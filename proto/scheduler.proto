@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package seazn.cpsat.v1;
+
+// -- Build/Polish (tier solver) --------------------------------------------
+
+message Slot {
+  string court = 1;
+  int64 start_at_ms = 2;
+}
+
+message Grid {
+  repeated Slot slots = 1;
+  int32 step_minutes = 2;
+}
+
+message Fixture {
+  string fixture_id = 1;
+  repeated string entrant_ids = 2;
+  string division_id = 3;
+}
+
+message Assignment {
+  string fixture_id = 1;
+  string court = 2;
+  int64 start_at_ms = 3;
+}
+
+message OrderPair {
+  string before_fixture_id = 1;
+  string after_fixture_id = 2;
+}
+
+message DivisionRestRule {
+  string division_id = 1;
+  int32 min_rest_minutes = 2;
+}
+
+message DivisionDayCapRule {
+  string division_id = 1;
+  int32 max_fixtures_per_day = 2;
+}
+
+message BuildConstraints {
+  int32 match_minutes = 1;
+  int32 gap_minutes = 2;
+  repeated DivisionRestRule rest_by_division = 3;
+  repeated DivisionDayCapRule day_cap_by_division = 4;
+}
+
+enum SolveStatus {
+  SOLVE_STATUS_UNSPECIFIED = 0;
+  SOLVE_STATUS_OPTIMAL = 1;
+  SOLVE_STATUS_FEASIBLE = 2;
+  SOLVE_STATUS_INFEASIBLE = 3;
+  SOLVE_STATUS_UNKNOWN = 4;
+  SOLVE_STATUS_ERROR = 5;
+}
+
+message Tier {
+  string name = 1;
+  int64 value_ms = 2;
+}
+
+message SolveError {
+  string code = 1;
+  string message = 2;
+}
+
+message SolveBuildRequest {
+  string request_id = 1;
+  repeated string courts = 2;
+  Grid grid = 3;
+  repeated Fixture fixtures = 4;
+  repeated Assignment existing = 5;
+  repeated OrderPair dependencies = 6;
+  BuildConstraints constraints = 7;
+  double wall_seconds = 8;
+}
+
+message SolveBuildResponse {
+  repeated Assignment assignments = 1;
+  SolveStatus status = 2;
+  int32 tiers_completed = 3;
+  repeated Tier objective_values = 4;
+  int64 elapsed_ms = 5;
+  bool wall_exhausted = 6;
+  SolveError error = 7;
+}
+
+service SchedulerService {
+  rpc SolveBuild(SolveBuildRequest) returns (SolveBuildResponse);
+}
