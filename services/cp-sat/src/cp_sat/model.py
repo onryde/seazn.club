@@ -15,24 +15,35 @@ constraint families, same presolve knobs. What changed is only the boundary:
 
 --- DROPPED: the greedy warm start (`AddHint`) -------------------------------
 
-`cpsat_bench.py`'s `greedy_seed()` computes a first-fit placement and
-`run_full_chain` feeds it to every tier's solve via `model.add_hint(...)`,
-mirroring z3's "greedy seeds the incumbent" design. **That is how the bench's
-published ~2.5 s full-chain number on the production board was produced.**
+In the bench this is a two-part mechanism, both parts in `cpsat_bench.py`:
+`greedy_seed()` computes a first-fit placement once, and `run_full_chain()`
+threads it into every tier as `build_model(..., hint=...)`, whose `if hint:`
+block is what actually calls `model.add_hint` on `start[i]`, `placed[i]` and
+`presence_court[i][slot.court]`. It mirrors z3's "greedy seeds the incumbent"
+design, and **it is how the bench's published ~2.5 s full-chain number on the
+production board was produced.**
 
-It is not ported here. Two reasons: it needs `board.slots` INDICES, which the
-service's plain `(court, start_at_ms)` grid does not carry in the same shape;
-and at T0 it makes no measurable difference on this board (80-145 ms with or
-without). A hint cannot change correctness — CP-SAT repairs or discards an
-invalid one — so nothing is at risk today.
+(Cited by symbol deliberately. An earlier version of this note gave line
+numbers; the Step 2b extraction moved every line in that file and the range
+silently came to point at the middle of `build_model` instead — precisely the
+misdirection this note exists to prevent.)
+
+It is not ported here. It needs `board.slots` INDICES, which the service's
+plain `(court, start_at_ms)` grid does not carry in the same shape, so it is a
+real rewrite rather than a copy — and at T0 there is nothing to justify it
+with: this model solves the production board in 80-145 ms unhinted, leaving no
+headroom worth chasing. A hint cannot change correctness — CP-SAT repairs or
+discards an invalid one — so nothing is at risk today.
+
+**Note what has NOT been measured**: no hinted run of THIS model exists. The
+80-145 ms figures are all unhinted. So the honest claim is "T0 is fast enough
+unhinted", not "the hint makes no difference here" — the A/B was never run.
 
 **This matters for Prompt 03.** The full T0->T3 chain is far heavier than T0
 alone (the bench spends ~1.2 s of its ~2 s in the idlegap tier), and every
 published chain timing was measured WITH the hint. If the tier chain comes in
 slower than the bench's numbers, suspect this omission before suspecting the
-tier code. Restoring it means porting `greedy_seed` (cpsat_bench.py:475-567)
-against `grid_slots` and calling `model.add_hint` on `start[i]`, `placed[i]`
-and `presence_court[i][court]`.
+tier code — and run the A/B rather than assuming either way.
 
 This module is domain logic and deliberately imports NOTHING from
 `cp_sat.generated` — no proto types cross this boundary in either direction.
