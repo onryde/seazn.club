@@ -10,19 +10,61 @@ constraint families, same presolve knobs. What changed is only the boundary:
   * `match_minutes`, `gap_minutes`, per-division rest and per-division day cap
     come from the request instead of module constants;
   * the solve loop is wrapped in `solve()` returning a `SolveOutcome`;
-  * the sweep's JSON instrumentation is gone.
+  * the sweep's JSON instrumentation is gone;
+  * the bench's greedy warm-start hint is NOT ported — see below.
+
+--- DROPPED: the greedy warm start (`AddHint`) -------------------------------
+
+`cpsat_bench.py`'s `greedy_seed()` computes a first-fit placement and
+`run_full_chain` feeds it to every tier's solve via `model.add_hint(...)`,
+mirroring z3's "greedy seeds the incumbent" design. **That is how the bench's
+published ~2.5 s full-chain number on the production board was produced.**
+
+It is not ported here. Two reasons: it needs `board.slots` INDICES, which the
+service's plain `(court, start_at_ms)` grid does not carry in the same shape;
+and at T0 it makes no measurable difference on this board (80-145 ms with or
+without). A hint cannot change correctness — CP-SAT repairs or discards an
+invalid one — so nothing is at risk today.
+
+**This matters for Prompt 03.** The full T0->T3 chain is far heavier than T0
+alone (the bench spends ~1.2 s of its ~2 s in the idlegap tier), and every
+published chain timing was measured WITH the hint. If the tier chain comes in
+slower than the bench's numbers, suspect this omission before suspecting the
+tier code. Restoring it means porting `greedy_seed` (cpsat_bench.py:475-567)
+against `grid_slots` and calling `model.add_hint` on `start[i]`, `placed[i]`
+and `presence_court[i][court]`.
 
 This module is domain logic and deliberately imports NOTHING from
 `cp_sat.generated` — no proto types cross this boundary in either direction.
 `cp_sat.schema` (Prompt 04) owns the proto->plain-Python translation.
 
---- the two presolve knobs are not tuning, they are a bug fix ---------------
+--- the two presolve knobs: keep them, but know what is and isn't proven -----
 
 `symmetry_level = 0` and `cp_model_probing_level = 0` in `solve()` are carried
-over unchanged and MUST STAY. On this board's heavy symmetry CP-SAT's default
-presolve can consume the entire wall before a single branch runs, and it fails
-SILENTLY: status `UNKNOWN`, zero fixtures placed, no error. See the bench
-module docstring's "REWRITE v2" section.
+over from the bench unchanged. Be precise about the evidence for them, because
+the obvious experiment does NOT support the strong version of the claim:
+
+  * The trap is real and on record — CP-SAT's default symmetry detection and
+    probing presolve consuming the entire wall on a symmetric board and
+    failing SILENTLY (`UNKNOWN`, zero placed, no error). But that was observed
+    under the bench's **v1 boolean fixture x slot grid** encoding, on the
+    larger sweep boards. It has NOT been shown to reproduce on this
+    interval/`NoOverlap` model.
+  * Measured here, production board, T0, identical model both ways:
+        knobs set     -> OPTIMAL, 37 placed, 145 ms
+        knobs default -> OPTIMAL, 37 placed, 424 ms
+    So on THIS board they are a ~3x speedup, not the difference between an
+    answer and no answer.
+
+They stay because the failure they guard against is silent and catastrophic
+while the cost of keeping them is nil, and because the larger boards that
+originally exhibited it are exactly the ones this service is being built to
+accept. But **nothing currently tests their necessity** — no test fails if you
+delete them. A mutation pass over this module will therefore report them as a
+surviving mutant. That is expected; it means "not covered", not "not needed".
+Do not delete them on the strength of a green suite. If their necessity has to
+be settled properly, the experiment is a board large enough to reproduce the
+v1 observation, not this one.
 
 --- what the wire contract cannot carry (and this model therefore cannot state)
 
@@ -142,12 +184,31 @@ def build_model(
     """
     del step_minutes  # see the docstring: contractual, not load-bearing.
 
-    model = ScheduleModel()
-    n = len(fixtures)
-    dur_ms = int(constraints.get("match_minutes", 0)) * MIN_MS
-    gap_ms = int(constraints.get("gap_minutes", 0)) * MIN_MS
     rest_by_division: dict[str, int] = constraints.get("rest_by_division") or {}
     day_cap_by_division: dict[str, int] = constraints.get("day_cap_by_division") or {}
+
+    # --- degenerate values that would otherwise produce a confidently WRONG
+    # --- board reported as OPTIMAL. See "proto3 scalars are non-optional".
+    match_minutes = int(constraints.get("match_minutes", 0))
+    if match_minutes <= 0:
+        raise ValueError(
+            f"match_minutes must be > 0, got {match_minutes!r}. A zero-length match makes "
+            "every court and rest interval zero-width, so NoOverlap constrains nothing and "
+            "the solver returns OPTIMAL with every fixture stacked on one tick."
+        )
+    for division, cap in day_cap_by_division.items():
+        if int(cap) <= 0:
+            raise ValueError(
+                f"max_fixtures_per_day for division {division!r} must be > 0, got {cap!r}. "
+                "A cap of 0 forbids placing that division at all, and the solver reports "
+                "OPTIMAL having silently dropped every one of its fixtures. To leave a "
+                "division uncapped, omit it from day_cap_by_division rather than passing 0."
+            )
+
+    model = ScheduleModel()
+    n = len(fixtures)
+    dur_ms = match_minutes * MIN_MS
+    gap_ms = int(constraints.get("gap_minutes", 0)) * MIN_MS
 
     fixture_ids = [fid for fid, _entrants, _division in fixtures]
     divisions = [division for _fid, _entrants, division in fixtures]
@@ -326,9 +387,11 @@ def solve(model: cp_model.CpModel, wall_seconds: float) -> SolveOutcome:
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = max(0.05, float(wall_seconds))
     solver.parameters.num_search_workers = NUM_SEARCH_WORKERS
-    # Do not remove — see this module's docstring. Default presolve can burn
-    # the whole wall on this board's symmetry and report UNKNOWN with nothing
-    # placed, no error raised.
+    # Keep these. No test fails without them (measured: this board solves
+    # OPTIMAL/37 either way, 145 ms vs 424 ms), so a mutation pass will flag
+    # them as a survivor — read the module docstring before concluding they
+    # are dead weight. The silent-UNKNOWN presolve trap they guard against was
+    # observed under the bench's v1 encoding on larger boards.
     solver.parameters.symmetry_level = 0
     solver.parameters.cp_model_probing_level = 0
 

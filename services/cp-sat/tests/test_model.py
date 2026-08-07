@@ -10,6 +10,8 @@ These exercise the real solver end to end. Nothing here is mocked: a green run
 means CP-SAT actually proved optimality on the real board inside the budget.
 """
 
+import pytest
+
 from cp_sat.model import DAY_MS, MIN_MS, build_model, solve
 
 
@@ -123,3 +125,55 @@ def test_assignments_satisfy_every_stated_constraint():
         assert count <= day_cap_by_division[division], (
             f"day cap violated: division {division} day {day} has {count} > {day_cap_by_division[division]}"
         )
+
+
+# --- degenerate constraint values must fail loudly, not solve quietly -------
+#
+# proto3 scalars are non-optional: an unset `max_fixtures_per_day` or
+# `match_minutes` arrives as 0, indistinguishable from a deliberate 0. Both
+# used to be accepted and produce a confidently WRONG board reported as
+# OPTIMAL — a whole division silently dropped, or every match given zero
+# length. Measured before the guards existed:
+#   day_cap {"d1": 0, "d2": 1}  -> OPTIMAL, placed 18/37, zero d1 fixtures
+#   match_minutes 0             -> OPTIMAL, 37 zero-length matches stacked
+# These are domain-layer guards. `cp_sat.schema` (Prompt 04) still owes the
+# wire-boundary validation; this is defence in depth, not a replacement.
+
+
+def test_rejects_zero_day_cap():
+    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    constraints = {**constraints, "day_cap_by_division": {"d1": 0, "d2": 1}}
+    with pytest.raises(ValueError, match="max_fixtures_per_day"):
+        build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+
+
+def test_rejects_negative_day_cap():
+    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    constraints = {**constraints, "day_cap_by_division": {"d1": -1, "d2": 1}}
+    with pytest.raises(ValueError, match="max_fixtures_per_day"):
+        build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+
+
+def test_absent_day_cap_rule_means_no_cap():
+    """A division simply MISSING from the dict is uncapped — that is the
+    contract, and the guard above must not break it."""
+    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    constraints = {**constraints, "day_cap_by_division": {}}
+    model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+    outcome = solve(model, wall_seconds=8.0)
+    assert outcome.status == "OPTIMAL"
+    assert len(outcome.assignments) == len(fixtures)
+
+
+def test_rejects_zero_match_minutes():
+    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    constraints = {**constraints, "match_minutes": 0}
+    with pytest.raises(ValueError, match="match_minutes"):
+        build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+
+
+def test_rejects_missing_match_minutes():
+    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    constraints = {k: v for k, v in constraints.items() if k != "match_minutes"}
+    with pytest.raises(ValueError, match="match_minutes"):
+        build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)

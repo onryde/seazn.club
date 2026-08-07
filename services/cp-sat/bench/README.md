@@ -1,6 +1,14 @@
 # CP-SAT scheduling bench
 
-Standalone research prototype, not wired into any service or test suite.
+Research harness. The **sweep** (`cpsat_bench.py`, `cpsat_repair_bench.py`) is
+standalone and not wired into any service or test suite. **`cpsat_bench_boards.py`
+is not** — it was extracted out of `cpsat_bench.py` so the bench and the
+service's tests share one board generator instead of two that drift, and
+`services/cp-sat/tests/test_model.py` imports `production_board()` from it
+(reaching it via `pythonpath = ["bench"]` in `services/cp-sat/pyproject.toml`).
+Changing that module changes what the service is tested against; changing the
+sweep does not.
+
 Models the same fixture-scheduling problem this repo's z3 solver encodes
 (`packages/engine/src/scheduling/build-encode.ts` / `build.ts`) using Google
 OR-Tools CP-SAT, and sweeps it across board sizes comparable to

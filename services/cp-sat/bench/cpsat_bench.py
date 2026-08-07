@@ -5,12 +5,19 @@ build solver encodes (packages/engine/src/scheduling/build-encode.ts and
 build.ts), run across a benchmark sweep comparable to
 packages/engine/scripts/bench-build.ts.
 
-THROWAWAY RESEARCH PROTOTYPE. Not part of the repo; nothing here is wired
-into build.ts or any test. It exists only to answer: does Google OR-Tools
-CP-SAT clear meaningfully larger boards than z3 within the same wall-clock
-budget, once the FULL constraint family set and the T0-T3 lexicographic
-objective are both in play (not just T0 placement, which the first pass of
-this script proved out alone)?
+RESEARCH HARNESS. This SWEEP is throwaway and is not wired into build.ts or
+any test — but `cpsat_bench_boards.py` beside it NO LONGER IS. That module
+was extracted from this file and is now imported by the service's own test
+suite (`services/cp-sat/tests/test_model.py`, via
+`production_board()`), so **deleting or editing it changes what the service
+is tested against.** Treat this file as disposable; treat that one as load
+bearing.
+
+The sweep exists only to answer: does Google OR-Tools CP-SAT clear
+meaningfully larger boards than z3 within the same wall-clock budget, once
+the FULL constraint family set and the T0-T3 lexicographic objective are
+both in play (not just T0 placement, which the first pass of this script
+proved out alone)?
 
 --- board generation (mirrors packages/engine/scripts/bench-build.ts) -------
 
