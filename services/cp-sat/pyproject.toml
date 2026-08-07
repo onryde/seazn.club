@@ -24,3 +24,14 @@ dev = ["pytest>=8"]
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+# `bench/` is a standalone script directory, not an installed package, so
+# nothing puts it on sys.path. The service's acceptance tests import their
+# board from `bench/cpsat_bench_boards.py` deliberately — sharing the bench's
+# ONE generator rather than keeping a second copy that can drift — so the
+# directory has to be importable. `pythonpath` is native pytest (>=7), no
+# plugin, and it is preferred here over a `sys.path.insert` inside the test
+# file: an import hack in one test module silently stops working the moment a
+# second module needs the same path.
+pythonpath = ["bench"]
