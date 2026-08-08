@@ -183,8 +183,13 @@ def run_tier_chain(
             not sliced per tier — `build.ts:1587-1597` rules that out, because a
             slice makes "which tier ran" a property of the machine, and the same
             request would come back differently optimised on a faster box.
-        tiers: the rungs to attempt, in order. Defaults to all four; the bench's
-            `tiers=("placed",)` isolation run is the reason this is a parameter.
+        tiers: the rungs to attempt. Defaults to all four, and must be a PREFIX
+            of `TIER_ORDER` — the bench's `tiers=("placed",)` isolation run is
+            the reason this is a parameter at all, and the only subset in use.
+
+    Raises:
+        ValueError: on a non-positive `wall_seconds`, an unknown tier name, or
+            a `tiers` sequence that is not a prefix of `TIER_ORDER`.
 
     Returns:
         `SolveOutcome`. `tiers_completed` counts tiers PROVED optimal (see the
@@ -193,11 +198,42 @@ def run_tier_chain(
         board that came back, per `_chain_status`.
     """
     started = time.perf_counter()
-    deadline = started + float(wall_seconds)
+
+    # --- degenerate arguments that would otherwise produce a confidently
+    # --- WRONG answer. Same class as `build_model`'s `match_minutes` /
+    # --- `day_cap_by_division` guards; see that module's docstring.
+    if float(wall_seconds) <= 0:
+        raise ValueError(
+            f"wall_seconds must be > 0, got {wall_seconds!r}. `SolveBuildRequest.wall_seconds` is a "
+            "plain proto3 double, so UNSET arrives as 0.0 and is indistinguishable from a deliberate "
+            "0 — and a 0 budget stops the chain before T0 ever runs, returning UNKNOWN with no "
+            "assignments and 0 tiers. That is the same answer a genuinely impossible board gives, so "
+            "a dropped field would read as a solver verdict about the request."
+        )
 
     unknown = [name for name in tiers if name not in _TIER_SPECS]
     if unknown:
         raise ValueError(f"unknown tier(s) {unknown!r}; expected some ordering of {list(TIER_ORDER)}")
+
+    # The ladder is a PREFIX of `TIER_ORDER` or it is not a ladder. Subsetting
+    # or reordering is not a lesser version of the chain, it is a different and
+    # silently wrong one: `tiers=("court_imbalance",)` balances courts across a
+    # board whose placement was never maximised, and `_chain_status` would then
+    # report OPTIMAL for it — a status Task 4/5 maps straight onto the wire.
+    # D3's order is the product ruling this whole module exists to enforce, so
+    # it is enforced on the way in too. `("placed",)` — the bench's isolation
+    # run, and the only subset anything actually uses — is a prefix and passes.
+    #
+    # ValueError, not `assert`: `python -O` strips asserts, and this is a
+    # contract check on a caller argument exactly like the two above it.
+    if tuple(tiers) != TIER_ORDER[: len(tiers)]:
+        raise ValueError(
+            f"tiers must be a prefix of {list(TIER_ORDER)}, got {list(tiers)}. The tier ORDER is the "
+            "product ruling (build.ts's D3: placed dominates absolutely), so a subset that skips or "
+            "reorders a rung optimises a metric the tiers above it were never allowed to constrain."
+        )
+
+    deadline = started + float(wall_seconds)
 
     assignments: list[tuple[str, str, int]] = []
     objective_values: list[tuple[str, int]] = []

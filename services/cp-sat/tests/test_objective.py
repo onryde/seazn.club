@@ -55,7 +55,14 @@ its bound in 20 s proved the same value in 0.4 s as an equality.
 import pytest
 
 from cp_sat.model import MIN_MS, build_model, solve
-from cp_sat.objective import TIER_COURT_IMBALANCE, TIER_IDLE_GAP, TIER_MAKESPAN, TIER_PLACED, run_tier_chain
+from cp_sat.objective import (
+    TIER_COURT_IMBALANCE,
+    TIER_IDLE_GAP,
+    TIER_MAKESPAN,
+    TIER_ORDER,
+    TIER_PLACED,
+    run_tier_chain,
+)
 
 #: The production budget the design spec settled on. Used by the ONE test that
 #: is actually about the budget, and by nothing else.
@@ -218,7 +225,14 @@ def test_a_completed_chain_reports_optimal(chain):
     last solve happened to prove its own objective"."""
     assert chain.status == "OPTIMAL"
     assert chain.tiers_completed == 4
-    assert chain.elapsed_ms < CHAIN_WALL_SECONDS * 1000
+
+    # A REAL ceiling, not just "inside the generous wall it was given".
+    # Splitting the four-tier claim off the 8 s budget removed the only
+    # elapsed-time assertion in the suite, which would let a 3x regression in
+    # tier cost pass silently. 15 s is chosen to sit above the worst measured
+    # loaded run (9 200-11 300 ms at load ~7.6) and well under 3x the 4 940 ms
+    # idle cost — it catches a regression, not a busy afternoon.
+    assert chain.elapsed_ms <= 15_000
 
 
 def test_a_wall_too_short_to_finish_reports_fewer_tiers_not_a_lie(board):
@@ -275,6 +289,59 @@ def test_a_tier_cut_short_is_neither_counted_nor_adopted(board):
     assert [name for name, _ in outcome.objective_values] == [TIER_PLACED]
     # T0's board survives intact — the fallback, not an empty result.
     assert len(outcome.assignments) == len(board[0])
+
+
+# --- degenerate arguments must fail loudly, not solve quietly ---------------
+#
+# Same family as test_model.py's `match_minutes` / day-cap guards, and the same
+# root cause: proto3 scalars are non-optional, so an unset field arrives as 0
+# and is indistinguishable from a deliberate one.
+
+
+def test_rejects_zero_wall_seconds(board):
+    """`wall_seconds=0` stops the chain before T0 runs and returns UNKNOWN with
+    no assignments and 0 tiers — byte-identical to what a genuinely impossible
+    board returns. A dropped `SolveBuildRequest.wall_seconds` would therefore
+    be reported to the caller as a solver verdict about their request."""
+    model = _model_for(board)
+    with pytest.raises(ValueError, match="wall_seconds"):
+        run_tier_chain(model, model.fixture_vars, wall_seconds=0)
+
+
+def test_rejects_negative_wall_seconds(board):
+    model = _model_for(board)
+    with pytest.raises(ValueError, match="wall_seconds"):
+        run_tier_chain(model, model.fixture_vars, wall_seconds=-1.0)
+
+
+def test_rejects_a_tier_sequence_that_is_not_a_prefix_of_the_ladder(board):
+    """Skipping or reordering rungs is not a smaller chain, it is a wrong one.
+
+    `tiers=("court_imbalance",)` balances courts across a board whose placement
+    was never maximised and whose makespan was never bounded — and, before this
+    guard, reported `status="OPTIMAL"` for it, because every requested tier had
+    indeed been proved. `SolveStatus` is what Task 4/5 map onto the wire, so
+    that is a lie with a straight route to a caller.
+    """
+    for bad in (
+        (TIER_COURT_IMBALANCE,),
+        (TIER_MAKESPAN, TIER_PLACED),
+        (TIER_PLACED, TIER_IDLE_GAP),
+        (TIER_PLACED, TIER_COURT_IMBALANCE, TIER_MAKESPAN, TIER_IDLE_GAP),
+    ):
+        model = _model_for(board)
+        with pytest.raises(ValueError, match="prefix"):
+            run_tier_chain(model, model.fixture_vars, CHAIN_WALL_SECONDS, tiers=bad)
+
+
+def test_every_prefix_of_the_ladder_is_accepted(board):
+    """The guard must not break the one subset that is actually used — the
+    bench's `("placed",)` isolation run — nor any other honest prefix. Asserts
+    acceptance only; the solving is covered above."""
+    for k in range(1, len(TIER_ORDER) + 1):
+        model = _model_for(board)
+        outcome = run_tier_chain(model, model.fixture_vars, 0.05, tiers=TIER_ORDER[:k])
+        assert outcome.tiers_completed <= k
 
 
 def test_chain_status_describes_the_board_not_the_last_solve():
