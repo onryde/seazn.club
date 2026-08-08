@@ -1,11 +1,13 @@
 """The anti-corruption layer between the wire and the domain.
 
-This module is the ONLY place a proto message is read, and the only place a
-plain-Python solve result is turned back into one. `cp_sat.model` and
-`cp_sat.objective` are written against tuples, dicts and floats and must never
-import `scheduler_pb2`; `cp_sat.main` orchestrates but holds no domain logic of
-its own. That boundary is the design's, not a style preference — it is what
-lets the solver be tested, benched and reasoned about without a gRPC runtime.
+This module is the ONLY place a proto message is read, and the ONLY place a
+plain-Python solve result is turned back into one — both directions, one file.
+`cp_sat.model` and `cp_sat.objective` are written against tuples, dicts and
+floats and must never import `scheduler_pb2`; `cp_sat.main` orchestrates
+(authenticate, translate in, compute, translate out) but holds no domain logic
+and constructs no proto message of its own. That boundary is the design's, not
+a style preference — it is what lets the solver be tested, benched and reasoned
+about without a gRPC runtime.
 
 It is also where degenerate requests are rejected. Three fields on
 `SolveBuildRequest` are proto3 non-optional scalars, so a field the caller
@@ -31,6 +33,20 @@ caller can act on, rather than an exception crossing the RPC boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from cp_sat.generated import scheduler_pb2
+from cp_sat.model import SolveOutcome
+
+# `SolveOutcome.status` is CP-SAT's own vocabulary, passed through verbatim by
+# the domain. Anything not listed — MODEL_INVALID, or a future OR-Tools status
+# — maps to ERROR rather than being guessed at. It must NOT fall through to the
+# proto default, which is SOLVE_STATUS_UNSPECIFIED (0) and would read as fine.
+STATUS_MAP = {
+    "OPTIMAL": scheduler_pb2.SOLVE_STATUS_OPTIMAL,
+    "FEASIBLE": scheduler_pb2.SOLVE_STATUS_FEASIBLE,
+    "INFEASIBLE": scheduler_pb2.SOLVE_STATUS_INFEASIBLE,
+    "UNKNOWN": scheduler_pb2.SOLVE_STATUS_UNKNOWN,
+}
 
 
 class InvalidRequestError(ValueError):
@@ -123,4 +139,52 @@ def request_to_model_input(req) -> ModelInput:
         existing=[(a.fixture_id, a.court, a.start_at_ms) for a in req.existing],
         dependencies=[(d.before_fixture_id, d.after_fixture_id) for d in req.dependencies],
         wall_seconds=req.wall_seconds,
+    )
+
+
+def error_response(code: str, message: str) -> scheduler_pb2.SolveBuildResponse:
+    """A rejected request is a SUCCESSFUL RPC carrying a reason, not a gRPC
+    error. The caller (`build.ts`) can fall back on its own heuristic placer
+    given a reason; it can do nothing useful with a transport-level failure.
+
+    One constructor for every rejection path — the wire-boundary one and the
+    domain's own `ValueError` backstop — so whichever layer noticed first, the
+    caller sees exactly one shape.
+    """
+    return scheduler_pb2.SolveBuildResponse(
+        status=scheduler_pb2.SOLVE_STATUS_ERROR,
+        error=scheduler_pb2.SolveError(code=code, message=message),
+    )
+
+
+def outcome_to_response(
+    outcome: SolveOutcome, wall_seconds: float
+) -> scheduler_pb2.SolveBuildResponse:
+    """Translate a solve result back onto the wire.
+
+    Args:
+        outcome: the domain's `SolveOutcome`, in plain Python.
+        wall_seconds: the budget the solve was actually GIVEN — the clamped
+            value, not whatever the request asked for. `wall_exhausted` is
+            meaningless against a budget that was never applied.
+    """
+    return scheduler_pb2.SolveBuildResponse(
+        assignments=[
+            scheduler_pb2.Assignment(fixture_id=fid, court=court, start_at_ms=start)
+            for fid, court, start in outcome.assignments
+        ],
+        status=STATUS_MAP.get(outcome.status, scheduler_pb2.SOLVE_STATUS_ERROR),
+        tiers_completed=outcome.tiers_completed,
+        # Sliced to the PROVED tiers. `objective_values` can carry one more
+        # entry than `tiers_completed`: when the clock cuts a tier short
+        # mid-solve the outcome still records that tier's last-known value,
+        # deliberately, without counting it as completed. Publishing that entry
+        # would tell the caller a value had been proved optimal when it is only
+        # the best thing seen before the budget ran out.
+        objective_values=[
+            scheduler_pb2.Tier(name=name, value_ms=value)
+            for name, value in outcome.objective_values[: outcome.tiers_completed]
+        ],
+        elapsed_ms=outcome.elapsed_ms,
+        wall_exhausted=outcome.elapsed_ms >= int(wall_seconds * 1000),
     )

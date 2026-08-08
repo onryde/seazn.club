@@ -1,10 +1,13 @@
 """The gRPC server: bootstrap, auth, health, and the SolveBuild handler.
 
-Application/infrastructure layer. It orchestrates and holds no domain logic of
-its own — it authenticates, asks `cp_sat.schema` to translate the request into
-domain types, asks the domain (`build_model` / `solve`) to compute, and asks
-itself only to translate the plain-Python outcome back onto the wire. Nothing
-in here decides anything about scheduling.
+Application/infrastructure layer. It orchestrates and nothing else: it
+authenticates, asks `cp_sat.schema` to translate the request into domain types,
+asks the domain (`build_model` / `solve`) to compute, and asks `cp_sat.schema`
+to translate the plain-Python outcome back onto the wire. It decides nothing
+about scheduling and — deliberately — constructs no proto message itself. Both
+directions of the translation live in the one anti-corruption layer, which is
+why this module imports `scheduler_pb2_grpc` (the generated servicer base and
+its registration helper) but never `scheduler_pb2`.
 
 Sync `grpcio` with a `ThreadPoolExecutor`, not `grpc.aio`: a solve is a
 CPU-bound OR-Tools call that never yields, so an event loop buys nothing and
@@ -23,31 +26,16 @@ import grpc
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 
 from cp_sat.config import Settings
-from cp_sat.generated import scheduler_pb2, scheduler_pb2_grpc
+from cp_sat.generated import scheduler_pb2_grpc
 from cp_sat.model import build_model, solve
-from cp_sat.schema import InvalidRequestError, request_to_model_input
+from cp_sat.schema import (
+    InvalidRequestError,
+    error_response,
+    outcome_to_response,
+    request_to_model_input,
+)
 
 AUTH_METADATA_KEY = "x-internal-secret"
-
-# `SolveOutcome.status` is CP-SAT's own vocabulary, passed through verbatim by
-# the domain. Anything not listed — MODEL_INVALID, or a future OR-Tools status
-# — maps to ERROR rather than being guessed at.
-STATUS_MAP = {
-    "OPTIMAL": scheduler_pb2.SOLVE_STATUS_OPTIMAL,
-    "FEASIBLE": scheduler_pb2.SOLVE_STATUS_FEASIBLE,
-    "INFEASIBLE": scheduler_pb2.SOLVE_STATUS_INFEASIBLE,
-    "UNKNOWN": scheduler_pb2.SOLVE_STATUS_UNKNOWN,
-}
-
-
-def _error_response(code: str, message: str) -> scheduler_pb2.SolveBuildResponse:
-    """A rejected request is a successful RPC carrying a reason, not a gRPC
-    error. The caller (`build.ts`) can fall back on its own heuristic placer
-    for this; it cannot do anything useful with a transport-level failure."""
-    return scheduler_pb2.SolveBuildResponse(
-        status=scheduler_pb2.SOLVE_STATUS_ERROR,
-        error=scheduler_pb2.SolveError(code=code, message=message),
-    )
 
 
 class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
@@ -76,7 +64,7 @@ class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
         try:
             parsed = request_to_model_input(request)
         except InvalidRequestError as exc:
-            return _error_response("INVALID_REQUEST", str(exc))
+            return error_response("INVALID_REQUEST", str(exc))
 
         wall = min(parsed.wall_seconds, self._settings.wall_seconds_max)
 
@@ -102,28 +90,11 @@ class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
             outcome = solve(model, wall_seconds=wall)
         except ValueError as exc:
             logging.warning("solve rejected request %s: %s", request.request_id, exc)
-            return _error_response("INVALID_REQUEST", str(exc))
+            return error_response("INVALID_REQUEST", str(exc))
 
-        return scheduler_pb2.SolveBuildResponse(
-            assignments=[
-                scheduler_pb2.Assignment(fixture_id=fid, court=court, start_at_ms=start)
-                for fid, court, start in outcome.assignments
-            ],
-            status=STATUS_MAP.get(outcome.status, scheduler_pb2.SOLVE_STATUS_ERROR),
-            tiers_completed=outcome.tiers_completed,
-            # Sliced to the PROVED tiers. `objective_values` can carry one more
-            # entry than `tiers_completed`: when the clock cuts a tier short
-            # mid-solve the outcome still records that tier's last-known value,
-            # deliberately, without counting it as completed. Publishing that
-            # entry would tell the caller a value had been proved optimal when
-            # it is only the best thing seen before the budget ran out.
-            objective_values=[
-                scheduler_pb2.Tier(name=name, value_ms=value)
-                for name, value in outcome.objective_values[: outcome.tiers_completed]
-            ],
-            elapsed_ms=outcome.elapsed_ms,
-            wall_exhausted=outcome.elapsed_ms >= int(wall * 1000),
-        )
+        # `wall`, not `parsed.wall_seconds`: the budget the solve was actually
+        # given is the one `wall_exhausted` has to be measured against.
+        return outcome_to_response(outcome, wall_seconds=wall)
 
 
 def build_health_servicer() -> health.HealthServicer:
