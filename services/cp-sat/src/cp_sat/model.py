@@ -39,11 +39,21 @@ discards an invalid one — so nothing is at risk today.
 80-145 ms figures are all unhinted. So the honest claim is "T0 is fast enough
 unhinted", not "the hint makes no difference here" — the A/B was never run.
 
-**This matters for Prompt 03.** The full T0->T3 chain is far heavier than T0
-alone (the bench spends ~1.2 s of its ~2 s in the idlegap tier), and every
-published chain timing was measured WITH the hint. If the tier chain comes in
-slower than the bench's numbers, suspect this omission before suspecting the
-tier code — and run the A/B rather than assuming either way.
+**SETTLED IN PROMPT 03: still not needed, and now for a measured reason.**
+The full chain does cost far more than T0 alone — 4 940 ms against T0's 88 ms
+on an idle box — and the tier that nearly sank it was T3, which sat at
+FEASIBLE after 20 000 ms. A warm start would not have moved it by a
+millisecond: T3 had ALREADY found the optimal board (2 400 000 ms, the
+pigeonhole minimum) in well under a second and could not close its DUAL bound
+from zero. Its incumbent was never the problem, and a hint supplies nothing
+but an incumbent. The fix was the term's encoding (see T3 below).
+
+The general lesson, which is why this note stays: when a tier here is slow,
+read `BestObjectiveBound()` against `ObjectiveValue()` before reaching for a
+warm start. If they are far apart the tier cannot PROVE what it has already
+FOUND, and a hint is the wrong tool — every tier of this chain is solved to
+proof, so proof time is what the budget buys. T0, T1 and T2 each reach
+`bound == value` unhinted, so none of them is waiting on an incumbent either.
 
 This module is domain logic and deliberately imports NOTHING from
 `cp_sat.generated` — no proto types cross this boundary in either direction.
@@ -104,7 +114,6 @@ zone. Any org not on UTC gets its caps applied against the wrong boundary.
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -113,10 +122,10 @@ from ortools.sat.python import cp_model
 MIN_MS = 60_000
 DAY_MS = 86_400_000
 
-# Tier names, fixed protocol constants shared with the TS side (see the design
-# spec, "Tier/objective semantics are a fixed protocol constant"). Only T0 is
-# solved here; Prompt 03 (`cp_sat.objective`) adds the remaining three.
-TIER_PLACED = "placed"
+# Tier names are fixed protocol constants shared with the TS side (see the
+# design spec, "Tier/objective semantics are a fixed protocol constant") and
+# they live in `cp_sat.objective`, with the chain that uses them — all four in
+# one place, since the ORDER is as much of the constant as the names are.
 
 # Same as the bench. CP-SAT's own default is the machine's core count; pinning
 # it keeps solve behaviour reproducible across the dev box and the deploy box.
@@ -337,15 +346,50 @@ def build_model(
         model.Add(mk_hi >= start[i] + dur_ms).OnlyEnforceIf(placed[i])
     makespan = mk_hi - mk_lo
 
-    # T3: court imbalance, exact native term (cb_hi - cb_lo), same squeeze
-    # technique as build.ts:2115-2135.
-    cb_lo = model.NewIntVar(0, max(1, n * dur_ms), "cb_lo")
-    cb_hi = model.NewIntVar(0, max(1, n * dur_ms), "cb_hi")
+    # T3: court imbalance — busiest configured-or-used court minus the
+    # quietest, in ms, exactly `boardMetrics.courtImbalanceMinutes`.
+    #
+    # STATED AS AN EQUALITY, WHERE build.ts:2115-2135 STATES A SQUEEZE
+    # (`cb_hi >= load`, `cb_lo <= load` for every court). The two have the same
+    # optimum — minimising `cb_hi - cb_lo` drives the squeeze onto the true
+    # extremes — so this is a propagation change, not a semantic one. It is
+    # here because the squeeze makes T3 UNPROVABLE inside any realistic wall,
+    # measured on the production board (Prompt 03):
+    #
+    #     squeeze        T3 FEASIBLE after 20 000 ms, best bound 0
+    #     max/min on ms  T3 OPTIMAL  in       934 ms
+    #     max/min on counts (this)   OPTIMAL  in  411 ms
+    #
+    # all three agreeing on the same value, 2 400 000 ms. The squeeze's dual
+    # bound is the problem, not its search: the LP relaxation spreads 37
+    # fixtures over 5 courts as 7.4 each and reports imbalance 0, and nothing
+    # in the one-sided form carries the counting argument that closes it. As
+    # equalities, `sum(load) == placed` propagates `max >= ceil(37/5)` and
+    # `min <= floor(37/5)` immediately — which IS the pigeonhole argument, and
+    # it lands on the true optimum of one match's worth of load.
+    #
+    # Counted in matches and scaled to ms once, rather than summing ms per
+    # court: same value, measured 2x faster to prove, and the variables' domain
+    # is 0..n instead of 0..n*dur_ms.
+    #
+    # z3 needs none of this: its tier walk only ever asks "is this metric <= B",
+    # a question the squeeze answers exactly. Native optimisation is what wants
+    # a dual bound. Deliberately NOT propagated back to build.ts (Prompt 06's
+    # file, and the squeeze is correct there).
+    court_counts = []
     for c in courts:
-        load = sum(presence_court[i][c] for i in range(n)) * dur_ms
-        model.Add(cb_hi >= load)
-        model.Add(cb_lo <= load)
-    imbalance = cb_hi - cb_lo
+        count = model.NewIntVar(0, n, f"load_{c}")
+        model.Add(count == sum(presence_court[i][c] for i in range(n)))
+        court_counts.append(count)
+    cb_lo = model.NewIntVar(0, n, "cb_lo")
+    cb_hi = model.NewIntVar(0, n, "cb_hi")
+    if court_counts:
+        model.AddMaxEquality(cb_hi, court_counts)
+        model.AddMinEquality(cb_lo, court_counts)
+    else:
+        model.Add(cb_hi == 0)
+        model.Add(cb_lo == 0)
+    imbalance = (cb_hi - cb_lo) * dur_ms
 
     # T2: worst idle gap — APPROXIMATE native term. Exact for any participant
     # with <=2 fixtures; a safe over-approximation for 3+ (max over ALL pairs,
@@ -383,50 +427,25 @@ def build_model(
 
 
 def solve(model: cp_model.CpModel, wall_seconds: float) -> SolveOutcome:
-    """Solve T0 (maximise placed fixtures) within `wall_seconds`.
+    """Solve `model` through the full lexicographic T0->T3 tier chain within
+    `wall_seconds`.
 
-    T0 ONLY. The lexicographic T0->T3 chain is Prompt 03's job
-    (`cp_sat.objective.run_tier_chain`); this function becomes a thin wrapper
-    around it then. `tiers_completed`/`objective_values` already carry the
-    chain's shape so that swap changes no caller.
+    A thin wrapper over `cp_sat.objective.run_tier_chain`, which owns the
+    objectives and the frozen bounds between them. Everything a solve needs to
+    know about tiers lives there, including why a tier cut short by the clock
+    does not count and why its board is discarded.
     """
-    started = time.perf_counter()
-    fixture_vars: FixtureVars = model.fixture_vars
+    # Imported HERE, not at module scope: `cp_sat.objective` imports this
+    # module for `SolveOutcome`/`FixtureVars`/`extract_assignments`, so a
+    # top-level import in this direction would be a cycle. The dependency is
+    # genuinely one-way — the model layer knows nothing about tiers — and this
+    # single call site is the seam.
+    from cp_sat.objective import run_tier_chain
 
-    model.Maximize(fixture_vars.placed_sum)
-
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = max(0.05, float(wall_seconds))
-    solver.parameters.num_search_workers = NUM_SEARCH_WORKERS
-    # Keep these. No test fails without them (measured: this board solves
-    # OPTIMAL/37 either way, 145 ms vs 424 ms), so a mutation pass will flag
-    # them as a survivor — read the module docstring before concluding they
-    # are dead weight. The silent-UNKNOWN presolve trap they guard against was
-    # observed under the bench's v1 encoding on larger boards.
-    solver.parameters.symmetry_level = 0
-    solver.parameters.cp_model_probing_level = 0
-
-    status = solver.Solve(model)
-    status_name = solver.StatusName(status)
-
-    assignments: list[tuple[str, str, int]] = []
-    objective_values: list[tuple[str, int]] = []
-    tiers_completed = 0
-    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        assignments = _extract_assignments(solver, fixture_vars)
-        objective_values = [(TIER_PLACED, int(solver.Value(fixture_vars.placed_sum)))]
-        tiers_completed = 1
-
-    return SolveOutcome(
-        assignments=assignments,
-        status=status_name,
-        tiers_completed=tiers_completed,
-        objective_values=objective_values,
-        elapsed_ms=int(round((time.perf_counter() - started) * 1000)),
-    )
+    return run_tier_chain(model, model.fixture_vars, wall_seconds)
 
 
-def _extract_assignments(solver: cp_model.CpSolver, fixture_vars: FixtureVars) -> list[tuple[str, str, int]]:
+def extract_assignments(solver: cp_model.CpSolver, fixture_vars: FixtureVars) -> list[tuple[str, str, int]]:
     """Read placed fixtures back out. `start[i]` free-floats for an unplaced
     fixture (its intervals are absent, so nothing constrains it), which is why
     this filters on `placed[i]` rather than reading every start."""
