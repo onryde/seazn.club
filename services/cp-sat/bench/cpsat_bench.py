@@ -260,7 +260,8 @@ def greedy_seed(
 ) -> dict[int, int]:
     """A cheap greedy placement — NOT a CP-SAT construct at all, just a plain
     Python first-fit walk — used only to warm-start CP-SAT via `AddHint`
-    (see `build_model`'s `warm_start` param). Mirrors z3's own design
+    (threaded in through `build_model`'s `hint` param; the caller-facing
+    switch is `run_full_chain`'s `warm_start`). Mirrors z3's own design
     principle (build.ts's header: "Greedy seeds the incumbent... lets this
     ship with NO escape hatch back to greedy") — CP-SAT gets no such seed by
     default and searches cold every solve, which the profiled sweep showed
