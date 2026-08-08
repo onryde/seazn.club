@@ -19,7 +19,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = [
+    "pytest>=8",
+    # Exact, not a range, and pinned to 1.81.1 alongside grpcio-tools and
+    # grpcio-health-checking rather than to the installed grpcio (1.83.0).
+    # grpcio-testing ships the in-process `server_from_dictionary` harness
+    # tests/test_server.py runs the servicer through, and it carries a protobuf
+    # floor that moves with its version: 1.83.0 requires protobuf>=7.35.1,
+    # which ortools (protobuf<6.34) forbids. An unpinned `pip install
+    # grpcio-testing` therefore resolves to 1.83.0 and silently upgrades
+    # protobuf out from under ortools and the generated stubs — a dev-only
+    # dependency breaking the runtime. 1.81.1 requires protobuf<7 and
+    # grpcio>=1.81.1, so it sits inside every existing constraint.
+    "grpcio-testing==1.81.1",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
