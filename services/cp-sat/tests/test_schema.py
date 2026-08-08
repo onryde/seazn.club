@@ -17,7 +17,7 @@ import pytest
 
 from cp_sat.generated import scheduler_pb2
 from cp_sat.model import SolveOutcome
-from cp_sat.objective import TIER_ORDER
+from cp_sat.objective import MIN_TIER_SECONDS, TIER_ORDER
 from cp_sat.schema import (
     InvalidRequestError,
     error_response,
@@ -56,6 +56,33 @@ def test_rejects_empty_courts():
         fixtures=[scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1"], division_id="d1")],
     )
     with pytest.raises(InvalidRequestError, match="courts"):
+        request_to_model_input(req)
+
+
+@pytest.mark.parametrize(
+    "grid",
+    [
+        pytest.param(None, id="grid-omitted-entirely"),
+        pytest.param(scheduler_pb2.Grid(step_minutes=10), id="grid-present-slots-empty"),
+    ],
+)
+def test_rejects_empty_grid_slots(grid):
+    """`Grid` is a proto3 MESSAGE field, so an omitted `grid` and a `grid` with
+    an empty `slots` list are indistinguishable on the wire — both arrive as an
+    empty `Grid`. Neither is absent, and neither is an error downstream:
+    `build_model` falls back to `Domain.FromValues([0])`, every fixture is
+    forced onto tick 0, and the solve proves that OPTIMAL with one fixture per
+    court and the rest silently unplaced.
+
+    Measured through the real server before this guard existed: 8 fixtures, 2
+    courts, no grid -> SOLVE_STATUS_OPTIMAL, `error` unset, 2 of 8 placed, both
+    at start_at_ms=0, tiers_completed=4.
+    """
+    overrides = {} if grid is None else {"grid": grid}
+    req = _valid_request(**overrides)
+    if grid is None:
+        req.ClearField("grid")
+    with pytest.raises(InvalidRequestError, match="grid"):
         request_to_model_input(req)
 
 
@@ -257,8 +284,40 @@ def test_outcome_to_response_publishes_only_proved_tiers():
 
 @pytest.mark.parametrize(
     "elapsed_ms,wall_seconds,exhausted",
-    [(9999, 10.0, False), (10000, 10.0, True), (10500, 10.0, True)],
+    [
+        (0, 10.0, False),
+        (5000, 10.0, False),
+        # The tier loop stops one MIN_TIER_SECONDS BEFORE the deadline, so this
+        # is the last elapsed value that can mean "there was still time".
+        (9949, 10.0, False),
+        # From here up, the chain cannot have started another tier — it was cut
+        # short by the wall even though it never reached the wall.
+        (9950, 10.0, True),
+        (9999, 10.0, True),
+        (10000, 10.0, True),
+        (10500, 10.0, True),
+    ],
 )
 def test_outcome_to_response_reports_wall_exhausted(elapsed_ms, wall_seconds, exhausted):
+    """`wall_exhausted` compares elapsed against the wall MINUS the tier loop's
+    proactive-break margin, not against the raw wall.
+
+    `run_tier_chain` breaks out when `deadline - now <= MIN_TIER_SECONDS`
+    rather than running a tier it has no time to finish, so a chain genuinely
+    stopped by the budget reports an `elapsed_ms` up to 50ms UNDER the wall. A
+    raw `elapsed_ms >= wall * 1000` comparison calls that `wall_exhausted=False`
+    and tells the caller the budget was not the limiting factor when it was —
+    which is the one thing this flag exists to say.
+    """
     resp = outcome_to_response(_outcome(elapsed_ms=elapsed_ms), wall_seconds=wall_seconds)
     assert resp.wall_exhausted is exhausted
+
+
+def test_wall_exhausted_threshold_tracks_the_tier_loops_own_margin():
+    """Pins the threshold to `objective.MIN_TIER_SECONDS` rather than to a
+    hardcoded 50ms. If the tier loop's margin changes, this flag's boundary has
+    to move with it — a literal here would silently stop matching."""
+    wall = 8.0
+    boundary_ms = int((wall - MIN_TIER_SECONDS) * 1000)
+    assert outcome_to_response(_outcome(elapsed_ms=boundary_ms - 1), wall).wall_exhausted is False
+    assert outcome_to_response(_outcome(elapsed_ms=boundary_ms), wall).wall_exhausted is True

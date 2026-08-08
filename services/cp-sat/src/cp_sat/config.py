@@ -28,11 +28,32 @@ class Settings:
         secret = os.environ.get("CPSAT_SERVICE_SECRET")
         if not secret:
             raise ValueError("CPSAT_SERVICE_SECRET is required")
+
+        max_workers = int(os.environ.get("CPSAT_MAX_WORKERS", "4"))
+        # The server's own ceiling on a caller-supplied `wall_seconds`. A
+        # request may ask for less; it may not ask for more.
+        wall_seconds_max = float(os.environ.get("CPSAT_WALL_SECONDS_MAX", "10"))
+
+        # --- degenerate configuration. Same zero-scalar family `schema.py`
+        # --- guards on the wire, one layer further out — and worse, because a
+        # --- bad request is one caller's problem while a bad env var is every
+        # --- caller's problem and the service reports SERVING throughout.
+        if wall_seconds_max <= 0:
+            raise ValueError(
+                f"CPSAT_WALL_SECONDS_MAX must be > 0, got {wall_seconds_max!r}. Every request's "
+                "budget is clamped to this ceiling, so a non-positive value takes a well-formed "
+                "request asking for 8.0 down to 0.0, the tier chain refuses it, and the caller is "
+                "told `wall_seconds must be > 0` about a field they set correctly."
+            )
+        if max_workers <= 0:
+            raise ValueError(
+                f"CPSAT_MAX_WORKERS must be > 0, got {max_workers!r}. It sizes the "
+                "ThreadPoolExecutor that serves every RPC."
+            )
+
         return cls(
             port=int(os.environ.get("CPSAT_PORT", "50051")),
-            max_workers=int(os.environ.get("CPSAT_MAX_WORKERS", "4")),
+            max_workers=max_workers,
             shared_secret=secret,
-            # The server's own ceiling on a caller-supplied `wall_seconds`. A
-            # request may ask for less; it may not ask for more.
-            wall_seconds_max=float(os.environ.get("CPSAT_WALL_SECONDS_MAX", "10")),
+            wall_seconds_max=wall_seconds_max,
         )

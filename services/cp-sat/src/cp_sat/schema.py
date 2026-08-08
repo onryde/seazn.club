@@ -9,11 +9,11 @@ and constructs no proto message of its own. That boundary is the design's, not
 a style preference — it is what lets the solver be tested, benched and reasoned
 about without a gRPC runtime.
 
-It is also where degenerate requests are rejected. Three fields on
-`SolveBuildRequest` are proto3 non-optional scalars, so a field the caller
-simply failed to set arrives as `0` and is indistinguishable from a deliberate
-zero — and each of the three zeros makes the solver return a confidently WRONG
-board with a healthy-looking status rather than an error:
+It is also where degenerate requests are rejected. Proto3 has no way to say
+"absent" for a non-optional scalar or for a message field, so a field the
+caller simply failed to set arrives as `0` / empty and is indistinguishable
+from a deliberate zero — and each of the four below makes the solver return a
+confidently WRONG board with a healthy-looking status rather than an error:
 
   * `constraints.match_minutes == 0` — zero-width intervals, so NoOverlap
     constrains nothing and every fixture stacks on one tick. OPTIMAL.
@@ -21,13 +21,27 @@ board with a healthy-looking status rather than an error:
     all, and the solve reports OPTIMAL having dropped all of its fixtures.
   * `wall_seconds == 0` — the tier chain stops before T0, returning UNKNOWN
     with no assignments, which is exactly what an impossible board returns.
+  * `grid.slots` empty — the same trap one level up, in a MESSAGE field rather
+    than a scalar: an omitted `grid` and a `grid` carrying no slots are the
+    same bytes. `build_model` then falls back to `Domain.FromValues([0])`,
+    every fixture is forced onto tick 0, and one fixture per court is placed
+    and proved OPTIMAL while the rest are silently dropped. Measured through
+    the real server: 8 fixtures, 2 courts, no grid -> OPTIMAL, `error` unset,
+    2 of 8 placed, both at `start_at_ms=0`, `tiers_completed=4`.
 
-`build_model` and `run_tier_chain` guard all three themselves and raise
+`build_model` and `run_tier_chain` guard the first THREE themselves and raise
 `ValueError`. Those guards stay: they protect the bench and any future caller.
 But the wire is where the mistake is actually made, so it is caught here first
 and as an `InvalidRequestError`, which `cp_sat.main` turns into a
 `SOLVE_STATUS_ERROR` response carrying the reason — a well-formed answer the
 caller can act on, rather than an exception crossing the RPC boundary.
+
+The FOURTH — the empty grid — has no downstream guard at all. `build_model`
+treats an empty `grid_slots` as a legal board with one admissible start rather
+than as an error, so there is no `ValueError` for `main.py`'s backstop to
+catch. This layer is the only thing standing between an omitted `Grid` and an
+OPTIMAL response for a board that was never really scheduled. Do not remove it
+on the assumption that the domain will catch it.
 """
 
 from __future__ import annotations
@@ -36,6 +50,7 @@ from dataclasses import dataclass
 
 from cp_sat.generated import scheduler_pb2
 from cp_sat.model import SolveOutcome
+from cp_sat.objective import MIN_TIER_SECONDS
 
 # `SolveOutcome.status` is CP-SAT's own vocabulary, passed through verbatim by
 # the domain. Anything not listed — MODEL_INVALID, or a future OR-Tools status
@@ -86,13 +101,20 @@ def request_to_model_input(req) -> ModelInput:
             do not — the boundary runs through here in one direction only.
 
     Raises:
-        InvalidRequestError: on an empty board, or on any of the three
-            degenerate scalars described in the module docstring.
+        InvalidRequestError: on an empty board, or on any of the four
+            degenerate fields enumerated in the module docstring.
     """
     if len(req.fixtures) == 0:
         raise InvalidRequestError("fixtures must not be empty")
     if len(req.courts) == 0:
         raise InvalidRequestError("courts must not be empty")
+    if len(req.grid.slots) == 0:
+        raise InvalidRequestError(
+            "grid.slots must not be empty. `Grid` is a proto3 message field, so an omitted grid "
+            "and a grid with no slots arrive identically — and neither is an error downstream: "
+            "the model falls back to a single admissible start of 0, places one fixture per "
+            "court there, and proves that OPTIMAL with every other fixture silently unplaced."
+        )
 
     # Built before it is validated, and validated off the built dict rather
     # than off the repeated proto field: `build_model` guards the dict, so
@@ -175,6 +197,15 @@ def outcome_to_response(
     # `SolveError`, or it becomes the only error response in the service that
     # tells the caller nothing about why. `error=None` leaves the field unset,
     # which is what every mapped status wants.
+    #
+    # This branch still maps `assignments` through, which is safe only because
+    # of a guarantee that lives in another module: `objective._chain_status`
+    # returns a raw solver status name (the only way to get a name that is not
+    # in STATUS_MAP) exclusively on its `if not assignments` path — a mapped
+    # status is returned whenever there IS a board. So an unmapped status
+    # cannot arrive carrying assignments, and this response cannot ship a board
+    # alongside an ERROR. Stated here because it is not visible from this file,
+    # and a future change to `_chain_status` would break it silently.
     status = STATUS_MAP.get(outcome.status)
     error = None
     if status is None:
@@ -206,5 +237,13 @@ def outcome_to_response(
             for name, value in outcome.objective_values[: outcome.tiers_completed]
         ],
         elapsed_ms=outcome.elapsed_ms,
-        wall_exhausted=outcome.elapsed_ms >= int(wall_seconds * 1000),
+        # Against the wall MINUS the tier loop's own proactive-break margin,
+        # not against the raw wall. `run_tier_chain` stops when
+        # `deadline - now <= MIN_TIER_SECONDS` rather than starting a tier it
+        # cannot finish, so a chain genuinely cut short by the budget reports
+        # an `elapsed_ms` up to 50ms UNDER the wall. Comparing against the raw
+        # wall calls that `False` and tells the caller the budget was not the
+        # limiting factor — the one thing this flag exists to say. Derived from
+        # `MIN_TIER_SECONDS` rather than a literal so the two move together.
+        wall_exhausted=outcome.elapsed_ms >= int((wall_seconds - MIN_TIER_SECONDS) * 1000),
     )

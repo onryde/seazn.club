@@ -106,16 +106,35 @@ def build_health_servicer() -> health.HealthServicer:
     return health_servicer
 
 
-def serve() -> None:
-    logging.basicConfig(level=logging.INFO)
-    settings = Settings.from_env()
+def build_server(settings: Settings) -> tuple[grpc.Server, int]:
+    """Construct and register the server, bind its port, and return both it and
+    the port actually bound. Does NOT start it.
+
+    Split out of `serve()` so the registration path is reachable from a test.
+    Every line here is load-bearing and none of it is observable from the
+    in-process `grpc_testing` harness, which never calls
+    `add_*Servicer_to_server` and never binds anything — all three registration
+    lines could be deleted with the suite still green.
+
+    Returns the bound port because `settings.port` may be 0, meaning "any free
+    port": `add_insecure_port` then returns the one the OS picked, and 0 back
+    means the bind FAILED.
+    """
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=settings.max_workers))
     scheduler_pb2_grpc.add_SchedulerServiceServicer_to_server(SchedulerServicer(settings), server)
     health_pb2_grpc.add_HealthServicer_to_server(build_health_servicer(), server)
+    port = server.add_insecure_port(f"[::]:{settings.port}")
+    return server, port
 
-    server.add_insecure_port(f"[::]:{settings.port}")
+
+def serve() -> None:
+    logging.basicConfig(level=logging.INFO)
+    settings = Settings.from_env()
+    server, port = build_server(settings)
+    if port == 0:
+        raise RuntimeError(f"failed to bind port {settings.port}")
     server.start()
-    logging.info("cp-sat service listening on :%d (max_workers=%d)", settings.port, settings.max_workers)
+    logging.info("cp-sat service listening on :%d (max_workers=%d)", port, settings.max_workers)
     server.wait_for_termination()
 
 

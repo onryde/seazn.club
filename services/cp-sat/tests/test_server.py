@@ -17,14 +17,16 @@ than just describing what it does:
     short, and that unproven value must not go out on the wire.
 """
 
+import dataclasses
+
 import grpc
 import grpc_testing
 import pytest
-from grpc_health.v1 import health_pb2
+from grpc_health.v1 import health_pb2, health_pb2_grpc
 
 from cp_sat.config import Settings
-from cp_sat.generated import scheduler_pb2
-from cp_sat.main import SchedulerServicer, build_health_servicer
+from cp_sat.generated import scheduler_pb2, scheduler_pb2_grpc
+from cp_sat.main import SchedulerServicer, build_health_servicer, build_server
 from cp_sat.model import SolveOutcome
 from cp_sat.objective import TIER_ORDER
 
@@ -281,3 +283,136 @@ def test_health_check_reports_serving():
     ).termination()
     assert code == grpc.StatusCode.OK
     assert response.status == health_pb2.HealthCheckResponse.SERVING
+
+
+# --- the real registration path --------------------------------------------
+
+
+def test_build_server_registers_both_services_on_a_real_port(settings):
+    """`grpc_testing` never binds a port and never calls
+    `add_*Servicer_to_server`, so everything `serve()` actually does to stand
+    the service up was untested — all three of its registration lines could be
+    deleted with the suite still green.
+
+    This drives `build_server` (the same function `serve()` calls) over a REAL
+    channel: health must answer SERVING, the scheduler must be reachable, and
+    auth must hold across a real transport — which, unlike the in-process
+    harness, lower-cases metadata keys for us.
+
+    Port 0 asks the OS for a free port and `add_insecure_port` returns the one
+    it got, so this cannot collide with a squatted fixed port or with a
+    concurrent agent's server.
+    """
+    server, port = build_server(dataclasses.replace(settings, port=0))
+    assert port != 0, "add_insecure_port returned 0 — nothing is listening"
+    server.start()
+    channel = grpc.insecure_channel(f"localhost:{port}")
+    try:
+        grpc.channel_ready_future(channel).result(timeout=10)
+
+        health = health_pb2_grpc.HealthStub(channel).Check(
+            health_pb2.HealthCheckRequest(service=""), timeout=10
+        )
+        assert health.status == health_pb2.HealthCheckResponse.SERVING
+
+        stub = scheduler_pb2_grpc.SchedulerServiceStub(channel)
+
+        # Registered AND authenticated: without the servicer registration this
+        # would be UNIMPLEMENTED, not UNAUTHENTICATED.
+        with pytest.raises(grpc.RpcError) as excinfo:
+            stub.SolveBuild(_solvable_request(), timeout=10)
+        assert excinfo.value.code() == grpc.StatusCode.UNAUTHENTICATED
+
+        response = stub.SolveBuild(_solvable_request(), metadata=GOOD_AUTH, timeout=10)
+        assert response.status == scheduler_pb2.SOLVE_STATUS_OPTIMAL
+        assert [(a.fixture_id, a.court, a.start_at_ms) for a in response.assignments] == [
+            ("f1", "Court 1", 0)
+        ]
+    finally:
+        channel.close()
+        server.stop(None)
+
+
+# --- the brief's acceptance criterion, on the production board --------------
+
+
+def test_production_board_solves_through_the_server(test_server):
+    """The brief's acceptance criterion: "a well-formed, correctly-authenticated
+    request against the production board shape returns OPTIMAL or FEASIBLE".
+
+    Every other test here uses a one-fixture toy board, which never exercises
+    `existing`, `dependencies`, `rest_by_division` or `day_cap_by_division`
+    through the wire mapping at all — a dropped field in `schema.py` would
+    relax the board and go unnoticed. This drives the bench's own
+    `production_board()` (37 fixtures, 5 courts, ~2081 slots) end to end.
+
+    Deliberately does NOT assert `tiers_completed == 4`: the T0-T3 chain is
+    ~4.9s idle but 9-11s under load, so that assertion is a flake generator
+    under parallel agents. What is asserted instead is that the BOARD is real —
+    status alone is not evidence, since the chain reports OPTIMAL just as
+    readily for an empty schedule.
+    """
+    from cpsat_bench_boards import production_board
+
+    fixtures, courts, grid_slots, step_minutes, constraints, existing, dependencies = (
+        production_board()
+    )
+
+    req = scheduler_pb2.SolveBuildRequest(
+        request_id="prod-37x77k",
+        courts=courts,
+        fixtures=[
+            scheduler_pb2.Fixture(fixture_id=fid, entrant_ids=entrants, division_id=division)
+            for fid, entrants, division in fixtures
+        ],
+        grid=scheduler_pb2.Grid(
+            slots=[scheduler_pb2.Slot(court=court, start_at_ms=start) for court, start in grid_slots],
+            step_minutes=step_minutes,
+        ),
+        existing=[
+            scheduler_pb2.Assignment(fixture_id=fid, court=court, start_at_ms=start)
+            for fid, court, start in existing
+        ],
+        dependencies=[
+            scheduler_pb2.OrderPair(before_fixture_id=before, after_fixture_id=after)
+            for before, after in dependencies
+        ],
+        constraints=scheduler_pb2.BuildConstraints(
+            match_minutes=constraints["match_minutes"],
+            gap_minutes=constraints["gap_minutes"],
+            rest_by_division=[
+                scheduler_pb2.DivisionRestRule(division_id=d, min_rest_minutes=v)
+                for d, v in constraints["rest_by_division"].items()
+            ],
+            day_cap_by_division=[
+                scheduler_pb2.DivisionDayCapRule(division_id=d, max_fixtures_per_day=v)
+                for d, v in constraints["day_cap_by_division"].items()
+            ],
+        ),
+        wall_seconds=8.0,
+    )
+
+    response, _, code, _ = _invoke(test_server, req)
+
+    assert code == grpc.StatusCode.OK
+    assert response.status in (
+        scheduler_pb2.SOLVE_STATUS_OPTIMAL,
+        scheduler_pb2.SOLVE_STATUS_FEASIBLE,
+    )
+    assert not response.HasField("error")
+    assert response.tiers_completed >= 1
+
+    placed = [(a.fixture_id, a.court, a.start_at_ms) for a in response.assignments]
+    assert len(placed) > 0
+
+    # A board, not just a status. Each of these is a way the wire mapping could
+    # be wrong while the solve still reports success.
+    fixture_ids = {fid for fid, _entrants, _division in fixtures}
+    assert {fid for fid, _c, _s in placed} <= fixture_ids
+    assert len({fid for fid, _c, _s in placed}) == len(placed), "a fixture was placed twice"
+    assert {court for _f, court, _s in placed} <= set(courts)
+    # The lattice actually reached the model: every (court, start) has to be a
+    # real grid point. An empty or ignored grid collapses every start onto tick
+    # 0 instead — precisely the empty-Grid failure this round also fixed.
+    assert {(court, start) for _f, court, start in placed} <= set(grid_slots)
+    assert len({start for _f, _c, start in placed}) > 1, "every fixture landed on one tick"
