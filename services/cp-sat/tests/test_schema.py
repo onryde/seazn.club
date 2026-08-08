@@ -218,6 +218,28 @@ def test_outcome_to_response_maps_status(status, expected):
     assert outcome_to_response(_outcome(status=status), wall_seconds=10.0).status == expected
 
 
+def test_outcome_to_response_populates_error_for_an_unmapped_status():
+    """Every other SOLVE_STATUS_ERROR path carries a populated `SolveError`.
+    This one is reached without an exception ever being raised — the domain
+    returned a status this layer has no mapping for — so it has to build its
+    own, or the caller gets ERROR with no reason at all."""
+    resp = outcome_to_response(_outcome(status="MODEL_INVALID"), wall_seconds=10.0)
+    assert resp.status == scheduler_pb2.SOLVE_STATUS_ERROR
+    assert resp.HasField("error")
+    assert resp.error.code == "INTERNAL_ERROR"
+    # The unexpected status string itself, or the message says nothing useful.
+    assert "MODEL_INVALID" in resp.error.message
+
+
+@pytest.mark.parametrize("status", ["OPTIMAL", "FEASIBLE", "INFEASIBLE", "UNKNOWN"])
+def test_outcome_to_response_leaves_error_unset_for_a_mapped_status(status):
+    """The other side: a known status must NOT carry an error. `error` is how
+    the caller tells a rejected request from a solved one, so populating it
+    unconditionally would be worse than leaving it empty."""
+    resp = outcome_to_response(_outcome(status=status), wall_seconds=10.0)
+    assert not resp.HasField("error")
+
+
 def test_outcome_to_response_publishes_only_proved_tiers():
     """`objective_values` can be ONE longer than `tiers_completed`: a tier cut
     short by the clock records its last-known value without being counted. That

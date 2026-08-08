@@ -168,12 +168,32 @@ def outcome_to_response(
             value, not whatever the request asked for. `wall_exhausted` is
             meaningless against a budget that was never applied.
     """
+    # An unmapped status is the one SOLVE_STATUS_ERROR path reached WITHOUT an
+    # exception having been raised — the domain returned a status vocabulary
+    # this layer has no entry for (`MODEL_INVALID`, or a future OR-Tools
+    # status), so there is no `str(exc)` to hand on. It has to build its own
+    # `SolveError`, or it becomes the only error response in the service that
+    # tells the caller nothing about why. `error=None` leaves the field unset,
+    # which is what every mapped status wants.
+    status = STATUS_MAP.get(outcome.status)
+    error = None
+    if status is None:
+        status = scheduler_pb2.SOLVE_STATUS_ERROR
+        error = scheduler_pb2.SolveError(
+            code="INTERNAL_ERROR",
+            message=(
+                f"solver returned unmapped status {outcome.status!r}; expected one of "
+                f"{sorted(STATUS_MAP)}. Treat this response as an error, not as a board."
+            ),
+        )
+
     return scheduler_pb2.SolveBuildResponse(
         assignments=[
             scheduler_pb2.Assignment(fixture_id=fid, court=court, start_at_ms=start)
             for fid, court, start in outcome.assignments
         ],
-        status=STATUS_MAP.get(outcome.status, scheduler_pb2.SOLVE_STATUS_ERROR),
+        status=status,
+        error=error,
         tiers_completed=outcome.tiers_completed,
         # Sliced to the PROVED tiers. `objective_values` can carry one more
         # entry than `tiers_completed`: when the clock cuts a tier short
