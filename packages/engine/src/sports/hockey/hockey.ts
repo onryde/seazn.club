@@ -106,6 +106,27 @@ export const hockey = makePeriodModule({
   },
   positions,
   keeperGroup: "GK",
+  // S3/W4b (#426) ruling 2 — FIH Rule 5.2: substitution is UNLIMITED and
+  // rolling. A player goes off and comes back as often as the coach likes, so
+  // `reentry: "unlimited"`; there is no cap to charge them against, which is
+  // why `maxSubs` is absent rather than set to some large number.
+  //
+  // `allowSquadGrowth: false` — FIH substitutes come from a pre-named bench
+  // (`positions.lineup.benchMax`), so a lineup event naming somebody who is on
+  // no team sheet is a scorer's mistake, and refusing it on the write path is
+  // the kindest thing the fold can do. Only cricket's concussion replacement
+  // genuinely arrives from outside the sheet.
+  //
+  // Takes `cfg` and ignores it TODAY: the competition knob that would vary it
+  // (a youth division running no-return substitution, say) is a config
+  // addition, and adding one to this module would leave `uncoveredConfigFields`
+  // demanding an EXTEND_GOLDEN pass. The shape is here so that knob is a
+  // one-line change rather than a re-plumb.
+  lineupPolicy: () => ({
+    reentry: "unlimited",
+    reentryPositionLock: false,
+    allowSquadGrowth: false,
+  }),
   entrantModel: { kinds: ["team"], defaultKind: "team", team: { squadNumbers: true, captain: true } },
   metrics: [
     { key: "gf", label: "GF", direction: "desc" },
