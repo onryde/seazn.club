@@ -78,6 +78,31 @@ block with: build a `SolveBuildInput` from the function's existing
 computed earlier in the function, unchanged), call
 `cpsatClient.solveBuild(...)` with `wallSeconds` from the existing
 `wallMs` budget math, and on success map its
+
+> **Signature correction (2026-08-09, after Task 5's fix round).**
+> `wallSeconds` goes on the **input**, NOT on `opts`. Task 5 originally
+> exposed it in both places; the two could disagree, and a disagreement
+> silently killed every solve at 2s and fell back to greedy with no error
+> anywhere. The fix removed it from `opts` entirely so the disagreement is
+> no longer expressible. The live signature is:
+>
+> ```ts
+> solveBuild(
+>   input: SolveBuildInput,          // wallSeconds lives HERE
+>   opts: { host?, secret, requestId?, clock? },
+> )
+> ```
+>
+> Two consequences for this task:
+> - **`requestId` is caller-supplied and you are the caller.** Pass a real
+>   one. It is not defaulted inside the client, and it must not be
+>   generated from a timestamp or a random there — `packages/engine/src`
+>   is a purity boundary enforced by a test (no `Date.now()`, no
+>   `new Date()`, no `Math.random()`; time comes from `core/clock.ts`).
+> - **Do not trust tsc to catch a stale `wallSeconds` in `opts`.** The
+>   excess-property error only fires on an object *literal*. Build `opts`
+>   as a variable and the stale field is silently ignored.
+
 `assignments`/`tiersCompleted`/`elapsedMs`/`wallExhausted` into the same
 local variables the rest of the function already expects before falling
 through to the existing `validateAssignments` call. On rejection (any

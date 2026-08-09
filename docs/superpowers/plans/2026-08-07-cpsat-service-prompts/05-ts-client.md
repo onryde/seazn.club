@@ -22,6 +22,15 @@ prompt only builds the client; wiring it into `solveBuild` is Prompt 06.
 - Consumes: `proto/scheduler.proto` (Prompt 01).
 - Produces: `solveBuild(input: SolveBuildInput, opts: { host: string; secret: string; wallSeconds: number }): Promise<SolveBuildOutcome>` — Prompt 06 (`build.ts`'s `solveBuild` function) calls this exact function.
 
+> **SUPERSEDED as shipped (2026-08-09).** `wallSeconds` is NOT on `opts`.
+> Having it in both places let the two disagree — probed: `opts` 0 with
+> `input` 8 was accepted and put the deadline at +2.000s, which would kill
+> every solve and fall back to greedy silently. It was removed from `opts`
+> so the disagreement cannot be expressed. As shipped in `b33ac2fb`:
+> `solveBuild(input, opts: { host?, secret, requestId?, clock? })`, with
+> `wallSeconds` on `input` and the deadline derived once from the value
+> that goes on the wire.
+
 - [ ] **Step 1: Install codegen deps and write the generation script**
 
 Run: `cd packages/engine && npm install --save @grpc/grpc-js && npm install --save-dev ts-proto grpc-tools`
