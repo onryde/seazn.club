@@ -71,6 +71,29 @@
         ],
         "default": 1
       },
+      "lineupChanges": {
+        "properties": {
+          "concussionReplacements": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxSubs": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reentry": {
+            "enum": [
+              "none",
+              "once",
+              "unlimited"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "maxOversPerBowler": {
         "exclusiveMinimum": 0,
         "maximum": 9007199254740991,

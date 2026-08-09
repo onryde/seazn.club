@@ -6,6 +6,7 @@
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
 import { isStrictFold, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import { playingSquad, type LineupPolicy, type SquadState } from "../../core/lineup.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
   labelledSegment,
@@ -64,6 +65,40 @@ const CricketCfgBase = z.object({
   // declared allowance" (reviews are still recordable, just uncapped), and it
   // keeps every previously-parsed config byte-identical.
   reviews: z.object({ perInnings: z.number().int().nonnegative() }).optional(),
+  // S3/W4b (#426) — what this variant lets a squad DO mid-fixture, feeding
+  // `lineupPolicy` below. Three separate knobs rather than one "concussion
+  // replacements allowed" boolean, because rulings 1 and 2 are independent
+  // axes: growth is about who may arrive, re-entry about who may come back,
+  // and the cap about how many arrivals are ordinary rather than exempt.
+  //
+  // `.optional()` with NO `.default()` at either level. `state.cfg` is
+  // serialised inside every recorded state and compared by the frozen corpus,
+  // so a defaulted key would appear in every stream ever recorded; an absent
+  // block parses to an absent block and reproduces the pre-wave behaviour
+  // exactly (no growth, no return, no exemption, no substitution).
+  lineupChanges: z
+    .object({
+      // Ordinary substitutions per side. Absent ⇒ 0, which is Law 24: a
+      // substitute may field but not bat, bowl or keep, so an ordinary
+      // substitution changes nothing a scorecard records and none of the
+      // shipped variants raises this. Present and positive is for the
+      // community codes that do swap players outright.
+      maxSubs: z.number().int().nonnegative().optional(),
+      // Ruling 1 — like-for-like concussion (and, under the ICC's event
+      // conditions, COVID/illness) replacements per side. A like-for-like
+      // replacement CAN bat and bowl and is a person the team sheet never
+      // named, so honouring one means letting the squad grow; that is exactly
+      // why the row sat deferred until `core/lineup.ts` existed. Absent ⇒ 0 ⇒
+      // no growth, which is ruling 1's stated default.
+      concussionReplacements: z.number().int().nonnegative().optional(),
+      // Ruling 2 — may a player who has LEFT THE FIELD take it again. ICC
+      // conditions say no: the concussed player takes no further part in the
+      // match. This knob is about the field only; a batter who retired hurt
+      // never left it, and his resumption is governed by the crease
+      // (`cricket.retire` → `fine.retiredNotOut`), not by this.
+      reentry: z.enum(["none", "once", "unlimited"]).optional(),
+    })
+    .optional(),
 });
 
 export const CricketCfg = CricketCfgBase.refine(
@@ -2013,10 +2048,22 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   eventSchema: CricketEv,
   positions,
   entrantModel: { kinds: ["team"], defaultKind: "team", team: { squadNumbers: true, captain: true } },
+  // The concussion allowance is declared ONLY on the three formats the ICC's
+  // playing conditions cover (DOMAIN.md, "Batters coming and going"). `hundred`
+  // and `pairs-6-a-side` are deliberately left without it: ruling 1's default
+  // is off, and a variant that says nothing keeps the squad its team sheets
+  // declared. Changing `variants` is golden-safe — the corpus stores and
+  // re-parses the RAW config objects it was recorded with, and `configsFor()`
+  // only runs under UPDATE_GOLDEN=1.
   variants: {
     // spec 04 §2.1
-    t20: { ballsPerInnings: 120, maxOversPerBowler: 4 },
-    odi: { ballsPerInnings: 300, maxOversPerBowler: 10, minOversForResult: 20 },
+    t20: { ballsPerInnings: 120, maxOversPerBowler: 4, lineupChanges: { concussionReplacements: 1 } },
+    odi: {
+      ballsPerInnings: 300,
+      maxOversPerBowler: 10,
+      minOversForResult: 20,
+      lineupChanges: { concussionReplacements: 1 },
+    },
     hundred: { ballsPerInnings: 100, ballsPerOver: 5, maxOversPerBowler: 4 },
     test: {
       inningsPerSide: 2,
@@ -2025,12 +2072,58 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
       superOver: false, // multi-day cricket draws; it never goes to a super over
       followOn: { enabled: true, lead: 200 },
       minOversForResult: 0,
+      lineupChanges: { concussionReplacements: 1 },
     },
     "pairs-6-a-side": { playersPerSide: 6, ballsPerInnings: 60, maxOversPerBowler: 2 },
   },
 
   // spec 03 §2 guarantee 4 — post-match scorecards append after the decision.
   postDecisionTypes: ["cricket.player.line"],
+
+  /**
+   * S3/W4b (#426) — what this variant permits a squad to do, handed to
+   * `core/lineup.ts`. THE MODULE OWNS NO SQUAD LOGIC: it translates cfg into a
+   * policy and the kernel enforces it. There is no membership test, no
+   * replacement counter and no re-entry rule anywhere in this file, and
+   * `grep -a "initSquads|reduceLineupEvent|subsUsed >=|exemptUsed\["` over
+   * `src/sports/` is the check that keeps it that way.
+   *
+   * PURE AND TOTAL, like every cfg-derived verdict in this wave. It reads cfg
+   * and returns a value; it cannot throw, so it cannot brick a recorded
+   * fixture, and on the read path the fold ignores it entirely in favour of
+   * `REPLAY_LINEUP_POLICY`.
+   *
+   * `maxSubs: 0` IS THE DEFAULT, and it is a statement rather than an
+   * omission. Leaving the cap absent means UNCAPPED in the kernel, which would
+   * say cricket permits unlimited outright substitution — the opposite of Law
+   * 24, under which a substitute fields only and never bats, bowls or keeps.
+   * Zero also makes the exemption channel meaningful from the first ball: the
+   * cap and the exemption disagree in every shipped variant, which is the
+   * property `cricket.lineup.test.ts` pins.
+   *
+   * `reentry` defaults to `none` because ICC concussion conditions make the
+   * replaced player's departure permanent. That is NOT the answer for a batter
+   * who retired hurt — he may resume — and the two coexist because they are
+   * different axes: retirement is the CREASE (`fine.retiredNotOut`, resolved by
+   * `resolveIncoming`), this knob is the FIELD. A retired-hurt batter never
+   * leaves the field, so nothing here is asked about him.
+   */
+  lineupPolicy(cfg): LineupPolicy {
+    const changes = cfg.lineupChanges;
+    const concussion = changes?.concussionReplacements ?? 0;
+    return {
+      reentry: changes?.reentry ?? "none",
+      // FIVB 15.6's lock is a volleyball rule; cricket's positions are fielding
+      // groups a captain moves at will (Law 28 is about where they stand, not
+      // about who may stand there).
+      reentryPositionLock: false,
+      // Ruling 1 — the ONLY reason a cricket squad may grow is the like-for-like
+      // replacement, so growth is gated on that allowance and nothing else.
+      allowSquadGrowth: concussion > 0,
+      maxSubs: changes?.maxSubs ?? 0,
+      ...(concussion === 0 ? {} : { exemptions: { concussion: { max: concussion } } }),
+    };
+  },
 
   init(cfg, lineups: LineupPair): CricketState {
     return {
