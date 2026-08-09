@@ -7,6 +7,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { EngineError } from "@seazn/engine/core";
+import { buildGrid, slotFixtures } from "@seazn/engine/scheduling";
 import { sql, withTenant } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -23,7 +24,10 @@ import {
   validateSchedule,
   publishSchedule,
   startDivision,
+  toSlotConfig,
 } from "../schedule";
+import { draftsToBlackouts } from "@/components/v2/constraints-panel";
+import { toLocalInput } from "@/lib/schedule-board";
 import { patchFixture } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { publicSchedule } from "../public";
@@ -626,6 +630,330 @@ describe.skipIf(!HAS_DB)("loadSettings resolves the organisation zone separately
     const settings = await load(auth, divisionId);
     expect(settings.orgTz).toBe("UTC");
   });
+});
+
+// ===========================================================================
+// BLACKOUT WINDOWS — editor shape → stored config → the placer.
+// Date/time UX programme, Prompt 07. Self-contained; nothing above or below
+// this banner depends on it.
+//
+// WHAT THIS PROVES, AND WHY IT IS NOT JUST A PUT/GET TEST.
+//
+// Prompt 06 built the blackout editor on the ruling that it writes the
+// EXISTING `config.blackouts` field and needs no new backend endpoint. This
+// block is the evidence for that ruling. The trap it is shaped around: a test
+// that only asserts "what I PUT is what I GET" passes even when the solver
+// never sees the window at all — and a blackout the solver ignores is exactly
+// the defect this feature would otherwise ship.
+//
+// So there are three layers, and the middle one is the point:
+//   1. the wire       — the editor's own `draftsToBlackouts` output survives
+//                       PUT → GET byte-identically, as ISO strings;
+//   2. the CONVERSION — `toSlotConfig` turns those ISO strings into the exact
+//                       epoch-ms instants `calendar.ts`'s `Blackout` takes.
+//                       Same three keys, different units, nothing in the type
+//                       system connecting them;
+//   3. the engine     — the placer (`slotFixtures`) and the solver lattice
+//                       (`buildGrid`) both refuse that time, each measured
+//                       against a control run through the identical path with
+//                       the window removed.
+//
+// Every "nothing landed in the window" assertion is paired with a control,
+// because an unpaired one is satisfied by a placer that never places anything
+// there anyway. Every "all N still placed" assertion is there because
+// "nothing in the window" must not be bought by dropping fixtures.
+// ===========================================================================
+
+/** Governing zone and display zone: both non-UTC and DIFFERENT from each
+ *  other, so "the server did not re-zone the stored instant" is a real
+ *  assertion. Resolved through either clock the numbers would miss by hours;
+ *  with UTC on one side a re-zoning bug would land on the right answer. */
+const BLACKOUT_ORG_TZ = "Pacific/Auckland";
+const BLACKOUT_DIVISION_TZ = "America/Los_Angeles";
+
+const HOUR = 60 * MIN;
+
+/** Exactly what the editor holds mid-edit: `<input type="datetime-local">`
+ *  values plus a court, `""` meaning the whole division. */
+const BLACKOUT_DRAFTS = [
+  { court: "Court 2", from: "2026-08-01T12:00", to: "2026-08-01T13:00" },
+  { court: "", from: "2026-08-02T09:00", to: "2026-08-02T10:30" },
+];
+
+/** The stored rows for those drafts, produced by the editor's OWN serialiser
+ *  rather than hand-written — so this suite goes red if `draftsToBlackouts`
+ *  ever stops emitting the shape `ScheduleConfig.blackouts` accepts. */
+function editorRows(): { court?: string; from: string; to: string }[] {
+  const rows = draftsToBlackouts(BLACKOUT_DRAFTS);
+  if (rows === null) throw new Error("fixture drafts must be storable");
+  return rows;
+}
+
+/** One division-wide window, and the instants it denotes. `datetime-local` is
+ *  resolved through the RUNNER's zone (see the tz note at the end of this
+ *  block), so the geometry below is derived from the produced instant rather
+ *  than assuming one — the test is zone-independent, the product is not. */
+function globalWindow(fromLocal: string, toLocal: string) {
+  const rows = draftsToBlackouts([{ court: "", from: fromLocal, to: toLocal }]);
+  if (rows === null) throw new Error("fixture draft must be storable");
+  return { rows, from: Date.parse(rows[0]!.from), to: Date.parse(rows[0]!.to) };
+}
+
+/** The same editor serialiser, driven from a chosen INSTANT instead of a typed
+ *  string. `toLocalInput` is the function the panel itself uses to fill the
+ *  control from stored config, so this stays a real editor round-trip while
+ *  letting a test pin geometry that must hold in any runner zone. */
+function windowAt(fromMs: number, toMs: number) {
+  return globalWindow(toLocalInput(new Date(fromMs)), toLocalInput(new Date(toMs)));
+}
+
+const BLACKOUT_BASE_CONFIG = {
+  startAt: T0,
+  matchMinutes: 30,
+  gapMinutes: 0,
+  courts: ["Court 1", "Court 2"],
+  perEntrantMinRest: 0,
+  sessionWindows: [],
+};
+
+describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time UX P07)", () => {
+  async function seedBlackoutDivision(): Promise<{ auth: AuthCtx; divisionId: string }> {
+    const { auth } = await seedOrg("pro");
+    await sql`update organizations set timezone = ${BLACKOUT_ORG_TZ} where id = ${auth.orgId}`;
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Blackout Cup",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      eligibility: [],
+    });
+    return { auth, divisionId: division.id };
+  }
+
+  it("the editor's own output survives PUT → GET unchanged, and stays ISO on the wire", async () => {
+    const { auth, divisionId } = await seedBlackoutDivision();
+    const rows = editorRows();
+
+    await putScheduleSettings(auth, divisionId, {
+      config: { ...BLACKOUT_BASE_CONFIG, blackouts: rows },
+    });
+    const stored = await getScheduleSettings(auth, divisionId);
+
+    // Both windows, in order, unchanged. No new endpoint anywhere in sight:
+    // this is the pre-existing JSONB write, and a non-empty `blackouts` is one
+    // of the things `usesConstraints` trips on — hence the "pro" seed.
+    expect(stored.config.blackouts).toEqual(rows);
+
+    // ISO strings, NOT the engine's epoch ms. `schemas.ts` types these as
+    // `z.iso.datetime({offset:true})`, so a client writing numbers gets a 400
+    // rather than a subtly wrong time — the two shapes share all three keys.
+    for (const w of stored.config.blackouts) {
+      expect(typeof w.from).toBe("string");
+      expect(w.from).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      expect(w.to).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    }
+
+    // The court-scoped window keeps its court. The division-wide one has NO
+    // `court` KEY — not a `court: undefined` — because `courtBlocked` skips on
+    // `bo.court !== undefined`, so a serialised `undefined` would scope the
+    // window to a court literally named "undefined" and block nothing.
+    expect(stored.config.blackouts[0]!.court).toBe("Court 2");
+    expect("court" in stored.config.blackouts[1]!).toBe(false);
+  });
+
+  it("toSlotConfig hands the engine the exact epoch-ms instants, not a re-zoned copy", async () => {
+    const { auth, divisionId } = await seedBlackoutDivision();
+    const rows = editorRows();
+    await putScheduleSettings(auth, divisionId, {
+      config: { ...BLACKOUT_BASE_CONFIG, blackouts: rows },
+      tz: BLACKOUT_DIVISION_TZ,
+    });
+
+    const settings = await withTenant(auth.orgId, (tx) => loadSettings(tx, divisionId));
+    // Non-vacuity guard for the assertion below: two different non-UTC clocks
+    // are genuinely in play on this row.
+    expect(settings.displayTz).toBe(BLACKOUT_DIVISION_TZ);
+    expect(settings.orgTz).toBe(BLACKOUT_ORG_TZ);
+
+    // THE CONVERSION BOUNDARY. A stored ISO instant carries its own offset, so
+    // the server must parse it absolutely and re-zone it through neither clock.
+    const config = toSlotConfig(settings, 0);
+    expect(config.blackouts).toEqual([
+      { court: "Court 2", from: Date.parse(rows[0]!.from), to: Date.parse(rows[0]!.to) },
+      { from: Date.parse(rows[1]!.from), to: Date.parse(rows[1]!.to) },
+    ]);
+    // `toEqual` treats an absent key and an `undefined` one as equal, so the
+    // global window's missing `court` needs saying separately.
+    expect("court" in config.blackouts![1]!).toBe(false);
+    expect(typeof config.blackouts![0]!.from).toBe("number");
+  });
+
+  it("the placer and the solver lattice both refuse the stored window", async () => {
+    const { auth, divisionId } = await seedBlackoutDivision();
+    const w = globalWindow("2026-08-01T12:00", "2026-08-01T13:00");
+    // One court, and the day opens an hour before the window: six 30-minute
+    // fixtures laid end to end MUST cross it unless something stops them.
+    await putScheduleSettings(auth, divisionId, {
+      config: {
+        ...BLACKOUT_BASE_CONFIG,
+        startAt: new Date(w.from - HOUR).toISOString(),
+        courts: ["Court 1"],
+        blackouts: w.rows,
+      },
+    });
+    const settings = await withTenant(auth.orgId, (tx) => loadSettings(tx, divisionId));
+    const config = toSlotConfig(settings, 0);
+
+    const fixtures = Array.from({ length: 6 }, (_, i) => ({ id: `f${i + 1}` }));
+    const placedInWindow = (as: readonly { startAt: number; endAt: number }[]) =>
+      as.filter((a) => a.startAt < w.to && a.endAt > w.from).length;
+
+    // CONTROL, through the identical path with the window removed: that hour
+    // is prime time and the placer fills it. Without this, the assertion below
+    // would also pass on a placer that ignored blackouts entirely.
+    const control = slotFixtures({ config: { ...config, blackouts: [] }, fixtures });
+    expect(control.assignments).toHaveLength(6);
+    expect(placedInWindow(control.assignments)).toBeGreaterThan(0);
+
+    const placed = slotFixtures({ config, fixtures });
+    expect(placedInWindow(placed.assignments)).toBe(0);
+    // All six still land: "nothing inside the window" must not be bought by
+    // dropping fixtures on the floor.
+    expect(placed.assignments).toHaveLength(6);
+
+    // The z3 path reaches the same window through `buildGrid`'s lattice. Its
+    // universe is pinned explicitly here because `applyWindow` leaves `to` at
+    // Infinity when the config carries no `endAt`, and buildGrid answers an
+    // unbounded universe by returning NO slots — which would make the control
+    // below vacuously true.
+    const bounded = {
+      ...config,
+      courts: [...config.courts],
+      window: { from: w.from - 2 * HOUR, to: w.from + 4 * HOUR },
+    };
+    const slotsInWindow = (g: { slots: readonly { startAt: number }[] }) =>
+      g.slots.filter((s) => s.startAt < w.to && s.startAt + 30 * MIN > w.from).length;
+    const grid = buildGrid({ config: bounded });
+    expect(grid.overCap).toBe(false);
+    expect(slotsInWindow(buildGrid({ config: { ...bounded, blackouts: [] } }))).toBeGreaterThan(0);
+    expect(slotsInWindow(grid)).toBe(0);
+  });
+
+  it("autoSchedule honours a stored window end to end — an identical division without one fills it", async () => {
+    const { auth } = await seedOrg("pro");
+    // WHERE THIS WINDOW SITS IS THE TEST.
+    //
+    // A stored blackout flips this run from greedy onto z3, and z3's lattice
+    // opens at LOCAL MIDNIGHT on the governing clock — `applyWindow` derives
+    // the universe from `startAt`'s DAY, not from `startAt` itself. Measured:
+    // with the window at 11:00 and `startAt` at 10:00, z3 answers it by moving
+    // the entire six-fixture board back to 00:00–02:30 and the window is
+    // simply nowhere near the board. "Nothing landed inside it" is then true
+    // of a solver that never looked at it — the exact vacuity this prompt
+    // exists to rule out.
+    //
+    // So the window goes half an hour after midnight, where nothing can pack
+    // around it: this org has no timezone, hence a UTC governing clock, and no
+    // arrangement of six 30-minute fixtures starting at or after 00:00 avoids
+    // 00:30–01:30 by accident.
+    const dayStart = Date.parse("2026-08-01T00:00:00.000Z");
+    const w = windowAt(dayStart + 30 * MIN, dayStart + 90 * MIN);
+    const startAt = new Date(dayStart).toISOString();
+
+    /** A whole division built and auto-scheduled through the real usecases —
+     *  no engine call in this test, so the ONLY route the window can take is
+     *  the stored config the editor writes. */
+    const boardFor = async (blackouts: { court?: string; from: string; to: string }[]) => {
+      const competition = await createCompetition(auth, {
+        ends_on: "2030-12-31",
+        name: `Blackout E2E ${blackouts.length}`,
+        visibility: "private",
+        branding: {},
+      });
+      const division = await createDivision(auth, competition.id, {
+        name: "Open",
+        sport_key: "generic",
+        variant_key: "score",
+        config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+        eligibility: [],
+      });
+      await createEntrants(
+        auth,
+        division.id,
+        ["A", "B", "C", "D"].map((display_name, i) => ({
+          kind: "individual" as const,
+          display_name,
+          seed: i + 1,
+          members: [],
+        })),
+      );
+      const [stage] = await createStages(auth, division.id, {
+        seq: 1,
+        kind: "league",
+        name: "L",
+        config: {},
+      });
+      await putScheduleSettings(auth, division.id, {
+        config: {
+          startAt,
+          matchMinutes: 30,
+          gapMinutes: 0,
+          courts: ["Court 1"],
+          perEntrantMinRest: 0,
+          blackouts,
+          sessionWindows: [],
+        },
+        tz: "UTC",
+      });
+      await generateStageFixtures(auth, stage!.id);
+      return autoSchedule(auth, stage!.id, { only_unlocked: false, mode: "build" });
+    };
+
+    const inWindow = (p: { assignments: { scheduled_at: string }[] }) =>
+      p.assignments.filter((a) => {
+        const start = Date.parse(a.scheduled_at);
+        return start < w.to && start + 30 * MIN > w.from;
+      }).length;
+
+    // CONTROL first: the same division shape with no window books that hour.
+    const control = await boardFor([]);
+    expect(control.assignments).toHaveLength(6);
+    expect(inWindow(control)).toBeGreaterThan(0);
+
+    const guarded = await boardFor(w.rows);
+    expect(inWindow(guarded)).toBe(0);
+    expect(guarded.assignments).toHaveLength(6);
+
+    // ...and the window COST something. Any packing of six 30-minute fixtures
+    // on one court that avoids the hour must finish later than the packing
+    // that does not, so this is true whichever arrangement the solver picks —
+    // z3 spends the window by pushing the whole board past it rather than
+    // leaving a hole, since that is the shorter makespan. A run that quietly
+    // dropped the window would land on the control's board instead.
+    const latest = (p: { assignments: { scheduled_at: string }[] }) =>
+      Math.max(...p.assignments.map((a) => Date.parse(a.scheduled_at)));
+    expect(latest(guarded)).toBeGreaterThan(latest(control));
+    // Two autoSchedule passes, and each one pays the z3/WASM warm-up: the
+    // sibling solver tests in this file run ~20s apiece on their own.
+  }, 120_000);
+
+  // TZ NOTE (reported, deliberately NOT pinned as expected behaviour).
+  // The assertions above are all about the SERVER, which handles the window
+  // correctly: an ISO instant carries its offset and is never re-zoned. The
+  // open gap is one layer up, in the editor: `draftsToBlackouts` resolves its
+  // `datetime-local` strings with `new Date(local)`, i.e. through the
+  // ORGANISER'S BROWSER zone, not `settings.orgTz` — the governing venue clock
+  // (#448). An organiser sitting in a different zone from the venue therefore
+  // stores an instant offset by the difference. That is pre-existing behaviour
+  // shared with every other absolute-time field in these panels (the sibling
+  // `boardset.startAt`, `dailyHoursToWindows`), not a Prompt 06 regression, and
+  // it is not pinned here precisely because it is a gap rather than a contract.
 });
 
 // ---------------------------------------------------------------------------
