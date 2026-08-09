@@ -1502,7 +1502,7 @@ const toMs = (iso: string): number => new Date(iso).getTime();
  *  movable id appears exactly once, no foreign ids, no unknown courts, no pinned
  *  fixture nudged off its current slot. Returns a human note on the first
  *  violation, or null when the plan is well-formed. */
-function structuralCheck(plan: AiSchedulePlan, movableIds: Set<string>, pack: SchedulePack): string | null {
+export function structuralCheck(plan: AiSchedulePlan, movableIds: Set<string>, pack: SchedulePack): string | null {
   const courts = new Set(pack.settings.courts);
   const pinned = new Map(pack.fixtures.movable.filter((f) => f.pinned).map((f) => [f.id, f]));
   const seen = new Set<string>();
@@ -1593,7 +1593,7 @@ export function toEngineAssignments(plan: AiSchedulePlan, pack: SchedulePack): A
  *  loop needs a shared entrant or person). Stamping a FOREIGN division's id on
  *  a row this run may not move would be a rule match invented in the opposite
  *  direction — the pack does not even carry the pool that row sat in. */
-function toObstacleAssignments(pack: SchedulePack): Assignment[] {
+export function toObstacleAssignments(pack: SchedulePack): Assignment[] {
   return pack.fixtures.obstacles.map((o, i) => ({
     fixtureId: `obstacle:${i}`,
     court: o.court,
@@ -1734,7 +1734,7 @@ export function windowBounds(window: { start: string; end: string }): { from: nu
 /** feeds.after are direct winner/loser feeds (schedule.ts feedDependencies);
  *  an order violation on one blocks. Deps whose source isn't placed are ignored
  *  by validateAssignments. */
-function packFeedDependencies(pack: SchedulePack): OrderDependency[] {
+export function packFeedDependencies(pack: SchedulePack): OrderDependency[] {
   const deps: OrderDependency[] = [];
   for (const f of pack.fixtures.movable) {
     for (const dependsOn of f.feeds.after) {
