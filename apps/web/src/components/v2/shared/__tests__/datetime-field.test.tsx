@@ -89,4 +89,29 @@ describe("DateTimeField", () => {
     // Same for `disabled`, which the wizard toggles per step.
     expect(inputOf({ ...base, disabled: true }).disabled).toBe(true);
   });
+
+  it("required marks the field for assistive tech and NEVER emits the native attribute", () => {
+    const base: DateTimeFieldProps = {
+      kind: "date",
+      value: "",
+      onChange: () => {},
+      label: "End date",
+    };
+    const props = inputOf({ ...base, required: true });
+    expect(props["aria-required"]).toBe("true");
+    // #376 is the whole point of this prop, and this is the half that guards
+    // it: the NATIVE `required` attribute fires the browser's own English
+    // validation tooltip, which preempts the localized message the form shows
+    // instead. A caller asking for `required` must get the a11y signal without
+    // the tooltip, by construction — never by remembering to avoid it.
+    expect(props.required).toBeUndefined();
+    const html = renderToStaticMarkup(<DateTimeField {...base} required />);
+    expect(html).toContain('aria-required="true"');
+    expect(html).not.toMatch(/\srequired[=\s/>]/);
+
+    // Optional and additive: absent by default, so the converted call sites
+    // that do not pass it are unchanged.
+    expect(inputOf(base)["aria-required"]).toBeUndefined();
+    expect(renderToStaticMarkup(<DateTimeField {...base} />)).not.toContain("required");
+  });
 });

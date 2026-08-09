@@ -123,37 +123,50 @@ describe("CompetitionWizard — create requires an end date (#376)", () => {
   });
 });
 
-// Date/time UX programme, prompt 03. The wizard hand-rolled its own
-// `<label className="block"><span className="label">…</span><input type="date"
-// className="input" /></label>`; the start date now goes through the shared
-// `DateTimeField` so every date/time control in the app is one component.
+// Date/time UX programme, prompt 03. The wizard hand-rolled both of its date
+// controls as `<label className="block"><span className="label">…</span><input
+// type="date" className="input" /></label>`; both now go through the shared
+// `DateTimeField`, so every date/time control in the app is one component.
 //
-// The END date is deliberately NOT converted: it carries `aria-required="true"`
-// (the accessible substitute for the native `required` attribute this form
-// avoids on purpose — see submit()), and `DateTimeFieldProps` has no way to
-// express that. Converting it would silently drop the only AT-visible signal
-// that the field is mandatory, and delete the assertion above that guards it.
+// The end date's `aria-required="true"` — the accessible stand-in for the
+// native `required` attribute this form avoids on purpose (see submit()) —
+// survives the swap as DateTimeField's `required` prop, which emits the ARIA
+// and never the native attribute. The #376 assertion above is what guards
+// that, unchanged; the component's own suite pins the "never native" half.
 describe("CompetitionWizard — shared date/time control (date/time UX prompt 03)", () => {
-  it("renders the start date through the shared DateTimeField, not a hand-rolled input", () => {
-    const [starts] = dateInputs(mountWizard().tree());
+  it("renders BOTH dates through the shared DateTimeField, not hand-rolled inputs", () => {
+    const [starts, ends] = dateInputs(mountWizard().tree());
     // The class is the whole fingerprint from here: hand-rolled was `input`,
     // DateTimeField renders `input w-full text-base`. Visually a no-op —
     // `.input` already applies `w-full`, and `text-base` is the size it
     // inherits anyway (see the component for why not `sm:text-sm`).
     expect(propsOf(starts!).className).toBe("input w-full text-base");
+    expect(propsOf(ends!).className).toBe("input w-full text-base");
   });
 
-  it("keeps the start-date label, still wrapping its own control", () => {
+  it("keeps both labels, each still wrapping its own control", () => {
     // Held constant across the swap: same copy, same implicit association via
     // an enclosing <label> (DateTimeField is hookless, so there is no htmlFor).
     const tree = mountWizard().tree();
-    const index = tree.indexOf(dateInputs(tree)[0]!);
-    expect(propsOf(tree[index - 1]!).className).toBe("label");
-    expect(propsOf(tree[index - 1]!).children).toBe(msg("comp.wizard.startsOn"));
-    expect(tree[index - 2]!.type).toBe("label");
+    const labels = [msg("comp.wizard.startsOn"), `${msg("comp.wizard.endsOn")} *`];
+    dateInputs(tree).forEach((input, i) => {
+      const index = tree.indexOf(input);
+      expect(propsOf(tree[index - 1]!).className).toBe("label");
+      expect(propsOf(tree[index - 1]!).children).toBe(labels[i]);
+      expect(tree[index - 2]!.type).toBe("label");
+    });
   });
 
-  it("still POSTs the start date typed into the shared control", async () => {
+  it("still floors the end date at the start date the organiser picked", () => {
+    // The one cross-field relationship the hand-rolled markup enforced. It is
+    // now a prop, so a dropped `min` would be invisible without this.
+    const island = mountWizard();
+    expect(propsOf(dateInputs(island.tree())[1]!).min).toBeUndefined();
+    typeDate(island.tree(), 0, "2026-06-01");
+    expect(propsOf(dateInputs(island.tree())[1]!).min).toBe("2026-06-01");
+  });
+
+  it("still POSTs the dates typed into the shared controls", async () => {
     // The join the swap could break invisibly: DateTimeField hands its parent
     // the VALUE, not the event, so a mis-wired onChange would post undefined.
     const island = mountWizard();
@@ -162,6 +175,7 @@ describe("CompetitionWizard — shared date/time control (date/time UX prompt 03
     await submitForm(island.tree());
 
     expect(postedBody().starts_on).toBe("2026-06-01");
+    expect(postedBody().ends_on).toBe("2026-08-31");
   });
 });
 

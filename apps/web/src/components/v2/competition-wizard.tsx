@@ -136,25 +136,19 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
           value={startsOn}
           onChange={setStartsOn}
         />
-        <label className="block">
-          {/* #376: mandatory — see submit() for why the message is ours and
-              not the browser's native `required` tooltip. That is also why
-              this one stays hand-rolled while the start date above moved to
-              the shared DateTimeField (date/time UX prompt 03):
-              `aria-required` is the accessible stand-in for the `required`
-              attribute we deliberately omit, and DateTimeFieldProps cannot
-              carry it. Converting this control would drop the only signal a
-              screen reader gets that the field is compulsory. */}
-          <span className="label">{msg("comp.wizard.endsOn")} *</span>
-          <input
-            type="date"
-            aria-required="true"
-            min={startsOn || undefined}
-            value={endsOn}
-            onChange={(e) => setEndsOn(e.target.value)}
-            className="input"
-          />
-        </label>
+        {/* #376: mandatory — see submit() for why the message is ours and not
+            the browser's native `required` tooltip. `required` here is exactly
+            that policy: DateTimeField emits `aria-required` and never the
+            native attribute, so the screen-reader signal survives without the
+            tooltip that would preempt our localized message. */}
+        <DateTimeField
+          kind="date"
+          label={`${msg("comp.wizard.endsOn")} *`}
+          required
+          min={startsOn || undefined}
+          value={endsOn}
+          onChange={setEndsOn}
+        />
       </div>
 
       {paywall && <UpgradeGate feature={paywall.feature} />}

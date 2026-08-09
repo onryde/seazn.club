@@ -26,9 +26,23 @@ export interface DateTimeFieldProps {
   label: string;
   min?: string;
   disabled?: boolean;
+  /**
+   * Announce the field as compulsory to assistive tech. This does NOT set the
+   * native `required` attribute, and the component owns that policy so no call
+   * site has to rediscover it — see the render below.
+   */
+  required?: boolean;
 }
 
-export function DateTimeField({ kind, value, onChange, label, min, disabled }: DateTimeFieldProps) {
+export function DateTimeField({
+  kind,
+  value,
+  onChange,
+  label,
+  min,
+  disabled,
+  required,
+}: DateTimeFieldProps) {
   return (
     <label className="block">
       <span className="label">{label}</span>
@@ -45,6 +59,12 @@ export function DateTimeField({ kind, value, onChange, label, min, disabled }: D
         value={value}
         min={min}
         disabled={disabled}
+        // ARIA only, deliberately never the native `required` attribute (#376):
+        // the native one fires the browser's OWN English validation tooltip,
+        // which preempts the localized message the form shows instead. So a
+        // required date/time field gets the screen-reader signal without the
+        // tooltip, by construction rather than by every caller remembering.
+        aria-required={required ? "true" : undefined}
         onChange={(e) => onChange(e.target.value)}
       />
     </label>
