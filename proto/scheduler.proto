@@ -3,74 +3,104 @@ syntax = "proto3";
 package seazn.cpsat.v1;
 
 // -- Build/Polish (tier solver) --------------------------------------------
+//
+// Round 6: identity in this bounded context is POSITIONAL, not string-based.
+// `_require_id`'s three-round canonicality saga (whitespace, then invisible
+// Unicode, then homoglyphs) never terminated because every character rule was
+// a guess about what a caller meant by two strings that render identically.
+// The service never actually misbehaved on any of them -- given two distinct
+// strings it saw two courts and placed one fixture on each, correctly. The
+// wrongness only appeared when a HUMAN rendered the board, and this context
+// never renders (see the DDD standard, section 1) -- so the fix is to stop
+// comparing strings at all. A fixture's identity is its index in `fixtures`;
+// a court's is its index in `court_names`; a division/entrant's identity is a
+// caller-assigned index bounded by a declared count. Two "confusable" court
+// NAMES are simply two distinct, correctly-disambiguated indices now -- there
+// is no canonicality question left to ask.
+//
+// The validation rule this replaces `_require_id` with, everywhere below:
+// every index must be IN RANGE for the list or count it points into, and
+// every singular (non-repeated) index field must be explicitly SET --
+// because 0 is always a legitimate index, an unset field cannot be told from
+// a deliberate `0` by value alone, and would otherwise silently resolve to
+// "index 0" rather than being refused. That is the same defence proto3
+// `optional` already gives `gap_minutes` and `Slot.day_index` below, applied
+// to every field whose whole job is naming one specific entity.
+
+message Fixture {
+  // Each element 0 <= idx < `SolveBuildRequest.entrant_count`. Repeated
+  // fields carry no presence ambiguity of their own -- every element that
+  // exists was explicitly appended by the caller -- so only the RANGE is
+  // checked, not presence.
+  repeated uint32 entrant_indices = 1;
+  // 0 <= idx < `SolveBuildRequest.division_count`. `optional` because
+  // division 0 is a real, legitimate division: without presence tracking, a
+  // caller who forgot to set this would silently join division 0's rest/cap
+  // rules instead of being refused -- the exact "unset vs. legitimately
+  // zero" trap this whole redesign exists to close, now on an index instead
+  // of a string.
+  optional uint32 division_index = 2;
+}
 
 message Slot {
-  string court = 1;
+  // 0 <= idx < len(`SolveBuildRequest.court_names`). `optional` for the same
+  // reason as `Fixture.division_index`: court 0 is real, so an unset field
+  // must be refused rather than silently defaulting to it.
+  optional uint32 court_index = 1;
   int64 start_at_ms = 2;
-  // The CALLER's calendar day for this slot, resolved in the org's own
-  // timezone, and the only thing the per-division day cap groups by.
-  //
-  // The solver used to bucket by `start_at_ms / 86400000`, a UTC day. Day caps
-  // are governed by the org's zone, so any org away from UTC had its caps
-  // applied against the wrong boundary: at UTC+10 a 09:00 and a 19:00 local
-  // match on one day fall in two UTC buckets and a cap of one admits two.
-  // Sending a timezone NAME instead would put timezones-as-policy inside the
-  // solver's bounded context, which the design rules out — the caller already
-  // knows the zone, so it resolves the day and sends the integer.
-  //
-  // `optional` because 0 is the first day and is therefore a legitimate value,
-  // so an unset field cannot be told from a real one: unset puts every slot on
-  // "day 0" and collapses the whole lattice into a single cap bucket.
+  // Unchanged from the string-identity contract: NOT an index into anything
+  // declared elsewhere (there is no `day_count`), just the caller's own
+  // resolved calendar-day integer. Day 0 is a legitimate value, so `optional`
+  // + presence is what separates it from unset -- exactly as before.
   optional int32 day_index = 3;
 }
 
-message Grid {
-  repeated Slot slots = 1;
-  int32 step_minutes = 2;
+// A blocking interval with no identity of its own. It never carried one that
+// mattered: the old `Assignment.fixture_id` on an `existing` row reached
+// nothing but a debug label on the CP-SAT interval variable's name
+// (`model.py`'s `ivc_existing_{id}`), confirmed by tracing every read of it,
+// not merely by the docstring that first claimed it. `model.py:118-120`
+// already documented that a pinned row carries no entrant list; this is the
+// same fact one field further.
+message PinnedRow {
+  optional uint32 court_index = 1;
+  int64 start_at_ms = 2;
 }
 
-message Fixture {
-  string fixture_id = 1;
-  repeated string entrant_ids = 2;
-  string division_id = 3;
-}
-
-message Assignment {
-  string fixture_id = 1;
-  string court = 2;
-  int64 start_at_ms = 3;
-}
-
+// (before, after) as FIXTURE indices -- 0 <= idx < len(`SolveBuildRequest.
+// fixtures`). Note what this closes for free: the old contract needed a
+// dedicated check rejecting a dependency that named a PINNED row's id
+// (`existing` and `fixtures` shared one string namespace, so `"x1"` was a
+// real id that happened to resolve to nothing). `PinnedRow` has no identity
+// at all now, so there is no namespace for a dependency to misname -- an
+// out-of-range index is the whole story.
 message OrderPair {
-  string before_fixture_id = 1;
-  string after_fixture_id = 2;
+  optional uint32 before_index = 1;
+  optional uint32 after_index = 2;
 }
 
-message DivisionRestRule {
-  string division_id = 1;
-  // `optional` because 0 is a LEGITIMATE value here ("this division has no
-  // minimum rest"), so it cannot be told from an unset field by its value. A
-  // rule that is present but carries an unset number is a rule the caller
-  // asked for and silently did not get. Contrast `max_fixtures_per_day`
-  // below, where 0 means "may not play at all" and is never legitimate, so a
-  // value guard reaches it and the field stays required — which also keeps
-  // ts-proto typing it as mandatory for the caller.
+// Replaces `DivisionRestRule` + `DivisionDayCapRule`: ONE rule per division,
+// not two independent lists keyed by the same string. `min_rest_minutes` and
+// `max_fixtures_per_day` are each `optional` so a division can carry either,
+// both, or (by being absent from `division_rules` entirely) neither --
+// exactly the independence the two-list contract had, just keyed on one
+// index instead of duplicated across two lists.
+message DivisionRule {
+  optional uint32 division_index = 1;
+  // Presence, not `>= 0`: 0 is "no minimum rest", a legitimate rule, and
+  // distinct from no rule at all (division absent from `division_rules`, or
+  // present with this field unset).
   optional int32 min_rest_minutes = 2;
-}
-
-message DivisionDayCapRule {
-  string division_id = 1;
-  int32 max_fixtures_per_day = 2;
+  // Presence, then `> 0` when set: 0 would forbid the division outright,
+  // which is never what "no cap" means. Absent = uncapped.
+  optional int32 max_fixtures_per_day = 3;
 }
 
 message BuildConstraints {
   int32 match_minutes = 1;
-  // `optional` for the same reason as `min_rest_minutes`: 0 is a real answer
-  // ("no court turnaround"), and unset arrives as the same 0. Everything else
-  // in this message has a value guard that reaches its degenerate case.
+  // `optional` because 0 is real ("no court turnaround") and unset arrives
+  // as the same 0.
   optional int32 gap_minutes = 2;
-  repeated DivisionRestRule rest_by_division = 3;
-  repeated DivisionDayCapRule day_cap_by_division = 4;
 }
 
 enum SolveStatus {
@@ -84,14 +114,13 @@ enum SolveStatus {
 
 // One rung of the lexicographic objective chain and the value it PROVED.
 message Tier {
-  // `placed` | `makespan` | `idle_gap` | `imbalance`, in that order. The word
-  // is shared with the TypeScript caller and only its case convention changes
-  // (`idle_gap` <-> `idleGap`); see the DDD standard's ubiquitous-language rule.
+  // `placed` | `makespan` | `idle_gap` | `imbalance`, in that order. Shared
+  // vocabulary with the TypeScript caller; see the DDD standard's
+  // ubiquitous-language rule. Untouched by the identity change -- a tier name
+  // is a fixed protocol constant, not caller data.
   string name = 1;
-  // NOT milliseconds for every tier. `makespan`, `idle_gap` and `imbalance`
-  // are ms; `placed` is a COUNT of fixtures. The field was called `value_ms`
-  // and carried the count regardless, so the name is deliberately
-  // unit-neutral rather than documenting the lie.
+  // NOT milliseconds for every tier -- see the field's history if this ever
+  // moves again. Untouched here.
   int64 value = 2;
 }
 
@@ -100,15 +129,48 @@ message SolveError {
   string message = 2;
 }
 
+// The OUTPUT half of what used to be `Assignment` (fixture_id, court,
+// start_at_ms). Positional now: a caller maps `fixture_index`/`court_index`
+// back through the SAME `fixtures`/`court_names` arrays it sent. Never
+// validated as input -- this message is service-authored only.
+message Assignment {
+  uint32 fixture_index = 1;
+  uint32 court_index = 2;
+  int64 start_at_ms = 3;
+}
+
 message SolveBuildRequest {
+  // Unchanged: an opaque correlation token, never compared, never joined
+  // against anything, reaching only a log line. Not identity in the sense
+  // this redesign is about, and untouched by it.
   string request_id = 1;
-  repeated string courts = 2;
-  Grid grid = 3;
-  repeated Fixture fixtures = 4;
-  repeated Assignment existing = 5;
-  repeated OrderPair dependencies = 6;
-  BuildConstraints constraints = 7;
-  double wall_seconds = 8;
+  // DISPLAY ONLY. Never compared, never required unique, never validated for
+  // content -- two entries that render identically are simply two distinct,
+  // correctly-disambiguated court indices; see the file header. Its LENGTH is
+  // the declared (not inferred) bound for every `court_index` field below,
+  // exactly as `fixtures`' own length bounds a fixture index.
+  repeated string court_names = 2;
+  // The declared bound for every `entrant_indices` value. Entrants have no
+  // names on the wire at all -- unlike courts, nothing about an entrant is
+  // ever rendered by this service, so there is nothing to carry for display.
+  // An inferred bound (the largest index actually used) cannot distinguish
+  // "entrant 7" from a typo; a declared count can.
+  uint32 entrant_count = 3;
+  // The declared bound for every `division_index` value, for the same reason
+  // `entrant_count` is declared rather than inferred.
+  uint32 division_count = 4;
+  repeated Fixture fixtures = 5;
+  repeated Slot slots = 6;
+  // Unread by the domain (`model.py` `del`etes its parameter immediately) --
+  // contractual only, exactly as before. Kept at the top level now that
+  // `Grid` no longer has a reason to exist: it existed only to pair `slots`
+  // with this field, and nothing else about it needs a wrapper message.
+  int32 step_minutes = 7;
+  repeated PinnedRow existing = 8;
+  repeated OrderPair dependencies = 9;
+  repeated DivisionRule division_rules = 10;
+  BuildConstraints constraints = 11;
+  double wall_seconds = 12;
 }
 
 message SolveBuildResponse {

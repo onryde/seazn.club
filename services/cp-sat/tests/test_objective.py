@@ -50,12 +50,21 @@ load before diagnosing, and re-run alone.
 If a tier ever needs to get genuinely faster, the lever is its DUAL bound, not
 its search — see `cp_sat.model`'s T3 note, where a squeeze that could not close
 its bound in 20 s proved the same value in 0.4 s as an equality.
+
+--- round 6: identity is POSITIONAL, `bench/` is not ------------------------
+
+`bench/cpsat_bench_boards.py` is out of scope and still returns string-keyed
+boards; `_board_positional.to_positional` converts every board generated in
+this file immediately, before it ever reaches `build_model`. `objective.py`
+itself is untouched by round 6 — it never keys on identity at all, only on
+`FixtureVars`'s decision variables.
 """
 
 import os
 
 import pytest
 
+from _board_positional import to_positional
 from cp_sat.model import MIN_MS, build_model, solve
 from cp_sat.objective import (
     TIER_IMBALANCE,
@@ -111,7 +120,7 @@ def _production_board():
     # cpsat_repair_bench.py.
     from cpsat_bench_boards import production_board
 
-    return production_board()
+    return to_positional(production_board())
 
 
 @pytest.fixture(scope="module")
@@ -120,8 +129,8 @@ def board():
 
 
 def _model_for(board):
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = board
-    return build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = board
+    return build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
 
 
 @pytest.fixture(scope="module")
@@ -212,13 +221,13 @@ def test_full_chain_places_exactly_what_t0_alone_places(board, chain):
 def test_reported_values_match_the_board_that_came_back(board, chain):
     """Every reported number is a property of the returned assignments, not of
     a board discarded three solves ago."""
-    fixtures, courts, _slots, _step, constraints, _existing, _deps = board
+    fixtures, num_courts, _slots, _step, constraints, _existing, _deps = board
     dur_ms = constraints["match_minutes"] * MIN_MS
     reported = dict(chain.objective_values)
 
     assert reported[TIER_PLACED] == len(chain.assignments)
     # T3 is the last tier, so its own term is exact for the board it returned.
-    assert reported[TIER_IMBALANCE] == _court_imbalance(chain.assignments, courts, dur_ms)
+    assert reported[TIER_IMBALANCE] == _court_imbalance(chain.assignments, num_courts, dur_ms)
 
 
 def test_reported_bounds_are_frozen_against_the_final_board(board, chain):
@@ -227,9 +236,9 @@ def test_reported_bounds_are_frozen_against_the_final_board(board, chain):
     honour them — that is the whole content of "frozen", and it is exactly
     what a blended score would not give you.
     """
-    fixtures, courts, _slots, _step, constraints, _existing, _deps = board
+    fixtures, _num_courts, _slots, _step, constraints, _existing, _deps = board
     dur_ms = constraints["match_minutes"] * MIN_MS
-    entrants_of = {fid: ents for fid, ents, _div in fixtures}
+    entrants_of = [ents for ents, _div in fixtures]  # identity is position now
     reported = dict(chain.objective_values)
 
     assert _makespan(chain.assignments, dur_ms) <= reported[TIER_MAKESPAN]
@@ -406,7 +415,7 @@ def test_tier_directions_are_pinned_without_the_clock():
         imbalance_probe_board,
     )
 
-    board = imbalance_probe_board()
+    board = to_positional(imbalance_probe_board())
     model = _model_for(board)
     outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=5.0)
     detail = (
@@ -520,7 +529,9 @@ def test_chain_status_describes_the_board_not_the_last_solve():
     """
     from cp_sat.objective import _chain_status
 
-    board = [("f0000", "C1", 0)]
+    # Opaque to `_chain_status` -- it only checks `if not assignments`, so the
+    # exact shape does not matter. (fixture_index, court_index, start_at_ms).
+    board = [(0, 0, 0)]
 
     # Every requested tier proved.
     assert _chain_status(board, 4, 4, "UNKNOWN") == "OPTIMAL"
@@ -542,18 +553,19 @@ def test_chain_status_describes_the_board_not_the_last_solve():
 
 
 def _makespan(assignments, dur_ms):
-    starts = [start for _fid, _court, start in assignments]
+    starts = [start for _fi, _court, start in assignments]
     if not starts:
         return 0
     return max(starts) + dur_ms - min(starts)
 
 
-def _court_imbalance(assignments, courts, dur_ms):
+def _court_imbalance(assignments, num_courts, dur_ms):
     """Busiest configured-or-used court minus the quietest. A configured court
     nobody plays on counts as a zero — build.ts:2084-2134's rule, which is why
-    the dict is seeded from `courts` rather than from the placements."""
-    load = {court: 0 for court in courts}
-    for _fid, court, _start in assignments:
+    the dict is seeded from `range(num_courts)` rather than from the
+    placements."""
+    load = {c: 0 for c in range(num_courts)}
+    for _fi, court, _start in assignments:
         load[court] = load.get(court, 0) + dur_ms
     if not load:
         return 0
@@ -562,10 +574,11 @@ def _court_imbalance(assignments, courts, dur_ms):
 
 def _worst_consecutive_gap(assignments, entrants_of, dur_ms):
     """Largest wait between CONSECUTIVE matches, per participant with two or
-    more — `boardMetrics.worstIdleGapMinutes` in ms."""
-    by_entrant: dict[str, list[int]] = {}
-    for fid, _court, start in assignments:
-        for entrant in entrants_of[fid]:
+    more — `boardMetrics.worstIdleGapMinutes` in ms. `entrants_of` is indexed
+    by fixture POSITION now (a list), not by a fixture id (a dict)."""
+    by_entrant: dict[int, list[int]] = {}
+    for fi, _court, start in assignments:
+        for entrant in entrants_of[fi]:
             by_entrant.setdefault(entrant, []).append(start)
     worst = 0
     for starts in by_entrant.values():

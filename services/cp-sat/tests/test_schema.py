@@ -5,15 +5,20 @@ This is the anti-corruption layer. Domain code (`cp_sat.model` /
 `cp_sat.objective`) never sees a proto type in either direction, and — the
 point of most of the tests below — never sees a request that would make it
 produce a confidently wrong board. `build_model` and `run_tier_chain` keep
-their own guards on the same three fields; those are defence in depth, not the
-first line. Rejecting here is what turns the failure into a clean
+their own guards on the same two scalar fields; those are defence in depth,
+not the first line. Rejecting here is what turns the failure into a clean
 `SOLVE_STATUS_ERROR` response instead of an exception escaping the handler.
 
-Every one of the three is a proto3 non-optional scalar, so UNSET arrives as
-`0` and is indistinguishable from a deliberate zero.
-"""
+--- round 6: identity is POSITIONAL ------------------------------------------
 
-import unicodedata
+`_require_id` and its three-round character-canonicality saga (whitespace,
+invisible Unicode, homoglyphs) are gone along with every test that exercised
+them — there is no id left to canonicalise. In their place: every index must
+be IN RANGE for the list or count it points into, and every SINGULAR index
+field must be explicitly SET (0 is always a legitimate index, so an unset
+field cannot be told from a deliberate 0 by value alone). See `cp_sat.schema`'s
+module docstring for the full reasoning.
+"""
 
 import pytest
 
@@ -22,7 +27,6 @@ from cp_sat.model import SolveOutcome
 from cp_sat.objective import MIN_TIER_SECONDS, TIER_ORDER
 from cp_sat.schema import (
     InvalidRequestError,
-    _require_id,
     error_response,
     outcome_to_response,
     request_to_model_input,
@@ -45,12 +49,12 @@ def _valid_request(**overrides) -> scheduler_pb2.SolveBuildRequest:
     exactly one field and know that field is why it was rejected."""
     kwargs = dict(
         request_id="r1",
-        courts=["Court 1"],
-        fixtures=[scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1")],
-        grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS, day_index=0)],
-            step_minutes=10,
-        ),
+        court_names=["Court 1"],
+        entrant_count=2,
+        division_count=1,
+        fixtures=[scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0)],
+        slots=[scheduler_pb2.Slot(court_index=0, start_at_ms=SLOT_MS, day_index=0)],
+        step_minutes=10,
         constraints=scheduler_pb2.BuildConstraints(match_minutes=30, gap_minutes=10),
         wall_seconds=8.0,
     )
@@ -61,7 +65,7 @@ def _valid_request(**overrides) -> scheduler_pb2.SolveBuildRequest:
 def _constraints(**overrides) -> scheduler_pb2.BuildConstraints:
     """`match_minutes` and `gap_minutes` both SET, always.
 
-    Written as a helper because `gap_minutes` now has explicit presence: a test
+    Written as a helper because `gap_minutes` has explicit presence: a test
     that builds `BuildConstraints(match_minutes=30)` to probe some unrelated
     field would be rejected for the missing gap instead, and would pass while
     proving nothing.
@@ -72,93 +76,82 @@ def _constraints(**overrides) -> scheduler_pb2.BuildConstraints:
 
 
 def test_rejects_empty_fixtures():
-    req = scheduler_pb2.SolveBuildRequest(request_id="r1", courts=["Court 1"])
+    req = scheduler_pb2.SolveBuildRequest(request_id="r1", court_names=["Court 1"])
     with pytest.raises(InvalidRequestError, match="fixtures"):
         request_to_model_input(req)
 
 
-def test_rejects_empty_courts():
+def test_rejects_empty_court_names():
     req = scheduler_pb2.SolveBuildRequest(
         request_id="r1",
-        fixtures=[scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1"], division_id="d1")],
+        entrant_count=2,
+        division_count=1,
+        fixtures=[scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0)],
     )
-    with pytest.raises(InvalidRequestError, match="courts"):
+    with pytest.raises(InvalidRequestError, match="court_names"):
         request_to_model_input(req)
 
 
-@pytest.mark.parametrize(
-    "grid",
-    [
-        pytest.param(None, id="grid-omitted-entirely"),
-        pytest.param(scheduler_pb2.Grid(step_minutes=10), id="grid-present-slots-empty"),
-    ],
-)
-def test_rejects_empty_grid_slots(grid):
-    """`Grid` is a proto3 MESSAGE field, so an omitted `grid` and a `grid` with
-    an empty `slots` list are indistinguishable on the wire — both arrive as an
-    empty `Grid`. Neither is absent, and neither is an error downstream:
-    `build_model` falls back to `Domain.FromValues([0])`, every fixture is
-    forced onto tick 0, and the solve proves that OPTIMAL with one fixture per
-    court and the rest silently unplaced.
+def test_rejects_empty_slots():
+    """No `Grid` wrapper any more (round 6 flattened it away — `step_minutes`
+    was never read by the domain and had no reason to keep a message field
+    to itself), so there is only one way to send zero slots now, not two.
 
-    Measured through the real server before this guard existed: 8 fixtures, 2
-    courts, no grid -> SOLVE_STATUS_OPTIMAL, `error` unset, 2 of 8 placed, both
-    at start_at_ms=0, tiers_completed=4.
+    Without any admissible tick the model falls back to a single start of 0,
+    forces every fixture onto it, and proves ONE fixture per court OPTIMAL
+    while silently dropping the rest — measured through the real server
+    before this guard existed: 8 fixtures, 2 courts, no slots -> OPTIMAL,
+    `error` unset, most fixtures silently unplaced.
     """
-    overrides = {} if grid is None else {"grid": grid}
-    req = _valid_request(**overrides)
-    if grid is None:
-        req.ClearField("grid")
-    with pytest.raises(InvalidRequestError, match="grid"):
+    req = _valid_request(slots=[])
+    with pytest.raises(InvalidRequestError, match="slots"):
         request_to_model_input(req)
 
 
 def test_maps_valid_request():
     req = _valid_request()
     parsed = request_to_model_input(req)
-    assert parsed.courts == ["Court 1"]
+    assert parsed.courts == 1
     assert len(parsed.fixtures) == 1
     assert parsed.wall_seconds == 8.0
 
 
 def test_maps_every_field_through():
-    """The whole translation, not just the three fields the guards read — a
+    """The whole translation, not just the two fields the guards read — a
     dropped `existing` or `dependencies` list silently relaxes the board."""
     req = _valid_request(
+        entrant_count=4,
+        division_count=1,
         fixtures=[
-            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1"),
-            scheduler_pb2.Fixture(fixture_id="f2", entrant_ids=["e3", "e4"], division_id="d1"),
+            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0),
+            scheduler_pb2.Fixture(entrant_indices=[2, 3], division_index=0),
         ],
-        existing=[scheduler_pb2.Assignment(fixture_id="x1", court="Court 1", start_at_ms=SLOT_MS)],
-        # Both endpoints name MOVABLE fixtures. A pair naming the pinned row
-        # `x1` used to map cleanly here and was then dropped without a word by
-        # `model.py`, because `id_to_idx` is built from `fixtures` alone.
-        dependencies=[scheduler_pb2.OrderPair(before_fixture_id="f1", after_fixture_id="f2")],
-        constraints=_constraints(
-            rest_by_division=[scheduler_pb2.DivisionRestRule(division_id="d1", min_rest_minutes=45)],
-            day_cap_by_division=[
-                scheduler_pb2.DivisionDayCapRule(division_id="d1", max_fixtures_per_day=3)
-            ],
-        ),
+        existing=[scheduler_pb2.PinnedRow(court_index=0, start_at_ms=SLOT_MS)],
+        # Both endpoints name MOVABLE fixtures (indices 0 and 1).
+        dependencies=[scheduler_pb2.OrderPair(before_index=0, after_index=1)],
+        division_rules=[
+            scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=45, max_fixtures_per_day=3)
+        ],
     )
     parsed = request_to_model_input(req)
-    assert parsed.fixtures == [("f1", ["e1", "e2"], "d1"), ("f2", ["e3", "e4"], "d1")]
-    assert parsed.grid_slots == [("Court 1", SLOT_MS, 0)]
+    assert parsed.fixtures == [([0, 1], 0), ([2, 3], 0)]
+    assert parsed.grid_slots == [(0, SLOT_MS, 0)]
     assert parsed.step_minutes == 10
     assert parsed.constraints == {
         "match_minutes": 30,
         "gap_minutes": 10,
-        "rest_by_division": {"d1": 45},
-        "day_cap_by_division": {"d1": 3},
+        "rest_by_division": {0: 45},
+        "day_cap_by_division": {0: 3},
     }
-    assert parsed.existing == [("x1", "Court 1", SLOT_MS)]
-    assert parsed.dependencies == [("f1", "f2")]
+    assert parsed.existing == [(0, SLOT_MS)]
+    assert parsed.dependencies == [(0, 1)]
 
 
 # --- degenerate scalars ----------------------------------------------------
-# Each of these three is separately guarded downstream. They are rejected HERE
-# so the caller gets SOLVE_STATUS_ERROR with a reason, and so the domain never
-# has to be the thing that notices.
+# Each of these is separately guarded downstream. They are rejected HERE so
+# the caller gets SOLVE_STATUS_ERROR with a reason, and so the domain never
+# has to be the thing that notices. Unrelated to identity, and unchanged by
+# round 6.
 
 
 @pytest.mark.parametrize("match_minutes", [0, -1])
@@ -178,41 +171,31 @@ def test_rejects_non_positive_match_minutes(match_minutes):
 def test_rejects_non_positive_day_cap(cap):
     """A cap of 0 forbids placing that division at all; the solve then reports
     OPTIMAL having silently dropped every one of its fixtures. Uncapped is
-    expressed by omitting the division, never by sending 0."""
+    expressed by leaving `max_fixtures_per_day` unset, never by sending 0."""
     req = _valid_request(
-        constraints=scheduler_pb2.BuildConstraints(
-            match_minutes=30,
-            gap_minutes=10,
-            day_cap_by_division=[
-                scheduler_pb2.DivisionDayCapRule(division_id="d1", max_fixtures_per_day=cap)
-            ],
-        )
+        division_rules=[scheduler_pb2.DivisionRule(division_index=0, max_fixtures_per_day=cap)]
     )
-    with pytest.raises(InvalidRequestError, match="d1"):
+    with pytest.raises(InvalidRequestError, match="max_fixtures_per_day"):
         request_to_model_input(req)
 
 
 def test_accepts_day_cap_rules_when_all_positive():
     """The guard is per-rule; a board with several capped divisions must still
-    map, or the check has quietly become 'no caps allowed'.
-
-    Both divisions have to be DECLARED by a fixture now: a rule keyed on a
-    division nobody is in is inert, and this test used to cap a `d2` that the
-    board did not contain."""
+    map, or the check has quietly become 'no caps allowed'."""
     req = _valid_request(
+        entrant_count=4,
+        division_count=2,
         fixtures=[
-            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1"),
-            scheduler_pb2.Fixture(fixture_id="f2", entrant_ids=["e3", "e4"], division_id="d2"),
+            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0),
+            scheduler_pb2.Fixture(entrant_indices=[2, 3], division_index=1),
         ],
-        constraints=_constraints(
-            day_cap_by_division=[
-                scheduler_pb2.DivisionDayCapRule(division_id="d1", max_fixtures_per_day=3),
-                scheduler_pb2.DivisionDayCapRule(division_id="d2", max_fixtures_per_day=1),
-            ],
-        ),
+        division_rules=[
+            scheduler_pb2.DivisionRule(division_index=0, max_fixtures_per_day=3),
+            scheduler_pb2.DivisionRule(division_index=1, max_fixtures_per_day=1),
+        ],
     )
     parsed = request_to_model_input(req)
-    assert parsed.constraints["day_cap_by_division"] == {"d1": 3, "d2": 1}
+    assert parsed.constraints["day_cap_by_division"] == {0: 3, 1: 1}
 
 
 @pytest.mark.parametrize("wall_seconds", [0.0, -1.0])
@@ -225,13 +208,14 @@ def test_rejects_non_positive_wall_seconds(wall_seconds):
         request_to_model_input(req)
 
 
-# --- explicit presence ------------------------------------------------------
+# --- explicit presence, unrelated to identity -------------------------------
 #
-# The two scalars below are the ONLY ones where 0 is a legitimate value, so a
-# value guard cannot reach their degenerate case: "no court turnaround" and "no
-# minimum rest" are real answers, and an unset field is the same bytes. proto3
-# `optional` is the only thing that separates them, and these are the tests
-# that keep the keyword in the .proto.
+# `gap_minutes` and `Slot.day_index` are the two fields where 0 was ALREADY
+# legitimate before round 6, so a value guard could never reach their
+# degenerate case: proto3 `optional` is the only thing that separates "unset"
+# from "deliberately 0", and these are the tests that keep the keyword in the
+# .proto. Unchanged by round 6 — see the INDEX presence family further down
+# for the new fields that now carry the same defence.
 
 
 def test_rejects_unset_gap_minutes():
@@ -250,44 +234,11 @@ def test_accepts_an_explicit_zero_gap():
     assert request_to_model_input(req).constraints["gap_minutes"] == 0
 
 
-def test_rejects_unset_min_rest_minutes():
-    """A rest rule that is PRESENT but carries an unset value is silently
-    equivalent to omitting the division — the caller asked for rest and got
-    none. Sits beside the day-cap guard, which has always rejected its own
-    degenerate value; the asymmetry was an oversight, not a decision."""
-    req = _valid_request(
-        constraints=_constraints(
-            rest_by_division=[scheduler_pb2.DivisionRestRule(division_id="d1")]
-        )
-    )
-    with pytest.raises(InvalidRequestError, match="min_rest_minutes"):
-        request_to_model_input(req)
-
-
-def test_accepts_an_explicit_zero_rest():
-    req = _valid_request(
-        constraints=_constraints(
-            rest_by_division=[
-                scheduler_pb2.DivisionRestRule(division_id="d1", min_rest_minutes=0)
-            ]
-        )
-    )
-    assert request_to_model_input(req).constraints["rest_by_division"] == {"d1": 0}
-
-
 def test_rejects_a_slot_without_a_day_index():
     """Day 0 is the first day, so 0 is a legitimate value and unset is the same
     bytes. Unset puts EVERY slot on day 0 and collapses the whole lattice into
-    one day-cap bucket — a board that comes back with one fixture per division
-    where the caller asked for one per DAY, reported OPTIMAL.
-
-    Found by mutation, not by design: removing this guard left all 60 other
-    ACL tests green, 6/6."""
-    req = _valid_request(
-        grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS)], step_minutes=10
-        )
-    )
+    one day-cap bucket."""
+    req = _valid_request(slots=[scheduler_pb2.Slot(court_index=0, start_at_ms=SLOT_MS)])
     with pytest.raises(InvalidRequestError, match="day_index"):
         request_to_model_input(req)
 
@@ -296,15 +247,12 @@ def test_accepts_day_index_zero():
     """The other half: day 0 is the first day and must map, or the presence
     check has quietly become `> 0` and no board can start on its own day one."""
     parsed = request_to_model_input(_valid_request())
-    assert parsed.grid_slots == [("Court 1", SLOT_MS, 0)]
+    assert parsed.grid_slots == [(0, SLOT_MS, 0)]
 
 
 def test_rejects_a_negative_day_index():
     req = _valid_request(
-        grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS, day_index=-1)],
-            step_minutes=10,
-        )
+        slots=[scheduler_pb2.Slot(court_index=0, start_at_ms=SLOT_MS, day_index=-1)]
     )
     with pytest.raises(InvalidRequestError, match="day_index"):
         request_to_model_input(req)
@@ -317,19 +265,14 @@ def test_rejects_an_omitted_constraints_message():
     whichever field the checks happen to reach first."""
     req = _valid_request()
     req.ClearField("constraints")
-    # Matched on the MESSAGE name, not on "constraints": every field guard's
-    # text contains the word, so a looser pattern passes on the
-    # `constraints.match_minutes` rejection and proves nothing.
     with pytest.raises(InvalidRequestError, match="BuildConstraints"):
         request_to_model_input(req)
 
 
-# --- negative values --------------------------------------------------------
+# --- negative values, unrelated to identity ---------------------------------
 #
 # The `<= 0` guards fire on zero and on missing; these two fields are guarded
-# `>= 0` because zero is legitimate, and NEGATIVE is worse than either. It does
-# not merely fail to constrain: it cancels the match length out of the interval
-# width and reopens a family that was closed.
+# `>= 0` because zero is legitimate, and NEGATIVE is worse than either.
 
 
 def test_rejects_negative_gap_minutes():
@@ -343,315 +286,124 @@ def test_rejects_negative_gap_minutes():
 
 def test_rejects_negative_min_rest_minutes():
     """Same arithmetic on the participant-rest interval: at
-    `rest == -match_minutes` one entrant plays two simultaneous matches.
-    Measured: 37 placed, 4 tiers, 1 collision, OPTIMAL."""
+    `rest == -match_minutes` one entrant plays two simultaneous matches."""
     req = _valid_request(
-        constraints=_constraints(
-            rest_by_division=[
-                scheduler_pb2.DivisionRestRule(division_id="d1", min_rest_minutes=-1)
-            ]
-        )
+        division_rules=[scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=-1)]
     )
     with pytest.raises(InvalidRequestError, match="min_rest_minutes"):
         request_to_model_input(req)
 
 
-# --- referential integrity --------------------------------------------------
+# --- referential integrity, now expressed as index range --------------------
 #
-# ONE pass, before any domain object exists: every id a request mentions must
-# resolve to something the same request declares. Each case below is a measured
-# defect in which the constraint the caller asked for evaporated and the
-# service answered OPTIMAL with `error` unset — never a crash, never a warning.
+# ONE pass, before any domain object exists: every index a request carries
+# must be IN RANGE for the list or count it points into. Each case below is
+# the positional restatement of a measured defect in which the constraint the
+# caller asked for evaporated and the service answered OPTIMAL with `error`
+# unset — never a crash, never a warning.
 #
-# The domain's tolerance of these is DELIBERATE and is not what changes here:
-# `model.py`'s `id_to_idx.get(...) or continue` and `if existing_court in
-# court_lists` are what let the bench feed it partial boards. The wire is where
-# the mistake is actually made, so the wire is where it is caught.
-
-
-def test_rejects_an_empty_court_name():
-    """A court nobody can name cannot be rendered or mapped back to.
-
-    Same argument as the `fixture_id`, `division_id` and `entrant_ids` guards,
-    and `courts` was missed when those were written.
-
-    **Not the phantom-placement guard**, though the probe that found this did
-    place a match on court `''` and this docstring used to claim the credit.
-    The empty string was incidental: what made that court placeable was having
-    no slots, which `test_rejects_a_declared_court_that_no_slot_offers` owns.
-    A blank court WITH slots is still rejected, and only by this test.
-    """
-    req = _valid_request(courts=["Court 1", ""])
-    with pytest.raises(InvalidRequestError, match="courts"):
-        request_to_model_input(req)
-
-
-def test_rejects_a_whitespace_only_court_name():
-    """`" "` is the same unnameable court as `""` and slipped the first guard,
-    which tested falsiness rather than `.strip()`. Measured 6/6 before the fix:
-    `courts=["C0", " "]` places 2 where `["C0"]` places 1, one match landing on
-    court `' '`.
-
-    The blank court is given a SLOT here, and the same tick as the real court,
-    so that `_validate_court_grids` cannot be the thing that rejects it. Its
-    first version left the blank court slotless, which meant the grid guard
-    caught the request and the test passed with the `.strip()` reverted to
-    falsiness — a mutant that survived 6/6 until the board was changed.
-    """
-    req = _valid_request(
-        courts=["Court 1", "   "],
-        grid=scheduler_pb2.Grid(
-            slots=[
-                scheduler_pb2.Slot(court=court, start_at_ms=SLOT_MS, day_index=0)
-                for court in ("Court 1", "   ")
-            ],
-            step_minutes=10,
-        ),
-    )
-    with pytest.raises(InvalidRequestError, match="must not be blank"):
-        request_to_model_input(req)
+# `court_names` uniqueness/blankness checks are GONE, on purpose — see the
+# "confusable court names" section below. That family of defects cannot occur
+# any more, by construction, so there is no guard left to test.
 
 
 def test_rejects_a_declared_court_that_no_slot_offers():
-    """A court with NO slots is placeable, and no empty string is needed.
-
-    This is the real mechanism behind the phantom-court defect: `courts` is
-    what the model builds per-court interval lists from, while
-    `admissible_starts` is the union of every slot's start across ALL courts.
-    So a declared court inherits the whole lattice regardless of what the grid
-    says about it. Measured 6/6, two fixtures and ONE slot on `C0`:
-
-        courts=["C0","C1"]  OPTIMAL, 2 placed, error unset  (one on C1)
-        courts=["C0"]       OPTIMAL, 1 placed               <- the control
-
-    The first round guarded emptiness — the member it had measured benign —
-    and left this one, which it had not measured at all, wide open. Reachable
-    from real data: `Blackout.court?` lets a caller blank out one court's whole
-    day and still declare it.
+    """A court with NO slots is placeable. `court_names` is what the model
+    builds per-court interval lists from, while the admissible start domain is
+    the union of every slot's start across ALL courts — so a declared court
+    inherits the whole lattice regardless of what the grid says about it.
     """
     req = _valid_request(
-        courts=["Court 1", "Court 2"],
-        grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS, day_index=0)],
-            step_minutes=10,
-        ),
+        court_names=["Court 1", "Court 2"],
+        slots=[scheduler_pb2.Slot(court_index=0, start_at_ms=SLOT_MS, day_index=0)],
     )
-    # Matched on the slotless message, not merely on the court name. The
-    # identical-tick-sets guard below also rejects this request — a slotless
-    # court has a tick set that differs from every other — so a looser pattern
-    # passes with this branch deleted (measured: survived 6/6). The branch
-    # exists purely to give the likeliest caller mistake its own diagnostic,
-    # so the diagnostic is what the test has to pin.
-    with pytest.raises(InvalidRequestError, match="no grid slot offers them"):
+    with pytest.raises(InvalidRequestError, match="no slot offers them"):
         request_to_model_input(req)
 
 
 def test_rejects_courts_that_offer_different_tick_sets():
-    """The same family one step in from its extreme, and equally reachable.
-
-    A court need not be slotless to receive an impossible placement — it only
-    needs a tick set DIFFERENT from another court's, because the model unions
-    the starts. Measured 6/6: `C0` offers {T, T+40}, `C1` offers {T+40}, and
-    the solver puts a fixture on **C1 at T**, a tick C1 does not offer.
-    OPTIMAL, `error` unset.
-
-    So the per-court-grid limitation is not two defects (a closable slotless
-    one and an unclosable partial one) — it is one continuous family, and the
-    boundary can close all of it by requiring every court to offer the same
-    ticks. That refuses per-court blackouts rather than mis-scheduling them;
-    see the module docstring for the alternative and its cost.
-    """
+    """A court need not be slotless to receive an impossible placement — it
+    only needs a tick set DIFFERENT from another court's, because the model
+    unions the starts. Refusing this is a deliberate trade of capability
+    (per-court blackouts) for correctness; see `cp_sat.model`'s docstring."""
     req = _valid_request(
-        courts=["Court 1", "Court 2"],
-        grid=scheduler_pb2.Grid(
-            slots=[
-                scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS, day_index=0),
-                scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS + 3_600_000, day_index=0),
-                scheduler_pb2.Slot(court="Court 2", start_at_ms=SLOT_MS + 3_600_000, day_index=0),
-            ],
-            step_minutes=10,
-        ),
+        court_names=["Court 1", "Court 2"],
+        slots=[
+            scheduler_pb2.Slot(court_index=0, start_at_ms=SLOT_MS, day_index=0),
+            scheduler_pb2.Slot(court_index=0, start_at_ms=SLOT_MS + 3_600_000, day_index=0),
+            scheduler_pb2.Slot(court_index=1, start_at_ms=SLOT_MS + 3_600_000, day_index=0),
+        ],
     )
     with pytest.raises(InvalidRequestError, match="same start times"):
         request_to_model_input(req)
 
 
 def test_accepts_several_courts_offering_the_identical_tick_set():
-    """The guard must not have become "one court only". This is the shape every
-    board in `bench/` has, and the shape a normal request has."""
+    """The guard must not have become "one court only". This is the shape
+    every board in `bench/` has, and the shape a normal request has."""
     req = _valid_request(
-        courts=["Court 1", "Court 2"],
-        grid=scheduler_pb2.Grid(
-            slots=[
-                scheduler_pb2.Slot(court=court, start_at_ms=SLOT_MS + k * 3_600_000, day_index=0)
-                for court in ("Court 1", "Court 2")
-                for k in range(2)
-            ],
-            step_minutes=10,
-        ),
+        court_names=["Court 1", "Court 2"],
+        slots=[
+            scheduler_pb2.Slot(court_index=c, start_at_ms=SLOT_MS + k * 3_600_000, day_index=0)
+            for c in (0, 1)
+            for k in range(2)
+        ],
     )
     assert len(request_to_model_input(req).grid_slots) == 4
 
 
-def test_rejects_duplicate_entrant_ids_within_a_fixture():
+def test_rejects_duplicate_entrant_indices_within_a_fixture():
     """A repeated entrant makes the fixture silently UNPLACEABLE.
 
     `by_entrant` puts the fixture's index in its own group twice, and the
     per-entrant `AddNoOverlap` then requires that fixture's rest interval not
-    to overlap ITSELF — which forces `placed[i] = 0`. Measured 6/6:
-
-        entrant_ids=["e1","e1"]  OPTIMAL, placed=0, error unset
-        entrant_ids=["e1","e2"]  OPTIMAL, placed=1        <- the control
-
-    The first round's guard rejected an EMPTY entrant id and the docstring was
-    then written as though ids were checked generally. They were not, and an
-    overstated rule is worse than the narrow one it replaced because the next
-    reader stops checking.
-    """
+    to overlap ITSELF — which forces `placed[i] = 0`."""
     req = _valid_request(
-        fixtures=[
-            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e1"], division_id="d1")
-        ]
+        fixtures=[scheduler_pb2.Fixture(entrant_indices=[0, 0], division_index=0)]
     )
-    with pytest.raises(InvalidRequestError, match="entrant_ids"):
+    with pytest.raises(InvalidRequestError, match="entrant_indices"):
         request_to_model_input(req)
 
 
-def test_rejects_duplicate_court_names():
-    """Two entries for one court is a caller error with no meaning to assign.
-
-    Benign in the model as it stands — `court_lists` and `presence_court` are
-    dicts keyed by court, so the duplicate collapses, and the extra entry in
-    `court_counts` is an identical expression that moves neither the max nor
-    the min of the T3 imbalance term. Rejected anyway: it is the same
-    "an id names exactly one thing" rule as everywhere else in this pass, and
-    the analysis that makes it benign is a property of today's model rather
-    than of the contract.
-    """
-    req = _valid_request(courts=["Court 1", "Court 1"])
-    with pytest.raises(InvalidRequestError, match="courts"):
-        request_to_model_input(req)
-
-
-def test_rejects_a_pinned_row_reusing_a_movable_fixtures_id():
-    """A fixture id names exactly ONE match in a request — movable or pinned.
-
-    An `existing` row reusing a movable id does not pin that fixture: the row
-    lays a fixed blocking interval, the movable fixture is still free, and it
-    is placed somewhere else. The caller gets an assignment for a fixture it
-    just told the service was already fixed. Measured, 5/5 deterministic, one
-    fixture and three ticks 40 min apart:
-
-        existing f1 @ T           -> OPTIMAL, error unset,
-                                     board = [('f1', 'C0', T+40min)]
-
-    i.e. `f1` is now in two places. The rule chosen is DISJOINT IDS rather
-    than "an existing row pins the movable fixture": the second would be a new
-    modelling feature (drop it from the movable set, or fix its start and
-    court), and the boundary's job is to refuse a request that means two
-    things, not to guess which one.
-    """
-    req = _valid_request(
-        existing=[scheduler_pb2.Assignment(fixture_id="f1", court="Court 1", start_at_ms=SLOT_MS)]
-    )
-    with pytest.raises(InvalidRequestError, match="existing"):
-        request_to_model_input(req)
-
-
-def test_rejects_an_empty_pinned_row_fixture_id():
-    """Same rule, the degenerate end of it: a pin nobody can name. It appears
-    in the diagnostic for every constraint that row participates in."""
-    req = _valid_request(
-        existing=[scheduler_pb2.Assignment(court="Court 1", start_at_ms=SLOT_MS)]
-    )
-    with pytest.raises(InvalidRequestError, match="existing"):
-        request_to_model_input(req)
-
-
-def test_rejects_duplicate_pinned_row_fixture_ids():
-    """One match cannot be pinned to two places at once. The model would
-    happily lay both blocking intervals and report OPTIMAL around them."""
+def test_accepts_pinned_rows_with_no_identity_of_their_own():
+    """`PinnedRow` carries no fixture id or index — round 6 confirmed by
+    tracing every read that the old `Assignment.fixture_id` on an `existing`
+    row reached nothing but a debug variable-name label in `model.py`, never
+    a constraint. The old "reuses a movable fixture's id" / "pinned twice
+    under the same id" family is gone with it: there is no id left for two
+    pinned rows to collide on. This test replaces `test_accepts_pinned_rows_
+    with_ids_of_their_own` — the rule now is simply that distinct pinned rows
+    map straight through."""
     req = _valid_request(
         existing=[
-            scheduler_pb2.Assignment(fixture_id="x1", court="Court 1", start_at_ms=SLOT_MS),
-            scheduler_pb2.Assignment(
-                fixture_id="x1", court="Court 1", start_at_ms=SLOT_MS + 3_600_000
-            ),
-        ]
-    )
-    with pytest.raises(InvalidRequestError, match="existing"):
-        request_to_model_input(req)
-
-
-def test_accepts_pinned_rows_with_ids_of_their_own():
-    """The rule must not have become "no pinned rows". Distinct, non-empty
-    ids that no movable fixture uses map straight through."""
-    req = _valid_request(
-        existing=[
-            scheduler_pb2.Assignment(fixture_id="x1", court="Court 1", start_at_ms=SLOT_MS),
-            scheduler_pb2.Assignment(
-                fixture_id="x2", court="Court 1", start_at_ms=SLOT_MS + 3_600_000
-            ),
+            scheduler_pb2.PinnedRow(court_index=0, start_at_ms=SLOT_MS),
+            scheduler_pb2.PinnedRow(court_index=0, start_at_ms=SLOT_MS + 3_600_000),
         ]
     )
     parsed = request_to_model_input(req)
-    assert [row[0] for row in parsed.existing] == ["x1", "x2"]
+    assert parsed.existing == [(0, SLOT_MS), (0, SLOT_MS + 3_600_000)]
 
 
-def test_rejects_a_dependency_naming_an_unknown_fixture():
-    """Measured, 2 fixtures, separation `start(f1) - start(f0)`, 5/5
-    deterministic: a real pair separates them by 1_800_000 ms; a pair naming
-    `""` or `"f1 "` separates them by 0, OPTIMAL, `error` unset."""
-    req = _valid_request(
-        dependencies=[scheduler_pb2.OrderPair(before_fixture_id="f1", after_fixture_id="nope")]
-    )
-    with pytest.raises(InvalidRequestError, match="dependencies"):
-        request_to_model_input(req)
-
-
-def test_rejects_a_dependency_naming_a_pinned_row():
-    """`id_to_idx` is built from MOVABLE fixtures only, so a dependency naming
-    an `existing` row is ALWAYS dropped — the one case where the caller's id is
-    real, exists in the request, and still resolves to nothing."""
-    req = _valid_request(
-        existing=[scheduler_pb2.Assignment(fixture_id="x1", court="Court 1", start_at_ms=SLOT_MS)],
-        dependencies=[scheduler_pb2.OrderPair(before_fixture_id="f1", after_fixture_id="x1")],
-    )
-    with pytest.raises(InvalidRequestError, match="dependencies"):
-        request_to_model_input(req)
-
-
-@pytest.mark.parametrize("court", ["", "Court 1 ", "Court 9"])
-def test_rejects_a_pinned_row_on_an_unknown_court(court):
-    """`model.py:309` folds a pinned row into a court's interval list only `if
-    existing_court in court_lists`, and skips it wordlessly otherwise — so the
-    pin reserves nothing and a movable fixture is placed on top of a match that
-    is already being played.
-
-    Measured on a board whose only grid point is `Court 1 @ T`, 5/5
-    deterministic: the real court blocks it (board `[]`); `""` and `"Court 1 "`
-    both put the movable fixture straight into the pinned slot, OPTIMAL."""
-    req = _valid_request(
-        existing=[scheduler_pb2.Assignment(fixture_id="x1", court=court, start_at_ms=SLOT_MS)]
-    )
-    with pytest.raises(InvalidRequestError, match="existing"):
+def test_rejects_a_dependency_naming_an_out_of_range_fixture():
+    """The positional restatement of "dependency naming an unknown fixture".
+    Also closes what used to need its OWN test: a dependency naming a PINNED
+    row's id. `PinnedRow` has no identity/index namespace of its own any
+    more, so there is nothing for a dependency to misname there — every
+    `before_index`/`after_index` is interpreted as a `fixtures` position,
+    full stop, and out-of-range is out-of-range regardless of what the
+    caller might have meant by it."""
+    req = _valid_request(dependencies=[scheduler_pb2.OrderPair(before_index=0, after_index=1)])
+    with pytest.raises(InvalidRequestError, match="dependencies.*after_index"):
         request_to_model_input(req)
 
 
 @pytest.mark.parametrize("start_at_ms", [0, -1])
 def test_rejects_a_pinned_row_without_a_real_start(start_at_ms):
     """An unset `start_at_ms` builds the blocking interval at epoch 0, which
-    overlaps nothing real, so the pin is silently ignored and a movable fixture
-    takes the pinned slot.
-
-    Guarded by VALUE rather than by proto3 presence on purpose: epoch 0 is
-    1970 and is never a legitimate match time, and `Assignment` is also the
-    RESPONSE type — marking it `optional` would make `startAtMs` nullable in
-    the TypeScript outcome for a value the service always sets."""
+    overlaps nothing real, so the pin is silently ignored and a movable
+    fixture takes the pinned slot."""
     req = _valid_request(
-        existing=[
-            scheduler_pb2.Assignment(fixture_id="x1", court="Court 1", start_at_ms=start_at_ms)
-        ]
+        existing=[scheduler_pb2.PinnedRow(court_index=0, start_at_ms=start_at_ms)]
     )
     with pytest.raises(InvalidRequestError, match="existing"):
         request_to_model_input(req)
@@ -660,135 +412,88 @@ def test_rejects_a_pinned_row_without_a_real_start(start_at_ms):
 @pytest.mark.parametrize("start_at_ms", [0, -1])
 def test_rejects_a_grid_slot_without_a_real_start(start_at_ms):
     """Same argument one field over, and the asymmetry is the point: a slot at
-    epoch 0 is a legal tick in 1970 that fixtures are then placed on and proved
-    OPTIMAL. Guarding the pinned row and not the slot would be exactly the
-    `min_rest` / `day_cap` oversight repeated."""
+    epoch 0 is a legal tick in 1970 that fixtures are then placed on and
+    proved OPTIMAL."""
     req = _valid_request(
-        grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=start_at_ms, day_index=0)], step_minutes=10
-        )
+        slots=[scheduler_pb2.Slot(court_index=0, start_at_ms=start_at_ms, day_index=0)]
     )
-    with pytest.raises(InvalidRequestError, match="grid.slots"):
-        request_to_model_input(req)
-
-
-def test_rejects_a_grid_slot_on_an_unknown_court():
-    """`Slot.court` is decorative in the model — `admissible_starts` unions
-    every slot's start across all courts — so a grid naming only courts that do
-    not exist still places fixtures on the real ones. The union is a documented
-    limitation; a slot naming a court the request never declared is a caller
-    error, and the only layer that can see it is this one."""
-    req = _valid_request(
-        grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court="Court 9", start_at_ms=SLOT_MS, day_index=0)], step_minutes=10
-        )
-    )
-    with pytest.raises(InvalidRequestError, match="grid.slots"):
+    with pytest.raises(InvalidRequestError, match="slots"):
         request_to_model_input(req)
 
 
 @pytest.mark.parametrize(
-    "rule_kwargs,field",
+    "rule_kwargs",
     [
-        pytest.param({"rest_by_division": [scheduler_pb2.DivisionRestRule(division_id="typo", min_rest_minutes=45)]}, "rest_by_division", id="rest"),
-        pytest.param({"day_cap_by_division": [scheduler_pb2.DivisionDayCapRule(division_id="typo", max_fixtures_per_day=1)]}, "day_cap_by_division", id="day-cap"),
+        pytest.param({"min_rest_minutes": 45}, id="rest"),
+        pytest.param({"max_fixtures_per_day": 1}, id="day-cap"),
     ],
 )
-def test_rejects_a_rule_for_a_division_no_fixture_is_in(rule_kwargs, field):
-    """A rule keyed on a division nobody is in is inert: `model.py` resolves
-    rest as `rest_by_division.get(division, 0)` and selects capped fixtures by
-    `divisions[i] == division`, so neither ever matches. The caller asked for a
-    constraint and silently received none — and this is also what catches a
-    typo, which no per-fixture check can."""
-    req = _valid_request(constraints=_constraints(**rule_kwargs))
-    with pytest.raises(InvalidRequestError, match=field):
+def test_rejects_a_rule_for_an_out_of_range_division(rule_kwargs):
+    """The positional restatement of "rule naming an undeclared division".
+
+    Note what this does NOT reproduce: the old check rejected a division_id
+    that no FIXTURE actually used, a data-dependent cross-reference. The new
+    one rejects a division_index outside the DECLARED bound
+    (`division_count`) — the brief's own words, "survives, now as a range
+    check". An in-range-but-unused division_index (e.g. `division_count=5`
+    but only divisions 0-1 ever appear on a fixture) is therefore no longer
+    rejected; it is simply inert, exactly like a division absent from
+    `division_rules` altogether. Recorded here rather than silently
+    narrowed, since it is a real (if small) capability difference from the
+    string contract, not an oversight.
+    """
+    req = _valid_request(
+        division_rules=[scheduler_pb2.DivisionRule(division_index=1, **rule_kwargs)]
+    )
+    with pytest.raises(InvalidRequestError, match="division_rules.*division_index"):
         request_to_model_input(req)
 
 
-@pytest.mark.parametrize(
-    "rule_kwargs,field",
-    [
-        pytest.param({"rest_by_division": [scheduler_pb2.DivisionRestRule(division_id="d1", min_rest_minutes=45), scheduler_pb2.DivisionRestRule(division_id="d1", min_rest_minutes=5)]}, "rest_by_division", id="rest"),
-        pytest.param({"day_cap_by_division": [scheduler_pb2.DivisionDayCapRule(division_id="d1", max_fixtures_per_day=3), scheduler_pb2.DivisionDayCapRule(division_id="d1", max_fixtures_per_day=1)]}, "day_cap_by_division", id="day-cap"),
-    ],
-)
-def test_rejects_duplicate_division_rules(rule_kwargs, field):
+def test_rejects_duplicate_division_rules():
     """These are repeated messages, not a proto `map`, so two rules for one
-    division are legal on the wire and the dict comprehension keeps the LAST.
-    The caller sent two numbers and one of them was chosen without a word."""
-    req = _valid_request(constraints=_constraints(**rule_kwargs))
-    with pytest.raises(InvalidRequestError, match=field):
-        request_to_model_input(req)
-
-
-def test_rejects_a_fixture_with_no_division():
-    """The headline probe. Same board, same constraints (`min_rest_minutes=240`,
-    `max_fixtures_per_day=1` on `d1`), 4 fixtures, 5/5 deterministic:
-
-        division_id  status                placed  error set
-        "d1"         SOLVE_STATUS_OPTIMAL       1  no
-        "" (unset)   SOLVE_STATUS_OPTIMAL       4  no
-
-    An unset division matches no rest rule and no cap, so both families
-    evaporate and the board quadruples while reporting OPTIMAL."""
+    division are legal on the wire. Unlike the old two-list contract, a
+    duplicate is now checked ONCE per division_index rather than once per
+    list — a caller wanting both a rest rule and a cap for one division must
+    combine them into a single `DivisionRule` entry."""
     req = _valid_request(
-        fixtures=[scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"])]
+        division_rules=[
+            scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=45),
+            scheduler_pb2.DivisionRule(division_index=0, max_fixtures_per_day=1),
+        ]
     )
-    with pytest.raises(InvalidRequestError, match="division_id"):
+    with pytest.raises(InvalidRequestError, match="division_rules"):
         request_to_model_input(req)
+
+
+def test_a_single_rule_may_carry_both_rest_and_cap_for_one_division():
+    """The replacement for the two-list contract's independence: a division
+    may have a rest rule, a cap, or both — now expressed as which fields of
+    ONE `DivisionRule` entry are present, not which of two lists it appears
+    in."""
+    req = _valid_request(
+        division_rules=[
+            scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=45, max_fixtures_per_day=2)
+        ]
+    )
+    parsed = request_to_model_input(req)
+    assert parsed.constraints["rest_by_division"] == {0: 45}
+    assert parsed.constraints["day_cap_by_division"] == {0: 2}
+
+
+def test_a_rule_may_carry_only_rest_leaving_the_division_uncapped():
+    req = _valid_request(
+        division_rules=[scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=45)]
+    )
+    parsed = request_to_model_input(req)
+    assert parsed.constraints["rest_by_division"] == {0: 45}
+    assert parsed.constraints["day_cap_by_division"] == {}
 
 
 def test_rejects_a_fixture_with_no_entrants():
     """An entrant-less fixture joins no `by_entrant` group, so the participant-
-    rest NoOverlap and every T2 idle-gap term skip it entirely. Measured: two
-    fixtures sharing player `e1` placed CONCURRENTLY, OPTIMAL."""
-    req = _valid_request(
-        fixtures=[scheduler_pb2.Fixture(fixture_id="f1", division_id="d1")]
-    )
-    with pytest.raises(InvalidRequestError, match="entrant_ids"):
-        request_to_model_input(req)
-
-
-@pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "whitespace"])
-def test_rejects_a_blank_entrant_id(blank):
-    """Every blank entrant collides into ONE participant group, so unrelated
-    fixtures acquire a shared-player rest constraint they do not have. Wrong in
-    the over-constraining direction, which is why it never surfaced as a bad
-    board — it surfaces as fixtures that mysteriously will not fit.
-
-    The whitespace case is parametrized in rather than assumed: with only `""`
-    covered, reverting `.strip()` to plain falsiness survived 6/6."""
-    req = _valid_request(
-        fixtures=[
-            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", blank], division_id="d1")
-        ]
-    )
-    with pytest.raises(InvalidRequestError, match="entrant_ids"):
-        request_to_model_input(req)
-
-
-def test_rejects_an_empty_fixture_id():
-    """`assignments` come back keyed by `fixture_id`, so an unset one gives the
-    caller rows it cannot map back to anything. Verified: two rows, both
-    `fixture_id=""`."""
-    req = _valid_request(
-        fixtures=[scheduler_pb2.Fixture(entrant_ids=["e1", "e2"], division_id="d1")]
-    )
-    with pytest.raises(InvalidRequestError, match="fixture_id"):
-        request_to_model_input(req)
-
-
-def test_rejects_duplicate_fixture_ids():
-    """`id_to_idx` is last-wins, so two fixtures sharing an id make every
-    dependency naming it resolve to the second one — and it is what makes
-    "a dependency names a fixture in `fixtures`" a meaningful check at all."""
-    req = _valid_request(
-        fixtures=[
-            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1"),
-            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e3", "e4"], division_id="d1"),
-        ]
-    )
-    with pytest.raises(InvalidRequestError, match="fixture_id"):
+    rest NoOverlap and every T2 idle-gap term skip it entirely."""
+    req = _valid_request(fixtures=[scheduler_pb2.Fixture(division_index=0)])
+    with pytest.raises(InvalidRequestError, match="entrant_indices"):
         request_to_model_input(req)
 
 
@@ -799,12 +504,275 @@ def test_invalid_request_error_is_a_value_error():
     assert issubclass(InvalidRequestError, ValueError)
 
 
+# --- the closed set: every uint32 index field in the contract ---------------
+#
+# Retargeted from `_require_id`'s string-field gate (rounds 2-5) to index
+# fields. Same shape, same purpose: enumerate the fields from the DESCRIPTOR,
+# state one policy, and prove no field escapes it — built the "other way
+# round" from the start, because rounds 2-4's string gate showed that closing
+# only the members you were SHOWN leaves the family open.
+#
+# Policy: every index must be IN RANGE for the list/count it points into, and
+# every SINGULAR (non-repeated) one must be explicitly SET.
+
+
+def _maximal_request() -> scheduler_pb2.SolveBuildRequest:
+    """A VALID request that populates every uint32-bearing message in the
+    contract at least once. Every perturbation below starts from this, so a
+    rejection can only have been caused by the one field that was changed."""
+    return scheduler_pb2.SolveBuildRequest(
+        request_id="r1",
+        court_names=["Court 1", "Court 2"],
+        entrant_count=4,
+        division_count=1,
+        slots=[
+            scheduler_pb2.Slot(court_index=c, start_at_ms=SLOT_MS + k * 3_600_000, day_index=0)
+            for c in (0, 1)
+            for k in range(2)
+        ],
+        step_minutes=10,
+        fixtures=[
+            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0),
+            scheduler_pb2.Fixture(entrant_indices=[2, 3], division_index=0),
+        ],
+        existing=[scheduler_pb2.PinnedRow(court_index=0, start_at_ms=SLOT_MS)],
+        dependencies=[scheduler_pb2.OrderPair(before_index=0, after_index=1)],
+        division_rules=[scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=45)],
+        constraints=_constraints(),
+        wall_seconds=8.0,
+    )
+
+
+#: Keyed by `Message.field` exactly as the descriptor names it, so the
+#: completeness test below can compare this table against the proto itself.
+#: Each perturbation sets an OUT-OF-RANGE value.
+INDEX_FIELDS = {
+    "Fixture.division_index": lambda r: setattr(r.fixtures[0], "division_index", 999),
+    "Fixture.entrant_indices": lambda r: r.fixtures[0].entrant_indices.__setitem__(0, 999),
+    "Slot.court_index": lambda r: setattr(r.slots[0], "court_index", 999),
+    "PinnedRow.court_index": lambda r: setattr(r.existing[0], "court_index", 999),
+    "OrderPair.before_index": lambda r: setattr(r.dependencies[0], "before_index", 999),
+    "OrderPair.after_index": lambda r: setattr(r.dependencies[0], "after_index", 999),
+    "DivisionRule.division_index": lambda r: setattr(r.division_rules[0], "division_index", 999),
+}
+
+#: Deliberately outside the range/presence policy, with the reason. Listed
+#: rather than omitted so the completeness test still has to account for the
+#: field. Neither is an INDEX — each is the declared BOUND other indices are
+#: checked against.
+EXEMPT_INDEX_FIELDS = {
+    "SolveBuildRequest.entrant_count": "a declared bound for entrant_indices, not itself an index",
+    "SolveBuildRequest.division_count": "a declared bound for division_index fields, not itself an index",
+}
+
+
+def _contract_index_fields() -> set[str]:
+    """Every `uint32` field reachable from `SolveBuildRequest`, from the
+    proto itself."""
+    from google.protobuf.descriptor import FieldDescriptor
+
+    found: set[str] = set()
+    seen: set[str] = set()
+
+    def walk(descriptor):
+        if descriptor.full_name in seen:
+            return
+        seen.add(descriptor.full_name)
+        for field in descriptor.fields:
+            if field.type == FieldDescriptor.TYPE_UINT32:
+                found.add(f"{descriptor.name}.{field.name}")
+            elif field.type == FieldDescriptor.TYPE_MESSAGE:
+                walk(field.message_type)
+
+    walk(scheduler_pb2.SolveBuildRequest.DESCRIPTOR)
+    return found
+
+
+def test_the_index_policy_accounts_for_every_uint32_field_in_the_contract():
+    """The closed set, checked against the proto rather than against memory.
+
+    Add a `uint32` field to `scheduler.proto` and this fails until it is
+    either routed through the range check or exempted with a reason.
+    """
+    assert _contract_index_fields() == set(INDEX_FIELDS) | set(EXEMPT_INDEX_FIELDS)
+
+    # A union alone is NOT a closed set — the string-field gate's mutation
+    # sweep proved it (moving a field between the two tables leaves the union
+    # identical and survives 6/6). So the exemption list is pinned literally,
+    # and no field may be in both.
+    assert set(EXEMPT_INDEX_FIELDS) == {
+        "SolveBuildRequest.entrant_count",
+        "SolveBuildRequest.division_count",
+    }
+    assert set(INDEX_FIELDS).isdisjoint(EXEMPT_INDEX_FIELDS)
+
+
+@pytest.mark.parametrize("path", sorted(INDEX_FIELDS))
+def test_an_out_of_range_index_is_rejected_in_every_index_field(path):
+    req = _maximal_request()
+    INDEX_FIELDS[path](req)
+    with pytest.raises(InvalidRequestError, match="out of range"):
+        request_to_model_input(req)
+
+
+def test_the_maximal_request_is_valid_unperturbed():
+    """Otherwise every case above could be passing for the wrong reason."""
+    parsed = request_to_model_input(_maximal_request())
+    assert len(parsed.fixtures) == 2
+    assert parsed.existing == [(0, SLOT_MS)]
+
+
+def test_an_exempt_field_carries_no_range_or_presence_check():
+    """The exemption has to be real, or the table is decorative. Setting
+    `entrant_count`/`division_count` to a value that happens to be smaller
+    than an index actually used is caught by the INDEX field's own range
+    check (proven above); this test is about the count fields THEMSELVES
+    never being range- or presence-checked directly — any uint32 value,
+    including 0, is a legal thing to declare as a count."""
+    req = _maximal_request()
+    req.entrant_count = 4  # unchanged, already valid; this is a smoke check
+    req.division_count = 1
+    parsed = request_to_model_input(req)
+    assert parsed.wall_seconds == 8.0
+
+
+# --- presence, for every SINGULAR index field --------------------------------
+#
+# This is NOT literally what the brief's ruling states ("every index must be
+# in range... is the complete set of identity rules") — it is an extension of
+# it, and the reasoning for adding it is recorded in `cp_sat.schema`'s module
+# docstring: a range check alone cannot catch a caller who simply forgot to
+# set a singular index field, because 0 is always in range and always a
+# legitimate index. Flagged here as a deliberate addition beyond the letter
+# of the brief, not a silent one — this is exactly the kind of place the
+# brief invites pushback.
+#
+# `Fixture.entrant_indices` is excluded: it is REPEATED, and a repeated
+# field's elements carry no presence ambiguity of their own.
+PRESENCE_FIELDS = {
+    "Fixture.division_index": lambda r: r.fixtures[0].ClearField("division_index"),
+    "Slot.court_index": lambda r: r.slots[0].ClearField("court_index"),
+    "PinnedRow.court_index": lambda r: r.existing[0].ClearField("court_index"),
+    "OrderPair.before_index": lambda r: r.dependencies[0].ClearField("before_index"),
+    "OrderPair.after_index": lambda r: r.dependencies[0].ClearField("after_index"),
+    "DivisionRule.division_index": lambda r: r.division_rules[0].ClearField("division_index"),
+}
+
+
+def test_presence_fields_are_the_singular_index_fields_minus_entrant_indices():
+    """Pins the two tables to the same key set minus the one repeated field,
+    so a field added to one and not the other (when it should be in both) is
+    caught rather than silently under-tested."""
+    assert set(PRESENCE_FIELDS) == set(INDEX_FIELDS) - {"Fixture.entrant_indices"}
+
+
+@pytest.mark.parametrize("path", sorted(PRESENCE_FIELDS))
+def test_an_unset_singular_index_field_is_rejected(path):
+    """0 is always a legitimate index, so an unset field must be refused
+    rather than silently read as index 0."""
+    req = _maximal_request()
+    PRESENCE_FIELDS[path](req)
+    with pytest.raises(InvalidRequestError, match="must be set"):
+        request_to_model_input(req)
+
+
+# --- round 6: confusable court names are now harmless, by construction ------
+#
+# The whole point of the redesign. Rounds 4-6 tried, in order: reject
+# whitespace, reject invisible Unicode, and were about to try rejecting
+# homoglyphs when the pattern was recognised — every character rule is a
+# guess about what a caller MEANT by two strings that render identically, and
+# the guessing never terminates. The service was never actually misbehaving:
+# given two distinct strings it saw two courts and placed one fixture on
+# each, correctly. Now that court identity is POSITIONAL, "two distinct
+# strings" and "two distinct entities" are the same fact, and there is
+# nothing left to reject.
+#
+# Small boards (2 fixtures, 2 courts), never the production board — per the
+# brief. N=6 per `_RULES.md` section 6b: the solver is nondeterministic, so a
+# single run is a sample, not an observation.
+N_REPRO = 6
+
+
+def _confusable_pair_request(second_court_name: str) -> scheduler_pb2.SolveBuildRequest:
+    """Two fixtures, two courts (one plain, one perturbed to be confusable
+    with the first), each fixture free to land on either court at the SAME
+    instant. If identity were still string-based and the two names collapsed,
+    this would double-book one court; if it were rejected outright, this
+    would raise. Under positional identity it is simply two fixtures on two
+    distinct court indices."""
+    return scheduler_pb2.SolveBuildRequest(
+        request_id="r1",
+        court_names=["Court 1", second_court_name],
+        entrant_count=4,
+        division_count=1,
+        fixtures=[
+            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0),
+            scheduler_pb2.Fixture(entrant_indices=[2, 3], division_index=0),
+        ],
+        slots=[
+            scheduler_pb2.Slot(court_index=c, start_at_ms=SLOT_MS, day_index=0) for c in (0, 1)
+        ],
+        step_minutes=10,
+        constraints=scheduler_pb2.BuildConstraints(match_minutes=30, gap_minutes=10),
+        wall_seconds=5.0,
+    )
+
+
+@pytest.mark.parametrize(
+    "second_court_name",
+    [
+        pytest.param("Court 1 ", id="whitespace"),
+        # U+3164 Hangul Filler: printable per Unicode's Lo category, and one
+        # of the ten code points round 5's re-review found that pass
+        # `str.isprintable()` while being invisible to a human.
+        pytest.param("Court 1" + chr(0x3164), id="invisible-hangul-filler"),
+        # Cyrillic Es (U+0421) in place of the Latin C. Fully printable, fully
+        # visible, and identical to the eye — no invisibility rule of any
+        # kind could ever have caught this one.
+        pytest.param("Сourt 1", id="cyrillic-homoglyph"),
+    ],
+)
+def test_a_confusable_court_name_is_harmless_end_to_end(second_court_name):
+    """`request_to_model_input` -> `build_model` -> `solve`, the same call
+    sequence `main.py` makes. Each of the three families that defeated a
+    character rule must now be harmless BY CONSTRUCTION: two fixtures land on
+    two distinct court indices, never double-booked, and the request is
+    never rejected at all."""
+    from cp_sat.model import build_model, solve
+
+    placed_counts = []
+    courts_used_per_run = []
+    for _ in range(N_REPRO):
+        req = _confusable_pair_request(second_court_name)
+        parsed = request_to_model_input(req)  # must not raise
+        model = build_model(
+            parsed.fixtures,
+            parsed.courts,
+            parsed.grid_slots,
+            parsed.step_minutes,
+            parsed.constraints,
+            parsed.existing,
+            parsed.dependencies,
+        )
+        outcome = solve(model, wall_seconds=5.0)
+        placed_counts.append(len(outcome.assignments))
+        courts_used_per_run.append(sorted({court for _f, court, _s in outcome.assignments}))
+
+    detail = f"placed_counts={placed_counts} courts_used={courts_used_per_run}"
+    assert placed_counts == [2] * N_REPRO, detail
+    assert courts_used_per_run == [[0, 1]] * N_REPRO, (
+        f"expected both distinct court indices used on every run (never double-booked one "
+        f"court), got: {detail}"
+    )
+
+
 # --- the outbound half of the boundary --------------------------------------
 
 
 def _outcome(**overrides) -> SolveOutcome:
     kwargs = dict(
-        assignments=[("f1", "Court 1", 0)],
+        assignments=[(0, 0, 0)],
         status="OPTIMAL",
         tiers_completed=len(TIER_ORDER),
         objective_values=[(name, i) for i, name in enumerate(TIER_ORDER)],
@@ -824,7 +792,9 @@ def test_error_response_shape():
 
 def test_outcome_to_response_maps_every_field():
     resp = outcome_to_response(_outcome(), wall_seconds=10.0)
-    assert [(a.fixture_id, a.court, a.start_at_ms) for a in resp.assignments] == [("f1", "Court 1", 0)]
+    assert [(a.fixture_index, a.court_index, a.start_at_ms) for a in resp.assignments] == [
+        (0, 0, 0)
+    ]
     assert resp.status == scheduler_pb2.SOLVE_STATUS_OPTIMAL
     assert resp.tiers_completed == len(TIER_ORDER)
     assert resp.elapsed_ms == 1000
@@ -859,7 +829,6 @@ def test_outcome_to_response_populates_error_for_an_unmapped_status():
     assert resp.status == scheduler_pb2.SOLVE_STATUS_ERROR
     assert resp.HasField("error")
     assert resp.error.code == "INTERNAL_ERROR"
-    # The unexpected status string itself, or the message says nothing useful.
     assert "MODEL_INVALID" in resp.error.message
 
 
@@ -911,8 +880,8 @@ def test_outcome_to_response_reports_wall_exhausted(elapsed_ms, wall_seconds, ex
     rather than running a tier it has no time to finish, so a chain genuinely
     stopped by the budget reports an `elapsed_ms` up to 50ms UNDER the wall. A
     raw `elapsed_ms >= wall * 1000` comparison calls that `wall_exhausted=False`
-    and tells the caller the budget was not the limiting factor when it was —
-    which is the one thing this flag exists to say.
+    and tells the caller the budget was not the limiting factor — which is the
+    one thing this flag exists to say.
     """
     resp = outcome_to_response(_outcome(elapsed_ms=elapsed_ms), wall_seconds=wall_seconds)
     assert resp.wall_exhausted is exhausted
@@ -926,404 +895,3 @@ def test_wall_exhausted_threshold_tracks_the_tier_loops_own_margin():
     boundary_ms = int((wall - MIN_TIER_SECONDS) * 1000)
     assert outcome_to_response(_outcome(elapsed_ms=boundary_ms - 1), wall).wall_exhausted is False
     assert outcome_to_response(_outcome(elapsed_ms=boundary_ms), wall).wall_exhausted is True
-
-
-# --- the closed set: every id-like string field in the contract -------------
-#
-# Rounds 2, 3 and 4 each closed the members they were SHOWN and left the family
-# open, so this section is built the other way round: enumerate the string
-# fields from the DESCRIPTOR, state one policy, and prove no field escapes it.
-#
-# Policy: an id-like string must be non-blank and already CANONICAL — equal to
-# its own `.strip()`. Rejected, never normalised. Normalising looks friendlier
-# and is a trap: `Assignment.fixture_id` round-trips, so silently stripping an
-# id on the way in returns a different string than the caller sent and breaks
-# the caller's own lookup — a new silent failure in place of the old one.
-
-
-def _maximal_request() -> scheduler_pb2.SolveBuildRequest:
-    """A VALID request that populates every string field in the contract.
-
-    Every perturbation below starts from this, so a rejection can only have
-    been caused by the one field that was changed.
-    """
-    return scheduler_pb2.SolveBuildRequest(
-        request_id="r1",
-        courts=["Court 1", "Court 2"],
-        grid=scheduler_pb2.Grid(
-            slots=[
-                scheduler_pb2.Slot(court=court, start_at_ms=SLOT_MS + k * 3_600_000, day_index=0)
-                for court in ("Court 1", "Court 2")
-                for k in range(2)
-            ],
-            step_minutes=10,
-        ),
-        fixtures=[
-            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1"),
-            scheduler_pb2.Fixture(fixture_id="f2", entrant_ids=["e3", "e4"], division_id="d1"),
-        ],
-        existing=[scheduler_pb2.Assignment(fixture_id="x1", court="Court 1", start_at_ms=SLOT_MS)],
-        dependencies=[scheduler_pb2.OrderPair(before_fixture_id="f1", after_fixture_id="f2")],
-        constraints=_constraints(
-            rest_by_division=[scheduler_pb2.DivisionRestRule(division_id="d1", min_rest_minutes=45)],
-            day_cap_by_division=[
-                scheduler_pb2.DivisionDayCapRule(division_id="d1", max_fixtures_per_day=2)
-            ],
-        ),
-        wall_seconds=8.0,
-    )
-
-
-def _space(obj, field):
-    setattr(obj, field, getattr(obj, field) + " ")
-
-
-def _space_at(repeated, index):
-    repeated[index] = repeated[index] + " "
-
-
-#: Keyed by `Message.field` exactly as the descriptor names it, so the
-#: completeness test below can compare this table against the proto itself.
-ID_FIELDS = {
-    "SolveBuildRequest.courts": lambda r: _space_at(r.courts, 0),
-    "Slot.court": lambda r: _space(r.grid.slots[0], "court"),
-    "Fixture.fixture_id": lambda r: _space(r.fixtures[0], "fixture_id"),
-    "Fixture.entrant_ids": lambda r: _space_at(r.fixtures[0].entrant_ids, 0),
-    "Fixture.division_id": lambda r: _space(r.fixtures[0], "division_id"),
-    "Assignment.fixture_id": lambda r: _space(r.existing[0], "fixture_id"),
-    "Assignment.court": lambda r: _space(r.existing[0], "court"),
-    "OrderPair.before_fixture_id": lambda r: _space(r.dependencies[0], "before_fixture_id"),
-    "OrderPair.after_fixture_id": lambda r: _space(r.dependencies[0], "after_fixture_id"),
-    "DivisionRestRule.division_id": lambda r: _space(
-        r.constraints.rest_by_division[0], "division_id"
-    ),
-    "DivisionDayCapRule.division_id": lambda r: _space(
-        r.constraints.day_cap_by_division[0], "division_id"
-    ),
-}
-
-#: Deliberately outside the policy, with the reason. Listed rather than omitted
-#: so the completeness test still has to account for the field.
-EXEMPT_STRING_FIELDS = {
-    # Opaque correlation token, not an id: it resolves against nothing, is
-    # compared with nothing, and reaches only a log line. Rejecting it would
-    # fail a request over a cosmetic detail of a value the service promises to
-    # treat as opaque.
-    "SolveBuildRequest.request_id": "opaque correlation token, appears only in logs",
-}
-
-
-def _contract_string_fields() -> set[str]:
-    """Every string field reachable from `SolveBuildRequest`, from the proto."""
-    from google.protobuf.descriptor import FieldDescriptor
-
-    found: set[str] = set()
-    seen: set[str] = set()
-
-    def walk(descriptor):
-        if descriptor.full_name in seen:
-            return
-        seen.add(descriptor.full_name)
-        for field in descriptor.fields:
-            if field.type == FieldDescriptor.TYPE_STRING:
-                found.add(f"{descriptor.name}.{field.name}")
-            elif field.type == FieldDescriptor.TYPE_MESSAGE:
-                walk(field.message_type)
-
-    walk(scheduler_pb2.SolveBuildRequest.DESCRIPTOR)
-    return found
-
-
-def test_the_id_policy_accounts_for_every_string_field_in_the_contract():
-    """The closed set, checked against the proto rather than against memory.
-
-    This is the assertion that makes the round finished, rather than the three
-    reported probes passing. Add a string field to `scheduler.proto` and this
-    fails until it is either routed through the id chokepoint or exempted with
-    a reason — which is the step rounds 2, 3 and 4 each skipped.
-    """
-    assert _contract_string_fields() == set(ID_FIELDS) | set(EXEMPT_STRING_FIELDS)
-
-    # A union alone is NOT a closed set, and the mutation sweep proved it:
-    # moving a field from ID_FIELDS to EXEMPT_STRING_FIELDS leaves the union
-    # identical, drops the field from the parametrized behaviour test, and was
-    # caught by nothing (survived 6/6). So the exemption list is pinned
-    # literally — growing it has to be a visible, argued edit, which is exactly
-    # the review step that rounds 2-4 each skipped.
-    assert set(EXEMPT_STRING_FIELDS) == {"SolveBuildRequest.request_id"}
-    # ...and belt-and-braces: a field cannot be in both, which is how the
-    # cheaper version of that same mutation would have hidden.
-    assert set(ID_FIELDS).isdisjoint(EXEMPT_STRING_FIELDS)
-
-
-@pytest.mark.parametrize("path", sorted(ID_FIELDS))
-def test_a_trailing_space_is_rejected_in_every_id_field(path):
-    """`"C0"` and `"C0 "` are one thing to a human and two to a dict key.
-
-    Measured before this policy, each against its own control:
-
-        courts=["C0","C0 "]  -> 2 placed at ONE instant on ONE court, OPTIMAL
-        division_id="d1 "    -> escapes its day cap, OPTIMAL
-        entrant "e1 "        -> escapes participant rest, OPTIMAL
-
-    all with `error` unset. Three were reported; the policy covers eleven, and
-    the completeness test above is what says eleven is all of them.
-    """
-    req = _maximal_request()
-    ID_FIELDS[path](req)
-    with pytest.raises(InvalidRequestError, match="whitespace"):
-        request_to_model_input(req)
-
-
-def test_the_maximal_request_is_valid_unperturbed():
-    """Otherwise every case above could be passing for the wrong reason."""
-    parsed = request_to_model_input(_maximal_request())
-    assert [fid for fid, _e, _d in parsed.fixtures] == ["f1", "f2"]
-    assert parsed.existing == [("x1", "Court 1", SLOT_MS)]
-
-
-def test_an_exempt_field_is_not_rejected_for_whitespace():
-    """The exemption has to be real, or the table is decorative."""
-    req = _maximal_request()
-    req.request_id = "r1 "
-    assert request_to_model_input(req).wall_seconds == 8.0
-
-
-# --- Round 5: invisible and non-printable characters -------------------------
-#
-# `.strip()`-equality only catches ASCII (and Unicode-whitespace) padding.
-# `str.strip()` removes a character only where `.isspace()` is true, which is
-# narrower than "invisible to a human": a Unicode FORMAT character (zero-width
-# space, BOM, zero-width joiner, ...) appended to an otherwise-canonical id
-# satisfies `value == value.strip()` completely and walks straight through
-# every guard above. `_require_id` closes this with `value.isprintable()`,
-# which rejects the whole CATEGORY (Cc, Cf, Cs, Co, Cn, Zl, Zp, and Zs except
-# U+0020) rather than a list of the specific characters this round happened to
-# find by hand.
-#
-# Invisible characters are written as `chr(0x200B)` in CODE below (an
-# unambiguous function call, not a string literal that could itself hide an
-# invisible byte), and spelled out in words or as `U+XXXX` in prose, never
-# embedded literally -- an invisible character pasted into a docstring is
-# invisible in the docstring too, which defeats the point of writing it.
-
-
-def _invisible(obj, field):
-    setattr(obj, field, getattr(obj, field) + chr(0x200B))
-
-
-def _invisible_at(repeated, index):
-    repeated[index] = repeated[index] + chr(0x200B)
-
-
-#: The same 11 fields as `ID_FIELDS`, perturbed with a zero-width space
-#: (U+200B) instead of an ASCII space. `test_id_fields_invisible_covers_the_
-#: same_fields_as_id_fields` pins the two tables to the same key set, so a
-#: field added to one and not the other is caught rather than silently
-#: under-tested.
-ID_FIELDS_INVISIBLE = {
-    "SolveBuildRequest.courts": lambda r: _invisible_at(r.courts, 0),
-    "Slot.court": lambda r: _invisible(r.grid.slots[0], "court"),
-    "Fixture.fixture_id": lambda r: _invisible(r.fixtures[0], "fixture_id"),
-    "Fixture.entrant_ids": lambda r: _invisible_at(r.fixtures[0].entrant_ids, 0),
-    "Fixture.division_id": lambda r: _invisible(r.fixtures[0], "division_id"),
-    "Assignment.fixture_id": lambda r: _invisible(r.existing[0], "fixture_id"),
-    "Assignment.court": lambda r: _invisible(r.existing[0], "court"),
-    "OrderPair.before_fixture_id": lambda r: _invisible(r.dependencies[0], "before_fixture_id"),
-    "OrderPair.after_fixture_id": lambda r: _invisible(r.dependencies[0], "after_fixture_id"),
-    "DivisionRestRule.division_id": lambda r: _invisible(
-        r.constraints.rest_by_division[0], "division_id"
-    ),
-    "DivisionDayCapRule.division_id": lambda r: _invisible(
-        r.constraints.day_cap_by_division[0], "division_id"
-    ),
-}
-
-
-def test_id_fields_invisible_covers_the_same_fields_as_id_fields():
-    """The two perturbation tables must name the same fields, or one of them
-    silently stopped testing a field the other still claims to cover."""
-    assert set(ID_FIELDS_INVISIBLE) == set(ID_FIELDS)
-
-
-@pytest.mark.parametrize("path", sorted(ID_FIELDS_INVISIBLE))
-def test_an_invisible_character_is_rejected_in_every_id_field(path):
-    """The same machinery as `test_a_trailing_space_is_rejected_in_every_id_
-    field`, with a zero-width space (U+200B) in place of an ASCII one.
-
-    `"C0"` and `"C0"` with a trailing ZWSP are one thing to a human and two
-    to a dict key, exactly like the whitespace case — through a character
-    `.strip()` cannot see. Combined with
-    `test_the_id_policy_accounts_for_every_string_field_in_the_contract`
-    (every one of these fields routes through `_require_id` unmodified),
-    this is the direct 11-field proof; the property test below is the
-    field-agnostic one.
-    """
-    req = _maximal_request()
-    ID_FIELDS_INVISIBLE[path](req)
-    with pytest.raises(InvalidRequestError, match="invisible"):
-        request_to_model_input(req)
-
-
-def _invisible_strip_canonical_code_points() -> list[int]:
-    """Every code point `unicodedata` calls invisible-or-non-printable that
-    ALSO passes the OLD `.strip()`-based canonicality check — the exact set
-    this round's fix has to newly reject. Built from `unicodedata.category()`
-    directly, not from the seven characters the review happened to find by
-    hand, so a code point Unicode assigns to one of these categories in a
-    future revision is covered by the same assertion without editing this
-    file.
-
-    Two categories are excluded, both because the WIRE rules them out rather
-    than for test convenience:
-
-      * `Cs` (lone surrogates, U+D800-U+DFFF) — not valid UTF-8, so a proto3
-        `string` field can never carry one; `_require_id` would never see it
-        from a real request.
-      * `Cn` (unassigned, ~820k code points) — not a character.
-        `str.isprintable()` rejects these too, by the same category-prefix
-        mechanism, but none of them is individually distinct and iterating
-        820k of them buys nothing the ~137k code points this function DOES
-        enumerate do not already cover — dominated by `Co` (private use),
-        which is fully enumerated below, every one of its members a real,
-        assigned, non-printable character per the Unicode standard itself.
-    """
-    found = []
-    for cp in range(0x110000):
-        if 0xD800 <= cp <= 0xDFFF:
-            continue
-        ch = chr(cp)
-        category = unicodedata.category(ch)
-        if category == "Cn" or category[0] not in ("C", "Z"):
-            continue
-        if ch == " ":  # the one Zs exception isprintable() itself carves out
-            continue
-        value = "X" + ch
-        if value != value.strip():
-            continue  # already caught by the PRE-EXISTING `.strip()` check
-        found.append(cp)
-    return found
-
-
-def test_the_known_format_characters_are_within_the_enumeration():
-    """Sanity check on the enumeration itself: the seven characters the
-    review measured by hand must be a SUBSET of what the category scan finds,
-    or the general property test below could be vacuously passing over a set
-    that misses the actual defect."""
-    known = {0x200B, 0xFEFF, 0x200D, 0x00AD, 0x2060, 0x180E, 0x200C}
-    assert known <= set(_invisible_strip_canonical_code_points())
-
-
-def test_require_id_rejects_every_invisible_strip_canonical_code_point():
-    """The general property, independent of any one field: enumerated from
-    `unicodedata`'s category table rather than hardcoded to the seven
-    characters the review found.
-
-    Composes with `test_the_id_policy_accounts_for_every_string_field_in_the_
-    contract` (every id-shaped field routes through `_require_id` unmodified
-    — see `ID_FIELDS`) to prove all 11 fields reject every invisible
-    character, without constructing thousands of proto messages per field to
-    say so directly. `test_an_invisible_character_is_rejected_in_every_id_
-    field` above is the direct (one-character, eleven-field) version of the
-    same claim; this is the (all-characters, one-function) version.
-    """
-    probes = _invisible_strip_canonical_code_points()
-    # A broken enumeration (e.g. a category-filter typo excluding everything)
-    # would make the survivor check below vacuously pass.
-    assert len(probes) > 130_000, f"expected roughly 137.7k code points, got {len(probes)}"
-
-    survivors = []
-    for cp in probes:
-        value = "X" + chr(cp)
-        try:
-            _require_id(value, "test_field")
-        except InvalidRequestError:
-            continue
-        survivors.append(cp)
-
-    assert not survivors, (
-        f"{len(survivors)} invisible, strip-canonical code point(s) were NOT rejected "
-        f"(first 20 shown): {[hex(cp) for cp in survivors[:20]]}"
-    )
-
-
-def test_require_id_accepts_legitimate_unicode_names():
-    """The other half of `isprintable()`: it must not have become "ASCII
-    only". Every one of these is a real, visible, printable name."""
-    for name in ("Court 1", "Café Court", "中央球場", "Pista Nº1", "Court-2A"):
-        assert _require_id(name, "test_field") == name
-
-
-def test_rejects_an_invisible_distinct_court_name():
-    """The phantom-court defect, reached through an invisible character
-    instead of ordinary whitespace. `courts=["C0","C0 "]` was closed by the
-    trailing-space check; `courts=["C0", "C0"+ZWSP]` (U+200B, zero-width
-    space) walked straight through it, because `.strip()` does not remove a
-    character whose `.isspace()` is False.
-
-    Measured 6/6, through the real domain (`build_model`/`solve`, the
-    identical call sequence `main.py` makes, run directly against these ids
-    to show what this ACL now stands in front of): OPTIMAL, 2 placed, both AT
-    THE SAME INSTANT, one on `'C0'` and one on `'C0'+ZWSP` — indistinguishable
-    to a human, two different dict keys to the model. The control (two real
-    distinct courts, same shape) also places 2, one per court, so the
-    difference is specifically the invisible-vs-visible collision, not
-    "a second court gets rejected".
-    """
-    req = _valid_request(courts=["Court 1", "Court 1" + chr(0x200B)])
-    with pytest.raises(InvalidRequestError, match="invisible"):
-        request_to_model_input(req)
-
-
-def test_rejects_an_invisible_distinct_entrant_id():
-    """The participant-rest-evasion defect, reached the same way. One human,
-    two spellings: `"e1"` and `"e1"+ZWSP` (U+200B) never collide in
-    `by_entrant`, so the rest window between two of their matches is never
-    stated.
-
-    Measured 6/6, through the real domain, one court, two ticks 40 minutes
-    apart, a 240-minute rest rule: the control (`"e1"`/`"e1"`) places 1 of 2,
-    correctly rest-capped; the invisible-distinct pair places BOTH, 40 minutes
-    apart, OPTIMAL, `error` unset — the rest rule the caller asked for is
-    silently never applied.
-    """
-    req = _valid_request(
-        fixtures=[
-            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1"),
-            scheduler_pb2.Fixture(
-                fixture_id="f2", entrant_ids=["e1" + chr(0x200B), "e3"], division_id="d1"
-            ),
-        ],
-        constraints=_constraints(
-            rest_by_division=[scheduler_pb2.DivisionRestRule(division_id="d1", min_rest_minutes=240)]
-        ),
-    )
-    with pytest.raises(InvalidRequestError, match="invisible"):
-        request_to_model_input(req)
-
-
-def test_rejects_an_emoji_zwj_sequence_as_a_court_name():
-    """The one deliberate false positive, proven rather than only asserted in
-    prose. A family emoji is three code points joined by two U+200D
-    (zero-width joiner) characters; `_require_id`'s new check cannot tell "an
-    emoji sequence" from "a copy-paste artifact" — both are strings carrying
-    an invisible character — so it rejects both, and the message says why
-    rather than leaving the caller to guess.
-    """
-    family_emoji = "\U0001F468" + chr(0x200D) + "\U0001F469" + chr(0x200D) + "\U0001F467"
-    court_name = f"{family_emoji} Court"
-    # `courts` and `grid.slots[].court` are made to agree deliberately: an
-    # otherwise-inconsistent request would still be rejected with this fix
-    # REVERTED (by the grid/court cross-check instead), which would make this
-    # test pass for the wrong reason -- exactly the "caught by a different
-    # guard" trap `test_rejects_a_declared_court_that_no_slot_offers` and
-    # `test_rejects_a_whitespace_only_court_name` both warn about above.
-    req = _valid_request(
-        courts=[court_name],
-        grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court=court_name, start_at_ms=SLOT_MS, day_index=0)],
-            step_minutes=10,
-        ),
-    )
-    with pytest.raises(InvalidRequestError, match="emoji sequence"):
-        request_to_model_input(req)

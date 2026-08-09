@@ -8,12 +8,22 @@ drift apart (see the prompt's Step 2b).
 
 These exercise the real solver end to end. Nothing here is mocked: a green run
 means CP-SAT actually proved optimality on the real board inside the budget.
+
+--- round 6: identity is POSITIONAL, `bench/` is not ------------------------
+
+`bench/cpsat_bench_boards.py` is out of scope for round 6 and still returns
+string-keyed boards (fixture ids, court names, division/entrant ids) — see
+`cp_sat.model`'s module docstring. `_board_positional.to_positional` is the
+one place that bridges the two: every board below is converted immediately
+after generation, so `build_model` only ever sees the positional shape a real
+caller would send after this round.
 """
 
 import os
 
 import pytest
 
+from _board_positional import to_positional
 from cp_sat.model import MIN_MS, build_model, solve
 
 #: The production budget from the design spec, and the wall the acceptance
@@ -40,7 +50,7 @@ def _production_board():
     # pyproject.toml — it is a script directory, not an installed package.
     from cpsat_bench_boards import production_board
 
-    return production_board()
+    return to_positional(production_board())
 
 
 def test_production_board_meets_the_stated_acceptance_criterion():
@@ -68,8 +78,8 @@ def test_production_board_meets_the_stated_acceptance_criterion():
     average is reported in the failure message so a red can be triaged rather
     than guessed at; re-run alone before calling it a regression.
     """
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    model = build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
     load = _load()
     outcome = solve(model, wall_seconds=PRODUCTION_WALL_SECONDS)
     detail = (
@@ -108,8 +118,8 @@ def test_production_board_solves_under_budget():
     `test_the_court_turnaround_gap_is_binding`, on contended boards that do not
     depend on the wall at all.
     """
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    model = build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
     outcome = solve(model, wall_seconds=8.0)
     assert outcome.status in ("OPTIMAL", "FEASIBLE")
     assert 35 <= len(outcome.assignments) <= 37
@@ -123,15 +133,15 @@ def test_no_court_double_booking():
     # result. See the measured table in
     # `test_assignments_satisfy_every_stated_constraint`. The court-gap family
     # is guarded by `test_the_court_turnaround_gap_is_binding`, not here.
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    model = build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
     outcome = solve(model, wall_seconds=8.0)
     assert outcome.assignments, "nothing placed — the loop below would be vacuous"
     seen = {}
-    for fixture_id, court, start_ms in outcome.assignments:
-        key = (court, start_ms)
+    for fixture_index, court_index, start_ms in outcome.assignments:
+        key = (court_index, start_ms)
         assert key not in seen, f"double-booked {key}"
-        seen[key] = fixture_id
+        seen[key] = fixture_index
 
 
 def test_assignments_satisfy_every_stated_constraint():
@@ -177,8 +187,8 @@ def test_assignments_satisfy_every_stated_constraint():
     place to take it from, provided the M1-M8 matrix is re-run to confirm the
     families it really does guard (M1, M3, M4, M5, M8) still die.
     """
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    model = build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
     outcome = solve(model, wall_seconds=8.0)
     assert outcome.assignments, "nothing placed — the rest of this test would be vacuous"
     assert len(outcome.assignments) == len(fixtures), (
@@ -190,19 +200,22 @@ def test_assignments_satisfy_every_stated_constraint():
     rest_by_division = constraints["rest_by_division"]
     day_cap_by_division = constraints["day_cap_by_division"]
 
-    entrants_of = {fid: ents for fid, ents, _div in fixtures}
-    division_of = {fid: div for fid, _ents, div in fixtures}
-    placed = {fid: (court, start) for fid, court, start in outcome.assignments}
+    # Fixture identity is now POSITION, so these are lists, not id-keyed dicts.
+    entrants_of = [ents for ents, _div in fixtures]
+    division_of = [div for _ents, div in fixtures]
+    placed = {fi: (court, start) for fi, court, start in outcome.assignments}
     legal_court_starts = {(court, start) for court, start, _day in grid_slots}
 
     # every placement lands on a tick THAT COURT actually offers
-    for fid, (court, start) in placed.items():
-        assert court in courts, f"{fid} placed on unknown court {court}"
-        assert (court, start) in legal_court_starts, f"{fid} placed at {start} on {court}, not a legal slot"
+    for fi, (court, start) in placed.items():
+        assert 0 <= court < num_courts, f"fixture {fi} placed on unknown court {court}"
+        assert (court, start) in legal_court_starts, (
+            f"fixture {fi} placed at {start} on court {court}, not a legal slot"
+        )
 
     # court turnaround (match+gap), movable vs movable AND vs immovable rows
-    occupancy = [(court, start, fid) for fid, (court, start) in placed.items()]
-    occupancy += [(court, start, f"existing:{eid}") for eid, court, start in existing]
+    occupancy = [(court, start, fi) for fi, (court, start) in placed.items()]
+    occupancy += [(court, start, f"existing:{k}") for k, (court, start) in enumerate(existing)]
     for a in range(len(occupancy)):
         for b in range(a + 1, len(occupancy)):
             court_a, start_a, name_a = occupancy[a]
@@ -210,32 +223,33 @@ def test_assignments_satisfy_every_stated_constraint():
             if court_a != court_b:
                 continue
             assert abs(start_a - start_b) >= dur_ms + gap_ms, (
-                f"court turnaround violated on {court_a}: {name_a}@{start_a} vs {name_b}@{start_b}"
+                f"court turnaround violated on court {court_a}: {name_a}@{start_a} vs {name_b}@{start_b}"
             )
 
     # participant rest: an entrant's two matches are separated by match+rest
     by_entrant = {}
-    for fid, (_court, start) in placed.items():
-        for entrant in entrants_of[fid]:
-            by_entrant.setdefault(entrant, []).append((start, fid))
+    for fi, (_court, start) in placed.items():
+        for entrant in entrants_of[fi]:
+            by_entrant.setdefault(entrant, []).append((start, fi))
     for entrant, rows in by_entrant.items():
         rows.sort()
         for a in range(len(rows)):
             for b in range(a + 1, len(rows)):
-                (start_a, fid_a), (start_b, fid_b) = rows[a], rows[b]
-                need = dur_ms + rest_by_division[division_of[fid_a]] * MIN_MS
+                (start_a, fi_a), (start_b, fi_b) = rows[a], rows[b]
+                need = dur_ms + rest_by_division.get(division_of[fi_a], 0) * MIN_MS
                 assert start_b - start_a >= need, (
-                    f"rest violated for {entrant}: {fid_a}@{start_a} vs {fid_b}@{start_b}, need {need}ms"
+                    f"rest violated for entrant {entrant}: fixture {fi_a}@{start_a} vs "
+                    f"fixture {fi_b}@{start_b}, need {need}ms"
                 )
 
     # order dependencies: `after` starts no earlier than `before` + match + its own rest
     checked_deps = 0
-    for before_id, after_id in deps:
-        if before_id not in placed or after_id not in placed:
+    for before_i, after_i in deps:
+        if before_i not in placed or after_i not in placed:
             continue
-        need = dur_ms + rest_by_division[division_of[after_id]] * MIN_MS
-        assert placed[after_id][1] >= placed[before_id][1] + need, (
-            f"dependency violated: {after_id} must start >= {before_id} + {need}ms"
+        need = dur_ms + rest_by_division.get(division_of[after_i], 0) * MIN_MS
+        assert placed[after_i][1] >= placed[before_i][1] + need, (
+            f"dependency violated: fixture {after_i} must start >= fixture {before_i} + {need}ms"
         )
         checked_deps += 1
     assert checked_deps == len(deps), "a dependency pair went unplaced — that arm would be vacuous"
@@ -245,12 +259,13 @@ def test_assignments_satisfy_every_stated_constraint():
     # re-deriving here would let a wrong day_index satisfy both sides at once.
     day_of_start = {start: day for _court, start, day in grid_slots}
     per_division_day = {}
-    for fid, (_court, start) in placed.items():
-        key = (division_of[fid], day_of_start[start])
+    for fi, (_court, start) in placed.items():
+        key = (division_of[fi], day_of_start[start])
         per_division_day[key] = per_division_day.get(key, 0) + 1
     for (division, day), count in per_division_day.items():
         assert count <= day_cap_by_division[division], (
-            f"day cap violated: division {division} day {day} has {count} > {day_cap_by_division[division]}"
+            f"day cap violated: division {division} day {day} has {count} > "
+            f"{day_cap_by_division[division]}"
         )
 
 
@@ -277,8 +292,8 @@ def test_pinned_rows_are_not_overwritten_when_a_fixture_wants_the_slot():
     """
     from cpsat_bench_boards import PIN_BOARD_FIXTURES, PIN_BOARD_FREE_SLOTS, pin_contended_board
 
-    board = pin_contended_board()
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = board
+    board = to_positional(pin_contended_board())
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = board
 
     # The board genuinely contends — otherwise everything below is vacuous.
     assert PIN_BOARD_FIXTURES > PIN_BOARD_FREE_SLOTS
@@ -297,13 +312,13 @@ def test_pinned_rows_are_not_overwritten_when_a_fixture_wants_the_slot():
         f"is not binding. {detail}"
     )
 
-    pinned = {(court, start) for _fid, court, start in existing}
-    for fid, court, start in outcome.assignments:
-        assert (court, start) not in pinned, f"{fid} placed on top of an immovable row at {(court, start)}"
+    pinned = set(existing)  # (court_index, start) -- PinnedRow carries no identity of its own
+    for _fi, court, start in outcome.assignments:
+        assert (court, start) not in pinned, f"fixture placed on top of an immovable row at {(court, start)}"
 
     # The one placement is on the one free slot, and it is a real slot.
     free = sorted({(court, start) for court, start, _day in grid_slots} - pinned)
-    assert [(court, start) for _fid, court, start in outcome.assignments] == free, detail
+    assert [(court, start) for _fi, court, start in outcome.assignments] == free, detail
 
 
 def test_the_court_turnaround_gap_is_binding():
@@ -343,8 +358,8 @@ def test_the_court_turnaround_gap_is_binding():
         gap_contended_board,
     )
 
-    board = gap_contended_board()
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = board
+    board = to_positional(gap_contended_board())
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = board
 
     # The board must genuinely contend, or every assertion below is vacuous.
     assert GAP_PROBE_CAPACITY < GAP_PROBE_CAPACITY_WITHOUT_GAP <= GAP_PROBE_FIXTURES
@@ -370,13 +385,13 @@ def test_the_court_turnaround_gap_is_binding():
 
     # ...and say it directly, not only as a count.
     need = (constraints["match_minutes"] + constraints["gap_minutes"]) * MIN_MS
-    placed = sorted((court, start) for _fid, court, start in outcome.assignments)
+    placed = sorted((court, start) for _fi, court, start in outcome.assignments)
     for a in range(len(placed)):
         for b in range(a + 1, len(placed)):
             if placed[a][0] == placed[b][0]:
                 assert abs(placed[a][1] - placed[b][1]) >= need, (
-                    f"court turnaround violated on {placed[a][0]}: {placed[a][1]} vs {placed[b][1]}, "
-                    f"need {need}ms"
+                    f"court turnaround violated on court {placed[a][0]}: {placed[a][1]} vs "
+                    f"{placed[b][1]}, need {need}ms"
                 )
 
 
@@ -401,14 +416,15 @@ def test_participant_rest_is_binding():
     from cp_sat.objective import TIER_PLACED, run_tier_chain
     from cpsat_bench_boards import REST_PROBE_CAPACITY, REST_PROBE_FIXTURES, rest_contended_board
 
-    board = rest_contended_board()
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = board
+    board = to_positional(rest_contended_board())
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = board
 
     assert REST_PROBE_CAPACITY < REST_PROBE_FIXTURES == len(fixtures)
-    assert len(courts) >= REST_PROBE_FIXTURES, "court exclusivity must not be able to bind"
+    assert num_courts >= REST_PROBE_FIXTURES, "court exclusivity must not be able to bind"
     assert not existing and not deps and not constraints["day_cap_by_division"]
-    shared = set.intersection(*(set(entrants) for _fid, entrants, _div in fixtures))
+    shared = set.intersection(*(set(entrants) for entrants, _div in fixtures))
     assert len(shared) == 1, "every fixture must share exactly one entrant for rest to be the variable"
+    (shared_entrant,) = shared
 
     model = build_model(*board)
     outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=5.0, tiers=(TIER_PLACED,))
@@ -422,13 +438,16 @@ def test_participant_rest_is_binding():
     )
 
     # ...and directly: the shared entrant's matches are match+rest apart.
-    need = (constraints["match_minutes"] + constraints["rest_by_division"]["d1"]) * MIN_MS
-    starts = sorted(start for _fid, _court, start in outcome.assignments)
+    only_division = next(iter(constraints["rest_by_division"]))
+    need = (constraints["match_minutes"] + constraints["rest_by_division"][only_division]) * MIN_MS
+    starts = sorted(start for _fi, _court, start in outcome.assignments)
     for earlier, later in zip(starts, starts[1:]):
-        assert later - earlier >= need, f"rest violated for {shared}: {earlier} vs {later}, need {need}ms"
+        assert later - earlier >= need, (
+            f"rest violated for entrant {shared_entrant}: {earlier} vs {later}, need {need}ms"
+        )
 
 
-# --- an unplaceable board must not report a NEGATIVE duration ---------------
+# --- an unplaceable board must not report a NEGATIVE makespan ---------------
 
 
 def test_an_empty_board_reports_a_non_negative_makespan():
@@ -455,19 +474,20 @@ def test_an_empty_board_reports_a_non_negative_makespan():
     shows up as a lower `placed`, which is visible); it is only the negative
     number that had to go.
     """
-    courts = ["C1"]
-    grid_slots = [("C1", _STRADDLE_A, 0), ("C1", _STRADDLE_A + 40 * MIN_MS, 0)]
-    fixtures = [("s0", ["sa", "sb"], "d1")]
+    num_courts = 1
+    grid_slots = [(0, _STRADDLE_A, 0), (0, _STRADDLE_A + 40 * MIN_MS, 0)]
+    fixtures = [([0, 1], 0)]
     constraints = {
         "match_minutes": 30,
         "gap_minutes": 10,
-        "rest_by_division": {"d1": 0},
+        "rest_by_division": {0: 0},
         "day_cap_by_division": {},
     }
-    model = build_model(fixtures, courts, grid_slots, 40, constraints, [], [("s0", "s0")])
+    # A self-dependency (fixture 0 depends on itself) makes it unplaceable.
+    model = build_model(fixtures, num_courts, grid_slots, 40, constraints, [], [(0, 0)])
     outcome = solve(model, wall_seconds=5.0)
 
-    assert outcome.assignments == [], "the self-dependency should make s0 unplaceable"
+    assert outcome.assignments == [], "the self-dependency should make fixture 0 unplaceable"
     reported = dict(outcome.objective_values)
     assert reported["placed"] == 0
     assert reported["makespan"] >= 0, (
@@ -482,17 +502,17 @@ def test_a_placed_board_still_reports_its_real_makespan():
     """The clamp must not have flattened the term. Two fixtures forced onto two
     different ticks by a single court give a makespan of exactly one tick gap
     plus one match."""
-    courts = ["C1"]
+    num_courts = 1
     step = 40 * MIN_MS
-    grid_slots = [("C1", _STRADDLE_A + k * step, 0) for k in range(2)]
-    fixtures = [("s0", ["sa", "sb"], "d1"), ("s1", ["sc", "sd"], "d1")]
+    grid_slots = [(0, _STRADDLE_A + k * step, 0) for k in range(2)]
+    fixtures = [([0, 1], 0), ([2, 3], 0)]
     constraints = {
         "match_minutes": 30,
         "gap_minutes": 10,
-        "rest_by_division": {"d1": 0},
+        "rest_by_division": {0: 0},
         "day_cap_by_division": {},
     }
-    model = build_model(fixtures, courts, grid_slots, 40, constraints, [], [])
+    model = build_model(fixtures, num_courts, grid_slots, 40, constraints, [], [])
     outcome = solve(model, wall_seconds=5.0)
 
     assert len(outcome.assignments) == 2
@@ -511,24 +531,24 @@ _STRADDLE_B = 1_767_315_600_000  # 2026-01-02T01:00:00Z
 
 
 def _straddling_board(day_index_of):
-    """Two ticks either side of UTC midnight, two courts, two `d1` fixtures
-    capped at one per day. Court capacity cannot bind (two courts, two ticks,
-    two fixtures) and entrants are disjoint, so the day cap is the only thing
-    deciding how many are placed — a COUNT that T0 proves in milliseconds,
-    independent of the wall and of which tiers ran.
+    """Two ticks either side of UTC midnight, two courts, two `d1`-equivalent
+    (division 0) fixtures capped at one per day. Court capacity cannot bind
+    (two courts, two ticks, two fixtures) and entrants are disjoint, so the
+    day cap is the only thing deciding how many are placed — a COUNT that T0
+    proves in milliseconds, independent of the wall and of which tiers ran.
     """
-    courts = ["C1", "C2"]
+    num_courts = 2
     grid_slots = [
-        (court, start, day_index_of(start)) for court in courts for start in (_STRADDLE_A, _STRADDLE_B)
+        (c, start, day_index_of(start)) for c in (0, 1) for start in (_STRADDLE_A, _STRADDLE_B)
     ]
-    fixtures = [("s0", ["sa", "sb"], "d1"), ("s1", ["sc", "sd"], "d1")]
+    fixtures = [([0, 1], 0), ([2, 3], 0)]
     constraints = {
         "match_minutes": 30,
         "gap_minutes": 0,
-        "rest_by_division": {"d1": 0},
-        "day_cap_by_division": {"d1": 1},
+        "rest_by_division": {0: 0},
+        "day_cap_by_division": {0: 1},
     }
-    return fixtures, courts, grid_slots, 60, constraints, [], []
+    return fixtures, num_courts, grid_slots, 60, constraints, [], []
 
 
 def test_the_day_cap_groups_by_the_callers_day_index_not_by_utc():
@@ -580,9 +600,9 @@ def test_two_day_indices_over_one_utc_day_give_two_buckets():
     # range bound leaves the count at 2 while both fixtures sit on the day-1
     # tick and one of them books day 0's allowance. T1 actively drives that —
     # a shorter makespan wants both on the same tick.
-    assert sorted(day_of_start[start] for _fid, _court, start in outcome.assignments) == [0, 1], (
+    assert sorted(day_of_start[start] for _fi, _court, start in outcome.assignments) == [0, 1], (
         f"the cap of one per day was satisfied by a day CLAIM, not by a placement: "
-        f"{[(fid, day_of_start[start]) for fid, _court, start in outcome.assignments]}"
+        f"{[(fi, day_of_start[start]) for fi, _court, start in outcome.assignments]}"
     )
 
 
@@ -591,12 +611,12 @@ def test_rejects_a_start_declared_on_two_different_days():
     disagreeing about which day one instant belongs to is not a board the
     caller can have meant, and the range encoding below it assumes days
     partition the admissible starts."""
-    courts = ["C1", "C2"]
-    grid_slots = [("C1", _STRADDLE_A, 0), ("C2", _STRADDLE_A, 1)]
-    fixtures = [("s0", ["sa", "sb"], "d1")]
+    num_courts = 2
+    grid_slots = [(0, _STRADDLE_A, 0), (1, _STRADDLE_A, 1)]
+    fixtures = [([0, 1], 0)]
     constraints = {"match_minutes": 30, "gap_minutes": 0, "rest_by_division": {}, "day_cap_by_division": {}}
     with pytest.raises(ValueError, match="day_index"):
-        build_model(fixtures, courts, grid_slots, 60, constraints, [], [])
+        build_model(fixtures, num_courts, grid_slots, 60, constraints, [], [])
 
 
 def test_rejects_interleaved_day_indices():
@@ -607,13 +627,13 @@ def test_rejects_interleaved_day_indices():
     which is exact only while no other day's ticks fall inside `[lo_d, hi_d]`.
     A caller that interleaves them would get a cap that binds on the wrong
     fixtures, silently, so the model refuses to be built instead."""
-    courts = ["C1"]
+    num_courts = 1
     middle = (_STRADDLE_A + _STRADDLE_B) // 2
-    grid_slots = [("C1", _STRADDLE_A, 0), ("C1", middle, 1), ("C1", _STRADDLE_B, 0)]
-    fixtures = [("s0", ["sa", "sb"], "d1")]
+    grid_slots = [(0, _STRADDLE_A, 0), (0, middle, 1), (0, _STRADDLE_B, 0)]
+    fixtures = [([0, 1], 0)]
     constraints = {"match_minutes": 30, "gap_minutes": 0, "rest_by_division": {}, "day_cap_by_division": {}}
     with pytest.raises(ValueError, match="day_index"):
-        build_model(fixtures, courts, grid_slots, 60, constraints, [], [])
+        build_model(fixtures, num_courts, grid_slots, 60, constraints, [], [])
 
 
 # --- degenerate constraint values must fail loudly, not solve quietly -------
@@ -623,24 +643,24 @@ def test_rejects_interleaved_day_indices():
 # used to be accepted and produce a confidently WRONG board reported as
 # OPTIMAL — a whole division silently dropped, or every match given zero
 # length. Measured before the guards existed:
-#   day_cap {"d1": 0, "d2": 1}  -> OPTIMAL, placed 18/37, zero d1 fixtures
-#   match_minutes 0             -> OPTIMAL, 37 zero-length matches stacked
+#   day_cap {0: 0, 1: 1}  -> OPTIMAL, placed 18/37, zero division-0 fixtures
+#   match_minutes 0       -> OPTIMAL, 37 zero-length matches stacked
 # These are domain-layer guards. `cp_sat.schema` (Prompt 04) still owes the
 # wire-boundary validation; this is defence in depth, not a replacement.
 
 
 def test_rejects_zero_day_cap():
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    constraints = {**constraints, "day_cap_by_division": {"d1": 0, "d2": 1}}
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    constraints = {**constraints, "day_cap_by_division": {0: 0, 1: 1}}
     with pytest.raises(ValueError, match="max_fixtures_per_day"):
-        build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+        build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
 
 
 def test_rejects_negative_day_cap():
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    constraints = {**constraints, "day_cap_by_division": {"d1": -1, "d2": 1}}
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    constraints = {**constraints, "day_cap_by_division": {0: -1, 1: 1}}
     with pytest.raises(ValueError, match="max_fixtures_per_day"):
-        build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+        build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
 
 
 def test_absent_day_cap_rule_means_no_cap():
@@ -661,7 +681,7 @@ def test_absent_day_cap_rule_means_no_cap():
 
     So the status assertion is dropped and replaced by the two that are
     actually about this test's subject: every fixture placed, and T0 saying so
-    itself. Neither is vacuous — reinstate a 0 cap for `d1` and both fail.
+    itself. Neither is vacuous — reinstate a 0 cap for division 0 and both fail.
 
     The wall is 3 s rather than the production 8 s for the same reason: T0
     settles this question in 157 ms and T1 then burns every remaining second
@@ -669,9 +689,9 @@ def test_absent_day_cap_rule_means_no_cap():
     budget, and a suite that heats the box for six seconds per test makes the
     tests that DO ask about it flakier.
     """
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
     constraints = {**constraints, "day_cap_by_division": {}}
-    model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+    model = build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
     outcome = solve(model, wall_seconds=3.0)
     assert outcome.tiers_completed >= 1, "T0 itself did not complete — the rest would be vacuous"
     assert len(outcome.assignments) == len(fixtures)
@@ -679,17 +699,17 @@ def test_absent_day_cap_rule_means_no_cap():
 
 
 def test_rejects_zero_match_minutes():
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
     constraints = {**constraints, "match_minutes": 0}
     with pytest.raises(ValueError, match="match_minutes"):
-        build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+        build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
 
 
 def test_rejects_missing_match_minutes():
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
     constraints = {k: v for k, v in constraints.items() if k != "match_minutes"}
     with pytest.raises(ValueError, match="match_minutes"):
-        build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+        build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
 
 
 # --- negative-AFTER-ARITHMETIC values: the same family, one step further ----
@@ -711,36 +731,41 @@ def test_rejects_negative_gap_minutes():
     """A negative turnaround zeroes the court interval and two matches land on
     one court simultaneously — the exact failure `match_minutes`' own guard
     text describes, through a field that had no guard at either layer."""
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
     constraints = {**constraints, "gap_minutes": -constraints["match_minutes"]}
     with pytest.raises(ValueError, match="gap_minutes"):
-        build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+        build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
 
 
 def test_accepts_zero_gap_minutes():
     """Zero turnaround is legitimate (courts with no changeover), so the guard
     must reject negatives WITHOUT closing the contract's own zero case."""
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
     constraints = {**constraints, "gap_minutes": 0}
-    model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
-    assert model.fixture_vars.fixture_ids == [fid for fid, _entrants, _division in fixtures]
+    model = build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
+    # One decision var per fixture -- identity is position, so this is just a
+    # count now rather than the old `fixture_ids == [...]` id-list check.
+    assert len(model.fixture_vars.placed) == len(fixtures)
 
 
 def test_rejects_negative_min_rest_minutes():
     """A negative rest zeroes the participant-rest interval and one entrant is
     placed in two simultaneous matches."""
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    constraints = {**constraints, "rest_by_division": {"d1": -constraints["match_minutes"], "d2": 80}}
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    constraints = {
+        **constraints,
+        "rest_by_division": {0: -constraints["match_minutes"], 1: 80},
+    }
     with pytest.raises(ValueError, match="min_rest_minutes"):
-        build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+        build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
 
 
 def test_accepts_zero_min_rest_minutes():
     """Rest of 0 means "no minimum rest" and is a legitimate request."""
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    constraints = {**constraints, "rest_by_division": {"d1": 0, "d2": 0}}
-    model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
-    assert model.fixture_vars.fixture_ids == [fid for fid, _entrants, _division in fixtures]
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    constraints = {**constraints, "rest_by_division": {0: 0, 1: 0}}
+    model = build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
+    assert len(model.fixture_vars.placed) == len(fixtures)
 
 
 def test_rejects_an_empty_grid():
@@ -749,11 +774,11 @@ def test_rejects_an_empty_grid():
     `build_model` fell back to `Domain.FromValues([0])` and a single day bucket
     `[0]`, so fixtures were placed at `start_at_ms=0` on a grid offering zero
     legal slots — measured: OPTIMAL, 2 placed, 4 tiers. `cp_sat.schema` already
-    rejects an empty `Grid` at the wire, so the SERVICE path was safe; the
+    rejects an empty slot list at the wire, so the SERVICE path was safe; the
     domain object could still be constructed invalid, which leaves `bench/`,
     `test_objective.py` and any future direct caller holding the silent wrong
     board. A domain object must refuse to exist in an invalid state.
     """
-    fixtures, courts, _grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    fixtures, num_courts, _grid_slots, step_minutes, constraints, existing, deps = _production_board()
     with pytest.raises(ValueError, match="grid_slots"):
-        build_model(fixtures, courts, [], step_minutes, constraints, existing, deps)
+        build_model(fixtures, num_courts, [], step_minutes, constraints, existing, deps)

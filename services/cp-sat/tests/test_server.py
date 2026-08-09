@@ -15,6 +15,11 @@ than just describing what it does:
   * only PROVED tiers are published in `objective_values` — the outcome can
     carry one more entry than `tiers_completed` when the clock cuts a tier
     short, and that unproven value must not go out on the wire.
+
+Round 6: identity on the wire is positional (`Assignment.fixture_index` /
+`.court_index`, not `.fixture_id` / `.court`). `_solvable_request` below
+builds a one-fixture, one-court request the same way it always did; only the
+field names and types changed.
 """
 
 import contextlib
@@ -26,6 +31,7 @@ import grpc_testing
 import pytest
 from grpc_health.v1 import health_pb2, health_pb2_grpc
 
+from _board_positional import to_proto_request
 from cp_sat.config import Settings
 from cp_sat.generated import scheduler_pb2, scheduler_pb2_grpc
 from cp_sat.main import SchedulerServicer, build_health_servicer, build_server
@@ -65,11 +71,12 @@ def _solvable_request(**overrides) -> scheduler_pb2.SolveBuildRequest:
     inside the budget, so nothing here is timing-sensitive."""
     kwargs = dict(
         request_id="r1",
-        courts=["Court 1"],
-        fixtures=[scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1")],
-        grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS, day_index=0)], step_minutes=10
-        ),
+        court_names=["Court 1"],
+        entrant_count=2,
+        division_count=1,
+        fixtures=[scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0)],
+        slots=[scheduler_pb2.Slot(court_index=0, start_at_ms=SLOT_MS, day_index=0)],
+        step_minutes=10,
         constraints=scheduler_pb2.BuildConstraints(match_minutes=30, gap_minutes=10),
         wall_seconds=2.0,
     )
@@ -136,8 +143,8 @@ def test_accepts_valid_request_with_correct_secret(test_server):
     assert response.status in (scheduler_pb2.SOLVE_STATUS_OPTIMAL, scheduler_pb2.SOLVE_STATUS_FEASIBLE)
     # Status alone is not evidence of a board: the chain reports OPTIMAL for an
     # EMPTY schedule just as readily, so assert the fixture actually landed.
-    assert [(a.fixture_id, a.court, a.start_at_ms) for a in response.assignments] == [
-        ("f1", "Court 1", SLOT_MS)
+    assert [(a.fixture_index, a.court_index, a.start_at_ms) for a in response.assignments] == [
+        (0, 0, SLOT_MS)
     ]
     assert response.tiers_completed > 0
     assert response.elapsed_ms >= 0
@@ -175,33 +182,28 @@ def test_maps_invalid_request_to_error_response(test_server):
 
 
 @pytest.mark.parametrize(
-    "field,value",
+    "overrides",
     [
-        ("match_minutes", 0),
-        ("day_cap", 0),
-        ("wall_seconds", 0.0),
+        pytest.param(
+            {"constraints": scheduler_pb2.BuildConstraints(match_minutes=0, gap_minutes=10)},
+            id="match_minutes",
+        ),
+        pytest.param(
+            {
+                "division_rules": [
+                    scheduler_pb2.DivisionRule(division_index=0, max_fixtures_per_day=0)
+                ]
+            },
+            id="day_cap",
+        ),
+        pytest.param({"wall_seconds": 0.0}, id="wall_seconds"),
     ],
 )
-def test_degenerate_scalars_come_back_as_error_not_a_wrong_board(test_server, field, value):
+def test_degenerate_scalars_come_back_as_error_not_a_wrong_board(test_server, overrides):
     """Each of these is an UNSET proto3 scalar arriving as 0, and each would
     otherwise produce a confidently wrong board reported as OPTIMAL. The wire
     boundary rejects all three, so none of them reaches the solver."""
-    if field == "match_minutes":
-        req = _solvable_request(
-            constraints=scheduler_pb2.BuildConstraints(match_minutes=value, gap_minutes=10)
-        )
-    elif field == "day_cap":
-        req = _solvable_request(
-            constraints=scheduler_pb2.BuildConstraints(
-                match_minutes=30,
-                gap_minutes=10,
-                day_cap_by_division=[
-                    scheduler_pb2.DivisionDayCapRule(division_id="d1", max_fixtures_per_day=value)
-                ],
-            )
-        )
-    else:
-        req = _solvable_request(wall_seconds=value)
+    req = _solvable_request(**overrides)
 
     response, _, code, _ = _invoke(test_server, req)
     assert code == grpc.StatusCode.OK
@@ -241,7 +243,7 @@ def test_publishes_only_confirmed_objective_values(test_server, monkeypatch):
 
     def _cut_short_solve(model, wall_seconds):
         return SolveOutcome(
-            assignments=[("f1", "Court 1", 0)],
+            assignments=[(0, 0, 0)],
             status="FEASIBLE",
             tiers_completed=1,
             # T1 (makespan) was cut short: recorded, but NOT proved.
@@ -263,7 +265,7 @@ def test_publishes_every_objective_value_when_all_tiers_proved(test_server, monk
 
     def _full_chain_solve(model, wall_seconds):
         return SolveOutcome(
-            assignments=[("f1", "Court 1", 0)],
+            assignments=[(0, 0, 0)],
             status="OPTIMAL",
             tiers_completed=len(TIER_ORDER),
             objective_values=[(name, i) for i, name in enumerate(TIER_ORDER)],
@@ -335,8 +337,8 @@ def test_build_server_registers_both_services_on_a_real_port(settings):
 
         response = stub.SolveBuild(_solvable_request(), metadata=GOOD_AUTH, timeout=10)
         assert response.status == scheduler_pb2.SOLVE_STATUS_OPTIMAL
-        assert [(a.fixture_id, a.court, a.start_at_ms) for a in response.assignments] == [
-            ("f1", "Court 1", SLOT_MS)
+        assert [(a.fixture_index, a.court_index, a.start_at_ms) for a in response.assignments] == [
+            (0, 0, SLOT_MS)
         ]
     finally:
         channel.close()
@@ -354,7 +356,9 @@ def test_production_board_solves_through_the_server(test_server):
     `existing`, `dependencies`, `rest_by_division` or `day_cap_by_division`
     through the wire mapping at all — a dropped field in `schema.py` would
     relax the board and go unnoticed. This drives the bench's own
-    `production_board()` (37 fixtures, 5 courts, ~2081 slots) end to end.
+    `production_board()` (37 fixtures, 5 courts, ~2081 slots) end to end,
+    converted to the positional wire shape by `_board_positional.to_proto_request`
+    (`bench/` is out of scope for round 6 and still returns string identity).
 
     Deliberately does NOT assert `tiers_completed == 4`: the T0-T3 chain is
     ~4.9s idle but 9-11s under load, so that assertion is a flake generator
@@ -364,46 +368,10 @@ def test_production_board_solves_through_the_server(test_server):
     """
     from cpsat_bench_boards import production_board
 
-    fixtures, courts, grid_slots, step_minutes, constraints, existing, dependencies = (
-        production_board()
-    )
+    board = production_board()
+    fixtures, courts, grid_slots, _step_minutes, _constraints, _existing, _dependencies = board
 
-    req = scheduler_pb2.SolveBuildRequest(
-        request_id="prod-37x77k",
-        courts=courts,
-        fixtures=[
-            scheduler_pb2.Fixture(fixture_id=fid, entrant_ids=entrants, division_id=division)
-            for fid, entrants, division in fixtures
-        ],
-        grid=scheduler_pb2.Grid(
-            slots=[
-                scheduler_pb2.Slot(court=court, start_at_ms=start, day_index=day)
-                for court, start, day in grid_slots
-            ],
-            step_minutes=step_minutes,
-        ),
-        existing=[
-            scheduler_pb2.Assignment(fixture_id=fid, court=court, start_at_ms=start)
-            for fid, court, start in existing
-        ],
-        dependencies=[
-            scheduler_pb2.OrderPair(before_fixture_id=before, after_fixture_id=after)
-            for before, after in dependencies
-        ],
-        constraints=scheduler_pb2.BuildConstraints(
-            match_minutes=constraints["match_minutes"],
-            gap_minutes=constraints["gap_minutes"],
-            rest_by_division=[
-                scheduler_pb2.DivisionRestRule(division_id=d, min_rest_minutes=v)
-                for d, v in constraints["rest_by_division"].items()
-            ],
-            day_cap_by_division=[
-                scheduler_pb2.DivisionDayCapRule(division_id=d, max_fixtures_per_day=v)
-                for d, v in constraints["day_cap_by_division"].items()
-            ],
-        ),
-        wall_seconds=8.0,
-    )
+    req = to_proto_request(board, request_id="prod-37x77k", wall_seconds=8.0)
 
     response, _, code, _ = _invoke(test_server, req)
 
@@ -415,21 +383,22 @@ def test_production_board_solves_through_the_server(test_server):
     assert not response.HasField("error")
     assert response.tiers_completed >= 1
 
-    placed = [(a.fixture_id, a.court, a.start_at_ms) for a in response.assignments]
+    placed = [(a.fixture_index, a.court_index, a.start_at_ms) for a in response.assignments]
     assert len(placed) > 0
 
     # A board, not just a status. Each of these is a way the wire mapping could
     # be wrong while the solve still reports success.
-    fixture_ids = {fid for fid, _entrants, _division in fixtures}
-    assert {fid for fid, _c, _s in placed} <= fixture_ids
-    assert len({fid for fid, _c, _s in placed}) == len(placed), "a fixture was placed twice"
-    assert {court for _f, court, _s in placed} <= set(courts)
+    num_fixtures = len(fixtures)
+    num_courts = len(courts)
+    assert {fi for fi, _c, _s in placed} <= set(range(num_fixtures))
+    assert len({fi for fi, _c, _s in placed}) == len(placed), "a fixture was placed twice"
+    assert {court for _f, court, _s in placed} <= set(range(num_courts))
     # The lattice actually reached the model: every (court, start) has to be a
-    # real grid point. An empty or ignored grid collapses every start onto tick
-    # 0 instead — precisely the empty-Grid failure this round also fixed.
-    assert {(court, start) for _f, court, start in placed} <= {
-        (court, start) for court, start, _day in grid_slots
-    }
+    # real grid point. An empty or ignored slot list collapses every start onto
+    # tick 0 instead — precisely the empty-slots failure this round also fixed.
+    court_index_of = {name: i for i, name in enumerate(courts)}
+    legal_points = {(court_index_of[court], start) for court, start, _day in grid_slots}
+    assert {(court, start) for _f, court, start in placed} <= legal_points
     assert len({start for _f, _c, start in placed}) > 1, "every fixture landed on one tick"
 
 

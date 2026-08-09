@@ -13,6 +13,33 @@ constraint families, same presolve knobs. What changed is only the boundary:
   * the sweep's JSON instrumentation is gone;
   * the bench's greedy warm-start hint is NOT ported — see below.
 
+--- round 6: identity is POSITIONAL, not string-based ------------------------
+
+Every id-shaped string this module used to key on — `fixture_id`, `court`,
+`division_id`, `entrant_id` — is gone. A fixture's identity is its position in
+`fixtures`; a court's is its position in the caller's `court_names`, carried
+here only as a COUNT (`num_courts`); a division's or entrant's identity is a
+caller-assigned index. `cp_sat.schema` is the ACL that enforces every index is
+in range before this module ever sees it — this module's OWN tolerance of an
+out-of-range dependency index (skip rather than crash) is unchanged from the
+string contract's `id_to_idx.get(...) or continue`, just re-expressed as a
+bounds check instead of a dict miss.
+
+Two concrete consequences, both mechanical, neither a modelling change:
+
+  * `presence_court`, `court_lists` and `by_entrant` are keyed on `int` now.
+    `presence_court` and `court_lists` are DENSE (`num_courts` is available
+    directly, so they are plain lists indexed 0..num_courts-1); `by_entrant`
+    stays a dict (`dict[int, list[int]]`) because nothing here carries a
+    declared entrant count to size a dense list against — only the indices
+    that actually appear in `fixtures` are ever grouped, exactly as the
+    string contract only ever grouped the entrant ids that appeared.
+  * `FixtureVars.fixture_ids` is gone. It used to carry each fixture's own id
+    string for `extract_assignments` to read back; a fixture's identity is
+    now simply its position, always recoverable from `enumerate(...)`, so a
+    parallel list that always equalled `range(n)` would have been dead
+    weight.
+
 --- DROPPED: the greedy warm start (`AddHint`) -------------------------------
 
 In the bench this is a two-part mechanism, both parts in `cpsat_bench.py`:
@@ -65,7 +92,10 @@ This module is domain logic and deliberately imports NOTHING from
 and imports nothing from `cp_sat` at all. Prompt 02 extracted the board
 GENERATOR into `bench/cpsat_bench_boards.py` precisely so the bench and the
 service could not disagree about the board — but the MODEL was left
-duplicated, so they can still disagree about everything else.
+duplicated, so they can still disagree about everything else. The bench's copy
+is STILL string-keyed; round 6 only touched this module and `cp_sat.schema`,
+so `tests/` carries a small adapter that converts the bench's string-shaped
+boards into this module's positional shape (see `tests/_board_positional.py`).
 
 They already do. The `mk_hi >= mk_lo` clamp below (Task 05c) is in this copy
 and not in the bench's (:542-547), so on a board where nothing is placed the
@@ -113,11 +143,12 @@ omitted, because each one makes this solver's answer strictly more permissive
 than z3's, and TS re-runs its own verifier on the result:
 
   * build-encode.ts section 5, per-fixture start windows (`notAfter`).
-    `Fixture` carries (fixture_id, entrant_ids, division_id) only.
+    `Fixture` carries (entrant_indices, division_index) only.
   * build-encode.ts section 7's PARTICIPANT-REST half. `existing` rows arrive
-    as `Assignment (fixture_id, court, start_at_ms)` with no entrant list, so
-    only the court-turnaround half of section 7 survives; a pinned row still
-    blocks its own court but no longer blocks a participant it shares.
+    as `PinnedRow (court_index, start_at_ms)` — no entrant list, and as of
+    round 6 no fixture identity of any kind — so only the court-turnaround
+    half of section 7 survives; a pinned row still blocks its own court but
+    no longer blocks a participant it shares.
   * per-court grids. `admissible_starts` is the union of every slot's start
     across all courts (exactly as the bench does, where every court offers the
     identical tick set), so a court with a DIFFERENT slot set — a per-court
@@ -126,10 +157,11 @@ than z3's, and TS re-runs its own verifier on the result:
     at T, OPTIMAL; and with C1 declared but slotless, on C1 at any tick at all.
 
     **This is NOT unclosable, and an earlier version of this note said it was.**
-    `cp_sat.schema._validate_court_grids` now REFUSES any request whose courts
-    do not all offer the same start times, so the wrong board is unreachable —
-    at the cost of the capability: a per-court blackout is rejected rather
-    than mis-scheduled, and the caller falls back to its own placer.
+    `cp_sat.schema._validate_court_slot_coverage` now REFUSES any request
+    whose courts do not all offer the same start times, so the wrong board is
+    unreachable — at the cost of the capability: a per-court blackout is
+    rejected rather than mis-scheduled, and the caller falls back to its own
+    placer.
 
     Closing it here INSTEAD, and getting the capability back, is a bounded
     change and is the right one if callers turn out to need it: give each
@@ -154,12 +186,12 @@ layer up, which is Prompt 06's problem and needs its own test there.
 A FIFTH is open and is a real permissiveness gap, listed here with the three
 above rather than left to be rediscovered: **`existing` rows are not counted
 against day caps.** `on_day` is built for movable fixtures only, so a pinned
-`d1` match on a capped day does not consume that day's allowance and the
-solver may add another. It cannot be fixed by adding `day_index` to
-`Assignment` alone — caps are PER DIVISION and `Assignment` carries no
-division, so a pinned row cannot be attributed to any cap. Closing it needs
-`Assignment.division_id` on the wire, which is a contract addition nothing has
-asked for yet.
+row on a capped day does not consume that day's allowance and the solver may
+add another. It cannot be fixed by adding `day_index` to `PinnedRow` alone —
+caps are PER DIVISION and `PinnedRow` carries no division at all (round 6
+removed even its fixture identity) — so a pinned row cannot be attributed to
+any cap. Closing it needs a `division_index` on `PinnedRow`, which is a
+contract addition nothing has asked for yet.
 """
 
 from __future__ import annotations
@@ -188,7 +220,7 @@ class SolveOutcome:
     (`OPTIMAL`/`FEASIBLE`/`INFEASIBLE`/`UNKNOWN`/`MODEL_INVALID`), passed
     through verbatim — `cp_sat.main` maps it onto the proto enum."""
 
-    assignments: list[tuple[str, str, int]]  # (fixture_id, court, start_at_ms)
+    assignments: list[tuple[int, int, int]]  # (fixture_index, court_index, start_at_ms)
     status: str
     tiers_completed: int
     objective_values: list[tuple[str, int]]  # (tier_name, achieved value)
@@ -200,12 +232,16 @@ class FixtureVars:
     """The decision variables and objective terms a tier solve needs to read
     back. Rides on the model itself (`model.fixture_vars`) so `solve()` — and
     Prompt 03's `run_tier_chain(model, fixture_vars, wall_seconds)` — can
-    recover them from the single model argument the interface passes around."""
+    recover them from the single model argument the interface passes around.
 
-    fixture_ids: list[str]
+    No `fixture_ids` field: a fixture's identity is its position, always
+    `range(len(placed))`, so a parallel list carrying it would only ever
+    equal that range — see the module docstring's round-6 note.
+    """
+
     placed: list[Any]
     start: list[Any]
-    presence_court: list[dict[str, Any]]
+    presence_court: list[list[Any]]  # presence_court[fixture_i][court_index]
     placed_sum: Any
     makespan: Any
     worst_gap: Any
@@ -224,43 +260,48 @@ class ScheduleModel(cp_model.CpModel):
 
 
 def build_model(
-    fixtures: list[tuple[str, list[str], str]],
-    courts: list[str],
-    grid_slots: list[tuple[str, int]],
+    fixtures: list[tuple[list[int], int]],
+    num_courts: int,
+    grid_slots: list[tuple[int, int, int]],
     step_minutes: int,
     constraints: dict,
-    existing: list[tuple[str, str, int]],
-    dependencies: list[tuple[str, str]],
+    existing: list[tuple[int, int]],
+    dependencies: list[tuple[int, int]],
 ) -> cp_model.CpModel:
     """Build the full constraint model. No objective is set — `solve()` owns
     that, so the tier chain (Prompt 03) can drive one model through several
     objectives without rebuilding the constraints each time.
 
     Args:
-        fixtures: (fixture_id, entrant_ids, division_id) per movable fixture.
-        courts: every court a fixture may be placed on.
-        grid_slots: (court, start_at_ms, day_index) legal lattice points,
-            treated as an opaque legal-start set — no calendar or timezone math
-            happens here. `day_index` is the CALLER's calendar day for that
-            slot, resolved in the org's own zone; it is the only thing the
-            per-division day cap groups by. Slots sharing a `start_at_ms` must
-            agree on it, and each day's ticks must occupy a stretch of the
-            timeline no other day's fall inside.
+        fixtures: (entrant_indices, division_index) per movable fixture. A
+            fixture's identity is its POSITION in this list.
+        num_courts: how many courts a fixture may be placed on. A court's
+            identity is its position in `range(num_courts)`; this module never
+            sees a court name.
+        grid_slots: (court_index, start_at_ms, day_index) legal lattice
+            points, treated as an opaque legal-start set — no calendar or
+            timezone math happens here. `day_index` is the CALLER's calendar
+            day for that slot, resolved in the org's own zone; it is the only
+            thing the per-division day cap groups by. Slots sharing a
+            `start_at_ms` must agree on it, and each day's ticks must occupy a
+            stretch of the timeline no other day's fall inside.
         step_minutes: the lattice's tick size. Accepted because it is part of
-            the contract (`Grid.step_minutes`) and callers have it, but the
-            model derives every start it needs from `grid_slots` directly, so
-            nothing reads it. It is NOT silently ignored spacing information:
-            `grid_slots` already enumerates every admissible tick.
+            the contract but unread here — see the module docstring. Nothing
+            reads it: `grid_slots` already enumerates every admissible tick.
         constraints: `match_minutes`, `gap_minutes`, `rest_by_division`,
-            `day_cap_by_division`.
-        existing: (fixture_id, court, start_at_ms) immovable rows.
-        dependencies: (before_fixture_id, after_fixture_id) — `after` may not
-            start until `before` has finished and rested.
+            `day_cap_by_division` — the latter two now `dict[int, int]`,
+            keyed by `division_index` rather than by division id string.
+        existing: (court_index, start_at_ms) immovable rows. No fixture
+            identity at all — round 6 confirmed by tracing every read that
+            the old `fixture_id` on a pinned row reached nothing but a debug
+            variable-name label.
+        dependencies: (before_index, after_index) — fixture POSITIONS, not
+            ids. `after` may not start until `before` has finished and rested.
     """
     del step_minutes  # see the docstring: contractual, not load-bearing.
 
-    rest_by_division: dict[str, int] = constraints.get("rest_by_division") or {}
-    day_cap_by_division: dict[str, int] = constraints.get("day_cap_by_division") or {}
+    rest_by_division: dict[int, int] = constraints.get("rest_by_division") or {}
+    day_cap_by_division: dict[int, int] = constraints.get("day_cap_by_division") or {}
 
     # --- degenerate values that would otherwise produce a confidently WRONG
     # --- board reported as OPTIMAL. See "proto3 scalars are non-optional".
@@ -274,7 +315,7 @@ def build_model(
     for division, cap in day_cap_by_division.items():
         if int(cap) <= 0:
             raise ValueError(
-                f"max_fixtures_per_day for division {division!r} must be > 0, got {cap!r}. "
+                f"max_fixtures_per_day for division_index {division!r} must be > 0, got {cap!r}. "
                 "A cap of 0 forbids placing that division at all, and the solver reports "
                 "OPTIMAL having silently dropped every one of its fixtures. To leave a "
                 "division uncapped, omit it from day_cap_by_division rather than passing 0."
@@ -296,7 +337,7 @@ def build_model(
     for division, rest in rest_by_division.items():
         if int(rest) < 0:
             raise ValueError(
-                f"min_rest_minutes for division {division!r} must be >= 0, got {rest!r}. The "
+                f"min_rest_minutes for division_index {division!r} must be >= 0, got {rest!r}. The "
                 "participant-rest interval is match_minutes + rest wide, so a negative rest "
                 "shrinks it — at rest == -match_minutes the width is 0 and the solver returns "
                 "OPTIMAL with one entrant in two simultaneous matches (measured: 37 placed, "
@@ -308,7 +349,7 @@ def build_model(
             "back to [0] and the day-bucket list to [0], so fixtures are placed at "
             "start_at_ms=0 — a grid that offers zero legal slots yields a board, reported "
             "OPTIMAL (measured: 2 fixtures placed at epoch 0). `cp_sat.schema` rejects an "
-            "empty Grid at the wire too; this is the domain refusing to be constructed "
+            "empty slot list at the wire too; this is the domain refusing to be constructed "
             "invalid, which is defence in depth rather than duplication."
         )
 
@@ -317,8 +358,7 @@ def build_model(
     dur_ms = match_minutes * MIN_MS
     gap_ms = gap_minutes * MIN_MS
 
-    fixture_ids = [fid for fid, _entrants, _division in fixtures]
-    divisions = [division for _fid, _entrants, division in fixtures]
+    divisions = [division_index for _entrants, division_index in fixtures]
     # Per-fixture rest, resolved off the fixture's OWN division. The bench had
     # one `hard_rest_min` for the whole board; this is that generalised, and
     # reduces to it exactly when every division shares a value.
@@ -331,46 +371,50 @@ def build_model(
     # admissible ticks) instead of a Bool per (fixture, slot).
     placed = [model.NewBoolVar(f"p_{i}") for i in range(n)]
     start: list[Any] = []
-    presence_court: list[dict[str, Any]] = []
+    presence_court: list[list[Any]] = []
     for i in range(n):
         start.append(model.NewIntVarFromDomain(full_domain, f"start_{i}"))
-        pcs = {c: model.NewBoolVar(f"onc_{i}_{c}") for c in courts}
+        pcs = [model.NewBoolVar(f"onc_{i}_{c}") for c in range(num_courts)]
         presence_court.append(pcs)
         # section 1: at most one court, and `placed[i]` tracks it exactly.
-        model.Add(sum(pcs.values()) == placed[i])
+        model.Add(sum(pcs) == placed[i])
 
     # sections 2+3 fused: one optional interval per (fixture, court), sized
     # matchMinutes+gapMinutes, all sharing that fixture's single `start[i]`.
     # AddNoOverlap per court is a strict superset of exact-slot exclusivity
     # (section 2) at this width, so section 2 needs no separate statement.
     width_court = dur_ms + gap_ms
-    court_lists: dict[str, list[Any]] = {c: [] for c in courts}
+    court_lists: list[list[Any]] = [[] for _ in range(num_courts)]
     for i in range(n):
-        for c in courts:
+        for c in range(num_courts):
             court_lists[c].append(
-                model.NewOptionalFixedSizeIntervalVar(start[i], width_court, presence_court[i][c], f"ivc_{i}_{c}")
+                model.NewOptionalFixedSizeIntervalVar(
+                    start[i], width_court, presence_court[i][c], f"ivc_{i}_{c}"
+                )
             )
 
     # section 7 (court-gap half): existing rows are plain fixed intervals,
     # same width, folded into their own court's list — one-directional by
     # construction (a fixed interval cannot move to accommodate a movable
     # one; only the movable side is ever constrained by NoOverlap here).
-    for existing_id, existing_court, existing_start in existing:
-        if existing_court in court_lists:
+    # `k` (the row's own position) labels the interval var; existing rows
+    # carry no identity of their own to label it with (round 6).
+    for k, (existing_court, existing_start) in enumerate(existing):
+        if 0 <= existing_court < num_courts:
             court_lists[existing_court].append(
-                model.NewFixedSizeIntervalVar(existing_start, width_court, f"ivc_existing_{existing_id}")
+                model.NewFixedSizeIntervalVar(existing_start, width_court, f"ivc_existing_{k}")
             )
 
-    for lst in court_lists.values():
+    for lst in court_lists:
         if len(lst) >= 2:
             model.AddNoOverlap(lst)
 
     # section 6: participant rest window, entrant-keyed groups. One optional
     # interval per fixture, sized matchMinutes+its division's rest, presence =
     # placed[i]; AddNoOverlap per entrant group (cross-court).
-    by_entrant: dict[str, list[int]] = {}
-    for i, (_fid, entrant_ids, _division) in enumerate(fixtures):
-        for entrant in entrant_ids:
+    by_entrant: dict[int, list[int]] = {}
+    for i, (entrant_indices, _division) in enumerate(fixtures):
+        for entrant in entrant_indices:
             by_entrant.setdefault(entrant, []).append(i)
 
     interval_rest = [
@@ -387,14 +431,17 @@ def build_model(
     # own row, placement-free) — same rule the bench states, with the pair
     # given in the proto's (before, after) order rather than the bench's
     # (dependent, feeder).
-    id_to_idx = {fid: i for i, fid in enumerate(fixture_ids)}
-    for before_id, after_id in dependencies:
-        after = id_to_idx.get(after_id)
-        before = id_to_idx.get(before_id)
-        if after is None or before is None:
+    #
+    # DIRECT indexing now — no `id_to_idx` lookup. `before_idx`/`after_idx`
+    # are already fixture POSITIONS; `cp_sat.schema` guarantees them in range
+    # for a real request. The bounds check below is the same tolerance the
+    # string contract had (`id_to_idx.get(...) or continue`), preserved for
+    # a direct domain caller (bench, tests) that hands this a partial board.
+    for before_idx, after_idx in dependencies:
+        if not (0 <= before_idx < n and 0 <= after_idx < n):
             continue
-        model.Add(start[after] >= start[before] + dur_ms + rest_ms[after]).OnlyEnforceIf(
-            [placed[after], placed[before]]
+        model.Add(start[after_idx] >= start[before_idx] + dur_ms + rest_ms[after_idx]).OnlyEnforceIf(
+            [placed[after_idx], placed[before_idx]]
         )
 
     # section 9: max fixtures per day, per division.
@@ -529,7 +576,7 @@ def build_model(
     # a dual bound. Deliberately NOT propagated back to build.ts (Prompt 06's
     # file, and the squeeze is correct there).
     court_counts = []
-    for c in courts:
+    for c in range(num_courts):
         count = model.NewIntVar(0, n, f"load_{c}")
         model.Add(count == sum(presence_court[i][c] for i in range(n)))
         court_counts.append(count)
@@ -566,7 +613,6 @@ def build_model(
         model.Add(worst_gap == 0)
 
     model.fixture_vars = FixtureVars(
-        fixture_ids=fixture_ids,
         placed=placed,
         start=start,
         presence_court=presence_court,
@@ -597,16 +643,21 @@ def solve(model: cp_model.CpModel, wall_seconds: float) -> SolveOutcome:
     return run_tier_chain(model, model.fixture_vars, wall_seconds)
 
 
-def extract_assignments(solver: cp_model.CpSolver, fixture_vars: FixtureVars) -> list[tuple[str, str, int]]:
+def extract_assignments(solver: cp_model.CpSolver, fixture_vars: FixtureVars) -> list[tuple[int, int, int]]:
     """Read placed fixtures back out. `start[i]` free-floats for an unplaced
     fixture (its intervals are absent, so nothing constrains it), which is why
-    this filters on `placed[i]` rather than reading every start."""
-    out: list[tuple[str, str, int]] = []
-    for i, fixture_id in enumerate(fixture_vars.fixture_ids):
-        if not solver.Value(fixture_vars.placed[i]):
+    this filters on `placed[i]` rather than reading every start.
+
+    A fixture's identity in the returned triples is its POSITION `i` —
+    `enumerate(fixture_vars.placed)` rather than a stored `fixture_ids` list,
+    since the two would always have agreed (see `FixtureVars`'s docstring).
+    """
+    out: list[tuple[int, int, int]] = []
+    for i, is_placed in enumerate(fixture_vars.placed):
+        if not solver.Value(is_placed):
             continue
-        for court, presence in fixture_vars.presence_court[i].items():
+        for court_index, presence in enumerate(fixture_vars.presence_court[i]):
             if solver.Value(presence):
-                out.append((fixture_id, court, int(solver.Value(fixture_vars.start[i]))))
+                out.append((i, court_index, int(solver.Value(fixture_vars.start[i]))))
                 break
     return out

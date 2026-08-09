@@ -103,14 +103,18 @@ def test_grpc_stub_imports_as_a_package_module():
 # largest makespan (~1.5e9) fits inside int32 — so the only place the narrowing
 # is observable is the descriptor.
 EXPECTED_REQUEST_FIELDS = {
-    "request_id":   (1, FieldDescriptor.TYPE_STRING,  False, False),
-    "courts":       (2, FieldDescriptor.TYPE_STRING,  True,  False),
-    "grid":         (3, FieldDescriptor.TYPE_MESSAGE, False, True),
-    "fixtures":     (4, FieldDescriptor.TYPE_MESSAGE, True,  False),
-    "existing":     (5, FieldDescriptor.TYPE_MESSAGE, True,  False),
-    "dependencies": (6, FieldDescriptor.TYPE_MESSAGE, True,  False),
-    "constraints":  (7, FieldDescriptor.TYPE_MESSAGE, False, True),
-    "wall_seconds": (8, FieldDescriptor.TYPE_DOUBLE,  False, False),
+    "request_id":     (1,  FieldDescriptor.TYPE_STRING,  False, False),
+    "court_names":    (2,  FieldDescriptor.TYPE_STRING,  True,  False),
+    "entrant_count":  (3,  FieldDescriptor.TYPE_UINT32,  False, False),
+    "division_count": (4,  FieldDescriptor.TYPE_UINT32,  False, False),
+    "fixtures":       (5,  FieldDescriptor.TYPE_MESSAGE, True,  False),
+    "slots":          (6,  FieldDescriptor.TYPE_MESSAGE, True,  False),
+    "step_minutes":   (7,  FieldDescriptor.TYPE_INT32,   False, False),
+    "existing":       (8,  FieldDescriptor.TYPE_MESSAGE, True,  False),
+    "dependencies":   (9,  FieldDescriptor.TYPE_MESSAGE, True,  False),
+    "division_rules": (10, FieldDescriptor.TYPE_MESSAGE, True,  False),
+    "constraints":    (11, FieldDescriptor.TYPE_MESSAGE, False, True),
+    "wall_seconds":   (12, FieldDescriptor.TYPE_DOUBLE,  False, False),
 }
 
 EXPECTED_RESPONSE_FIELDS = {
@@ -129,41 +133,35 @@ EXPECTED_RESPONSE_FIELDS = {
 #: survived all 57 proto-aware tests.
 EXPECTED_MESSAGE_FIELDS = {
     "Slot": {
-        "court":       (1, FieldDescriptor.TYPE_STRING, False, False),
+        "court_index": (1, FieldDescriptor.TYPE_UINT32, False, True),
         "start_at_ms": (2, FieldDescriptor.TYPE_INT64,  False, False),
         "day_index":   (3, FieldDescriptor.TYPE_INT32,  False, True),
     },
-    "Grid": {
-        "slots":        (1, FieldDescriptor.TYPE_MESSAGE, True,  False),
-        "step_minutes": (2, FieldDescriptor.TYPE_INT32,   False, False),
-    },
     "Fixture": {
-        "fixture_id":  (1, FieldDescriptor.TYPE_STRING, False, False),
-        "entrant_ids": (2, FieldDescriptor.TYPE_STRING, True,  False),
-        "division_id": (3, FieldDescriptor.TYPE_STRING, False, False),
+        "entrant_indices": (1, FieldDescriptor.TYPE_UINT32, True,  False),
+        "division_index":  (2, FieldDescriptor.TYPE_UINT32, False, True),
+    },
+    "PinnedRow": {
+        "court_index": (1, FieldDescriptor.TYPE_UINT32, False, True),
+        "start_at_ms": (2, FieldDescriptor.TYPE_INT64,  False, False),
     },
     "Assignment": {
-        "fixture_id":  (1, FieldDescriptor.TYPE_STRING, False, False),
-        "court":       (2, FieldDescriptor.TYPE_STRING, False, False),
-        "start_at_ms": (3, FieldDescriptor.TYPE_INT64,  False, False),
+        "fixture_index": (1, FieldDescriptor.TYPE_UINT32, False, False),
+        "court_index":   (2, FieldDescriptor.TYPE_UINT32, False, False),
+        "start_at_ms":   (3, FieldDescriptor.TYPE_INT64,  False, False),
     },
     "OrderPair": {
-        "before_fixture_id": (1, FieldDescriptor.TYPE_STRING, False, False),
-        "after_fixture_id":  (2, FieldDescriptor.TYPE_STRING, False, False),
+        "before_index": (1, FieldDescriptor.TYPE_UINT32, False, True),
+        "after_index":  (2, FieldDescriptor.TYPE_UINT32, False, True),
     },
-    "DivisionRestRule": {
-        "division_id":      (1, FieldDescriptor.TYPE_STRING, False, False),
-        "min_rest_minutes": (2, FieldDescriptor.TYPE_INT32,  False, True),
-    },
-    "DivisionDayCapRule": {
-        "division_id":          (1, FieldDescriptor.TYPE_STRING, False, False),
-        "max_fixtures_per_day": (2, FieldDescriptor.TYPE_INT32,  False, False),
+    "DivisionRule": {
+        "division_index":       (1, FieldDescriptor.TYPE_UINT32, False, True),
+        "min_rest_minutes":     (2, FieldDescriptor.TYPE_INT32,  False, True),
+        "max_fixtures_per_day": (3, FieldDescriptor.TYPE_INT32,  False, True),
     },
     "BuildConstraints": {
-        "match_minutes":       (1, FieldDescriptor.TYPE_INT32,   False, False),
-        "gap_minutes":         (2, FieldDescriptor.TYPE_INT32,   False, True),
-        "rest_by_division":    (3, FieldDescriptor.TYPE_MESSAGE, True,  False),
-        "day_cap_by_division": (4, FieldDescriptor.TYPE_MESSAGE, True,  False),
+        "match_minutes": (1, FieldDescriptor.TYPE_INT32, False, False),
+        "gap_minutes":   (2, FieldDescriptor.TYPE_INT32, False, True),
     },
     "Tier": {
         "name":     (1, FieldDescriptor.TYPE_STRING, False, False),
