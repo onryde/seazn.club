@@ -979,66 +979,79 @@ export function ScheduleBoard({
           </button>
         )}
         <div className="flex-1" />
-        {/* Whole-division freeze (Jul3/03 §4), surfaced on the board itself —
-            single-division boards only; the competition board freezes per
-            division on each division's own page. */}
-        {canEdit && single && (
-          <button
-            type="button"
-            disabled={actions.busy}
-            onClick={() => void toggleFreeze()}
-            title={single.schedule_locked ? msg("board.freezeTitle.unfreeze") : msg("board.freezeTitle.freeze")}
-            className={`btn px-3 py-1.5 text-xs ${
-              single.schedule_locked
-                ? "border border-amber-300 bg-amber-50 text-amber-800"
-                : "btn-ghost"
-            }`}
-          >
-            {single.schedule_locked ? msg("board.frozenBtn") : msg("board.freezeBtn")}
-          </button>
-        )}
-        <ConflictsBadge
-          count={visibleConflicts.length}
-          open={panelOpen}
-          onToggle={() => setPanelOpen((o) => !o)}
-          checkFailed={actions.checkFailed}
-          checking={actions.checking}
-          onRetry={() => void actions.revalidate()}
-        />
-        {canEdit && single && single.status !== "active" && single.status !== "completed" && (
-          <>
+        {/* Lifecycle actions travel as one cluster (#349 Verdict D): at
+            tablet widths (md) the toolbar doesn't fit on one line, and the
+            flat list used to let "Freeze schedule" alone fit on row 1 —
+            stranded past the stretched flex-1 spacer above — while
+            Publish/Start wrapped to row 2. Nesting the group means the
+            outer flex-wrap treats it as a single box: it either stays on
+            row 1 in full (desktop, unchanged) or wraps to row 2 in full
+            (tablet), never split mid-cluster. At >=1024 this renders
+            byte-identical to the flat list: same gap-2 value inside and
+            out, same item order, nothing here changes the hypothetical
+            width of any child. */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Whole-division freeze (Jul3/03 §4), surfaced on the board itself —
+              single-division boards only; the competition board freezes per
+              division on each division's own page. */}
+          {canEdit && single && (
             <button
               type="button"
-              data-testid="board-publish-schedule"
               disabled={actions.busy}
-              onClick={() =>
-                void runGated(
-                  "publish",
-                  `/api/v1/divisions/${single.id}/publish-schedule`,
-                  msg("board.publishNotice"),
-                )
-              }
-              className="btn btn-ghost px-3 py-1.5 text-xs"
+              onClick={() => void toggleFreeze()}
+              title={single.schedule_locked ? msg("board.freezeTitle.unfreeze") : msg("board.freezeTitle.freeze")}
+              className={`btn px-3 py-1.5 text-xs ${
+                single.schedule_locked
+                  ? "border border-amber-300 bg-amber-50 text-amber-800"
+                  : "btn-ghost"
+              }`}
             >
-              {msg("board.publish")}
+              {single.schedule_locked ? msg("board.frozenBtn") : msg("board.freezeBtn")}
             </button>
-            <button
-              type="button"
-              data-testid="board-start-division"
-              disabled={actions.busy}
-              onClick={() =>
-                void runGated(
-                  "start",
-                  `/api/v1/divisions/${single.id}/start`,
-                  msg("board.startNotice"),
-                )
-              }
-              className="btn btn-primary px-3 py-1.5 text-xs"
-            >
-              {msg("board.start")}
-            </button>
-          </>
-        )}
+          )}
+          <ConflictsBadge
+            count={visibleConflicts.length}
+            open={panelOpen}
+            onToggle={() => setPanelOpen((o) => !o)}
+            checkFailed={actions.checkFailed}
+            checking={actions.checking}
+            onRetry={() => void actions.revalidate()}
+          />
+          {canEdit && single && single.status !== "active" && single.status !== "completed" && (
+            <>
+              <button
+                type="button"
+                data-testid="board-publish-schedule"
+                disabled={actions.busy}
+                onClick={() =>
+                  void runGated(
+                    "publish",
+                    `/api/v1/divisions/${single.id}/publish-schedule`,
+                    msg("board.publishNotice"),
+                  )
+                }
+                className="btn btn-ghost px-3 py-1.5 text-xs"
+              >
+                {msg("board.publish")}
+              </button>
+              <button
+                type="button"
+                data-testid="board-start-division"
+                disabled={actions.busy}
+                onClick={() =>
+                  void runGated(
+                    "start",
+                    `/api/v1/divisions/${single.id}/start`,
+                    msg("board.startNotice"),
+                  )
+                }
+                className="btn btn-primary px-3 py-1.5 text-xs"
+              >
+                {msg("board.start")}
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Legend doubles as the division filter (v3/04 §2) — URL-backed. */}
