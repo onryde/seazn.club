@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { describeEvent, EVENT_COPY_KEYS } from "../event-copy";
 import { EVENT_KEY, type MsgFn } from "@/lib/scoring-vocab";
 import { builtinModules } from "@seazn/engine/sports";
+import { CORE_EVENT_SCHEMAS } from "@seazn/engine/core";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
@@ -37,9 +38,17 @@ interface TieredModule {
 }
 
 /** Every event type any shipped module declares — read from the engine, not
- *  hand-copied, so a wave that adds a type reds this file until copy lands. */
+ *  hand-copied, so a wave that adds a type reds this file until copy lands.
+ *
+ *  S3/W4b (#426): the CORE half of that promise was false. It seeded core types
+ *  from `EVENT_KEY` — this app's own vocabulary map — so a core type the engine
+ *  declared and the app had never heard of was absent from the seed, absent
+ *  from every loop below, and reded nothing. The gate could not fail for the
+ *  one case it was written to catch. `core.suspend`/`core.resume` (W4a) have
+ *  copy only because someone remembered. Seeded from `CORE_EVENT_SCHEMAS` now,
+ *  which is the registration the fold itself dispatches on. */
 function declaredEventTypes(): string[] {
-  const out = new Set<string>(Object.keys(EVENT_KEY).filter((k) => k.startsWith("core.")));
+  const out = new Set<string>(Object.keys(CORE_EVENT_SCHEMAS));
   for (const m of builtinModules as unknown as TieredModule[]) {
     for (const tier of m.fidelityTiers ?? []) for (const t of tier.eventTypes) out.add(t);
   }
@@ -109,6 +118,13 @@ describe("the activity feed authors no English of its own", () => {
     expect(types).toContain("football.goal");
     expect(types).toContain("cricket.ball");
     expect(types).toContain("volleyball.set.summary");
+    // The seed must come from the ENGINE, not from this app's own EVENT_KEY.
+    // A core type the app has never heard of is exactly the case the old seed
+    // could not see, so pin one that only the engine declares.
+    expect(types).toContain("core.lineup.substitution");
+    expect(types.filter((t) => t.startsWith("core."))).toHaveLength(
+      Object.keys(CORE_EVENT_SCHEMAS).length,
+    );
     expect(EVENT_COPY_KEYS.length).toBeGreaterThanOrEqual(10);
     // And prove the fr dictionary is actually loaded and differs from en, or
     // every "not English" assertion below is vacuously satisfied by two

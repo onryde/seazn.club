@@ -42,6 +42,8 @@ import type {
 } from "../../sport/module.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
 import type { PlayerStatsModel } from "../../stats/stats.ts";
+import { expectedPairServerOf, makeSquadAdopter } from "../squad-state.ts";
+import type { LineupPolicy, SquadState } from "../../core/lineup.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — v6/00 §2
@@ -367,6 +369,35 @@ export interface NestedState {
   // interruption arrives. Initialising it to `[]` in `init` rewrites every
   // frozen golden state string.
   interruptions?: NestedInterruptionRec[];
+  /**
+   * S3/W4b (#426) — the pair, and who is still on court, as `core/lineup.ts`
+   * folded it. `tennis/DOMAIN.md`'s doubles-order row was deferred for exactly
+   * one missing fact: the pair's DECLARED order. `server` reconstructs who
+   * served, but only a declaration can say which partner was named first, and
+   * without it the fixed rotation cannot be checked against anything.
+   *
+   * ABSENT until it says something the team sheet does not — see
+   * `sports/squad-state.ts`. Same rule as the three fields above: never
+   * initialise it in `init`.
+   */
+  squads?: SquadState;
+}
+
+/**
+ * Who is due to serve this side's `serviceTurn`-th service turn (0-based) —
+ * the reader `tennis/DOMAIN.md`'s "doubles serving and receiving order" row
+ * was deferred for. In doubles the partners alternate service games, so the
+ * turn is the side's service-game index.
+ *
+ * `null` for a singles fixture or a sheet naming no order: the caller then has
+ * nothing to compare the recorded `server` against, which is the true answer.
+ */
+export function expectedDoublesServer(
+  state: NestedState,
+  side: Side,
+  serviceTurn: number,
+): string | null {
+  return expectedPairServerOf(state.squads, side, serviceTurn);
 }
 
 /** Per-person tallies folded out of attributed points (W4). Aces and double
@@ -1087,6 +1118,16 @@ export interface NestedPreset {
   rallyEntitlement: string; // FeatureKey for tier-2/3 point-by-point scoring
   entrantModel?: EntrantModel;
   playerStats?: PlayerStatsModel; // Jul3/07 §3 — unlocked by person attribution
+  /**
+   * S3/W4b (#426) owner ruling 2 — what this competition permits a lineup to
+   * do. A FUNCTION OF CFG: ITF Rule 30 ends the match when a player retires,
+   * so tennis is `none`, but padel lands on this kernel later and a club
+   * format that permits a replacement partner would answer differently for
+   * the same code.
+   *
+   * Omitted ⇒ `DEFAULT_LINEUP_POLICY`.
+   */
+  lineupPolicy?: (cfg: NestedCfg) => LineupPolicy;
 }
 
 const METRICS: MetricSpec[] = [
@@ -1163,6 +1204,9 @@ export function makeNestedModule(
   const summaryType = `${preset.key}.set_summary`;
   const sanctionType = `${preset.key}.sanction`;
   const interruptionType = `${preset.key}.interruption`;
+  // One per module — see `sports/squad-state.ts` for the init handshake it
+  // keys on.
+  const squadAdopter = makeSquadAdopter<NestedState>();
 
   // W4 review item 7 — the ITF code-violation ladder reaches the shared
   // discipline projection. The kernel folded a LOCAL sanction record in this
@@ -1235,8 +1279,12 @@ export function makeNestedModule(
     positions: preset.positions,
     variants: preset.variants,
 
+    // S3/W4b (#426) — the two halves of adopting `core/lineup.ts`.
+    ...(preset.lineupPolicy === undefined ? {} : { lineupPolicy: preset.lineupPolicy }),
+    onLineup: (state, squads) => squadAdopter.adopt(state, squads),
+
     init(cfg, lineups: LineupPair): NestedState {
-      return {
+      return squadAdopter.fresh({
         cfg,
         entrants: { home: lineups.home.entrantId, away: lineups.away.entrantId },
         phase: "pre",
@@ -1250,7 +1298,7 @@ export function makeNestedModule(
         pointsWon: { home: 0, away: 0 },
         outcome: null,
         replayFlagged: false,
-      };
+      });
     },
 
     apply(state, ev: EventEnvelope<NestedEv | CoreEv>, ctx): NestedState {

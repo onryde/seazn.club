@@ -8,7 +8,7 @@
 //   node --experimental-strip-types packages/engine/scripts/repair-cpsat-harness.ts solve-z3 < board.json
 //   node --experimental-strip-types packages/engine/scripts/repair-cpsat-harness.ts verify < assignments-and-config.json
 import { validateAssignments } from "../src/scheduling/calendar.ts";
-import { repairSchedule } from "../src/scheduling/repair.ts";
+import { repairSchedule, type RepairInput } from "../src/scheduling/repair.ts";
 import { syntheticBoard, singleComponentBoard } from "../src/scheduling/repair-synthetic-board.ts";
 import { resetZ3 } from "../src/scheduling/z3-load.ts";
 
@@ -16,6 +16,19 @@ const arg = (name: string, fallback: string): string => {
   const hit = process.argv.find((a) => a.startsWith(`--${name}=`));
   return hit === undefined ? fallback : hit.slice(name.length + 3);
 };
+
+// The stdin payloads, named rather than left as `JSON.parse`'s `any`. Derived
+// from RepairInput by indexed access so the harness cannot drift from the
+// production shapes it is here to compare CP-SAT against — the whole point of
+// this tool is that it calls the real solver and the real verifier.
+type SolveInput = Pick<RepairInput, "proposal" | "existing" | "dependencies" | "config">;
+
+interface VerifyInput {
+  assignments: RepairInput["proposal"];
+  config: RepairInput["config"];
+  existing?: RepairInput["existing"];
+  dependencies?: RepairInput["dependencies"];
+}
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -39,7 +52,7 @@ async function main(): Promise<void> {
   }
 
   if (cmd === "solve-z3") {
-    const input = JSON.parse(await readStdin());
+    const input = JSON.parse(await readStdin()) as SolveInput;
     const budgetMs = Number(arg("budget", "60000"));
     const t0 = performance.now();
     const result = await repairSchedule({
@@ -56,7 +69,7 @@ async function main(): Promise<void> {
   }
 
   if (cmd === "verify") {
-    const input = JSON.parse(await readStdin());
+    const input = JSON.parse(await readStdin()) as VerifyInput;
     const conflicts = validateAssignments(
       input.assignments,
       input.config,
