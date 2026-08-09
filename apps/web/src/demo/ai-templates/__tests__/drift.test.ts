@@ -183,9 +183,48 @@ function expectCommonInvariants(fixture: AiDemoFixture, plan: AiSchedulePlan): v
   for (const a of plan.assignments) expect(boardIds.has(a.fixture_id)).toBe(true);
   for (const u of plan.unschedulable) expect(boardIds.has(u.fixture_id)).toBe(true);
 
+  // (d) …and a lane to paint it in. `board.courts` (types.ts:47) is what the
+  // demo renders columns from — the UNION for a joint template — while every
+  // court check upstream of here is against `pack.settings.courts` (or, jointly,
+  // the fixture's own division's set). Those are different surfaces: a slot on a
+  // court the pack has and the board does not verifies perfectly clean and then
+  // paints a ghost into a column that is not there.
+  const lanes = new Set(fixture.board.courts);
+  expect(lanes.size).toBeGreaterThan(0);
+  for (const a of plan.assignments) expect(lanes.has(a.court_label)).toBe(true);
+
   // (g) The board is field-compatible with what production's console builds.
   expect(fixture.board.fixtures.length).toBeGreaterThan(0);
   for (const row of fixture.board.fixtures) expectConsoleFixtureShape(row);
+}
+
+/**
+ * The non-emptiness floor, pinned to the captured counts rather than `> 0`.
+ *
+ * Without it the tripwire's own SUBJECT can vanish silently: `AiPlanResponse`
+ * puts no `.min(1)` on `proposal`, and both structural gates return `null` for
+ * an empty plan against an empty `movableIds` (their loops have nothing to
+ * iterate and every rule is vacuously satisfied). So a re-capture that wrote
+ * `movableIds: []` / `proposal: []` — a seed that stopped producing fixtures, a
+ * harness that recorded a refusal — would sail through (a)-(d), (g) and (h)
+ * while the demo page rendered an empty board.
+ *
+ * Exact counts, the same stance as finals-day's `unschedulable === 4`: these are
+ * recordings, and a recording that changed size is a different recording that
+ * owes a deliberate re-baseline.
+ */
+function expectCapturedSize(
+  fixture: AiDemoFixture,
+  plan: AiSchedulePlan,
+  captured: { placed: number; movable: number },
+): void {
+  expect(plan.assignments).toHaveLength(captured.placed);
+  expect(fixture.movableIds).toHaveLength(captured.movable);
+  // The pack must agree it had that much to move, or the counts above are
+  // pinning a `movableIds` list nothing produced.
+  expect((fixture.pack as { fixtures: { movable: unknown[] } }).fixtures.movable).toHaveLength(
+    captured.movable,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -193,15 +232,23 @@ function expectCommonInvariants(fixture: AiDemoFixture, plan: AiSchedulePlan): v
 // ---------------------------------------------------------------------------
 
 describe.each([
-  { slug: "club-night", mode: "generate" as const },
-  { slug: "finals-day", mode: "repair" as const },
-])("$slug — the committed run still verifies", ({ slug, mode }) => {
+  // `placed` / `movable` are the CAPTURED counts — see `expectCapturedSize`.
+  // finals-day is the interesting pair: 25 placed out of 29 movable, the four
+  // the blackout defeated being the difference.
+  { slug: "club-night", mode: "generate" as const, placed: 12, movable: 12 },
+  { slug: "finals-day", mode: "repair" as const, placed: 25, movable: 29 },
+])("$slug — the committed run still verifies", ({ slug, mode, placed, movable }) => {
   const fixture = loadFixture(slug);
 
   it("declares itself a single-division run", () => {
     expect(fixture.meta.slug).toBe(slug);
     expect(fixture.meta.joint).toBe(false);
     expect(fixture.meta.mode).toBe(mode);
+  });
+
+  it("still records the board it captured, at the size it captured", () => {
+    const plan = planFrom(AiPlanResponse.parse(fixture.response));
+    expectCapturedSize(fixture, plan, { placed, movable });
   });
 
   it("(a) the recorded response still parses as today's AiPlanResponse", () => {
@@ -234,7 +281,7 @@ describe.each([
     expect(conflicts.filter(isBlocking)).toEqual([]);
   });
 
-  it("(d/g/h) board, instruction and proposal ids agree", () => {
+  it("(d/g/h) board, courts, instruction and proposal ids agree", () => {
     const plan = planFrom(AiPlanResponse.parse(fixture.response));
     expectCommonInvariants(fixture, plan);
   });
@@ -285,6 +332,13 @@ describe("northside-open — the committed joint run still verifies", () => {
     expect(fixture.meta.slug).toBe("northside-open");
     expect(fixture.meta.joint).toBe(true);
     expect(fixture.meta.mode).toBe("generate");
+  });
+
+  it("still records the board it captured, at the size it captured", () => {
+    const plan = planFrom(AiCompetitionPlanResponse.parse(fixture.response));
+    // The whole board placed: 115 movable, 115 slots, nothing unschedulable.
+    expectCapturedSize(fixture, plan, { placed: 115, movable: 115 });
+    expect(plan.unschedulable).toHaveLength(0);
   });
 
   it("(a) the recorded response still parses as today's AiCompetitionPlanResponse", () => {
@@ -345,8 +399,10 @@ describe("northside-open — the committed joint run still verifies", () => {
     expect(fixture.meta.model.length).toBeGreaterThan(0);
   });
 
-  it("(d/g/h) board, instruction and proposal ids agree", () => {
+  it("(d/g/h) board, courts, instruction and proposal ids agree", () => {
     const plan = planFrom(AiCompetitionPlanResponse.parse(fixture.response));
+    // `board.courts` is the five-court UNION here, which is the right lane set:
+    // the demo renders one flat competition board, not three division grids.
     expectCommonInvariants(fixture, plan);
   });
 });
