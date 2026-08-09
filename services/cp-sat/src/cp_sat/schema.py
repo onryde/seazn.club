@@ -161,10 +161,11 @@ class ModelInput:
 def _require_id(value: str, where: str) -> str:
     """THE chokepoint. Every id-like string in a request passes through here.
 
-    One policy, one place: an id must be non-blank and already CANONICAL —
-    equal to its own `.strip()`. `tests/test_schema.py` enumerates the string
-    fields straight out of the descriptor and asserts that each one either
-    reaches this function or is on a named exemption list, so a field added to
+    One policy, one place: an id must be non-blank, contain no invisible or
+    non-printable character, and already be CANONICAL — equal to its own
+    `.strip()`. `tests/test_schema.py` enumerates the string fields straight
+    out of the descriptor and asserts that each one either reaches this
+    function or is on a named exemption list, so a field added to
     `scheduler.proto` cannot quietly skip it.
 
     **Rejected, never normalised**, and that is the load-bearing choice.
@@ -188,6 +189,45 @@ def _require_id(value: str, where: str) -> str:
     Each is the pass's own rule failing on its own terms: *an id names exactly
     one thing.* `"C0"` and `"C0 "` are one thing to a human and two to a dict
     key, which is precisely what that rule exists to forbid.
+
+    **Round 5: `.strip()`-equality is not the whole rule.** `str.strip()`
+    only removes characters where `.isspace()` is true, which is narrower
+    than "invisible to a human". Zero-width space (U+200B), BOM (U+FEFF),
+    zero-width joiner (U+200D), soft hyphen (U+00AD), word joiner (U+2060),
+    Mongolian vowel separator (U+180E) and zero-width non-joiner (U+200C) —
+    all Unicode category Cf, "format" — are not `.isspace()`-true, so a
+    court spelled `"C0"` with a zero-width space appended is both non-blank
+    and equal to its own `.strip()`: it satisfied the old rule completely.
+    Measured, 6/6 through the real domain (`build_model`/`solve`, the same
+    call sequence this module's caller makes), each against its own
+    control. The examples below spell the character as ZWSP rather than
+    embedding it literally, so this docstring stays legible in a plain-text
+    reader instead of vanishing the way it vanishes from a request:
+
+        courts=["C0", "C0"+ZWSP]      2 fixtures placed at ONE instant on
+                                         ONE court, OPTIMAL, error unset
+        entrant_ids "e1" vs            both placed 40 minutes apart -- the
+          "e1"+ZWSP, min_rest=240        SAME two failure shapes above,
+                                         reached through a character
+                                         `.strip()` cannot see.
+
+    Fixed by adding `value.isprintable()` to the check. `str.isprintable()`
+    closes the whole CATEGORY — `False` for every code point in Unicode
+    categories Cc, Cf, Cs, Co, Cn, Zl, Zp and Zs except U+0020 — rather than
+    a list of the seven characters found so far, which would leave the
+    category open for the next one. `tests/test_schema.py` enumerates the
+    category from `unicodedata` directly rather than hardcoding those seven,
+    so a code point Unicode assigns to one of these categories in a future
+    revision is covered by the same assertion without a test edit.
+
+    **One deliberate false positive, recorded rather than hidden.** Emoji ZWJ
+    sequences (a family emoji, a profession emoji with a skin-tone modifier
+    joined to a person) contain U+200D and are now rejected wherever they
+    appear in an id. This is an accepted trade, not an oversight: an id in
+    this contract is a court, a fixture, a division or a participant — not a
+    place an emoji sequence legitimately appears — and refusing it with a
+    clear reason beats the alternative this whole task exists to close: a
+    silently wrong `OPTIMAL`.
     """
     if not value.strip():
         raise InvalidRequestError(
@@ -202,6 +242,18 @@ def _require_id(value: str, where: str) -> str:
             "not apply. Send the id exactly as it is stored; it is not normalised here, because "
             "`Assignment.fixture_id` travels back in the response and a silently altered id would "
             "not match the caller's own records.".format(stripped=value.strip(), value=value)
+        )
+    if not value.isprintable():
+        raise InvalidRequestError(
+            f"{where} contains an invisible or non-printable character, got {value!r}. Ids are "
+            "compared as dict keys, so a copy of this id carrying a zero-width space, a joiner, a "
+            "byte-order mark, or any other Unicode format/control character looks identical to a "
+            "human but is a DIFFERENT key here — the constraint keyed on the other spelling "
+            "silently does not apply, the same failure the whitespace check above exists for, "
+            "reached through a character `.strip()` cannot see. This also rejects an emoji sequence "
+            "joined with U+200D (zero-width joiner) — e.g. a family emoji in a court name — which is "
+            "a deliberate trade: an id here is not a place such a sequence legitimately appears, and "
+            "refusing it with a reason beats silently double-booking a court or evading a rest rule."
         )
     return value
 

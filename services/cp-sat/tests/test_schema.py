@@ -13,6 +13,8 @@ Every one of the three is a proto3 non-optional scalar, so UNSET arrives as
 `0` and is indistinguishable from a deliberate zero.
 """
 
+import unicodedata
+
 import pytest
 
 from cp_sat.generated import scheduler_pb2
@@ -20,6 +22,7 @@ from cp_sat.model import SolveOutcome
 from cp_sat.objective import MIN_TIER_SECONDS, TIER_ORDER
 from cp_sat.schema import (
     InvalidRequestError,
+    _require_id,
     error_response,
     outcome_to_response,
     request_to_model_input,
@@ -1084,3 +1087,243 @@ def test_an_exempt_field_is_not_rejected_for_whitespace():
     req = _maximal_request()
     req.request_id = "r1 "
     assert request_to_model_input(req).wall_seconds == 8.0
+
+
+# --- Round 5: invisible and non-printable characters -------------------------
+#
+# `.strip()`-equality only catches ASCII (and Unicode-whitespace) padding.
+# `str.strip()` removes a character only where `.isspace()` is true, which is
+# narrower than "invisible to a human": a Unicode FORMAT character (zero-width
+# space, BOM, zero-width joiner, ...) appended to an otherwise-canonical id
+# satisfies `value == value.strip()` completely and walks straight through
+# every guard above. `_require_id` closes this with `value.isprintable()`,
+# which rejects the whole CATEGORY (Cc, Cf, Cs, Co, Cn, Zl, Zp, and Zs except
+# U+0020) rather than a list of the specific characters this round happened to
+# find by hand.
+#
+# Invisible characters are written as `chr(0x200B)` in CODE below (an
+# unambiguous function call, not a string literal that could itself hide an
+# invisible byte), and spelled out in words or as `U+XXXX` in prose, never
+# embedded literally -- an invisible character pasted into a docstring is
+# invisible in the docstring too, which defeats the point of writing it.
+
+
+def _invisible(obj, field):
+    setattr(obj, field, getattr(obj, field) + chr(0x200B))
+
+
+def _invisible_at(repeated, index):
+    repeated[index] = repeated[index] + chr(0x200B)
+
+
+#: The same 11 fields as `ID_FIELDS`, perturbed with a zero-width space
+#: (U+200B) instead of an ASCII space. `test_id_fields_invisible_covers_the_
+#: same_fields_as_id_fields` pins the two tables to the same key set, so a
+#: field added to one and not the other is caught rather than silently
+#: under-tested.
+ID_FIELDS_INVISIBLE = {
+    "SolveBuildRequest.courts": lambda r: _invisible_at(r.courts, 0),
+    "Slot.court": lambda r: _invisible(r.grid.slots[0], "court"),
+    "Fixture.fixture_id": lambda r: _invisible(r.fixtures[0], "fixture_id"),
+    "Fixture.entrant_ids": lambda r: _invisible_at(r.fixtures[0].entrant_ids, 0),
+    "Fixture.division_id": lambda r: _invisible(r.fixtures[0], "division_id"),
+    "Assignment.fixture_id": lambda r: _invisible(r.existing[0], "fixture_id"),
+    "Assignment.court": lambda r: _invisible(r.existing[0], "court"),
+    "OrderPair.before_fixture_id": lambda r: _invisible(r.dependencies[0], "before_fixture_id"),
+    "OrderPair.after_fixture_id": lambda r: _invisible(r.dependencies[0], "after_fixture_id"),
+    "DivisionRestRule.division_id": lambda r: _invisible(
+        r.constraints.rest_by_division[0], "division_id"
+    ),
+    "DivisionDayCapRule.division_id": lambda r: _invisible(
+        r.constraints.day_cap_by_division[0], "division_id"
+    ),
+}
+
+
+def test_id_fields_invisible_covers_the_same_fields_as_id_fields():
+    """The two perturbation tables must name the same fields, or one of them
+    silently stopped testing a field the other still claims to cover."""
+    assert set(ID_FIELDS_INVISIBLE) == set(ID_FIELDS)
+
+
+@pytest.mark.parametrize("path", sorted(ID_FIELDS_INVISIBLE))
+def test_an_invisible_character_is_rejected_in_every_id_field(path):
+    """The same machinery as `test_a_trailing_space_is_rejected_in_every_id_
+    field`, with a zero-width space (U+200B) in place of an ASCII one.
+
+    `"C0"` and `"C0"` with a trailing ZWSP are one thing to a human and two
+    to a dict key, exactly like the whitespace case — through a character
+    `.strip()` cannot see. Combined with
+    `test_the_id_policy_accounts_for_every_string_field_in_the_contract`
+    (every one of these fields routes through `_require_id` unmodified),
+    this is the direct 11-field proof; the property test below is the
+    field-agnostic one.
+    """
+    req = _maximal_request()
+    ID_FIELDS_INVISIBLE[path](req)
+    with pytest.raises(InvalidRequestError, match="invisible"):
+        request_to_model_input(req)
+
+
+def _invisible_strip_canonical_code_points() -> list[int]:
+    """Every code point `unicodedata` calls invisible-or-non-printable that
+    ALSO passes the OLD `.strip()`-based canonicality check — the exact set
+    this round's fix has to newly reject. Built from `unicodedata.category()`
+    directly, not from the seven characters the review happened to find by
+    hand, so a code point Unicode assigns to one of these categories in a
+    future revision is covered by the same assertion without editing this
+    file.
+
+    Two categories are excluded, both because the WIRE rules them out rather
+    than for test convenience:
+
+      * `Cs` (lone surrogates, U+D800-U+DFFF) — not valid UTF-8, so a proto3
+        `string` field can never carry one; `_require_id` would never see it
+        from a real request.
+      * `Cn` (unassigned, ~820k code points) — not a character.
+        `str.isprintable()` rejects these too, by the same category-prefix
+        mechanism, but none of them is individually distinct and iterating
+        820k of them buys nothing the ~137k code points this function DOES
+        enumerate do not already cover — dominated by `Co` (private use),
+        which is fully enumerated below, every one of its members a real,
+        assigned, non-printable character per the Unicode standard itself.
+    """
+    found = []
+    for cp in range(0x110000):
+        if 0xD800 <= cp <= 0xDFFF:
+            continue
+        ch = chr(cp)
+        category = unicodedata.category(ch)
+        if category == "Cn" or category[0] not in ("C", "Z"):
+            continue
+        if ch == " ":  # the one Zs exception isprintable() itself carves out
+            continue
+        value = "X" + ch
+        if value != value.strip():
+            continue  # already caught by the PRE-EXISTING `.strip()` check
+        found.append(cp)
+    return found
+
+
+def test_the_known_format_characters_are_within_the_enumeration():
+    """Sanity check on the enumeration itself: the seven characters the
+    review measured by hand must be a SUBSET of what the category scan finds,
+    or the general property test below could be vacuously passing over a set
+    that misses the actual defect."""
+    known = {0x200B, 0xFEFF, 0x200D, 0x00AD, 0x2060, 0x180E, 0x200C}
+    assert known <= set(_invisible_strip_canonical_code_points())
+
+
+def test_require_id_rejects_every_invisible_strip_canonical_code_point():
+    """The general property, independent of any one field: enumerated from
+    `unicodedata`'s category table rather than hardcoded to the seven
+    characters the review found.
+
+    Composes with `test_the_id_policy_accounts_for_every_string_field_in_the_
+    contract` (every id-shaped field routes through `_require_id` unmodified
+    — see `ID_FIELDS`) to prove all 11 fields reject every invisible
+    character, without constructing thousands of proto messages per field to
+    say so directly. `test_an_invisible_character_is_rejected_in_every_id_
+    field` above is the direct (one-character, eleven-field) version of the
+    same claim; this is the (all-characters, one-function) version.
+    """
+    probes = _invisible_strip_canonical_code_points()
+    # A broken enumeration (e.g. a category-filter typo excluding everything)
+    # would make the survivor check below vacuously pass.
+    assert len(probes) > 130_000, f"expected roughly 137.7k code points, got {len(probes)}"
+
+    survivors = []
+    for cp in probes:
+        value = "X" + chr(cp)
+        try:
+            _require_id(value, "test_field")
+        except InvalidRequestError:
+            continue
+        survivors.append(cp)
+
+    assert not survivors, (
+        f"{len(survivors)} invisible, strip-canonical code point(s) were NOT rejected "
+        f"(first 20 shown): {[hex(cp) for cp in survivors[:20]]}"
+    )
+
+
+def test_require_id_accepts_legitimate_unicode_names():
+    """The other half of `isprintable()`: it must not have become "ASCII
+    only". Every one of these is a real, visible, printable name."""
+    for name in ("Court 1", "Café Court", "中央球場", "Pista Nº1", "Court-2A"):
+        assert _require_id(name, "test_field") == name
+
+
+def test_rejects_an_invisible_distinct_court_name():
+    """The phantom-court defect, reached through an invisible character
+    instead of ordinary whitespace. `courts=["C0","C0 "]` was closed by the
+    trailing-space check; `courts=["C0", "C0"+ZWSP]` (U+200B, zero-width
+    space) walked straight through it, because `.strip()` does not remove a
+    character whose `.isspace()` is False.
+
+    Measured 6/6, through the real domain (`build_model`/`solve`, the
+    identical call sequence `main.py` makes, run directly against these ids
+    to show what this ACL now stands in front of): OPTIMAL, 2 placed, both AT
+    THE SAME INSTANT, one on `'C0'` and one on `'C0'+ZWSP` — indistinguishable
+    to a human, two different dict keys to the model. The control (two real
+    distinct courts, same shape) also places 2, one per court, so the
+    difference is specifically the invisible-vs-visible collision, not
+    "a second court gets rejected".
+    """
+    req = _valid_request(courts=["Court 1", "Court 1" + chr(0x200B)])
+    with pytest.raises(InvalidRequestError, match="invisible"):
+        request_to_model_input(req)
+
+
+def test_rejects_an_invisible_distinct_entrant_id():
+    """The participant-rest-evasion defect, reached the same way. One human,
+    two spellings: `"e1"` and `"e1"+ZWSP` (U+200B) never collide in
+    `by_entrant`, so the rest window between two of their matches is never
+    stated.
+
+    Measured 6/6, through the real domain, one court, two ticks 40 minutes
+    apart, a 240-minute rest rule: the control (`"e1"`/`"e1"`) places 1 of 2,
+    correctly rest-capped; the invisible-distinct pair places BOTH, 40 minutes
+    apart, OPTIMAL, `error` unset — the rest rule the caller asked for is
+    silently never applied.
+    """
+    req = _valid_request(
+        fixtures=[
+            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1"),
+            scheduler_pb2.Fixture(
+                fixture_id="f2", entrant_ids=["e1" + chr(0x200B), "e3"], division_id="d1"
+            ),
+        ],
+        constraints=_constraints(
+            rest_by_division=[scheduler_pb2.DivisionRestRule(division_id="d1", min_rest_minutes=240)]
+        ),
+    )
+    with pytest.raises(InvalidRequestError, match="invisible"):
+        request_to_model_input(req)
+
+
+def test_rejects_an_emoji_zwj_sequence_as_a_court_name():
+    """The one deliberate false positive, proven rather than only asserted in
+    prose. A family emoji is three code points joined by two U+200D
+    (zero-width joiner) characters; `_require_id`'s new check cannot tell "an
+    emoji sequence" from "a copy-paste artifact" — both are strings carrying
+    an invisible character — so it rejects both, and the message says why
+    rather than leaving the caller to guess.
+    """
+    family_emoji = "\U0001F468" + chr(0x200D) + "\U0001F469" + chr(0x200D) + "\U0001F467"
+    court_name = f"{family_emoji} Court"
+    # `courts` and `grid.slots[].court` are made to agree deliberately: an
+    # otherwise-inconsistent request would still be rejected with this fix
+    # REVERTED (by the grid/court cross-check instead), which would make this
+    # test pass for the wrong reason -- exactly the "caught by a different
+    # guard" trap `test_rejects_a_declared_court_that_no_slot_offers` and
+    # `test_rejects_a_whitespace_only_court_name` both warn about above.
+    req = _valid_request(
+        courts=[court_name],
+        grid=scheduler_pb2.Grid(
+            slots=[scheduler_pb2.Slot(court=court_name, start_at_ms=SLOT_MS, day_index=0)],
+            step_minutes=10,
+        ),
+    )
+    with pytest.raises(InvalidRequestError, match="emoji sequence"):
+        request_to_model_input(req)
