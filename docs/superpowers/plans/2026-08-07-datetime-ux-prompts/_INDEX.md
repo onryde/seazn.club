@@ -45,7 +45,7 @@ existing test's premise became stale)
 | # | Prompt | State |
 |---|---|---|
 | 01 | Shared `DateTimeField` component | **done** — `dcbec661`, `615dd3ff` |
-| 02 | Convert `division-builder.tsx` | not started |
+| 02 | Convert `division-builder.tsx` | **done** — `2c808ae6` |
 | 03 | Convert `competition-wizard.tsx` | not started |
 | 04 | Convert `settings-panel.tsx` | not started |
 | 05 | Board segmentation (real gcd step) | not started |
@@ -81,4 +81,6 @@ checkout simultaneously.
 | Prompt | The plan said | What is actually true |
 |---|---|---|
 | 01 | `text-base sm:text-sm` is needed so iOS does not zoom on focus. | **False.** `globals.css` Pattern 5 (`@media (max-width:39.99rem){input,select,textarea{font-size:16px}}`) already forces 16px repo-wide; measured identical at 375px with and without. `sm:text-sm` only shrank the control to 14px/38px on **desktop**, beside `.input` siblings at 16px/42px — breaking the "styled identically to the division-wizard inputs" criterion the component exists for. Dropped in `615dd3ff`; the test asserts its **absence**. Do not re-add it in Prompts 02-04/06. |
+| 02 | Add the regression case to `division-builder.test.tsx`. | **No such file.** The nearest owner is `apps/web/src/components/v2/__tests__/division-builder-schedule-seed.test.tsx`. Prompts 03/04 name test files the same way — locate the real owner before writing, don't create a parallel one. |
+| 02 | (gap, not a premise) A call-site test can drive `DateTimeField`'s `min` prop. | It cannot: `DivisionBuilder` calls `useLocale()`, which throws outside a `DictProvider`, so `renderIsland` can only pin the *absence* case. `min` forwarding is red-proven in `DateTimeField`'s own suite instead. Expect the same wall in 03/04; Prompt 09's E2E is where the wired-up case gets real coverage. |
 | 01 | Test with `@testing-library/react` + `screen.getByLabelText`; component uses `useId`/`htmlFor`. | **Not available.** `apps/web` has no jsdom and no `@testing-library` (vitest `environment: "node"`) — that suite cannot collect. Repo convention is `renderToStaticMarkup` + element-tree walk, which needs the component **hookless**; association is implicit via the wrapping `<label>`, matching the division wizard. Later prompts' tests must follow the same pattern. |
