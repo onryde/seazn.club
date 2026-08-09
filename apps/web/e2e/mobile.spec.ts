@@ -7,6 +7,7 @@ import {
   expectNoHorizontalScroll,
   addEntrantsViaApi,
   createStageAndGenerate,
+  competitionPath,
   divisionPath,
 } from "./helpers";
 
@@ -92,20 +93,27 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
 // socket keeps the network permanently busy and cold compiles already eat
 // the budget.
 async function auditRoute(page: Page, path: string) {
-  await page.goto(path, { waitUntil: "load" });
+  const response = await page.goto(path, { waitUntil: "load" });
+  expect(response, `${path}: navigation produced no response`).not.toBeNull();
+  expect(response!.status(), `${path} returned ${response!.status()}`).toBeLessThan(400);
   await page.waitForTimeout(300);
   await expectNoHorizontalScroll(page);
 }
 
-test("console routes: no horizontal scroll", async ({ page }) => {
+test("console routes: no horizontal scroll", async ({ page, request }) => {
   const routes = [
     "/dashboard",
-    `/competitions/${compId}`,
-    `/competitions/${compId}/settings`,
-    `/divisions/${divisionId}`,
-    `/divisions/${divisionId}?tab=fixtures`,
-    `/divisions/${divisionId}?tab=standings`,
-    `/divisions/${divisionId}/registrations`,
+    // These six used to be legacy id-routes (/competitions/{id},
+    // /divisions/{id}...) deleted by commit e8bed930 — they 404'd, and a 404
+    // page has no overflow, so the gate passed vacuously on a third of the
+    // console inventory (#349). Re-pointed to the live /o/{org}/c/{comp}/...
+    // slug chain via the same helpers the rest of the suite uses.
+    await competitionPath(request, compId),
+    await competitionPath(request, compId, "/settings"),
+    await divisionPath(request, divisionId),
+    await divisionPath(request, divisionId, "?tab=fixtures"),
+    await divisionPath(request, divisionId, "?tab=standings"),
+    await divisionPath(request, divisionId, "/registrations"),
     "/settings?tab=organization",
     "/settings?tab=news",
     "/settings?tab=sponsors",
