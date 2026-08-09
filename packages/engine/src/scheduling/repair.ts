@@ -49,6 +49,7 @@ import {
   REPAIR_FAMILIES,
   type RepairFamily,
 } from "./repair-domain.ts";
+import { GRID_FLOOR_MINUTES } from "./grid-step.ts";
 import { dayKeyInTz } from "./tz.ts";
 import { loadZ3, withZ3LockAndReset } from "./z3-load.ts";
 
@@ -62,8 +63,13 @@ const MS_PER_MIN = 60_000;
 const MS_PER_DAY = 86_400_000;
 
 /** Minutes. The lattice repaired starts snap to; a fixture's ORIGINAL start is
- *  always legal even when it is off-grid, so k=0 is always representable. */
-export const REPAIR_GRID_MINUTES = 5;
+ *  always legal even when it is off-grid, so k=0 is always representable.
+ *
+ *  Historical name for `GRID_FLOOR_MINUTES`, which now lives in `grid-step.ts`
+ *  beside the step it floors — the board imports that leaf and must not pull
+ *  this solver into the browser to learn one integer. Aliased rather than
+ *  duplicated: one value, one owner, no way for the two to disagree. */
+export const REPAIR_GRID_MINUTES = GRID_FLOOR_MINUTES;
 
 /**
  * Wall-clock ceiling on a whole repair, ascending-k search included. MEASURED,

@@ -46,7 +46,7 @@ import "server-only";
 import { withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { MOVABLE_STATUS, OCCUPYING, peopleByEntrant } from "./schedule";
+import { FIXED_OCCUPYING, MOVABLE_STATUS, OCCUPYING, peopleByEntrant } from "./schedule";
 import {
   AI_VERIFY_POLICY,
   buildEngineConstraints,
@@ -161,11 +161,6 @@ const SCOPE_CHANGED = "AI_PLAN_SCOPE_CHANGED";
  *  per-division callers. */
 const tooLarge = (): HttpError =>
   new HttpError(409, "too large — schedule per division", TOO_LARGE);
-
-/** Court-holding statuses that are NOT being re-placed by this run: the fixed
- *  board of a part-played competition (a rain-delay repair over a morning that
- *  is already `decided` is the canonical case). Derived, never copied. */
-const FIXED_OCCUPYING = OCCUPYING.filter((s) => s !== MOVABLE_STATUS);
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const ms = (iso: string): number => Date.parse(iso);

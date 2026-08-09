@@ -13,8 +13,8 @@ import {
   type Blackout,
   type SlotConfig,
 } from "./calendar.ts";
+import { gridStepMinutes } from "./grid-step.ts";
 import { calendarDaysCovering, repairCourts, repairUniverse } from "./repair-domain.ts";
-import { REPAIR_GRID_MINUTES } from "./repair.ts";
 
 const MS_PER_MIN = 60_000;
 
@@ -68,53 +68,17 @@ export interface BuildGridInput {
   seedPins?: readonly BuildSlot[];
 }
 
-/**
- * The lattice step, in minutes.
- *
- * The gcd of match and gap length is the coarsest step that can still express
- * every back-to-back placement: on one court a match starts at a multiple of
- * `matchMinutes + gapMinutes`, and around a blackout or an existing booking it
- * starts at that edge, which is a multiple of neither alone. `gapMinutes: 0` is
- * legal and makes the gcd the match length, which is exactly right for a
- * back-to-back court rather than a degenerate case.
- *
- * IT DOES NOT READ ANY REST, AND THAT IS DELIBERATE. Greedy's rest chaining
- * (`lastEnd + rest`) does land off this lattice — `match 30 / gap 10 / rest 35`
- * seeds at +0/+65/+130 against a ten-minute step — but folding the rests into
- * the gcd to fix it collapses the step to the `REPAIR_GRID_MINUTES` floor on
- * every config whose rest is incommensurate with its pitch, which is an ~8x
- * lattice for every board in the system. Measured at the 8 s wall: last
- * improving size 80 -> 20, `canSolveWithin` admitting n<=80 -> n<=20, and three
- * runs of eighteen killed by an uncatchable emscripten OOM inside the WASM.
- * The incumbent is made representable by PINNING it instead (`seedPins`), which
- * costs O(n) slots and only on the boards that need them.
- *
- * Floored at `REPAIR_GRID_MINUTES` so the two solvers agree about what
- * "on-grid" means, and so a five-minute sport cannot explode the lattice. The
- * floor, and an ABSOLUTE anchor no duration divides (a `notBefore` at 09:07, a
- * blackout edge on a court greedy did not use), can still leave a seed row the
- * lattice cannot hold. That residue is not silently coarsened away: `build.ts`
- * tests the seed against the finished lattice and reports `not_searched` rather
- * than claiming a proof over a lattice the board is not on.
- */
-export function gridStepMinutes(config: Pick<SlotConfig, "matchMinutes" | "gapMinutes">): number {
-  const g = gcd(
-    Math.max(1, Math.round(config.matchMinutes)),
-    Math.max(0, Math.round(config.gapMinutes)),
-  );
-  return Math.max(REPAIR_GRID_MINUTES, g);
-}
-
-function gcd(a: number, b: number): number {
-  return b === 0 ? a : gcd(b, a % b);
-}
+// The lattice step lives in `./grid-step.ts` — it is imported here, never
+// recomputed, because the board's time axis has to be the SAME function and a
+// second copy is how the two drifted apart in the first place. Its doc comment
+// carries the "why the gcd, and why it does not fold rest" reasoning.
 
 export function buildGrid(input: BuildGridInput): BuildGrid {
   const { config } = input;
   const existing = input.existing ?? [];
   const pinned = input.pinned ?? [];
   const seedPins = input.seedPins ?? [];
-  const stepMinutes = gridStepMinutes(config);
+  const stepMinutes = gridStepMinutes(config.matchMinutes, config.gapMinutes);
   const stepMs = stepMinutes * MS_PER_MIN;
   const durMs = config.matchMinutes * MS_PER_MIN;
   const gapMs = config.gapMinutes * MS_PER_MIN;

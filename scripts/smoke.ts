@@ -733,6 +733,10 @@ async function main() {
   // --- v8: division settings — format lock + logo upload URL.
   await divisionSettingsSuite(admin);
 
+  // --- Date/time UX programme, Prompt 09: the court-removal guard added in
+  // P08 (own fresh free session — not an entitlement gate).
+  await scheduleCourtRemovalGuardSuite();
+
   // --- design/v6 PROMPT-48..50: tennis rally set (nested kernel), icehockey
   // OT points in standings, PP goal + release with the public strength chip.
   // Before gapSuite — needs the org's pro entitlements for tier-3 scoring.
@@ -6142,6 +6146,92 @@ async function divisionSettingsSuite(admin: Session): Promise<void> {
     "v8 structure PUT 409s once fixtures exist",
     structSwap.status === 409 &&
       (structSwap.json.error as { code?: string } | undefined)?.code === "FORMAT_LOCKED",
+  );
+}
+
+/**
+ * Date/time UX programme, Prompt 09 — the court-removal guard
+ * (`putScheduleSettings`, "date/time UX P08", usecases/schedule.ts): dropping
+ * a court that still holds a PINNED fixture is refused (409, naming the court
+ * and the reason); the identically-shaped save is allowed once that fixture
+ * is unpinned. The guard's reasoning matrix (both refusal reasons, the
+ * combination, the widened-but-not-too-widened boundary) is already
+ * exhaustively unit-tested (usecases/__tests__/schedule.test.ts) — this
+ * proves the real HTTP PUT route reaches it end to end, over the wire, with
+ * no mocks.
+ *
+ * NOT an entitlement check (V353/#382 opened multi-court scheduling to every
+ * plan), so this needs no Pro org — own fresh free session.
+ *
+ * Control-run idiom: the SAME division, the SAME shaped PUT, ONE fixture's
+ * lock toggled — pinned is refused, unpinned is not. If the guard regressed
+ * to always-409 (over-widened to "any fixture on the court") or always-200
+ * (a no-op), one half of this would fail.
+ */
+async function scheduleCourtRemovalGuardSuite(): Promise<void> {
+  const free = newSession();
+  await signIn(free, `dtx_free_${tag}@example.com`);
+  const comp = v1data<{ id: string }>(
+    await v1(free, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `DTX Court Guard ${tag}`,
+    }),
+  );
+  const div = v1data<{ id: string }>(
+    await v1(free, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Court Guard",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  await v1(free, `/api/v1/divisions/${div.id}/entrants`, "POST", [
+    { kind: "individual", display_name: "A", seed: 1 },
+    { kind: "individual", display_name: "B", seed: 2 },
+  ]);
+  const stage = v1data<{ id: string }>(
+    await v1(free, `/api/v1/divisions/${div.id}/stages`, "POST", {
+      seq: 1,
+      kind: "league",
+      name: "L",
+      config: {},
+    }),
+  );
+  const gen = v1data<{ fixtures: { id: string }[] }>(
+    await v1(free, `/api/v1/stages/${stage.id}/generate`, "POST"),
+  );
+  const fixtureId = gen.fixtures[0]!.id;
+
+  const putCourts = (courts: string[]) =>
+    v1(free, `/api/v1/divisions/${div.id}/schedule-settings`, "PUT", {
+      tz: "UTC",
+      config: {
+        startAt: new Date(Date.UTC(2026, 9, 19, 9, 0)).toISOString(),
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts,
+      },
+    });
+  await putCourts(["Court 1", "Court 2"]);
+  await v1(free, `/api/v1/fixtures/${fixtureId}`, "PATCH", {
+    scheduled_at: new Date(Date.UTC(2026, 9, 19, 9, 0)).toISOString(),
+    court_label: "Court 2",
+  });
+  await v1(free, `/api/v1/fixtures/${fixtureId}`, "PATCH", { schedule_locked: true });
+
+  const refused = await putCourts(["Court 1"]);
+  const refusedMsg = (refused.json.error as { message?: string } | undefined)?.message ?? "";
+  check(
+    "schedule court-removal guard: dropping a court with a pinned fixture is refused (409, names the court + reason)",
+    refused.status === 409 && /Court 2/.test(refusedMsg) && /pinned/i.test(refusedMsg),
+  );
+
+  // The control — the identically-shaped save once the fixture is unpinned.
+  await v1(free, `/api/v1/fixtures/${fixtureId}`, "PATCH", { schedule_locked: false });
+  const allowed = await putCourts(["Court 1"]);
+  check(
+    "schedule court-removal guard: the identically-shaped save is allowed once unpinned",
+    allowed.status === 200,
   );
 }
 

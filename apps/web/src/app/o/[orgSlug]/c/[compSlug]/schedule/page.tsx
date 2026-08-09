@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 // (doc 12 §5 — scheduling.multi_division).
 import Link from "@/components/ui/console-link";
 import { requireCompetitionPage } from "@/server/page-auth";
+import { resolveVenueTz } from "@/lib/tz";
 import { routes } from "@/lib/routes";
 import { getCompetition } from "@/server/usecases/competitions";
 import { listDivisions } from "@/server/usecases/divisions";
@@ -30,6 +31,13 @@ export default async function CompetitionSchedulePage({
   const { orgSlug, compSlug } = await params;
   const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/schedule" });
   const { auth, canEdit } = page;
+  // The GOVERNING venue clock (#448) for every absolute date/time control the
+  // board hosts, resolved the same way `loadSettings` does it server-side:
+  // org -> UTC, never the division's display override. One competition spans
+  // several divisions here, which is exactly why the DIVISION tz must not
+  // participate — the divisions would otherwise disagree about what a typed
+  // time means on a single shared grid.
+  const orgTz = resolveVenueTz(null, page.org.timezone);
   const id = page.competition.id;
   const competition = await getCompetition(auth, id);
   const locale = await resolveLocale();
@@ -180,6 +188,7 @@ export default async function CompetitionSchedulePage({
             division_id: divisions[0]?.id ?? id,
             config: { ...settings.config, courts: allCourts.length > 0 ? allCourts : settings.config.courts },
             tz: settings.tz,
+            orgTz,
           }}
           canEdit={canEdit && !frozen && boardEditable}
           constraintsAllowed={constraints}

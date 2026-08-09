@@ -39,7 +39,8 @@
 // (`status: "not_searched"`) rather than to claim a proof.
 import { describe, expect, it } from "vitest";
 import { buildSchedule, seedPinsOf } from "./build.ts";
-import { buildGrid, gridStepMinutes } from "./build-grid.ts";
+import { buildGrid } from "./build-grid.ts";
+import { gridStepMinutes } from "./grid-step.ts";
 import { boardMetrics } from "./build-objectives.ts";
 import { slotFixtures } from "./calendar.ts";
 import { resetZ3 } from "./z3-load.ts";
@@ -99,13 +100,13 @@ describe("the step is match and gap only", () => {
   it("does not read a rest, so a rest-chained seed lands between slots", () => {
     // `gcd(30, 10) = 10`, and greedy's second start is at +65. The step is not
     // refined to divide it — the pins below are what make it representable.
-    expect(gridStepMinutes(restConfig)).toBe(10);
-    expect(65 % gridStepMinutes(restConfig)).not.toBe(0);
+    expect(gridStepMinutes(restConfig.matchMinutes, restConfig.gapMinutes)).toBe(10);
+    expect(65 % gridStepMinutes(restConfig.matchMinutes, restConfig.gapMinutes)).not.toBe(0);
   });
 
   it("keeps the coarse step a back-to-back court is entitled to", () => {
-    expect(gridStepMinutes({ matchMinutes: 40, gapMinutes: 0 })).toBe(40);
-    expect(gridStepMinutes({ matchMinutes: 60, gapMinutes: 15 })).toBe(15);
+    expect(gridStepMinutes(40, 0)).toBe(40);
+    expect(gridStepMinutes(60, 15)).toBe(15);
   });
 });
 

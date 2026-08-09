@@ -4,19 +4,34 @@
 // v3 split. Play hours expose the engine's sessionWindows as plain daily
 // times: the auto pass and validator already refuse slots outside them, the
 // panel just never offered the knob.
+//
+// EVERY ABSOLUTE TIME HERE IS ON THE VENUE CLOCK (`orgTz`, #448), never the
+// browser's. `startAt`, the end DATE and the play-hours expansion are all read
+// out of and written back into instants through `@/lib/zoned-datetime`, which
+// takes the zone explicitly. It used to be `new Date(localInput)` /
+// `toLocalInput(iso)`, i.e. the organiser's own zone — self-consistent on
+// screen, so the mistake was invisible, and off by the whole offset in the
+// instant the solver actually reads.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import { dailyHoursToWindows, windowsToDailyHours } from "@/lib/schedule-board";
 import {
-  dailyHoursToWindows,
-  dayKey,
-  toLocalInput,
-  windowsToDailyHours,
-} from "@/lib/schedule-board";
+  isoFromZonedDateTime,
+  isoFromZonedParts,
+  zonedDateInput,
+  zonedDateTimeInput,
+} from "@/lib/zoned-datetime";
 import type { BoardConfig } from "./types";
+import { DateTimeField } from "@/components/v2/shared/datetime-field";
+import { Tip } from "@/components/ui/tip";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { pluralizeVenue } from "@/lib/venue";
+
+/** The end DATE field bounds a whole day, so it is stored as that day's last
+ *  minute. One definition, used by the PUT and by the play-hours expansion. */
+const DAY_END_HHMM = "23:59";
 
 /** Self-contained wrapper for RSC pages (constraints tab): owns the saved/
  *  error notice the board would otherwise host. Opens expanded — on a
@@ -27,6 +42,8 @@ export function StandaloneScheduleSettings(props: {
   canEdit: boolean;
   constraintsAllowed: boolean;
   venueCap?: string;
+  /** The VENUE clock (`settings.orgTz`, #448). See {@link SettingsPanel}. */
+  orgTz: string;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -59,6 +76,7 @@ export function SettingsPanel({
   canEdit,
   constraintsAllowed,
   venueCap = "Court",
+  orgTz,
   defaultOpen = false,
   onSaved,
   onError,
@@ -68,14 +86,21 @@ export function SettingsPanel({
   canEdit: boolean;
   constraintsAllowed: boolean;
   venueCap?: string;
+  /** The VENUE clock every absolute time on this panel is read and written on
+   *  (`settings.orgTz`, #448 — NOT `settings.tz`, the display lane a division
+   *  may override). Required rather than defaulted: a wrong zone here stores the
+   *  wrong instant and looks correct on the way back out. */
+  orgTz: string;
   defaultOpen?: boolean;
   onSaved: () => void;
   onError: (err: unknown) => void;
 }) {
   const msg = useMsg();
   const [open, setOpen] = useState(defaultOpen);
-  const [startAt, setStartAt] = useState(config.startAt ? toLocalInput(config.startAt) : "");
-  const [endAt, setEndAt] = useState(config.endAt ? dayKey(config.endAt) : "");
+  const [startAt, setStartAt] = useState(
+    config.startAt ? zonedDateTimeInput(config.startAt, orgTz) : "",
+  );
+  const [endAt, setEndAt] = useState(config.endAt ? zonedDateInput(config.endAt, orgTz) : "");
   const [matchMinutes, setMatchMinutes] = useState(config.matchMinutes);
   const [gapMinutes, setGapMinutes] = useState(config.gapMinutes);
   const [rest, setRest] = useState(config.perEntrantMinRest);
@@ -87,8 +112,13 @@ export function SettingsPanel({
   const [saving, setSaving] = useState(false);
   const [hoursError, setHoursError] = useState<string | null>(null);
   // Prefill only when the stored windows are a uniform daily pattern —
-  // hand-built windows (constraints panel) show as "custom" and stay put.
-  const daily = windowsToDailyHours(config.sessionWindows);
+  // hand-built windows show as "custom" and stay put. Nothing in the app writes
+  // a non-uniform set (this panel is the only writer, and it always expands one
+  // daily pattern), so that state arrives through the API. `boardset
+  // .customWindows` used to send organisers to the constraints panel to edit
+  // them; that panel has never had a session-window editor, so the copy now
+  // states the situation instead of pointing at a dead end.
+  const daily = windowsToDailyHours(config.sessionWindows, orgTz);
   const customWindows = config.sessionWindows.length > 0 && daily === null;
   const [playFrom, setPlayFrom] = useState(daily?.from ?? "");
   const [playTo, setPlayTo] = useState(daily?.to ?? "");
@@ -106,17 +136,29 @@ export function SettingsPanel({
 
   async function save() {
     setHoursError(null);
+    // Resolved ONCE, on the venue clock, and reused by both the play-hours
+    // expansion and the PUT below. Converting the same field twice is how the
+    // window the solver is given and the window the organiser sees drift apart.
+    //
+    // A non-empty field that will not parse falls back to the STORED instant
+    // rather than to null: `<input type="datetime-local">` cannot emit such a
+    // value, and if one ever arrived, silently clearing the schedule's start is
+    // the worst of the available outcomes.
+    const startIso =
+      startAt === "" ? null : (isoFromZonedDateTime(startAt, orgTz) ?? config.startAt ?? null);
+    // The end DATE bounds a day, so it stores that day's last minute AT THE
+    // VENUE — 23:59 on the organiser's clock is a different instant, and on a
+    // far-enough zone a different day.
+    const endIso =
+      endAt === "" ? null : (isoFromZonedParts(endAt, DAY_END_HHMM, orgTz) ?? config.endAt ?? null);
     // Play hours → session windows. Both set: expand across the schedule
     // span. Both blank: clear a previously-uniform pattern (all hours play),
     // but never clobber hand-built windows. Half-filled or inverted: refuse.
     let sessionWindows = config.sessionWindows;
     const hoursTouched = playFrom !== "" || playTo !== "";
     if (hoursTouched) {
-      const startIso = startAt
-        ? new Date(startAt).toISOString()
-        : (config.startAt ?? new Date().toISOString());
-      const endIso = endAt ? new Date(`${endAt}T23:59:00`).toISOString() : null;
-      const expanded = dailyHoursToWindows(playFrom, playTo, startIso, endIso);
+      const expandFrom = startIso ?? config.startAt ?? new Date().toISOString();
+      const expanded = dailyHoursToWindows(playFrom, playTo, expandFrom, endIso, orgTz);
       if (!expanded) {
         setHoursError(msg("boardset.hoursError"));
         return;
@@ -137,8 +179,8 @@ export function SettingsPanel({
         json: {
           config: {
             ...config,
-            startAt: startAt ? new Date(startAt).toISOString() : null,
-            endAt: endAt ? new Date(`${endAt}T23:59:00`).toISOString() : null,
+            startAt: startIso,
+            endAt: endIso,
             matchMinutes,
             gapMinutes,
             perEntrantMinRest: rest,
@@ -167,43 +209,76 @@ export function SettingsPanel({
       <div>
         <h4 className="text-sm font-semibold text-slate-700">{msg("boardset.title")}</h4>
         <p className="mt-0.5 text-xs text-slate-500">{msg("boardset.desc")}</p>
+        {/* Start, end and play hours are all read and written on the VENUE
+            clock, so the panel says which one that is. An organiser running an
+            event in another zone otherwise has no way to know whether "09:00"
+            means theirs or the venue's. Reuses the caption the stages panel
+            already shows over fixture times — already translated everywhere. */}
+        <p className="mt-0.5 text-xs text-slate-400">{msg("schedule.tz.caption", { tz: orgTz })}</p>
       </div>
       {constrained && <UpgradeGate feature="scheduling.constraints" compact />}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <label className="block">
-          <span className="label">{msg("boardset.startAt")}</span>
-          <input type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} className="input w-full" disabled={!canEdit} />
+        {/* DateTimeField owns the whole <label>, so each hint moves from inside
+            it to a sibling <div> — a hint inside a <label> joins the control's
+            accessible name anyway. The <div> becomes the grid item that
+            `label.block` was, and measures identical at 1280 and 375. */}
+        <div>
+          <DateTimeField
+            kind="datetime-local"
+            label={msg("boardset.startAt")}
+            value={startAt}
+            onChange={setStartAt}
+            disabled={!canEdit}
+          />
           <span className="mt-0.5 block text-xs text-slate-400">{msg("boardset.startAtHint")}</span>
-        </label>
-        <label className="block">
-          <span className="label">{msg("boardset.endAt")}</span>
-          <input type="date" value={endAt} min={startAt ? startAt.slice(0, 10) : undefined} onChange={(e) => setEndAt(e.target.value)} className="input w-full" disabled={!canEdit} />
+        </div>
+        <div>
+          <DateTimeField
+            kind="date"
+            label={msg("boardset.endAt")}
+            value={endAt}
+            min={startAt ? startAt.slice(0, 10) : undefined}
+            onChange={setEndAt}
+            disabled={!canEdit}
+          />
           <span className="mt-0.5 block text-xs text-slate-400">{msg("boardset.endAtHint")}</span>
-        </label>
+        </div>
         <fieldset className="block">
           <legend className="label">{msg("boardset.playHours")}</legend>
           {customWindows ? (
             <p className="text-xs text-slate-500">{msg("boardset.customWindows")}</p>
           ) : (
+            // `labelHidden`: the legend above already says "Play hours", so a
+            // second visible line per input is duplication — and the extra
+            // `.label` row pushed this cell 20px taller than the match-length
+            // field sharing its grid row. The label element still renders and
+            // still wraps the control, which is what names it; that is strictly
+            // more than the bare `aria-label` these two carried before.
+            // `min-w-0 flex-1` keeps the halves equal-width the way the bare
+            // `w-full` inputs were before they gained a wrapper.
             <div className="flex items-center gap-2">
-              <input
-                type="time"
-                aria-label={msg("boardset.playFrom")}
-                value={playFrom}
-                onChange={(e) => setPlayFrom(e.target.value)}
-                className="input w-full"
-                disabled={!canEdit}
-              />
+              <div className="min-w-0 flex-1">
+                <DateTimeField
+                  kind="time"
+                  label={msg("boardset.playFrom")}
+                  labelHidden
+                  value={playFrom}
+                  onChange={setPlayFrom}
+                  disabled={!canEdit}
+                />
+              </div>
               <span className="text-sm text-slate-500">–</span>
-              <input
-                type="time"
-                aria-label={msg("boardset.playUntil")}
-                value={playTo}
-                onChange={(e) => setPlayTo(e.target.value)}
-                className="input w-full"
-                disabled={!canEdit}
-              />
+              <div className="min-w-0 flex-1">
+                <DateTimeField
+                  kind="time"
+                  label={msg("boardset.playUntil")}
+                  labelHidden
+                  value={playTo}
+                  onChange={setPlayTo}
+                  disabled={!canEdit}
+                />
+              </div>
             </div>
           )}
           <span className="mt-0.5 block text-xs text-slate-400">{msg("boardset.playHoursHint")}</span>
@@ -217,13 +292,36 @@ export function SettingsPanel({
           <input type="number" min={0} inputMode="numeric" value={gapMinutes} onChange={(e) => setGapMinutes(Number(e.target.value))} className="input w-full" disabled={!canEdit} />
           <span className="mt-0.5 block text-xs text-slate-400">{msg("boardset.gapHint", { venue })}</span>
         </label>
-        <label className="block">
-          <span className="label">{msg("boardset.rest")}</span>
-          <input type="number" min={0} inputMode="numeric" value={rest} onChange={(e) => setRest(Number(e.target.value))} className="input w-full" disabled={!canEdit || constrained} />
-          <span className="mt-0.5 block text-xs text-slate-400">
+        {/* A <div> with an explicit htmlFor rather than a wrapping <label>:
+            `Tip` renders a <button>, and a button inside a <label> forwards its
+            click to the control. Same shape the constraints panel's copy of
+            this field uses. The other fields in this grid keep their wrapping
+            label — only this one hosts a tip. */}
+        <div className="block">
+          <span className="label flex items-center gap-1">
+            {/* Literal ids, not `useId()`: the hand-rolled dispatcher in
+                `_hook-harness.tsx` does not implement useId, so it throws
+                `resolveDispatcher(...).useId is not a function` and reds five
+                unrelated datetime suites. A duplicate is unreachable today —
+                the division route forces `showSettings={false}` and the
+                competition route mounts one `SettingsPanel`. */}
+            <label htmlFor="boardset-rest">{msg("boardset.rest")}</label>
+            {/* Same tip id as the Constraints tab's field. Both write a
+                DIFFERENT stored value for one idea and the engine resolves
+                them with MAX (`effectiveRestMinutes`, #459), so the losing
+                field otherwise looks broken — type 10 beside a 30 and nothing
+                changes, with nothing on screen saying why. */}
+            <Tip id="schedule.min-rest" small />
+          </span>
+          {/* The hint used to sit INSIDE the wrapping <label>, so it formed part
+              of the input's accessible name. Splitting the label out to host the
+              tip would have dropped it entirely; `aria-describedby` keeps it, and
+              as a description rather than a name — which is what it always was. */}
+          <input id="boardset-rest" aria-describedby="boardset-rest-hint" type="number" min={0} inputMode="numeric" value={rest} onChange={(e) => setRest(Number(e.target.value))} className="input w-full" disabled={!canEdit || constrained} />
+          <span id="boardset-rest-hint" className="mt-0.5 block text-xs text-slate-400">
             {msg("boardset.restHint")}{constrained ? msg("boardset.proSuffix") : ""}
           </span>
-        </label>
+        </div>
       </div>
 
       <div>

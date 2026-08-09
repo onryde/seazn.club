@@ -15,6 +15,7 @@ import { venueNoun, venueLabel, pluralizeVenue } from "@/lib/venue";
 import { defaultMatchMinutes } from "@/lib/match-length";
 import { FormatExplainerPanel } from "@/components/v2/format-explainer-panel";
 import { FormatRecommendStrip } from "@/components/v2/format-recommend-strip";
+import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { useMsg, useLocale } from "@/components/i18n/dict-provider";
 import { sportLabel } from "@/lib/scoring-vocab";
 
@@ -763,26 +764,26 @@ export function DivisionBuilder({
             />
             <span className="mt-0.5 block text-xs text-slate-400">{msg("wizard.matchLengthHint")}</span>
           </label>
-          <label className="block">
-            <span className="label">{msg("boardset.startAt")}</span>
-            <input
-              type="datetime-local"
-              value={scheduleStart}
-              onChange={(e) => setScheduleStart(e.target.value)}
-              className="input w-full"
-            />
-          </label>
-          <label className="block">
-            <span className="label">{msg("boardset.endAt")}</span>
-            <input
-              type="date"
+          <DateTimeField
+            kind="datetime-local"
+            label={msg("boardset.startAt")}
+            value={scheduleStart}
+            onChange={setScheduleStart}
+          />
+          {/* The hint sits beside the field rather than inside its <label>:
+              DateTimeField owns the label element, and a hint inside a label
+              is read out as part of the control's accessible name anyway.
+              `block` + the same margin keeps it visually where it was. */}
+          <div>
+            <DateTimeField
+              kind="date"
+              label={msg("boardset.endAt")}
               value={scheduleEnd}
               min={scheduleStart ? scheduleStart.slice(0, 10) : undefined}
-              onChange={(e) => setScheduleEnd(e.target.value)}
-              className="input w-full"
+              onChange={setScheduleEnd}
             />
             <span className="mt-0.5 block text-xs text-slate-400">{msg("wizard.endDateHint")}</span>
-          </label>
+          </div>
         </div>
 
         <div>

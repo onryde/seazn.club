@@ -7,6 +7,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { EngineError } from "@seazn/engine/core";
+import { buildGrid, slotFixtures } from "@seazn/engine/scheduling";
 import { sql, withTenant } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -23,7 +24,10 @@ import {
   validateSchedule,
   publishSchedule,
   startDivision,
+  toSlotConfig,
 } from "../schedule";
+import { draftsToBlackouts } from "@/components/v2/constraints-panel";
+import { zonedDateTimeInput } from "@/lib/zoned-datetime";
 import { patchFixture } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { publicSchedule } from "../public";
@@ -625,6 +629,664 @@ describe.skipIf(!HAS_DB)("loadSettings resolves the organisation zone separately
     const { auth, divisionId } = await seedDivisionWithOrgTz("Pacific/Atlantis");
     const settings = await load(auth, divisionId);
     expect(settings.orgTz).toBe("UTC");
+  });
+});
+
+// ===========================================================================
+// BLACKOUT WINDOWS — editor shape → stored config → the placer.
+// Date/time UX programme, Prompt 07. Self-contained; nothing above or below
+// this banner depends on it.
+//
+// WHAT THIS PROVES, AND WHY IT IS NOT JUST A PUT/GET TEST.
+//
+// Prompt 06 built the blackout editor on the ruling that it writes the
+// EXISTING `config.blackouts` field and needs no new backend endpoint. This
+// block is the evidence for that ruling. The trap it is shaped around: a test
+// that only asserts "what I PUT is what I GET" passes even when the solver
+// never sees the window at all — and a blackout the solver ignores is exactly
+// the defect this feature would otherwise ship.
+//
+// So there are three layers, and the middle one is the point:
+//   1. the wire       — the editor's own `draftsToBlackouts` output survives
+//                       PUT → GET byte-identically, as ISO strings;
+//   2. the CONVERSION — `toSlotConfig` turns those ISO strings into the exact
+//                       epoch-ms instants `calendar.ts`'s `Blackout` takes.
+//                       Same three keys, different units, nothing in the type
+//                       system connecting them;
+//   3. the engine     — the placer (`slotFixtures`) and the solver lattice
+//                       (`buildGrid`) both refuse that time, each measured
+//                       against a control run through the identical path with
+//                       the window removed.
+//
+// Every "nothing landed in the window" assertion is paired with a control,
+// because an unpaired one is satisfied by a placer that never places anything
+// there anyway. Every "all N still placed" assertion is there because
+// "nothing in the window" must not be bought by dropping fixtures.
+// ===========================================================================
+
+/** Governing zone and display zone: both non-UTC and DIFFERENT from each
+ *  other, so "the server did not re-zone the stored instant" is a real
+ *  assertion. Resolved through either clock the numbers would miss by hours;
+ *  with UTC on one side a re-zoning bug would land on the right answer. */
+const BLACKOUT_ORG_TZ = "Pacific/Auckland";
+const BLACKOUT_DIVISION_TZ = "America/Los_Angeles";
+
+const HOUR = 60 * MIN;
+
+/** Exactly what the editor holds mid-edit: `<input type="datetime-local">`
+ *  values plus a court, `""` meaning the whole division. */
+const BLACKOUT_DRAFTS = [
+  { court: "Court 2", from: "2026-08-01T12:00", to: "2026-08-01T13:00" },
+  { court: "", from: "2026-08-02T09:00", to: "2026-08-02T10:30" },
+];
+
+/** The stored rows for those drafts, produced by the editor's OWN serialiser
+ *  rather than hand-written — so this suite goes red if `draftsToBlackouts`
+ *  ever stops emitting the shape `ScheduleConfig.blackouts` accepts. */
+function editorRows(): { court?: string; from: string; to: string }[] {
+  const rows = draftsToBlackouts(BLACKOUT_DRAFTS, BLACKOUT_ORG_TZ);
+  if (rows === null) throw new Error("fixture drafts must be storable");
+  return rows;
+}
+
+/** One division-wide window, and the instants it denotes. The editor resolves
+ *  its `datetime-local` values on the GOVERNING clock, which the caller names —
+ *  so the instants below are deterministic rather than runner-dependent. The
+ *  geometry is still derived from the produced instant rather than assumed. */
+function globalWindow(fromLocal: string, toLocal: string, tz: string) {
+  const rows = draftsToBlackouts([{ court: "", from: fromLocal, to: toLocal }], tz);
+  if (rows === null) throw new Error("fixture draft must be storable");
+  return { rows, from: Date.parse(rows[0]!.from), to: Date.parse(rows[0]!.to) };
+}
+
+/** The same editor serialiser, driven from a chosen INSTANT instead of a typed
+ *  string. `zonedDateTimeInput` is the function the panel itself uses to fill
+ *  the control from stored config, so this stays a real editor round-trip —
+ *  and, read and written on one zone, it returns the instant it was given. */
+function windowAt(fromMs: number, toMs: number, tz: string) {
+  return globalWindow(zonedDateTimeInput(fromMs, tz), zonedDateTimeInput(toMs, tz), tz);
+}
+
+const BLACKOUT_BASE_CONFIG = {
+  startAt: T0,
+  matchMinutes: 30,
+  gapMinutes: 0,
+  courts: ["Court 1", "Court 2"],
+  perEntrantMinRest: 0,
+  sessionWindows: [],
+};
+
+describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time UX P07)", () => {
+  async function seedBlackoutDivision(): Promise<{ auth: AuthCtx; divisionId: string }> {
+    const { auth } = await seedOrg("pro");
+    await sql`update organizations set timezone = ${BLACKOUT_ORG_TZ} where id = ${auth.orgId}`;
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Blackout Cup",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      eligibility: [],
+    });
+    return { auth, divisionId: division.id };
+  }
+
+  it("the editor's own output survives PUT → GET unchanged, and stays ISO on the wire", async () => {
+    const { auth, divisionId } = await seedBlackoutDivision();
+    const rows = editorRows();
+
+    await putScheduleSettings(auth, divisionId, {
+      config: { ...BLACKOUT_BASE_CONFIG, blackouts: rows },
+    });
+    const stored = await getScheduleSettings(auth, divisionId);
+
+    // Both windows, in order, unchanged. No new endpoint anywhere in sight:
+    // this is the pre-existing JSONB write, and a non-empty `blackouts` is one
+    // of the things `usesConstraints` trips on — hence the "pro" seed.
+    expect(stored.config.blackouts).toEqual(rows);
+
+    // ISO strings, NOT the engine's epoch ms. `schemas.ts` types these as
+    // `z.iso.datetime({offset:true})`, so a client writing numbers gets a 400
+    // rather than a subtly wrong time — the two shapes share all three keys.
+    for (const w of stored.config.blackouts) {
+      expect(typeof w.from).toBe("string");
+      expect(w.from).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      expect(w.to).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    }
+
+    // The court-scoped window keeps its court. The division-wide one has NO
+    // `court` KEY — not a `court: undefined` — because `courtBlocked` skips on
+    // `bo.court !== undefined`, so a serialised `undefined` would scope the
+    // window to a court literally named "undefined" and block nothing.
+    expect(stored.config.blackouts[0]!.court).toBe("Court 2");
+    expect("court" in stored.config.blackouts[1]!).toBe(false);
+  });
+
+  it("toSlotConfig hands the engine the exact epoch-ms instants, not a re-zoned copy", async () => {
+    const { auth, divisionId } = await seedBlackoutDivision();
+    const rows = editorRows();
+    await putScheduleSettings(auth, divisionId, {
+      config: { ...BLACKOUT_BASE_CONFIG, blackouts: rows },
+      tz: BLACKOUT_DIVISION_TZ,
+    });
+
+    const settings = await withTenant(auth.orgId, (tx) => loadSettings(tx, divisionId));
+    // Non-vacuity guard for the assertion below: two different non-UTC clocks
+    // are genuinely in play on this row.
+    expect(settings.displayTz).toBe(BLACKOUT_DIVISION_TZ);
+    expect(settings.orgTz).toBe(BLACKOUT_ORG_TZ);
+
+    // THE CONVERSION BOUNDARY. A stored ISO instant carries its own offset, so
+    // the server must parse it absolutely and re-zone it through neither clock.
+    const config = toSlotConfig(settings, 0);
+    expect(config.blackouts).toEqual([
+      { court: "Court 2", from: Date.parse(rows[0]!.from), to: Date.parse(rows[0]!.to) },
+      { from: Date.parse(rows[1]!.from), to: Date.parse(rows[1]!.to) },
+    ]);
+    // `toEqual` treats an absent key and an `undefined` one as equal, so the
+    // global window's missing `court` needs saying separately.
+    expect("court" in config.blackouts![1]!).toBe(false);
+    expect(typeof config.blackouts![0]!.from).toBe("number");
+  });
+
+  it("the placer and the solver lattice both refuse the stored window", async () => {
+    const { auth, divisionId } = await seedBlackoutDivision();
+    const w = globalWindow("2026-08-01T12:00", "2026-08-01T13:00", BLACKOUT_ORG_TZ);
+    // One court, and the day opens an hour before the window: six 30-minute
+    // fixtures laid end to end MUST cross it unless something stops them.
+    await putScheduleSettings(auth, divisionId, {
+      config: {
+        ...BLACKOUT_BASE_CONFIG,
+        startAt: new Date(w.from - HOUR).toISOString(),
+        courts: ["Court 1"],
+        blackouts: w.rows,
+      },
+    });
+    const settings = await withTenant(auth.orgId, (tx) => loadSettings(tx, divisionId));
+    const config = toSlotConfig(settings, 0);
+
+    const fixtures = Array.from({ length: 6 }, (_, i) => ({ id: `f${i + 1}` }));
+    const placedInWindow = (as: readonly { startAt: number; endAt: number }[]) =>
+      as.filter((a) => a.startAt < w.to && a.endAt > w.from).length;
+
+    // CONTROL, through the identical path with the window removed: that hour
+    // is prime time and the placer fills it. Without this, the assertion below
+    // would also pass on a placer that ignored blackouts entirely.
+    const control = slotFixtures({ config: { ...config, blackouts: [] }, fixtures });
+    expect(control.assignments).toHaveLength(6);
+    expect(placedInWindow(control.assignments)).toBeGreaterThan(0);
+
+    const placed = slotFixtures({ config, fixtures });
+    expect(placedInWindow(placed.assignments)).toBe(0);
+    // All six still land: "nothing inside the window" must not be bought by
+    // dropping fixtures on the floor.
+    expect(placed.assignments).toHaveLength(6);
+
+    // The z3 path reaches the same window through `buildGrid`'s lattice. Its
+    // universe is pinned explicitly here because `applyWindow` leaves `to` at
+    // Infinity when the config carries no `endAt`, and buildGrid answers an
+    // unbounded universe by returning NO slots — which would make the control
+    // below vacuously true.
+    const bounded = {
+      ...config,
+      courts: [...config.courts],
+      window: { from: w.from - 2 * HOUR, to: w.from + 4 * HOUR },
+    };
+    const slotsInWindow = (g: { slots: readonly { startAt: number }[] }) =>
+      g.slots.filter((s) => s.startAt < w.to && s.startAt + 30 * MIN > w.from).length;
+    const grid = buildGrid({ config: bounded });
+    expect(grid.overCap).toBe(false);
+    expect(slotsInWindow(buildGrid({ config: { ...bounded, blackouts: [] } }))).toBeGreaterThan(0);
+    expect(slotsInWindow(grid)).toBe(0);
+  });
+
+  it("autoSchedule honours a stored window end to end — an identical division without one fills it", async () => {
+    const { auth } = await seedOrg("pro");
+    // WHERE THIS WINDOW SITS IS THE TEST.
+    //
+    // A stored blackout flips this run from greedy onto z3, and z3's lattice
+    // opens at LOCAL MIDNIGHT on the governing clock — `applyWindow` derives
+    // the universe from `startAt`'s DAY, not from `startAt` itself. Measured:
+    // with the window at 11:00 and `startAt` at 10:00, z3 answers it by moving
+    // the entire six-fixture board back to 00:00–02:30 and the window is
+    // simply nowhere near the board. "Nothing landed inside it" is then true
+    // of a solver that never looked at it — the exact vacuity this prompt
+    // exists to rule out.
+    //
+    // So the window goes half an hour after midnight, where nothing can pack
+    // around it: this org has no timezone, hence a UTC governing clock, and no
+    // arrangement of six 30-minute fixtures starting at or after 00:00 avoids
+    // 00:30–01:30 by accident. The editor is driven on that same UTC clock, so
+    // "half an hour after LOCAL midnight" is now stated rather than inherited
+    // from whatever zone the runner happens to be in.
+    const dayStart = Date.parse("2026-08-01T00:00:00.000Z");
+    const w = windowAt(dayStart + 30 * MIN, dayStart + 90 * MIN, "UTC");
+    const startAt = new Date(dayStart).toISOString();
+
+    /** A whole division built and auto-scheduled through the real usecases —
+     *  no engine call in this test, so the ONLY route the window can take is
+     *  the stored config the editor writes. */
+    const boardFor = async (blackouts: { court?: string; from: string; to: string }[]) => {
+      const competition = await createCompetition(auth, {
+        ends_on: "2030-12-31",
+        name: `Blackout E2E ${blackouts.length}`,
+        visibility: "private",
+        branding: {},
+      });
+      const division = await createDivision(auth, competition.id, {
+        name: "Open",
+        sport_key: "generic",
+        variant_key: "score",
+        config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+        eligibility: [],
+      });
+      await createEntrants(
+        auth,
+        division.id,
+        ["A", "B", "C", "D"].map((display_name, i) => ({
+          kind: "individual" as const,
+          display_name,
+          seed: i + 1,
+          members: [],
+        })),
+      );
+      const [stage] = await createStages(auth, division.id, {
+        seq: 1,
+        kind: "league",
+        name: "L",
+        config: {},
+      });
+      await putScheduleSettings(auth, division.id, {
+        config: {
+          startAt,
+          matchMinutes: 30,
+          gapMinutes: 0,
+          courts: ["Court 1"],
+          perEntrantMinRest: 0,
+          blackouts,
+          sessionWindows: [],
+        },
+        tz: "UTC",
+      });
+      await generateStageFixtures(auth, stage!.id);
+      return autoSchedule(auth, stage!.id, { only_unlocked: false, mode: "build" });
+    };
+
+    const inWindow = (p: { assignments: { scheduled_at: string }[] }) =>
+      p.assignments.filter((a) => {
+        const start = Date.parse(a.scheduled_at);
+        return start < w.to && start + 30 * MIN > w.from;
+      }).length;
+
+    // CONTROL first: the same division shape with no window books that hour.
+    const control = await boardFor([]);
+    expect(control.assignments).toHaveLength(6);
+    expect(inWindow(control)).toBeGreaterThan(0);
+
+    const guarded = await boardFor(w.rows);
+    expect(inWindow(guarded)).toBe(0);
+    expect(guarded.assignments).toHaveLength(6);
+
+    // ...and the window COST something. Any packing of six 30-minute fixtures
+    // on one court that avoids the hour must finish later than the packing
+    // that does not, so this is true whichever arrangement the solver picks —
+    // z3 spends the window by pushing the whole board past it rather than
+    // leaving a hole, since that is the shorter makespan. A run that quietly
+    // dropped the window would land on the control's board instead.
+    const latest = (p: { assignments: { scheduled_at: string }[] }) =>
+      Math.max(...p.assignments.map((a) => Date.parse(a.scheduled_at)));
+    expect(latest(guarded)).toBeGreaterThan(latest(control));
+    // Two autoSchedule passes, and each one pays the z3/WASM warm-up: the
+    // sibling solver tests in this file run ~20s apiece on their own.
+  }, 120_000);
+
+  // TZ NOTE — the gap this block reported is now CLOSED, and these helpers are
+  // what changed. The assertions above were always about the SERVER, which
+  // handles the window correctly: an ISO instant carries its offset and is
+  // never re-zoned. The defect was one layer up, in the editor, where
+  // `draftsToBlackouts` resolved its `datetime-local` strings with
+  // `new Date(local)` — the ORGANISER'S BROWSER zone rather than
+  // `settings.orgTz`, the governing venue clock (#448) — so anyone working from
+  // outside the venue's zone stored an instant off by the difference.
+  //
+  // It now takes the zone as an argument, which is why `editorRows` and
+  // `globalWindow` name `BLACKOUT_ORG_TZ` (the zone this block actually seeds
+  // onto the organisation) and the autoSchedule case names "UTC" (the governing
+  // clock of an org with no timezone). The editor's zone behaviour itself is
+  // pinned in `components/v2/__tests__/schedule-times-use-org-zone.test.tsx`
+  // and `lib/__tests__/zoned-datetime.test.ts`, not here — this block stays
+  // about the server round-trip.
+});
+
+// ===========================================================================
+// COURT REMOVAL — a settings save may not orphan a pinned fixture.
+// Date/time UX programme, Prompt 08. Self-contained; nothing above or below
+// this banner depends on it, and it deliberately does not reuse the Prompt 07
+// block's helpers — that block is about blackouts and its fixtures are shaped
+// for the solver, not for the board.
+//
+// WHAT THIS PROVES.
+//
+// Dropping a court from `config.courts` used to be completely unguarded. A
+// fixture the auto pass cannot relocate stays on a court the board no longer
+// draws — invisible, unmovable, still occupying the timetable. The guard
+// rejects that save with a 409 before it writes.
+//
+// TWO fixtures are immovable, and the ruling blocks both:
+//   * PINNED (`schedule_locked`) — exempt from AUTO's cleanup filter, and
+//     REFLOW's move-minimising objective leaves it where it is;
+//   * FIXED OCCUPANCY — a fixture that holds a court but is not `scheduled`.
+//     `MOVABLE_STATUS` is `"scheduled"` alone, so `in_play`/`decided`/
+//     `finalized`/`forfeited` are immutable obstacles (doc 12 §6). This half
+//     has NO pin attached, so the refusal must name a different reason or the
+//     organiser searches for a pin that is not there.
+// That second set is `FIXED_OCCUPYING = OCCUPYING.filter(s => s !== MOVABLE_STATUS)`,
+// derived in schedule.ts and never spelled out as a literal here either — a
+// hand-typed status list rots silently the day `OCCUPYING` grows a member.
+//
+// The four things a naive "it rejects" test would NOT catch, each with its own
+// case below:
+//   1. SCOPE — an implementation that asks "does this division have ANY pinned
+//      fixture?" passes every rejection case here. So one case pins a fixture
+//      on a court that is KEPT and requires the save to SUCCEED.
+//   2. ATOMICITY — a guard that throws AFTER the upsert still "rejects". So the
+//      rejection case re-reads the stored config and asserts the OTHER fields
+//      (and `updated_at`) are untouched, not merely that an error was thrown.
+//   3. REGRESSION — removing a court whose fixtures are all UNLOCKED must still
+//      work; AUTO relocates those correctly today and blocking them would be a
+//      regression, not a fix. Owner ruling: hard reject, never a confirmation
+//      prompt, and never wider than the pinned set.
+//   4. NAMING — the organiser has to know which court to unpin, so a save that
+//      drops two offending courts must name both.
+//
+// The pinned predicate is `fixtures.schedule_locked` — the same column, tested
+// the same way (plain truthiness of the boolean), as `history.ts`'s
+// `clearableFixtures` → `locked: f.schedule_locked` → the engine's
+// `if (scope.excludeLocked && f.locked)`. Not a second definition of "pinned".
+// ===========================================================================
+
+/** Two courts, and every other field set to a value that is NOT the schema
+ *  default — so a partial write during a rejected save has somewhere visible
+ *  to show up. `perEntrantMinRest` is 0 on purpose: the seeds below place
+ *  fixtures by hand and a rest warning is noise, not signal, in this block. */
+const COURT_GUARD_CONFIG = {
+  startAt: T0,
+  matchMinutes: 45,
+  gapMinutes: 15,
+  courts: ["Court 1", "Court 2"],
+  perEntrantMinRest: 0,
+  blackouts: [],
+  sessionWindows: [],
+};
+
+describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/time UX P08)", () => {
+  /** A 4-entrant single-pool division (6 fixtures) with the two-court config
+   *  already stored, plus whatever extra courts a case needs. Returns the
+   *  generated fixtures so a case can place and pin one by hand — `autoSchedule`
+   *  is deliberately avoided here: it costs the z3 warm-up and decides court
+   *  placement itself, which is the very thing these cases need to control. */
+  async function seedCourtDivision(courts: string[] = COURT_GUARD_CONFIG.courts) {
+    const { auth } = await seedOrg("pro");
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Court Removal Cup",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      eligibility: [],
+    });
+    await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 4 }, (_, i) => ({
+        kind: "individual" as const,
+        display_name: `E${i + 1}`,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, [
+      { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 1 } } },
+    ]);
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    await putScheduleSettings(auth, division.id, {
+      config: { ...COURT_GUARD_CONFIG, courts },
+    });
+    return { auth, divisionId: division.id, fixtures };
+  }
+
+  /** Place a fixture on a court, optionally pinning it, through the same
+   *  console path the board uses (`patchFixture` → `moveFixture`) rather than
+   *  a raw UPDATE — so a pin these cases treat as real is a pin the product
+   *  can actually produce. Times are staggered so nothing court-clashes. */
+  async function place(
+    auth: AuthCtx,
+    fixtureId: string,
+    court: string,
+    minutes: number,
+    locked: boolean,
+  ) {
+    await patchFixture(auth, fixtureId, {
+      scheduled_at: at(minutes),
+      court_label: court,
+      schedule_locked: locked,
+    });
+  }
+
+  const dropCourt2 = (courts: string[] = ["Court 1"]) => ({
+    config: { ...COURT_GUARD_CONFIG, courts },
+  });
+
+  /** The thrown error, typed, for the cases that assert on more than one of
+   *  its fields (`rejects.toMatchObject` can carry only one matcher per key).
+   *  Throws its own error if the promise RESOLVES, so a guard that stopped
+   *  rejecting cannot slip through as an empty catch. */
+  async function rejection(p: Promise<unknown>): Promise<{ status?: number; message: string }> {
+    try {
+      await p;
+    } catch (err) {
+      return err as { status?: number; message: string };
+    }
+    throw new Error("expected the settings save to be rejected, but it resolved");
+  }
+
+  it("rejects removing a court that still has a pinned fixture on it", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
+
+    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2()));
+    expect(err.status).toBe(409);
+    expect(err.message).toMatch(/court 2/i);
+    // Paired with the completed-fixture case below, which asserts the OPPOSITE
+    // reason on the same message shape: neither wording can drift into the other.
+    expect(err.message).toMatch(/pinned/i);
+  });
+
+  /** THE REGRESSION THAT MATTERS MOST. The whole ruling turns on "AUTO can
+   *  relocate this one", so the guard must stay narrower than "any fixture on
+   *  the court". The status precondition is asserted, not assumed: if the seed
+   *  ever stopped leaving the fixture `scheduled` this case would go on passing
+   *  for the wrong reason, and it is the only thing standing between the guard
+   *  and an over-widening that blocks every populated court. */
+  it("allows removing a court whose fixtures are all unlocked and still movable", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, "Court 2", 0, false);
+
+    const [seeded] = await sql<{ status: string; schedule_locked: boolean }[]>`
+      select status, schedule_locked from fixtures where id = ${fixtures[0]!.id}`;
+    expect(seeded!.status).toBe("scheduled");
+    expect(seeded!.schedule_locked).toBe(false);
+
+    // Read back rather than trusting the return: a resolve alone does not
+    // prove a write.
+    const saved = await putScheduleSettings(auth, divisionId, dropCourt2());
+    expect(saved.config.courts).toEqual(["Court 1"]);
+    expect((await getScheduleSettings(auth, divisionId)).config.courts).toEqual(["Court 1"]);
+  });
+
+  /** The widened half of the rule. A DECIDED fixture is unlocked, so the pin
+   *  check waves it through — but `MOVABLE_STATUS` is `"scheduled"` alone, so
+   *  the auto pass treats it as a fixed obstacle and will never relocate it
+   *  (doc 12 §6: decided fixtures are immutable). It orphans on a removed court
+   *  exactly the way a pin does, with no pin anywhere for the organiser to
+   *  find — hence the message must NOT say "pinned". */
+  it("rejects removing a court that holds a completed fixture, with no pin anywhere", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, "Court 2", 0, false);
+    await startDivision(auth, divisionId);
+    await decide(auth, fixtures[0]!.id, 2, 1);
+
+    const [seeded] = await sql<{ status: string; schedule_locked: boolean }[]>`
+      select status, schedule_locked from fixtures where id = ${fixtures[0]!.id}`;
+    expect(seeded!.status).toBe("decided");
+    expect(seeded!.schedule_locked).toBe(false);
+
+    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2()));
+    expect(err.status).toBe(409);
+    expect(err.message).toMatch(/court 2/i);
+    // The reason has to be distinguishable, or the organiser goes hunting for a
+    // pin that does not exist. This half is the load-bearing one.
+    expect(err.message).not.toMatch(/pinned/i);
+    expect(err.message).toMatch(/in play or completed/i);
+  });
+
+  /** Same guard, the other reason, and the message says so. Two separate courts
+   *  in one save so the per-court breakdown is exercised rather than a single
+   *  global reason string. */
+  it("names the two blocking reasons separately in one refusal", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision([
+      "Court 1",
+      "Court 2",
+      "Court 3",
+    ]);
+    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
+    await place(auth, fixtures[1]!.id, "Court 3", 60, false);
+    await startDivision(auth, divisionId);
+    await decide(auth, fixtures[1]!.id, 2, 1);
+
+    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2()));
+    expect(err.status).toBe(409);
+    expect(err.message).toMatch(/Court 2 \(1 pinned\)/);
+    expect(err.message).toMatch(/Court 3 \(1 in play or completed\)/);
+  });
+
+  /** ATOMICITY on the widened path too. A second early return added for the
+   *  status check could easily land after the upsert; deep-equalling the whole
+   *  stored config plus `updated_at` is what catches that. */
+  it("does not write anything when a completed-fixture save is rejected", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, "Court 2", 0, false);
+    await startDivision(auth, divisionId);
+    await decide(auth, fixtures[0]!.id, 2, 1);
+
+    const before = await getScheduleSettings(auth, divisionId);
+    await expect(
+      putScheduleSettings(auth, divisionId, {
+        config: {
+          ...COURT_GUARD_CONFIG,
+          courts: ["Court 1"],
+          matchMinutes: 90,
+          gapMinutes: 0,
+          perEntrantMinRest: 25,
+          startAt: at(600),
+        },
+      }),
+    ).rejects.toBeDefined();
+
+    const after = await getScheduleSettings(auth, divisionId);
+    expect(after.config).toEqual(before.config);
+    expect(after.config.courts).toEqual(["Court 1", "Court 2"]);
+    expect(after.config.matchMinutes).toBe(45);
+    expect(after.updated_at).toEqual(before.updated_at);
+  });
+
+  it("allows removing a court with no fixtures on it at all", async () => {
+    const { auth, divisionId } = await seedCourtDivision();
+
+    const saved = await putScheduleSettings(auth, divisionId, dropCourt2());
+    expect(saved.config.courts).toEqual(["Court 1"]);
+  });
+
+  /** The scope discriminator. An implementation that counts pinned fixtures
+   *  across the DIVISION instead of on the REMOVED courts passes all three
+   *  cases above; this one goes red for it. Court 3 is dropped and is empty,
+   *  while the pin sits on Court 2, which survives the save. */
+  it("does not block on a pinned fixture that sits on a court being kept", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision([
+      "Court 1",
+      "Court 2",
+      "Court 3",
+    ]);
+    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
+
+    const saved = await putScheduleSettings(
+      auth,
+      divisionId,
+      dropCourt2(["Court 1", "Court 2"]),
+    );
+    expect(saved.config.courts).toEqual(["Court 1", "Court 2"]);
+  });
+
+  /** The organiser has to be told WHICH pins to release. One save dropping two
+   *  occupied courts must name both, or the second refusal arrives only after
+   *  they have fixed the first. */
+  it("names every removed court that still holds a pin", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision([
+      "Court 1",
+      "Court 2",
+      "Court 3",
+    ]);
+    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
+    await place(auth, fixtures[1]!.id, "Court 3", 60, true);
+
+    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2()));
+    expect(err.status).toBe(409);
+    expect(err.message).toMatch(/court 2/i);
+    expect(err.message).toMatch(/court 3/i);
+  });
+
+  /** ATOMICITY. The rejected save changes every other field too, so a guard
+   *  placed AFTER the upsert would leave `matchMinutes` at 90 and the stored
+   *  courts at one entry. Asserting only "it threw" would not see that. */
+  it("does not write anything when the save is rejected", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
+
+    const before = await getScheduleSettings(auth, divisionId);
+    await expect(
+      putScheduleSettings(auth, divisionId, {
+        config: {
+          ...COURT_GUARD_CONFIG,
+          courts: ["Court 1"],
+          matchMinutes: 90,
+          gapMinutes: 0,
+          perEntrantMinRest: 25,
+          startAt: at(600),
+        },
+      }),
+    ).rejects.toBeDefined();
+
+    const after = await getScheduleSettings(auth, divisionId);
+    expect(after.config).toEqual(before.config);
+    // Spelled out as well as compared, so the failure message names the field
+    // that leaked rather than dumping two configs.
+    expect(after.config.courts).toEqual(["Court 1", "Court 2"]);
+    expect(after.config.matchMinutes).toBe(45);
+    expect(after.config.gapMinutes).toBe(15);
+    expect(after.config.perEntrantMinRest).toBe(0);
+    expect(after.config.startAt).toBe(T0);
+    // The row was not even touched: the upsert stamps `updated_at = now()`.
+    expect(after.updated_at).toEqual(before.updated_at);
   });
 });
 

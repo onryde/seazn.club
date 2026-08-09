@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildGrid, gridStepMinutes, MAX_SLOTS } from "./build-grid.ts";
+import { buildGrid, MAX_SLOTS } from "./build-grid.ts";
+import { gridStepMinutes } from "./grid-step.ts";
 import type { Assignment, SlotConfig } from "./calendar.ts";
 
 const MIN = 60_000;
@@ -18,16 +19,16 @@ const cfg = (over: Partial<SlotConfig> = {}): SlotConfig & { courts: string[] } 
 
 describe("gridStepMinutes", () => {
   it("is the gcd of match and gap length", () => {
-    expect(gridStepMinutes({ matchMinutes: 60, gapMinutes: 15 })).toBe(15);
-    expect(gridStepMinutes({ matchMinutes: 45, gapMinutes: 10 })).toBe(5);
+    expect(gridStepMinutes(60, 15)).toBe(15);
+    expect(gridStepMinutes(45, 10)).toBe(5);
   });
 
   it("degenerates to the match length when there is no gap", () => {
-    expect(gridStepMinutes({ matchMinutes: 45, gapMinutes: 0 })).toBe(45);
+    expect(gridStepMinutes(45, 0)).toBe(45);
   });
 
   it("never goes below the repair grid", () => {
-    expect(gridStepMinutes({ matchMinutes: 7, gapMinutes: 3 })).toBe(5);
+    expect(gridStepMinutes(7, 3)).toBe(5);
   });
 });
 

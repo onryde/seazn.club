@@ -174,6 +174,21 @@ export const TIPS = {
     body: "A tie-break, not a rule. When two courts are free at the same moment, this decides which one an entrant gets: Balance courts favours the court they have used least, Rotate every game avoids the one they just played on. Kick-off times always win — no match is ever delayed to even out courts.",
     helpSlug: "scheduling/constraints",
   },
+  // Rendered on BOTH minimum-rest fields — Settings (`perEntrantMinRest`) and
+  // Constraints (`constraints.restMin`). They are two stored values for one
+  // idea, and the engine resolves them with MAX, never precedence
+  // (`effectiveRestMinutes`, #459). Without this tip the losing field looks
+  // broken: type 10 next to a 30 and nothing changes, with nothing on screen
+  // saying why. One entry, one wording, so the two tabs cannot drift apart.
+  // The body deliberately does NOT name the two tabs. The tab strip renders
+  // its raw English slugs (schedule/page.tsx `{t}` + `capitalize`), so they are
+  // untranslated in es/fr/nl — a localized body naming "Configuración" would
+  // point at a tab labelled "settings".
+  "schedule.min-rest": {
+    title: "Minimum rest",
+    body: "This limit is set in two places, and the stricter value always wins. Put 30 in one and 10 in the other and entrants rest 30. Raising either raises the floor; leaving one at 0 simply lets the other decide.",
+    helpSlug: "scheduling/constraints",
+  },
 } as const satisfies Record<string, TipEntry>;
 
 export type TipId = keyof typeof TIPS;

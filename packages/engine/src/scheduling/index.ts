@@ -13,6 +13,10 @@ export * from "./participants.ts";
 export * from "./tz.ts";
 // The build solver (this plan). Pure metrics first — no z3 anywhere in here.
 export * from "./build-objectives.ts";
+// The grid step both the solver and the BOARD are built from. Also reachable
+// as `@seazn/engine/scheduling/grid-step`, which is how the browser takes it:
+// a leaf import, so the schedule page does not ship the solvers.
+export * from "./grid-step.ts";
 export * from "./build-grid.ts";
 // The boolean model over that lattice. Free to name here for the same reason
 // the repair block below is: its only `z3-solver` reference is `import type`.

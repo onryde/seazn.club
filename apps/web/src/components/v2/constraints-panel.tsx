@@ -9,6 +9,8 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { Tip } from "@/components/ui/tip";
+import { DateTimeField } from "@/components/v2/shared/datetime-field";
+import { isoFromZonedDateTime, zonedDateTimeInput } from "@/lib/zoned-datetime";
 
 /** 625 → "10h 25m"; 45 → "45m". The raw minute dumps read like debug output. */
 function fmtDuration(minutes: number): string {
@@ -47,6 +49,113 @@ export function withMaxFixturesPerDay(
   if (count === undefined) return rest;
   return [...rest, { type: "max_fixtures_per_day", count, scope: { kind: "division", divisionId } }];
 }
+
+// ---------------------------------------------------------------------------
+// Blackout windows (date/time UX programme, Prompt 06). Until now `blackouts`
+// could only be written by the AI natural-language console; this form
+// supplements it rather than replacing it, and writes the SAME field.
+//
+// Two shapes, deliberately kept apart:
+//   * `BlackoutRow` is the stored/wire shape (`schemas.ts` ScheduleConfig
+//     .blackouts) — ISO datetimes with offset. The engine's own `Blackout`
+//     (calendar.ts) carries epoch ms; the server converts. The panel talks to
+//     the API, so it writes ISO.
+//   * `BlackoutDraft` is what the form holds while it is being filled in:
+//     `<input type="datetime-local">` values, either of which may be blank.
+//     The stored shape cannot represent a half-typed row at all.
+//
+// The bridge between them is `@/lib/zoned-datetime` and it needs the VENUE zone
+// (`settings.orgTz`, #448) — a `datetime-local` value carries no offset, so
+// something has to say which zone the organiser's keystrokes belong to. "Court
+// 2 is closed 12:00–13:00" means noon where Court 2 is. Resolving it with
+// `new Date(value)` used the ORGANISER's zone instead, so anyone working from
+// outside the venue's zone blacked out the wrong hour, silently: read-back went
+// through the same wrong zone and showed 12:00 again, while the solver read the
+// instant on `orgTz` and saw something else.
+// ---------------------------------------------------------------------------
+
+/** One blacked-out window as stored in `config.blackouts`. */
+export interface BlackoutRow {
+  /** Scoped to one court; ABSENT (never `undefined`) for the whole division. */
+  court?: string;
+  from: string;
+  to: string;
+}
+
+/** One row of the editor. `court: ""` is the whole division. */
+export interface BlackoutDraft {
+  court: string;
+  from: string;
+  to: string;
+}
+
+/** Why a row cannot be stored yet, or null when it can. */
+export type BlackoutRowError = "incomplete" | "order";
+
+/**
+ * `config.blackouts` → editable rows, shown on the venue clock `tz`. The config
+ * arrives as `Record<string, unknown>` and the panel never re-parses the wire
+ * schema, so anything malformed is dropped rather than rendered as an "Invalid
+ * Date" field the organiser cannot fix.
+ */
+export function toBlackoutDrafts(raw: unknown, tz: string): BlackoutDraft[] {
+  if (!Array.isArray(raw)) return [];
+  const out: BlackoutDraft[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const row = item as { court?: unknown; from?: unknown; to?: unknown };
+    if (typeof row.from !== "string" || typeof row.to !== "string") continue;
+    const from = zonedDateTimeInput(row.from, tz);
+    const to = zonedDateTimeInput(row.to, tz);
+    if (from === "" || to === "") continue;
+    out.push({ court: typeof row.court === "string" ? row.court : "", from, to });
+  }
+  return out;
+}
+
+/** Validation for one row. Localised copy for each case lives in the render. */
+export function blackoutRowError(draft: BlackoutDraft, tz: string): BlackoutRowError | null {
+  if (draft.from === "" || draft.to === "") return "incomplete";
+  const from = isoFromZonedDateTime(draft.from, tz);
+  const to = isoFromZonedDateTime(draft.to, tz);
+  if (from === null || to === null) return "incomplete";
+  // `to` is EXCLUSIVE in the engine (`overlaps(start, end, bo.from, bo.to)`),
+  // so an equal pair blacks out nothing at all — a control that silently does
+  // not work. Refused here rather than stored.
+  //
+  // Ordered by the INSTANTS the two halves name rather than by the strings, so
+  // the refusal means the same thing inside a fall-back hour, where one wall
+  // clock happens twice and string order and time order part company.
+  if (Date.parse(to) <= Date.parse(from)) return "order";
+  return null;
+}
+
+/**
+ * Editable rows → the stored shape, or null when ANY row is still invalid.
+ * All-or-nothing on purpose: writing the valid subset would silently discard
+ * the row the organiser is in the middle of typing.
+ *
+ * Overlapping windows are allowed. The engine unions them (`courtBlocked`
+ * returns on the first match), so an overlap is exactly equivalent to its
+ * union, and refusing it would block a legitimate "site closed 12–13, and
+ * Court 2 closed 12–15" pair.
+ */
+export function draftsToBlackouts(
+  drafts: readonly BlackoutDraft[],
+  tz: string,
+): BlackoutRow[] | null {
+  const out: BlackoutRow[] = [];
+  for (const draft of drafts) {
+    if (blackoutRowError(draft, tz) !== null) return null;
+    const from = isoFromZonedDateTime(draft.from, tz);
+    const to = isoFromZonedDateTime(draft.to, tz);
+    if (from === null || to === null) return null;
+    const court = draft.court.trim();
+    out.push({ ...(court === "" ? {} : { court }), from, to });
+  }
+  return out;
+}
+
 interface Constraints {
   restMin?: number;
   noBackToBack?: boolean;
@@ -72,10 +181,16 @@ export function ConstraintsPanel({
   divisionId,
   initialSettings,
   canEdit,
+  orgTz,
 }: {
   divisionId: string;
   initialSettings: Settings;
   canEdit: boolean;
+  /** The VENUE clock every absolute time on this panel is read and written on
+   *  (`settings.orgTz`, #448 — NOT `settings.tz`, which a division may override
+   *  for display). Required rather than defaulted: a wrong zone here stores the
+   *  wrong instant and looks correct on the way back out. */
+  orgTz: string;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -88,6 +203,14 @@ export function ConstraintsPanel({
   );
   const [shiftMinutes, setShiftMinutes] = useState(15);
   const [report, setReport] = useState<{ worst: WaitRow[] } | null>(null);
+  // Blackouts are edited as a DRAFT and committed with one button, unlike the
+  // instant-save rows above. A datetime pair cannot be saved per keystroke, and
+  // a half-typed row has no representation in the stored shape at all. `saved`
+  // is what the server last acknowledged, so the commit button can appear only
+  // when there is something to commit.
+  const storedBlackouts = () => toBlackoutDrafts(initialSettings.config.blackouts, orgTz);
+  const [blackouts, setBlackouts] = useState<BlackoutDraft[]>(storedBlackouts);
+  const [savedBlackouts, setSavedBlackouts] = useState<BlackoutDraft[]>(storedBlackouts);
 
   async function run(fn: () => Promise<unknown>, refresh = false) {
     setError(null);
@@ -109,7 +232,8 @@ export function ConstraintsPanel({
 
   const maxPerDay = readMaxFixturesPerDay(constraints.hard, divisionId);
 
-  const save = (next: Constraints) =>
+  /** Read-modify-write of ONE config key, leaving every other key as stored. */
+  const savePatch = (patch: Record<string, unknown>, applied: () => void) =>
     run(async () => {
       const current = await apiV1<Settings>(`/api/v1/divisions/${divisionId}/schedule-settings`);
       await apiV1(`/api/v1/divisions/${divisionId}/schedule-settings`, {
@@ -117,10 +241,35 @@ export function ConstraintsPanel({
         // No `tz` (V305): re-sending the RESOLVED zone would pin this
         // division to it and quietly break inheritance from the org. An
         // omitted tz leaves the stored value exactly as it is.
-        json: { config: { ...current.config, constraints: next } },
+        json: { config: { ...current.config, ...patch } },
       });
-      setConstraints(next);
+      applied();
     }, true);
+
+  const save = (next: Constraints) => savePatch({ constraints: next }, () => setConstraints(next));
+
+  const updateBlackout = (index: number, patch: Partial<BlackoutDraft>) =>
+    setBlackouts((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+
+  const pendingBlackouts = draftsToBlackouts(blackouts, orgTz);
+  const blackoutsDirty = JSON.stringify(blackouts) !== JSON.stringify(savedBlackouts);
+  const courts = Array.isArray(initialSettings.config.courts)
+    ? initialSettings.config.courts.filter((c): c is string => typeof c === "string")
+    : [];
+  // A stored window may name a court that has since been deleted. Keeping its
+  // option is what stops the select falling back to the first entry and the
+  // next save silently re-scoping that window to the whole division. (Prompt 08
+  // owns the pinned-fixture side of court removal; an unpinned blackout naming
+  // a gone court is inert in the engine — `courtBlocked` skips it everywhere.)
+  const courtOptions = [
+    ...courts,
+    ...blackouts.map((b) => b.court).filter((c) => c !== "" && !courts.includes(c)),
+  ].filter((c, i, all) => all.indexOf(c) === i);
+  // The whole block is Pro: the page hands down `canEdit && !frozen &&
+  // scheduling.constraints`, mirroring the server's `usesConstraints()` gate
+  // (schedule.ts), which trips on a non-empty `blackouts`. Windows already
+  // stored stay visible read-only so a downgrade never hides data.
+  const showBlackouts = canEdit || blackouts.length > 0;
 
   return (
     <section className="mt-8 space-y-4" aria-label="Scheduling constraints">
@@ -180,15 +329,31 @@ export function ConstraintsPanel({
           />
         </label>
 
-        <label className="flex flex-col items-start gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
+        {/* A <div> with an explicit htmlFor, not a wrapping <label> — the same
+            shape the field-fairness row below uses, and for the same reason:
+            `Tip` renders a <button>, and a button inside a <label> forwards its
+            click to the control. Association stays real via the id. */}
+        <div className="flex flex-col items-start gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
           <span className="min-w-0">
-            <span className="block text-sm text-slate-800">Minimum rest</span>
-            <span className="mt-0.5 block text-xs text-slate-400">
-              Breathing room between one entrant&apos;s matches.
+            <label htmlFor="rest-min" className="block text-sm text-slate-800">
+              {msg("constraints.restMin.label")}
+            </label>
+            {/* The hint and the unit used to sit INSIDE the wrapping <label>,
+                so both fed the input's accessible name. Splitting the label out
+                to host the tip would have dropped them; `aria-describedby` keeps
+                them, as a description rather than a name. Literal ids match the
+                `ff-select` row below — this panel has one call site. */}
+            <span id="rest-min-hint" className="mt-0.5 block text-xs text-slate-400">
+              {msg("constraints.restMin.hint")}
             </span>
           </span>
           <span className="flex shrink-0 items-center gap-2 text-sm text-slate-500">
+            {/* Same tip id as the Settings tab's field: one wording for one
+                idea, so the two tabs cannot drift apart. */}
+            <Tip id="schedule.min-rest" className="shrink-0" small />
             <input
+              id="rest-min"
+              aria-describedby="rest-min-hint rest-min-unit"
               type="number"
               min={0}
               inputMode="numeric"
@@ -199,9 +364,9 @@ export function ConstraintsPanel({
                 void save({ ...constraints, restMin: Math.max(0, Number(e.target.value)) })
               }
             />
-            min
+            <span id="rest-min-unit">{msg("constraints.restMin.unit")}</span>
           </span>
-        </label>
+        </div>
 
         <label className="flex flex-col items-start gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
           <span className="min-w-0">
@@ -267,6 +432,153 @@ export function ConstraintsPanel({
           <p className="px-4 py-3 text-xs text-slate-500 sm:px-5">
             {constraints.startWindows!.length} start window(s) set.
           </p>
+        )}
+
+        {/* Blackout windows. The only row of this sheet whose control is a
+            COLLECTION, so it drops the left-sentence/right-control split and
+            takes the full width underneath its own heading — a variable-height
+            block in the control column would break the scan the sheet exists
+            for. Last row on purpose, for the same reason. */}
+        {showBlackouts && (
+          <div className="px-4 py-3 sm:px-5">
+            <span className="block text-sm text-slate-800">{msg("constraints.blackout.title")}</span>
+            <span className="mt-0.5 block text-xs text-slate-400">
+              {msg("constraints.blackout.hint")}
+            </span>
+            {/* Both instants below are read and written on the VENUE clock, so
+                the panel has to say which one that is: an organiser in another
+                zone otherwise types a time meaning their own and gets no signal
+                that it was taken as the venue's. Reuses the caption the stages
+                panel already shows over fixture times — same fact, same words,
+                and it is already translated in all four locales. */}
+            <span className="mt-0.5 block text-xs text-slate-400">
+              {msg("schedule.tz.caption", { tz: orgTz })}
+            </span>
+
+            {blackouts.length === 0 ? (
+              <p className="mt-3 rounded-lg border border-dashed border-purple-200 px-3 py-4 text-center text-xs text-slate-500">
+                {msg("constraints.blackout.empty")}
+              </p>
+            ) : (
+              <ul className="mt-3 space-y-3">
+                {blackouts.map((row, i) => {
+                  const rowError = blackoutRowError(row, orgTz);
+                  return (
+                    // Index key: every field is controlled from this array, so
+                    // there is no per-row state for React to mis-reuse — the
+                    // same choice the settings panel's court list makes.
+                    <li key={i} className="rounded-lg border border-purple-100 bg-purple-50/60 p-3">
+                      {/* One row of fields at `sm`; stacked on a phone with the
+                          remove control tucked beside the scope select, so a
+                          three-window list does not become three full-width red
+                          buttons down the page. DOM order puts the button
+                          second for that layout and `sm:order-last` returns it
+                          to the end of the desktop row. */}
+                      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+                        <label className="block">
+                          <span className="label">{msg("constraints.blackout.scope")}</span>
+                          <select
+                            className="select w-full"
+                            value={row.court}
+                            disabled={!canEdit || busy}
+                            onChange={(e) => updateBlackout(i, { court: e.target.value })}
+                          >
+                            <option value="">{msg("constraints.blackout.everywhere")}</option>
+                            {courtOptions.map((court) => (
+                              <option key={court} value={court}>
+                                {court}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        {canEdit && (
+                          // `min-h-11`/`w-11` is the 44px touch floor
+                          // mobile.spec.ts asserts; `.btn` alone renders 38px.
+                          <button
+                            type="button"
+                            aria-label={msg("constraints.blackout.remove", { n: i + 1 })}
+                            className="btn btn-danger min-h-11 w-11 px-0 sm:order-last"
+                            disabled={busy}
+                            onClick={() => setBlackouts((rows) => rows.filter((_, j) => j !== i))}
+                          >
+                            ✕
+                          </button>
+                        )}
+                        {/* DateTimeField owns its whole <label> and takes no
+                            className, so the grid span lives on a wrapper.
+                            Visible labels, not `labelHidden`: nothing above
+                            these two names them, and a column header would
+                            vanish at 375px where the row stacks. */}
+                        <div className="col-span-2 sm:col-span-1">
+                          <DateTimeField
+                            kind="datetime-local"
+                            label={msg("constraints.blackout.from")}
+                            value={row.from}
+                            required
+                            disabled={!canEdit || busy}
+                            onChange={(v) => updateBlackout(i, { from: v })}
+                          />
+                        </div>
+                        <div className="col-span-2 sm:col-span-1">
+                          <DateTimeField
+                            kind="datetime-local"
+                            label={msg("constraints.blackout.to")}
+                            value={row.to}
+                            min={row.from === "" ? undefined : row.from}
+                            required
+                            disabled={!canEdit || busy}
+                            onChange={(v) => updateBlackout(i, { to: v })}
+                          />
+                        </div>
+                      </div>
+                      {rowError !== null && (
+                        <p
+                          className={`mt-2 text-xs ${
+                            rowError === "order" ? "text-red-600" : "text-slate-500"
+                          }`}
+                        >
+                          {msg(
+                            rowError === "order"
+                              ? "constraints.blackout.errorOrder"
+                              : "constraints.blackout.errorIncomplete",
+                          )}
+                        </p>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            {canEdit && (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="btn btn-ghost text-sm"
+                  disabled={busy}
+                  onClick={() => setBlackouts((rows) => [...rows, { court: "", from: "", to: "" }])}
+                >
+                  {msg("constraints.blackout.add")}
+                </button>
+                {blackoutsDirty && (
+                  <button
+                    type="button"
+                    className="btn btn-primary text-sm"
+                    disabled={busy || pendingBlackouts === null}
+                    onClick={() => {
+                      if (pendingBlackouts === null) return;
+                      const committed = blackouts;
+                      void savePatch({ blackouts: pendingBlackouts }, () =>
+                        setSavedBlackouts(committed),
+                      );
+                    }}
+                  >
+                    {busy ? msg("constraints.blackout.saving") : msg("constraints.blackout.save")}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </div>
 
