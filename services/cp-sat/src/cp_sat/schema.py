@@ -158,6 +158,54 @@ class ModelInput:
     wall_seconds: float
 
 
+def _require_id(value: str, where: str) -> str:
+    """THE chokepoint. Every id-like string in a request passes through here.
+
+    One policy, one place: an id must be non-blank and already CANONICAL —
+    equal to its own `.strip()`. `tests/test_schema.py` enumerates the string
+    fields straight out of the descriptor and asserts that each one either
+    reaches this function or is on a named exemption list, so a field added to
+    `scheduler.proto` cannot quietly skip it.
+
+    **Rejected, never normalised**, and that is the load-bearing choice.
+    Stripping on the way in looks friendlier and introduces a new silent
+    failure in place of the old one: `Assignment.fixture_id` round-trips, so a
+    caller that sent `"f1 "` would get `"f1"` back in `assignments` and fail to
+    match it against its own records. Refusing tells the caller which field is
+    wrong while its data is still in front of it.
+
+    Why whitespace at all — measured, each against its own control, all
+    OPTIMAL with `error` unset:
+
+        courts=["C0","C0 "]   two courts to a dict, one court in the world:
+                              2 fixtures placed at ONE instant on ONE court
+        division_id="d1 "     matches no rest rule and no day-cap key, so both
+                              families evaporate for that fixture
+        entrant "e1 "         joins a different participant group, so the rest
+                              window between two of one player's matches is
+                              never stated
+
+    Each is the pass's own rule failing on its own terms: *an id names exactly
+    one thing.* `"C0"` and `"C0 "` are one thing to a human and two to a dict
+    key, which is precisely what that rule exists to forbid.
+    """
+    if not value.strip():
+        raise InvalidRequestError(
+            f"{where} must not be blank, got {value!r}. An id nobody can name resolves to nothing "
+            "and cannot be mapped back to anything the caller holds."
+        )
+    if value != value.strip():
+        raise InvalidRequestError(
+            f"{where} has leading or trailing whitespace, got {value!r}. Ids are compared as dict "
+            "keys, so {stripped!r} and {value!r} are two different things to this service and one "
+            "thing to everybody else — the constraint keyed on the other spelling silently does "
+            "not apply. Send the id exactly as it is stored; it is not normalised here, because "
+            "`Assignment.fixture_id` travels back in the response and a silently altered id would "
+            "not match the caller's own records.".format(stripped=value.strip(), value=value)
+        )
+    return value
+
+
 def _validated_fixtures(proto_fixtures) -> list[tuple[str, list[str], str]]:
     """The movable fixtures, with every id they carry checked for substance.
 
@@ -168,12 +216,7 @@ def _validated_fixtures(proto_fixtures) -> list[tuple[str, list[str], str]]:
     fixtures: list[tuple[str, list[str], str]] = []
     seen: set[str] = set()
     for i, f in enumerate(proto_fixtures):
-        if not f.fixture_id:
-            raise InvalidRequestError(
-                f"fixtures[{i}].fixture_id must not be empty. `assignments` come back keyed by "
-                "fixture_id, so an unset one hands the caller rows it cannot map to anything "
-                "(verified: two rows, both fixture_id='')."
-            )
+        _require_id(f.fixture_id, f"fixtures[{i}].fixture_id")
         if f.fixture_id in seen:
             raise InvalidRequestError(
                 f"fixtures[{i}].fixture_id {f.fixture_id!r} is a duplicate. The model's id index is "
@@ -188,12 +231,11 @@ def _validated_fixtures(proto_fixtures) -> list[tuple[str, list[str], str]]:
                 "every T2 idle-gap term skip it. Measured: two fixtures sharing one player placed "
                 "CONCURRENTLY, reported OPTIMAL."
             )
-        if any(not entrant.strip() for entrant in f.entrant_ids):
-            raise InvalidRequestError(
-                f"fixtures[{i}].entrant_ids contains a blank id (fixture {f.fixture_id!r}). Every "
-                "blank entrant collides into ONE participant group, so unrelated fixtures acquire a "
-                "shared-player rest constraint they do not have."
-            )
+        for j, entrant in enumerate(f.entrant_ids):
+            # A blank entrant collides every such fixture into ONE participant
+            # group; a mis-spaced one lands in a group of its own, so the rest
+            # window between two of one player's matches is never stated.
+            _require_id(entrant, f"fixtures[{i}].entrant_ids[{j}]")
         if len(set(f.entrant_ids)) != len(f.entrant_ids):
             # Not cosmetic: a repeated entrant puts this fixture's index in its
             # own `by_entrant` group TWICE, and the per-entrant AddNoOverlap
@@ -207,19 +249,18 @@ def _validated_fixtures(proto_fixtures) -> list[tuple[str, list[str], str]]:
                 "own participant-rest group, so it becomes silently UNPLACEABLE and the board comes "
                 "back OPTIMAL without it."
             )
-        if not f.division_id:
-            raise InvalidRequestError(
-                f"fixtures[{i}].division_id must not be empty (fixture {f.fixture_id!r}). An unset "
-                "division matches no rest rule and no day cap, so both families evaporate. Measured "
-                "on one board with min_rest_minutes=240 and a cap of 1: division 'd1' places 1, "
-                "unset places 4, both OPTIMAL with `error` unset."
-            )
+        # Unset OR mis-spaced matches no rest rule and no day-cap key, so both
+        # families evaporate for this fixture. Measured with min_rest=240 and a
+        # cap of 1: 'd1' places 1, '' places 4, 'd1 ' escapes the cap — all
+        # OPTIMAL with `error` unset.
+        _require_id(f.division_id, f"fixtures[{i}].division_id")
         fixtures.append((f.fixture_id, list(f.entrant_ids), f.division_id))
     return fixtures
 
 
 def _validated_grid_slots(slots, known_courts: set[str]) -> list[tuple[str, int, int]]:
     for i, s in enumerate(slots):
+        _require_id(s.court, f"grid.slots[{i}].court")
         if s.court not in known_courts:
             raise InvalidRequestError(
                 f"grid.slots[{i}].court {s.court!r} is not one of `courts`. The model unions every "
@@ -267,11 +308,7 @@ def _validated_courts(proto_courts) -> list[str]:
         # and slipped the first version of this guard. Note this is about the
         # name being unusable to the CALLER — the reason a blank court gets
         # PLACED on is slotlessness, which `_validate_court_grids` owns.
-        if not court.strip():
-            raise InvalidRequestError(
-                f"courts[{i}] must not be blank, got {court!r}. A court nobody can name cannot be "
-                "rendered, and an assignment on it cannot be mapped back to anything."
-            )
+        _require_id(court, f"courts[{i}]")
         if court in seen:
             raise InvalidRequestError(
                 f"courts[{i}] {court!r} is a duplicate. A court names exactly one place to play."
@@ -359,11 +396,7 @@ def _validated_existing(
         # That reading is a modelling feature — drop it from the movable set,
         # or fix its start and court — and the boundary's job is to refuse a
         # request that means two things, not to choose one of them.
-        if not a.fixture_id:
-            raise InvalidRequestError(
-                f"existing[{i}].fixture_id must not be empty. A pinned row nobody can name appears "
-                "in the diagnostic for every constraint it participates in."
-            )
+        _require_id(a.fixture_id, f"existing[{i}].fixture_id")
         if a.fixture_id in movable_fixture_ids:
             raise InvalidRequestError(
                 f"existing[{i}].fixture_id {a.fixture_id!r} is also a movable fixture. A pinned row "
@@ -379,6 +412,7 @@ def _validated_existing(
             )
         seen.add(a.fixture_id)
 
+        _require_id(a.court, f"existing[{i}].court")
         if a.court not in known_courts:
             raise InvalidRequestError(
                 f"existing[{i}].court {a.court!r} is not one of `courts`. A pinned row is folded into "
@@ -399,6 +433,7 @@ def _validated_existing(
 def _validated_dependencies(pairs, fixture_ids: set[str]) -> list[tuple[str, str]]:
     for i, d in enumerate(pairs):
         for role, fixture_id in (("before", d.before_fixture_id), ("after", d.after_fixture_id)):
+            _require_id(fixture_id, f"dependencies[{i}].{role}_fixture_id")
             if fixture_id not in fixture_ids:
                 raise InvalidRequestError(
                     f"dependencies[{i}].{role}_fixture_id {fixture_id!r} names no fixture in "
@@ -422,6 +457,7 @@ def _rule_map(rules, field: str, value_of, declared_divisions: set[str]) -> dict
     """
     out: dict[str, int] = {}
     for i, rule in enumerate(rules):
+        _require_id(rule.division_id, f"constraints.{field}[{i}].division_id")
         if rule.division_id in out:
             raise InvalidRequestError(
                 f"constraints.{field}[{i}] is a second rule for division {rule.division_id!r}. "

@@ -923,3 +923,164 @@ def test_wall_exhausted_threshold_tracks_the_tier_loops_own_margin():
     boundary_ms = int((wall - MIN_TIER_SECONDS) * 1000)
     assert outcome_to_response(_outcome(elapsed_ms=boundary_ms - 1), wall).wall_exhausted is False
     assert outcome_to_response(_outcome(elapsed_ms=boundary_ms), wall).wall_exhausted is True
+
+
+# --- the closed set: every id-like string field in the contract -------------
+#
+# Rounds 2, 3 and 4 each closed the members they were SHOWN and left the family
+# open, so this section is built the other way round: enumerate the string
+# fields from the DESCRIPTOR, state one policy, and prove no field escapes it.
+#
+# Policy: an id-like string must be non-blank and already CANONICAL — equal to
+# its own `.strip()`. Rejected, never normalised. Normalising looks friendlier
+# and is a trap: `Assignment.fixture_id` round-trips, so silently stripping an
+# id on the way in returns a different string than the caller sent and breaks
+# the caller's own lookup — a new silent failure in place of the old one.
+
+
+def _maximal_request() -> scheduler_pb2.SolveBuildRequest:
+    """A VALID request that populates every string field in the contract.
+
+    Every perturbation below starts from this, so a rejection can only have
+    been caused by the one field that was changed.
+    """
+    return scheduler_pb2.SolveBuildRequest(
+        request_id="r1",
+        courts=["Court 1", "Court 2"],
+        grid=scheduler_pb2.Grid(
+            slots=[
+                scheduler_pb2.Slot(court=court, start_at_ms=SLOT_MS + k * 3_600_000, day_index=0)
+                for court in ("Court 1", "Court 2")
+                for k in range(2)
+            ],
+            step_minutes=10,
+        ),
+        fixtures=[
+            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1"),
+            scheduler_pb2.Fixture(fixture_id="f2", entrant_ids=["e3", "e4"], division_id="d1"),
+        ],
+        existing=[scheduler_pb2.Assignment(fixture_id="x1", court="Court 1", start_at_ms=SLOT_MS)],
+        dependencies=[scheduler_pb2.OrderPair(before_fixture_id="f1", after_fixture_id="f2")],
+        constraints=_constraints(
+            rest_by_division=[scheduler_pb2.DivisionRestRule(division_id="d1", min_rest_minutes=45)],
+            day_cap_by_division=[
+                scheduler_pb2.DivisionDayCapRule(division_id="d1", max_fixtures_per_day=2)
+            ],
+        ),
+        wall_seconds=8.0,
+    )
+
+
+def _space(obj, field):
+    setattr(obj, field, getattr(obj, field) + " ")
+
+
+def _space_at(repeated, index):
+    repeated[index] = repeated[index] + " "
+
+
+#: Keyed by `Message.field` exactly as the descriptor names it, so the
+#: completeness test below can compare this table against the proto itself.
+ID_FIELDS = {
+    "SolveBuildRequest.courts": lambda r: _space_at(r.courts, 0),
+    "Slot.court": lambda r: _space(r.grid.slots[0], "court"),
+    "Fixture.fixture_id": lambda r: _space(r.fixtures[0], "fixture_id"),
+    "Fixture.entrant_ids": lambda r: _space_at(r.fixtures[0].entrant_ids, 0),
+    "Fixture.division_id": lambda r: _space(r.fixtures[0], "division_id"),
+    "Assignment.fixture_id": lambda r: _space(r.existing[0], "fixture_id"),
+    "Assignment.court": lambda r: _space(r.existing[0], "court"),
+    "OrderPair.before_fixture_id": lambda r: _space(r.dependencies[0], "before_fixture_id"),
+    "OrderPair.after_fixture_id": lambda r: _space(r.dependencies[0], "after_fixture_id"),
+    "DivisionRestRule.division_id": lambda r: _space(
+        r.constraints.rest_by_division[0], "division_id"
+    ),
+    "DivisionDayCapRule.division_id": lambda r: _space(
+        r.constraints.day_cap_by_division[0], "division_id"
+    ),
+}
+
+#: Deliberately outside the policy, with the reason. Listed rather than omitted
+#: so the completeness test still has to account for the field.
+EXEMPT_STRING_FIELDS = {
+    # Opaque correlation token, not an id: it resolves against nothing, is
+    # compared with nothing, and reaches only a log line. Rejecting it would
+    # fail a request over a cosmetic detail of a value the service promises to
+    # treat as opaque.
+    "SolveBuildRequest.request_id": "opaque correlation token, appears only in logs",
+}
+
+
+def _contract_string_fields() -> set[str]:
+    """Every string field reachable from `SolveBuildRequest`, from the proto."""
+    from google.protobuf.descriptor import FieldDescriptor
+
+    found: set[str] = set()
+    seen: set[str] = set()
+
+    def walk(descriptor):
+        if descriptor.full_name in seen:
+            return
+        seen.add(descriptor.full_name)
+        for field in descriptor.fields:
+            if field.type == FieldDescriptor.TYPE_STRING:
+                found.add(f"{descriptor.name}.{field.name}")
+            elif field.type == FieldDescriptor.TYPE_MESSAGE:
+                walk(field.message_type)
+
+    walk(scheduler_pb2.SolveBuildRequest.DESCRIPTOR)
+    return found
+
+
+def test_the_id_policy_accounts_for_every_string_field_in_the_contract():
+    """The closed set, checked against the proto rather than against memory.
+
+    This is the assertion that makes the round finished, rather than the three
+    reported probes passing. Add a string field to `scheduler.proto` and this
+    fails until it is either routed through the id chokepoint or exempted with
+    a reason — which is the step rounds 2, 3 and 4 each skipped.
+    """
+    assert _contract_string_fields() == set(ID_FIELDS) | set(EXEMPT_STRING_FIELDS)
+
+    # A union alone is NOT a closed set, and the mutation sweep proved it:
+    # moving a field from ID_FIELDS to EXEMPT_STRING_FIELDS leaves the union
+    # identical, drops the field from the parametrized behaviour test, and was
+    # caught by nothing (survived 6/6). So the exemption list is pinned
+    # literally — growing it has to be a visible, argued edit, which is exactly
+    # the review step that rounds 2-4 each skipped.
+    assert set(EXEMPT_STRING_FIELDS) == {"SolveBuildRequest.request_id"}
+    # ...and belt-and-braces: a field cannot be in both, which is how the
+    # cheaper version of that same mutation would have hidden.
+    assert set(ID_FIELDS).isdisjoint(EXEMPT_STRING_FIELDS)
+
+
+@pytest.mark.parametrize("path", sorted(ID_FIELDS))
+def test_a_trailing_space_is_rejected_in_every_id_field(path):
+    """`"C0"` and `"C0 "` are one thing to a human and two to a dict key.
+
+    Measured before this policy, each against its own control:
+
+        courts=["C0","C0 "]  -> 2 placed at ONE instant on ONE court, OPTIMAL
+        division_id="d1 "    -> escapes its day cap, OPTIMAL
+        entrant "e1 "        -> escapes participant rest, OPTIMAL
+
+    all with `error` unset. Three were reported; the policy covers eleven, and
+    the completeness test above is what says eleven is all of them.
+    """
+    req = _maximal_request()
+    ID_FIELDS[path](req)
+    with pytest.raises(InvalidRequestError, match="whitespace"):
+        request_to_model_input(req)
+
+
+def test_the_maximal_request_is_valid_unperturbed():
+    """Otherwise every case above could be passing for the wrong reason."""
+    parsed = request_to_model_input(_maximal_request())
+    assert [fid for fid, _e, _d in parsed.fixtures] == ["f1", "f2"]
+    assert parsed.existing == [("x1", "Court 1", SLOT_MS)]
+
+
+def test_an_exempt_field_is_not_rejected_for_whitespace():
+    """The exemption has to be real, or the table is decorative."""
+    req = _maximal_request()
+    req.request_id = "r1 "
+    assert request_to_model_input(req).wall_seconds == 8.0

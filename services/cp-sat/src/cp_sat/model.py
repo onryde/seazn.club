@@ -59,6 +59,24 @@ This module is domain logic and deliberately imports NOTHING from
 `cp_sat.generated` — no proto types cross this boundary in either direction.
 `cp_sat.schema` (Prompt 04) owns the proto->plain-Python translation.
 
+--- THE BENCH HAS ITS OWN COPY OF THIS MODEL, AND IT HAS DRIFTED ------------
+
+`bench/cpsat_bench.py` defines its own `build_model` (:378, called at :658)
+and imports nothing from `cp_sat` at all. Prompt 02 extracted the board
+GENERATOR into `bench/cpsat_bench_boards.py` precisely so the bench and the
+service could not disagree about the board — but the MODEL was left
+duplicated, so they can still disagree about everything else.
+
+They already do. The `mk_hi >= mk_lo` clamp below (Task 05c) is in this copy
+and not in the bench's (:542-547), so on a board where nothing is placed the
+two report different makespans.
+
+The consequence to hold on to: **a bench measurement is evidence about the
+bench's model, not about this one.** Any timing or quality number quoted from
+`bench/` has to be re-taken here before it can be said about the service.
+Recorded rather than fixed: de-duplicating the model is Prompt 10's call, not
+a side-effect of a contract-hardening task.
+
 --- the two presolve knobs: keep them, but know what is and isn't proven -----
 
 `symmetry_level = 0` and `cp_model_probing_level = 0` in `solve()` are carried
@@ -465,11 +483,18 @@ def build_model(
     # a negative epoch-shaped number presented to the caller as a proved
     # optimum, on a response with `error` unset.
     #
-    # Stated here rather than clamped at the wire so the bench, the tier chain
-    # and the response all get the same answer, and so the freeze
-    # `Add(makespan <= achieved)` that T2 and T3 inherit is a real bound. It
-    # costs nothing on a non-empty board: `mk_lo <= min start` and
-    # `mk_hi >= max start + dur_ms` already force `mk_hi > mk_lo` there.
+    # Stated here rather than clamped at the wire for two reasons that are
+    # about this module: the freeze `Add(makespan <= achieved)` that T2 and T3
+    # inherit has to be a real bound, and `schema.py` should not need a special
+    # case for a value the term should never have produced. It costs nothing on
+    # a non-empty board: `mk_lo <= min start` and `mk_hi >= max start + dur_ms`
+    # already force `mk_hi > mk_lo` there.
+    #
+    # An earlier version of this comment also claimed it kept "the bench" in
+    # agreement. It does NOT, and the correction matters more than the
+    # sentence: `bench/cpsat_bench.py` has its own `build_model` (:378, called
+    # at :658) with its own unclamped `mk_lo`/`mk_hi` (:542-547) and imports
+    # nothing from `cp_sat`. See this module's docstring.
     model.Add(mk_hi >= mk_lo)
     makespan = mk_hi - mk_lo
 
