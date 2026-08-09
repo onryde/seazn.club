@@ -76,7 +76,14 @@ export function EntityCard({
 
   const body = (
     <div className={tile ? "min-w-0 flex-1" : undefined}>
-      <div className="flex items-start gap-2">
+      {/* #349: below `sm` this row can't hold name + status chip + menu on one
+          line for tile-media (division) cards — the 56px logo tile leaves too
+          little room, and the chip is `shrink-0` by design (status text must
+          never truncate). `flex-wrap` lets the chip/menu drop to their own
+          line at narrow widths; `sm:flex-nowrap` keeps every width ≥640px
+          pixel-identical to before (competition/banner cards already fit on
+          one line there and are unaffected either way). */}
+      <div className="flex flex-wrap items-start gap-2 sm:flex-nowrap">
         {!media && glyph && (
           <span aria-hidden className="mt-px shrink-0 text-base leading-5">
             {glyph}

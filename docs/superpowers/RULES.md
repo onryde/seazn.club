@@ -69,6 +69,13 @@ separately. Don't silently absorb scope.
 Every interface works on both desktop AND mobile — responsive layouts,
 touch-friendly targets, no desktop-only interactions.
 
+Screenshot-verify every UI change at desktop (1280), 320px, and 768px —
+no horizontal page scroll at any of them. Wide tables scroll inside their
+own `overflow-x-auto` container, never the page. The seven-width e2e
+matrix (`apps/web/e2e/mobile.spec.ts` viewport projects: 320/360/375/390/
+430/768/834) is the enforcement backstop. `/admin` stays functional-bar
+only.
+
 ## Pre-commit
 
 Before every commit: verify the OpenAPI spec hasn't drifted

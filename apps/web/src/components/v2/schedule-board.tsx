@@ -903,10 +903,13 @@ export function ScheduleBoard({
           stages
             .filter((s) => s.status !== "complete" && visibleIds.has(s.division_id))
             .map((s) => (
-              // `min-h-11 sm:min-h-0` on all three: `py-1.5 text-xs` renders a
-              // 28px control, well under the 44px touch target, and these are the
-              // primary actions of the surface. Mobile-only, so the desktop bar
-              // is pixel-identical to what shipped.
+              // `min-h-11` on all three: `py-1.5 text-xs` alone renders a 28px
+              // control, well under the 44px touch target. These are the
+              // primary actions of the surface, so the floor holds at every
+              // width — it was previously dropped via `sm:min-h-0`, which
+              // activates at >=640px with no counter-override past that
+              // point, so the 28px height applied at every width from
+              // tablet through desktop, not just tablet (#349).
               <span key={s.id} className="inline-flex items-center gap-1">
                 {/* #465: the two original actions carry a stable id like their
                     Polish sibling. Not tidiness — `board.autoSchedule` is
@@ -918,7 +921,7 @@ export function ScheduleBoard({
                   data-testid="schedule-auto"
                   disabled={actions.busy}
                   onClick={() => void actions.autoRun(s.id, false)}
-                  className="btn btn-primary min-h-11 px-3 py-1.5 text-xs sm:min-h-0"
+                  className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
                 >
                   {msg("board.autoSchedule", { name: stages.length > 1 ? s.name : "" })}
                 </button>
@@ -927,7 +930,7 @@ export function ScheduleBoard({
                   data-testid="schedule-reflow"
                   disabled={actions.busy}
                   onClick={() => void actions.autoRun(s.id, true)}
-                  className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs sm:min-h-0"
+                  className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
                   title={msg("board.reflowTitle")}
                 >
                   {msg("board.reflow")}
@@ -943,7 +946,7 @@ export function ScheduleBoard({
                   data-testid="schedule-polish"
                   disabled={actions.busy}
                   onClick={() => void actions.autoRun(s.id, true, "polish")}
-                  className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs sm:min-h-0"
+                  className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
                   title={msg("board.polishTitle")}
                 >
                   {msg("board.polish")}
@@ -953,10 +956,15 @@ export function ScheduleBoard({
         {/* Pin semantics live next to the buttons they modify (v3/03 §4). */}
         {canEdit && <Tip id="schedule.locking" />}
         {/* AI schedule architect (v4) — the console dock's entry point. Free
-            orgs still see it; the paywall lives inside the dock. */}
+            orgs still see it; the paywall lives inside the dock. `min-h-11`
+            here and on freeze/publish/start below (#349 review): these four
+            never carried the 44px floor their auto/reflow/polish siblings
+            got, so they rendered a 28px control at every width, unlike the
+            siblings' sm-only regression. */}
         {aiAvailable && (
           <button
             type="button"
+            data-testid="board-ai-schedule"
             onClick={() => {
               setAiRepairScope(null);
               setAiOpen(true);
@@ -964,7 +972,7 @@ export function ScheduleBoard({
             title={msg("board.ai.buttonTitle")}
             aria-haspopup="dialog"
             aria-expanded={aiOpen}
-            className="btn inline-flex items-center gap-1.5 border border-violet-200 bg-gradient-to-br from-violet-50 to-indigo-50 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:from-violet-100 hover:to-indigo-100"
+            className="btn min-h-11 inline-flex items-center gap-1.5 border border-violet-200 bg-gradient-to-br from-violet-50 to-indigo-50 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:from-violet-100 hover:to-indigo-100"
           >
             <span aria-hidden>✦</span>
             {msg("board.ai.button")}
@@ -976,66 +984,80 @@ export function ScheduleBoard({
           </button>
         )}
         <div className="flex-1" />
-        {/* Whole-division freeze (Jul3/03 §4), surfaced on the board itself —
-            single-division boards only; the competition board freezes per
-            division on each division's own page. */}
-        {canEdit && single && (
-          <button
-            type="button"
-            disabled={actions.busy}
-            onClick={() => void toggleFreeze()}
-            title={single.schedule_locked ? msg("board.freezeTitle.unfreeze") : msg("board.freezeTitle.freeze")}
-            className={`btn px-3 py-1.5 text-xs ${
-              single.schedule_locked
-                ? "border border-amber-300 bg-amber-50 text-amber-800"
-                : "btn-ghost"
-            }`}
-          >
-            {single.schedule_locked ? msg("board.frozenBtn") : msg("board.freezeBtn")}
-          </button>
-        )}
-        <ConflictsBadge
-          count={visibleConflicts.length}
-          open={panelOpen}
-          onToggle={() => setPanelOpen((o) => !o)}
-          checkFailed={actions.checkFailed}
-          checking={actions.checking}
-          onRetry={() => void actions.revalidate()}
-        />
-        {canEdit && single && single.status !== "active" && single.status !== "completed" && (
-          <>
+        {/* Lifecycle actions travel as one cluster (#349 Verdict D): at
+            tablet widths (md) the toolbar doesn't fit on one line, and the
+            flat list used to let "Freeze schedule" alone fit on row 1 —
+            stranded past the stretched flex-1 spacer above — while
+            Publish/Start wrapped to row 2. Nesting the group means the
+            outer flex-wrap treats it as a single box: it either stays on
+            row 1 in full (desktop, unchanged) or wraps to row 2 in full
+            (tablet), never split mid-cluster. At >=1024 this renders
+            byte-identical to the flat list: same gap-2 value inside and
+            out, same item order, nothing here changes the hypothetical
+            width of any child. */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Whole-division freeze (Jul3/03 §4), surfaced on the board itself —
+              single-division boards only; the competition board freezes per
+              division on each division's own page. */}
+          {canEdit && single && (
             <button
               type="button"
-              data-testid="board-publish-schedule"
+              data-testid="board-freeze"
               disabled={actions.busy}
-              onClick={() =>
-                void runGated(
-                  "publish",
-                  `/api/v1/divisions/${single.id}/publish-schedule`,
-                  msg("board.publishNotice"),
-                )
-              }
-              className="btn btn-ghost px-3 py-1.5 text-xs"
+              onClick={() => void toggleFreeze()}
+              title={single.schedule_locked ? msg("board.freezeTitle.unfreeze") : msg("board.freezeTitle.freeze")}
+              className={`btn min-h-11 px-3 py-1.5 text-xs ${
+                single.schedule_locked
+                  ? "border border-amber-300 bg-amber-50 text-amber-800"
+                  : "btn-ghost"
+              }`}
             >
-              {msg("board.publish")}
+              {single.schedule_locked ? msg("board.frozenBtn") : msg("board.freezeBtn")}
             </button>
-            <button
-              type="button"
-              data-testid="board-start-division"
-              disabled={actions.busy}
-              onClick={() =>
-                void runGated(
-                  "start",
-                  `/api/v1/divisions/${single.id}/start`,
-                  msg("board.startNotice"),
-                )
-              }
-              className="btn btn-primary px-3 py-1.5 text-xs"
-            >
-              {msg("board.start")}
-            </button>
-          </>
-        )}
+          )}
+          <ConflictsBadge
+            count={visibleConflicts.length}
+            open={panelOpen}
+            onToggle={() => setPanelOpen((o) => !o)}
+            checkFailed={actions.checkFailed}
+            checking={actions.checking}
+            onRetry={() => void actions.revalidate()}
+          />
+          {canEdit && single && single.status !== "active" && single.status !== "completed" && (
+            <>
+              <button
+                type="button"
+                data-testid="board-publish-schedule"
+                disabled={actions.busy}
+                onClick={() =>
+                  void runGated(
+                    "publish",
+                    `/api/v1/divisions/${single.id}/publish-schedule`,
+                    msg("board.publishNotice"),
+                  )
+                }
+                className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+              >
+                {msg("board.publish")}
+              </button>
+              <button
+                type="button"
+                data-testid="board-start-division"
+                disabled={actions.busy}
+                onClick={() =>
+                  void runGated(
+                    "start",
+                    `/api/v1/divisions/${single.id}/start`,
+                    msg("board.startNotice"),
+                  )
+                }
+                className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
+              >
+                {msg("board.start")}
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Legend doubles as the division filter (v3/04 §2) — URL-backed. */}
