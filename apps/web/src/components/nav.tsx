@@ -161,7 +161,15 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 contactSupport: t(dict, "help.contactSupport"),
               }}
             />
-            <span className="mx-1 hidden text-sm font-medium text-cream/85 sm:block">
+            {/* #349: at 640-1023px (labels visible, `lg:` grid not yet on)
+                the gantry's right-hand group (nav links + help + this name +
+                sign out) has no slack left — an unclamped display_name
+                forces the whole row past the viewport (measured: needs
+                ~775px of the ~768px tablet-768 has). `truncate` + a capped
+                width lets ANY name fit without wrapping/overflowing;
+                `lg:max-w-none` restores the untouched, unclamped desktop
+                rendering this always had at ≥1024px. */}
+            <span className="mx-1 hidden max-w-12 truncate text-sm font-medium text-cream/85 sm:block lg:max-w-none">
               {user.display_name}
             </span>
             <LogoutButton label={t(dict, "nav.signOut")} />
