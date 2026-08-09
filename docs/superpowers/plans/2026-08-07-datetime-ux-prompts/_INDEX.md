@@ -148,7 +148,12 @@ with `PUT /api/v1/divisions/{id}/schedule-settings` carrying
 `blackouts:[…]` (`ai-architect.spec.ts:1219`) — independent evidence
 from the e2e side that no new endpoint is needed.
 
-## Session state — 2026-08-09 (read this after a compaction)
+## Session state — 2026-08-09, FIRST HALF (SUPERSEDED — see the final section at the bottom of this file)
+
+The section immediately below was written mid-session, before the rebase and
+before Prompts 08b/09/10/11 landed. **Its commit SHAs are all pre-rebase and no
+longer resolve**, and it lists work as in-flight that is now done. Kept for its
+rulings and its reasoning, not for its status. Read the LAST section first.
 
 **Branch/worktree**: `worktree-datetime-ux` at
 `/Users/ashokhein/github/seazn.club/.claude/worktrees/datetime-ux`.
@@ -298,3 +303,157 @@ two layers do not overlap or contradict.
 
 Per the prompt's own Step 2 instruction ("if it still passes unmodified, leave
 the file alone"), the file is untouched.
+
+---
+
+# FINAL SESSION STATE — 2026-08-09 (READ THIS FIRST AFTER A COMPACTION)
+
+**The programme is COMPLETE. All ten prompts are done and committed.** What is
+left is release mechanics and a short list of deliberate non-goals, both below.
+
+## Where the work is
+
+Worktree `/Users/ashokhein/github/seazn.club/.claude/worktrees/datetime-ux`,
+branch `worktree-datetime-ux`, **29 commits, rebased onto `origin/main`
+(`ece80fc8`), 0 behind**. Nothing pushed. No PR. Tree clean.
+
+Always prefix `cd <that abs path> &&` in the SAME call as any command you judge
+— the shell cwd resets to the main checkout between tool calls, and it bit this
+session twice (a `git add` ran from `packages/engine` and failed with
+"pathspec did not match"; a `git status` reported the MAIN checkout's dirty
+`.claude/agents/*.md` as if it were the worktree's).
+
+Prompt→commit map is the **Status** table near the top of this file. Every SHA
+there is post-rebase; anything quoted in a commit message body is pre-rebase and
+will not resolve.
+
+## Gates, as measured by the orchestrator (not agent-reported)
+
+| Gate | Result |
+|---|---|
+| `packages/engine` `vitest run --coverage` | **3005 / 3006**, 0 failed, 1 pending, 128 files, exit 0 — coverage thresholds held |
+| `apps/web` full suite, pre-fix | 6139 / 6202, 10 failed (one file, since fixed) |
+| `apps/web` the two fixed suites | **31 / 31** |
+| `apps/web` full re-run, post-P09 | **STILL IN FLIGHT at compaction — re-run it, this is the one number missing** |
+| `tsc --noEmit` both workspaces | exit 0, clean |
+| eslint | web 0 errors / 79 warnings, engine clean; **no warning in any file this branch touches** |
+| Drift gates | `openapi:gen`, `i18n:gen-keys`, `schema:snapshot` → `git status --porcelain` empty |
+| e2e (P09, agent-run) | 5/5 in the `parallel` project; serial + mobile phases NOT run |
+
+**The one outstanding verification** is the post-P09 full `apps/web` run. Command:
+```
+cd <worktree>/apps/web && DATABASE_URL=postgresql://postgres@127.0.0.1:54373/seazn_test \
+  DATABASE_SSL=disable npx vitest run --maxWorkers=3 --reporter=json --outputFile=<out>.json
+```
+
+## Environment facts that cost real time this session
+
+- **Throwaway Postgres on `:54373`** (`postgresql://postgres@127.0.0.1:54373/seazn_test`,
+  `DATABASE_SSL=disable`), migrated + `sync:sports`. `data_directory` verified
+  ours. It may still be up — check `pg_ctl -D <scratch>/pg54373 status`. **The
+  dev DB on :5432 cannot run `schedule.test.ts`** (missing
+  `division_has_results(uuid)`, 9 reds that mimic a branch regression), and is
+  off-limits anyway.
+- **The engine suite hangs, it does not merely run slow.** Its own
+  `vitest.config.ts` documents 46–57 s. A run sat at 23 minutes; `ps -M` showed
+  the process idle with its workers gone and the log's only line was
+  `received "cleanupThread" command from terminated worker: 1`. The cap is
+  computed from `totalmem()` (16 GB → 5 workers), **not available memory**, so
+  with other sessions running plus coverage instrumentation it overcommits.
+  **Run it with `--maxWorkers=2`** — green in ~2 min.
+- The harness reported that killed run as **"exit code 0"**. The script's own
+  `echo "ENGINE_EXIT=$?"` caught the real `143`. Always have the command write
+  its own exit code.
+- **Ports 3000 and 3100 were both squatted** by other sessions. P09 used 3200
+  with `PLAYWRIGHT_BASE=http://localhost:3200`. Use `localhost`, never
+  `127.0.0.1` — the session cookie is `Secure` and 127.0.0.1 401s every API
+  call while the browser still looks signed in.
+- Magic-link is rate-limited **5 per 5 min per IP, fail-closed**; `auth.setup`
+  spends 2.
+
+## Screenshots — the programme's screenshot debt is CLEARED
+
+10 PNGs, 5 surfaces × {1280, 375}, at
+`<session scratchpad>/p09-screenshots/`. **Scratchpad is ephemeral** — if these
+need to outlive the session, copy them somewhere durable. Orchestrator-verified
+three of them: the blackout editor showing a valid AND a refused row with save
+disabled; board settings showing `labelHidden` working (legend names the pair,
+no duplicated From/To rows, shared baseline); the board on a 5-minute grid.
+
+## Deliberate non-goals and known-unfixed — do NOT "discover" these as bugs
+
+- **`move-panel.tsx` still resolves fixture reschedule through the BROWSER
+  zone** — same bug class P11 fixed, outside its three-field scope.
+  `stages-panel.tsx` and `registration-settings.tsx` keep private
+  `toLocalInput` copies. Handed back by P11, not done.
+- `apps/web/src/app/o/[orgSlug]/c/[compSlug]/schedule/page.tsx` (the
+  competition-level board) took the same `resolveVenueTz(null,
+  page.org.timezone)` line but has **no page-level test suite at all**.
+- **`putScheduleSettings` takes no `pg_advisory_xact_lock`** — pre-existing on a
+  hot endpoint, not introduced here.
+- **API `HttpError` messages are plain English and are rendered raw to the user**
+  (`settings-panel.tsx:65` does `setError(err.message)`). This violates the
+  4-locale rule, but it is the convention of every `HttpError` in `usecases/`
+  — blast radius is hundreds of strings across ~40 files. Flagged, not fixed.
+- e2e **serial and mobile phases never ran** (`test:e2e` is three chained runs;
+  P09 ran the `parallel` project only).
+- The 79 eslint warnings in `apps/web` are all in untouched files.
+
+## Housekeeping owed at session end
+
+`.claude/agents/{implementer,reviewer,scout}.md` are **tracked files left dirty
+in the MAIN checkout** (set to `model: sonnet`, `effort: max` per the owner's
+instruction for this session). Revert them unless the owner wants that kept.
+
+## Process that worked, and should continue
+
+Every prompt ran as an implementer subagent with a self-contained brief that
+restated the false premises found so far; every agent proved its test
+non-vacuous by MUTATION (revert the production line, confirm the red returns
+AND `numTotalTests` holds, confirm the file restored); the orchestrator re-ran
+the gate itself at each boundary rather than trusting a summary.
+
+That last rule earned its keep twice this session: the post-rebase full suite
+caught 10 failures a scoped agent gate could not see, and P09 disproved a claim
+this very file had asserted as general.
+
+## Owner-raised 2026-08-09, NOT actioned: minimum rest appears in TWO tabs
+
+The owner spotted from the P09 screenshots that "minimum rest" is editable in
+both the Settings tab and the Constraints tab. Investigated; recording the
+answer so nobody re-derives it, and so nobody "fixes" it by deleting a field.
+
+**Two fields, deliberately, and they are NOT duplicates:**
+
+| Tab | Field | Framing (`calendar.ts:89-101`) |
+|---|---|---|
+| Settings | `config.perEntrantMinRest` | "the shape of the day" |
+| Constraints | `config.constraints.restMin` | "a rule about entrants" |
+
+Both live in the SAME `PUT /divisions/{id}/schedule-settings` payload
+(`schemas.ts:738` and `:753`).
+
+**The engine already reconciles them and the old fork is CLOSED.**
+`effectiveRestMinutes` (`calendar.ts:102-117`) returns the strictest of
+`perEntrantMinRest`, `constraints.restMin`, `restByGroup` and `noBackToBack` —
+**MAX, not precedence** (#459, owner ruling 2026-08-04). It is exported
+specifically so the placer and the verifier answer identically; its own comment
+records that they used to disagree, which is the recurring bug class in this
+area. **Do not "simplify" this to one field or to `??`** — `0 ?? x` is `0`, and
+that erased a division rule rather than adding nothing.
+
+**What IS wrong is the UI, and it is unfixed:**
+- Both controls render the same hint ("Breathing room between one entrant's
+  matches"), so they read as the same setting duplicated.
+- Neither states that the effective floor is the MAX of the two, and neither
+  shows the other's current value. Set Settings=30 and Constraints=10 and the
+  organiser gets 30, with nothing on screen explaining why the 10 did nothing.
+- A fix should surface the effective floor (and which field is winning) rather
+  than remove either control — the two framings are intentional.
+
+**Also found, pre-existing, NOT this programme's doing:** the constraints
+panel's rule rows are **hardcoded English**, not `msg()` calls — "Minimum rest",
+"Breathing room between one entrant's matches.", "At least one break between a
+team's matches", "No entrant plays two rounds running.", "Enforced across every
+division…". Verified present on `origin/main`. This violates the 4-locale rule
+and is a separate piece of work from the duplication above.
