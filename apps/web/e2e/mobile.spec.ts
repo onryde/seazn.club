@@ -497,10 +497,20 @@ test("z3 schedule actions + result strip hold at phone width", async ({ page, re
   const auto = page.getByTestId("schedule-auto");
   const reflow = page.getByTestId("schedule-reflow");
   const polish = page.getByTestId("schedule-polish");
+  // The toolbar's other four controls (#349 review): freeze/publish/start/AI
+  // never got the min-h-11 floor their three auto/reflow/polish siblings did.
+  const freeze = page.getByTestId("board-freeze");
+  const publish = page.getByTestId("board-publish-schedule");
+  const start = page.getByTestId("board-start-division");
+  const aiSchedule = page.getByTestId("board-ai-schedule");
   for (const [name, button] of [
     ["schedule-auto", auto],
     ["schedule-reflow", reflow],
     ["schedule-polish", polish],
+    ["board-freeze", freeze],
+    ["board-publish-schedule", publish],
+    ["board-start-division", start],
+    ["board-ai-schedule", aiSchedule],
   ] as const) {
     await expect(button, `${name} is not visible at this width`).toBeVisible({ timeout: 30_000 });
     const box = await button.boundingBox();

@@ -956,10 +956,15 @@ export function ScheduleBoard({
         {/* Pin semantics live next to the buttons they modify (v3/03 §4). */}
         {canEdit && <Tip id="schedule.locking" />}
         {/* AI schedule architect (v4) — the console dock's entry point. Free
-            orgs still see it; the paywall lives inside the dock. */}
+            orgs still see it; the paywall lives inside the dock. `min-h-11`
+            here and on freeze/publish/start below (#349 review): these four
+            never carried the 44px floor their auto/reflow/polish siblings
+            got, so they rendered a 28px control at every width, unlike the
+            siblings' sm-only regression. */}
         {aiAvailable && (
           <button
             type="button"
+            data-testid="board-ai-schedule"
             onClick={() => {
               setAiRepairScope(null);
               setAiOpen(true);
@@ -967,7 +972,7 @@ export function ScheduleBoard({
             title={msg("board.ai.buttonTitle")}
             aria-haspopup="dialog"
             aria-expanded={aiOpen}
-            className="btn inline-flex items-center gap-1.5 border border-violet-200 bg-gradient-to-br from-violet-50 to-indigo-50 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:from-violet-100 hover:to-indigo-100"
+            className="btn min-h-11 inline-flex items-center gap-1.5 border border-violet-200 bg-gradient-to-br from-violet-50 to-indigo-50 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:from-violet-100 hover:to-indigo-100"
           >
             <span aria-hidden>✦</span>
             {msg("board.ai.button")}
@@ -997,10 +1002,11 @@ export function ScheduleBoard({
           {canEdit && single && (
             <button
               type="button"
+              data-testid="board-freeze"
               disabled={actions.busy}
               onClick={() => void toggleFreeze()}
               title={single.schedule_locked ? msg("board.freezeTitle.unfreeze") : msg("board.freezeTitle.freeze")}
-              className={`btn px-3 py-1.5 text-xs ${
+              className={`btn min-h-11 px-3 py-1.5 text-xs ${
                 single.schedule_locked
                   ? "border border-amber-300 bg-amber-50 text-amber-800"
                   : "btn-ghost"
@@ -1030,7 +1036,7 @@ export function ScheduleBoard({
                     msg("board.publishNotice"),
                   )
                 }
-                className="btn btn-ghost px-3 py-1.5 text-xs"
+                className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
               >
                 {msg("board.publish")}
               </button>
@@ -1045,7 +1051,7 @@ export function ScheduleBoard({
                     msg("board.startNotice"),
                   )
                 }
-                className="btn btn-primary px-3 py-1.5 text-xs"
+                className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
               >
                 {msg("board.start")}
               </button>
