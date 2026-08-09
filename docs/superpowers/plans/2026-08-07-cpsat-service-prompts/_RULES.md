@@ -189,6 +189,71 @@ the wrong file. The gRPC handler's only jobs: authenticate, translate in
 A test that reaches across two layers to set up one assertion is a
 smell: the seam it crosses is probably in the wrong place.
 
+## 6b. Mutation testing — the method, and the two ways it lies
+
+Every claim of the form "this test guards X" in this programme is proven
+by breaking X and watching the test go red. That is the only evidence
+that counts here, because the re-audit found that most of this suite's
+tests could not fail at all.
+
+Two failure modes have both bitten, and both produce a **false SURVIVED**:
+
+**1. A shared worktree.** Other agents work here. An auditor read a guard
+as GREEN twice because a sibling had `objective.py` dirty at that moment;
+against a clean tree it died 3/3. So mutate in your own mirror
+(`git archive HEAD` into scratchpad), not in the worktree.
+
+**2. But a mirror of an editable-installed package is INERT.** The venv's
+`.pth` resolves `cp_sat` back to the **worktree**, so a mutation applied
+in the mirror changes nothing the interpreter imports. Set `PYTHONPATH`,
+and then **prove the mirror is live before trusting any result**: apply a
+mutation that must fail loudly — a syntax error, or an always-raising
+assert — and confirm you see it. If the suite stays green, the mirror is
+inert and every conclusion from that run is void.
+
+Note the asymmetry, because it bounds how much you have to redo: an inert
+mirror yields **false SURVIVED, never false RED**. A "this test kills that
+mutant" result stays trustworthy. Only "that mutant survived" needs the
+liveness proof.
+
+**3. And the one that actually bit hardest: n=1 against a
+nondeterministic solver.** CP-SAT does not return the same board twice, so
+a mutation result is a *sample*, not an observation. Measured at N=6 per
+cell:
+
+| mutant | 8 s wall | 3 s wall |
+|---|---|---|
+| M2 participant-rest | RED 5/6 | RED 6/6 |
+| M7 court gap | RED **1/6** | RED 6/6 |
+
+At n=1 this programme drew the 1-in-6 M7 kill *and* the 1-in-6 M2 miss —
+two unlucky samples that together told a tidy, plausible, **wrong** story
+("short walls destroy coverage because T1's packing pressure is what makes
+a missing constraint visible"). It was endorsed at controller level and
+written into three docstrings as measured fact. The truth is the inverse:
+both die more reliably at the shorter wall. Load was not the discriminator
+either — M7's single kill came at load 11.07, inside the 9.57–12.27 band
+of its five misses.
+
+So: **N≥6 per cell, and report the spread rather than a verdict.**
+"RED 5/6" is a result; "RED" is not.
+
+**Better still, remove the nondeterminism instead of averaging over it.**
+The fix here was two *contended* boards that decide a T0-proved **count**
+in ~0.55 s, independent of wall, tiers and day cap — killing M1/M2/M3/M7
+at 6/6 with unmutated 0/3. A small deterministic board beats a large
+stochastic one every time.
+
+Two further traps, both measured here: a mutant whose value **collides
+with an existing fixture value** under-reports (a hardcoded `8` killed
+only 2 tests because another test already used 8); and a mutant that dies
+only because it is **slower** is not a real kill (T3's old mutants were
+green at 22 s and red at 44 s — same mutation).
+
+**Corollary for wall budgets in this suite: the 8 s walls carry NO
+coverage claim.** They are a legitimate place to reclaim runtime, provided
+the M1–M8 matrix is re-run at N≥6 afterwards.
+
 ## 7. Enforcement
 
 Every task reviewer in this programme receives §2's table and check
