@@ -20,7 +20,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
-import { ConstraintsPanel, draftsToBlackouts, toBlackoutDrafts } from "../constraints-panel";
+import {
+  blackoutRowError,
+  ConstraintsPanel,
+  draftsToBlackouts,
+  toBlackoutDrafts,
+} from "../constraints-panel";
 import { SettingsPanel, StandaloneScheduleSettings } from "@/components/v2/board/settings-panel";
 import { toLocalInput } from "@/lib/schedule-board";
 import { zonedDateInput, zonedDateTimeInput } from "@/lib/zoned-datetime";
@@ -147,17 +152,46 @@ describe("blackout windows resolve on the venue clock", () => {
     expect(draftsToBlackouts(toBlackoutDrafts(stored, ORG_TZ), ORG_TZ)).toEqual(stored);
   });
 
-  it("orders from/to by the instants they name, not by the strings typed", () => {
-    // Both halves resolve in the same zone, so a plain string compare agrees
-    // almost everywhere — except inside a fall-back hour, where the same wall
-    // clock happens twice. Ordering the resolved instants is what makes the
-    // refusal mean the same thing on every day of the year.
+  it("refuses a plainly inverted range", () => {
     const island = renderIsland(ConstraintsPanel, panelProps({
       blackouts: [{ from: VENUE_ONE_PM_ISO, to: VENUE_NOON_ISO }],
     }));
     expect(island.text()).toContain(label("constraints.blackout.errorOrder"));
     const save = byText(island.tree(), "button", label("constraints.blackout.save"));
     expect(save === undefined || propsOf(save).disabled === true).toBe(true);
+  });
+
+  it("orders from/to by the instants they name on the VENUE clock", () => {
+    // The case that separates "compare the two strings" from "compare the two
+    // instants", and it needs the spring-forward gap to exist at all.
+    //
+    // Auckland skips 02:00–02:59 on 27 Sep 2026. Typing 02:30 there names a
+    // time that does not happen, and it resolves FORWARD past the transition to
+    // 03:30 NZDT — later than the 03:00 the organiser typed as the END. On the
+    // venue clock the window is inverted and must be refused. Read in a zone
+    // with no transition that day (London) the same two strings are an ordinary
+    // 30-minute window and would be stored happily.
+    const GAP_FROM = "2026-09-27T02:30";
+    const GAP_TO = "2026-09-27T03:00";
+
+    // The premise, stated directly: the verdict is zone-dependent, so this
+    // cannot pass against an implementation that ignores the zone it is given.
+    expect(blackoutRowError({ court: "", from: GAP_FROM, to: GAP_TO }, ORG_TZ)).toBe("order");
+    expect(blackoutRowError({ court: "", from: GAP_FROM, to: GAP_TO }, "Europe/London")).toBeNull();
+
+    // And through the form the organiser actually types into.
+    const island = renderIsland(ConstraintsPanel, panelProps());
+    (propsOf(byText(island.tree(), "button", label("constraints.blackout.add"))!).onClick as () => void)();
+    const type = (name: string, value: string) =>
+      (propsOf(fieldNamed(island.tree(), label(name as keyof typeof enUi))[0]!).onChange as (v: string) => void)(
+        value,
+      );
+    type("constraints.blackout.from", GAP_FROM);
+    type("constraints.blackout.to", GAP_TO);
+    expect(island.text()).toContain(label("constraints.blackout.errorOrder"));
+    expect(
+      propsOf(byText(island.tree(), "button", label("constraints.blackout.save"))!).disabled,
+    ).toBe(true);
   });
 });
 
