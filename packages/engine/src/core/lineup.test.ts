@@ -250,6 +250,37 @@ describe("reduceLineupEvent — substitution", () => {
     );
     expect(r.ok === false && r.reason).toBe("not-a-player");
   });
+
+  it("refuses to substitute a coach OFF, not only to bring one on (ruling 3)", () => {
+    // The mirror of the test above. Both directions matter: `role` is only an
+    // enforced rule if it is checked on the way off as well as on the way on,
+    // and a coach who could be substituted off would acquire `timesOff` — a
+    // playing-record fact — which is exactly what ruling 3 forbids.
+    const r = reduceLineupEvent(
+      initSquads(lineups),
+      substitution("H", "h-coach", { personId: "h-sub-mf", slot: "starting", orderNo: 5 }),
+      policy(),
+    );
+    expect(r.ok === false && r.reason).toBe("not-a-player");
+  });
+
+  it("refuses to GROW the squad with a non-player, even where growth is allowed", () => {
+    // Growth and role are independent gates. A variant that permits a
+    // mid-fixture addition must not thereby permit adding a coach to the field:
+    // the addition path builds its own member and would otherwise bypass the
+    // role check that the substitute path applies to team-sheet members.
+    const r = reduceLineupEvent(
+      initSquads(lineups),
+      substitution("H", "h-fw", {
+        personId: "h-new-coach",
+        slot: "bench",
+        orderNo: 24,
+        role: "coach",
+      }),
+      policy({ allowSquadGrowth: true }),
+    );
+    expect(r.ok === false && r.reason).toBe("not-a-player");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -446,6 +477,22 @@ describe("reduceLineupEvent — position, retirement, entry", () => {
   it("refuses a position change for someone off the field", () => {
     const r = reduceLineupEvent(initSquads(lineups), positionChange("H", "h-sub-mf", "GK"), policy());
     expect(r.ok === false && r.reason).toBe("not-on-field");
+  });
+
+  it("refuses a position change for a person who is not in the squad at all", () => {
+    // Distinct from the branch above: `not-on-field` says "known, benched",
+    // `unknown-person` says "never named". Collapsing them would let a typo in
+    // a personId read as a benched player and refuse for the wrong reason.
+    const r = reduceLineupEvent(initSquads(lineups), positionChange("H", "h-ghost", "GK"), policy());
+    expect(r.ok === false && r.reason).toBe("unknown-person");
+  });
+
+  it("refuses to move a coach into a position (ruling 3)", () => {
+    // A coach is on the team sheet and has no `onField` of their own, so the
+    // role check must come BEFORE the on-field check or this refuses as
+    // `not-on-field` and the ruling reads as an accident of ordering.
+    const r = reduceLineupEvent(initSquads(lineups), positionChange("H", "h-coach", "GK"), policy());
+    expect(r.ok === false && r.reason).toBe("not-a-player");
   });
 
   it("takes a retiring player off with nobody coming on", () => {
