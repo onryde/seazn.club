@@ -136,7 +136,7 @@ describe("cricket.lineupPolicy — declared per variant, never a module constant
 
 describe("concussion replacement — the deferred row", () => {
   it("admits a person the team sheet never named, marked `added`", () => {
-    const squads = foldSquads(t20, stream(concussion("H-3", "H-12", 12)));
+    const squads = foldSquads(t20, stream(concussion("H-3", "H-12", 3)));
     const replacement = memberOf(squads.home, "H-12");
     expect(replacement?.provenance).toBe("added");
     expect(replacement?.onField).toBe(true);
@@ -148,18 +148,18 @@ describe("concussion replacement — the deferred row", () => {
   });
 
   it("charges the exemption, not the substitution cap", () => {
-    const squads = foldSquads(t20, stream(concussion("H-3", "H-12", 12)));
+    const squads = foldSquads(t20, stream(concussion("H-3", "H-12", 3)));
     expect(squads.home.exemptUsed).toEqual({ concussion: 1 });
     expect(squads.home.subsUsed).toBe(0);
   });
 
   it("bounds the exemption at the configured allowance", () => {
-    const events = stream(concussion("H-3", "H-12", 12), concussion("H-4", "H-13", 13));
+    const events = stream(concussion("H-3", "H-12", 3), concussion("H-4", "H-13", 4));
     expect(refusalOf(t20, events)).toBe("exemption-cap-reached");
   });
 
   it("refuses it in a variant that does not declare it", () => {
-    expect(refusalOf(parse(cricket.variants.hundred), stream(concussion("H-3", "H-12", 12)))).toBe(
+    expect(refusalOf(parse(cricket.variants.hundred), stream(concussion("H-3", "H-12", 3)))).toBe(
       "exemption-not-declared",
     );
   });
@@ -189,7 +189,7 @@ describe("the substitution cap and the concussion exemption disagree", () => {
     expect(refusalOf(t20, stream(substitution("H-3", "H-b1", 12)), benched)).toBe(
       "sub-cap-reached",
     );
-    const squads = foldSquads(t20, stream(concussion("H-3", "H-12", 12)), benched);
+    const squads = foldSquads(t20, stream(concussion("H-3", "H-12", 3)), benched);
     expect(squads.home.exemptUsed).toEqual({ concussion: 1 });
   });
 
@@ -210,11 +210,11 @@ describe("the substitution cap and the concussion exemption disagree", () => {
     const exempt = stream(
       substitution("H-3", "H-b1", 12),
       substitution("H-4", "H-b2", 13),
-      concussion("H-5", "H-12", 14),
+      concussion("H-5", "H-12", 5),
     );
     // The refused ordinary substitution is dropped from the stream, not the
     // exempt one that follows it.
-    const accepted = stream(substitution("H-3", "H-b1", 12), concussion("H-5", "H-12", 14));
+    const accepted = stream(substitution("H-3", "H-b1", 12), concussion("H-5", "H-12", 5));
     expect(refusalOf(cfg, exempt, benched)).toBe("sub-cap-reached");
     expect(refusalOf(cfg, accepted, benched)).toBeNull();
     const squads = foldSquads(cfg, accepted, benched);
@@ -280,7 +280,7 @@ const entry = (personId: string, orderNo: number) =>
 
 describe("re-entry — the field axis (ruling 2)", () => {
   it("refuses the concussion-replaced player the field again: ICC permanence", () => {
-    const events = stream(concussion("H-3", "H-12", 12), entry("H-3", 3));
+    const events = stream(concussion("H-3", "H-12", 3), entry("H-3", 3));
     expect(cricket.lineupPolicy?.(t20).reentry).toBe("none");
     expect(refusalOf(t20, events)).toBe("reentry-forbidden");
   });
@@ -290,7 +290,7 @@ describe("re-entry — the field axis (ruling 2)", () => {
       ...cricket.variants.t20,
       lineupChanges: { concussionReplacements: 1, reentry: "unlimited" },
     });
-    const events = stream(concussion("H-3", "H-12", 12), entry("H-3", 3));
+    const events = stream(concussion("H-3", "H-12", 3), entry("H-3", 3));
     expect(refusalOf(cfg, events)).toBeNull();
     const squads = foldSquads(cfg, events);
     expect(memberOf(squads.home, "H-3")?.onField).toBe(true);
@@ -299,7 +299,7 @@ describe("re-entry — the field axis (ruling 2)", () => {
 
   it("`once` bounds it at one return, `unlimited` does not", () => {
     const twice = stream(
-      concussion("H-3", "H-12", 12),
+      concussion("H-3", "H-12", 3),
       entry("H-3", 3),
       ["core.lineup.retirement", { side: "H", personId: "H-3" }],
       entry("H-3", 3),
@@ -342,7 +342,7 @@ describe("re-entry — the CREASE axis is a different axis", () => {
   });
 
   it("…while the concussion-replaced player is refused the field under the same cfg", () => {
-    expect(refusalOf(t20, stream(concussion("H-3", "H-12", 12), entry("H-3", 3)))).toBe(
+    expect(refusalOf(t20, stream(concussion("H-3", "H-12", 3), entry("H-3", 3)))).toBe(
       "reentry-forbidden",
     );
   });
@@ -369,7 +369,7 @@ describe("a retirement and a replacement never collapse into one another", () =>
   });
 
   it("a replacement moves the squad and leaves the crease alone", () => {
-    const events = stream(...live, concussion("H-1", "H-12", 12));
+    const events = stream(...live, concussion("H-1", "H-12", 1));
     const after = crease(t20, events);
     // H-1 is still the striker: a concussion replacement does not walk to the
     // wicket in the replaced batter's place. The scorer records BOTH acts —
@@ -388,7 +388,7 @@ describe("a retirement and a replacement never collapse into one another", () =>
     const events = stream(
       ...live,
       ["cricket.retire", { person: "H-1", reason: "hurt" }],
-      concussion("H-1", "H-12", 12),
+      concussion("H-1", "H-12", 1),
     );
     const after = crease(t20, events);
     const squads = foldSquads(t20, events);
@@ -400,5 +400,100 @@ describe("a retirement and a replacement never collapse into one another", () =>
     expect(squads.home.subsUsed).toBe(0);
     // And the innings took no wicket for either act (`reason: "hurt"`).
     expect(foldMatch(cricket, t20, lineups, events, STRICT_ALL).innings[0]?.wickets).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. The batting order survives a growing squad
+// ---------------------------------------------------------------------------
+
+const XI = Array.from({ length: SIDE }, (_, i) => `H-${i + 1}`);
+
+describe("state.orders — APPEND-ONLY, because it is also a cursor", () => {
+  // `fine.nextBatterIndex` is an INDEX INTO THIS ARRAY. Inserting a replacement
+  // at the position of the player he replaced would silently re-point the
+  // cursor at a different batter, and every later "who walks in next" would be
+  // wrong with nothing in the totals to show it. Appending is also the correct
+  // domain answer: Law 25.1 leaves the order after the openers to the captain,
+  // and a replacement is named explicitly through `incoming` when he bats.
+  const live = [["core.start"], ball(0, "H-1", "H-2")] as Array<[string, unknown?]>;
+
+  it("leaves the order untouched when no lineup event is folded", () => {
+    expect(crease(t20, stream(...live)).orders.home).toEqual(XI);
+  });
+
+  it("appends the replacement, preserving every existing index", () => {
+    const after = crease(t20, stream(...live, concussion("H-1", "H-12", 1)));
+    expect(after.orders.home).toEqual([...XI, "H-12"]);
+    expect(after.orders.away).toEqual(Array.from({ length: SIDE }, (_, i) => `A-${i + 1}`));
+  });
+
+  it("keeps the replaced player in the order — his scorecard line is already there", () => {
+    const after = crease(t20, stream(...live, concussion("H-1", "H-12", 1)));
+    expect(after.orders.home).toContain("H-1");
+    expect(after.orders.home.indexOf("H-1")).toBe(0);
+  });
+
+  it("does not move the next-batter cursor: the replacement is not next in", () => {
+    // TWO wickets, and the replacement's declared orderNo (4) sits BETWEEN
+    // them. One wicket cannot tell the two implementations apart — the cursor
+    // skips the batter at the crease and lands on the same person either way.
+    // The second wicket is where an insert-by-orderNo order diverges: it would
+    // send H-12 in at the fall of the second wicket instead of H-4.
+    const fall = [
+      ball(1, "H-1", "H-2", bowled("H-1", undefined)),
+      ball(2, "H-3", "H-2", bowled("H-3", undefined)),
+    ] as Array<[string, unknown?]>;
+    const withReplacement = stream(...live, concussion("H-4", "H-12", 4), ...fall);
+    const without = stream(...live, ...fall);
+    expect(crease(t20, withReplacement).striker).toBe("H-4");
+    // Byte-for-byte the same answer as the fixture that folded no lineup event.
+    expect(crease(t20, without).striker).toBe("H-4");
+    expect(crease(t20, withReplacement).orders.home).toEqual([...XI, "H-12"]);
+  });
+
+  it("lets the replacement bat when the captain names him — the point of the row", () => {
+    const events = stream(
+      ...live,
+      concussion("H-1", "H-12", 1),
+      ball(1, "H-1", "H-2", bowled("H-1", "H-12")),
+    );
+    expect(crease(t20, events).striker).toBe("H-12");
+  });
+
+  it("appends a bench player who takes the field by ordinary substitution", () => {
+    const cfg = parse({ ...cricket.variants.t20, lineupChanges: { maxSubs: 1 } });
+    const after = crease(cfg, stream(...live, substitution("H-1", "H-b1", 12)), benched);
+    expect(after.orders.home).toEqual([...XI, "H-b1"]);
+  });
+
+  it("does NOT put an unused bench player in the batting order", () => {
+    // The bench is not the batting order — `orderFromLineup` never included it
+    // and adopting the squad model must not change that.
+    expect(crease(t20, stream(...live), benched).orders.home).toEqual(XI);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. Persisting the kernel snapshot — and staying invisible until it says
+//    something the team sheet does not
+// ---------------------------------------------------------------------------
+
+describe("onLineup — cricket persists the kernel's SquadState, never its own", () => {
+  it("carries NO squads key through a fixture with no lineup event", () => {
+    // The frozen corpus compares JSON.stringify(state) after every event, so a
+    // key present from `init` would red all eleven cricket streams at once.
+    const state = foldMatch(cricket, t20, lineups, stream(["core.start"], ball(0, "H-1", "H-2")));
+    expect(Object.hasOwn(state, "squads")).toBe(false);
+    expect(JSON.parse(JSON.stringify(state))).not.toHaveProperty("squads");
+  });
+
+  it("persists the snapshot once a replacement is folded", () => {
+    const events = stream(["core.start"], ball(0, "H-1", "H-2"), concussion("H-1", "H-12", 1));
+    const state = foldMatch(cricket, t20, lineups, events, STRICT_ALL);
+    // The SAME object the kernel returns — one model, not a cricket-shaped copy.
+    expect(state.squads).toEqual(foldSquads(t20, events));
+    expect(memberOf(state.squads?.home as never, "H-12")?.provenance).toBe("added");
+    expect(state.squads?.home.exemptUsed).toEqual({ concussion: 1 });
   });
 });

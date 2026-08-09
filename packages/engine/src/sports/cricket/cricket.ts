@@ -26,6 +26,7 @@ import {
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { ModuleEvent, SportModule } from "../../sport/module.ts";
 import { resolvePayloadPath, type PlayerStatsModel } from "../../stats/stats.ts";
+import { makeSquadAdopter } from "../squad-state.ts";
 import { dlsPar, dlsTarget, resourcesFromBalls } from "./dls.ts";
 
 // ---------------------------------------------------------------------------
@@ -398,7 +399,24 @@ export interface CricketState {
   outcome: MatchOutcome | null;
   margin: string | null;
   playerLines: PlayerLineRec[];
+  // S3/W4b (#426) — the kernel's squad, persisted by `onLineup`. Structurally a
+  // `SquadCarrier` (src/sports/squad-state.ts), which is what lets cricket share
+  // the adoption rule with every other pass-B sport instead of inventing one.
+  //
+  // ABSENT UNTIL A `core.lineup.*` EVENT IS FOLDED, and that is not an
+  // optimisation — `init` writing it would put a copy of the team sheet into
+  // every serialised state, and the frozen corpus compares `JSON.stringify` per
+  // event across eleven sports. It is also NOT the source of truth: the
+  // authoritative squads are `foldMatchWithStoppage(...).squads`, which the
+  // kernel returns whether or not any module persisted them. This copy exists
+  // so cricket's own fold can keep `orders` honest.
+  squads?: SquadState;
 }
+
+// One adopter per module. It owns the `init`-vs-change handshake by object
+// identity — see src/sports/squad-state.ts for why a shape test cannot do it
+// (a `core.lineup.position` bumps no counter anywhere in SquadState).
+const squadAdopter = makeSquadAdopter<CricketState>();
 
 function opponent(side: Side): Side {
   return side === "home" ? "away" : "home";
@@ -1949,6 +1967,47 @@ function orderFromLineup(lineup: LineupPair["home"]): string[] {
     .map((slot) => slot.personId);
 }
 
+/**
+ * Everyone now on the field who is not yet in this side's batting order.
+ *
+ * APPEND-ONLY, and that is the whole design. `state.orders[side]` is not just a
+ * list — `fine.nextBatterIndex` is an INDEX INTO IT, and `resolveIncoming`
+ * scans it from that index. Inserting a replacement at the position of the
+ * player he replaced would silently re-point the cursor at a different batter,
+ * and every later "who walks in next" would be wrong with nothing in the
+ * totals, the summary or the standings to show it. Appending moves no existing
+ * index and removes nobody: a replaced player keeps his place because his
+ * scorecard line, his `dismissed` entry and the all-out arithmetic all still
+ * refer to him.
+ *
+ * It is also the right domain answer rather than a mechanical one. Law 25.1
+ * leaves the order after the openers entirely to the captain, which cricket
+ * already honours through `incoming`; what a replacement needs is to be
+ * ELIGIBLE (`resolveIncoming` refuses a batter the order does not contain), not
+ * to be at a particular position.
+ *
+ * `onField` is the gate rather than the squad's declared slot, because a bench
+ * player is not in the batting order and never was — at `init` every starting
+ * player is already present, so this is identity for every stream that folds no
+ * lineup event, which is every stream in the frozen corpus.
+ */
+function withArrivals(state: CricketState, squads: SquadState): CricketState {
+  let orders = state.orders;
+  // `squads.home`/`.away` and `state.orders.home`/`.away` are both built from
+  // the same `LineupPair`, so the side keys agree by construction.
+  for (const side of ["home", "away"] as const) {
+    const known = new Set(orders[side]);
+    const arrived = playingSquad(squads[side])
+      .filter((member) => member.onField && !known.has(member.personId))
+      // At most one person arrives per accepted event, but the sort keeps the
+      // result total and stable rather than dependent on member order.
+      .sort((a, b) => (a.orderNo === b.orderNo ? 0 : a.orderNo - b.orderNo))
+      .map((member) => member.personId);
+    if (arrived.length > 0) orders = { ...orders, [side]: [...orders[side], ...arrived] };
+  }
+  return orders === state.orders ? state : { ...state, orders };
+}
+
 function sideLine(state: CricketState, side: Side): string {
   const list = state.innings.filter((innings) => innings.battingSide === side);
   if (list.length === 0) return "—";
@@ -2126,7 +2185,9 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   },
 
   init(cfg, lineups: LineupPair): CricketState {
-    return {
+    // `fresh` registers this exact object for the `onLineup` handshake and
+    // returns it unchanged, so `init`'s output is byte-identical to pre-wave.
+    return squadAdopter.fresh({
       cfg,
       entrants: { home: lineups.home.entrantId, away: lineups.away.entrantId },
       orders: { home: orderFromLineup(lineups.home), away: orderFromLineup(lineups.away) },
@@ -2145,7 +2206,25 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
       outcome: null,
       margin: null,
       playerLines: [],
-    };
+    });
+  },
+
+  /**
+   * S3/W4b (#426) — the kernel handing back the squads it has just folded.
+   *
+   * Two jobs, in this order and for a reason. `adopt` first: it identifies the
+   * `init` handshake by the identity of the object `init` returned, so it must
+   * see that object and not a copy — `withArrivals` is identity at `init`
+   * anyway, but relying on that would make a correctness property depend on an
+   * optimisation. Then `withArrivals` keeps the batting order honest.
+   *
+   * NOTHING HERE DECIDES ANYTHING. There is no membership test, no replacement
+   * counter and no re-entry rule in this function or anywhere else in this
+   * file: `core/lineup.ts` accepted the change before cricket was told, and
+   * this hook is only asked where the result may land.
+   */
+  onLineup(state, squads) {
+    return withArrivals(squadAdopter.adopt(state, squads), squads);
   },
 
   apply(state, ev: EventEnvelope<CricketEv | CoreEv>, ctx): CricketState {
