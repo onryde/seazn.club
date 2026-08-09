@@ -1,0 +1,1916 @@
+{
+  "meta": {
+    "slug": "finals-day",
+    "capturedAt": "2026-08-09T08:24:06.954Z",
+    "model": "google/gemini-3.6-flash",
+    "commit": "19b3cf87b6f8a1e7913ca7ac555a61b25600040d",
+    "mode": "repair",
+    "joint": false,
+    "instruction": "Rain has closed all six courts from 13:00 to 15:30. Repair the schedule moving as few matches as possible; matches already played stay exactly where they are."
+  },
+  "board": {
+    "fixtures": [
+      {
+        "id": "ef28a4a9-bd7d-4007-9652-76ae19f96f7c",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T08:00:00.000Z",
+        "court_label": "Court 1",
+        "code": "F1",
+        "matchup": "Harriet M. vs Mervyn W.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "decided",
+        "home_entrant_id": "c4e6f1ba-5616-4188-8168-24891651f21c",
+        "away_entrant_id": "f3c13e44-83ba-4639-acc3-cec08fabf9c9"
+      },
+      {
+        "id": "2cbf61ac-806d-4181-b3fa-7d5ca2fa17ce",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T08:00:00.000Z",
+        "court_label": "Court 2",
+        "code": "F2",
+        "matchup": "Owen B. vs Lowri V.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "decided",
+        "home_entrant_id": "65f6d027-6362-438b-97f1-f9ba64e7cde5",
+        "away_entrant_id": "b986ecc7-1d2b-434a-b447-1839b6d06db7"
+      },
+      {
+        "id": "a980ca26-e44d-4dc8-9ac9-2eaebb643b86",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T08:00:00.000Z",
+        "court_label": "Court 3",
+        "code": "F3",
+        "matchup": "Sian D. vs Katya T.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "decided",
+        "home_entrant_id": "2e380c38-9ad2-4b46-ade2-6c197e875553",
+        "away_entrant_id": "fa195345-784a-47f5-936f-5367a4197c4b"
+      },
+      {
+        "id": "cf0bef90-a92e-4b2a-b429-4a904571064d",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T08:00:00.000Z",
+        "court_label": "Court 4",
+        "code": "F4",
+        "matchup": "Rory F. vs Josef S.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "decided",
+        "home_entrant_id": "f9a8e44a-9837-4f57-a64c-b87ff032ac20",
+        "away_entrant_id": "27ee4495-1e32-4d42-97fb-6a491495b17c"
+      },
+      {
+        "id": "ed977813-4936-4506-bb82-35b566e50365",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T08:00:00.000Z",
+        "court_label": "Court 5",
+        "code": "F5",
+        "matchup": "Tamsin G. vs Imogen R.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "decided",
+        "home_entrant_id": "3f0abf8f-38a5-4a09-953a-987b82f24f25",
+        "away_entrant_id": "5edd1e9e-8572-49ea-abfb-67275d3c0771"
+      },
+      {
+        "id": "889472ab-85d4-479b-9d6b-23a55ce9e105",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T08:00:00.000Z",
+        "court_label": "Court 6",
+        "code": "F6",
+        "matchup": "Callum H. vs Gareth P.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "decided",
+        "home_entrant_id": "df3eb03a-46e2-4332-b360-ed013c568e8a",
+        "away_entrant_id": "8cd50b2e-19c2-4d2d-a0e2-25c050b9c650"
+      },
+      {
+        "id": "30d28523-11cc-41ab-bf86-dabf194e384d",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T09:10:00.000Z",
+        "court_label": "Court 1",
+        "code": "F7",
+        "matchup": "Niamh J. vs Ffion N.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "decided",
+        "home_entrant_id": "f2fb89bc-aeb2-45f6-a0aa-10eef86d2d40",
+        "away_entrant_id": "c2cc0186-bdfa-4899-aabd-f644dd171e8e"
+      },
+      {
+        "id": "208bb3de-76a5-4c20-b859-60f9a7cb887c",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T09:10:00.000Z",
+        "court_label": "Court 2",
+        "code": "F8",
+        "matchup": "Elliot K. vs Bryn L.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "decided",
+        "home_entrant_id": "4a1b457e-81a5-4ee6-918b-782dd1818955",
+        "away_entrant_id": "1fe224bb-841a-4e97-a7bf-3e62ab80d275"
+      },
+      {
+        "id": "4069e158-af86-4a4f-8a8d-ef6f9b4ce20a",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T09:10:00.000Z",
+        "court_label": "Court 3",
+        "code": "F9",
+        "matchup": "Lowri V. vs Harriet M.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "decided",
+        "home_entrant_id": "b986ecc7-1d2b-434a-b447-1839b6d06db7",
+        "away_entrant_id": "c4e6f1ba-5616-4188-8168-24891651f21c"
+      },
+      {
+        "id": "2d451972-192d-4b1f-981d-6ddce162bf85",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T09:10:00.000Z",
+        "court_label": "Court 4",
+        "code": "F10",
+        "matchup": "Mervyn W. vs Katya T.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "decided",
+        "home_entrant_id": "f3c13e44-83ba-4639-acc3-cec08fabf9c9",
+        "away_entrant_id": "fa195345-784a-47f5-936f-5367a4197c4b"
+      },
+      {
+        "id": "f8e5c09e-5ab0-48ff-a1ab-1287549af59f",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T09:10:00.000Z",
+        "court_label": "Court 5",
+        "code": "F11",
+        "matchup": "Owen B. vs Josef S.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "decided",
+        "home_entrant_id": "65f6d027-6362-438b-97f1-f9ba64e7cde5",
+        "away_entrant_id": "27ee4495-1e32-4d42-97fb-6a491495b17c"
+      },
+      {
+        "id": "2d78d160-db0b-49eb-b7a2-e608ea60340c",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T09:10:00.000Z",
+        "court_label": "Court 6",
+        "code": "F12",
+        "matchup": "Sian D. vs Imogen R.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "2e380c38-9ad2-4b46-ade2-6c197e875553",
+        "away_entrant_id": "5edd1e9e-8572-49ea-abfb-67275d3c0771"
+      },
+      {
+        "id": "c03e6251-df51-45a3-a76d-37cfac7be303",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T10:20:00.000Z",
+        "court_label": "Court 1",
+        "code": "F13",
+        "matchup": "Rory F. vs Gareth P.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "f9a8e44a-9837-4f57-a64c-b87ff032ac20",
+        "away_entrant_id": "8cd50b2e-19c2-4d2d-a0e2-25c050b9c650"
+      },
+      {
+        "id": "c8b75f00-dca0-4614-b0e5-c925e986f718",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T10:20:00.000Z",
+        "court_label": "Court 2",
+        "code": "F14",
+        "matchup": "Tamsin G. vs Ffion N.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "3f0abf8f-38a5-4a09-953a-987b82f24f25",
+        "away_entrant_id": "c2cc0186-bdfa-4899-aabd-f644dd171e8e"
+      },
+      {
+        "id": "1406ee3e-c476-4a4f-953c-1723cd64c8bb",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T10:20:00.000Z",
+        "court_label": "Court 3",
+        "code": "F15",
+        "matchup": "Callum H. vs Bryn L.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "df3eb03a-46e2-4332-b360-ed013c568e8a",
+        "away_entrant_id": "1fe224bb-841a-4e97-a7bf-3e62ab80d275"
+      },
+      {
+        "id": "dce9fdb1-3e9d-41da-a01d-e3634096ee47",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T10:20:00.000Z",
+        "court_label": "Court 4",
+        "code": "F16",
+        "matchup": "Niamh J. vs Elliot K.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "f2fb89bc-aeb2-45f6-a0aa-10eef86d2d40",
+        "away_entrant_id": "4a1b457e-81a5-4ee6-918b-782dd1818955"
+      },
+      {
+        "id": "d55e7c5b-8bc6-41c6-80e7-669db9da9f43",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T10:20:00.000Z",
+        "court_label": "Court 5",
+        "code": "F17",
+        "matchup": "Harriet M. vs Katya T.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "c4e6f1ba-5616-4188-8168-24891651f21c",
+        "away_entrant_id": "fa195345-784a-47f5-936f-5367a4197c4b"
+      },
+      {
+        "id": "7d1f4396-4d07-4e6f-b3d9-ca235ec872fa",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T10:20:00.000Z",
+        "court_label": "Court 6",
+        "code": "F18",
+        "matchup": "Lowri V. vs Josef S.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "b986ecc7-1d2b-434a-b447-1839b6d06db7",
+        "away_entrant_id": "27ee4495-1e32-4d42-97fb-6a491495b17c"
+      },
+      {
+        "id": "0f841bf7-cfca-4813-990e-f4c0794eb31b",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T11:30:00.000Z",
+        "court_label": "Court 1",
+        "code": "F19",
+        "matchup": "Mervyn W. vs Imogen R.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "f3c13e44-83ba-4639-acc3-cec08fabf9c9",
+        "away_entrant_id": "5edd1e9e-8572-49ea-abfb-67275d3c0771"
+      },
+      {
+        "id": "62b10eb9-13cf-43bd-98e7-71c4fca0ff82",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T11:30:00.000Z",
+        "court_label": "Court 2",
+        "code": "F20",
+        "matchup": "Owen B. vs Gareth P.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "65f6d027-6362-438b-97f1-f9ba64e7cde5",
+        "away_entrant_id": "8cd50b2e-19c2-4d2d-a0e2-25c050b9c650"
+      },
+      {
+        "id": "736daafb-54ff-4866-b4a0-f386dc03e710",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T11:30:00.000Z",
+        "court_label": "Court 3",
+        "code": "F21",
+        "matchup": "Sian D. vs Ffion N.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "2e380c38-9ad2-4b46-ade2-6c197e875553",
+        "away_entrant_id": "c2cc0186-bdfa-4899-aabd-f644dd171e8e"
+      },
+      {
+        "id": "4b4b68c5-99d5-4e77-8665-546adc19859f",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T11:30:00.000Z",
+        "court_label": "Court 4",
+        "code": "F22",
+        "matchup": "Rory F. vs Bryn L.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "f9a8e44a-9837-4f57-a64c-b87ff032ac20",
+        "away_entrant_id": "1fe224bb-841a-4e97-a7bf-3e62ab80d275"
+      },
+      {
+        "id": "2ac3420f-9ec3-40f8-b96b-67648cfe4f99",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T11:30:00.000Z",
+        "court_label": "Court 5",
+        "code": "F23",
+        "matchup": "Tamsin G. vs Elliot K.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "3f0abf8f-38a5-4a09-953a-987b82f24f25",
+        "away_entrant_id": "4a1b457e-81a5-4ee6-918b-782dd1818955"
+      },
+      {
+        "id": "b2219593-62f5-4cfe-ac03-faf6b2d01b62",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T11:30:00.000Z",
+        "court_label": "Court 6",
+        "code": "F24",
+        "matchup": "Callum H. vs Niamh J.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "df3eb03a-46e2-4332-b360-ed013c568e8a",
+        "away_entrant_id": "f2fb89bc-aeb2-45f6-a0aa-10eef86d2d40"
+      },
+      {
+        "id": "943bbba2-ee28-4414-b8bc-d9fc5caced49",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T12:40:00.000Z",
+        "court_label": "Court 1",
+        "code": "F25",
+        "matchup": "Josef S. vs Harriet M.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "27ee4495-1e32-4d42-97fb-6a491495b17c",
+        "away_entrant_id": "c4e6f1ba-5616-4188-8168-24891651f21c"
+      },
+      {
+        "id": "0899cf15-4aaf-4e43-b2a5-f4db96dcf77d",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T12:40:00.000Z",
+        "court_label": "Court 2",
+        "code": "F26",
+        "matchup": "Katya T. vs Imogen R.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "fa195345-784a-47f5-936f-5367a4197c4b",
+        "away_entrant_id": "5edd1e9e-8572-49ea-abfb-67275d3c0771"
+      },
+      {
+        "id": "abb19c80-5a78-4e33-90d9-88d8acf4ea6a",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T12:40:00.000Z",
+        "court_label": "Court 3",
+        "code": "F27",
+        "matchup": "Lowri V. vs Gareth P.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "b986ecc7-1d2b-434a-b447-1839b6d06db7",
+        "away_entrant_id": "8cd50b2e-19c2-4d2d-a0e2-25c050b9c650"
+      },
+      {
+        "id": "d6d902e8-3285-4341-b6c0-27084fb3a6cb",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T12:40:00.000Z",
+        "court_label": "Court 4",
+        "code": "F28",
+        "matchup": "Mervyn W. vs Ffion N.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "f3c13e44-83ba-4639-acc3-cec08fabf9c9",
+        "away_entrant_id": "c2cc0186-bdfa-4899-aabd-f644dd171e8e"
+      },
+      {
+        "id": "7e2a8372-82ff-425a-8c0c-24e86b510be8",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T12:40:00.000Z",
+        "court_label": "Court 5",
+        "code": "F29",
+        "matchup": "Owen B. vs Bryn L.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "65f6d027-6362-438b-97f1-f9ba64e7cde5",
+        "away_entrant_id": "1fe224bb-841a-4e97-a7bf-3e62ab80d275"
+      },
+      {
+        "id": "a035b7e7-e1f9-4fe9-b6ca-9ad7416d7f75",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T12:40:00.000Z",
+        "court_label": "Court 6",
+        "code": "F30",
+        "matchup": "Sian D. vs Elliot K.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "2e380c38-9ad2-4b46-ade2-6c197e875553",
+        "away_entrant_id": "4a1b457e-81a5-4ee6-918b-782dd1818955"
+      },
+      {
+        "id": "315761b5-8936-4f67-85e7-88177c071a69",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T13:50:00.000Z",
+        "court_label": "Court 1",
+        "code": "F31",
+        "matchup": "Rory F. vs Niamh J.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "f9a8e44a-9837-4f57-a64c-b87ff032ac20",
+        "away_entrant_id": "f2fb89bc-aeb2-45f6-a0aa-10eef86d2d40"
+      },
+      {
+        "id": "9d18e89d-67cb-4b8f-988e-b64c30fddc40",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T13:50:00.000Z",
+        "court_label": "Court 2",
+        "code": "F32",
+        "matchup": "Tamsin G. vs Callum H.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "3f0abf8f-38a5-4a09-953a-987b82f24f25",
+        "away_entrant_id": "df3eb03a-46e2-4332-b360-ed013c568e8a"
+      },
+      {
+        "id": "b1358d51-d038-419e-91f2-1d6af2e471fa",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T13:50:00.000Z",
+        "court_label": "Court 3",
+        "code": "F33",
+        "matchup": "Harriet M. vs Imogen R.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "c4e6f1ba-5616-4188-8168-24891651f21c",
+        "away_entrant_id": "5edd1e9e-8572-49ea-abfb-67275d3c0771"
+      },
+      {
+        "id": "295255ac-5554-4518-a79b-00a5ff2df17b",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T13:50:00.000Z",
+        "court_label": "Court 4",
+        "code": "F34",
+        "matchup": "Josef S. vs Gareth P.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "27ee4495-1e32-4d42-97fb-6a491495b17c",
+        "away_entrant_id": "8cd50b2e-19c2-4d2d-a0e2-25c050b9c650"
+      },
+      {
+        "id": "0a501a89-c386-4620-8073-6a1175676c89",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T13:50:00.000Z",
+        "court_label": "Court 5",
+        "code": "F35",
+        "matchup": "Katya T. vs Ffion N.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "fa195345-784a-47f5-936f-5367a4197c4b",
+        "away_entrant_id": "c2cc0186-bdfa-4899-aabd-f644dd171e8e"
+      },
+      {
+        "id": "7278fe53-351a-43e9-a372-a8bb1a3d0a30",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T13:50:00.000Z",
+        "court_label": "Court 6",
+        "code": "F36",
+        "matchup": "Lowri V. vs Bryn L.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "b986ecc7-1d2b-434a-b447-1839b6d06db7",
+        "away_entrant_id": "1fe224bb-841a-4e97-a7bf-3e62ab80d275"
+      },
+      {
+        "id": "71f9ee23-ca84-4d78-adb3-0a7b9ce66063",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T15:00:00.000Z",
+        "court_label": "Court 1",
+        "code": "F37",
+        "matchup": "Mervyn W. vs Elliot K.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "f3c13e44-83ba-4639-acc3-cec08fabf9c9",
+        "away_entrant_id": "4a1b457e-81a5-4ee6-918b-782dd1818955"
+      },
+      {
+        "id": "f7c8657d-28ae-472a-bd57-882a5ffb88d3",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T15:00:00.000Z",
+        "court_label": "Court 2",
+        "code": "F38",
+        "matchup": "Owen B. vs Niamh J.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "65f6d027-6362-438b-97f1-f9ba64e7cde5",
+        "away_entrant_id": "f2fb89bc-aeb2-45f6-a0aa-10eef86d2d40"
+      },
+      {
+        "id": "b8142f3b-9c10-47a9-9b2c-b315ed3ad455",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T15:00:00.000Z",
+        "court_label": "Court 3",
+        "code": "F39",
+        "matchup": "Sian D. vs Callum H.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "2e380c38-9ad2-4b46-ade2-6c197e875553",
+        "away_entrant_id": "df3eb03a-46e2-4332-b360-ed013c568e8a"
+      },
+      {
+        "id": "866372cf-8d75-4dae-b2b3-f7bb9c84ad90",
+        "stage_id": "490cbe27-fca5-4cac-990f-396d54176acf",
+        "division_id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+        "scheduled_at": "2026-09-26T15:00:00.000Z",
+        "court_label": "Court 4",
+        "code": "F40",
+        "matchup": "Rory F. vs Tamsin G.",
+        "isFinal": false,
+        "isJunior": false,
+        "status": "scheduled",
+        "home_entrant_id": "f9a8e44a-9837-4f57-a64c-b87ff032ac20",
+        "away_entrant_id": "3f0abf8f-38a5-4a09-953a-987b82f24f25"
+      }
+    ],
+    "courts": [
+      "Court 1",
+      "Court 2",
+      "Court 3",
+      "Court 4",
+      "Court 5",
+      "Court 6"
+    ],
+    "entrants": [
+      {
+        "id": "c4e6f1ba-5616-4188-8168-24891651f21c",
+        "name": "Harriet M."
+      },
+      {
+        "id": "65f6d027-6362-438b-97f1-f9ba64e7cde5",
+        "name": "Owen B."
+      },
+      {
+        "id": "2e380c38-9ad2-4b46-ade2-6c197e875553",
+        "name": "Sian D."
+      },
+      {
+        "id": "f9a8e44a-9837-4f57-a64c-b87ff032ac20",
+        "name": "Rory F."
+      },
+      {
+        "id": "3f0abf8f-38a5-4a09-953a-987b82f24f25",
+        "name": "Tamsin G."
+      },
+      {
+        "id": "df3eb03a-46e2-4332-b360-ed013c568e8a",
+        "name": "Callum H."
+      },
+      {
+        "id": "f2fb89bc-aeb2-45f6-a0aa-10eef86d2d40",
+        "name": "Niamh J."
+      },
+      {
+        "id": "4a1b457e-81a5-4ee6-918b-782dd1818955",
+        "name": "Elliot K."
+      },
+      {
+        "id": "1fe224bb-841a-4e97-a7bf-3e62ab80d275",
+        "name": "Bryn L."
+      },
+      {
+        "id": "c2cc0186-bdfa-4899-aabd-f644dd171e8e",
+        "name": "Ffion N."
+      },
+      {
+        "id": "8cd50b2e-19c2-4d2d-a0e2-25c050b9c650",
+        "name": "Gareth P."
+      },
+      {
+        "id": "5edd1e9e-8572-49ea-abfb-67275d3c0771",
+        "name": "Imogen R."
+      },
+      {
+        "id": "27ee4495-1e32-4d42-97fb-6a491495b17c",
+        "name": "Josef S."
+      },
+      {
+        "id": "fa195345-784a-47f5-936f-5367a4197c4b",
+        "name": "Katya T."
+      },
+      {
+        "id": "b986ecc7-1d2b-434a-b447-1839b6d06db7",
+        "name": "Lowri V."
+      },
+      {
+        "id": "f3c13e44-83ba-4639-acc3-cec08fabf9c9",
+        "name": "Mervyn W."
+      }
+    ],
+    "window": {
+      "start": "2026-09-26T00:00:00+01:00",
+      "end": "2026-10-02T23:59:59+01:00"
+    }
+  },
+  "pack": {
+    "mode": "repair",
+    "division": {
+      "id": "9ab8de51-936c-49ff-94c2-2d786e75c9ea",
+      "name": "Finals Day",
+      "sport": "tennis",
+      "tz": "Europe/London"
+    },
+    "tz": "Europe/London",
+    "clock": {
+      "now": "2026-09-01T08:00:00.000Z",
+      "today": "2026-09-01",
+      "tomorrow": "2026-09-02",
+      "nextWeekday": {
+        "WED": "2026-09-02",
+        "THU": "2026-09-03",
+        "FRI": "2026-09-04",
+        "SAT": "2026-09-05",
+        "SUN": "2026-09-06",
+        "MON": "2026-09-07",
+        "TUE": "2026-09-08"
+      }
+    },
+    "window": {
+      "start": "2026-09-26T00:00:00+01:00",
+      "end": "2026-10-02T23:59:59+01:00"
+    },
+    "sessionHours": {
+      "start": "08:00",
+      "end": "22:00"
+    },
+    "parsed": {
+      "hard": [],
+      "soft": [],
+      "unparsed": []
+    },
+    "settings": {
+      "matchMinutes": 60,
+      "gapMinutes": 10,
+      "perEntrantMinRest": 0,
+      "courts": [
+        "Court 1",
+        "Court 2",
+        "Court 3",
+        "Court 4",
+        "Court 5",
+        "Court 6"
+      ],
+      "sessionWindows": [
+        {
+          "from": "2026-09-26T09:00:00+01:00",
+          "to": "2026-09-26T19:00:00+01:00"
+        }
+      ],
+      "blackouts": [
+        {
+          "from": "2026-09-26T13:00:00+01:00",
+          "to": "2026-09-26T15:30:00+01:00"
+        }
+      ],
+      "constraints": {
+        "noBackToBack": false,
+        "startWindows": [],
+        "fieldFairness": "balance",
+        "parallelism": "mixed",
+        "crossPersonClash": "hard"
+      }
+    },
+    "entrants": [
+      {
+        "id": "c4e6f1ba-5616-4188-8168-24891651f21c",
+        "name": "Harriet M.",
+        "pool": null,
+        "seed": 1
+      },
+      {
+        "id": "65f6d027-6362-438b-97f1-f9ba64e7cde5",
+        "name": "Owen B.",
+        "pool": null,
+        "seed": 2
+      },
+      {
+        "id": "2e380c38-9ad2-4b46-ade2-6c197e875553",
+        "name": "Sian D.",
+        "pool": null,
+        "seed": 3
+      },
+      {
+        "id": "f9a8e44a-9837-4f57-a64c-b87ff032ac20",
+        "name": "Rory F.",
+        "pool": null,
+        "seed": 4
+      },
+      {
+        "id": "3f0abf8f-38a5-4a09-953a-987b82f24f25",
+        "name": "Tamsin G.",
+        "pool": null,
+        "seed": 5
+      },
+      {
+        "id": "df3eb03a-46e2-4332-b360-ed013c568e8a",
+        "name": "Callum H.",
+        "pool": null,
+        "seed": 6
+      },
+      {
+        "id": "f2fb89bc-aeb2-45f6-a0aa-10eef86d2d40",
+        "name": "Niamh J.",
+        "pool": null,
+        "seed": 7
+      },
+      {
+        "id": "4a1b457e-81a5-4ee6-918b-782dd1818955",
+        "name": "Elliot K.",
+        "pool": null,
+        "seed": 8
+      },
+      {
+        "id": "1fe224bb-841a-4e97-a7bf-3e62ab80d275",
+        "name": "Bryn L.",
+        "pool": null,
+        "seed": 9
+      },
+      {
+        "id": "c2cc0186-bdfa-4899-aabd-f644dd171e8e",
+        "name": "Ffion N.",
+        "pool": null,
+        "seed": 10
+      },
+      {
+        "id": "8cd50b2e-19c2-4d2d-a0e2-25c050b9c650",
+        "name": "Gareth P.",
+        "pool": null,
+        "seed": 11
+      },
+      {
+        "id": "5edd1e9e-8572-49ea-abfb-67275d3c0771",
+        "name": "Imogen R.",
+        "pool": null,
+        "seed": 12
+      },
+      {
+        "id": "27ee4495-1e32-4d42-97fb-6a491495b17c",
+        "name": "Josef S.",
+        "pool": null,
+        "seed": 13
+      },
+      {
+        "id": "fa195345-784a-47f5-936f-5367a4197c4b",
+        "name": "Katya T.",
+        "pool": null,
+        "seed": 14
+      },
+      {
+        "id": "b986ecc7-1d2b-434a-b447-1839b6d06db7",
+        "name": "Lowri V.",
+        "pool": null,
+        "seed": 15
+      },
+      {
+        "id": "f3c13e44-83ba-4639-acc3-cec08fabf9c9",
+        "name": "Mervyn W.",
+        "pool": null,
+        "seed": 16
+      }
+    ],
+    "people": [],
+    "participants": {
+      "dce9fdb1-3e9d-41da-a01d-e3634096ee47": [],
+      "2d78d160-db0b-49eb-b7a2-e608ea60340c": [],
+      "c03e6251-df51-45a3-a76d-37cfac7be303": [],
+      "c8b75f00-dca0-4614-b0e5-c925e986f718": [],
+      "1406ee3e-c476-4a4f-953c-1723cd64c8bb": [],
+      "2ac3420f-9ec3-40f8-b96b-67648cfe4f99": [],
+      "b2219593-62f5-4cfe-ac03-faf6b2d01b62": [],
+      "d55e7c5b-8bc6-41c6-80e7-669db9da9f43": [],
+      "7d1f4396-4d07-4e6f-b3d9-ca235ec872fa": [],
+      "0f841bf7-cfca-4813-990e-f4c0794eb31b": [],
+      "62b10eb9-13cf-43bd-98e7-71c4fca0ff82": [],
+      "736daafb-54ff-4866-b4a0-f386dc03e710": [],
+      "4b4b68c5-99d5-4e77-8665-546adc19859f": [],
+      "a035b7e7-e1f9-4fe9-b6ca-9ad7416d7f75": [],
+      "315761b5-8936-4f67-85e7-88177c071a69": [],
+      "9d18e89d-67cb-4b8f-988e-b64c30fddc40": [],
+      "943bbba2-ee28-4414-b8bc-d9fc5caced49": [],
+      "0899cf15-4aaf-4e43-b2a5-f4db96dcf77d": [],
+      "abb19c80-5a78-4e33-90d9-88d8acf4ea6a": [],
+      "d6d902e8-3285-4341-b6c0-27084fb3a6cb": [],
+      "7e2a8372-82ff-425a-8c0c-24e86b510be8": [],
+      "71f9ee23-ca84-4d78-adb3-0a7b9ce66063": [],
+      "f7c8657d-28ae-472a-bd57-882a5ffb88d3": [],
+      "b8142f3b-9c10-47a9-9b2c-b315ed3ad455": [],
+      "866372cf-8d75-4dae-b2b3-f7bb9c84ad90": [],
+      "b1358d51-d038-419e-91f2-1d6af2e471fa": [],
+      "295255ac-5554-4518-a79b-00a5ff2df17b": [],
+      "0a501a89-c386-4620-8073-6a1175676c89": [],
+      "7278fe53-351a-43e9-a372-a8bb1a3d0a30": []
+    },
+    "poolIds": {},
+    "assumptions": [],
+    "fixtures": {
+      "movable": [
+        {
+          "id": "dce9fdb1-3e9d-41da-a01d-e3634096ee47",
+          "ext_key": "rr-r2-c1",
+          "round": 2,
+          "seq": 1,
+          "pool": null,
+          "home": "f2fb89bc-aeb2-45f6-a0aa-10eef86d2d40",
+          "away": "4a1b457e-81a5-4ee6-918b-782dd1818955",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T11:20:00+01:00",
+            "court": "Court 4"
+          },
+          "pinned": false
+        },
+        {
+          "id": "2d78d160-db0b-49eb-b7a2-e608ea60340c",
+          "ext_key": "rr-r2-c5",
+          "round": 2,
+          "seq": 5,
+          "pool": null,
+          "home": "2e380c38-9ad2-4b46-ade2-6c197e875553",
+          "away": "5edd1e9e-8572-49ea-abfb-67275d3c0771",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T10:10:00+01:00",
+            "court": "Court 6"
+          },
+          "pinned": false
+        },
+        {
+          "id": "c03e6251-df51-45a3-a76d-37cfac7be303",
+          "ext_key": "rr-r2-c6",
+          "round": 2,
+          "seq": 6,
+          "pool": null,
+          "home": "f9a8e44a-9837-4f57-a64c-b87ff032ac20",
+          "away": "8cd50b2e-19c2-4d2d-a0e2-25c050b9c650",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T11:20:00+01:00",
+            "court": "Court 1"
+          },
+          "pinned": false
+        },
+        {
+          "id": "c8b75f00-dca0-4614-b0e5-c925e986f718",
+          "ext_key": "rr-r2-c7",
+          "round": 2,
+          "seq": 7,
+          "pool": null,
+          "home": "3f0abf8f-38a5-4a09-953a-987b82f24f25",
+          "away": "c2cc0186-bdfa-4899-aabd-f644dd171e8e",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T11:20:00+01:00",
+            "court": "Court 2"
+          },
+          "pinned": false
+        },
+        {
+          "id": "1406ee3e-c476-4a4f-953c-1723cd64c8bb",
+          "ext_key": "rr-r2-c8",
+          "round": 2,
+          "seq": 8,
+          "pool": null,
+          "home": "df3eb03a-46e2-4332-b360-ed013c568e8a",
+          "away": "1fe224bb-841a-4e97-a7bf-3e62ab80d275",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T11:20:00+01:00",
+            "court": "Court 3"
+          },
+          "pinned": false
+        },
+        {
+          "id": "2ac3420f-9ec3-40f8-b96b-67648cfe4f99",
+          "ext_key": "rr-r3-c1",
+          "round": 3,
+          "seq": 1,
+          "pool": null,
+          "home": "3f0abf8f-38a5-4a09-953a-987b82f24f25",
+          "away": "4a1b457e-81a5-4ee6-918b-782dd1818955",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T12:30:00+01:00",
+            "court": "Court 5"
+          },
+          "pinned": false
+        },
+        {
+          "id": "b2219593-62f5-4cfe-ac03-faf6b2d01b62",
+          "ext_key": "rr-r3-c2",
+          "round": 3,
+          "seq": 2,
+          "pool": null,
+          "home": "df3eb03a-46e2-4332-b360-ed013c568e8a",
+          "away": "f2fb89bc-aeb2-45f6-a0aa-10eef86d2d40",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T12:30:00+01:00",
+            "court": "Court 6"
+          },
+          "pinned": false
+        },
+        {
+          "id": "d55e7c5b-8bc6-41c6-80e7-669db9da9f43",
+          "ext_key": "rr-r3-c3",
+          "round": 3,
+          "seq": 3,
+          "pool": null,
+          "home": "c4e6f1ba-5616-4188-8168-24891651f21c",
+          "away": "fa195345-784a-47f5-936f-5367a4197c4b",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T11:20:00+01:00",
+            "court": "Court 5"
+          },
+          "pinned": false
+        },
+        {
+          "id": "7d1f4396-4d07-4e6f-b3d9-ca235ec872fa",
+          "ext_key": "rr-r3-c4",
+          "round": 3,
+          "seq": 4,
+          "pool": null,
+          "home": "b986ecc7-1d2b-434a-b447-1839b6d06db7",
+          "away": "27ee4495-1e32-4d42-97fb-6a491495b17c",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T11:20:00+01:00",
+            "court": "Court 6"
+          },
+          "pinned": false
+        },
+        {
+          "id": "0f841bf7-cfca-4813-990e-f4c0794eb31b",
+          "ext_key": "rr-r3-c5",
+          "round": 3,
+          "seq": 5,
+          "pool": null,
+          "home": "f3c13e44-83ba-4639-acc3-cec08fabf9c9",
+          "away": "5edd1e9e-8572-49ea-abfb-67275d3c0771",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T12:30:00+01:00",
+            "court": "Court 1"
+          },
+          "pinned": false
+        },
+        {
+          "id": "62b10eb9-13cf-43bd-98e7-71c4fca0ff82",
+          "ext_key": "rr-r3-c6",
+          "round": 3,
+          "seq": 6,
+          "pool": null,
+          "home": "65f6d027-6362-438b-97f1-f9ba64e7cde5",
+          "away": "8cd50b2e-19c2-4d2d-a0e2-25c050b9c650",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T12:30:00+01:00",
+            "court": "Court 2"
+          },
+          "pinned": false
+        },
+        {
+          "id": "736daafb-54ff-4866-b4a0-f386dc03e710",
+          "ext_key": "rr-r3-c7",
+          "round": 3,
+          "seq": 7,
+          "pool": null,
+          "home": "2e380c38-9ad2-4b46-ade2-6c197e875553",
+          "away": "c2cc0186-bdfa-4899-aabd-f644dd171e8e",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T12:30:00+01:00",
+            "court": "Court 3"
+          },
+          "pinned": false
+        },
+        {
+          "id": "4b4b68c5-99d5-4e77-8665-546adc19859f",
+          "ext_key": "rr-r3-c8",
+          "round": 3,
+          "seq": 8,
+          "pool": null,
+          "home": "f9a8e44a-9837-4f57-a64c-b87ff032ac20",
+          "away": "1fe224bb-841a-4e97-a7bf-3e62ab80d275",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T12:30:00+01:00",
+            "court": "Court 4"
+          },
+          "pinned": false
+        },
+        {
+          "id": "a035b7e7-e1f9-4fe9-b6ca-9ad7416d7f75",
+          "ext_key": "rr-r4-c1",
+          "round": 4,
+          "seq": 1,
+          "pool": null,
+          "home": "2e380c38-9ad2-4b46-ade2-6c197e875553",
+          "away": "4a1b457e-81a5-4ee6-918b-782dd1818955",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T13:40:00+01:00",
+            "court": "Court 6"
+          },
+          "pinned": false
+        },
+        {
+          "id": "315761b5-8936-4f67-85e7-88177c071a69",
+          "ext_key": "rr-r4-c2",
+          "round": 4,
+          "seq": 2,
+          "pool": null,
+          "home": "f9a8e44a-9837-4f57-a64c-b87ff032ac20",
+          "away": "f2fb89bc-aeb2-45f6-a0aa-10eef86d2d40",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T14:50:00+01:00",
+            "court": "Court 1"
+          },
+          "pinned": false
+        },
+        {
+          "id": "9d18e89d-67cb-4b8f-988e-b64c30fddc40",
+          "ext_key": "rr-r4-c3",
+          "round": 4,
+          "seq": 3,
+          "pool": null,
+          "home": "3f0abf8f-38a5-4a09-953a-987b82f24f25",
+          "away": "df3eb03a-46e2-4332-b360-ed013c568e8a",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T14:50:00+01:00",
+            "court": "Court 2"
+          },
+          "pinned": false
+        },
+        {
+          "id": "943bbba2-ee28-4414-b8bc-d9fc5caced49",
+          "ext_key": "rr-r4-c4",
+          "round": 4,
+          "seq": 4,
+          "pool": null,
+          "home": "27ee4495-1e32-4d42-97fb-6a491495b17c",
+          "away": "c4e6f1ba-5616-4188-8168-24891651f21c",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T13:40:00+01:00",
+            "court": "Court 1"
+          },
+          "pinned": false
+        },
+        {
+          "id": "0899cf15-4aaf-4e43-b2a5-f4db96dcf77d",
+          "ext_key": "rr-r4-c5",
+          "round": 4,
+          "seq": 5,
+          "pool": null,
+          "home": "fa195345-784a-47f5-936f-5367a4197c4b",
+          "away": "5edd1e9e-8572-49ea-abfb-67275d3c0771",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T13:40:00+01:00",
+            "court": "Court 2"
+          },
+          "pinned": false
+        },
+        {
+          "id": "abb19c80-5a78-4e33-90d9-88d8acf4ea6a",
+          "ext_key": "rr-r4-c6",
+          "round": 4,
+          "seq": 6,
+          "pool": null,
+          "home": "b986ecc7-1d2b-434a-b447-1839b6d06db7",
+          "away": "8cd50b2e-19c2-4d2d-a0e2-25c050b9c650",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T13:40:00+01:00",
+            "court": "Court 3"
+          },
+          "pinned": false
+        },
+        {
+          "id": "d6d902e8-3285-4341-b6c0-27084fb3a6cb",
+          "ext_key": "rr-r4-c7",
+          "round": 4,
+          "seq": 7,
+          "pool": null,
+          "home": "f3c13e44-83ba-4639-acc3-cec08fabf9c9",
+          "away": "c2cc0186-bdfa-4899-aabd-f644dd171e8e",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T13:40:00+01:00",
+            "court": "Court 4"
+          },
+          "pinned": false
+        },
+        {
+          "id": "7e2a8372-82ff-425a-8c0c-24e86b510be8",
+          "ext_key": "rr-r4-c8",
+          "round": 4,
+          "seq": 8,
+          "pool": null,
+          "home": "65f6d027-6362-438b-97f1-f9ba64e7cde5",
+          "away": "1fe224bb-841a-4e97-a7bf-3e62ab80d275",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T13:40:00+01:00",
+            "court": "Court 5"
+          },
+          "pinned": false
+        },
+        {
+          "id": "71f9ee23-ca84-4d78-adb3-0a7b9ce66063",
+          "ext_key": "rr-r5-c1",
+          "round": 5,
+          "seq": 1,
+          "pool": null,
+          "home": "f3c13e44-83ba-4639-acc3-cec08fabf9c9",
+          "away": "4a1b457e-81a5-4ee6-918b-782dd1818955",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T16:00:00+01:00",
+            "court": "Court 1"
+          },
+          "pinned": false
+        },
+        {
+          "id": "f7c8657d-28ae-472a-bd57-882a5ffb88d3",
+          "ext_key": "rr-r5-c2",
+          "round": 5,
+          "seq": 2,
+          "pool": null,
+          "home": "65f6d027-6362-438b-97f1-f9ba64e7cde5",
+          "away": "f2fb89bc-aeb2-45f6-a0aa-10eef86d2d40",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T16:00:00+01:00",
+            "court": "Court 2"
+          },
+          "pinned": false
+        },
+        {
+          "id": "b8142f3b-9c10-47a9-9b2c-b315ed3ad455",
+          "ext_key": "rr-r5-c3",
+          "round": 5,
+          "seq": 3,
+          "pool": null,
+          "home": "2e380c38-9ad2-4b46-ade2-6c197e875553",
+          "away": "df3eb03a-46e2-4332-b360-ed013c568e8a",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T16:00:00+01:00",
+            "court": "Court 3"
+          },
+          "pinned": false
+        },
+        {
+          "id": "866372cf-8d75-4dae-b2b3-f7bb9c84ad90",
+          "ext_key": "rr-r5-c4",
+          "round": 5,
+          "seq": 4,
+          "pool": null,
+          "home": "f9a8e44a-9837-4f57-a64c-b87ff032ac20",
+          "away": "3f0abf8f-38a5-4a09-953a-987b82f24f25",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T16:00:00+01:00",
+            "court": "Court 4"
+          },
+          "pinned": false
+        },
+        {
+          "id": "b1358d51-d038-419e-91f2-1d6af2e471fa",
+          "ext_key": "rr-r5-c5",
+          "round": 5,
+          "seq": 5,
+          "pool": null,
+          "home": "c4e6f1ba-5616-4188-8168-24891651f21c",
+          "away": "5edd1e9e-8572-49ea-abfb-67275d3c0771",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T14:50:00+01:00",
+            "court": "Court 3"
+          },
+          "pinned": false
+        },
+        {
+          "id": "295255ac-5554-4518-a79b-00a5ff2df17b",
+          "ext_key": "rr-r5-c6",
+          "round": 5,
+          "seq": 6,
+          "pool": null,
+          "home": "27ee4495-1e32-4d42-97fb-6a491495b17c",
+          "away": "8cd50b2e-19c2-4d2d-a0e2-25c050b9c650",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T14:50:00+01:00",
+            "court": "Court 4"
+          },
+          "pinned": false
+        },
+        {
+          "id": "0a501a89-c386-4620-8073-6a1175676c89",
+          "ext_key": "rr-r5-c7",
+          "round": 5,
+          "seq": 7,
+          "pool": null,
+          "home": "fa195345-784a-47f5-936f-5367a4197c4b",
+          "away": "c2cc0186-bdfa-4899-aabd-f644dd171e8e",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T14:50:00+01:00",
+            "court": "Court 5"
+          },
+          "pinned": false
+        },
+        {
+          "id": "7278fe53-351a-43e9-a372-a8bb1a3d0a30",
+          "ext_key": "rr-r5-c8",
+          "round": 5,
+          "seq": 8,
+          "pool": null,
+          "home": "b986ecc7-1d2b-434a-b447-1839b6d06db7",
+          "away": "1fe224bb-841a-4e97-a7bf-3e62ab80d275",
+          "feeds": {
+            "winner_to": null,
+            "after": []
+          },
+          "current": {
+            "at": "2026-09-26T14:50:00+01:00",
+            "court": "Court 6"
+          },
+          "pinned": false
+        }
+      ],
+      "obstacles": [
+        {
+          "court": "Court 1",
+          "from": "2026-09-26T09:00:00+01:00",
+          "to": "2026-09-26T10:00:00+01:00",
+          "label": "Finals Day · R1"
+        },
+        {
+          "court": "Court 1",
+          "from": "2026-09-26T10:10:00+01:00",
+          "to": "2026-09-26T11:10:00+01:00",
+          "label": "Finals Day · R1"
+        },
+        {
+          "court": "Court 2",
+          "from": "2026-09-26T09:00:00+01:00",
+          "to": "2026-09-26T10:00:00+01:00",
+          "label": "Finals Day · R1"
+        },
+        {
+          "court": "Court 2",
+          "from": "2026-09-26T10:10:00+01:00",
+          "to": "2026-09-26T11:10:00+01:00",
+          "label": "Finals Day · R1"
+        },
+        {
+          "court": "Court 3",
+          "from": "2026-09-26T09:00:00+01:00",
+          "to": "2026-09-26T10:00:00+01:00",
+          "label": "Finals Day · R1"
+        },
+        {
+          "court": "Court 3",
+          "from": "2026-09-26T10:10:00+01:00",
+          "to": "2026-09-26T11:10:00+01:00",
+          "label": "Finals Day · R2"
+        },
+        {
+          "court": "Court 4",
+          "from": "2026-09-26T09:00:00+01:00",
+          "to": "2026-09-26T10:00:00+01:00",
+          "label": "Finals Day · R1"
+        },
+        {
+          "court": "Court 4",
+          "from": "2026-09-26T10:10:00+01:00",
+          "to": "2026-09-26T11:10:00+01:00",
+          "label": "Finals Day · R2"
+        },
+        {
+          "court": "Court 5",
+          "from": "2026-09-26T09:00:00+01:00",
+          "to": "2026-09-26T10:00:00+01:00",
+          "label": "Finals Day · R1"
+        },
+        {
+          "court": "Court 5",
+          "from": "2026-09-26T10:10:00+01:00",
+          "to": "2026-09-26T11:10:00+01:00",
+          "label": "Finals Day · R2"
+        },
+        {
+          "court": "Court 6",
+          "from": "2026-09-26T09:00:00+01:00",
+          "to": "2026-09-26T10:00:00+01:00",
+          "label": "Finals Day · R1"
+        }
+      ]
+    },
+    "draft": [
+      {
+        "fixture_id": "2d78d160-db0b-49eb-b7a2-e608ea60340c",
+        "scheduled_at": "2026-09-26T10:10:00+01:00",
+        "court_label": "Court 6"
+      },
+      {
+        "fixture_id": "c03e6251-df51-45a3-a76d-37cfac7be303",
+        "scheduled_at": "2026-09-26T11:20:00+01:00",
+        "court_label": "Court 1"
+      },
+      {
+        "fixture_id": "c8b75f00-dca0-4614-b0e5-c925e986f718",
+        "scheduled_at": "2026-09-26T11:20:00+01:00",
+        "court_label": "Court 2"
+      },
+      {
+        "fixture_id": "1406ee3e-c476-4a4f-953c-1723cd64c8bb",
+        "scheduled_at": "2026-09-26T11:20:00+01:00",
+        "court_label": "Court 3"
+      },
+      {
+        "fixture_id": "dce9fdb1-3e9d-41da-a01d-e3634096ee47",
+        "scheduled_at": "2026-09-26T11:20:00+01:00",
+        "court_label": "Court 4"
+      },
+      {
+        "fixture_id": "d55e7c5b-8bc6-41c6-80e7-669db9da9f43",
+        "scheduled_at": "2026-09-26T11:20:00+01:00",
+        "court_label": "Court 5"
+      },
+      {
+        "fixture_id": "7d1f4396-4d07-4e6f-b3d9-ca235ec872fa",
+        "scheduled_at": "2026-09-26T11:20:00+01:00",
+        "court_label": "Court 6"
+      },
+      {
+        "fixture_id": "0f841bf7-cfca-4813-990e-f4c0794eb31b",
+        "scheduled_at": "2026-09-26T12:30:00+01:00",
+        "court_label": "Court 1"
+      },
+      {
+        "fixture_id": "62b10eb9-13cf-43bd-98e7-71c4fca0ff82",
+        "scheduled_at": "2026-09-26T12:30:00+01:00",
+        "court_label": "Court 2"
+      },
+      {
+        "fixture_id": "736daafb-54ff-4866-b4a0-f386dc03e710",
+        "scheduled_at": "2026-09-26T12:30:00+01:00",
+        "court_label": "Court 3"
+      },
+      {
+        "fixture_id": "4b4b68c5-99d5-4e77-8665-546adc19859f",
+        "scheduled_at": "2026-09-26T12:30:00+01:00",
+        "court_label": "Court 4"
+      },
+      {
+        "fixture_id": "2ac3420f-9ec3-40f8-b96b-67648cfe4f99",
+        "scheduled_at": "2026-09-26T12:30:00+01:00",
+        "court_label": "Court 5"
+      },
+      {
+        "fixture_id": "b2219593-62f5-4cfe-ac03-faf6b2d01b62",
+        "scheduled_at": "2026-09-26T12:30:00+01:00",
+        "court_label": "Court 6"
+      },
+      {
+        "fixture_id": "943bbba2-ee28-4414-b8bc-d9fc5caced49",
+        "scheduled_at": "2026-09-26T13:40:00+01:00",
+        "court_label": "Court 1"
+      },
+      {
+        "fixture_id": "0899cf15-4aaf-4e43-b2a5-f4db96dcf77d",
+        "scheduled_at": "2026-09-26T13:40:00+01:00",
+        "court_label": "Court 2"
+      },
+      {
+        "fixture_id": "abb19c80-5a78-4e33-90d9-88d8acf4ea6a",
+        "scheduled_at": "2026-09-26T13:40:00+01:00",
+        "court_label": "Court 3"
+      },
+      {
+        "fixture_id": "d6d902e8-3285-4341-b6c0-27084fb3a6cb",
+        "scheduled_at": "2026-09-26T13:40:00+01:00",
+        "court_label": "Court 4"
+      },
+      {
+        "fixture_id": "7e2a8372-82ff-425a-8c0c-24e86b510be8",
+        "scheduled_at": "2026-09-26T13:40:00+01:00",
+        "court_label": "Court 5"
+      },
+      {
+        "fixture_id": "a035b7e7-e1f9-4fe9-b6ca-9ad7416d7f75",
+        "scheduled_at": "2026-09-26T13:40:00+01:00",
+        "court_label": "Court 6"
+      },
+      {
+        "fixture_id": "315761b5-8936-4f67-85e7-88177c071a69",
+        "scheduled_at": "2026-09-26T14:50:00+01:00",
+        "court_label": "Court 1"
+      },
+      {
+        "fixture_id": "9d18e89d-67cb-4b8f-988e-b64c30fddc40",
+        "scheduled_at": "2026-09-26T14:50:00+01:00",
+        "court_label": "Court 2"
+      },
+      {
+        "fixture_id": "b1358d51-d038-419e-91f2-1d6af2e471fa",
+        "scheduled_at": "2026-09-26T14:50:00+01:00",
+        "court_label": "Court 3"
+      },
+      {
+        "fixture_id": "295255ac-5554-4518-a79b-00a5ff2df17b",
+        "scheduled_at": "2026-09-26T14:50:00+01:00",
+        "court_label": "Court 4"
+      },
+      {
+        "fixture_id": "0a501a89-c386-4620-8073-6a1175676c89",
+        "scheduled_at": "2026-09-26T14:50:00+01:00",
+        "court_label": "Court 5"
+      },
+      {
+        "fixture_id": "7278fe53-351a-43e9-a372-a8bb1a3d0a30",
+        "scheduled_at": "2026-09-26T14:50:00+01:00",
+        "court_label": "Court 6"
+      },
+      {
+        "fixture_id": "71f9ee23-ca84-4d78-adb3-0a7b9ce66063",
+        "scheduled_at": "2026-09-26T16:00:00+01:00",
+        "court_label": "Court 1"
+      },
+      {
+        "fixture_id": "f7c8657d-28ae-472a-bd57-882a5ffb88d3",
+        "scheduled_at": "2026-09-26T16:00:00+01:00",
+        "court_label": "Court 2"
+      },
+      {
+        "fixture_id": "b8142f3b-9c10-47a9-9b2c-b315ed3ad455",
+        "scheduled_at": "2026-09-26T16:00:00+01:00",
+        "court_label": "Court 3"
+      },
+      {
+        "fixture_id": "866372cf-8d75-4dae-b2b3-f7bb9c84ad90",
+        "scheduled_at": "2026-09-26T16:00:00+01:00",
+        "court_label": "Court 4"
+      }
+    ],
+    "instruction": "Rain has closed all six courts from 13:00 to 15:30. Repair the schedule moving as few matches as possible; matches already played stay exactly where they are.",
+    "prior": null,
+    "officials": []
+  },
+  "movableIds": [
+    "dce9fdb1-3e9d-41da-a01d-e3634096ee47",
+    "2d78d160-db0b-49eb-b7a2-e608ea60340c",
+    "c03e6251-df51-45a3-a76d-37cfac7be303",
+    "c8b75f00-dca0-4614-b0e5-c925e986f718",
+    "1406ee3e-c476-4a4f-953c-1723cd64c8bb",
+    "2ac3420f-9ec3-40f8-b96b-67648cfe4f99",
+    "b2219593-62f5-4cfe-ac03-faf6b2d01b62",
+    "d55e7c5b-8bc6-41c6-80e7-669db9da9f43",
+    "7d1f4396-4d07-4e6f-b3d9-ca235ec872fa",
+    "0f841bf7-cfca-4813-990e-f4c0794eb31b",
+    "62b10eb9-13cf-43bd-98e7-71c4fca0ff82",
+    "736daafb-54ff-4866-b4a0-f386dc03e710",
+    "4b4b68c5-99d5-4e77-8665-546adc19859f",
+    "a035b7e7-e1f9-4fe9-b6ca-9ad7416d7f75",
+    "315761b5-8936-4f67-85e7-88177c071a69",
+    "9d18e89d-67cb-4b8f-988e-b64c30fddc40",
+    "943bbba2-ee28-4414-b8bc-d9fc5caced49",
+    "0899cf15-4aaf-4e43-b2a5-f4db96dcf77d",
+    "abb19c80-5a78-4e33-90d9-88d8acf4ea6a",
+    "d6d902e8-3285-4341-b6c0-27084fb3a6cb",
+    "7e2a8372-82ff-425a-8c0c-24e86b510be8",
+    "71f9ee23-ca84-4d78-adb3-0a7b9ce66063",
+    "f7c8657d-28ae-472a-bd57-882a5ffb88d3",
+    "b8142f3b-9c10-47a9-9b2c-b315ed3ad455",
+    "866372cf-8d75-4dae-b2b3-f7bb9c84ad90",
+    "b1358d51-d038-419e-91f2-1d6af2e471fa",
+    "295255ac-5554-4518-a79b-00a5ff2df17b",
+    "0a501a89-c386-4620-8073-6a1175676c89",
+    "7278fe53-351a-43e9-a372-a8bb1a3d0a30"
+  ],
+  "response": {
+    "proposal": [
+      {
+        "fixture_id": "2d78d160-db0b-49eb-b7a2-e608ea60340c",
+        "scheduled_at": "2026-09-26T10:10:00+01:00",
+        "court_label": "Court 6"
+      },
+      {
+        "fixture_id": "c03e6251-df51-45a3-a76d-37cfac7be303",
+        "scheduled_at": "2026-09-26T11:20:00+01:00",
+        "court_label": "Court 1"
+      },
+      {
+        "fixture_id": "c8b75f00-dca0-4614-b0e5-c925e986f718",
+        "scheduled_at": "2026-09-26T11:20:00+01:00",
+        "court_label": "Court 2"
+      },
+      {
+        "fixture_id": "1406ee3e-c476-4a4f-953c-1723cd64c8bb",
+        "scheduled_at": "2026-09-26T11:20:00+01:00",
+        "court_label": "Court 3"
+      },
+      {
+        "fixture_id": "dce9fdb1-3e9d-41da-a01d-e3634096ee47",
+        "scheduled_at": "2026-09-26T11:20:00+01:00",
+        "court_label": "Court 4"
+      },
+      {
+        "fixture_id": "d55e7c5b-8bc6-41c6-80e7-669db9da9f43",
+        "scheduled_at": "2026-09-26T11:20:00+01:00",
+        "court_label": "Court 5"
+      },
+      {
+        "fixture_id": "7d1f4396-4d07-4e6f-b3d9-ca235ec872fa",
+        "scheduled_at": "2026-09-26T11:20:00+01:00",
+        "court_label": "Court 6"
+      },
+      {
+        "fixture_id": "0f841bf7-cfca-4813-990e-f4c0794eb31b",
+        "scheduled_at": "2026-09-26T15:30:00+01:00",
+        "court_label": "Court 1"
+      },
+      {
+        "fixture_id": "62b10eb9-13cf-43bd-98e7-71c4fca0ff82",
+        "scheduled_at": "2026-09-26T15:30:00+01:00",
+        "court_label": "Court 2"
+      },
+      {
+        "fixture_id": "736daafb-54ff-4866-b4a0-f386dc03e710",
+        "scheduled_at": "2026-09-26T15:30:00+01:00",
+        "court_label": "Court 3"
+      },
+      {
+        "fixture_id": "4b4b68c5-99d5-4e77-8665-546adc19859f",
+        "scheduled_at": "2026-09-26T15:30:00+01:00",
+        "court_label": "Court 4"
+      },
+      {
+        "fixture_id": "2ac3420f-9ec3-40f8-b96b-67648cfe4f99",
+        "scheduled_at": "2026-09-26T15:30:00+01:00",
+        "court_label": "Court 5"
+      },
+      {
+        "fixture_id": "b2219593-62f5-4cfe-ac03-faf6b2d01b62",
+        "scheduled_at": "2026-09-26T15:30:00+01:00",
+        "court_label": "Court 6"
+      },
+      {
+        "fixture_id": "943bbba2-ee28-4414-b8bc-d9fc5caced49",
+        "scheduled_at": "2026-09-26T16:40:00+01:00",
+        "court_label": "Court 1"
+      },
+      {
+        "fixture_id": "0899cf15-4aaf-4e43-b2a5-f4db96dcf77d",
+        "scheduled_at": "2026-09-26T16:40:00+01:00",
+        "court_label": "Court 2"
+      },
+      {
+        "fixture_id": "abb19c80-5a78-4e33-90d9-88d8acf4ea6a",
+        "scheduled_at": "2026-09-26T16:40:00+01:00",
+        "court_label": "Court 3"
+      },
+      {
+        "fixture_id": "d6d902e8-3285-4341-b6c0-27084fb3a6cb",
+        "scheduled_at": "2026-09-26T16:40:00+01:00",
+        "court_label": "Court 4"
+      },
+      {
+        "fixture_id": "7e2a8372-82ff-425a-8c0c-24e86b510be8",
+        "scheduled_at": "2026-09-26T16:40:00+01:00",
+        "court_label": "Court 5"
+      },
+      {
+        "fixture_id": "a035b7e7-e1f9-4fe9-b6ca-9ad7416d7f75",
+        "scheduled_at": "2026-09-26T16:40:00+01:00",
+        "court_label": "Court 6"
+      },
+      {
+        "fixture_id": "315761b5-8936-4f67-85e7-88177c071a69",
+        "scheduled_at": "2026-09-26T17:50:00+01:00",
+        "court_label": "Court 1"
+      },
+      {
+        "fixture_id": "9d18e89d-67cb-4b8f-988e-b64c30fddc40",
+        "scheduled_at": "2026-09-26T17:50:00+01:00",
+        "court_label": "Court 2"
+      },
+      {
+        "fixture_id": "b1358d51-d038-419e-91f2-1d6af2e471fa",
+        "scheduled_at": "2026-09-26T17:50:00+01:00",
+        "court_label": "Court 3"
+      },
+      {
+        "fixture_id": "295255ac-5554-4518-a79b-00a5ff2df17b",
+        "scheduled_at": "2026-09-26T17:50:00+01:00",
+        "court_label": "Court 4"
+      },
+      {
+        "fixture_id": "0a501a89-c386-4620-8073-6a1175676c89",
+        "scheduled_at": "2026-09-26T17:50:00+01:00",
+        "court_label": "Court 5"
+      },
+      {
+        "fixture_id": "7278fe53-351a-43e9-a372-a8bb1a3d0a30",
+        "scheduled_at": "2026-09-26T17:50:00+01:00",
+        "court_label": "Court 6"
+      }
+    ],
+    "unschedulable": [
+      {
+        "fixture_id": "71f9ee23-ca84-4d78-adb3-0a7b9ce66063",
+        "reason": "H3: Cannot fit within session window after blackout due to limited court capacity.",
+        "rule": "H3"
+      },
+      {
+        "fixture_id": "f7c8657d-28ae-472a-bd57-882a5ffb88d3",
+        "reason": "H3: Cannot fit within session window after blackout due to limited court capacity.",
+        "rule": "H3"
+      },
+      {
+        "fixture_id": "b8142f3b-9c10-47a9-9b2c-b315ed3ad455",
+        "reason": "H3: Cannot fit within session window after blackout due to limited court capacity.",
+        "rule": "H3"
+      },
+      {
+        "fixture_id": "866372cf-8d75-4dae-b2b3-f7bb9c84ad90",
+        "reason": "H3: Cannot fit within session window after blackout due to limited court capacity.",
+        "rule": "H3"
+      }
+    ],
+    "warnings": [],
+    "blocking": [],
+    "diff": {
+      "moved": [
+        "2ac3420f-9ec3-40f8-b96b-67648cfe4f99",
+        "b2219593-62f5-4cfe-ac03-faf6b2d01b62",
+        "0f841bf7-cfca-4813-990e-f4c0794eb31b",
+        "62b10eb9-13cf-43bd-98e7-71c4fca0ff82",
+        "736daafb-54ff-4866-b4a0-f386dc03e710",
+        "4b4b68c5-99d5-4e77-8665-546adc19859f",
+        "a035b7e7-e1f9-4fe9-b6ca-9ad7416d7f75",
+        "315761b5-8936-4f67-85e7-88177c071a69",
+        "9d18e89d-67cb-4b8f-988e-b64c30fddc40",
+        "943bbba2-ee28-4414-b8bc-d9fc5caced49",
+        "0899cf15-4aaf-4e43-b2a5-f4db96dcf77d",
+        "abb19c80-5a78-4e33-90d9-88d8acf4ea6a",
+        "d6d902e8-3285-4341-b6c0-27084fb3a6cb",
+        "7e2a8372-82ff-425a-8c0c-24e86b510be8",
+        "b1358d51-d038-419e-91f2-1d6af2e471fa",
+        "295255ac-5554-4518-a79b-00a5ff2df17b",
+        "0a501a89-c386-4620-8073-6a1175676c89",
+        "7278fe53-351a-43e9-a372-a8bb1a3d0a30"
+      ],
+      "placed": [],
+      "unscheduled": [
+        "71f9ee23-ca84-4d78-adb3-0a7b9ce66063",
+        "f7c8657d-28ae-472a-bd57-882a5ffb88d3",
+        "b8142f3b-9c10-47a9-9b2c-b315ed3ad455",
+        "866372cf-8d75-4dae-b2b3-f7bb9c84ad90"
+      ],
+      "unchanged": [
+        "dce9fdb1-3e9d-41da-a01d-e3634096ee47",
+        "2d78d160-db0b-49eb-b7a2-e608ea60340c",
+        "c03e6251-df51-45a3-a76d-37cfac7be303",
+        "c8b75f00-dca0-4614-b0e5-c925e986f718",
+        "1406ee3e-c476-4a4f-953c-1723cd64c8bb",
+        "d55e7c5b-8bc6-41c6-80e7-669db9da9f43",
+        "7d1f4396-4d07-4e6f-b3d9-ca235ec872fa"
+      ]
+    },
+    "explanations": [
+      {
+        "fixture_id": "0f841bf7-cfca-4813-990e-f4c0794eb31b",
+        "note": "Shifted to 15:30 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "62b10eb9-13cf-43bd-98e7-71c4fca0ff82",
+        "note": "Shifted to 15:30 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "736daafb-54ff-4866-b4a0-f386dc03e710",
+        "note": "Shifted to 15:30 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "4b4b68c5-99d5-4e77-8665-546adc19859f",
+        "note": "Shifted to 15:30 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "2ac3420f-9ec3-40f8-b96b-67648cfe4f99",
+        "note": "Shifted to 15:30 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "b2219593-62f5-4cfe-ac03-faf6b2d01b62",
+        "note": "Shifted to 15:30 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "943bbba2-ee28-4414-b8bc-d9fc5caced49",
+        "note": "Shifted to 16:40 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "0899cf15-4aaf-4e43-b2a5-f4db96dcf77d",
+        "note": "Shifted to 16:40 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "abb19c80-5a78-4e33-90d9-88d8acf4ea6a",
+        "note": "Shifted to 16:40 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "d6d902e8-3285-4341-b6c0-27084fb3a6cb",
+        "note": "Shifted to 16:40 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "7e2a8372-82ff-425a-8c0c-24e86b510be8",
+        "note": "Shifted to 16:40 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "a035b7e7-e1f9-4fe9-b6ca-9ad7416d7f75",
+        "note": "Shifted to 16:40 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "315761b5-8936-4f67-85e7-88177c071a69",
+        "note": "Shifted to 17:50 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "9d18e89d-67cb-4b8f-988e-b64c30fddc40",
+        "note": "Shifted to 17:50 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "b1358d51-d038-419e-91f2-1d6af2e471fa",
+        "note": "Shifted to 17:50 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "295255ac-5554-4518-a79b-00a5ff2df17b",
+        "note": "Shifted to 17:50 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "0a501a89-c386-4620-8073-6a1175676c89",
+        "note": "Shifted to 17:50 following rain closure from 13:00 to 15:30."
+      },
+      {
+        "fixture_id": "7278fe53-351a-43e9-a372-a8bb1a3d0a30",
+        "note": "Shifted to 17:50 following rain closure from 13:00 to 15:30."
+      }
+    ],
+    "summary": "Preserved morning matches and moved afternoon fixtures to resume at 15:30 after the rain closure. Because the 13:00–15:30 blackout reduces post-rain capacity to 18 match slots before the 19:00 session cutoff, four Round 5 matches could not be accommodated. Consider extending evening session hours or scheduling another day to complete the remaining Round 5 fixtures.",
+    "assumptions": [],
+    "usage": {
+      "input_tokens": 16007,
+      "output_tokens": 30757,
+      "repair_rounds": 0
+    },
+    "repair": {
+      "engine": "none",
+      "solver_ran": false
+    },
+    "officials_coverage": null,
+    "credits": 1,
+    "budget": 32000,
+    "spent_tokens": 30757,
+    "underfunded": false,
+    "stopped_on_budget": false,
+    "est_tokens": 14700,
+    "parse_tokens": 56,
+    "parse_failed": false,
+    "rung": 1,
+    "predicted_rung": 1
+  }
+}

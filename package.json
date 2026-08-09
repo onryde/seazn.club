@@ -21,6 +21,7 @@
     "test": "npm run test --workspace apps/web && npm run test --workspace packages/engine",
     "test:watch": "npm run test:watch --workspace apps/web",
     "test:coverage": "npm run test:coverage --workspace apps/web",
+    "capture:ai-demo": "CAPTURE_AI_DEMO=1 npm run test --workspace apps/web -- src/demo/ai-templates/__capture__/capture.test.ts",
     "test:smoke": "node --experimental-strip-types scripts/smoke.ts",
     "test:smoke:sports": "node --experimental-strip-types scripts/smoke-sports.ts",
     "seed:demo:setup": "node --env-file=apps/web/.env.local --experimental-strip-types scripts/seed-demo.ts --phase=setup",
