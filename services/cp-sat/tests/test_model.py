@@ -103,9 +103,16 @@ def test_production_board_solves_under_budget():
     solves are what make the budget tests marginal. Measured at a 3 s wall,
     against the Task 2 audit's mutation matrix: the participant-rest
     `AddNoOverlap` mutant (M2) and the dropped-court-gap mutant (M7) both go
-    from RED to **GREEN**. See the note on
-    `test_assignments_satisfy_every_stated_constraint` for the mechanism — it
-    applies to every solving test in this file.
+    from RED to **GREEN**.
+
+    What is load-bearing is T1's PACKING PRESSURE, not the number 8. A wall
+    that stops inside T1 hands back essentially T0's board, and T0 only
+    maximises placement — on a lattice this sparse it spreads fixtures out and
+    a removed constraint never binds. Any wall long enough to let T1 prove its
+    makespan optimum preserves the coverage; anything shorter silently loses
+    it. So if this ever has to change, the test is "does T1 still complete",
+    and re-running the M1-M8 matrix is how you check. Full mechanism and table
+    in `test_assignments_satisfy_every_stated_constraint`.
     """
     fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
     model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
@@ -117,10 +124,16 @@ def test_production_board_solves_under_budget():
 
 
 def test_no_court_double_booking():
-    # The 8 s wall is load-bearing, not slack — see
-    # `test_assignments_satisfy_every_stated_constraint`. A shorter wall stops
-    # after T0, and T0 alone does not pack the board hard enough for a removed
-    # court/rest constraint to show up in the placements.
+    # THE WALL IS COVERAGE, NOT SLACK, and the reason is T1's PACKING
+    # PRESSURE — not the number 8. A wall short enough to stop inside T1
+    # returns essentially T0's board, and T0 only MAXIMISES PLACEMENT: with
+    # 8 320 slots for 37 fixtures it has no reason to put two matches near
+    # each other, so a deleted court-turnaround constraint never shows up in
+    # the placements. It is T1's makespan minimisation that presses fixtures
+    # together and turns a missing constraint into a visible violation.
+    # Measured at 3 s: the M2 (participant-rest) and M7 (court-gap) mutants
+    # both go from RED to GREEN. Full table in
+    # `test_assignments_satisfy_every_stated_constraint`.
     fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
     model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
     outcome = solve(model, wall_seconds=8.0)
@@ -160,8 +173,18 @@ def test_assignments_satisfy_every_stated_constraint():
 
     So the wall here is not budget slack that can be reclaimed to speed the
     suite up; it is what makes six of this file's constraint families testable
-    at all. If suite runtime ever has to come down, take it from somewhere
-    else and re-run the mutation matrix to prove you did no harm.
+    at all.
+
+    THE INVARIANT IS "T1 COMPLETES", NOT "THE NUMBER IS 8". Do not read this
+    as a magic constant to be preserved verbatim — read it as a floor. Any
+    wall that lets T1 prove its makespan optimum keeps the coverage; anything
+    that cuts T1 off loses M2 and M7 silently, with the suite still green. If
+    suite runtime ever has to come down, the lever is elsewhere (fewer search
+    workers, or not stacking the budget tests behind the packing-pressure
+    ones), and re-running the M1-M8 matrix is how you prove you did no harm.
+
+    Iterating locally at a 2-3 s wall is fine and is much faster; just never
+    ship the shortened wall.
     """
     fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
     model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
