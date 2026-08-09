@@ -966,10 +966,21 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
 // WHAT THIS PROVES.
 //
 // Dropping a court from `config.courts` used to be completely unguarded. A
-// fixture PINNED to that court is exempt from AUTO's own cleanup filter, and
-// REFLOW's move-minimising objective leaves it where it is, so the card stays
-// on a court the board no longer draws — invisible, unmovable, still occupying
-// the timetable. The guard rejects that save with a 409 before it writes.
+// fixture the auto pass cannot relocate stays on a court the board no longer
+// draws — invisible, unmovable, still occupying the timetable. The guard
+// rejects that save with a 409 before it writes.
+//
+// TWO fixtures are immovable, and the ruling blocks both:
+//   * PINNED (`schedule_locked`) — exempt from AUTO's cleanup filter, and
+//     REFLOW's move-minimising objective leaves it where it is;
+//   * FIXED OCCUPANCY — a fixture that holds a court but is not `scheduled`.
+//     `MOVABLE_STATUS` is `"scheduled"` alone, so `in_play`/`decided`/
+//     `finalized`/`forfeited` are immutable obstacles (doc 12 §6). This half
+//     has NO pin attached, so the refusal must name a different reason or the
+//     organiser searches for a pin that is not there.
+// That second set is `FIXED_OCCUPYING = OCCUPYING.filter(s => s !== MOVABLE_STATUS)`,
+// derived in schedule.ts and never spelled out as a literal here either — a
+// hand-typed status list rots silently the day `OCCUPYING` grows a member.
 //
 // The four things a naive "it rejects" test would NOT catch, each with its own
 // case below:
@@ -1086,22 +1097,110 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
     const { auth, divisionId, fixtures } = await seedCourtDivision();
     await place(auth, fixtures[0]!.id, "Court 2", 0, true);
 
-    await expect(putScheduleSettings(auth, divisionId, dropCourt2())).rejects.toMatchObject({
-      status: 409,
-      message: expect.stringMatching(/court 2/i),
-    });
+    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2()));
+    expect(err.status).toBe(409);
+    expect(err.message).toMatch(/court 2/i);
+    // Paired with the completed-fixture case below, which asserts the OPPOSITE
+    // reason on the same message shape: neither wording can drift into the other.
+    expect(err.message).toMatch(/pinned/i);
   });
 
-  it("allows removing a court whose fixtures are all unlocked", async () => {
+  /** THE REGRESSION THAT MATTERS MOST. The whole ruling turns on "AUTO can
+   *  relocate this one", so the guard must stay narrower than "any fixture on
+   *  the court". The status precondition is asserted, not assumed: if the seed
+   *  ever stopped leaving the fixture `scheduled` this case would go on passing
+   *  for the wrong reason, and it is the only thing standing between the guard
+   *  and an over-widening that blocks every populated court. */
+  it("allows removing a court whose fixtures are all unlocked and still movable", async () => {
     const { auth, divisionId, fixtures } = await seedCourtDivision();
     await place(auth, fixtures[0]!.id, "Court 2", 0, false);
 
-    // AUTO already relocates an unlocked card off a removed court, so refusing
-    // this save would be a regression the guard must not introduce. Read back
-    // rather than trusting the return: a resolve alone does not prove a write.
+    const [seeded] = await sql<{ status: string; schedule_locked: boolean }[]>`
+      select status, schedule_locked from fixtures where id = ${fixtures[0]!.id}`;
+    expect(seeded!.status).toBe("scheduled");
+    expect(seeded!.schedule_locked).toBe(false);
+
+    // Read back rather than trusting the return: a resolve alone does not
+    // prove a write.
     const saved = await putScheduleSettings(auth, divisionId, dropCourt2());
     expect(saved.config.courts).toEqual(["Court 1"]);
     expect((await getScheduleSettings(auth, divisionId)).config.courts).toEqual(["Court 1"]);
+  });
+
+  /** The widened half of the rule. A DECIDED fixture is unlocked, so the pin
+   *  check waves it through — but `MOVABLE_STATUS` is `"scheduled"` alone, so
+   *  the auto pass treats it as a fixed obstacle and will never relocate it
+   *  (doc 12 §6: decided fixtures are immutable). It orphans on a removed court
+   *  exactly the way a pin does, with no pin anywhere for the organiser to
+   *  find — hence the message must NOT say "pinned". */
+  it("rejects removing a court that holds a completed fixture, with no pin anywhere", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, "Court 2", 0, false);
+    await startDivision(auth, divisionId);
+    await decide(auth, fixtures[0]!.id, 2, 1);
+
+    const [seeded] = await sql<{ status: string; schedule_locked: boolean }[]>`
+      select status, schedule_locked from fixtures where id = ${fixtures[0]!.id}`;
+    expect(seeded!.status).toBe("decided");
+    expect(seeded!.schedule_locked).toBe(false);
+
+    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2()));
+    expect(err.status).toBe(409);
+    expect(err.message).toMatch(/court 2/i);
+    // The reason has to be distinguishable, or the organiser goes hunting for a
+    // pin that does not exist. This half is the load-bearing one.
+    expect(err.message).not.toMatch(/pinned/i);
+    expect(err.message).toMatch(/in play or completed/i);
+  });
+
+  /** Same guard, the other reason, and the message says so. Two separate courts
+   *  in one save so the per-court breakdown is exercised rather than a single
+   *  global reason string. */
+  it("names the two blocking reasons separately in one refusal", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision([
+      "Court 1",
+      "Court 2",
+      "Court 3",
+    ]);
+    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
+    await place(auth, fixtures[1]!.id, "Court 3", 60, false);
+    await startDivision(auth, divisionId);
+    await decide(auth, fixtures[1]!.id, 2, 1);
+
+    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2()));
+    expect(err.status).toBe(409);
+    expect(err.message).toMatch(/Court 2 \(1 pinned\)/);
+    expect(err.message).toMatch(/Court 3 \(1 in play or completed\)/);
+  });
+
+  /** ATOMICITY on the widened path too. A second early return added for the
+   *  status check could easily land after the upsert; deep-equalling the whole
+   *  stored config plus `updated_at` is what catches that. */
+  it("does not write anything when a completed-fixture save is rejected", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, "Court 2", 0, false);
+    await startDivision(auth, divisionId);
+    await decide(auth, fixtures[0]!.id, 2, 1);
+
+    const before = await getScheduleSettings(auth, divisionId);
+    await expect(
+      putScheduleSettings(auth, divisionId, {
+        config: {
+          ...COURT_GUARD_CONFIG,
+          courts: ["Court 1"],
+          matchMinutes: 90,
+          gapMinutes: 0,
+          perEntrantMinRest: 25,
+          startAt: at(600),
+        },
+      }),
+    ).rejects.toBeDefined();
+
+    const after = await getScheduleSettings(auth, divisionId);
+    expect(after.config).toEqual(before.config);
+    expect(after.config.courts).toEqual(["Court 1", "Court 2"]);
+    expect(after.config.matchMinutes).toBe(45);
+    expect(after.updated_at).toEqual(before.updated_at);
   });
 
   it("allows removing a court with no fixtures on it at all", async () => {
