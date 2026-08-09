@@ -177,6 +177,25 @@ omitted court — the model gives it a real column and places matches on
 it (measured: two fixtures over one grid point place 2 with an empty
 string in `courts`, one of them on court `''`, and 1 without).
 
+**4. Court names must be unique, and `config.courts` is not guaranteed to
+make them so.** `courts` carries court *names*. Two venues that each call
+a court "Court 1" produce a duplicate, and the ACL now **hard-refuses**
+it rather than silently letting the model collapse or split them.
+
+That rejection is deliberate — whether duplicates are harmless is a
+property of today's model, not of the contract — but the cost lands on
+you: you must disambiguate names before sending, not after. A caller that
+passes `config.courts` straight through will start failing for any org
+whose court names repeat across venues.
+
+**5. Every court you declare must be referenced by at least one slot.**
+A declared court with no slots is not inert — measured 6/6, `courts=["C0","C1"]`
+with one slot on `C0` returns **OPTIMAL, placed=2, with a fixture on
+`C1`**, a court that has nowhere to play. This is reachable from real
+data: `Blackout.court?` (`calendar.ts:21`) via `build.ts:1752` is exactly
+how a court loses all its slots. Filter the court list to those the grid
+actually covers.
+
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `cd packages/engine && npx vitest run src/scheduling/build.test.ts`
