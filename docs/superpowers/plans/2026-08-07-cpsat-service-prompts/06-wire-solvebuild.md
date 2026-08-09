@@ -115,6 +115,35 @@ computed earlier in the function, unchanged), call
 >   `SolveBuildOptions` is wire-free) is reachable from `build.ts`'s
 >   tests. Say in your report which you chose — 06b depends on it.
 
+### Two obligations Prompt 05c created for you (2026-08-09)
+
+**1. You owe a correct `dayIndex`, and it needs its own test.**
+Day caps no longer bucket by a UTC quotient. `Slot` now carries a
+caller-supplied `day_index`, and the solver groups by that integer and
+never reasons about time zones at all — a deliberate ruling, because
+`_RULES.md` §1 puts timezone-as-policy outside this bounded context.
+
+Which makes resolving each slot to the **org's local calendar day**
+entirely your job. This is issue #448 one layer up: the in-scope `tz` is
+wrong and typechecks, and `settings.orgTz` is the governing clock. Get it
+wrong and every day cap binds against the wrong day, silently, exactly as
+before — only now nothing downstream can catch it, because the solver has
+been made deliberately blind to time zones.
+
+Note also that `Assignment` does **not** carry `day_index`. That was
+considered and rejected: caps are per-division and `Assignment` has no
+`division_id`, so the field would have been decorative. The consequence
+is real and documented in `model.py` — `existing` rows do not participate
+in day caps.
+
+**2. You must FILTER your rule maps — this is a behaviour change.**
+Rules naming a division that no fixture declares are now **rejected**,
+not silently ignored. If you pass an org-wide rest or day-cap map
+straight through, a division that happens to have no fixtures in this
+board will now produce an `InvalidRequestError` where it previously
+produced a silent no-op. Filter to the divisions actually present in
+`fixtures` before sending.
+
 `assignments`/`tiersCompleted`/`elapsedMs`/`wallExhausted` into the same
 local variables the rest of the function already expects before falling
 through to the existing `validateAssignments` call. On rejection (any
