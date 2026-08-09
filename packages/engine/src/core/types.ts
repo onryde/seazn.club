@@ -180,6 +180,28 @@ export const LineupSlot = z.object({
   // numbers simply omit it, and every lineup written before W4 stays valid.
   // 0 is a legal number.
   squadNumber: z.number().int().nonnegative().optional(),
+  // S3/W4b (#426) OWNER RULING 3 — a team official is a ROLE on the slot, not a
+  // separate collection. A coach can be cautioned, sent off and suspended, so
+  // he has to be nameable on the team sheet; but he never plays, so `role`
+  // rather than a parallel `officials: []` keeps one identity per person and
+  // lets `core/lineup.ts` filter every playing projection on one field.
+  //
+  // OPTIONAL WITH NO `.default()`, deliberately. A `.default()` would rewrite
+  // every parsed slot in the system to carry `role: "player"`, which is a
+  // change to recorded lineups for a field nothing had asked for; `initSquads`
+  // applies the default once, where it is read. Absent ⇒ `player`.
+  //
+  // Carried caveat (S4, #428): `persons.lane` is `check (lane in
+  // ('player','official'))` where `'official'` means a MATCH official, so a
+  // team coach has no DB lane yet. Engine-side only until S4 extends it.
+  role: z.enum(["player", "coach", "staff"]).optional(),
+  // S3/W4b (#426) — declared order WITHIN a pair (1 = first-named), for the
+  // doubles disciplines. `orderNo` cannot carry it: that is the team-sheet
+  // order across the whole squad, and a five-pair table-tennis tie has five
+  // first-named players. Recorded because it is DECLARED, not derivable — the
+  // racquet dossiers marked it `deferred` for exactly the lack of a field.
+  // Sports read it in pass B; the engine only has to stop discarding it.
+  pairOrder: z.number().int().positive().optional(),
 });
 export type LineupSlot = z.infer<typeof LineupSlot>;
 
