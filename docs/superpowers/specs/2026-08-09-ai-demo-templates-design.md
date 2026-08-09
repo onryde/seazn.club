@@ -66,7 +66,7 @@ One JSON per template at `apps/web/src/demo/ai-templates/<slug>.json`:
     "entrants": [ /* id, name */ ],
     "window": { /* session window(s), anchor date */ }
   },
-  "response": { /* AiPlanResult | AiCompetitionPlanResponse, verbatim — post-verify */ },
+  "response": { /* AiPlanResponse | AiCompetitionPlanResponse, verbatim — post-verify */ },
   "verify": { /* VerifyConfig snapshot sufficient to re-run validateAssignments */ }
 }
 ```
@@ -74,20 +74,25 @@ One JSON per template at `apps/web/src/demo/ai-templates/<slug>.json`:
 **There is no `planRaw`, because it cannot be captured.** The raw
 `AiSchedulePlan` never crosses an exported boundary: the model's own output is
 parsed, structurally checked, verified and repaired entirely inside
-`aiPlanForDivision`, and what the usecase returns is `AiPlanResult`
-(`schedule-ai.ts:1444`) — already post-verify. Nothing the capture can call
+`aiPlanForDivision`, and what the usecase returns is `AiPlanResponse`
+(`api-v1/schemas.ts:2110`) — already post-verify. Nothing the capture can call
 hands back the pre-verify plan.
 
 So the fixture stores the verified `response` **verbatim**, and the drift
 guard reconstructs what it needs: a plan-shaped projection of
 `response.proposal` + `response.unschedulable`. That projection is lossless
 for `structuralCheck`'s purposes, which is the only thing reading it —
-`proposal`'s element type is field-identical to `AiAssignment`
-(`fixture_id`, `scheduled_at`, `court_label`, optional `schedule_locked`), and
-`response.unschedulable` is a superset of the plan's (it adds `rule`, which
-`structuralCheck` ignores). The museum-of-an-older-product failure the issue
-names is still caught: the projection is re-checked against today's
-`structuralCheck` and re-verified against today's engine.
+`proposal`'s rows are `AiPlanAssignment` (`api-v1/schemas.ts:2006`), which is
+*field-name*-identical to `AiAssignment` (`schedule-ai-prompt.ts:226`); the
+plan schema is strictly narrower (`scheduled_at` must be
+`.datetime({offset: true})` and `court_label` `.min(1)`, both bare
+`z.string()` on the wire), which costs the projection nothing because those
+values only reached the wire by parsing as a plan in the first place.
+`response.unschedulable` (`api-v1/schemas.ts:2112`) is a superset of the
+plan's — it adds `rule`, which `structuralCheck` ignores. The
+museum-of-an-older-product failure the issue names is still caught: the
+projection is re-checked against today's `structuralCheck` and re-verified
+against today's engine.
 
 Loaded by **dynamic import on card selection** — the T2 fixture (~115
 fixtures, likely 100–200 KB) must not sit in the marketing page's initial
@@ -134,7 +139,7 @@ usecases mint their UUIDs server-side, so no two capture runs agree byte for
 byte on an id field, and "re-runnable to identical bytes" stated over raw ids
 is simply false. Determinism is therefore asserted **after first-seen
 UUID→placeholder normalization** — the approach the pack tests already take
-(`redact()`, `schedule-ai-pack.test.ts:58`). Under that normalization the
+(`redact()`, `schedule-ai-pack.test.ts:60`). Under that normalization the
 *seeds and packs* do reproduce exactly: names, times, structure and counts are
 literal-fixed and compare verbatim. The *model output* may legitimately differ
 — a refresh produces a new fixture to commit, and the drift guard validates
@@ -226,6 +231,7 @@ attract-mode board:
 3. `/[lang]/scheduling/page.tsx` gains the section + the filtered-dict
    provider.
 4. Four `marketing` dictionaries gain the demo keys.
+5. Root `package.json` gains the `capture:ai-demo` script.
 
 No routes, no schema, no credits, no entitlements, nothing under
 `(marketing)` beyond the one page.
