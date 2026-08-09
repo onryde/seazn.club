@@ -873,7 +873,7 @@ function Comparison({
         role="region"
         aria-label={t(dict, "upgrade.compare.title")}
       >
-        <table className="w-full min-w-[22rem] border-collapse text-sm">
+        <table className="w-full min-w-0 border-collapse text-sm sm:min-w-[22rem]">
           <thead>
             <tr className="border-b border-purple-100">
               <th scope="col" className="py-2 pr-3 text-left font-normal text-slate-500">
