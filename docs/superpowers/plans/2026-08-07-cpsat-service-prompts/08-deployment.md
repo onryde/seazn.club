@@ -64,6 +64,27 @@ safe on the production board *because* real boards are heavily
 constrained; a sparsely-constrained org is the harder case. Do not size
 memory or CPU off the dense board alone.
 
+**5. What actually degrades under load is PROOF time, not placement — and
+this is the single most important number for sizing this machine.**
+
+The production board's acceptance test reds above load ~8.2, reaching
+`OPTIMAL` only about 2-3 times in 12 across two independent paired,
+interleaved A/B runs. Read alone, that looks alarming for a 2-vCPU box.
+
+It is not, and the reason matters: **`placed` was 37 of 37 in all 12
+runs.** What varies under contention is `tiers_completed` — how much of
+the T0→T3 chain the solver gets to *prove* inside the wall.
+
+So the 8-second budget is a **proof-time** criterion, not a placement
+one. Under-provisioning does not hand an organiser a broken or partial
+board; it hands them a fully-placed board that is less optimised — worse
+makespan, worse idle gaps, worse court balance — and a lower
+`tiers_completed` in the telemetry.
+
+Size for the quality you want to guarantee, and say in your report which
+tier you are willing to have complete on the deploy shape. Do not size as
+though a slow machine drops fixtures, because it does not.
+
 ---
 
 - [ ] **Step 1: Write the Dockerfile**
