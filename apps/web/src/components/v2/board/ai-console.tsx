@@ -44,7 +44,8 @@ import { AiQuoteCard, quoteFor, type QuoteCardLine } from "./ai-quote-card";
 import { useRungConfig } from "./rung-config-provider";
 import { compileWishes, deriveFreeText, joinNonEmpty, type Wish } from "./wish-compile";
 import { compileOfficialsWishes, type OfficialsWish } from "./officials-wish-compile";
-import { AiTrace, type TraceEvent } from "./ai-trace";
+import { AiTrace } from "./ai-trace";
+import { buildScheduleTrace } from "./ai-trace-compose";
 import { AiDiffPanel } from "./ai-diff-panel";
 import { AiReviewPanel } from "./ai-review-panel";
 import { AiInstructionPreview } from "./ai-instruction-preview";
@@ -1364,60 +1365,6 @@ export function BriefStep({
 }
 
 // ----------------------------------------------------------- schedule step
-/**
- * Compose the referee trace from the verified plan (design §0). There is no
- * server trace field, so the console narrates what the engine did from the
- * result: a draft/plan/verify spine, then — when a repair ran or conflicts
- * surfaced — flag lines (the caught conflicts, pulsed on the grid) and a repair
- * round, and finally either the mandated CLEAN line + Ready, or, when blocking
- * conflicts remain, a red "unresolved" tail (no clean, spine stays flagged).
- */
-function buildScheduleTrace(
-  plan: AiPlanResponse,
-  courts: number,
-  msg: ReturnType<typeof useMsg>,
-): { events: TraceEvent[]; flaggedIds: string[] } {
-  const events: TraceEvent[] = [];
-  const node = (k: MessageKey) => events.push({ t: "step", text: msg(k) });
-  const log = (text: string) => events.push({ t: "log", text });
-
-  node("board.ai.trace.node.draft");
-  log(msg("board.ai.trace.line.draft", { fixtures: plan.proposal.length, courts }));
-  node("board.ai.trace.node.plan");
-  log(msg("board.ai.trace.line.plan", { count: plan.proposal.length }));
-  node("board.ai.trace.node.referee");
-  log(msg("board.ai.trace.line.verify"));
-
-  const conflicts = [...plan.blocking, ...plan.warnings];
-  const flaggedIds = Array.from(new Set(conflicts.map((c) => c.fixtureId)));
-  const repaired = plan.usage.repair_rounds > 0;
-
-  if (repaired || conflicts.length > 0) {
-    const shown = conflicts.slice(0, 3);
-    if (shown.length > 0) {
-      for (const c of shown) {
-        events.push({ t: "flag", text: msg("board.ai.trace.line.flag", { what: c.detail || c.reason }) });
-      }
-    } else {
-      events.push({ t: "flag", text: msg("board.ai.trace.line.flagGeneric") });
-    }
-    if (repaired) {
-      node("board.ai.trace.node.repair");
-      log(msg("board.ai.trace.line.repair", { rounds: plan.usage.repair_rounds }));
-    }
-  }
-
-  if (plan.blocking.length > 0) {
-    // Not clean — the engine could not fully verify; spine ends flagged.
-    events.push({ t: "flag", text: msg("board.ai.trace.line.blockingRemain", { count: plan.blocking.length }) });
-  } else {
-    events.push({ t: "clean", text: msg("board.ai.trace.line.clean") });
-    node("board.ai.trace.node.ready");
-  }
-
-  return { events, flaggedIds };
-}
-
 /** Exported for the render tests: its inputs are a raw plan and the board's
  *  fixtures, and everything worth pinning — what the review card counts, what
  *  it names — is derived from them, so calling it directly still pins the
