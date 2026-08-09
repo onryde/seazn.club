@@ -417,7 +417,7 @@
   "scheduling.aidemo.replay": "Reproducir otra vez",
   "scheduling.aidemo.loading": "Cargando la grabación…",
   "scheduling.aidemo.recordedLabel": "Grabado en una planificación real",
-  "scheduling.aidemo.recordedMeta": "{model} · {date}",
+  "scheduling.aidemo.recordedMeta": "{date}",
   "scheduling.aidemo.commitAria": "Grabado en el commit {commit}",
   "scheduling.aidemo.instructionLabel": "Lo que pidió el organizador",
   "scheduling.aidemo.mode.generate": "Horario nuevo",

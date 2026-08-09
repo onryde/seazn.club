@@ -351,10 +351,11 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
                   commit: fixture.meta.commit.slice(0, 7),
                 })}
               >
-                {t("scheduling.aidemo.recordedMeta", {
-                  model: fixture.meta.model,
-                  date: capturedOn,
-                })}
+                {/* Date and commit only. The served model is deliberately NOT
+                    named on a public page (owner's ruling 2026-08-09) — it stays
+                    in the recording as provenance, read by the capture harness
+                    and the drift guard, never rendered. */}
+                {t("scheduling.aidemo.recordedMeta", { date: capturedOn })}
               </span>
             )}
           </div>

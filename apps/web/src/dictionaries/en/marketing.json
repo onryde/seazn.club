@@ -418,7 +418,7 @@
   "scheduling.aidemo.replay": "Play it again",
   "scheduling.aidemo.loading": "Loading the recording…",
   "scheduling.aidemo.recordedLabel": "Recorded from a real run",
-  "scheduling.aidemo.recordedMeta": "{model} · {date}",
+  "scheduling.aidemo.recordedMeta": "{date}",
   "scheduling.aidemo.commitAria": "Recorded at commit {commit}",
   "scheduling.aidemo.instructionLabel": "What the organiser asked for",
   "scheduling.aidemo.mode.generate": "New schedule",

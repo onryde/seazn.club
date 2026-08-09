@@ -417,7 +417,7 @@
   "scheduling.aidemo.replay": "Speel opnieuw af",
   "scheduling.aidemo.loading": "Opname laden…",
   "scheduling.aidemo.recordedLabel": "Opgenomen tijdens een echte run",
-  "scheduling.aidemo.recordedMeta": "{model} · {date}",
+  "scheduling.aidemo.recordedMeta": "{date}",
   "scheduling.aidemo.commitAria": "Opgenomen bij commit {commit}",
   "scheduling.aidemo.instructionLabel": "Wat de organisator vroeg",
   "scheduling.aidemo.mode.generate": "Nieuw schema",

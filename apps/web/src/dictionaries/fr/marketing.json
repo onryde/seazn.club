@@ -417,7 +417,7 @@
   "scheduling.aidemo.replay": "Rejouer",
   "scheduling.aidemo.loading": "Chargement de l'enregistrement…",
   "scheduling.aidemo.recordedLabel": "Enregistré lors d'une vraie planification",
-  "scheduling.aidemo.recordedMeta": "{model} · {date}",
+  "scheduling.aidemo.recordedMeta": "{date}",
   "scheduling.aidemo.commitAria": "Enregistré au commit {commit}",
   "scheduling.aidemo.instructionLabel": "Ce que l'organisateur a demandé",
   "scheduling.aidemo.mode.generate": "Nouveau planning",

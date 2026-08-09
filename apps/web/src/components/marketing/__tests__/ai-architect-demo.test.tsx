@@ -32,6 +32,9 @@ import type { Dict } from "@/lib/i18n-constants";
 import type { AiDemoFixture } from "@/demo/ai-templates/types";
 
 import marketingEn from "@/dictionaries/en/marketing.json";
+import marketingEs from "@/dictionaries/es/marketing.json";
+import marketingFr from "@/dictionaries/fr/marketing.json";
+import marketingNl from "@/dictionaries/nl/marketing.json";
 import uiEn from "@/dictionaries/en/ui.json";
 import clubNightJson from "@/demo/ai-templates/club-night.json";
 import northsideJson from "@/demo/ai-templates/northside-open.json";
@@ -58,6 +61,15 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
   };
   return { ...actual, useDict: () => dict };
 });
+
+/** All four shipped marketing catalogs — the model-name ban is a copy rule, so
+ *  it is checked against every locale, not only the one the island mounts in. */
+const MARKETING_DICTS: Record<string, Record<string, unknown>> = {
+  en: marketingEn as unknown as Record<string, unknown>,
+  es: marketingEs as unknown as Record<string, unknown>,
+  fr: marketingFr as unknown as Record<string, unknown>,
+  nl: marketingNl as unknown as Record<string, unknown>,
+};
 
 const msg = (key: string, vars?: Record<string, string | number>) => tRuntime(DICT, key, vars);
 const tPlural = (key: string, count: number, vars?: Record<string, string | number>) =>
@@ -269,16 +281,40 @@ describe("AiArchitectDemo — T1 club night", () => {
     expect(propsOf(trace).running).toBe(false);
   });
 
-  it("names the run it recorded — label, model and capture date", async () => {
+  it("names the run it recorded — label and capture date, never the model", async () => {
     const island = await mount();
     await select(island, "club-night");
     const text = island.text();
     expect(text).toContain(msg("scheduling.aidemo.recordedLabel"));
-    expect(text).toContain(CLUB_NIGHT.meta.model);
     expect(text).toContain(captureDate(CLUB_NIGHT.meta.capturedAt));
     expect(text).toContain("2026");
     // The organiser's own sentence, verbatim.
     expect(text).toContain(CLUB_NIGHT.meta.instruction);
+  });
+
+  // Owner's ruling (2026-08-09): the marketing page does not name the model it
+  // was served by. `meta.model` stays in the recording — it is provenance the
+  // capture harness and the drift guard both read — but nothing rendered may
+  // carry it. Two halves, because either alone is escapable: the render half
+  // proves the component does not print `fixture.meta.model`, and the dictionary
+  // half proves no locale's copy hardcodes the name (the slate's text is a
+  // per-locale value, and only `en` is mounted here).
+  it("never renders the served model", async () => {
+    const island = await mount();
+    for (const slug of ["club-night", "northside-open", "finals-day"]) {
+      await select(island, slug);
+      await playOut();
+      expect(island.text(), `${slug} names the model`).not.toContain(CLUB_NIGHT.meta.model);
+    }
+  });
+
+  it("names the model in no locale's copy", () => {
+    for (const [locale, dict] of Object.entries(MARKETING_DICTS)) {
+      const named = Object.entries(dict).filter(([, v]) =>
+        typeof v === "string" ? v.includes(CLUB_NIGHT.meta.model) : false,
+      );
+      expect(named, `${locale} marketing copy names the model`).toEqual([]);
+    }
   });
 
   it("prices the run with quoteRun, and agrees with what the run was charged", async () => {
