@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from google.protobuf.descriptor import FieldDescriptor
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -82,26 +83,95 @@ def test_grpc_stub_imports_as_a_package_module():
 # Field-by-field contract. A rename, a renumber, a type change or a
 # repeated/singular flip in proto/scheduler.proto breaks these — this task owns
 # catching that, because a mismatch here becomes a bug in every downstream task.
-# Tuples are (field number, wire type, is_repeated).
+#
+# Tuples are (field number, wire type, is_repeated, has_presence), and BOTH of
+# the last two carry a specific defect this suite has already shipped once:
+#
+#   is_repeated   the request's shape.
+#   has_presence  proto3's `optional` keyword — the ONLY way a scalar can
+#                 distinguish "not sent" from "sent as 0". Which fields carry
+#                 it is a design decision, not an accident, so it is asserted
+#                 rather than left to whoever edits the .proto next: adding or
+#                 deleting the keyword compiles, round-trips and changes no
+#                 behaviour that any other test can see, while deciding whether
+#                 a whole constraint family can silently evaporate.
+#
+# The wire type is equally load-bearing and is the reason this file grew to
+# cover the nested messages at all: `int64 -> int32` on `Tier.value_ms` or on
+# either `start_at_ms` survived every behavioural test in the suite. It cannot
+# be caught by data — durations do not scale with the epoch, and the corpus's
+# largest makespan (~1.5e9) fits inside int32 — so the only place the narrowing
+# is observable is the descriptor.
 EXPECTED_REQUEST_FIELDS = {
-    "request_id":   (1, FieldDescriptor.TYPE_STRING,  False),
-    "courts":       (2, FieldDescriptor.TYPE_STRING,  True),
-    "grid":         (3, FieldDescriptor.TYPE_MESSAGE, False),
-    "fixtures":     (4, FieldDescriptor.TYPE_MESSAGE, True),
-    "existing":     (5, FieldDescriptor.TYPE_MESSAGE, True),
-    "dependencies": (6, FieldDescriptor.TYPE_MESSAGE, True),
-    "constraints":  (7, FieldDescriptor.TYPE_MESSAGE, False),
-    "wall_seconds": (8, FieldDescriptor.TYPE_DOUBLE,  False),
+    "request_id":   (1, FieldDescriptor.TYPE_STRING,  False, False),
+    "courts":       (2, FieldDescriptor.TYPE_STRING,  True,  False),
+    "grid":         (3, FieldDescriptor.TYPE_MESSAGE, False, True),
+    "fixtures":     (4, FieldDescriptor.TYPE_MESSAGE, True,  False),
+    "existing":     (5, FieldDescriptor.TYPE_MESSAGE, True,  False),
+    "dependencies": (6, FieldDescriptor.TYPE_MESSAGE, True,  False),
+    "constraints":  (7, FieldDescriptor.TYPE_MESSAGE, False, True),
+    "wall_seconds": (8, FieldDescriptor.TYPE_DOUBLE,  False, False),
 }
 
 EXPECTED_RESPONSE_FIELDS = {
-    "assignments":      (1, FieldDescriptor.TYPE_MESSAGE, True),
-    "status":           (2, FieldDescriptor.TYPE_ENUM,    False),
-    "tiers_completed":  (3, FieldDescriptor.TYPE_INT32,   False),
-    "objective_values": (4, FieldDescriptor.TYPE_MESSAGE, True),
-    "elapsed_ms":       (5, FieldDescriptor.TYPE_INT64,   False),
-    "wall_exhausted":   (6, FieldDescriptor.TYPE_BOOL,    False),
-    "error":            (7, FieldDescriptor.TYPE_MESSAGE, False),
+    "assignments":      (1, FieldDescriptor.TYPE_MESSAGE, True,  False),
+    "status":           (2, FieldDescriptor.TYPE_ENUM,    False, False),
+    "tiers_completed":  (3, FieldDescriptor.TYPE_INT32,   False, False),
+    "objective_values": (4, FieldDescriptor.TYPE_MESSAGE, True,  False),
+    "elapsed_ms":       (5, FieldDescriptor.TYPE_INT64,   False, False),
+    "wall_exhausted":   (6, FieldDescriptor.TYPE_BOOL,    False, False),
+    "error":            (7, FieldDescriptor.TYPE_MESSAGE, False, True),
+}
+
+#: Every other message in the contract. `SolveBuildRequest`/`SolveBuildResponse`
+#: were covered from the start; these were not, which is how three proto mutants
+#: (`Assignment.start_at_ms` and `Tier.value` narrowed to int32, among them)
+#: survived all 57 proto-aware tests.
+EXPECTED_MESSAGE_FIELDS = {
+    "Slot": {
+        "court":       (1, FieldDescriptor.TYPE_STRING, False, False),
+        "start_at_ms": (2, FieldDescriptor.TYPE_INT64,  False, False),
+    },
+    "Grid": {
+        "slots":        (1, FieldDescriptor.TYPE_MESSAGE, True,  False),
+        "step_minutes": (2, FieldDescriptor.TYPE_INT32,   False, False),
+    },
+    "Fixture": {
+        "fixture_id":  (1, FieldDescriptor.TYPE_STRING, False, False),
+        "entrant_ids": (2, FieldDescriptor.TYPE_STRING, True,  False),
+        "division_id": (3, FieldDescriptor.TYPE_STRING, False, False),
+    },
+    "Assignment": {
+        "fixture_id":  (1, FieldDescriptor.TYPE_STRING, False, False),
+        "court":       (2, FieldDescriptor.TYPE_STRING, False, False),
+        "start_at_ms": (3, FieldDescriptor.TYPE_INT64,  False, False),
+    },
+    "OrderPair": {
+        "before_fixture_id": (1, FieldDescriptor.TYPE_STRING, False, False),
+        "after_fixture_id":  (2, FieldDescriptor.TYPE_STRING, False, False),
+    },
+    "DivisionRestRule": {
+        "division_id":      (1, FieldDescriptor.TYPE_STRING, False, False),
+        "min_rest_minutes": (2, FieldDescriptor.TYPE_INT32,  False, False),
+    },
+    "DivisionDayCapRule": {
+        "division_id":          (1, FieldDescriptor.TYPE_STRING, False, False),
+        "max_fixtures_per_day": (2, FieldDescriptor.TYPE_INT32,  False, False),
+    },
+    "BuildConstraints": {
+        "match_minutes":       (1, FieldDescriptor.TYPE_INT32,   False, False),
+        "gap_minutes":         (2, FieldDescriptor.TYPE_INT32,   False, False),
+        "rest_by_division":    (3, FieldDescriptor.TYPE_MESSAGE, True,  False),
+        "day_cap_by_division": (4, FieldDescriptor.TYPE_MESSAGE, True,  False),
+    },
+    "Tier": {
+        "name":     (1, FieldDescriptor.TYPE_STRING, False, False),
+        "value_ms": (2, FieldDescriptor.TYPE_INT64,  False, False),
+    },
+    "SolveError": {
+        "code":    (1, FieldDescriptor.TYPE_STRING, False, False),
+        "message": (2, FieldDescriptor.TYPE_STRING, False, False),
+    },
 }
 
 EXPECTED_SOLVE_STATUS = {
@@ -121,12 +191,14 @@ def _assert_fields(descriptor, expected):
         f"unexpected={sorted(set(actual) - set(expected))}, "
         f"missing={sorted(set(expected) - set(actual))}"
     )
-    for name, (number, type_, repeated) in expected.items():
+    for name, (number, type_, repeated, presence) in expected.items():
         field = actual[name]
-        assert (field.number, field.type, field.is_repeated) == (number, type_, repeated), (
+        got = (field.number, field.type, field.is_repeated, field.has_presence)
+        assert got == (number, type_, repeated, presence), (
             f"{descriptor.full_name}.{name} changed: "
-            f"got (number={field.number}, type={field.type}, repeated={field.is_repeated}), "
-            f"expected (number={number}, type={type_}, repeated={repeated})"
+            f"got (number={field.number}, type={field.type}, repeated={field.is_repeated}, "
+            f"has_presence={field.has_presence}), "
+            f"expected (number={number}, type={type_}, repeated={repeated}, has_presence={presence})"
         )
 
 
@@ -138,6 +210,34 @@ def test_solve_build_request_contract():
 def test_solve_build_response_contract():
     pb2 = importlib.import_module("cp_sat.generated.scheduler_pb2")
     _assert_fields(pb2.SolveBuildResponse.DESCRIPTOR, EXPECTED_RESPONSE_FIELDS)
+
+
+@pytest.mark.parametrize("message_name", sorted(EXPECTED_MESSAGE_FIELDS))
+def test_nested_message_contract(message_name):
+    """Every message the two top-level ones are built out of.
+
+    Parametrized so a narrowing names the message it happened in, rather than
+    reporting one failure for the whole contract.
+    """
+    pb2 = importlib.import_module("cp_sat.generated.scheduler_pb2")
+    _assert_fields(getattr(pb2, message_name).DESCRIPTOR, EXPECTED_MESSAGE_FIELDS[message_name])
+
+
+def test_every_message_in_the_proto_is_covered():
+    """The contract above must not silently stop covering a new message.
+
+    Without this, adding a message to `scheduler.proto` and forgetting to
+    describe it here is invisible — the per-message tests only check what they
+    already know about, which is exactly how the nested messages went
+    uncovered for four review rounds.
+    """
+    pb2 = importlib.import_module("cp_sat.generated.scheduler_pb2")
+    declared = set(pb2.DESCRIPTOR.message_types_by_name)
+    covered = set(EXPECTED_MESSAGE_FIELDS) | {"SolveBuildRequest", "SolveBuildResponse"}
+    assert declared == covered, (
+        f"messages in scheduler.proto not covered by a field contract: {sorted(declared - covered)}; "
+        f"contracts for messages that no longer exist: {sorted(covered - declared)}"
+    )
 
 
 def test_solve_status_enum_contract():
