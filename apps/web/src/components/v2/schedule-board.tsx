@@ -906,9 +906,10 @@ export function ScheduleBoard({
               // `min-h-11` on all three: `py-1.5 text-xs` alone renders a 28px
               // control, well under the 44px touch target. These are the
               // primary actions of the surface, so the floor holds at every
-              // width — it was previously dropped past `sm` (640px) via
-              // `sm:min-h-0`, which read fine on phone and desktop widths but
-              // left tablet (768/834) with a 28px hit target (#349).
+              // width — it was previously dropped via `sm:min-h-0`, which
+              // activates at >=640px with no counter-override past that
+              // point, so the 28px height applied at every width from
+              // tablet through desktop, not just tablet (#349).
               <span key={s.id} className="inline-flex items-center gap-1">
                 {/* #465: the two original actions carry a stable id like their
                     Polish sibling. Not tidiness — `board.autoSchedule` is

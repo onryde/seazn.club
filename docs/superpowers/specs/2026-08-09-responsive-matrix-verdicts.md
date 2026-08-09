@@ -35,8 +35,9 @@ layout with no half-measures.
 **One pre-existing, out-of-scope defect found while building the screenshot
 fixtures:** `mobile.spec.ts`'s "console routes: no horizontal scroll" test
 navigates `/competitions/{id}`, `/competitions/{id}/settings`,
-`/divisions/{id}`, `/divisions/{id}?tab=fixtures` and
-`/divisions/{id}/registrations` — all dead (404) routes. No
+`/divisions/{id}`, `/divisions/{id}?tab=fixtures`,
+`/divisions/{id}?tab=standings` and `/divisions/{id}/registrations` — all
+dead (404) routes. No
 `src/app/competitions/[id]` or `src/app/divisions/[id]` page exists; the
 console moved to the `/o/{org}/c/{comp}/d/{div}` slug chain before this
 wave. The test still passes because a 404 page has no horizontal overflow —
@@ -77,7 +78,7 @@ owner / a future task, not corrected in `mobile.spec.ts`.
 | public news feed | `/shared/{org}/news` | OK | 2-col card grid, no overlap | — | `news-feed-{768,834}.png` |
 | public news post | `/shared/{org}/news/{slug}` | OK | article + share buttons fit | — | `news-post-{768,834}.png` |
 | publish-gate confirm sheet | `/o/{org}/c/{comp}/d/{div}/schedule?tab=board` (dialog open) | OK | renders as a centered modal (not the phone bottom sheet) at this width, conflict list and Cancel/Publish anyway both fit without clipping | — | `publish-gate-sheet-{768,834}.png` |
-| z3 schedule board (schedule-board.tsx:347 JS fork; named suspect) | `/o/{org}/c/{comp}/d/{div}/schedule?tab=board` | OK | action bar (now ≥44px after this task's fix), result strip, and week-view controls all fit without wrapping badly; `matchMedia("(max-width: 640px)")` fork is below both tablet widths, correctly inert here | — | `schedule-board-{768,834}.png` |
+| z3 schedule board (schedule-board.tsx:347 JS fork; named suspect) | `/o/{org}/c/{comp}/d/{div}/schedule?tab=board` | D | action toolbar (`flex flex-wrap` container, schedule-board.tsx:901) breaks into 2 rows, isolating the "Freeze schedule" button behind a stretched `flex-1` spacer gap (schedule-board.tsx:980) | `apps/web/src/components/v2/schedule-board.tsx` (toolbar container ~:901 + spacer ~:980) | `schedule-board-{768,834}.png` |
 | admin dashboard | `/admin` | OK (functional bar) | staff nav overflows into its own `overflow-x-auto` container (by design, same pattern as the pricing table) — not clipped/broken, reachable via scroll | — | `admin-home-{768,834}.png` |
 | admin AI runs | `/admin/ai-runs` | OK (functional bar) | table renders, empty state clean | — | `admin-ai-runs-{768,834}.png` |
 | admin audit log | `/admin/audit` | OK (functional bar) | hash-chain banner + table render fully | — | `admin-audit-{768,834}.png` |
@@ -94,8 +95,8 @@ owner / a future task, not corrected in `mobile.spec.ts`.
 
 ## Counts
 
-- OK: 40
-- D: 0
+- OK: 39
+- D: 1
 - P: 0
 
 Tasks 5 and 6 have zero rows to implement from this table.
