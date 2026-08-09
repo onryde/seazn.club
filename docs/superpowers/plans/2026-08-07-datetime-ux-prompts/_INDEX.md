@@ -51,7 +51,7 @@ existing test's premise became stale)
 | 05 | Board segmentation (real gcd step) | **done** — `bd7c69dc` |
 | 06 | Blackout editor UI + fix broken pointer | **done** — `d370c3f0` |
 | 07 | Confirm blackout round-trip (verification only) | **done** — `41067d49`. Premise CONFIRMED: zero backend changes needed. |
-| 08 | Court-removal guard | not started |
+| 08 | Court-removal guard | **done** — `bb3cac2f`; being WIDENED per new owner ruling, see Session state |
 | 09 | E2E + smoke coverage | not started |
 | 10 | Regression audit (`disruption-signals.test.ts`) | not started |
 
@@ -137,3 +137,60 @@ Corroboration for Prompt 07: an existing spec already seeds blackouts
 with `PUT /api/v1/divisions/{id}/schedule-settings` carrying
 `blackouts:[…]` (`ai-architect.spec.ts:1219`) — independent evidence
 from the e2e side that no new endpoint is needed.
+
+## Session state — 2026-08-09 (read this after a compaction)
+
+**Branch/worktree**: `worktree-datetime-ux` at
+`/Users/ashokhein/github/seazn.club/.claude/worktrees/datetime-ux`.
+Env symlinks, real `pnpm install`, `@seazn/engine` verified resolving
+INSIDE the worktree, `.claude/agent-memory` symlinked.
+
+**Throwaway Postgres for the DB-backed server suites**:
+`postgresql://postgres@127.0.0.1:54371/seazn_test`, `DATABASE_SSL=disable`,
+`data_directory` verified as this session's scratchpad. **The local dev DB
+CANNOT run `schedule.test.ts`** — it lacks `division_has_results(uuid)` and
+yields 9 reds that read exactly like a branch regression.
+
+**Measured gates** (by the orchestrator, not reported by an agent):
+- web `v2/__tests__` + `v2/shared/__tests__` + `v2/board/__tests__`:
+  **760 / 760 / 0 failed / 251 suites / 0 pending / 0 off-worktree** (after P06).
+- engine full: **2857 passed / 2858 total / 1 pending / 735 suites** (after P05).
+- `schedule.test.ts` + `schedule-settings-wire.test.ts` on the DB above:
+  **36 / 36 / 0 pending** (after P07); P08 took it to 42/42.
+- `apps/web` `tsc --noEmit`: exit 0, 0 lines.
+
+**Two owner rulings taken mid-session, both IN FLIGHT:**
+1. **Widen the court-removal guard.** Rejection must also fire when the
+   removed court holds a fixture whose `status` is in `OCCUPYING` but is
+   not `MOVABLE_STATUS` — `schedule.ts:87` is `"scheduled"` alone while
+   `:92` is `["scheduled","in_play","decided","finalized","forfeited"]`,
+   so a `decided` fixture occupies a court, is immutable (doc 12 §6), is
+   NOT `schedule_locked`, and was being silently orphaned. Derive the set
+   FROM those constants; never hand-type a status list. The
+   `scheduled`-only removal must still SUCCEED — that is the regression
+   most at risk from over-widening.
+2. **Resolve all three local-datetime fields through `settings.orgTz`.**
+   Blackout from/to, `boardset.startAt`/`endAt`, and
+   `dailyHoursToWindows` all resolve via the BROWSER zone today
+   (`settings.tz` is DISPLAY, `orgTz` is the governing clock, #448). One
+   shared bidirectional helper taking the zone explicitly — not three
+   local fixes. Server is CORRECT and must not change. Tests must use
+   zones that DISAGREE (`America/Los_Angeles` vs `Pacific/Auckland`, as
+   P07 does); equal zones make the test vacuous against broken code.
+
+**Remaining**: 09 (E2E + smoke — see the recon section above, its spec is
+largely fiction) and 10 (regression audit of `disruption-signals.test.ts`,
+whose premise the WIDENED guard may have changed — run it after the
+widening lands, not before).
+
+**Subagent topology for this session**: owner overrode `RULES.md` — first
+to Opus xHigh, then to **Sonnet Max**. Set in `.claude/agents/*.md`
+frontmatter in the MAIN checkout (tracked files, left dirty there; revert
+at session end). Every prompt has been run by an implementer subagent with
+an inline self-contained brief, then gate-verified by the orchestrator.
+
+**Process that has been working and should continue**: every prompt's
+brief restates the false premises found so far; every agent must prove its
+test is not vacuous by MUTATION (revert the production file, confirm the
+red reappears AND `numTotalTests` holds); the orchestrator re-runs the gate
+itself at each boundary rather than trusting a summary.
