@@ -85,11 +85,11 @@ compaction-proof summary. Keep them in step.
 | 05b | Corpus + coverage hardening (Python tests) | **complete** — `b33ac2fb..a554961e`, clean after fix rounds |
 | 05c | Contract + boundary hardening | **complete** — `a554961e..5774439e`, after 6 fix rounds. Rounds 4 and 5 each tried a *character* rule for id canonicality (`.strip()`, then `isprintable()`) and each was defeated — by Cf characters, then by ten code points in Lo/Mn/So. Homoglyphs (`'Сourt 1'`, Cyrillic Es U+0421) defeat any such rule, so round 6 re-cut the contract to **positional identity**: index is identity, the service compares no strings, `court_names` is display-only |
 | 06 | Wire `solveBuild` in `build.ts` | not started — **unblocked**; brief rewritten for positional identity at `.superpowers/…/task-06-brief.md` (the prompt's obligations 2, 3 and 4 dissolved; 1, 5, 6 survive) |
-| 06b | Status vocabulary translation | not started |
+| 06b | Status vocabulary translation | not started — **carries an obligation Task 08 discovered**: `CPSAT_MAX_WORKERS=1` on the deploy shape means a second concurrent organiser gets `SOLVER_BUSY`, and **nothing maps that to a greedy board today**. `build.ts`'s existing `"solver_busy"` path is `MAX_SOLVER_QUEUE`, the LOCAL z3 queue cap — unrelated. The service's `SOLVER_BUSY` (`schema.py:473`) reaches `toOutcome` as `status:"ERROR"` + `error.code` and is read by nobody. 06b must map it, or one of two simultaneous organisers gets an error rather than a board |
 | 07 | Integration tests (parity, regression, fallback) | not started |
 | 11 | E2E + smoke coverage | not started — **brief written** |
-| 08 | Deployment (Dockerfile, fly.toml) | not started |
-| 09 | CI workflow | not started |
+| 08 | Deployment (Dockerfile, fly.toml) | **complete** — `befd49eb..d292e33f`, approved after 1 fix round. App is `cp-sat` (NOT the plan's `seazn-cpsat-prod` sample — `.internal` DNS derives from the app name and must match `cpsat-client.ts:127`'s `cp-sat.internal:50051`). Warm-start is carried by `auto_stop_machines = "off"`; `min_machines_running = 1` is set but inert beside it |
+| 09 | CI workflow | **complete** — `8d78c595..befd49eb` plus `c57eefe6`, spec PASS + quality approved, 0 Critical/Important. Builds AND runs the image; drift gate covers Python and TS stubs |
 | 10 | Remove BUILD/POLISH's z3 code | **blocked** — 01-09 and 11 live in production for one full deploy cycle, **AND the per-court-grid gap closed** (see below) |
 
 ### Prompt 10 has a second gate now: the per-court-grid capability gap
