@@ -33,6 +33,24 @@ const spies = vi.hoisted(() => ({
   listOfficialBusyElsewhere: vi.fn(),
 }));
 
+// Hoisted so a single test can hand the page a differently-shaped membership;
+// the default is re-installed in `beforeEach`.
+const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
+
+/** The shape `requireDivisionPage` really returns. `org` is NOT optional on it
+ *  (`page-auth.ts:28`, `org: OrgMembership`) — this stub used to omit it, which
+ *  only typechecked because a `vi.mock` factory is untyped, and stayed harmless
+ *  for exactly as long as nothing read it. */
+/*  No DEFAULT on `timezone`: `divisionPage(undefined)` would silently take it
+ *  and hand back a zoned org, so the payer-placeholder test below would assert
+ *  against the wrong fixture. Callers state the zone, or state its absence. */
+const divisionPage = (timezone: string | undefined) => ({
+  auth: { orgId: "org-1", userId: "user-1", role: "owner" },
+  canEdit: true,
+  division: { id: "div-1" },
+  org: { id: "org-1", slug: "org", name: "Org One", role: "owner", timezone },
+});
+
 const OFFICIALS = [
   {
     id: "off-1",
@@ -66,13 +84,7 @@ const BUSY = [{ official_id: "off-1", scheduled_at: "2026-09-04T10:00:00.000Z" }
 
 vi.mock("@/server/usecases/officials", () => spies);
 
-vi.mock("@/server/page-auth", () => ({
-  requireDivisionPage: vi.fn(async () => ({
-    auth: { orgId: "org-1", userId: "user-1", role: "owner" },
-    canEdit: true,
-    division: { id: "div-1" },
-  })),
-}));
+vi.mock("@/server/page-auth", () => pageAuth);
 vi.mock("@/server/usecases/divisions", () => ({
   getDivision: vi.fn(async () => ({
     id: "div-1",
@@ -143,6 +155,7 @@ describe("division schedule page defers officials loads to the officials tab", (
     spies.listOfficialsForConsole.mockReset().mockResolvedValue(OFFICIALS);
     spies.listOfficialBlackouts.mockReset().mockResolvedValue(BLACKOUTS);
     spies.listOfficialBusyElsewhere.mockReset().mockResolvedValue(BUSY);
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(divisionPage("Europe/London"));
   });
 
   // `undefined` is the real default landing (no ?tab= on the first visit) and
@@ -185,5 +198,30 @@ describe("division schedule page defers officials loads to the officials tab", (
     expect(spies.listOfficialsForConsole).toHaveBeenCalledTimes(1);
     expect(spies.listOfficialBlackouts).toHaveBeenCalledTimes(1);
     expect(spies.listOfficialBusyElsewhere).toHaveBeenCalledTimes(1);
+  });
+
+  // The page resolves the governing venue clock from `page.org.timezone`, and
+  // one real caller cannot supply it: the PAYER PLACEHOLDER branch of
+  // `requireDivisionPage` (page-auth.ts:179) builds `org` from four fields and
+  // casts it `as unknown as OrgMembership`, so `timezone` is genuinely absent
+  // there. That cast means tsc will never flag it. `resolveVenueTz` is what
+  // makes it safe — a missing zone falls through to DEFAULT_TZ (tz.ts:44-51)
+  // — so this pins the fallback rather than the crash, and would fail against
+  // any future non-null-safe read (`page.org.timezone.trim()`, a helper that
+  // throws on undefined, a switch to `settings.orgTz`).
+  it("falls back to UTC when the membership carries no timezone (payer placeholder)", async () => {
+    pageAuth.requireDivisionPage.mockResolvedValue(divisionPage(undefined));
+    const board = find(await renderTab("board"), ScheduleBoard);
+    expect(board, "no ScheduleBoard rendered on tab=board").not.toBeNull();
+    const { settings } = board!.props as { settings: { orgTz: string } };
+    expect(settings.orgTz).toBe("UTC");
+
+    // Control: the same path with a zone present must NOT report UTC, or the
+    // assertion above would hold for a page that ignored `org.timezone`.
+    pageAuth.requireDivisionPage.mockResolvedValue(divisionPage("Pacific/Auckland"));
+    const zoned = find(await renderTab("board"), ScheduleBoard);
+    expect((zoned!.props as { settings: { orgTz: string } }).settings.orgTz).toBe(
+      "Pacific/Auckland",
+    );
   });
 });
