@@ -222,3 +222,183 @@ describe("the substitution cap and the concussion exemption disagree", () => {
     expect(squads.home.exemptUsed).toEqual({ concussion: 1 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 3. Re-entry — two answers in one sport, on two different axes
+// ---------------------------------------------------------------------------
+
+/** A ball at legal-delivery index `n`, so over/ballInOver match what the fold
+ *  derives. Runs default to a dot so the strike never rotates and the crease
+ *  stays where the test put it. */
+function ball(
+  n: number,
+  striker: string,
+  nonStriker: string,
+  extra: Record<string, unknown> = {},
+): [string, unknown] {
+  return [
+    "cricket.ball",
+    {
+      over: Math.floor(n / 6),
+      ballInOver: (n % 6) + 1,
+      striker,
+      nonStriker,
+      bowler: "A-1",
+      runs: { bat: 0 },
+      ...extra,
+    },
+  ];
+}
+
+const bowled = (out: string, incoming?: string) => ({
+  wicket: {
+    kind: "bowled",
+    out,
+    bowlerCredited: true,
+    ...(incoming === undefined ? {} : { incoming }),
+  },
+});
+
+/** The crease as cricket records it, for the fixture's open innings. */
+function crease(cfg: CricketCfg, events: EventEnvelope[], pair: LineupPair = lineups) {
+  const state = foldMatch(cricket, cfg, pair, events, STRICT_ALL);
+  const fine = state.innings[0]?.fine;
+  return {
+    striker: fine?.striker,
+    nonStriker: fine?.nonStriker,
+    retiredNotOut: fine?.retiredNotOut ?? [],
+    dismissed: fine?.dismissed ?? [],
+    orders: state.orders,
+  };
+}
+
+const entry = (personId: string, orderNo: number) =>
+  ["core.lineup.entry", { side: "H", on: { personId, slot: "starting", orderNo } }] as [
+    string,
+    unknown,
+  ];
+
+describe("re-entry — the field axis (ruling 2)", () => {
+  it("refuses the concussion-replaced player the field again: ICC permanence", () => {
+    const events = stream(concussion("H-3", "H-12", 12), entry("H-3", 3));
+    expect(cricket.lineupPolicy?.(t20).reentry).toBe("none");
+    expect(refusalOf(t20, events)).toBe("reentry-forbidden");
+  });
+
+  it("admits him when the variant says returns are allowed", () => {
+    const cfg = parse({
+      ...cricket.variants.t20,
+      lineupChanges: { concussionReplacements: 1, reentry: "unlimited" },
+    });
+    const events = stream(concussion("H-3", "H-12", 12), entry("H-3", 3));
+    expect(refusalOf(cfg, events)).toBeNull();
+    const squads = foldSquads(cfg, events);
+    expect(memberOf(squads.home, "H-3")?.onField).toBe(true);
+    expect(memberOf(squads.home, "H-3")?.timesOn).toBe(1);
+  });
+
+  it("`once` bounds it at one return, `unlimited` does not", () => {
+    const twice = stream(
+      concussion("H-3", "H-12", 12),
+      entry("H-3", 3),
+      ["core.lineup.retirement", { side: "H", personId: "H-3" }],
+      entry("H-3", 3),
+    );
+    const once = parse({
+      ...cricket.variants.t20,
+      lineupChanges: { concussionReplacements: 1, reentry: "once" },
+    });
+    const unlimited = parse({
+      ...cricket.variants.t20,
+      lineupChanges: { concussionReplacements: 1, reentry: "unlimited" },
+    });
+    expect(refusalOf(once, twice)).toBe("reentry-limit");
+    expect(refusalOf(unlimited, twice)).toBeNull();
+  });
+});
+
+describe("re-entry — the CREASE axis is a different axis", () => {
+  // The two answers cricket needs are not in tension, and this is why: a batter
+  // who retires hurt never leaves the FIELD, so the `reentry` knob is never
+  // asked about him. Both assertions below run under t20, whose field policy is
+  // `none` — the strictest setting there is.
+  it("a retired-hurt batter resumes at the crease with the field policy at `none`", () => {
+    const events = stream(
+      ["core.start"],
+      ball(0, "H-1", "H-2"),
+      ["cricket.retire", { person: "H-1", reason: "hurt" }],
+      // H-3 walked in for the retired H-1; now H-3 is bowled and the captain
+      // sends the recovered H-1 back out (Law 25.4.2).
+      ball(1, "H-3", "H-2", bowled("H-3", "H-1")),
+    );
+    const after = crease(t20, events);
+    expect(after.striker).toBe("H-1");
+    expect(after.retiredNotOut).toEqual([]);
+    // And nothing about the SQUAD moved: he never left the field.
+    const squads = foldSquads(t20, events);
+    expect(memberOf(squads.home, "H-1")?.onField).toBe(true);
+    expect(memberOf(squads.home, "H-1")?.timesOff).toBe(0);
+    expect(squads.home.exemptUsed).toEqual({});
+  });
+
+  it("…while the concussion-replaced player is refused the field under the same cfg", () => {
+    expect(refusalOf(t20, stream(concussion("H-3", "H-12", 12), entry("H-3", 3)))).toBe(
+      "reentry-forbidden",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. `cricket.retire` and `core.lineup.replacement` are different acts
+// ---------------------------------------------------------------------------
+
+describe("a retirement and a replacement never collapse into one another", () => {
+  const live = [["core.start"], ball(0, "H-1", "H-2")] as Array<[string, unknown?]>;
+
+  it("a retirement moves the crease and leaves the squad alone", () => {
+    const events = stream(...live, ["cricket.retire", { person: "H-1", reason: "hurt" }]);
+    const after = crease(t20, events);
+    expect(after.striker).toBe("H-3"); // the next batter walked in
+    expect(after.retiredNotOut).toEqual(["H-1"]);
+
+    const squads = foldSquads(t20, events);
+    expect(squads.home.exemptUsed).toEqual({});
+    expect(squads.home.subsUsed).toBe(0);
+    expect(onFieldPersons(squads.home)).toContain("H-1");
+    expect(squads.home.members.every((m) => m.provenance === "named")).toBe(true);
+  });
+
+  it("a replacement moves the squad and leaves the crease alone", () => {
+    const events = stream(...live, concussion("H-1", "H-12", 12));
+    const after = crease(t20, events);
+    // H-1 is still the striker: a concussion replacement does not walk to the
+    // wicket in the replaced batter's place. The scorer records BOTH acts —
+    // `cricket.retire` for the crease, the replacement for the squad.
+    expect(after.striker).toBe("H-1");
+    expect(after.nonStriker).toBe("H-2");
+    expect(after.retiredNotOut).toEqual([]);
+    expect(after.dismissed).toEqual([]);
+
+    const squads = foldSquads(t20, events);
+    expect(squads.home.exemptUsed).toEqual({ concussion: 1 });
+    expect(memberOf(squads.home, "H-1")?.onField).toBe(false);
+  });
+
+  it("both acts on one batter are two independent records, not a double count", () => {
+    const events = stream(
+      ...live,
+      ["cricket.retire", { person: "H-1", reason: "hurt" }],
+      concussion("H-1", "H-12", 12),
+    );
+    const after = crease(t20, events);
+    const squads = foldSquads(t20, events);
+    // Crease: retired not out, replaced at the wicket by the next batter.
+    expect(after.striker).toBe("H-3");
+    expect(after.retiredNotOut).toEqual(["H-1"]);
+    // Squad: one exemption charged, exactly one — the retirement charged none.
+    expect(squads.home.exemptUsed).toEqual({ concussion: 1 });
+    expect(squads.home.subsUsed).toBe(0);
+    // And the innings took no wicket for either act (`reason: "hurt"`).
+    expect(foldMatch(cricket, t20, lineups, events, STRICT_ALL).innings[0]?.wickets).toBe(0);
+  });
+});
