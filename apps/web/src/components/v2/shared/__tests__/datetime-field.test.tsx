@@ -45,7 +45,12 @@ describe("DateTimeField", () => {
     expect(inputOf({ ...props, kind: "datetime-local" }).type).toBe("datetime-local");
   });
 
-  it("uses text-base sm:text-sm so iOS does not zoom on focus", () => {
+  it("stays 16px at every width — text-base, and no sm: override that shrinks it", () => {
+    // iOS zoom-on-focus is already blocked repo-wide by globals.css Pattern 5
+    // (`@media (max-width:39.99rem){input,select,textarea{font-size:16px}}`),
+    // so the plan's `sm:text-sm` changed nothing at 375px and only shrank the
+    // control to 14px/38px on desktop, beside `.input` siblings at 16px/42px.
+    // This field must be indistinguishable from a hand-rolled `.input`.
     const classes = classesOf({
       kind: "time",
       value: "09:00",
@@ -53,7 +58,7 @@ describe("DateTimeField", () => {
       label: "Start time",
     });
     expect(classes).toContain("text-base");
-    expect(classes).toContain("sm:text-sm");
+    expect(classes).not.toContain("sm:text-sm");
   });
 
   it("calls onChange with the raw input value", () => {

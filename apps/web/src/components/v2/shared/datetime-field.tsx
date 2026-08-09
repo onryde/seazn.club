@@ -34,10 +34,14 @@ export function DateTimeField({ kind, value, onChange, label, min, disabled }: D
       <span className="label">{label}</span>
       <input
         type={kind}
-        // `text-base` under `sm` is the iOS zoom-on-focus block. globals.css
-        // Pattern 5 already forces 16px on every form control at that width;
-        // this states it locally so the rule survives a caller that overrides.
-        className="input w-full text-base sm:text-sm"
+        // `text-base` only. The plan asked for `text-base sm:text-sm` as an iOS
+        // zoom-on-focus block, but globals.css Pattern 5 already forces 16px on
+        // every form control under 40rem — measured identical at 375px with and
+        // without it. All `sm:text-sm` did was shrink this to 14px/38px on
+        // desktop beside `.input` siblings at 16px/42px, breaking the "styled
+        // identically to the division wizard" criterion this component exists
+        // to satisfy. Dropped; `text-base` matches `.input` and is a no-op.
+        className="input w-full text-base"
         value={value}
         min={min}
         disabled={disabled}
