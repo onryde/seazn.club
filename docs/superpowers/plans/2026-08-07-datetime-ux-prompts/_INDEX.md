@@ -42,18 +42,26 @@ existing test's premise became stale)
 
 ## Status
 
+**Every SHA below is POST-REBASE.** The branch was rebased onto `origin/main`
+(`ece80fc8`, +22 commits from PR #493) on 2026-08-09, so any SHA quoted in an
+older section of this file or in a commit message is the pre-rebase one and no
+longer resolves. `git range-diff` confirmed all 24 patches came through
+byte-identical. Pre-rebase tip was `f0921f28`.
+
 | # | Prompt | State |
 |---|---|---|
-| 01 | Shared `DateTimeField` component | **done** — `dcbec661`, `615dd3ff` |
-| 02 | Convert `division-builder.tsx` | **done** — `2c808ae6` |
-| 03 | Convert `competition-wizard.tsx` | **done** — `3a1822c4`, `d80a680a` |
-| 04 | Convert `settings-panel.tsx` | **done** — `d25ab95f`, `8348a5af` |
-| 05 | Board segmentation (real gcd step) | **done** — `bd7c69dc` |
-| 06 | Blackout editor UI + fix broken pointer | **done** — `d370c3f0` |
-| 07 | Confirm blackout round-trip (verification only) | **done** — `41067d49`. Premise CONFIRMED: zero backend changes needed. |
-| 08 | Court-removal guard | **done** — `bb3cac2f`; being WIDENED per new owner ruling, see Session state |
+| 01 | Shared `DateTimeField` component | **done** — `426f79ca`, `82767777` |
+| 02 | Convert `division-builder.tsx` | **done** — `4d602f94` |
+| 03 | Convert `competition-wizard.tsx` | **done** — `ff9e9cf3`, `8100485f` |
+| 04 | Convert `settings-panel.tsx` | **done** — `6873cd39`, `9830b49e` |
+| 05 | Board segmentation (real gcd step) | **done** — `a4fdc316` |
+| 06 | Blackout editor UI + fix broken pointer | **done** — `e5136e19` |
+| 07 | Confirm blackout round-trip (verification only) | **done** — `6ddffe18`. Premise CONFIRMED: zero backend changes needed. |
+| 08 | Court-removal guard | **done** — `761b4ff4` |
+| 08b | Widen guard to OCCUPYING-not-movable | **done** — `c05ad9ed`. Owner ruling applied; `FIXED_OCCUPYING` derived, never a literal list. |
+| 11 | All 3 date/time fields resolve via `settings.orgTz` | **done** — `1372437b`, `fa289a71`, `3cdf6b33` |
 | 09 | E2E + smoke coverage | not started |
-| 10 | Regression audit (`disruption-signals.test.ts`) | not started |
+| 10 | Regression audit (`disruption-signals.test.ts`) | not started — must run AFTER 08b, which changed the premise being audited |
 
 ## Parallel execution
 
@@ -194,3 +202,97 @@ brief restates the false premises found so far; every agent must prove its
 test is not vacuous by MUTATION (revert the production file, confirm the
 red reappears AND `numTotalTests` holds); the orchestrator re-runs the gate
 itself at each boundary rather than trusting a summary.
+
+## Rebase onto origin/main — 2026-08-09
+
+Branch rebased from the stale local `main` (`fa1114e7`) onto `origin/main`
+(`ece80fc8`): **+22 commits, all of PR #493** (pick-a-template AI demo, #364).
+Now 24 ahead / 0 behind.
+
+- **Zero conflicts.** Only 1 of our 24 commits touches i18n (`e5136e19`), and
+  the dict additions on both sides landed on disjoint lines.
+- **`git range-diff fa1114e7..f0921f28 origin/main..HEAD` printed only `=`
+  rows** — every patch came through byte-identical. This is the check worth
+  repeating on any future rebase here; a clean exit code alone does not prove
+  patches survived intact.
+- Post-rebase drift gates all clean: `openapi:gen`, `i18n:gen-keys`,
+  `schema:snapshot --workspace packages/engine` → `git status --porcelain`
+  empty.
+- Post-rebase env re-verified (a rebase can invalidate it): `readlink -f
+  node_modules/@seazn/engine` resolves INSIDE the worktree, both `.env.local`
+  symlinks intact, and the only incoming dep-file change was one new npm
+  script (`capture:ai-demo`) — no lockfile churn, so no reinstall.
+
+## Post-rebase wave gate — the one real regression it caught
+
+Full `apps/web` suite on a fresh throwaway PG (`:54373`, `data_directory`
+confirmed ours): **6139 passed / 6202 total / 10 failed / 53 pending**, 0
+suites resolving outside the worktree path.
+
+All 10 failures were one file,
+`app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/schedule/__tests__/officials-loads-deferred.test.tsx`,
+one cause: `TypeError: Cannot read properties of undefined (reading
+'timezone')` at `schedule/page.tsx:70`.
+
+**Not a production bug — a stale test mock.** `page-auth.ts:28` declares
+`org: OrgMembership` as REQUIRED, so production always supplies it; the
+suite's `vi.mock` factory omitted `org` entirely and only typechecked because
+**a `vi.mock` factory is untyped**. It stayed harmless for exactly as long as
+nothing read the field.
+
+Two things worth carrying forward:
+
+1. **A scoped gate cannot see this class of break.** P11 ran
+   `v2/__tests__ + shared + board` and measured a legitimate 780/780; the
+   suite that broke lives under the *page* directory, outside that glob. When
+   a change edits a `page.tsx`, the page's own `__tests__` sibling must be in
+   the gate — or only the full-suite wave boundary will catch it.
+2. **`page.org.timezone` genuinely can be undefined in production.** The payer
+   placeholder branch (`page-auth.ts:179`) builds `org` from four fields and
+   casts `as unknown as OrgMembership`, so tsc will never flag the gap.
+   `resolveVenueTz` is what makes it safe (missing zone → `DEFAULT_TZ`,
+   `tz.ts:44-51`). Now pinned by a test that asserts the UTC fallback AND a
+   control with `Pacific/Auckland` present, so it cannot pass for a page that
+   ignores `org.timezone` altogether.
+
+## Follow-ups handed back by P11 — outside its scope, NOT done
+
+- `move-panel.tsx` (fixture reschedule) still resolves through the BROWSER
+  zone — same bug class as the three fields P11 fixed.
+- `stages-panel.tsx` and `registration-settings.tsx` each keep a private
+  `toLocalInput` copy rather than the shared helper.
+- `apps/web/src/app/o/[orgSlug]/c/[compSlug]/schedule/page.tsx` (the
+  competition-level board) took the same `resolveVenueTz(null,
+  page.org.timezone)` line but has **no page-level test suite at all**, so
+  nothing covers its org-zone resolution. Candidate for P09.
+
+**Ruling recorded by P11 on stored instants: (a), no migration.** The stored
+value is an absolute instant; only its RESOLUTION was wrong, so a changed
+display is the truth surfacing. A migration is also impossible in principle —
+it would need each writer's browser zone at write time, which was never
+recorded.
+
+## Prompt 10 — audited inline, NO CHANGE NEEDED
+
+The plan asks whether P08's guard made `disruption-signals.test.ts`'s
+`court_gone` scenario unreachable. It did not, and the worry is structurally
+impossible rather than merely unfounded:
+
+- The `court_gone` case (`disruption-signals.test.ts:70-77`) seeds
+  `fx({ id: "a", court_label: "Court 2" })`, and `fx` defaults to
+  `status: "scheduled"` (line 17) with no lock.
+- **`DisruptionFixtureInput` has no lock field at all** — there is no
+  `schedule_locked` anywhere in the type — so this suite could never have
+  seeded a pinned fixture, and the plan's premise ("it was written to test a
+  pinned fixture on a removed court") cannot have been true.
+- P08b's guard deliberately ALLOWS removing a court whose fixtures are all
+  `scheduled` and unlocked. That is precisely this scenario, so it stays
+  reachable through the save path.
+
+Consistent on the other side too: the suite's
+`it.each(["in_play","decided","finalized","abandoned","forfeited","cancelled"])`
+"never flags" case covers the statuses P08b now rejects at save time, so the
+two layers do not overlap or contradict.
+
+Per the prompt's own Step 2 instruction ("if it still passes unmodified, leave
+the file alone"), the file is untouched.
