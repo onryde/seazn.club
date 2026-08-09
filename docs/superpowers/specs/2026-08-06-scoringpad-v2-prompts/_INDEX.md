@@ -576,6 +576,78 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   replacement EVENT is missing. And cricket has **no substitute-fielder or
   12th-man concept at all** (zero grep hits), so its concussion replacement is
   net-new, not an extension.
+- 2026-08-09 — S3/#426 — **pass A (core lineup model) landed: `8f6987f4` + `b02e0215`.**
+  Gate `{total:2917, passed:2916, failed:0, failedSuites:0, pending:1}`,
+  `tsc -p packages/engine` EXIT=0, `schema:snapshot` 11/11 unchanged / 0 written,
+  zero goldens touched. New: `core/lineup.ts`, `core/lineup.test.ts` (39),
+  `core/lineup.events.test.ts` (29); touched `core/events.ts`, `core/types.ts`,
+  `core/index.ts`, `sport/module.ts`.
+  **Design ruling — FIVE SIBLING EVENT TYPES, not one type with a discriminated
+  `kind`.** Every consumer in this engine keys on the exact envelope type string
+  (`CORE_EVENT_SCHEMAS`, `DURING_STOPPAGE`, `postDecisionTypes`,
+  `fidelityTiers[].eventTypes`, and the entitlement gate), so a nested `kind`
+  would be invisible to all of them — and a sport could not tier substitutions
+  separately from position changes, which S6's fidelity model requires. Sibling
+  `strictObject`s also carry no `z.union` first-match hazard; proved anyway with
+  a full 5×5 cross-parse matrix, which is the swallowed-sibling test this
+  session owed.
+  Three design deviations from the brief, all correct and all kept: (i) a
+  `lineupPolicy?(cfg)` module hook was added — the brief named only `onLineup`,
+  but ruling 2 makes the policy cfg-derived and cfg belongs to the module;
+  (ii) `onLineup` is called once at `init` too, so a module's `State` and the
+  kernel's `SquadState` are never two constructions of one fact; (iii) the
+  strict/replay seam is a single `REPLAY_LINEUP_POLICY` constant (every knob
+  maximally permissive) rather than per-check `if (strict)`, so **no cfg-derived
+  condition can refuse on replay at all** — structurally, not by discipline.
+  That is the strongest available answer to the W4a brick-the-fixture defect.
+- 2026-08-09 — S3/#426 — **pass A review: 7 of 9 clean, 2 live.** Confirmed by
+  the reviewer against the diff: no `throw` on any cfg-derived condition (every
+  refusal is a returned value; `reduceLineupEvent` contains no `throw` at all);
+  the refusal tests DO run through `foldMatchWithStoppage`, not the bare reducer
+  (`lineup.events.test.ts:303-352`), so `REPLAY_LINEUP_POLICY` has not made the
+  strict path vacuous; the keeper test asserts IDENTITY at init
+  (`lineup.test.ts:124`, `personsAtPosition → ["h-gk"]`) and after a keeper
+  change (`lineup.events.test.ts:239`, `["h-gk","h-sub-gk"]`); ruling 3 is
+  genuinely enforced, not merely carried — `playingSquad`/`onFieldPersons`/
+  `personsAtPosition` (`lineup.ts:312-336`) filter `role === "player"` and no
+  other reader bypasses them; schemas are purely additive (`role`/`pairOrder`
+  optional, no `.default()`); all five types present at every required site.
+  Open: (a) HIGH — the model is wired in the kernel but **unreachable from any
+  real match** until a sport declares `lineupPolicy`/`onLineup`; that is pass B.
+  (b) MED — `provenance:"added"` is proven only through the bare reducer, never
+  through a full fold; assigned to pass B lane 1.
+- 2026-08-09 — S3/#426 — **`football.sub` MUST NOT be deleted, and that bounds
+  the football cutover.** Recorded golden corpora contain `football.sub` events,
+  so removing or narrowing the type stops them parsing and fails golden replay —
+  which this session's acceptance forbids. The cutover is therefore: the event
+  type and payload stay exactly as they are, and only what its FOLD calls
+  changes, to the shared `reduceLineupEvent`. Recorded because "retire the
+  private implementation" reads as "delete the event" and would have cost a
+  re-baseline the policy does not sanction here.
+- 2026-08-09 — S3/#426 — **OWNER RULING 4 — fix the vacuous i18n gate and add
+  the copy now, widening this session into `apps/web` + the 4 dictionaries.**
+  `apps/web` `event-copy.test.ts` seeds its core event types from `EVENT_KEY`
+  itself, so adding a `core.*` event type can never red it — the five new
+  `core.lineup.*` types would have shipped with no copy and nothing to catch it.
+  This is the FOURTH "a test that cannot fail" defect in this programme
+  (`metricOf` silent-0 at the ranking layer, optional `PeriodSetPiece.outcome`
+  folding to exactly what a recorded miss folds to, `unslimCorpus` comparing a
+  thing with itself). Unlike the copy, the hole affects every FUTURE core event
+  type — S4 (#428) lands before S7 (#427) and would add its own types through
+  the same blind gate. Fix: seed the test from the engine's authoritative type
+  list, then add 5 keys × 4 locales (`en`,`es`,`fr`,`nl`, flat dotted keys).
+- 2026-08-09 — S3/#426 — **engine lint was 18 errors on `main` before this
+  branch**, all in `packages/engine/scripts/repair-cpsat-harness.ts`, all
+  downstream of two untyped `JSON.parse` calls (`no-unsafe-assignment` /
+  `no-unsafe-member-access` / `no-unsafe-argument`). Measured with
+  `cd packages/engine && npx eslint` — the root lint task does NOT cover
+  `packages/engine`, and running eslint from the repo root against that path
+  exits 2 with "Oops! Something went wrong!", which reads as a broken config
+  rather than as the wrong invocation. Fixed inline as an unplanned fix
+  (`99d47c37`) because the ship checklist requires `✖ 0 problems`: the payloads
+  are now named via indexed access on `RepairInput`, so the harness cannot drift
+  from the production shapes it exists to compare CP-SAT against. Engine lint on
+  the branch is now EXIT=0 with zero output.
 - _(append below)_
 
 ## Open questions for the owner
