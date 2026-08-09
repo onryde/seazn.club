@@ -155,6 +155,19 @@ Tasks 01-04 were re-audited on 2026-08-09 at the owner's request (four
 parallel Opus reviewers, mutation-first, one per task). Suite at that
 point: 86 passed, 0 failed, exit 0.
 
+### Owed after first deploy: re-measure `NUM_SEARCH_WORKERS`
+
+It is **hardcoded at 8** in the Python source. The deploy shape is
+`shared-cpu-2x` — 2 vCPU — so it is 4x oversubscribed, and Task 08's sizing
+claim (`tiers_completed=2` guaranteed, T2/T3 best-effort) was reasoned
+against a value of 4 that no longer exists in the code.
+
+Recorded here rather than only in the SDD ledger because **two prior task
+reports already recommended re-measuring it and nothing changed** — the
+ledger is git-ignored, so a recommendation left there is invisible to a
+fresh clone and to every subagent. It cannot be measured from a developer
+box: the real machine shape is the only place the number means anything.
+
 ### Timing numbers on this box need a load reading beside them
 
 The production-board tests are **proof-time** tests, not placement tests,
