@@ -56,34 +56,36 @@ EXPECTED_GAP_MINUTES = 10
 EXPECTED_REST_BY_DIVISION = {"d1": 80, "d2": 80}
 EXPECTED_DAY_CAP_BY_DIVISION = {"d1": 1, "d2": 1}
 
-#: TWO SEPARATE CLAIMS, NOT ONE. `MIN_REAL_EPOCH_MS > INT32_MAX` arithmetically,
-#: so the int32 assertion below LOOKS like a redundant duplicate of the epoch
-#: one and is the obvious thing to delete on a tidy-up. It is not redundant:
-#: the two thresholds guard different regressions, and either could be
-#: reintroduced without the other.
+#: The corpus must clear two different bars, and ONE constant is chosen to
+#: clear both — so read this before adding a second data assertion that looks
+#: like it is pulling its weight.
 #:
-#:   MIN_REAL_EPOCH_MS  separates a legitimate timestamp from proto3's unset
-#:                      scalar 0. With the old `EPOCH_MS = 0` corpus those were
-#:                      the same value, which is how an `existing` row with an
-#:                      unset `start_at_ms` built its blocking interval at epoch
-#:                      0, overlapped nothing, and let a movable fixture take
-#:                      the pinned slot — OPTIMAL, `error` unset, through four
-#:                      review rounds.
-#:   INT32_MAX          keeps an `int64 -> int32` narrowing of
-#:                      `Assignment.start_at_ms` OBSERVABLE. A corpus could sit
-#:                      above 0 and still fit in int32 (any date before
-#:                      1970-01-26); that corpus separates unset from real and
-#:                      still cannot see the narrowing.
+#:   bar 1  separate a legitimate timestamp from proto3's unset scalar 0. With
+#:          the old `EPOCH_MS = 0` corpus those were the same value, which is
+#:          how an `existing` row with an unset `start_at_ms` built its
+#:          blocking interval at epoch 0, overlapped nothing, and let a movable
+#:          fixture take the pinned slot — OPTIMAL, `error` unset, through four
+#:          review rounds.
+#:   bar 2  keep an `int64 -> int32` narrowing of `Assignment.start_at_ms`
+#:          OBSERVABLE. This is a real and separate bar: a corpus can sit above
+#:          0 and still fit in int32 (any date before 1970-01-26), clearing
+#:          bar 1 while staying blind to the narrowing.
 #:
-#: The second claim is not an inference — it was demonstrated. Narrowing
+#: `MIN_REAL_EPOCH_MS` clears both, because it is itself far above `INT32_MAX`.
+#: That makes bar 2 IMPLIED by bar 1 rather than independently checkable
+#: against the data — so `min(starts) > INT32_MAX` would be unreachable behind
+#: `min(starts) > MIN_REAL_EPOCH_MS` and is deliberately not asserted. What IS
+#: asserted is the implication itself, on the constants, so that a future
+#: attempt to "just lower the epoch floor a bit" trips immediately.
+#:
+#: Bar 2 is not an inference — it was demonstrated. Narrowing
 #: `Assignment.start_at_ms` to int32 in `proto/scheduler.proto`, regenerating
 #: the stubs, and running `test_server.py -k production_board`:
 #:
 #:     real-epoch corpus (this one)   -> RED
 #:     same narrowing, EPOCH_MS = 0   -> GREEN      <- the control
 #:
-#: i.e. the corpus, not a missing assertion, was what hid the mutant. Keep both
-#: thresholds; if you ever need to prove it again, that A/B is the experiment.
+#: i.e. the corpus, not a missing assertion, was what hid the mutant.
 MIN_REAL_EPOCH_MS = 1_000_000_000_000
 INT32_MAX = 2_147_483_647
 
@@ -228,18 +230,23 @@ def test_every_corpus_timestamp_is_a_real_epoch_millisecond(board):
 
     starts = [start for _court, start in grid_slots]
 
-    # Claim 1: real timestamps, so unset-vs-legitimate is decidable.
+    # The threshold must itself clear int32, or bar 1 stops implying bar 2 and
+    # the corpus could satisfy every assertion below while being blind to the
+    # narrowing. Asserted on the CONSTANTS because that is where the claim
+    # lives; asserting it on `min(starts)` as well would be unreachable code.
+    assert MIN_REAL_EPOCH_MS > INT32_MAX
+
     assert min(starts) > MIN_REAL_EPOCH_MS, (
         "the corpus has drifted back towards epoch 0, where proto3's unset start_at_ms and a "
         "legitimate test timestamp are the same value"
     )
-    # Claim 2 — NOT a duplicate of claim 1, see the note on INT32_MAX. Proved
-    # by a measured control: the identical int32 narrowing is GREEN against a
-    # zero-epoch corpus and RED against this one.
-    assert min(starts) > INT32_MAX, "a corpus that fits in int32 cannot detect an int64->int32 narrowing"
-    assert all(start > INT32_MAX for _fid, _court, start in existing), (
-        "pinned rows must clear int32 too — they are the Assignment messages the narrowing "
-        "would actually truncate"
+    # The `existing` rows are the ones that matter most and they are NOT
+    # covered by the assertion above — that one reads `grid_slots`. These are
+    # the `Assignment` messages an int64->int32 narrowing would truncate, and
+    # the row whose unset start silently voided a pin.
+    assert min(start for _fid, _court, start in existing) > MIN_REAL_EPOCH_MS, (
+        "a pinned row is not a real epoch timestamp — an unset start_at_ms builds its blocking "
+        "interval at epoch 0, overlaps nothing, and the pin is silently ignored"
     )
 
 

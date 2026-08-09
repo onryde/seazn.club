@@ -98,21 +98,15 @@ def test_production_board_solves_under_budget():
     A missing objective returns OPTIMAL with ZERO placed, so the count is what
     catches that mutant, never the status.
 
-    DO NOT CUT THIS WALL TO SPEED THE SUITE UP. It is tempting — this test's
-    own question is settled by T0 in ~150 ms, and the suite's eight-worker
-    solves are what make the budget tests marginal. Measured at a 3 s wall,
-    against the Task 2 audit's mutation matrix: the participant-rest
-    `AddNoOverlap` mutant (M2) and the dropped-court-gap mutant (M7) both go
-    from RED to **GREEN**.
-
-    What is load-bearing is T1's PACKING PRESSURE, not the number 8. A wall
-    that stops inside T1 hands back essentially T0's board, and T0 only
-    maximises placement — on a lattice this sparse it spreads fixtures out and
-    a removed constraint never binds. Any wall long enough to let T1 prove its
-    makespan optimum preserves the coverage; anything shorter silently loses
-    it. So if this ever has to change, the test is "does T1 still complete",
-    and re-running the M1-M8 matrix is how you check. Full mechanism and table
-    in `test_assignments_satisfy_every_stated_constraint`.
+    The 8 s wall here is inherited, not justified. An earlier version of this
+    docstring claimed cutting it to 3 s let the participant-rest and court-gap
+    mutants survive; that came from a single run per cell and does not
+    reproduce — at six runs both mutants die MORE reliably at 3 s than at 8 s.
+    The measured table is in
+    `test_assignments_satisfy_every_stated_constraint`, and those two families
+    are now guarded properly by `test_participant_rest_is_binding` and
+    `test_the_court_turnaround_gap_is_binding`, on contended boards that do not
+    depend on the wall at all.
     """
     fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
     model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
@@ -124,16 +118,11 @@ def test_production_board_solves_under_budget():
 
 
 def test_no_court_double_booking():
-    # THE WALL IS COVERAGE, NOT SLACK, and the reason is T1's PACKING
-    # PRESSURE — not the number 8. A wall short enough to stop inside T1
-    # returns essentially T0's board, and T0 only MAXIMISES PLACEMENT: with
-    # 8 320 slots for 37 fixtures it has no reason to put two matches near
-    # each other, so a deleted court-turnaround constraint never shows up in
-    # the placements. It is T1's makespan minimisation that presses fixtures
-    # together and turns a missing constraint into a visible violation.
-    # Measured at 3 s: the M2 (participant-rest) and M7 (court-gap) mutants
-    # both go from RED to GREEN. Full table in
-    # `test_assignments_satisfy_every_stated_constraint`.
+    # The 8 s wall carries no coverage claim — an earlier comment here said it
+    # did, on the strength of one run per cell, and six runs reversed the
+    # result. See the measured table in
+    # `test_assignments_satisfy_every_stated_constraint`. The court-gap family
+    # is guarded by `test_the_court_turnaround_gap_is_binding`, not here.
     fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
     model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
     outcome = solve(model, wall_seconds=8.0)
@@ -156,35 +145,37 @@ def test_assignments_satisfy_every_stated_constraint():
     a test noticing is the failure mode this repo has been bitten by before,
     so each family gets an assertion that fails without it.
 
-    THE 8 s WALL IS PART OF THE ASSERTION. Measured (Prompt 05b), this exact
-    test at a 3 s wall against the Task 2 audit's mutation matrix:
+    DO NOT TREAT THIS TEST AS THE GUARD FOR COURT GAP OR PARTICIPANT REST.
+    It catches them only by luck. Measured over six runs per cell against a
+    pristine mirror, with the mutation's presence verified in each run:
 
-        M2  participant-rest AddNoOverlap disabled   8 s: RED   3 s: **GREEN**
-        M7  gap dropped from the court interval      8 s: RED   3 s: **GREEN**
-        M1/M3/M4/M5/M8                               RED at both
+        mutant                                   8 s wall     3 s wall
+        M2  participant-rest NoOverlap deleted   RED 5/6      RED 6/6
+        M7  gap dropped from the court width     RED 1/6      RED 6/6
+        baseline (unmutated)                     GREEN 2/2    GREEN 2/2
 
-    The mechanism: a 3 s wall stops the chain inside T1, so the board that
-    comes back is essentially T0's. T0 only MAXIMISES PLACEMENT, and on a
-    lattice with 8 320 slots for 37 fixtures it has no reason to put two
-    matches near each other — so a court-turnaround or participant-rest
-    constraint that has been deleted never manifests in the placements. It is
-    T1's makespan minimisation that PACKS the board, and the packing pressure
-    is what turns a missing constraint into an observable violation.
+    Two things follow, and the second corrects a claim an earlier version of
+    this docstring asserted as fact:
 
-    So the wall here is not budget slack that can be reclaimed to speed the
-    suite up; it is what makes six of this file's constraint families testable
-    at all.
+      * M7 is a **coin flip here — 1 in 6** at the shipped wall. It is now
+        genuinely guarded by `test_the_court_turnaround_gap_is_binding`, and
+        M2 by `test_participant_rest_is_binding`, both on purpose-built
+        contended boards that decide on a proved COUNT in milliseconds.
+      * A LONGER WALL MAKES THESE TWO **LESS** DETECTABLE, NOT MORE. The
+        earlier claim that "T1's packing pressure is what exposes them" was
+        drawn from a single run per cell and is wrong — with six runs the
+        effect reverses. The real driver is that this board is uncontended:
+        8 320 slots, 37 fixtures and a day cap of one per division per day
+        leave everything naturally spread out, so a deleted turnaround or rest
+        window usually changes no placement at all. The more tiers finish, the
+        better-optimised the board, and the fewer incidental violations remain
+        for this test to trip over.
 
-    THE INVARIANT IS "T1 COMPLETES", NOT "THE NUMBER IS 8". Do not read this
-    as a magic constant to be preserved verbatim — read it as a floor. Any
-    wall that lets T1 prove its makespan optimum keeps the coverage; anything
-    that cuts T1 off loses M2 and M7 silently, with the suite still green. If
-    suite runtime ever has to come down, the lever is elsewhere (fewer search
-    workers, or not stacking the budget tests behind the packing-pressure
-    ones), and re-running the M1-M8 matrix is how you prove you did no harm.
-
-    Iterating locally at a 2-3 s wall is fine and is much faster; just never
-    ship the shortened wall.
+    So the 8 s wall is NOT load-bearing coverage. It is kept only because it
+    is what the other assertions here were measured at and nothing argues for
+    changing it; if suite runtime ever needs to come down this is a legitimate
+    place to take it from, provided the M1-M8 matrix is re-run to confirm the
+    families it really does guard (M1, M3, M4, M5, M8) still die.
     """
     fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
     model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
@@ -310,6 +301,128 @@ def test_pinned_rows_are_not_overwritten_when_a_fixture_wants_the_slot():
     # The one placement is on the one free slot, and it is a real slot.
     free = sorted(set(grid_slots) - pinned)
     assert [(court, start) for _fid, court, start in outcome.assignments] == free, detail
+
+
+def test_the_court_turnaround_gap_is_binding():
+    """The court gap, on a board where it actually decides something.
+
+    `gap_minutes` widens every court interval to `match + gap`. On
+    `production_board()` that is almost never observable: 8 320 slots, 37
+    fixtures and a day cap of one per division per day mean nothing is forced
+    onto the same court close together, so narrowing the interval usually
+    changes no placement. Measured over six runs at the production 8 s wall,
+    the mutant that drops `gap_ms` from the width was caught **2 times in 6** —
+    a coin flip, not a guard, and one that reads as a regression in CI.
+
+    Here the gap is the only thing deciding how many fixtures fit:
+
+        width = match + gap  ->  GAP_PROBE_CAPACITY            placements
+        width = match alone  ->  GAP_PROBE_CAPACITY_WITHOUT_GAP placements
+
+    T0 settles that in milliseconds and the answer does not depend on the
+    wall, on how many tiers completed, or on the day cap.
+
+    Run as a T0-ONLY chain (`tiers=(TIER_PLACED,)`, the prefix the bench also
+    uses) rather than through `solve()`. That is not a shortcut, it is the
+    question: "how many fit" is exactly what T0 proves, and `tiers_completed
+    == 1` here means CP-SAT proved no board places more. Measured, the full
+    chain on this board burns a 5 s wall and still returns `tiers_completed=1`
+    — fourteen interchangeable fixtures over thirteen ticks is a symmetric
+    packing problem and T1 cannot close its bound — so asserting the whole
+    ladder here would have made a T0 fact hostage to a T1 proof that never
+    lands.
+    """
+    from cp_sat.objective import TIER_PLACED, run_tier_chain
+    from cpsat_bench_boards import (
+        GAP_PROBE_CAPACITY,
+        GAP_PROBE_CAPACITY_WITHOUT_GAP,
+        GAP_PROBE_FIXTURES,
+        gap_contended_board,
+    )
+
+    board = gap_contended_board()
+    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = board
+
+    # The board must genuinely contend, or every assertion below is vacuous.
+    assert GAP_PROBE_CAPACITY < GAP_PROBE_CAPACITY_WITHOUT_GAP <= GAP_PROBE_FIXTURES
+    assert len(fixtures) == GAP_PROBE_FIXTURES
+    assert not existing and not deps, "pins or dependencies would confound the gap family"
+    assert not constraints["day_cap_by_division"], "a day cap would confound the gap family"
+    assert set(constraints["rest_by_division"].values()) == {0}, "rest would confound the gap family"
+
+    model = build_model(*board)
+    outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=5.0, tiers=(TIER_PLACED,))
+    detail = f"status={outcome.status} tiers={outcome.tiers_completed} board={sorted(outcome.assignments)}"
+
+    # T0 PROVED its maximum — without this the count below could be a board the
+    # clock cut short rather than the most that fits.
+    assert outcome.tiers_completed == 1, detail
+    assert outcome.status == "OPTIMAL", detail
+
+    assert dict(outcome.objective_values)[TIER_PLACED] == GAP_PROBE_CAPACITY, (
+        f"expected {GAP_PROBE_CAPACITY} placements; {GAP_PROBE_CAPACITY_WITHOUT_GAP} means the court "
+        f"interval lost its turnaround gap. {detail}"
+    )
+    assert len(outcome.assignments) == GAP_PROBE_CAPACITY, detail
+
+    # ...and say it directly, not only as a count.
+    need = (constraints["match_minutes"] + constraints["gap_minutes"]) * MIN_MS
+    placed = sorted((court, start) for _fid, court, start in outcome.assignments)
+    for a in range(len(placed)):
+        for b in range(a + 1, len(placed)):
+            if placed[a][0] == placed[b][0]:
+                assert abs(placed[a][1] - placed[b][1]) >= need, (
+                    f"court turnaround violated on {placed[a][0]}: {placed[a][1]} vs {placed[b][1]}, "
+                    f"need {need}ms"
+                )
+
+
+def test_participant_rest_is_binding():
+    """Participant rest, on a board where it actually decides something.
+
+    Seven fixtures share one entrant across seven courts, so court exclusivity
+    cannot bind and the per-entrant rest window is the only thing spacing them:
+
+        rest enforced   ->  REST_PROBE_CAPACITY placements
+        rest removed    ->  REST_PROBE_FIXTURES placements
+
+    On `production_board()` the same mutant is caught only most of the time —
+    re-measured over six runs, RED 5 of 6 at the production 8 s wall and 6 of 6
+    at a 3 s wall. One miss in six is a flake that reads as a regression, and
+    note the direction: the SHORTER wall was the more reliable killer, so this
+    was never something a longer solve could fix.
+
+    Kills both the "rest `AddNoOverlap` deleted" mutant and the "rest_ms
+    zeroed" one, since either lets all seven seat.
+    """
+    from cp_sat.objective import TIER_PLACED, run_tier_chain
+    from cpsat_bench_boards import REST_PROBE_CAPACITY, REST_PROBE_FIXTURES, rest_contended_board
+
+    board = rest_contended_board()
+    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = board
+
+    assert REST_PROBE_CAPACITY < REST_PROBE_FIXTURES == len(fixtures)
+    assert len(courts) >= REST_PROBE_FIXTURES, "court exclusivity must not be able to bind"
+    assert not existing and not deps and not constraints["day_cap_by_division"]
+    shared = set.intersection(*(set(entrants) for _fid, entrants, _div in fixtures))
+    assert len(shared) == 1, "every fixture must share exactly one entrant for rest to be the variable"
+
+    model = build_model(*board)
+    outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=5.0, tiers=(TIER_PLACED,))
+    detail = f"status={outcome.status} tiers={outcome.tiers_completed} board={sorted(outcome.assignments)}"
+
+    assert outcome.tiers_completed == 1, detail
+    assert outcome.status == "OPTIMAL", detail
+    assert dict(outcome.objective_values)[TIER_PLACED] == REST_PROBE_CAPACITY, (
+        f"expected {REST_PROBE_CAPACITY} placements; {REST_PROBE_FIXTURES} means the participant-rest "
+        f"window is not binding. {detail}"
+    )
+
+    # ...and directly: the shared entrant's matches are match+rest apart.
+    need = (constraints["match_minutes"] + constraints["rest_by_division"]["d1"]) * MIN_MS
+    starts = sorted(start for _fid, _court, start in outcome.assignments)
+    for earlier, later in zip(starts, starts[1:]):
+        assert later - earlier >= need, f"rest violated for {shared}: {earlier} vs {later}, need {need}ms"
 
 
 # --- degenerate constraint values must fail loudly, not solve quietly -------

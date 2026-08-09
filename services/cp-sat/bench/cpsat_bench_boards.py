@@ -448,6 +448,128 @@ def pin_contended_board():
     return fixtures, courts, grid_slots, PIN_MATCH_MIN + PIN_GAP_MIN, constraints, existing, []
 
 
+#: `gap_contended_board`'s match/gap and lattice. Deliberately distinct from
+#: both the production board (40/10) and `imbalance_probe_board` (25/5), so no
+#: count or duration here can collide with a number another test already uses.
+GAP_PROBE_MATCH_MIN = 20
+GAP_PROBE_GAP_MIN = 10
+GAP_PROBE_STEP_MIN = 10
+GAP_PROBE_COURTS = 2
+GAP_PROBE_TICKS = 13  # 0, 10, ... 120 minutes after the day opens
+#: Starts must be >= match+gap = 30 min apart, so one court fits
+#: {0, 30, 60, 90, 120} = 5, and two courts fit 10.
+GAP_PROBE_CAPACITY = 10
+#: Drop the gap and the width becomes match alone = 20 min, so one court fits
+#: {0, 20, 40, 60, 80, 100, 120} = 7, and two courts fit 14.
+GAP_PROBE_CAPACITY_WITHOUT_GAP = 14
+#: Enough fixtures for the ungapped board to reach its full capacity — that
+#: headroom is the entire measurement.
+GAP_PROBE_FIXTURES = GAP_PROBE_CAPACITY_WITHOUT_GAP
+
+
+def gap_contended_board():
+    """A board where the court TURNAROUND GAP is the binding constraint.
+
+    Two courts, thirteen ticks each at a 10-minute lattice, and more fixtures
+    than either version of the board can seat. The gap is then the only thing
+    deciding how many fit:
+
+        width = match + gap = 30 min  ->  5 per court, GAP_PROBE_CAPACITY = 10
+        width = match       = 20 min  ->  7 per court, ..._WITHOUT_GAP  = 14
+
+    so dropping `gap_ms` from the court interval width changes T0's answer by
+    four placements. That is a COUNT, decided by T0 in milliseconds, and it
+    does not depend on the wall, on which tiers completed, or on the day cap.
+
+    Why this board has to exist. On `production_board()` the same mutation is
+    only visible by luck: with 8 320 slots, 37 fixtures and a day cap of one
+    per division per day, almost nothing is ever forced onto the same court
+    close together, so a narrower court interval usually changes no placement
+    at all. Re-measured across six runs at the production 8 s wall, the mutant
+    was caught **2 times in 6** — and the kills correlated with the chain
+    NOT completing, i.e. with a less-optimised board, not with a longer solve.
+    A guard that fires two times in six is a coin flip that reads as a
+    regression in CI, and it was the strongest evidence for the (incorrect)
+    claim that a longer wall makes this family more detectable.
+
+    Entrants are pairwise disjoint and rest is 0 so participant rest cannot
+    bind; there is no day cap and no dependency. The court gap is measured
+    alone.
+    """
+    dur_gap_ms = (GAP_PROBE_MATCH_MIN + GAP_PROBE_GAP_MIN) * MIN_MS
+    del dur_gap_ms
+    courts = [f"C{i + 1}" for i in range(GAP_PROBE_COURTS)]
+    ticks = [EPOCH_MS + OPEN_MS + k * GAP_PROBE_STEP_MIN * MIN_MS for k in range(GAP_PROBE_TICKS)]
+    grid_slots = [(court, tick) for court in courts for tick in ticks]
+    fixtures = [
+        (f"g{i:02d}", [f"ge{2 * i:02d}", f"ge{2 * i + 1:02d}"], "d1") for i in range(GAP_PROBE_FIXTURES)
+    ]
+    constraints = {
+        "match_minutes": GAP_PROBE_MATCH_MIN,
+        "gap_minutes": GAP_PROBE_GAP_MIN,
+        "rest_by_division": {"d1": 0},
+        "day_cap_by_division": {},
+    }
+    return fixtures, courts, grid_slots, GAP_PROBE_STEP_MIN, constraints, [], []
+
+
+#: `rest_contended_board`'s shape. Match/gap/rest again distinct from every
+#: other board here, and the capacities (5 and 7) collide with no other count
+#: asserted in the suite.
+REST_PROBE_MATCH_MIN = 15
+REST_PROBE_GAP_MIN = 0  # legitimate, and keeps court turnaround out of the way
+REST_PROBE_REST_MIN = 45
+REST_PROBE_STEP_MIN = 15
+REST_PROBE_TICKS = 17  # 0, 15, ... 240 minutes after the day opens
+#: One entrant plays every fixture, so their rest intervals (match + rest =
+#: 60 min) may not overlap: {0, 60, 120, 180, 240} = 5.
+REST_PROBE_CAPACITY = 5
+#: Enough courts and fixtures that, with participant rest gone, every fixture
+#: seats on its own court at any tick.
+REST_PROBE_FIXTURES = 7
+REST_PROBE_COURTS = 7
+
+
+def rest_contended_board():
+    """A board where PARTICIPANT REST is the binding constraint.
+
+    Seven fixtures all share one entrant, on seven courts, so court
+    exclusivity can never bind — every fixture could sit on its own court at
+    the same tick. The only thing spacing them out is the per-entrant rest
+    interval:
+
+        rest enforced (width match + rest = 60 min)  ->  REST_PROBE_CAPACITY
+        rest constraint removed, or rest zeroed      ->  REST_PROBE_FIXTURES
+
+    so deleting the participant-rest `AddNoOverlap`, or zeroing `rest_ms`,
+    changes T0's proved count from 5 to 7.
+
+    Why this board has to exist. On `production_board()` the participant-rest
+    mutant is caught only most of the time: re-measured over six runs it was
+    RED **5 of 6** at the production 8 s wall (and 3 of 3 at a 3 s wall — the
+    wall is not the variable). One miss in six is a flake that reads as a
+    regression, and it is the same weakness the court-gap family has in a
+    milder form: on a board with 8 320 slots and a day cap of one per division
+    per day, participants are naturally spread out and a missing rest window
+    usually changes no placement.
+
+    Like `gap_contended_board`, this is a T0-only question and is asserted as
+    one.
+    """
+    courts = [f"C{i + 1}" for i in range(REST_PROBE_COURTS)]
+    ticks = [EPOCH_MS + OPEN_MS + k * REST_PROBE_STEP_MIN * MIN_MS for k in range(REST_PROBE_TICKS)]
+    grid_slots = [(court, tick) for court in courts for tick in ticks]
+    # `re00` is in every fixture; the partner is unique so nothing else couples.
+    fixtures = [(f"r{i:02d}", ["re00", f"rp{i:02d}"], "d1") for i in range(REST_PROBE_FIXTURES)]
+    constraints = {
+        "match_minutes": REST_PROBE_MATCH_MIN,
+        "gap_minutes": REST_PROBE_GAP_MIN,
+        "rest_by_division": {"d1": REST_PROBE_REST_MIN},
+        "day_cap_by_division": {},
+    }
+    return fixtures, courts, grid_slots, REST_PROBE_STEP_MIN, constraints, [], []
+
+
 #: `imbalance_probe_board`'s match/gap. Deliberately NOT 40/10: every derived
 #: value on this board (durations, makespan, imbalance) must be distinct from
 #: the production board's, so a mutant that hardcodes a production number
