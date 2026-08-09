@@ -56,7 +56,11 @@ where its decisions live, and what order its prompts run in.
 ```
 01 (proto) → 02, 03 (Python model + objective, can run together — same
 package, sequential is safer given 03 imports 02) → 04 (server, needs
-01-03) → 05 (TS client, needs 01) → 06 (wire build.ts, needs 04 deployed
+01-03) → 05 (TS client, needs 01) → 05b (corpus + coverage hardening) →
+05c (contract + boundary hardening; 05b FIRST — while the corpus is
+EPOCH_MS=0, "unset" and "legitimate value" are the same number, so a
+guard added by 05c cannot be proven to fail for the case it exists for)
+→ 06 (wire build.ts, needs 04 deployed
 somewhere reachable + 05) → 06b (status mapping, needs 06) → 07
 (integration tests, needs 06b) → 11 (E2E + smoke, needs 06b — the point
 at which the feature is visible end-to-end) → 08 ∥ 09 (deployment, CI —
@@ -77,11 +81,13 @@ compaction-proof summary. Keep them in step.
 | 02 | BUILD model (promote from bench) | **complete** — `e854b978..eee3a590`, clean after 2 fix rounds |
 | 03 | T0-T3 objective chain | **complete** — `eee3a590..f64235e6`, clean after 1 fix round |
 | 04 | gRPC server (auth, health, mapping) | **complete** — `f64235e6..f19605a6`, clean after 1 fix round |
-| 05 | TS codegen + client wrapper | in progress — codegen + tests done, client wrapper landing |
-| 06 | Wire `solveBuild` in `build.ts` | not started — **blocked on the 4 wire-contract gaps** parked in the ledger; the day-cap timezone one must not ship past this task |
+| 05 | TS codegen + client wrapper | **complete** — `f19605a6..b33ac2fb`, approved after 1 fix round |
+| 05b | Corpus + coverage hardening (Python tests) | in progress — must land before 05c |
+| 05c | Contract + boundary hardening | not started — brief written, held behind 05b |
+| 06 | Wire `solveBuild` in `build.ts` | not started — **blocked on 05c** |
 | 06b | Status vocabulary translation | not started |
 | 07 | Integration tests (parity, regression, fallback) | not started |
-| 11 | E2E + smoke coverage | not started — prompt not yet drafted |
+| 11 | E2E + smoke coverage | not started — **brief written** |
 | 08 | Deployment (Dockerfile, fly.toml) | not started |
 | 09 | CI workflow | not started |
 | 10 | Remove BUILD/POLISH's z3 code | **blocked** — do not start until 01-09 and 11 are live in production for one full deploy cycle |
