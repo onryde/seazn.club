@@ -194,7 +194,7 @@ The failure text names the culprit (tag, classes, text snippet). Find it with `g
 
 - [ ] **Step 3: Rerun the failing project after each fix** (same command). The width project IS the regression test: red before, green after, permanent in the gate.
 
-- [ ] **Step 4: Screenshot each fixed surface** at 320, 768, and desktop 1280 (§4 standing rule), stored under `test-results/349/` — these attach to the PR.
+- [ ] **Step 4: Screenshot each fixed surface** at 320, 768, and desktop 1280 (§4 standing rule), stored under `/tmp/349/` (owner instruction 2026-08-09: all wave screenshots in /tmp/) — these attach to the PR.
 
 - [ ] **Step 5: Full three-phone-project rerun, JSON out.** Expected: `failed: 0` across mobile-320/360/430, and mobile-se/mobile-14 still green (rerun them too — a 320 fix can regress 375).
 
@@ -224,7 +224,7 @@ const isPhone = (projectViewport()?.width ?? 1280) < 640; // sm breakpoint
 
 Assert the phone shape when `isPhone`, the dialog/desktop shape otherwise. The invariants that hold at EVERY width stay unconditional: element in DOM, content not clipped, no page-level horizontal scroll, ≥44px touch targets.
 
-- [ ] **Step 2: Screenshot every inventory surface at 768 and 834.** Inventory = union of the `mobile.spec.ts` route arrays (console routes ×19, public surfaces ×5, news, axe routes, page smokes) + publish-gate sheet + schedule board. Drive with a throwaway Playwright script in the scratchpad (reuse `e2e/.auth/pro.json` storage state), writing `test-results/349/tablet/<slug>-{768,834}.png`. `/admin` routes: screenshot for the functional check only.
+- [ ] **Step 2: Screenshot every inventory surface at 768 and 834.** Inventory = union of the `mobile.spec.ts` route arrays (console routes ×19, public surfaces ×5, news, axe routes, page smokes) + publish-gate sheet + schedule board. Drive with a throwaway Playwright script in the scratchpad (reuse `e2e/.auth/pro.json` storage state), writing `/tmp/349/tablet/<slug>-{768,834}.png` (owner instruction: all wave screenshots in /tmp/). `/admin` routes: screenshot for the functional check only.
 
 - [ ] **Step 3: Eyeball pass → verdict per surface.** For each surface record D or P in `docs/superpowers/specs/2026-08-09-responsive-matrix-verdicts.md`:
   - **D (desktop layout fits):** structure is right, only density/spacing/column-count needs `md:` band rules.
@@ -341,7 +341,7 @@ git commit -m "docs: upgrade UI verification rule to 320+768+desktop, matrix as 
 **Files:** none new (verification + PR assembly).
 
 **Interfaces:**
-- Consumes: everything; verdict table + `test-results/349/` screenshots.
+- Consumes: everything; verdict table + `/tmp/349/` screenshots.
 
 - [ ] **Step 1: Fresh-eyes environment check** — server still yours (`lsof -t -i :3100`), schema still the throwaway one, `git status --porcelain` shows only intended files (a sibling session's dirt reads as your failure).
 
@@ -360,7 +360,7 @@ Then run the serial phase exactly as `npm run test:e2e` does (`--workers=1`) if 
 
 - [ ] **Step 4: Unit/engine suites untouched-check.** This wave changed only `apps/web` UI + e2e + docs; run `npm test --workspace apps/web -- run` with JSON reporter and paste counts (watch: positional args are filename filters — a typo silently subsets; run with NO positional filter).
 
-- [ ] **Step 5: Push branch, open PR** (base `main`) titled `Responsive support matrix: 320–430 phones + 768/834 tablets (#349)`. Body includes: spec + verdict-table links, the JSON counts from step 2 verbatim, screenshot gallery (`test-results/349/`), the AGENTS/RULES diff summary, and `Closes #349`. End body with the standard generated-with footer.
+- [ ] **Step 5: Push branch, open PR** (base `main`) titled `Responsive support matrix: 320–430 phones + 768/834 tablets (#349)`. Body includes: spec + verdict-table links, the JSON counts from step 2 verbatim, screenshot gallery (`/tmp/349/`), the AGENTS/RULES diff summary, and `Closes #349`. End body with the standard generated-with footer.
 
 - [ ] **Step 6: Post-merge memory note** (session owner, not subagent): update `feedback_all_surfaces_mobile.md` / `feedback_ui_visual_approval.md`-adjacent memory to the 320+768+desktop rule once the PR merges — not before.
 
