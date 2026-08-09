@@ -15,7 +15,7 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 |---|---|---|---|---|
 | S1 | #429 | `S01-429-golden-corpus-policy.md` | — | **DONE** |
 | S2 | #430 | `S02-430-fidelity-tier-4-decision.md` | — | **DONE** — no code. Fidelity ladder closed at 0–3; tier 4 will never exist |
-| S3 | #426 | `S03-426-w4b-mutable-squads.md` | S1 | TODO |
+| S3 | #426 | `S03-426-w4b-mutable-squads.md` | S1 | **IN PROGRESS** — `feat/s3-w4b-mutable-squads`; 3 product rulings taken 2026-08-09 (see log) |
 | S4 | #428 | `S04-428-offence-taxonomies.md` | S3 (person-role decision) | TODO |
 | S5 | #431 | `S05-431-decisions-register.md` | S3, S4 | TODO |
 | S6 | #416 | `S06-416-w5-padspec.md` | S2, S3, S5 | TODO |
@@ -479,6 +479,66 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   `requiredFeatureForEvent` + `testkit/golden.ts:282` +
   `conformance/discipline.test.ts:28`. Mechanical; no prod data; modules stay
   `1.0.0`. Grows S6 by roughly a third.
+- 2026-08-09 — S3/#426 — **scout re-pin: four of the brief's structural
+  assumptions are wrong, and they make scope 2 bigger, not smaller.** Measured on
+  `main` @ `0c8eb752`:
+  (a) `squadFromLineup` is **football-private** (`football.ts:1347`), not a shared
+  helper. `positionKey` is dropped one line later at `:1351`
+  (`.map((slot) => slot.personId)`), and the return at `:1356` keeps person-id
+  arrays only.
+  (b) `maxSubs` is **football-private too** — `Cfg.maxSubs` at `football.ts:83`,
+  exactly one reader at `:918-921` comparing against `offUsed.length`. There is
+  no shared substitution concept anywhere in the engine to hang an exemption on.
+  (c) **No family kernel State holds a squad at all.** `setbased/kernel.ts:280-299`
+  and `nested/kernel.ts:345-369` carry `entrants:{home,away}` as entrant ids only;
+  `period/kernel.ts:386-410` has no entrant/squad/roster field whatsoever. So
+  "positions survive `init` into `State`" is **new state in three kernels**, not a
+  plumbing fix in one module.
+  (d) hockey has **no `positionsFor` hook** — `hockey.ts:15` hardcodes
+  `{key:"GK",min:1,max:1}` and grep for a relaxation hook returns zero hits. The
+  brief's "check whether `positionsFor(cfg)` already relaxes it" is answered: it
+  does not exist for hockey. `positionsFor` is declared at `sport/module.ts:91`
+  (optional hook), implemented at `football.ts:1338` and `period/kernel.ts:1545`,
+  reached via `sport/catalog.ts:55` `resolvePositions`.
+  (e) no pair/partner/declared-order field exists in any Lineup or State; the
+  racquet dossiers mark it `deferred` (`DOMAIN.tabletennis.md:39,77`).
+  Pattern to copy for a new core event (the 5 edits): shape at
+  `core/events.ts:62`/`:66`, `CORE_EVENT_SCHEMAS` keys `:76-77`, dispatch `:113`,
+  fold branches `:518`/`:531`, generator `testkit/stoppages.ts:97`.
+- 2026-08-09 — S3/#426 — **OWNER RULING 1 — a squad MAY grow mid-fixture, gated
+  per variant in cfg.** Growth is structurally representable: a `core.lineup.*`
+  event carries a full `LineupSlot` for a person not named at start, and the
+  squad entry records provenance (`named` | `added`) so S9 can tell an original
+  team-sheet member from a mid-fixture addition. Whether growth is *permitted* is
+  a cfg knob per sport/variant, **default off**. Reason: only cricket's
+  concussion/COVID replacement genuinely comes from outside the team sheet —
+  football, both hockey codes and volleyball all substitute from pre-named
+  benches, so those variants keep it off and lose nothing, while a schema that
+  forbids growth outright leaves the cricket row permanently unclosable and
+  pushes club scorers to fabricate placeholder persons (which corrupts S9 worse
+  than growth does). Engine records; the competition layer still owns
+  registration eligibility.
+- 2026-08-09 — S3/#426 — **OWNER RULING 2 — re-entry is a cfg knob:
+  `none | once | unlimited`, per sport, per variant.** No global answer is
+  correct: football Law 3.3 is no-return (with grassroots / small-sided
+  dispensations that ARE rolling), FIH hockey and ice hockey are unlimited
+  rolling substitution, FIVB volleyball 15.6 is **once and only back to the
+  position left** (so volleyball is `once` + a position lock), cricket lets a
+  retired-hurt batter resume while a concussion replacement is permanent. A
+  single global rule breaks at least four of the nine deferred rows. A violating
+  re-entry **returns a rejection, never throws** — a cfg-derived throw inside a
+  fold permanently bricks recorded fixtures (found 6× in W4a).
+- 2026-08-09 — S3/#426 — **OWNER RULING 3 — a coach/team official is a `role` on
+  the lineup slot, and stat projections filter on it.** `LineupSlot.role:
+  'player' | 'coach' | 'staff'`, default `'player'`; squad and stat projections
+  keep only `role === 'player'`, so a card to a coach records against the person
+  but never enters a playing record. Additive, one optional field, engine-only.
+  **Input to S4** (#428, offence taxonomies) — S4 must not re-decide this.
+  Carried caveat, NOT fixed here: `persons.lane` is
+  `check (lane in ('player','official'))` (`V348__persons_lane_and_registration_user.sql:9`)
+  where `'official'` means a **match** official (referee/umpire) per that
+  migration's own comment. A team coach has no value there, so a DB lane
+  extension is owed — out of scope for an engine-only session, flagged for S4.
 - _(append below)_
 
 ## Open questions for the owner
