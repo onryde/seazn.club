@@ -37,7 +37,7 @@ import clubNightJson from "@/demo/ai-templates/club-night.json";
 import northsideJson from "@/demo/ai-templates/northside-open.json";
 import finalsDayJson from "@/demo/ai-templates/finals-day.json";
 
-import { AiArchitectDemo } from "../ai-architect-demo";
+import { AiArchitectDemo, demoQuoteLines } from "../ai-architect-demo";
 
 const UI_PREFIXES = ["board.ai.", "board.conflict."] as const;
 
@@ -259,6 +259,15 @@ describe("AiArchitectDemo — T1 club night", () => {
     expect(propsOf(price!)["data-discount"]).toBe("0");
   });
 
+  it("prices a single division off the pack, the way schedule-ai.ts does", () => {
+    expect(demoQuoteLines(CLUB_NIGHT)).toEqual([
+      { key: "club-night", input: { movableFixtures: 12, entrants: 8, courts: 2 } },
+    ]);
+    expect(demoQuoteLines(FINALS_DAY)).toEqual([
+      { key: "finals-day", input: { movableFixtures: 29, entrants: 16, courts: 6 } },
+    ]);
+  });
+
   it("shows no per-division ledger for a single-division run", async () => {
     const island = await mount();
     await select(island, "club-night");
@@ -311,6 +320,24 @@ describe("AiArchitectDemo — T2 Northside Open (joint)", () => {
     expect(n).toBe(0);
     expect(propsOf(box!)["data-count"]).toBe("0");
     expect(island.text()).toContain(msg("scheduling.aidemo.conflicts.none"));
+  });
+
+  // The inputs, not just the answer. `sizeScore` for Men's and Women's lands at
+  // 55 and 55.5 against an `s1` of 60, so a board-derived quote (5 courts, and a
+  // participation count of 24 for U15 rather than the draw's 23) is within one
+  // recapture of printing a rung the run never paid — while `credits` still
+  // happens to come out at 3 today. Pinning the credits alone cannot see that.
+  it("prices each division on the SERVER's inputs, not the board's", () => {
+    const lines = demoQuoteLines(NORTHSIDE);
+    expect(lines).toHaveLength(3);
+    expect(lines.map((l) => l.key)).toEqual(planOf(NORTHSIDE).divisions!.map((d) => d.id));
+    expect(lines.map((l) => l.input.movableFixtures)).toEqual([31, 48, 36]);
+    // Per-division court sets off `pack.divisions[].settings.courts` …
+    expect(lines.map((l) => l.input.courts)).toEqual([4, 3, 4]);
+    // … and the DRAW's entrants off `pack.entrants`, not board participation.
+    expect(lines.map((l) => l.input.entrants)).toEqual([32, 32, 23]);
+    // The board would have said 5 courts for every one of them.
+    expect(NORTHSIDE.board.courts.length).toBe(5);
   });
 
   it("charges the batch price — Σ of the rungs, less one", async () => {

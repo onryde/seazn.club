@@ -59,6 +59,10 @@ export default async function SchedulingPage({
     "board.ai.",
     "board.conflict.",
   ]);
+  // ONE provider for the page. `demoDict` is a superset of the marketing dict
+  // (`uiSubset` adds only `board.*`, which marketing.json does not declare), so
+  // the board island reads exactly what it read before — and the 33KB marketing
+  // catalog crosses the RSC boundary once instead of once per provider.
   const demoDict = { ...d, ...uiSubset };
   // Resolved here, not in the island: the AI_RUNG_* overrides only exist on the
   // server, so a client that priced the run itself would disagree with the
@@ -66,59 +70,57 @@ export default async function SchedulingPage({
   const rungWeights = schedulingRungWeights();
   return (
     <MarketingShell lang={lang}>
-      <main className="bg-[var(--mk-light-warm)]">
-        <section className="mx-auto max-w-4xl px-4 pb-14 pt-16">
-          <h1 className="mk-display text-5xl font-bold text-purple-950">{t(d, "scheduling.hero.title")}</h1>
-          <p className="mt-3 max-w-xl text-slate-600">
-            {t(d, "scheduling.hero.subhead")}
-          </p>
-          <div className="mt-8">
-            <DictProvider dict={d} locale={lang}>
+      <DictProvider dict={demoDict} locale={lang}>
+        <main className="bg-[var(--mk-light-warm)]">
+          <section className="mx-auto max-w-4xl px-4 pb-14 pt-16">
+            <h1 className="mk-display text-5xl font-bold text-purple-950">{t(d, "scheduling.hero.title")}</h1>
+            <p className="mt-3 max-w-xl text-slate-600">
+              {t(d, "scheduling.hero.subhead")}
+            </p>
+            <div className="mt-8">
               <SchedulingBoard />
-            </DictProvider>
-          </div>
-        </section>
+            </div>
+          </section>
 
-        <DictProvider dict={demoDict} locale={lang}>
           <AiArchitectDemo locale={lang} weights={rungWeights} />
-        </DictProvider>
 
-        <section className="mx-auto max-w-4xl px-4 py-14">
-          <h2 className="mk-display mb-6 text-3xl font-bold text-purple-950">{t(d, "scheduling.orderOfPlay")}</h2>
-          <div className="border-l-2 border-purple-950 pl-5">
-            {RUNDOWN.map((r) => (
-              <Reveal
-                key={r.time}
-                className="flex items-baseline gap-4 border-b border-dashed border-[#e5decd] py-2.5"
-              >
-                <span className="mk-display min-w-14 text-lg font-bold tabular-nums text-[var(--mk-purple)]">
-                  {r.time}
-                </span>
-                <span>
-                  <span className="text-sm font-semibold text-slate-800">{t(d, `scheduling.rundown.${r.key}.what`)}</span>{" "}
-                  <span className="text-sm text-slate-600">— {t(d, `scheduling.rundown.${r.key}.how`)}</span>
-                </span>
-              </Reveal>
-            ))}
-          </div>
-        </section>
+          <section className="mx-auto max-w-4xl px-4 py-14">
+            <h2 className="mk-display mb-6 text-3xl font-bold text-purple-950">{t(d, "scheduling.orderOfPlay")}</h2>
+            <div className="border-l-2 border-purple-950 pl-5">
+              {RUNDOWN.map((r) => (
+                <Reveal
+                  key={r.time}
+                  className="flex items-baseline gap-4 border-b border-dashed border-[#e5decd] py-2.5"
+                >
+                  <span className="mk-display min-w-14 text-lg font-bold tabular-nums text-[var(--mk-purple)]">
+                    {r.time}
+                  </span>
+                  <span>
+                    <span className="text-sm font-semibold text-slate-800">{t(d, `scheduling.rundown.${r.key}.what`)}</span>{" "}
+                    <span className="text-sm text-slate-600">— {t(d, `scheduling.rundown.${r.key}.how`)}</span>
+                  </span>
+                </Reveal>
+              ))}
+            </div>
+          </section>
 
-        <section className="mx-auto max-w-4xl px-4 pb-20">
-          <div className="grid gap-4 sm:grid-cols-3">
-            {KIT.map((k) => (
-              <div key={k} className="card p-4 text-sm">
-                <p className="mb-1 font-semibold text-slate-800">{t(d, `scheduling.kit.${k}.label`)}</p>
-                <p className="text-slate-500">{t(d, `scheduling.kit.${k}.body`)}</p>
-              </div>
-            ))}
-          </div>
-          <p className="mt-10 text-center">
-            <Link href={`/${lang}/start`} className="btn btn-primary px-6 py-2.5 text-base">
-              {t(d, "scheduling.cta")} →
-            </Link>
-          </p>
-        </section>
-      </main>
+          <section className="mx-auto max-w-4xl px-4 pb-20">
+            <div className="grid gap-4 sm:grid-cols-3">
+              {KIT.map((k) => (
+                <div key={k} className="card p-4 text-sm">
+                  <p className="mb-1 font-semibold text-slate-800">{t(d, `scheduling.kit.${k}.label`)}</p>
+                  <p className="text-slate-500">{t(d, `scheduling.kit.${k}.body`)}</p>
+                </div>
+              ))}
+            </div>
+            <p className="mt-10 text-center">
+              <Link href={`/${lang}/start`} className="btn btn-primary px-6 py-2.5 text-base">
+                {t(d, "scheduling.cta")} →
+              </Link>
+            </p>
+          </section>
+        </main>
+      </DictProvider>
     </MarketingShell>
   );
 }

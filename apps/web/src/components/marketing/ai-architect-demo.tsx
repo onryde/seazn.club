@@ -27,9 +27,10 @@ import { useDict } from "@/components/i18n/dict-provider";
 import { AiDiffPanel } from "@/components/v2/board/ai-diff-panel";
 import { AiTrace } from "@/components/v2/board/ai-trace";
 import { buildScheduleTrace } from "@/components/v2/board/ai-trace-compose";
-import type { AiConsoleFixture } from "@/components/v2/board/ai-diff";
-import { quoteRun, type Quote, type Rung, type RungWeights } from "@/lib/ai-rung";
-import type { Locale } from "@/lib/i18n-constants";
+import { blockingConflictCode, blockingConflictKey } from "@/components/v2/board/ai-diff";
+import { CONFLICT_LABEL } from "@/components/v2/board/types";
+import { quoteRun, type Quote, type QuoteLineInput, type Rung, type RungWeights } from "@/lib/ai-rung";
+import type { Dict, Locale } from "@/lib/i18n-constants";
 import { plural as pluralRuntime, t as tRuntime, type TKey } from "@/lib/i18n-runtime";
 import type { AiDemoFixture } from "@/demo/ai-templates/types";
 import type { AiPlanResponse } from "@/server/api-v1/schemas";
@@ -76,11 +77,74 @@ type DemoPlan = Omit<AiPlanResponse, "divisions"> & {
   divergent_courts?: string[];
 };
 type ProposalRow = AiPlanResponse["proposal"][number] & { division_id?: string };
-/** The capture writes the board rows straight off the fixtures table, so the
- *  entrant ids ride along even though `AiConsoleFixture` has no use for them.
- *  Needed to size a per-division quote line; if a future capture drops them the
- *  joint credits stop matching the recorded ones and the suite reds. */
-type BoardRow = AiConsoleFixture & { home_entrant_id?: string; away_entrant_id?: string };
+
+/** The slice of the committed `pack` the price is derived from. `pack` is
+ *  `unknown` in `AiDemoFixture` on purpose (its real types are server-only), so
+ *  each consumer declares the half it reads. */
+type DemoPack = {
+  divisions?: { id: string; movableIds: string[]; settings?: { courts?: string[] } }[];
+  entrants?: { id: string; division_id?: string }[];
+  settings?: { courts?: string[] };
+};
+
+/**
+ * The priced lines for a recorded run, derived exactly the way the SERVER
+ * derives them — same fields, same source.
+ *
+ *   joint  → competition-schedule-ai.ts:2565, one line per solved division:
+ *            `d.movableIds.length`, `pack.entrants.filter(division_id)`,
+ *            `d.settings.courts.length`
+ *   single → schedule-ai.ts:2680, one line: `movableIds.size`,
+ *            `pack.entrants.length`, `pack.settings.courts.length`
+ *
+ * Read from the PACK, never from the board. The board's `courts` is the UNION
+ * across divisions (5 at Northside, where the real per-division sets are 4/3/4)
+ * and its entrant count is participation, not the draw (23 U15 entrants own a
+ * fixture; 24 people appear in one). Both differences move `sizeScore` — Men's
+ * and Women's land at 55 and 55.5 against an `s1` of 60 — so a board-derived
+ * quote is one recapture away from printing a rung the run never paid.
+ */
+export function demoQuoteLines(fixture: AiDemoFixture): QuoteLineInput[] {
+  const pack = fixture.pack as DemoPack;
+  const fallbackCourts = fixture.board.courts.length;
+  if (pack.divisions?.length) {
+    const entrants = pack.entrants ?? [];
+    return pack.divisions.map((d) => ({
+      key: d.id,
+      input: {
+        movableFixtures: d.movableIds.length,
+        entrants: entrants.filter((e) => e.division_id === d.id).length,
+        courts: d.settings?.courts?.length ?? fallbackCourts,
+      },
+    }));
+  }
+  return [
+    {
+      key: fixture.meta.slug,
+      input: {
+        movableFixtures: fixture.movableIds.length,
+        entrants: pack.entrants?.length ?? fixture.board.entrants.length,
+        courts: pack.settings?.courts?.length ?? fallbackCourts,
+      },
+    },
+  ];
+}
+
+/**
+ * A conflict's primary text, resolved through the shared taxonomy — the exact
+ * body of `ai-diff-panel.tsx`'s `conflictLabel` (:65), which the joint console
+ * and the review panel also use.
+ *
+ * The engine hands back a camelCase reason token. Printing it raw would put
+ * English machine vocabulary on /es, /fr and /nl, which is the one thing this
+ * section cannot afford to do — it is arguing that what you see is the product.
+ */
+export function conflictLabelFor(dict: Dict, reason: string): string {
+  const code = blockingConflictCode(reason);
+  const key = blockingConflictKey(reason);
+  const localized = tRuntime(dict, key);
+  return localized === key ? (CONFLICT_LABEL[code] ?? code) : localized;
+}
 
 /** SSR-safe, and safe in a DOM-less test: `window` may not exist at all. */
 function usePrefersReducedMotion(): boolean {
@@ -165,51 +229,18 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
     return plan.divisions.map((d) => ({ ...d, placed: placed.get(d.id) ?? 0 }));
   }, [plan]);
 
-  const quote: Quote | null = useMemo(() => {
-    if (!fixture || !plan) return null;
-    const courts = fixture.board.courts.length;
-    if (plan.divisions?.length) {
-      // One priced line per division, exactly as the competition endpoint
-      // quotes a joint run — the Σ−1 batch discount is `quoteRun`'s, not ours.
-      const entrants = new Map<string, Set<string>>();
-      for (const row of fixture.board.fixtures as BoardRow[]) {
-        if (!row.division_id) continue;
-        const set = entrants.get(row.division_id) ?? new Set<string>();
-        if (row.home_entrant_id) set.add(row.home_entrant_id);
-        if (row.away_entrant_id) set.add(row.away_entrant_id);
-        entrants.set(row.division_id, set);
-      }
-      return quoteRun(
-        plan.divisions.map((d) => ({
-          key: d.id,
-          input: {
-            movableFixtures: d.movable,
-            entrants: entrants.get(d.id)?.size ?? 0,
-            courts,
-          },
-        })),
-        weights,
-      );
-    }
-    return quoteRun(
-      [
-        {
-          key: fixture.meta.slug,
-          input: {
-            movableFixtures: fixture.movableIds.length,
-            entrants: fixture.board.entrants.length,
-            courts,
-          },
-        },
-      ],
-      weights,
-    );
-  }, [fixture, plan, weights]);
+  // The Σ−1 batch discount is `quoteRun`'s, never ours; the inputs are the
+  // server's, never the board's — see `demoQuoteLines`.
+  const quote: Quote | null = useMemo(
+    () => (fixture ? quoteRun(demoQuoteLines(fixture), weights) : null),
+    [fixture, weights],
+  );
 
   const codeOf = useCallback(
     (id: string) => fixture?.board.fixtures.find((f) => f.id === id)?.code ?? id.slice(0, 8),
     [fixture],
   );
+  const conflictLabel = useCallback((reason: string) => conflictLabelFor(dict, reason), [dict]);
 
   const conflicts = plan ? [...plan.blocking, ...plan.warnings] : [];
   const capturedOn = fixture
@@ -417,12 +448,19 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
                         {conflicts.map((c, i) => (
                           <li
                             key={`${c.fixtureId}-${i}`}
-                            className="flex flex-wrap items-baseline gap-x-2 text-[11px] text-slate-600"
+                            data-ai-conflict="row"
+                            className="flex flex-wrap items-baseline gap-x-2 text-[11px]"
                           >
                             <span className="font-mono font-semibold text-slate-700">
                               {codeOf(c.fixtureId)}
                             </span>
-                            <span>{c.detail || c.reason}</span>
+                            {/* The localized taxonomy label first, the engine's
+                                raw detail only as muted supplementary text —
+                                the shape ai-diff-panel.tsx:156 uses. */}
+                            <span className="font-medium text-red-600">
+                              {conflictLabel(c.reason)}
+                            </span>
+                            {c.detail && <span className="text-slate-500">{c.detail}</span>}
                           </li>
                         ))}
                       </ul>
