@@ -250,11 +250,19 @@ describe("football state machine guards (spec 04 §1.3)", () => {
     const base = stream(["core.start"]);
     const sub = (payload: unknown) =>
       fold(leagueCfg, [...base, makeEnvelope(1, { type: "football.sub", payload })]);
+    // S3/W4b (#426) — the refusals below are the variant's rules, so they are
+    // asserted through the WRITE path (`strictFromSeq`), which is where a
+    // scorer can still fix the entry. The one structural refusal — a player
+    // who was never on the field — holds on both paths.
+    const subStrict = (payload: unknown) =>
+      foldMatch(football, leagueCfg, lineups, [...base, makeEnvelope(1, { type: "football.sub", payload })], {
+        strictFromSeq: 0,
+      });
     expect(sub({ by: "H", off: "H-p1", on: "H-b1" }).squads.home.onPitch).toContain("H-b1");
     expect(() => sub({ by: "H", off: "H-b2", on: "H-b1" })).toThrowError(
       expect.objectContaining({ code: "INVALID_EVENT" }),
     );
-    expect(() => sub({ by: "H", off: "H-p1", on: "A-b1" })).toThrowError(
+    expect(() => subStrict({ by: "H", off: "H-p1", on: "A-b1" })).toThrowError(
       expect.objectContaining({ code: "INVALID_EVENT" }),
     );
     // A substituted-off player may not return.
@@ -263,9 +271,9 @@ describe("football state machine guards (spec 04 §1.3)", () => {
       makeEnvelope(1, { type: "football.sub", payload: { by: "H", off: "H-p1", on: "H-b1" } }),
       makeEnvelope(2, { type: "football.sub", payload: { by: "H", off: "H-b1", on: "H-p1" } }),
     ];
-    expect(() => fold(leagueCfg, twice)).toThrowError(
-      expect.objectContaining({ code: "INVALID_EVENT" }),
-    );
+    expect(() =>
+      foldMatch(football, leagueCfg, lineups, twice, { strictFromSeq: 0 }),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
   });
 
   it("flags an abandoned fixture for replay without an outcome", () => {

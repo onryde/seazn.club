@@ -43,6 +43,15 @@ export const tennis = makeNestedModule({
     },
   },
   positions,
+  // S3/W4b (#426) ruling 2 — ITF Rule 30: a player who retires does not
+  // resume, and there is no substitute in tennis. Every knob at its most
+  // restrictive; declared rather than defaulted so the answer is the sport's,
+  // and so padel arriving on this kernel has to state its own.
+  lineupPolicy: () => ({
+    reentry: "none",
+    reentryPositionLock: false,
+    allowSquadGrowth: false,
+  }),
   entrantModel: { kinds: ["individual", "pair"], defaultKind: "individual" },
   // v6/00 §4 — points → set ratio → game ratio → h2h → seed.
   defaultTiebreakers: ["points", "set_ratio", "game_ratio", "h2h_points", "seed"],

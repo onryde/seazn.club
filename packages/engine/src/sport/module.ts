@@ -3,6 +3,7 @@
 // declaredPointsSets; arbitraryEvent/coarsen hooks from spec 03 §6 + §9.6).
 import { z } from "zod";
 import type { CoreEv, EventEnvelope, FoldableModule, FoldContext } from "../core/events.ts";
+import type { LineupPolicy, SquadState } from "../core/lineup.ts";
 import type { MatchPosition } from "../core/position.ts";
 import type { Rng } from "../core/rng.ts";
 import type {
@@ -89,6 +90,25 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   // before W4. Engine-side callers must go through `resolvePositions` rather
   // than reading `positions` directly (src/sport/catalog.ts).
   positionsFor?(cfg: Cfg): PositionCatalog;
+
+  // S3/W4b (#426) — the two lineup hooks, restated here because this is the
+  // interface a sport author reads. Both are inherited unchanged from
+  // FoldableModule (src/core/events.ts), where the full reasoning lives.
+  //
+  //  - `lineupPolicy(cfg)` declares what THIS VARIANT permits: re-entry
+  //    (`none | once | unlimited` + FIVB's position lock), mid-fixture squad
+  //    growth, the substitution cap, and the named exemptions held outside it.
+  //    A cfg hook, never a module constant — football's grassroots
+  //    dispensations are rolling while Law 3.3 is not, and both share a module.
+  //  - `onLineup(state, squads)` hands the folded SquadState back so a module
+  //    can persist it into its own State. Called at `init` and after every
+  //    accepted change; never after a refusal.
+  //
+  // The kernel folds `core.lineup.*` itself and never forwards those events to
+  // `apply`, exactly as with `core.suspend`. A module that only needs to READ
+  // the squads mid-fold declares neither hook and reads `ctx.squads`.
+  lineupPolicy?(cfg: Cfg): LineupPolicy;
+  onLineup?(state: State, squads: SquadState): State;
   variants: Record<string, Partial<Cfg>>; // named presets: t20, odi, beach, blitz…
 
   // Jul3/06 §3 — optional print-template fragments. Sport-neutral kinds

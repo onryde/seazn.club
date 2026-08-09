@@ -136,6 +136,20 @@ export const icehockey = makePeriodModule({
   },
   positions,
   keeperGroup: "G",
+  // S3/W4b (#426) ruling 2 — IIHF Rule 68: substitution is unlimited and "on
+  // the fly". `reentry: "unlimited"` is also what makes a PULLED GOALIE
+  // recordable end to end: the goalie leaves (`core.lineup.retirement`), an
+  // extra skater takes the ice, and the goalie comes back
+  // (`core.lineup.entry`) — under any narrower mode the return is refused and
+  // the fold has to be told a lie to stay foldable.
+  //
+  // No growth: IIHF benches are named, and the roster is closed at the
+  // pre-game sheet. See hockey.ts for why this takes `cfg` and ignores it.
+  lineupPolicy: () => ({
+    reentry: "unlimited",
+    reentryPositionLock: false,
+    allowSquadGrowth: false,
+  }),
   entrantModel: { kinds: ["team"], defaultKind: "team", team: { squadNumbers: true, captain: true } },
   metrics: [
     { key: "gf", label: "GF", direction: "desc" },

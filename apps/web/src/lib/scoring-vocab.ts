@@ -55,6 +55,15 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "core.finalize": "event.core.finalize", "core.note": "event.core.note",
   "core.award": "event.core.award", "core.suspend": "event.core.suspend",
   "core.resume": "event.core.resume",
+  // S3/W4b (#426) — the lineup family. `replacement` is the exemptible one
+  // (concussion / injury / COVID), which is why fr distinguishes it from a
+  // plain `substitution`: both are "remplacement" in football French and a
+  // reader cannot tell an exempt change from a counted one otherwise.
+  "core.lineup.substitution": "event.core.lineup.substitution",
+  "core.lineup.replacement": "event.core.lineup.replacement",
+  "core.lineup.position": "event.core.lineup.position",
+  "core.lineup.retirement": "event.core.lineup.retirement",
+  "core.lineup.entry": "event.core.lineup.entry",
 
   "badminton.game.summary": "event.badminton.game.summary",
   "badminton.rally": "event.badminton.rally",

@@ -53,6 +53,8 @@ import {
   shootoutTally,
   type ShootoutKick,
 } from "./shootout.ts";
+import { makeSquadAdopter } from "../squad-state.ts";
+import type { LineupPolicy, SquadState } from "../../core/lineup.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — v6/00 §3
@@ -414,6 +416,22 @@ export interface PeriodState {
    * core.suspend / core.resume pair never does.
    */
   asOf?: GameTime;
+  /**
+   * S3/W4b (#426) — WHO IS ON THE PITCH AND WHERE, as `core/lineup.ts` folded
+   * it. This is what settles the two personnel rows both period dossiers
+   * deferred: FIH's "goalkeeper, field player with goalkeeping privileges, or
+   * no keeper at all", and IIHF's "goalkeeper changes; pulled goalie".
+   *
+   * The `emptyNet` flag on a goal does NOT say either of those things. It is
+   * the scorer's note about one goal; this says who was in the net a minute
+   * earlier, and it is the only one of the two an accumulation rule or a
+   * goalkeeper stat can read.
+   *
+   * ABSENT until it says something the team sheet does not — see
+   * `sports/squad-state.ts`, which is also why initialising it in `init` is
+   * forbidden, exactly as for `goalLog` and `setPieces` above.
+   */
+  squads?: SquadState;
 }
 
 function opponent(side: Side): Side {
@@ -1247,6 +1265,22 @@ export interface PeriodPreset {
   // The vocabulary is the sport's, not the kernel's: FIH says GK, IIHF says G.
   // Omitted ⇒ the sport has no keeper and the config knob does nothing.
   keeperGroup?: string;
+  /**
+   * S3/W4b (#426) owner ruling 2 — what THIS competition permits a lineup to
+   * do: re-entry mode, FIVB's position lock, mid-fixture squad growth, the
+   * substitution cap and the exemptions held outside it.
+   *
+   * A FUNCTION OF CFG rather than a constant, because none of those is a
+   * property of the sport. Both codes on this kernel are unlimited rolling
+   * substitution today (FIH Rule 5.2, IIHF Rule 68) and football — which this
+   * kernel is meant to absorb — is Law 3.3 no-return with grassroots
+   * dispensations that ARE rolling, so the same preset shape has to answer
+   * differently for two configs of one module.
+   *
+   * Omitted ⇒ `DEFAULT_LINEUP_POLICY`: no growth, no return, no exemption, no
+   * cap — nothing a module could do before this wave becomes impossible.
+   */
+  lineupPolicy?: (cfg: PeriodCfg) => LineupPolicy;
   metrics: MetricSpec[];
   defaultTiebreakers: TiebreakerKey[];
   officialLabel: { scorer: string };
@@ -1302,6 +1336,9 @@ export function makePeriodModule(
   const attemptType = `${preset.key}.shootout.attempt`;
   const setPieceType = `${preset.key}.set_piece`;
   const setPieceKinds = preset.setPieceKinds;
+  // One per module, built here so the init handshake it keys on cannot leak
+  // between two sports sharing this kernel (see `sports/squad-state.ts`).
+  const squadAdopter = makeSquadAdopter<PeriodState>();
 
   // Set pieces are attributed-scoring detail (who took it, did it convert), so
   // they join tiers 2/3 only — a tier-0 scorer taps goals, not awards.
@@ -1554,8 +1591,14 @@ export function makePeriodModule(
     },
     variants: preset.variants,
 
+    // S3/W4b (#426) — the two halves of adopting `core/lineup.ts`. Declared
+    // only when the preset states a policy, so a period sport that says nothing
+    // gets `DEFAULT_LINEUP_POLICY` from the fold and is byte-for-byte unmoved.
+    ...(preset.lineupPolicy === undefined ? {} : { lineupPolicy: preset.lineupPolicy }),
+    onLineup: (state, squads) => squadAdopter.adopt(state, squads),
+
     init(cfg, lineups: LineupPair): PeriodState {
-      return {
+      return squadAdopter.fresh({
         cfg,
         entrants: { home: lineups.home.entrantId, away: lineups.away.entrantId },
         phase: "pre",
@@ -1567,7 +1610,7 @@ export function makePeriodModule(
         shootout: null,
         outcome: null,
         replayFlagged: false,
-      };
+      });
     },
 
     apply(state, ev: EventEnvelope<PeriodEv | CoreEv>, ctx): PeriodState {

@@ -35,6 +35,16 @@ export const tabletennis = makeSetBasedModule({
     "hardbat-21": { setTo: 21, finalSetTo: 21 }, // legacy/social — kernel unchanged
   },
   positions,
+  // S3/W4b (#426) ruling 2 — ITTF has no substitute: the pair named on the
+  // sheet plays the match. Every knob at its most restrictive, which is also
+  // `DEFAULT_LINEUP_POLICY`; stated explicitly so the answer is the sport's
+  // rather than a default nobody chose, and so the volleyball/table-tennis
+  // divergence on one shared kernel is visible in both files.
+  lineupPolicy: () => ({
+    reentry: "none",
+    reentryPositionLock: false,
+    allowSquadGrowth: false,
+  }),
   unitLabel: { one: "Game", many: "Games" },
   // spec 04 §5 / table-tennis.md §5 — matches → h2h → game ratio → point ratio.
   defaultTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],

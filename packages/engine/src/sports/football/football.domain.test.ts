@@ -32,6 +32,12 @@ function stream(...specs: Array<[type: string, payload?: unknown]>): EventEnvelo
 const cfgOf = (raw: unknown): FootballCfg => football.configSchema.parse(raw);
 const fold = (cfg: FootballCfg, events: EventEnvelope[]) =>
   foldMatch(football, cfg, lineups, events);
+// W4a (#425) §3.3 seam, wired for football's substitutions in S3/W4b (#426): a
+// cfg-derived refusal exists on the WRITE path only. A scorer entering a
+// substitution is pad-shaped, so the rules below are asserted through a strict
+// fold; `fold` above is the READ path, which must never refuse history.
+const foldStrict = (cfg: FootballCfg, events: EventEnvelope[]) =>
+  foldMatch(football, cfg, lineups, events, { strictFromSeq: 0 });
 
 const sub = (off: string, on: string): [string, unknown] => [
   "football.sub",
@@ -46,8 +52,17 @@ const sub = (off: string, on: string): [string, unknown] => [
 describe("substitution rules per variant (Law 3)", () => {
   it("keeps return substitutions illegal by default (11-a-side)", () => {
     expect(() =>
-      fold(cfgOf({}), stream(["core.start"], sub("H-p1", "H-b1"), sub("H-b1", "H-p1"))),
+      foldStrict(cfgOf({}), stream(["core.start"], sub("H-p1", "H-b1"), sub("H-b1", "H-p1"))),
     ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
+  });
+
+  it("does not refuse a recorded return on the READ path (S3/W4b, #426)", () => {
+    // The competition has since been switched off rolling substitutions. The
+    // return was legal when it was scored and there is no event to void, so a
+    // throw here would make every already-scored fixture in the division
+    // unreadable — the cfg-derived-throw-inside-a-fold shape found 6× in W4a.
+    const state = fold(cfgOf({}), stream(["core.start"], sub("H-p1", "H-b1"), sub("H-b1", "H-p1")));
+    expect(state.squads.home.onPitch).toContain("H-p1");
   });
 
   it("lets a substituted player return when cfg.rollingSubs is on", () => {
@@ -70,10 +85,16 @@ describe("substitution rules per variant (Law 3)", () => {
       sub("H-p2", "H-b2"),
       sub("H-p3", "H-b3"),
     );
+    const beyond = [
+      ...three,
+      makeEnvelope(4, { type: "football.sub", payload: { by: "H", off: "H-p4", on: "H-b4" } }),
+    ];
     expect(fold(cfg, three).squads.home.offUsed).toHaveLength(3);
-    expect(() =>
-      fold(cfg, [...three, makeEnvelope(4, { type: "football.sub", payload: { by: "H", off: "H-p4", on: "H-b4" } })]),
-    ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
+    expect(() => foldStrict(cfg, beyond)).toThrowError(
+      expect.objectContaining({ code: "INVALID_EVENT" }),
+    );
+    // …and the same over-cap stream still READS, for the reason above.
+    expect(fold(cfg, beyond).squads.home.offUsed).toHaveLength(4);
   });
 
   it("counts the cap per side, not per fixture", () => {

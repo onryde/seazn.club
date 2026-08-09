@@ -15,8 +15,8 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 |---|---|---|---|---|
 | S1 | #429 | `S01-429-golden-corpus-policy.md` | — | **DONE** |
 | S2 | #430 | `S02-430-fidelity-tier-4-decision.md` | — | **DONE** — no code. Fidelity ladder closed at 0–3; tier 4 will never exist |
-| S3 | #426 | `S03-426-w4b-mutable-squads.md` | S1 | TODO |
-| S4 | #428 | `S04-428-offence-taxonomies.md` | S3 (person-role decision) | TODO |
+| S3 | #426 | `S03-426-w4b-mutable-squads.md` | S1 | **DONE** — all 9 deferred rows closed; 4 owner rulings; e2e+smoke deferred to S12/S13 |
+| S4 | #428 | `S04-428-offence-taxonomies.md` | S3 (person-role decision) | TODO — **person-role decision ANSWERED by S3 ruling 3**: `LineupSlot.role: player\|coach\|staff`, stat projections filter `role === "player"`. S4 does NOT re-decide it, and owes the `persons.lane` DB extension (`'official'` there means MATCH official) |
 | S5 | #431 | `S05-431-decisions-register.md` | S3, S4 | TODO |
 | S6 | #416 | `S06-416-w5-padspec.md` | S2, S3, S5 | TODO |
 | S7 | #427 | `S07-427-pad-vocabulary-i18n.md` | S3, S4, S6 | TODO |
@@ -479,6 +479,267 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   `requiredFeatureForEvent` + `testkit/golden.ts:282` +
   `conformance/discipline.test.ts:28`. Mechanical; no prod data; modules stay
   `1.0.0`. Grows S6 by roughly a third.
+- 2026-08-09 — S3/#426 — **scout re-pin: four of the brief's structural
+  assumptions are wrong, and they make scope 2 bigger, not smaller.** Measured on
+  `main` @ `0c8eb752`:
+  (a) `squadFromLineup` is **football-private** (`football.ts:1347`), not a shared
+  helper. `positionKey` is dropped one line later at `:1351`
+  (`.map((slot) => slot.personId)`), and the return at `:1356` keeps person-id
+  arrays only.
+  (b) `maxSubs` is **football-private too** — `Cfg.maxSubs` at `football.ts:83`,
+  exactly one reader at `:918-921` comparing against `offUsed.length`. There is
+  no shared substitution concept anywhere in the engine to hang an exemption on.
+  (c) **No family kernel State holds a squad at all.** `setbased/kernel.ts:280-299`
+  and `nested/kernel.ts:345-369` carry `entrants:{home,away}` as entrant ids only;
+  `period/kernel.ts:386-410` has no entrant/squad/roster field whatsoever. So
+  "positions survive `init` into `State`" is **new state in three kernels**, not a
+  plumbing fix in one module.
+  (d) hockey has **no `positionsFor` hook** — `hockey.ts:15` hardcodes
+  `{key:"GK",min:1,max:1}` and grep for a relaxation hook returns zero hits. The
+  brief's "check whether `positionsFor(cfg)` already relaxes it" is answered: it
+  does not exist for hockey. `positionsFor` is declared at `sport/module.ts:91`
+  (optional hook), implemented at `football.ts:1338` and `period/kernel.ts:1545`,
+  reached via `sport/catalog.ts:55` `resolvePositions`.
+  (e) no pair/partner/declared-order field exists in any Lineup or State; the
+  racquet dossiers mark it `deferred` (`DOMAIN.tabletennis.md:39,77`).
+  Pattern to copy for a new core event (the 5 edits): shape at
+  `core/events.ts:62`/`:66`, `CORE_EVENT_SCHEMAS` keys `:76-77`, dispatch `:113`,
+  fold branches `:518`/`:531`, generator `testkit/stoppages.ts:97`.
+- 2026-08-09 — S3/#426 — **OWNER RULING 1 — a squad MAY grow mid-fixture, gated
+  per variant in cfg.** Growth is structurally representable: a `core.lineup.*`
+  event carries a full `LineupSlot` for a person not named at start, and the
+  squad entry records provenance (`named` | `added`) so S9 can tell an original
+  team-sheet member from a mid-fixture addition. Whether growth is *permitted* is
+  a cfg knob per sport/variant, **default off**. Reason: only cricket's
+  concussion/COVID replacement genuinely comes from outside the team sheet —
+  football, both hockey codes and volleyball all substitute from pre-named
+  benches, so those variants keep it off and lose nothing, while a schema that
+  forbids growth outright leaves the cricket row permanently unclosable and
+  pushes club scorers to fabricate placeholder persons (which corrupts S9 worse
+  than growth does). Engine records; the competition layer still owns
+  registration eligibility.
+- 2026-08-09 — S3/#426 — **OWNER RULING 2 — re-entry is a cfg knob:
+  `none | once | unlimited`, per sport, per variant.** No global answer is
+  correct: football Law 3.3 is no-return (with grassroots / small-sided
+  dispensations that ARE rolling), FIH hockey and ice hockey are unlimited
+  rolling substitution, FIVB volleyball 15.6 is **once and only back to the
+  position left** (so volleyball is `once` + a position lock), cricket lets a
+  retired-hurt batter resume while a concussion replacement is permanent. A
+  single global rule breaks at least four of the nine deferred rows. A violating
+  re-entry **returns a rejection, never throws** — a cfg-derived throw inside a
+  fold permanently bricks recorded fixtures (found 6× in W4a).
+- 2026-08-09 — S3/#426 — **OWNER RULING 3 — a coach/team official is a `role` on
+  the lineup slot, and stat projections filter on it.** `LineupSlot.role:
+  'player' | 'coach' | 'staff'`, default `'player'`; squad and stat projections
+  keep only `role === 'player'`, so a card to a coach records against the person
+  but never enters a playing record. Additive, one optional field, engine-only.
+  **Input to S4** (#428, offence taxonomies) — S4 must not re-decide this.
+  Carried caveat, NOT fixed here: `persons.lane` is
+  `check (lane in ('player','official'))` (`V348__persons_lane_and_registration_user.sql:9`)
+  where `'official'` means a **match** official (referee/umpire) per that
+  migration's own comment. A team coach has no value there, so a DB lane
+  extension is owed — out of scope for an engine-only session, flagged for S4.
+- 2026-08-09 — S3/#426 — **pass-B pin table (scout, `main` @ `0c8eb752`), plus two
+  findings that change what "closed" means for two of the nine rows.**
+  `init(cfg, lineups)` implementations: football `football.ts:1422`, cricket
+  `cricket.ts:2035`, carrom `carrom.ts:537`, boardgame `boardgame.ts:351`,
+  generic `generic.ts:222` own theirs; the other six delegate to a kernel —
+  hockey + icehockey via `period/kernel.ts:1557`, volleyball + badminton +
+  tabletennis via `setbased/kernel.ts:950`, tennis via `nested/kernel.ts:1238`.
+  So six of eleven sports are covered by three kernel edits.
+  Football substitution: fold case `:1373`, second fold pass `:1985`, `offUsed`
+  built `:971`, cap check `:918` (`!rolling && offUsed.length >= maxSubs`).
+  Position catalogs: hockey `hockey.ts:15`, icehockey `icehockey.ts:13` (GK
+  `:15`), football `football.ts:1314` (GK `:1316`). Cricket retire fold
+  `cricket.ts:2744`. Pair entrant kinds: tennis `tennis.ts:46`, badminton
+  `setbased/badminton.ts:43`, tabletennis `setbased/tabletennis.ts:44`; serve
+  decisions `nested/kernel.ts:594` (TB first server) and `setbased/kernel.ts:101`
+  (a `server` scorebook field with **no rotation logic**).
+  Deferred rows: cricket concussion `cricket/DOMAIN.md:112`; football keeper
+  `football/DOMAIN.md:129` (a numbered finding, not a table row) and concussion
+  sub `:69`; hockey no-keeper `hockey/DOMAIN.md:69`; icehockey pulled goalie
+  `icehockey/DOMAIN.md:58`; volleyball libero `setbased/DOMAIN.volleyball.md:42`;
+  tennis doubles order `tennis/DOMAIN.md:64`; tabletennis `setbased/DOMAIN.tabletennis.md:39`.
+  **FINDING A — football folds `football.sub` in TWO places** (`:1373` init-time
+  validation and `:1985` the replay fold). That is this repo's recurring
+  placer/verifier fork, hit 3× in one earlier session. The substitution cap and
+  the re-entry rule must be ONE shared function called from both sides, and a
+  test must assert both sides return the same number, or the two will diverge.
+  **FINDING B — `emptyNet` already exists and does NOT close the pulled-goalie
+  row.** `period/kernel.ts:217` declares the zod field and `icehockey.ts:75`
+  reads it (`agg:"count", when: p.emptyNet === true`). It is a property of a
+  GOAL, not a statement about on-ice personnel, which is exactly what the
+  deferred row asks for. A pass that points at `emptyNet` and calls the row
+  closed has closed nothing.
+  Also: volleyball's **libero is already a role catalog entry**
+  (`setbased/volleyball.ts:24`), so a lineup can already name one — only the
+  replacement EVENT is missing. And cricket has **no substitute-fielder or
+  12th-man concept at all** (zero grep hits), so its concussion replacement is
+  net-new, not an extension.
+- 2026-08-09 — S3/#426 — **pass A (core lineup model) landed: `8f6987f4` + `b02e0215`.**
+  Gate `{total:2917, passed:2916, failed:0, failedSuites:0, pending:1}`,
+  `tsc -p packages/engine` EXIT=0, `schema:snapshot` 11/11 unchanged / 0 written,
+  zero goldens touched. New: `core/lineup.ts`, `core/lineup.test.ts` (39),
+  `core/lineup.events.test.ts` (29); touched `core/events.ts`, `core/types.ts`,
+  `core/index.ts`, `sport/module.ts`.
+  **Design ruling — FIVE SIBLING EVENT TYPES, not one type with a discriminated
+  `kind`.** Every consumer in this engine keys on the exact envelope type string
+  (`CORE_EVENT_SCHEMAS`, `DURING_STOPPAGE`, `postDecisionTypes`,
+  `fidelityTiers[].eventTypes`, and the entitlement gate), so a nested `kind`
+  would be invisible to all of them — and a sport could not tier substitutions
+  separately from position changes, which S6's fidelity model requires. Sibling
+  `strictObject`s also carry no `z.union` first-match hazard; proved anyway with
+  a full 5×5 cross-parse matrix, which is the swallowed-sibling test this
+  session owed.
+  Three design deviations from the brief, all correct and all kept: (i) a
+  `lineupPolicy?(cfg)` module hook was added — the brief named only `onLineup`,
+  but ruling 2 makes the policy cfg-derived and cfg belongs to the module;
+  (ii) `onLineup` is called once at `init` too, so a module's `State` and the
+  kernel's `SquadState` are never two constructions of one fact; (iii) the
+  strict/replay seam is a single `REPLAY_LINEUP_POLICY` constant (every knob
+  maximally permissive) rather than per-check `if (strict)`, so **no cfg-derived
+  condition can refuse on replay at all** — structurally, not by discipline.
+  That is the strongest available answer to the W4a brick-the-fixture defect.
+- 2026-08-09 — S3/#426 — **pass A review: 7 of 9 clean, 2 live.** Confirmed by
+  the reviewer against the diff: no `throw` on any cfg-derived condition (every
+  refusal is a returned value; `reduceLineupEvent` contains no `throw` at all);
+  the refusal tests DO run through `foldMatchWithStoppage`, not the bare reducer
+  (`lineup.events.test.ts:303-352`), so `REPLAY_LINEUP_POLICY` has not made the
+  strict path vacuous; the keeper test asserts IDENTITY at init
+  (`lineup.test.ts:124`, `personsAtPosition → ["h-gk"]`) and after a keeper
+  change (`lineup.events.test.ts:239`, `["h-gk","h-sub-gk"]`); ruling 3 is
+  genuinely enforced, not merely carried — `playingSquad`/`onFieldPersons`/
+  `personsAtPosition` (`lineup.ts:312-336`) filter `role === "player"` and no
+  other reader bypasses them; schemas are purely additive (`role`/`pairOrder`
+  optional, no `.default()`); all five types present at every required site.
+  Open: (a) HIGH — the model is wired in the kernel but **unreachable from any
+  real match** until a sport declares `lineupPolicy`/`onLineup`; that is pass B.
+  (b) MED — `provenance:"added"` is proven only through the bare reducer, never
+  through a full fold; assigned to pass B lane 1.
+- 2026-08-09 — S3/#426 — **`football.sub` MUST NOT be deleted, and that bounds
+  the football cutover.** Recorded golden corpora contain `football.sub` events,
+  so removing or narrowing the type stops them parsing and fails golden replay —
+  which this session's acceptance forbids. The cutover is therefore: the event
+  type and payload stay exactly as they are, and only what its FOLD calls
+  changes, to the shared `reduceLineupEvent`. Recorded because "retire the
+  private implementation" reads as "delete the event" and would have cost a
+  re-baseline the policy does not sanction here.
+- 2026-08-09 — S3/#426 — **OWNER RULING 4 — fix the vacuous i18n gate and add
+  the copy now, widening this session into `apps/web` + the 4 dictionaries.**
+  `apps/web` `event-copy.test.ts` seeds its core event types from `EVENT_KEY`
+  itself, so adding a `core.*` event type can never red it — the five new
+  `core.lineup.*` types would have shipped with no copy and nothing to catch it.
+  This is the FOURTH "a test that cannot fail" defect in this programme
+  (`metricOf` silent-0 at the ranking layer, optional `PeriodSetPiece.outcome`
+  folding to exactly what a recorded miss folds to, `unslimCorpus` comparing a
+  thing with itself). Unlike the copy, the hole affects every FUTURE core event
+  type — S4 (#428) lands before S7 (#427) and would add its own types through
+  the same blind gate. Fix: seed the test from the engine's authoritative type
+  list, then add 5 keys × 4 locales (`en`,`es`,`fr`,`nl`, flat dotted keys).
+- 2026-08-09 — S3/#426 — **engine lint was 18 errors on `main` before this
+  branch**, all in `packages/engine/scripts/repair-cpsat-harness.ts`, all
+  downstream of two untyped `JSON.parse` calls (`no-unsafe-assignment` /
+  `no-unsafe-member-access` / `no-unsafe-argument`). Measured with
+  `cd packages/engine && npx eslint` — the root lint task does NOT cover
+  `packages/engine`, and running eslint from the repo root against that path
+  exits 2 with "Oops! Something went wrong!", which reads as a broken config
+  rather than as the wrong invocation. Fixed inline as an unplanned fix
+  (`99d47c37`) because the ship checklist requires `✖ 0 problems`: the payloads
+  are now named via indexed access on `RepairInput`, so the harness cannot drift
+  from the production shapes it exists to compare CP-SAT against. Engine lint on
+  the branch is now EXIT=0 with zero output.
+- 2026-08-09 — S3/#426 — **pass B landed as three directory-disjoint lanes
+  (football / three kernels + six sports / cricket), and ALL THREE died to the
+  600s subagent watchdog.** Nothing was lost — every lane had committed before
+  it stalled, `git status --porcelain` was empty and no golden was dirty — but
+  the cause is worth naming: three opus implementers plus a full gate on one
+  machine starves the streams. Third occurrence in this repo. The recovery is to
+  verify the tree yourself (`git log`, `git status`, then the gate) rather than
+  to re-dispatch; a re-dispatch would have redone committed work.
+- 2026-08-09 — S3/#426 — **an unpinned config knob is a gate that cannot fail,
+  and the obvious fix is INERT.** The new cfg knobs (football `concussionSubs`;
+  cricket `lineupChanges.{maxSubs,concussionReplacements,reentry}`) redded
+  `golden.test.ts`'s coverage clause: "no recorded config sets them and no
+  frozen state carries them, so narrowing, renaming or reshaping those knobs
+  would not red anything". Correct gate, and the same defect class this
+  programme keeps finding.
+  **The trap:** adding the knobs to the EXISTING coverage config entries
+  (football `lawful`, cricket `reviewed`) pins nothing. `coverageCandidates`
+  (`testkit/golden.ts:938`) does `if (known.has(name)) continue;` — a config
+  NAME already present in `corpus.configs` is skipped outright, so the scan
+  never reaches the edited object. Measured: `EXTEND_GOLDEN=1` reported
+  `[extend] cricket: +0 streams [] gained [] stillMissing ["cfg:lineupChanges",…]`
+  and the coverage clause stayed red with byte-identical wording. A NEW name is
+  required. Shipped as `football.concussed` and `cricket.mutable`, both with
+  `maxSubs` deliberately LOW against a non-zero exemption so the cap and the
+  exemption disagree inside the recorded stream instead of agreeing trivially.
+  Second trap, cheap: cricket's extend takes ~11.6s against vitest's 5000ms
+  default, so an `EXTEND_GOLDEN=1` run needs `--testTimeout`. The timeout reads
+  as a corpus failure.
+- 2026-08-09 — S3/#426 — **the corpus extension, verified against RECORDED BYTES
+  (`e3d2b1cf`).** Append-only, not a re-baseline: cricket 27 → 28 streams,
+  football 25 → 26, **every pre-existing stream byte-identical**, pre-existing
+  configs unchanged, exactly one new config each. Checked by diffing
+  `.streams[0:n]` against `git show HEAD:<path>` per S2's ruling — the harness's
+  own summary is not evidence, and `rtk` swallows the printout anyway.
+  Nine other corpora untouched. `schema:snapshot`: 11 snapshots, 0 written,
+  11 already current.
+- 2026-08-09 — S3/#426 — **the adoption layer, and why `State.squads` is
+  deliberately ABSENT on most fixtures.** `sports/squad-state.ts` is a shared
+  adopter, not a second reducer — it re-derives no membership, no substitution
+  count, no re-entry. Its rule: PERSIST ONLY WHEN THE SNAPSHOT SAYS SOMETHING
+  THE TEAM SHEET DOES NOT, i.e. a `core.lineup.*` event has been folded, or the
+  sheet declares `pairOrder` or a non-`player` `role`. A declared POSITION is
+  deliberately excluded, because every corpus lineup already carries it and
+  treating it as new would re-baseline six sports to store what
+  `initSquads(lineups)` reproduces exactly. The init handshake is a `WeakSet`
+  on the object `init` returned, NOT a shape test — a shape test is wrong for
+  exactly one event, and it is one both hockey codes need:
+  `core.lineup.position` moves a player who never left the field and bumps no
+  counter, so a "nothing has happened yet" heuristic reads it as pristine and
+  the module goes on reporting the wrong keeper. Football is the exception and
+  persists at `init` unconditionally, because its State already had a private
+  squad field; that is why the keeper-identity criterion is met there.
+- 2026-08-09 — S3/#426 — **`Cfg.goalkeeper === "optional"` already existed and
+  the period kernel already honoured it — hockey just never declared the hook.**
+  `period/kernel.ts:1547` on `main` reads `if (cfg.goalkeeper !== "optional" ||
+  keeper === undefined) return preset.positions;`, and `testkit/golden.ts`
+  already pinned `goalkeeper: "optional"` for both period sports in
+  `COVERAGE_CONFIG_KNOBS` (that file is unchanged by this branch). So the
+  hockey dossier's "the catalog REQUIRES exactly one GK, so a side playing
+  without a keeper cannot be expressed in a lineup at all" was true of
+  **hockey's own catalog** (`hockey.ts:15`, `{key:"GK",min:1,max:1}`) while the
+  relaxation sat one layer up, unreached. Not a false premise — a correctly
+  described symptom with the cause one level higher than the dossier looked.
+  Worth recording because the same shape (live mechanism, undeclared hook) is
+  how `Cfg.overtime.skaters` read as dead config in S1.
+- 2026-08-09 — S3/#426 — **all nine deferred rows CLOSED; a tenth found and
+  correctly left open.** Each dossier row moved `deferred` → `extended` with its
+  mechanism named: cricket concussion/COVID (`Cfg.lineupChanges.concussionReplacements`
+  → `lineupPolicy` → `core.lineup.replacement{exemption:"concussion"}`);
+  football keeper identity (`Lineup.slots[].positionKey="GK"` → `initSquads` →
+  `personsAtPosition`), football keeper change without a substitution
+  (`core.lineup.position{positionKey:"GK"}`), football concussion sub
+  (`Cfg.concussionSubs` → `lineupPolicy().exemptions.concussion`); hockey
+  no-keeper (`positionsFor(cfg)`, GK `min` → 0 when `Cfg.goalkeeper ===
+  "optional"`); icehockey pulled goalie (`core.lineup.retirement`/`.substitution`/
+  `.entry` → `personsAtPosition(side,"G")`); volleyball libero
+  (`core.lineup.replacement{exemption:"libero"}`, `exemptUsed.libero`);
+  tennis + tabletennis doubles order (`LineupSlot.pairOrder` →
+  `State.squads.<side>.members[].pairOrder`, read by `expectedDoublesServer`).
+  The tenth is cricket's **substitute fielder**, left `deferred` with a real
+  reason rather than closed for symmetry: a substitute may field but not bat,
+  bowl or keep (Law 24), so nothing on a scorecard changes — no fold-visible
+  fact. The channel now exists if that ever changes.
+- 2026-08-09 — S3/#426 — **acceptance evidence: ONE reducer.**
+  `git grep -c "export function reduceLineupEvent"` = 1 (`core/lineup.ts`).
+  Non-test callers: `core/events.ts`, `core/lineup.ts`, `football.ts`,
+  `cricket.ts` — the three family kernels reach it through the core fold, so six
+  sports need no call site at all. `git grep -E "subsUsed\s*(\+\+|\+ 1|>=)|offUsed\.length\s*>="`
+  outside tests: **zero hits** — no sport counts substitutions privately any
+  more. `football.sub` is retained deliberately (recorded goldens contain it);
+  only its FOLD changed, and the dossier records both it and
+  `core.lineup.substitution` routing to `reduceLineupEvent`.
 - _(append below)_
 
 ## Open questions for the owner

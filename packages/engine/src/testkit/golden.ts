@@ -817,6 +817,18 @@ const COVERAGE_CONFIG_KNOBS: Record<string, Record<string, unknown>> = {
   // Law 3 as an FA youth competition writes it down: a squad cap, a window cap,
   // returns permitted, a declared sin-bin length, and a second half played
   // longer than the first (the one thing `halfMinutes` cannot say).
+  //
+  // S3/W4b (#426) — `concussed` is a SEPARATE entry, and it has to be. A name
+  // already present in `corpus.configs` is skipped outright by
+  // `coverageCandidates` (`known.has(name)`), so adding `concussionSubs` to
+  // `lawful` — a name the corpus already records — pins nothing at all: the scan
+  // never reaches the edited object and `EXTEND_GOLDEN=1` reports `+0 streams`
+  // while the field stays in `stillMissing`. Measured both ways.
+  //
+  // `maxSubs` is deliberately LOW against a non-zero `concussionSubs`, so the
+  // cap and the exemption disagree inside the recorded stream rather than
+  // agreeing trivially — a coverage config that sets a knob without letting its
+  // behaviour differ pins the key and exercises nothing.
   football: {
     lawful: {
       teamSize: 11,
@@ -826,11 +838,22 @@ const COVERAGE_CONFIG_KNOBS: Record<string, Record<string, unknown>> = {
       sinBinMinutes: 10,
       periodSeconds: { H1: 2700, H2: 2820 },
     },
+    concussed: { teamSize: 11, maxSubs: 1, concussionSubs: 2 },
   },
   // ICC playing conditions declare a per-innings DRS allowance; no shipped
   // variant does, so `reviews` was pinned by nothing. The generator already
   // respects the allowance, so a stream under it stays valid.
-  cricket: { reviewed: { reviews: { perInnings: 2 } } },
+  //
+  // S3/W4b (#426) — `mutable` is a separate entry for the same reason football's
+  // `concussed` is: `reviewed` is already a recorded config name, so editing it
+  // is inert (see the football note above). `reentry: "once"` is chosen over
+  // `none`/`unlimited` because those two skip the counting path entirely, so
+  // either would pin the key while exercising none of its behaviour — the same
+  // reason `periodSeconds` is non-uniform below.
+  cricket: {
+    reviewed: { reviews: { perInnings: 2 } },
+    mutable: { lineupChanges: { maxSubs: 1, concussionReplacements: 2, reentry: "once" } },
+  },
   // A Fischer-with-delay time control ("G/5 +3 d2"). `increment` and `delay`
   // are independent knobs and a control may declare both.
   boardgame: { timed: { clock: { base: 300, increment: 3, delay: 2 } } },
