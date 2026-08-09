@@ -2,10 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { SchedulingBoard } from "@/components/marketing/scheduling-board";
+import { AiArchitectDemo } from "@/components/marketing/ai-architect-demo";
 import { Reveal } from "@/components/marketing/reveal";
 import { notFound } from "next/navigation";
 import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale } from "@/lib/i18n-constants";
+import { pickDictPrefixes } from "@/lib/i18n-subset";
+import { schedulingRungWeights } from "@/lib/ai-rung";
 import { DictProvider } from "@/components/i18n/dict-provider";
 
 export async function generateMetadata({
@@ -47,6 +50,20 @@ export default async function SchedulingPage({
   const { lang } = await params;
   if (!hasLocale(lang)) notFound();
   const d = await getDictionary(lang, "marketing");
+  // The AI demo section replays the recordings through the PRODUCT's own trace
+  // and diff components, whose copy lives in the `ui` catalog — and marketing.json
+  // holds no `board.*` key at all, so without this merge they would render raw
+  // dictionary keys. Only the two prefixes those components read are shipped;
+  // the whole of ui.json is ~196KB and this page needs none of the rest.
+  const uiSubset = pickDictPrefixes(await getDictionary(lang, "ui"), [
+    "board.ai.",
+    "board.conflict.",
+  ]);
+  const demoDict = { ...d, ...uiSubset };
+  // Resolved here, not in the island: the AI_RUNG_* overrides only exist on the
+  // server, so a client that priced the run itself would disagree with the
+  // server's own render after hydration (#385).
+  const rungWeights = schedulingRungWeights();
   return (
     <MarketingShell lang={lang}>
       <main className="bg-[var(--mk-light-warm)]">
@@ -62,7 +79,11 @@ export default async function SchedulingPage({
           </div>
         </section>
 
-        <section className="mx-auto max-w-4xl px-4 pb-14">
+        <DictProvider dict={demoDict} locale={lang}>
+          <AiArchitectDemo locale={lang} weights={rungWeights} />
+        </DictProvider>
+
+        <section className="mx-auto max-w-4xl px-4 py-14">
           <h2 className="mk-display mb-6 text-3xl font-bold text-purple-950">{t(d, "scheduling.orderOfPlay")}</h2>
           <div className="border-l-2 border-purple-950 pl-5">
             {RUNDOWN.map((r) => (

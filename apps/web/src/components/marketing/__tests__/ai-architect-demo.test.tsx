@@ -111,8 +111,14 @@ async function settle(): Promise<void> {
 type DemoProps = Parameters<typeof AiArchitectDemo>[0];
 type Island = ReturnType<typeof renderIsland<DemoProps>>;
 
+/** The rung weights are resolved on the SERVER and handed down (#385): env
+ *  overrides do not exist in a browser, so a client that called
+ *  `schedulingRungWeights()` itself would price differently after hydration. */
 async function mount(): Promise<Island> {
-  const island = renderIsland(AiArchitectDemo, { locale: "en" } as DemoProps);
+  const island = renderIsland(AiArchitectDemo, {
+    locale: "en",
+    weights: schedulingRungWeights(),
+  } as DemoProps);
   await settle();
   return island;
 }
@@ -160,7 +166,7 @@ describe("AiArchitectDemo — the template rail", () => {
   it("carries the smoke hooks in the server-rendered body", () => {
     const html = renderToStaticMarkup(
       <DictProvider dict={DICT} locale="en">
-        <AiArchitectDemo locale="en" />
+        <AiArchitectDemo locale="en" weights={schedulingRungWeights()} />
       </DictProvider>,
     );
     expect(html).toContain('data-ai-demo="ready"');
