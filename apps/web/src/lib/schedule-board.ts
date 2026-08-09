@@ -4,6 +4,13 @@
 import type { Conflict } from "@seazn/engine/scheduling";
 import { GRID_FLOOR_MINUTES } from "@seazn/engine/scheduling/grid-step";
 import type { ScheduleConflict } from "@/server/api-v1/schemas";
+import {
+  addYmdDays,
+  isoFromZonedParts,
+  ymdSpanDays,
+  zonedDateInput,
+  zonedTimeInput,
+} from "@/lib/zoned-datetime";
 
 // ---------------------------------------------------------------------------
 // Conflict taxonomy (doc 12 §2) — engine verifier reason tokens → API conflict
@@ -112,6 +119,17 @@ export function daySlots(fromMs: number, toMs: number, slotMinutes: number): num
   return out;
 }
 
+/**
+ * An instant as a `datetime-local` value on the BROWSER's clock.
+ *
+ * NOT for anything the scheduler consumes. A time the organiser types for a
+ * VENUE — a blackout, the board's start, play hours — means the venue's wall
+ * clock, and resolving it here would store an instant off by the offset between
+ * the two zones (#448: `settings.orgTz` is the governing clock). Those fields go
+ * through `@/lib/zoned-datetime`, which takes the zone explicitly. What is left
+ * here is the fixture move panel, where the organiser is looking at a time
+ * already rendered in their own zone.
+ */
 export function toLocalInput(iso: string | Date): string {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -130,68 +148,71 @@ export interface IsoWindow {
   to: string;
 }
 
-const HHMM = /^(\d{2}):(\d{2})$/;
+const HHMM = /^\d{2}:\d{2}$/;
 
 /** Cap on the expansion when the schedule has no end date — two weeks of
  *  windows is plenty for the auto pass's search horizon. */
 const DEFAULT_SPAN_DAYS = 14;
 
+/** Hard ceiling on the expansion, so a mistyped end date cannot generate a
+ *  year of windows. */
+const MAX_SPAN_DAYS = 90;
+
 /**
  * Expand daily play hours into one absolute window per day across the
  * schedule's date span (inclusive). Returns null when the hours don't parse
  * or are inverted/empty (from must be before to — overnight windows are out
- * of scope). Times are local wall-clock, matching every other input on the
- * settings panel.
+ * of scope).
+ *
+ * `tz` is the VENUE zone (`settings.orgTz`, #448) and is not optional: "we play
+ * 09:00–18:00" means 09:00 where the matches are, and an organiser working from
+ * another zone used to expand it into 09:00 where THEY are. It also fixes DST —
+ * each day's hours are resolved on that day's own offset, where the previous
+ * "noon anchor" trick still stepped a fixed 24 hours and walked the window an
+ * hour across a transition.
  */
 export function dailyHoursToWindows(
   fromHHMM: string,
   toHHMM: string,
   startIso: string,
-  endIso?: string | null,
+  endIso: string | null,
+  tz: string,
 ): IsoWindow[] | null {
-  const from = HHMM.exec(fromHHMM);
-  const to = HHMM.exec(toHHMM);
-  if (!from || !to) return null;
+  if (!HHMM.test(fromHHMM) || !HHMM.test(toHHMM)) return null;
   if (fromHHMM >= toHHMM) return null;
-  const first = new Date(startIso);
-  if (Number.isNaN(first.getTime())) return null;
-  const last = endIso ? new Date(endIso) : null;
-  const days =
-    last && !Number.isNaN(last.getTime())
-      ? Math.max(1, Math.round((dayStart(last) - dayStart(first)) / 86_400_000) + 1)
-      : DEFAULT_SPAN_DAYS;
+  const first = zonedDateInput(startIso, tz);
+  if (first === "") return null;
+  const last = endIso ? zonedDateInput(endIso, tz) : "";
+  const days = last === "" ? DEFAULT_SPAN_DAYS : ymdSpanDays(first, last);
   const out: IsoWindow[] = [];
-  for (let i = 0; i < Math.min(days, 90); i++) {
-    const d = new Date(dayStart(first) + i * 86_400_000 + 12 * 3_600_000); // noon anchor dodges DST
-    const at = (h: string, m: string) =>
-      new Date(d.getFullYear(), d.getMonth(), d.getDate(), Number(h), Number(m)).toISOString();
-    out.push({ from: at(from[1]!, from[2]!), to: at(to[1]!, to[2]!) });
+  for (let i = 0; i < Math.min(days, MAX_SPAN_DAYS); i++) {
+    const ymd = addYmdDays(first, i);
+    const from = isoFromZonedParts(ymd, fromHHMM, tz);
+    const to = isoFromZonedParts(ymd, toHHMM, tz);
+    if (from === null || to === null) return null;
+    out.push({ from, to });
   }
   return out;
 }
 
-function dayStart(d: Date): number {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-}
-
 /**
  * The inverse, for prefilling the panel: when every window shares the same
- * local wall-clock from/to, report those hours; otherwise null (hand-built
- * windows from the constraints panel stay untouched).
+ * wall-clock from/to ON THE VENUE CLOCK, report those hours; otherwise null
+ * (hand-built windows from the constraints panel stay untouched).
+ *
+ * Reading these in any other zone is what makes a legitimate daily pattern look
+ * "custom" across a DST boundary, and would prefill hours nobody typed.
  */
 export function windowsToDailyHours(
   windows: readonly IsoWindow[],
+  tz: string,
 ): { from: string; to: string } | null {
   if (windows.length === 0) return null;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const hhmm = (iso: string) => {
-    const d = new Date(iso);
-    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  };
-  const from = hhmm(windows[0]!.from);
-  const to = hhmm(windows[0]!.to);
+  const from = zonedTimeInput(windows[0]!.from, tz);
+  const to = zonedTimeInput(windows[0]!.to, tz);
+  if (from === "" || to === "") return null;
   for (const w of windows) {
-    if (hhmm(w.from) !== from || hhmm(w.to) !== to) return null;
+    if (zonedTimeInput(w.from, tz) !== from || zonedTimeInput(w.to, tz) !== to) return null;
   }
   return { from, to };
 }

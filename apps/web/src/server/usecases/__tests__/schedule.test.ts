@@ -27,7 +27,7 @@ import {
   toSlotConfig,
 } from "../schedule";
 import { draftsToBlackouts } from "@/components/v2/constraints-panel";
-import { toLocalInput } from "@/lib/schedule-board";
+import { zonedDateTimeInput } from "@/lib/zoned-datetime";
 import { patchFixture } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { publicSchedule } from "../public";
@@ -684,27 +684,27 @@ const BLACKOUT_DRAFTS = [
  *  rather than hand-written — so this suite goes red if `draftsToBlackouts`
  *  ever stops emitting the shape `ScheduleConfig.blackouts` accepts. */
 function editorRows(): { court?: string; from: string; to: string }[] {
-  const rows = draftsToBlackouts(BLACKOUT_DRAFTS);
+  const rows = draftsToBlackouts(BLACKOUT_DRAFTS, BLACKOUT_ORG_TZ);
   if (rows === null) throw new Error("fixture drafts must be storable");
   return rows;
 }
 
-/** One division-wide window, and the instants it denotes. `datetime-local` is
- *  resolved through the RUNNER's zone (see the tz note at the end of this
- *  block), so the geometry below is derived from the produced instant rather
- *  than assuming one — the test is zone-independent, the product is not. */
-function globalWindow(fromLocal: string, toLocal: string) {
-  const rows = draftsToBlackouts([{ court: "", from: fromLocal, to: toLocal }]);
+/** One division-wide window, and the instants it denotes. The editor resolves
+ *  its `datetime-local` values on the GOVERNING clock, which the caller names —
+ *  so the instants below are deterministic rather than runner-dependent. The
+ *  geometry is still derived from the produced instant rather than assumed. */
+function globalWindow(fromLocal: string, toLocal: string, tz: string) {
+  const rows = draftsToBlackouts([{ court: "", from: fromLocal, to: toLocal }], tz);
   if (rows === null) throw new Error("fixture draft must be storable");
   return { rows, from: Date.parse(rows[0]!.from), to: Date.parse(rows[0]!.to) };
 }
 
 /** The same editor serialiser, driven from a chosen INSTANT instead of a typed
- *  string. `toLocalInput` is the function the panel itself uses to fill the
- *  control from stored config, so this stays a real editor round-trip while
- *  letting a test pin geometry that must hold in any runner zone. */
-function windowAt(fromMs: number, toMs: number) {
-  return globalWindow(toLocalInput(new Date(fromMs)), toLocalInput(new Date(toMs)));
+ *  string. `zonedDateTimeInput` is the function the panel itself uses to fill
+ *  the control from stored config, so this stays a real editor round-trip —
+ *  and, read and written on one zone, it returns the instant it was given. */
+function windowAt(fromMs: number, toMs: number, tz: string) {
+  return globalWindow(zonedDateTimeInput(fromMs, tz), zonedDateTimeInput(toMs, tz), tz);
 }
 
 const BLACKOUT_BASE_CONFIG = {
@@ -796,7 +796,7 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
 
   it("the placer and the solver lattice both refuse the stored window", async () => {
     const { auth, divisionId } = await seedBlackoutDivision();
-    const w = globalWindow("2026-08-01T12:00", "2026-08-01T13:00");
+    const w = globalWindow("2026-08-01T12:00", "2026-08-01T13:00", BLACKOUT_ORG_TZ);
     // One court, and the day opens an hour before the window: six 30-minute
     // fixtures laid end to end MUST cross it unless something stops them.
     await putScheduleSettings(auth, divisionId, {
@@ -861,9 +861,11 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
     // So the window goes half an hour after midnight, where nothing can pack
     // around it: this org has no timezone, hence a UTC governing clock, and no
     // arrangement of six 30-minute fixtures starting at or after 00:00 avoids
-    // 00:30–01:30 by accident.
+    // 00:30–01:30 by accident. The editor is driven on that same UTC clock, so
+    // "half an hour after LOCAL midnight" is now stated rather than inherited
+    // from whatever zone the runner happens to be in.
     const dayStart = Date.parse("2026-08-01T00:00:00.000Z");
-    const w = windowAt(dayStart + 30 * MIN, dayStart + 90 * MIN);
+    const w = windowAt(dayStart + 30 * MIN, dayStart + 90 * MIN, "UTC");
     const startAt = new Date(dayStart).toISOString();
 
     /** A whole division built and auto-scheduled through the real usecases —
@@ -943,17 +945,22 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
     // sibling solver tests in this file run ~20s apiece on their own.
   }, 120_000);
 
-  // TZ NOTE (reported, deliberately NOT pinned as expected behaviour).
-  // The assertions above are all about the SERVER, which handles the window
-  // correctly: an ISO instant carries its offset and is never re-zoned. The
-  // open gap is one layer up, in the editor: `draftsToBlackouts` resolves its
-  // `datetime-local` strings with `new Date(local)`, i.e. through the
-  // ORGANISER'S BROWSER zone, not `settings.orgTz` — the governing venue clock
-  // (#448). An organiser sitting in a different zone from the venue therefore
-  // stores an instant offset by the difference. That is pre-existing behaviour
-  // shared with every other absolute-time field in these panels (the sibling
-  // `boardset.startAt`, `dailyHoursToWindows`), not a Prompt 06 regression, and
-  // it is not pinned here precisely because it is a gap rather than a contract.
+  // TZ NOTE — the gap this block reported is now CLOSED, and these helpers are
+  // what changed. The assertions above were always about the SERVER, which
+  // handles the window correctly: an ISO instant carries its offset and is
+  // never re-zoned. The defect was one layer up, in the editor, where
+  // `draftsToBlackouts` resolved its `datetime-local` strings with
+  // `new Date(local)` — the ORGANISER'S BROWSER zone rather than
+  // `settings.orgTz`, the governing venue clock (#448) — so anyone working from
+  // outside the venue's zone stored an instant off by the difference.
+  //
+  // It now takes the zone as an argument, which is why `editorRows` and
+  // `globalWindow` name `BLACKOUT_ORG_TZ` (the zone this block actually seeds
+  // onto the organisation) and the autoSchedule case names "UTC" (the governing
+  // clock of an org with no timezone). The editor's zone behaviour itself is
+  // pinned in `components/v2/__tests__/schedule-times-use-org-zone.test.tsx`
+  // and `lib/__tests__/zoned-datetime.test.ts`, not here — this block stays
+  // about the server round-trip.
 });
 
 // ===========================================================================

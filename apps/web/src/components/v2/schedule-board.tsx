@@ -338,7 +338,16 @@ interface Props {
    *  and must keep naming withdrawn entrants' existing fixtures. */
   activeEntrantCounts: Record<string, number>;
   feedLabels: Record<string, FeedLabelPair>;
-  settings: { division_id: string; config: BoardConfig; tz: string };
+  settings: {
+    division_id: string;
+    config: BoardConfig;
+    /** DISPLAY zone (`ScheduleSettingsWire.tz`) — what times are rendered in. */
+    tz: string;
+    /** GOVERNING venue clock (`settings.orgTz`, #448) — what a time the
+     *  organiser TYPES means. Distinct from `tz`, which a division may override
+     *  for display only; the settings panel below reads and writes on this one. */
+    orgTz: string;
+  };
   canEdit: boolean;
   constraintsAllowed: boolean;
   /** Organiser can manage this division (role + not frozen), independent of the
@@ -1380,6 +1389,7 @@ export function ScheduleBoard({
           canEdit={canEdit}
           constraintsAllowed={constraintsAllowed}
           venueCap={venueCap}
+          orgTz={settings.orgTz}
           onSaved={() => {
             actions.setNotice(msg("boardset.saved"));
             router.refresh();

@@ -4,20 +4,33 @@
 // v3 split. Play hours expose the engine's sessionWindows as plain daily
 // times: the auto pass and validator already refuse slots outside them, the
 // panel just never offered the knob.
+//
+// EVERY ABSOLUTE TIME HERE IS ON THE VENUE CLOCK (`orgTz`, #448), never the
+// browser's. `startAt`, the end DATE and the play-hours expansion are all read
+// out of and written back into instants through `@/lib/zoned-datetime`, which
+// takes the zone explicitly. It used to be `new Date(localInput)` /
+// `toLocalInput(iso)`, i.e. the organiser's own zone — self-consistent on
+// screen, so the mistake was invisible, and off by the whole offset in the
+// instant the solver actually reads.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import { dailyHoursToWindows, windowsToDailyHours } from "@/lib/schedule-board";
 import {
-  dailyHoursToWindows,
-  dayKey,
-  toLocalInput,
-  windowsToDailyHours,
-} from "@/lib/schedule-board";
+  isoFromZonedDateTime,
+  isoFromZonedParts,
+  zonedDateInput,
+  zonedDateTimeInput,
+} from "@/lib/zoned-datetime";
 import type { BoardConfig } from "./types";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { pluralizeVenue } from "@/lib/venue";
+
+/** The end DATE field bounds a whole day, so it is stored as that day's last
+ *  minute. One definition, used by the PUT and by the play-hours expansion. */
+const DAY_END_HHMM = "23:59";
 
 /** Self-contained wrapper for RSC pages (constraints tab): owns the saved/
  *  error notice the board would otherwise host. Opens expanded — on a
@@ -28,6 +41,8 @@ export function StandaloneScheduleSettings(props: {
   canEdit: boolean;
   constraintsAllowed: boolean;
   venueCap?: string;
+  /** The VENUE clock (`settings.orgTz`, #448). See {@link SettingsPanel}. */
+  orgTz: string;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -60,6 +75,7 @@ export function SettingsPanel({
   canEdit,
   constraintsAllowed,
   venueCap = "Court",
+  orgTz,
   defaultOpen = false,
   onSaved,
   onError,
@@ -69,14 +85,21 @@ export function SettingsPanel({
   canEdit: boolean;
   constraintsAllowed: boolean;
   venueCap?: string;
+  /** The VENUE clock every absolute time on this panel is read and written on
+   *  (`settings.orgTz`, #448 — NOT `settings.tz`, the display lane a division
+   *  may override). Required rather than defaulted: a wrong zone here stores the
+   *  wrong instant and looks correct on the way back out. */
+  orgTz: string;
   defaultOpen?: boolean;
   onSaved: () => void;
   onError: (err: unknown) => void;
 }) {
   const msg = useMsg();
   const [open, setOpen] = useState(defaultOpen);
-  const [startAt, setStartAt] = useState(config.startAt ? toLocalInput(config.startAt) : "");
-  const [endAt, setEndAt] = useState(config.endAt ? dayKey(config.endAt) : "");
+  const [startAt, setStartAt] = useState(
+    config.startAt ? zonedDateTimeInput(config.startAt, orgTz) : "",
+  );
+  const [endAt, setEndAt] = useState(config.endAt ? zonedDateInput(config.endAt, orgTz) : "");
   const [matchMinutes, setMatchMinutes] = useState(config.matchMinutes);
   const [gapMinutes, setGapMinutes] = useState(config.gapMinutes);
   const [rest, setRest] = useState(config.perEntrantMinRest);
@@ -94,7 +117,7 @@ export function SettingsPanel({
   // .customWindows` used to send organisers to the constraints panel to edit
   // them; that panel has never had a session-window editor, so the copy now
   // states the situation instead of pointing at a dead end.
-  const daily = windowsToDailyHours(config.sessionWindows);
+  const daily = windowsToDailyHours(config.sessionWindows, orgTz);
   const customWindows = config.sessionWindows.length > 0 && daily === null;
   const [playFrom, setPlayFrom] = useState(daily?.from ?? "");
   const [playTo, setPlayTo] = useState(daily?.to ?? "");
@@ -112,17 +135,29 @@ export function SettingsPanel({
 
   async function save() {
     setHoursError(null);
+    // Resolved ONCE, on the venue clock, and reused by both the play-hours
+    // expansion and the PUT below. Converting the same field twice is how the
+    // window the solver is given and the window the organiser sees drift apart.
+    //
+    // A non-empty field that will not parse falls back to the STORED instant
+    // rather than to null: `<input type="datetime-local">` cannot emit such a
+    // value, and if one ever arrived, silently clearing the schedule's start is
+    // the worst of the available outcomes.
+    const startIso =
+      startAt === "" ? null : (isoFromZonedDateTime(startAt, orgTz) ?? config.startAt ?? null);
+    // The end DATE bounds a day, so it stores that day's last minute AT THE
+    // VENUE — 23:59 on the organiser's clock is a different instant, and on a
+    // far-enough zone a different day.
+    const endIso =
+      endAt === "" ? null : (isoFromZonedParts(endAt, DAY_END_HHMM, orgTz) ?? config.endAt ?? null);
     // Play hours → session windows. Both set: expand across the schedule
     // span. Both blank: clear a previously-uniform pattern (all hours play),
     // but never clobber hand-built windows. Half-filled or inverted: refuse.
     let sessionWindows = config.sessionWindows;
     const hoursTouched = playFrom !== "" || playTo !== "";
     if (hoursTouched) {
-      const startIso = startAt
-        ? new Date(startAt).toISOString()
-        : (config.startAt ?? new Date().toISOString());
-      const endIso = endAt ? new Date(`${endAt}T23:59:00`).toISOString() : null;
-      const expanded = dailyHoursToWindows(playFrom, playTo, startIso, endIso);
+      const expandFrom = startIso ?? config.startAt ?? new Date().toISOString();
+      const expanded = dailyHoursToWindows(playFrom, playTo, expandFrom, endIso, orgTz);
       if (!expanded) {
         setHoursError(msg("boardset.hoursError"));
         return;
@@ -143,8 +178,8 @@ export function SettingsPanel({
         json: {
           config: {
             ...config,
-            startAt: startAt ? new Date(startAt).toISOString() : null,
-            endAt: endAt ? new Date(`${endAt}T23:59:00`).toISOString() : null,
+            startAt: startIso,
+            endAt: endIso,
             matchMinutes,
             gapMinutes,
             perEntrantMinRest: rest,
@@ -173,6 +208,12 @@ export function SettingsPanel({
       <div>
         <h4 className="text-sm font-semibold text-slate-700">{msg("boardset.title")}</h4>
         <p className="mt-0.5 text-xs text-slate-500">{msg("boardset.desc")}</p>
+        {/* Start, end and play hours are all read and written on the VENUE
+            clock, so the panel says which one that is. An organiser running an
+            event in another zone otherwise has no way to know whether "09:00"
+            means theirs or the venue's. Reuses the caption the stages panel
+            already shows over fixture times — already translated everywhere. */}
+        <p className="mt-0.5 text-xs text-slate-400">{msg("schedule.tz.caption", { tz: orgTz })}</p>
       </div>
       {constrained && <UpgradeGate feature="scheduling.constraints" compact />}
 

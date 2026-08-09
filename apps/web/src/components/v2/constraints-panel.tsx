@@ -10,7 +10,7 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { Tip } from "@/components/ui/tip";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
-import { toLocalInput } from "@/lib/schedule-board";
+import { isoFromZonedDateTime, zonedDateTimeInput } from "@/lib/zoned-datetime";
 
 /** 625 → "10h 25m"; 45 → "45m". The raw minute dumps read like debug output. */
 function fmtDuration(minutes: number): string {
@@ -63,6 +63,15 @@ export function withMaxFixturesPerDay(
 //   * `BlackoutDraft` is what the form holds while it is being filled in:
 //     `<input type="datetime-local">` values, either of which may be blank.
 //     The stored shape cannot represent a half-typed row at all.
+//
+// The bridge between them is `@/lib/zoned-datetime` and it needs the VENUE zone
+// (`settings.orgTz`, #448) — a `datetime-local` value carries no offset, so
+// something has to say which zone the organiser's keystrokes belong to. "Court
+// 2 is closed 12:00–13:00" means noon where Court 2 is. Resolving it with
+// `new Date(value)` used the ORGANISER's zone instead, so anyone working from
+// outside the venue's zone blacked out the wrong hour, silently: read-back went
+// through the same wrong zone and showed 12:00 again, while the solver read the
+// instant on `orgTz` and saw something else.
 // ---------------------------------------------------------------------------
 
 /** One blacked-out window as stored in `config.blackouts`. */
@@ -84,40 +93,40 @@ export interface BlackoutDraft {
 export type BlackoutRowError = "incomplete" | "order";
 
 /**
- * `config.blackouts` → editable rows. The config arrives as
- * `Record<string, unknown>` and the panel never re-parses the wire schema, so
- * anything malformed is dropped rather than rendered as an "Invalid Date"
- * field the organiser cannot fix.
+ * `config.blackouts` → editable rows, shown on the venue clock `tz`. The config
+ * arrives as `Record<string, unknown>` and the panel never re-parses the wire
+ * schema, so anything malformed is dropped rather than rendered as an "Invalid
+ * Date" field the organiser cannot fix.
  */
-export function toBlackoutDrafts(raw: unknown): BlackoutDraft[] {
+export function toBlackoutDrafts(raw: unknown, tz: string): BlackoutDraft[] {
   if (!Array.isArray(raw)) return [];
   const out: BlackoutDraft[] = [];
   for (const item of raw) {
     if (typeof item !== "object" || item === null) continue;
     const row = item as { court?: unknown; from?: unknown; to?: unknown };
     if (typeof row.from !== "string" || typeof row.to !== "string") continue;
-    const from = new Date(row.from);
-    const to = new Date(row.to);
-    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) continue;
-    out.push({
-      court: typeof row.court === "string" ? row.court : "",
-      from: toLocalInput(from),
-      to: toLocalInput(to),
-    });
+    const from = zonedDateTimeInput(row.from, tz);
+    const to = zonedDateTimeInput(row.to, tz);
+    if (from === "" || to === "") continue;
+    out.push({ court: typeof row.court === "string" ? row.court : "", from, to });
   }
   return out;
 }
 
 /** Validation for one row. Localised copy for each case lives in the render. */
-export function blackoutRowError(draft: BlackoutDraft): BlackoutRowError | null {
+export function blackoutRowError(draft: BlackoutDraft, tz: string): BlackoutRowError | null {
   if (draft.from === "" || draft.to === "") return "incomplete";
-  const from = new Date(draft.from).getTime();
-  const to = new Date(draft.to).getTime();
-  if (Number.isNaN(from) || Number.isNaN(to)) return "incomplete";
+  const from = isoFromZonedDateTime(draft.from, tz);
+  const to = isoFromZonedDateTime(draft.to, tz);
+  if (from === null || to === null) return "incomplete";
   // `to` is EXCLUSIVE in the engine (`overlaps(start, end, bo.from, bo.to)`),
   // so an equal pair blacks out nothing at all — a control that silently does
   // not work. Refused here rather than stored.
-  if (to <= from) return "order";
+  //
+  // Ordered by the INSTANTS the two halves name rather than by the strings, so
+  // the refusal means the same thing inside a fall-back hour, where one wall
+  // clock happens twice and string order and time order part company.
+  if (Date.parse(to) <= Date.parse(from)) return "order";
   return null;
 }
 
@@ -131,16 +140,18 @@ export function blackoutRowError(draft: BlackoutDraft): BlackoutRowError | null 
  * union, and refusing it would block a legitimate "site closed 12–13, and
  * Court 2 closed 12–15" pair.
  */
-export function draftsToBlackouts(drafts: readonly BlackoutDraft[]): BlackoutRow[] | null {
+export function draftsToBlackouts(
+  drafts: readonly BlackoutDraft[],
+  tz: string,
+): BlackoutRow[] | null {
   const out: BlackoutRow[] = [];
   for (const draft of drafts) {
-    if (blackoutRowError(draft) !== null) return null;
+    if (blackoutRowError(draft, tz) !== null) return null;
+    const from = isoFromZonedDateTime(draft.from, tz);
+    const to = isoFromZonedDateTime(draft.to, tz);
+    if (from === null || to === null) return null;
     const court = draft.court.trim();
-    out.push({
-      ...(court === "" ? {} : { court }),
-      from: new Date(draft.from).toISOString(),
-      to: new Date(draft.to).toISOString(),
-    });
+    out.push({ ...(court === "" ? {} : { court }), from, to });
   }
   return out;
 }
@@ -170,10 +181,16 @@ export function ConstraintsPanel({
   divisionId,
   initialSettings,
   canEdit,
+  orgTz,
 }: {
   divisionId: string;
   initialSettings: Settings;
   canEdit: boolean;
+  /** The VENUE clock every absolute time on this panel is read and written on
+   *  (`settings.orgTz`, #448 — NOT `settings.tz`, which a division may override
+   *  for display). Required rather than defaulted: a wrong zone here stores the
+   *  wrong instant and looks correct on the way back out. */
+  orgTz: string;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -191,7 +208,7 @@ export function ConstraintsPanel({
   // a half-typed row has no representation in the stored shape at all. `saved`
   // is what the server last acknowledged, so the commit button can appear only
   // when there is something to commit.
-  const storedBlackouts = () => toBlackoutDrafts(initialSettings.config.blackouts);
+  const storedBlackouts = () => toBlackoutDrafts(initialSettings.config.blackouts, orgTz);
   const [blackouts, setBlackouts] = useState<BlackoutDraft[]>(storedBlackouts);
   const [savedBlackouts, setSavedBlackouts] = useState<BlackoutDraft[]>(storedBlackouts);
 
@@ -234,7 +251,7 @@ export function ConstraintsPanel({
   const updateBlackout = (index: number, patch: Partial<BlackoutDraft>) =>
     setBlackouts((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
 
-  const pendingBlackouts = draftsToBlackouts(blackouts);
+  const pendingBlackouts = draftsToBlackouts(blackouts, orgTz);
   const blackoutsDirty = JSON.stringify(blackouts) !== JSON.stringify(savedBlackouts);
   const courts = Array.isArray(initialSettings.config.courts)
     ? initialSettings.config.courts.filter((c): c is string => typeof c === "string")
@@ -412,6 +429,15 @@ export function ConstraintsPanel({
             <span className="mt-0.5 block text-xs text-slate-400">
               {msg("constraints.blackout.hint")}
             </span>
+            {/* Both instants below are read and written on the VENUE clock, so
+                the panel has to say which one that is: an organiser in another
+                zone otherwise types a time meaning their own and gets no signal
+                that it was taken as the venue's. Reuses the caption the stages
+                panel already shows over fixture times — same fact, same words,
+                and it is already translated in all four locales. */}
+            <span className="mt-0.5 block text-xs text-slate-400">
+              {msg("schedule.tz.caption", { tz: orgTz })}
+            </span>
 
             {blackouts.length === 0 ? (
               <p className="mt-3 rounded-lg border border-dashed border-purple-200 px-3 py-4 text-center text-xs text-slate-500">
@@ -420,7 +446,7 @@ export function ConstraintsPanel({
             ) : (
               <ul className="mt-3 space-y-3">
                 {blackouts.map((row, i) => {
-                  const rowError = blackoutRowError(row);
+                  const rowError = blackoutRowError(row, orgTz);
                   return (
                     // Index key: every field is controlled from this array, so
                     // there is no per-row state for React to mis-reuse — the

@@ -5,6 +5,7 @@ export const dynamic = "force-dynamic";
 // on any tier. They stay: an override or a future tier still moves through them.
 import Link from "@/components/ui/console-link";
 import { venueLabel } from "@/lib/venue";
+import { resolveVenueTz } from "@/lib/tz";
 import { requireDivisionPage } from "@/server/page-auth";
 import { routes } from "@/lib/routes";
 import { getDivision } from "@/server/usecases/divisions";
@@ -56,6 +57,17 @@ export default async function DivisionSchedulePage({
   const tab: Tab = (TABS as readonly string[]).includes(rawTab ?? "") ? (rawTab as Tab) : "board";
   const page = await requireDivisionPage(orgSlug, compSlug, divSlug, { tail: "/schedule" });
   const { auth, canEdit } = page;
+  // The GOVERNING venue clock (#448), resolved exactly as `loadSettings` does
+  // it server-side — `resolveVenueTz(null, org.timezone)`, org → UTC, with the
+  // division's own `tz` deliberately excluded so a display override cannot
+  // change what a typed time MEANS. Every absolute date/time control below
+  // reads and writes on it. It is NOT `settings.tz`, which is the display lane.
+  //
+  // Taken from the membership already loaded for this page rather than from the
+  // settings payload: `ScheduleSettingsWire` intentionally omits `orgTz`, and
+  // widening the wire to carry it would be a public API change for a value the
+  // page can resolve locally from the same source of truth.
+  const orgTz = resolveVenueTz(null, page.org.timezone);
   const id = page.division.id;
   const division = await getDivision(auth, id);
   // #230 item 4: officials data is read by the Officials tab, and nothing else
@@ -241,7 +253,7 @@ export default async function DivisionSchedulePage({
                 ).length,
               }}
               feedLabels={feedLabels(feedRows)}
-              settings={{ division_id: id, config: settings.config, tz: settings.tz }}
+              settings={{ division_id: id, config: settings.config, tz: settings.tz, orgTz }}
               canEdit={editable}
               constraintsAllowed={constraints}
               canManage={canEdit && !frozen}
@@ -307,6 +319,7 @@ export default async function DivisionSchedulePage({
             canEdit={editable}
             constraintsAllowed={constraints}
             venueCap={venueLabel(division.sport_key)}
+            orgTz={orgTz}
           />
         )}
 
@@ -318,6 +331,7 @@ export default async function DivisionSchedulePage({
             config: settings.config as Record<string, unknown>,
           }}
           canEdit={canEdit && !frozen && constraints}
+          orgTz={orgTz}
         />
         )}
 

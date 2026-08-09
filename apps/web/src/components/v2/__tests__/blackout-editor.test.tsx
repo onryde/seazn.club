@@ -25,7 +25,7 @@ import {
   type BlackoutDraft,
 } from "../constraints-panel";
 import { StandaloneScheduleSettings } from "@/components/v2/board/settings-panel";
-import { toLocalInput } from "@/lib/schedule-board";
+import { zonedDateTimeInput } from "@/lib/zoned-datetime";
 import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
@@ -71,8 +71,14 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 const FROM_ISO = "2026-08-01T12:00:00.000Z";
 const TO_ISO = "2026-08-01T13:00:00.000Z";
 
-/** The datetime-local string a browser in this process's zone would show. */
-const local = (iso: string) => toLocalInput(iso);
+/** The VENUE clock this editor reads and writes on (`settings.orgTz`, #448).
+ *  Non-UTC and not this process's zone, so nothing below can pass by
+ *  coincidence against a browser-zone implementation. */
+const ORG_TZ = "Pacific/Auckland";
+
+/** The datetime-local string the field shows for an instant, on the VENUE
+ *  clock — which is what the panel now renders and parses. */
+const local = (iso: string) => zonedDateTimeInput(iso, ORG_TZ);
 
 /** A complete, valid draft — one hour, whole division. */
 function validDraft(over: Partial<BlackoutDraft> = {}): BlackoutDraft {
@@ -81,7 +87,7 @@ function validDraft(over: Partial<BlackoutDraft> = {}): BlackoutDraft {
 
 describe("toBlackoutDrafts — stored rows into editable drafts", () => {
   it("reads ISO instants back as local datetime-input values", () => {
-    const drafts = toBlackoutDrafts([{ from: FROM_ISO, to: TO_ISO }]);
+    const drafts = toBlackoutDrafts([{ from: FROM_ISO, to: TO_ISO }], ORG_TZ);
     expect(drafts).toEqual([{ court: "", from: local(FROM_ISO), to: local(TO_ISO) }]);
   });
 
@@ -89,21 +95,21 @@ describe("toBlackoutDrafts — stored rows into editable drafts", () => {
     const drafts = toBlackoutDrafts([
       { court: "Court 2", from: FROM_ISO, to: TO_ISO },
       { from: FROM_ISO, to: TO_ISO },
-    ]);
+    ], ORG_TZ);
     expect(drafts.map((d) => d.court)).toEqual(["Court 2", ""]);
   });
 
   it("tolerates a config with no blackouts key at all", () => {
-    expect(toBlackoutDrafts(undefined)).toEqual([]);
-    expect(toBlackoutDrafts(null)).toEqual([]);
-    expect(toBlackoutDrafts("not an array")).toEqual([]);
+    expect(toBlackoutDrafts(undefined, ORG_TZ)).toEqual([]);
+    expect(toBlackoutDrafts(null, ORG_TZ)).toEqual([]);
+    expect(toBlackoutDrafts("not an array", ORG_TZ)).toEqual([]);
   });
 
   it("drops a row whose instants are not strings rather than rendering NaN", () => {
     // `config` is `Record<string, unknown>` on the way in — the panel never
     // re-parses the wire schema, so a malformed row must not become a field
     // showing "Invalid Date".
-    const drafts = toBlackoutDrafts([{ from: 123, to: TO_ISO }, null, { from: FROM_ISO, to: TO_ISO }]);
+    const drafts = toBlackoutDrafts([{ from: 123, to: TO_ISO }, null, { from: FROM_ISO, to: TO_ISO }], ORG_TZ);
     expect(drafts).toHaveLength(1);
     expect(drafts[0]!.from).toBe(local(FROM_ISO));
   });
@@ -111,34 +117,34 @@ describe("toBlackoutDrafts — stored rows into editable drafts", () => {
 
 describe("blackoutRowError — what the form refuses to store", () => {
   it("accepts a complete window", () => {
-    expect(blackoutRowError(validDraft())).toBeNull();
+    expect(blackoutRowError(validDraft(), ORG_TZ)).toBeNull();
   });
 
   it("reports an unfinished row as incomplete, not as an error", () => {
-    expect(blackoutRowError(validDraft({ to: "" }))).toBe("incomplete");
-    expect(blackoutRowError(validDraft({ from: "" }))).toBe("incomplete");
-    expect(blackoutRowError({ court: "", from: "", to: "" })).toBe("incomplete");
+    expect(blackoutRowError(validDraft({ to: "" }), ORG_TZ)).toBe("incomplete");
+    expect(blackoutRowError(validDraft({ from: "" }), ORG_TZ)).toBe("incomplete");
+    expect(blackoutRowError({ court: "", from: "", to: "" }, ORG_TZ)).toBe("incomplete");
   });
 
   it("refuses an inverted range", () => {
-    expect(blackoutRowError({ court: "", from: local(TO_ISO), to: local(FROM_ISO) })).toBe("order");
+    expect(blackoutRowError({ court: "", from: local(TO_ISO), to: local(FROM_ISO) }, ORG_TZ)).toBe("order");
   });
 
   it("refuses a zero-length range", () => {
     // The engine's `to` is EXCLUSIVE (calendar.ts `overlaps(start, end, bo.from,
     // bo.to)`), so from === to blacks out nothing whatsoever. Storing it would
     // be a control that silently does not work.
-    expect(blackoutRowError({ court: "", from: local(FROM_ISO), to: local(FROM_ISO) })).toBe("order");
+    expect(blackoutRowError({ court: "", from: local(FROM_ISO), to: local(FROM_ISO) }, ORG_TZ)).toBe("order");
   });
 
   it("treats an unparseable instant as incomplete", () => {
-    expect(blackoutRowError({ court: "", from: "not-a-date", to: local(TO_ISO) })).toBe("incomplete");
+    expect(blackoutRowError({ court: "", from: "not-a-date", to: local(TO_ISO) }, ORG_TZ)).toBe("incomplete");
   });
 });
 
 describe("draftsToBlackouts — drafts into the stored wire shape", () => {
   it("writes ISO instants, not the engine's epoch ms", () => {
-    const rows = draftsToBlackouts([validDraft()]);
+    const rows = draftsToBlackouts([validDraft()], ORG_TZ);
     expect(rows).toEqual([{ from: FROM_ISO, to: TO_ISO }]);
     // Guards the shape itself: `schemas.ts` types these as z.iso.datetime, so a
     // number here is a 400 from the PUT, not a silently different unit.
@@ -146,7 +152,7 @@ describe("draftsToBlackouts — drafts into the stored wire shape", () => {
   });
 
   it("omits the court key entirely for a whole-division window", () => {
-    const rows = draftsToBlackouts([validDraft()]);
+    const rows = draftsToBlackouts([validDraft()], ORG_TZ);
     // Not `court: undefined` — the wire schema marks it `.optional()`, and an
     // explicit undefined is the difference between "every court" and a key the
     // round-trip has to survive.
@@ -154,16 +160,16 @@ describe("draftsToBlackouts — drafts into the stored wire shape", () => {
   });
 
   it("carries a court scope through, trimmed", () => {
-    const rows = draftsToBlackouts([validDraft({ court: " Court 2 " })]);
+    const rows = draftsToBlackouts([validDraft({ court: " Court 2 " })], ORG_TZ);
     expect(rows).toEqual([{ court: "Court 2", from: FROM_ISO, to: TO_ISO }]);
   });
 
   it("refuses the whole set when any single row is invalid", () => {
     // All-or-nothing on purpose: a partial write would silently drop the row
     // the organiser was in the middle of typing.
-    expect(draftsToBlackouts([validDraft(), validDraft({ to: "" })])).toBeNull();
+    expect(draftsToBlackouts([validDraft(), validDraft({ to: "" })], ORG_TZ)).toBeNull();
     expect(
-      draftsToBlackouts([validDraft(), { court: "", from: local(TO_ISO), to: local(FROM_ISO) }]),
+      draftsToBlackouts([validDraft(), { court: "", from: local(TO_ISO), to: local(FROM_ISO) }], ORG_TZ),
     ).toBeNull();
   });
 
@@ -172,7 +178,7 @@ describe("draftsToBlackouts — drafts into the stored wire shape", () => {
     // first match), so an overlap is exactly equivalent to its union and
     // refusing it would block a legitimate "whole site closed, plus Court 2
     // closed longer" pair.
-    const rows = draftsToBlackouts([validDraft(), validDraft({ court: "Court 2" })]);
+    const rows = draftsToBlackouts([validDraft(), validDraft({ court: "Court 2" })], ORG_TZ);
     expect(rows).toHaveLength(2);
   });
 
@@ -181,7 +187,7 @@ describe("draftsToBlackouts — drafts into the stored wire shape", () => {
       { from: FROM_ISO, to: TO_ISO },
       { court: "Court 2", from: FROM_ISO, to: TO_ISO },
     ];
-    expect(draftsToBlackouts(toBlackoutDrafts(stored))).toEqual(stored);
+    expect(draftsToBlackouts(toBlackoutDrafts(stored, ORG_TZ), ORG_TZ)).toEqual(stored);
   });
 });
 
@@ -204,6 +210,7 @@ function panelProps(over: { config?: Record<string, unknown>; canEdit?: boolean 
     divisionId: "d1",
     initialSettings: { division_id: "d1", config: over.config ?? config() },
     canEdit: over.canEdit ?? true,
+    orgTz: ORG_TZ,
   };
 }
 
@@ -524,6 +531,7 @@ describe("settings panel — the dead-end pointer is gone", () => {
           canEdit
           constraintsAllowed
           venueCap="Court"
+          orgTz={ORG_TZ}
         />
       </DictProvider>,
     );

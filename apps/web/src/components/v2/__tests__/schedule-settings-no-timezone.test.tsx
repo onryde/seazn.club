@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StandaloneScheduleSettings } from "@/components/v2/board/settings-panel";
-import { toLocalInput } from "@/lib/schedule-board";
+import { zonedDateInput } from "@/lib/zoned-datetime";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
@@ -19,6 +19,11 @@ import type { BoardConfig } from "@/components/v2/board/types";
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
 }));
+
+/** The VENUE clock this panel reads and writes on (`settings.orgTz`, #448).
+ *  Non-UTC and not the process's own zone, so an expectation derived through it
+ *  cannot be satisfied by a browser-zone implementation. */
+const ORG_TZ = "Pacific/Auckland";
 
 const config: BoardConfig = {
   startAt: "2026-08-01T09:00:00.000Z",
@@ -47,6 +52,7 @@ function render(locale: Locale, dict: Dict): string {
         canEdit
         constraintsAllowed
         venueCap="Court"
+        orgTz={ORG_TZ}
       />
     </DictProvider>,
   );
@@ -131,8 +137,10 @@ describe("division schedule settings — date/time inputs use the shared DateTim
     if (!startIso) throw new Error("fixture must set config.startAt");
     const html = render("en", enUi as Dict);
     // The end DATE may not precede the start: derived from the start field's
-    // own local value, and DateTimeField has to forward it as an attribute.
-    expect(inputsOfType(html, "date")[0]).toContain(`min="${toLocalInput(startIso).slice(0, 10)}"`);
+    // own value on the VENUE clock, and DateTimeField has to forward it as an
+    // attribute. Derived rather than hardcoded, but through the org zone now —
+    // reading it in the process's zone would name a different day.
+    expect(inputsOfType(html, "date")[0]).toContain(`min="${zonedDateInput(startIso, ORG_TZ)}"`);
     // The other three are unbounded — a `min` here would be a new constraint,
     // not a preserved one.
     for (const tag of [...inputsOfType(html, "datetime-local"), ...inputsOfType(html, "time")]) {
@@ -184,6 +192,7 @@ describe("division schedule settings — date/time inputs use the shared DateTim
           canEdit={false}
           constraintsAllowed
           venueCap="Court"
+          orgTz={ORG_TZ}
         />
       </DictProvider>,
     );
