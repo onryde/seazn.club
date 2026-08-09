@@ -83,8 +83,8 @@ compaction-proof summary. Keep them in step.
 | 04 | gRPC server (auth, health, mapping) | **complete** — `f64235e6..f19605a6`, clean after 1 fix round |
 | 05 | TS codegen + client wrapper | **complete** — `f19605a6..b33ac2fb`, approved after 1 fix round |
 | 05b | Corpus + coverage hardening (Python tests) | **complete** — `b33ac2fb..a554961e`, clean after fix rounds |
-| 05c | Contract + boundary hardening | **fix round 5 of 5 — the last** — `a554961e..7bc75e15` then round 5; rebased to `acd33af8`. Round 4's re-review found invisible Cf characters pass `_require_id`'s `.strip()` canonicality check |
-| 06 | Wire `solveBuild` in `build.ts` | not started — **blocked on 05c** |
+| 05c | Contract + boundary hardening | **complete** — `a554961e..5774439e`, after 6 fix rounds. Rounds 4 and 5 each tried a *character* rule for id canonicality (`.strip()`, then `isprintable()`) and each was defeated — by Cf characters, then by ten code points in Lo/Mn/So. Homoglyphs (`'Сourt 1'`, Cyrillic Es U+0421) defeat any such rule, so round 6 re-cut the contract to **positional identity**: index is identity, the service compares no strings, `court_names` is display-only |
+| 06 | Wire `solveBuild` in `build.ts` | not started — **unblocked**; brief rewritten for positional identity at `.superpowers/…/task-06-brief.md` (the prompt's obligations 2, 3 and 4 dissolved; 1, 5, 6 survive) |
 | 06b | Status vocabulary translation | not started |
 | 07 | Integration tests (parity, regression, fallback) | not started |
 | 11 | E2E + smoke coverage | not started — **brief written** |
@@ -127,9 +127,29 @@ here that the constraint work then has to widen — coordinate instead. The
 constraint work also carries a product decision this programme does not
 own: whether instruction rules stay **warn-only** (today's behaviour) or
 become hard, because a hard placer turns boards that currently return
-with a warning into `INFEASIBLE`. The recommendation on record is a soft
-T4 tier below the existing T0-T3 chain, so the service always returns a
-board and reports what it could not honour.
+with a warning into `INFEASIBLE`.
+
+That decision is tracked as **C0** and is filed as issue #497. **The
+recommendation on record is soft, inserted as the NEW T1** — not, as an
+earlier draft of #497's body said, a T4 below the existing chain. Below
+the chain a rule loses to court balance, which is backwards:
+
+```
+T0  maximise placed          <- unchanged
+T1  minimise rule violations <- new
+T2  makespan          |
+T3  worst idle gap    | existing chain, demoted
+T4  court imbalance   |
+```
+
+Two reasons it must not be hard. `INFEASIBLE` is not where a too-tight
+rule lands — `build.ts` falls back to **greedy** on any CP-SAT failure,
+and greedy honours no rules at all, so one marginal rule costs the whole
+optimised board and every other rule with it. And `INFEASIBLE` does not
+say which rule broke, whereas a minimum-violation board names it for
+free. Escape hatch if per-rule strictness is wanted later: a per-rule
+`enforcement: "hard" | "soft"`, matching the existing
+`crossPersonClash: "warn" | "hard"` (`schemas.ts:767`). Not designed now.
 
 Tasks 01-04 were re-audited on 2026-08-09 at the owner's request (four
 parallel Opus reviewers, mutation-first, one per task). Suite at that
