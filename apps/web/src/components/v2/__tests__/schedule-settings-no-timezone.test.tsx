@@ -159,6 +159,22 @@ describe("division schedule settings — date/time inputs use the shared DateTim
     for (const tag of inputsOfType(html, "time")) expect(tag).not.toContain("aria-label=");
   });
 
+  it("hides only the play-hours labels, which the legend above already states", () => {
+    const html = render("en", enUi as Dict);
+    // `<legend class="label">Play hours (daily)</legend>` already says this, so
+    // a second visible line per input is duplication — and the extra `.label`
+    // row knocked this cell 20px taller than the match-length field sharing its
+    // grid row. The element still RENDERS, which is what keeps them named.
+    for (const key of ["boardset.playFrom", "boardset.playUntil"] as const) {
+      expect(html, key).toContain(`<span class="label sr-only">${escapeHtml(enUi[key])}</span>`);
+    }
+    // Start and end have no legend above them and keep visible labels — this is
+    // a targeted exception, not a new house style for date/time fields.
+    for (const key of ["boardset.startAt", "boardset.endAt"] as const) {
+      expect(html, key).toContain(`<span class="label">${escapeHtml(enUi[key])}</span>`);
+    }
+  });
+
   it("still disables all four when the viewer cannot edit", () => {
     const html = renderToStaticMarkup(
       <DictProvider dict={enUi as Dict} locale="en">

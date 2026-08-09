@@ -25,6 +25,14 @@ const inputOf = (props: DateTimeFieldProps) => {
 
 const classesOf = (props: DateTimeFieldProps) => String(inputOf(props).className ?? "").split(/\s+/);
 
+/** The label `<span>`. Throwing when it is absent is deliberate — it is this
+ *  component's entire accessible name, so "no span" is never a valid render. */
+const labelSpanOf = (props: DateTimeFieldProps) => {
+  const el = walk(DateTimeField(props)).find((e) => e.type === "span");
+  if (!el) throw new Error("DateTimeField rendered no label <span>");
+  return propsOf(el);
+};
+
 describe("DateTimeField", () => {
   it("renders a native input of the requested kind with the shared input class, labelled by its wrapping label", () => {
     const props: DateTimeFieldProps = {
@@ -113,5 +121,34 @@ describe("DateTimeField", () => {
     // that do not pass it are unchanged.
     expect(inputOf(base)["aria-required"]).toBeUndefined();
     expect(renderToStaticMarkup(<DateTimeField {...base} />)).not.toContain("required");
+  });
+
+  it("labelHidden hides the label VISUALLY and never drops it", () => {
+    const base: DateTimeFieldProps = {
+      kind: "time",
+      value: "",
+      onChange: () => {},
+      label: "Play from",
+    };
+
+    // The load-bearing half. `sr-only` is a visual utility, not a removal: the
+    // element still renders and still carries the text, because it is the only
+    // thing naming this control (no `id`, so association is implicit via the
+    // wrapping <label>). An implementation that omitted the span entirely would
+    // satisfy a naive "no visible label" check while leaving the input unnamed
+    // — `labelSpanOf` throws instead.
+    const hiddenSpan = labelSpanOf({ ...base, labelHidden: true });
+    expect(String(hiddenSpan.className).split(/\s+/)).toEqual(["label", "sr-only"]);
+    expect(hiddenSpan.children).toBe("Play from");
+    const hidden = renderToStaticMarkup(<DateTimeField {...base} labelHidden />);
+    expect(hidden).toContain("Play from");
+    // Still WRAPS the control, so implicit association (and Playwright's
+    // getByLabel) keeps working — the reason this beats a bare `aria-label`.
+    expect(hidden).toMatch(/^<label[^>]*>.*Play from.*<input[^>]*type="time"[^>]*\/?>.*<\/label>$/s);
+
+    // Optional and additive: visible by default, so the call sites that do not
+    // pass it are unchanged.
+    expect(String(labelSpanOf(base).className).split(/\s+/)).toEqual(["label"]);
+    expect(renderToStaticMarkup(<DateTimeField {...base} />)).not.toContain("sr-only");
   });
 });

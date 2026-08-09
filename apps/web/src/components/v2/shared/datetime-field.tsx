@@ -32,6 +32,24 @@ export interface DateTimeFieldProps {
    * site has to rediscover it — see the render below.
    */
   required?: boolean;
+  /**
+   * Hide the label VISUALLY only, for a field that already sits under a
+   * `<legend>` or heading saying the same thing — a second visible line there
+   * is duplication, and the extra `.label` row (16px + 4px margin) is what
+   * knocks a `sm:grid-cols-2` row's inputs off a shared baseline with the
+   * plain field beside them.
+   *
+   * The label element is ALWAYS rendered and only ever hidden, never dropped:
+   * it is this control's entire accessible name, since the component takes no
+   * `id` and relies on implicit association through the wrapping `<label>`.
+   * Dropping it would leave the input unnamed.
+   *
+   * This is strictly better than the bare `aria-label` such call sites carried
+   * before converting — a real wrapping `<label>` is what makes implicit
+   * association hold and Playwright's `getByLabel` resolve; `aria-label` on a
+   * naked input gives neither.
+   */
+  labelHidden?: boolean;
 }
 
 export function DateTimeField({
@@ -42,10 +60,12 @@ export function DateTimeField({
   min,
   disabled,
   required,
+  labelHidden,
 }: DateTimeFieldProps) {
   return (
     <label className="block">
-      <span className="label">{label}</span>
+      {/* `sr-only` is a visual utility, never a removal — see `labelHidden`. */}
+      <span className={labelHidden ? "label sr-only" : "label"}>{label}</span>
       <input
         type={kind}
         // `text-base` only. The plan asked for `text-base sm:text-sm` as an iOS

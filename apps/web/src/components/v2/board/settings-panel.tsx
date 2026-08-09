@@ -202,26 +202,31 @@ export function SettingsPanel({
           {customWindows ? (
             <p className="text-xs text-slate-500">{msg("boardset.customWindows")}</p>
           ) : (
-            // The pair named itself with `aria-label` on bare inputs; the shared
-            // field carries a real visible <label> instead, so the row aligns on
-            // `items-end` and the dash is nudged down onto the inputs' own band.
-            // `min-w-0 flex-1` keeps the two halves equal-width the way the bare
+            // `labelHidden`: the legend above already says "Play hours", so a
+            // second visible line per input is duplication — and the extra
+            // `.label` row pushed this cell 20px taller than the match-length
+            // field sharing its grid row. The label element still renders and
+            // still wraps the control, which is what names it; that is strictly
+            // more than the bare `aria-label` these two carried before.
+            // `min-w-0 flex-1` keeps the halves equal-width the way the bare
             // `w-full` inputs were before they gained a wrapper.
-            <div className="flex items-end gap-2">
+            <div className="flex items-center gap-2">
               <div className="min-w-0 flex-1">
                 <DateTimeField
                   kind="time"
                   label={msg("boardset.playFrom")}
+                  labelHidden
                   value={playFrom}
                   onChange={setPlayFrom}
                   disabled={!canEdit}
                 />
               </div>
-              <span className="pb-2.5 text-sm text-slate-500">–</span>
+              <span className="text-sm text-slate-500">–</span>
               <div className="min-w-0 flex-1">
                 <DateTimeField
                   kind="time"
                   label={msg("boardset.playUntil")}
+                  labelHidden
                   value={playTo}
                   onChange={setPlayTo}
                   disabled={!canEdit}
