@@ -26,6 +26,17 @@ from cp_sat.schema import (
 )
 
 
+#: A real epoch-ms timestamp (2026-01-01T08:00:00Z), never 0.
+#:
+#: The corpus in `bench/` moved off epoch zero in Prompt 05b for a reason that
+#: applies just as hard to these hand-built requests: at `start_at_ms = 0`,
+#: proto3's UNSET and a deliberate test value are the same number, so a guard
+#: written against "unset" cannot be shown to reject unset rather than to
+#: reject the fixture data. Every timestamp in this file is above `INT32_MAX`
+#: for the same reason `MIN_REAL_EPOCH_MS` is (see `test_bench_contract.py`).
+SLOT_MS = 1_767_225_600_000 + 8 * 3_600_000
+
+
 def _valid_request(**overrides) -> scheduler_pb2.SolveBuildRequest:
     """A minimal request that maps cleanly, so each test below can break
     exactly one field and know that field is why it was rejected."""
@@ -34,7 +45,7 @@ def _valid_request(**overrides) -> scheduler_pb2.SolveBuildRequest:
         courts=["Court 1"],
         fixtures=[scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1")],
         grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=0)],
+            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS)],
             step_minutes=10,
         ),
         constraints=scheduler_pb2.BuildConstraints(match_minutes=30, gap_minutes=10),
@@ -42,6 +53,19 @@ def _valid_request(**overrides) -> scheduler_pb2.SolveBuildRequest:
     )
     kwargs.update(overrides)
     return scheduler_pb2.SolveBuildRequest(**kwargs)
+
+
+def _constraints(**overrides) -> scheduler_pb2.BuildConstraints:
+    """`match_minutes` and `gap_minutes` both SET, always.
+
+    Written as a helper because `gap_minutes` now has explicit presence: a test
+    that builds `BuildConstraints(match_minutes=30)` to probe some unrelated
+    field would be rejected for the missing gap instead, and would pass while
+    proving nothing.
+    """
+    kwargs = dict(match_minutes=30, gap_minutes=10)
+    kwargs.update(overrides)
+    return scheduler_pb2.BuildConstraints(**kwargs)
 
 
 def test_rejects_empty_fixtures():
@@ -98,11 +122,16 @@ def test_maps_every_field_through():
     """The whole translation, not just the three fields the guards read — a
     dropped `existing` or `dependencies` list silently relaxes the board."""
     req = _valid_request(
-        existing=[scheduler_pb2.Assignment(fixture_id="x1", court="Court 1", start_at_ms=1000)],
-        dependencies=[scheduler_pb2.OrderPair(before_fixture_id="f1", after_fixture_id="x1")],
-        constraints=scheduler_pb2.BuildConstraints(
-            match_minutes=30,
-            gap_minutes=10,
+        fixtures=[
+            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1"),
+            scheduler_pb2.Fixture(fixture_id="f2", entrant_ids=["e3", "e4"], division_id="d1"),
+        ],
+        existing=[scheduler_pb2.Assignment(fixture_id="x1", court="Court 1", start_at_ms=SLOT_MS)],
+        # Both endpoints name MOVABLE fixtures. A pair naming the pinned row
+        # `x1` used to map cleanly here and was then dropped without a word by
+        # `model.py`, because `id_to_idx` is built from `fixtures` alone.
+        dependencies=[scheduler_pb2.OrderPair(before_fixture_id="f1", after_fixture_id="f2")],
+        constraints=_constraints(
             rest_by_division=[scheduler_pb2.DivisionRestRule(division_id="d1", min_rest_minutes=45)],
             day_cap_by_division=[
                 scheduler_pb2.DivisionDayCapRule(division_id="d1", max_fixtures_per_day=3)
@@ -110,8 +139,8 @@ def test_maps_every_field_through():
         ),
     )
     parsed = request_to_model_input(req)
-    assert parsed.fixtures == [("f1", ["e1", "e2"], "d1")]
-    assert parsed.grid_slots == [("Court 1", 0)]
+    assert parsed.fixtures == [("f1", ["e1", "e2"], "d1"), ("f2", ["e3", "e4"], "d1")]
+    assert parsed.grid_slots == [("Court 1", SLOT_MS)]
     assert parsed.step_minutes == 10
     assert parsed.constraints == {
         "match_minutes": 30,
@@ -119,8 +148,8 @@ def test_maps_every_field_through():
         "rest_by_division": {"d1": 45},
         "day_cap_by_division": {"d1": 3},
     }
-    assert parsed.existing == [("x1", "Court 1", 1000)]
-    assert parsed.dependencies == [("f1", "x1")]
+    assert parsed.existing == [("x1", "Court 1", SLOT_MS)]
+    assert parsed.dependencies == [("f1", "f2")]
 
 
 # --- degenerate scalars ----------------------------------------------------
@@ -162,16 +191,22 @@ def test_rejects_non_positive_day_cap(cap):
 
 def test_accepts_day_cap_rules_when_all_positive():
     """The guard is per-rule; a board with several capped divisions must still
-    map, or the check has quietly become 'no caps allowed'."""
+    map, or the check has quietly become 'no caps allowed'.
+
+    Both divisions have to be DECLARED by a fixture now: a rule keyed on a
+    division nobody is in is inert, and this test used to cap a `d2` that the
+    board did not contain."""
     req = _valid_request(
-        constraints=scheduler_pb2.BuildConstraints(
-            match_minutes=30,
-            gap_minutes=10,
+        fixtures=[
+            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1"),
+            scheduler_pb2.Fixture(fixture_id="f2", entrant_ids=["e3", "e4"], division_id="d2"),
+        ],
+        constraints=_constraints(
             day_cap_by_division=[
                 scheduler_pb2.DivisionDayCapRule(division_id="d1", max_fixtures_per_day=3),
                 scheduler_pb2.DivisionDayCapRule(division_id="d2", max_fixtures_per_day=1),
             ],
-        )
+        ),
     )
     parsed = request_to_model_input(req)
     assert parsed.constraints["day_cap_by_division"] == {"d1": 3, "d2": 1}
@@ -184,6 +219,303 @@ def test_rejects_non_positive_wall_seconds(wall_seconds):
     gives, so a dropped field would read as a solver verdict."""
     req = _valid_request(wall_seconds=wall_seconds)
     with pytest.raises(InvalidRequestError, match="wall_seconds"):
+        request_to_model_input(req)
+
+
+# --- explicit presence ------------------------------------------------------
+#
+# The two scalars below are the ONLY ones where 0 is a legitimate value, so a
+# value guard cannot reach their degenerate case: "no court turnaround" and "no
+# minimum rest" are real answers, and an unset field is the same bytes. proto3
+# `optional` is the only thing that separates them, and these are the tests
+# that keep the keyword in the .proto.
+
+
+def test_rejects_unset_gap_minutes():
+    """Unset -> 0 -> the court interval loses its turnaround and matches are
+    booked back-to-back, OPTIMAL, `error` unset. Distinguishable from a
+    deliberate `gap_minutes = 0` only by field presence."""
+    req = _valid_request(constraints=scheduler_pb2.BuildConstraints(match_minutes=30))
+    with pytest.raises(InvalidRequestError, match="gap_minutes"):
+        request_to_model_input(req)
+
+
+def test_accepts_an_explicit_zero_gap():
+    """The other half, and the reason this is presence and not `> 0`: some
+    sports genuinely have no turnaround, and that board must still solve."""
+    req = _valid_request(constraints=_constraints(gap_minutes=0))
+    assert request_to_model_input(req).constraints["gap_minutes"] == 0
+
+
+def test_rejects_unset_min_rest_minutes():
+    """A rest rule that is PRESENT but carries an unset value is silently
+    equivalent to omitting the division — the caller asked for rest and got
+    none. Sits beside the day-cap guard, which has always rejected its own
+    degenerate value; the asymmetry was an oversight, not a decision."""
+    req = _valid_request(
+        constraints=_constraints(
+            rest_by_division=[scheduler_pb2.DivisionRestRule(division_id="d1")]
+        )
+    )
+    with pytest.raises(InvalidRequestError, match="min_rest_minutes"):
+        request_to_model_input(req)
+
+
+def test_accepts_an_explicit_zero_rest():
+    req = _valid_request(
+        constraints=_constraints(
+            rest_by_division=[
+                scheduler_pb2.DivisionRestRule(division_id="d1", min_rest_minutes=0)
+            ]
+        )
+    )
+    assert request_to_model_input(req).constraints["rest_by_division"] == {"d1": 0}
+
+
+def test_rejects_an_omitted_constraints_message():
+    """`BuildConstraints` is a message field, so omitting it entirely arrives
+    as a default-valued one. Named separately from the field guards so the
+    caller is told the message is missing rather than being told about
+    whichever field the checks happen to reach first."""
+    req = _valid_request()
+    req.ClearField("constraints")
+    # Matched on the MESSAGE name, not on "constraints": every field guard's
+    # text contains the word, so a looser pattern passes on the
+    # `constraints.match_minutes` rejection and proves nothing.
+    with pytest.raises(InvalidRequestError, match="BuildConstraints"):
+        request_to_model_input(req)
+
+
+# --- negative values --------------------------------------------------------
+#
+# The `<= 0` guards fire on zero and on missing; these two fields are guarded
+# `>= 0` because zero is legitimate, and NEGATIVE is worse than either. It does
+# not merely fail to constrain: it cancels the match length out of the interval
+# width and reopens a family that was closed.
+
+
+def test_rejects_negative_gap_minutes():
+    """At `gap_minutes == -match_minutes` the court interval is zero-width,
+    NoOverlap over zero-width intervals constrains nothing, and two matches
+    overlap on one court. Measured: 37 placed, 4 tiers, 1 overlap, OPTIMAL."""
+    req = _valid_request(constraints=_constraints(gap_minutes=-1))
+    with pytest.raises(InvalidRequestError, match="gap_minutes"):
+        request_to_model_input(req)
+
+
+def test_rejects_negative_min_rest_minutes():
+    """Same arithmetic on the participant-rest interval: at
+    `rest == -match_minutes` one entrant plays two simultaneous matches.
+    Measured: 37 placed, 4 tiers, 1 collision, OPTIMAL."""
+    req = _valid_request(
+        constraints=_constraints(
+            rest_by_division=[
+                scheduler_pb2.DivisionRestRule(division_id="d1", min_rest_minutes=-1)
+            ]
+        )
+    )
+    with pytest.raises(InvalidRequestError, match="min_rest_minutes"):
+        request_to_model_input(req)
+
+
+# --- referential integrity --------------------------------------------------
+#
+# ONE pass, before any domain object exists: every id a request mentions must
+# resolve to something the same request declares. Each case below is a measured
+# defect in which the constraint the caller asked for evaporated and the
+# service answered OPTIMAL with `error` unset — never a crash, never a warning.
+#
+# The domain's tolerance of these is DELIBERATE and is not what changes here:
+# `model.py`'s `id_to_idx.get(...) or continue` and `if existing_court in
+# court_lists` are what let the bench feed it partial boards. The wire is where
+# the mistake is actually made, so the wire is where it is caught.
+
+
+def test_rejects_a_dependency_naming_an_unknown_fixture():
+    """Measured, 2 fixtures, separation `start(f1) - start(f0)`, 5/5
+    deterministic: a real pair separates them by 1_800_000 ms; a pair naming
+    `""` or `"f1 "` separates them by 0, OPTIMAL, `error` unset."""
+    req = _valid_request(
+        dependencies=[scheduler_pb2.OrderPair(before_fixture_id="f1", after_fixture_id="nope")]
+    )
+    with pytest.raises(InvalidRequestError, match="dependencies"):
+        request_to_model_input(req)
+
+
+def test_rejects_a_dependency_naming_a_pinned_row():
+    """`id_to_idx` is built from MOVABLE fixtures only, so a dependency naming
+    an `existing` row is ALWAYS dropped — the one case where the caller's id is
+    real, exists in the request, and still resolves to nothing."""
+    req = _valid_request(
+        existing=[scheduler_pb2.Assignment(fixture_id="x1", court="Court 1", start_at_ms=SLOT_MS)],
+        dependencies=[scheduler_pb2.OrderPair(before_fixture_id="f1", after_fixture_id="x1")],
+    )
+    with pytest.raises(InvalidRequestError, match="dependencies"):
+        request_to_model_input(req)
+
+
+@pytest.mark.parametrize("court", ["", "Court 1 ", "Court 9"])
+def test_rejects_a_pinned_row_on_an_unknown_court(court):
+    """`model.py:309` folds a pinned row into a court's interval list only `if
+    existing_court in court_lists`, and skips it wordlessly otherwise — so the
+    pin reserves nothing and a movable fixture is placed on top of a match that
+    is already being played.
+
+    Measured on a board whose only grid point is `Court 1 @ T`, 5/5
+    deterministic: the real court blocks it (board `[]`); `""` and `"Court 1 "`
+    both put the movable fixture straight into the pinned slot, OPTIMAL."""
+    req = _valid_request(
+        existing=[scheduler_pb2.Assignment(fixture_id="x1", court=court, start_at_ms=SLOT_MS)]
+    )
+    with pytest.raises(InvalidRequestError, match="existing"):
+        request_to_model_input(req)
+
+
+@pytest.mark.parametrize("start_at_ms", [0, -1])
+def test_rejects_a_pinned_row_without_a_real_start(start_at_ms):
+    """An unset `start_at_ms` builds the blocking interval at epoch 0, which
+    overlaps nothing real, so the pin is silently ignored and a movable fixture
+    takes the pinned slot.
+
+    Guarded by VALUE rather than by proto3 presence on purpose: epoch 0 is
+    1970 and is never a legitimate match time, and `Assignment` is also the
+    RESPONSE type — marking it `optional` would make `startAtMs` nullable in
+    the TypeScript outcome for a value the service always sets."""
+    req = _valid_request(
+        existing=[
+            scheduler_pb2.Assignment(fixture_id="x1", court="Court 1", start_at_ms=start_at_ms)
+        ]
+    )
+    with pytest.raises(InvalidRequestError, match="existing"):
+        request_to_model_input(req)
+
+
+@pytest.mark.parametrize("start_at_ms", [0, -1])
+def test_rejects_a_grid_slot_without_a_real_start(start_at_ms):
+    """Same argument one field over, and the asymmetry is the point: a slot at
+    epoch 0 is a legal tick in 1970 that fixtures are then placed on and proved
+    OPTIMAL. Guarding the pinned row and not the slot would be exactly the
+    `min_rest` / `day_cap` oversight repeated."""
+    req = _valid_request(
+        grid=scheduler_pb2.Grid(
+            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=start_at_ms)], step_minutes=10
+        )
+    )
+    with pytest.raises(InvalidRequestError, match="grid.slots"):
+        request_to_model_input(req)
+
+
+def test_rejects_a_grid_slot_on_an_unknown_court():
+    """`Slot.court` is decorative in the model — `admissible_starts` unions
+    every slot's start across all courts — so a grid naming only courts that do
+    not exist still places fixtures on the real ones. The union is a documented
+    limitation; a slot naming a court the request never declared is a caller
+    error, and the only layer that can see it is this one."""
+    req = _valid_request(
+        grid=scheduler_pb2.Grid(
+            slots=[scheduler_pb2.Slot(court="Court 9", start_at_ms=SLOT_MS)], step_minutes=10
+        )
+    )
+    with pytest.raises(InvalidRequestError, match="grid.slots"):
+        request_to_model_input(req)
+
+
+@pytest.mark.parametrize(
+    "rule_kwargs,field",
+    [
+        pytest.param({"rest_by_division": [scheduler_pb2.DivisionRestRule(division_id="typo", min_rest_minutes=45)]}, "rest_by_division", id="rest"),
+        pytest.param({"day_cap_by_division": [scheduler_pb2.DivisionDayCapRule(division_id="typo", max_fixtures_per_day=1)]}, "day_cap_by_division", id="day-cap"),
+    ],
+)
+def test_rejects_a_rule_for_a_division_no_fixture_is_in(rule_kwargs, field):
+    """A rule keyed on a division nobody is in is inert: `model.py` resolves
+    rest as `rest_by_division.get(division, 0)` and selects capped fixtures by
+    `divisions[i] == division`, so neither ever matches. The caller asked for a
+    constraint and silently received none — and this is also what catches a
+    typo, which no per-fixture check can."""
+    req = _valid_request(constraints=_constraints(**rule_kwargs))
+    with pytest.raises(InvalidRequestError, match=field):
+        request_to_model_input(req)
+
+
+@pytest.mark.parametrize(
+    "rule_kwargs,field",
+    [
+        pytest.param({"rest_by_division": [scheduler_pb2.DivisionRestRule(division_id="d1", min_rest_minutes=45), scheduler_pb2.DivisionRestRule(division_id="d1", min_rest_minutes=5)]}, "rest_by_division", id="rest"),
+        pytest.param({"day_cap_by_division": [scheduler_pb2.DivisionDayCapRule(division_id="d1", max_fixtures_per_day=3), scheduler_pb2.DivisionDayCapRule(division_id="d1", max_fixtures_per_day=1)]}, "day_cap_by_division", id="day-cap"),
+    ],
+)
+def test_rejects_duplicate_division_rules(rule_kwargs, field):
+    """These are repeated messages, not a proto `map`, so two rules for one
+    division are legal on the wire and the dict comprehension keeps the LAST.
+    The caller sent two numbers and one of them was chosen without a word."""
+    req = _valid_request(constraints=_constraints(**rule_kwargs))
+    with pytest.raises(InvalidRequestError, match=field):
+        request_to_model_input(req)
+
+
+def test_rejects_a_fixture_with_no_division():
+    """The headline probe. Same board, same constraints (`min_rest_minutes=240`,
+    `max_fixtures_per_day=1` on `d1`), 4 fixtures, 5/5 deterministic:
+
+        division_id  status                placed  error set
+        "d1"         SOLVE_STATUS_OPTIMAL       1  no
+        "" (unset)   SOLVE_STATUS_OPTIMAL       4  no
+
+    An unset division matches no rest rule and no cap, so both families
+    evaporate and the board quadruples while reporting OPTIMAL."""
+    req = _valid_request(
+        fixtures=[scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"])]
+    )
+    with pytest.raises(InvalidRequestError, match="division_id"):
+        request_to_model_input(req)
+
+
+def test_rejects_a_fixture_with_no_entrants():
+    """An entrant-less fixture joins no `by_entrant` group, so the participant-
+    rest NoOverlap and every T2 idle-gap term skip it entirely. Measured: two
+    fixtures sharing player `e1` placed CONCURRENTLY, OPTIMAL."""
+    req = _valid_request(
+        fixtures=[scheduler_pb2.Fixture(fixture_id="f1", division_id="d1")]
+    )
+    with pytest.raises(InvalidRequestError, match="entrant_ids"):
+        request_to_model_input(req)
+
+
+def test_rejects_an_empty_entrant_id():
+    """Every `""` entrant collides into ONE participant group, so unrelated
+    fixtures acquire a shared-player rest constraint they do not have. Wrong in
+    the over-constraining direction, which is why it never surfaced as a bad
+    board — it surfaces as fixtures that mysteriously will not fit."""
+    req = _valid_request(
+        fixtures=[scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", ""], division_id="d1")]
+    )
+    with pytest.raises(InvalidRequestError, match="entrant_ids"):
+        request_to_model_input(req)
+
+
+def test_rejects_an_empty_fixture_id():
+    """`assignments` come back keyed by `fixture_id`, so an unset one gives the
+    caller rows it cannot map back to anything. Verified: two rows, both
+    `fixture_id=""`."""
+    req = _valid_request(
+        fixtures=[scheduler_pb2.Fixture(entrant_ids=["e1", "e2"], division_id="d1")]
+    )
+    with pytest.raises(InvalidRequestError, match="fixture_id"):
+        request_to_model_input(req)
+
+
+def test_rejects_duplicate_fixture_ids():
+    """`id_to_idx` is last-wins, so two fixtures sharing an id make every
+    dependency naming it resolve to the second one — and it is what makes
+    "a dependency names a fixture in `fixtures`" a meaningful check at all."""
+    req = _valid_request(
+        fixtures=[
+            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1"),
+            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e3", "e4"], division_id="d1"),
+        ]
+    )
+    with pytest.raises(InvalidRequestError, match="fixture_id"):
         request_to_model_input(req)
 
 

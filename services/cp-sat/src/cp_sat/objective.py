@@ -219,6 +219,21 @@ def run_tier_chain(
             "a dropped field would read as a solver verdict about the request."
         )
 
+    # An empty ladder is a prefix of `TIER_ORDER` and clears every check below,
+    # and it returns UNKNOWN / 0 tiers / no assignments — byte-identical to the
+    # answer for a board nobody could solve. It also reaches `_chain_status`'s
+    # `tiers_completed == tiers_requested` as `0 == 0`. Rejected rather than
+    # defaulted to the full ladder: the default argument already IS the full
+    # ladder, so an empty sequence can only come from a caller that computed
+    # one, and substituting four tiers for the zero they asked for would hide
+    # whatever computed it.
+    if len(tiers) == 0:
+        raise ValueError(
+            f"tiers must not be empty; expected a non-empty prefix of {list(TIER_ORDER)}. A chain "
+            "with no rungs returns UNKNOWN with no assignments and 0 tiers completed, which is "
+            "exactly what an unsolvable board returns — the caller cannot tell the two apart."
+        )
+
     unknown = [name for name in tiers if name not in _TIER_SPECS]
     if unknown:
         raise ValueError(f"unknown tier(s) {unknown!r}; expected some ordering of {list(TIER_ORDER)}")

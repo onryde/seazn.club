@@ -474,6 +474,31 @@ def test_rejects_a_tier_sequence_that_is_not_a_prefix_of_the_ladder(board):
             run_tier_chain(model, model.fixture_vars, CHAIN_WALL_SECONDS, tiers=bad)
 
 
+def test_rejects_an_empty_tier_sequence(board):
+    """`tiers=()` is a prefix of the ladder and passes every other guard, and
+    it produces a result that cannot be told from a board nobody could solve:
+
+        status='UNKNOWN', tiers_completed=0, assignments=[], objective_values=[]
+
+    byte-identical to what a genuinely unsolvable board returns. It also walks
+    into `_chain_status`'s equality — `tiers_completed == tiers_requested` is
+    `0 == 0` — so any future change that let a board through alongside it would
+    report OPTIMAL for a chain that optimised nothing.
+
+    Rejecting is the ruling rather than defaulting to the full ladder: the
+    default argument already IS the full ladder, so an empty sequence can only
+    arrive from a caller that computed it, and quietly substituting four tiers
+    for the zero they asked for would hide the bug that computed it.
+
+    Cannot arrive from the wire — `SolveBuildRequest` carries no tier list, by
+    design — so this is a domain contract check on a domain caller, exactly
+    like the two guards beside it.
+    """
+    model = _model_for(board)
+    with pytest.raises(ValueError, match="tiers must not be empty"):
+        run_tier_chain(model, model.fixture_vars, CHAIN_WALL_SECONDS, tiers=())
+
+
 def test_every_prefix_of_the_ladder_is_accepted(board):
     """The guard must not break the one subset that is actually used — the
     bench's `("placed",)` isolation run — nor any other honest prefix. Asserts

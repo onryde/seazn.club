@@ -33,7 +33,14 @@ message OrderPair {
 
 message DivisionRestRule {
   string division_id = 1;
-  int32 min_rest_minutes = 2;
+  // `optional` because 0 is a LEGITIMATE value here ("this division has no
+  // minimum rest"), so it cannot be told from an unset field by its value. A
+  // rule that is present but carries an unset number is a rule the caller
+  // asked for and silently did not get. Contrast `max_fixtures_per_day`
+  // below, where 0 means "may not play at all" and is never legitimate, so a
+  // value guard reaches it and the field stays required — which also keeps
+  // ts-proto typing it as mandatory for the caller.
+  optional int32 min_rest_minutes = 2;
 }
 
 message DivisionDayCapRule {
@@ -43,7 +50,10 @@ message DivisionDayCapRule {
 
 message BuildConstraints {
   int32 match_minutes = 1;
-  int32 gap_minutes = 2;
+  // `optional` for the same reason as `min_rest_minutes`: 0 is a real answer
+  // ("no court turnaround"), and unset arrives as the same 0. Everything else
+  // in this message has a value guard that reaches its degenerate case.
+  optional int32 gap_minutes = 2;
   repeated DivisionRestRule rest_by_division = 3;
   repeated DivisionDayCapRule day_cap_by_division = 4;
 }

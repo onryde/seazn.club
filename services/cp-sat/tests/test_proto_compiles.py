@@ -152,7 +152,7 @@ EXPECTED_MESSAGE_FIELDS = {
     },
     "DivisionRestRule": {
         "division_id":      (1, FieldDescriptor.TYPE_STRING, False, False),
-        "min_rest_minutes": (2, FieldDescriptor.TYPE_INT32,  False, False),
+        "min_rest_minutes": (2, FieldDescriptor.TYPE_INT32,  False, True),
     },
     "DivisionDayCapRule": {
         "division_id":          (1, FieldDescriptor.TYPE_STRING, False, False),
@@ -160,7 +160,7 @@ EXPECTED_MESSAGE_FIELDS = {
     },
     "BuildConstraints": {
         "match_minutes":       (1, FieldDescriptor.TYPE_INT32,   False, False),
-        "gap_minutes":         (2, FieldDescriptor.TYPE_INT32,   False, False),
+        "gap_minutes":         (2, FieldDescriptor.TYPE_INT32,   False, True),
         "rest_by_division":    (3, FieldDescriptor.TYPE_MESSAGE, True,  False),
         "day_cap_by_division": (4, FieldDescriptor.TYPE_MESSAGE, True,  False),
     },

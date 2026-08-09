@@ -50,6 +50,14 @@ def test_server(settings):
     )
 
 
+#: A real epoch-ms timestamp (2026-01-01T08:00:00Z), never 0 — the boundary
+#: rejects a slot at epoch 0 because 1970 is not a court time, and because a
+#: zero-based corpus is what made "unset" and "a test value" the same number
+#: for four review rounds. Same constant and same reasoning as
+#: `test_schema.py`'s `SLOT_MS`.
+SLOT_MS = 1_767_225_600_000 + 8 * 3_600_000
+
+
 def _solvable_request(**overrides) -> scheduler_pb2.SolveBuildRequest:
     """One fixture, one court, one slot — small enough to prove OPTIMAL well
     inside the budget, so nothing here is timing-sensitive."""
@@ -58,7 +66,7 @@ def _solvable_request(**overrides) -> scheduler_pb2.SolveBuildRequest:
         courts=["Court 1"],
         fixtures=[scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1")],
         grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=0)], step_minutes=10
+            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS)], step_minutes=10
         ),
         constraints=scheduler_pb2.BuildConstraints(match_minutes=30, gap_minutes=10),
         wall_seconds=2.0,
@@ -127,7 +135,7 @@ def test_accepts_valid_request_with_correct_secret(test_server):
     # Status alone is not evidence of a board: the chain reports OPTIMAL for an
     # EMPTY schedule just as readily, so assert the fixture actually landed.
     assert [(a.fixture_id, a.court, a.start_at_ms) for a in response.assignments] == [
-        ("f1", "Court 1", 0)
+        ("f1", "Court 1", SLOT_MS)
     ]
     assert response.tiers_completed > 0
     assert response.elapsed_ms >= 0
@@ -326,7 +334,7 @@ def test_build_server_registers_both_services_on_a_real_port(settings):
         response = stub.SolveBuild(_solvable_request(), metadata=GOOD_AUTH, timeout=10)
         assert response.status == scheduler_pb2.SOLVE_STATUS_OPTIMAL
         assert [(a.fixture_id, a.court, a.start_at_ms) for a in response.assignments] == [
-            ("f1", "Court 1", 0)
+            ("f1", "Court 1", SLOT_MS)
         ]
     finally:
         channel.close()

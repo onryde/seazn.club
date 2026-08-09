@@ -42,6 +42,35 @@ than as an error, so there is no `ValueError` for `main.py`'s backstop to
 catch. This layer is the only thing standing between an omitted `Grid` and an
 OPTIMAL response for a board that was never really scheduled. Do not remove it
 on the assumption that the domain will catch it.
+
+--- and the same defect wearing an ID instead of a number -------------------
+
+A re-audit of Tasks 1-4 found seven more instances, and they turned out to be
+ONE defect: nothing checked that an id the request MENTIONS resolves to
+something the request DECLARES. A dependency naming a fixture that is not in
+`fixtures`, a pinned row on a court that is not in `courts`, a rest rule keyed
+on a division no fixture is in — each is dropped by the domain deliberately
+and wordlessly, and the caller receives OPTIMAL with `error` unset for a board
+missing the constraint they asked for.
+
+So `request_to_model_input` runs ONE referential-integrity pass rather than
+seven field guards, in dependency order: fixtures first (they declare the
+fixture ids and the divisions), then the grid, the pinned rows, the
+dependencies and the division rules against them. The domain's tolerance is
+NOT changed — `model.py`'s `id_to_idx.get(...) or continue` and its
+`if existing_court in court_lists` are what let the bench feed it partial
+boards, and moving the check there would break that. The wire is where the
+mistake is made, so the wire is where it is caught.
+
+Two fields carry proto3 `optional` and are checked for PRESENCE rather than
+for range, because 0 is a legitimate answer for both and no value guard can
+reach them: `constraints.gap_minutes` (no court turnaround) and
+`DivisionRestRule.min_rest_minutes` (no minimum rest). Nothing else does, and
+that restraint is deliberate — `ts-proto` renders a proto3-`optional` field as
+`field?: T | undefined`, so marking a field the caller must ALWAYS send
+`optional` trades a run-time guard here for the loss of a compile-time one in
+`build.ts`. Presence is spent only where the value cannot carry the
+information.
 """
 
 from __future__ import annotations
@@ -92,8 +121,222 @@ class ModelInput:
     wall_seconds: float
 
 
+def _validated_fixtures(proto_fixtures) -> list[tuple[str, list[str], str]]:
+    """The movable fixtures, with every id they carry checked for substance.
+
+    Runs first because everything after it resolves against what it returns:
+    the dependency endpoints must name one of these fixtures and the division
+    rules must name one of these divisions.
+    """
+    fixtures: list[tuple[str, list[str], str]] = []
+    seen: set[str] = set()
+    for i, f in enumerate(proto_fixtures):
+        if not f.fixture_id:
+            raise InvalidRequestError(
+                f"fixtures[{i}].fixture_id must not be empty. `assignments` come back keyed by "
+                "fixture_id, so an unset one hands the caller rows it cannot map to anything "
+                "(verified: two rows, both fixture_id='')."
+            )
+        if f.fixture_id in seen:
+            raise InvalidRequestError(
+                f"fixtures[{i}].fixture_id {f.fixture_id!r} is a duplicate. The model's id index is "
+                "last-wins, so every dependency naming it resolves to the second fixture."
+            )
+        seen.add(f.fixture_id)
+
+        if len(f.entrant_ids) == 0:
+            raise InvalidRequestError(
+                f"fixtures[{i}].entrant_ids must not be empty (fixture {f.fixture_id!r}). A fixture "
+                "with no entrants joins no participant group, so the participant-rest NoOverlap and "
+                "every T2 idle-gap term skip it. Measured: two fixtures sharing one player placed "
+                "CONCURRENTLY, reported OPTIMAL."
+            )
+        if any(not entrant for entrant in f.entrant_ids):
+            raise InvalidRequestError(
+                f"fixtures[{i}].entrant_ids contains an empty id (fixture {f.fixture_id!r}). Every "
+                "empty entrant collides into ONE participant group, so unrelated fixtures acquire a "
+                "shared-player rest constraint they do not have."
+            )
+        if not f.division_id:
+            raise InvalidRequestError(
+                f"fixtures[{i}].division_id must not be empty (fixture {f.fixture_id!r}). An unset "
+                "division matches no rest rule and no day cap, so both families evaporate. Measured "
+                "on one board with min_rest_minutes=240 and a cap of 1: division 'd1' places 1, "
+                "unset places 4, both OPTIMAL with `error` unset."
+            )
+        fixtures.append((f.fixture_id, list(f.entrant_ids), f.division_id))
+    return fixtures
+
+
+def _validated_grid_slots(slots, known_courts: set[str]) -> list[tuple[str, int]]:
+    for i, s in enumerate(slots):
+        if s.court not in known_courts:
+            raise InvalidRequestError(
+                f"grid.slots[{i}].court {s.court!r} is not one of `courts`. The model unions every "
+                "slot's start across all courts, so a slot naming a court the request never declared "
+                "still contributes its tick and is otherwise ignored."
+            )
+        if s.start_at_ms <= 0:
+            raise InvalidRequestError(
+                f"grid.slots[{i}].start_at_ms must be > 0, got {s.start_at_ms!r}. Epoch 0 is 1970 and "
+                "is never a legitimate court time; an unset start is a legal tick that fixtures are "
+                "then placed on and proved OPTIMAL."
+            )
+    return [(s.court, s.start_at_ms) for s in slots]
+
+
+def _validated_existing(rows, known_courts: set[str]) -> list[tuple[str, str, int]]:
+    for i, a in enumerate(rows):
+        if a.court not in known_courts:
+            raise InvalidRequestError(
+                f"existing[{i}].court {a.court!r} is not one of `courts`. A pinned row is folded into "
+                "its court's interval list only if that court exists, and is skipped without a word "
+                "otherwise — so the pin reserves nothing and a movable fixture is placed on top of a "
+                "match already being played (measured, 5/5: board [] with the real court, the pinned "
+                "slot taken with '' or a trailing space, OPTIMAL both times)."
+            )
+        if a.start_at_ms <= 0:
+            raise InvalidRequestError(
+                f"existing[{i}].start_at_ms must be > 0, got {a.start_at_ms!r}. An unset start builds "
+                "the blocking interval at epoch 0, which overlaps nothing real, so the pin is "
+                "silently ignored and a movable fixture takes the pinned slot."
+            )
+    return [(a.fixture_id, a.court, a.start_at_ms) for a in rows]
+
+
+def _validated_dependencies(pairs, fixture_ids: set[str]) -> list[tuple[str, str]]:
+    for i, d in enumerate(pairs):
+        for role, fixture_id in (("before", d.before_fixture_id), ("after", d.after_fixture_id)):
+            if fixture_id not in fixture_ids:
+                raise InvalidRequestError(
+                    f"dependencies[{i}].{role}_fixture_id {fixture_id!r} names no fixture in "
+                    "`fixtures`. The model's id index is built from MOVABLE fixtures only, so an "
+                    "unset id, a typo, and a real `existing` row are all dropped identically. "
+                    "Measured, 5/5: a real pair separates two fixtures by 1 800 000 ms; every "
+                    "unresolvable one separates them by 0, OPTIMAL, `error` unset."
+                )
+    return [(d.before_fixture_id, d.after_fixture_id) for d in pairs]
+
+
+def _rule_map(rules, field: str, value_of, declared_divisions: set[str]) -> dict[str, int]:
+    """One repeated division-keyed rule list, as a dict, with its keys checked.
+
+    Repeated messages, not a proto `map`, so the wire permits two rules for one
+    division and a dict comprehension keeps the LAST — the caller sent two
+    numbers and one was chosen silently. And a key no fixture carries is inert:
+    rest resolves as `rest_by_division.get(division, 0)` and the cap selects on
+    `divisions[i] == division`, so neither ever matches. That second check is
+    also the only thing in the request that can catch a typo.
+    """
+    out: dict[str, int] = {}
+    for i, rule in enumerate(rules):
+        if rule.division_id in out:
+            raise InvalidRequestError(
+                f"constraints.{field}[{i}] is a second rule for division {rule.division_id!r}. "
+                "These are repeated messages rather than a map, so the duplicate is legal on the "
+                "wire and the last one silently wins."
+            )
+        if rule.division_id not in declared_divisions:
+            raise InvalidRequestError(
+                f"constraints.{field}[{i}].division_id {rule.division_id!r} matches no fixture's "
+                f"division (declared: {sorted(declared_divisions)}). The rule would be inert and the "
+                "caller would be told nothing."
+            )
+        out[rule.division_id] = value_of(rule)
+    return out
+
+
+def _validated_constraints(proto_constraints, declared_divisions: set[str]) -> dict:
+    """The `build_model` constraints dict, validated.
+
+    Built before it is validated, and validated off the built dict rather than
+    off the repeated proto field wherever the domain also guards the value:
+    `build_model` guards the dict, so checking the same object it will check is
+    what keeps the two from ever disagreeing about which values are admissible.
+    Field PRESENCE is the exception — only the proto message can answer it, and
+    only for the two fields that carry proto3 `optional`.
+    """
+    if not proto_constraints.HasField("gap_minutes"):
+        raise InvalidRequestError(
+            "constraints.gap_minutes must be set. 0 is a legitimate value ('no court turnaround'), "
+            "so an unset field cannot be told from a deliberate one by its value — which is why the "
+            "field carries proto3 `optional` and is checked for presence rather than for range. "
+            "Unset silently books matches back-to-back and reports OPTIMAL."
+        )
+
+    rest_by_division = _rule_map(
+        proto_constraints.rest_by_division,
+        "rest_by_division",
+        lambda r: r.min_rest_minutes,
+        declared_divisions,
+    )
+    for i, rule in enumerate(proto_constraints.rest_by_division):
+        if not rule.HasField("min_rest_minutes"):
+            raise InvalidRequestError(
+                f"constraints.rest_by_division[{i}].min_rest_minutes must be set (division "
+                f"{rule.division_id!r}). 0 is legitimate ('no minimum rest'), so presence is the only "
+                "thing separating it from an unset field — and an unset one makes a rule the caller "
+                "explicitly sent behave exactly like omitting the division."
+            )
+
+    constraints = {
+        "match_minutes": proto_constraints.match_minutes,
+        "gap_minutes": proto_constraints.gap_minutes,
+        "rest_by_division": rest_by_division,
+        "day_cap_by_division": _rule_map(
+            proto_constraints.day_cap_by_division,
+            "day_cap_by_division",
+            lambda r: r.max_fixtures_per_day,
+            declared_divisions,
+        ),
+    }
+
+    if constraints["match_minutes"] <= 0:
+        raise InvalidRequestError(
+            f"constraints.match_minutes must be > 0, got {constraints['match_minutes']!r}. "
+            "A zero-length match makes every court and rest interval zero-width, so the board "
+            "comes back OPTIMAL with every fixture stacked on one tick."
+        )
+
+    # Negative is worse than zero for both of the fields where zero is allowed:
+    # it does not merely fail to constrain, it CANCELS the match length out of
+    # the interval width and reopens a family that was closed. `build_model`
+    # raises on both too; this is the wire half of that pair.
+    if constraints["gap_minutes"] < 0:
+        raise InvalidRequestError(
+            f"constraints.gap_minutes must be >= 0, got {constraints['gap_minutes']!r}. The court "
+            "interval is match_minutes + gap_minutes wide, so at gap == -match_minutes it is "
+            "zero-width and two matches overlap on one court (measured: 37 placed, 4 tiers, 1 "
+            "overlap, OPTIMAL)."
+        )
+    for division, rest in constraints["rest_by_division"].items():
+        if rest < 0:
+            raise InvalidRequestError(
+                f"constraints.rest_by_division[{division!r}].min_rest_minutes must be >= 0, got "
+                f"{rest!r}. The participant-rest interval is match_minutes + rest wide, so at "
+                "rest == -match_minutes one entrant plays two simultaneous matches (measured: 37 "
+                "placed, 4 tiers, 1 collision, OPTIMAL)."
+            )
+
+    for division, cap in constraints["day_cap_by_division"].items():
+        if cap <= 0:
+            raise InvalidRequestError(
+                f"constraints.day_cap_by_division[{division!r}].max_fixtures_per_day must be > 0, "
+                f"got {cap!r}. A cap of 0 forbids placing that division at all and the board comes "
+                "back OPTIMAL with all of its fixtures dropped. To leave a division uncapped, omit "
+                "it rather than sending 0."
+            )
+
+    return constraints
+
+
 def request_to_model_input(req) -> ModelInput:
     """Translate a `SolveBuildRequest` into domain types, or reject it.
+
+    ONE referential-integrity pass, before any domain object exists: every id
+    the request mentions must resolve to something the same request declares.
+    Order matters — the fixtures are validated first because the dependency
+    endpoints and the division rule keys both resolve against them.
 
     Args:
         req: a `scheduler_pb2.SolveBuildRequest`. Untyped in the signature so
@@ -101,8 +344,9 @@ def request_to_model_input(req) -> ModelInput:
             do not — the boundary runs through here in one direction only.
 
     Raises:
-        InvalidRequestError: on an empty board, or on any of the four
-            degenerate fields enumerated in the module docstring.
+        InvalidRequestError: on an empty board, on any degenerate scalar
+            enumerated in the module docstring, or on any id that resolves to
+            nothing.
     """
     if len(req.fixtures) == 0:
         raise InvalidRequestError("fixtures must not be empty")
@@ -115,35 +359,24 @@ def request_to_model_input(req) -> ModelInput:
             "the model falls back to a single admissible start of 0, places one fixture per "
             "court there, and proves that OPTIMAL with every other fixture silently unplaced."
         )
-
-    # Built before it is validated, and validated off the built dict rather
-    # than off the repeated proto field: `build_model` guards the dict, so
-    # checking the same object it will check is what keeps the two from ever
-    # disagreeing about which values are admissible.
-    constraints = {
-        "match_minutes": req.constraints.match_minutes,
-        "gap_minutes": req.constraints.gap_minutes,
-        "rest_by_division": {r.division_id: r.min_rest_minutes for r in req.constraints.rest_by_division},
-        "day_cap_by_division": {
-            r.division_id: r.max_fixtures_per_day for r in req.constraints.day_cap_by_division
-        },
-    }
-
-    if constraints["match_minutes"] <= 0:
+    if not req.HasField("constraints"):
         raise InvalidRequestError(
-            f"constraints.match_minutes must be > 0, got {constraints['match_minutes']!r}. "
-            "A zero-length match makes every court and rest interval zero-width, so the board "
-            "comes back OPTIMAL with every fixture stacked on one tick."
+            "the BuildConstraints message must be set. It is a proto3 message field, so an omitted "
+            "one arrives fully default-valued and every constraint family it carries disappears at "
+            "once."
         )
 
-    for division, cap in constraints["day_cap_by_division"].items():
-        if cap <= 0:
-            raise InvalidRequestError(
-                f"constraints.day_cap_by_division[{division!r}].max_fixtures_per_day must be > 0, "
-                f"got {cap!r}. A cap of 0 forbids placing that division at all and the board comes "
-                "back OPTIMAL with all of its fixtures dropped. To leave a division uncapped, omit "
-                "it rather than sending 0."
-            )
+    courts = list(req.courts)
+    known_courts = set(courts)
+
+    fixtures = _validated_fixtures(req.fixtures)
+    fixture_ids = {fixture_id for fixture_id, _entrants, _division in fixtures}
+    declared_divisions = {division for _fid, _entrants, division in fixtures}
+
+    grid_slots = _validated_grid_slots(req.grid.slots, known_courts)
+    existing = _validated_existing(req.existing, known_courts)
+    dependencies = _validated_dependencies(req.dependencies, fixture_ids)
+    constraints = _validated_constraints(req.constraints, declared_divisions)
 
     if req.wall_seconds <= 0:
         raise InvalidRequestError(
@@ -153,13 +386,13 @@ def request_to_model_input(req) -> ModelInput:
         )
 
     return ModelInput(
-        courts=list(req.courts),
-        fixtures=[(f.fixture_id, list(f.entrant_ids), f.division_id) for f in req.fixtures],
-        grid_slots=[(s.court, s.start_at_ms) for s in req.grid.slots],
+        courts=courts,
+        fixtures=fixtures,
+        grid_slots=grid_slots,
         step_minutes=req.grid.step_minutes,
         constraints=constraints,
-        existing=[(a.fixture_id, a.court, a.start_at_ms) for a in req.existing],
-        dependencies=[(d.before_fixture_id, d.after_fixture_id) for d in req.dependencies],
+        existing=existing,
+        dependencies=dependencies,
         wall_seconds=req.wall_seconds,
     )
 

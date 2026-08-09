@@ -107,7 +107,16 @@ export interface OrderPair {
 
 export interface DivisionRestRule {
   divisionId: string;
-  minRestMinutes: number;
+  /**
+   * `optional` because 0 is a LEGITIMATE value here ("this division has no
+   * minimum rest"), so it cannot be told from an unset field by its value. A
+   * rule that is present but carries an unset number is a rule the caller
+   * asked for and silently did not get. Contrast `max_fixtures_per_day`
+   * below, where 0 means "may not play at all" and is never legitimate, so a
+   * value guard reaches it and the field stays required — which also keeps
+   * ts-proto typing it as mandatory for the caller.
+   */
+  minRestMinutes?: number | undefined;
 }
 
 export interface DivisionDayCapRule {
@@ -117,7 +126,12 @@ export interface DivisionDayCapRule {
 
 export interface BuildConstraints {
   matchMinutes: number;
-  gapMinutes: number;
+  /**
+   * `optional` for the same reason as `min_rest_minutes`: 0 is a real answer
+   * ("no court turnaround"), and unset arrives as the same 0. Everything else
+   * in this message has a value guard that reaches its degenerate case.
+   */
+  gapMinutes?: number | undefined;
   restByDivision: DivisionRestRule[];
   dayCapByDivision: DivisionDayCapRule[];
 }
@@ -614,7 +628,7 @@ export const OrderPair: MessageFns<OrderPair> = {
 };
 
 function createBaseDivisionRestRule(): DivisionRestRule {
-  return { divisionId: "", minRestMinutes: 0 };
+  return { divisionId: "", minRestMinutes: undefined };
 }
 
 export const DivisionRestRule: MessageFns<DivisionRestRule> = {
@@ -622,7 +636,7 @@ export const DivisionRestRule: MessageFns<DivisionRestRule> = {
     if (message.divisionId !== "") {
       writer.uint32(10).string(message.divisionId);
     }
-    if (message.minRestMinutes !== 0) {
+    if (message.minRestMinutes !== undefined) {
       writer.uint32(16).int32(message.minRestMinutes);
     }
     return writer;
@@ -671,7 +685,7 @@ export const DivisionRestRule: MessageFns<DivisionRestRule> = {
         ? globalThis.Number(object.minRestMinutes)
         : isSet(object.min_rest_minutes)
         ? globalThis.Number(object.min_rest_minutes)
-        : 0,
+        : undefined,
     };
   },
 
@@ -680,7 +694,7 @@ export const DivisionRestRule: MessageFns<DivisionRestRule> = {
     if (message.divisionId !== "") {
       obj.divisionId = message.divisionId;
     }
-    if (message.minRestMinutes !== 0) {
+    if (message.minRestMinutes !== undefined) {
       obj.minRestMinutes = Math.round(message.minRestMinutes);
     }
     return obj;
@@ -692,7 +706,7 @@ export const DivisionRestRule: MessageFns<DivisionRestRule> = {
   fromPartial<I extends Exact<DeepPartial<DivisionRestRule>, I>>(object: I): DivisionRestRule {
     const message = createBaseDivisionRestRule();
     message.divisionId = object.divisionId ?? "";
-    message.minRestMinutes = object.minRestMinutes ?? 0;
+    message.minRestMinutes = object.minRestMinutes ?? undefined;
     return message;
   },
 };
@@ -782,7 +796,7 @@ export const DivisionDayCapRule: MessageFns<DivisionDayCapRule> = {
 };
 
 function createBaseBuildConstraints(): BuildConstraints {
-  return { matchMinutes: 0, gapMinutes: 0, restByDivision: [], dayCapByDivision: [] };
+  return { matchMinutes: 0, gapMinutes: undefined, restByDivision: [], dayCapByDivision: [] };
 }
 
 export const BuildConstraints: MessageFns<BuildConstraints> = {
@@ -790,7 +804,7 @@ export const BuildConstraints: MessageFns<BuildConstraints> = {
     if (message.matchMinutes !== 0) {
       writer.uint32(8).int32(message.matchMinutes);
     }
-    if (message.gapMinutes !== 0) {
+    if (message.gapMinutes !== undefined) {
       writer.uint32(16).int32(message.gapMinutes);
     }
     for (const v of message.restByDivision) {
@@ -861,7 +875,7 @@ export const BuildConstraints: MessageFns<BuildConstraints> = {
         ? globalThis.Number(object.gapMinutes)
         : isSet(object.gap_minutes)
         ? globalThis.Number(object.gap_minutes)
-        : 0,
+        : undefined,
       restByDivision: globalThis.Array.isArray(object?.restByDivision)
         ? object.restByDivision.map((e: any) => DivisionRestRule.fromJSON(e))
         : globalThis.Array.isArray(object?.rest_by_division)
@@ -880,7 +894,7 @@ export const BuildConstraints: MessageFns<BuildConstraints> = {
     if (message.matchMinutes !== 0) {
       obj.matchMinutes = Math.round(message.matchMinutes);
     }
-    if (message.gapMinutes !== 0) {
+    if (message.gapMinutes !== undefined) {
       obj.gapMinutes = Math.round(message.gapMinutes);
     }
     if (message.restByDivision?.length) {
@@ -898,7 +912,7 @@ export const BuildConstraints: MessageFns<BuildConstraints> = {
   fromPartial<I extends Exact<DeepPartial<BuildConstraints>, I>>(object: I): BuildConstraints {
     const message = createBaseBuildConstraints();
     message.matchMinutes = object.matchMinutes ?? 0;
-    message.gapMinutes = object.gapMinutes ?? 0;
+    message.gapMinutes = object.gapMinutes ?? undefined;
     message.restByDivision = object.restByDivision?.map((e) => DivisionRestRule.fromPartial(e)) || [];
     message.dayCapByDivision = object.dayCapByDivision?.map((e) => DivisionDayCapRule.fromPartial(e)) || [];
     return message;
