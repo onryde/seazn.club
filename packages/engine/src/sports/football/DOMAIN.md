@@ -61,16 +61,16 @@ is initialised with.
 | **A sin bin running out on the clock** | as above | `person` | `Ev.FootballSinBinStart.at` + `.minutes`/`Cfg.sinBinMinutes` → `State.squads[].sinBin[].expiresAt`, `State.squads[].sinBinLog[]`, swept in `apply` | **extended** | W4a (#425) §3.1. Before W4a a temporary dismissal ended **only** on an explicit `football.sinbin.end`, so the competition's own sin-bin length was recorded and never counted down. Expiry is **lazy**: the fold releases the player at the next STAMPED event at or after `expiresAt`, which means the pad (rendering the countdown from `expiresAt`) and the fold legitimately disagree in between — by design, and a `PadSpec` obligation for W5, not a bug. An **unstamped** event sweeps nothing, which is what keeps every pre-W4a stream folding unchanged, and both halves are required, so nothing expires that did not expire before. Two further sweeps close the gap lazy expiry leaves: the **whistle that closes a phase** ends anything that ran out inside it, and the **final whistle** (full time, a shoot-out decision, a forfeit, an awarded abandonment) ends every TIMED dismissal still standing — without them a bin that expired with nothing stamped after it survived into the final state and every consumer read the side a player short at full time. Both are TIMED-only, so an unstamped bin still keeps the side short to the end, which is what leaves the frozen goldens untouched. An anonymous bin closes without returning anybody to the pitch. The explicit end still works, and one stamped at or after a derived expiry is a **no-op, not a refusal** — the scorer recording a release the fold has already swept is being right, and refusing punishes them for the fold's own laziness. Narrow: reconciled against `sinBinLog` (the only record left once the sweep removes the entry), so a release of a bin that never existed, one still running, or one for a player the fold sent off all keep their rejection. |
 | **A sin bin carrying into the next half** | as above | `person` | `Cfg.halfMinutes` / `Cfg.extraTime.halfMinutes`, overridden by `Cfg.periodSeconds` → `State.squads[].sinBin[].expiresAt` | **extended** | W4a §3.2, **amended 2026-08-04**. The wave originally ruled that expiry never crosses a period boundary, on the reasoning that the engine held no half length. Both halves were wrong: IFAB's temporary-dismissal protocol carries the unserved remainder into the next half exactly as IIHF carries a penalty, and `Cfg.halfMinutes` is a **required** positive integer, so the length was never missing. Leaving the expiry in-period was not a harmless approximation but actively wrong under lazy expiry — `{H1, 3200}` sorts before every H2 stamp, so the first stamped event of the second half swept a bin with 500 seconds still to run, under-serving the player in the offending side's favour. The lengths come from cfg's own required scalars; `Cfg.periodSeconds` is an **override for the one thing they cannot express**, halves of UNEQUAL length, and a map that merely contradicts the scalar is **ignored, not refused** (cfg is read live on every fold, so a `CONFIG_INVALID` there would let one admin edit make every already-scored fixture in the division unviewable). The carry counts against the NOMINAL length, so a half that ran into added time still carries against 45. Where there is no later phase to carry into, the **named fallback** applies: the expiry stays in-period past the nominal length and the bin ends on the explicit release or the final whistle. |
 | A sin-binned player then sent off | as above | `person` | `applyCard` lineup check + `removeFromPitch` | **extended** | A player serving a temporary dismissal is off the pitch but still cardable; a permanent dismissal drops their bin entry so they cannot "return". |
-| Substitution (off / on) | all | `off`, `on` | `Ev.FootballSub` → `State.squads[].onPitch\|bench\|offUsed` | modelled | `off` must be on the pitch, `on` must be an unused bench player. |
-| **Return ("rolling" / "flying") substitution** | `youth`, `small-sided` | `off`, `on` | `Cfg.rollingSubs` | **extended** | Absent ≡ pre-W4 behaviour (a substituted player may not return). When on, the player who came off rejoins the **bench** and nothing lands in `offUsed`. Declared `true` on both the `youth` and `small-sided` presets and left unset on `11-a-side`. |
-| **Cap on substitutions per side** | `11-a-side` (5 under most senior regulations) | entrant | `Cfg.maxSubs` | **extended** | Counted from `squad.offUsed.length`, so it needed no new state. Never applied under `rollingSubs`, which is uncapped by definition. Absent = uncapped, which is what every pre-W4 stream assumed. |
+| Substitution (off / on) | all | `off`, `on` | `Ev.FootballSub` **or** `core.lineup.substitution` → `reduceLineupEvent` → `State.squads[].onPitch\|bench\|offUsed` | modelled | `off` must be on the pitch, `on` must be someone this side may bring on. S3/W4b (#426) — **two vocabularies, one decider.** `football.sub` cannot be deleted (the frozen corpora contain it) so it stays on the wire unchanged; what moved is what its fold CALLS. Both it and the kernel's `core.lineup.substitution` now put the question to `core/lineup.ts`'s one reducer, and `football.lineup.test.ts` holds them to the same NUMBER of permitted substitutions rather than to "each works" — which is what the last three placer/verifier bugs in this repo each looked like. The kernel form additionally carries `positionKey`, which the legacy form has no field for. |
+| **Return ("rolling" / "flying") substitution** | `youth`, `small-sided` | `off`, `on` | `Cfg.rollingSubs` → `lineupPolicy().reentry` (`unlimited` \| `none`) | **extended** | Absent ≡ pre-W4 behaviour (a substituted player may not return). When on, the player who came off rejoins the **bench** and nothing lands in `offUsed`. Declared `true` on both the `youth` and `small-sided` presets and left unset on `11-a-side`. S3/W4b (#426), owner ruling 2 — re-entry is a cfg knob (`none \| once \| unlimited`) and not a per-sport constant, and football is the sport that proves why: Law 3.3 is no-return while the grassroots and small-sided dispensations that share this module are rolling. The private `bench.includes(on)` test that used to encode it is gone. |
+| **Cap on substitutions per side** | `11-a-side` (5 under most senior regulations) | entrant | `Cfg.maxSubs` → `lineupPolicy().maxSubs` → `SideSquad.subsUsed` | **extended** | Counted from `squad.offUsed.length` less any exempt replacements, so it still needed no new always-present state. Never applied under `rollingSubs`, which is uncapped by definition. Absent = uncapped, which is what every pre-W4 stream assumed. S3/W4b (#426) — the cap now has **one** reader, the shared reducer, and it is asserted through both substitution vocabularies at once. The refusal is also cfg-derived, so it is a WRITE-path error only: replaying a fixture whose competition has since lowered `maxSubs` folds rather than throwing, because the substitution was legal when it was made and there is no event left to void. |
 | **Substitution *windows*** (3 windows for 5 subs) | `11-a-side` | entrant | `Cfg.subWindows` + `Ev.FootballSub.at` → `State.squads[].subWindows[]`, error `SUB_WINDOW_EXCEEDED` | **extended** | W4a (#425) §5.2. Unblocked by the core time model: the clock fact State had no clock for is now the stamp on the event. A window is the set of substitutions **sharing one `at`**, so three players sent on at a single stoppage spend one window; five subs taken one at a time spend five, which is exactly the Law that `Cfg.maxSubs` alone could not express. Counted per side, and applied **alongside** `maxSubs`, never instead of it. An **unstamped** substitution is in no window and consumes none — reading "no stamp" as one shared window would trip a one-window allowance on the second unstamped sub and make every pre-W4a stream unfoldable; recording one window each is the mirror of the same bug. Absent `Cfg.subWindows` = unlimited windows, which is what every pre-W4a stream assumed. First throw site for `SUB_WINDOW_EXCEEDED` (422). |
 | Injury as the reason for a substitution | all | `off` | — | deferred | A scorebook records the substitution, not the injury; the reason is medical data with consent implications. Needs a product decision. |
-| Concussion (additional permanent) substitution | all | `off`, `on` | — | deferred | An IFAB trial protocol adopted per competition; would need `Cfg.concussionSubs` and its own exemption from `maxSubs`. Needs a product decision on whether we support the trial. |
+| **Concussion (additional permanent) substitution** | all | `off`, `on` | `Cfg.concussionSubs` → `lineupPolicy().exemptions.concussion` → `core.lineup.replacement {exemption:"concussion"}` → `SideSquad.exemptUsed`, `State.squads[].exemptUsed` | **extended** | S3/W4b (#426). Closed by the kernel-owned lineup model: a replacement charged to a NAMED exemption rather than to the cap is a `core.lineup.replacement`, and `Cfg.concussionSubs` is what declares the exemption exists and how many. **Config-driven, never hard-coded** (owner ruling): the IFAB protocol is adopted per competition, so absent = the trial is not in force and the kernel refuses the event outright (`exemption-not-declared`) — which is also what stops a pad evading `maxSubs` by inventing an exemption key. The replacement is **permanent**, so its outgoing player still lands in `State.squads[].offUsed`; `exemptUsed` is carried alongside precisely so the cap arithmetic (`offUsed.length − exempt`) does not let the exemption spend the ordinary allowance one event later. Absent until the first exempt replacement, so no frozen stream moves. |
 | Starting XI confirmed pre-match | all | 11 persons | `Lineup.slots[slot="starting"]`, `positions.lineup.size` | modelled | `validateLineup` enforces the exact count. |
 | Captain confirmed pre-match | all | one person | `Lineup.slots[].roles = ["captain"]`, `positions.roles` | modelled | Declared `unique: true`. |
-| Goalkeeper confirmed pre-match | all | one person | `Lineup.slots[].positionKey = "GK"` (`min:1, max:1`) | modelled | Enforced on the lineup — but `squadFromLineup` drops `positionKey`, so **State does not know who the keeper is**. See the next two rows. |
-| Goalkeeper change without a substitution | all | `person` | would be `Ev.FootballKeeper` | deferred | State drops `positionKey` at init, so a change-only event yields a keeper field that is `undefined` for every match where nobody swapped. Carrying the starting keeper in `init` changes the serialised State of every frozen stream and is therefore not additive. Blocked on W5's lineup model carrying positions into State. |
+| Goalkeeper confirmed pre-match | all | one person | `Lineup.slots[].positionKey = "GK"` (`min:1, max:1`) → `initSquads` → `personsAtPosition(squads.home, "GK")` | modelled | S3/W4b (#426) — the "State does not know who the keeper is" caveat is **closed at the fold, not at State**, and the distinction is deliberate. `init` now builds its squads through the kernel's `initSquads`, which KEEPS `positionKey`; the keeper is nameable by person id from `foldMatchWithStoppage(...).squads` and from `ctx.squads` inside `apply`, at init and after every accepted change. It is **not** copied into `FootballState`, and cannot be: `state.squads` is inside the recorded state that the frozen corpus compares byte for byte, so any always-present position field there reds all eleven football streams (that is the same constraint the deferred row below used to cite, now measured rather than assumed). One squad, one place, projected on read. |
+| **Goalkeeper change without a substitution** | all | `person` | `core.lineup.position {positionKey:"GK"}` (kernel-owned) → `SquadMember.positionKey` | **extended** | S3/W4b (#426). No `Ev.FootballKeeper` was needed and none was added: a change of gloves is a POSITION change, which is one of the five kernel `core.lineup.*` types, so all eleven sports get it from one implementation and football's event union does not move. It **charges nothing** — `core.lineup.position` never touches `SideSquad.subsUsed` — which is #426's explicit requirement ("swap the goalkeeper without spending a substitution") and is asserted against a `Cfg.maxSubs` that still bites on the very next substitution, so the assertion cannot pass vacuously. A keeper who comes on as a SUBSTITUTE carries `positionKey` on the incoming slot of `core.lineup.substitution` instead; the legacy `football.sub` states no position and therefore still changes nobody's. |
 | **Shirt numbers** | all | every squad member | `entrantModel.team.squadNumbers = true` + `LineupSlot.squadNumber` | **extended** | Unblocked later in W4: the number field landed on `LineupSlot` (`src/core/types.ts`), so the affordance the entrant model declares now has a home on the lineup. Optional, and the fold never reads it. |
 | **Squad size per variant (5-, 7-, 9-a-side)** | `small-sided` | 5–9 persons | `Cfg.teamSize` → `positionsFor(cfg)` → `resolvePositions` | **extended** | Unblocked later in W4: `SportModule.positionsFor?(cfg)` (`src/sport/module.ts`) and the `resolvePositions` accessor (`src/sport/catalog.ts`). Football declares `teamSize: 7` on `small-sided` (`football.ts`), so `validateLineup` now compares against the variant's own starting count. Lineup-only — never the fold. |
 | Bench size | all | up to 12 persons | `positions.lineup.benchMax = 12` | modelled | Same per-variant caveat as squad size. |
@@ -98,7 +98,7 @@ is initialised with.
 
 | Where in the match an event happened (the position axis) | all | — | `SportModule.position(state)` -> `period` + `clock` segments, e.g. `H2 . 48:12` | extended | W4a T6b. A **read-side projection**, never a payload: a `MatchPosition` on every stamped event was considered this wave and rejected, because position is derivable from state the fold already computes and recording it would create a recorded value and a derived value of the same type that can silently disagree — the `DisciplineCard.entrantSide` shape. A wrong recorded value is in the hash-chained ledger forever; a wrong projection is one deploy away from fixed. Ordered segments rather than a display string, so W8 can drop a segment for a 375px scorebug, localise each `key` and order two positions in one match; `formatPosition` is the plain-text path. Nothing is materialised into state, so every frozen golden is byte-identical. Football and the period kernel have different state types and cannot share a module member, so both delegate to the core `periodClockPosition` and the conformance suite holds them to ONE shape. That is the direct answer to this wave's five hand-rolled time-model divergences in this file. Ranked against `playPhases(cfg)` — the wider list an event's `at.period` is validated against — never the narrower `PLAY_PHASES`. |
 
-**Row counts:** 25 modelled, 21 extended, 13 deferred (59 rows). No blank cells.
+**Row counts:** 25 modelled, 23 extended, 11 deferred (59 rows). No blank cells.
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## Per-variant divergence
@@ -126,10 +126,41 @@ Football sets the pattern the other families copy, so this is explicit.
 
 **Incomplete / missing:**
 
-1. **The goalkeeper is never named in State.** `squadFromLineup` keeps person
-   ids and drops `positionKey`, so nothing downstream can say who was in goal —
-   and therefore no goalkeeper stat (clean sheets, saves, goals conceded) is
-   derivable. Deferred, see the table.
+1. ~~**The goalkeeper is never named in State.**~~ Closed in S3/W4b (#426), and
+   closed **at the fold rather than in `State`** — read that distinction before
+   using it. `squadFromLineup` is gone; `init` builds its squads with the
+   kernel's `initSquads`, which keeps `positionKey`, so
+   `personsAtPosition(squads.home, "GK")` names the keeper by person id at init,
+   after a `core.lineup.position` change of gloves, and after a keeper
+   substitution — from `foldMatchWithStoppage(...).squads` on the read side and
+   from `ctx.squads` inside `apply`. Goalkeeper stats (clean sheets, saves,
+   goals conceded) are therefore derivable now; none is declared yet, which is
+   S8's job, not this wave's.
+   **What is NOT closed, deliberately:** `FootballState` itself still holds only
+   person-id lists. `state.squads` is inside the state the frozen corpus
+   compares byte for byte, and every default lineup names a GK, so ANY
+   always-present position field there reds all eleven football streams at init
+   — measured this session, not assumed. Carrying it in State would also make
+   the recorded position and the folded one two constructions of one fact, which
+   is the `DisciplineCard.entrantSide` shape. One squad, projected on read.
+   **Carried limitation:** a legacy `football.sub` states no position and never
+   reaches the kernel's squads (it is a module event; only `core.lineup.*` is
+   kernel-folded), so a fixture scored with the legacy vocabulary answers
+   position questions from the team sheet. A pad that wants position-accurate
+   substitutions emits `core.lineup.substitution`, which carries `positionKey`
+   on the incoming slot. **One fixture should use one vocabulary.** Membership
+   is merged correctly either way (`mergeFromKernel` applies the kernel's delta
+   rather than overwriting, so a red card, a sin bin and a legacy substitution
+   all survive a later kernel event), but two things are undefined in a mixed
+   fixture: positions, as above, and the CAP as the kernel counts it —
+   `SideSquad.subsUsed` never sees a `football.sub`, so a kernel substitution
+   made after legacy ones is judged against a low count. The legacy path does
+   not have the mirror problem: it lifts football's own squad, which has both.
+   Closing the mix properly needs the fold to route a module event into the
+   kernel squad — a `core/events.ts` change, outside this session's blast
+   radius, and it should be weighed against simply retiring `football.sub` from
+   the pad once `core.lineup.*` ships there (the type must stay on the wire
+   either way: the frozen corpora contain it).
 2. **The shootout kicker is validated but not retained.** `applyShootoutKick`
    checks `person` is on the pitch and then folds only `{side, scored}`. Shootout
    conversion is not attributable from State (it is from the ledger).
@@ -156,7 +187,11 @@ Nothing here was acted on.
    is no valid `football.penalty` without it); the sin-bin duration when
    `Cfg.sinBinMinutes` is not set; `addedMinutes` at each period marker.
 4. **New config the rules editor should expose**: `rollingSubs`, `maxSubs`,
-   `sinBinMinutes`, and (W4a) `subWindows` and `periodSeconds`. `periodSeconds`
+   `sinBinMinutes`, (W4a) `subWindows` and `periodSeconds`, and (S3/W4b)
+   `concussionSubs` — the last one is the competition's adoption of the IFAB
+   concussion-substitute trial, so it belongs beside `maxSubs` and reads
+   "additional permanent substitutions for a suspected concussion", default
+   none. `periodSeconds`
    is deliberately NOT a general "how long is a half" knob — `halfMinutes` and
    `extraTime.halfMinutes` already answer that and win where the two disagree —
    so an editor should surface it only as "halves of unequal length", or not at
@@ -229,9 +264,17 @@ because of these are now `extended`, each naming what implements it.
 | `src/stats/stats.test.ts` blocked an `own_goals` metric | done | `playerStats.own_goals` in `football.ts`; the closed-set assertion in `stats.test.ts` was widened to the new correct row |
 
 **Still genuinely deferred** (and still marked `deferred` in the table above):
-the goalkeeper is not named in `State`, so no keeper stat is derivable; the
-shootout kicker is validated but not retained in `State`; quarters instead of
-halves need three new `PlayPhase` values; the Law 12 direct-free-kick offence
-taxonomy behind a conceded penalty has no declared fidelity tier. Each of those
+the shootout kicker is validated but not retained in `State`; quarters instead
+of halves need three new `PlayPhase` values; the Law 12 direct-free-kick offence
+taxonomy behind a conceded penalty has no declared fidelity tier; the injury
+behind a substitution is medical data with consent implications. Each of those
 needs a product decision or a state-machine extension, not a shared-engine
 field.
+
+**Cleared in S3/W4b (#426)** by the kernel-owned lineup model
+(`src/core/lineup.ts`): the keeper is nameable by person id at every fold point
+(finding 1 above, with its stated limitation), a goalkeeper change costs no
+substitution, and the IFAB concussion replacement has a cfg-declared exemption
+outside `Cfg.maxSubs`. Football's private squad model is gone: `squadFromLineup`
+is deleted, `Cfg.maxSubs` has exactly one reader (`lineupPolicy`), and "may he
+come back" is `LineupPolicy.reentry` rather than a `bench.includes(on)` test.

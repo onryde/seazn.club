@@ -351,6 +351,37 @@ describe("policy refusals across the strict/replay seam", () => {
     );
   });
 
+  it("carries provenance 'added' through a whole fold, not just a bare reduce", () => {
+    // Reviewer gap 6. `reduceLineupEvent` was pinned directly on this; the fold
+    // is the only path production ever takes, and it is where the flag has to
+    // survive for S9 to tell a team-sheet member from a mid-fixture arrival.
+    // OWNER RULING 1: growth is a cfg knob, DEFAULT OFF, so the test has to
+    // turn it on — which is also what proves the knob is read from cfg here.
+    const module = toy({
+      lineupPolicy: () => ({ ...DEFAULT_LINEUP_POLICY, allowSquadGrowth: true }),
+    });
+    const { squads } = foldMatchWithStoppage(
+      module,
+      cfg,
+      lineups,
+      [
+        env(0, "core.lineup.entry", {
+          side: "H",
+          on: { personId: "h-late", positionKey: "FW", slot: "starting", orderNo: 4 },
+        }),
+      ],
+      { strictFromSeq: 0 },
+    );
+    const named = squads.home.members.find((m) => m.personId === "h-gk");
+    const added = squads.home.members.find((m) => m.personId === "h-late");
+    expect(named?.provenance).toBe("named");
+    // The pair is the assertion: a fold that stamped everyone the same way
+    // would satisfy either line on its own.
+    expect(added?.provenance).toBe("added");
+    expect(added?.onField).toBe(true);
+    expect(added?.started).toBe(false);
+  });
+
   it("reads the policy from cfg, not from the module identity", () => {
     // Same module object, two variants, opposite verdicts — the proof that
     // ruling 2 is a cfg knob and not a per-sport constant.

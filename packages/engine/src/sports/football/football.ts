@@ -3,10 +3,32 @@
 // two official tiebreaker presets (fifa2026 H2H-first / classic GD-first).
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
-import { isStrictFold, resolveVoids, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import {
+  isStrictFold,
+  resolveVoids,
+  type CoreEv,
+  type EventEnvelope,
+  type FoldContext,
+} from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import { GameTime, addDuration, compareGameTime, gameTimeOf } from "../../core/time.ts";
 import { periodClockPosition, type MatchPosition } from "../../core/position.ts";
+// S3/W4b (#426) — the ONE squad model. Football re-derived all three of these
+// privately before this wave (`squadFromLineup` dropped `positionKey` one line
+// after reading it; `maxSubs` had a single reader; "may he come back" was
+// spelled `bench.includes(on)`), and a second implementation of a Law is how
+// the placer/verifier divergence keeps happening here.
+import {
+  REPLAY_LINEUP_POLICY,
+  initSquads,
+  onFieldPersons,
+  playingSquad,
+  reduceLineupEvent,
+  type LineupPolicy,
+  type SideSquad,
+  type SquadMember,
+  type SquadState as KernelSquads,
+} from "../../core/lineup.ts";
 import {
   AttemptOutcome,
   EntrantId,
@@ -81,6 +103,21 @@ export const FootballCfg = z.object({
   // 11-a-side since 2020; unlimited under rollingSubs). Absent = uncapped,
   // which is what every stream recorded before W4 assumed.
   maxSubs: z.number().int().nonnegative().optional(),
+  // S3/W4b (#426), IFAB concussion-substitute trial — how many ADDITIONAL
+  // permanent substitutions this competition allows for a suspected
+  // concussion, held OUTSIDE `maxSubs`.
+  //
+  // A cfg knob and not a constant, because the trial is adopted per
+  // competition: the Premier League runs two, most grassroots competitions run
+  // none, and a module that hard-coded either would have answered for the wrong
+  // one. Absent = the trial is not in force here, and the kernel then refuses a
+  // `core.lineup.replacement` naming it (`exemption-not-declared`) rather than
+  // letting any pad evade the cap by inventing an exemption key.
+  //
+  // Optional with NO default, like every other knob this wave: `state.cfg` is
+  // serialised inside every recorded state, so a default would appear in all
+  // eleven frozen football streams.
+  concussionSubs: z.number().int().nonnegative().optional(),
   // W4 (Law 12 addendum, temporary dismissals) — the competition's sin-bin
   // period in minutes, used when a `football.sinbin.start` event omits its own.
   // The FA runs 10 minutes in 90-minute football and reduces it pro rata for
@@ -321,7 +358,21 @@ interface SinBinRecord {
   expiresAt?: GameTime;
 }
 
-interface SquadState {
+/**
+ * Football's PROJECTION of the kernel squad — never a second squad model.
+ *
+ * S3/W4b (#426): `core/lineup.ts` owns membership, positions, the substitution
+ * count and re-entry for all eleven sports. What survives here is the football
+ * half the kernel deliberately does not model — a sending-off, a temporary
+ * dismissal, and the Law 3 substitution WINDOW — plus the flattened person-id
+ * lists that every frozen football stream has serialised since W4 and that this
+ * wave is not allowed to reshape (`state.squads` is inside the recorded state,
+ * compared byte for byte).
+ *
+ * Renamed off `SquadState` on purpose: the kernel's type has that name, and one
+ * concept must not answer to two of them in one package.
+ */
+interface FootballSquad {
   onPitch: string[];
   bench: string[];
   offUsed: string[]; // substituted off — may not return
@@ -346,6 +397,19 @@ interface SquadState {
   // no expiry, is never logged here, and the key stays absent — matching the
   // `sinBin` / `penalties` precedent.
   sinBinLog?: SinBinRecord[];
+  // S3/W4b (#426) — replacements this side has taken OUTSIDE `Cfg.maxSubs`, per
+  // exemption key (`{concussion: 1}`), mirrored from `SideSquad.exemptUsed`.
+  //
+  // It has to be carried rather than derived, and that is the whole point of
+  // the row: an exempt replacement still puts its outgoing player in `offUsed`
+  // (a concussion replacement is permanent, so he may not return), and the cap
+  // is counted from `offUsed.length` — so without this the exemption would
+  // silently consume the ordinary allowance one event later and the cap and the
+  // exemption would never actually disagree.
+  //
+  // Absent until the first exempt replacement, so every frozen stream
+  // serialises exactly as it did.
+  exemptUsed?: Readonly<Record<string, number>>;
 }
 
 interface CardRecord {
@@ -375,7 +439,7 @@ export interface FootballState {
   // (PROMPT-04 §9) and the summary.detail payload.
   periods: PeriodRecord[];
   cards: CardRecord[];
-  squads: { home: SquadState; away: SquadState };
+  squads: { home: FootballSquad; away: FootballSquad };
   shootout: { kicks: { side: Side; scored: boolean }[] } | null;
   outcome: MatchOutcome | null;
   replayFlagged: boolean; // abandonPolicy 'replay' — fixture to regenerate
@@ -817,7 +881,7 @@ function cardCounts(cards: readonly CardRecord[], side: Side): { yellow: number;
   return { yellow, red };
 }
 
-function removeFromPitch(squad: SquadState, person: string, sentOff: boolean): SquadState {
+function removeFromPitch(squad: FootballSquad, person: string, sentOff: boolean): FootballSquad {
   return {
     ...squad,
     onPitch: squad.onPitch.filter((id) => id !== person),
@@ -899,27 +963,50 @@ function applyCard(state: FootballState, payload: z.infer<typeof FootballCard>):
   return { ...state, cards: [...state.cards, record], squads };
 }
 
-function applySub(state: FootballState, payload: z.infer<typeof FootballSub>): FootballState {
+function applySub(
+  state: FootballState,
+  payload: z.infer<typeof FootballSub>,
+  ctx?: FoldContext,
+): FootballState {
   if (!isPlayPhase(state.phase)) {
     wrongPhase(`substitution not allowed in phase "${state.phase}"`);
   }
   const side = sideOf(state, payload.by);
   const squad = state.squads[side];
   const rolling = state.cfg.rollingSubs === true;
-  if (!squad.onPitch.includes(payload.off)) {
-    invalid(`"${payload.off}" is not on the pitch`, { off: payload.off });
-  }
-  if (!squad.bench.includes(payload.on)) {
-    invalid(`"${payload.on}" is not an available bench player`, { on: payload.on });
-  }
-  // W4 (Law 3) — the cap counts substitutions made, which is exactly the
-  // length of offUsed. Rolling substitutions are uncapped by definition, so
-  // the cap only bites on the return-forbidden path.
-  if (!rolling && state.cfg.maxSubs !== undefined && squad.offUsed.length >= state.cfg.maxSubs) {
-    invalid(`"${payload.by}" has used all ${state.cfg.maxSubs} substitutions`, {
-      by: payload.by,
-      maxSubs: state.cfg.maxSubs,
-    });
+  // S3/W4b (#426) — THE VERDICT IS THE KERNEL'S, for both vocabularies.
+  //
+  // Everything this block used to spell out itself — is `off` on the field, is
+  // `on` someone this side may bring on, has this side already come back once,
+  // has it spent its allowance — is one reducer now, the same one
+  // `core.lineup.substitution` goes through. `football.sub` survives unchanged
+  // on the wire (the frozen corpora contain it), and only what its fold CALLS
+  // has moved.
+  //
+  // THE POLICY IS THE STRICT/REPLAY SEAM, exactly as in the fold kernel: a
+  // scorer entering a substitution now is held to the variant's own rules, and
+  // a substitution already in the ledger is replayed against the permissive
+  // policy. A cfg-derived refusal on the read path would mean an organiser
+  // lowering `maxSubs`, or switching a competition off rolling substitutions,
+  // made every already-scored fixture in that division unreadable — with no
+  // event to void, because the substitution was legal when it was made.
+  const verdict = reduceLineupEvent(
+    liftSquads(state),
+    {
+      type: "core.lineup.substitution",
+      payload: {
+        side: payload.by,
+        off: payload.off,
+        // `slot`/`orderNo` are structural filler: the person is already in the
+        // lifted squad, so `bringOn` matches on `personId` and never reads them.
+        // No `positionKey` — a `football.sub` does not state one (see liftSide).
+        on: { personId: payload.on, slot: "bench" as const, orderNo: 1 },
+      },
+    },
+    isStrictFold(ctx) ? lineupPolicy(state.cfg) : REPLAY_LINEUP_POLICY,
+  );
+  if (!verdict.ok) {
+    invalid(verdict.message, { by: payload.by, reason: verdict.reason });
   }
   // W4a (#425) §5.2 (Law 3) — substitution WINDOWS. The Law counts the
   // stoppages a side substitutes at, not the players it substitutes: five subs
@@ -960,7 +1047,7 @@ function applySub(state: FootballState, payload: z.infer<typeof FootballSub>): F
     }
   }
   const onPitch = [...squad.onPitch.filter((id) => id !== payload.off), payload.on];
-  const base: SquadState = rolling
+  const base: FootballSquad = rolling
     ? // Repeat substitution: the player who came off rejoins the bench and may
       // re-enter, so nothing lands in offUsed.
       { ...squad, onPitch, bench: [...squad.bench.filter((id) => id !== payload.on), payload.off] }
@@ -972,7 +1059,7 @@ function applySub(state: FootballState, payload: z.infer<typeof FootballSub>): F
       };
   // Absent until the first STAMPED substitution — `base` already carries the
   // key when the squad had one, so an unstamped stream never grows it.
-  const next: SquadState = subWindows === undefined ? base : { ...base, subWindows };
+  const next: FootballSquad = subWindows === undefined ? base : { ...base, subWindows };
   return { ...state, squads: { ...state.squads, [side]: next } };
 }
 
@@ -1077,7 +1164,7 @@ function applySinBinStart(
   const side = sideOf(state, payload.by);
   const squad = state.squads[side];
   const bin = squad.sinBin ?? [];
-  const withSquad = (next: SquadState): FootballState => ({
+  const withSquad = (next: FootballSquad): FootballState => ({
     ...state,
     squads: { ...state.squads, [side]: next },
   });
@@ -1344,16 +1431,154 @@ function positionsFor(cfg: FootballCfg): PositionCatalog {
 // Module
 // ---------------------------------------------------------------------------
 
-function squadFromLineup(lineup: LineupPair["home"]): SquadState {
-  const starting = lineup.slots
-    .filter((slot) => slot.slot === "starting")
-    .sort((a, b) => a.orderNo - b.orderNo)
-    .map((slot) => slot.personId);
-  const bench = lineup.slots
-    .filter((slot) => slot.slot === "bench")
-    .sort((a, b) => a.orderNo - b.orderNo)
-    .map((slot) => slot.personId);
-  return { onPitch: starting, bench, offUsed: [], sentOff: [] };
+// ---------------------------------------------------------------------------
+// The lineup seam (S3/W4b, #426) — everything football says about who may take
+// the field, said ONCE, to the kernel.
+// ---------------------------------------------------------------------------
+
+/**
+ * What THIS VARIANT permits a lineup to do. The three owner rulings of
+ * 2026-08-09, all as cfg and none as a per-sport constant:
+ *
+ *  - **Re-entry** (ruling 2). Law 3.3 forbids a substituted player to return;
+ *    the FA youth and small-sided/futsal dispensations that share this module
+ *    are rolling. `Cfg.rollingSubs` already said which, and it said it to a
+ *    private `bench.includes(on)` test — this is the same fact, said to the one
+ *    reducer every sport shares.
+ *  - **The cap** (Law 3). Never applied under `rollingSubs`, which is uncapped
+ *    by definition, exactly as before this wave.
+ *  - **Growth** (ruling 1) is OFF, and football loses nothing by it: every
+ *    football substitute comes off a pre-named bench, so a lineup event naming
+ *    a person the team sheet never had is a mistake, not a concussion call-up.
+ *  - **Exemptions** are declared, never inferred: the IFAB concussion trial and
+ *    only when the competition has adopted it (`Cfg.concussionSubs`). An
+ *    undeclared key is refused, which is what stops a pad evading the cap by
+ *    inventing one.
+ */
+function lineupPolicy(cfg: FootballCfg): LineupPolicy {
+  const rolling = cfg.rollingSubs === true;
+  return {
+    reentry: rolling ? "unlimited" : "none",
+    reentryPositionLock: false,
+    allowSquadGrowth: false,
+    ...(rolling || cfg.maxSubs === undefined ? {} : { maxSubs: cfg.maxSubs }),
+    ...(cfg.concussionSubs === undefined
+      ? {}
+      : { exemptions: { concussion: { max: cfg.concussionSubs } } }),
+  };
+}
+
+/** Football's flattened view of a kernel side, as `init` writes it. Ordered by
+ *  the team sheet's `orderNo` — the order every frozen stream recorded. */
+function initialFootballSquad(side: SideSquad): FootballSquad {
+  const byOrder = [...playingSquad(side)].sort((a, b) => a.orderNo - b.orderNo);
+  return {
+    onPitch: byOrder.filter((m) => m.onField).map((m) => m.personId),
+    bench: byOrder.filter((m) => !m.onField).map((m) => m.personId),
+    offUsed: [],
+    sentOff: [],
+  };
+}
+
+/**
+ * Re-project football's squad after the KERNEL has accepted a `core.lineup.*`
+ * event (the `onLineup` hook).
+ *
+ * Written as a DELTA against what football already had rather than as a
+ * wholesale overwrite, and that is load-bearing in both directions:
+ *
+ *  - the kernel does not model a sending-off or a temporary dismissal, so an
+ *    overwrite would put a red-carded player back on the pitch at the next
+ *    substitution;
+ *  - the kernel never sees a legacy `football.sub` (it is a module event), so an
+ *    overwrite would also undo one.
+ *
+ * The delta is exactly "who did the kernel take off, and who did it put on",
+ * which is derivable from the kernel members alone: a player it took off is off
+ * the field with `timesOff > 0`, and a player it put on is on the field and was
+ * not on football's pitch.
+ */
+function mergeFromKernel(prev: FootballSquad, side: SideSquad, rolling: boolean): FootballSquad {
+  const known = new Map(playingSquad(side).map((m) => [m.personId, m] as const));
+  const held = new Set([
+    ...prev.sentOff,
+    ...prev.offUsed,
+    ...(prev.sinBin ?? []).flatMap((entry) => (entry.person === undefined ? [] : [entry.person])),
+  ]);
+  const tookOff = prev.onPitch.filter((person) => {
+    const member = known.get(person);
+    return member !== undefined && !member.onField && member.timesOff > 0;
+  });
+  const broughtOn = onFieldPersons(side).filter(
+    (person) => !prev.onPitch.includes(person) && !held.has(person),
+  );
+  const off = new Set(tookOff);
+  const on = new Set(broughtOn);
+  const exemptUsed = Object.keys(side.exemptUsed).length === 0 ? prev.exemptUsed : side.exemptUsed;
+  return {
+    // Spread FIRST so the recorded key order is untouched and football's own
+    // fields (sentOff, sinBin, subWindows, sinBinLog) survive verbatim.
+    ...prev,
+    onPitch: [...prev.onPitch.filter((person) => !off.has(person)), ...broughtOn],
+    // Rolling substitution puts the player who came off back on the BENCH; the
+    // return-forbidden variant puts him in `offUsed`. Same split `applySub`
+    // makes, from the same `Cfg.rollingSubs`.
+    bench: [...prev.bench.filter((person) => !on.has(person)), ...(rolling ? tookOff : [])],
+    offUsed: rolling ? prev.offUsed : [...prev.offUsed, ...tookOff],
+    ...(exemptUsed === undefined ? {} : { exemptUsed }),
+  };
+}
+
+/**
+ * Football's squad, expressed in the kernel's vocabulary, so that a legacy
+ * `football.sub` is judged by the SAME reducer a `core.lineup.substitution` is.
+ *
+ * This is the fork-killer. `football.sub` cannot be deleted — the frozen
+ * corpora contain it — so the two vocabularies coexist, and the only way they
+ * cannot drift is that neither owns the rule. `football.lineup.test.ts` holds
+ * them to the same NUMBER of permitted substitutions rather than to "each
+ * works", because two implementations that each work is exactly what the last
+ * three placer/verifier bugs looked like.
+ *
+ * POSITIONS ARE DELIBERATELY ABSENT from the lift: `football.sub` names no
+ * position, so inventing one here would let `personsAtPosition` answer from a
+ * fact nobody recorded — the `DisciplineCard.entrantSide` shape. Positions come
+ * from the kernel's own squads, which the fold carries and returns.
+ */
+function liftSide(state: FootballState, side: Side): SideSquad {
+  const squad = state.squads[side];
+  const exempt = Object.values(squad.exemptUsed ?? {}).reduce((total, n) => total + n, 0);
+  let orderNo = 0;
+  const member = (personId: string, onField: boolean, timesOff: number): SquadMember => ({
+    personId,
+    role: "player",
+    provenance: "named",
+    orderNo: (orderNo += 1),
+    onField,
+    started: false,
+    timesOff,
+    timesOn: 0,
+  });
+  const gone = squad.offUsed.filter(
+    (person) => !squad.onPitch.includes(person) && !squad.bench.includes(person),
+  );
+  return {
+    entrantId: state.entrants[side],
+    members: [
+      ...squad.onPitch.map((person) => member(person, true, 0)),
+      ...squad.bench.map((person) => member(person, false, 0)),
+      ...gone.map((person) => member(person, false, 1)),
+    ],
+    // The cap counts ORDINARY substitutions. An exempt replacement is in
+    // `offUsed` too (it is permanent), so it has to be subtracted back out or
+    // the exemption would spend the allowance it exists to sit outside.
+    subsUsed: Math.max(0, squad.offUsed.length - exempt),
+    exemptUsed: squad.exemptUsed ?? {},
+  };
+}
+
+function liftSquads(state: FootballState): KernelSquads {
+  return { home: liftSide(state, "home"), away: liftSide(state, "away") };
 }
 
 // The event dispatch, unchanged since W4. It is lifted out of `apply` so that
@@ -1361,7 +1586,11 @@ function squadFromLineup(lineup: LineupPair["home"]): SquadState {
 // dispatch, sweep again for the one release case, record `asOf` — rather than
 // threading a stamp through every branch. The switch returning directly is what
 // made post-processing impossible before.
-function applyEvent(state: FootballState, ev: EventEnvelope<FootballEv | CoreEv>): FootballState {
+function applyEvent(
+  state: FootballState,
+  ev: EventEnvelope<FootballEv | CoreEv>,
+  ctx?: FoldContext,
+): FootballState {
   switch (ev.type) {
     case "core.start":
       if (state.phase !== "pre") wrongPhase("already started");
@@ -1371,7 +1600,7 @@ function applyEvent(state: FootballState, ev: EventEnvelope<FootballEv | CoreEv>
     case "football.card":
       return applyCard(state, parsePayload(FootballCard, ev.payload, ev.type));
     case "football.sub":
-      return applySub(state, parsePayload(FootballSub, ev.payload, ev.type));
+      return applySub(state, parsePayload(FootballSub, ev.payload, ev.type), ctx);
     case "football.period":
       return applyPeriod(state, parsePayload(FootballPeriod, ev.payload, ev.type));
     case "football.shootout.kick":
@@ -1420,6 +1649,14 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
   },
 
   init(cfg, lineups: LineupPair): FootballState {
+    // S3/W4b (#426) — ONE construction of the squad, the kernel's. The private
+    // `squadFromLineup` this replaces read every slot's `positionKey` and threw
+    // it away on the next line, which is why "who is in goal" was unanswerable
+    // from any folded football state. `initSquads` keeps it, and the fold
+    // carries the result (`foldMatchWithStoppage(...).squads`, `ctx.squads`);
+    // what lands in `State` is the flattened projection below, byte-identical
+    // to what every frozen stream recorded.
+    const squads = initSquads(lineups);
     return {
       cfg,
       entrants: { home: lineups.home.entrantId, away: lineups.away.entrantId },
@@ -1427,10 +1664,38 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
       goals: { home: 0, away: 0 },
       periods: [],
       cards: [],
-      squads: { home: squadFromLineup(lineups.home), away: squadFromLineup(lineups.away) },
+      squads: {
+        home: initialFootballSquad(squads.home),
+        away: initialFootballSquad(squads.away),
+      },
       shootout: null,
       outcome: null,
       replayFlagged: false,
+    };
+  },
+
+  // S3/W4b (#426) — football's lineup rules, declared once (see lineupPolicy).
+  lineupPolicy,
+
+  /**
+   * S3/W4b (#426) — the kernel has accepted a `core.lineup.*` event; football
+   * moves its own pitch to match.
+   *
+   * Without this the two vocabularies would be mute to each other: the kernel
+   * would have the substitute on the field and football would refuse his very
+   * next goal as "not on the pitch". Called once at `init` too, where it is a
+   * no-op by construction — `init` builds its projection from the same
+   * `initSquads` — which is what stops football's State and the kernel's
+   * SquadState being two constructions of one fact.
+   */
+  onLineup(state, squads): FootballState {
+    const rolling = state.cfg.rollingSubs === true;
+    return {
+      ...state,
+      squads: {
+        home: mergeFromKernel(state.squads.home, squads.home, rolling),
+        away: mergeFromKernel(state.squads.away, squads.away, rolling),
+      },
     };
   },
 
@@ -1475,7 +1740,7 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
     // — so that one applies first and sweeps after.
     const sweepsFirst = at !== null && ev.type !== "football.sinbin.end";
     const base = sweepsFirst ? sweepExpired(state, at) : state;
-    const applied = applyEvent(base, ev);
+    const applied = applyEvent(base, ev, ctx);
     if (at === null) return applied;
     const swept = ev.type === "football.sinbin.end" ? sweepExpired(applied, at) : applied;
     // §6 obligation 3 — as of when everything above is true.
