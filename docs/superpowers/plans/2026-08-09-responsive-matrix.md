@@ -241,6 +241,18 @@ git commit -m "docs+test: tablet verdict table, width-branch phone-only assertio
 
 ---
 
+### Task 4b (added during execution): re-point the dead console-gate routes
+
+Discovered in Task 4, confirmed in its review: six entries in the `mobile.spec.ts` "console routes" array still target the legacy id-routes deleted by e8bed930 (`/competitions/{id}`, `/competitions/{id}/settings`, `/divisions/{id}`, `/divisions/{id}?tab=fixtures`, `/divisions/{id}?tab=standings`, `/divisions/{id}/registrations`). They 404, and a 404 page has no overflow — the gate passes vacuously on a third of the console inventory, at every width, since before this wave began.
+
+**Files:**
+- Modify: `apps/web/e2e/mobile.spec.ts` (the six route strings → their `/o/{orgSlug}/c/{compSlug}/…` slug-chain equivalents, as already derived by Task 4's screenshot script)
+- Modify: whatever components the newly-real routes red at any of the seven widths (Task 3 fix classes only)
+
+**Steps:** re-point the six routes (a 404 must FAIL the audit henceforth — add a response-status assertion to `auditRoute` so a dead route can never pass silently again); run all seven viewport projects + desktop `parallel`; fix fallout within the approved classes; screenshots of any fixed surface to `/tmp/349/`; commit.
+
+---
+
 ### Task 5: Verdict-D fixes — `md:` density band
 
 **Files:**
