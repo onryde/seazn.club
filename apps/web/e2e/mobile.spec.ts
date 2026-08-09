@@ -166,7 +166,7 @@ test("news (SPEC-2): feed + post page hold at mobile width", async ({ page, brow
   );
   const postSlug = pub.data!.slug;
 
-  const anonCtx = await browser.newContext();
+  const anonCtx = await browser.newContext({ viewport: projectViewport() ?? undefined });
   try {
     const anon = await anonCtx.newPage();
     await anon.goto(`/shared/${orgSlug}/news`, { waitUntil: "load" });
