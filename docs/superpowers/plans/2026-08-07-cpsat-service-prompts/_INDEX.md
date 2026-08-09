@@ -90,7 +90,29 @@ compaction-proof summary. Keep them in step.
 | 11 | E2E + smoke coverage | not started — **brief written** |
 | 08 | Deployment (Dockerfile, fly.toml) | not started |
 | 09 | CI workflow | not started |
-| 10 | Remove BUILD/POLISH's z3 code | **blocked** — do not start until 01-09 and 11 are live in production for one full deploy cycle |
+| 10 | Remove BUILD/POLISH's z3 code | **blocked** — 01-09 and 11 live in production for one full deploy cycle, **AND the per-court-grid gap closed** (see below) |
+
+### Prompt 10 has a second gate now: the per-court-grid capability gap
+
+Prompt 05c found that CP-SAT was placing fixtures at start times the
+court did not offer — measured 6/6 with `C0` at `{T, T+40}` and `C1` at
+`{T+40}`, a fixture landed on `C1` at `T`. The board was wrong, and the
+TS verifier rejected it afterwards.
+
+The ACL now requires every court to offer identical start times, so those
+boards are **refused rather than mis-scheduled**. That is strictly better
+— but it means **CP-SAT refuses a shape z3 accepts**, and
+`Blackout.court?` (`calendar.ts:21`) makes that shape reachable from
+ordinary org data.
+
+**So z3 cannot be removed while this holds.** Removing it would leave any
+org with a per-court blackout permanently on the greedy fallback.
+
+The fix is specified but deliberately not built: an enforced per-court
+start domain in the model, free on homogeneous boards. It was left out of
+05c because it is in the solver hot path, was not asked for, and needs
+its own timing case. Closing it is a prerequisite for Prompt 10, not
+optional cleanup.
 
 Tasks 01-04 were re-audited on 2026-08-09 at the owner's request (four
 parallel Opus reviewers, mutation-first, one per task). Suite at that

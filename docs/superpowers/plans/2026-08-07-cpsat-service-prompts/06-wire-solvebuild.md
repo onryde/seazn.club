@@ -188,13 +188,40 @@ you: you must disambiguate names before sending, not after. A caller that
 passes `config.courts` straight through will start failing for any org
 whose court names repeat across venues.
 
-**5. Every court you declare must be referenced by at least one slot.**
-A declared court with no slots is not inert — measured 6/6, `courts=["C0","C1"]`
-with one slot on `C0` returns **OPTIMAL, placed=2, with a fixture on
-`C1`**, a court that has nowhere to play. This is reachable from real
-data: `Blackout.court?` (`calendar.ts:21`) via `build.ts:1752` is exactly
-how a court loses all its slots. Filter the court list to those the grid
-actually covers.
+**5. Every court must offer the SAME start times — and this one changes
+what boards you can send at all.**
+
+The first version of this obligation said "every declared court must be
+referenced by at least one slot". That was too weak. A slotless court is
+only the extreme point of a continuous family: measured 6/6, with `C0`
+offering `{T, T+40}` and `C1` offering only `{T+40}`, a fixture is still
+placed on **`C1` at `T`** — a time that court does not have. Filtering out
+slotless courts would have closed the visible case and left the family
+open.
+
+So the ACL now requires every court to offer identical start times, and
+**per-court grids are refused, not mis-scheduled**. `Blackout.court?`
+(`calendar.ts:21`) via `build.ts:1752` is exactly how a real board gets a
+per-court grid, so this is reachable from ordinary data, not a synthetic
+edge case.
+
+**What you must do with such a board is a decision this prompt owns.**
+The honest options are to filter the blackout so every court shares one
+grid, or to route the board to greedy. Do not send it and hope. Whichever
+you choose, say so in your report and cover it with a test — an org with
+a per-court blackout must not silently get a worse board with no signal.
+
+Context for that choice: before this change those boards were **already
+wrong**, just quietly — CP-SAT placed matches at times the court did not
+offer, and the TS verifier rejected the board afterwards. Refusal is
+strictly better than that. It is still a capability gap against z3, and
+it is tracked as a **Prompt 10 blocker**: z3 cannot be removed while
+CP-SAT refuses boards z3 handles.
+
+**6. `entrant_ids` must be unique within a fixture.** `["e1","e1"]`
+returns **OPTIMAL with `placed=0`** and no error — the fixture joins its
+own participant group twice and `AddNoOverlap` then makes it unplaceable.
+Now rejected at the ACL.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
