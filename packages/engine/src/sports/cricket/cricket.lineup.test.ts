@@ -30,12 +30,13 @@ import { EngineError } from "../../core/errors.ts";
 import {
   foldMatch,
   foldMatchWithStoppage,
+  type CoreEv,
   type EventEnvelope,
 } from "../../core/events.ts";
 import { memberOf, onFieldPersons, type SquadState } from "../../core/lineup.ts";
 import type { LineupPair } from "../../core/types.ts";
 import { makeEnvelope } from "../../testkit/index.ts";
-import { cricket, type CricketCfg } from "./cricket.ts";
+import { cricket, type CricketCfg, type CricketEv } from "./cricket.ts";
 
 // Every fold here is PAD-SHAPED — building a stream event by event, which is
 // the write path — so the whole stream is strict and a cfg-derived refusal is
@@ -520,9 +521,14 @@ describe("coarsen — a lineup event survives the fidelity drop", () => {
     ball(2, "H-1", "H-2", bowled("H-1", "H-12")),
     ball(3, "H-12", "H-2", { runs: { bat: 4 }, boundary: 4 }),
   );
+  // Same shape conformance's §9.6 property uses: `coarsen` is optional on the
+  // interface, and generator envelopes carry `unknown` payloads while the
+  // module declares its own union. The receiver is supplied explicitly by
+  // `.call`, so the extracted reference is never unbound.
+  const coarsen = cricket.coarsen as NonNullable<typeof cricket.coarsen>;
   const coarse = stream(
-    ...cricket
-      .coarsen(events.map((event) => ({ type: event.type, payload: event.payload })))
+    ...coarsen
+      .call(cricket, events as readonly EventEnvelope<CricketEv | CoreEv>[])
       .map((event) => [event.type, event.payload] as [string, unknown]),
   );
 
