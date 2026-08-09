@@ -9,6 +9,7 @@
 // the pin/undo affordances predate v3 and stay.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { gridStepMinutes } from "@seazn/engine/scheduling/grid-step";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { Tip } from "@/components/ui/tip";
 import { apiV1 } from "@/lib/client-v1";
@@ -859,7 +860,19 @@ export function ScheduleBoard({
   );
 
   // ------------------------------------------------------------ grid math
-  const slotMinutes = cfg.matchMinutes + cfg.gapMinutes;
+  // THE SOLVER'S OWN STEP, imported rather than re-derived. This used to be
+  // `cfg.matchMinutes + cfg.gapMinutes`, which on a 30/10 board draws a
+  // 40-minute row over the 10-minute lattice `buildGrid` actually searches:
+  // matches placed at 09:10 and 09:20 both land in the 09:00 row and stack in
+  // one cell. See `grid-step.ts` — it is a leaf module precisely so the board
+  // can import it without pulling the solvers into this bundle.
+  const slotMinutes = gridStepMinutes(cfg.matchMinutes, cfg.gapMinutes);
+  // `cfg` is a stored JSONB blob, so a legacy row can be missing either field
+  // outright. `gridStepMinutes` absorbs that for the STEP; the occupancy math
+  // below needs the same guarantee, because one `NaN` there makes `gridTo` NaN,
+  // `daySlots` returns zero rows, and the organiser gets a blank grid over a
+  // fully scheduled board with no error anywhere.
+  const matchMinutes = Number.isFinite(cfg.matchMinutes) ? cfg.matchMinutes : slotMinutes;
   const dayFixtures = scheduled.filter((f) => dayKey(f.scheduled_at as string) === day);
   // Ghosts on this day drive the grid layout while a proposal is on screen.
   const dayGhosts = ghosts ? ghosts.filter((g) => dayKey(new Date(g.at).toISOString()) === day) : null;
@@ -871,7 +884,7 @@ export function ScheduleBoard({
   const gridFrom = times.length > 0 ? Math.min(...times, dayStartDefault) : dayStartDefault;
   const gridTo =
     times.length > 0
-      ? Math.max(...times.map((t) => t + cfg.matchMinutes * MIN), Math.min(dayEndDefault, gridFrom + 8 * 60 * MIN))
+      ? Math.max(...times.map((t) => t + matchMinutes * MIN), Math.min(dayEndDefault, gridFrom + 8 * 60 * MIN))
       : dayEndDefault;
   const slots = daySlots(gridFrom, gridTo, slotMinutes);
 

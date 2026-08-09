@@ -2,6 +2,7 @@
 // server page (feed labels) and the client board (grid math); unit-testable
 // without React or a DB.
 import type { Conflict } from "@seazn/engine/scheduling";
+import { GRID_FLOOR_MINUTES } from "@seazn/engine/scheduling/grid-step";
 import type { ScheduleConflict } from "@/server/api-v1/schemas";
 
 // ---------------------------------------------------------------------------
@@ -97,10 +98,16 @@ export function dayKey(isoOrDate: string | Date): string {
 }
 
 /** Slot rows for a day grid: starts every `slotMinutes` from `fromMs` up to
- *  (and excluding) `toMs`. */
+ *  (and excluding) `toMs`.
+ *
+ *  `slotMinutes` is expected to come from `gridStepMinutes`, which already
+ *  applies this floor — the guard stays because a bad step here does not draw a
+ *  coarse grid, it draws NO grid (`t += NaN` never terminates the comparison)
+ *  or hangs the render (`t += 0`). It reads the engine's constant rather than
+ *  its own 5 so there is one definition of the finest legal step in the repo. */
 export function daySlots(fromMs: number, toMs: number, slotMinutes: number): number[] {
   const out: number[] = [];
-  const step = Math.max(5, slotMinutes) * 60_000;
+  const step = Math.max(GRID_FLOOR_MINUTES, slotMinutes) * 60_000;
   for (let t = fromMs; t < toMs; t += step) out.push(t);
   return out;
 }

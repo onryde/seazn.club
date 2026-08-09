@@ -64,18 +64,52 @@ export function BoardGrid({
   const columns: (string | null)[] = courts.length > 0 ? courts : [null];
   const showGhosts = ghosts != null;
 
+  // ROW HEIGHT TRACKS THE STEP (#datetime-ux prompt 05). Since the axis became
+  // the solver's real `gcd(match, gap)` lattice, the same day is 14 rows at a
+  // 60-minute step and 84 at a 10-minute one, so one fixed height cannot serve
+  // both: the coarse board's 40px row turns the fine one into ~3400px of mostly
+  // empty cells.
+  //
+  // IT TAKES BOTH CLASSES BELOW. The `td`'s own height is NOT what sets the row
+  // — measured, an empty cell's floor is the place-target button's `min-h-8`,
+  // so changing the `td` alone is inert and screenshots identically. Scaling
+  // one without the other is the trap here.
+  //
+  // Floored, never scaled linearly: at a 5-minute step a proportional row would
+  // be 3px. 24px is the floor because that is the WCAG 2.5.8 AA minimum target
+  // size, and the button is a real drop/tap target. Cells holding a card grow
+  // past either figure anyway — these are minimums.
+  const compact = slotMinutes < 30;
+  const rowHeight = compact ? "h-7" : "h-10";
+  const placeHeight = compact ? "min-h-6" : "min-h-8";
+  // At a fine step, labelling every row in full ("09:00 09:05 09:10 …") is
+  // noise that buries the anchors, so half-hour marks stay dark and the rows
+  // between them recede. A row that HOLDS something is always dark whatever the
+  // clock says: muting the one label the organiser is reading a card against
+  // was the first thing that went wrong when this was purely time-based.
+  const inRow = (at: number, t: number) => at >= t && at < t + slotMinutes * MIN;
+  const occupied = (t: number) =>
+    showGhosts
+      ? ghosts.some((g) => inRow(g.at, t))
+      : fixtures.some((f) => inRow(new Date(f.scheduled_at as string).getTime(), t));
+  const isMajor = (t: number) => new Date(t).getMinutes() % 30 === 0 || occupied(t);
+
   return (
-    <div className="scroll-x scroll-x-fade rounded-lg border border-slate-200 bg-white">
+    // Bounded VERTICALLY as well as horizontally: a fine step is legitimately
+    // dozens of rows, and letting them stretch the page scrolls the court
+    // headers off the top, which is the one thing a grid cannot afford. The
+    // header is sticky inside this container so it survives that scroll.
+    <div className="scroll-x scroll-x-fade max-h-[70vh] overflow-y-auto rounded-lg border border-slate-200 bg-white">
       <table className="w-full border-collapse text-xs" aria-label={msg("board.grid.aria", { day })}>
         <thead>
           <tr>
-            <th className="w-16 border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium text-slate-500">
+            <th className="sticky top-0 z-10 w-16 border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium text-slate-500">
               {msg("board.grid.time")}
             </th>
             {columns.map((c) => (
               <th
                 key={c ?? UNASSIGNED}
-                className="min-w-36 border-b border-l border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium text-slate-600"
+                className="sticky top-0 z-10 min-w-36 border-b border-slate-200 border-l bg-slate-50 px-2 py-2 text-left font-medium text-slate-600"
               >
                 {c ?? msg("board.grid.unassignedCol", { venue: venueCap.toLowerCase() })}
               </th>
@@ -85,7 +119,11 @@ export function BoardGrid({
         <tbody>
           {slots.map((t) => (
             <tr key={t}>
-              <td className="border-b border-slate-100 px-2 py-1 align-top text-slate-500">
+              <td
+                className={`border-b border-slate-100 px-2 py-1 align-top tabular-nums ${
+                  isMajor(t) ? "text-slate-500" : "text-slate-300"
+                }`}
+              >
                 {timeLabel(t)}
               </td>
               {columns.map((court) => {
@@ -101,7 +139,7 @@ export function BoardGrid({
                 return (
                   <td
                     key={court ?? UNASSIGNED}
-                    className="h-10 border-b border-l border-slate-100 px-1 py-0.5 align-top"
+                    className={`${rowHeight} border-b border-l border-slate-100 px-1 py-0.5 align-top`}
                     onDragOver={canEdit && !showGhosts ? (e) => e.preventDefault() : undefined}
                     onDrop={
                       canEdit && !showGhosts
@@ -141,7 +179,7 @@ export function BoardGrid({
                             ? msg("board.grid.placeAriaCourt", { time: timeLabel(t), court })
                             : msg("board.grid.placeAriaUnassigned", { time: timeLabel(t) })
                         }
-                        className={`h-full min-h-8 w-full rounded text-[10px] transition ${
+                        className={`h-full ${placeHeight} w-full rounded text-[10px] transition ${
                           pickedId
                             ? "border border-dashed border-purple-300 text-purple-600 hover:border-purple-500 hover:bg-purple-50 focus-visible:border-purple-500 focus-visible:bg-purple-50"
                             : "text-transparent focus-visible:border focus-visible:border-dashed focus-visible:border-purple-300 focus-visible:text-purple-600"
