@@ -25,6 +25,7 @@ import {
 } from "@/lib/zoned-datetime";
 import type { BoardConfig } from "./types";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
+import { Tip } from "@/components/ui/tip";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { pluralizeVenue } from "@/lib/venue";
 
@@ -291,13 +292,36 @@ export function SettingsPanel({
           <input type="number" min={0} inputMode="numeric" value={gapMinutes} onChange={(e) => setGapMinutes(Number(e.target.value))} className="input w-full" disabled={!canEdit} />
           <span className="mt-0.5 block text-xs text-slate-400">{msg("boardset.gapHint", { venue })}</span>
         </label>
-        <label className="block">
-          <span className="label">{msg("boardset.rest")}</span>
-          <input type="number" min={0} inputMode="numeric" value={rest} onChange={(e) => setRest(Number(e.target.value))} className="input w-full" disabled={!canEdit || constrained} />
-          <span className="mt-0.5 block text-xs text-slate-400">
+        {/* A <div> with an explicit htmlFor rather than a wrapping <label>:
+            `Tip` renders a <button>, and a button inside a <label> forwards its
+            click to the control. Same shape the constraints panel's copy of
+            this field uses. The other fields in this grid keep their wrapping
+            label — only this one hosts a tip. */}
+        <div className="block">
+          <span className="label flex items-center gap-1">
+            {/* Literal ids, not `useId()`: the hand-rolled dispatcher in
+                `_hook-harness.tsx` does not implement useId, so it throws
+                `resolveDispatcher(...).useId is not a function` and reds five
+                unrelated datetime suites. A duplicate is unreachable today —
+                the division route forces `showSettings={false}` and the
+                competition route mounts one `SettingsPanel`. */}
+            <label htmlFor="boardset-rest">{msg("boardset.rest")}</label>
+            {/* Same tip id as the Constraints tab's field. Both write a
+                DIFFERENT stored value for one idea and the engine resolves
+                them with MAX (`effectiveRestMinutes`, #459), so the losing
+                field otherwise looks broken — type 10 beside a 30 and nothing
+                changes, with nothing on screen saying why. */}
+            <Tip id="schedule.min-rest" small />
+          </span>
+          {/* The hint used to sit INSIDE the wrapping <label>, so it formed part
+              of the input's accessible name. Splitting the label out to host the
+              tip would have dropped it entirely; `aria-describedby` keeps it, and
+              as a description rather than a name — which is what it always was. */}
+          <input id="boardset-rest" aria-describedby="boardset-rest-hint" type="number" min={0} inputMode="numeric" value={rest} onChange={(e) => setRest(Number(e.target.value))} className="input w-full" disabled={!canEdit || constrained} />
+          <span id="boardset-rest-hint" className="mt-0.5 block text-xs text-slate-400">
             {msg("boardset.restHint")}{constrained ? msg("boardset.proSuffix") : ""}
           </span>
-        </label>
+        </div>
       </div>
 
       <div>

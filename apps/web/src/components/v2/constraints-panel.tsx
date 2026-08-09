@@ -329,15 +329,31 @@ export function ConstraintsPanel({
           />
         </label>
 
-        <label className="flex flex-col items-start gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
+        {/* A <div> with an explicit htmlFor, not a wrapping <label> — the same
+            shape the field-fairness row below uses, and for the same reason:
+            `Tip` renders a <button>, and a button inside a <label> forwards its
+            click to the control. Association stays real via the id. */}
+        <div className="flex flex-col items-start gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
           <span className="min-w-0">
-            <span className="block text-sm text-slate-800">Minimum rest</span>
-            <span className="mt-0.5 block text-xs text-slate-400">
-              Breathing room between one entrant&apos;s matches.
+            <label htmlFor="rest-min" className="block text-sm text-slate-800">
+              {msg("constraints.restMin.label")}
+            </label>
+            {/* The hint and the unit used to sit INSIDE the wrapping <label>,
+                so both fed the input's accessible name. Splitting the label out
+                to host the tip would have dropped them; `aria-describedby` keeps
+                them, as a description rather than a name. Literal ids match the
+                `ff-select` row below — this panel has one call site. */}
+            <span id="rest-min-hint" className="mt-0.5 block text-xs text-slate-400">
+              {msg("constraints.restMin.hint")}
             </span>
           </span>
           <span className="flex shrink-0 items-center gap-2 text-sm text-slate-500">
+            {/* Same tip id as the Settings tab's field: one wording for one
+                idea, so the two tabs cannot drift apart. */}
+            <Tip id="schedule.min-rest" className="shrink-0" small />
             <input
+              id="rest-min"
+              aria-describedby="rest-min-hint rest-min-unit"
               type="number"
               min={0}
               inputMode="numeric"
@@ -348,9 +364,9 @@ export function ConstraintsPanel({
                 void save({ ...constraints, restMin: Math.max(0, Number(e.target.value)) })
               }
             />
-            min
+            <span id="rest-min-unit">{msg("constraints.restMin.unit")}</span>
           </span>
-        </label>
+        </div>
 
         <label className="flex flex-col items-start gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
           <span className="min-w-0">
