@@ -17,6 +17,13 @@ import {
 // (v3/11 gaps 11, 12, 15).
 test.describe.configure({ mode: "serial" });
 
+/** The viewport this PROJECT declares. Raw `browser.newContext()` does not
+ *  inherit project `use` options, so every anon context must thread this
+ *  through explicitly or it silently runs at Playwright's 1280×720 default. */
+const projectViewport = (): { width: number; height: number } | null =>
+  (test.info().project.use as { viewport?: { width: number; height: number } })
+    .viewport ?? null;
+
 // The check that guards every other 375px assertion in this file. It compared
 // document.scrollWidth against clientWidth, which `overflow-x: clip`
 // (globals.css:63) pins to the viewport — so a 525px overflow read as clean.
@@ -123,7 +130,7 @@ test("console routes: no horizontal scroll", async ({ page }) => {
 
 test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser }) => {
   // Anonymous context — public pages must hold without the authed shell.
-  const anonCtx = await browser.newContext();
+  const anonCtx = await browser.newContext({ viewport: projectViewport() ?? undefined });
   try {
     const anon = await anonCtx.newPage();
     const routes = [
@@ -266,7 +273,12 @@ async function measureLcp(page: Page, path: string): Promise<number> {
 test("LCP < 2.5s on Fast-3G: public dashboard + registration (v3/11 gap 15)", async ({
   browser,
 }) => {
-  const anonCtx = await browser.newContext();
+  const vp = projectViewport();
+  test.skip(
+    !vp || (vp.width !== 375 && vp.width !== 390),
+    "LCP gates load perf at the phone reference widths only (spec §1); layout is gated by every project",
+  );
+  const anonCtx = await browser.newContext({ viewport: projectViewport() ?? undefined });
   try {
     const anon = await anonCtx.newPage();
     for (const path of [`/shared/${orgSlug}/${compSlug}`, `/shared/${orgSlug}/${compSlug}/register`]) {
@@ -385,7 +397,9 @@ test("the publish gate's confirm sheet holds at phone width", async ({ page, req
     expect(box, `${id} has no box`).not.toBeNull();
     expect(box!.height, `${id} touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
   }
-  await page.screenshot({ path: "test-results/publish-gate-sheet-375.png" });
+  await page.screenshot({
+    path: `test-results/publish-gate-sheet-${test.info().project.name}.png`,
+  });
 
   // And it works from here — a sheet that renders but cannot be confirmed on a
   // phone is the same dead end in a nicer wrapper.
