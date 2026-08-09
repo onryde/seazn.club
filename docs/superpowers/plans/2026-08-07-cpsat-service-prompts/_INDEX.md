@@ -82,8 +82,8 @@ compaction-proof summary. Keep them in step.
 | 03 | T0-T3 objective chain | **complete** — `eee3a590..f64235e6`, clean after 1 fix round |
 | 04 | gRPC server (auth, health, mapping) | **complete** — `f64235e6..f19605a6`, clean after 1 fix round |
 | 05 | TS codegen + client wrapper | **complete** — `f19605a6..b33ac2fb`, approved after 1 fix round |
-| 05b | Corpus + coverage hardening (Python tests) | in progress — must land before 05c |
-| 05c | Contract + boundary hardening | not started — brief written, held behind 05b |
+| 05b | Corpus + coverage hardening (Python tests) | **complete** — `b33ac2fb..a554961e`, clean after fix rounds |
+| 05c | Contract + boundary hardening | **fix round 5 of 5 — the last** — `a554961e..7bc75e15` then round 5; rebased to `acd33af8`. Round 4's re-review found invisible Cf characters pass `_require_id`'s `.strip()` canonicality check |
 | 06 | Wire `solveBuild` in `build.ts` | not started — **blocked on 05c** |
 | 06b | Status vocabulary translation | not started |
 | 07 | Integration tests (parity, regression, fallback) | not started |
@@ -117,6 +117,20 @@ optional cleanup.
 Tasks 01-04 were re-audited on 2026-08-09 at the owner's request (four
 parallel Opus reviewers, mutation-first, one per task). Suite at that
 point: 86 passed, 0 failed, exit 0.
+
+### Timing numbers on this box need a load reading beside them
+
+The production-board tests are **proof-time** tests, not placement tests,
+and they are the first thing to red under CPU contention. Measured on
+2026-08-09 at load average 139 (sibling sessions running full vitest from
+the main checkout): 7 failed. As load fell to ~12, with **no code
+change**, the same suite went to 1 failed and `test_objective.py` to
+19/19. Every failure carried `placed=37` of 37 — full placement, with
+only `tiers_completed` truncating from 4 to 2.
+
+So a red here is a moving target that tracks `uptime`, and it reads
+exactly like a real regression. Record a load reading beside any timing
+number, and never "fix" one of these by changing a timing constant.
 
 ## Parallel execution
 
