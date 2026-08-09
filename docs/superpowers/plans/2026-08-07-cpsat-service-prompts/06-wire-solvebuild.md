@@ -78,6 +78,20 @@ block with: build a `SolveBuildInput` from the function's existing
 computed earlier in the function, unchanged), call
 `cpsatClient.solveBuild(...)` with `wallSeconds` from the existing
 `wallMs` budget math, and on success map its
+`assignments`/`tiersCompleted`/`elapsedMs`/`wallExhausted` into the same
+local variables the rest of the function already expects before falling
+through to the existing `validateAssignments` call. On rejection (any
+error, including deadline-exceeded), fall through to the existing
+greedy-seed path exactly as today's z3-unavailable/gate-reject branches
+already do — reuse it, don't add a new fallback mechanism. Set
+`engine: "cp-sat"` (new literal, add it to `BuildResult["engine"]`'s
+type union alongside the existing `"greedy"`/`"z3"`/`"z3+lns"` — do not
+remove the old values yet, Prompt 10 does that).
+
+---
+
+Everything below was added after Prompts 05, 05b and 05c shipped. Step 4
+above is the task; these are the constraints it now has to satisfy.
 
 > **Signature correction (2026-08-09, after Task 5's fix round).**
 > `wallSeconds` goes on the **input**, NOT on `opts`. Task 5 originally
@@ -162,16 +176,6 @@ entries must be non-empty and unique. An empty court name is not an
 omitted court — the model gives it a real column and places matches on
 it (measured: two fixtures over one grid point place 2 with an empty
 string in `courts`, one of them on court `''`, and 1 without).
-
-`assignments`/`tiersCompleted`/`elapsedMs`/`wallExhausted` into the same
-local variables the rest of the function already expects before falling
-through to the existing `validateAssignments` call. On rejection (any
-error, including deadline-exceeded), fall through to the existing
-greedy-seed path exactly as today's z3-unavailable/gate-reject branches
-already do — reuse it, don't add a new fallback mechanism. Set
-`engine: "cp-sat"` (new literal, add it to `BuildResult["engine"]`'s
-type union alongside the existing `"greedy"`/`"z3"`/`"z3+lns"` — do not
-remove the old values yet, Prompt 10 does that).
 
 - [ ] **Step 5: Run tests to verify they pass**
 
