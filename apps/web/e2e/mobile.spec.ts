@@ -191,18 +191,24 @@ test("news (SPEC-2): feed + post page hold at mobile width", async ({ page, brow
   }
 });
 
-test("axe: no serious/critical violations on key surfaces (v3/11 gap 11)", async ({ page }) => {
+test("axe: no serious/critical violations on key surfaces (v3/11 gap 11)", async ({ page, request }) => {
   const routes = [
     "/dashboard",
-    `/competitions/${compId}`,
-    `/divisions/${divisionId}?tab=standings`,
+    // Were /competitions/{id} and /divisions/{id}?tab=standings — dead legacy
+    // id-routes that 404, so the scan below ran against a 404 page (#349).
+    // Re-pointed to the live /o/{org}/c/{comp}/... slug chain, mirroring the
+    // "console routes" test's fix for the same class of bug.
+    await competitionPath(request, compId),
+    await divisionPath(request, divisionId, "?tab=standings"),
     "/settings?tab=organization",
     "/settings/billing",
     `/o/${orgSlug}/c/${compSlug}/upgrade`,
     `/shared/${orgSlug}/${compSlug}`,
   ];
   for (const path of routes) {
-    await page.goto(path, { waitUntil: "load" });
+    const response = await page.goto(path, { waitUntil: "load" });
+    expect(response, `${path}: navigation produced no response`).not.toBeNull();
+    expect(response!.status(), `${path} returned ${response!.status()}`).toBeLessThan(400);
     await page.waitForTimeout(300);
     const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
     const blocking = results.violations.filter(
