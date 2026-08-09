@@ -50,9 +50,21 @@ a timestamp above 1e12. Two measured consequences:
    a package rename. An epoch-ms narrowing is invisible when every
    timestamp is zero.
 
-Change `EPOCH_MS` to a real epoch millisecond value —
-**`1767261600000`** (2026-01-01T10:00:00Z), the value the audits probed
-with. Use that exact number so future runs are comparable.
+Change `EPOCH_MS` to a real epoch millisecond value.
+
+> **CORRECTED after implementation — use `1_767_225_600_000`
+> (2026-01-01T**00:00**:00Z).** This brief originally specified
+> `1767261600000` (10:00Z), which was **wrong and dangerous**.
+> `build_board` opens session days at epoch+8h, so a 10:00Z base makes
+> every session day straddle UTC midnight and occupy TWO
+> `start_ms // DAY_MS` buckets — silently doubling every per-division day
+> cap. Measured: 27 buckets instead of 26, with 2 `d1` fixtures placed on
+> session day 0 against a cap of 1.
+> What makes it dangerous rather than merely wrong: **`test_model.py`'s
+> day-cap assertion still PASSES**, because it re-derives the same bucket.
+> A wrong corpus plus a self-consistent assertion is precisely the failure
+> this task exists to remove. The midnight alignment is now guarded by its
+> own test — do not remove it.
 
 Expect fallout and treat each one as information, not noise: anything
 that breaks was asserting on a zero-based accident. The production board
@@ -161,7 +173,9 @@ at all.
 Create `tests/test_bench_contract.py` asserting that `cpsat_bench`
 imports, that `production_board()` returns its 7-tuple, and — the point
 of the extraction — that the board the service tests against has the
-shape it claims: **37 fixtures, 5 courts**, 30/10 min match/gap. Today
+shape it claims: **37 fixtures, 5 courts**, **40/10** min match/gap (this
+brief originally said 30/10, which was stale — assert the real value).
+Today
 `test_model.py`'s docstring claims that and no assertion enforces it, so
 a bench experiment silently changes what the service is tested against.
 
