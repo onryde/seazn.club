@@ -6,7 +6,7 @@
 // interpretation, no board validation — `build.ts` owns all of that.
 import * as grpc from "@grpc/grpc-js";
 
-import type { ClientUnaryCall, ServiceError } from "@grpc/grpc-js";
+import type { ServiceError } from "@grpc/grpc-js";
 
 import { systemClock } from "../core/clock.ts";
 import type { Clock } from "../core/clock.ts";
@@ -18,11 +18,31 @@ import type {
 import { SchedulerServiceClient, SolveStatus } from "./generated/scheduler.ts";
 
 /**
- * The only part of the generated client this wrapper needs. Narrowing to the
- * single RPC is what lets tests inject a plain object instead of standing up a
- * channel.
+ * @internal The RPC seam, declared explicitly rather than `Pick`ed off the
+ * generated client so that nothing on the public surface is structurally tied
+ * to generated code. It is deliberately NOT a field on `SolveBuildOptions`:
+ * `build.ts` builds that object, and a wire-typed member on it would put
+ * generated types in the domain layer's type graph — the exact leak §2.2
+ * forbids, and one `grep "@grpc/grpc-js" build.ts` cannot see. Tests pass it as
+ * the third argument instead; production never supplies it.
  */
-export type SolveBuildCall = Pick<SchedulerServiceClientType, "solveBuild">;
+export interface SolveBuildCall {
+  solveBuild(
+    request: SolveBuildRequest,
+    metadata: grpc.Metadata,
+    options: Partial<grpc.CallOptions>,
+    callback: (error: ServiceError | null, response: SolveBuildResponse) => void,
+  ): // The started call, whose only use here is cancellation. Typed `unknown`
+  // rather than `ClientUnaryCall` so the seam does not drag a grpc handle type
+  // onto the surface for a capability probed at run time anyway.
+  unknown;
+}
+
+/** Best-effort cancellation of a started call; a seam need not return a handle. */
+function cancelCall(call: unknown): void {
+  const cancel = (call as { cancel?: unknown } | null | undefined)?.cancel;
+  if (typeof cancel === "function") cancel.call(call);
+}
 
 export interface SolveBuildInput {
   courts: string[];
@@ -49,13 +69,16 @@ export interface SolveBuildOutcome {
   error?: { code: string; message: string };
 }
 
+/**
+ * Transport configuration. Deliberately carries NO wall budget: that lives on
+ * `SolveBuildInput.wallSeconds`, which is the value that goes on the wire, and
+ * a second copy here could disagree with it. See `deadlineMsFor`.
+ */
 export interface SolveBuildOptions {
-  /** `host:port` of the cp-sat service. Ignored when `client` is supplied. */
+  /** `host:port` of the cp-sat service. Ignored when a call seam is injected. */
   host?: string;
   /** Shared secret sent as `x-internal-secret` metadata on every call. */
   secret: string;
-  /** The solver's own wall budget. The transport deadline is this plus the margin. */
-  wallSeconds: number;
   /**
    * Correlation id for the service's logs — the service treats it as opaque and
    * never as an idempotency key. Defaults to empty: the engine boundary gate
@@ -68,8 +91,6 @@ export interface SolveBuildOptions {
    * ambient time directly — `core/clock.ts` is the only sanctioned source.
    */
   clock?: Clock;
-  /** Injected RPC surface — tests only; production resolves a cached channel. */
-  client?: SolveBuildCall;
 }
 
 /**
@@ -79,6 +100,19 @@ export interface SolveBuildOptions {
  * that has stopped answering at all.
  */
 const DEADLINE_MARGIN_SECONDS = 2;
+
+/**
+ * The wire budget and the transport deadline are derived from ONE field, and
+ * that field is the one the service actually receives. When the budget was also
+ * settable through the options object the two could disagree silently: a caller
+ * that passed the budget only in the options left the request carrying
+ * `wallSeconds` while the deadline was computed from the other copy — every
+ * solve would then die at the margin, report `deadline`, and `build.ts` would
+ * fall back to greedy on every board with nothing surfacing anywhere.
+ */
+function deadlineMsFor(input: SolveBuildInput): number {
+  return Math.round((input.wallSeconds + DEADLINE_MARGIN_SECONDS) * 1000);
+}
 
 const DEFAULT_HOST = "cp-sat.internal:50051";
 
@@ -289,16 +323,18 @@ function assertNoAmbiguousZeros(input: SolveBuildInput): void {
 export async function solveBuild(
   input: SolveBuildInput,
   opts: SolveBuildOptions,
+  /** @internal Test seam — see {@link SolveBuildCall}. Production omits it. */
+  injectedCall?: SolveBuildCall,
 ): Promise<SolveBuildOutcome> {
   assertNoAmbiguousZeros(input);
 
   const client =
-    opts.client ?? clientFor(opts.host ?? process.env.CPSAT_SERVICE_HOST ?? DEFAULT_HOST);
+    injectedCall ?? clientFor(opts.host ?? process.env.CPSAT_SERVICE_HOST ?? DEFAULT_HOST);
 
   const metadata = new grpc.Metadata();
   metadata.set("x-internal-secret", opts.secret);
 
-  const deadlineMs = Math.round((opts.wallSeconds + DEADLINE_MARGIN_SECONDS) * 1000);
+  const deadlineMs = deadlineMsFor(input);
   const request = toRequest(input, opts.requestId ?? "");
   // grpc-js reads `deadline` as an absolute instant, so this needs wall time.
   const deadlineAt = new Date((opts.clock ?? systemClock).now());
@@ -306,7 +342,7 @@ export async function solveBuild(
 
   return new Promise<SolveBuildOutcome>((resolve, reject) => {
     let settled = false;
-    let call: ClientUnaryCall | undefined = undefined;
+    let call: unknown = undefined;
 
     // The gRPC CallOption deadline is enforced by the channel, so it cannot be
     // the only guard: a call that never reaches the channel's timer — or one
@@ -318,7 +354,7 @@ export async function solveBuild(
     // caller still awaiting. It lives at most `deadlineMs`.
     const watchdog = setTimeout(() => {
       settle(() => {
-        call?.cancel();
+        cancelCall(call);
         reject(deadlineError(deadlineMs, "no response from the service"));
       });
     }, deadlineMs);
@@ -327,7 +363,24 @@ export async function solveBuild(
       if (settled) return;
       settled = true;
       clearTimeout(watchdog);
-      run();
+      // `run` has already disarmed the watchdog, so a throw inside it would
+      // leave the promise pending FOREVER with nothing left to time it out.
+      // `toOutcome` can genuinely throw: the generated decoder raises on an
+      // int64 past MAX_SAFE_INTEGER, and a malformed repeated field fails on
+      // `.map`. Turn any such throw into a rejection.
+      try {
+        run();
+      } catch (thrown) {
+        reject(
+          new CpSatError(
+            "transport",
+            `cp-sat solveBuild could not read the service's response: ${
+              thrown instanceof Error ? thrown.message : String(thrown)
+            }`,
+            { cause: thrown },
+          ),
+        );
+      }
     }
 
     try {

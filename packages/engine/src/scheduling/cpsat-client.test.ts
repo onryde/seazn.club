@@ -1,7 +1,7 @@
-// Transport tests for the cp-sat gRPC client wrapper. Everything here drives an
-// INJECTED client (`opts.client`), so no gRPC channel, no server, no network —
-// the wrapper's own behaviour is the whole subject: metadata, request shaping,
-// status vocabulary, and settling instead of hanging.
+// Transport tests for the cp-sat gRPC client wrapper. Everything here injects a
+// call seam as `solveBuild`'s third argument, so no gRPC channel, no server, no
+// network — the wrapper's own behaviour is the whole subject: metadata, request
+// shaping, status vocabulary, and settling instead of hanging.
 import { describe, expect, it, vi } from "vitest";
 import type { SolveBuildCall } from "./cpsat-client.ts";
 import { CpSatError, solveBuild } from "./cpsat-client.ts";
@@ -61,11 +61,7 @@ describe("solveBuild", () => {
   it("attaches the shared secret as call metadata", async () => {
     const mockClient = respondingClient();
 
-    const result = await solveBuild(INPUT, {
-      secret: "s3cr3t",
-      wallSeconds: 8,
-      client: mockClient as unknown as SolveBuildCall,
-    });
+    const result = await solveBuild(INPUT, { secret: "s3cr3t" }, mockClient);
 
     expect(mockClient.solveBuild).toHaveBeenCalled();
     const [, metadata] = mockClient.solveBuild.mock.calls[0]!;
@@ -84,12 +80,8 @@ describe("solveBuild", () => {
 
     await solveBuild(
       { ...INPUT, wallSeconds: 8 },
-      {
-        secret: "s3cr3t",
-        wallSeconds: 8,
-        clock: fixedClock(startedAtIso),
-        client: mockClient as unknown as SolveBuildCall,
-      },
+      { secret: "s3cr3t", clock: fixedClock(startedAtIso) },
+      mockClient,
     );
 
     const [, , callOptions] = mockClient.solveBuild.mock.calls[0]!;
@@ -120,7 +112,8 @@ describe("solveBuild", () => {
           dayCapByDivision: { "div-b": 3 },
         },
       },
-      { secret: "s3cr3t", wallSeconds: 8, client: mockClient as unknown as SolveBuildCall },
+      { secret: "s3cr3t" },
+      mockClient,
     );
 
     const [request] = mockClient.solveBuild.mock.calls[0]!;
@@ -154,10 +147,7 @@ describe("solveBuild", () => {
     const startedAt = performance.now();
 
       await expect(
-        solveBuild(
-          { ...INPUT, wallSeconds: 0.05 },
-          { secret: "s3cr3t", wallSeconds: 0.05, client: mockClient as unknown as SolveBuildCall },
-        ),
+        solveBuild({ ...INPUT, wallSeconds: 0.05 }, { secret: "s3cr3t" }, mockClient),
       ).rejects.toThrow(/deadline/i);
 
       // Pins that the rejection came from the elapsed-time guard rather than
@@ -176,11 +166,7 @@ describe("solveBuild", () => {
     });
 
     await expect(
-      solveBuild(INPUT, {
-        secret: "s3cr3t",
-        wallSeconds: 8,
-        client: mockClient as unknown as SolveBuildCall,
-      }),
+      solveBuild(INPUT, { secret: "s3cr3t" }, mockClient),
     ).rejects.toThrow(/deadline/i);
   });
 
@@ -198,11 +184,9 @@ describe("solveBuild", () => {
   ])("translates a %s transport status into a domain failure", async (label, code, failure) => {
     const mockClient = failingClient({ code, details: `boom: ${label}`, message: label });
 
-    const rejection = await solveBuild(INPUT, {
-      secret: "s3cr3t",
-      wallSeconds: 8,
-      client: mockClient as unknown as SolveBuildCall,
-    }).catch((err: unknown) => err);
+    const rejection = await solveBuild(INPUT, { secret: "s3cr3t" }, mockClient).catch(
+      (err: unknown) => err,
+    );
 
     expect(rejection).toBeInstanceOf(CpSatError);
     expect((rejection as CpSatError).failure).toBe(failure);
@@ -228,11 +212,9 @@ describe("solveBuild", () => {
   ])("refuses a request whose %s is an ambiguous zero", async (_label, badInput) => {
     const mockClient = respondingClient();
 
-    const rejection = await solveBuild(badInput, {
-      secret: "s3cr3t",
-      wallSeconds: 8,
-      client: mockClient as unknown as SolveBuildCall,
-    }).catch((err: unknown) => err);
+    const rejection = await solveBuild(badInput, { secret: "s3cr3t" }, mockClient).catch(
+      (err: unknown) => err,
+    );
 
     expect(rejection).toBeInstanceOf(CpSatError);
     expect((rejection as CpSatError).failure).toBe("invalid_request");
@@ -257,12 +239,8 @@ describe("solveBuild", () => {
         grid: { slots: [{ court: "Court 1", startAtMs: 1_700_000_000_000 }], stepMinutes: 10 },
         constraints: { matchMinutes: 30, gapMinutes: 10, restByDivision: { "div-a": 45 } },
       },
-      {
-        secret: "s3cr3t",
-        wallSeconds: 8,
-        requestId: "req-42",
-        client: mockClient as unknown as SolveBuildCall,
-      },
+      { secret: "s3cr3t", requestId: "req-42" },
+      mockClient,
     );
 
     const [request] = mockClient.solveBuild.mock.calls[0]!;
@@ -291,11 +269,7 @@ describe("solveBuild", () => {
   ])("reports an unreadable %s wire status as ERROR, not UNKNOWN", async (_label, wireStatus) => {
     const mockClient = respondingClient({ ...EMPTY_RESPONSE, status: wireStatus });
 
-    const result = await solveBuild(INPUT, {
-      secret: "s3cr3t",
-      wallSeconds: 8,
-      client: mockClient as unknown as SolveBuildCall,
-    });
+    const result = await solveBuild(INPUT, { secret: "s3cr3t" }, mockClient);
 
     expect(result.status).toBe("ERROR");
   });
@@ -316,14 +290,55 @@ describe("solveBuild", () => {
     const startedAt = performance.now();
 
     await expect(
-      solveBuild(INPUT, {
-        secret: "s3cr3t",
-        wallSeconds: 8,
-        client: mockClient,
-      }),
+      solveBuild(INPUT, { secret: "s3cr3t" }, mockClient as unknown as SolveBuildCall),
     ).rejects.toThrow(/channel closed/);
 
     // Not swallowed into the 10s watchdog wait.
     expect(performance.now() - startedAt).toBeLessThan(1_000);
+  });
+
+  // `settle()` disarms the watchdog BEFORE running its callback, so anything
+  // that throws while translating the response leaves the promise pending with
+  // nothing left to time it out — a permanent hang, strictly worse than the
+  // failure it came from. `toOutcome` really can throw: the generated decoder
+  // raises on an int64 past MAX_SAFE_INTEGER, and a repeated field that is not
+  // an array dies on `.map`.
+  it("rejects rather than hanging when the response cannot be translated", async () => {
+    // `assignments` is not an array — `.map` throws inside the settle callback.
+    const mockClient = respondingClient({ ...EMPTY_RESPONSE, assignments: 5 });
+    const startedAt = performance.now();
+
+    const rejection = await solveBuild(INPUT, { secret: "s3cr3t" }, mockClient).catch(
+      (err: unknown) => err,
+    );
+
+    expect(rejection).toBeInstanceOf(CpSatError);
+    expect((rejection as CpSatError).failure).toBe("transport");
+    // The point of the test: it settled at all, and did not wait out the 10s watchdog.
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+  });
+
+  // The wire budget and the transport deadline must come from ONE field. While
+  // the budget was also settable through the options object, the two could
+  // disagree with nothing to catch it: pass 8s in the input and 0 in the
+  // options and the request still says 8s while the deadline lands at +2s, so
+  // every solve dies at the margin and `build.ts` falls back to greedy on every
+  // board. Asserting both halves against the same number is what pins them
+  // together — the options type no longer has anywhere to put a second copy.
+  it("derives the wire budget and the transport deadline from the same wallSeconds", async () => {
+    const mockClient = respondingClient();
+
+    await solveBuild(
+      { ...INPUT, wallSeconds: 30 },
+      { secret: "s3cr3t", clock: fixedClock("2026-08-09T12:00:00.000Z") },
+      mockClient,
+    );
+
+    const [request, , callOptions] = mockClient.solveBuild.mock.calls[0]!;
+    expect(request.wallSeconds).toBe(30);
+    // 30s wall + the 2s margin — not the 8s that INPUT and every other test use.
+    expect((callOptions as { deadline: Date }).deadline.toISOString()).toBe(
+      "2026-08-09T12:00:32.000Z",
+    );
   });
 });
