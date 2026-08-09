@@ -956,6 +956,234 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
   // it is not pinned here precisely because it is a gap rather than a contract.
 });
 
+// ===========================================================================
+// COURT REMOVAL — a settings save may not orphan a pinned fixture.
+// Date/time UX programme, Prompt 08. Self-contained; nothing above or below
+// this banner depends on it, and it deliberately does not reuse the Prompt 07
+// block's helpers — that block is about blackouts and its fixtures are shaped
+// for the solver, not for the board.
+//
+// WHAT THIS PROVES.
+//
+// Dropping a court from `config.courts` used to be completely unguarded. A
+// fixture PINNED to that court is exempt from AUTO's own cleanup filter, and
+// REFLOW's move-minimising objective leaves it where it is, so the card stays
+// on a court the board no longer draws — invisible, unmovable, still occupying
+// the timetable. The guard rejects that save with a 409 before it writes.
+//
+// The four things a naive "it rejects" test would NOT catch, each with its own
+// case below:
+//   1. SCOPE — an implementation that asks "does this division have ANY pinned
+//      fixture?" passes every rejection case here. So one case pins a fixture
+//      on a court that is KEPT and requires the save to SUCCEED.
+//   2. ATOMICITY — a guard that throws AFTER the upsert still "rejects". So the
+//      rejection case re-reads the stored config and asserts the OTHER fields
+//      (and `updated_at`) are untouched, not merely that an error was thrown.
+//   3. REGRESSION — removing a court whose fixtures are all UNLOCKED must still
+//      work; AUTO relocates those correctly today and blocking them would be a
+//      regression, not a fix. Owner ruling: hard reject, never a confirmation
+//      prompt, and never wider than the pinned set.
+//   4. NAMING — the organiser has to know which court to unpin, so a save that
+//      drops two offending courts must name both.
+//
+// The pinned predicate is `fixtures.schedule_locked` — the same column, tested
+// the same way (plain truthiness of the boolean), as `history.ts`'s
+// `clearableFixtures` → `locked: f.schedule_locked` → the engine's
+// `if (scope.excludeLocked && f.locked)`. Not a second definition of "pinned".
+// ===========================================================================
+
+/** Two courts, and every other field set to a value that is NOT the schema
+ *  default — so a partial write during a rejected save has somewhere visible
+ *  to show up. `perEntrantMinRest` is 0 on purpose: the seeds below place
+ *  fixtures by hand and a rest warning is noise, not signal, in this block. */
+const COURT_GUARD_CONFIG = {
+  startAt: T0,
+  matchMinutes: 45,
+  gapMinutes: 15,
+  courts: ["Court 1", "Court 2"],
+  perEntrantMinRest: 0,
+  blackouts: [],
+  sessionWindows: [],
+};
+
+describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/time UX P08)", () => {
+  /** A 4-entrant single-pool division (6 fixtures) with the two-court config
+   *  already stored, plus whatever extra courts a case needs. Returns the
+   *  generated fixtures so a case can place and pin one by hand — `autoSchedule`
+   *  is deliberately avoided here: it costs the z3 warm-up and decides court
+   *  placement itself, which is the very thing these cases need to control. */
+  async function seedCourtDivision(courts: string[] = COURT_GUARD_CONFIG.courts) {
+    const { auth } = await seedOrg("pro");
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Court Removal Cup",
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      eligibility: [],
+    });
+    await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 4 }, (_, i) => ({
+        kind: "individual" as const,
+        display_name: `E${i + 1}`,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, [
+      { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 1 } } },
+    ]);
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    await putScheduleSettings(auth, division.id, {
+      config: { ...COURT_GUARD_CONFIG, courts },
+    });
+    return { auth, divisionId: division.id, fixtures };
+  }
+
+  /** Place a fixture on a court, optionally pinning it, through the same
+   *  console path the board uses (`patchFixture` → `moveFixture`) rather than
+   *  a raw UPDATE — so a pin these cases treat as real is a pin the product
+   *  can actually produce. Times are staggered so nothing court-clashes. */
+  async function place(
+    auth: AuthCtx,
+    fixtureId: string,
+    court: string,
+    minutes: number,
+    locked: boolean,
+  ) {
+    await patchFixture(auth, fixtureId, {
+      scheduled_at: at(minutes),
+      court_label: court,
+      schedule_locked: locked,
+    });
+  }
+
+  const dropCourt2 = (courts: string[] = ["Court 1"]) => ({
+    config: { ...COURT_GUARD_CONFIG, courts },
+  });
+
+  /** The thrown error, typed, for the cases that assert on more than one of
+   *  its fields (`rejects.toMatchObject` can carry only one matcher per key).
+   *  Throws its own error if the promise RESOLVES, so a guard that stopped
+   *  rejecting cannot slip through as an empty catch. */
+  async function rejection(p: Promise<unknown>): Promise<{ status?: number; message: string }> {
+    try {
+      await p;
+    } catch (err) {
+      return err as { status?: number; message: string };
+    }
+    throw new Error("expected the settings save to be rejected, but it resolved");
+  }
+
+  it("rejects removing a court that still has a pinned fixture on it", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
+
+    await expect(putScheduleSettings(auth, divisionId, dropCourt2())).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringMatching(/court 2/i),
+    });
+  });
+
+  it("allows removing a court whose fixtures are all unlocked", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, "Court 2", 0, false);
+
+    // AUTO already relocates an unlocked card off a removed court, so refusing
+    // this save would be a regression the guard must not introduce. Read back
+    // rather than trusting the return: a resolve alone does not prove a write.
+    const saved = await putScheduleSettings(auth, divisionId, dropCourt2());
+    expect(saved.config.courts).toEqual(["Court 1"]);
+    expect((await getScheduleSettings(auth, divisionId)).config.courts).toEqual(["Court 1"]);
+  });
+
+  it("allows removing a court with no fixtures on it at all", async () => {
+    const { auth, divisionId } = await seedCourtDivision();
+
+    const saved = await putScheduleSettings(auth, divisionId, dropCourt2());
+    expect(saved.config.courts).toEqual(["Court 1"]);
+  });
+
+  /** The scope discriminator. An implementation that counts pinned fixtures
+   *  across the DIVISION instead of on the REMOVED courts passes all three
+   *  cases above; this one goes red for it. Court 3 is dropped and is empty,
+   *  while the pin sits on Court 2, which survives the save. */
+  it("does not block on a pinned fixture that sits on a court being kept", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision([
+      "Court 1",
+      "Court 2",
+      "Court 3",
+    ]);
+    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
+
+    const saved = await putScheduleSettings(
+      auth,
+      divisionId,
+      dropCourt2(["Court 1", "Court 2"]),
+    );
+    expect(saved.config.courts).toEqual(["Court 1", "Court 2"]);
+  });
+
+  /** The organiser has to be told WHICH pins to release. One save dropping two
+   *  occupied courts must name both, or the second refusal arrives only after
+   *  they have fixed the first. */
+  it("names every removed court that still holds a pin", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision([
+      "Court 1",
+      "Court 2",
+      "Court 3",
+    ]);
+    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
+    await place(auth, fixtures[1]!.id, "Court 3", 60, true);
+
+    const err = await rejection(putScheduleSettings(auth, divisionId, dropCourt2()));
+    expect(err.status).toBe(409);
+    expect(err.message).toMatch(/court 2/i);
+    expect(err.message).toMatch(/court 3/i);
+  });
+
+  /** ATOMICITY. The rejected save changes every other field too, so a guard
+   *  placed AFTER the upsert would leave `matchMinutes` at 90 and the stored
+   *  courts at one entry. Asserting only "it threw" would not see that. */
+  it("does not write anything when the save is rejected", async () => {
+    const { auth, divisionId, fixtures } = await seedCourtDivision();
+    await place(auth, fixtures[0]!.id, "Court 2", 0, true);
+
+    const before = await getScheduleSettings(auth, divisionId);
+    await expect(
+      putScheduleSettings(auth, divisionId, {
+        config: {
+          ...COURT_GUARD_CONFIG,
+          courts: ["Court 1"],
+          matchMinutes: 90,
+          gapMinutes: 0,
+          perEntrantMinRest: 25,
+          startAt: at(600),
+        },
+      }),
+    ).rejects.toBeDefined();
+
+    const after = await getScheduleSettings(auth, divisionId);
+    expect(after.config).toEqual(before.config);
+    // Spelled out as well as compared, so the failure message names the field
+    // that leaked rather than dumping two configs.
+    expect(after.config.courts).toEqual(["Court 1", "Court 2"]);
+    expect(after.config.matchMinutes).toBe(45);
+    expect(after.config.gapMinutes).toBe(15);
+    expect(after.config.perEntrantMinRest).toBe(0);
+    expect(after.config.startAt).toBe(T0);
+    // The row was not even touched: the upsert stamps `updated_at = now()`.
+    expect(after.updated_at).toEqual(before.updated_at);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Auto-schedule API contract (z3 solver programme, task 8). Pure schema tests —
 // no DB, so they are deliberately OUTSIDE the skipIf(!HAS_DB) blocks above.

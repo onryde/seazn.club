@@ -172,6 +172,50 @@ export async function putScheduleSettings(
       select competition_id from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
     assertNotFrozen(frozen, division.competition_id);
+    // COURT-REMOVAL GUARD (date/time UX P08). Dropping a court that still
+    // carries a PINNED fixture orphans that fixture: it is exempt from AUTO's
+    // own cleanup filter, REFLOW's move-minimising objective leaves it where it
+    // is, and the board grid no longer draws the column — so the card becomes
+    // invisible and unmovable while still occupying the timetable. Refuse the
+    // whole save rather than repairing it: the organiser is the only one who
+    // can say whether the pin or the court was the mistake.
+    //
+    // Placed BEFORE the upsert on purpose. Everything below this point writes,
+    // so a rejection here leaves the stored config completely unchanged — the
+    // atomicity half of the acceptance criteria, pinned by a test that re-reads
+    // the OTHER config fields after the refusal rather than only catching.
+    //
+    // "Pinned" is `fixtures.schedule_locked`, tested for plain truthiness, and
+    // that is deliberately the SAME predicate as the clear path's — history.ts
+    // `clearableFixtures` reads the column into `locked: f.schedule_locked` and
+    // the engine gates on `if (scope.excludeLocked && f.locked)`. A second
+    // definition of "this fixture is pinned" is exactly the kind of fork this
+    // area has already been bitten by. Unlocked cards are NOT blocked: AUTO
+    // relocates those correctly today and refusing them would be a regression.
+    const removedCourts = (await loadSettings(tx, divisionId)).config.courts.filter(
+      (court) => !input.config.courts.includes(court),
+    );
+    if (removedCourts.length > 0) {
+      const pinned = await tx<{ court_label: string; n: number }[]>`
+        select court_label, count(*)::int as n
+        from fixtures
+        where division_id = ${divisionId}
+          and schedule_locked
+          and court_label = any(${removedCourts})
+        group by court_label
+        order by court_label`;
+      if (pinned.length > 0) {
+        // Names every offending court and its count, so the organiser does not
+        // discover the second one only after releasing the first.
+        const detail = pinned
+          .map((r) => `${r.court_label} (${r.n} pinned ${r.n === 1 ? "fixture" : "fixtures"})`)
+          .join(", ");
+        throw new HttpError(
+          409,
+          `cannot remove a court that still has pinned fixtures on it: ${detail} — unpin or move them first`,
+        );
+      }
+    }
     // tz is tri-state (V305). An ABSENT key must not clobber the stored value:
     // the division settings form no longer offers a timezone at all, so every
     // console save omits it, and a save may never move a division's venue zone.
