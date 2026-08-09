@@ -106,15 +106,26 @@ than z3's, and TS re-runs its own verifier on the result:
     slot sets — a per-court blackout — a fixture could be placed on a court at
     a tick that court does not offer.
 
-Day-cap day boundaries are a fourth, subtler one: `start_ms // DAY_MS` is a
-UTC day, and the bench corpus is midnight-aligned (`EPOCH_MS` is a whole
-number of UTC days) so one session day is exactly one cap bucket there — but
-production day caps are governed by the org's own timezone and the request
-carries no zone. Any org not on UTC gets its caps applied against the wrong
-boundary. That alignment is load-bearing for the corpus, not incidental:
-`tests/test_bench_contract.py` fails if `EPOCH_MS` ever moves off midnight,
-because an offset epoch slides one session day across two cap buckets and
-silently doubles every cap. See that test and `bench/cpsat_bench_boards.py`.
+A fourth is CLOSED, and is recorded because the fix shows where the seam
+sits. Day-cap buckets used to be `start_ms // DAY_MS`, a UTC day, so any org
+not on UTC had its caps applied against the wrong boundary — at UTC+10 a
+09:00 and a 19:00 local match on one day fall in two UTC buckets and a cap of
+one admits two. The contract now carries a pre-computed `Slot.day_index`: the
+caller resolves each slot to the org's local calendar day and sends the
+integer, and this module groups by it. Timezones-as-policy stay outside this
+bounded context; the solver never reasons about a zone. Computing that index
+is the caller's obligation and getting it wrong reintroduces the same bug one
+layer up, which is Prompt 06's problem and needs its own test there.
+
+A FIFTH is open and is a real permissiveness gap, listed here with the three
+above rather than left to be rediscovered: **`existing` rows are not counted
+against day caps.** `on_day` is built for movable fixtures only, so a pinned
+`d1` match on a capped day does not consume that day's allowance and the
+solver may add another. It cannot be fixed by adding `day_index` to
+`Assignment` alone — caps are PER DIVISION and `Assignment` carries no
+division, so a pinned row cannot be attributed to any cap. Closing it needs
+`Assignment.division_id` on the wire, which is a contract addition nothing has
+asked for yet.
 """
 
 from __future__ import annotations
@@ -194,8 +205,13 @@ def build_model(
     Args:
         fixtures: (fixture_id, entrant_ids, division_id) per movable fixture.
         courts: every court a fixture may be placed on.
-        grid_slots: (court, start_at_ms) legal lattice points, treated as an
-            opaque legal-start set — no calendar or timezone math happens here.
+        grid_slots: (court, start_at_ms, day_index) legal lattice points,
+            treated as an opaque legal-start set — no calendar or timezone math
+            happens here. `day_index` is the CALLER's calendar day for that
+            slot, resolved in the org's own zone; it is the only thing the
+            per-division day cap groups by. Slots sharing a `start_at_ms` must
+            agree on it, and each day's ticks must occupy a stretch of the
+            timeline no other day's fall inside.
         step_minutes: the lattice's tick size. Accepted because it is part of
             the contract (`Grid.step_minutes`) and callers have it, but the
             model derives every start it needs from `grid_slots` directly, so
@@ -274,7 +290,7 @@ def build_model(
     # reduces to it exactly when every division shares a value.
     rest_ms = [int(rest_by_division.get(division, 0)) * MIN_MS for division in divisions]
 
-    admissible_starts = sorted({start_ms for _court, start_ms in grid_slots})
+    admissible_starts = sorted({start_ms for _court, start_ms, _day in grid_slots})
     full_domain = cp_model.Domain.FromValues(admissible_starts or [0])
 
     # One IntVar per fixture (its actual chosen start, domain-restricted to
@@ -347,21 +363,63 @@ def build_model(
             [placed[after], placed[before]]
         )
 
-    # section 9: max fixtures per day, per division. Day membership is a
-    # range-reified indicator: calendar days partition the admissible-start
-    # domain exactly (no two days' ms ranges overlap), so `on_day[i][d]==1 =>
-    # start[i] in [d*DAY_MS, (d+1)*DAY_MS)` plus `sum_d on_day[i][d] ==
-    # placed[i]` pins down the true day one-directionally — the solver cannot
-    # "cheat" by setting the wrong day's bool, since turning it on binds the
-    # range constraint for real.
-    day_ids = sorted({v // DAY_MS for v in admissible_starts}) if admissible_starts else [0]
+    # section 9: max fixtures per day, per division.
+    #
+    # Day membership comes from the CALLER's `day_index`, not from
+    # `start_ms // DAY_MS`. That quotient is a UTC day, and production day caps
+    # are governed by the org's own timezone: for an org at UTC+10 a 09:00 and
+    # a 19:00 local match on one day land in two different UTC buckets, so a
+    # cap of one per day admits two, silently, reported OPTIMAL. Sending a
+    # timezone instead would put timezones-as-policy inside this bounded
+    # context, which the design rules out — the caller already knows the zone,
+    # resolves each slot to its local calendar day, and sends the integer. This
+    # module never reasons about time zones at all.
+    day_of_start: dict[int, int] = {}
+    for _court, start_ms, day_index in grid_slots:
+        previous = day_of_start.setdefault(start_ms, day_index)
+        if previous != day_index:
+            raise ValueError(
+                f"grid slots disagree about which day start_at_ms={start_ms} belongs to: "
+                f"day_index {previous} and {day_index}. One instant is on one day; two courts "
+                "offering the same tick must label it identically."
+            )
+
+    day_bounds: dict[int, tuple[int, int]] = {}
+    for start_ms, day_index in day_of_start.items():
+        lo, hi = day_bounds.get(day_index, (start_ms, start_ms))
+        day_bounds[day_index] = (min(lo, start_ms), max(hi, start_ms))
+
+    # Days must occupy DISJOINT stretches of the timeline, because membership
+    # below is a range-reified indicator — two linear constraints per
+    # (fixture, day) rather than a per-day value domain, which on the
+    # production board is 1 924 constraints instead of 962 domains of 64
+    # singletons each. The range form is exact only while no other day's ticks
+    # fall inside `[lo_d, hi_d]`. A real calendar always satisfies this; a
+    # caller that does not gets a refusal rather than a cap that binds on the
+    # wrong fixtures.
+    ordered_days = sorted(day_bounds.items(), key=lambda item: item[1][0])
+    for (prev_day, (_prev_lo, prev_hi)), (next_day, (next_lo, _next_hi)) in zip(
+        ordered_days, ordered_days[1:]
+    ):
+        if next_lo <= prev_hi:
+            raise ValueError(
+                f"day_index {prev_day} and {next_day} interleave on the timeline: day {prev_day} "
+                f"runs to {prev_hi} and day {next_day} starts at {next_lo}. Calendar days must "
+                "partition the admissible starts, or the per-day cap binds on the wrong fixtures."
+            )
+
+    # `on_day[i][d]==1 => lo_d <= start[i] <= hi_d`, plus
+    # `sum_d on_day[i][d] == placed[i]`, pins down the true day
+    # one-directionally: the solver cannot "cheat" by setting the wrong day's
+    # bool, because turning it on binds the range constraint for real.
+    day_ids = sorted(day_bounds)
     on_day: list[dict[int, Any]] = [dict() for _ in range(n)]
     for i in range(n):
         for d in day_ids:
-            lo, hi = d * DAY_MS, (d + 1) * DAY_MS
+            lo, hi = day_bounds[d]
             b = model.NewBoolVar(f"day_{i}_{d}")
             model.Add(start[i] >= lo).OnlyEnforceIf(b)
-            model.Add(start[i] < hi).OnlyEnforceIf(b)
+            model.Add(start[i] <= hi).OnlyEnforceIf(b)
             on_day[i][d] = b
         model.Add(sum(on_day[i].values()) == placed[i])
     for division, cap in day_cap_by_division.items():

@@ -113,7 +113,7 @@ class ModelInput:
 
     courts: list[str]
     fixtures: list[tuple[str, list[str], str]]  # (fixture_id, entrant_ids, division_id)
-    grid_slots: list[tuple[str, int]]  # (court, start_at_ms)
+    grid_slots: list[tuple[str, int, int]]  # (court, start_at_ms, day_index)
     step_minutes: int
     constraints: dict
     existing: list[tuple[str, str, int]]  # (fixture_id, court, start_at_ms)
@@ -168,7 +168,7 @@ def _validated_fixtures(proto_fixtures) -> list[tuple[str, list[str], str]]:
     return fixtures
 
 
-def _validated_grid_slots(slots, known_courts: set[str]) -> list[tuple[str, int]]:
+def _validated_grid_slots(slots, known_courts: set[str]) -> list[tuple[str, int, int]]:
     for i, s in enumerate(slots):
         if s.court not in known_courts:
             raise InvalidRequestError(
@@ -182,7 +182,18 @@ def _validated_grid_slots(slots, known_courts: set[str]) -> list[tuple[str, int]
                 "is never a legitimate court time; an unset start is a legal tick that fixtures are "
                 "then placed on and proved OPTIMAL."
             )
-    return [(s.court, s.start_at_ms) for s in slots]
+        if not s.HasField("day_index"):
+            raise InvalidRequestError(
+                f"grid.slots[{i}].day_index must be set. Day 0 is a legitimate value, so an unset "
+                "field cannot be told from a real one by its value — and unset puts EVERY slot on "
+                "day 0, collapsing the whole lattice into one day-cap bucket. Resolve each slot to "
+                "the org's local calendar day; the solver never reasons about time zones."
+            )
+        if s.day_index < 0:
+            raise InvalidRequestError(
+                f"grid.slots[{i}].day_index must be >= 0, got {s.day_index!r}."
+            )
+    return [(s.court, s.start_at_ms, s.day_index) for s in slots]
 
 
 def _validated_existing(rows, known_courts: set[str]) -> list[tuple[str, str, int]]:

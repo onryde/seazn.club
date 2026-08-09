@@ -147,7 +147,10 @@ def test_production_board_returns_the_documented_seven_tuple(board):
         for fid, entrants, division in fixtures
     )
     assert all(isinstance(court, str) for court in courts)
-    assert all(isinstance(court, str) and isinstance(start, int) for court, start in grid_slots)
+    assert all(
+        isinstance(court, str) and isinstance(start, int) and isinstance(day, int)
+        for court, start, day in grid_slots
+    )
     assert isinstance(step_minutes, int)
     assert set(constraints) == {"match_minutes", "gap_minutes", "rest_by_division", "day_cap_by_division"}
     assert all(
@@ -166,7 +169,7 @@ def test_production_board_has_the_shape_the_service_tests_claim(board):
     assert len(fixtures) == EXPECTED_FIXTURES
     assert len(courts) == EXPECTED_COURTS
     assert len(grid_slots) == EXPECTED_GRID_SLOTS
-    assert len({start for _court, start in grid_slots}) == EXPECTED_DISTINCT_STARTS
+    assert len({start for _court, start, _day in grid_slots}) == EXPECTED_DISTINCT_STARTS
     assert step_minutes == EXPECTED_STEP_MINUTES
     assert len(existing) == EXPECTED_EXISTING_ROWS
     assert len(dependencies) == EXPECTED_DEPENDENCY_PAIRS
@@ -179,7 +182,7 @@ def test_production_board_has_the_shape_the_service_tests_claim(board):
     # Every court offers the identical tick set — `build_model` unions the
     # starts across courts, so a per-court grid would be silently flattened.
     per_court = {}
-    for court, start in grid_slots:
+    for court, start, _day in grid_slots:
         per_court.setdefault(court, set()).add(start)
     assert {frozenset(s) for s in per_court.values()} == {frozenset(next(iter(per_court.values())))}
 
@@ -201,7 +204,7 @@ def test_the_day_cap_still_binds_hard_enough_to_be_testable(board):
         per_division[division] = per_division.get(division, 0) + 1
     assert per_division == {"d1": 19, "d2": 18}
 
-    buckets = len({start // DAY_MS for _court, start in grid_slots})
+    buckets = len({day for _court, _start, day in grid_slots})
     assert buckets == EXPECTED_DAY_BUCKETS
     biggest = max(per_division.values())
     cap = constraints["day_cap_by_division"]["d1"]
@@ -228,7 +231,7 @@ def test_every_corpus_timestamp_is_a_real_epoch_millisecond(board):
     """
     _fixtures, _courts, grid_slots, _step, _constraints, existing, _deps = board
 
-    starts = [start for _court, start in grid_slots]
+    starts = [start for _court, start, _day in grid_slots]
 
     # The threshold must itself clear int32, or bar 1 stops implying bar 2 and
     # the corpus could satisfy every assertion below while being blind to the

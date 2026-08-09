@@ -81,6 +81,23 @@ export function solveStatusToJSON(object: SolveStatus): string {
 export interface Slot {
   court: string;
   startAtMs: number;
+  /**
+   * The CALLER's calendar day for this slot, resolved in the org's own
+   * timezone, and the only thing the per-division day cap groups by.
+   *
+   * The solver used to bucket by `start_at_ms / 86400000`, a UTC day. Day caps
+   * are governed by the org's zone, so any org away from UTC had its caps
+   * applied against the wrong boundary: at UTC+10 a 09:00 and a 19:00 local
+   * match on one day fall in two UTC buckets and a cap of one admits two.
+   * Sending a timezone NAME instead would put timezones-as-policy inside the
+   * solver's bounded context, which the design rules out — the caller already
+   * knows the zone, so it resolves the day and sends the integer.
+   *
+   * `optional` because 0 is the first day and is therefore a legitimate value,
+   * so an unset field cannot be told from a real one: unset puts every slot on
+   * "day 0" and collapses the whole lattice into a single cap bucket.
+   */
+  dayIndex?: number | undefined;
 }
 
 export interface Grid {
@@ -180,7 +197,7 @@ export interface SolveBuildResponse {
 }
 
 function createBaseSlot(): Slot {
-  return { court: "", startAtMs: 0 };
+  return { court: "", startAtMs: 0, dayIndex: undefined };
 }
 
 export const Slot: MessageFns<Slot> = {
@@ -190,6 +207,9 @@ export const Slot: MessageFns<Slot> = {
     }
     if (message.startAtMs !== 0) {
       writer.uint32(16).int64(message.startAtMs);
+    }
+    if (message.dayIndex !== undefined) {
+      writer.uint32(24).int32(message.dayIndex);
     }
     return writer;
   },
@@ -217,6 +237,14 @@ export const Slot: MessageFns<Slot> = {
           message.startAtMs = longToNumber(reader.int64());
           continue;
         }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.dayIndex = reader.int32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -234,6 +262,11 @@ export const Slot: MessageFns<Slot> = {
         : isSet(object.start_at_ms)
         ? globalThis.Number(object.start_at_ms)
         : 0,
+      dayIndex: isSet(object.dayIndex)
+        ? globalThis.Number(object.dayIndex)
+        : isSet(object.day_index)
+        ? globalThis.Number(object.day_index)
+        : undefined,
     };
   },
 
@@ -245,6 +278,9 @@ export const Slot: MessageFns<Slot> = {
     if (message.startAtMs !== 0) {
       obj.startAtMs = Math.round(message.startAtMs);
     }
+    if (message.dayIndex !== undefined) {
+      obj.dayIndex = Math.round(message.dayIndex);
+    }
     return obj;
   },
 
@@ -255,6 +291,7 @@ export const Slot: MessageFns<Slot> = {
     const message = createBaseSlot();
     message.court = object.court ?? "";
     message.startAtMs = object.startAtMs ?? 0;
+    message.dayIndex = object.dayIndex ?? undefined;
     return message;
   },
 };

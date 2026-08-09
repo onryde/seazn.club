@@ -236,7 +236,10 @@ describe("solveBuild", () => {
       {
         ...INPUT,
         fixtures: [{ fixtureId: "f1", entrantIds: ["e1", "e2"], divisionId: "div-a" }],
-        grid: { slots: [{ court: "Court 1", startAtMs: 1_700_000_000_000 }], stepMinutes: 10 },
+        grid: {
+          slots: [{ court: "Court 1", startAtMs: 1_700_000_000_000, dayIndex: 0 }],
+          stepMinutes: 10,
+        },
         constraints: { matchMinutes: 30, gapMinutes: 10, restByDivision: { "div-a": 45 } },
       },
       { secret: "s3cr3t", requestId: "req-42" },
@@ -247,7 +250,14 @@ describe("solveBuild", () => {
     const decoded = SolveBuildRequest.decode(SolveBuildRequest.encode(request).finish());
 
     expect(decoded.requestId).toBe("req-42");
-    expect(decoded.grid?.slots).toEqual([{ court: "Court 1", startAtMs: 1_700_000_000_000 }]);
+    // `dayIndex: 0` has to survive the round trip, and this is the assertion
+    // that says so. It is proto3-`optional` precisely because 0 is the first
+    // day and therefore a real value: without explicit presence the encoder
+    // would drop it as a default, the service would see an unset field, and
+    // every slot would collapse into one day-cap bucket.
+    expect(decoded.grid?.slots).toEqual([
+      { court: "Court 1", startAtMs: 1_700_000_000_000, dayIndex: 0 },
+    ]);
     expect(decoded.fixtures).toEqual([
       { fixtureId: "f1", entrantIds: ["e1", "e2"], divisionId: "div-a" },
     ]);

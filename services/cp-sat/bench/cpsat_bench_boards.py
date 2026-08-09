@@ -52,14 +52,22 @@ DIVISIONS = ["d1", "d2"]
 # `tests/test_bench_contract.py` fails if it ever stops being. This is not
 # tidiness: `build_board` opens each session day at `EPOCH_MS + d*DAY_MS +
 # OPEN_MS` and runs it for `spcd * TICKS_PER_COARSE_SLOT` ticks, while
-# `cp_sat.model` buckets the per-division day cap by `start_ms // DAY_MS` — a
-# UTC day. An epoch offset from midnight slides the session day across a UTC
-# midnight, so ONE session day maps to TWO cap buckets and the cap silently
+# `day_index_of` below buckets the per-division day cap by `start_ms // DAY_MS`
+# — a UTC day. An epoch offset from midnight slides the session day across a
+# UTC midnight, so ONE session day maps to TWO cap buckets and the cap silently
 # doubles. Measured on the production board at 2026-01-01T10:00:00Z
 # (1767261600000): 27 buckets instead of 26, and the returned board puts two
 # `d1` fixtures on session day 0 and two `d2` on session day 15 against a cap
 # of 1 — while `test_model.py`'s day-cap assertion still passes, because it
 # re-derives the same `// DAY_MS` bucket. See the Prompt 05b report.
+#
+# Prompt 05c moved that quotient OUT of `cp_sat.model` (the wire now carries a
+# caller-resolved `Slot.day_index`, because a UTC bucket is the wrong one for
+# any org away from UTC) and into `day_index_of` in this file. The requirement
+# is unchanged and so is every measurement above — the corpus is a UTC corpus
+# and still derives its days the same way. Only the OWNER of the derivation
+# moved, from the solver to the caller, which is what the corpus now stands in
+# for.
 EPOCH_MS = 1_767_225_600_000
 
 
@@ -303,6 +311,20 @@ def dependency_pairs_for(board: Board, k: int = 3) -> list[tuple[str, str]]:
 
 # --- service-shaped rendering of the sweep's production point ---------------
 
+
+def day_index_of(start_ms: int) -> int:
+    """This corpus's calendar day for a tick, as `Slot.day_index` carries it.
+
+    `cp_sat.model` no longer derives the day-cap bucket from the timestamp —
+    production caps are governed by the org's own timezone and the caller sends
+    a resolved integer. The corpus is a UTC corpus, so the derivation that used
+    to live in the model lives here instead, unchanged: the boards below mean
+    exactly the same days they always did, and
+    `test_the_corpus_epoch_is_utc_midnight_aligned` still guards it — it is now
+    guarding THIS function rather than the solver.
+    """
+    return start_ms // DAY_MS
+
 # The sweep point this mirrors: SweepPoint("prod-37x77k@8s", n=37, courts=5,
 # target_slots=2081, wall_s=8.0). Kept as named constants rather than inlined
 # so a change to the sweep point and a change here are visibly the same edit.
@@ -320,7 +342,7 @@ def production_board():
     where
       fixtures     = [(fixture_id, [entrant_id, ...], division_id), ...]
       courts       = [court, ...]
-      grid_slots   = [(court, start_at_ms), ...]
+      grid_slots   = [(court, start_at_ms, day_index), ...]
       step_minutes = int
       constraints  = {match_minutes, gap_minutes, rest_by_division, day_cap_by_division}
       existing     = [(fixture_id, court, start_at_ms), ...]
@@ -353,7 +375,7 @@ def production_board():
 
     fixtures = [(fx.id, [fx.home, fx.away], fx.division) for fx in board.fixtures]
     courts = list(board.courts)
-    grid_slots = [(s.court, s.start_ms) for s in board.slots]
+    grid_slots = [(s.court, s.start_ms, day_index_of(s.start_ms)) for s in board.slots]
     constraints = {
         "match_minutes": MATCH_MIN,
         "gap_minutes": GAP_MIN,
@@ -421,7 +443,7 @@ def pin_contended_board():
     width_ms = (PIN_MATCH_MIN + PIN_GAP_MIN) * MIN_MS
     courts = ["C1", "C2"]
     ticks = [EPOCH_MS + OPEN_MS + k * width_ms for k in range(3)]
-    grid_slots = [(court, tick) for court in courts for tick in ticks]
+    grid_slots = [(court, tick, day_index_of(tick)) for court in courts for tick in ticks]
 
     # Pin everything except (C2, ticks[2]).
     free_slot = (courts[1], ticks[2])
@@ -500,7 +522,7 @@ def gap_contended_board():
     del dur_gap_ms
     courts = [f"C{i + 1}" for i in range(GAP_PROBE_COURTS)]
     ticks = [EPOCH_MS + OPEN_MS + k * GAP_PROBE_STEP_MIN * MIN_MS for k in range(GAP_PROBE_TICKS)]
-    grid_slots = [(court, tick) for court in courts for tick in ticks]
+    grid_slots = [(court, tick, day_index_of(tick)) for court in courts for tick in ticks]
     fixtures = [
         (f"g{i:02d}", [f"ge{2 * i:02d}", f"ge{2 * i + 1:02d}"], "d1") for i in range(GAP_PROBE_FIXTURES)
     ]
@@ -558,7 +580,7 @@ def rest_contended_board():
     """
     courts = [f"C{i + 1}" for i in range(REST_PROBE_COURTS)]
     ticks = [EPOCH_MS + OPEN_MS + k * REST_PROBE_STEP_MIN * MIN_MS for k in range(REST_PROBE_TICKS)]
-    grid_slots = [(court, tick) for court in courts for tick in ticks]
+    grid_slots = [(court, tick, day_index_of(tick)) for court in courts for tick in ticks]
     # `re00` is in every fixture; the partner is unique so nothing else couples.
     fixtures = [(f"r{i:02d}", ["re00", f"rp{i:02d}"], "d1") for i in range(REST_PROBE_FIXTURES)]
     constraints = {
@@ -611,7 +633,7 @@ def imbalance_probe_board():
     width_ms = (PROBE_MATCH_MIN + PROBE_GAP_MIN) * MIN_MS
     courts = [f"C{i + 1}" for i in range(PROBE_COURTS)]
     ticks = [EPOCH_MS + OPEN_MS + k * width_ms for k in range(2)]
-    grid_slots = [(court, tick) for court in courts for tick in ticks]
+    grid_slots = [(court, tick, day_index_of(tick)) for court in courts for tick in ticks]
     fixtures = [(f"q{i:02d}", [f"qe{2 * i:02d}", f"qe{2 * i + 1:02d}"], "d1") for i in range(PROBE_FIXTURES)]
     constraints = {
         "match_minutes": PROBE_MATCH_MIN,

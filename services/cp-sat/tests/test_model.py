@@ -193,7 +193,7 @@ def test_assignments_satisfy_every_stated_constraint():
     entrants_of = {fid: ents for fid, ents, _div in fixtures}
     division_of = {fid: div for fid, _ents, div in fixtures}
     placed = {fid: (court, start) for fid, court, start in outcome.assignments}
-    legal_court_starts = set(grid_slots)
+    legal_court_starts = {(court, start) for court, start, _day in grid_slots}
 
     # every placement lands on a tick THAT COURT actually offers
     for fid, (court, start) in placed.items():
@@ -240,10 +240,13 @@ def test_assignments_satisfy_every_stated_constraint():
         checked_deps += 1
     assert checked_deps == len(deps), "a dependency pair went unplaced — that arm would be vacuous"
 
-    # per-division day cap
+    # per-division day cap. Bucketed by the board's own `day_index`, not by
+    # re-deriving `start // DAY_MS` — the model groups by the caller's day and
+    # re-deriving here would let a wrong day_index satisfy both sides at once.
+    day_of_start = {start: day for _court, start, day in grid_slots}
     per_division_day = {}
     for fid, (_court, start) in placed.items():
-        key = (division_of[fid], start // DAY_MS)
+        key = (division_of[fid], day_of_start[start])
         per_division_day[key] = per_division_day.get(key, 0) + 1
     for (division, day), count in per_division_day.items():
         assert count <= day_cap_by_division[division], (
@@ -299,7 +302,7 @@ def test_pinned_rows_are_not_overwritten_when_a_fixture_wants_the_slot():
         assert (court, start) not in pinned, f"{fid} placed on top of an immovable row at {(court, start)}"
 
     # The one placement is on the one free slot, and it is a real slot.
-    free = sorted(set(grid_slots) - pinned)
+    free = sorted({(court, start) for court, start, _day in grid_slots} - pinned)
     assert [(court, start) for _fid, court, start in outcome.assignments] == free, detail
 
 
@@ -423,6 +426,123 @@ def test_participant_rest_is_binding():
     starts = sorted(start for _fid, _court, start in outcome.assignments)
     for earlier, later in zip(starts, starts[1:]):
         assert later - earlier >= need, f"rest violated for {shared}: {earlier} vs {later}, need {need}ms"
+
+
+# --- the day cap binds on the CALLER's day, not on a UTC boundary -----------
+
+#: A UTC-midnight-straddling session, in `build_model`'s parameter shape.
+#:
+#: 2026-01-01T23:00:00Z and 2026-01-02T01:00:00Z. For an org two hours ahead of
+#: UTC those are 01:00 and 03:00 on the SAME local morning — one session day,
+#: and one day-cap bucket. `start_ms // DAY_MS` puts them in two.
+_STRADDLE_A = 1_767_308_400_000  # 2026-01-01T23:00:00Z
+_STRADDLE_B = 1_767_315_600_000  # 2026-01-02T01:00:00Z
+
+
+def _straddling_board(day_index_of):
+    """Two ticks either side of UTC midnight, two courts, two `d1` fixtures
+    capped at one per day. Court capacity cannot bind (two courts, two ticks,
+    two fixtures) and entrants are disjoint, so the day cap is the only thing
+    deciding how many are placed — a COUNT that T0 proves in milliseconds,
+    independent of the wall and of which tiers ran.
+    """
+    courts = ["C1", "C2"]
+    grid_slots = [
+        (court, start, day_index_of(start)) for court in courts for start in (_STRADDLE_A, _STRADDLE_B)
+    ]
+    fixtures = [("s0", ["sa", "sb"], "d1"), ("s1", ["sc", "sd"], "d1")]
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 0,
+        "rest_by_division": {"d1": 0},
+        "day_cap_by_division": {"d1": 1},
+    }
+    return fixtures, courts, grid_slots, 60, constraints, [], []
+
+
+def test_the_day_cap_groups_by_the_callers_day_index_not_by_utc():
+    """One local day is one cap bucket, whatever UTC thinks.
+
+    `start_ms // DAY_MS` is a UTC day. The deploy region is `lhr` and
+    Europe/London is UTC+1 for about seven months of the year, and orgs further
+    out are worse: for UTC+10, a 09:00 local match and a 19:00 local match on
+    the same day land in DIFFERENT UTC buckets, so a cap of one per day admits
+    two. Same class as this repo's `settings.tz`-vs-`settings.orgTz` bug.
+
+    The solver stays timezone-agnostic by design (timezones-as-policy are
+    outside this bounded context): the caller, which already knows the org's
+    zone, resolves each slot to its local calendar day and sends the integer.
+
+    Both ticks carry `day_index = 0`, so the cap admits exactly ONE. Deriving
+    the day from the timestamp instead admits TWO, and reports it OPTIMAL.
+    """
+    board = _straddling_board(lambda _start: 0)
+    model = build_model(*board)
+    outcome = solve(model, wall_seconds=3.0)
+
+    assert outcome.tiers_completed >= 1, "T0 itself did not complete — the count below is vacuous"
+    assert len(outcome.assignments) == 1, (
+        f"expected the cap to admit one fixture on the single local day, got "
+        f"{outcome.assignments}"
+    )
+
+
+def test_two_day_indices_over_one_utc_day_give_two_buckets():
+    """The converse, so the test above cannot pass by the cap simply being
+    stricter. Same two ticks, same cap — but the caller calls them two days, so
+    two fixtures fit. Without both halves, `on_day[i][d] = 0` for every d would
+    satisfy the first assertion and nothing would notice.
+    """
+    board = _straddling_board(lambda start: 0 if start == _STRADDLE_A else 1)
+    grid_slots = board[2]
+    day_of_start = {start: day for _court, start, day in grid_slots}
+    model = build_model(*board)
+    outcome = solve(model, wall_seconds=3.0)
+
+    assert outcome.tiers_completed >= 1
+    assert len(outcome.assignments) == 2, (
+        f"two declared days must give two cap buckets, got {outcome.assignments}"
+    )
+    # And they must land on ONE DAY EACH, not merely number two. The count
+    # alone cannot see a fixture claiming a day it is not on: total capacity is
+    # `days * cap` however the claims are distributed, so dropping the upper
+    # range bound leaves the count at 2 while both fixtures sit on the day-1
+    # tick and one of them books day 0's allowance. T1 actively drives that —
+    # a shorter makespan wants both on the same tick.
+    assert sorted(day_of_start[start] for _fid, _court, start in outcome.assignments) == [0, 1], (
+        f"the cap of one per day was satisfied by a day CLAIM, not by a placement: "
+        f"{[(fid, day_of_start[start]) for fid, _court, start in outcome.assignments]}"
+    )
+
+
+def test_rejects_a_start_declared_on_two_different_days():
+    """The same tick on two courts must carry the same day. Two slots
+    disagreeing about which day one instant belongs to is not a board the
+    caller can have meant, and the range encoding below it assumes days
+    partition the admissible starts."""
+    courts = ["C1", "C2"]
+    grid_slots = [("C1", _STRADDLE_A, 0), ("C2", _STRADDLE_A, 1)]
+    fixtures = [("s0", ["sa", "sb"], "d1")]
+    constraints = {"match_minutes": 30, "gap_minutes": 0, "rest_by_division": {}, "day_cap_by_division": {}}
+    with pytest.raises(ValueError, match="day_index"):
+        build_model(fixtures, courts, grid_slots, 60, constraints, [], [])
+
+
+def test_rejects_interleaved_day_indices():
+    """Days must occupy disjoint stretches of the timeline.
+
+    The cap is encoded as `on_day[i][d] => lo_d <= start[i] <= hi_d`, two
+    linear constraints rather than a 64-value domain per fixture per day —
+    which is exact only while no other day's ticks fall inside `[lo_d, hi_d]`.
+    A caller that interleaves them would get a cap that binds on the wrong
+    fixtures, silently, so the model refuses to be built instead."""
+    courts = ["C1"]
+    middle = (_STRADDLE_A + _STRADDLE_B) // 2
+    grid_slots = [("C1", _STRADDLE_A, 0), ("C1", middle, 1), ("C1", _STRADDLE_B, 0)]
+    fixtures = [("s0", ["sa", "sb"], "d1")]
+    constraints = {"match_minutes": 30, "gap_minutes": 0, "rest_by_division": {}, "day_cap_by_division": {}}
+    with pytest.raises(ValueError, match="day_index"):
+        build_model(fixtures, courts, grid_slots, 60, constraints, [], [])
 
 
 # --- degenerate constraint values must fail loudly, not solve quietly -------

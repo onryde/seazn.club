@@ -131,6 +131,7 @@ EXPECTED_MESSAGE_FIELDS = {
     "Slot": {
         "court":       (1, FieldDescriptor.TYPE_STRING, False, False),
         "start_at_ms": (2, FieldDescriptor.TYPE_INT64,  False, False),
+        "day_index":   (3, FieldDescriptor.TYPE_INT32,  False, True),
     },
     "Grid": {
         "slots":        (1, FieldDescriptor.TYPE_MESSAGE, True,  False),

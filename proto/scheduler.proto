@@ -7,6 +7,21 @@ package seazn.cpsat.v1;
 message Slot {
   string court = 1;
   int64 start_at_ms = 2;
+  // The CALLER's calendar day for this slot, resolved in the org's own
+  // timezone, and the only thing the per-division day cap groups by.
+  //
+  // The solver used to bucket by `start_at_ms / 86400000`, a UTC day. Day caps
+  // are governed by the org's zone, so any org away from UTC had its caps
+  // applied against the wrong boundary: at UTC+10 a 09:00 and a 19:00 local
+  // match on one day fall in two UTC buckets and a cap of one admits two.
+  // Sending a timezone NAME instead would put timezones-as-policy inside the
+  // solver's bounded context, which the design rules out — the caller already
+  // knows the zone, so it resolves the day and sends the integer.
+  //
+  // `optional` because 0 is the first day and is therefore a legitimate value,
+  // so an unset field cannot be told from a real one: unset puts every slot on
+  // "day 0" and collapses the whole lattice into a single cap bucket.
+  optional int32 day_index = 3;
 }
 
 message Grid {

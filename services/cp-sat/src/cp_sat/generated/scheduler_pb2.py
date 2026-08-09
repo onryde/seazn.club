@@ -24,39 +24,39 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0fscheduler.proto\x12\x0eseazn.cpsat.v1\"*\n\x04Slot\x12\r\n\x05\x63ourt\x18\x01 \x01(\t\x12\x13\n\x0bstart_at_ms\x18\x02 \x01(\x03\"A\n\x04Grid\x12#\n\x05slots\x18\x01 \x03(\x0b\x32\x14.seazn.cpsat.v1.Slot\x12\x14\n\x0cstep_minutes\x18\x02 \x01(\x05\"G\n\x07\x46ixture\x12\x12\n\nfixture_id\x18\x01 \x01(\t\x12\x13\n\x0b\x65ntrant_ids\x18\x02 \x03(\t\x12\x13\n\x0b\x64ivision_id\x18\x03 \x01(\t\"D\n\nAssignment\x12\x12\n\nfixture_id\x18\x01 \x01(\t\x12\r\n\x05\x63ourt\x18\x02 \x01(\t\x12\x13\n\x0bstart_at_ms\x18\x03 \x01(\x03\"@\n\tOrderPair\x12\x19\n\x11\x62\x65\x66ore_fixture_id\x18\x01 \x01(\t\x12\x18\n\x10\x61\x66ter_fixture_id\x18\x02 \x01(\t\"[\n\x10\x44ivisionRestRule\x12\x13\n\x0b\x64ivision_id\x18\x01 \x01(\t\x12\x1d\n\x10min_rest_minutes\x18\x02 \x01(\x05H\x00\x88\x01\x01\x42\x13\n\x11_min_rest_minutes\"G\n\x12\x44ivisionDayCapRule\x12\x13\n\x0b\x64ivision_id\x18\x01 \x01(\t\x12\x1c\n\x14max_fixtures_per_day\x18\x02 \x01(\x05\"\xd0\x01\n\x10\x42uildConstraints\x12\x15\n\rmatch_minutes\x18\x01 \x01(\x05\x12\x18\n\x0bgap_minutes\x18\x02 \x01(\x05H\x00\x88\x01\x01\x12:\n\x10rest_by_division\x18\x03 \x03(\x0b\x32 .seazn.cpsat.v1.DivisionRestRule\x12?\n\x13\x64\x61y_cap_by_division\x18\x04 \x03(\x0b\x32\".seazn.cpsat.v1.DivisionDayCapRuleB\x0e\n\x0c_gap_minutes\"#\n\x04Tier\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\x03\"+\n\nSolveError\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\"\xb2\x02\n\x11SolveBuildRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x0e\n\x06\x63ourts\x18\x02 \x03(\t\x12\"\n\x04grid\x18\x03 \x01(\x0b\x32\x14.seazn.cpsat.v1.Grid\x12)\n\x08\x66ixtures\x18\x04 \x03(\x0b\x32\x17.seazn.cpsat.v1.Fixture\x12,\n\x08\x65xisting\x18\x05 \x03(\x0b\x32\x1a.seazn.cpsat.v1.Assignment\x12/\n\x0c\x64\x65pendencies\x18\x06 \x03(\x0b\x32\x19.seazn.cpsat.v1.OrderPair\x12\x35\n\x0b\x63onstraints\x18\x07 \x01(\x0b\x32 .seazn.cpsat.v1.BuildConstraints\x12\x14\n\x0cwall_seconds\x18\x08 \x01(\x01\"\x92\x02\n\x12SolveBuildResponse\x12/\n\x0b\x61ssignments\x18\x01 \x03(\x0b\x32\x1a.seazn.cpsat.v1.Assignment\x12+\n\x06status\x18\x02 \x01(\x0e\x32\x1b.seazn.cpsat.v1.SolveStatus\x12\x17\n\x0ftiers_completed\x18\x03 \x01(\x05\x12.\n\x10objective_values\x18\x04 \x03(\x0b\x32\x14.seazn.cpsat.v1.Tier\x12\x12\n\nelapsed_ms\x18\x05 \x01(\x03\x12\x16\n\x0ewall_exhausted\x18\x06 \x01(\x08\x12)\n\x05\x65rror\x18\x07 \x01(\x0b\x32\x1a.seazn.cpsat.v1.SolveError*\xaf\x01\n\x0bSolveStatus\x12\x1c\n\x18SOLVE_STATUS_UNSPECIFIED\x10\x00\x12\x18\n\x14SOLVE_STATUS_OPTIMAL\x10\x01\x12\x19\n\x15SOLVE_STATUS_FEASIBLE\x10\x02\x12\x1b\n\x17SOLVE_STATUS_INFEASIBLE\x10\x03\x12\x18\n\x14SOLVE_STATUS_UNKNOWN\x10\x04\x12\x16\n\x12SOLVE_STATUS_ERROR\x10\x05\x32g\n\x10SchedulerService\x12S\n\nSolveBuild\x12!.seazn.cpsat.v1.SolveBuildRequest\x1a\".seazn.cpsat.v1.SolveBuildResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0fscheduler.proto\x12\x0eseazn.cpsat.v1\"P\n\x04Slot\x12\r\n\x05\x63ourt\x18\x01 \x01(\t\x12\x13\n\x0bstart_at_ms\x18\x02 \x01(\x03\x12\x16\n\tday_index\x18\x03 \x01(\x05H\x00\x88\x01\x01\x42\x0c\n\n_day_index\"A\n\x04Grid\x12#\n\x05slots\x18\x01 \x03(\x0b\x32\x14.seazn.cpsat.v1.Slot\x12\x14\n\x0cstep_minutes\x18\x02 \x01(\x05\"G\n\x07\x46ixture\x12\x12\n\nfixture_id\x18\x01 \x01(\t\x12\x13\n\x0b\x65ntrant_ids\x18\x02 \x03(\t\x12\x13\n\x0b\x64ivision_id\x18\x03 \x01(\t\"D\n\nAssignment\x12\x12\n\nfixture_id\x18\x01 \x01(\t\x12\r\n\x05\x63ourt\x18\x02 \x01(\t\x12\x13\n\x0bstart_at_ms\x18\x03 \x01(\x03\"@\n\tOrderPair\x12\x19\n\x11\x62\x65\x66ore_fixture_id\x18\x01 \x01(\t\x12\x18\n\x10\x61\x66ter_fixture_id\x18\x02 \x01(\t\"[\n\x10\x44ivisionRestRule\x12\x13\n\x0b\x64ivision_id\x18\x01 \x01(\t\x12\x1d\n\x10min_rest_minutes\x18\x02 \x01(\x05H\x00\x88\x01\x01\x42\x13\n\x11_min_rest_minutes\"G\n\x12\x44ivisionDayCapRule\x12\x13\n\x0b\x64ivision_id\x18\x01 \x01(\t\x12\x1c\n\x14max_fixtures_per_day\x18\x02 \x01(\x05\"\xd0\x01\n\x10\x42uildConstraints\x12\x15\n\rmatch_minutes\x18\x01 \x01(\x05\x12\x18\n\x0bgap_minutes\x18\x02 \x01(\x05H\x00\x88\x01\x01\x12:\n\x10rest_by_division\x18\x03 \x03(\x0b\x32 .seazn.cpsat.v1.DivisionRestRule\x12?\n\x13\x64\x61y_cap_by_division\x18\x04 \x03(\x0b\x32\".seazn.cpsat.v1.DivisionDayCapRuleB\x0e\n\x0c_gap_minutes\"#\n\x04Tier\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\x03\"+\n\nSolveError\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\"\xb2\x02\n\x11SolveBuildRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x0e\n\x06\x63ourts\x18\x02 \x03(\t\x12\"\n\x04grid\x18\x03 \x01(\x0b\x32\x14.seazn.cpsat.v1.Grid\x12)\n\x08\x66ixtures\x18\x04 \x03(\x0b\x32\x17.seazn.cpsat.v1.Fixture\x12,\n\x08\x65xisting\x18\x05 \x03(\x0b\x32\x1a.seazn.cpsat.v1.Assignment\x12/\n\x0c\x64\x65pendencies\x18\x06 \x03(\x0b\x32\x19.seazn.cpsat.v1.OrderPair\x12\x35\n\x0b\x63onstraints\x18\x07 \x01(\x0b\x32 .seazn.cpsat.v1.BuildConstraints\x12\x14\n\x0cwall_seconds\x18\x08 \x01(\x01\"\x92\x02\n\x12SolveBuildResponse\x12/\n\x0b\x61ssignments\x18\x01 \x03(\x0b\x32\x1a.seazn.cpsat.v1.Assignment\x12+\n\x06status\x18\x02 \x01(\x0e\x32\x1b.seazn.cpsat.v1.SolveStatus\x12\x17\n\x0ftiers_completed\x18\x03 \x01(\x05\x12.\n\x10objective_values\x18\x04 \x03(\x0b\x32\x14.seazn.cpsat.v1.Tier\x12\x12\n\nelapsed_ms\x18\x05 \x01(\x03\x12\x16\n\x0ewall_exhausted\x18\x06 \x01(\x08\x12)\n\x05\x65rror\x18\x07 \x01(\x0b\x32\x1a.seazn.cpsat.v1.SolveError*\xaf\x01\n\x0bSolveStatus\x12\x1c\n\x18SOLVE_STATUS_UNSPECIFIED\x10\x00\x12\x18\n\x14SOLVE_STATUS_OPTIMAL\x10\x01\x12\x19\n\x15SOLVE_STATUS_FEASIBLE\x10\x02\x12\x1b\n\x17SOLVE_STATUS_INFEASIBLE\x10\x03\x12\x18\n\x14SOLVE_STATUS_UNKNOWN\x10\x04\x12\x16\n\x12SOLVE_STATUS_ERROR\x10\x05\x32g\n\x10SchedulerService\x12S\n\nSolveBuild\x12!.seazn.cpsat.v1.SolveBuildRequest\x1a\".seazn.cpsat.v1.SolveBuildResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'scheduler_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_SOLVESTATUS']._serialized_start=1401
-  _globals['_SOLVESTATUS']._serialized_end=1576
+  _globals['_SOLVESTATUS']._serialized_start=1439
+  _globals['_SOLVESTATUS']._serialized_end=1614
   _globals['_SLOT']._serialized_start=35
-  _globals['_SLOT']._serialized_end=77
-  _globals['_GRID']._serialized_start=79
-  _globals['_GRID']._serialized_end=144
-  _globals['_FIXTURE']._serialized_start=146
-  _globals['_FIXTURE']._serialized_end=217
-  _globals['_ASSIGNMENT']._serialized_start=219
-  _globals['_ASSIGNMENT']._serialized_end=287
-  _globals['_ORDERPAIR']._serialized_start=289
-  _globals['_ORDERPAIR']._serialized_end=353
-  _globals['_DIVISIONRESTRULE']._serialized_start=355
-  _globals['_DIVISIONRESTRULE']._serialized_end=446
-  _globals['_DIVISIONDAYCAPRULE']._serialized_start=448
-  _globals['_DIVISIONDAYCAPRULE']._serialized_end=519
-  _globals['_BUILDCONSTRAINTS']._serialized_start=522
-  _globals['_BUILDCONSTRAINTS']._serialized_end=730
-  _globals['_TIER']._serialized_start=732
-  _globals['_TIER']._serialized_end=767
-  _globals['_SOLVEERROR']._serialized_start=769
-  _globals['_SOLVEERROR']._serialized_end=812
-  _globals['_SOLVEBUILDREQUEST']._serialized_start=815
-  _globals['_SOLVEBUILDREQUEST']._serialized_end=1121
-  _globals['_SOLVEBUILDRESPONSE']._serialized_start=1124
-  _globals['_SOLVEBUILDRESPONSE']._serialized_end=1398
-  _globals['_SCHEDULERSERVICE']._serialized_start=1578
-  _globals['_SCHEDULERSERVICE']._serialized_end=1681
+  _globals['_SLOT']._serialized_end=115
+  _globals['_GRID']._serialized_start=117
+  _globals['_GRID']._serialized_end=182
+  _globals['_FIXTURE']._serialized_start=184
+  _globals['_FIXTURE']._serialized_end=255
+  _globals['_ASSIGNMENT']._serialized_start=257
+  _globals['_ASSIGNMENT']._serialized_end=325
+  _globals['_ORDERPAIR']._serialized_start=327
+  _globals['_ORDERPAIR']._serialized_end=391
+  _globals['_DIVISIONRESTRULE']._serialized_start=393
+  _globals['_DIVISIONRESTRULE']._serialized_end=484
+  _globals['_DIVISIONDAYCAPRULE']._serialized_start=486
+  _globals['_DIVISIONDAYCAPRULE']._serialized_end=557
+  _globals['_BUILDCONSTRAINTS']._serialized_start=560
+  _globals['_BUILDCONSTRAINTS']._serialized_end=768
+  _globals['_TIER']._serialized_start=770
+  _globals['_TIER']._serialized_end=805
+  _globals['_SOLVEERROR']._serialized_start=807
+  _globals['_SOLVEERROR']._serialized_end=850
+  _globals['_SOLVEBUILDREQUEST']._serialized_start=853
+  _globals['_SOLVEBUILDREQUEST']._serialized_end=1159
+  _globals['_SOLVEBUILDRESPONSE']._serialized_start=1162
+  _globals['_SOLVEBUILDRESPONSE']._serialized_end=1436
+  _globals['_SCHEDULERSERVICE']._serialized_start=1616
+  _globals['_SCHEDULERSERVICE']._serialized_end=1719
 # @@protoc_insertion_point(module_scope)

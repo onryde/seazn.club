@@ -45,7 +45,7 @@ def _valid_request(**overrides) -> scheduler_pb2.SolveBuildRequest:
         courts=["Court 1"],
         fixtures=[scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1")],
         grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS)],
+            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS, day_index=0)],
             step_minutes=10,
         ),
         constraints=scheduler_pb2.BuildConstraints(match_minutes=30, gap_minutes=10),
@@ -140,7 +140,7 @@ def test_maps_every_field_through():
     )
     parsed = request_to_model_input(req)
     assert parsed.fixtures == [("f1", ["e1", "e2"], "d1"), ("f2", ["e3", "e4"], "d1")]
-    assert parsed.grid_slots == [("Court 1", SLOT_MS)]
+    assert parsed.grid_slots == [("Court 1", SLOT_MS, 0)]
     assert parsed.step_minutes == 10
     assert parsed.constraints == {
         "match_minutes": 30,
@@ -272,6 +272,41 @@ def test_accepts_an_explicit_zero_rest():
     assert request_to_model_input(req).constraints["rest_by_division"] == {"d1": 0}
 
 
+def test_rejects_a_slot_without_a_day_index():
+    """Day 0 is the first day, so 0 is a legitimate value and unset is the same
+    bytes. Unset puts EVERY slot on day 0 and collapses the whole lattice into
+    one day-cap bucket — a board that comes back with one fixture per division
+    where the caller asked for one per DAY, reported OPTIMAL.
+
+    Found by mutation, not by design: removing this guard left all 60 other
+    ACL tests green, 6/6."""
+    req = _valid_request(
+        grid=scheduler_pb2.Grid(
+            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS)], step_minutes=10
+        )
+    )
+    with pytest.raises(InvalidRequestError, match="day_index"):
+        request_to_model_input(req)
+
+
+def test_accepts_day_index_zero():
+    """The other half: day 0 is the first day and must map, or the presence
+    check has quietly become `> 0` and no board can start on its own day one."""
+    parsed = request_to_model_input(_valid_request())
+    assert parsed.grid_slots == [("Court 1", SLOT_MS, 0)]
+
+
+def test_rejects_a_negative_day_index():
+    req = _valid_request(
+        grid=scheduler_pb2.Grid(
+            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS, day_index=-1)],
+            step_minutes=10,
+        )
+    )
+    with pytest.raises(InvalidRequestError, match="day_index"):
+        request_to_model_input(req)
+
+
 def test_rejects_an_omitted_constraints_message():
     """`BuildConstraints` is a message field, so omitting it entirely arrives
     as a default-valued one. Named separately from the field guards so the
@@ -398,7 +433,7 @@ def test_rejects_a_grid_slot_without_a_real_start(start_at_ms):
     `min_rest` / `day_cap` oversight repeated."""
     req = _valid_request(
         grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=start_at_ms)], step_minutes=10
+            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=start_at_ms, day_index=0)], step_minutes=10
         )
     )
     with pytest.raises(InvalidRequestError, match="grid.slots"):
@@ -413,7 +448,7 @@ def test_rejects_a_grid_slot_on_an_unknown_court():
     error, and the only layer that can see it is this one."""
     req = _valid_request(
         grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court="Court 9", start_at_ms=SLOT_MS)], step_minutes=10
+            slots=[scheduler_pb2.Slot(court="Court 9", start_at_ms=SLOT_MS, day_index=0)], step_minutes=10
         )
     )
     with pytest.raises(InvalidRequestError, match="grid.slots"):

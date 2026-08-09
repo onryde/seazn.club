@@ -47,7 +47,16 @@ function cancelCall(call: unknown): void {
 export interface SolveBuildInput {
   courts: string[];
   fixtures: { fixtureId: string; entrantIds: string[]; divisionId: string }[];
-  grid: { slots: { court: string; startAtMs: number }[]; stepMinutes: number };
+  /**
+   * `dayIndex` is the CALLER's calendar day for the slot, resolved in the
+   * ORG's timezone — not a UTC day, and not optional. The solver groups the
+   * per-division day cap by it and never reasons about a zone itself, so
+   * getting it wrong here reintroduces the `settings.tz`-vs-`settings.orgTz`
+   * class of bug one layer up. Required in this domain type even though the
+   * wire field is proto3-`optional`: presence on the wire exists so the
+   * service can REJECT an omission, not so callers may omit it.
+   */
+  grid: { slots: { court: string; startAtMs: number; dayIndex: number }[]; stepMinutes: number };
   existing: { fixtureId: string; court: string; startAtMs: number }[];
   dependencies: { beforeFixtureId: string; afterFixtureId: string }[];
   constraints: {
@@ -177,7 +186,11 @@ function toRequest(input: SolveBuildInput, requestId: string): SolveBuildRequest
     requestId,
     courts: [...input.courts],
     grid: {
-      slots: input.grid.slots.map(({ court, startAtMs }) => ({ court, startAtMs })),
+      slots: input.grid.slots.map(({ court, startAtMs, dayIndex }) => ({
+        court,
+        startAtMs,
+        dayIndex,
+      })),
       stepMinutes: input.grid.stepMinutes,
     },
     fixtures: input.fixtures.map(({ fixtureId, entrantIds, divisionId }) => ({

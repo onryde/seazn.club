@@ -66,7 +66,7 @@ def _solvable_request(**overrides) -> scheduler_pb2.SolveBuildRequest:
         courts=["Court 1"],
         fixtures=[scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e2"], division_id="d1")],
         grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS)], step_minutes=10
+            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS, day_index=0)], step_minutes=10
         ),
         constraints=scheduler_pb2.BuildConstraints(match_minutes=30, gap_minutes=10),
         wall_seconds=2.0,
@@ -374,7 +374,10 @@ def test_production_board_solves_through_the_server(test_server):
             for fid, entrants, division in fixtures
         ],
         grid=scheduler_pb2.Grid(
-            slots=[scheduler_pb2.Slot(court=court, start_at_ms=start) for court, start in grid_slots],
+            slots=[
+                scheduler_pb2.Slot(court=court, start_at_ms=start, day_index=day)
+                for court, start, day in grid_slots
+            ],
             step_minutes=step_minutes,
         ),
         existing=[
@@ -422,5 +425,7 @@ def test_production_board_solves_through_the_server(test_server):
     # The lattice actually reached the model: every (court, start) has to be a
     # real grid point. An empty or ignored grid collapses every start onto tick
     # 0 instead — precisely the empty-Grid failure this round also fixed.
-    assert {(court, start) for _f, court, start in placed} <= set(grid_slots)
+    assert {(court, start) for _f, court, start in placed} <= {
+        (court, start) for court, start, _day in grid_slots
+    }
     assert len({start for _f, _c, start in placed}) > 1, "every fixture landed on one tick"
