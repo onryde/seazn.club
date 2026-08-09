@@ -1756,7 +1756,7 @@
   "boardset.endAt": "Fecha de fin",
   "boardset.endAtHint": "Limita las horas de juego y el rango de la vista semanal.",
   "boardset.playHours": "Horas de juego (diarias)",
-  "boardset.customWindows": "Ventanas personalizadas configuradas en el panel de restricciones: edítalas allí.",
+  "boardset.customWindows": "Hay ventanas de juego personalizadas para días concretos, así que las horas diarias no se aplican aquí. Al guardar se mantienen tal cual.",
   "boardset.playFrom": "Jugar desde",
   "boardset.playUntil": "Jugar hasta",
   "boardset.playHoursHint": "Los partidos solo se ubican entre estas horas cada día. En blanco = cualquier hora.",
@@ -3257,5 +3257,18 @@
   "board.gate.blockBody": "Estos conflictos son imposibles de jugar, así que no se pueden omitir. Corrígelos en el tablero y vuelve a intentarlo.",
   "board.gate.publishAnyway": "Publicar de todos modos",
   "board.gate.startAnyway": "Empezar de todos modos",
-  "board.gate.dismiss": "Cerrar"
+  "board.gate.dismiss": "Cerrar",
+  "constraints.blackout.title": "Franjas de indisponibilidad",
+  "constraints.blackout.hint": "Momentos en los que no se puede programar nada: una pausa para comer o una sede fuera de servicio.",
+  "constraints.blackout.empty": "Todavía no hay franjas de indisponibilidad. Añade una para dejar los partidos fuera de una pausa o de una sede no disponible.",
+  "constraints.blackout.add": "Añadir franja",
+  "constraints.blackout.remove": "Quitar la franja {n}",
+  "constraints.blackout.scope": "Se aplica a",
+  "constraints.blackout.everywhere": "Toda la división",
+  "constraints.blackout.from": "Desde",
+  "constraints.blackout.to": "Hasta",
+  "constraints.blackout.errorOrder": "El fin debe ser posterior al inicio.",
+  "constraints.blackout.errorIncomplete": "Indica un inicio y un fin.",
+  "constraints.blackout.save": "Guardar franjas",
+  "constraints.blackout.saving": "Guardando…"
 }

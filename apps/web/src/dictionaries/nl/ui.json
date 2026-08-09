@@ -1756,7 +1756,7 @@
   "boardset.endAt": "Einddatum",
   "boardset.endAtHint": "Begrenst de speeltijden en de reikwijdte van de weekweergave.",
   "boardset.playHours": "Speeltijden (dagelijks)",
-  "boardset.customWindows": "Aangepaste vensters ingesteld op het beperkingenpaneel — bewerk ze daar.",
+  "boardset.customWindows": "Er zijn aangepaste speelvensters ingesteld voor afzonderlijke dagen, dus dagelijkse tijden gelden hier niet. Opslaan laat ze ongewijzigd.",
   "boardset.playFrom": "Spelen vanaf",
   "boardset.playUntil": "Spelen tot",
   "boardset.playHoursHint": "Wedstrijden vallen alleen tussen deze tijden per dag. Leeg = elk moment.",
@@ -3257,5 +3257,18 @@
   "board.gate.blockBody": "Deze conflicten zijn onspeelbaar en kunnen niet worden genegeerd. Los ze op het bord op en probeer het opnieuw.",
   "board.gate.publishAnyway": "Toch publiceren",
   "board.gate.startAnyway": "Toch starten",
-  "board.gate.dismiss": "Sluiten"
+  "board.gate.dismiss": "Sluiten",
+  "constraints.blackout.title": "Blokkeringen",
+  "constraints.blackout.hint": "Momenten waarop niets ingepland kan worden — een lunchpauze of één locatie buiten gebruik.",
+  "constraints.blackout.empty": "Nog geen blokkeringen. Voeg er een toe om wedstrijden buiten een pauze of van een onbeschikbare locatie te houden.",
+  "constraints.blackout.add": "Blokkering toevoegen",
+  "constraints.blackout.remove": "Blokkering {n} verwijderen",
+  "constraints.blackout.scope": "Geldt voor",
+  "constraints.blackout.everywhere": "Hele divisie",
+  "constraints.blackout.from": "Van",
+  "constraints.blackout.to": "Tot",
+  "constraints.blackout.errorOrder": "Het einde moet na het begin liggen.",
+  "constraints.blackout.errorIncomplete": "Vul zowel een begin als een einde in.",
+  "constraints.blackout.save": "Blokkeringen opslaan",
+  "constraints.blackout.saving": "Opslaan…"
 }

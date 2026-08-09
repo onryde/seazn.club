@@ -1801,7 +1801,7 @@
   "boardset.endAt": "End date",
   "boardset.endAtHint": "Bounds play hours and the week view's span.",
   "boardset.playHours": "Play hours (daily)",
-  "boardset.customWindows": "Custom windows set on the constraints panel — edit them there.",
+  "boardset.customWindows": "Custom play windows are set for individual days, so daily hours don't apply here. Saving leaves them exactly as they are.",
   "boardset.playFrom": "Play from",
   "boardset.playUntil": "Play until",
   "boardset.playHoursHint": "Matches only land between these times each day. Blank = any time.",
@@ -3257,5 +3257,18 @@
   "board.gate.blockBody": "These conflicts are impossible to play, so there is no way to override them. Fix them on the board, then try again.",
   "board.gate.publishAnyway": "Publish anyway",
   "board.gate.startAnyway": "Start anyway",
-  "board.gate.dismiss": "Close"
+  "board.gate.dismiss": "Close",
+  "constraints.blackout.title": "Blackout windows",
+  "constraints.blackout.hint": "Times when nothing can be scheduled — a lunch break, or one venue out of action.",
+  "constraints.blackout.empty": "No blackout windows yet. Add one to keep matches out of a break, or off a venue that is unavailable.",
+  "constraints.blackout.add": "Add blackout",
+  "constraints.blackout.remove": "Remove blackout {n}",
+  "constraints.blackout.scope": "Applies to",
+  "constraints.blackout.everywhere": "Whole division",
+  "constraints.blackout.from": "From",
+  "constraints.blackout.to": "To",
+  "constraints.blackout.errorOrder": "End must be after start.",
+  "constraints.blackout.errorIncomplete": "Set both a start and an end.",
+  "constraints.blackout.save": "Save blackout windows",
+  "constraints.blackout.saving": "Saving…"
 }

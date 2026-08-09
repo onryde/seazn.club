@@ -88,7 +88,12 @@ export function SettingsPanel({
   const [saving, setSaving] = useState(false);
   const [hoursError, setHoursError] = useState<string | null>(null);
   // Prefill only when the stored windows are a uniform daily pattern —
-  // hand-built windows (constraints panel) show as "custom" and stay put.
+  // hand-built windows show as "custom" and stay put. Nothing in the app writes
+  // a non-uniform set (this panel is the only writer, and it always expands one
+  // daily pattern), so that state arrives through the API. `boardset
+  // .customWindows` used to send organisers to the constraints panel to edit
+  // them; that panel has never had a session-window editor, so the copy now
+  // states the situation instead of pointing at a dead end.
   const daily = windowsToDailyHours(config.sessionWindows);
   const customWindows = config.sessionWindows.length > 0 && daily === null;
   const [playFrom, setPlayFrom] = useState(daily?.from ?? "");

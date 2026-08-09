@@ -1801,7 +1801,7 @@
   "boardset.endAt": "Date de fin",
   "boardset.endAtHint": "Délimite les heures de jeu et l'étendue de la vue hebdomadaire.",
   "boardset.playHours": "Heures de jeu (quotidiennes)",
-  "boardset.customWindows": "Fenêtres personnalisées définies dans le panneau des contraintes — modifiez-les là-bas.",
+  "boardset.customWindows": "Des plages de jeu personnalisées sont définies pour certains jours — les heures quotidiennes ne s'appliquent donc pas ici. L'enregistrement les laisse telles quelles.",
   "boardset.playFrom": "Jeu à partir de",
   "boardset.playUntil": "Jeu jusqu'à",
   "boardset.playHoursHint": "Les matchs ne se déroulent qu'entre ces horaires chaque jour. Vide = n'importe quand.",
@@ -3257,5 +3257,18 @@
   "board.gate.blockBody": "Ces conflits sont injouables : ils ne peuvent pas être ignorés. Corrigez-les sur le tableau, puis réessayez.",
   "board.gate.publishAnyway": "Publier quand même",
   "board.gate.startAnyway": "Démarrer quand même",
-  "board.gate.dismiss": "Fermer"
+  "board.gate.dismiss": "Fermer",
+  "constraints.blackout.title": "Plages d'indisponibilité",
+  "constraints.blackout.hint": "Moments où rien ne peut être programmé — une pause déjeuner ou un site hors service.",
+  "constraints.blackout.empty": "Aucune plage d'indisponibilité pour l'instant. Ajoutez-en une pour éviter de placer des matchs pendant une pause ou sur un site indisponible.",
+  "constraints.blackout.add": "Ajouter une plage",
+  "constraints.blackout.remove": "Supprimer la plage {n}",
+  "constraints.blackout.scope": "S'applique à",
+  "constraints.blackout.everywhere": "Toute la division",
+  "constraints.blackout.from": "Début",
+  "constraints.blackout.to": "Fin",
+  "constraints.blackout.errorOrder": "La fin doit être postérieure au début.",
+  "constraints.blackout.errorIncomplete": "Indiquez un début et une fin.",
+  "constraints.blackout.save": "Enregistrer les plages",
+  "constraints.blackout.saving": "Enregistrement…"
 }
