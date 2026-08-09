@@ -15,6 +15,7 @@ import {
   windowsToDailyHours,
 } from "@/lib/schedule-board";
 import type { BoardConfig } from "./types";
+import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { pluralizeVenue } from "@/lib/venue";
 
@@ -171,39 +172,61 @@ export function SettingsPanel({
       {constrained && <UpgradeGate feature="scheduling.constraints" compact />}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <label className="block">
-          <span className="label">{msg("boardset.startAt")}</span>
-          <input type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} className="input w-full" disabled={!canEdit} />
+        {/* DateTimeField owns the whole <label>, so each hint moves from inside
+            it to a sibling <div> — a hint inside a <label> joins the control's
+            accessible name anyway. The <div> becomes the grid item that
+            `label.block` was, and measures identical at 1280 and 375. */}
+        <div>
+          <DateTimeField
+            kind="datetime-local"
+            label={msg("boardset.startAt")}
+            value={startAt}
+            onChange={setStartAt}
+            disabled={!canEdit}
+          />
           <span className="mt-0.5 block text-xs text-slate-400">{msg("boardset.startAtHint")}</span>
-        </label>
-        <label className="block">
-          <span className="label">{msg("boardset.endAt")}</span>
-          <input type="date" value={endAt} min={startAt ? startAt.slice(0, 10) : undefined} onChange={(e) => setEndAt(e.target.value)} className="input w-full" disabled={!canEdit} />
+        </div>
+        <div>
+          <DateTimeField
+            kind="date"
+            label={msg("boardset.endAt")}
+            value={endAt}
+            min={startAt ? startAt.slice(0, 10) : undefined}
+            onChange={setEndAt}
+            disabled={!canEdit}
+          />
           <span className="mt-0.5 block text-xs text-slate-400">{msg("boardset.endAtHint")}</span>
-        </label>
+        </div>
         <fieldset className="block">
           <legend className="label">{msg("boardset.playHours")}</legend>
           {customWindows ? (
             <p className="text-xs text-slate-500">{msg("boardset.customWindows")}</p>
           ) : (
-            <div className="flex items-center gap-2">
-              <input
-                type="time"
-                aria-label={msg("boardset.playFrom")}
-                value={playFrom}
-                onChange={(e) => setPlayFrom(e.target.value)}
-                className="input w-full"
-                disabled={!canEdit}
-              />
-              <span className="text-sm text-slate-500">–</span>
-              <input
-                type="time"
-                aria-label={msg("boardset.playUntil")}
-                value={playTo}
-                onChange={(e) => setPlayTo(e.target.value)}
-                className="input w-full"
-                disabled={!canEdit}
-              />
+            // The pair named itself with `aria-label` on bare inputs; the shared
+            // field carries a real visible <label> instead, so the row aligns on
+            // `items-end` and the dash is nudged down onto the inputs' own band.
+            // `min-w-0 flex-1` keeps the two halves equal-width the way the bare
+            // `w-full` inputs were before they gained a wrapper.
+            <div className="flex items-end gap-2">
+              <div className="min-w-0 flex-1">
+                <DateTimeField
+                  kind="time"
+                  label={msg("boardset.playFrom")}
+                  value={playFrom}
+                  onChange={setPlayFrom}
+                  disabled={!canEdit}
+                />
+              </div>
+              <span className="pb-2.5 text-sm text-slate-500">–</span>
+              <div className="min-w-0 flex-1">
+                <DateTimeField
+                  kind="time"
+                  label={msg("boardset.playUntil")}
+                  value={playTo}
+                  onChange={setPlayTo}
+                  disabled={!canEdit}
+                />
+              </div>
             </div>
           )}
           <span className="mt-0.5 block text-xs text-slate-400">{msg("boardset.playHoursHint")}</span>
