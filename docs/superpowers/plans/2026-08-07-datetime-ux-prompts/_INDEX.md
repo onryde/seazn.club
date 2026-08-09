@@ -97,3 +97,40 @@ checkout simultaneously.
 | 06 | "Two `DateTimeField kind="time"` fields (from/to)." | Used `kind="datetime-local"`. A blackout is an ABSOLUTE instant range; a time-only pair would have to be expanded across N days (the `dailyHoursToWindows` trick session windows use) and would NOT round-trip — which is exactly what Prompt 07 checks. One row = one stored window, losslessly. |
 | 06 | (finding, not a premise) `boardset.customWindows` "points at itself". | It lives in `settings-panel.tsx` and pointed at the constraints panel, which has never had a session-window editor. The slot is still needed — it is the only explanation for the two daily-hours inputs being absent — so the COPY was repointed in all four locales, not deleted. Separately: **nothing in the app writes a non-uniform `sessionWindows` set** (this panel is the only writer and always expands one daily pattern), so that state can only arrive through the API. |
 | 01 | Test with `@testing-library/react` + `screen.getByLabelText`; component uses `useId`/`htmlFor`. | **Not available.** `apps/web` has no jsdom and no `@testing-library` (vitest `environment: "node"`) — that suite cannot collect. Repo convention is `renderToStaticMarkup` + element-tree walk, which needs the component **hookless**; association is implicit via the wrapping `<label>`, matching the division wizard. Later prompts' tests must follow the same pattern. |
+
+## Prompt 09 recon — done ahead of dispatch, its spec is largely fiction
+
+Scouted read-only before P09 runs. Every row below contradicts the
+prompt's own text, so do not follow that snippet literally.
+
+| Prompt 09 says | Truth |
+|---|---|
+| Create `e2e/schedule-datetime-ux.spec.ts` | e2e lives at **`apps/web/e2e/`**, not the repo root — 73 specs, config `apps/web/playwright.config.ts`. |
+| `[data-testid="board-cell"][data-hour="12"]` | **Neither attribute exists anywhere in `apps/web/src`.** Board cells are bare `<td>` (`board-grid.tsx:140`). The real handles are the table's `aria-label` (`board-grid.tsx:103`) and the empty-cell button's `aria-label` "Place picked match at {time} on {court}" (`board-grid.tsx:177`, key `board.grid.placeAriaCourt`). Testids that DO exist: `board-tray`, `board-tray-mobile`, `schedule-result-strip/-headline/-budget`. |
+| Three separate routes | **One route, three tabs**: `/o/{org}/c/{comp}/d/{div}/schedule?tab=board\|settings\|constraints` (`schedule/page.tsx:37`). Build it with `divisionPath()` — `apps/web/e2e/helpers.ts:753`. |
+| copy regexes (`/add blackout/i`, `/remove court 2/i`, `/auto.?schedule/i`) | Violates the standing convention in this exact area: **"SELECTORS ARE IDS, NEVER COPY (#465)"** (`z3-auto-schedule.spec.ts:21`). `board.autoSchedule` is "Auto-schedule {name}" — interpolated, so copy matching is fragile too. |
+| "seed via the real helper" for a pinned fixture | **No such helper exists.** The pattern is `PATCH /api/v1/fixtures/{id} {schedule_locked:true}` (`schedule-board.spec.ts:249`), after `addEntrantsViaApi` (`helpers.ts:790`) + `createStageAndGenerate` (`helpers.ts:807`). |
+| hand-rolled `scrollWidth`/`clientWidth` | `expectNoHorizontalScroll(...)` already exists — `helpers.ts:43`. |
+
+Other facts P09 needs: auth is the `setup` project → `e2e/.auth/pro.json`,
+BASE `http://localhost:3000` (**not 3100**); projects are
+`setup`/`parallel`/`serial`/`mobile-se`(375×667)/`mobile-14`(390×844);
+`globalSetup` aborts unless a prod server is already on BASE;
+`test:e2e` is **three chained runs**, so a parallel-phase failure means
+serial and mobile NEVER RAN. Auto-schedule via
+`POST /api/v1/stages/{stageId}/schedule/auto {only_unlocked}`.
+Smoke is `npm run test:smoke` (`node --experimental-strip-types
+scripts/smoke.ts`); every assertion is `check(label, cond)`
+(`smoke.ts:82`) and the "control-run" idiom is: assert the gated case,
+then an identically-shaped ungated one through the same path
+(`smoke.ts:5168`, `:8071`).
+
+Vocabulary, which differs per layer: DB `fixtures.schedule_locked`
+(`V214__fixtures.sql:39`), engine `pinned` (`build-grid.ts:49`), UI copy
+uses both (📌/🔒). Prompt 08's guard must speak `schedule_locked` at the
+DB layer.
+
+Corroboration for Prompt 07: an existing spec already seeds blackouts
+with `PUT /api/v1/divisions/{id}/schedule-settings` carrying
+`blackouts:[…]` (`ai-architect.spec.ts:1219`) — independent evidence
+from the e2e side that no new endpoint is needed.
