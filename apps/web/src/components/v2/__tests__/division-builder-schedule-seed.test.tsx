@@ -75,6 +75,67 @@ describe("buildScheduleSeed — wizard schedule-settings seed", () => {
   });
 });
 
+describe("DivisionBuilder — scheduling step date/time controls", () => {
+  // Regression for the date/time UX programme, prompt 02. The Scheduling step
+  // carried two hand-rolled native controls (`<input type="datetime-local">`
+  // and `<input type="date">`, each in its own `<label className="block">`).
+  // They now go through the shared `DateTimeField`, so all six date/time call
+  // sites in the app share one control. The swap is markup-only: same kinds,
+  // same labels, same hint, same `min` derivation.
+  //
+  // The observable fingerprint is the class. Hand-rolled was `input w-full`;
+  // DateTimeField renders `input w-full text-base` (see its own suite for why
+  // `text-base` and not `text-base sm:text-sm`). apps/web has no jsdom, so the
+  // rendered markup is the only place a shared child is visible from here.
+  const inputTag = (html: string, type: string): string => {
+    const found = new RegExp(`<input[^>]*type="${type}"[^>]*>`).exec(html);
+    if (!found) throw new Error(`no <input type="${type}"> in the wizard markup`);
+    return found[0];
+  };
+  // React escapes text nodes, so a dictionary sentence with `&` or `'` in it
+  // ("Start date & time") is never a raw substring of the markup.
+  const escapeHtml = (s: string): string =>
+    s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#x27;");
+  const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  it("renders schedule start and end through the shared DateTimeField", () => {
+    const html = render(true);
+    expect(inputTag(html, "datetime-local")).toContain('class="input w-full text-base"');
+    expect(inputTag(html, "date")).toContain('class="input w-full text-base"');
+    // Nothing the organiser reads changes: both labels still render, each as
+    // the shared component's `<span class="label">` immediately before its
+    // control, and the end-date hint still follows the end control.
+    for (const [key, type] of [
+      ["boardset.startAt", "datetime-local"],
+      ["boardset.endAt", "date"],
+    ] as const) {
+      expect(html).toMatch(
+        new RegExp(
+          `<span class="label">${escapeRe(escapeHtml(msg(key)))}</span><input[^>]*type="${type}"`,
+        ),
+      );
+    }
+    expect(html).toMatch(
+      new RegExp(
+        `<input[^>]*type="date"[^>]*>.*${escapeRe(escapeHtml(msg("wizard.endDateHint")))}`,
+        "s",
+      ),
+    );
+  });
+
+  it("emits no min on the end date while the start is unset", () => {
+    // `min` is derived from the start value and handed to DateTimeField as a
+    // prop; an always-present `min=""` would make every date unselectable.
+    // (DateTimeField's own suite red-proves that it forwards a set `min`.)
+    expect(inputTag(render(true), "date")).not.toContain("min=");
+  });
+});
+
 describe("DivisionBuilder — venue list gate", () => {
   it("offers Add venue when the org has scheduling.constraints", () => {
     const html = render(true);
