@@ -8969,6 +8969,19 @@ async function marketingSuite(): Promise<void> {
   const shtml = await sched.text();
   check("marketing: /scheduling 200", sched.status === 200);
   check("marketing: /scheduling has rundown", shtml.includes("Order of play"));
+
+  // #364 Task 8 — the AI architect demo section. Smoke reads HTML with no JS
+  // running, so the claim provable here is narrow and deliberately so: the
+  // section SHIPPED on this page, with one card per template. `ready` names the
+  // section root, not a played recording — that a recording actually replays is
+  // an e2e claim (apps/web/e2e/marketing-ai-demo.spec.ts), never this one.
+  // Every probe carries the full value AND its closing quote: React serialises
+  // an omitted prop as `"$undefined"`, so a bare attribute-name probe would
+  // pass in both states and prove nothing.
+  check("marketing: ai demo section shipped", shtml.includes('data-ai-demo="ready"'));
+  for (const slug of ["finals-day", "club-night", "northside-open"]) {
+    check(`marketing: ai demo card ${slug}`, shtml.includes(`data-ai-template="${slug}"`));
+  }
 }
 
 async function funnelSuite(): Promise<void> {
