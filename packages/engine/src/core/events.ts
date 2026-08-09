@@ -2,6 +2,20 @@
 // foldMatch is the ONLY state-derivation function in the system.
 import { z } from "zod";
 import { EngineError } from "./errors.ts";
+import {
+  DEFAULT_LINEUP_POLICY,
+  LineupEntry,
+  LineupPositionChange,
+  LineupReplacement,
+  LineupRetirement,
+  LineupSubstitution,
+  REPLAY_LINEUP_POLICY,
+  initSquads,
+  isLineupEventType,
+  reduceLineupEvent,
+  type LineupPolicy,
+  type SquadState,
+} from "./lineup.ts";
 import { GameTime, compareGameTime, gameTimeOf } from "./time.ts";
 import { EntrantId, type LineupPair, type MatchOutcome } from "./types.ts";
 
@@ -75,13 +89,33 @@ export const CORE_EVENT_SCHEMAS = {
   "core.award": CoreAward,
   "core.suspend": CoreSuspend,
   "core.resume": CoreResume,
+  // S3/W4b (#426) — the lineup family. Kernel-owned on the core.suspend
+  // precedent: the kernel validates them here, folds them into SquadState, and
+  // never forwards them to module.apply, so one implementation serves all
+  // eleven sports and no module state moves. Payload shapes and the reducer
+  // live in `core/lineup.ts`; this map is the registration.
+  //
+  // FIVE SIBLING TYPES rather than one type with a discriminated `kind`,
+  // because every consumer in the system keys on the exact type string —
+  // this map, DURING_STOPPAGE below, `postDecisionTypes`, a module's
+  // `fidelityTiers[].eventTypes`, the entitlement gate, the pad's filters —
+  // and a `kind` nested in one payload is invisible to all of them. The full
+  // argument, and the cross-parse proof that no sibling swallows another, are
+  // in `core/lineup.ts` and `core/lineup.events.test.ts`.
+  "core.lineup.substitution": LineupSubstitution,
+  "core.lineup.replacement": LineupReplacement,
+  "core.lineup.position": LineupPositionChange,
+  "core.lineup.retirement": LineupRetirement,
+  "core.lineup.entry": LineupEntry,
 } as const;
 
 export type CoreEventType = keyof typeof CORE_EVENT_SCHEMAS;
 
 // Payload union modules see in apply(): EventEnvelope<Ev | CoreEv> (spec 03 §3).
-// core.void, core.suspend and core.resume are absent on purpose — the kernel
-// resolves all three before a module sees anything.
+// core.void, core.suspend, core.resume and the whole core.lineup.* family are
+// absent on purpose — the kernel resolves all of them before a module sees
+// anything. A module reads the RESULT of a lineup change (FoldContext.squads,
+// or the onLineup hook), never the event.
 export type CoreEv =
   | z.infer<typeof CoreStart>
   | z.infer<typeof CoreForfeit>
@@ -187,6 +221,23 @@ export function resolveVoids(events: readonly EventEnvelope[]): EventEnvelope[] 
  */
 export interface FoldContext {
   readonly strict: boolean;
+  /**
+   * S3/W4b (#426) — the squads as folded so far: who is on the field, where,
+   * and what has already happened to them.
+   *
+   * This is the read path that costs the eight uninterested modules nothing.
+   * `ctx` was already optional (W4a), so a module that never asks does not
+   * move; a module that needs to name the keeper mid-fold — to attribute a
+   * penalty save, to know whether a card leaves a side without one — reads
+   * `personsAtPosition(ctx.squads.home, "GK")` and stays out of the squad
+   * business entirely.
+   *
+   * OPTIONAL because `apply()` is also reachable directly, from
+   * `testkit/conformance.ts`, `testkit/simulation.ts` and
+   * `helpers.buildStream`, which pass no context at all. A module reading this
+   * must therefore handle its absence — the fold always supplies it.
+   */
+  readonly squads?: SquadState;
 }
 
 /**
@@ -251,6 +302,40 @@ export interface FoldableModule<Cfg = unknown, State = unknown> {
   // one working unchanged. An empty or duplicated list is neither: both are
   // refused as CONFIG_INVALID (validateDeclaredPhases).
   playPhases?(cfg: Cfg): readonly string[];
+
+  /**
+   * S3/W4b (#426) — what this VARIANT permits a lineup to do: re-entry mode
+   * and FIVB's position lock, mid-fixture squad growth, the substitution cap
+   * and the exemptions held outside it.
+   *
+   * A hook on cfg rather than a constant on the module, because every one of
+   * those differs by variant and not by sport: football Law 3.3 forbids a
+   * return while the grassroots dispensations that share the module are
+   * rolling; a T20 permits a concussion replacement a village friendly does
+   * not. A module that hard-codes any of them has answered for the wrong
+   * competition.
+   *
+   * Absent ⇒ DEFAULT_LINEUP_POLICY — no growth, no return, no exemption, no
+   * cap. Nothing a module could do before this wave becomes impossible, and
+   * nothing new becomes possible without a variant asking for it.
+   */
+  lineupPolicy?(cfg: Cfg): LineupPolicy;
+
+  /**
+   * S3/W4b (#426) — the kernel handing over the squads after it has folded a
+   * `core.lineup.*` event, so a module that keeps its own view of who is on the
+   * field can persist the snapshot into its own State.
+   *
+   * Called once at `init` and once after every ACCEPTED change — never after a
+   * refusal, and never with a squad the kernel has not accepted. The init call
+   * is what stops a module's State and the kernel's SquadState being two
+   * constructions of the same fact that can drift apart.
+   *
+   * OPTIONAL, and the eight modules that do not care declare nothing: no module
+   * State moves, so no frozen golden shifts. Pass B wires football and the
+   * three family kernels; nothing in `src/sports/**` implements it yet.
+   */
+  onLineup?(state: State, squads: SquadState): State;
 }
 
 /**
@@ -328,6 +413,16 @@ const DURING_STOPPAGE: readonly string[] = [
   "core.abandon",
   "core.forfeit",
   "core.finalize",
+  // S3/W4b (#426) — a lineup change during a stoppage is not a claim that play
+  // happened; it is the commonest thing that happens while play is stopped. An
+  // injury stoppage exists precisely so the replacement can be made, and
+  // refusing these here would have made the ordinary injury substitution
+  // unrecordable in every sport that can suspend play.
+  "core.lineup.substitution",
+  "core.lineup.replacement",
+  "core.lineup.position",
+  "core.lineup.retirement",
+  "core.lineup.entry",
 ];
 
 // The only state-derivation function in the system (spec 03 §2). Guarantees:
@@ -366,7 +461,7 @@ export function foldMatchWithStoppage<Cfg, State>(
   lineups: LineupPair,
   events: readonly EventEnvelope[],
   opts?: FoldOptions,
-): { state: State; stoppage: MatchStoppage | null } {
+): { state: State; stoppage: MatchStoppage | null; squads: SquadState } {
   const active = resolveVoids(events);
   const strictFromSeq = opts?.strictFromSeq;
   const postDecision = new Set([...POST_DECISION_CORE, ...(module.postDecisionTypes ?? [])]);
@@ -375,6 +470,13 @@ export function foldMatchWithStoppage<Cfg, State>(
   let state = module.init(cfg, lineups);
   let decided = false;
   let stoppage: MatchStoppage | null = null;
+
+  // S3/W4b (#426) — the squads start as the team sheets declared them, with
+  // positions intact, and the module is offered the snapshot immediately so its
+  // own State and the kernel's can never be two constructions of one fact.
+  const lineupPolicy = module.lineupPolicy?.(cfg) ?? DEFAULT_LINEUP_POLICY;
+  let squads = initSquads(lineups);
+  if (module.onLineup !== undefined) state = module.onLineup(state, squads);
 
   // W4a (#425) §3.3 — monotonic time guard. A timer only moves forward, but a
   // manually typed time (§4) can go anywhere, and an out-of-order stamp makes
@@ -537,12 +639,48 @@ export function foldMatchWithStoppage<Cfg, State>(
       stoppage = null;
       continue; // kernel-owned: the module never sees it
     }
+    if (isLineupEventType(event.type)) {
+      // THE POLICY IS THE SEAM (§3.3), not a second `if (strict)` around each
+      // check. On the write path the variant's own policy applies and a
+      // refusal is an error the scorer can still fix. On REPLAY the reducer
+      // runs against REPLAY_LINEUP_POLICY — every knob at its most permissive
+      // — so no cfg-derived condition can refuse at all. That is the whole
+      // reason the reducer takes a policy rather than reading cfg itself: an
+      // organiser tightening `maxSubs`, or switching a variant from rolling
+      // substitution to no-return, must not make every already-scored fixture
+      // in the division unreadable. cfg is not the ledger's to police
+      // retroactively.
+      const reduced = reduceLineupEvent(
+        squads,
+        event,
+        strict ? lineupPolicy : REPLAY_LINEUP_POLICY,
+      );
+      if (!reduced.ok) {
+        if (strict) {
+          throw new EngineError("LINEUP_INVALID", reduced.message, {
+            eventId: event.id,
+            seq: event.seq,
+            reason: reduced.reason,
+          });
+        }
+        // Replay reaches here only for a STRUCTURAL refusal — an unknown
+        // person, someone taken off who was never on — which no config edit
+        // can make coherent and which there is no longer an event to void. The
+        // squads are left as they were and the fixture stays readable. Note
+        // this is a no-op and NOT an approximation: applying half a swap would
+        // put the squads in a state no ledger ever recorded.
+      } else {
+        squads = reduced.squads;
+        if (module.onLineup !== undefined) state = module.onLineup(state, squads);
+      }
+      continue; // kernel-owned: the module never sees it
+    }
     // The seam reaches the module too. Three of the eleven re-validate the
     // stamp inside apply() — not redundantly, because the testkit calls apply()
     // directly — and nested/kernel refuses an interruption against a cfg
     // allowance. Each is the same fixture-bricking shape as the guard above and
     // needs the same signal; the other eight ignore the argument.
-    state = module.apply(state, event, { strict });
+    state = module.apply(state, event, { strict, squads });
     if (!decided) {
       decided = module.outcome(state) !== null;
       // A decided match is not awaiting resumption. core.abandon and
@@ -553,5 +691,5 @@ export function foldMatchWithStoppage<Cfg, State>(
       if (decided) stoppage = null;
     }
   }
-  return { state, stoppage };
+  return { state, stoppage, squads };
 }
