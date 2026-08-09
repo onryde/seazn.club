@@ -220,7 +220,16 @@ describe.skipIf(!HAS_DB)("seedNorthsideOpen (northside-open)", () => {
     expect(t.a.mode).toBe("generate");
     expect(t.a.joint).toBe(true);
     expect(t.a.divisionIds).toHaveLength(3);
-    expect(t.a.instruction).toContain("Court 5 is juniors only");
+    // Pinned VERBATIM, not by substring. The instruction is compiled into rules
+    // the referee enforces, so its wording is dataset, not prose: the earlier
+    // "across the weekend" phrasing compiled into per-fixture day targets and
+    // returned 85 warn-only H8 rows on a fully-placed board (#364 Task 3). A
+    // reword is a re-capture, and this assertion is what makes that explicit
+    // rather than something the committed fixture discovers later.
+    expect(t.a.instruction).toBe(
+      "Schedule all three divisions. Courts 1-4 are shared by the adult draws; " +
+        "Court 5 is juniors only. All U15 matches must finish by 18:00 each day.",
+    );
   });
 
   it("generates 31 + 36 + 48 = 115 fixtures in draw order", async () => {

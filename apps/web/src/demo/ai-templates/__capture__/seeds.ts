@@ -265,8 +265,27 @@ const NORTHSIDE_U15_ENTRANTS = [
  *  smaller one, which is a different story than the demo tells. */
 const NORTHSIDE_RETIREMENT = "Vera Y.";
 
+/**
+ * The organiser's sentence — LOAD-BEARING, and pinned verbatim by the tests.
+ *
+ * It said "Schedule all three divisions across the weekend" until the first
+ * capture (#364 Task 3) showed what that costs. Stage 1 compiles the
+ * instruction into rules the referee then enforces, and a DAY-SPREAD phrase
+ * compiles into per-fixture day targets — "this one on SAT, that one on SUN".
+ * The architect placed all 115 fixtures cleanly and the board had no blocking
+ * conflict, but 85 of them landed on the other day from the wish, so the run
+ * came back carrying 85 warn-only H8 rows. On the joint console that is a flat
+ * conflict list longer than the board, and at 375px it is the whole screen.
+ *
+ * Dropping the phrase is not softening the demo — the two constraints that
+ * actually BITE are still here, still verified, and the days were never in
+ * doubt: the session windows already pin Saturday and Sunday
+ * ({@link NORTHSIDE_ADULT_WINDOWS}), so the model was being asked to satisfy a
+ * wish the settings had already decided. Keep the compiled set to the rules
+ * that bite, and a warning means something again.
+ */
 const NORTHSIDE_INSTRUCTION =
-  "Schedule all three divisions across the weekend. Courts 1-4 are shared by the adult draws; Court 5 is juniors only. All U15 matches must finish by 18:00 each day.";
+  "Schedule all three divisions. Courts 1-4 are shared by the adult draws; Court 5 is juniors only. All U15 matches must finish by 18:00 each day.";
 
 const NORTHSIDE_ADULT_WINDOWS: DemoScheduleConfig["sessionWindows"] = [
   { from: "2026-09-19T09:00:00+01:00", to: "2026-09-19T21:00:00+01:00" },
