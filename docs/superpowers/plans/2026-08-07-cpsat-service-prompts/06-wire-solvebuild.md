@@ -144,6 +144,25 @@ board will now produce an `InvalidRequestError` where it previously
 produced a silent no-op. Filter to the divisions actually present in
 `fixtures` before sending.
 
+**3. A pinned row may not share an id with a fixture you are asking to
+place** (added after 05c's review round). `existing[].fixture_id` must be
+non-empty, unique, and **disjoint** from every `fixtures[].fixture_id`.
+
+This is the one most likely to bite you, because the engine's natural
+shape is "here is the competition, some of it is already scheduled" — one
+list. Sending a match in both lists does NOT pin it: the `existing` row
+lays a fixed blocking interval while the movable fixture stays free, and
+it comes back placed a SECOND time somewhere else. Measured, 5/5: `f1`
+pinned at T returns `[('f1','C0',T+40min)]`, OPTIMAL, `error` unset. The
+ACL now rejects it rather than guessing which reading you meant, so
+whatever builds the request has to split the two lists.
+
+Same round, same rule, and cheap to trip from generated data: `courts`
+entries must be non-empty and unique. An empty court name is not an
+omitted court — the model gives it a real column and places matches on
+it (measured: two fixtures over one grid point place 2 with an empty
+string in `courts`, one of them on court `''`, and 1 without).
+
 `assignments`/`tiersCompleted`/`elapsedMs`/`wallExhausted` into the same
 local variables the rest of the function already expects before falling
 through to the existing `validateAssignments` call. On rejection (any
