@@ -118,14 +118,24 @@ primary_region = "lhr"
 #     ever measured. Pinned to 1 above specifically so the worst case stays
 #     the SAME already-discussed 8-threads-on-2-vCPU oversubscription
 #     rather than stacking a second, wholly unmeasured axis on top of it.
-#     The cost is real but designed-for: a second concurrent solve request
-#     gets an immediate `SOLVER_BUSY` (main.py's admission control,
-#     `BoundedSemaphore.acquire(blocking=False)`) and the caller falls back
-#     to its own placer — the same fallback contract already used for a
-#     deadline-exceeded or unavailable transport, not a new failure mode.
-#     1 is a defensible floor, not a claimed optimum; raise it once
-#     concurrent-solve behaviour has actually been measured on this
-#     machine shape.
+#     The cost: a second concurrent solve request gets an immediate
+#     `SOLVER_BUSY` (main.py's admission control,
+#     `BoundedSemaphore.acquire(blocking=False)`).
+#
+#     WHAT THE CALLER DOES WITH THAT IS NOT WIRED YET — do not read this
+#     block as saying the fallback works today. `build.ts` does not import
+#     `cpsat-client.ts` at all yet (Task 06), and the `"solver_busy"` +
+#     greedy path `build.ts` already has is `MAX_SOLVER_QUEUE`, the LOCAL
+#     z3/WASM queue cap, which has nothing to do with this service. The
+#     service's `SOLVER_BUSY` (`schema.py:473`) reaches `cpsat-client.ts`'s
+#     `toOutcome` as `status:"ERROR"` plus an `error.code`, and nothing
+#     reads that back until Task 06b writes the status translation.
+#
+#     So until 06 and 06b land, a second concurrent organiser does not get
+#     a graceful greedy board — they get whatever the unwired error path
+#     does. That is the reason 1 is a floor rather than a recommendation.
+#     Raise it once concurrent-solve behaviour has actually been measured
+#     on this machine shape.
 
 # Secrets (fly secrets set --app cp-sat):
 #   CPSAT_SERVICE_SECRET — new, distinct from apps/web's CRON_SECRET. Never
