@@ -46,7 +46,7 @@ existing test's premise became stale)
 |---|---|---|
 | 01 | Shared `DateTimeField` component | **done** — `dcbec661`, `615dd3ff` |
 | 02 | Convert `division-builder.tsx` | **done** — `2c808ae6` |
-| 03 | Convert `competition-wizard.tsx` | not started |
+| 03 | Convert `competition-wizard.tsx` | **done** — `3a1822c4`, `d80a680a` |
 | 04 | Convert `settings-panel.tsx` | not started |
 | 05 | Board segmentation (real gcd step) | not started |
 | 06 | Blackout editor UI + fix broken pointer | not started |
@@ -74,6 +74,7 @@ checkout simultaneously.
 | Board segmentation | Matches the backend's real `gcd(matchMinutes, gapMinutes)` step, not a snap-to-{15,30,60} display rule. Extracted into a SHARED helper (`packages/engine/src/scheduling/grid-step.ts`) both sides import, so they can't drift apart again. |
 | Blackout editor scope | Supplements the AI natural-language console, does not replace it. Writes into the EXISTING `config.blackouts` field — confirmed by reading `schedule.ts:146-155`'s `usesConstraints()`, no new backend endpoint needed (Prompt 07 verifies this rather than Prompt 06 building something new). |
 | Court-removal guard | Hard reject (not override-with-confirmation) when the removed court has pinned/frozen fixtures. Does not block removing a court whose fixtures are all unlocked — AUTO already relocates those correctly today. |
+| `DateTimeField.required` | Added in `d80a680a` (P03). Sets `aria-required="true"` and **never** the native `required` attribute — the native one fires the browser's own English validation tooltip, which preempts the localized message (#376). The component owns that policy so no call site rediscovers it. Its test asserts BOTH halves; the native-absence half is the load-bearing one (an impl emitting both passes without it). Use this prop for any mandatory date/time field, including Prompt 06's. |
 | Row height | No fixed value pre-committed — Prompt 05 decides via screenshot comparison at implementation time, per the design doc's own deferral. |
 
 ## False premises found during execution — do not re-derive
