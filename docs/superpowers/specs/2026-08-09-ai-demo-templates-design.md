@@ -55,7 +55,7 @@ One JSON per template at `apps/web/src/demo/ai-templates/<slug>.json`:
   "meta": {
     "slug": "club-night",
     "capturedAt": "…",          // fixed at capture, not render
-    "model": "…",               // exact model id that produced planRaw
+    "model": "…",               // exact model id that produced `response`
     "commit": "…",              // repo commit of the capture run
     "mode": "generate" | "repair",
     "joint": false               // true only for northside-open
@@ -66,21 +66,45 @@ One JSON per template at `apps/web/src/demo/ai-templates/<slug>.json`:
     "entrants": [ /* id, name */ ],
     "window": { /* session window(s), anchor date */ }
   },
-  "planRaw": { /* AiSchedulePlan — the model's own output, verbatim */ },
-  "response": { /* AiPlanResponse | AiCompetitionPlanResponse — post-verify */ },
+  "response": { /* AiPlanResult | AiCompetitionPlanResponse, verbatim — post-verify */ },
   "verify": { /* VerifyConfig snapshot sufficient to re-run validateAssignments */ }
 }
 ```
 
-`planRaw` is kept verbatim so the drift guard can assert the *model output*
-still parses and verifies — the museum-of-an-older-product failure the issue
-names. `response` is kept because the UI renders from the verified shape.
+**There is no `planRaw`, because it cannot be captured.** The raw
+`AiSchedulePlan` never crosses an exported boundary: the model's own output is
+parsed, structurally checked, verified and repaired entirely inside
+`aiPlanForDivision`, and what the usecase returns is `AiPlanResult`
+(`schedule-ai.ts:1444`) — already post-verify. Nothing the capture can call
+hands back the pre-verify plan.
+
+So the fixture stores the verified `response` **verbatim**, and the drift
+guard reconstructs what it needs: a plan-shaped projection of
+`response.proposal` + `response.unschedulable`. That projection is lossless
+for `structuralCheck`'s purposes, which is the only thing reading it —
+`proposal`'s element type is field-identical to `AiAssignment`
+(`fixture_id`, `scheduled_at`, `court_label`, optional `schedule_locked`), and
+`response.unschedulable` is a superset of the plan's (it adds `rule`, which
+`structuralCheck` ignores). The museum-of-an-older-product failure the issue
+names is still caught: the projection is re-checked against today's
+`structuralCheck` and re-verified against today's engine.
 
 Loaded by **dynamic import on card selection** — the T2 fixture (~115
 fixtures, likely 100–200 KB) must not sit in the marketing page's initial
 bundle.
 
-## Capture pipeline — `scripts/capture-ai-demo.ts`
+## Capture pipeline — env-gated vitest harness
+
+Not a `scripts/` entry. Everything under `scripts/` drives the product over
+**HTTP**, and no HTTP surface exposes `buildSchedulePack` or the pack itself —
+the capture cannot reach what it has to record. apps/web vitest, by contrast,
+already imports the usecases directly. So the capture is a test file that only
+writes when explicitly asked: `CAPTURE_AI_DEMO=1`, at
+`apps/web/src/demo/ai-templates/__capture__/capture.test.ts`, fronted by a root
+npm script `capture:ai-demo`. The repo precedent for an env-gated writer living
+inside the suite it feeds is `REBASELINE_GOLDEN=1`
+(`packages/engine/src/testkit/golden.ts`). Ungated — an ordinary CI run — the
+same file asserts instead of writes, which is where the drift guard below runs.
 
 1. Ephemeral Postgres schema, smoke-script recipe (`seazn-local-env` skill):
    fresh throwaway `DB_SCHEMA`, `db:apply` **and** `sync:sports`, torn down
@@ -88,10 +112,11 @@ bundle.
 2. Seed the three datasets through the ordinary usecases — `createDivision`,
    `createEntrants`, `createStages`, `generateStageFixtures`
    (`apps/web/src/server/usecases/{divisions,entrants,stages}.ts`) — so the
-   data is valid by construction. Deterministic: UUIDv5 from
-   `<slug>/<entity>/<n>`, fixed anchor date (no `Date.now()`), fictional
-   names per the issue comment's datasets (Riverside Badminton Club /
-   Northside Open / Eastvale Tennis Club). T3 additionally pre-schedules and
+   data is valid by construction. The usecases mint their ids server-side, so
+   the seed cannot pin them; everything else is literal-fixed: fixed anchor
+   date (no `Date.now()`), fictional names per the issue comment's datasets
+   (Riverside Badminton Club / Northside Open / Eastvale Tennis Club), fixed
+   structure and counts. T3 additionally pre-schedules and
    publishes all 40 fixtures, marks 11 `decided`, then applies the
    13:00–15:30 blackout — the repair input state.
 3. Seed the org a credit balance (DB rows in a throwaway schema — free), then
@@ -101,15 +126,22 @@ bundle.
    provider key comes from `apps/web/.env.local`; token cost is paid once, by
    us, at capture time.
 4. Write the fixture JSONs. Stable key order + trailing newline so a re-run
-   with unchanged code diffs clean on the *seed-derived* parts.
+   with unchanged code diffs clean on the *seed-derived* parts, once ids are
+   normalized as below.
 
-**Determinism claim, stated precisely:** the *seeds and packs* reproduce to
-identical bytes on re-run. The *model output* may legitimately differ — a
-refresh produces a new fixture to commit, and the drift guard validates
-whatever is committed. The issue's "re-runnable to identical bytes" applies
-to the datasets, and the capture script asserts exactly that (it rebuilds the
-pack and diffs it against the committed fixture's `board`/`verify` sections
-in a `--check` mode).
+**Determinism claim, stated precisely:** raw ids can never match. The seeding
+usecases mint their UUIDs server-side, so no two capture runs agree byte for
+byte on an id field, and "re-runnable to identical bytes" stated over raw ids
+is simply false. Determinism is therefore asserted **after first-seen
+UUID→placeholder normalization** — the approach the pack tests already take
+(`redact()`, `schedule-ai-pack.test.ts:58`). Under that normalization the
+*seeds and packs* do reproduce exactly: names, times, structure and counts are
+literal-fixed and compare verbatim. The *model output* may legitimately differ
+— a refresh produces a new fixture to commit, and the drift guard validates
+whatever is committed. The issue's "re-runnable to identical bytes" applies to
+the normalized datasets, and the ungated harness asserts exactly that: it
+rebuilds the pack and diffs its normalized form against the committed
+fixture's `board`/`verify` sections.
 
 ## Runtime derivation
 
@@ -117,11 +149,14 @@ in a `--check` mode).
   shared pure module (`apps/web/src/components/v2/board/ai-trace-compose.ts`),
   signature `(plan, courts, msg) => {events, flaggedIds}` with `msg` as a
   plain `(key, params?) => string` parameter. The console re-points to it
-  (behavior-identical); the demo calls it with the visitor's locale. T2: the
-  joint console (`ai-competition-console.tsx`) has its own composition — the
-  implementation plan verifies whether it shares this composer or needs its
-  own extraction; either way the demo renders T2 through the joint shapes,
-  not by flattening into the single-division shape.
+  (behavior-identical); the demo calls it with the visitor's locale.
+  **T2 has no trace at all.** The joint console
+  (`ai-competition-console.tsx`) renders none — no composer, no `AiTrace`, not
+  one occurrence of the word in its 1,350 lines (against 36 in
+  `ai-console.tsx`). The demo's T2 panel therefore mirrors the real joint
+  console — per-division placed ledger, review/diff, flat conflict list, Σ−1
+  price — with no trace spine. Trace replay is T1/T3 only. No new product
+  behavior is invented for the demo.
 - **Diff:** `computeAiDiff(response, board.fixtures)`
   (`components/v2/board/ai-diff.ts:112` — note: *not* `lib/ai-diff.ts`; the
   issue's path is stale).
@@ -143,11 +178,12 @@ attract-mode board:
 
 - Three template cards, **T3 "County League Finals Day" first** (hero slot,
   per issue). Card copy: name, one-line dataset, one-line "what it shows".
-- Tap a card → dynamic-import fixture → timed replay of the composed
-  `TraceEvent[]` through `AiTrace` (which already honours
-  `prefers-reduced-motion` by dumping the full trace) → `AiDiffPanel` with
-  local-state `onToggleExclude` (harmless interactivity) → conflict list →
-  price card. `AiWishChips` display-only if used at all.
+- Tap a card → dynamic-import fixture → **on T1/T3 only**, timed replay of the
+  composed `TraceEvent[]` through `AiTrace` (which already honours
+  `prefers-reduced-motion` by dumping the full trace); T2 goes straight to its
+  per-division ledger, since the real joint console has no trace →
+  `AiDiffPanel` with local-state `onToggleExclude` (harmless interactivity) →
+  conflict list → price card. `AiWishChips` display-only if used at all.
 - **"Recorded from a real run"** label adjacent to the trace, plus the model
   id and capture date from `meta` — understating nothing, implying nothing
   live. New `marketing` keys, all four locales (en/es/fr/nl), flat dotted
@@ -157,18 +193,23 @@ attract-mode board:
 
 ## Tests (all four types)
 
-- **Unit — the drift guard, per fixture:** `planRaw` parses as
-  `AiSchedulePlan` (`schedule-ai-prompt.ts:239`); `structuralCheck`
-  (`schedule-ai.ts:1505` — currently unexported; exporting it is the one
-  server-file touch) passes against the stored pack slice;
+- **Unit — the drift guard, per fixture:** the plan-shaped projection of
+  `response.proposal` + `response.unschedulable` parses as `AiSchedulePlan`
+  (`schedule-ai-prompt.ts:239`) — note both halves are required, since
+  `structuralCheck` walks `unschedulable` too and its "every movable fixture
+  appears in the plan" check fails on a projection built from `proposal`
+  alone; `structuralCheck` (`schedule-ai.ts:1505` — currently unexported;
+  exporting it is the one server-file touch) passes against the stored pack
+  slice;
   `validateAssignments` (`packages/engine/src/scheduling/calendar.ts:1257`)
   returns zero blocking conflicts against the stored `verify` config; every
   `response.proposal[].fixture_id` exists in `board.fixtures`. T3
   additionally: every `decided` fixture is untouched by the proposal, and
   `unschedulable` is non-empty (the honest-output claim is load-bearing for
   the hero template).
-- **E2E (Playwright):** on `/en/scheduling` — pick each template, trace
-  replays to its end state, diff panel and price card render;
+- **E2E (Playwright):** on `/en/scheduling` — pick each template, the T1/T3
+  trace replays to its end state, diff panel and price card render on all
+  three;
   `page.route`-level assertion of **zero requests** to any model host or to
   `/api/v1/**ai**`; a 375 px viewport case asserting no horizontal scroll;
   the recorded-run label present in all four locales.
