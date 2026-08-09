@@ -417,7 +417,7 @@ That last rule earned its keep twice this session: the post-rebase full suite
 caught 10 failures a scoped agent gate could not see, and P09 disproved a claim
 this very file had asserted as general.
 
-## Owner-raised 2026-08-09, NOT actioned: minimum rest appears in TWO tabs
+## Owner-raised 2026-08-09, PARTLY ACTIONED: minimum rest appears in TWO tabs
 
 The owner spotted from the P09 screenshots that "minimum rest" is editable in
 both the Settings tab and the Constraints tab. Investigated; recording the
@@ -457,3 +457,58 @@ panel's rule rows are **hardcoded English**, not `msg()` calls — "Minimum rest
 team's matches", "No entrant plays two rounds running.", "Enforced across every
 division…". Verified present on `origin/main`. This violates the 4-locale rule
 and is a separate piece of work from the duplication above.
+
+### What shipped for it (`f6664dbe`), and what is still open
+
+Owner asked for a help chip with a worked example rather than a UI rework.
+Shipped: one `Tip` under `schedule.min-rest`, rendered from BOTH fields off the
+same id so the two tabs cannot drift into two explanations of one rule. The copy
+carries the example ("put 30 in one and 10 in the other and entrants rest 30")
+because "the stricter wins" alone still leaves an organiser guessing which of
+their two values is in force. Five keys × 4 locales; all four at 3277.
+
+Three of the hardcoded English strings above (`constraints.restMin.{label,hint,
+unit}`) are now `msg()` keys. **The rest of that list is still hardcoded** —
+no-back-to-back, max-per-day and the cross-division note. Still owed.
+
+**Two structural things a future edit will want to undo. Don't:**
+
+1. **Both rows use `htmlFor`, not a wrapping `<label>`.** `Tip` renders a
+   `<button>`, and a button inside a label forwards its click to the control —
+   the tip would focus and step the number input instead of opening. Tidying
+   this back into a wrapping label reds
+   `min-rest-tip.test.tsx` ("sits OUTSIDE every `<label>`").
+2. **`aria-describedby` is load-bearing, not decoration.** The hint (both
+   panels) and the "min" unit (Constraints) used to sit inside the label and so
+   fed the input's accessible name; the split above dropped them out. Found by
+   the reviewer, not by a test — worth noting, because splitting a label to host
+   a control is a pattern this codebase now has three instances of.
+
+**`useId()` does not work in this repo's component tests.** The hand-rolled
+dispatcher in `apps/web/src/components/__tests__/_hook-harness.tsx` implements
+no `useId`, so any component using it throws
+`resolveDispatcher(...).useId is not a function` at render — which surfaces as
+reds in *unrelated* suites for that component (five datetime suites here), not
+as an obvious "unsupported hook" message. Ids in harness-tested components must
+stay literal until the harness gains one.
+
+Consequently the ids `boardset-rest` / `rest-min` are literals in a component
+(`SettingsPanel`) that has two mount paths — `schedule-board.tsx` renders it
+inline with `showSettings` defaulting true, and the competition route mounts
+`StandaloneScheduleSettings`. **Not triggerable today**: the division route
+forces `showSettings={false}` (`schedule/page.tsx:265`) and the competition
+route (`c/[compSlug]/schedule/page.tsx:153`) mounts one instance. Nothing
+enforces that by construction, so a second concurrent mount would silently point
+label and hint at whichever input rendered first.
+
+**Still unfixed from the list above:** neither control shows the *other's*
+current value or the resulting effective floor. The tip explains the rule; it
+does not show the arithmetic for the organiser's actual numbers.
+
+Screenshots for this change were **waived by the owner** ("don't need screenshot
+for me"), so the #349 bar (1280 / 320 / 768) was not exercised. The reviewer
+flagged one speculative visual risk it would have covered: the tip sits in a
+`grid gap-4 sm:grid-cols-2` row whose neighbour ("gap") has no tip, and this
+exact grid carries a comment recording a prior 20px row mismatch
+(`settings-panel.tsx:252-259`). CSS reading found no height delta — 14px small
+button inside a `text-xs` label with `items-center` — but it is unverified.
