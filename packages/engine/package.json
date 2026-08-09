@@ -17,6 +17,7 @@
     "./officials": "./src/officials/index.ts",
     "./scheduling": "./src/scheduling/index.ts",
     "./scheduling/grid-step": "./src/scheduling/grid-step.ts",
+    "./scheduling/tz": "./src/scheduling/tz.ts",
     "./testkit": "./src/testkit/index.ts"
   },
   "scripts": {
