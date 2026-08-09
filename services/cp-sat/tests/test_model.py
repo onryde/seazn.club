@@ -14,7 +14,7 @@ import os
 
 import pytest
 
-from cp_sat.model import DAY_MS, MIN_MS, build_model, solve
+from cp_sat.model import MIN_MS, build_model, solve
 
 #: The production budget from the design spec, and the wall the acceptance
 #: criterion is stated at.

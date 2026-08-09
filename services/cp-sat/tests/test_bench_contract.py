@@ -257,18 +257,25 @@ def test_the_corpus_epoch_is_utc_midnight_aligned():
     """A session day must be exactly ONE day-cap bucket.
 
     `build_board` opens each session day at `EPOCH_MS + d*DAY_MS + OPEN_MS` and
-    runs it for a fixed number of ticks; `cp_sat.model` buckets the per-division
-    day cap by `start_ms // DAY_MS`, a UTC day. Those two agree only while
-    `EPOCH_MS` is a whole number of UTC days.
+    runs it for a fixed number of ticks; `cpsat_bench_boards.day_index_of`
+    labels each tick with `start_ms // DAY_MS`, a UTC day. Those two agree only
+    while `EPOCH_MS` is a whole number of UTC days.
+
+    That quotient used to live in `cp_sat.model`. Prompt 05c moved it out — the
+    wire now carries a caller-resolved `Slot.day_index`, because a UTC bucket
+    is the wrong one for any org away from UTC — so this test now guards the
+    CORPUS's derivation rather than the solver's. The requirement and every
+    measurement below are unchanged: the corpus is a UTC corpus and still says
+    exactly which day each tick is on by dividing.
 
     Measured at `EPOCH_MS = 1767261600000` (2026-01-01T10:00:00Z, ten hours off
     midnight): each session day opens at 18:00Z and runs to 04:30Z the next
     day, so it straddles UTC midnight and occupies TWO cap buckets. The board
     grows from 26 buckets to 27 and the solver legally places two `d1` fixtures
     on session day 0 and two `d2` on session day 15 against a cap of one — and
-    `test_model.py`'s day-cap assertion still passes, because it re-derives the
-    same `// DAY_MS` bucket the model used. The cap silently doubles and every
-    guard around it keeps reporting green.
+    `test_model.py`'s day-cap assertion still passes, because it reads the same
+    day label the model was given. The cap silently doubles and every guard
+    around it keeps reporting green.
     """
     import cpsat_bench_boards as boards
 
