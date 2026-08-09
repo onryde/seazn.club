@@ -35,6 +35,21 @@ const ANCHOR_NOW = new Date("2026-09-01T08:00:00.000Z").getTime();
  *  half of that board must sit entirely before. */
 const T3_BLACKOUT_FROM = Date.parse("2026-09-26T13:00:00+01:00");
 
+/** The pack fields that prove the ORG zone reached the build. `division.tz` is
+ *  display metadata and drives nothing (#397) — `pack.tz` is the one clock, and
+ *  `window` is written in it. */
+interface ZonedPack {
+  tz: string;
+  window: { start: string; end: string };
+}
+
+async function sportKeys(divisionIds: string[]): Promise<string[]> {
+  const rows = await sql<{ id: string; sport_key: string }[]>`
+    select id, sport_key from divisions where id in ${sql(divisionIds)}`;
+  const byId = new Map(rows.map((r) => [r.id, r.sport_key]));
+  return divisionIds.map((id) => byId.get(id)!);
+}
+
 async function fixtureCount(divisionId: string): Promise<number> {
   const [{ n }] = await sql<{ n: number }[]>`
     select count(*)::int as n from fixtures where division_id = ${divisionId}`;
@@ -156,6 +171,25 @@ describe.skipIf(!HAS_DB)("seedClubNight (club-night)", () => {
     expect(await fixtureCount(t.a.divisionIds[0]!)).toBe(12);
   });
 
+  // A schema that never ran `sync:sports` has no badminton row, and
+  // `resolveSport` falls back to generic/score SILENTLY — every count above
+  // still holds, both packs still agree, and the capture would record the wrong
+  // board. Asserting the key is what makes an unsynced schema fail loud.
+  it("seeds the real badminton sport, not the generic fallback", async () => {
+    expect(await sportKeys(t.a.divisionIds)).toEqual(["badminton"]);
+  });
+
+  // The ORG zone is the pack's ONE clock (#397/#448) and `seedOrg` leaves
+  // `organizations.timezone` null — which renders every instant in UTC and puts
+  // the whole demo an hour out. `schedule_settings.tz` below is DISPLAY
+  // metadata and would not have caught it.
+  it("builds a pack whose clock is the club's zone, in BST", () => {
+    const pack = t.packA as ZonedPack;
+    expect(pack.tz).toBe("Europe/London");
+    expect(pack.window.start).toMatch(/\+01:00$/);
+    expect(pack.window.end).toMatch(/\+01:00$/);
+  });
+
   it("carries the 2-court, 20-minute club-night settings", async () => {
     const [row] = await sql<{ config: Record<string, unknown>; tz: string }[]>`
       select config, tz from schedule_settings where division_id = ${t.a.divisionIds[0]!}`;
@@ -193,6 +227,14 @@ describe.skipIf(!HAS_DB)("seedNorthsideOpen (northside-open)", () => {
     const counts = await Promise.all(t.a.divisionIds.map(fixtureCount));
     expect(counts).toEqual([31, 36, 48]);
     expect(counts.reduce((a, b) => a + b, 0)).toBe(115);
+  });
+
+  it("seeds all three divisions on the real badminton sport", async () => {
+    expect(await sportKeys(t.a.divisionIds)).toEqual([
+      "badminton",
+      "badminton",
+      "badminton",
+    ]);
   });
 
   it("gives the juniors a court set and a finish time the adults do not share", async () => {
@@ -282,6 +324,13 @@ describe.skipIf(!HAS_DB)("seedFinalsDay (finals-day)", () => {
       { from: "2026-09-26T13:00:00+01:00", to: "2026-09-26T15:30:00+01:00" },
     ]);
     expect(row.config.courts).toHaveLength(6);
+  });
+
+  it("seeds the real tennis sport, and a pack clocked in BST", async () => {
+    expect(await sportKeys(t.a.divisionIds)).toEqual(["tennis"]);
+    const pack = t.packA as ZonedPack;
+    expect(pack.tz).toBe("Europe/London");
+    expect(pack.window.start).toMatch(/\+01:00$/);
   });
 
   it("reseeds to an identical pack", () => {

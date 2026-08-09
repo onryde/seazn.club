@@ -440,6 +440,13 @@ const FINALS_DAY_PLAYED = 11;
  * hold every displaced match, so the run is expected to report some as
  * unplaceable rather than pretend. The trim is by `fixture_no` (keep the first
  * 40) so the same 40 matches survive on every reseed.
+ *
+ * THE INFEASIBILITY IS THE DESIGN, NOT A BUG TO TUNE OUT. The closure leaves
+ * roughly three and a half playable hours for work that needed five and a half,
+ * so a non-empty `unschedulable` is this template's ACCEPTANCE CRITERION — the
+ * issue asks the demo to show repair mode reporting what it cannot place. The
+ * 19:00 window end stays. Do not widen it, do not shorten the closure, and do
+ * NOT make the frozen morning movable to buy back capacity.
  */
 export async function seedFinalsDay(auth: AuthCtx): Promise<SeededTemplate> {
   await brandOrg(auth, "Eastvale Tennis Club");
