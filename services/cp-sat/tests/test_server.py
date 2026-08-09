@@ -17,7 +17,9 @@ than just describing what it does:
     short, and that unproven value must not go out on the wire.
 """
 
+import contextlib
 import dataclasses
+import threading
 
 import grpc
 import grpc_testing
@@ -429,3 +431,123 @@ def test_production_board_solves_through_the_server(test_server):
         (court, start) for court, start, _day in grid_slots
     }
     assert len({start for _f, _c, start in placed}) > 1, "every fixture landed on one tick"
+
+
+# --- the health check may not be starved by in-flight solves ----------------
+
+
+def _saturating_solve(started: threading.Semaphore, release: threading.Event):
+    """A stand-in for `cp_sat.main.solve` that occupies its thread on command.
+
+    The real solver is replaced so that solve SPEED is not a variable: this
+    test is about the server's thread topology, and a test whose red depends on
+    how fast CP-SAT is that afternoon says nothing about topology.
+    """
+
+    def _solve(model, wall_seconds):
+        started.release()
+        release.wait(timeout=20)
+        return SolveOutcome(
+            assignments=[], status="OPTIMAL", tiers_completed=4, objective_values=[], elapsed_ms=1
+        )
+
+    return _solve
+
+
+@contextlib.contextmanager
+def _server_with_solves_in_flight(settings, monkeypatch, count):
+    """Start a real server on a real port and hold `count` solves in its pool.
+
+    A real port, not `grpc_testing`: the in-process harness never builds the
+    `ThreadPoolExecutor` at all, so the topology this file's last two tests
+    are about is invisible to it.
+    """
+    started = threading.Semaphore(0)
+    release = threading.Event()
+    monkeypatch.setattr("cp_sat.main.solve", _saturating_solve(started, release))
+
+    server, port = build_server(settings)
+    assert port != 0, "failed to bind a port"
+    server.start()
+
+    channel = grpc.insecure_channel(f"localhost:{port}")
+    stub = scheduler_pb2_grpc.SchedulerServiceStub(channel)
+    callers = [
+        stub.SolveBuild.future(_solvable_request(), metadata=GOOD_AUTH, timeout=30)
+        for _ in range(count)
+    ]
+    try:
+        for _ in range(count):
+            assert started.acquire(timeout=10), "a solve never reached the solver"
+        yield port
+    finally:
+        release.set()
+        for call in callers:
+            try:
+                call.result(timeout=10)
+            except Exception:  # noqa: BLE001 - teardown; the assertions are above
+                pass
+        channel.close()
+        server.stop(None)
+
+
+def test_health_check_answers_while_every_solve_slot_is_busy(settings, monkeypatch):
+    """A saturated solver must not make the machine look dead.
+
+    Measured over a real port before the fix, with `solve` replaced by a sleep
+    so solver speed was not a variable:
+
+        max_workers   health, idle       health, pool saturated (2s deadline)
+        1             SERVING in 0.003s  DEADLINE_EXCEEDED after 2.005s
+        4 (default)   SERVING in 0.002s  DEADLINE_EXCEEDED after 2.004s
+
+    One `grpc.server` carried both servicers on one bounded pool, so with
+    `max_workers` solves in flight there was no thread left to answer
+    `Health/Check`. With the shipped defaults that is a ~10 s liveness blackout
+    — long enough for a platform probe to kill the machine MID-SOLVE, taking
+    every in-flight solve with it, including the ones about to succeed. Under
+    load it is self-reinforcing: the kill drops capacity, which saturates the
+    replacement faster.
+
+    `main.py`'s own module docstring used to claim this topology was chosen
+    partly because an event loop "would starve the health check". It starved it
+    too. A comment asserting a bug is absent is how the bug survives review.
+    """
+    settings = dataclasses.replace(settings, port=0, max_workers=1)
+    with _server_with_solves_in_flight(settings, monkeypatch, settings.max_workers) as port:
+        channel = grpc.insecure_channel(f"localhost:{port}")
+        try:
+            health = health_pb2_grpc.HealthStub(channel)
+            # 2 s, not the default: a deadline generous enough to outlast a
+            # solve would pass with the bug still present.
+            response = health.Check(health_pb2.HealthCheckRequest(), timeout=2)
+            assert response.status == health_pb2.HealthCheckResponse.SERVING
+        finally:
+            channel.close()
+
+
+def test_a_solve_beyond_the_configured_concurrency_is_refused_not_queued(settings, monkeypatch):
+    """Past `max_workers` concurrent solves, the answer is SOLVER_BUSY at once.
+
+    Reserving threads for the health check is only half the fix: without
+    admission control an unbounded queue of solves eventually fills the reserve
+    too, and every queued caller waits out a deadline it was always going to
+    miss. `build.ts` can fall back on its own heuristic placer given a reason
+    immediately; it can do nothing with a request that returns at T+30s. The
+    design spec's `solver_busy` status is this case.
+
+    A SUCCESSFUL RPC carrying SOLVE_STATUS_ERROR, like every other refusal in
+    this service — not a gRPC status code, which would put transport
+    vocabulary in front of a caller whose problem is not transport.
+    """
+    settings = dataclasses.replace(settings, port=0, max_workers=1)
+    with _server_with_solves_in_flight(settings, monkeypatch, settings.max_workers) as port:
+        channel = grpc.insecure_channel(f"localhost:{port}")
+        try:
+            stub = scheduler_pb2_grpc.SchedulerServiceStub(channel)
+            response = stub.SolveBuild(_solvable_request(), metadata=GOOD_AUTH, timeout=5)
+            assert response.status == scheduler_pb2.SOLVE_STATUS_ERROR
+            assert response.error.code == "SOLVER_BUSY"
+            assert len(response.assignments) == 0
+        finally:
+            channel.close()

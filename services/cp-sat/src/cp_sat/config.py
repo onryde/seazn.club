@@ -29,6 +29,10 @@ class Settings:
         if not secret:
             raise ValueError("CPSAT_SERVICE_SECRET is required")
 
+        # CONCURRENT SOLVES, not the RPC thread pool's size. `cp_sat.main`
+        # sizes the pool at this plus `HEALTH_RESERVE_THREADS` and holds the
+        # solver to this number with a semaphore, so a saturated solver still
+        # has threads left to answer the liveness probe.
         max_workers = int(os.environ.get("CPSAT_MAX_WORKERS", "4"))
         # The server's own ceiling on a caller-supplied `wall_seconds`. A
         # request may ask for less; it may not ask for more.
@@ -47,8 +51,10 @@ class Settings:
             )
         if max_workers <= 0:
             raise ValueError(
-                f"CPSAT_MAX_WORKERS must be > 0, got {max_workers!r}. It sizes the "
-                "ThreadPoolExecutor that serves every RPC."
+                f"CPSAT_MAX_WORKERS must be > 0, got {max_workers!r}. It caps CONCURRENT SOLVES: "
+                "the servicer admits that many at once and refuses the rest with SOLVER_BUSY, and "
+                "the RPC thread pool is sized this plus a fixed reserve so the health check cannot "
+                "be starved by a full solver."
             )
 
         return cls(

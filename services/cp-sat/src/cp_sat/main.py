@@ -10,16 +10,53 @@ why this module imports `scheduler_pb2_grpc` (the generated servicer base and
 its registration helper) but never `scheduler_pb2`.
 
 Sync `grpcio` with a `ThreadPoolExecutor`, not `grpc.aio`: a solve is a
-CPU-bound OR-Tools call that never yields, so an event loop buys nothing and
-would starve the health check. Auth is a shared secret on request metadata,
-not mTLS — 6PN is already WireGuard-encrypted, and cert rotation would be cost
-against a threat model nothing else in this repo defends against.
+CPU-bound OR-Tools call that never yields, so an event loop buys nothing. Auth
+is a shared secret on request metadata, not mTLS — 6PN is already
+WireGuard-encrypted, and cert rotation would be cost against a threat model
+nothing else in this repo defends against.
+
+--- the health check gets its own threads, and solves are admission-controlled
+
+An earlier version of this docstring justified the thread pool partly on the
+grounds that an event loop "would starve the health check". The chosen
+topology starved it too, and the claim is exactly why nobody looked: a comment
+asserting a bug is absent is how the bug survives the next review.
+
+Measured over a real port with `solve` replaced by a sleep, so solver speed was
+not a variable:
+
+    max_workers   health, idle       health, pool saturated (2 s deadline)
+    1             SERVING in 0.003s  DEADLINE_EXCEEDED after 2.005s
+    4 (default)   SERVING in 0.002s  DEADLINE_EXCEEDED after 2.004s
+
+One `grpc.server` carried both servicers on one bounded pool, so `max_workers`
+in-flight solves left no thread to answer `Health/Check`. With the shipped
+defaults that is a ~10 s liveness blackout — long enough for a platform probe
+to kill the machine MID-SOLVE, taking every in-flight solve with it. It is
+self-reinforcing under load: the kill drops capacity, which saturates the
+replacement faster.
+
+Two changes, and both are needed:
+
+  * the pool is `max_workers + HEALTH_RESERVE_THREADS`, so threads exist that
+    a solve can never occupy. `CPSAT_MAX_WORKERS` now means CONCURRENT SOLVES
+    rather than pool size.
+  * `SolveBuild` takes a slot from a bounded semaphore and refuses at once
+    with `SOLVER_BUSY` when there is none. Reserved threads alone would fill
+    with QUEUED solves, and a queued caller waits out a deadline it was always
+    going to miss — `build.ts` can fall back on its own placer given a reason,
+    and can do nothing with an answer that arrives after it gave up.
+
+One server on one port, deliberately: a second server for health would need a
+second port in the deploy, and the reserve achieves the same isolation without
+one.
 """
 
 from __future__ import annotations
 
 import hmac
 import logging
+import threading
 from concurrent import futures
 
 import grpc
@@ -37,10 +74,24 @@ from cp_sat.schema import (
 
 AUTH_METADATA_KEY = "x-internal-secret"
 
+#: Threads on the server's pool that no solve can ever occupy.
+#:
+#: Two, not one: one answers `Health/Check` while the pool is full, and the
+#: second answers the `SOLVER_BUSY` refusals — which are instant, but still
+#: need a thread to be instant ON. Sizing this from `max_workers` would defeat
+#: it, since the whole point is a floor that does not move when a caller turns
+#: the solve concurrency up.
+HEALTH_RESERVE_THREADS = 2
+
 
 class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
     def __init__(self, settings: Settings):
         self._settings = settings
+        # Admission control. `BoundedSemaphore` rather than `Semaphore` so a
+        # release without a matching acquire — the shape a future refactor of
+        # the try/finally below would take — raises instead of silently
+        # inflating the concurrency limit.
+        self._solve_slots = threading.BoundedSemaphore(settings.max_workers)
 
     def _authenticated(self, context) -> bool:
         # Header names are case-insensitive on the wire and a real transport
@@ -61,6 +112,28 @@ class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
             # `abort` raises, so nothing below runs.
             context.abort(grpc.StatusCode.UNAUTHENTICATED, "missing or invalid secret")
 
+        # Admission control, before the request is even parsed: a saturated
+        # server should cost a caller a round trip, not a parse of 8 000 slots.
+        # `blocking=False` is the whole mechanism — queueing here is what fills
+        # the health check's reserved threads and turns a busy service into a
+        # dead-looking one.
+        if not self._solve_slots.acquire(blocking=False):
+            logging.warning("solver busy, refused request %s", request.request_id)
+            return error_response(
+                "SOLVER_BUSY",
+                f"all {self._settings.max_workers} solve slots are in use. Retry, or fall back to "
+                "your own placer — this request was refused immediately rather than queued, "
+                "because a queued solve returns after the caller's deadline has already passed.",
+            )
+
+        try:
+            return self._solve_build(request)
+        finally:
+            self._solve_slots.release()
+
+    def _solve_build(self, request):
+        """The handler proper, holding a solve slot. Split out so the release
+        is a single `finally` with no early-return path that can skip it."""
         try:
             parsed = request_to_model_input(request)
         except InvalidRequestError as exc:
@@ -120,7 +193,14 @@ def build_server(settings: Settings) -> tuple[grpc.Server, int]:
     port": `add_insecure_port` then returns the one the OS picked, and 0 back
     means the bind FAILED.
     """
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=settings.max_workers))
+    # `max_workers + HEALTH_RESERVE_THREADS`, not `max_workers`. The servicer's
+    # semaphore caps concurrent solves at `max_workers`, so the reserve is
+    # threads a solve provably cannot take — which is what keeps `Health/Check`
+    # answerable while the solver is saturated. Deleting the `+` here restores
+    # the measured ~10 s liveness blackout, and no in-process test can see it.
+    server = grpc.server(
+        futures.ThreadPoolExecutor(max_workers=settings.max_workers + HEALTH_RESERVE_THREADS)
+    )
     scheduler_pb2_grpc.add_SchedulerServiceServicer_to_server(SchedulerServicer(settings), server)
     health_pb2_grpc.add_HealthServicer_to_server(build_health_servicer(), server)
     port = server.add_insecure_port(f"[::]:{settings.port}")
