@@ -903,10 +903,12 @@ export function ScheduleBoard({
           stages
             .filter((s) => s.status !== "complete" && visibleIds.has(s.division_id))
             .map((s) => (
-              // `min-h-11 sm:min-h-0` on all three: `py-1.5 text-xs` renders a
-              // 28px control, well under the 44px touch target, and these are the
-              // primary actions of the surface. Mobile-only, so the desktop bar
-              // is pixel-identical to what shipped.
+              // `min-h-11` on all three: `py-1.5 text-xs` alone renders a 28px
+              // control, well under the 44px touch target. These are the
+              // primary actions of the surface, so the floor holds at every
+              // width — it was previously dropped past `sm` (640px) via
+              // `sm:min-h-0`, which read fine on phone and desktop widths but
+              // left tablet (768/834) with a 28px hit target (#349).
               <span key={s.id} className="inline-flex items-center gap-1">
                 {/* #465: the two original actions carry a stable id like their
                     Polish sibling. Not tidiness — `board.autoSchedule` is
@@ -918,7 +920,7 @@ export function ScheduleBoard({
                   data-testid="schedule-auto"
                   disabled={actions.busy}
                   onClick={() => void actions.autoRun(s.id, false)}
-                  className="btn btn-primary min-h-11 px-3 py-1.5 text-xs sm:min-h-0"
+                  className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
                 >
                   {msg("board.autoSchedule", { name: stages.length > 1 ? s.name : "" })}
                 </button>
@@ -927,7 +929,7 @@ export function ScheduleBoard({
                   data-testid="schedule-reflow"
                   disabled={actions.busy}
                   onClick={() => void actions.autoRun(s.id, true)}
-                  className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs sm:min-h-0"
+                  className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
                   title={msg("board.reflowTitle")}
                 >
                   {msg("board.reflow")}
@@ -943,7 +945,7 @@ export function ScheduleBoard({
                   data-testid="schedule-polish"
                   disabled={actions.busy}
                   onClick={() => void actions.autoRun(s.id, true, "polish")}
-                  className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs sm:min-h-0"
+                  className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
                   title={msg("board.polishTitle")}
                 >
                   {msg("board.polish")}
