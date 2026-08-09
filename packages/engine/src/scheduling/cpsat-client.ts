@@ -58,6 +58,14 @@ export interface SolveBuildInput {
    * service can REJECT an omission, not so callers may omit it.
    */
   grid: { slots: { court: string; startAtMs: number; dayIndex: number }[]; stepMinutes: number };
+  /** `fixtureId` is carried for the caller's own bookkeeping only — it is NOT
+   *  sent on the wire (`PinnedRow` carries no identity; see `toRequest`), so
+   *  it cannot be used to "pin" a fixture that also appears in `fixtures`.
+   *  Sending the same id in both lists does not pin it: the row here lays a
+   *  fixed blocking interval while the movable fixture in `fixtures` stays
+   *  free, and the fixture comes back placed a SECOND time elsewhere. A
+   *  pinned/locked/frozen fixture must be excluded from `fixtures` when it is
+   *  added here. */
   existing: { fixtureId: string; court: string; startAtMs: number }[];
   dependencies: { beforeFixtureId: string; afterFixtureId: string }[];
   constraints: {

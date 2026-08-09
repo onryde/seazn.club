@@ -19,7 +19,7 @@
 //   * the floor is not greedy's board, it is greedy's LEGAL board. Counting a
 //     card that carries a blocking conflict as "placed" is what let an illegal
 //     greedy board outrank every legal one D3 could reach.
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_SOLVER_QUEUE,
   buildSchedule,
@@ -41,6 +41,8 @@ import {
 } from "./calendar.ts";
 import type { SchedulingConstraints } from "./constraints.ts";
 import { resetZ3 } from "./z3-load.ts";
+import { dayKeyInTz } from "./tz.ts";
+import type { SolveBuildInput, SolveBuildOutcome } from "./cpsat-client.ts";
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 7, 8, 9, 0);
@@ -938,4 +940,177 @@ describe("buildSchedule — the solver queue cap", () => {
     const after = await buildSchedule({ fixtures, config });
     expect(after.status).not.toBe("solver_busy");
   }, 240_000);
+});
+
+// Task 06 — solveBuild now calls the cp-sat service instead of z3. Every case
+// here mocks `cpsat-client.ts`'s `solveBuild` via `vi.spyOn(await
+// import(...))`, never `vi.doMock`: the recorded trap in this repo is that
+// `vi.doMock` (and this spy form too) is INERT if `build.ts` imports the
+// module STATICALLY, and it has previously passed 5/5 with the guard
+// deleted. `build.ts` loads `cpsat-client.ts` dynamically at the call site
+// for exactly this reason — see the comment there.
+describe("buildSchedule — CP-SAT path", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const minimalInput = (over: Partial<BuildInput> = {}): BuildInput => ({
+    fixtures: [fx("f1", "E1", "E2")],
+    config: cfg(),
+    ...over,
+  });
+
+  const okOutcome = (assignments: SolveBuildOutcome["assignments"] = []): SolveBuildOutcome => ({
+    assignments,
+    status: "OPTIMAL",
+    tiersCompleted: 4,
+    objectiveValues: [],
+    elapsedMs: 1200,
+    wallExhausted: false,
+  });
+
+  it("uses the CP-SAT client and returns a verified board", async () => {
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([{ fixtureId: "f1", court: "C1", startAtMs: T0 }]),
+    );
+    const result = await buildSchedule(minimalInput());
+    expect(result.engine).toBe("cp-sat");
+    expect(result.assignments).toHaveLength(1);
+    // proves `validateAssignments` still ran over the cp-sat board — the
+    // verifier never moves, it just gets handed a different engine's board.
+    expect(result.conflicts).toHaveLength(0);
+  });
+
+  it("falls back to greedy on a CP-SAT rejection, exactly like a z3 gate-reject", async () => {
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockRejectedValue(
+      new Error("cp-sat solveBuild exceeded deadline"),
+    );
+    const result = await buildSchedule(minimalInput());
+    expect(result.engine).toBe("greedy");
+    expect(result.assignments.map((a) => a.fixtureId)).toEqual(["f1"]);
+  });
+
+  it("reports a board CP-SAT itself marks ERROR the same way as a rejection — never trusted", async () => {
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [{ fixtureId: "f1", court: "C1", startAtMs: T0 }],
+      status: "ERROR",
+      tiersCompleted: 0,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+      error: { code: "internal", message: "boom" },
+    });
+    const result = await buildSchedule(minimalInput());
+    expect(result.engine).toBe("greedy");
+  });
+
+  it("derives a dense dayIndex matching the verifier's own dayKeyInTz bucketing (obligation 1)", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    await buildSchedule(
+      minimalInput({ config: cfg({ window: { from: T0, to: T0 + 28 * 60 * MIN } }) }),
+    );
+    expect(captured).toBeDefined();
+    const slots = captured!.grid.slots;
+    expect(slots.length).toBeGreaterThan(0);
+    const dayIndexByKey = new Map<string, number>();
+    for (const s of slots) {
+      const key = dayKeyInTz(s.startAtMs, "Europe/London");
+      const seen = dayIndexByKey.get(key);
+      if (seen === undefined) dayIndexByKey.set(key, s.dayIndex);
+      // Same real calendar day must always get the SAME index.
+      else expect(s.dayIndex).toBe(seen);
+    }
+    // The 28h window actually crosses a real midnight in Europe/London.
+    expect(dayIndexByKey.size).toBeGreaterThanOrEqual(2);
+    // Dense 0..n-1, and no two distinct days collide on one index.
+    const values = [...dayIndexByKey.values()];
+    expect(new Set(values).size).toBe(values.length);
+    expect([...values].sort((a, b) => a - b)).toEqual(values.map((_, i) => i));
+  });
+
+  it("sends dayIndex 0 for every slot and omits dayCapByDivision when tz is undefined (obligation 1)", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const config = {
+      ...cfg({ window: { from: T0, to: T0 + 28 * 60 * MIN } }),
+      tz: undefined,
+      hard: [
+        { type: "max_fixtures_per_day" as const, count: 1, scope: { kind: "division" as const, divisionId: "D1" } },
+      ],
+    };
+    await buildSchedule(
+      minimalInput({ fixtures: [fx("f1", "E1", "E2", { divisionId: "D1" })], config }),
+    );
+    expect(captured).toBeDefined();
+    expect(captured!.grid.slots.length).toBeGreaterThan(0);
+    expect(captured!.grid.slots.every((s) => s.dayIndex === 0)).toBe(true);
+    expect(captured!.constraints.dayCapByDivision).toBeUndefined();
+  });
+
+  it("derives dayCapByDivision from division-scoped max_fixtures_per_day hard rules", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const config = {
+      ...cfg(),
+      hard: [
+        { type: "max_fixtures_per_day" as const, count: 2, scope: { kind: "division" as const, divisionId: "D1" } },
+      ],
+    };
+    await buildSchedule(
+      minimalInput({ fixtures: [fx("f1", "E1", "E2", { divisionId: "D1" })], config }),
+    );
+    expect(captured!.constraints.dayCapByDivision).toEqual({ D1: 2 });
+  });
+
+  it("splits a locked fixture into an existing row and excludes it from fixtures (obligation 3)", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome([{ fixtureId: "free", court: "C1", startAtMs: T0 + 30 * MIN }]);
+    });
+    const locked = { court: "C1", startAt: T0 };
+    const result = await buildSchedule(
+      minimalInput({
+        fixtures: [fx("pinned", "E1", "E2", { locked }), fx("free", "E3", "E4")],
+      }),
+    );
+    expect(captured).toBeDefined();
+    // The pinned fixture must NOT be one of the fixtures cp-sat is asked to
+    // place — sending it there too is exactly what silently un-pins it
+    // (measured 5/5 under the string contract: it comes back placed a SECOND
+    // time, elsewhere, OPTIMAL, no error).
+    expect(captured!.fixtures.map((f) => f.fixtureId)).toEqual(["free"]);
+    expect(
+      captured!.existing.some((e) => e.court === "C1" && e.startAtMs === T0),
+    ).toBe(true);
+    // And it must still come back on the final board, at its pinned slot —
+    // the split must not just protect cp-sat's request, it must not lose the
+    // card either.
+    const pinnedRow = result.assignments.find((a) => a.fixtureId === "pinned");
+    expect(pinnedRow?.court).toBe("C1");
+    expect(pinnedRow?.startAt).toBe(T0);
+    expect(result.conflicts).toHaveLength(0);
+  });
+
+  it("routes a per-court blackout board to greedy instead of sending an uneven grid (obligation 5)", async () => {
+    const spy = vi.spyOn(await import("./cpsat-client.ts"), "solveBuild");
+    const config = cfg({
+      courts: ["C1", "C2"],
+      window: { from: T0, to: T0 + 120 * MIN },
+      blackouts: [{ court: "C1", from: T0 + 90 * MIN, to: T0 + 120 * MIN }],
+    });
+    const result = await buildSchedule(minimalInput({ config }));
+    expect(spy).not.toHaveBeenCalled();
+    expect(result.engine).toBe("greedy");
+  });
 });
