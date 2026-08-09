@@ -104,9 +104,12 @@ before diagnosing a real bug:
 - Any new or changed user-facing string → all 4 locale dictionaries,
   never hardcoded English. `content/help/**` is the exception: one
   English tree, no i18n work owed.
-- UI work is verified by screenshot at desktop **and 375px**, with no
-  horizontal page scroll. `/admin` is staff-only — functional bar, skip
-  design polish; every other surface keeps full polish.
+- UI work is verified by screenshot at desktop (1280), **320px**, and
+  **768px**, with no horizontal page scroll at any of them; the
+  seven-width e2e matrix (320/360/375/390/430/768/834, `mobile.spec.ts`
+  projects) is the enforcement backstop. `/admin` is staff-only —
+  functional bar, skip design polish; every other surface keeps full
+  polish.
 - New branches go in a worktree; never check out in the main repo dir.
 
 ## Live programmes — read the index before touching their code
