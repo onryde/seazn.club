@@ -118,7 +118,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
               <Link
                 href={activeOrg ? routes.orgHome(activeOrg.slug) : "/orgs/new"}
                 aria-label={t(dict, "nav.dashboard")}
-                className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream"
+                className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
               >
                 <LayoutDashboard className="h-4 w-4" strokeWidth={1.75} />
                 <span className="hidden sm:inline">{t(dict, "nav.dashboard")}</span>
@@ -126,7 +126,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
               <Link
                 href="/directory"
                 aria-label={t(dict, "nav.directory")}
-                className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream"
+                className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
               >
                 <Users className="h-4 w-4" strokeWidth={1.75} />
                 <span className="hidden sm:inline">{t(dict, "nav.directory")}</span>
@@ -134,7 +134,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
               <Link
                 href={activeOrg ? routes.orgSettings(activeOrg.slug) : "/orgs/new"}
                 aria-label={t(dict, "nav.settings")}
-                className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream"
+                className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
               >
                 <Settings className="h-4 w-4" strokeWidth={1.75} />
                 <span className="hidden sm:inline">{t(dict, "nav.settings")}</span>
@@ -145,7 +145,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 <Link
                   href={routes.me()}
                   aria-label={t(dict, "nav.playerHome")}
-                  className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream"
+                  className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
                 >
                   <CircleUserRound className="h-4 w-4" strokeWidth={1.75} />
                   <span className="hidden sm:inline">{t(dict, "nav.playerHome")}</span>
