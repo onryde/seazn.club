@@ -497,3 +497,48 @@ describe("onLineup — cricket persists the kernel's SquadState, never its own",
     expect(state.squads?.home.exemptUsed).toEqual({ concussion: 1 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 7. Dual fidelity (§9.6) — a squad change is not an innings boundary
+// ---------------------------------------------------------------------------
+
+describe("coarsen — a lineup event survives the fidelity drop", () => {
+  // §9.6 asserts summary(coarsen(events)) === summary(events), and the frozen
+  // conformance streams can never reach this: `arbitraryEvent` generates no
+  // `core.lineup.*`, so the ONLY way a lineup event meets `coarsen` is a
+  // hand-written stream like this one. Both properties below are regression
+  // guards on the pass-through — the mutation that kills them is dropping the
+  // event, which is what the module already does with `cricket.player.line`,
+  // `cricket.newball`, `cricket.powerplay` and `cricket.review`.
+  const events = stream(
+    ["core.start"],
+    // Even run counts only: an odd one rotates the strike and the hand-written
+    // crease stops matching what the fold derives.
+    ball(0, "H-1", "H-2", { runs: { bat: 4 }, boundary: 4 }),
+    concussion("H-4", "H-12", 4),
+    ball(1, "H-1", "H-2", { runs: { bat: 2 } }),
+    ball(2, "H-1", "H-2", bowled("H-1", "H-12")),
+    ball(3, "H-12", "H-2", { runs: { bat: 4 }, boundary: 4 }),
+  );
+  const coarse = stream(
+    ...cricket
+      .coarsen(events.map((event) => ({ type: event.type, payload: event.payload })))
+      .map((event) => [event.type, event.payload] as [string, unknown]),
+  );
+
+  it("folds to the same summary at both fidelities", () => {
+    const fine = foldMatch(cricket, t20, lineups, events, STRICT_ALL);
+    const dropped = foldMatch(cricket, t20, lineups, coarse, STRICT_ALL);
+    expect(cricket.summary(dropped)).toEqual(cricket.summary(fine));
+    expect(cricket.outcome(dropped)).toEqual(cricket.outcome(fine));
+  });
+
+  it("leaves the coarse fold with the SAME squads as the fine fold", () => {
+    // The kernel folds `core.lineup.*` itself, so this holds only while
+    // `coarsen` forwards the event. Dropping it would make a coarse-fidelity
+    // scorebook disagree with a ball-by-ball one about who is on the field —
+    // silently, since no total moves.
+    expect(foldSquads(t20, coarse)).toEqual(foldSquads(t20, events));
+    expect(memberOf(foldSquads(t20, coarse).home, "H-12")?.provenance).toBe("added");
+  });
+});
