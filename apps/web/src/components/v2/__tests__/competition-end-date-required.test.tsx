@@ -12,8 +12,9 @@
 // vitest runs `environment: "node"` with no jsdom here, so the stateful islands
 // are driven through the shared hook harness (see _hook-harness.tsx).
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactElement } from "react";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import type { ReactElement, ReactNode } from "react";
+import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
+import { DateTimeField, type DateTimeFieldProps } from "../shared/datetime-field";
 import { CompetitionWizard } from "../competition-wizard";
 import { CompetitionSettings } from "../competition-settings";
 import { apiV1 } from "@/lib/client-v1";
@@ -47,6 +48,21 @@ const postedBody = () => {
 const dateInputs = (tree: ReactElement[]) =>
   tree.filter((el) => el.type === "input" && propsOf(el).type === "date");
 
+/**
+ * `renderIsland` renders ONE component one level deep, so a date field that now
+ * comes from the shared `DateTimeField` (date/time UX prompt 03) is an
+ * unexpanded element and its `<input>` is invisible to `dateInputs`. The
+ * component is hookless by design, so it is safe to call here — expanded IN
+ * PLACE rather than appended, because these tests index the pair positionally
+ * and appending would swap [starts, ends].
+ */
+const expandFields = (node: ReactNode): ReactElement[] =>
+  walk(node).flatMap((el) =>
+    el.type === DateTimeField
+      ? [el, ...walk(DateTimeField(propsOf(el) as unknown as DateTimeFieldProps))]
+      : [el],
+  );
+
 function typeDate(tree: ReactElement[], which: 0 | 1, value: string): void {
   const input = dateInputs(tree)[which]!;
   (propsOf(input).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
@@ -65,8 +81,11 @@ beforeEach(() => {
   vi.mocked(apiV1).mockResolvedValue({ id: "c1", slug: "summer-cup" } as never);
 });
 
+const mountWizard = () =>
+  renderIsland(CompetitionWizard, { orgSlug: "riverside" }, expandFields);
+
 describe("CompetitionWizard — create requires an end date (#376)", () => {
-  const mount = () => renderIsland(CompetitionWizard, { orgSlug: "riverside" });
+  const mount = mountWizard;
 
   it("marks the end date required and leaves the start date optional", () => {
     const [starts, ends] = dateInputs(mount().tree());
@@ -101,6 +120,48 @@ describe("CompetitionWizard — create requires an end date (#376)", () => {
 
     expect(vi.mocked(apiV1)).toHaveBeenCalledTimes(1);
     expect(postedBody().ends_on).toBe("2026-08-31");
+  });
+});
+
+// Date/time UX programme, prompt 03. The wizard hand-rolled its own
+// `<label className="block"><span className="label">…</span><input type="date"
+// className="input" /></label>`; the start date now goes through the shared
+// `DateTimeField` so every date/time control in the app is one component.
+//
+// The END date is deliberately NOT converted: it carries `aria-required="true"`
+// (the accessible substitute for the native `required` attribute this form
+// avoids on purpose — see submit()), and `DateTimeFieldProps` has no way to
+// express that. Converting it would silently drop the only AT-visible signal
+// that the field is mandatory, and delete the assertion above that guards it.
+describe("CompetitionWizard — shared date/time control (date/time UX prompt 03)", () => {
+  it("renders the start date through the shared DateTimeField, not a hand-rolled input", () => {
+    const [starts] = dateInputs(mountWizard().tree());
+    // The class is the whole fingerprint from here: hand-rolled was `input`,
+    // DateTimeField renders `input w-full text-base`. Visually a no-op —
+    // `.input` already applies `w-full`, and `text-base` is the size it
+    // inherits anyway (see the component for why not `sm:text-sm`).
+    expect(propsOf(starts!).className).toBe("input w-full text-base");
+  });
+
+  it("keeps the start-date label, still wrapping its own control", () => {
+    // Held constant across the swap: same copy, same implicit association via
+    // an enclosing <label> (DateTimeField is hookless, so there is no htmlFor).
+    const tree = mountWizard().tree();
+    const index = tree.indexOf(dateInputs(tree)[0]!);
+    expect(propsOf(tree[index - 1]!).className).toBe("label");
+    expect(propsOf(tree[index - 1]!).children).toBe(msg("comp.wizard.startsOn"));
+    expect(tree[index - 2]!.type).toBe("label");
+  });
+
+  it("still POSTs the start date typed into the shared control", async () => {
+    // The join the swap could break invisibly: DateTimeField hands its parent
+    // the VALUE, not the event, so a mis-wired onChange would post undefined.
+    const island = mountWizard();
+    typeDate(island.tree(), 0, "2026-06-01");
+    typeDate(island.tree(), 1, "2026-08-31");
+    await submitForm(island.tree());
+
+    expect(postedBody().starts_on).toBe("2026-06-01");
   });
 });
 

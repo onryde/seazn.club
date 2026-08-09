@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { VisibilityPicker } from "@/components/ui/visibility-picker";
+import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { routes } from "@/lib/routes";
 import { useMsg } from "@/components/i18n/dict-provider";
 
@@ -129,18 +130,21 @@ export function CompetitionWizard({ orgSlug }: { orgSlug: string }) {
       </fieldset>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <label className="block">
-          <span className="label">{msg("comp.wizard.startsOn")}</span>
-          <input
-            type="date"
-            value={startsOn}
-            onChange={(e) => setStartsOn(e.target.value)}
-            className="input"
-          />
-        </label>
+        <DateTimeField
+          kind="date"
+          label={msg("comp.wizard.startsOn")}
+          value={startsOn}
+          onChange={setStartsOn}
+        />
         <label className="block">
           {/* #376: mandatory — see submit() for why the message is ours and
-              not the browser's native `required` tooltip. */}
+              not the browser's native `required` tooltip. That is also why
+              this one stays hand-rolled while the start date above moved to
+              the shared DateTimeField (date/time UX prompt 03):
+              `aria-required` is the accessible stand-in for the `required`
+              attribute we deliberately omit, and DateTimeFieldProps cannot
+              carry it. Converting this control would drop the only signal a
+              screen reader gets that the field is compulsory. */}
           <span className="label">{msg("comp.wizard.endsOn")} *</span>
           <input
             type="date"
