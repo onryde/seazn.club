@@ -126,6 +126,56 @@ function loadAnthropicKeyIfAbsent(): void {
   process.env.ANTHROPIC_API_KEY = (comment === -1 ? raw : raw.slice(0, comment)).trim();
 }
 
+/**
+ * Refuse to capture against anything but a database the caller NAMED.
+ *
+ * `npm run capture:ai-demo` from a clean shell inherits `DATABASE_URL` from the
+ * repo-root `.env.local` that `vitest.config.ts` loads — the developer's own
+ * dev database. A naive invocation would seed three real organisations, a
+ * competition and a 115-fixture draw into it AND spend about a dollar, and
+ * would look exactly like a successful capture while doing it.
+ *
+ * A comment cannot prevent that, and a `skipIf` would be worse than useless
+ * here: skipping is silent, and the operator would read the green run as a
+ * capture that happened. So this THROWS, before any seeding and before any
+ * model call.
+ *
+ * The test is "did the caller override the env file", not a guess about the
+ * URL's shape: the file's own value is read back and compared. That stays
+ * correct if the dev database is ever renamed or moved off :5432, which a
+ * hardcoded pattern would not. The `:5432/seazn` shape is kept as a second
+ * belt for the case where the env file is absent or differs.
+ *
+ * `CAPTURE_DB_OK=1` is the deliberate override, for an operator who really
+ * does mean the database they are pointed at.
+ */
+function assertCaptureDatabase(): void {
+  if (process.env.CAPTURE_DB_OK === "1") return;
+  const url = process.env.DATABASE_URL ?? "";
+  const refuse = (why: string): never => {
+    throw new Error(
+      `refusing to capture against ${why}.\n` +
+        "The capture seeds real organisations and spends real money, so it only " +
+        "runs against a database you name explicitly:\n\n" +
+        "  DATABASE_URL=postgresql://postgres@127.0.0.1:54339/<throwaway> \\\n" +
+        "  DATABASE_SSL=disable npm run capture:ai-demo\n\n" +
+        "Set CAPTURE_DB_OK=1 to override if you really mean this database.",
+    );
+  };
+
+  let fromEnvFile: string | null = null;
+  try {
+    const contents = readFileSync(path.resolve(__dirname, "../../../../../../.env.local"), "utf8");
+    fromEnvFile = contents.match(/^DATABASE_URL=(.*)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "") ?? null;
+  } catch {
+    // No env file (CI). The shape check below still applies.
+  }
+  if (fromEnvFile !== null && url === fromEnvFile) {
+    refuse("the DATABASE_URL inherited from the repo-root .env.local — the dev database");
+  }
+  if (/:5432\/seazn\b/.test(url)) refuse("what looks like the local dev database");
+}
+
 /** The pack the run is anchored on: one division, or the joint competition. */
 async function packFor(
   auth: AuthCtx,
@@ -250,8 +300,42 @@ async function grantCredits(walletId: string, n: number): Promise<void> {
     values (${walletId}, ${n}, 'admin_adjust', 'grant', ${n})`;
 }
 
+/**
+ * Orgs the GUARD seeded on this run, for teardown.
+ *
+ * The guard is always on, so without this every `npm test` would leave three
+ * more organisations — one of them a 115-fixture, 88-entrant competition — in
+ * the shared test database, for ever. That is not a tidiness point: suites here
+ * that sweep ALL orgs go red on accumulated volume rather than on any defect,
+ * and the failure reads as a race or a timeout rather than as bloat.
+ *
+ * The CAPTURE's orgs are deliberately NOT tracked. That path already refuses to
+ * run against anything but a database the operator named as disposable, and its
+ * rows are what you inspect afterwards to see what the run actually cost.
+ */
+const guardOrgIds: string[] = [];
+const guardUserIds: string[] = [];
+
 afterAll(async () => {
   if (!HAS_DB) return;
+  // Orgs first: `org_members` references `users`, so the owners cannot go until
+  // their memberships have. Everything the templates create — competitions,
+  // divisions, entrants, fixtures, schedule_settings — cascades with the org,
+  // which is the same shape `scripts/smoke.ts`'s cleanup(tag) relies on.
+  if (guardOrgIds.length > 0) {
+    await sql`delete from organizations where id in ${sql(guardOrgIds)}`;
+  }
+  if (guardUserIds.length > 0) {
+    // `seedOrg("pro")` mints a subscription, and it does NOT go with the org:
+    // the FK runs the other way (`organizations.subscription_id → subscriptions`,
+    // no cascade), while `subscriptions.owner_user_id → users` has no ON DELETE
+    // at all. So the row outlives its organisation and then blocks its owner
+    // with `subscriptions_owner_fk`. Orgs → subscriptions → users is the only
+    // order that holds, and it is the same "money rows before their owner"
+    // shape `scripts/smoke.ts` uses.
+    await sql`delete from subscriptions where owner_user_id in ${sql(guardUserIds)}`;
+    await sql`delete from users where id in ${sql(guardUserIds)}`;
+  }
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
   const client = globalForDb._sql;
   globalForDb._sql = undefined;
@@ -267,6 +351,7 @@ describe.skipIf(!CAPTURING || !HAS_DB)("capture a real architect run", () => {
     it(
       `captures ${t.slug}`,
       async () => {
+        assertCaptureDatabase();
         loadAnthropicKeyIfAbsent();
 
         // pro_plus is the only plan holding BOTH gates a template can need —
@@ -376,6 +461,8 @@ describe.skipIf(!HAS_DB)("committed demo fixtures reproduce their board", () => 
       const committed = JSON.parse(raw) as { pack: unknown; movableIds: string[] };
 
       const { auth } = await seedOrg("pro");
+      guardOrgIds.push(auth.orgId);
+      if (auth.userId) guardUserIds.push(auth.userId);
       const seeded = await t.seed(auth);
       const { pack, movableIds } = await packFor(auth, seeded);
 
