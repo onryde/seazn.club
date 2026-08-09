@@ -23,14 +23,18 @@ was fixed directly in this task (removed `sm:min-h-0` from all three
 buttons), not deferred to Task 5/6. See task-4-report.md for the fix,
 rebuild/restart, and green re-run evidence.
 
-**Result: every surface below is OK.** No D or P rows — Tasks 5/6 have no
-rows from this table to implement. This was not assumed going in; the brief's
+**Result: 39 OK / 1 D / 0 P.** This was not assumed going in; the brief's
 named "known suspects" (org settings sidebar, marketing nav, console shell,
-schedule board) were screenshotted and inspected like everything else, and
-each held up: full desktop nav at both widths (no hamburger-next-to-links
-half-collapse), no sidebar/content collisions, no toolbar wrapping badly. The
-app's shell and console pages already commit to a `md:` (768px) desktop
-layout with no half-measures.
+schedule board) were screenshotted and inspected like everything else. Three
+of the four held up clean: full desktop nav at both widths (no
+hamburger-next-to-links half-collapse), no sidebar/content collisions. The
+fourth — the schedule board — is the one D row below: its action toolbar
+breaks into 2 rows at both tablet widths, isolating the "Freeze schedule"
+button behind a stretched `flex-1` spacer gap (see the schedule board row for
+file:line detail). Task 5 has exactly one row to implement from this table
+(the schedule board); Task 6 has zero. The rest of the app's shell and
+console pages already commit to a `md:` (768px) desktop layout with no
+half-measures.
 
 **One pre-existing, out-of-scope defect found while building the screenshot
 fixtures:** `mobile.spec.ts`'s "console routes: no horizontal scroll" test
@@ -99,4 +103,5 @@ owner / a future task, not corrected in `mobile.spec.ts`.
 - D: 1
 - P: 0
 
-Tasks 5 and 6 have zero rows to implement from this table.
+Task 5 has exactly one row to implement from this table (the z3 schedule
+board — toolbar wrap break, see row above); Task 6 has zero.
