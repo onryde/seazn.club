@@ -103,8 +103,18 @@ async function isolated<T>(
 const shape = (rows: readonly { fixtureId: string; court: string; startAt: number }[]): string[] =>
   rows.map((a) => `${a.fixtureId}@${a.court}+${(a.startAt - T0) / MIN}`).sort();
 
+// Three of the five cases below are SKIPPED (Task 06, cp-sat cutover):
+// `solveBuild` no longer boots z3 (`loadZ3`) at all on the path these
+// exercise, so `z3LoadCount()` returning to 0 after a "solve" is no longer
+// evidence of a teardown — it is evidence that z3 was never touched in the
+// first place, which these tests' own header comment names as the exact
+// vacuous reading `rlimitSpent > 0` exists to rule out. `buildSchedule`
+// still wraps every call in `withZ3LockAndReset` (untouched, still correct
+// for REFLOW's z3 usage), but nothing on the BUILD/POLISH path leaves
+// anything for it to tear down anymore. Prompt 10 removes this file's
+// remaining premise along with `z3-load.ts`.
 describe("buildSchedule — z3 teardown (R17)", () => {
-  it("hands the WASM heap back after a solve that succeeded", async () => {
+  it.skip("hands the WASM heap back after a solve that succeeded", async () => {
     await isolated(async ({ build, z3 }) => {
       const out = await build.buildSchedule({ fixtures, config });
       // The positive witness. z3's own resource counter moved, so the WASM
@@ -115,7 +125,7 @@ describe("buildSchedule — z3 teardown (R17)", () => {
     });
   }, 180_000);
 
-  it("hands the WASM heap back when the solve THREW", async () => {
+  it.skip("hands the WASM heap back when the solve THREW", async () => {
     // The path that gets forgotten, and the reason this is a separate case
     // rather than a corollary of the one above. `encodeBuild` runs AFTER
     // `loadZ3`, so a fault injected here is a fault with the context already
@@ -278,7 +288,7 @@ describe("buildSchedule — z3 teardown (R17)", () => {
     }
   }, 60_000);
 
-  it("still serialises, and still tears down, when two runs queue together", async () => {
+  it.skip("still serialises, and still tears down, when two runs queue together", async () => {
     // The teardown moved INSIDE the lock, so the guard worth keeping is that
     // holding it across both halves did not wedge the queue: two runs launched
     // together must both complete and both leave nothing loaded.

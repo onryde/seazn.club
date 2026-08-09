@@ -85,7 +85,7 @@
 // incumbent simply stands and `budgetExpired` says why. Both sites that can
 // see an `unknown` — the feasibility probe and the T0 walk — are pinned by
 // their own test.
-import type { Arith, Bool, Model, Solver } from "z3-solver";
+import type { Arith, Bool, Solver } from "z3-solver";
 import { boardMetrics, isStrictlyBetter, type BoardMetrics } from "./build-objectives.ts";
 import { buildGrid, type BuildGrid, type BuildSlot } from "./build-grid.ts";
 import type { BuildConfig, EncodedModel } from "./build-encode.ts";
@@ -287,112 +287,15 @@ export function canSolveWithin(
  *  decision. */
 const AUTO_SOLVER_WALL_MS_AT_MEASUREMENT = 8_000;
 
-/**
- * One run's z3 resource budget, shared by every solve the run performs
- * (ruling R11).
- *
- * --- WHY THIS IS NOT `solver.set("rlimit", n)` ONCE ------------------------
- *
- * MEASURED, against z3-solver 5.0.0:
- *
- *   * `rlimit` is RE-ARMED ON EVERY `check()`. Three checks at `rlimit: 50_000`
- *     on ONE solver each returned `sat`, spending ~40_000 apiece — 120_000
- *     against a limit that reads like 50_000.
- *   * it is a PER-CHECK DELTA, not an absolute threshold. With the context's
- *     counter already at 86_090, a check at `rlimit: 50_000` still returned
- *     `sat` and spent 40_672. An absolute reading would have aborted at once.
- *
- * So a limit set once before the first check bounds a CHECK, never a run: the
- * old code could spend `checks x rlimit`, and with LNS re-entering the solver
- * per window it became `(windows + 1) x checks x rlimit`. That inverts D9 —
- * the deterministic budget stops binding and the wall-clock backstop becomes
- * the real stopping rule, on a machine-dependent boundary that R10 says must
- * never fire at all.
- *
- * --- HOW IT IS ACCOUNTED ---------------------------------------------------
- *
- * z3's own counter, read from `solver.statistics()` under the key
- * `rlimit count`. It is CONTEXT-GLOBAL and monotonic — a fresh `Solver` keeps
- * counting from where the last one stopped, which is exactly what makes it
- * usable as a run total across the sub-solves LNS opens. Every reading here is
- * a DELTA against `base`, so what other runs did before this one is irrelevant,
- * and `withZ3Lock` guarantees no other solve is interleaving with ours.
- *
- * Deterministic by construction: `rlimit` is a resource counter, not a clock,
- * which is the whole reason D9 chose it. Nothing here reads elapsed time.
- */
-interface RunBudget {
-  /** The whole run's allowance, in z3 resource units. */
-  readonly total: number;
-  /** `rlimit count` when the run started. Readings are deltas against it. */
-  readonly base: number;
-  /** Consumed so far by every solve in this run. MEASURED, never assumed. */
-  spent: number;
-  /**
-   * What the run has DRAWN, as opposed to what it spent: each phase is charged
-   * the smaller of what it used and what it was allotted.
-   *
-   * The two differ because a check OVERSHOOTS (see `rlimitSpent`), and the
-   * overshoot is z3's, not the next phase's to pay for. Charging it whole makes
-   * the reserve imaginary: MEASURED, the main phase's last check overran its
-   * 75% share by more than the remaining 25% in EVERY configuration tried —
-   * 500_000 spent 1_045_248, 100_000 spent 103_661, 260_000 spent 288_533 — so
-   * `spent < total` was false the moment the tiers fell short, and the fallback
-   * never ran on a single board it exists for. Allotments are drawn against
-   * this; `spent` stays the honest total and is what `rlimitSpent` reports.
-   */
-  drawn: number;
-}
-
-/**
- * z3's own resource counter. Present before the first `check()` (measured: 1 on
- * a brand-new context), but guarded anyway — a missing key must read as
- * "nothing spent yet", not as a `NaN` that would silently disable the cap.
- *
- * `release()` IS NOT OPTIONAL HERE, whatever the API docs' "can help release
- * memory sooner" suggests. `statistics()` allocates a `Z3_stats` in the WASM
- * heap and JS finalisers are not prompt enough to keep up with one reading per
- * `check()`: leaving them to the collector aborted a 14-run probe with
- * `RuntimeError: memory access out of bounds` inside
- * `smt::relevancy_propagator_imp::pop` — a corrupted heap, surfacing at the
- * next `solver.pop()` rather than anywhere near the leak.
- */
-function rlimitCount(solver: Solver<"repair">): number {
-  const stats = solver.statistics();
-  try {
-    return stats.keys().includes("rlimit count") ? stats.get("rlimit count") : 0;
-  } finally {
-    stats.release();
-  }
-}
-
-/**
- * Read a satisfying model and hand the handle straight back.
- *
- * SAME ARGUMENT AS `rlimitCount` ABOVE, and `ModelImpl` uses the same
- * FinalizationRegistry `StatisticsImpl` does. Every `sat` in this file allocates
- * a `Z3_model` in the WASM heap, and a search can produce one per bound across
- * four tier walks plus every LNS sub-solve — the exact rate at which leaving
- * `Z3_stats` to the collector corrupted the heap and aborted a probe inside
- * `smt::relevancy_propagator_imp::pop`.
- *
- * A CALLBACK RATHER THAN A RETURNED HANDLE, because the model has to outlive the
- * read and not the caller: `model.slotOf` walks every placement literal through
- * it, so releasing before that is a use-after-free and releasing after the
- * caller has moved on is what this replaces. The `finally` also covers a throw
- * out of `slotOf`, which is where an encoder-drift error surfaces.
- *
- * Bounded in practice by `withZ3LockAndReset`'s per-run teardown, so this is
- * insurance rather than a fix for a reproduced abort — see the report.
- */
-function withModel<T>(solver: Solver<"repair">, read: (model: Model<"repair">) => T): T {
-  const m = solver.model();
-  try {
-    return read(m);
-  } finally {
-    m.release();
-  }
-}
+// `RunBudget` (z3's per-run rlimit accounting), `rlimitCount` and `withModel`
+// lived here — z3-specific support code for the tier-walk `solveBuild` used
+// to run. Removed rather than left as dead code once this task's rewrite of
+// `solveBuild` (see below) took their only call sites: ESLint's
+// `no-unused-vars` is an error in this package, not a warning, and ORPHANED
+// local helpers are not "z3 code" in the sense `_RULES.md`/the task brief
+// mean by it — `build-encode.ts`, `z3-load.ts` and `build-lns.ts` (which
+// still own the actual solving logic, untouched, for Prompt 10 to remove as
+// a unit) are.
 
 export type BuildStatus =
   /** A board was produced and the gate accepted it. */
@@ -1352,6 +1255,22 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     };
   };
   const pinnedAssignments = pins.map((p) => assignmentOf(p.id, p.at.court, p.at.startAt));
+
+  // If the pins ALONE already carry a blocking conflict — two locked cards on
+  // one slot, or a locked card colliding with an `existing` row — no amount
+  // of placing FREE fixtures can fix it: cp-sat cannot move a pin, only place
+  // the rest around it (a pin is sent as a fixed `existing` row, and the wire
+  // never cross-checks two `existing` rows against each other — see the
+  // comment on `SolveBuildInput.existing`). This is the same fact z3's own
+  // feasibility probe rested on ("without a pin the model is satisfiable by
+  // inspection"), reproduced locally because there is no live solver handle
+  // left to probe once the request is a single RPC rather than a session.
+  if (pins.length > 0) {
+    const pinConflicts = validateAssignments(pinnedAssignments, verifyConfig, existing, dependencies);
+    if (pinConflicts.some(isBlockingConflict)) {
+      return { ...greedy("infeasible"), contradictoryPins: pinnedIds };
+    }
+  }
 
   // Obligation 1: `dayIndex` is the org's local calendar day, bucketed
   // EXACTLY the way the verifier buckets a day cap — any other derivation
