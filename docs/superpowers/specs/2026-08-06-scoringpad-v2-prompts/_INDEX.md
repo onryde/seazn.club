@@ -539,6 +539,43 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   where `'official'` means a **match** official (referee/umpire) per that
   migration's own comment. A team coach has no value there, so a DB lane
   extension is owed — out of scope for an engine-only session, flagged for S4.
+- 2026-08-09 — S3/#426 — **pass-B pin table (scout, `main` @ `0c8eb752`), plus two
+  findings that change what "closed" means for two of the nine rows.**
+  `init(cfg, lineups)` implementations: football `football.ts:1422`, cricket
+  `cricket.ts:2035`, carrom `carrom.ts:537`, boardgame `boardgame.ts:351`,
+  generic `generic.ts:222` own theirs; the other six delegate to a kernel —
+  hockey + icehockey via `period/kernel.ts:1557`, volleyball + badminton +
+  tabletennis via `setbased/kernel.ts:950`, tennis via `nested/kernel.ts:1238`.
+  So six of eleven sports are covered by three kernel edits.
+  Football substitution: fold case `:1373`, second fold pass `:1985`, `offUsed`
+  built `:971`, cap check `:918` (`!rolling && offUsed.length >= maxSubs`).
+  Position catalogs: hockey `hockey.ts:15`, icehockey `icehockey.ts:13` (GK
+  `:15`), football `football.ts:1314` (GK `:1316`). Cricket retire fold
+  `cricket.ts:2744`. Pair entrant kinds: tennis `tennis.ts:46`, badminton
+  `setbased/badminton.ts:43`, tabletennis `setbased/tabletennis.ts:44`; serve
+  decisions `nested/kernel.ts:594` (TB first server) and `setbased/kernel.ts:101`
+  (a `server` scorebook field with **no rotation logic**).
+  Deferred rows: cricket concussion `cricket/DOMAIN.md:112`; football keeper
+  `football/DOMAIN.md:129` (a numbered finding, not a table row) and concussion
+  sub `:69`; hockey no-keeper `hockey/DOMAIN.md:69`; icehockey pulled goalie
+  `icehockey/DOMAIN.md:58`; volleyball libero `setbased/DOMAIN.volleyball.md:42`;
+  tennis doubles order `tennis/DOMAIN.md:64`; tabletennis `setbased/DOMAIN.tabletennis.md:39`.
+  **FINDING A — football folds `football.sub` in TWO places** (`:1373` init-time
+  validation and `:1985` the replay fold). That is this repo's recurring
+  placer/verifier fork, hit 3× in one earlier session. The substitution cap and
+  the re-entry rule must be ONE shared function called from both sides, and a
+  test must assert both sides return the same number, or the two will diverge.
+  **FINDING B — `emptyNet` already exists and does NOT close the pulled-goalie
+  row.** `period/kernel.ts:217` declares the zod field and `icehockey.ts:75`
+  reads it (`agg:"count", when: p.emptyNet === true`). It is a property of a
+  GOAL, not a statement about on-ice personnel, which is exactly what the
+  deferred row asks for. A pass that points at `emptyNet` and calls the row
+  closed has closed nothing.
+  Also: volleyball's **libero is already a role catalog entry**
+  (`setbased/volleyball.ts:24`), so a lineup can already name one — only the
+  replacement EVENT is missing. And cricket has **no substitute-fielder or
+  12th-man concept at all** (zero grep hits), so its concussion replacement is
+  net-new, not an extension.
 - _(append below)_
 
 ## Open questions for the owner
