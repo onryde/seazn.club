@@ -43,6 +43,32 @@ export const volleyball = makeSetBasedModule({
     beach: { bestOf: 3, setTo: 21, finalSetTo: 15, pointsMap: { "*": [2, 0] } },
   },
   positions,
+  // S3/W4b (#426) ruling 2 — FIVB 15.6, the two conditions on a re-entry, and
+  // 19.3, the libero replacement that is not a substitution.
+  //
+  //  * `reentry: "once"` — a player who has left may come back once, and once
+  //    only, in the same set.
+  //  * `reentryPositionLock: true` — and only to the position they left. This
+  //    is the half a generic "may they come back?" knob cannot express, and it
+  //    is why `SquadMember.lastPositionKey` is recorded at the moment of
+  //    leaving rather than derived afterwards.
+  //  * `exemptions: { libero }`, UNCAPPED — a libero replacement is explicitly
+  //    not a substitution (19.3.2.1), so it is charged here rather than to
+  //    `maxSubs` and the six-a-set allowance is untouched by it.
+  //
+  // `maxSubs` is deliberately ABSENT, not six: the dossier's "timeout /
+  // substitution allowances" row is a standing product decision that refusing
+  // the seventh substitution would make a legitimate late correction
+  // unrecordable. Nothing here changes that; charging the count is what makes
+  // capping it a one-line change if the decision goes the other way.
+  //
+  // `allowSquadGrowth: false` — FIVB benches are named on the sheet.
+  lineupPolicy: () => ({
+    reentry: "once",
+    reentryPositionLock: true,
+    allowSquadGrowth: false,
+    exemptions: { libero: {} },
+  }),
   unitLabel: { one: "Set", many: "Sets" },
   // spec 04 §3.4 — points → matches won → set ratio → point ratio → h2h.
   defaultTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],

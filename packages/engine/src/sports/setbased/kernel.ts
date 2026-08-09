@@ -35,6 +35,8 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
+import { expectedPairServerOf, makeSquadAdopter } from "../squad-state.ts";
+import type { LineupPolicy, SquadState } from "../../core/lineup.ts";
 
 // ---------------------------------------------------------------------------
 // Kernel parameters & config — spec 04 §3.1 / §4 / §5
@@ -313,6 +315,42 @@ export interface SetBasedState {
    *  already reads — so a pad can read this counter today without any new
    *  export. Staying out of `summary` costs it nothing. */
   expediteUnchecked?: number;
+  /**
+   * S3/W4b (#426) — who is on court and where, as `core/lineup.ts` folded it.
+   *
+   * Two dossier rows land here. FIVB's LIBERO REPLACEMENT is a squad fact and
+   * nothing else: it changes no score, so `subs`/`sets` cannot carry it, and
+   * `SetBasedSubState` beside it is the scoresheet's substitution BOXES (a
+   * per-set tally of in/out numbers) rather than a model of who is on court —
+   * the two record different things and neither is derivable from the other.
+   * And the racquet codes' DOUBLES ORDER arrives here from the team sheet's
+   * `pairOrder`, which is what `expectedDoublesServer` reads.
+   *
+   * ABSENT until it says something the team sheet does not — see
+   * `sports/squad-state.ts`. Never initialise it in `init`, for the same reason
+   * as every optional field above it.
+   */
+  squads?: SquadState;
+}
+
+/**
+ * Who is due to serve this side's `serviceTurn`-th service turn (0-based),
+ * from the pair the team sheet declared — the reader
+ * `DOMAIN.tabletennis.md`'s "doubles serve and receive order" row was deferred
+ * for.
+ *
+ * The rotation itself was always derivable from the service history; the ORDER
+ * was not, because it is declared and `init` used to discard it. `null` for a
+ * singles fixture or a sheet that names no order: the caller then has nothing
+ * to check the recorded `server` against, which is a true answer, unlike a
+ * fabricated one.
+ */
+export function expectedDoublesServer(
+  state: SetBasedState,
+  side: Side,
+  serviceTurn: number,
+): string | null {
+  return expectedPairServerOf(state.squads, side, serviceTurn);
 }
 
 /** ITTF Law 2.15.2 — the receiver wins the point on their thirteenth good
@@ -779,6 +817,16 @@ export interface SetBasedPreset {
     expedite?: boolean;
   };
   playerStats?: PlayerStatsModel; // Jul3/07 §3 — unlocked by person attribution
+  /**
+   * S3/W4b (#426) owner ruling 2 — what this competition permits a lineup to
+   * do. A FUNCTION OF CFG, and on this kernel the per-sport answers are as far
+   * apart as they get: FIVB indoor is `once` PLUS a position lock (15.6),
+   * while ITTF and BWF have no substitution at all and so no return either. A
+   * kernel constant would be right for at most one of the three.
+   *
+   * Omitted ⇒ `DEFAULT_LINEUP_POLICY`.
+   */
+  lineupPolicy?: (cfg: SetBasedCfg) => LineupPolicy;
 }
 
 function makeMetrics(unit: { one: string; many: string }): MetricSpec[] {
@@ -854,6 +902,9 @@ export function makeSetBasedModule(
   const expediteType = `${preset.key}.expedite.start`;
   const records = preset.records ?? {};
   const coarsenParams = preset.defaults; // spec 04 §9.6 conformance runs at default cfg
+  // One per module, so the init handshake it keys on cannot leak between the
+  // three sports sharing this kernel (see `sports/squad-state.ts`).
+  const squadAdopter = makeSquadAdopter<SetBasedState>();
 
   // W4 — the interruption types this sport actually records. `coarsen` treats
   // them as transparent, so they never split a rally set.
@@ -947,8 +998,12 @@ export function makeSetBasedModule(
     ...(preset.playerStats === undefined ? {} : { playerStats: preset.playerStats }),
     ...(discipline === undefined ? {} : { discipline }),
 
+    // S3/W4b (#426) — the two halves of adopting `core/lineup.ts`.
+    ...(preset.lineupPolicy === undefined ? {} : { lineupPolicy: preset.lineupPolicy }),
+    onLineup: (state, squads) => squadAdopter.adopt(state, squads),
+
     init(cfg, lineups: LineupPair): SetBasedState {
-      return {
+      return squadAdopter.fresh({
         cfg,
         entrants: { home: lineups.home.entrantId, away: lineups.away.entrantId },
         phase: "pre",
@@ -956,7 +1011,7 @@ export function makeSetBasedModule(
         setsWon: { home: 0, away: 0 },
         outcome: null,
         replayFlagged: false,
-      };
+      });
     },
 
     apply(state, ev: EventEnvelope<SetBasedEv | CoreEv>, ctx): SetBasedState {

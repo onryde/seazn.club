@@ -33,6 +33,14 @@ export const badminton = makeSetBasedModule({
     short: { setTo: 11, finalSetTo: 11, cap: 15 },
   },
   positions,
+  // S3/W4b (#426) ruling 2 — BWF Law 16 has no substitution: a player who
+  // cannot continue retires and the match is over. Stated for the same reason
+  // as table tennis's.
+  lineupPolicy: () => ({
+    reentry: "none",
+    reentryPositionLock: false,
+    allowSquadGrowth: false,
+  }),
   unitLabel: { one: "Game", many: "Games" },
   // spec 04 §4 — points → matches → game ratio → point ratio → h2h. game_ratio
   // is the set_ratio key (games are the kernel's sets).
