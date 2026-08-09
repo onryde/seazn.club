@@ -121,12 +121,19 @@ shared contract, so it is the vocabulary of record.
 | a match to place | `Fixture.fixture_id` | `fixture_id` | `fixtureId` |
 | a place to play | `court` | `court` | `court` |
 | a placement | `Assignment` | `(fixture_id, court, start_at_ms)` | `{fixtureId, court, startAtMs}` |
-| an objective level | `Tier{name, value_ms}` | `objective_values: [(name, value)]` | `objectiveValues` |
+| an objective level | `Tier{name, value}` | `objective_values: [(name, value)]` | `objectiveValues` |
+| the T3 metric | `Tier.name == "imbalance"` | `TIER_IMBALANCE` | `imbalance` |
 
 Case convention changes at the language boundary (`snake_case` ->
 `camelCase`); **the word never does.** A rename on one side without the
 other is a defect, not a style choice. If a tier is called `idle_gap` in
 Python it is `idleGap` in TypeScript — never `gap`, never `worstGap`.
+
+The unit is not part of the word either, and a unit in the NAME is a
+claim the field has to keep. `Tier.value_ms` carried T0's `placed`, a
+count of fixtures, in a milliseconds-named field; Task 05c renamed it to
+`value` rather than documenting the lie. Nothing was deployed, so the
+rename was free — after Prompt 08 it would not have been.
 
 ## 4. The anti-corruption layer earns its name
 

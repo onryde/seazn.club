@@ -244,7 +244,7 @@ def test_publishes_only_confirmed_objective_values(test_server, monkeypatch):
     response, _, code, _ = _invoke(test_server, _solvable_request())
     assert code == grpc.StatusCode.OK
     assert response.tiers_completed == 1
-    assert [(t.name, t.value_ms) for t in response.objective_values] == [(TIER_ORDER[0], 1)]
+    assert [(t.name, t.value) for t in response.objective_values] == [(TIER_ORDER[0], 1)]
 
 
 def test_publishes_every_objective_value_when_all_tiers_proved(test_server, monkeypatch):

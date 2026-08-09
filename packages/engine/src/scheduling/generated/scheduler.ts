@@ -122,9 +122,21 @@ export interface BuildConstraints {
   dayCapByDivision: DivisionDayCapRule[];
 }
 
+/** One rung of the lexicographic objective chain and the value it PROVED. */
 export interface Tier {
+  /**
+   * `placed` | `makespan` | `idle_gap` | `imbalance`, in that order. The word
+   * is shared with the TypeScript caller and only its case convention changes
+   * (`idle_gap` <-> `idleGap`); see the DDD standard's ubiquitous-language rule.
+   */
   name: string;
-  valueMs: number;
+  /**
+   * NOT milliseconds for every tier. `makespan`, `idle_gap` and `imbalance`
+   * are ms; `placed` is a COUNT of fixtures. The field was called `value_ms`
+   * and carried the count regardless, so the name is deliberately
+   * unit-neutral rather than documenting the lie.
+   */
+  value: number;
 }
 
 export interface SolveError {
@@ -894,7 +906,7 @@ export const BuildConstraints: MessageFns<BuildConstraints> = {
 };
 
 function createBaseTier(): Tier {
-  return { name: "", valueMs: 0 };
+  return { name: "", value: 0 };
 }
 
 export const Tier: MessageFns<Tier> = {
@@ -902,8 +914,8 @@ export const Tier: MessageFns<Tier> = {
     if (message.name !== "") {
       writer.uint32(10).string(message.name);
     }
-    if (message.valueMs !== 0) {
-      writer.uint32(16).int64(message.valueMs);
+    if (message.value !== 0) {
+      writer.uint32(16).int64(message.value);
     }
     return writer;
   },
@@ -928,7 +940,7 @@ export const Tier: MessageFns<Tier> = {
             break;
           }
 
-          message.valueMs = longToNumber(reader.int64());
+          message.value = longToNumber(reader.int64());
           continue;
         }
       }
@@ -943,11 +955,7 @@ export const Tier: MessageFns<Tier> = {
   fromJSON(object: any): Tier {
     return {
       name: isSet(object.name) ? globalThis.String(object.name) : "",
-      valueMs: isSet(object.valueMs)
-        ? globalThis.Number(object.valueMs)
-        : isSet(object.value_ms)
-        ? globalThis.Number(object.value_ms)
-        : 0,
+      value: isSet(object.value) ? globalThis.Number(object.value) : 0,
     };
   },
 
@@ -956,8 +964,8 @@ export const Tier: MessageFns<Tier> = {
     if (message.name !== "") {
       obj.name = message.name;
     }
-    if (message.valueMs !== 0) {
-      obj.valueMs = Math.round(message.valueMs);
+    if (message.value !== 0) {
+      obj.value = Math.round(message.value);
     }
     return obj;
   },
@@ -968,7 +976,7 @@ export const Tier: MessageFns<Tier> = {
   fromPartial<I extends Exact<DeepPartial<Tier>, I>>(object: I): Tier {
     const message = createBaseTier();
     message.name = object.name ?? "";
-    message.valueMs = object.valueMs ?? 0;
+    message.value = object.value ?? 0;
     return message;
   },
 };

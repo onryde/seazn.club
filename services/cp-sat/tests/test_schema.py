@@ -279,7 +279,7 @@ def test_outcome_to_response_publishes_only_proved_tiers():
     )
     resp = outcome_to_response(outcome, wall_seconds=10.0)
     assert resp.tiers_completed == 1
-    assert [(t.name, t.value_ms) for t in resp.objective_values] == [(TIER_ORDER[0], 1)]
+    assert [(t.name, t.value) for t in resp.objective_values] == [(TIER_ORDER[0], 1)]
 
 
 @pytest.mark.parametrize(

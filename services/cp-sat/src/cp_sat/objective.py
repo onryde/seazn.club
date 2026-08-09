@@ -124,12 +124,20 @@ from cp_sat.model import (
 # `makespan` / `idleGap` / `imbalance` (and T0 is unnamed there, being handled
 # before the tier loop). They travel as `Tier.name` strings on the wire, so
 # whichever side reads them has to agree — Prompt 06 owns that comparison.
+#
+# T3 is `imbalance`, NOT `court_imbalance`. The DDD standard's
+# ubiquitous-language rule allows the CASE convention to change at the language
+# boundary and nothing else, so `idle_gap` <-> `idleGap` is fine while
+# `court_imbalance` <-> `imbalance` is a genuine word mismatch that no amount
+# of case-folding reconciles. `build.ts` is the side that cannot move — it is
+# shared with the z3 and greedy placers, which have their own tier tables — so
+# the service moved.
 TIER_PLACED = "placed"
 TIER_MAKESPAN = "makespan"
 TIER_IDLE_GAP = "idle_gap"
-TIER_COURT_IMBALANCE = "court_imbalance"
+TIER_IMBALANCE = "imbalance"
 
-TIER_ORDER: tuple[str, ...] = (TIER_PLACED, TIER_MAKESPAN, TIER_IDLE_GAP, TIER_COURT_IMBALANCE)
+TIER_ORDER: tuple[str, ...] = (TIER_PLACED, TIER_MAKESPAN, TIER_IDLE_GAP, TIER_IMBALANCE)
 #: `build.ts`'s `TIER_COUNT`. Reaching it means every tier was PROVED optimal.
 TIER_COUNT = len(TIER_ORDER)
 
@@ -158,7 +166,7 @@ _TIER_SPECS: dict[str, _TierSpec] = {
     # T1-T3 minimise, and freeze CEILINGS (`<=`) — `Tier.atMost` in build.ts.
     TIER_MAKESPAN: _TierSpec(TIER_MAKESPAN, maximize=False, term=lambda fv: fv.makespan),
     TIER_IDLE_GAP: _TierSpec(TIER_IDLE_GAP, maximize=False, term=lambda fv: fv.worst_gap),
-    TIER_COURT_IMBALANCE: _TierSpec(TIER_COURT_IMBALANCE, maximize=False, term=lambda fv: fv.imbalance),
+    TIER_IMBALANCE: _TierSpec(TIER_IMBALANCE, maximize=False, term=lambda fv: fv.imbalance),
 }
 
 
@@ -217,7 +225,7 @@ def run_tier_chain(
 
     # The ladder is a PREFIX of `TIER_ORDER` or it is not a ladder. Subsetting
     # or reordering is not a lesser version of the chain, it is a different and
-    # silently wrong one: `tiers=("court_imbalance",)` balances courts across a
+    # silently wrong one: `tiers=("imbalance",)` balances courts across a
     # board whose placement was never maximised, and `_chain_status` would then
     # report OPTIMAL for it — a status Task 4/5 maps straight onto the wire.
     # D3's order is the product ruling this whole module exists to enforce, so

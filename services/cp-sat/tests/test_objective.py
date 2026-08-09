@@ -58,7 +58,7 @@ import pytest
 
 from cp_sat.model import MIN_MS, build_model, solve
 from cp_sat.objective import (
-    TIER_COURT_IMBALANCE,
+    TIER_IMBALANCE,
     TIER_IDLE_GAP,
     TIER_MAKESPAN,
     TIER_ORDER,
@@ -139,7 +139,7 @@ def chain(board):
 def test_all_four_tiers_complete_on_production_board(chain):
     assert chain.tiers_completed == 4
     names = [name for name, _ in chain.objective_values]
-    assert names == ["placed", "makespan", "idle_gap", "court_imbalance"]
+    assert names == ["placed", "makespan", "idle_gap", "imbalance"]
 
 
 def test_tier_order_is_lexicographic_not_weighted(chain):
@@ -186,7 +186,7 @@ def test_chain_fits_the_production_budget(board):
     # Whatever it got through, it got through IN ORDER — never a later tier
     # reported without the ones that dominate it.
     names = [name for name, _ in outcome.objective_values]
-    assert names == [TIER_PLACED, TIER_MAKESPAN, TIER_IDLE_GAP, TIER_COURT_IMBALANCE][: len(names)]
+    assert names == [TIER_PLACED, TIER_MAKESPAN, TIER_IDLE_GAP, TIER_IMBALANCE][: len(names)]
 
 
 # --- the ordering, pinned properly ------------------------------------------
@@ -218,7 +218,7 @@ def test_reported_values_match_the_board_that_came_back(board, chain):
 
     assert reported[TIER_PLACED] == len(chain.assignments)
     # T3 is the last tier, so its own term is exact for the board it returned.
-    assert reported[TIER_COURT_IMBALANCE] == _court_imbalance(chain.assignments, courts, dur_ms)
+    assert reported[TIER_IMBALANCE] == _court_imbalance(chain.assignments, courts, dur_ms)
 
 
 def test_reported_bounds_are_frozen_against_the_final_board(board, chain):
@@ -272,7 +272,7 @@ def test_a_wall_too_short_to_finish_reports_fewer_tiers_not_a_lie(board):
     # short is adopted, since there is no earlier board to fall back on, but it
     # is not counted as proved.)
     names = [name for name, _ in outcome.objective_values]
-    assert names == [TIER_PLACED, TIER_MAKESPAN, TIER_IDLE_GAP, TIER_COURT_IMBALANCE][: len(names)]
+    assert names == [TIER_PLACED, TIER_MAKESPAN, TIER_IDLE_GAP, TIER_IMBALANCE][: len(names)]
     assert outcome.tiers_completed <= len(names) <= outcome.tiers_completed + 1
 
 
@@ -374,7 +374,7 @@ def test_t3_reports_the_proved_minimum_court_imbalance(chain):
     wall, and a mutant that dies by wall clock is not a killed mutant:
     measured, the same T3 mutation was green at a 22 s wall and red at 44 s.
     """
-    assert _proved(chain, TIER_COURT_IMBALANCE, 4) == T3_PROVED_IMBALANCE_MS
+    assert _proved(chain, TIER_IMBALANCE, 4) == T3_PROVED_IMBALANCE_MS
 
 
 def test_tier_directions_are_pinned_without_the_clock():
@@ -419,7 +419,7 @@ def test_tier_directions_are_pinned_without_the_clock():
     assert reported[TIER_PLACED] == PROBE_FIXTURES, detail
     assert reported[TIER_MAKESPAN] == PROBE_OPTIMAL_MAKESPAN_MS, detail
     assert reported[TIER_IDLE_GAP] == 0, detail
-    assert reported[TIER_COURT_IMBALANCE] == PROBE_OPTIMAL_IMBALANCE_MS, detail
+    assert reported[TIER_IMBALANCE] == PROBE_OPTIMAL_IMBALANCE_MS, detail
     # The assertion above is only two-sided because a worse value is reachable
     # on this board — state that, so a future board edit that removes the slack
     # turns this into a loud failure rather than a silently vacuous pass.
@@ -457,17 +457,17 @@ def test_rejects_negative_wall_seconds(board):
 def test_rejects_a_tier_sequence_that_is_not_a_prefix_of_the_ladder(board):
     """Skipping or reordering rungs is not a smaller chain, it is a wrong one.
 
-    `tiers=("court_imbalance",)` balances courts across a board whose placement
+    `tiers=("imbalance",)` balances courts across a board whose placement
     was never maximised and whose makespan was never bounded — and, before this
     guard, reported `status="OPTIMAL"` for it, because every requested tier had
     indeed been proved. `SolveStatus` is what Task 4/5 map onto the wire, so
     that is a lie with a straight route to a caller.
     """
     for bad in (
-        (TIER_COURT_IMBALANCE,),
+        (TIER_IMBALANCE,),
         (TIER_MAKESPAN, TIER_PLACED),
         (TIER_PLACED, TIER_IDLE_GAP),
-        (TIER_PLACED, TIER_COURT_IMBALANCE, TIER_MAKESPAN, TIER_IDLE_GAP),
+        (TIER_PLACED, TIER_IMBALANCE, TIER_MAKESPAN, TIER_IDLE_GAP),
     ):
         model = _model_for(board)
         with pytest.raises(ValueError, match="prefix"):

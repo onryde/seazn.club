@@ -233,7 +233,7 @@ def outcome_to_response(
         # would tell the caller a value had been proved optimal when it is only
         # the best thing seen before the budget ran out.
         objective_values=[
-            scheduler_pb2.Tier(name=name, value_ms=value)
+            scheduler_pb2.Tier(name=name, value=value)
             for name, value in outcome.objective_values[: outcome.tiers_completed]
         ],
         elapsed_ms=outcome.elapsed_ms,

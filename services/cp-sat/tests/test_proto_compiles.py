@@ -97,7 +97,7 @@ def test_grpc_stub_imports_as_a_package_module():
 #                 a whole constraint family can silently evaporate.
 #
 # The wire type is equally load-bearing and is the reason this file grew to
-# cover the nested messages at all: `int64 -> int32` on `Tier.value_ms` or on
+# cover the nested messages at all: `int64 -> int32` on `Tier.value` or on
 # either `start_at_ms` survived every behavioural test in the suite. It cannot
 # be caught by data — durations do not scale with the epoch, and the corpus's
 # largest makespan (~1.5e9) fits inside int32 — so the only place the narrowing
@@ -166,7 +166,7 @@ EXPECTED_MESSAGE_FIELDS = {
     },
     "Tier": {
         "name":     (1, FieldDescriptor.TYPE_STRING, False, False),
-        "value_ms": (2, FieldDescriptor.TYPE_INT64,  False, False),
+        "value":    (2, FieldDescriptor.TYPE_INT64,  False, False),
     },
     "SolveError": {
         "code":    (1, FieldDescriptor.TYPE_STRING, False, False),

@@ -63,7 +63,7 @@ export interface SolveBuildOutcome {
   assignments: { fixtureId: string; court: string; startAtMs: number }[];
   status: "OPTIMAL" | "FEASIBLE" | "INFEASIBLE" | "UNKNOWN" | "ERROR";
   tiersCompleted: number;
-  objectiveValues: { name: string; valueMs: number }[];
+  objectiveValues: { name: string; value: number }[];
   elapsedMs: number;
   wallExhausted: boolean;
   error?: { code: string; message: string };
@@ -213,9 +213,9 @@ function toOutcome(response: SolveBuildResponse): SolveBuildOutcome {
     })),
     status: STATUS_BY_WIRE_VALUE.get(response.status) ?? "ERROR",
     tiersCompleted: response.tiersCompleted,
-    objectiveValues: (response.objectiveValues ?? []).map(({ name, valueMs }) => ({
+    objectiveValues: (response.objectiveValues ?? []).map(({ name, value }) => ({
       name,
-      valueMs,
+      value,
     })),
     elapsedMs: response.elapsedMs,
     wallExhausted: response.wallExhausted,
