@@ -78,94 +78,118 @@ export function solveStatusToJSON(object: SolveStatus): string {
   }
 }
 
+export interface Fixture {
+  /**
+   * Each element 0 <= idx < `SolveBuildRequest.entrant_count`. Repeated
+   * fields carry no presence ambiguity of their own -- every element that
+   * exists was explicitly appended by the caller -- so only the RANGE is
+   * checked, not presence.
+   */
+  entrantIndices: number[];
+  /**
+   * 0 <= idx < `SolveBuildRequest.division_count`. `optional` because
+   * division 0 is a real, legitimate division: without presence tracking, a
+   * caller who forgot to set this would silently join division 0's rest/cap
+   * rules instead of being refused -- the exact "unset vs. legitimately
+   * zero" trap this whole redesign exists to close, now on an index instead
+   * of a string.
+   */
+  divisionIndex?: number | undefined;
+}
+
 export interface Slot {
-  court: string;
+  /**
+   * 0 <= idx < len(`SolveBuildRequest.court_names`). `optional` for the same
+   * reason as `Fixture.division_index`: court 0 is real, so an unset field
+   * must be refused rather than silently defaulting to it.
+   */
+  courtIndex?: number | undefined;
   startAtMs: number;
   /**
-   * The CALLER's calendar day for this slot, resolved in the org's own
-   * timezone, and the only thing the per-division day cap groups by.
-   *
-   * The solver used to bucket by `start_at_ms / 86400000`, a UTC day. Day caps
-   * are governed by the org's zone, so any org away from UTC had its caps
-   * applied against the wrong boundary: at UTC+10 a 09:00 and a 19:00 local
-   * match on one day fall in two UTC buckets and a cap of one admits two.
-   * Sending a timezone NAME instead would put timezones-as-policy inside the
-   * solver's bounded context, which the design rules out — the caller already
-   * knows the zone, so it resolves the day and sends the integer.
-   *
-   * `optional` because 0 is the first day and is therefore a legitimate value,
-   * so an unset field cannot be told from a real one: unset puts every slot on
-   * "day 0" and collapses the whole lattice into a single cap bucket.
+   * Unchanged from the string-identity contract: NOT an index into anything
+   * declared elsewhere (there is no `day_count`), just the caller's own
+   * resolved calendar-day integer. Day 0 is a legitimate value, so `optional`
+   * + presence is what separates it from unset -- exactly as before.
    */
   dayIndex?: number | undefined;
 }
 
-export interface Grid {
-  slots: Slot[];
-  stepMinutes: number;
-}
-
-export interface Fixture {
-  fixtureId: string;
-  entrantIds: string[];
-  divisionId: string;
-}
-
-export interface Assignment {
-  fixtureId: string;
-  court: string;
+/**
+ * A blocking interval with no identity of its own. It never carried one that
+ * mattered: the old `Assignment.fixture_id` on an `existing` row reached
+ * nothing but a debug label on the CP-SAT interval variable's name
+ * (`model.py`'s `ivc_existing_{id}`), confirmed by tracing every read of it,
+ * not merely by the docstring that first claimed it. `model.py:118-120`
+ * already documented that a pinned row carries no entrant list; this is the
+ * same fact one field further.
+ */
+export interface PinnedRow {
+  courtIndex?: number | undefined;
   startAtMs: number;
 }
 
+/**
+ * (before, after) as FIXTURE indices -- 0 <= idx < len(`SolveBuildRequest.
+ * fixtures`). Note what this closes for free: the old contract needed a
+ * dedicated check rejecting a dependency that named a PINNED row's id
+ * (`existing` and `fixtures` shared one string namespace, so `"x1"` was a
+ * real id that happened to resolve to nothing). `PinnedRow` has no identity
+ * at all now, so there is no namespace for a dependency to misname -- an
+ * out-of-range index is the whole story.
+ */
 export interface OrderPair {
-  beforeFixtureId: string;
-  afterFixtureId: string;
+  beforeIndex?: number | undefined;
+  afterIndex?: number | undefined;
 }
 
-export interface DivisionRestRule {
-  divisionId: string;
+/**
+ * Replaces `DivisionRestRule` + `DivisionDayCapRule`: ONE rule per division,
+ * not two independent lists keyed by the same string. `min_rest_minutes` and
+ * `max_fixtures_per_day` are each `optional` so a division can carry either,
+ * both, or (by being absent from `division_rules` entirely) neither --
+ * exactly the independence the two-list contract had, just keyed on one
+ * index instead of duplicated across two lists.
+ */
+export interface DivisionRule {
+  divisionIndex?:
+    | number
+    | undefined;
   /**
-   * `optional` because 0 is a LEGITIMATE value here ("this division has no
-   * minimum rest"), so it cannot be told from an unset field by its value. A
-   * rule that is present but carries an unset number is a rule the caller
-   * asked for and silently did not get. Contrast `max_fixtures_per_day`
-   * below, where 0 means "may not play at all" and is never legitimate, so a
-   * value guard reaches it and the field stays required — which also keeps
-   * ts-proto typing it as mandatory for the caller.
+   * Presence, not `>= 0`: 0 is "no minimum rest", a legitimate rule, and
+   * distinct from no rule at all (division absent from `division_rules`, or
+   * present with this field unset).
    */
-  minRestMinutes?: number | undefined;
-}
-
-export interface DivisionDayCapRule {
-  divisionId: string;
-  maxFixturesPerDay: number;
+  minRestMinutes?:
+    | number
+    | undefined;
+  /**
+   * Presence, then `> 0` when set: 0 would forbid the division outright,
+   * which is never what "no cap" means. Absent = uncapped.
+   */
+  maxFixturesPerDay?: number | undefined;
 }
 
 export interface BuildConstraints {
   matchMinutes: number;
   /**
-   * `optional` for the same reason as `min_rest_minutes`: 0 is a real answer
-   * ("no court turnaround"), and unset arrives as the same 0. Everything else
-   * in this message has a value guard that reaches its degenerate case.
+   * `optional` because 0 is real ("no court turnaround") and unset arrives
+   * as the same 0.
    */
   gapMinutes?: number | undefined;
-  restByDivision: DivisionRestRule[];
-  dayCapByDivision: DivisionDayCapRule[];
 }
 
 /** One rung of the lexicographic objective chain and the value it PROVED. */
 export interface Tier {
   /**
-   * `placed` | `makespan` | `idle_gap` | `imbalance`, in that order. The word
-   * is shared with the TypeScript caller and only its case convention changes
-   * (`idle_gap` <-> `idleGap`); see the DDD standard's ubiquitous-language rule.
+   * `placed` | `makespan` | `idle_gap` | `imbalance`, in that order. Shared
+   * vocabulary with the TypeScript caller; see the DDD standard's
+   * ubiquitous-language rule. Untouched by the identity change -- a tier name
+   * is a fixed protocol constant, not caller data.
    */
   name: string;
   /**
-   * NOT milliseconds for every tier. `makespan`, `idle_gap` and `imbalance`
-   * are ms; `placed` is a COUNT of fixtures. The field was called `value_ms`
-   * and carried the count regardless, so the name is deliberately
-   * unit-neutral rather than documenting the lie.
+   * NOT milliseconds for every tier -- see the field's history if this ever
+   * moves again. Untouched here.
    */
   value: number;
 }
@@ -175,13 +199,58 @@ export interface SolveError {
   message: string;
 }
 
+/**
+ * The OUTPUT half of what used to be `Assignment` (fixture_id, court,
+ * start_at_ms). Positional now: a caller maps `fixture_index`/`court_index`
+ * back through the SAME `fixtures`/`court_names` arrays it sent. Never
+ * validated as input -- this message is service-authored only.
+ */
+export interface Assignment {
+  fixtureIndex: number;
+  courtIndex: number;
+  startAtMs: number;
+}
+
 export interface SolveBuildRequest {
+  /**
+   * Unchanged: an opaque correlation token, never compared, never joined
+   * against anything, reaching only a log line. Not identity in the sense
+   * this redesign is about, and untouched by it.
+   */
   requestId: string;
-  courts: string[];
-  grid: Grid | undefined;
+  /**
+   * DISPLAY ONLY. Never compared, never required unique, never validated for
+   * content -- two entries that render identically are simply two distinct,
+   * correctly-disambiguated court indices; see the file header. Its LENGTH is
+   * the declared (not inferred) bound for every `court_index` field below,
+   * exactly as `fixtures`' own length bounds a fixture index.
+   */
+  courtNames: string[];
+  /**
+   * The declared bound for every `entrant_indices` value. Entrants have no
+   * names on the wire at all -- unlike courts, nothing about an entrant is
+   * ever rendered by this service, so there is nothing to carry for display.
+   * An inferred bound (the largest index actually used) cannot distinguish
+   * "entrant 7" from a typo; a declared count can.
+   */
+  entrantCount: number;
+  /**
+   * The declared bound for every `division_index` value, for the same reason
+   * `entrant_count` is declared rather than inferred.
+   */
+  divisionCount: number;
   fixtures: Fixture[];
-  existing: Assignment[];
+  slots: Slot[];
+  /**
+   * Unread by the domain (`model.py` `del`etes its parameter immediately) --
+   * contractual only, exactly as before. Kept at the top level now that
+   * `Grid` no longer has a reason to exist: it existed only to pair `slots`
+   * with this field, and nothing else about it needs a wrapper message.
+   */
+  stepMinutes: number;
+  existing: PinnedRow[];
   dependencies: OrderPair[];
+  divisionRules: DivisionRule[];
   constraints: BuildConstraints | undefined;
   wallSeconds: number;
 }
@@ -196,14 +265,110 @@ export interface SolveBuildResponse {
   error: SolveError | undefined;
 }
 
+function createBaseFixture(): Fixture {
+  return { entrantIndices: [], divisionIndex: undefined };
+}
+
+export const Fixture: MessageFns<Fixture> = {
+  encode(message: Fixture, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    writer.uint32(10).fork();
+    for (const v of message.entrantIndices) {
+      writer.uint32(v);
+    }
+    writer.join();
+    if (message.divisionIndex !== undefined) {
+      writer.uint32(16).uint32(message.divisionIndex);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): Fixture {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseFixture();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag === 8) {
+            message.entrantIndices.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 10) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.entrantIndices.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.divisionIndex = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): Fixture {
+    return {
+      entrantIndices: globalThis.Array.isArray(object?.entrantIndices)
+        ? object.entrantIndices.map((e: any) => globalThis.Number(e))
+        : globalThis.Array.isArray(object?.entrant_indices)
+        ? object.entrant_indices.map((e: any) => globalThis.Number(e))
+        : [],
+      divisionIndex: isSet(object.divisionIndex)
+        ? globalThis.Number(object.divisionIndex)
+        : isSet(object.division_index)
+        ? globalThis.Number(object.division_index)
+        : undefined,
+    };
+  },
+
+  toJSON(message: Fixture): unknown {
+    const obj: any = {};
+    if (message.entrantIndices?.length) {
+      obj.entrantIndices = message.entrantIndices.map((e) => Math.round(e));
+    }
+    if (message.divisionIndex !== undefined) {
+      obj.divisionIndex = Math.round(message.divisionIndex);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<Fixture>, I>>(base?: I): Fixture {
+    return Fixture.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<Fixture>, I>>(object: I): Fixture {
+    const message = createBaseFixture();
+    message.entrantIndices = object.entrantIndices?.map((e) => e) || [];
+    message.divisionIndex = object.divisionIndex ?? undefined;
+    return message;
+  },
+};
+
 function createBaseSlot(): Slot {
-  return { court: "", startAtMs: 0, dayIndex: undefined };
+  return { courtIndex: undefined, startAtMs: 0, dayIndex: undefined };
 }
 
 export const Slot: MessageFns<Slot> = {
   encode(message: Slot, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.court !== "") {
-      writer.uint32(10).string(message.court);
+    if (message.courtIndex !== undefined) {
+      writer.uint32(8).uint32(message.courtIndex);
     }
     if (message.startAtMs !== 0) {
       writer.uint32(16).int64(message.startAtMs);
@@ -222,11 +387,11 @@ export const Slot: MessageFns<Slot> = {
       const tag = reader.uint32();
       switch (tag >>> 3) {
         case 1: {
-          if (tag !== 10) {
+          if (tag !== 8) {
             break;
           }
 
-          message.court = reader.string();
+          message.courtIndex = reader.uint32();
           continue;
         }
         case 2: {
@@ -256,7 +421,11 @@ export const Slot: MessageFns<Slot> = {
 
   fromJSON(object: any): Slot {
     return {
-      court: isSet(object.court) ? globalThis.String(object.court) : "",
+      courtIndex: isSet(object.courtIndex)
+        ? globalThis.Number(object.courtIndex)
+        : isSet(object.court_index)
+        ? globalThis.Number(object.court_index)
+        : undefined,
       startAtMs: isSet(object.startAtMs)
         ? globalThis.Number(object.startAtMs)
         : isSet(object.start_at_ms)
@@ -272,8 +441,8 @@ export const Slot: MessageFns<Slot> = {
 
   toJSON(message: Slot): unknown {
     const obj: any = {};
-    if (message.court !== "") {
-      obj.court = message.court;
+    if (message.courtIndex !== undefined) {
+      obj.courtIndex = Math.round(message.courtIndex);
     }
     if (message.startAtMs !== 0) {
       obj.startAtMs = Math.round(message.startAtMs);
@@ -289,240 +458,45 @@ export const Slot: MessageFns<Slot> = {
   },
   fromPartial<I extends Exact<DeepPartial<Slot>, I>>(object: I): Slot {
     const message = createBaseSlot();
-    message.court = object.court ?? "";
+    message.courtIndex = object.courtIndex ?? undefined;
     message.startAtMs = object.startAtMs ?? 0;
     message.dayIndex = object.dayIndex ?? undefined;
     return message;
   },
 };
 
-function createBaseGrid(): Grid {
-  return { slots: [], stepMinutes: 0 };
+function createBasePinnedRow(): PinnedRow {
+  return { courtIndex: undefined, startAtMs: 0 };
 }
 
-export const Grid: MessageFns<Grid> = {
-  encode(message: Grid, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    for (const v of message.slots) {
-      Slot.encode(v!, writer.uint32(10).fork()).join();
+export const PinnedRow: MessageFns<PinnedRow> = {
+  encode(message: PinnedRow, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.courtIndex !== undefined) {
+      writer.uint32(8).uint32(message.courtIndex);
     }
-    if (message.stepMinutes !== 0) {
-      writer.uint32(16).int32(message.stepMinutes);
+    if (message.startAtMs !== 0) {
+      writer.uint32(16).int64(message.startAtMs);
     }
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): Grid {
+  decode(input: BinaryReader | Uint8Array, length?: number): PinnedRow {
     const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseGrid();
+    const message = createBasePinnedRow();
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
         case 1: {
-          if (tag !== 10) {
+          if (tag !== 8) {
             break;
           }
 
-          message.slots.push(Slot.decode(reader, reader.uint32()));
+          message.courtIndex = reader.uint32();
           continue;
         }
         case 2: {
           if (tag !== 16) {
-            break;
-          }
-
-          message.stepMinutes = reader.int32();
-          continue;
-        }
-      }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
-      }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
-
-  fromJSON(object: any): Grid {
-    return {
-      slots: globalThis.Array.isArray(object?.slots) ? object.slots.map((e: any) => Slot.fromJSON(e)) : [],
-      stepMinutes: isSet(object.stepMinutes)
-        ? globalThis.Number(object.stepMinutes)
-        : isSet(object.step_minutes)
-        ? globalThis.Number(object.step_minutes)
-        : 0,
-    };
-  },
-
-  toJSON(message: Grid): unknown {
-    const obj: any = {};
-    if (message.slots?.length) {
-      obj.slots = message.slots.map((e) => Slot.toJSON(e));
-    }
-    if (message.stepMinutes !== 0) {
-      obj.stepMinutes = Math.round(message.stepMinutes);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<Grid>, I>>(base?: I): Grid {
-    return Grid.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<Grid>, I>>(object: I): Grid {
-    const message = createBaseGrid();
-    message.slots = object.slots?.map((e) => Slot.fromPartial(e)) || [];
-    message.stepMinutes = object.stepMinutes ?? 0;
-    return message;
-  },
-};
-
-function createBaseFixture(): Fixture {
-  return { fixtureId: "", entrantIds: [], divisionId: "" };
-}
-
-export const Fixture: MessageFns<Fixture> = {
-  encode(message: Fixture, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.fixtureId !== "") {
-      writer.uint32(10).string(message.fixtureId);
-    }
-    for (const v of message.entrantIds) {
-      writer.uint32(18).string(v!);
-    }
-    if (message.divisionId !== "") {
-      writer.uint32(26).string(message.divisionId);
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): Fixture {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseFixture();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.fixtureId = reader.string();
-          continue;
-        }
-        case 2: {
-          if (tag !== 18) {
-            break;
-          }
-
-          message.entrantIds.push(reader.string());
-          continue;
-        }
-        case 3: {
-          if (tag !== 26) {
-            break;
-          }
-
-          message.divisionId = reader.string();
-          continue;
-        }
-      }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
-      }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
-
-  fromJSON(object: any): Fixture {
-    return {
-      fixtureId: isSet(object.fixtureId)
-        ? globalThis.String(object.fixtureId)
-        : isSet(object.fixture_id)
-        ? globalThis.String(object.fixture_id)
-        : "",
-      entrantIds: globalThis.Array.isArray(object?.entrantIds)
-        ? object.entrantIds.map((e: any) => globalThis.String(e))
-        : globalThis.Array.isArray(object?.entrant_ids)
-        ? object.entrant_ids.map((e: any) => globalThis.String(e))
-        : [],
-      divisionId: isSet(object.divisionId)
-        ? globalThis.String(object.divisionId)
-        : isSet(object.division_id)
-        ? globalThis.String(object.division_id)
-        : "",
-    };
-  },
-
-  toJSON(message: Fixture): unknown {
-    const obj: any = {};
-    if (message.fixtureId !== "") {
-      obj.fixtureId = message.fixtureId;
-    }
-    if (message.entrantIds?.length) {
-      obj.entrantIds = message.entrantIds;
-    }
-    if (message.divisionId !== "") {
-      obj.divisionId = message.divisionId;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<Fixture>, I>>(base?: I): Fixture {
-    return Fixture.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<Fixture>, I>>(object: I): Fixture {
-    const message = createBaseFixture();
-    message.fixtureId = object.fixtureId ?? "";
-    message.entrantIds = object.entrantIds?.map((e) => e) || [];
-    message.divisionId = object.divisionId ?? "";
-    return message;
-  },
-};
-
-function createBaseAssignment(): Assignment {
-  return { fixtureId: "", court: "", startAtMs: 0 };
-}
-
-export const Assignment: MessageFns<Assignment> = {
-  encode(message: Assignment, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.fixtureId !== "") {
-      writer.uint32(10).string(message.fixtureId);
-    }
-    if (message.court !== "") {
-      writer.uint32(18).string(message.court);
-    }
-    if (message.startAtMs !== 0) {
-      writer.uint32(24).int64(message.startAtMs);
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): Assignment {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseAssignment();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.fixtureId = reader.string();
-          continue;
-        }
-        case 2: {
-          if (tag !== 18) {
-            break;
-          }
-
-          message.court = reader.string();
-          continue;
-        }
-        case 3: {
-          if (tag !== 24) {
             break;
           }
 
@@ -538,14 +512,13 @@ export const Assignment: MessageFns<Assignment> = {
     return message;
   },
 
-  fromJSON(object: any): Assignment {
+  fromJSON(object: any): PinnedRow {
     return {
-      fixtureId: isSet(object.fixtureId)
-        ? globalThis.String(object.fixtureId)
-        : isSet(object.fixture_id)
-        ? globalThis.String(object.fixture_id)
-        : "",
-      court: isSet(object.court) ? globalThis.String(object.court) : "",
+      courtIndex: isSet(object.courtIndex)
+        ? globalThis.Number(object.courtIndex)
+        : isSet(object.court_index)
+        ? globalThis.Number(object.court_index)
+        : undefined,
       startAtMs: isSet(object.startAtMs)
         ? globalThis.Number(object.startAtMs)
         : isSet(object.start_at_ms)
@@ -554,13 +527,10 @@ export const Assignment: MessageFns<Assignment> = {
     };
   },
 
-  toJSON(message: Assignment): unknown {
+  toJSON(message: PinnedRow): unknown {
     const obj: any = {};
-    if (message.fixtureId !== "") {
-      obj.fixtureId = message.fixtureId;
-    }
-    if (message.court !== "") {
-      obj.court = message.court;
+    if (message.courtIndex !== undefined) {
+      obj.courtIndex = Math.round(message.courtIndex);
     }
     if (message.startAtMs !== 0) {
       obj.startAtMs = Math.round(message.startAtMs);
@@ -568,29 +538,28 @@ export const Assignment: MessageFns<Assignment> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<Assignment>, I>>(base?: I): Assignment {
-    return Assignment.fromPartial(base ?? ({} as any));
+  create<I extends Exact<DeepPartial<PinnedRow>, I>>(base?: I): PinnedRow {
+    return PinnedRow.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<Assignment>, I>>(object: I): Assignment {
-    const message = createBaseAssignment();
-    message.fixtureId = object.fixtureId ?? "";
-    message.court = object.court ?? "";
+  fromPartial<I extends Exact<DeepPartial<PinnedRow>, I>>(object: I): PinnedRow {
+    const message = createBasePinnedRow();
+    message.courtIndex = object.courtIndex ?? undefined;
     message.startAtMs = object.startAtMs ?? 0;
     return message;
   },
 };
 
 function createBaseOrderPair(): OrderPair {
-  return { beforeFixtureId: "", afterFixtureId: "" };
+  return { beforeIndex: undefined, afterIndex: undefined };
 }
 
 export const OrderPair: MessageFns<OrderPair> = {
   encode(message: OrderPair, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.beforeFixtureId !== "") {
-      writer.uint32(10).string(message.beforeFixtureId);
+    if (message.beforeIndex !== undefined) {
+      writer.uint32(8).uint32(message.beforeIndex);
     }
-    if (message.afterFixtureId !== "") {
-      writer.uint32(18).string(message.afterFixtureId);
+    if (message.afterIndex !== undefined) {
+      writer.uint32(16).uint32(message.afterIndex);
     }
     return writer;
   },
@@ -603,19 +572,19 @@ export const OrderPair: MessageFns<OrderPair> = {
       const tag = reader.uint32();
       switch (tag >>> 3) {
         case 1: {
-          if (tag !== 10) {
+          if (tag !== 8) {
             break;
           }
 
-          message.beforeFixtureId = reader.string();
+          message.beforeIndex = reader.uint32();
           continue;
         }
         case 2: {
-          if (tag !== 18) {
+          if (tag !== 16) {
             break;
           }
 
-          message.afterFixtureId = reader.string();
+          message.afterIndex = reader.uint32();
           continue;
         }
       }
@@ -629,26 +598,26 @@ export const OrderPair: MessageFns<OrderPair> = {
 
   fromJSON(object: any): OrderPair {
     return {
-      beforeFixtureId: isSet(object.beforeFixtureId)
-        ? globalThis.String(object.beforeFixtureId)
-        : isSet(object.before_fixture_id)
-        ? globalThis.String(object.before_fixture_id)
-        : "",
-      afterFixtureId: isSet(object.afterFixtureId)
-        ? globalThis.String(object.afterFixtureId)
-        : isSet(object.after_fixture_id)
-        ? globalThis.String(object.after_fixture_id)
-        : "",
+      beforeIndex: isSet(object.beforeIndex)
+        ? globalThis.Number(object.beforeIndex)
+        : isSet(object.before_index)
+        ? globalThis.Number(object.before_index)
+        : undefined,
+      afterIndex: isSet(object.afterIndex)
+        ? globalThis.Number(object.afterIndex)
+        : isSet(object.after_index)
+        ? globalThis.Number(object.after_index)
+        : undefined,
     };
   },
 
   toJSON(message: OrderPair): unknown {
     const obj: any = {};
-    if (message.beforeFixtureId !== "") {
-      obj.beforeFixtureId = message.beforeFixtureId;
+    if (message.beforeIndex !== undefined) {
+      obj.beforeIndex = Math.round(message.beforeIndex);
     }
-    if (message.afterFixtureId !== "") {
-      obj.afterFixtureId = message.afterFixtureId;
+    if (message.afterIndex !== undefined) {
+      obj.afterIndex = Math.round(message.afterIndex);
     }
     return obj;
   },
@@ -658,40 +627,43 @@ export const OrderPair: MessageFns<OrderPair> = {
   },
   fromPartial<I extends Exact<DeepPartial<OrderPair>, I>>(object: I): OrderPair {
     const message = createBaseOrderPair();
-    message.beforeFixtureId = object.beforeFixtureId ?? "";
-    message.afterFixtureId = object.afterFixtureId ?? "";
+    message.beforeIndex = object.beforeIndex ?? undefined;
+    message.afterIndex = object.afterIndex ?? undefined;
     return message;
   },
 };
 
-function createBaseDivisionRestRule(): DivisionRestRule {
-  return { divisionId: "", minRestMinutes: undefined };
+function createBaseDivisionRule(): DivisionRule {
+  return { divisionIndex: undefined, minRestMinutes: undefined, maxFixturesPerDay: undefined };
 }
 
-export const DivisionRestRule: MessageFns<DivisionRestRule> = {
-  encode(message: DivisionRestRule, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.divisionId !== "") {
-      writer.uint32(10).string(message.divisionId);
+export const DivisionRule: MessageFns<DivisionRule> = {
+  encode(message: DivisionRule, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.divisionIndex !== undefined) {
+      writer.uint32(8).uint32(message.divisionIndex);
     }
     if (message.minRestMinutes !== undefined) {
       writer.uint32(16).int32(message.minRestMinutes);
     }
+    if (message.maxFixturesPerDay !== undefined) {
+      writer.uint32(24).int32(message.maxFixturesPerDay);
+    }
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): DivisionRestRule {
+  decode(input: BinaryReader | Uint8Array, length?: number): DivisionRule {
     const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseDivisionRestRule();
+    const message = createBaseDivisionRule();
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
         case 1: {
-          if (tag !== 10) {
+          if (tag !== 8) {
             break;
           }
 
-          message.divisionId = reader.string();
+          message.divisionIndex = reader.uint32();
           continue;
         }
         case 2: {
@@ -702,84 +674,8 @@ export const DivisionRestRule: MessageFns<DivisionRestRule> = {
           message.minRestMinutes = reader.int32();
           continue;
         }
-      }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
-      }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
-
-  fromJSON(object: any): DivisionRestRule {
-    return {
-      divisionId: isSet(object.divisionId)
-        ? globalThis.String(object.divisionId)
-        : isSet(object.division_id)
-        ? globalThis.String(object.division_id)
-        : "",
-      minRestMinutes: isSet(object.minRestMinutes)
-        ? globalThis.Number(object.minRestMinutes)
-        : isSet(object.min_rest_minutes)
-        ? globalThis.Number(object.min_rest_minutes)
-        : undefined,
-    };
-  },
-
-  toJSON(message: DivisionRestRule): unknown {
-    const obj: any = {};
-    if (message.divisionId !== "") {
-      obj.divisionId = message.divisionId;
-    }
-    if (message.minRestMinutes !== undefined) {
-      obj.minRestMinutes = Math.round(message.minRestMinutes);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<DivisionRestRule>, I>>(base?: I): DivisionRestRule {
-    return DivisionRestRule.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<DivisionRestRule>, I>>(object: I): DivisionRestRule {
-    const message = createBaseDivisionRestRule();
-    message.divisionId = object.divisionId ?? "";
-    message.minRestMinutes = object.minRestMinutes ?? undefined;
-    return message;
-  },
-};
-
-function createBaseDivisionDayCapRule(): DivisionDayCapRule {
-  return { divisionId: "", maxFixturesPerDay: 0 };
-}
-
-export const DivisionDayCapRule: MessageFns<DivisionDayCapRule> = {
-  encode(message: DivisionDayCapRule, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.divisionId !== "") {
-      writer.uint32(10).string(message.divisionId);
-    }
-    if (message.maxFixturesPerDay !== 0) {
-      writer.uint32(16).int32(message.maxFixturesPerDay);
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): DivisionDayCapRule {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseDivisionDayCapRule();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.divisionId = reader.string();
-          continue;
-        }
-        case 2: {
-          if (tag !== 16) {
+        case 3: {
+          if (tag !== 24) {
             break;
           }
 
@@ -795,45 +691,54 @@ export const DivisionDayCapRule: MessageFns<DivisionDayCapRule> = {
     return message;
   },
 
-  fromJSON(object: any): DivisionDayCapRule {
+  fromJSON(object: any): DivisionRule {
     return {
-      divisionId: isSet(object.divisionId)
-        ? globalThis.String(object.divisionId)
-        : isSet(object.division_id)
-        ? globalThis.String(object.division_id)
-        : "",
+      divisionIndex: isSet(object.divisionIndex)
+        ? globalThis.Number(object.divisionIndex)
+        : isSet(object.division_index)
+        ? globalThis.Number(object.division_index)
+        : undefined,
+      minRestMinutes: isSet(object.minRestMinutes)
+        ? globalThis.Number(object.minRestMinutes)
+        : isSet(object.min_rest_minutes)
+        ? globalThis.Number(object.min_rest_minutes)
+        : undefined,
       maxFixturesPerDay: isSet(object.maxFixturesPerDay)
         ? globalThis.Number(object.maxFixturesPerDay)
         : isSet(object.max_fixtures_per_day)
         ? globalThis.Number(object.max_fixtures_per_day)
-        : 0,
+        : undefined,
     };
   },
 
-  toJSON(message: DivisionDayCapRule): unknown {
+  toJSON(message: DivisionRule): unknown {
     const obj: any = {};
-    if (message.divisionId !== "") {
-      obj.divisionId = message.divisionId;
+    if (message.divisionIndex !== undefined) {
+      obj.divisionIndex = Math.round(message.divisionIndex);
     }
-    if (message.maxFixturesPerDay !== 0) {
+    if (message.minRestMinutes !== undefined) {
+      obj.minRestMinutes = Math.round(message.minRestMinutes);
+    }
+    if (message.maxFixturesPerDay !== undefined) {
       obj.maxFixturesPerDay = Math.round(message.maxFixturesPerDay);
     }
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<DivisionDayCapRule>, I>>(base?: I): DivisionDayCapRule {
-    return DivisionDayCapRule.fromPartial(base ?? ({} as any));
+  create<I extends Exact<DeepPartial<DivisionRule>, I>>(base?: I): DivisionRule {
+    return DivisionRule.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<DivisionDayCapRule>, I>>(object: I): DivisionDayCapRule {
-    const message = createBaseDivisionDayCapRule();
-    message.divisionId = object.divisionId ?? "";
-    message.maxFixturesPerDay = object.maxFixturesPerDay ?? 0;
+  fromPartial<I extends Exact<DeepPartial<DivisionRule>, I>>(object: I): DivisionRule {
+    const message = createBaseDivisionRule();
+    message.divisionIndex = object.divisionIndex ?? undefined;
+    message.minRestMinutes = object.minRestMinutes ?? undefined;
+    message.maxFixturesPerDay = object.maxFixturesPerDay ?? undefined;
     return message;
   },
 };
 
 function createBaseBuildConstraints(): BuildConstraints {
-  return { matchMinutes: 0, gapMinutes: undefined, restByDivision: [], dayCapByDivision: [] };
+  return { matchMinutes: 0, gapMinutes: undefined };
 }
 
 export const BuildConstraints: MessageFns<BuildConstraints> = {
@@ -843,12 +748,6 @@ export const BuildConstraints: MessageFns<BuildConstraints> = {
     }
     if (message.gapMinutes !== undefined) {
       writer.uint32(16).int32(message.gapMinutes);
-    }
-    for (const v of message.restByDivision) {
-      DivisionRestRule.encode(v!, writer.uint32(26).fork()).join();
-    }
-    for (const v of message.dayCapByDivision) {
-      DivisionDayCapRule.encode(v!, writer.uint32(34).fork()).join();
     }
     return writer;
   },
@@ -876,22 +775,6 @@ export const BuildConstraints: MessageFns<BuildConstraints> = {
           message.gapMinutes = reader.int32();
           continue;
         }
-        case 3: {
-          if (tag !== 26) {
-            break;
-          }
-
-          message.restByDivision.push(DivisionRestRule.decode(reader, reader.uint32()));
-          continue;
-        }
-        case 4: {
-          if (tag !== 34) {
-            break;
-          }
-
-          message.dayCapByDivision.push(DivisionDayCapRule.decode(reader, reader.uint32()));
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -913,16 +796,6 @@ export const BuildConstraints: MessageFns<BuildConstraints> = {
         : isSet(object.gap_minutes)
         ? globalThis.Number(object.gap_minutes)
         : undefined,
-      restByDivision: globalThis.Array.isArray(object?.restByDivision)
-        ? object.restByDivision.map((e: any) => DivisionRestRule.fromJSON(e))
-        : globalThis.Array.isArray(object?.rest_by_division)
-        ? object.rest_by_division.map((e: any) => DivisionRestRule.fromJSON(e))
-        : [],
-      dayCapByDivision: globalThis.Array.isArray(object?.dayCapByDivision)
-        ? object.dayCapByDivision.map((e: any) => DivisionDayCapRule.fromJSON(e))
-        : globalThis.Array.isArray(object?.day_cap_by_division)
-        ? object.day_cap_by_division.map((e: any) => DivisionDayCapRule.fromJSON(e))
-        : [],
     };
   },
 
@@ -934,12 +807,6 @@ export const BuildConstraints: MessageFns<BuildConstraints> = {
     if (message.gapMinutes !== undefined) {
       obj.gapMinutes = Math.round(message.gapMinutes);
     }
-    if (message.restByDivision?.length) {
-      obj.restByDivision = message.restByDivision.map((e) => DivisionRestRule.toJSON(e));
-    }
-    if (message.dayCapByDivision?.length) {
-      obj.dayCapByDivision = message.dayCapByDivision.map((e) => DivisionDayCapRule.toJSON(e));
-    }
     return obj;
   },
 
@@ -950,8 +817,6 @@ export const BuildConstraints: MessageFns<BuildConstraints> = {
     const message = createBaseBuildConstraints();
     message.matchMinutes = object.matchMinutes ?? 0;
     message.gapMinutes = object.gapMinutes ?? undefined;
-    message.restByDivision = object.restByDivision?.map((e) => DivisionRestRule.fromPartial(e)) || [];
-    message.dayCapByDivision = object.dayCapByDivision?.map((e) => DivisionDayCapRule.fromPartial(e)) || [];
     return message;
   },
 };
@@ -1108,14 +973,122 @@ export const SolveError: MessageFns<SolveError> = {
   },
 };
 
+function createBaseAssignment(): Assignment {
+  return { fixtureIndex: 0, courtIndex: 0, startAtMs: 0 };
+}
+
+export const Assignment: MessageFns<Assignment> = {
+  encode(message: Assignment, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.fixtureIndex !== 0) {
+      writer.uint32(8).uint32(message.fixtureIndex);
+    }
+    if (message.courtIndex !== 0) {
+      writer.uint32(16).uint32(message.courtIndex);
+    }
+    if (message.startAtMs !== 0) {
+      writer.uint32(24).int64(message.startAtMs);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): Assignment {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAssignment();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.fixtureIndex = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.courtIndex = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.startAtMs = longToNumber(reader.int64());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): Assignment {
+    return {
+      fixtureIndex: isSet(object.fixtureIndex)
+        ? globalThis.Number(object.fixtureIndex)
+        : isSet(object.fixture_index)
+        ? globalThis.Number(object.fixture_index)
+        : 0,
+      courtIndex: isSet(object.courtIndex)
+        ? globalThis.Number(object.courtIndex)
+        : isSet(object.court_index)
+        ? globalThis.Number(object.court_index)
+        : 0,
+      startAtMs: isSet(object.startAtMs)
+        ? globalThis.Number(object.startAtMs)
+        : isSet(object.start_at_ms)
+        ? globalThis.Number(object.start_at_ms)
+        : 0,
+    };
+  },
+
+  toJSON(message: Assignment): unknown {
+    const obj: any = {};
+    if (message.fixtureIndex !== 0) {
+      obj.fixtureIndex = Math.round(message.fixtureIndex);
+    }
+    if (message.courtIndex !== 0) {
+      obj.courtIndex = Math.round(message.courtIndex);
+    }
+    if (message.startAtMs !== 0) {
+      obj.startAtMs = Math.round(message.startAtMs);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<Assignment>, I>>(base?: I): Assignment {
+    return Assignment.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<Assignment>, I>>(object: I): Assignment {
+    const message = createBaseAssignment();
+    message.fixtureIndex = object.fixtureIndex ?? 0;
+    message.courtIndex = object.courtIndex ?? 0;
+    message.startAtMs = object.startAtMs ?? 0;
+    return message;
+  },
+};
+
 function createBaseSolveBuildRequest(): SolveBuildRequest {
   return {
     requestId: "",
-    courts: [],
-    grid: undefined,
+    courtNames: [],
+    entrantCount: 0,
+    divisionCount: 0,
     fixtures: [],
+    slots: [],
+    stepMinutes: 0,
     existing: [],
     dependencies: [],
+    divisionRules: [],
     constraints: undefined,
     wallSeconds: 0,
   };
@@ -1126,26 +1099,38 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
     if (message.requestId !== "") {
       writer.uint32(10).string(message.requestId);
     }
-    for (const v of message.courts) {
+    for (const v of message.courtNames) {
       writer.uint32(18).string(v!);
     }
-    if (message.grid !== undefined) {
-      Grid.encode(message.grid, writer.uint32(26).fork()).join();
+    if (message.entrantCount !== 0) {
+      writer.uint32(24).uint32(message.entrantCount);
+    }
+    if (message.divisionCount !== 0) {
+      writer.uint32(32).uint32(message.divisionCount);
     }
     for (const v of message.fixtures) {
-      Fixture.encode(v!, writer.uint32(34).fork()).join();
+      Fixture.encode(v!, writer.uint32(42).fork()).join();
+    }
+    for (const v of message.slots) {
+      Slot.encode(v!, writer.uint32(50).fork()).join();
+    }
+    if (message.stepMinutes !== 0) {
+      writer.uint32(56).int32(message.stepMinutes);
     }
     for (const v of message.existing) {
-      Assignment.encode(v!, writer.uint32(42).fork()).join();
+      PinnedRow.encode(v!, writer.uint32(66).fork()).join();
     }
     for (const v of message.dependencies) {
-      OrderPair.encode(v!, writer.uint32(50).fork()).join();
+      OrderPair.encode(v!, writer.uint32(74).fork()).join();
+    }
+    for (const v of message.divisionRules) {
+      DivisionRule.encode(v!, writer.uint32(82).fork()).join();
     }
     if (message.constraints !== undefined) {
-      BuildConstraints.encode(message.constraints, writer.uint32(58).fork()).join();
+      BuildConstraints.encode(message.constraints, writer.uint32(90).fork()).join();
     }
     if (message.wallSeconds !== 0) {
-      writer.uint32(65).double(message.wallSeconds);
+      writer.uint32(97).double(message.wallSeconds);
     }
     return writer;
   },
@@ -1170,23 +1155,23 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
             break;
           }
 
-          message.courts.push(reader.string());
+          message.courtNames.push(reader.string());
           continue;
         }
         case 3: {
-          if (tag !== 26) {
+          if (tag !== 24) {
             break;
           }
 
-          message.grid = Grid.decode(reader, reader.uint32());
+          message.entrantCount = reader.uint32();
           continue;
         }
         case 4: {
-          if (tag !== 34) {
+          if (tag !== 32) {
             break;
           }
 
-          message.fixtures.push(Fixture.decode(reader, reader.uint32()));
+          message.divisionCount = reader.uint32();
           continue;
         }
         case 5: {
@@ -1194,7 +1179,7 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
             break;
           }
 
-          message.existing.push(Assignment.decode(reader, reader.uint32()));
+          message.fixtures.push(Fixture.decode(reader, reader.uint32()));
           continue;
         }
         case 6: {
@@ -1202,19 +1187,51 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
             break;
           }
 
-          message.dependencies.push(OrderPair.decode(reader, reader.uint32()));
+          message.slots.push(Slot.decode(reader, reader.uint32()));
           continue;
         }
         case 7: {
-          if (tag !== 58) {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.stepMinutes = reader.int32();
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.existing.push(PinnedRow.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.dependencies.push(OrderPair.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 10: {
+          if (tag !== 82) {
+            break;
+          }
+
+          message.divisionRules.push(DivisionRule.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 11: {
+          if (tag !== 90) {
             break;
           }
 
           message.constraints = BuildConstraints.decode(reader, reader.uint32());
           continue;
         }
-        case 8: {
-          if (tag !== 65) {
+        case 12: {
+          if (tag !== 97) {
             break;
           }
 
@@ -1237,14 +1254,40 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
         : isSet(object.request_id)
         ? globalThis.String(object.request_id)
         : "",
-      courts: globalThis.Array.isArray(object?.courts) ? object.courts.map((e: any) => globalThis.String(e)) : [],
-      grid: isSet(object.grid) ? Grid.fromJSON(object.grid) : undefined,
-      fixtures: globalThis.Array.isArray(object?.fixtures) ? object.fixtures.map((e: any) => Fixture.fromJSON(e)) : [],
+      courtNames: globalThis.Array.isArray(object?.courtNames)
+        ? object.courtNames.map((e: any) => globalThis.String(e))
+        : globalThis.Array.isArray(object?.court_names)
+        ? object.court_names.map((e: any) => globalThis.String(e))
+        : [],
+      entrantCount: isSet(object.entrantCount)
+        ? globalThis.Number(object.entrantCount)
+        : isSet(object.entrant_count)
+        ? globalThis.Number(object.entrant_count)
+        : 0,
+      divisionCount: isSet(object.divisionCount)
+        ? globalThis.Number(object.divisionCount)
+        : isSet(object.division_count)
+        ? globalThis.Number(object.division_count)
+        : 0,
+      fixtures: globalThis.Array.isArray(object?.fixtures)
+        ? object.fixtures.map((e: any) => Fixture.fromJSON(e))
+        : [],
+      slots: globalThis.Array.isArray(object?.slots) ? object.slots.map((e: any) => Slot.fromJSON(e)) : [],
+      stepMinutes: isSet(object.stepMinutes)
+        ? globalThis.Number(object.stepMinutes)
+        : isSet(object.step_minutes)
+        ? globalThis.Number(object.step_minutes)
+        : 0,
       existing: globalThis.Array.isArray(object?.existing)
-        ? object.existing.map((e: any) => Assignment.fromJSON(e))
+        ? object.existing.map((e: any) => PinnedRow.fromJSON(e))
         : [],
       dependencies: globalThis.Array.isArray(object?.dependencies)
         ? object.dependencies.map((e: any) => OrderPair.fromJSON(e))
+        : [],
+      divisionRules: globalThis.Array.isArray(object?.divisionRules)
+        ? object.divisionRules.map((e: any) => DivisionRule.fromJSON(e))
+        : globalThis.Array.isArray(object?.division_rules)
+        ? object.division_rules.map((e: any) => DivisionRule.fromJSON(e))
         : [],
       constraints: isSet(object.constraints) ? BuildConstraints.fromJSON(object.constraints) : undefined,
       wallSeconds: isSet(object.wallSeconds)
@@ -1260,20 +1303,32 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
     if (message.requestId !== "") {
       obj.requestId = message.requestId;
     }
-    if (message.courts?.length) {
-      obj.courts = message.courts;
+    if (message.courtNames?.length) {
+      obj.courtNames = message.courtNames;
     }
-    if (message.grid !== undefined) {
-      obj.grid = Grid.toJSON(message.grid);
+    if (message.entrantCount !== 0) {
+      obj.entrantCount = Math.round(message.entrantCount);
+    }
+    if (message.divisionCount !== 0) {
+      obj.divisionCount = Math.round(message.divisionCount);
     }
     if (message.fixtures?.length) {
       obj.fixtures = message.fixtures.map((e) => Fixture.toJSON(e));
     }
+    if (message.slots?.length) {
+      obj.slots = message.slots.map((e) => Slot.toJSON(e));
+    }
+    if (message.stepMinutes !== 0) {
+      obj.stepMinutes = Math.round(message.stepMinutes);
+    }
     if (message.existing?.length) {
-      obj.existing = message.existing.map((e) => Assignment.toJSON(e));
+      obj.existing = message.existing.map((e) => PinnedRow.toJSON(e));
     }
     if (message.dependencies?.length) {
       obj.dependencies = message.dependencies.map((e) => OrderPair.toJSON(e));
+    }
+    if (message.divisionRules?.length) {
+      obj.divisionRules = message.divisionRules.map((e) => DivisionRule.toJSON(e));
     }
     if (message.constraints !== undefined) {
       obj.constraints = BuildConstraints.toJSON(message.constraints);
@@ -1290,11 +1345,15 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
   fromPartial<I extends Exact<DeepPartial<SolveBuildRequest>, I>>(object: I): SolveBuildRequest {
     const message = createBaseSolveBuildRequest();
     message.requestId = object.requestId ?? "";
-    message.courts = object.courts?.map((e) => e) || [];
-    message.grid = (object.grid !== undefined && object.grid !== null) ? Grid.fromPartial(object.grid) : undefined;
+    message.courtNames = object.courtNames?.map((e) => e) || [];
+    message.entrantCount = object.entrantCount ?? 0;
+    message.divisionCount = object.divisionCount ?? 0;
     message.fixtures = object.fixtures?.map((e) => Fixture.fromPartial(e)) || [];
-    message.existing = object.existing?.map((e) => Assignment.fromPartial(e)) || [];
+    message.slots = object.slots?.map((e) => Slot.fromPartial(e)) || [];
+    message.stepMinutes = object.stepMinutes ?? 0;
+    message.existing = object.existing?.map((e) => PinnedRow.fromPartial(e)) || [];
     message.dependencies = object.dependencies?.map((e) => OrderPair.fromPartial(e)) || [];
+    message.divisionRules = object.divisionRules?.map((e) => DivisionRule.fromPartial(e)) || [];
     message.constraints = (object.constraints !== undefined && object.constraints !== null)
       ? BuildConstraints.fromPartial(object.constraints)
       : undefined;
