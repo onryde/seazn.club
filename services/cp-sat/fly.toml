@@ -28,6 +28,27 @@ primary_region = "lhr"
 [[services]]
   internal_port = 50051
   protocol = "tcp"
+  # Fly's own config reference documents both of these identically under
+  # [http_service] and a generic [[services]] block — confirmed directly
+  # against https://fly.io/docs/reference/configuration/ (fetched twice,
+  # independently, after an earlier draft of this file wrongly claimed
+  # min_machines_running only exists under [http_service]; it does not).
+  #
+  # min_machines_running only takes effect "when auto_stop_machines is
+  # `stop` or `suspend`" (the docs' own wording) — so it is meaningless on
+  # its own. A bare [[services]] block defaults auto_stop_machines to
+  # "off" (also verified against the same page), which already means
+  # machines are never auto-stopped today — but leaving that as an
+  # unstated default is exactly the kind of implicit behaviour this
+  # service can't afford to depend on: a cold start (~1-3s) eats directly
+  # into the 8-10s wall budget the whole investigation was built around.
+  # Both are pinned explicitly so "always warm" is this file's own
+  # guarantee, not a currently-safe accident of a platform default that
+  # could change or get overridden by a later edit chasing idle-cost
+  # savings. Nothing further is owed post-deploy: no `fly scale` call is
+  # needed for this, unlike an earlier draft of this file claimed.
+  auto_stop_machines = "off"
+  min_machines_running = 1
 
   [[services.ports]]
     port = 50051
@@ -58,14 +79,12 @@ primary_region = "lhr"
   size = "shared-cpu-2x"
   memory = "1gb"
 
-# min_machines_running=1 (always warm) is intentionally NOT set above — the
-# key only exists under [http_service] in Fly's config schema, and this app
-# has no [http_service] block (gRPC over raw TCP, not HTTP/1.1). Set once,
-# post-deploy:
-#   fly scale count 1 --min-machines-running=1 --app cp-sat
-# A cold start (Fly machine boot, ~1-3s) would eat directly into the 8-10s
-# wall budget this entire investigation was built around. Until that command
-# runs, the machine may scale to zero between deploys.
+[env]
+  # Caps CONCURRENT solves (config.py's `Settings.max_workers`, default 4
+  # if unset). Set to 1 here rather than left at the default — see the
+  # sizing note below for the full reasoning; it multiplies with
+  # NUM_SEARCH_WORKERS and is this file's half of that tradeoff to set.
+  CPSAT_MAX_WORKERS = "1"
 
 # --- sizing: this box is sized for PROOF TIME, not placement -----------------
 # Across two independent paired, interleaved A/B runs of 12 on the production
@@ -82,13 +101,31 @@ primary_region = "lhr"
 # elapsed_ms~8014). A failure whose `placed` is not 37 would be a real bug,
 # not a sizing tradeoff.
 #
-# NUM_SEARCH_WORKERS (src/cp_sat/model.py, hardcoded — not settable from this
-# file or the Dockerfile) is 8, measured on a 6-physical-core dev box.
-# shared-cpu-2x is 2 vCPU: unmeasured here, and plausibly oversubscribed — a
-# dev-box A/B already found 4 workers beating 8 and 12 under load (see
-# task-3-report.md, task-5b-report.md in the SDD workspace). Re-measure on
-# this machine shape after first deploy; changing the constant is Python
-# source and out of this task's scope.
+# Two oversubscription axes feed that risk, and they MULTIPLY:
+#   * NUM_SEARCH_WORKERS (src/cp_sat/model.py, hardcoded — not settable
+#     from this file or the Dockerfile) is 8, measured on a
+#     6-physical-core dev box. shared-cpu-2x is 2 vCPU: unmeasured here,
+#     and plausibly oversubscribed even alone — a dev-box A/B already
+#     found 4 workers beating 8 and 12 under load (task-3-report.md,
+#     task-5b-report.md in the SDD workspace). Re-measure on this machine
+#     shape after first deploy; changing the constant is Python source
+#     and out of this task's scope.
+#   * CPSAT_MAX_WORKERS (set above, default 4 if left unset) caps
+#     CONCURRENT solves and is this file's to set. Every NUM_SEARCH_WORKERS
+#     measurement above was taken with exactly ONE solve in flight, so the
+#     default of 4 concurrent solves would let up to 4 x 8 = 32 solver
+#     threads contend for 2 vCPU — a ratio nothing in this programme has
+#     ever measured. Pinned to 1 above specifically so the worst case stays
+#     the SAME already-discussed 8-threads-on-2-vCPU oversubscription
+#     rather than stacking a second, wholly unmeasured axis on top of it.
+#     The cost is real but designed-for: a second concurrent solve request
+#     gets an immediate `SOLVER_BUSY` (main.py's admission control,
+#     `BoundedSemaphore.acquire(blocking=False)`) and the caller falls back
+#     to its own placer — the same fallback contract already used for a
+#     deadline-exceeded or unavailable transport, not a new failure mode.
+#     1 is a defensible floor, not a claimed optimum; raise it once
+#     concurrent-solve behaviour has actually been measured on this
+#     machine shape.
 
 # Secrets (fly secrets set --app cp-sat):
 #   CPSAT_SERVICE_SECRET — new, distinct from apps/web's CRON_SECRET. Never

@@ -19,7 +19,16 @@ FROM python:3.14.6-slim-bookworm
 
 WORKDIR /app
 
-# Dependency manifest first so this layer caches across source-only changes.
+# pyproject.toml copied ahead of src/ for readability (manifest before
+# code), NOT for Docker layer caching. `pip install .` below needs src/
+# present to build this package at all — setuptools discovers `cp_sat` as a
+# namespace package there — so this split buys nothing on its own: a
+# source-only change still busts the COPY src/ layer and therefore the RUN
+# pip install layer after it, exactly like a dependency change would. A real
+# dependency-only cache would need a two-pass install (deps first with no
+# src/, then the local package once src/ lands); not done here, since it is
+# unverified complexity with no container runtime on this machine to
+# build-test it against.
 COPY pyproject.toml .
 COPY src/ src/
 
