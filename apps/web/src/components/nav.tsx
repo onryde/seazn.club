@@ -99,7 +99,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
         {user && activeOrg && (
           <span
             data-tour="org-chip"
-            className="hidden items-center gap-1.5 rounded-full border border-cream/15 bg-cream/[0.07] px-3 py-1 text-xs font-medium text-cream/85 sm:flex"
+            className="hidden shrink-0 items-center gap-1.5 rounded-full border border-cream/15 bg-cream/[0.07] px-3 py-1 text-xs font-medium text-cream/85 sm:flex"
           >
             <span className="h-1.5 w-1.5 rounded-full bg-lime-400" />
             {activeOrg.name}
@@ -111,7 +111,12 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
 
         {/* Right: primary nav + user */}
         {user ? (
-          <div className="flex items-center gap-1">
+          // min-w-0 (#349): without it, this row reports its own UNSHRUNK
+          // content width as its automatic minimum size to the header's
+          // outer flex row above — the outer row then never asks it to give
+          // up any space at all, and the display_name span below never gets
+          // a chance to shrink no matter what class it carries.
+          <div className="flex min-w-0 items-center gap-1">
             <nav className="flex items-center gap-0.5">
               {/* Labels collapse to icons under `sm` — aria-label keeps the
                   accessible name (axe link-name, v3/11 gap 11). */}
@@ -162,14 +167,26 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
               }}
             />
             {/* #349: at 640-1023px (labels visible, `lg:` grid not yet on)
-                the gantry's right-hand group (nav links + help + this name +
-                sign out) has no slack left — an unclamped display_name
-                forces the whole row past the viewport (measured: needs
-                ~775px of the ~768px tablet-768 has). `truncate` + a capped
-                width lets ANY name fit without wrapping/overflowing;
-                `lg:max-w-none` restores the untouched, unclamped desktop
-                rendering this always had at ≥1024px. */}
-            <span className="mx-1 hidden max-w-12 truncate text-sm font-medium text-cream/85 sm:block lg:max-w-none">
+                the gantry's right-hand group has no slack left — an
+                unclamped display_name forces the whole row past the
+                viewport (measured: needs ~775px of the ~768px tablet-768
+                has). `min-w-0` lets this flex child give up its automatic
+                content-based minimum size — it renders at full width
+                whenever there's room, and `truncate` only engages once the
+                row runs out of space, self-scoping to exactly the width
+                band that's tight instead of a hardcoded cap.
+                This is the ONLY child here meant to give up space: the org
+                chip above and the LogoutButton below both carry an explicit
+                `shrink-0` for exactly that reason. Plain nested flex-shrink
+                does not automatically concentrate 100% of a squeeze onto
+                the one item with `min-w-0` — any OTHER text that can still
+                wrap at a word boundary (no `shrink-0` of its own) gets
+                dragged into the same squeeze and wraps too, which is worse
+                than the overflow this fix exists to close. Confirmed by
+                measurement: with `min-w-0` on this span alone, "Sign out"
+                and "My organization" both wrapped to two lines at 768px
+                before those two `shrink-0`s were added. */}
+            <span className="mx-1 hidden min-w-0 truncate text-sm font-medium text-cream/85 sm:block">
               {user.display_name}
             </span>
             <LogoutButton label={t(dict, "nav.signOut")} />
