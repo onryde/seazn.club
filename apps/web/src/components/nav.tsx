@@ -117,7 +117,17 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
           // up any space at all, and the display_name span below never gets
           // a chance to shrink no matter what class it carries.
           <div className="flex min-w-0 items-center gap-1">
-            <nav className="flex items-center gap-0.5">
+            {/* shrink-0 (#349, fix round 2): this row's default CSS makes
+                EVERY child shrinkable once the row itself has `min-w-0` —
+                not just the display_name span below. English labels
+                ("Dashboard"/"Directory"/"Settings") happen to be single
+                unbreakable words, so this never visibly wrapped in the
+                English-only e2e matrix, but `nav.dashboard` is "Tableau de
+                bord" in fr and `nav.playerHome` is "Player home" / "Accueil
+                joueur" / "Inicio del jugador" — multi-word labels with real
+                wrap points that would hit the exact "Sign out" failure fix
+                round 1 found, invisibly to every automated check here. */}
+            <nav className="flex shrink-0 items-center gap-0.5">
               {/* Labels collapse to icons under `sm` — aria-label keeps the
                   accessible name (axe link-name, v3/11 gap 11). */}
               <Link
@@ -176,16 +186,24 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 row runs out of space, self-scoping to exactly the width
                 band that's tight instead of a hardcoded cap.
                 This is the ONLY child here meant to give up space: the org
-                chip above and the LogoutButton below both carry an explicit
-                `shrink-0` for exactly that reason. Plain nested flex-shrink
-                does not automatically concentrate 100% of a squeeze onto
-                the one item with `min-w-0` — any OTHER text that can still
-                wrap at a word boundary (no `shrink-0` of its own) gets
-                dragged into the same squeeze and wraps too, which is worse
-                than the overflow this fix exists to close. Confirmed by
-                measurement: with `min-w-0` on this span alone, "Sign out"
-                and "My organization" both wrapped to two lines at 768px
-                before those two `shrink-0`s were added. */}
+                chip above, the `<nav>` links wrapper, and the LogoutButton
+                below all carry an explicit `shrink-0` for exactly that
+                reason (HelpMenu is icon-only, no text, incidentally safe
+                either way) — the guard set is what makes this span
+                architecturally the sole shrink target, not an accident of
+                which labels happen to be short enough today. Plain nested
+                flex-shrink does not automatically concentrate 100% of a
+                squeeze onto the one item with `min-w-0` — any OTHER text
+                that can still wrap at a word boundary (no `shrink-0` of its
+                own) gets dragged into the same squeeze and wraps too,
+                which is worse than the overflow this fix exists to close.
+                Confirmed by measurement: with `min-w-0` on this span alone,
+                "Sign out" and "My organization" both wrapped to two lines
+                at 768px before those `shrink-0`s were added — and without
+                one on `<nav>`, the same failure was reachable in any
+                locale whose labels aren't single unbreakable words (fr:
+                "Tableau de bord"), just never exercised by this
+                English-only e2e matrix. */}
             <span className="mx-1 hidden min-w-0 truncate text-sm font-medium text-cream/85 sm:block">
               {user.display_name}
             </span>
