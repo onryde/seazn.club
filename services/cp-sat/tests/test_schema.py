@@ -294,6 +294,35 @@ def test_rejects_negative_min_rest_minutes():
         request_to_model_input(req)
 
 
+def test_zero_is_legitimate_rest_but_not_a_legitimate_day_cap():
+    """The two `DivisionRule` fields treat zero OPPOSITELY, on purpose, and the
+    asymmetry is the whole point of this test.
+
+    `min_rest_minutes = 0` means "this division needs no rest between a
+    player's matches" — a real thing to ask for, so it is accepted AND
+    recorded. `max_fixtures_per_day = 0` means "never place this division",
+    which no caller intends; it is the shape that comes back OPTIMAL with
+    every one of that division's fixtures silently dropped, so it is refused
+    and the caller is told to omit the field instead.
+
+    Asserting `rest_by_division[0] == 0` rather than merely "no raise" is
+    deliberate: accepted-and-recorded and accepted-then-dropped are the same
+    from the outside, and only the first is correct. `HasField` is what
+    separates them, so this pins the presence read at `schema.py:337` — the
+    guard that stops an explicit zero being indistinguishable from an unset
+    field."""
+    req = _valid_request(
+        division_rules=[scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=0)]
+    )
+    assert request_to_model_input(req).constraints["rest_by_division"] == {0: 0}
+
+    capped = _valid_request(
+        division_rules=[scheduler_pb2.DivisionRule(division_index=0, max_fixtures_per_day=0)]
+    )
+    with pytest.raises(InvalidRequestError, match="max_fixtures_per_day"):
+        request_to_model_input(capped)
+
+
 # --- referential integrity, now expressed as index range --------------------
 #
 # ONE pass, before any domain object exists: every index a request carries
