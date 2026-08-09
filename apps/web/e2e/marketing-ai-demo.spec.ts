@@ -143,7 +143,15 @@ test.describe("/[lang]/scheduling — the recorded AI demo", () => {
       const replay = section(page).getByRole("button", {
         name: MARKETING.en["scheduling.aidemo.replay"]!,
       });
-      if (await replay.count()) {
+      // Asserted, not probed. `if (await replay.count())` passed whether the
+      // button existed or not, so a control that stopped rendering — the one
+      // interaction that would re-fetch a run if anything here were live — would
+      // have taken this test's teeth with it and stayed green. The button
+      // belongs to the trace, so it exists for exactly the two single-division
+      // templates and must NOT exist for the joint one.
+      const joint = Boolean(RECORDING[slug].response.divisions?.length);
+      await expect(replay).toHaveCount(joint ? 0 : 1);
+      if (!joint) {
         await replay.click();
         await expect(trace(page)).toContainText(UI_EN["board.ai.trace.node.ready"]!, {
           timeout: 30_000,

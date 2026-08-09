@@ -436,11 +436,13 @@
   "scheduling.aidemo.price.label": "Wat deze run kostte",
   "scheduling.aidemo.price.credits.one": "{n} credit",
   "scheduling.aidemo.price.credits.other": "{n} credits",
-  "scheduling.aidemo.price.joint": "{divisions} divisies samen afgerekend — {discount} credit korting",
   "scheduling.aidemo.card.finals-day.name": "Finaledag, regen om één uur",
-  "scheduling.aidemo.card.finals-day.what": "Zes banen tweeënhalf uur dicht. Al gespeelde wedstrijden blijven staan; de rest schuift op.",
+  "scheduling.aidemo.card.finals-day.what": "Zes banen tweeënhalf uur dicht. De AI verplaatst zo min mogelijk wedstrijden en benoemt de wedstrijden die niet passen.",
   "scheduling.aidemo.card.club-night.name": "Clubavond",
   "scheduling.aidemo.card.club-night.what": "Twaalf wedstrijden op twee banen, met twintig minuten rust tussen elke partij.",
   "scheduling.aidemo.card.northside-open.name": "Northside Open",
-  "scheduling.aidemo.card.northside-open.what": "Drie divisies in één run. Junioren op baan 5, de seniorentableaus delen baan 1 tot 4, U15 klaar om zes uur."
+  "scheduling.aidemo.card.northside-open.what": "Drie divisies in één run. Junioren op baan 5, de seniorentableaus delen baan 1 tot 4, U15 klaar om zes uur.",
+  "scheduling.aidemo.scopeNote": "Deze run mocht {movable} van de {total} wedstrijden op het bord verplaatsen. De wijzigingslijst vergelijkt het antwoord met het hele bord, dus wedstrijden die hij nooit mocht aanraken — de al gespeelde — staan ook onder “naar lade”.",
+  "scheduling.aidemo.price.joint.one": "{divisions} divisies samen afgerekend — {count} credit korting",
+  "scheduling.aidemo.price.joint.other": "{divisions} divisies samen afgerekend — {count} credits korting"
 }

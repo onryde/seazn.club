@@ -18,14 +18,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { AiTrace } from "@/components/v2/board/ai-trace";
 import { AiDiffPanel } from "@/components/v2/board/ai-diff-panel";
 import { buildScheduleTrace, type TraceSource } from "@/components/v2/board/ai-trace-compose";
 import { computeAiDiff } from "@/components/v2/board/ai-diff";
 import { pickDictPrefixes } from "@/lib/i18n-subset";
-import { t as tRuntime } from "@/lib/i18n-runtime";
+import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import { quoteRun, schedulingRungWeights } from "@/lib/ai-rung";
 import type { AiPlanResponse } from "@/server/api-v1/schemas";
 import type { Dict } from "@/lib/i18n-constants";
@@ -60,6 +60,8 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
 });
 
 const msg = (key: string, vars?: Record<string, string | number>) => tRuntime(DICT, key, vars);
+const tPlural = (key: string, count: number, vars?: Record<string, string | number>) =>
+  pluralRuntime(DICT, key, count, "en", { n: count, ...vars });
 
 const CLUB_NIGHT = clubNightJson as unknown as AiDemoFixture;
 const NORTHSIDE = northsideJson as unknown as AiDemoFixture;
@@ -161,6 +163,49 @@ describe("AiArchitectDemo — the template rail", () => {
     expect(propsOf(cards[0]!)["data-ai-hero"]).toBe("true");
     expect(propsOf(cards[1]!)["data-ai-hero"]).toBeUndefined();
     expect(propsOf(cards[2]!)["data-ai-hero"]).toBeUndefined();
+  });
+
+  // The REC slate names a model and a capture date. Holding the previous
+  // recording on screen while the next chunk arrives attributes one run's
+  // receipt to another — briefly, but on the one surface whose whole job is
+  // saying where the numbers came from.
+  it("drops the previous recording the moment another card is picked", async () => {
+    const island = await mount(); // settles on the hero, finals-day
+    expect(island.text()).toContain(FINALS_DAY.meta.instruction);
+
+    const next = find(island, "data-ai-template", "northside-open")!;
+    (propsOf(next).onClick as () => void)(); // deliberately NOT settled
+    const midLoad = island.text();
+    expect(midLoad).toContain(msg("scheduling.aidemo.loading"));
+    expect(midLoad).not.toContain(FINALS_DAY.meta.instruction);
+    expect(find(island, "data-ai-price")).toBeUndefined();
+
+    await settle();
+    expect(island.text()).toContain(NORTHSIDE.meta.instruction);
+  });
+
+  // Backs the e2e assertion `toHaveCount(joint ? 0 : 1)` on the replay button
+  // (marketing-ai-demo.spec.ts:146), which replaced an `if (await count())` that
+  // passed whether the control rendered or not. The e2e proves it in a browser;
+  // this proves the rule the e2e now encodes.
+  it("offers the replay control only where there is a trace to replay", async () => {
+    const label = msg("scheduling.aidemo.replay");
+    const replayButton = (island: Island) =>
+      island
+        .tree()
+        .find(
+          (el) => el.type === "button" && textOf(propsOf(el).children as never) === label,
+        );
+
+    const island = await mount();
+    for (const slug of ["finals-day", "club-night"] as const) {
+      await select(island, slug);
+      await playOut();
+      expect(replayButton(island), `${slug} has no replay control`).toBeDefined();
+    }
+    await select(island, "northside-open");
+    await playOut();
+    expect(replayButton(island), "the joint run has no trace, so nothing to replay").toBeUndefined();
   });
 
   it("carries the smoke hooks in the server-rendered body", () => {
@@ -349,9 +394,26 @@ describe("AiArchitectDemo — T2 Northside Open (joint)", () => {
     expect(propsOf(price)["data-credits"]).toBe(String(Math.max(1, rungTotal - 1)));
     expect(propsOf(price)["data-credits"]).toBe(String(plan.credits));
     expect(propsOf(price)["data-discount"]).toBe("1");
+    // Plural pair, not a hardcoded singular around `{discount}`.
     expect(island.text()).toContain(
-      msg("scheduling.aidemo.price.joint", { divisions: plan.divisions!.length, discount: 1 }),
+      tPlural("scheduling.aidemo.price.joint", 1, { divisions: plan.divisions!.length }),
     );
+    expect(island.text()).toContain("1 credit off");
+    expect(island.text()).not.toContain("1 credits off");
+  });
+
+  it("has both plural branches for the batch discount, in all four locales", async () => {
+    for (const loc of ["en", "es", "fr", "nl"] as const) {
+      const dict = (await import(`../../../dictionaries/${loc}/marketing.json`)).default as Dict;
+      for (const cat of ["one", "other"] as const) {
+        const v = dict[`scheduling.aidemo.price.joint.${cat}`];
+        expect(typeof v, `${loc}.${cat}`).toBe("string");
+        expect(v as string, `${loc}.${cat}`).toContain("{count}");
+      }
+      // The flat key it replaced must be gone, or `lookup` would find it first
+      // and the plural pair would be dead weight.
+      expect(dict["scheduling.aidemo.price.joint"], loc).toBeUndefined();
+    }
   });
 });
 
@@ -413,6 +475,42 @@ describe("AiArchitectDemo — T3 finals day (repair)", () => {
       </DictProvider>,
     );
     expect(html).toContain(esc(note!));
+  });
+
+  // The card blurb used to promise "matches already played stay put" directly
+  // above a panel that strikes eleven of those very fixtures "→ tray". The diff
+  // is the PRODUCT's — `computeAiDiff` buckets any placed board row missing from
+  // the proposal, with no movable filter — so the section explains it instead of
+  // filtering it, which would show a console that does not exist.
+  it("explains the tray rows the repair was never allowed to touch", async () => {
+    const plan = planOf(FINALS_DAY);
+    const diff = computeAiDiff(plan, FINALS_DAY.board.fixtures);
+    const movable = new Set(FINALS_DAY.movableIds);
+    const outOfScope = diff.unscheduled.filter((u) => !movable.has(u.fixture_id));
+    // The premise, read from the recording rather than asserted from memory.
+    expect(diff.unscheduled).toHaveLength(15);
+    expect(outOfScope).toHaveLength(11);
+
+    const island = await mount();
+    await select(island, "finals-day");
+    await playOut();
+    expect(find(island, "data-ai-scope"), "no scope note beside an out-of-scope diff").toBeDefined();
+    expect(island.text()).toContain(
+      msg("scheduling.aidemo.scopeNote", {
+        movable: FINALS_DAY.movableIds.length,
+        total: FINALS_DAY.board.fixtures.length,
+      }),
+    );
+    // …and the blurb no longer makes the claim the panel contradicts.
+    expect(msg("scheduling.aidemo.card.finals-day.what")).not.toContain("stay put");
+  });
+
+  it("shows no scope note when the run could move the whole board", async () => {
+    expect(CLUB_NIGHT.movableIds.length).toBe(CLUB_NIGHT.board.fixtures.length);
+    const island = await mount();
+    await select(island, "club-night");
+    await playOut();
+    expect(find(island, "data-ai-scope")).toBeUndefined();
   });
 
   it("prices the repair from the movable set it was given", async () => {

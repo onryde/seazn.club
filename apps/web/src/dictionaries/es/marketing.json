@@ -436,11 +436,13 @@
   "scheduling.aidemo.price.label": "Lo que costó esta planificación",
   "scheduling.aidemo.price.credits.one": "{n} crédito",
   "scheduling.aidemo.price.credits.other": "{n} créditos",
-  "scheduling.aidemo.price.joint": "{divisions} divisiones facturadas en un lote: {discount} crédito menos",
   "scheduling.aidemo.card.finals-day.name": "Día de finales, lluvia a la una",
-  "scheduling.aidemo.card.finals-day.what": "Seis pistas cerradas dos horas y media. Los partidos ya jugados se quedan donde están; el resto se mueve.",
+  "scheduling.aidemo.card.finals-day.what": "Seis pistas cerradas dos horas y media. La IA mueve los mínimos partidos posibles y señala los que no caben.",
   "scheduling.aidemo.card.club-night.name": "Noche de club",
   "scheduling.aidemo.card.club-night.what": "Doce partidos en dos pistas, con veinte minutos de descanso entre cada uno.",
   "scheduling.aidemo.card.northside-open.name": "Abierto de Northside",
-  "scheduling.aidemo.card.northside-open.what": "Tres divisiones en una sola tirada. Los juveniles en la pista 5, los cuadros adultos comparten de la 1 a la 4, sub-15 terminado a las seis."
+  "scheduling.aidemo.card.northside-open.what": "Tres divisiones en una sola tirada. Los juveniles en la pista 5, los cuadros adultos comparten de la 1 a la 4, sub-15 terminado a las seis.",
+  "scheduling.aidemo.scopeNote": "Esta ejecución podía mover {movable} de los {total} partidos del cuadro. La lista de cambios compara su respuesta con el cuadro entero, así que los partidos que nunca pudo tocar —los ya jugados— también aparecen en «a la bandeja».",
+  "scheduling.aidemo.price.joint.one": "{divisions} divisiones facturadas en un lote: {count} crédito menos",
+  "scheduling.aidemo.price.joint.other": "{divisions} divisiones facturadas en un lote: {count} créditos menos"
 }

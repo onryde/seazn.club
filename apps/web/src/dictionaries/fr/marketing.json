@@ -436,11 +436,13 @@
   "scheduling.aidemo.price.label": "Ce que cette planification a coûté",
   "scheduling.aidemo.price.credits.one": "{n} crédit",
   "scheduling.aidemo.price.credits.other": "{n} crédits",
-  "scheduling.aidemo.price.joint": "{divisions} divisions facturées en un lot — {discount} crédit offert",
   "scheduling.aidemo.card.finals-day.name": "Jour des finales, pluie à 13 h",
-  "scheduling.aidemo.card.finals-day.what": "Six terrains fermés deux heures et demie. Les matchs déjà joués ne bougent pas ; tout le reste est déplacé.",
+  "scheduling.aidemo.card.finals-day.what": "Six terrains fermés deux heures et demie. L'IA déplace le moins de matchs possible et signale ceux qui ne rentrent pas.",
   "scheduling.aidemo.card.club-night.name": "Soirée du club",
   "scheduling.aidemo.card.club-night.what": "Douze matchs sur deux terrains, avec vingt minutes de repos entre chaque rencontre.",
   "scheduling.aidemo.card.northside-open.name": "Open de Northside",
-  "scheduling.aidemo.card.northside-open.what": "Trois divisions en une seule fois. Les jeunes sur le terrain 5, les tableaux adultes se partagent les terrains 1 à 4, U15 terminé avant 18 h."
+  "scheduling.aidemo.card.northside-open.what": "Trois divisions en une seule fois. Les jeunes sur le terrain 5, les tableaux adultes se partagent les terrains 1 à 4, U15 terminé avant 18 h.",
+  "scheduling.aidemo.scopeNote": "Cette exécution pouvait déplacer {movable} des {total} matchs du tableau. La liste des changements compare sa réponse au tableau entier : les matchs auxquels elle ne pouvait pas toucher — ceux déjà joués — apparaissent donc aussi en « réserve ».",
+  "scheduling.aidemo.price.joint.one": "{divisions} divisions facturées en un lot — {count} crédit offert",
+  "scheduling.aidemo.price.joint.other": "{divisions} divisions facturées en un lot — {count} crédits offerts"
 }

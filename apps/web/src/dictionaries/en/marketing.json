@@ -437,11 +437,13 @@
   "scheduling.aidemo.price.label": "What this run cost",
   "scheduling.aidemo.price.credits.one": "{n} credit",
   "scheduling.aidemo.price.credits.other": "{n} credits",
-  "scheduling.aidemo.price.joint": "{divisions} divisions priced as one batch — {discount} credit off",
   "scheduling.aidemo.card.finals-day.name": "Finals day, rain at one",
-  "scheduling.aidemo.card.finals-day.what": "Six courts shut for two and a half hours. Matches already played stay put; everything else moves.",
+  "scheduling.aidemo.card.finals-day.what": "Six courts shut for two and a half hours. The AI moves as few matches as it can and names the ones that will not fit.",
   "scheduling.aidemo.card.club-night.name": "Club night",
   "scheduling.aidemo.card.club-night.what": "Twelve matches on two courts, with twenty minutes' rest between every game.",
   "scheduling.aidemo.card.northside-open.name": "Northside Open",
-  "scheduling.aidemo.card.northside-open.what": "Three divisions in one run. Juniors on court 5, the adult draws share 1 to 4, U15 done by six."
+  "scheduling.aidemo.card.northside-open.what": "Three divisions in one run. Juniors on court 5, the adult draws share 1 to 4, U15 done by six.",
+  "scheduling.aidemo.scopeNote": "This run was allowed to move {movable} of the {total} matches on the board. The change list compares its answer with the whole board, so matches it could never touch — the ones already played — appear under “to tray” as well.",
+  "scheduling.aidemo.price.joint.one": "{divisions} divisions priced as one batch — {count} credit off",
+  "scheduling.aidemo.price.joint.other": "{divisions} divisions priced as one batch — {count} credits off"
 }

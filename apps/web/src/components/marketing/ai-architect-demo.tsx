@@ -170,17 +170,36 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
     [dict],
   );
   const plural = useCallback(
-    (key: string, count: number) => pluralRuntime(dict, key, count, locale, { n: count }),
+    (key: string, count: number, vars?: Record<string, string | number>) =>
+      pluralRuntime(dict, key, count, locale, { n: count, ...vars }),
     [dict, locale],
   );
 
   const [slug, setSlug] = useState<Slug>(SLUGS[0]);
+  const [seenSlug, setSeenSlug] = useState<Slug>(SLUGS[0]);
   const [fixture, setFixture] = useState<AiDemoFixture | null>(null);
   const [shown, setShown] = useState(0);
   const [replays, setReplays] = useState(0);
   const [excluded, setExcluded] = useState<string[]>([]);
   const wanted = useRef<Slug>(SLUGS[0]);
   const reduced = usePrefersReducedMotion();
+
+  // Drop the previous recording IN THE SAME RENDER the pick changes.
+  //
+  // This is a provenance surface: the REC slate names a model and a capture
+  // date, and leaving the last run's on screen under a newly-selected card
+  // attributes one run's receipt to another for the length of a chunk fetch.
+  //
+  // React's sanctioned "adjust state when something changes" pattern rather
+  // than an effect — it throws this pass away and re-runs the body, so there is
+  // no frame in which the stale fixture is rendered at all. Clearing it in an
+  // effect would both paint that frame and trip `react-hooks/set-state-in-effect`.
+  if (seenSlug !== slug) {
+    setSeenSlug(slug);
+    setFixture(null);
+    setShown(0);
+    setExcluded([]);
+  }
 
   // Load the picked recording. `wanted` settles the race a fast second click
   // creates: two chunks in flight, and the slower one must not win.
@@ -190,8 +209,6 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
       .then((mod) => {
         if (wanted.current !== slug) return;
         setFixture(mod.default as AiDemoFixture);
-        setShown(0);
-        setExcluded([]);
       })
       .catch(() => {
         // A chunk that never arrives leaves the screen on its loading line.
@@ -496,6 +513,26 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
                   </div>
                 )}
 
+                {/* A repair is SCOPED, but `computeAiDiff` compares the whole
+                    board: any placed fixture missing from the proposal lands in
+                    the unscheduled group, including the 11 already-played
+                    matches the run was never allowed to move. That is the
+                    product's behaviour and the panel must keep it — so the
+                    section explains it rather than filtering the diff and
+                    showing a demo the console would not. Suppressed when the
+                    run could move everything, where there is nothing to explain. */}
+                {fixture.movableIds.length < fixture.board.fixtures.length && (
+                  <p
+                    data-ai-scope="note"
+                    className="rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2 text-[11px] leading-relaxed text-slate-500"
+                  >
+                    {t("scheduling.aidemo.scopeNote", {
+                      movable: fixture.movableIds.length,
+                      total: fixture.board.fixtures.length,
+                    })}
+                  </p>
+                )}
+
                 {/* The product's own change list — provenance, notes and all. */}
                 <div className="overflow-x-auto">
                   <AiDiffPanel
@@ -527,9 +564,8 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
                       </span>
                       {quote.discount > 0 && (
                         <span className="text-[11px] text-teal-700">
-                          {t("scheduling.aidemo.price.joint", {
+                          {plural("scheduling.aidemo.price.joint", quote.discount, {
                             divisions: ledger.length,
-                            discount: quote.discount,
                           })}
                         </span>
                       )}
