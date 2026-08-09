@@ -102,6 +102,18 @@ computed earlier in the function, unchanged), call
 > - **Do not trust tsc to catch a stale `wallSeconds` in `opts`.** The
 >   excess-property error only fires on an object *literal*. Build `opts`
 >   as a variable and the stale field is silently ignored.
+> - **Your import style decides whether Prompt 06b's tests can work at
+>   all.** `build.test.ts` mocks with `vi.doMock`, and there is a recorded
+>   trap in this repo: **`vi.doMock` is INERT if the file under test also
+>   imports the module STATICALLY** — it has previously passed 5/5 with
+>   the guard deleted. `z3-load.ts` is mockable today only because
+>   `build.ts` loads it dynamically. So a static
+>   `import { solveBuild } from "./cpsat-client.ts"` here would silently
+>   disarm 06b's status-mapping tests one task later.
+>   Either mirror how `loadZ3` is imported, or make sure the injection
+>   seam Prompt 05 shipped (the call object is an internal third argument;
+>   `SolveBuildOptions` is wire-free) is reachable from `build.ts`'s
+>   tests. Say in your report which you chose — 06b depends on it.
 
 `assignments`/`tiersCompleted`/`elapsedMs`/`wallExhausted` into the same
 local variables the rest of the function already expects before falling

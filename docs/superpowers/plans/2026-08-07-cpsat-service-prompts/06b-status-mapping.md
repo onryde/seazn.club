@@ -37,6 +37,31 @@ or `already_optimal` per the existing rule already in `build.ts`
 
 - [ ] **Step 1: Write the failing test**
 
+> **The sample below uses a mocking style that does not work in this file
+> — read this before copying it.** (Checked 2026-08-09.)
+>
+> `build.test.ts` mocks with `vi.doMock(...)` + `vi.importActual` (see
+> its `./calendar.ts` and `./z3-load.ts` mocks), not
+> `vi.spyOn(await import(...))`. An ESM module namespace object is
+> sealed, so spying on it is not the idiom that works here.
+>
+> Worse, there is a recorded trap in this repo: **`vi.doMock` is INERT if
+> the file under test also imports the module STATICALLY.** It has
+> previously passed 5/5 with the guard deleted. `z3-load.ts` is mockable
+> today precisely because `build.ts` loads it dynamically.
+>
+> So whether module mocking works here at all depends on how Prompt 06
+> imports `cpsat-client.ts` — a decision made in the task before this one.
+>
+> **Prefer injection over mocking.** Prompt 05 shipped a seam for exactly
+> this: the call object is an internal third argument to `solveBuild`,
+> and `SolveBuildOptions` is wire-free. Feeding a fake through that seam
+> tests the mapping without depending on module-mock semantics at all.
+> If you do use `vi.doMock`, prove it is live: make the mock return a
+> value the real path cannot produce, and confirm the test fails when the
+> mapping is deleted. A green mapping test that never invoked your mock
+> is the failure mode this whole programme has been fighting.
+
 ```typescript
 describe("CP-SAT status -> BuildStatus mapping", () => {
   it.each([
@@ -44,9 +69,7 @@ describe("CP-SAT status -> BuildStatus mapping", () => {
     ["ERROR", "solver_unavailable"],
     ["INFEASIBLE", "infeasible"],
   ] as const)("%s maps to %s", async (cpsatStatus, expected) => {
-    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
-      assignments: [], status: cpsatStatus, tiersCompleted: 0, objectiveValues: [], elapsedMs: 100, wallExhausted: false,
-    });
+    // See the note above — inject rather than spying on the namespace.
     const result = await buildSchedule(minimalBuildInput());
     expect(result.status).toBe(expected);
   });
@@ -86,11 +109,24 @@ copy the existing `z3` key already uses in each locale ("Solver" /
 
 - [ ] **Step 6: Write and run a UI test**
 
+> **The sample below is VACUOUS — do not ship it.** (Checked 2026-08-09.)
+> `expect(html).toContain("Solver")` is exactly the assertion that file
+> already documents as broken. Its own comment, above the `provenance()`
+> helper, says: *"'Solver' is a prefix of 'Solver, then refined', so a
+> substring check can be satisfied by the wrong label."* And `toContain`
+> over the WHOLE html matches the word anywhere on the page, not just in
+> the provenance line — so it would also pass on a blank engine key.
+>
+> Use the file's existing `provenance(html)` helper, which extracts the
+> provenance line and strips React's SSR comment markers, and assert the
+> label EXACTLY. Prove it: render `engine: "z3"` and confirm your cp-sat
+> assertion fails against it.
+
 ```typescript
 // apps/web/src/components/v2/board/__tests__/result-strip.test.tsx (addition)
 it("cp-sat engine renders the same neutral 'Solver' copy as z3 did", () => {
   const html = render(metrics(), solver({ engine: "cp-sat", status: "ok" }));
-  expect(html).toContain("Solver");
+  expect(provenance(html)).toMatch(/^Solver · /);   // exact, not toContain
 });
 ```
 
