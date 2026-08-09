@@ -1,0 +1,96 @@
+# CP-SAT scheduling service — own Fly app, own image, deliberately separate
+# from apps/web's (root Dockerfile/fly.toml). gRPC over raw TCP, called by
+# apps/web only over Fly's private 6PN network
+# (docs/superpowers/specs/2026-08-07-cpsat-scheduler-design.md, "Security":
+# shared-secret auth substitutes for mTLS specifically because 6PN is already
+# WireGuard-encrypted and not internet-reachable). Do not allocate a public
+# IPv4/v6 for this app — that is a separate, explicit `fly ips allocate-*`
+# step nothing here performs, and doing it would contradict that assumption.
+#
+# `app` MUST be exactly "cp-sat". Fly's private DNS is always
+# <app-name>.internal, and packages/engine/src/scheduling/cpsat-client.ts's
+# DEFAULT_HOST is the literal string "cp-sat.internal:50051" — it only yields
+# to an explicit CPSAT_SERVICE_HOST env var, which nothing in this repo
+# currently sets (checked: no reference anywhere outside that one file).
+# Naming this app anything else breaks the zero-config path silently: every
+# solve dials a host that does not exist, the gRPC call fails, and
+# build.ts falls back to greedy placement with nothing surfacing why.
+app = "cp-sat"
+# Matches apps/web's root fly.toml — same Fly region, minimal added latency
+# for an RPC that is already budgeted to the second.
+primary_region = "lhr"
+
+[build]
+
+# A TCP service block, not [http_service]: that block is HTTP/1.1-oriented
+# (methods, paths, force_https) and tuned for the web app's own traffic
+# shape. This is gRPC over raw TCP.
+[[services]]
+  internal_port = 50051
+  protocol = "tcp"
+
+  [[services.ports]]
+    port = 50051
+
+  # A TCP accept, not a gRPC Health/Check — and kept that way deliberately.
+  # The Task 04 audit found the original health servicer shared the solve
+  # ThreadPoolExecutor: under max_workers concurrent solves, Health/Check
+  # returned DEADLINE_EXCEEDED, and a liveness probe using it would kill the
+  # machine mid-solve, dropping every in-flight solve with it.
+  #
+  # Verified in code for this task (src/cp_sat/main.py): that pool-exhaustion
+  # bug IS fixed. The RPC thread pool is now sized `max_workers +
+  # HEALTH_RESERVE_THREADS` (2 reserved threads no solve can ever occupy) and
+  # SolveBuild is admission-controlled by a bounded semaphore that refuses
+  # with SOLVER_BUSY instead of queueing, so Health/Check keeps threads free
+  # even when the solver is fully saturated. That fix has only been read
+  # here, not load-tested under real concurrent solves — the base prompt's
+  # own stated condition for switching to a gRPC check — so tcp_checks stays.
+  # It proves less (only that the port accepts a connection, not that the
+  # service can answer), but it is unconditionally immune to this failure
+  # mode, costs nothing, and a TCP accept was never the thing in question.
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "1gb"
+
+# min_machines_running=1 (always warm) is intentionally NOT set above — the
+# key only exists under [http_service] in Fly's config schema, and this app
+# has no [http_service] block (gRPC over raw TCP, not HTTP/1.1). Set once,
+# post-deploy:
+#   fly scale count 1 --min-machines-running=1 --app cp-sat
+# A cold start (Fly machine boot, ~1-3s) would eat directly into the 8-10s
+# wall budget this entire investigation was built around. Until that command
+# runs, the machine may scale to zero between deploys.
+
+# --- sizing: this box is sized for PROOF TIME, not placement -----------------
+# Across two independent paired, interleaved A/B runs of 12 on the production
+# board, `placed` was 37 of 37 fixtures in every single run, regardless of
+# load — this machine size can never hand an organiser a broken or partial
+# board. What degrades under contention is `tiers_completed`: how much of the
+# T0(placed)->T1(makespan)->T2(idle gap)->T3(court imbalance) chain the
+# solver PROVES inside the 8s wall.
+#
+# This shape is sized to guarantee T0+T1 (tiers_completed=2: every fixture
+# placed, makespan proven optimal) within budget under load; T2/T3 are
+# best-effort on top of that, exactly the degraded-but-valid shape measured
+# on a contended dev box (status=FEASIBLE placed=37 tiers_completed=2
+# elapsed_ms~8014). A failure whose `placed` is not 37 would be a real bug,
+# not a sizing tradeoff.
+#
+# NUM_SEARCH_WORKERS (src/cp_sat/model.py, hardcoded — not settable from this
+# file or the Dockerfile) is 8, measured on a 6-physical-core dev box.
+# shared-cpu-2x is 2 vCPU: unmeasured here, and plausibly oversubscribed — a
+# dev-box A/B already found 4 workers beating 8 and 12 under load (see
+# task-3-report.md, task-5b-report.md in the SDD workspace). Re-measure on
+# this machine shape after first deploy; changing the constant is Python
+# source and out of this task's scope.
+
+# Secrets (fly secrets set --app cp-sat):
+#   CPSAT_SERVICE_SECRET — new, distinct from apps/web's CRON_SECRET. Never
+#   reuse that value; a shared secret would let either service authenticate
+#   as the other.
