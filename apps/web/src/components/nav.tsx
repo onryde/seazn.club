@@ -99,7 +99,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
         {user && activeOrg && (
           <span
             data-tour="org-chip"
-            className="hidden items-center gap-1.5 rounded-full border border-cream/15 bg-cream/[0.07] px-3 py-1 text-xs font-medium text-cream/85 sm:flex"
+            className="hidden shrink-0 items-center gap-1.5 rounded-full border border-cream/15 bg-cream/[0.07] px-3 py-1 text-xs font-medium text-cream/85 sm:flex"
           >
             <span className="h-1.5 w-1.5 rounded-full bg-lime-400" />
             {activeOrg.name}
@@ -111,14 +111,29 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
 
         {/* Right: primary nav + user */}
         {user ? (
-          <div className="flex items-center gap-1">
-            <nav className="flex items-center gap-0.5">
+          // min-w-0 (#349): without it, this row reports its own UNSHRUNK
+          // content width as its automatic minimum size to the header's
+          // outer flex row above — the outer row then never asks it to give
+          // up any space at all, and the display_name span below never gets
+          // a chance to shrink no matter what class it carries.
+          <div className="flex min-w-0 items-center gap-1">
+            {/* shrink-0 (#349, fix round 2): this row's default CSS makes
+                EVERY child shrinkable once the row itself has `min-w-0` —
+                not just the display_name span below. English labels
+                ("Dashboard"/"Directory"/"Settings") happen to be single
+                unbreakable words, so this never visibly wrapped in the
+                English-only e2e matrix, but `nav.dashboard` is "Tableau de
+                bord" in fr and `nav.playerHome` is "Player home" / "Accueil
+                joueur" / "Inicio del jugador" — multi-word labels with real
+                wrap points that would hit the exact "Sign out" failure fix
+                round 1 found, invisibly to every automated check here. */}
+            <nav className="flex shrink-0 items-center gap-0.5">
               {/* Labels collapse to icons under `sm` — aria-label keeps the
                   accessible name (axe link-name, v3/11 gap 11). */}
               <Link
                 href={activeOrg ? routes.orgHome(activeOrg.slug) : "/orgs/new"}
                 aria-label={t(dict, "nav.dashboard")}
-                className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream"
+                className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
               >
                 <LayoutDashboard className="h-4 w-4" strokeWidth={1.75} />
                 <span className="hidden sm:inline">{t(dict, "nav.dashboard")}</span>
@@ -126,7 +141,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
               <Link
                 href="/directory"
                 aria-label={t(dict, "nav.directory")}
-                className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream"
+                className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
               >
                 <Users className="h-4 w-4" strokeWidth={1.75} />
                 <span className="hidden sm:inline">{t(dict, "nav.directory")}</span>
@@ -134,7 +149,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
               <Link
                 href={activeOrg ? routes.orgSettings(activeOrg.slug) : "/orgs/new"}
                 aria-label={t(dict, "nav.settings")}
-                className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream"
+                className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
               >
                 <Settings className="h-4 w-4" strokeWidth={1.75} />
                 <span className="hidden sm:inline">{t(dict, "nav.settings")}</span>
@@ -145,7 +160,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 <Link
                   href={routes.me()}
                   aria-label={t(dict, "nav.playerHome")}
-                  className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream"
+                  className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
                 >
                   <CircleUserRound className="h-4 w-4" strokeWidth={1.75} />
                   <span className="hidden sm:inline">{t(dict, "nav.playerHome")}</span>
@@ -161,7 +176,35 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 contactSupport: t(dict, "help.contactSupport"),
               }}
             />
-            <span className="mx-1 hidden text-sm font-medium text-cream/85 sm:block">
+            {/* #349: at 640-1023px (labels visible, `lg:` grid not yet on)
+                the gantry's right-hand group has no slack left — an
+                unclamped display_name forces the whole row past the
+                viewport (measured: needs ~775px of the ~768px tablet-768
+                has). `min-w-0` lets this flex child give up its automatic
+                content-based minimum size — it renders at full width
+                whenever there's room, and `truncate` only engages once the
+                row runs out of space, self-scoping to exactly the width
+                band that's tight instead of a hardcoded cap.
+                This is the ONLY child here meant to give up space: the org
+                chip above, the `<nav>` links wrapper, and the LogoutButton
+                below all carry an explicit `shrink-0` for exactly that
+                reason (HelpMenu is icon-only, no text, incidentally safe
+                either way) — the guard set is what makes this span
+                architecturally the sole shrink target, not an accident of
+                which labels happen to be short enough today. Plain nested
+                flex-shrink does not automatically concentrate 100% of a
+                squeeze onto the one item with `min-w-0` — any OTHER text
+                that can still wrap at a word boundary (no `shrink-0` of its
+                own) gets dragged into the same squeeze and wraps too,
+                which is worse than the overflow this fix exists to close.
+                Confirmed by measurement: with `min-w-0` on this span alone,
+                "Sign out" and "My organization" both wrapped to two lines
+                at 768px before those `shrink-0`s were added — and without
+                one on `<nav>`, the same failure was reachable in any
+                locale whose labels aren't single unbreakable words (fr:
+                "Tableau de bord"), just never exercised by this
+                English-only e2e matrix. */}
+            <span className="mx-1 hidden min-w-0 truncate text-sm font-medium text-cream/85 sm:block">
               {user.display_name}
             </span>
             <LogoutButton label={t(dict, "nav.signOut")} />

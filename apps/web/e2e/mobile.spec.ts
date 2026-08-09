@@ -7,6 +7,7 @@ import {
   expectNoHorizontalScroll,
   addEntrantsViaApi,
   createStageAndGenerate,
+  competitionPath,
   divisionPath,
 } from "./helpers";
 
@@ -16,6 +17,13 @@ import {
 // public dashboard + registration page must LCP under 2.5 s on Fast-3G
 // (v3/11 gaps 11, 12, 15).
 test.describe.configure({ mode: "serial" });
+
+/** The viewport this PROJECT declares. Raw `browser.newContext()` does not
+ *  inherit project `use` options, so every anon context must thread this
+ *  through explicitly or it silently runs at Playwright's 1280×720 default. */
+const projectViewport = (): { width: number; height: number } | null =>
+  (test.info().project.use as { viewport?: { width: number; height: number } })
+    .viewport ?? null;
 
 // The check that guards every other 375px assertion in this file. It compared
 // document.scrollWidth against clientWidth, which `overflow-x: clip`
@@ -85,20 +93,27 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
 // socket keeps the network permanently busy and cold compiles already eat
 // the budget.
 async function auditRoute(page: Page, path: string) {
-  await page.goto(path, { waitUntil: "load" });
+  const response = await page.goto(path, { waitUntil: "load" });
+  expect(response, `${path}: navigation produced no response`).not.toBeNull();
+  expect(response!.status(), `${path} returned ${response!.status()}`).toBeLessThan(400);
   await page.waitForTimeout(300);
   await expectNoHorizontalScroll(page);
 }
 
-test("console routes: no horizontal scroll", async ({ page }) => {
+test("console routes: no horizontal scroll", async ({ page, request }) => {
   const routes = [
     "/dashboard",
-    `/competitions/${compId}`,
-    `/competitions/${compId}/settings`,
-    `/divisions/${divisionId}`,
-    `/divisions/${divisionId}?tab=fixtures`,
-    `/divisions/${divisionId}?tab=standings`,
-    `/divisions/${divisionId}/registrations`,
+    // These six used to be legacy id-routes (/competitions/{id},
+    // /divisions/{id}...) deleted by commit e8bed930 — they 404'd, and a 404
+    // page has no overflow, so the gate passed vacuously on a third of the
+    // console inventory (#349). Re-pointed to the live /o/{org}/c/{comp}/...
+    // slug chain via the same helpers the rest of the suite uses.
+    await competitionPath(request, compId),
+    await competitionPath(request, compId, "/settings"),
+    await divisionPath(request, divisionId),
+    await divisionPath(request, divisionId, "?tab=fixtures"),
+    await divisionPath(request, divisionId, "?tab=standings"),
+    await divisionPath(request, divisionId, "/registrations"),
     "/settings?tab=organization",
     "/settings?tab=news",
     "/settings?tab=sponsors",
@@ -123,7 +138,7 @@ test("console routes: no horizontal scroll", async ({ page }) => {
 
 test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser }) => {
   // Anonymous context — public pages must hold without the authed shell.
-  const anonCtx = await browser.newContext();
+  const anonCtx = await browser.newContext({ viewport: projectViewport() ?? undefined });
   try {
     const anon = await anonCtx.newPage();
     const routes = [
@@ -159,7 +174,7 @@ test("news (SPEC-2): feed + post page hold at mobile width", async ({ page, brow
   );
   const postSlug = pub.data!.slug;
 
-  const anonCtx = await browser.newContext();
+  const anonCtx = await browser.newContext({ viewport: projectViewport() ?? undefined });
   try {
     const anon = await anonCtx.newPage();
     await anon.goto(`/shared/${orgSlug}/news`, { waitUntil: "load" });
@@ -176,18 +191,24 @@ test("news (SPEC-2): feed + post page hold at mobile width", async ({ page, brow
   }
 });
 
-test("axe: no serious/critical violations on key surfaces (v3/11 gap 11)", async ({ page }) => {
+test("axe: no serious/critical violations on key surfaces (v3/11 gap 11)", async ({ page, request }) => {
   const routes = [
     "/dashboard",
-    `/competitions/${compId}`,
-    `/divisions/${divisionId}?tab=standings`,
+    // Were /competitions/{id} and /divisions/{id}?tab=standings — dead legacy
+    // id-routes that 404, so the scan below ran against a 404 page (#349).
+    // Re-pointed to the live /o/{org}/c/{comp}/... slug chain, mirroring the
+    // "console routes" test's fix for the same class of bug.
+    await competitionPath(request, compId),
+    await divisionPath(request, divisionId, "?tab=standings"),
     "/settings?tab=organization",
     "/settings/billing",
     `/o/${orgSlug}/c/${compSlug}/upgrade`,
     `/shared/${orgSlug}/${compSlug}`,
   ];
   for (const path of routes) {
-    await page.goto(path, { waitUntil: "load" });
+    const response = await page.goto(path, { waitUntil: "load" });
+    expect(response, `${path}: navigation produced no response`).not.toBeNull();
+    expect(response!.status(), `${path} returned ${response!.status()}`).toBeLessThan(400);
     await page.waitForTimeout(300);
     const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
     const blocking = results.violations.filter(
@@ -266,7 +287,12 @@ async function measureLcp(page: Page, path: string): Promise<number> {
 test("LCP < 2.5s on Fast-3G: public dashboard + registration (v3/11 gap 15)", async ({
   browser,
 }) => {
-  const anonCtx = await browser.newContext();
+  const vp = projectViewport();
+  test.skip(
+    !vp || (vp.width !== 375 && vp.width !== 390),
+    "LCP gates load perf at the phone reference widths only (spec §1); layout is gated by every project",
+  );
+  const anonCtx = await browser.newContext({ viewport: projectViewport() ?? undefined });
   try {
     const anon = await anonCtx.newPage();
     for (const path of [`/shared/${orgSlug}/${compSlug}`, `/shared/${orgSlug}/${compSlug}/register`]) {
@@ -385,7 +411,9 @@ test("the publish gate's confirm sheet holds at phone width", async ({ page, req
     expect(box, `${id} has no box`).not.toBeNull();
     expect(box!.height, `${id} touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
   }
-  await page.screenshot({ path: "test-results/publish-gate-sheet-375.png" });
+  await page.screenshot({
+    path: `test-results/publish-gate-sheet-${test.info().project.name}.png`,
+  });
 
   // And it works from here — a sheet that renders but cannot be confirmed on a
   // phone is the same dead end in a nicer wrapper.
@@ -475,10 +503,20 @@ test("z3 schedule actions + result strip hold at phone width", async ({ page, re
   const auto = page.getByTestId("schedule-auto");
   const reflow = page.getByTestId("schedule-reflow");
   const polish = page.getByTestId("schedule-polish");
+  // The toolbar's other four controls (#349 review): freeze/publish/start/AI
+  // never got the min-h-11 floor their three auto/reflow/polish siblings did.
+  const freeze = page.getByTestId("board-freeze");
+  const publish = page.getByTestId("board-publish-schedule");
+  const start = page.getByTestId("board-start-division");
+  const aiSchedule = page.getByTestId("board-ai-schedule");
   for (const [name, button] of [
     ["schedule-auto", auto],
     ["schedule-reflow", reflow],
     ["schedule-polish", polish],
+    ["board-freeze", freeze],
+    ["board-publish-schedule", publish],
+    ["board-start-division", start],
+    ["board-ai-schedule", aiSchedule],
   ] as const) {
     await expect(button, `${name} is not visible at this width`).toBeVisible({ timeout: 30_000 });
     const box = await button.boundingBox();

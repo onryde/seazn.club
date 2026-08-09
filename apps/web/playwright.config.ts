@@ -84,6 +84,59 @@ export default defineConfig({
       },
       dependencies: ["setup"],
     },
+    // #349 responsive matrix — the five widths beyond the 375/390 references.
+    // Full suite per width (owner decision, spec §1): every gate assertion
+    // holds at every width; LCP self-pins to 375/390 inside the test.
+    {
+      name: "mobile-320",
+      testMatch: /mobile\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 320, height: 568 },
+        storageState: AUTH_STATE,
+      },
+      dependencies: ["setup"],
+    },
+    {
+      name: "mobile-360",
+      testMatch: /mobile\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 360, height: 800 },
+        storageState: AUTH_STATE,
+      },
+      dependencies: ["setup"],
+    },
+    {
+      name: "mobile-430",
+      testMatch: /mobile\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 430, height: 932 },
+        storageState: AUTH_STATE,
+      },
+      dependencies: ["setup"],
+    },
+    {
+      name: "tablet-768",
+      testMatch: /mobile\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 768, height: 1024 },
+        storageState: AUTH_STATE,
+      },
+      dependencies: ["setup"],
+    },
+    {
+      name: "tablet-834",
+      testMatch: /mobile\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 834, height: 1194 },
+        storageState: AUTH_STATE,
+      },
+      dependencies: ["setup"],
+    },
   ],
   // NO `webServer` BLOCK, deliberately (#342). It used to run
   // `npm run build && npm run start`, which was wrong in three ways at once:

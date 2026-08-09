@@ -30,7 +30,11 @@ export function LogoutButton({ label }: { label: string }) {
         router.refresh();
       }}
       // Lives only on night chrome (gantry + my-matches header) — cream it is.
-      className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-cream/70 transition-colors hover:bg-cream/10 hover:text-cream"
+      // shrink-0: the gantry's right-hand group can now shrink the display
+      // name (min-w-0 truncate, #349) to fit narrow tablet widths — this
+      // button must never be a second target, or "Sign out" wraps to two
+      // lines the same way the name used to overflow.
+      className="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-cream/70 transition-colors hover:bg-cream/10 hover:text-cream"
       title={label}
     >
       <LogOut className="h-4 w-4" strokeWidth={1.75} />
