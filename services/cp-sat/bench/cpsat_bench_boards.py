@@ -39,7 +39,28 @@ CLOSE_MS = 20 * HOUR_MS
 # `build_board`.
 SLOTS_PER_COURT_DAY_CAP = (CLOSE_MS - OPEN_MS) // (MATCH_MIN * MIN_MS)  # 18
 DIVISIONS = ["d1", "d2"]
-EPOCH_MS = 0  # Monday 00:00 UTC, arbitrary — only relative offsets matter.
+
+# 2026-01-01T00:00:00Z. Moved off 0 deliberately (Prompt 05b Step 1): with a
+# zero epoch, "unset proto3 `start_at_ms`" and "legitimate test timestamp" are
+# THE SAME VALUE, which is how a Critical survived four review rounds — an
+# `existing` row with an unset start builds its blocking interval at epoch 0,
+# overlaps nothing real, and the pin is silently ignored. A zero corpus also
+# makes an int64->int32 narrowing of `Assignment.start_at_ms` invisible,
+# because no timestamp ever exceeds 2^31.
+#
+# MUST STAY MIDNIGHT-ALIGNED (`EPOCH_MS % DAY_MS == 0`), and
+# `tests/test_bench_contract.py` fails if it ever stops being. This is not
+# tidiness: `build_board` opens each session day at `EPOCH_MS + d*DAY_MS +
+# OPEN_MS` and runs it for `spcd * TICKS_PER_COARSE_SLOT` ticks, while
+# `cp_sat.model` buckets the per-division day cap by `start_ms // DAY_MS` — a
+# UTC day. An epoch offset from midnight slides the session day across a UTC
+# midnight, so ONE session day maps to TWO cap buckets and the cap silently
+# doubles. Measured on the production board at 2026-01-01T10:00:00Z
+# (1767261600000): 27 buckets instead of 26, and the returned board puts two
+# `d1` fixtures on session day 0 and two `d2` on session day 15 against a cap
+# of 1 — while `test_model.py`'s day-cap assertion still passes, because it
+# re-derives the same `// DAY_MS` bucket. See the Prompt 05b report.
+EPOCH_MS = 1_767_225_600_000
 
 
 # --- lattice sizing -----------------------------------------------------
@@ -348,3 +369,132 @@ def production_board():
     order_pairs = [(feeder, dependent) for dependent, feeder in dependencies]
 
     return fixtures, courts, grid_slots, STEP_MIN, constraints, existing_rows, order_pairs
+
+
+# --- purpose-built probe boards ---------------------------------------------
+#
+# `production_board()` is a realistic board and is BLIND in two specific ways
+# that four rounds of review did not surface, both measured:
+#
+#   * its three pins never contend. 3 pinned rows against 8 320 grid slots and
+#     37 movable fixtures means no fixture ever WANTS a pinned (court, tick),
+#     so the whole `existing` constraint family (`cp_sat.model`'s pinned-row
+#     fold) can be deleted with the suite still green. Adding an assertion to
+#     the production board cannot fix that — the family is inert on it, not
+#     merely unasserted.
+#   * its court-imbalance tier can only be pinned through a multi-second
+#     four-tier chain, so a T3 mutation that survives on the merits dies (or
+#     does not) by wall clock instead. Measured: the same T3 mutation was green
+#     at a 22 s wall and red at 44 s.
+#
+# Both boards below are tiny and prove all four tiers in milliseconds, so the
+# assertions they carry are about the CODE and never about the machine's load.
+# They are here rather than inline in `tests/` so there is exactly one place
+# that answers "what boards does the service get tested against".
+
+#: `match_minutes` / `gap_minutes` for `pin_contended_board`. Same 40/10 the
+#: production board uses, so the pinned-row width is the production width.
+PIN_MATCH_MIN = 40
+PIN_GAP_MIN = 10
+#: The one (court, tick) `pin_contended_board` leaves free, and therefore the
+#: number of movable fixtures it can legally place.
+PIN_BOARD_FREE_SLOTS = 1
+PIN_BOARD_FIXTURES = 3
+
+
+def pin_contended_board():
+    """A board whose pins genuinely CONTEND, in `build_model`'s parameter shape.
+
+    Two courts offer three ticks each, spaced exactly `match + gap` apart so
+    consecutive ticks are legal neighbours. Five of those six (court, tick)
+    pairs carry an immovable row; the sixth is free. Three movable fixtures
+    with pairwise-disjoint entrants and no day cap then compete for it, so the
+    ONLY thing standing between them and the pinned slots is the pinned-row
+    fold in `cp_sat.model.build_model`.
+
+    Therefore: with that constraint, exactly ONE fixture can be placed, on the
+    single free slot. Without it, all three place — two of them on top of a
+    match that is already being played, reported `OPTIMAL`. That gap is the
+    test's teeth, and it does not exist on `production_board()`.
+    """
+    dur_ms = PIN_MATCH_MIN * MIN_MS
+    width_ms = (PIN_MATCH_MIN + PIN_GAP_MIN) * MIN_MS
+    courts = ["C1", "C2"]
+    ticks = [EPOCH_MS + OPEN_MS + k * width_ms for k in range(3)]
+    grid_slots = [(court, tick) for court in courts for tick in ticks]
+
+    # Pin everything except (C2, ticks[2]).
+    free_slot = (courts[1], ticks[2])
+    existing = [
+        (f"pin-{court}-{k}", court, tick)
+        for court in courts
+        for k, tick in enumerate(ticks)
+        if (court, tick) != free_slot
+    ]
+
+    # Disjoint entrants: nothing here should be decided by participant rest or
+    # by an order dependency, so the pinned-row family is measured alone.
+    fixtures = [(f"m{i:02d}", [f"pe{2 * i:02d}", f"pe{2 * i + 1:02d}"], "d1") for i in range(PIN_BOARD_FIXTURES)]
+    constraints = {
+        "match_minutes": PIN_MATCH_MIN,
+        "gap_minutes": PIN_GAP_MIN,
+        # Rest 0 is legitimate ("no minimum rest") and is deliberately chosen
+        # so the participant-rest family cannot mask the pinned-row family.
+        "rest_by_division": {"d1": 0},
+        # Uncapped: a division absent from the dict is uncapped by contract.
+        "day_cap_by_division": {},
+    }
+    del dur_ms
+    return fixtures, courts, grid_slots, PIN_MATCH_MIN + PIN_GAP_MIN, constraints, existing, []
+
+
+#: `imbalance_probe_board`'s match/gap. Deliberately NOT 40/10: every derived
+#: value on this board (durations, makespan, imbalance) must be distinct from
+#: the production board's, so a mutant that hardcodes a production number
+#: cannot pass here by collision.
+PROBE_MATCH_MIN = 25
+PROBE_GAP_MIN = 5
+PROBE_COURTS = 3
+PROBE_FIXTURES = 4
+#: The proved T3 optimum on this board: four fixtures over three courts in two
+#: rows is (2,1,1), a spread of one match. Maximising instead gives (2,2,0), a
+#: spread of two — `PROBE_WORST_IMBALANCE_MS`.
+PROBE_OPTIMAL_IMBALANCE_MS = 1 * PROBE_MATCH_MIN * MIN_MS
+PROBE_WORST_IMBALANCE_MS = 2 * PROBE_MATCH_MIN * MIN_MS
+#: T1's proved optimum here: two rows, so one tick-width plus one match.
+PROBE_OPTIMAL_MAKESPAN_MS = (PROBE_MATCH_MIN + PROBE_GAP_MIN) * MIN_MS + PROBE_MATCH_MIN * MIN_MS
+
+
+def imbalance_probe_board():
+    """A board that pins T3's optimisation DIRECTION in milliseconds.
+
+    Three courts, two ticks each, four movable fixtures with pairwise-disjoint
+    entrants. The shape is chosen so every tier above T3 is forced and leaves
+    T3 real slack:
+
+      * T0 places all four (six slots, four fixtures).
+      * T1's minimal makespan is two rows — four fixtures cannot share three
+        courts in one tick — so both remaining layouts survive its freeze.
+      * T2 is trivially 0: disjoint entrants means no participant has two
+        matches, so there are no idle-gap pairs at all.
+      * T3 then chooses between (2,1,1) — a spread of ONE match — and (2,2,0),
+        a spread of TWO. Minimising gives `PROBE_OPTIMAL_IMBALANCE_MS`;
+        maximising gives `PROBE_WORST_IMBALANCE_MS`. Both prove instantly.
+
+    That last property is the point. On the production board a maximising T3
+    is caught only by failing to finish inside the wall, which makes the kill a
+    property of the box; here the two directions return different VALUES from a
+    solve that costs milliseconds at any load.
+    """
+    width_ms = (PROBE_MATCH_MIN + PROBE_GAP_MIN) * MIN_MS
+    courts = [f"C{i + 1}" for i in range(PROBE_COURTS)]
+    ticks = [EPOCH_MS + OPEN_MS + k * width_ms for k in range(2)]
+    grid_slots = [(court, tick) for court in courts for tick in ticks]
+    fixtures = [(f"q{i:02d}", [f"qe{2 * i:02d}", f"qe{2 * i + 1:02d}"], "d1") for i in range(PROBE_FIXTURES)]
+    constraints = {
+        "match_minutes": PROBE_MATCH_MIN,
+        "gap_minutes": PROBE_GAP_MIN,
+        "rest_by_division": {"d1": 0},
+        "day_cap_by_division": {},
+    }
+    return fixtures, courts, grid_slots, PROBE_MATCH_MIN + PROBE_GAP_MIN, constraints, [], []

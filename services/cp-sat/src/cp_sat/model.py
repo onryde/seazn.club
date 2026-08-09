@@ -107,9 +107,14 @@ than z3's, and TS re-runs its own verifier on the result:
     a tick that court does not offer.
 
 Day-cap day boundaries are a fourth, subtler one: `start_ms // DAY_MS` is a
-UTC day, matching the bench's `EPOCH_MS = 0` board exactly, but production
-day caps are governed by the org's own timezone and the request carries no
-zone. Any org not on UTC gets its caps applied against the wrong boundary.
+UTC day, and the bench corpus is midnight-aligned (`EPOCH_MS` is a whole
+number of UTC days) so one session day is exactly one cap bucket there — but
+production day caps are governed by the org's own timezone and the request
+carries no zone. Any org not on UTC gets its caps applied against the wrong
+boundary. That alignment is load-bearing for the corpus, not incidental:
+`tests/test_bench_contract.py` fails if `EPOCH_MS` ever moves off midnight,
+because an offset epoch slides one session day across two cap buckets and
+silently doubles every cap. See that test and `bench/cpsat_bench_boards.py`.
 """
 
 from __future__ import annotations
@@ -224,11 +229,43 @@ def build_model(
                 "OPTIMAL having silently dropped every one of its fixtures. To leave a "
                 "division uncapped, omit it from day_cap_by_division rather than passing 0."
             )
+    # `gap_minutes` and rest of 0 are both LEGITIMATE (no turnaround required,
+    # no minimum rest), which is why neither is guarded as `<= 0` the way
+    # `match_minutes` is. Negative is the degenerate case, and it is worse than
+    # zero: it does not merely fail to constrain, it CANCELS the match length
+    # out of the interval width and reopens a family that was closed.
+    gap_minutes = int(constraints.get("gap_minutes", 0))
+    if gap_minutes < 0:
+        raise ValueError(
+            f"gap_minutes must be >= 0, got {gap_minutes!r}. The court interval is "
+            "match_minutes + gap_minutes wide, so a negative gap shrinks it — at "
+            "gap_minutes == -match_minutes the width is 0, NoOverlap over zero-width "
+            "intervals constrains nothing, and the solver returns OPTIMAL with two matches "
+            "physically overlapping on one court (measured: 37 placed, 4 tiers, 1 overlap)."
+        )
+    for division, rest in rest_by_division.items():
+        if int(rest) < 0:
+            raise ValueError(
+                f"min_rest_minutes for division {division!r} must be >= 0, got {rest!r}. The "
+                "participant-rest interval is match_minutes + rest wide, so a negative rest "
+                "shrinks it — at rest == -match_minutes the width is 0 and the solver returns "
+                "OPTIMAL with one entrant in two simultaneous matches (measured: 37 placed, "
+                "4 tiers, 1 collision). Rest of 0 is legitimate and is deliberately allowed."
+            )
+    if not grid_slots:
+        raise ValueError(
+            "grid_slots must be non-empty. With no admissible ticks the start domain falls "
+            "back to [0] and the day-bucket list to [0], so fixtures are placed at "
+            "start_at_ms=0 — a grid that offers zero legal slots yields a board, reported "
+            "OPTIMAL (measured: 2 fixtures placed at epoch 0). `cp_sat.schema` rejects an "
+            "empty Grid at the wire too; this is the domain refusing to be constructed "
+            "invalid, which is defence in depth rather than duplication."
+        )
 
     model = ScheduleModel()
     n = len(fixtures)
     dur_ms = match_minutes * MIN_MS
-    gap_ms = int(constraints.get("gap_minutes", 0)) * MIN_MS
+    gap_ms = gap_minutes * MIN_MS
 
     fixture_ids = [fid for fid, _entrants, _division in fixtures]
     divisions = [division for _fid, _entrants, division in fixtures]

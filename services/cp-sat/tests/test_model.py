@@ -10,9 +10,27 @@ These exercise the real solver end to end. Nothing here is mocked: a green run
 means CP-SAT actually proved optimality on the real board inside the budget.
 """
 
+import os
+
 import pytest
 
 from cp_sat.model import DAY_MS, MIN_MS, build_model, solve
+
+#: The production budget from the design spec, and the wall the acceptance
+#: criterion is stated at.
+PRODUCTION_WALL_SECONDS = 8.0
+
+
+def _load():
+    """One-minute load average, for failure messages only.
+
+    Every wall-clock claim in this service is load-sensitive — the same board
+    measures ~4 940 ms/OPTIMAL on an idle box and 8 044 ms/FEASIBLE at load 11
+    — so a red that does not say how busy the machine was cannot be triaged.
+    Reported, never branched on: a test that skips itself under load is a test
+    that never runs in CI.
+    """
+    return os.getloadavg()[0]
 
 
 def _production_board():
@@ -23,6 +41,44 @@ def _production_board():
     from cpsat_bench_boards import production_board
 
     return production_board()
+
+
+def test_production_board_meets_the_stated_acceptance_criterion():
+    """Prompt 02's acceptance criterion, asserted as written, for the first time.
+
+    *"the production board solves to OPTIMAL with 35-37 assignments in under 8
+    seconds, verified by an automated test."* Both halves existed in the suite;
+    neither was asserted against the other. `test_production_board_solves_under_budget`
+    accepts FEASIBLE and `tiers_completed >= 1` at the 8 s wall, and the OPTIMAL
+    half is proved in `test_objective.py` at a THIRTY second wall. Measured at
+    8 s under load 11: `FEASIBLE, 37 placed, tiers=2, elapsed_ms=8044` — the
+    criterion not met, the suite green.
+
+    Note what OPTIMAL means for this chain and why the count is asserted beside
+    it: `status` is OPTIMAL only when every requested tier was PROVED, so it
+    carries the four-tier claim; and a model with no objective at all also
+    returns OPTIMAL, with ZERO placed, so status alone is vacuous. Both
+    assertions are load-bearing.
+
+    THIS TEST IS LOAD-SENSITIVE ON PURPOSE. The same board measures ~4 940 ms
+    OPTIMAL idle and 8 044 ms FEASIBLE at load 11, on eight search workers over
+    six physical cores. That is the acceptance criterion being genuinely
+    marginal on a contended box, not a defect in the tier code, and weakening
+    the assertion would hide the one thing this test exists to say. The load
+    average is reported in the failure message so a red can be triaged rather
+    than guessed at; re-run alone before calling it a regression.
+    """
+    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+    load = _load()
+    outcome = solve(model, wall_seconds=PRODUCTION_WALL_SECONDS)
+    detail = (
+        f"status={outcome.status} placed={len(outcome.assignments)} "
+        f"tiers_completed={outcome.tiers_completed} elapsed_ms={outcome.elapsed_ms} "
+        f"wall={PRODUCTION_WALL_SECONDS}s load1={load:.2f}"
+    )
+    assert 35 <= len(outcome.assignments) <= 37, detail
+    assert outcome.status == "OPTIMAL", detail
 
 
 def test_production_board_solves_under_budget():
@@ -41,6 +97,15 @@ def test_production_board_solves_under_budget():
     the assertion that carries the weight anyway: the board comes back whole.
     A missing objective returns OPTIMAL with ZERO placed, so the count is what
     catches that mutant, never the status.
+
+    DO NOT CUT THIS WALL TO SPEED THE SUITE UP. It is tempting — this test's
+    own question is settled by T0 in ~150 ms, and the suite's eight-worker
+    solves are what make the budget tests marginal. Measured at a 3 s wall,
+    against the Task 2 audit's mutation matrix: the participant-rest
+    `AddNoOverlap` mutant (M2) and the dropped-court-gap mutant (M7) both go
+    from RED to **GREEN**. See the note on
+    `test_assignments_satisfy_every_stated_constraint` for the mechanism — it
+    applies to every solving test in this file.
     """
     fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
     model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
@@ -52,9 +117,14 @@ def test_production_board_solves_under_budget():
 
 
 def test_no_court_double_booking():
+    # The 8 s wall is load-bearing, not slack — see
+    # `test_assignments_satisfy_every_stated_constraint`. A shorter wall stops
+    # after T0, and T0 alone does not pack the board hard enough for a removed
+    # court/rest constraint to show up in the placements.
     fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
     model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
     outcome = solve(model, wall_seconds=8.0)
+    assert outcome.assignments, "nothing placed — the loop below would be vacuous"
     seen = {}
     for fixture_id, court, start_ms in outcome.assignments:
         key = (court, start_ms)
@@ -72,11 +142,34 @@ def test_assignments_satisfy_every_stated_constraint():
     survived them). A solver whose constraint families can be removed without
     a test noticing is the failure mode this repo has been bitten by before,
     so each family gets an assertion that fails without it.
+
+    THE 8 s WALL IS PART OF THE ASSERTION. Measured (Prompt 05b), this exact
+    test at a 3 s wall against the Task 2 audit's mutation matrix:
+
+        M2  participant-rest AddNoOverlap disabled   8 s: RED   3 s: **GREEN**
+        M7  gap dropped from the court interval      8 s: RED   3 s: **GREEN**
+        M1/M3/M4/M5/M8                               RED at both
+
+    The mechanism: a 3 s wall stops the chain inside T1, so the board that
+    comes back is essentially T0's. T0 only MAXIMISES PLACEMENT, and on a
+    lattice with 8 320 slots for 37 fixtures it has no reason to put two
+    matches near each other — so a court-turnaround or participant-rest
+    constraint that has been deleted never manifests in the placements. It is
+    T1's makespan minimisation that PACKS the board, and the packing pressure
+    is what turns a missing constraint into an observable violation.
+
+    So the wall here is not budget slack that can be reclaimed to speed the
+    suite up; it is what makes six of this file's constraint families testable
+    at all. If suite runtime ever has to come down, take it from somewhere
+    else and re-run the mutation matrix to prove you did no harm.
     """
     fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
     model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
     outcome = solve(model, wall_seconds=8.0)
     assert outcome.assignments, "nothing placed — the rest of this test would be vacuous"
+    assert len(outcome.assignments) == len(fixtures), (
+        "not every fixture was placed, so some constraint arm below may be vacuous"
+    )
 
     dur_ms = constraints["match_minutes"] * MIN_MS
     gap_ms = constraints["gap_minutes"] * MIN_MS
@@ -142,6 +235,58 @@ def test_assignments_satisfy_every_stated_constraint():
         assert count <= day_cap_by_division[division], (
             f"day cap violated: division {division} day {day} has {count} > {day_cap_by_division[division]}"
         )
+
+
+# --- pinned/immovable rows, on a board where they actually contend ----------
+
+
+def test_pinned_rows_are_not_overwritten_when_a_fixture_wants_the_slot():
+    """The `existing` constraint family, on the only board that can test it.
+
+    On `production_board()` this family is INERT, not merely unasserted: three
+    pins against 8 320 grid slots and 37 movable fixtures means nothing ever
+    competes for a pinned (court, tick). Measured, with the pinned-row fold
+    deleted from `build_model`: **0 pin-involving violations with the
+    constraint and 0 without it**, on both the zero-epoch and the real-epoch
+    board. An assertion added to the production board therefore cannot catch
+    the deletion — the corpus is blind, and no amount of asserting fixes a
+    corpus.
+
+    `pin_contended_board()` fixes the corpus instead. Five of its six
+    (court, tick) pairs are pinned and three movable fixtures compete for the
+    sixth, so the constraint is the ONLY thing keeping them off an occupied
+    court. With it: one placement. Without it: three, two of them on top of a
+    match already being played, reported OPTIMAL with `error` unset.
+    """
+    from cpsat_bench_boards import PIN_BOARD_FIXTURES, PIN_BOARD_FREE_SLOTS, pin_contended_board
+
+    board = pin_contended_board()
+    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = board
+
+    # The board genuinely contends — otherwise everything below is vacuous.
+    assert PIN_BOARD_FIXTURES > PIN_BOARD_FREE_SLOTS
+    assert len(fixtures) == PIN_BOARD_FIXTURES
+    assert len(existing) == len(grid_slots) - PIN_BOARD_FREE_SLOTS
+    assert not constraints["day_cap_by_division"], "a day cap would confound the pinned-row family"
+    assert set(constraints["rest_by_division"].values()) == {0}, "rest would confound the pinned-row family"
+
+    model = build_model(*board)
+    outcome = solve(model, wall_seconds=5.0)
+    detail = f"status={outcome.status} tiers={outcome.tiers_completed} board={sorted(outcome.assignments)}"
+
+    assert outcome.tiers_completed == 4, detail  # tiny board; anything less means it did not run
+    assert len(outcome.assignments) == PIN_BOARD_FREE_SLOTS, (
+        "a movable fixture was placed into a pinned slot — the pinned-row fold in build_model "
+        f"is not binding. {detail}"
+    )
+
+    pinned = {(court, start) for _fid, court, start in existing}
+    for fid, court, start in outcome.assignments:
+        assert (court, start) not in pinned, f"{fid} placed on top of an immovable row at {(court, start)}"
+
+    # The one placement is on the one free slot, and it is a real slot.
+    free = sorted(set(grid_slots) - pinned)
+    assert [(court, start) for _fid, court, start in outcome.assignments] == free, detail
 
 
 # --- degenerate constraint values must fail loudly, not solve quietly -------
@@ -218,3 +363,70 @@ def test_rejects_missing_match_minutes():
     constraints = {k: v for k, v in constraints.items() if k != "match_minutes"}
     with pytest.raises(ValueError, match="match_minutes"):
         build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+
+
+# --- negative-AFTER-ARITHMETIC values: the same family, one step further ----
+#
+# The guards above catch `<= 0` and missing. They do not catch a NEGATIVE value
+# that only becomes degenerate once the model adds it to `match_minutes`, and
+# that case is strictly worse than zero: zero fails to constrain, negative
+# CANCELS the match length and reopens a constraint family that was closed.
+# Both measured on the production board, both returning OPTIMAL with `error`
+# unset — the service's most dangerous shape, a confident wrong answer:
+#   gap_minutes      = -40  -> OPTIMAL, 37 placed, 4 tiers, 1 same-court MATCH overlap
+#   rest_by_division = -40  -> OPTIMAL, 37 placed, 4 tiers, 1 entrant in two matches at once
+# `-match_minutes` is used below because it is the exact value that zeroes the
+# interval width; any negative value is rejected, but this is the one that
+# demonstrably produces the wrong board.
+
+
+def test_rejects_negative_gap_minutes():
+    """A negative turnaround zeroes the court interval and two matches land on
+    one court simultaneously — the exact failure `match_minutes`' own guard
+    text describes, through a field that had no guard at either layer."""
+    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    constraints = {**constraints, "gap_minutes": -constraints["match_minutes"]}
+    with pytest.raises(ValueError, match="gap_minutes"):
+        build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+
+
+def test_accepts_zero_gap_minutes():
+    """Zero turnaround is legitimate (courts with no changeover), so the guard
+    must reject negatives WITHOUT closing the contract's own zero case."""
+    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    constraints = {**constraints, "gap_minutes": 0}
+    model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+    assert model.fixture_vars.fixture_ids == [fid for fid, _entrants, _division in fixtures]
+
+
+def test_rejects_negative_min_rest_minutes():
+    """A negative rest zeroes the participant-rest interval and one entrant is
+    placed in two simultaneous matches."""
+    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    constraints = {**constraints, "rest_by_division": {"d1": -constraints["match_minutes"], "d2": 80}}
+    with pytest.raises(ValueError, match="min_rest_minutes"):
+        build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+
+
+def test_accepts_zero_min_rest_minutes():
+    """Rest of 0 means "no minimum rest" and is a legitimate request."""
+    fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    constraints = {**constraints, "rest_by_division": {"d1": 0, "d2": 0}}
+    model = build_model(fixtures, courts, grid_slots, step_minutes, constraints, existing, deps)
+    assert model.fixture_vars.fixture_ids == [fid for fid, _entrants, _division in fixtures]
+
+
+def test_rejects_an_empty_grid():
+    """A grid with no admissible ticks must not silently invent one.
+
+    `build_model` fell back to `Domain.FromValues([0])` and a single day bucket
+    `[0]`, so fixtures were placed at `start_at_ms=0` on a grid offering zero
+    legal slots — measured: OPTIMAL, 2 placed, 4 tiers. `cp_sat.schema` already
+    rejects an empty `Grid` at the wire, so the SERVICE path was safe; the
+    domain object could still be constructed invalid, which leaves `bench/`,
+    `test_objective.py` and any future direct caller holding the silent wrong
+    board. A domain object must refuse to exist in an invalid state.
+    """
+    fixtures, courts, _grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    with pytest.raises(ValueError, match="grid_slots"):
+        build_model(fixtures, courts, [], step_minutes, constraints, existing, deps)

@@ -52,6 +52,8 @@ its search — see `cp_sat.model`'s T3 note, where a squeeze that could not clos
 its bound in 20 s proved the same value in 0.4 s as an equality.
 """
 
+import os
+
 import pytest
 
 from cp_sat.model import MIN_MS, build_model, solve
@@ -81,6 +83,26 @@ PRODUCTION_WALL_SECONDS = 8.0
 #: assertions hostage to the box's load average (measured: 4 tiers at load
 #: ~2.5, 2 tiers at load ~6, same code, same commit).
 CHAIN_WALL_SECONDS = 30.0
+
+# --- the proved optima of `production_board()` ------------------------------
+#
+# These are not observations of a run, they are PROVED lexicographic optima of
+# a deterministic model, so each is a single exact value: `tiers_completed == 4`
+# means CP-SAT proved there is no better one. That is what makes them safe to
+# assert with `==`, and asserting them with `==` is the point — every existing
+# assertion on these three numbers is one-sided in the SAFE direction
+# (`recomputed <= reported`), which a WORSE value satisfies more easily. A
+# chain that actively MAXIMISES player idle time therefore shipped green
+# through four review rounds: inverting T2 moves the reported gap from
+# 132 600 000 ms to 2 229 000 000 ms — 16.8x worse, the metric an organiser
+# feels most directly — with the suite 14/14.
+#
+# If a deliberate board change moves these, `tests/test_bench_contract.py`
+# fails first and says which part of the board moved. Do not re-baseline them
+# without reading that test's failure.
+T1_PROVED_MAKESPAN_MS = 1_519_800_000
+T2_PROVED_IDLE_GAP_MS = 132_600_000
+T3_PROVED_IMBALANCE_MS = 2_400_000
 
 
 def _production_board():
@@ -289,6 +311,124 @@ def test_a_tier_cut_short_is_neither_counted_nor_adopted(board):
     assert [name for name, _ in outcome.objective_values] == [TIER_PLACED]
     # T0's board survives intact — the fallback, not an empty result.
     assert len(outcome.assignments) == len(board[0])
+
+
+# --- each tier's optimisation DIRECTION, pinned two-sidedly -----------------
+#
+# `test_reported_bounds_are_frozen_against_the_final_board` above proves the
+# freeze MECHANISM; it cannot tell minimisation from maximisation, because a
+# larger reported ceiling satisfies `recomputed <= reported` more easily. The
+# four tests below are the missing half. Each names the exact proved optimum,
+# so a tier that optimises the wrong way fails on the VALUE — not by running
+# out of clock, and not by a downstream `KeyError`.
+
+
+def _proved(chain, tier, rung):
+    """The value tier `rung` reported, with a precondition that it ran at all.
+
+    Without the precondition an inverted tier that simply failed to prove
+    inside the wall would raise `KeyError` instead of failing the assertion —
+    a red for a reason that is about the box, not the code. This turns that
+    case into a message that says which it was.
+    """
+    assert chain.tiers_completed >= rung, (
+        f"the chain reached only {chain.tiers_completed} of {len(TIER_ORDER)} tiers in "
+        f"{chain.elapsed_ms} ms at load1={os.getloadavg()[0]:.2f}, so {tier!r} never ran and this "
+        "assertion cannot bind. That is the documented load hazard, not necessarily a defect — "
+        "re-run alone before diagnosing."
+    )
+    return dict(chain.objective_values)[tier]
+
+
+def test_t1_reports_the_proved_minimum_makespan_not_merely_a_ceiling(chain):
+    """T1 MINIMISES. Inverted, the reported makespan is not a slightly worse
+    number — `mk_lo` is only squeezed from above and `mk_hi` only from below,
+    so maximising drives them to the ends of their domains and the reported
+    value becomes the whole lattice span (measured: 1 769 454 600 000 ms
+    against the true optimum's 1 519 800 000, with all four tiers still
+    proved in 3 792 ms). A one-sided `<=` welcomes that; `==` refuses it."""
+    assert _proved(chain, TIER_MAKESPAN, 2) == T1_PROVED_MAKESPAN_MS
+
+
+def test_t2_reports_the_proved_minimum_idle_gap_not_merely_a_ceiling(chain):
+    """T2 MINIMISES — the tier whose direction nothing could detect.
+
+    This is CRITICAL-1 from the Task 3 re-audit: two independent T2 mutations
+    (term deleted, direction inverted) left the suite reproducibly green while
+    the board handed to organisers had a worst idle gap 16.8x larger. T2's
+    term is a per-pair lower bound, true only while something minimises it, so
+    inverted it reads as the lattice span rather than a real gap.
+    """
+    assert _proved(chain, TIER_IDLE_GAP, 3) == T2_PROVED_IDLE_GAP_MS
+
+
+def test_t3_reports_the_proved_minimum_court_imbalance(chain):
+    """T3 MINIMISES. Unlike T1/T2 its term is an equality, so it reads true on
+    any board — which is exactly why the existing
+    `reported == _court_imbalance(board)` check is direction-BLIND: it holds
+    whether T3 minimised, maximised, or did nothing. This pins the value.
+
+    The direction claim itself does not rest on this test — see
+    `test_tier_directions_are_pinned_without_the_clock`, which settles it in
+    milliseconds. On the production board a maximising T3 tends to miss the
+    wall, and a mutant that dies by wall clock is not a killed mutant:
+    measured, the same T3 mutation was green at a 22 s wall and red at 44 s.
+    """
+    assert _proved(chain, TIER_COURT_IMBALANCE, 4) == T3_PROVED_IMBALANCE_MS
+
+
+def test_tier_directions_are_pinned_without_the_clock():
+    """T1's and T3's directions, on a board that proves all four tiers in ~20 ms.
+
+    `imbalance_probe_board()` exists because a direction assertion carried on
+    the production chain inherits that chain's load sensitivity, and the T3
+    mutants currently die by wall clock alone. Here every tier is forced except
+    T3, which chooses between a spread of one match and a spread of two:
+
+        minimising -> PROBE_OPTIMAL_IMBALANCE_MS   (2,1,1 across three courts)
+        maximising -> PROBE_WORST_IMBALANCE_MS     (2,2,0)
+
+    both proved instantly, so the kill is on the value at any machine load.
+    Its match/gap is 25/5 rather than the production 40/10 precisely so no
+    number here collides with a production number — a mutant that hardcodes a
+    production value must not pass by coincidence.
+
+    T2 is NOT pinned here and cannot be: the probe board's entrants are
+    pairwise disjoint, so no participant has two matches, `worst_gap` is
+    constrained to 0 outright and both directions agree. Asserting that 0 keeps
+    the omission explicit rather than letting it read as coverage.
+    """
+    from cpsat_bench_boards import (
+        PROBE_FIXTURES,
+        PROBE_OPTIMAL_IMBALANCE_MS,
+        PROBE_OPTIMAL_MAKESPAN_MS,
+        PROBE_WORST_IMBALANCE_MS,
+        imbalance_probe_board,
+    )
+
+    board = imbalance_probe_board()
+    model = _model_for(board)
+    outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=5.0)
+    detail = (
+        f"status={outcome.status} tiers={outcome.tiers_completed} elapsed_ms={outcome.elapsed_ms} "
+        f"values={outcome.objective_values} load1={os.getloadavg()[0]:.2f}"
+    )
+    assert outcome.tiers_completed == 4, detail
+    reported = dict(outcome.objective_values)
+
+    assert reported[TIER_PLACED] == PROBE_FIXTURES, detail
+    assert reported[TIER_MAKESPAN] == PROBE_OPTIMAL_MAKESPAN_MS, detail
+    assert reported[TIER_IDLE_GAP] == 0, detail
+    assert reported[TIER_COURT_IMBALANCE] == PROBE_OPTIMAL_IMBALANCE_MS, detail
+    # The assertion above is only two-sided because a worse value is reachable
+    # on this board — state that, so a future board edit that removes the slack
+    # turns this into a loud failure rather than a silently vacuous pass.
+    assert PROBE_WORST_IMBALANCE_MS > PROBE_OPTIMAL_IMBALANCE_MS
+
+    # ...and the returned board really has that imbalance, recomputed in plain
+    # Python rather than read back off the model's own term.
+    dur_ms = board[4]["match_minutes"] * MIN_MS
+    assert _court_imbalance(outcome.assignments, board[1], dur_ms) == PROBE_OPTIMAL_IMBALANCE_MS, detail
 
 
 # --- degenerate arguments must fail loudly, not solve quietly ---------------
