@@ -87,12 +87,22 @@ jobs:
       # so a proof-time truncation under load surfaces as its own visibly
       # failed (but non-blocking) step, distinguishable from a real
       # placement regression, rather than either silently passing or
-      # blocking merges on the runner's load average. Every OTHER
-      # acceptance test on this board — test_production_board_solves_under_budget,
-      # test_no_court_double_booking, the whole T0-T3 chain in
-      # test_objective.py — asserts placement/constraint completeness
-      # without requiring proof completion, stays in the blocking run
-      # unmodified, and is what actually catches a real regression.
+      # blocking merges on the runner's load average.
+      #
+      # What still catches a real PLACEMENT regression, all blocking and
+      # all untouched by the deselect. Named exactly, because the honest
+      # question about this step is "what goes red at 30 of 37?":
+      #   * test_model.py:147 test_assignments_satisfy_every_stated_constraint
+      #     — exact equality, len(assignments) == len(fixtures), at :194
+      #   * test_objective.py:159 test_chain_fits_the_production_budget
+      #     — the same equality at :186, same 8s wall, separate file
+      #   * test_model.py:125 (35 <= len <= 37) and test_objective.py:156
+      #     (>= 35) as the wider band
+      #
+      # NOT test_no_court_double_booking (test_model.py:130): it checks
+      # non-empty plus no double-booking among whatever got placed, so it
+      # passes at placed=1. It defends correctness, not completeness —
+      # do not cite it as placement coverage.
       - name: pytest (blocking — full suite except the proof-time-sensitive test)
         working-directory: services/cp-sat
         run: |
