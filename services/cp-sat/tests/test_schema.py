@@ -366,6 +366,110 @@ def test_rejects_negative_min_rest_minutes():
 # the mistake is actually made, so the wire is where it is caught.
 
 
+def test_rejects_an_empty_court_name():
+    """An empty court is not an omitted court — it is a PLACEABLE phantom one.
+
+    `courts` is the set the model builds its per-court interval lists from, so
+    `""` gets a real column on the board that no grid slot ever offers and no
+    caller can render. Measured through the ACL and the model, 5/5
+    deterministic, two fixtures and ONE grid point on `C0`:
+
+        courts=["C0", ""]  OPTIMAL, 2 placed, error unset
+                           [('f1', '', T), ('f2', 'C0', T)]
+        courts=["C0"]      OPTIMAL, 1 placed          <- the control
+
+    The phantom doubles the board and puts a match on a court that does not
+    exist, at the same instant as a real one. This is the same argument the
+    guards on `fixture_id`, `division_id` and `entrant_ids` already make —
+    the caller cannot map the answer back to anything — and `courts` was
+    missed when they were written.
+    """
+    req = _valid_request(courts=["Court 1", ""])
+    with pytest.raises(InvalidRequestError, match="courts"):
+        request_to_model_input(req)
+
+
+def test_rejects_duplicate_court_names():
+    """Two entries for one court is a caller error with no meaning to assign.
+
+    Benign in the model as it stands — `court_lists` and `presence_court` are
+    dicts keyed by court, so the duplicate collapses, and the extra entry in
+    `court_counts` is an identical expression that moves neither the max nor
+    the min of the T3 imbalance term. Rejected anyway: it is the same
+    "an id names exactly one thing" rule as everywhere else in this pass, and
+    the analysis that makes it benign is a property of today's model rather
+    than of the contract.
+    """
+    req = _valid_request(courts=["Court 1", "Court 1"])
+    with pytest.raises(InvalidRequestError, match="courts"):
+        request_to_model_input(req)
+
+
+def test_rejects_a_pinned_row_reusing_a_movable_fixtures_id():
+    """A fixture id names exactly ONE match in a request — movable or pinned.
+
+    An `existing` row reusing a movable id does not pin that fixture: the row
+    lays a fixed blocking interval, the movable fixture is still free, and it
+    is placed somewhere else. The caller gets an assignment for a fixture it
+    just told the service was already fixed. Measured, 5/5 deterministic, one
+    fixture and three ticks 40 min apart:
+
+        existing f1 @ T           -> OPTIMAL, error unset,
+                                     board = [('f1', 'C0', T+40min)]
+
+    i.e. `f1` is now in two places. The rule chosen is DISJOINT IDS rather
+    than "an existing row pins the movable fixture": the second would be a new
+    modelling feature (drop it from the movable set, or fix its start and
+    court), and the boundary's job is to refuse a request that means two
+    things, not to guess which one.
+    """
+    req = _valid_request(
+        existing=[scheduler_pb2.Assignment(fixture_id="f1", court="Court 1", start_at_ms=SLOT_MS)]
+    )
+    with pytest.raises(InvalidRequestError, match="existing"):
+        request_to_model_input(req)
+
+
+def test_rejects_an_empty_pinned_row_fixture_id():
+    """Same rule, the degenerate end of it: a pin nobody can name. It appears
+    in the diagnostic for every constraint that row participates in."""
+    req = _valid_request(
+        existing=[scheduler_pb2.Assignment(court="Court 1", start_at_ms=SLOT_MS)]
+    )
+    with pytest.raises(InvalidRequestError, match="existing"):
+        request_to_model_input(req)
+
+
+def test_rejects_duplicate_pinned_row_fixture_ids():
+    """One match cannot be pinned to two places at once. The model would
+    happily lay both blocking intervals and report OPTIMAL around them."""
+    req = _valid_request(
+        existing=[
+            scheduler_pb2.Assignment(fixture_id="x1", court="Court 1", start_at_ms=SLOT_MS),
+            scheduler_pb2.Assignment(
+                fixture_id="x1", court="Court 1", start_at_ms=SLOT_MS + 3_600_000
+            ),
+        ]
+    )
+    with pytest.raises(InvalidRequestError, match="existing"):
+        request_to_model_input(req)
+
+
+def test_accepts_pinned_rows_with_ids_of_their_own():
+    """The rule must not have become "no pinned rows". Distinct, non-empty
+    ids that no movable fixture uses map straight through."""
+    req = _valid_request(
+        existing=[
+            scheduler_pb2.Assignment(fixture_id="x1", court="Court 1", start_at_ms=SLOT_MS),
+            scheduler_pb2.Assignment(
+                fixture_id="x2", court="Court 1", start_at_ms=SLOT_MS + 3_600_000
+            ),
+        ]
+    )
+    parsed = request_to_model_input(req)
+    assert [row[0] for row in parsed.existing] == ["x1", "x2"]
+
+
 def test_rejects_a_dependency_naming_an_unknown_fixture():
     """Measured, 2 fixtures, separation `start(f1) - start(f0)`, 5/5
     deterministic: a real pair separates them by 1_800_000 ms; a pair naming

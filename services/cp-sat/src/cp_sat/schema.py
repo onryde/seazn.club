@@ -54,13 +54,28 @@ and wordlessly, and the caller receives OPTIMAL with `error` unset for a board
 missing the constraint they asked for.
 
 So `request_to_model_input` runs ONE referential-integrity pass rather than
-seven field guards, in dependency order: fixtures first (they declare the
-fixture ids and the divisions), then the grid, the pinned rows, the
-dependencies and the division rules against them. The domain's tolerance is
+seven field guards, in dependency order: courts first, then fixtures (they
+declare the fixture ids and the divisions), then the grid, the pinned rows,
+the dependencies and the division rules against them. The domain's tolerance is
 NOT changed — `model.py`'s `id_to_idx.get(...) or continue` and its
 `if existing_court in court_lists` are what let the bench feed it partial
 boards, and moving the check there would break that. The wire is where the
 mistake is made, so the wire is where it is caught.
+
+The rule the pass enforces, stated once: **an id names exactly one thing, and
+that thing is declared by the same request.** Two members of that family were
+found only after the first version of this pass shipped, both by review, and
+both because "an id" was read as "an id in `fixtures`":
+
+  * `courts` accepted `""`. An empty court is not an omitted court, it is a
+    PLACEABLE phantom one — the model gives it a column and puts a match on
+    it. Measured: two fixtures over one grid point place 2 with an empty
+    string in `courts` and 1 without, OPTIMAL either way.
+  * an `existing` row could reuse a movable fixture's id, which does not pin
+    that fixture — the row lays a blocking interval and the fixture is placed
+    a SECOND time, elsewhere.
+
+If a third turns up, look for an id this docstring does not mention.
 
 Two fields carry proto3 `optional` and are checked for PRESENCE rather than
 for range, because 0 is a legitimate answer for both and no value guard can
@@ -196,8 +211,73 @@ def _validated_grid_slots(slots, known_courts: set[str]) -> list[tuple[str, int,
     return [(s.court, s.start_at_ms, s.day_index) for s in slots]
 
 
-def _validated_existing(rows, known_courts: set[str]) -> list[tuple[str, str, int]]:
+def _validated_courts(proto_courts) -> list[str]:
+    """The courts, which every other id in the request resolves against.
+
+    An empty court name is not an omitted court, it is a PLACEABLE phantom
+    one: `courts` is the set the model builds its per-court interval lists
+    from, so `""` gets a real column that no grid slot offers and no caller
+    can render. Measured, 5/5, two fixtures over ONE grid point on `C0`:
+    `["C0", ""]` places 2 (one of them on `''`, at the same instant as the
+    real match) where `["C0"]` places 1. Same argument as the `fixture_id`,
+    `division_id` and `entrant_ids` guards — the caller cannot map the answer
+    back to anything.
+    """
+    courts = list(proto_courts)
+    seen: set[str] = set()
+    for i, court in enumerate(courts):
+        if not court:
+            raise InvalidRequestError(
+                f"courts[{i}] must not be empty. An empty court name is not an omitted court — the "
+                "model gives it a real column, places matches on it, and proves that OPTIMAL "
+                "(measured: two fixtures and one grid point on 'C0' place 2 with an empty court in "
+                "the list and 1 without)."
+            )
+        if court in seen:
+            raise InvalidRequestError(
+                f"courts[{i}] {court!r} is a duplicate. A court names exactly one place to play."
+            )
+        seen.add(court)
+    return courts
+
+
+def _validated_existing(
+    rows, known_courts: set[str], movable_fixture_ids: set[str]
+) -> list[tuple[str, str, int]]:
+    seen: set[str] = set()
     for i, a in enumerate(rows):
+        # A fixture id names exactly ONE match in a request — movable or
+        # pinned, never both and never twice. An `existing` row reusing a
+        # movable id does NOT pin that fixture: the row lays a fixed blocking
+        # interval, the movable fixture stays free, and it is placed elsewhere,
+        # so the caller receives an assignment for a fixture it just declared
+        # already fixed. Measured, 5/5: `f1` pinned at T comes back placed at
+        # T+40min, OPTIMAL, `error` unset.
+        #
+        # Rejected rather than reinterpreted as "this row pins that fixture".
+        # That reading is a modelling feature — drop it from the movable set,
+        # or fix its start and court — and the boundary's job is to refuse a
+        # request that means two things, not to choose one of them.
+        if not a.fixture_id:
+            raise InvalidRequestError(
+                f"existing[{i}].fixture_id must not be empty. A pinned row nobody can name appears "
+                "in the diagnostic for every constraint it participates in."
+            )
+        if a.fixture_id in movable_fixture_ids:
+            raise InvalidRequestError(
+                f"existing[{i}].fixture_id {a.fixture_id!r} is also a movable fixture. A pinned row "
+                "does not pin the fixture that shares its id — it lays a blocking interval while "
+                "the fixture stays free — so the response comes back placing it a second time, "
+                "somewhere else. If it is pinned, leave it out of `fixtures`."
+            )
+        if a.fixture_id in seen:
+            raise InvalidRequestError(
+                f"existing[{i}].fixture_id {a.fixture_id!r} is pinned twice. One match cannot be in "
+                "two places at once, and the model would lay both blocking intervals and report "
+                "OPTIMAL around them."
+            )
+        seen.add(a.fixture_id)
+
         if a.court not in known_courts:
             raise InvalidRequestError(
                 f"existing[{i}].court {a.court!r} is not one of `courts`. A pinned row is folded into "
@@ -377,7 +457,7 @@ def request_to_model_input(req) -> ModelInput:
             "once."
         )
 
-    courts = list(req.courts)
+    courts = _validated_courts(req.courts)
     known_courts = set(courts)
 
     fixtures = _validated_fixtures(req.fixtures)
@@ -385,7 +465,7 @@ def request_to_model_input(req) -> ModelInput:
     declared_divisions = {division for _fid, _entrants, division in fixtures}
 
     grid_slots = _validated_grid_slots(req.grid.slots, known_courts)
-    existing = _validated_existing(req.existing, known_courts)
+    existing = _validated_existing(req.existing, known_courts, fixture_ids)
     dependencies = _validated_dependencies(req.dependencies, fixture_ids)
     constraints = _validated_constraints(req.constraints, declared_divisions)
 
