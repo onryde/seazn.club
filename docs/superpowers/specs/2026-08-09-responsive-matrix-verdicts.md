@@ -36,21 +36,30 @@ file:line detail). Task 5 has exactly one row to implement from this table
 console pages already commit to a `md:` (768px) desktop layout with no
 half-measures.
 
-**One pre-existing, out-of-scope defect found while building the screenshot
-fixtures:** `mobile.spec.ts`'s "console routes: no horizontal scroll" test
-navigates `/competitions/{id}`, `/competitions/{id}/settings`,
+**One pre-existing defect found while building the screenshot fixtures, since
+corrected in-wave:** `mobile.spec.ts`'s "console routes: no horizontal
+scroll" test navigated `/competitions/{id}`, `/competitions/{id}/settings`,
 `/divisions/{id}`, `/divisions/{id}?tab=fixtures`,
 `/divisions/{id}?tab=standings` and `/divisions/{id}/registrations` — all
 dead (404) routes. No
 `src/app/competitions/[id]` or `src/app/divisions/[id]` page exists; the
 console moved to the `/o/{org}/c/{comp}/d/{div}` slug chain before this
-wave. The test still passes because a 404 page has no horizontal overflow —
-vacuous, not a real width check, at every width it runs at (not tablet-
-specific). Out of scope to fix here (unrelated to the width-branch work, and
-touching it risks the already-green phone gates); the four screenshots below
-against those conceptual surfaces were taken against the real canonical
-addresses instead so the verdict reflects the actual page. Flagged for the
-owner / a future task, not corrected in `mobile.spec.ts`.
+wave. The test still passed because a 404 page has no horizontal overflow —
+vacuous, not a real width check, at every width it ran at (not tablet-
+specific). At the time this table was built it was flagged as out of scope
+(unrelated to the width-branch work, and touching it risked the
+already-green phone gates); the four screenshots below against those
+conceptual surfaces were taken against the real canonical addresses instead
+so the verdict reflects the actual page. It was **not** left for a future
+task: Task 4b (commit `ff2c22fb`) re-pointed the "console routes" test at
+the live `/o/{org}/c/{comp}/d/{div}` slug chain via `competitionPath`/
+`divisionPath`, closing the vacuous-pass gap for that test in this same
+wave. The sibling "axe: no serious/critical violations" test carried the
+identical dead-route bug (`/competitions/{id}`,
+`/divisions/{id}?tab=standings`) and was missed by Task 4b's fix; it is
+corrected in the final-review fix wave that follows this task, using the
+same helpers and adding a <400 status check on navigation so it cannot go
+vacuous again.
 
 ## Verdicts
 
@@ -82,7 +91,7 @@ owner / a future task, not corrected in `mobile.spec.ts`.
 | public news feed | `/shared/{org}/news` | OK | 2-col card grid, no overlap | — | `news-feed-{768,834}.png` |
 | public news post | `/shared/{org}/news/{slug}` | OK | article + share buttons fit | — | `news-post-{768,834}.png` |
 | publish-gate confirm sheet | `/o/{org}/c/{comp}/d/{div}/schedule?tab=board` (dialog open) | OK | renders as a centered modal (not the phone bottom sheet) at this width, conflict list and Cancel/Publish anyway both fit without clipping | — | `publish-gate-sheet-{768,834}.png` |
-| z3 schedule board (schedule-board.tsx:347 JS fork; named suspect) | `/o/{org}/c/{comp}/d/{div}/schedule?tab=board` | D | action toolbar (`flex flex-wrap` container, schedule-board.tsx:901) breaks into 2 rows, isolating the "Freeze schedule" button behind a stretched `flex-1` spacer gap (schedule-board.tsx:980) | `apps/web/src/components/v2/schedule-board.tsx` (toolbar container ~:901 + spacer ~:980) | `schedule-board-{768,834}.png` |
+| z3 schedule board (schedule-board.tsx:347 JS fork; named suspect) | `/o/{org}/c/{comp}/d/{div}/schedule?tab=board` | D | action toolbar (`flex flex-wrap` container, schedule-board.tsx:901) breaks into 2 rows, isolating the "Freeze schedule" button behind a stretched `flex-1` spacer gap (schedule-board.tsx:980). **Fixed by Task 5 (commit `8e92ffd3`)**, which nested the lifecycle-actions cluster (freeze/publish/start) in its own inner `flex flex-wrap` box so the outer wrap treats it as one unit — it now either holds on row 1 in full or wraps to row 2 in full, never split mid-cluster; this defect description is kept as the historical record of what the pre-fix layout did. | `apps/web/src/components/v2/schedule-board.tsx` (toolbar container ~:901 + spacer ~:980) | `schedule-board-{768,834}.png` |
 | admin dashboard | `/admin` | OK (functional bar) | staff nav overflows into its own `overflow-x-auto` container (by design, same pattern as the pricing table) — not clipped/broken, reachable via scroll | — | `admin-home-{768,834}.png` |
 | admin AI runs | `/admin/ai-runs` | OK (functional bar) | table renders, empty state clean | — | `admin-ai-runs-{768,834}.png` |
 | admin audit log | `/admin/audit` | OK (functional bar) | hash-chain banner + table render fully | — | `admin-audit-{768,834}.png` |
