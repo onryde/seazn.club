@@ -114,6 +114,23 @@ start domain in the model, free on homogeneous boards. It was left out of
 its own timing case. Closing it is a prerequisite for Prompt 10, not
 optional cleanup.
 
+**This gate now has an owner outside this programme.** A separate piece
+of work — adding `court_allow` to the scheduling constraint vocabulary,
+so an organiser can say "Priya plays on Court 2" — needs exactly the same
+primitive: a **per-fixture domain restriction over (court, start)**.
+CP-SAT already carries the per-fixture, per-court presence booleans it
+would use (`model.py:337`), so enforcement is forcing the disallowed ones
+to zero.
+
+Build it once and both close. Do not build a narrower per-court-grid fix
+here that the constraint work then has to widen — coordinate instead. The
+constraint work also carries a product decision this programme does not
+own: whether instruction rules stay **warn-only** (today's behaviour) or
+become hard, because a hard placer turns boards that currently return
+with a warning into `INFEASIBLE`. The recommendation on record is a soft
+T4 tier below the existing T0-T3 chain, so the service always returns a
+board and reports what it could not honour.
+
 Tasks 01-04 were re-audited on 2026-08-09 at the owner's request (four
 parallel Opus reviewers, mutation-first, one per task). Suite at that
 point: 86 passed, 0 failed, exit 0.
