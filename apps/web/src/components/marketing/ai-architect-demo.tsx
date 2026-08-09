@@ -33,6 +33,7 @@ import { quoteRun, type Quote, type QuoteLineInput, type Rung, type RungWeights 
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { plural as pluralRuntime, t as tRuntime, type TKey } from "@/lib/i18n-runtime";
 import type { AiDemoFixture } from "@/demo/ai-templates/types";
+import { useStartOnView } from "./use-start-on-view";
 import type { AiPlanResponse } from "@/server/api-v1/schemas";
 
 /** Hero first — the section leads with the run that admits a failure. */
@@ -183,6 +184,19 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
   const [excluded, setExcluded] = useState<string[]>([]);
   const wanted = useRef<Slug>(SLUGS[0]);
   const reduced = usePrefersReducedMotion();
+  // The screen is below the fold. Without this the trace plays itself out on
+  // mount and an organiser scrolling down meets a finished, static run.
+  //
+  // The observed element is the SCREEN, not the section: the section's top edge
+  // is already on the first viewport at desktop, so anchoring there would start
+  // the run while the part that draws it is still a thousand pixels down.
+  const screenRef = useRef<HTMLDivElement | null>(null);
+  const inView = useStartOnView(screenRef);
+  // Picking a template is an explicit ask, and it must play whether or not the
+  // screen has scrolled into view yet — at 375px a card click leaves the screen
+  // itself off-screen, so a view-only gate would swallow the interaction.
+  const [picked, setPicked] = useState(false);
+  const started = inView || picked;
 
   // Drop the previous recording IN THE SAME RENDER the pick changes.
   //
@@ -229,11 +243,14 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
   const total = trace?.events.length ?? 0;
   const revealed = reduced ? total : Math.min(shown, total);
 
+  // The recording is fetched on mount regardless of `started` — only the CLOCK
+  // waits, so the run is ready to draw the moment the block arrives instead of
+  // opening on a loading line.
   useEffect(() => {
-    if (reduced || shown >= total) return;
+    if (!started || reduced || shown >= total) return;
     const id = setTimeout(() => setShown((n) => n + 1), REPLAY_MS);
     return () => clearTimeout(id);
-  }, [reduced, shown, total]);
+  }, [started, reduced, shown, total]);
 
   // Joint only: what each division actually got, counted off the proposal rows
   // the server stamped with a division.
@@ -278,7 +295,10 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
         data-ai-template={s}
         {...(hero ? { "data-ai-hero": "true" } : {})}
         aria-pressed={active}
-        onClick={() => setSlug(s)}
+        onClick={() => {
+          setPicked(true);
+          setSlug(s);
+        }}
         className={`group flex min-h-11 w-full flex-col items-start gap-1 rounded-xl border bg-[#241650] text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--mk-lime)] ${
           hero ? "p-4 sm:p-5" : "p-4"
         } ${
@@ -310,6 +330,7 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
   return (
     <section
       data-ai-demo="ready"
+      data-ai-started={started ? "true" : "false"}
       aria-labelledby="ai-demo-title"
       className="bg-[var(--mk-night)] px-4 py-14 sm:py-16"
     >
@@ -335,7 +356,11 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
 
         {/* The screen: the product's own light chrome, dropped into the night
             page behind a slate that says where it came from. */}
-        <div className="mt-6 overflow-hidden rounded-2xl border border-[#4a3885] bg-[var(--mk-night-2)] p-1.5">
+        <div
+          ref={screenRef}
+          data-ai-screen="true"
+          className="mt-6 overflow-hidden rounded-2xl border border-[#4a3885] bg-[var(--mk-night-2)] p-1.5"
+        >
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2.5 py-2">
             <span className="mk-display inline-flex items-center gap-1.5 text-[10px] font-semibold tracking-[0.18em] text-[var(--mk-lime)]">
               <span
@@ -375,7 +400,9 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
                   <p className="mt-1 font-mono text-[13px] leading-relaxed text-slate-700">
                     {fixture.meta.instruction}
                   </p>
-                  <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] text-slate-500">
+                  {/* slate-600, not slate-500: 11px on the card's tinted
+                      `#f6f3ff` measures 4.35:1, just under the 4.5:1 AA floor. */}
+                  <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] text-slate-600">
                     <span className="rounded bg-white px-1.5 py-0.5 font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">
                       {t(`scheduling.aidemo.mode.${fixture.meta.mode}`)}
                     </span>

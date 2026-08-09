@@ -84,6 +84,8 @@ const section = (page: Page): Locator => page.locator('[data-ai-demo="ready"]');
 const card = (page: Page, slug: Slug): Locator =>
   section(page).locator(`[data-ai-template="${slug}"]`);
 const price = (page: Page): Locator => section(page).locator('[data-ai-price="run"]');
+/** The panel that actually draws the run — what the viewport gate observes. */
+const screen = (page: Page): Locator => section(page).locator('[data-ai-screen="true"]');
 const trace = (page: Page): Locator =>
   section(page).getByRole("region", { name: UI_EN["board.ai.trace.aria.schedule"]! });
 
@@ -161,6 +163,54 @@ test.describe("/[lang]/scheduling — the recorded AI demo", () => {
 
     expect(urls.length).toBeGreaterThan(0); // the probe collected something
     expect(urls.filter((u) => MODEL_CALL.test(u))).toEqual([]);
+  });
+
+  test("holds the replay until the block is scrolled into view", async ({ page }) => {
+    await page.goto("/en/scheduling");
+
+    // The premise, measured rather than assumed: if the screen were already on
+    // display at load, every assertion below would pass for the wrong reason.
+    // Measured on the SCREEN, not the section — the section's own top edge is
+    // inside the first viewport at this size (y≈548 of 720), which is why the
+    // observer is anchored on the screen in the first place.
+    const box = await screen(page).boundingBox();
+    const viewport = page.viewportSize();
+    expect(box, "screen has no box").not.toBeNull();
+    expect(
+      box!.y,
+      "the demo screen starts inside the first viewport — this test proves nothing",
+    ).toBeGreaterThan(viewport!.height);
+
+    // Long enough for the whole reveal to have run twice over (350ms a line).
+    // Before the gate this is where the trace finished, unwatched.
+    await page.waitForTimeout(6_000);
+    await expect(section(page)).toHaveAttribute("data-ai-started", "false");
+    await expect(
+      trace(page).getByText(UI_EN["board.ai.trace.state.verified"]!, { exact: true }),
+      "the run played out below the fold",
+    ).toHaveCount(0);
+
+    // Scrolling is the whole trigger — no click. That this half passes is also
+    // what proves the half above was a shut gate and not dead JavaScript.
+    await screen(page).scrollIntoViewIfNeeded();
+    await expect(section(page)).toHaveAttribute("data-ai-started", "true");
+    await expect(trace(page)).toContainText(UI_EN["board.ai.trace.node.ready"]!, {
+      timeout: 30_000,
+    });
+  });
+
+  test("a card click starts the run even while the screen is still off-screen", async ({
+    page,
+  }) => {
+    await page.goto("/en/scheduling");
+
+    // The card scrolls into view on click; the screen below it need not, and at
+    // 375px it does not. A view-only gate swallowed exactly this interaction.
+    await card(page, "club-night").click();
+    await expect(section(page)).toHaveAttribute("data-ai-started", "true");
+    await expect(trace(page)).toContainText(UI_EN["board.ai.trace.node.ready"]!, {
+      timeout: 30_000,
+    });
   });
 
   test("T3 finals day plays through to the diff, the unplaceable list and the price", async ({

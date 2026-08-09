@@ -60,7 +60,9 @@ export function AiTrace({
   const reduced = usePrefersReducedMotion();
   const [revealed, setRevealed] = useState(0);
   const firedFlags = useRef(0);
-  const logRef = useRef<HTMLOListElement>(null);
+  // The SCROLLER, which is the log region wrapping the `<ol>` — see the note
+  // beside it on why the role and the list cannot share one element.
+  const logRef = useRef<HTMLDivElement>(null);
 
   const total = events.length;
   // Reduced motion lands on the final state directly (derived, no setState in an
@@ -193,30 +195,38 @@ export function AiTrace({
       </ol>
 
       {/* Verification console — the machine's own voice, mono on floodlit night. */}
-      <ol
+      {/* `role="log"` belongs on the region, NOT on the `<ol>`: an explicit role
+          REPLACES the element's implicit one, so a logged `<ol>` stops being a
+          list and every `<li>` inside it becomes an orphan — a serious axe
+          violation ("List item parent element has a role that is not
+          role=list"), which is how this was found on /scheduling. Splitting the
+          two keeps the live region and the list semantics both intact. */}
+      <div
         ref={logRef}
         role="log"
         aria-live="polite"
         aria-label={msg("board.ai.trace.consoleAria")}
         className="max-h-40 overflow-y-auto border-t border-slate-800 bg-slate-950 px-3 py-2 font-mono text-[11px] leading-relaxed"
       >
-        {consoleLines.length === 0 && (
-          <li className="text-slate-400">{msg("board.ai.trace.consoleWaiting")}</li>
-        )}
-        {consoleLines.map(({ e, i }) => (
-          <li
-            key={i}
-            className={`whitespace-pre-wrap break-words ${lineTone[e.t as Exclude<TraceEventKind, "step">]}`}
-          >
-            {e.t === "flag" && <span aria-hidden className="mr-1 text-red-400">⚑</span>}
-            {e.t === "clean" && <span aria-hidden className="mr-1 text-teal-400">✓</span>}
-            {e.text}
-            {isLive && i === consoleLines[consoleLines.length - 1]?.i && (
-              <span aria-hidden className="ml-0.5 inline-block w-1.5 animate-pulse text-slate-400">▌</span>
-            )}
-          </li>
-        ))}
-      </ol>
+        <ol>
+          {consoleLines.length === 0 && (
+            <li className="text-slate-400">{msg("board.ai.trace.consoleWaiting")}</li>
+          )}
+          {consoleLines.map(({ e, i }) => (
+            <li
+              key={i}
+              className={`whitespace-pre-wrap break-words ${lineTone[e.t as Exclude<TraceEventKind, "step">]}`}
+            >
+              {e.t === "flag" && <span aria-hidden className="mr-1 text-red-400">⚑</span>}
+              {e.t === "clean" && <span aria-hidden className="mr-1 text-teal-400">✓</span>}
+              {e.text}
+              {isLive && i === consoleLines[consoleLines.length - 1]?.i && (
+                <span aria-hidden className="ml-0.5 inline-block w-1.5 animate-pulse text-slate-400">▌</span>
+              )}
+            </li>
+          ))}
+        </ol>
+      </div>
 
       {/* State tag */}
       <div className="flex items-center gap-2 border-t border-slate-200 bg-slate-50/70 px-3 py-1.5">

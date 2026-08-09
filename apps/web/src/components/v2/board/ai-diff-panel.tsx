@@ -6,6 +6,12 @@
 // — moved / placed / unscheduled grouped with from→to provenance (which lives
 // here, never on the grid block). Blocking rows keep a per-row untick: unticking
 // a blocker drops it to the tray in the accept payload so the rest can apply.
+//
+// The de-emphasised text here is `slate-600`, not `slate-400`. Every one of
+// these rows is 10-11px on white or near-white, where slate-400 (#90a1b9) lands
+// at 2.5-2.6:1 against a WCAG AA floor of 4.5:1 — 55 serious axe violations on
+// /scheduling once this panel appeared on a public page. slate-500 is not
+// enough either (4.35:1 on the tinted card). Keep new dim text at slate-600.
 import { useMemo } from "react";
 import { timeLabel } from "@/lib/day-label";
 import { useMsg, usePlural } from "@/components/i18n/dict-provider";
@@ -90,7 +96,7 @@ export function AiDiffPanel({
               key={u.k}
               className="inline-flex items-center gap-1 rounded bg-white px-1.5 py-0.5 font-mono text-[10px] text-slate-500 ring-1 ring-inset ring-slate-200"
             >
-              <span className="text-slate-400">{msg(u.k)}</span>
+              <span className="text-slate-600">{msg(u.k)}</span>
               <span className="font-semibold text-slate-700">{u.v}</span>
             </span>
           ))}
@@ -187,7 +193,7 @@ export function AiDiffPanel({
             const l = label(m.fixture_id);
             return (
               <DiffRow key={m.fixture_id} code={l.code} matchup={l.matchup} marker={l.marker} note={notes.get(m.fixture_id)}>
-                <span className="text-slate-400 line-through">{slot(m.from)}</span>
+                <span className="text-slate-600 line-through">{slot(m.from)}</span>
                 <span aria-hidden className="text-amber-600">→</span>
                 <span className="font-medium text-amber-700">{slot(m.to)}</span>
               </DiffRow>
@@ -219,7 +225,7 @@ export function AiDiffPanel({
             const l = label(u.fixture_id);
             return (
               <DiffRow key={u.fixture_id} code={l.code} matchup={l.matchup} marker={l.marker} note={notes.get(u.fixture_id)}>
-                <span className="text-slate-400 line-through">{slot(u.from)}</span>
+                <span className="text-slate-600 line-through">{slot(u.from)}</span>
                 <span className="font-medium text-slate-500">{msg("board.ai.diff.toTray")}</span>
               </DiffRow>
             );
@@ -227,7 +233,7 @@ export function AiDiffPanel({
         </DiffGroup>
 
         {diff.unchanged.length > 0 && (
-          <p className="mt-2 border-t border-slate-100 pt-2 text-[11px] text-slate-400">
+          <p className="mt-2 border-t border-slate-100 pt-2 text-[11px] text-slate-600">
             {plural("board.ai.diff.unchangedGroup", diff.unchanged.length)}
           </p>
         )}
@@ -236,7 +242,7 @@ export function AiDiffPanel({
           diff.placed.length === 0 &&
           diff.unscheduled.length === 0 &&
           diff.unchanged.length === 0 && (
-            <p className="mt-1 text-[11px] text-slate-400">{msg("board.ai.diff.none")}</p>
+            <p className="mt-1 text-[11px] text-slate-600">{msg("board.ai.diff.none")}</p>
           )}
       </div>
     </div>
@@ -254,7 +260,7 @@ function CoverageStrip({ fillable, total, unfilled }: { fillable: number; total:
         </p>
         <p className="font-mono text-[11px] text-slate-600">
           <span className="font-semibold text-teal-700">{fillable}</span>
-          <span className="text-slate-400">/{total}</span>
+          <span className="text-slate-600">/{total}</span>
         </p>
       </div>
       <div
@@ -380,7 +386,7 @@ function DiffRow({
         <span className="min-w-0 flex-1 truncate text-slate-600">{matchup}</span>
       </div>
       <div className="mt-0.5 flex flex-wrap items-center gap-1.5 pl-0.5 text-[11px]">{children}</div>
-      {note && <p className="mt-0.5 text-[11px] italic text-slate-400">{note}</p>}
+      {note && <p className="mt-0.5 text-[11px] italic text-slate-600">{note}</p>}
     </li>
   );
 }
