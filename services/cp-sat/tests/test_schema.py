@@ -367,25 +367,150 @@ def test_rejects_negative_min_rest_minutes():
 
 
 def test_rejects_an_empty_court_name():
-    """An empty court is not an omitted court — it is a PLACEABLE phantom one.
+    """A court nobody can name cannot be rendered or mapped back to.
 
-    `courts` is the set the model builds its per-court interval lists from, so
-    `""` gets a real column on the board that no grid slot ever offers and no
-    caller can render. Measured through the ACL and the model, 5/5
-    deterministic, two fixtures and ONE grid point on `C0`:
+    Same argument as the `fixture_id`, `division_id` and `entrant_ids` guards,
+    and `courts` was missed when those were written.
 
-        courts=["C0", ""]  OPTIMAL, 2 placed, error unset
-                           [('f1', '', T), ('f2', 'C0', T)]
-        courts=["C0"]      OPTIMAL, 1 placed          <- the control
-
-    The phantom doubles the board and puts a match on a court that does not
-    exist, at the same instant as a real one. This is the same argument the
-    guards on `fixture_id`, `division_id` and `entrant_ids` already make —
-    the caller cannot map the answer back to anything — and `courts` was
-    missed when they were written.
+    **Not the phantom-placement guard**, though the probe that found this did
+    place a match on court `''` and this docstring used to claim the credit.
+    The empty string was incidental: what made that court placeable was having
+    no slots, which `test_rejects_a_declared_court_that_no_slot_offers` owns.
+    A blank court WITH slots is still rejected, and only by this test.
     """
     req = _valid_request(courts=["Court 1", ""])
     with pytest.raises(InvalidRequestError, match="courts"):
+        request_to_model_input(req)
+
+
+def test_rejects_a_whitespace_only_court_name():
+    """`" "` is the same unnameable court as `""` and slipped the first guard,
+    which tested falsiness rather than `.strip()`. Measured 6/6 before the fix:
+    `courts=["C0", " "]` places 2 where `["C0"]` places 1, one match landing on
+    court `' '`.
+
+    The blank court is given a SLOT here, and the same tick as the real court,
+    so that `_validate_court_grids` cannot be the thing that rejects it. Its
+    first version left the blank court slotless, which meant the grid guard
+    caught the request and the test passed with the `.strip()` reverted to
+    falsiness — a mutant that survived 6/6 until the board was changed.
+    """
+    req = _valid_request(
+        courts=["Court 1", "   "],
+        grid=scheduler_pb2.Grid(
+            slots=[
+                scheduler_pb2.Slot(court=court, start_at_ms=SLOT_MS, day_index=0)
+                for court in ("Court 1", "   ")
+            ],
+            step_minutes=10,
+        ),
+    )
+    with pytest.raises(InvalidRequestError, match="must not be blank"):
+        request_to_model_input(req)
+
+
+def test_rejects_a_declared_court_that_no_slot_offers():
+    """A court with NO slots is placeable, and no empty string is needed.
+
+    This is the real mechanism behind the phantom-court defect: `courts` is
+    what the model builds per-court interval lists from, while
+    `admissible_starts` is the union of every slot's start across ALL courts.
+    So a declared court inherits the whole lattice regardless of what the grid
+    says about it. Measured 6/6, two fixtures and ONE slot on `C0`:
+
+        courts=["C0","C1"]  OPTIMAL, 2 placed, error unset  (one on C1)
+        courts=["C0"]       OPTIMAL, 1 placed               <- the control
+
+    The first round guarded emptiness — the member it had measured benign —
+    and left this one, which it had not measured at all, wide open. Reachable
+    from real data: `Blackout.court?` lets a caller blank out one court's whole
+    day and still declare it.
+    """
+    req = _valid_request(
+        courts=["Court 1", "Court 2"],
+        grid=scheduler_pb2.Grid(
+            slots=[scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS, day_index=0)],
+            step_minutes=10,
+        ),
+    )
+    # Matched on the slotless message, not merely on the court name. The
+    # identical-tick-sets guard below also rejects this request — a slotless
+    # court has a tick set that differs from every other — so a looser pattern
+    # passes with this branch deleted (measured: survived 6/6). The branch
+    # exists purely to give the likeliest caller mistake its own diagnostic,
+    # so the diagnostic is what the test has to pin.
+    with pytest.raises(InvalidRequestError, match="no grid slot offers them"):
+        request_to_model_input(req)
+
+
+def test_rejects_courts_that_offer_different_tick_sets():
+    """The same family one step in from its extreme, and equally reachable.
+
+    A court need not be slotless to receive an impossible placement — it only
+    needs a tick set DIFFERENT from another court's, because the model unions
+    the starts. Measured 6/6: `C0` offers {T, T+40}, `C1` offers {T+40}, and
+    the solver puts a fixture on **C1 at T**, a tick C1 does not offer.
+    OPTIMAL, `error` unset.
+
+    So the per-court-grid limitation is not two defects (a closable slotless
+    one and an unclosable partial one) — it is one continuous family, and the
+    boundary can close all of it by requiring every court to offer the same
+    ticks. That refuses per-court blackouts rather than mis-scheduling them;
+    see the module docstring for the alternative and its cost.
+    """
+    req = _valid_request(
+        courts=["Court 1", "Court 2"],
+        grid=scheduler_pb2.Grid(
+            slots=[
+                scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS, day_index=0),
+                scheduler_pb2.Slot(court="Court 1", start_at_ms=SLOT_MS + 3_600_000, day_index=0),
+                scheduler_pb2.Slot(court="Court 2", start_at_ms=SLOT_MS + 3_600_000, day_index=0),
+            ],
+            step_minutes=10,
+        ),
+    )
+    with pytest.raises(InvalidRequestError, match="same start times"):
+        request_to_model_input(req)
+
+
+def test_accepts_several_courts_offering_the_identical_tick_set():
+    """The guard must not have become "one court only". This is the shape every
+    board in `bench/` has, and the shape a normal request has."""
+    req = _valid_request(
+        courts=["Court 1", "Court 2"],
+        grid=scheduler_pb2.Grid(
+            slots=[
+                scheduler_pb2.Slot(court=court, start_at_ms=SLOT_MS + k * 3_600_000, day_index=0)
+                for court in ("Court 1", "Court 2")
+                for k in range(2)
+            ],
+            step_minutes=10,
+        ),
+    )
+    assert len(request_to_model_input(req).grid_slots) == 4
+
+
+def test_rejects_duplicate_entrant_ids_within_a_fixture():
+    """A repeated entrant makes the fixture silently UNPLACEABLE.
+
+    `by_entrant` puts the fixture's index in its own group twice, and the
+    per-entrant `AddNoOverlap` then requires that fixture's rest interval not
+    to overlap ITSELF — which forces `placed[i] = 0`. Measured 6/6:
+
+        entrant_ids=["e1","e1"]  OPTIMAL, placed=0, error unset
+        entrant_ids=["e1","e2"]  OPTIMAL, placed=1        <- the control
+
+    The first round's guard rejected an EMPTY entrant id and the docstring was
+    then written as though ids were checked generally. They were not, and an
+    overstated rule is worse than the narrow one it replaced because the next
+    reader stops checking.
+    """
+    req = _valid_request(
+        fixtures=[
+            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", "e1"], division_id="d1")
+        ]
+    )
+    with pytest.raises(InvalidRequestError, match="entrant_ids"):
         request_to_model_input(req)
 
 
@@ -621,13 +746,19 @@ def test_rejects_a_fixture_with_no_entrants():
         request_to_model_input(req)
 
 
-def test_rejects_an_empty_entrant_id():
-    """Every `""` entrant collides into ONE participant group, so unrelated
+@pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "whitespace"])
+def test_rejects_a_blank_entrant_id(blank):
+    """Every blank entrant collides into ONE participant group, so unrelated
     fixtures acquire a shared-player rest constraint they do not have. Wrong in
     the over-constraining direction, which is why it never surfaced as a bad
-    board — it surfaces as fixtures that mysteriously will not fit."""
+    board — it surfaces as fixtures that mysteriously will not fit.
+
+    The whitespace case is parametrized in rather than assumed: with only `""`
+    covered, reverting `.strip()` to plain falsiness survived 6/6."""
     req = _valid_request(
-        fixtures=[scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", ""], division_id="d1")]
+        fixtures=[
+            scheduler_pb2.Fixture(fixture_id="f1", entrant_ids=["e1", blank], division_id="d1")
+        ]
     )
     with pytest.raises(InvalidRequestError, match="entrant_ids"):
         request_to_model_input(req)

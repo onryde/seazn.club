@@ -102,9 +102,25 @@ than z3's, and TS re-runs its own verifier on the result:
     blocks its own court but no longer blocks a participant it shares.
   * per-court grids. `admissible_starts` is the union of every slot's start
     across all courts (exactly as the bench does, where every court offers the
-    identical tick set). If a real request ever sends courts with DIFFERENT
-    slot sets — a per-court blackout — a fixture could be placed on a court at
-    a tick that court does not offer.
+    identical tick set), so a court with a DIFFERENT slot set — a per-court
+    blackout — can receive a fixture at a tick it does not offer. Measured:
+    with C0 offering {T, T+40} and C1 only {T+40}, a fixture was placed on C1
+    at T, OPTIMAL; and with C1 declared but slotless, on C1 at any tick at all.
+
+    **This is NOT unclosable, and an earlier version of this note said it was.**
+    `cp_sat.schema._validate_court_grids` now REFUSES any request whose courts
+    do not all offer the same start times, so the wrong board is unreachable —
+    at the cost of the capability: a per-court blackout is rejected rather
+    than mis-scheduled, and the caller falls back to its own placer.
+
+    Closing it here INSTEAD, and getting the capability back, is a bounded
+    change and is the right one if callers turn out to need it: give each
+    fixture an enforced per-court start domain,
+    `AddLinearExpressionInDomain(start[i], Domain.FromValues(starts_of(c)))
+    .OnlyEnforceIf(presence_court[i][c])`, emitted only for courts whose tick
+    set is a strict subset of the union, so a homogeneous board pays nothing.
+    Not done here because it is a solver-hot-path change that no task has
+    asked for and that needs its own timing evidence.
 
 A fourth is CLOSED, and is recorded because the fix shows where the seam
 sits. Day-cap buckets used to be `start_ms // DAY_MS`, a UTC day, so any org
@@ -439,6 +455,22 @@ def build_model(
     for i in range(n):
         model.Add(mk_lo <= start[i]).OnlyEnforceIf(placed[i])
         model.Add(mk_hi >= start[i] + dur_ms).OnlyEnforceIf(placed[i])
+    # A duration cannot be negative — and without this it can be, spectacularly.
+    # Both squeeze constraints above are `OnlyEnforceIf(placed[i])`, so on a
+    # board where NOTHING is placed `mk_lo` and `mk_hi` float freely over
+    # [0, max_end] and T1, which MINIMISES the difference, drives `mk_hi` to 0
+    # and `mk_lo` to `max_end`. The chain proves that optimal and publishes it:
+    # measured, one fixture made unplaceable by a self-dependency,
+    # `objective_values=[('placed', 0), ('makespan', -1767258600000), ...]` —
+    # a negative epoch-shaped number presented to the caller as a proved
+    # optimum, on a response with `error` unset.
+    #
+    # Stated here rather than clamped at the wire so the bench, the tier chain
+    # and the response all get the same answer, and so the freeze
+    # `Add(makespan <= achieved)` that T2 and T3 inherit is a real bound. It
+    # costs nothing on a non-empty board: `mk_lo <= min start` and
+    # `mk_hi >= max start + dur_ms` already force `mk_hi > mk_lo` there.
+    model.Add(mk_hi >= mk_lo)
     makespan = mk_hi - mk_lo
 
     # T3: court imbalance — busiest configured-or-used court minus the

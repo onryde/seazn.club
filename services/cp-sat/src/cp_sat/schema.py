@@ -62,20 +62,42 @@ NOT changed — `model.py`'s `id_to_idx.get(...) or continue` and its
 boards, and moving the check there would break that. The wire is where the
 mistake is made, so the wire is where it is caught.
 
-The rule the pass enforces, stated once: **an id names exactly one thing, and
-that thing is declared by the same request.** Two members of that family were
-found only after the first version of this pass shipped, both by review, and
-both because "an id" was read as "an id in `fixtures`":
+The rule the pass enforces, stated once: **an id names exactly one thing, that
+thing is declared by the same request, and it is declared COMPLETELY.** Four
+members of that family were found only after the first version of this pass
+shipped, all by review, in two rounds:
 
-  * `courts` accepted `""`. An empty court is not an omitted court, it is a
-    PLACEABLE phantom one — the model gives it a column and puts a match on
-    it. Measured: two fixtures over one grid point place 2 with an empty
-    string in `courts` and 1 without, OPTIMAL either way.
   * an `existing` row could reuse a movable fixture's id, which does not pin
     that fixture — the row lays a blocking interval and the fixture is placed
     a SECOND time, elsewhere.
+  * `courts` accepted `""`, and then `" "`. Rejected because a court nobody
+    can name cannot be rendered and an assignment on it maps back to nothing.
+    **Read the next bullet before assuming this is what stops phantom
+    placements — it is not.**
+  * a court can be DECLARED WITHOUT SLOTS, and is then placed on. This is the
+    real mechanism, and no malformed name is needed for it: `courts` is what
+    the model builds per-court interval lists from, while `admissible_starts`
+    is the union of every slot's start across ALL courts. Round 2 guarded the
+    member it had measured benign (duplicate courts) and left this one, which
+    it had not measured at all, open.
+  * and the same defect one step in from its extreme: courts offering
+    DIFFERENT tick sets. A fixture lands on a court at a tick that court does
+    not offer. Owned by `_validate_court_grids`, which requires every court to
+    offer identical starts — that closes the whole family, slotless included.
 
-If a third turns up, look for an id this docstring does not mention.
+The lesson each time was the same, and it is worth more than the four fixes:
+**a guard's docstring must name the mechanism it actually blocks.** Twice now
+a correct-sounding rule has been written over a narrower guard, and the next
+reader stopped checking. When editing this pass, enumerate every id-shaped
+field in `SolveBuildRequest` — `courts` and `existing[].fixture_id` are
+id-shaped and live outside `fixtures` — and ask of each not only "does it
+resolve" but "is what it names fully specified".
+
+Note also what is deliberately NOT rejected: a self-dependency
+(`before == after`). It makes that fixture unplaceable, which shows up as a
+lower `placed` count — visible, not silent. Its one invisible consequence, a
+negative `makespan` on a board where nothing is placed, is fixed in
+`cp_sat.model` at the term rather than here.
 
 Two fields carry proto3 `optional` and are checked for PRESENCE rather than
 for range, because 0 is a legitimate answer for both and no value guard can
@@ -166,11 +188,24 @@ def _validated_fixtures(proto_fixtures) -> list[tuple[str, list[str], str]]:
                 "every T2 idle-gap term skip it. Measured: two fixtures sharing one player placed "
                 "CONCURRENTLY, reported OPTIMAL."
             )
-        if any(not entrant for entrant in f.entrant_ids):
+        if any(not entrant.strip() for entrant in f.entrant_ids):
             raise InvalidRequestError(
-                f"fixtures[{i}].entrant_ids contains an empty id (fixture {f.fixture_id!r}). Every "
-                "empty entrant collides into ONE participant group, so unrelated fixtures acquire a "
+                f"fixtures[{i}].entrant_ids contains a blank id (fixture {f.fixture_id!r}). Every "
+                "blank entrant collides into ONE participant group, so unrelated fixtures acquire a "
                 "shared-player rest constraint they do not have."
+            )
+        if len(set(f.entrant_ids)) != len(f.entrant_ids):
+            # Not cosmetic: a repeated entrant puts this fixture's index in its
+            # own `by_entrant` group TWICE, and the per-entrant AddNoOverlap
+            # then requires its rest interval not to overlap ITSELF — which is
+            # unsatisfiable, so `placed[i]` is forced to 0. Measured 6/6:
+            # ["e1","e1"] gives OPTIMAL / placed=0 / error unset where
+            # ["e1","e2"] places the fixture.
+            raise InvalidRequestError(
+                f"fixtures[{i}].entrant_ids repeats an entrant (fixture {f.fixture_id!r}, got "
+                f"{list(f.entrant_ids)!r}). The duplicate makes the fixture overlap itself in its "
+                "own participant-rest group, so it becomes silently UNPLACEABLE and the board comes "
+                "back OPTIMAL without it."
             )
         if not f.division_id:
             raise InvalidRequestError(
@@ -214,24 +249,28 @@ def _validated_grid_slots(slots, known_courts: set[str]) -> list[tuple[str, int,
 def _validated_courts(proto_courts) -> list[str]:
     """The courts, which every other id in the request resolves against.
 
-    An empty court name is not an omitted court, it is a PLACEABLE phantom
-    one: `courts` is the set the model builds its per-court interval lists
-    from, so `""` gets a real column that no grid slot offers and no caller
-    can render. Measured, 5/5, two fixtures over ONE grid point on `C0`:
-    `["C0", ""]` places 2 (one of them on `''`, at the same instant as the
-    real match) where `["C0"]` places 1. Same argument as the `fixture_id`,
-    `division_id` and `entrant_ids` guards — the caller cannot map the answer
-    back to anything.
+    NAMES only: blank and duplicate. Same argument as the `fixture_id`,
+    `division_id` and `entrant_ids` guards — an assignment on a court nobody
+    can name maps back to nothing, and a court named twice names one place.
+
+    **This is not the guard that stops phantom placements.** The first version
+    of this function claimed it was, on the strength of a probe that used
+    `courts=["C0", ""]`; the empty string turned out to be incidental and
+    slotlessness was the real mechanism. `_validate_court_grids` owns that,
+    and blank-vs-slotless are now two guards with two reasons because they
+    are two defects. Do not merge them back.
     """
     courts = list(proto_courts)
     seen: set[str] = set()
     for i, court in enumerate(courts):
-        if not court:
+        # `.strip()`, not falsiness: `" "` is the same unnameable court as `""`
+        # and slipped the first version of this guard. Note this is about the
+        # name being unusable to the CALLER — the reason a blank court gets
+        # PLACED on is slotlessness, which `_validate_court_grids` owns.
+        if not court.strip():
             raise InvalidRequestError(
-                f"courts[{i}] must not be empty. An empty court name is not an omitted court — the "
-                "model gives it a real column, places matches on it, and proves that OPTIMAL "
-                "(measured: two fixtures and one grid point on 'C0' place 2 with an empty court in "
-                "the list and 1 without)."
+                f"courts[{i}] must not be blank, got {court!r}. A court nobody can name cannot be "
+                "rendered, and an assignment on it cannot be mapped back to anything."
             )
         if court in seen:
             raise InvalidRequestError(
@@ -239,6 +278,68 @@ def _validated_courts(proto_courts) -> list[str]:
             )
         seen.add(court)
     return courts
+
+
+def _validate_court_grids(courts: list[str], grid_slots: list[tuple[str, int, int]]) -> None:
+    """Every court must offer the SAME start times, and at least one.
+
+    This is the guard that actually stops a fixture being placed on a court at
+    a time that court does not offer. `courts` is what the model builds its
+    per-court interval lists from, while `admissible_starts` is the union of
+    every slot's start across ALL courts — so a court inherits the whole
+    lattice no matter what the grid says about it.
+
+    Measured 6/6, two fixtures, and note that NEITHER case needs a malformed
+    court name:
+
+        courts ["C0","C1"], slots {C0@T}          -> 2 placed, one on C1
+        courts ["C0"],      slots {C0@T}          -> 1 placed   (the control)
+        C0 {T, T+40}, C1 {T+40}                   -> a fixture on **C1 at T**
+
+    The last one is why this is stated as "identical tick sets" rather than
+    "no slotless courts". A slotless court is only the extreme point of one
+    continuous family; the interior is just as reachable and just as silent,
+    and it comes from the same real feature (`Blackout.court?` lets a caller
+    black out part or all of one court's day).
+
+    So NOTHING in this family is unclosable at the boundary, which is the
+    opposite of what `model.py` said before this change. The cost is that
+    per-court blackouts are now REFUSED rather than mis-scheduled: a caller
+    that needs them gets `INVALID_REQUEST` and falls back to its own placer.
+    That is a deliberate trade of capability for correctness, and it is one
+    line to revert. Supporting them properly is a MODEL change, not a boundary
+    one — an enforced per-court start domain,
+    `AddLinearExpressionInDomain(start[i], Domain.FromValues(starts_of(c)))
+    .OnlyEnforceIf(presence_court[i][c])`, emitted only for courts whose tick
+    set is a strict subset of the union so homogeneous boards pay nothing.
+    """
+    starts_by_court: dict[str, set[int]] = {court: set() for court in courts}
+    for court, start_ms, _day in grid_slots:
+        starts_by_court[court].add(start_ms)
+
+    slotless = sorted(court for court, starts in starts_by_court.items() if not starts)
+    if slotless:
+        raise InvalidRequestError(
+            f"courts {slotless} are declared but no grid slot offers them. A court with no slots is "
+            "not an unused court — the model gives it a column and the solver places matches on it "
+            "at ticks taken from the OTHER courts, then proves that OPTIMAL (measured: two fixtures "
+            "and one slot on 'C0' place 2 with a slotless 'C1' declared, 1 without). Either give it "
+            "slots or leave it out of `courts`."
+        )
+
+    distinct = {frozenset(starts) for starts in starts_by_court.values()}
+    if len(distinct) > 1:
+        offenders = sorted(
+            court for court, starts in starts_by_court.items()
+            if frozenset(starts) != frozenset(starts_by_court[courts[0]])
+        )
+        raise InvalidRequestError(
+            f"every court must offer the same start times; {offenders} differ from {courts[0]!r}. "
+            "The model unions the starts across courts, so a per-court grid is flattened and a "
+            "fixture can be placed on a court at a tick that court does not offer (measured: with "
+            "C0 offering {T, T+40} and C1 only {T+40}, a fixture was placed on C1 at T, OPTIMAL). "
+            "A per-court blackout has to be refused here rather than silently mis-scheduled."
+        )
 
 
 def _validated_existing(
@@ -465,6 +566,9 @@ def request_to_model_input(req) -> ModelInput:
     declared_divisions = {division for _fid, _entrants, division in fixtures}
 
     grid_slots = _validated_grid_slots(req.grid.slots, known_courts)
+    # After the slots, because it reads both sides: which courts are declared
+    # and which the grid actually offers.
+    _validate_court_grids(courts, grid_slots)
     existing = _validated_existing(req.existing, known_courts, fixture_ids)
     dependencies = _validated_dependencies(req.dependencies, fixture_ids)
     constraints = _validated_constraints(req.constraints, declared_divisions)

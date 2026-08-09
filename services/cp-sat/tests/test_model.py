@@ -428,6 +428,77 @@ def test_participant_rest_is_binding():
         assert later - earlier >= need, f"rest violated for {shared}: {earlier} vs {later}, need {need}ms"
 
 
+# --- an unplaceable board must not report a NEGATIVE duration ---------------
+
+
+def test_an_empty_board_reports_a_non_negative_makespan():
+    """`mk_hi - mk_lo` is unpinned when nothing is placed, and T1 MINIMISES it.
+
+    Both squeeze constraints are `OnlyEnforceIf(placed[i])`, so with an empty
+    board `mk_lo` and `mk_hi` float freely over `[0, max_end]` and minimising
+    their difference drives `mk_hi` to 0 and `mk_lo` to `max_end`. The chain
+    then proves that optimal and publishes it. Measured 6/6, one fixture made
+    unplaceable by a self-dependency:
+
+        OPTIMAL, placed=0, error unset,
+        objective_values=[('placed', 0), ('makespan', -1767258600000), ...]
+
+    A negative epoch-shaped number on the wire, presented as a proved optimum.
+    `build.ts` compares tier values against its own board metrics, and no
+    caller has any reason to defend against a negative duration.
+
+    Fixed in the model rather than at the ACL: a duration cannot be negative is
+    an invariant of the term, so every consumer — the bench, the tier chain,
+    the wire — gets the same answer. An empty board has a makespan of zero.
+
+    Self-dependency is DELIBERATELY still accepted (an unplaceable fixture
+    shows up as a lower `placed`, which is visible); it is only the negative
+    number that had to go.
+    """
+    courts = ["C1"]
+    grid_slots = [("C1", _STRADDLE_A, 0), ("C1", _STRADDLE_A + 40 * MIN_MS, 0)]
+    fixtures = [("s0", ["sa", "sb"], "d1")]
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 10,
+        "rest_by_division": {"d1": 0},
+        "day_cap_by_division": {},
+    }
+    model = build_model(fixtures, courts, grid_slots, 40, constraints, [], [("s0", "s0")])
+    outcome = solve(model, wall_seconds=5.0)
+
+    assert outcome.assignments == [], "the self-dependency should make s0 unplaceable"
+    reported = dict(outcome.objective_values)
+    assert reported["placed"] == 0
+    assert reported["makespan"] >= 0, (
+        f"a negative duration reached the objective values: {outcome.objective_values}"
+    )
+    assert reported["makespan"] == 0, (
+        f"an empty board has no makespan at all, got {reported['makespan']}"
+    )
+
+
+def test_a_placed_board_still_reports_its_real_makespan():
+    """The clamp must not have flattened the term. Two fixtures forced onto two
+    different ticks by a single court give a makespan of exactly one tick gap
+    plus one match."""
+    courts = ["C1"]
+    step = 40 * MIN_MS
+    grid_slots = [("C1", _STRADDLE_A + k * step, 0) for k in range(2)]
+    fixtures = [("s0", ["sa", "sb"], "d1"), ("s1", ["sc", "sd"], "d1")]
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 10,
+        "rest_by_division": {"d1": 0},
+        "day_cap_by_division": {},
+    }
+    model = build_model(fixtures, courts, grid_slots, 40, constraints, [], [])
+    outcome = solve(model, wall_seconds=5.0)
+
+    assert len(outcome.assignments) == 2
+    assert dict(outcome.objective_values)["makespan"] == step + 30 * MIN_MS
+
+
 # --- the day cap binds on the CALLER's day, not on a UTC boundary -----------
 
 #: A UTC-midnight-straddling session, in `build_model`'s parameter shape.
