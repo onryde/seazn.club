@@ -63,8 +63,32 @@ describe("MovePanel", () => {
     expect(html).not.toContain('value="09:15"');
   });
 
-  it("falls back to the quarter-hour list when no board config is passed", () => {
-    const html = renderToStaticMarkup(<MovePanel {...baseProps} />);
+  // THE #448 REGRESSION. The panel used to seed its value with `toLocalInput`,
+  // which is deliberately the BROWSER's zone, while its option list is built
+  // from `startAt` on `orgTz`. Two clocks in one control: the organiser saw the
+  // board's grid plus their own local time as a stray extra option, and pressing
+  // Move stored an instant the offset away from the slot they picked.
+  //
+  // Tokyo (+9) is chosen so this cannot pass by coincidence: under the old
+  // browser-zone seed the same fixture renders 09:00 on a UTC runner (CI) and
+  // 10:00 on a BST one (this machine) — neither is 18:00.
+  it("seeds the value on the VENUE clock, not the browser's", () => {
+    const html = renderToStaticMarkup(
+      <MovePanel
+        {...baseProps}
+        fixture={{ ...baseProps.fixture, scheduled_at: "2026-08-16T09:00:00.000Z" }}
+        boardConfig={{ config: baseConfig, orgTz: "Asia/Tokyo" }}
+      />,
+    );
+    expect(html).toContain('value="2026-08-16"');
+    expect(html).toMatch(/<option value="18:00"[^>]*selected[^>]*>18:00<\/option>/);
+  });
+
+  it("falls back to the quarter-hour list when the config carries no startAt", () => {
+    const noStart: BoardConfig = { ...baseConfig, startAt: null };
+    const html = renderToStaticMarkup(
+      <MovePanel {...baseProps} boardConfig={{ config: noStart, orgTz: "UTC" }} />,
+    );
     for (const t of quarterHours()) {
       expect(html).toContain(`value="${t}"`);
     }

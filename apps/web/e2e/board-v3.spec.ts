@@ -368,10 +368,16 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     };
 
     // A's move must COMMIT (2xx) before B writes, so B is provably stale.
-    // datetime-local is the RUNNER's timezone. 16th 18:00 was free on a BST
-    // laptop (17:00Z) but collided with the seeded 18:00Z/P0A fixture on the
-    // UTC runner — the chronic "CI-only" red was a court clash, not a race.
-    // The 18th sits outside the seeded 15th–17th grid in any timezone.
+    //
+    // The time typed here is the VENUE's, not the runner's. That changed with
+    // the quarter-hour-time-select work: MovePanel now seeds and emits on
+    // `settings.orgTz` (#448) instead of the browser zone, so a BST laptop and
+    // a UTC runner resolve this identically. The history is worth keeping,
+    // because it is what made the date safe rather than the zone rule: 16th
+    // 18:00 was free on a BST laptop (17:00Z) but collided with the seeded
+    // 18:00Z/P0A fixture on the UTC runner — the chronic "CI-only" red was a
+    // court clash, not a race. The 18th sits outside the seeded 15th-17th grid
+    // in any timezone, so it survives both the old behaviour and the new.
     await moveAndAwait(page, "2026-09-18T09:00", "committed");
     // A's own board refreshes without complaint.
     await expect(page.getByText("Schedule changed by someone else")).toHaveCount(0);

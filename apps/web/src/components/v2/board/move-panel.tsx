@@ -4,8 +4,8 @@
 // The keyboard-accessible alternative to dragging since PROMPT-17; in v3 it
 // rides the same pick state as tap-to-assign (v3/11 gap 11).
 import { useMemo, useState } from "react";
-import { toLocalInput, windowsToDailyHours, type FeedLabelPair } from "@/lib/schedule-board";
-import { zonedTimeInput } from "@/lib/zoned-datetime";
+import { windowsToDailyHours, type FeedLabelPair } from "@/lib/schedule-board";
+import { isoFromZonedDateTime, zonedDateTimeInput, zonedTimeInput } from "@/lib/zoned-datetime";
 import { cardTitle, type BoardConfig, type BoardFixture } from "./types";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { DateTimeField } from "../shared/datetime-field";
@@ -17,7 +17,7 @@ export function MovePanel({
   venueCap = "Court",
   entrantNames,
   feedLabels,
-  boardConfig = null,
+  boardConfig,
   onMove,
   onClose,
 }: {
@@ -38,16 +38,34 @@ export function MovePanel({
    * wall clock via `zonedTimeInput(…, orgTz)` before it becomes
    * `boardSlotTimes`' anchor — `orgTz` (`settings.orgTz`) is the governing
    * clock, never `settings.tz` (display-only, #448) and never the browser
-   * zone. `null`, or a config that yields fewer than 2 slots, falls back to
-   * the shared quarter-hour list — see `boardSlotOptions` below.
+   * zone. A config that yields fewer than 2 slots falls back to the shared
+   * quarter-hour list — see `boardSlotOptions` below.
+   *
+   * REQUIRED, deliberately. It shipped optional-with-a-null-default and the
+   * board — its only caller — never passed it, so the board-slot list was
+   * unreachable in production while every test that exercised it passed one
+   * in directly. `orgTz` is also what the value itself is seeded and emitted
+   * on now, so an absent config would mean a panel with no clock at all
+   * rather than a panel with a coarser list.
    */
-  boardConfig?: { config: BoardConfig; orgTz: string } | null;
+  boardConfig: { config: BoardConfig; orgTz: string };
   onMove: (atIso: string | null, court: string | null) => void;
   onClose: () => void;
 }) {
   const msg = useMsg();
+  // THE WHOLE PANEL SPEAKS ONE CLOCK, and it is the venue's (#448).
+  //
+  // This used to seed from `toLocalInput`, which is deliberately the BROWSER's
+  // zone. That was survivable while the field was a bare datetime-local — the
+  // organiser typed a wall clock and it round-tripped through the same zone it
+  // came from. It stopped being survivable once the time half became a list
+  // generated from `startAt` on `orgTz`: the value and the options would be
+  // two different clocks in one control, so an organiser working from a
+  // different zone than the venue saw the board's grid plus their own time as
+  // a stray extra option (injected by `timeOptions`' value rule, so no crash —
+  // just a control quietly describing two timetables at once).
   const [when, setWhen] = useState(
-    fixture.scheduled_at ? toLocalInput(fixture.scheduled_at) : "",
+    fixture.scheduled_at ? zonedDateTimeInput(fixture.scheduled_at, boardConfig.orgTz) : "",
   );
   const [court, setCourt] = useState(fixture.court_label ?? courts[0] ?? "");
 
@@ -58,8 +76,6 @@ export function MovePanel({
   // 1-entry select).
   const boardSlotOptions = useMemo((): string[] | undefined => {
     if (
-      boardConfig === null ||
-      boardConfig === undefined ||
       boardConfig.config.startAt === null ||
       boardConfig.config.startAt === undefined ||
       boardConfig.config.startAt === ""
@@ -110,7 +126,13 @@ export function MovePanel({
       </label>
       <button
         type="button"
-        onClick={() => onMove(when ? new Date(when).toISOString() : null, court || null)}
+        // Resolved on the venue clock, matching the seed and the option list
+        // above. `new Date(when)` here would read the wall clock the organiser
+        // just picked off the BOARD'S grid as the BROWSER's, storing an instant
+        // the offset away from the slot they chose.
+        onClick={() =>
+          onMove(when ? isoFromZonedDateTime(when, boardConfig.orgTz) : null, court || null)
+        }
         className="btn btn-primary px-3 py-1.5 text-xs"
       >
         {msg("board.move")}
