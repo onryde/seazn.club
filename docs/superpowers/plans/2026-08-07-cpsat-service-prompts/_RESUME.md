@@ -33,40 +33,40 @@ cleaner and cheaper.
 
 ## State as of this file
 
-- Branch `worktree-cpsat-service-build`, HEAD `0835792a`, **0 behind
-  `origin/main`**, tree clean, 78 commits ahead. Never pushed — no PR, no
-  force-push concern.
+- Branch `worktree-cpsat-service-build`, **0 behind `origin/main`**, tree
+  clean. Never pushed — no PR, no force-push concern. Take the current HEAD
+  from live `git log`; do not trust a sha written here.
 - Rebased onto `origin/main` this session: 73 commits, zero conflicts.
   `git merge-tree --write-tree origin/main HEAD` predicted it correctly
   beforehand; use that to preview next time.
 - **Every sha recorded in the ledger before the rebase is historical.**
-  Take BASE from live `git log`.
-- Tasks 01-09 and 5b/5c/06b complete. Task 07 complete pending review.
+- Tasks 01-09, 5b, 5c, 06b and **07** all complete and reviewed. Nothing in
+  flight; no agent running.
 
-## IN FLIGHT AND LOST — re-dispatch this first
+## Task 07 is CLOSED — nothing in flight
 
-A task reviewer for **Task 07** was dispatched and did not finish before the
-session ended. Its result is gone. **Task 07 is NOT closed**: it has an
-implementer report and a resolved fix round, but no spec verdict and no
-quality verdict, and the SDD loop requires both.
+The reviewer landed before the session ended. **Spec PASS, quality approved
+after 2 fix rounds**, 0 Critical / 0 Important open, 0 deferred Minors (the
+one Minor was fixed inline). Commits `1b739d02`, `23fb5756`, `2b44d480`,
+`80c181fd`. Review in `.superpowers/sdd/.../task-07-review.md`.
 
-Re-dispatch it. Everything it needs already exists on disk:
+The review answered the question that mattered: Board 1's win depends only
+on fields that actually reach the solver. `SolveBuildInput.constraints` is
+exactly 4 fields (`cpsat-client.ts:71-76`); `dependencies` reaches cp-sat
+regardless of `direct` (`build.ts:1402-1404` drops it in the `.map()`);
+`model.py:365`, `:429-445` enforce every pair unconditionally.
 
-- Brief: `.superpowers/sdd/.../task-07-brief.md`
-- Report: `.superpowers/sdd/.../task-07-report.md`
-- Review package: `.superpowers/sdd/.../review-task07-bf2f9682..b069d282.diff`
-  (372 lines, BASE `bf2f9682`, built with **path filters** because three of
-  the coordinator's own commits interleave with the task's — `c74ac3ca`,
-  `dba3cd8f`, `b069d282`. Verified disjoint. The task's own commits are
-  three: `1b739d02`, `23fb5756`, `2b44d480`.)
+It also found a second no-teeth board. `scaleBoard`'s original assertions
+(`length === 32`, `conflicts === 0`) could not fail: entrants never repeat,
+so greedy alone places all 32 unaided, and any RPC failure fell back to
+greedy with both assertions still green — while the docstring claimed it
+proved the round-trip "without erroring or timing out". Seventh instance of
+this programme's signature defect, second in that one file. Fixed with
+`expect(result.status).not.toBe("solver_unavailable")`.
 
-The one question that review must answer: **does every constraint the
-current Board 1's win depends on actually reach the solver on the wire?**
-Checked against `cpsat-client.ts`'s `SolveBuildInput`/`toRequest` and
-`services/cp-sat/src/cp_sat/model.py` — NOT against the test's own comments.
-Board 1 failed exactly that check twice already. Do not ask it to re-run the
-suite: the implementer ran it and the coordinator verified independently
-(3 consecutive live runs at 3/3, default-skip at 3 pending / 0 passed).
+**Proven by negative control**, which is the evidence to trust: with
+`CPSAT_SERVICE_SECRET=WRONG-SECRET` against a live service, Board 2 now
+FAILS. Before `80c181fd` that same broken run passed green.
 
 ---
 
@@ -77,7 +77,8 @@ suite: the implementer ran it and the coordinator verified independently
 | Scale to zero | `auto_stop_machines = "suspend"`, `min_machines_running = 0` on the solver. Suspend not stop: resumes from a memory snapshot instead of a 1-3s cold start against an 8-10s wall. Fly does not document suspend billing (pricing covers `stopped` only, rootfs $0.15/GB/30d); cents either way, so it is a latency choice |
 | Host | `cp-sat.flycast:50051`, NOT `.internal`. Autostart is a Fly Proxy feature and `.internal` bypasses the proxy, so suspended + `.internal` = unreachable = **silent greedy boards**. Needs a one-time `fly ips allocate-v6 --private` — DEPLOY.md step 2 |
 | Staging web app | `fly.stg.toml` also moved `"stop"` -> `"suspend"`. No flycast work owed there: it is reached over the public internet through Fly Proxy already |
-| Production web app | **NOT changed.** Deliberately left alone — suspending it puts a resume in front of a real user's page load. Needs an explicit decision |
+| Production web app | **Also `"suspend"`** (owner decision, `68280e42`). Only machines above `min_machines_running = 2` are affected; the floor never suspends. One real difference from `stop`: a suspended peer cannot answer `broadcastRevalidate`'s 6PN POST and resumes with its in-memory ISR cache intact, including entries invalidated while it slept. Acceptable because that is the failure mode `peer-revalidate.ts` already declares and bounds (fail-open, converges within the 30s `REVALIDATE_FAST` window). Revisit if that window tightens |
+| 10 concurrent orgs | **A real target, not a worst case** (owner). Sequences the concurrency work ahead of the contract revision |
 | Multi-board | Boards share a page but solve **one at a time, per button click** |
 | `CPSAT_MAX_WORKERS` | Stays **1**. CP-SAT's parallelism is INTRA-solve (`NUM_SEARCH_WORKERS = 8`, `model.py:214`), so one solve already uses the whole box. Raising it trades proof depth for throughput nobody needs |
 | Wake-on-load | An authenticated, rate-limited API route that pings gRPC `Health/Check`. The browser cannot reach 6PN, so it must be a server route. It starts a machine, so an open endpoint is an abuse lever |
@@ -177,13 +178,16 @@ invisible downgrade.
 
 ## Open work, in dependency order
 
-1. **Task 07 review** — re-dispatch, above. Blocks closing Task 07.
+1. **Solver concurrency + status honesty** — Q1/Q2/Q3 above. One cohesive
+   task: `build.ts` + `cpsat-client.ts`, one test story. **Owner has
+   approved the 10-concurrent-org target**, which moves this ahead of the
+   contract revision. Order within it: channel-per-solve, then the
+   `solver_busy` split (+ 4 locales + `openapi:gen`), then `hard_limit = 1`
+   + `fly scale count`.
 2. **Task 11 (E2E + smoke)** — no brief written. E2E and smoke are deferred
    in full to it for every task 01-07; **no task has paid either**. Until it
    lands the cutover has zero end-to-end coverage.
-3. **Solver concurrency + status honesty** — Q1/Q2/Q3 above. One cohesive
-   task: `build.ts` + `cpsat-client.ts`, one test story.
-4. **#21 unified contract revision** covering C1, C2, C4, C5.
+3. **#21 unified contract revision** covering C1, C2, C4, C5.
 5. **C2, C1, C4, C5** — blocked on #21.
 6. **#20 rename `cp-sat` -> `placement`** across seven namespaces (1013 refs
    / 66 files, measured). Cheap now, expensive after deploy — the engine
@@ -229,18 +233,16 @@ Paste this into a fresh `claude` started in the worktree:
 > `.superpowers/sdd/2026-08-07-cpsat-service-build-cutover/progress.md` if it
 > still exists.
 >
-> First action: re-dispatch the Task 07 task reviewer — it was in flight when
-> the last session ended and its result was lost. The brief, report and
-> review package are all on disk; `_RESUME.md` names them and states the one
-> question the review must answer. Task 07 is not closed until it returns
-> both a spec verdict and a quality verdict.
+> Nothing is in flight and Task 07 is closed (spec PASS, quality approved
+> after 2 fix rounds, 0 deferred Minors).
 >
-> After that, work the open list in `_RESUME.md` in dependency order. The
-> next substantive task is the solver concurrency + status honesty work
+> Work the open list in `_RESUME.md` in dependency order. The first item is
+> the solver concurrency + status honesty work
 > (channel-per-solve, then the `solver_busy` split with its i18n and
 > `openapi:gen` regen, then `hard_limit` + `fly scale count`) — the full
 > reasoning is in `_RESUME.md`'s Q1/Q2/Q3 section and the decisions are
-> already settled, so do not re-litigate them.
+> already settled, so do not re-litigate them. Ten concurrent orgs is a real
+> target, not a worst case.
 >
 > Standing rules: follow the SDD loop (fresh implementer per task, then a
 > task reviewer returning BOTH verdicts, then the ledger entry). Never
