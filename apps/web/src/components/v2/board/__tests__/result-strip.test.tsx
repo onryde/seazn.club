@@ -95,6 +95,9 @@ describe("ScheduleResultStrip — the numbers", () => {
     ["greedy", "Quick pass"],
     ["z3", "Solver"],
     ["z3+lns", "Solver, then refined"],
+    // Task 06b: same neutral copy as `z3` — the organiser is never told
+    // which solver ran, only whether one did.
+    ["cp-sat", "Solver"],
   ] as const)("names the '%s' engine exactly '%s'", (engine, label) => {
     const html = render(metrics(), solver({ engine, elapsed_ms: 3200, moved: 6 }));
     expect(provenance(html)).toBe(`${label} · 3.2s · 6 matches moved`);
@@ -228,6 +231,20 @@ describe("ScheduleResultStrip — the anytime contract", () => {
 
   it("z3_unavailable says the board is valid, and does NOT promise a retry will help", () => {
     const html = render(metrics(), solver({ status: "z3_unavailable", engine: "greedy" }));
+    expect(html).toContain("the optimiser was not available");
+    expect(html).toContain("The board is valid, just not optimised.");
+    expect(html).not.toContain("Try again");
+    expect(html).toContain('data-tone="plain"');
+  });
+
+  // Task 06b: the cp-sat era's `z3_unavailable`. Same copy, same tone, by
+  // design (the brief's semantic argument: "does not promise a retry will
+  // help" is equally true for a CP-SAT outage) — this is what proves the
+  // two statuses actually share a rendering path rather than one silently
+  // falling through a switch with no case (which throws, per the
+  // `not_searched` test below).
+  it("solver_unavailable says the board is valid, and does NOT promise a retry will help", () => {
+    const html = render(metrics(), solver({ status: "solver_unavailable", engine: "greedy" }));
     expect(html).toContain("the optimiser was not available");
     expect(html).toContain("The board is valid, just not optimised.");
     expect(html).not.toContain("Try again");

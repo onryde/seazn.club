@@ -387,8 +387,15 @@ describe("buildSchedule — polish", () => {
     });
     // The trigger the brief's version would have fired on.
     expect(out.moved).toBe(0);
-    // ...and the answer, which is that nothing was established.
-    expect(out.status).toBe("ok");
+    // ...and the answer, which is that nothing was established. Task 06b
+    // gave that answer its own name: `not_searched`, not the `"ok"` this
+    // case asserted before that task's mapping existed. `"ok"` — "a board
+    // was produced and the gate accepted it" — is still not a PROOF, so it
+    // was never `already_optimal` either, but `not_searched` is the more
+    // honest of the two non-`already_optimal` readings and is what
+    // `outcome.status === "UNKNOWN"` maps to now.
+    expect(out.status).toBe("not_searched");
+    expect(out.status).not.toBe("already_optimal");
     expect(out.budgetExpired).toBe(true);
     // EXACT, not `< TIER_COUNT`. Two mechanisms bound this run — the per-check
     // `rlimit` arming and the accounting gate — and an inequality cannot say

@@ -996,7 +996,12 @@ export type ScheduleMetrics = z.infer<typeof ScheduleMetrics>;
 /** How the proposal was produced — telemetry, not policy. `status` tracks the
  *  engine's BuildStatus union one-for-one. */
 export const ScheduleSolverInfo = z.object({
-  engine: z.enum(["greedy", "z3", "z3+lns"]),
+  /** `"cp-sat"` (Task 06b) is listed for the same reason `"not_searched"` is
+   *  documented below: `schedule.ts` assigns the engine's `BuildResult
+   *  ["engine"]` into this field one-for-one, so a member missing here is a
+   *  board the API has no shape for — and this one is not hypothetical: TS
+   *  already refuses `schedule.ts`'s `engine: out.engine` without it. */
+  engine: z.enum(["greedy", "z3", "z3+lns", "cp-sat"]),
   /** Which solver the request asked for, echoed back.
    *
    *  NOT redundant with `engine`, which names what actually produced the board:
@@ -1038,6 +1043,20 @@ export const ScheduleSolverInfo = z.object({
      * from this enum is a board the API has no shape for.
      */
     "not_searched",
+    /**
+     * The cp-sat era's `z3_unavailable` (Task 06b): the service call
+     * resolved but not into a trustworthy board — a transport fault, an
+     * unmapped/unreadable status, or the RPC rejecting outright. Renders
+     * through the SAME `board.result.unavailable` copy `z3_unavailable`
+     * always has, so this is not a new string — but it is a new member,
+     * for the same reason `not_searched` above is listed rather than left
+     * off: `schedule.ts` assigns `BuildStatus` into this object one-for-one.
+     *
+     * Deliberately NOT what a `SOLVER_BUSY` refusal maps to — that stays
+     * the existing `"solver_busy"` a few lines up, because a retry helps
+     * there and this copy does not promise one will.
+     */
+    "solver_unavailable",
   ]),
   tiers_completed: z.number().int(),
   /** How many improvement targets the ladder HAS — the denominator

@@ -3242,6 +3242,7 @@
   "board.result.engine.greedy": "Pasada rápida",
   "board.result.engine.z3": "Solucionador",
   "board.result.engine.z3lns": "Solucionador y refinado",
+  "board.result.engine.cpsat": "Solucionador",
   "board.result.moved.one": "1 partido movido",
   "board.result.moved.other": "{count} partidos movidos",
   "board.result.movedNone": "nada movido",

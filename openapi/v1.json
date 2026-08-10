@@ -22631,7 +22631,8 @@
                               "enum": [
                                 "greedy",
                                 "z3",
-                                "z3+lns"
+                                "z3+lns",
+                                "cp-sat"
                               ]
                             },
                             "mode": {
@@ -22651,7 +22652,8 @@
                                 "verifier_rejected",
                                 "z3_unavailable",
                                 "solver_busy",
-                                "not_searched"
+                                "not_searched",
+                                "solver_unavailable"
                               ]
                             },
                             "tiers_completed": {

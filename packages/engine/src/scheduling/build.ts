@@ -319,8 +319,23 @@ export type BuildStatus =
    *  INTRODUCED a blocking conflict. The greedy seed is returned and the
    *  disagreement is logged. */
   | "verifier_rejected"
-  /** The WASM would not boot. A fallback, never an exception. */
+  /** The WASM would not boot. A fallback, never an exception. z3-era only —
+   *  additive, not renamed, since Prompt 10 (not this task) removes z3. */
   | "z3_unavailable"
+  /** The cp-sat era's `z3_unavailable`: the service call resolved but not
+   *  into a trustworthy board — a transport fault, an unmapped/unreadable
+   *  status, or the RPC promise rejecting outright (deadline, unavailable,
+   *  a malformed request) all land here. A DIFFERENT identifier rather than
+   *  reusing `z3_unavailable`, even though the two mean the same thing to an
+   *  organiser and share one i18n key (`board.result.unavailable`):
+   *  `z3_unavailable` is invisible to users today per the design doc, but
+   *  the NAME is misleading once z3 is gone, and carrying a stale name
+   *  forward was judged more expensive than adding one clean value now.
+   *
+   *  Deliberately NOT what `SOLVER_BUSY` maps to — that is `solver_busy`,
+   *  a few members below, because a retry helps there and this copy does
+   *  not promise one will. */
+  | "solver_unavailable"
   /**
    * THE SOLVER NEVER SEARCHED THIS BOARD, so nothing is claimed about it.
    *
@@ -1428,19 +1443,62 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
       requestId,
     });
   } catch {
-    // Any rejection — deadline, unavailable, transport, or a request this
-    // function itself got wrong — falls back to greedy exactly as the
-    // z3-unavailable path always has. Distinguishing failure reasons into
-    // their own engine-status vocabulary is Task 06b's job (`_RULES.md` §4:
-    // the "wire -> engine" status translation), not this one's.
-    return greedy("not_searched", true);
+    // Any rejection — deadline, unavailable, transport, invalid_request
+    // (`CpSatError["failure"]`, `cpsat-client.ts`'s `failureFor`), an
+    // unclassified bug thrown as a plain `Error`, or unauthenticated (the
+    // shared secret rejected — an OPERATOR misconfiguration, and the
+    // single most likely first-deploy failure per `DEPLOY.md`: it presents
+    // as "cp-sat is slow", not as an auth error) — ALL of it falls back to
+    // greedy as `solver_unavailable`, uniformly, by the same test the
+    // `ERROR`-status default arm below already applies: none of these
+    // promise a retry will help. `invalid_request` is the sharpest case for
+    // that — retrying an IDENTICAL malformed request fails identically
+    // every time — which is why it is not `solver_busy`: that status is
+    // true of exactly one cause (`SOLVER_BUSY`, handled below) and would be
+    // a worse lie here than for a genuine outage. No `.failure` switch is
+    // needed because every kind lands in the same place; a caller that
+    // needs the specific reason still has it on the rejected error's
+    // `.failure`/`.message`, this function only decides the fallback board.
+    return greedy("solver_unavailable", true);
   }
 
   // `ERROR` is a RESOLVED outcome, not a rejection, but it carries the same
   // instruction: an unmapped or unreadable status is a board this function
   // has no reason to trust (see `cpsat-client.ts`'s comment on
-  // `STATUS_BY_WIRE_VALUE`), so it is handled identically to a rejection.
-  if (outcome.status === "ERROR") return greedy("not_searched", true);
+  // `STATUS_BY_WIRE_VALUE`), so it falls back to greedy exactly as a
+  // rejection does. WHICH status name it falls back to is not uniform,
+  // though (Task 06b, Correction 2): `SOLVER_BUSY` is the service's own
+  // admission control refusing a concurrent solve (`schema.py`'s
+  // `error_response("SOLVER_BUSY", ...)`, called from `main.py`), and Task
+  // 08 pinned `CPSAT_MAX_WORKERS=1` in `fly.toml` specifically to hold
+  // worst-case thread contention down — which makes two organisers clicking
+  // Auto-schedule at once an ORDINARY-traffic path into this, not a rare
+  // fault. A retry helps there (the other solve finishes in seconds), so it
+  // reports the EXISTING `solver_busy` (`statusKey()` already handles it,
+  // and its copy already promises a retry), never the new
+  // `solver_unavailable` — whose copy does not promise a retry will help,
+  // and would be a worse lie than "busy" for a transient queue refusal.
+  // Every other `ERROR` (a transport fault, an unmapped status the service
+  // itself could not name) genuinely offers no such promise.
+  if (outcome.status === "ERROR") {
+    return greedy(outcome.error?.code === "SOLVER_BUSY" ? "solver_busy" : "solver_unavailable", true);
+  }
+
+  // `UNKNOWN`: the chain proved nothing, closest in meaning to "don't claim
+  // anything" — the same reading z3's own `unknown` got. Not folded into the
+  // `!improved` derivation below with OPTIMAL/FEASIBLE: `objective.py`'s
+  // `_chain_status` (the service's own status derivation) returns a raw
+  // solver-status name — UNKNOWN among them — ONLY on its `if not
+  // assignments` path, since a mapped OPTIMAL/FEASIBLE status is returned
+  // whenever there IS a board. So `outcome.assignments` is always empty
+  // here and `tiersCompleted` is always 0 (every tier that increments it
+  // also extracts a non-empty board first) — meaning this outcome could
+  // never legitimately reach `already_optimal` either, and would otherwise
+  // silently fall through the `!improved` branch below as `"ok"` (0 !==
+  // `TIER_COUNT`), the exact invented verdict `not_searched` exists to
+  // refuse. `outcome.wallExhausted` carries whether the run actually spent
+  // its budget getting here rather than bailing instantly.
+  if (outcome.status === "UNKNOWN") return greedy("not_searched", outcome.wallExhausted);
 
   // The pins are the only thing that can make this request's model unsat:
   // without one the empty board is always a legal answer (the same reasoning

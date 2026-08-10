@@ -851,6 +851,7 @@ export type DictionaryKey =
   | "board.result.dur.m"
   | "board.result.dur.ms"
   | "board.result.dur.s"
+  | "board.result.engine.cpsat"
   | "board.result.engine.greedy"
   | "board.result.engine.z3"
   | "board.result.engine.z3lns"

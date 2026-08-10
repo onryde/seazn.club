@@ -1390,9 +1390,52 @@ describe("buildSchedule — CP-SAT path", () => {
     const result = await buildSchedule(minimalInput());
     expect(result.engine).toBe("greedy");
     expect(result.assignments.map((a) => a.fixtureId)).toEqual(["f1"]);
+    // A plain (non-CpSatError) rejection — an unclassified bug at the call
+    // site is no less untrustworthy than a classified one, so it gets the
+    // same status, not the old `not_searched`.
+    expect(result.status).toBe("solver_unavailable");
   });
 
-  it("reports a board CP-SAT itself marks ERROR the same way as a rejection — never trusted", async () => {
+  // Coordinator follow-up (found preparing Task 07): the try/catch around
+  // `cpsatClient.solveBuild` swallows every PROMISE REJECTION into one
+  // fallback — a different path from the `ERROR`-status split above, which
+  // only covers a RESOLVED outcome. `CpSatError["failure"]`
+  // (`cpsat-client.ts`'s `failureFor`) has five members, and all five land
+  // on `solver_unavailable` HERE — never `solver_busy`, which promises a
+  // retry will help and is true of exactly one cause (`SOLVER_BUSY`, the
+  // `ERROR`-status path above). Applying the SAME "does a retry obviously
+  // help" test to each:
+  //
+  //   * `unavailable`/`transport`/`deadline` — a genuine outage or a
+  //     service that stopped answering; no promise a retry fixes it.
+  //   * `invalid_request` — the SHARPEST case: retrying an identical
+  //     malformed request fails identically every time, so this is if
+  //     anything a WORSE candidate for "try again" than an outage.
+  //   * `unauthenticated` — an operator misconfiguration (the shared
+  //     secret unset or wrong on one of the two apps — `DEPLOY.md`'s own
+  //     read of the single most likely first-deploy failure), not a solver
+  //     condition an organiser's retry can fix at all. No new user-facing
+  //     string exists to say so more precisely, so it is NOT invented here
+  //     — this status is reused and the gap is named in this task's report
+  //     for whoever owns an operator-visible signal later.
+  it.each([
+    "invalid_request",
+    "deadline",
+    "unauthenticated",
+    "unavailable",
+    "transport",
+  ] as const)("maps a rejected CpSatError(%s) to solver_unavailable, never solver_busy", async (failure) => {
+    const { CpSatError } = await import("./cpsat-client.ts");
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockRejectedValue(
+      new CpSatError(failure, `synthetic ${failure} for the mapping test`),
+    );
+    const result = await buildSchedule(minimalInput());
+    expect(result.engine).toBe("greedy");
+    expect(result.status).toBe("solver_unavailable");
+    expect(result.status).not.toBe("solver_busy");
+  });
+
+  it("reports a board CP-SAT itself marks ERROR the same way as a rejection — never trusted, and defaults to solver_unavailable", async () => {
     vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
       assignments: [{ fixtureId: "f1", court: "C1", startAtMs: T0 }],
       status: "ERROR",
@@ -1404,6 +1447,61 @@ describe("buildSchedule — CP-SAT path", () => {
     });
     const result = await buildSchedule(minimalInput());
     expect(result.engine).toBe("greedy");
+    // "internal" is not "SOLVER_BUSY", so this is the DEFAULT arm — a genuine
+    // outage, not admission-control contention (Task 06b, Correction 2).
+    expect(result.status).toBe("solver_unavailable");
+  });
+
+  // Task 06b, Correction 2: `SOLVER_BUSY` must NOT map to `solver_unavailable`.
+  // Task 08 pinned `CPSAT_MAX_WORKERS=1` in `fly.toml` to hold worst-case
+  // thread contention at 8-on-2-vCPU, which makes two organisers clicking
+  // Auto-schedule at once an ORDINARY-traffic path into `SOLVER_BUSY`
+  // (`schema.py`'s `error_response("SOLVER_BUSY", ...)`, called from
+  // `main.py`'s admission control), not a rare fault — a retry helps here,
+  // unlike a genuine outage, so it must land on the EXISTING `solver_busy`
+  // (`build.ts:369`, `result-strip.tsx`'s `statusKey` already handles it),
+  // never the new `solver_unavailable`.
+  it("maps ERROR + error.code SOLVER_BUSY to the existing solver_busy, not the new solver_unavailable", async () => {
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [],
+      status: "ERROR",
+      tiersCompleted: 0,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+      error: { code: "SOLVER_BUSY", message: "admission control refused a concurrent solve" },
+    });
+    const result = await buildSchedule(minimalInput());
+    expect(result.engine).toBe("greedy");
+    expect(result.status).toBe("solver_busy");
+    expect(result.status).not.toBe("solver_unavailable");
+  });
+
+  // `UNKNOWN` is the one wire status this function had NO case for at all —
+  // it fell through into the tiersCompleted-based ok/already_optimal
+  // derivation below and reported "ok" (0 !== TIER_COUNT). That is an
+  // invented verdict: `objective.py`'s `_chain_status` returns a raw
+  // solver-status name (UNKNOWN here) ONLY on its `if not assignments`
+  // path — a mapped status (OPTIMAL/FEASIBLE) is returned whenever there IS
+  // a board — so `tiersCompleted` is always 0 here and this outcome can
+  // never legitimately reach `already_optimal` either. `cornerFixtures`/
+  // `cornerConfig` (measured: greedy places 1 of 2, `[a]`) proves the
+  // GREEDY FLOOR still ships, not an empty board and not a fabricated proof.
+  it("maps an UNKNOWN outcome (the chain proved nothing) to not_searched, not ok", async () => {
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [],
+      status: "UNKNOWN",
+      tiersCompleted: 0,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: true,
+    });
+    const result = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+    expect(result.engine).toBe("greedy");
+    expect(result.status).toBe("not_searched");
+    expect(result.status).not.toBe("ok");
+    expect(result.budgetExpired).toBe(true);
+    expect(result.assignments.map((a) => a.fixtureId)).toEqual(["a"]);
   });
 
   it("derives a dense dayIndex matching the verifier's own dayKeyInTz bucketing (obligation 1)", async () => {

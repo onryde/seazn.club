@@ -1369,10 +1369,12 @@ describe("AutoScheduleResult metrics + solver contract", () => {
     expect(() => AutoScheduleResult.parse({ assignments: [], conflicts: [] })).toThrow();
   });
 
-  /** These seven must stay one-for-one with the engine's BuildStatus union.
+  /** These eight must stay one-for-one with the engine's BuildStatus union.
    *  Pinned as literals rather than imported: packages/engine is under
-   *  concurrent edit in sibling lanes, and this is the API-side contract. */
-  it("accepts exactly the seven BuildStatus values", () => {
+   *  concurrent edit in sibling lanes, and this is the API-side contract.
+   *  `solver_unavailable` (Task 06b) is the eighth — the cp-sat era's
+   *  `z3_unavailable`, additive rather than a rename of it. */
+  it("accepts exactly the eight BuildStatus values", () => {
     for (const status of [
       "ok",
       "already_optimal",
@@ -1381,6 +1383,7 @@ describe("AutoScheduleResult metrics + solver contract", () => {
       "z3_unavailable",
       "solver_busy",
       "not_searched",
+      "solver_unavailable",
     ]) {
       expect(ScheduleSolverInfo.parse({ ...solver, status }).status).toBe(status);
     }
@@ -1414,8 +1417,12 @@ describe("AutoScheduleResult metrics + solver contract", () => {
     expect(AutoScheduleResult.parse(result)).toEqual(result);
   });
 
-  it("accepts exactly the three solver engines", () => {
-    for (const engine of ["greedy", "z3", "z3+lns"]) {
+  // "cp-sat" (Task 06b) is the fourth. The rejection below is still
+  // "cpsat", NOT "cp-sat" — a different, still-invalid string, kept as
+  // written so this case keeps proving the enum rejects an unknown value
+  // rather than merely re-proving "cp-sat" is accepted twice.
+  it("accepts exactly the four solver engines", () => {
+    for (const engine of ["greedy", "z3", "z3+lns", "cp-sat"]) {
       expect(ScheduleSolverInfo.parse({ ...solver, engine }).engine).toBe(engine);
     }
     expect(() => ScheduleSolverInfo.parse({ ...solver, engine: "cpsat" })).toThrow();
