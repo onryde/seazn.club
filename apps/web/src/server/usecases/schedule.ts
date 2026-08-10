@@ -1232,7 +1232,7 @@ const SOLVER_SLACK_MS = 24 * 60 * MS_PER_MIN;
  * Task 13's bench sets the DETERMINISTIC budget (`rlimit`); this is only the
  * outer safety cap, and should be revisited once that lands.
  */
-export const AUTO_SOLVER_WALL_MS = 20_000;
+export const AUTO_SOLVER_WALL_MS = 10_000;
 
 /**
  * The per-ORG cooldown on the auto pass. Ten runs per five minutes.
@@ -1276,7 +1276,11 @@ export const AUTO_SOLVER_WALL_MS = 20_000;
  * `schedule-auto-solver-busy-latency.test.ts`, which now runs with the limiter
  * live for exactly that reason.
  */
-export const AUTO_SCHEDULE_COOLDOWN: RateLimitConfig = { max: 10, windowSeconds: 750 };
+// 375, re-derived as this block instructs when the wall moves: 10 runs x 10 s
+// / 0.2667 = 375 s. It was 750 while `AUTO_SOLVER_WALL_MS` was 20_000; leaving
+// it there against a 10 s wall would have silently doubled one org's share of
+// solver capacity, which is the ratio this number exists to hold.
+export const AUTO_SCHEDULE_COOLDOWN: RateLimitConfig = { max: 10, windowSeconds: 375 };
 
 /**
  * A FINITE search window, replacing an open-ended one.

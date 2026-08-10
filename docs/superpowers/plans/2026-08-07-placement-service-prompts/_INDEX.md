@@ -214,6 +214,128 @@ than "the cutover works". A four-value allow-list is also not an assertion:
 Task 11 owes a scenario that REQUIRES the optimised engine and skips loudly
 when the service is down.
 
+### C2 is REAL and reachable from the UI — confirmed in production 2026-08-10
+
+One court-scoped blackout, added through the ordinary settings UI, silently
+removes the optimiser from an org **permanently**. Not hypothetical, not
+synthetic — reproduced on staging:
+
+    "blackouts": [
+      { "from": "2026-08-11T11:00Z", "to": "2026-08-11T12:00Z" },
+      { "from": "2026-08-12T14:00Z", "to": "2026-08-12T14:30Z", "court": "Board 1" }
+    ]
+
+The second one scopes to a single court, so the three courts stop offering
+identical start times. The ACL's uniform-grid check refuses to send a
+per-court grid, the request never leaves the app, and the response is
+`status: "not_searched"`, `tiers_completed: 0`, `elapsed_ms: 103` — the
+solver was never asked. The board is fine (37/37, no conflicts, and the BEST
+court imbalance measured that day at 30 minutes), so nothing looks wrong.
+
+**This is the failure mode that gates Prompt 10**, stated in the C2 row as
+"routes those orgs permanently to greedy". It now has a live reproduction and
+a one-line UI recipe. Weight C2 accordingly in #21: it is not a quality gap,
+it is the optimiser silently switching itself off for an org.
+
+### DO NOT benchmark the solver over an ALREADY-APPLIED board
+
+The single most expensive mistake of 2026-08-10, and it invalidated four
+production deploys.
+
+Runs 1-4 varied the wall (10s -> 20s -> 30s) and the machine (shared-cpu-2x
+-> performance-1x -> performance-8x/16gb) and returned a **byte-identical
+board every time**: same 30 assignments, same makespan 7270 / idle 2850 /
+imbalance 210, always `tiers_completed: 1/4`. That looked like a solver that
+was immune to resources. It was not: the board's 30 rows were **already in
+the database**, so every run was re-solving around its own previous output as
+`existing` rows. The input was identical AND already saturated.
+
+Clear the schedule and the same org, same settings, same service produced
+**37/37 with zero conflicts**.
+
+So before any solver measurement:
+
+    select count(*) filter (where scheduled_at is not null) as scheduled,
+           count(*) as total
+      from fixtures f join stages s on s.id = f.stage_id
+     where s.division_id = '<id>';
+
+`scheduled` must be 0. A non-zero value does not fail loudly — it produces a
+plausible, stable, wrong answer, which is the worst kind.
+
+Two corollaries worth carrying:
+
+  * `placed: 30/37` with seven `warn.no_slot` conflicts is NOT evidence that
+    seven fixtures are unplaceable. `status: FEASIBLE` means CP-SAT never
+    PROVED the maximum; 30 was greedy's number and the solver merely failed to
+    beat it inside the wall.
+  * read the conflict's `rule` field, not its `detail` prose. `rule: "CAP"`
+    names the day cap; the detail string says "no court/time within horizon",
+    which reads like a capacity limit and is not one. That misreading cost
+    several hours.
+
+### T0 cannot PROVE a maximum on an over-subscribed board — measured in production
+
+2026-08-10, first production incident, and it cost four deploys to reach a
+one-line answer. Read this before tuning anything on the solver.
+
+**The symptom.** A real 37-fixture, 3-court board returned `tiers_completed:
+1/4`, `budget_expired: true`, `engine: "greedy"`, `placed: 30/37`, with seven
+`warn.no_slot` conflicts. Four configurations were tried — wall **10s -> 20s ->
+30s**, machine **shared-cpu-2x/1gb -> performance-1x/2gb -> performance-8x/16gb**
+— and every single run returned a BYTE-IDENTICAL board.
+
+**Why four deploys taught nothing.** Two reasons, both now fixed:
+
+  * `NUM_SEARCH_WORKERS` was set in `fly.toml`'s `[env]` and **did nothing** —
+    it was a hardcoded constant in `model.py` and `config.py` read only four
+    `PLACEMENT_*` vars. The variable everyone believed they were tuning never
+    left 8. A knob that silently does nothing is worse than no knob: it makes
+    an experiment look conclusive when it never ran.
+  * the service logged **only refusals**, so the only visible timing was
+    TS-side `elapsed_ms` — which covers greedy seed, grid, encode, RPC and
+    verification, and cannot separate "the solver used its budget" from "the
+    solver finished in 3s and something else took the rest".
+
+**The answer, once one line of telemetry existed:**
+
+    status=FEASIBLE placed=30/37 granted=30.0s solver_elapsed_ms=30022 workers=8
+
+  1. Solver-bound. 30022ms of 30000ms granted; TS overhead ~0.5s.
+  2. **FEASIBLE, not OPTIMAL.** It FINDS 30 immediately. It cannot PROVE 30 is
+     the maximum inside 30s — i.e. refute a 31st placement.
+  3. T0 never completes, so T1/T2/T3 never start. That is why
+     `tiers_completed` was pinned at 1 through every change.
+
+**So the lever is never "more".** More time, more cores and a bigger machine
+are all proven not to move it — the obstruction is combinatorial. And a warm
+start will not help either: `model.py`'s own docstring settles that class of
+bug, from the T3 experience — *"if [BestObjectiveBound and ObjectiveValue] are
+far apart the tier cannot PROVE what it has already found… a hint supplies
+nothing but an incumbent."* We already have the incumbent. It is the DUAL
+BOUND that will not close.
+
+**The untried fix, and it is cheap: T0 has no capacity bound.** Nothing in the
+model says `placed_sum <= len(grid_slots)`, though a slot holds at most one
+fixture, so the bound is trivially valid. Without it CP-SAT's dual bound for
+T0 starts at 37 and must be walked down to 30 by refuting each impossible
+fixture. With it the pigeonhole limit is known immediately. That is the same
+SHAPE of fix that rescued T3 — the term's encoding, not a warm start.
+
+**Two hypotheses tested and REJECTED**, so they are not re-run:
+
+  * *symmetry breaking* — `PLACEMENT_SYMMETRY_LEVEL` swept 0/1/2 across two
+    worker counts on a starved 37-fixture board: no effect whatsoever.
+  * *"8 workers is oversubscribed, try 4"* — backwards. Measured 8 workers
+    OPTIMAL/4 tiers in 3.8s against 4 workers FEASIBLE/3 tiers timing out at
+    30s. The dev-box note that found 4 beating 8 was taken on 6 cores UNDER
+    LOAD, a different regime. **Do not lower it on a big machine.**
+
+The local repro (`starve the bench board to 30 slots for 37 fixtures`) does
+NOT reproduce production — it reaches 4 tiers. The untested difference is the
+real board's constraint set and lattice, which cannot be reconstructed from a
+response payload. Log the model size next time before theorising.
+
 ### The solver was winning boards by IGNORING a rule it was never sent
 
 Found 2026-08-10 by CI on PR #501 — the first time the app's server layer ever

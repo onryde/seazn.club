@@ -62,3 +62,4 @@ packages/engine/sim-report.json
 # single `git add -A` would commit twelve of them. Agent DEFINITIONS
 # (.claude/agents/*.md) stay tracked; only the per-run memory is ignored.
 **/.claude/agent-memory/
+

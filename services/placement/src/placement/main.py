@@ -57,6 +57,7 @@ from __future__ import annotations
 import hmac
 import logging
 import threading
+import time
 from concurrent import futures
 
 import grpc
@@ -64,7 +65,13 @@ from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 
 from placement.config import Settings
 from placement.generated import scheduler_pb2_grpc
-from placement.model import build_model, solve
+from placement.model import (
+    CP_MODEL_PROBING_LEVEL,
+    NUM_SEARCH_WORKERS,
+    SYMMETRY_LEVEL,
+    build_model,
+    solve,
+)
 from placement.schema import (
     InvalidRequestError,
     error_response,
@@ -160,10 +167,48 @@ class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
                 parsed.existing,
                 parsed.dependencies,
             )
+            solve_started = time.perf_counter()
             outcome = solve(model, wall_seconds=wall)
+            solve_elapsed_ms = (time.perf_counter() - solve_started) * 1000.0
         except ValueError as exc:
             logging.warning("solve rejected request %s: %s", request.request_id, exc)
             return error_response("INVALID_REQUEST", str(exc))
+
+        # ONE LINE PER SOLVE, and it is not decoration.
+        #
+        # Before this existed the service logged only refusals, so the only
+        # visible timing was `elapsed_ms` on the TS side — which measures the
+        # whole round trip (greedy seed, grid, encode, RPC, verification) and
+        # cannot separate "the solver used its whole budget" from "the solver
+        # finished in 3s and something else took the rest".
+        #
+        # That cost four production deploys on 2026-08-10 to learn nothing: the
+        # wall went 10s -> 30s and the machine shared-cpu-2x -> performance-8x,
+        # and every run returned a byte-identical board at tiers_completed 1/4.
+        # With this line the first run would have said which of those numbers
+        # was even moving.
+        #
+        # `granted` is the wall the solve actually got (`min(requested, max)`),
+        # so a clamp is visible here rather than inferred from a stopwatch two
+        # processes away. `workers`/`symmetry` are logged because both are now
+        # env-overridable and a knob you cannot see is a knob you cannot trust —
+        # `NUM_SEARCH_WORKERS` spent that same afternoon set in `fly.toml` while
+        # having no effect whatsoever.
+        logging.info(
+            "solve request=%s status=%s placed=%d/%d tiers=%d/%d "
+            "granted=%.1fs solver_elapsed_ms=%.0f workers=%d symmetry=%d probing=%d",
+            request.request_id or "-",
+            outcome.status,
+            len(outcome.assignments),
+            len(parsed.fixtures),
+            outcome.tiers_completed,
+            len(outcome.objective_values) or outcome.tiers_completed,
+            wall,
+            solve_elapsed_ms,
+            NUM_SEARCH_WORKERS,
+            SYMMETRY_LEVEL,
+            CP_MODEL_PROBING_LEVEL,
+        )
 
         # `wall`, not `parsed.wall_seconds`: the budget the solve was actually
         # given is the one `wall_exhausted` has to be measured against.

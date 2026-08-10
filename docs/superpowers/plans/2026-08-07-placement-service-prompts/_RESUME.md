@@ -11,125 +11,93 @@ exists.
 
 ---
 
-## PR #501 — ALL CHECKS GREEN, ready to merge
+## STATE: #501 MERGED, #503 open and green
 
-https://github.com/ashokhein/seazn.club/pull/501 · branch
-`worktree-cpsat-service-build` (the BRANCH kept its old name; only the service
-was renamed). Tasks 01-13 + Task 11, ~107 commits.
+**The cutover is live.** PR #501 merged 2026-08-10 16:07Z (`origin/main` at
+`6ef9fc31`). The `placement` service is deployed on Fly, reachable at
+`placement.flycast:50051`, and REAL staging boards have been solved through it.
 
-Green: e2e (Playwright, with a real placement container), smoke, unit +
-typecheck, engine coverage, pytest, TS<->live gRPC integration, proto drift,
-docker, security, TS 7 musl. `mergeStateStatus: CLEAN`.
+**PR #503** (follow-up) — 9 checks passing. Real solver knobs, per-solve
+telemetry, five tests, the wall/machine revert, and the findings below.
+Merge it, then resume testing.
 
-**The service is already DEPLOYED** — `placement` on Fly, private v6 allocated,
-`PLACEMENT_SERVICE_SECRET` set on `placement` + `seazn-club-prod` +
-`seazn-club-stg`, `fly scale count 10` done. Staging SHARES the prod service
-(DEPLOY.md 4b records the two accepted costs).
+### The cutover WORKS. Six production runs proved it, the hard way
 
-**Nothing is verified end-to-end in production yet**, because the web app still
-runs `main`. That is what merging changes.
+Every "solver problem" chased on 2026-08-10 turned out to be something else.
+Read this before touching the solver:
 
-### What merging does, in order
+| Symptom | Actual cause |
+|---|---|
+| 4 byte-identical boards, immune to wall AND hardware | the board was ALREADY APPLIED — every run re-solved around its own output as `existing` rows |
+| `placed: 30/37`, "7 impossible" | never proved. `FEASIBLE` means the maximum was never established; 30 was greedy's number |
+| solver never invoked, `not_searched`, 103 ms | **C2** — one court-scoped blackout, added from the UI |
+| worker tuning had no effect | the env var was not wired to anything |
 
-1. `ci.yml`'s `deploy-staging` ships the web app to `seazn-club-stg`.
-2. `placement-service.yml`'s `deploy` job rebuilds and redeploys `placement`
-   (path-filtered; it fires because this PR touches `services/placement/**`).
-3. Production web is NOT deployed by CI — that is still a separate manual step.
+Three walls (10/20/30s) and three machines (shared-cpu-2x, performance-1x,
+performance-8x/16gb) changed NOTHING on any board. All reverted in #503.
 
-### THE FIRST THING TO DO AFTER MERGING
+### Before ANY solver measurement, run this
 
-Verify on staging, because no test can prove this for you:
+    select count(*) filter (where scheduled_at is not null) as scheduled,
+           count(*) as total
+      from fixtures f join stages s on s.id = f.stage_id
+     where s.division_id = '<id>';
 
-- Auto-schedule a **MULTI-COURT** board on `seazn-club-stg`.
-- On the result strip, read **`data-engine`**. `optimized` or `greedy` are both
-  fine (greedy is correct when the seed is already optimal). What must NOT
-  appear is `data-status="solver_unavailable"` — that is the fallback, and it
-  means the solve never reached the service. Work DEPLOY.md step 7's triage in
-  order: private v6 (step 2), secret on BOTH apps (step 4), app named exactly
-  `placement`, machines deployed.
-- Then open two tabs and hit Auto-schedule simultaneously. This settles the one
-  question three rounds of doc-reading could not: whether Fly `tcp_checks`
-  consume a `hard_limit = 1` connection slot. If both solves get a real verdict,
-  the proxy is fanning out and health checks do not count. If one returns
-  `solver_busy`, they may — `fly.toml` carries a `hard_limit = 2` fallback note.
-- Watch `tiers_completed` in `fly logs`. The server clamps the app's 20s request
-  to 10s, so the proof chain truncates on larger boards. `placed` must stay
-  full; a `placed` short of total is a real bug, not a sizing tradeoff.
+`scheduled` must be 0. A non-zero value does not fail loudly — it produces a
+plausible, stable, WRONG answer. This invalidated four deploys.
+
+Staging DB access: `REMOTE_DATABASE_URL` is COMMENTED OUT in the repo-root
+`.env.local` (line 9). Uncomment or export it; `psql` works directly.
+`set search_path = seazn_club;` first.
+
+### The one genuinely open solver question
+
+**T1 never completes on a real board, even when T0 is trivially satisfied.**
+So the organiser waits for tiers that never run and gets greedy's board.
+
+The lead, and it is specific: the day cap uses **range-reified indicators**
+(`model.py:505-515`, two linear constraints per fixture/day). That relaxation
+hides the counting bound, so CP-SAT's dual bound cannot close and it branches
+instead. A redundant `sum(placed) <= sum_of_day_caps` should hand it the bound
+directly. Same SHAPE of fix that rescued T3 — the term's encoding, NOT a warm
+start (`model.py`'s docstring: "a hint supplies nothing but an incumbent",
+and the incumbent was never the problem).
+
+Rejected by measurement, do not re-run: symmetry level (six runs, no effect),
+and fewer search workers (8 -> OPTIMAL/4 tiers in 3.8 s; 4 -> timeout at 3).
 
 ### Open work, in dependency order
 
-1. **Re-measure `NUM_SEARCH_WORKERS`** on the real machine shape. Hardcoded 8
-   (`model.py`), measured on a 6-core dev box, deploy shape is 2 vCPU. A
-   dev-box A/B already found 4 beating 8 and 12. Decide it TOGETHER with
-   `PLACEMENT_WALL_SECONDS_MAX` (10s, clamping the app's 20s) — changing both
-   at once makes neither attributable. Owner action; needs the real box.
-2. **A5** — disable other boards' Auto-schedule buttons while a solve is in
-   flight. Decided 2026-08-10, never briefed. Without it "one board at a time"
-   is an intention, and the second click earns `solver_busy`.
-3. **A6** — wake-on-page-load route pinging gRPC `Health/Check` to resume a
-   suspended machine. Must be a SERVER route (the browser cannot reach 6PN),
-   authenticated and rate-limited (it starts machines). The service half
-   already exists (`main.py:173-178`, 2 reserved threads); the TS client has no
-   health call at all.
-4. **#21 unified contract revision** — one proto bump covering C1, C2, C4 and
-   now **C6**. Doing them separately costs a regen of both stub sets, an ACL
-   pass and a drift-gate cycle each time.
-   - **C6 (new)** — `PinnedRow` carries no entrant identity since contract
-     round 6 stripped it for positional identity, so rest BETWEEN PINS is
-     undetectable. Tripwire is live: `schedule-solver-telemetry.test.ts` >
-     "forwards the pinned set an infeasible proof is about" is `it.skip` with
-     the reason at the skip and its assertions UNTOUCHED. Un-skip when C6
-     closes; it should pass unchanged.
-   - **C4** — `existing` rows do not consume day-cap allowance. Produces a
-     wrong board CP-SAT reports OPTIMAL.
-   - **C2** — per-court start grids (`court_allow`).
-   - **C1** — rule scopes above the division.
-   - **Revisit the shared staging service before this lands**: with one service
-     serving both, deploying a contract change to staging IS deploying it to
-     prod. Splitting is config-only (`PLACEMENT_SERVICE_HOST` on
-     `seazn-club-stg`).
-5. **Task 10** — remove z3 as a CAPABILITY (WASM loader, fallback path,
-   repair/REFLOW's z3). Gated on 01-13 live for a deploy cycle plus C1/C2/C4.
-   NOTE: the z3 tier ENCODER (`buildTiers`) and its bench are already deleted —
-   they were uncalled, and Task 10's gate never protected them.
-6. **Restore the stronger e2e assertion** — `placement-cutover.spec.ts` has a
-   TODO: rebuild `seedBoard` into a board the optimiser still strictly BEATS
-   with rest enforced, so `data-engine === "optimized"` can be pinned again.
-   Board design plus measurement, not a one-liner.
+1. **Merge #503.**
+2. **C2 — move it UP #21's order.** It is not a quality gap: one court-scoped
+   blackout silently switches the optimiser off for an org, permanently, with
+   a board that looks fine. Live repro in `_INDEX.md`.
+3. **The T1 encoding fix** above. Its own task — solver behaviour, needs a
+   board that actually reproduces the stall (the local starved repro does not).
+4. **#21 unified contract revision** — one proto bump covering C1, C2, C4, C6.
+   Revisit the shared staging service BEFORE it lands: with one service
+   serving both, deploying a contract change to staging IS deploying to prod.
+5. **A5** — disable other boards' buttons mid-solve. **A6** — wake-on-load
+   `Health/Check` route (server-side, authed, rate-limited).
+6. **Task 10** — remove z3 as a capability. Gated on C1/C2/C4/C6. The dead
+   tier encoder is already deleted; this is the WASM loader and fallback path.
+7. **Owner:** re-measure `NUM_SEARCH_WORKERS` on the real box — now that the
+   knob actually works. Decide it WITH `PLACEMENT_WALL_SECONDS_MAX`, one
+   variable at a time.
+8. **Check why a "max 5 per day" setting saved as 10, then 8.** Independent of
+   the solver; looks like a UI/save path issue.
 
-### Two defects with no repro built
+### Reading a solver response
 
-- **H1** — `rejectedBlockingConflicts` is a DELTA keyed
-  `fixtureId|reason|detail`, so a blocking conflict matching one the greedy
-  seed already carried ships un-rejected.
-- **H2** — no rule under `config.constraints` reaches the solver beyond the
-  four scalars. `perEntrantMinRest` was the first case anyone reproduced and is
-  now fixed; the rest of the family is C1.
+`solver.status` distinguishes reached from not-reached — `ok`/`already_optimal`
+mean the service answered; `solver_unavailable`/`solver_busy`/`not_searched`
+mean it did not. `engine` answers "did it WIN", which is a race and must never
+be asserted. `elapsed_ms` is TS-side (whole round trip); the service's own time
+is in its log line now.
 
-### THE LESSON THAT COST THE MOST ROUNDS — read before writing a solver test
-
-**Anything that depends on whether the solver BEATS greedy, or how much of the
-ladder it PROVES, is a race — not a property of the board.** Four assertions
-were pinned this way and each went red in CI while passing locally:
-
-  `status === "already_optimal"` · `engine === "greedy"` ·
-  `tiers_completed === TIERS_TOTAL` · `data-engine === "optimized"` (e2e)
-
-What IS safe: the status is a real solver verdict (`ok` / `already_optimal`,
-which excludes every fallback), and `z3LoadCount() === 0`. Same reason
-`test_production_board_meets_the_stated_acceptance_criterion` is deselected
-from the blocking pytest run and re-run as advisory — a local `FEASIBLE` with
-`placed=37/37` is load, not a regression.
-
-**Do not put the placement integration suite in the engine coverage job.**
-Tried; red there while the identical three tests passed in
-`placement-service.yml`'s integration job on the same commit and image
-(`total=3 passed=3 failed=0 skipped=0`). That job runs them alone; the coverage
-job runs the whole engine suite including the simulation harness.
-
-**Three CI jobs now start a placement container** — `ci.yml` smoke, `e2e.yml`
-local, `placement-service.yml` integration. In all three the env goes on the
-SERVER step (build.ts runs server-side) and teardown goes LAST.
+Conflicts: read the `rule` field, NOT the `detail` prose. `rule: "CAP"` is the
+day cap; the detail says "no court/time within horizon", which reads like a
+capacity limit and is not one.
 
 ## How to restart
 

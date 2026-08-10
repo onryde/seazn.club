@@ -112,7 +112,9 @@ from typing import Any
 from ortools.sat.python import cp_model
 
 from placement.model import (
+    CP_MODEL_PROBING_LEVEL,
     NUM_SEARCH_WORKERS,
+    SYMMETRY_LEVEL,
     FixtureVars,
     SolveOutcome,
     extract_assignments,
@@ -358,10 +360,15 @@ def _tier_solver(deadline: float) -> cp_model.CpSolver:
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = max(MIN_TIER_SECONDS, deadline - time.perf_counter())
     solver.parameters.num_search_workers = NUM_SEARCH_WORKERS
-    # Keep these two. Read `placement.model`'s docstring before concluding they
-    # are dead weight: no test fails without them (measured, ~3x slower on this
-    # board), but the failure they guard against — presolve eating the entire
-    # wall and returning UNKNOWN with nothing placed — is silent.
-    solver.parameters.symmetry_level = 0
-    solver.parameters.cp_model_probing_level = 0
+    # Read `placement.model`'s notes before concluding these are dead weight:
+    # no test fails without them (measured ~3x slower on the BENCH board), but
+    # the failure they guard against — presolve eating the entire wall and
+    # returning UNKNOWN with nothing placed — is silent.
+    #
+    # Both default to 0, exactly as before; they are now env-overridable so the
+    # tradeoff can be re-measured on a REAL board without a code deploy. The
+    # bench board is not symmetric the way a three-interchangeable-court,
+    # repeating-daily-slots production board is.
+    solver.parameters.symmetry_level = SYMMETRY_LEVEL
+    solver.parameters.cp_model_probing_level = CP_MODEL_PROBING_LEVEL
     return solver
