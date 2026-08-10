@@ -21,8 +21,11 @@ where its decisions live, and what order its prompts run in.
   the rule.
 - **Project-wide standing rules**: `docs/superpowers/RULES.md` — read it.
   Agent topology for dispatching any prompt below: Scout=Sonnet High,
-  Implementer=Sonnet xHigh, Reviewer=Sonnet xHigh (NOT Opus — supersedes
-  older guidance). **Session override 2026-08-09: the owner directed
+  Implementer=Sonnet MAX, Reviewer=Sonnet MAX (NOT Opus — supersedes
+  older guidance). **Effort raised xHigh -> max by the owner 2026-08-10.**
+  Effort lives in `.claude/agents/*.md` frontmatter, NOT in the dispatch:
+  the Agent tool takes `model` but not `effort`, so passing `model: sonnet`
+  changes nothing about effort either way. **Session override 2026-08-09: the owner directed
   that all subagents in the current session run on Opus xHigh instead.
   That override is per-session and does NOT amend the standing topology
   above** — a later session with no such instruction goes back to Sonnet.
