@@ -24,8 +24,38 @@ name: placement-service
 # than the rest of this filter deliberately — that directory is the entire
 # TS-side surface that this service has a contract with, and narrowing it to
 # an enumerated file list is how the gap above got created the first time.
+# PRs validate. Pushes to main DEPLOY. The two never overlap: every gate job
+# below carries `if: github.event_name == 'pull_request'`, and `deploy`
+# carries `if: github.event_name == 'push'`.
+#
+# Same reasoning as ci.yml's: a squash-merge lands the exact tree the PR
+# already validated, so re-running the gates on the push would test the same
+# code twice. The push trigger exists solely to deploy, and it trusts the PR
+# gates.
+#
+# `deploy` therefore has NO `needs:` — a `needs:` on a skipped job skips the
+# dependent job too, so listing the PR-only gates there would mean nothing
+# ever deployed.
+#
+# What still protects the Dockerfile, which has no local gate at all (the
+# developer machine has no container runtime — no docker, no usable
+# podman/colima): the deploy job BUILDS THE IMAGE ITSELF before shipping it.
+# A broken Dockerfile fails that build and the deploy never happens. So the
+# `docker` job is a PR-time signal, not the last line of defence.
+#
+# What a local-merge-and-push does bypass is the Python suite and the
+# TypeScript-against-live-gRPC integration suite. That is the same trade
+# ci.yml already makes for the staging web deploy, taken knowingly.
 on:
   pull_request:
+    paths:
+      - "services/placement/**"
+      - "proto/**"
+      - "packages/engine/src/scheduling/**"
+      - "packages/engine/scripts/gen-proto.ts"
+      - ".github/workflows/placement-service.yml"
+  push:
+    branches: [main]
     paths:
       - "services/placement/**"
       - "proto/**"
@@ -51,6 +81,7 @@ jobs:
   # ---------------------------------------------------------------------
   test:
     name: Test (pytest, Python 3.14)
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -136,6 +167,7 @@ jobs:
   # ---------------------------------------------------------------------
   docker:
     name: Docker build + image smoke test
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -248,6 +280,7 @@ jobs:
   # ---------------------------------------------------------------------
   proto-drift:
     name: Cross-language proto stub drift gate
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -324,6 +357,7 @@ jobs:
   # ---------------------------------------------------------------------
   integration:
     name: TypeScript ↔ live service (real gRPC, no mocks)
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -448,3 +482,91 @@ jobs:
         run: |
           docker logs placement-integration || true
           docker rm -f placement-integration >/dev/null 2>&1 || true
+
+  # ---------------------------------------------------------------------
+  # Deploy — push to main only, behind every gate above.
+  # ---------------------------------------------------------------------
+  #
+  # Supersedes this workflow's earlier "builds and runs the image but never
+  # deploys" stance (owner decision 2026-08-10). The standing rule was "no
+  # AGENT runs `fly deploy`", and it still holds — no agent does. CI is a
+  # different actor, and it is gated on checks this service cannot run
+  # anywhere else.
+  #
+  # The image is built ON THE RUNNER and pushed to fly's registry, then
+  # deployed by digest — the same pattern ci.yml uses for the staging web app.
+  # `flyctl deploy` without `--image` would rebuild on a fly builder and
+  # discard the artifact this workflow just proved boots and answers gRPC.
+  # Shipping the exact thing that was tested is the whole point.
+  #
+  # `fly scale count` is NOT run here. Machine count is deployment SHAPE, set
+  # once by hand (DEPLOY.md step 5); a deploy rolls existing machines and
+  # preserves the count. If a deploy ever resets it, that is a bug worth
+  # seeing rather than papering over with a scale call on every push — hence
+  # the reporting step at the end, which notices but does not fail.
+  deploy:
+    name: Deploy to fly (main only)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    # Serialise: a second push must not race a rollout mid-flight.
+    concurrency:
+      group: placement-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # The app name is read from fly.toml and ASSERTED, not hardcoded and not
+      # trusted. Fly's private DNS derives from it and `placement-client.ts`'s
+      # DEFAULT_HOST is the literal "placement.flycast:50051" — if the two ever
+      # drift, every solve dials a host that does not exist, `build.ts` falls
+      # back to greedy, and the symptom is "the optimiser got worse" rather
+      # than any error. Failing the deploy is much cheaper than debugging that.
+      - name: Read and verify the app name
+        id: flycfg
+        run: |
+          app="$(sed -n 's/^[[:space:]]*app[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' services/placement/fly.toml | head -1)"
+          if [ -z "$app" ]; then
+            echo "::error::no app name in services/placement/fly.toml"
+            exit 1
+          fi
+          if [ "$app" != "placement" ]; then
+            echo "::error::fly.toml app is '$app', expected 'placement' — placement-client.ts's DEFAULT_HOST is placement.flycast:50051 and would no longer resolve"
+            exit 1
+          fi
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate Docker against the fly registry
+        run: flyctl auth docker
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and push the image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          push: true
+          tags: registry.fly.io/${{ steps.flycfg.outputs.app }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy the pushed digest
+        run: |
+          flyctl deploy \
+            --app "${{ steps.flycfg.outputs.app }}" \
+            --config services/placement/fly.toml \
+            --image "registry.fly.io/${{ steps.flycfg.outputs.app }}:${{ github.sha }}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN }}
+
+      # Reports, never blocks. Machine count is owner-managed shape, and a
+      # mismatch should be visible without failing a deploy that already
+      # passed every correctness gate.
+      - name: Report machine count
+        if: always()
+        run: |
+          flyctl status --app "${{ steps.flycfg.outputs.app }}" || true
+          echo "::notice::DEPLOY.md step 5 sets 'fly scale count 10'. If the count above is not 10, the fan-out that makes hard_limit=1 useful is not in place."
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN }}

@@ -86,7 +86,59 @@ secret as `UNAUTHENTICATED` — which `placement-client.ts:507` maps to a failur
 and `build.ts` turns into a greedy board. A missing secret on the web app
 therefore looks exactly like "placement is slow", not like an auth error.
 
+## 4b. Staging shares THIS service (owner decision 2026-08-10)
+
+`seazn-club-stg` calls the same `placement` app as production. No second
+service, no `placement-stg`. It needs nothing but the secret — the host is
+already right, because `placement-client.ts` falls back to
+`DEFAULT_HOST = "placement.flycast:50051"` when `PLACEMENT_SERVICE_HOST` is
+unset, and `.flycast` resolves for any app in the same Fly organisation.
+
+```bash
+fly secrets set PLACEMENT_SERVICE_SECRET="$SECRET" --app seazn-club-stg
+```
+
+Miss this and staging silently serves greedy boards — the same
+`UNAUTHENTICATED` → greedy path step 4 describes, which reads as "the
+optimiser got worse", not as an auth failure.
+
+**Two consequences of sharing, accepted deliberately.** Record them here so
+neither is rediscovered as a bug:
+
+1. **Staging contends with production for machines.** `hard_limit = 1` means
+   one solve occupies a whole machine, and staging solves draw from the same
+   pool of ten. Someone testing on staging can push a real organiser onto
+   `solver_busy` and therefore onto a greedy board. Correctly labelled since
+   Task 06b, but still a worse board caused by non-production traffic.
+2. **A contract change cannot be validated on staging first.** One service
+   serves both, so deploying a proto/contract revision to staging *is*
+   deploying it to production. Every such change must therefore be
+   backward-compatible in both directions, or be accepted as a production
+   risk. **This bites #21**, the planned unified contract revision covering
+   C1/C2/C4/C5. Revisit the shared-service decision before that lands.
+
+Both share one secret, so its blast radius now includes staging.
+
+To split later: create `placement-stg`, allocate its own private v6, and set
+`PLACEMENT_SERVICE_HOST=placement-stg.flycast:50051` on `seazn-club-stg`. It
+is config only — no code change — because the override already exists.
+
 ## 5. Deploy
+
+**Deploys now run in CI** (`.github/workflows/placement-service.yml`, the
+`deploy` job) on any push to `main` that touches `services/placement/**`,
+`proto/**`, or `packages/engine/src/scheduling/**`. It builds the image on
+the runner, pushes it to fly's registry, and deploys that digest — so what
+ships is the exact artifact the `integration` job proved answers gRPC, rather
+than a rebuild. It requires the `FLY_TOKEN` GitHub secret.
+
+The standing rule that **no agent runs `fly deploy`** is unchanged; none
+does. CI is a different actor, gated on checks this service cannot run
+anywhere else — the developer machine has no container runtime, so the
+`docker` job is the only place this image is ever built.
+
+The manual path below remains valid for a first deploy, a rollback, or any
+deploy outside that path filter:
 
 ```bash
 fly deploy services/placement --app placement
