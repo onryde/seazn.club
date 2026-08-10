@@ -317,6 +317,36 @@ describe("penalties in open play (Law 14)", () => {
     ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
   });
 
+  // S4 (#428) — the Law 12 direct-free-kick/penalty offence that CONCEDED the
+  // kick. Distinct from CardReason: a penalty need not carry a card at all
+  // (a foul with no misconduct still concedes one), and a card's reason can
+  // differ from the offence that gave away the penalty in the first place
+  // (e.g. a penalty for handball plus a separate caution for dissent).
+  it("records which Law 12 offence conceded the kick", () => {
+    const state = fold(
+      cfgOf({}),
+      stream(["core.start"], pen({ by: "H", taker: "H-p9", outcome: "saved", offence: "handball" })),
+    );
+    expect(state.penalties).toEqual([
+      { side: "home", outcome: "saved", taker: "H-p9", offence: "handball" },
+    ]);
+  });
+
+  it("stays a legal, unchanged penalty when the offence is omitted (additive)", () => {
+    const state = fold(cfgOf({}), stream(["core.start"], pen({ by: "H", outcome: "post" })));
+    expect(state.penalties).toEqual([{ side: "home", outcome: "post" }]);
+    expect(Object.hasOwn(state.penalties![0]!, "offence")).toBe(false);
+  });
+
+  it("rejects an offence outside the closed Law 12 vocabulary", () => {
+    expect(() =>
+      fold(
+        cfgOf({}),
+        stream(["core.start"], pen({ by: "H", outcome: "saved", offence: "professional_foul" })),
+      ),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
+  });
+
   it("is reachable from the attributed fidelity tiers and never from the coarse ones", () => {
     const types = (tier: number) =>
       football.fidelityTiers.find((t) => t.tier === tier)?.eventTypes ?? [];

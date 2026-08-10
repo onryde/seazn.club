@@ -270,6 +270,25 @@ export const FootballShootoutKick = z.strictObject({
 // scored penalty is the goal event, and accepting it here would let one kick
 // be counted twice.
 export const PenaltyOutcome = AttemptOutcome.exclude(["scored"]);
+// S4 (#428) — IFAB Law 12 §3: the direct-free-kick offence that CONCEDED the
+// penalty (theifab.com Law 12, checked this session). Short and closed —
+// unlike `CardReason` (Law 12.3/12.4 cautionable/sending-off offences), this
+// answers a DIFFERENT question: not every penalty carries a card at all, and
+// a card's reason can diverge from the offence that gave the kick away (a
+// penalty for handball plus a separate caution for dissent). Named distinctly
+// from `CardReason` on purpose — conflating the two fields would make one
+// enum answer two questions.
+export const PenaltyOffence = z.enum([
+  "kicking",
+  "tripping",
+  "jumping_at",
+  "charging",
+  "pushing",
+  "striking",
+  "tackling",
+  "handball",
+]);
+export type PenaltyOffence = z.infer<typeof PenaltyOffence>;
 export const FootballPenalty = z.strictObject({
   by: EntrantId, // the side awarded the kick
   taker: PersonId.optional(),
@@ -279,6 +298,9 @@ export const FootballPenalty = z.strictObject({
   // "GK", IIHF "G"). One fact, one key, one pad control.
   goalkeeper: PersonId.optional(),
   outcome: PenaltyOutcome,
+  // S4 (#428) — optional everywhere: coarse scoring records a kick and
+  // nothing else, exactly like FootballCard.reason.
+  offence: PenaltyOffence.optional(),
   /** @deprecated W4a §5.2 — MINUTES, display only. Prefer `at` (seconds). */
   minute: z.number().int().nonnegative().optional(),
   // W4a §5.2 — a `strictObject` with no `at` does not merely LACK the field, it
@@ -469,6 +491,8 @@ interface PenaltyRecord {
   goalkeeper?: string;
   minute?: number;
   at?: GameTime; // W4a §5.2 — the stamp, when the pad recorded one
+  // S4 (#428) — the Law 12 offence that conceded the kick, when recorded.
+  offence?: PenaltyOffence;
 }
 
 const PLAY_PHASES: readonly Phase[] = ["H1", "H2", "ET_H1", "ET_H2"];
@@ -1254,6 +1278,9 @@ function applyPenalty(state: FootballState, payload: z.infer<typeof FootballPena
     // W4a §5.2 — the stamp rides beside the display integer, absent when the
     // pad recorded none, so a pre-wave penalty record is byte-identical.
     ...(payload.at === undefined ? {} : { at: payload.at }),
+    // S4 (#428) — absent unless the referee's Law 12 offence was recorded, so
+    // a pre-wave penalty record is byte-identical.
+    ...(payload.offence === undefined ? {} : { offence: payload.offence }),
   };
   return { ...state, penalties: [...(state.penalties ?? []), record] };
 }
@@ -2137,6 +2164,11 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
       const goalkeeper = rng() < 0.5 ? state.squads[opponent(side)].onPitch[0] : undefined;
       const outcomes = PenaltyOutcome.options;
       const outcome = outcomes[Math.floor(rng() * outcomes.length)] ?? "saved";
+      // S4 (#428) — SOMETIMES, same idiom as goalkeeper/minute above: a
+      // seeded walk has to actually witness this field for the golden
+      // coverage gate to consider it protected (golden.test.ts).
+      const offences = PenaltyOffence.options;
+      const offence = rng() < 0.5 ? offences[Math.floor(rng() * offences.length)] : undefined;
       return {
         type: "football.penalty",
         payload: {
@@ -2144,6 +2176,7 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
           ...(taker === undefined ? {} : { taker }),
           ...(goalkeeper === undefined ? {} : { goalkeeper }),
           outcome,
+          ...(offence === undefined ? {} : { offence }),
           at: stamp(state.phase),
         },
       };
