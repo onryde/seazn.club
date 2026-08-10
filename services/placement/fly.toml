@@ -133,6 +133,27 @@ primary_region = "lhr"
   # NUM_SEARCH_WORKERS and is this file's half of that tradeoff to set.
   PLACEMENT_MAX_WORKERS = "1"
 
+  # *** THE SERVER HALVES THE CALLER'S WALL BUDGET, SILENTLY. ***
+  # Left UNSET here, so `config.py:39`'s default of 10 applies, and
+  # `main.py:142` clamps every request: `min(parsed.wall_seconds,
+  # wall_seconds_max)`. The TS side asks for up to 20 s
+  # (`AUTO_SOLVER_WALL_MS`, `apps/web/src/server/usecases/schedule.ts`), so
+  # HALF the requested proof budget is discarded on every board — measured
+  # 2026-08-10, a generated 21-fixture round-robin stalls at
+  # `tiers_completed: 1/4` because of it.
+  #
+  # `placed` is not what degrades — across 24 paired runs it was full
+  # placement every time. What degrades is how much of the T0->T3 chain is
+  # PROVEN inside the wall, which is exactly the thing this service exists to
+  # deliver over greedy.
+  #
+  # Deliberately not "fixed" here by setting it to 20: raising it trades
+  # machine-seconds for proof depth on a box whose real shape has never been
+  # measured (`NUM_SEARCH_WORKERS` is still owed a re-measurement, step 8),
+  # and doing both at once makes neither attributable. Decide it as one
+  # change AFTER the first deploy, with the re-measurement in hand.
+  # PLACEMENT_WALL_SECONDS_MAX = "20"
+
 # --- sizing: this box is sized for PROOF TIME, not placement -----------------
 # Across two independent paired, interleaved A/B runs of 12 on the production
 # board, `placed` was 37 of 37 fixtures in every single run, regardless of

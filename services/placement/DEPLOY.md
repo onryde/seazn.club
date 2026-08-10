@@ -168,6 +168,22 @@ as "placement lost on merit under load" rather than as a wiring bug.
 
 ## 8. Owed immediately after this deploy
 
+**The server halves the caller's wall budget, and it will do so in
+production on day one.** `PLACEMENT_WALL_SECONDS_MAX` defaults to **10**
+(`src/placement/config.py:39`) and `main.py:142` clamps every request to
+`min(parsed.wall_seconds, wall_seconds_max)`. The web app asks for up to
+**20 s** (`AUTO_SOLVER_WALL_MS`, `apps/web/src/server/usecases/schedule.ts`),
+so half of it is discarded on every board. Measured 2026-08-10: a generated
+21-fixture round-robin stalls at `tiers_completed: 1/4` because of this, which
+is why Task 11's E2E uses a smaller hand-built board.
+
+This is **not** a placement failure — `placed` stays full. It truncates how
+much of the T0→T3 chain is PROVEN inside the wall, which is the thing this
+service exists to deliver over greedy. Left unset deliberately rather than
+raised to 20 here: see the commented line in `fly.toml`'s `[env]`, and decide
+it together with the re-measurement below rather than changing two variables
+at once.
+
 **Re-measure `NUM_SEARCH_WORKERS`.** It is hardcoded at 8
 (`src/placement/model.py`), measured on a 6-physical-core dev box. This shape is
 `shared-cpu-2x` — 2 vCPU, so 4x oversubscribed — and a dev-box A/B already
