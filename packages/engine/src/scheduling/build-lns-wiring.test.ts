@@ -169,7 +169,14 @@ const withStub = async (
   return { seen, mod: await import("./build.ts") };
 };
 
-describe("buildSchedule — the LNS seam", () => {
+// SKIPPED WHOLESALE (Task 06, placement cutover): `solveBuild` no longer calls
+// `improveByWindows` at all — the whole LNS pass (window planning, budget
+// sharing, re-entrant sub-solves) was z3-specific machinery, replaced by
+// one placement RPC that does its own T0-T3 search server-side. `build-lns.ts`
+// itself is untouched and still unit-tested directly (`build-lns.test.ts`,
+// 13/13 green); only ITS WIRING INTO `solveBuild` is gone, which is exactly
+// what every case here exercises through `buildSchedule`.
+describe.skip("buildSchedule — the LNS seam", () => {
   /**
    * A COLD z3 CONTEXT PER TEST, and this is the other half of the lever.
    *

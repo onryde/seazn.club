@@ -5,6 +5,17 @@
 // from the shared engine `twoSidedBracket`, so console, public and PDF can
 // never diverge. Renders nothing for non-single-elim shapes (double-elim /
 // stepladder keep their existing views).
+//
+// LEAF IMPORT, NOT THE BARREL (Task 11 fix — this broke `next build` outright:
+// `Module not found: Can't resolve 'dns'/'fs'/'http2'/'net'/'tls'`). The
+// cutover's `build.ts` now imports `placement-client.ts` (`@grpc/grpc-js`,
+// Node-only) into `@seazn/engine/scheduling`'s barrel (`index.ts`), and this
+// component is a client component — the barrel's whole module graph, grpc-js
+// included, was getting pulled into the browser bundle even though only
+// `bracket-layout.ts`'s pure geometry functions are used here. `grid-step.ts`
+// and `rest-floor.ts` already carry this same leaf-export pattern for exactly
+// this reason ("so the schedule page does not ship the solvers");
+// `bracket-layout.ts` has zero imports of its own, so it is safe the same way.
 import Link from "@/components/ui/console-link";
 import { routes } from "@/lib/routes";
 import { useMsg } from "@/components/i18n/dict-provider";
@@ -18,7 +29,7 @@ import {
   type BracketNode,
   type DoubleElimLayout,
   type PagePlayoffLayout,
-} from "@seazn/engine/scheduling";
+} from "@seazn/engine/scheduling/bracket-layout";
 
 interface FixtureLike {
   id: string;

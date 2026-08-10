@@ -34,6 +34,9 @@ const ENGINE_KEY = {
   greedy: "board.result.engine.greedy",
   z3: "board.result.engine.z3",
   "z3+lns": "board.result.engine.z3lns",
+  // Same neutral copy as `z3` in every locale ("Solver"/"Solveur"/
+  // "Solucionador"/NL) — a new engine label, not new user-facing text.
+  optimized: "board.result.engine.optimized",
 } as const;
 
 /** Status -> the one sentence that says what the solver did. `ok` splits on the
@@ -48,6 +51,11 @@ function statusKey(solver: ScheduleSolverInfo) {
     case "solver_busy":
       return "board.result.busy";
     case "z3_unavailable":
+    // The placement era's `z3_unavailable`: same copy, because "does not promise
+    // a retry will help" is equally true for a genuine placement outage. No new
+    // string — see `build.ts`'s `BuildStatus.solver_unavailable` doc for why
+    // it is a distinct status identifier even though it renders identically.
+    case "solver_unavailable":
       return "board.result.unavailable";
     case "verifier_rejected":
       return "board.result.verifierRejected";
@@ -203,6 +211,13 @@ export function ScheduleResultStrip({
       data-testid="schedule-result-strip"
       data-tone={flagged ? "flag" : "plain"}
       data-status={solver.status}
+      // Task 11: the only DOM-observable proof of which engine produced this
+      // board. `ENGINE_KEY` above deliberately renders "optimized" with the
+      // SAME copy as z3 in every locale, so the rendered text cannot tell them
+      // apart — this attribute is additive, carries no new copy, and owes no
+      // i18n. Assert it as `data-engine="optimized"`, never bare presence:
+      // React serialises an omitted prop as the string "$undefined".
+      data-engine={solver.engine}
       aria-label={msg("board.result.aria")}
       className={`rounded-lg border px-3 py-2.5 ${
         flagged ? "border-amber-200 bg-amber-50/70" : "border-slate-200 bg-slate-50"

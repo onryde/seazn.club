@@ -33,10 +33,24 @@
 // nothing else. The predicate above is therefore not merely unused but
 // unspellable, which is the strongest form of the guard this file was written
 // to provide.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildSchedule, TIER_COUNT } from "./build.ts";
 import { resetZ3 } from "./z3-load.ts";
 import type { Assignment, SchedulableFixture, SlotConfig } from "./calendar.ts";
+import type { SolveBuildOutcome } from "./placement-client.ts";
+
+/** Shorthand for a resolved, fully-proved placement reply — the shape every case
+ *  below builds on. `isolate: false` (vitest.config.ts) plus no global
+ *  mock-restore config means a `vi.spyOn` left standing leaks into later
+ *  tests, hence `afterEach` below. */
+const okOutcome = (assignments: SolveBuildOutcome["assignments"]): SolveBuildOutcome => ({
+  assignments,
+  status: "OPTIMAL",
+  tiersCompleted: 4,
+  objectiveValues: [],
+  elapsedMs: 5,
+  wallExhausted: false,
+});
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 7, 8, 9, 0);
@@ -101,8 +115,19 @@ const row = (fixtureId: string, court: string, startAt: number): Assignment => (
 /** The organiser's board: just `a`, wherever they published it. */
 const currentWithAAt = (startAt: number): Assignment[] => [row("a", "C1", startAt)];
 
+// UN-SKIPPED (fix round 1), all six: each now drives `vi.spyOn(await
+// import("./placement-client.ts"))` directly rather than a real solve.
 describe("buildSchedule — polish", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("returns already_optimal and moves nothing on an optimal board", async () => {
+    // Both fixtures are `locked`, so BOTH are pins — `freeFixtures` is empty
+    // and placement is asked to place nothing at all. The mock exists only to
+    // supply `tiersCompleted`/`wallExhausted`; the board itself comes
+    // entirely from the pins either way.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(okOutcome([]));
     const out = await buildSchedule({ fixtures: optimal, config, frozen: ["a", "b"] });
     expect(out.status).toBe("already_optimal");
     expect(out.moved).toBe(0);
@@ -162,6 +187,13 @@ describe("buildSchedule — polish", () => {
     // for `a`, and then has nowhere legal for `b`. The organiser's board has `a`
     // at 09:30 — so honouring the PUBLISHED slot also happens to free 09:00 and
     // let both cards fit, which is why `placed` is asserted too.
+    //
+    // "a" is frozen (no `locked`) so it pins at `current`'s 09:30, excluded
+    // from `fixtures` — only "b" is free, and the mock places it at 09:00,
+    // the one slot left in `current`'s shadow.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([{ fixtureId: "b", court: "C1", startAtMs: T0 }]),
+    );
     const out = await buildSchedule({
       fixtures: cornerFixtures,
       config: cornerConfig,
@@ -185,6 +217,12 @@ describe("buildSchedule — polish", () => {
     // so against THEIR board `a` did not move and only `b` is new: 1. Against
     // the greedy seed both look changed: 2. The two baselines disagree by
     // construction here, which is the only way to prove which one is being read.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+      ]),
+    );
     const out = await buildSchedule({
       fixtures: cornerFixtures,
       config: cornerConfig,
@@ -195,7 +233,15 @@ describe("buildSchedule — polish", () => {
     expect(out.moved).toBe(1);
 
     // The control: the identical run with no `current` falls back to the seed
-    // and counts both.
+    // and counts both. Mocked again (`vi.spyOn` set once) since the previous
+    // call already consumed no state, but re-set for clarity and in case a
+    // future edit makes the two calls' mocks diverge.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+      ]),
+    );
     const seedBaseline = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
     expect(seedBaseline.moved).toBe(2);
     await resetZ3();
@@ -292,6 +338,12 @@ describe("buildSchedule — polish", () => {
     ];
     // No `current`: the seed is the baseline, which is what every caller gets
     // today and what this case exists to protect.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "c", court: "C2", startAtMs: T0 },
+      ]),
+    );
     const out = await buildSchedule({ fixtures, config: oneEach });
     expect(out.assignments.map((a) => a.fixtureId).sort()).toEqual(["b", "c"]);
 
@@ -309,12 +361,24 @@ describe("buildSchedule — polish", () => {
   it("does not call a starved run optimal, however little it moved", async () => {
     // THE TRIPWIRE against the brief's predicate. Every condition it keys on is
     // satisfied: the mode is POLISH and the run moved nothing. It moved nothing
-    // because it never got to look — `rlimit: 1` buys one check's overshoot and
-    // no verdict at all.
+    // because it never got to look.
     //
-    // `rlimit`, not a wall clock, so this is a property of the search and
-    // reproduces on any machine (D9). Measured on this model: spent 153,
-    // `tiersCompleted: 0`.
+    // `rlimit: 1` no longer produces this — `solveBuild` does not read
+    // `input.rlimit` at all now that z3's per-check resource counter has no
+    // placement equivalent (kept on the input below anyway, harmlessly ignored,
+    // so this case still documents that the FIELD survives even though the
+    // MECHANISM does not). What starves the run here is the mock: a reply
+    // with nothing placed and zero tiers proved, the placement analogue of
+    // "never got to look" (`status: "UNKNOWN"`, the wire's own vocabulary
+    // for the absence of a verdict).
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [],
+      status: "UNKNOWN",
+      tiersCompleted: 0,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: true,
+    });
     const out = await buildSchedule({
       fixtures: optimal,
       config,
@@ -323,8 +387,15 @@ describe("buildSchedule — polish", () => {
     });
     // The trigger the brief's version would have fired on.
     expect(out.moved).toBe(0);
-    // ...and the answer, which is that nothing was established.
-    expect(out.status).toBe("ok");
+    // ...and the answer, which is that nothing was established. Task 06b
+    // gave that answer its own name: `not_searched`, not the `"ok"` this
+    // case asserted before that task's mapping existed. `"ok"` — "a board
+    // was produced and the gate accepted it" — is still not a PROOF, so it
+    // was never `already_optimal` either, but `not_searched` is the more
+    // honest of the two non-`already_optimal` readings and is what
+    // `outcome.status === "UNKNOWN"` maps to now.
+    expect(out.status).toBe("not_searched");
+    expect(out.status).not.toBe("already_optimal");
     expect(out.budgetExpired).toBe(true);
     // EXACT, not `< TIER_COUNT`. Two mechanisms bound this run — the per-check
     // `rlimit` arming and the accounting gate — and an inequality cannot say
@@ -342,6 +413,11 @@ describe("buildSchedule — polish", () => {
     //
     // Asserted as a PAIR in one case rather than as two: the claim is that the
     // two runs agree, and two assertions in two files cannot say that.
+    //
+    // Both fixtures are `locked`, so `frozen` changes nothing about which
+    // are pins — the SAME mock (nothing free to place, everything already
+    // pinned) is honest for both calls.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(okOutcome([]));
     const polished = await buildSchedule({
       fixtures: optimal,
       config,

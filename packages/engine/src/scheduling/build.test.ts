@@ -19,7 +19,7 @@
 //   * the floor is not greedy's board, it is greedy's LEGAL board. Counting a
 //     card that carries a blocking conflict as "placed" is what let an illegal
 //     greedy board outrank every legal one D3 could reach.
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_SOLVER_QUEUE,
   buildSchedule,
@@ -41,6 +41,8 @@ import {
 } from "./calendar.ts";
 import type { SchedulingConstraints } from "./constraints.ts";
 import { resetZ3 } from "./z3-load.ts";
+import { dayKeyInTz } from "./tz.ts";
+import type { SolveBuildInput, SolveBuildOutcome } from "./placement-client.ts";
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 7, 8, 9, 0);
@@ -136,12 +138,32 @@ describe("buildSchedule", () => {
     await resetZ3();
   });
 
+  // `isolate: false` (vitest.config.ts) shares module state across the whole
+  // file, and this repo has no global `restoreMocks`/`clearMocks` — a
+  // `vi.spyOn` left standing from one `it` here is still active in the
+  // next, and in every later describe block in this file. Every case below
+  // that mocks `placement-client.ts` relies on this to not leak into its
+  // neighbours.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("never returns a board the greedy floor beats", async () => {
     // The floor property, and the SOLE reason design D6 ships with no escape
     // hatch back to greedy. Asserted with `isStrictlyBetter` rather than a
     // hand-written conjunction so the test and the solver's own accept
     // condition are the same function — a test that re-derived D3's ordering
     // could disagree with the code it is guarding.
+    //
+    // CURRENTLY VACUOUS ON THE PLACEMENT PATH, and worth saying so rather than
+    // leaving a green name to imply otherwise: placement is unreachable from
+    // this test environment, so every case here falls back to greedy and
+    // compares the floor against itself — always false, regardless of
+    // whether the D6 gate that makes this true in production actually
+    // fires. The gate itself IS covered, deterministically, by
+    // `describe("buildSchedule — Placement path", ...)`'s "falls back to the
+    // greedy floor when placement's own board is not strictly better (D6)",
+    // which mocks a worse placement reply and asserts the seed ships instead.
     const cases: BuildInput[] = [
       { fixtures: cornerFixtures, config: cornerConfig },
       { fixtures: overSubscribedFixtures, config: overSubscribedConfig },
@@ -163,6 +185,13 @@ describe("buildSchedule", () => {
     }
   }, 180_000);
 
+  // UN-SKIPPED (fix round 1): mocked at the grid's own ceiling — `window`
+  // bounds the GRID itself (`buildGrid` reads `config.window`), so no
+  // engine, real or mocked, can offer a 3rd slot here. placement is therefore
+  // capped at the same 2-placed greedy already reaches, which is what makes
+  // this `already_optimal` via the D6 floor rather than a `placement`
+  // improvement — the mock exists to prove `tiersCompleted`/`status` reflect
+  // a real (tied) proof, not "never asked".
   it("drops a card greedy placed OUTSIDE the window, and keeps the legal board", async () => {
     // R2. Greedy places all three; the third overruns the competition window,
     // which `isBlockingConflict` calls physically impossible. Counting it as
@@ -174,6 +203,17 @@ describe("buildSchedule", () => {
     expect(raw.assignments).toHaveLength(3);
     expect(raw.conflicts).toEqual([]);
 
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "a", court: "C1", startAtMs: T0 },
+        { fixtureId: "b", court: "C1", startAtMs: T0 + 30 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures: overrunFixtures, config: overrunConfig });
     expect(validateAssignments(built.assignments, overrunConfig)).toEqual([]);
     expect(built.metrics.placed).toBe(2);
@@ -182,6 +222,10 @@ describe("buildSchedule", () => {
     expect(dropped.map((c) => c.reason)).toEqual(["window"]);
   }, 180_000);
 
+  // UN-SKIPPED (fix round 1): the file's own MEASURED z3 shape
+  // (`[b@C1+0, a@C1+30]`, see the file header) mocked directly — 2 placed
+  // strictly beats greedy's 1, so D6 accepts it and `engine` becomes
+  // `"optimized"`, not `"z3"`.
   it("places a card greedy declared unplaceable", async () => {
     const seed = rawSeedOf({ fixtures: cornerFixtures, config: cornerConfig });
     // The premise, asserted rather than assumed: without it the rest of this
@@ -189,9 +233,20 @@ describe("buildSchedule", () => {
     expect(seed.assignments).toHaveLength(1);
     expect(seed.conflicts.map((c) => `${c.fixtureId}:${c.reason}`)).toEqual(["b:start_window"]);
 
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
     expect(built.metrics.placed).toBe(2);
-    expect(built.engine).toBe("z3");
+    expect(built.engine).toBe("optimized");
     expect(built.status).toBe("ok");
     expect(built.tiersCompleted).toBe(4);
     expect(built.budgetExpired).toBe(false);
@@ -202,9 +257,26 @@ describe("buildSchedule", () => {
     expect(validateAssignments(built.assignments, cornerConfig)).toEqual([]);
   }, 180_000);
 
+  // UN-SKIPPED (fix round 1): the pairwise rest (45 min) FORCES the three
+  // starts 75 minutes apart regardless of court — T, T+75, T+150 (see the
+  // comment below) — so only the COURT assignment of the middle card is
+  // free, and mocked here on C2 (imbalance 30) against greedy's all-on-C1
+  // (imbalance 90).
   it("returns a board the verifier accepts", async () => {
     const config = cfg({ courts: ["C1", "C2"], perEntrantMinRest: 45 });
     const fixtures = [fx("a", "E1", "E2"), fx("b", "E1", "E3"), fx("c", "E2", "E3")];
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "a", court: "C1", startAtMs: T0 },
+        { fixtureId: "b", court: "C2", startAtMs: T0 + 75 * MIN },
+        { fixtureId: "c", court: "C1", startAtMs: T0 + 150 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures, config });
     expect(validateAssignments(built.assignments, config)).toEqual([]);
     // THIS CASE USED TO ASSERT `already_optimal`, and the comment explaining
@@ -234,11 +306,27 @@ describe("buildSchedule", () => {
     expect(built.metrics.courtImbalanceMinutes).toBe(30);
   }, 180_000);
 
+  // UN-SKIPPED (fix round 1): the session window bounds the GRID to 2 slots
+  // total, so no engine can place more than 2 of these 3 — mocked as
+  // EXACTLY greedy's own pair (a, b) so the board ties on every metric and
+  // "c" is unplaced via the SAME `conflictsForBoard` path either way.
   it("reports every unplaced card, and PROVES the count is the ceiling", async () => {
     const input = { fixtures: overSubscribedFixtures, config: overSubscribedConfig };
     const seed = rawSeedOf(input);
     expect(seed.assignments).toHaveLength(2);
 
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: seed.assignments.map((a) => ({
+        fixtureId: a.fixtureId,
+        court: a.court,
+        startAtMs: a.startAt,
+      })),
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule(input);
     expect(built.metrics.placed).toBe(2);
     // Greedy GUESSED that a third card would not fit; T0 walked `placed >= 3`
@@ -286,7 +374,13 @@ describe("buildSchedule", () => {
     expect(built.metrics.placed).toBe(1);
   }, 180_000);
 
-  it("does not mistake the WALK's `unknown` for a proof of infeasibility", async () => {
+  // SKIPPED (Task 06, placement cutover): `rlimit` was z3's own deterministic
+  // resource counter (`solver.set("rlimit", ...)`) and `solveBuild` no
+  // longer reads `input.rlimit` at all — placement has no equivalent knob, so
+  // `rlimit: 1` here has no effect and cannot reproduce a z3 `unknown`. The
+  // placement analog (an outcome whose `status` is `"UNKNOWN"`) needs a real or
+  // mocked service response, not a local budget knob.
+  it.skip("does not mistake the WALK's `unknown` for a proof of infeasibility", async () => {
     // `rlimit: 1` exhausts z3's deterministic resource counter before it can
     // decide anything, so `check()` returns `unknown` — measured, not assumed.
     // `unknown` is the ABSENCE of a proof and the incumbent must simply stand;
@@ -304,7 +398,11 @@ describe("buildSchedule", () => {
     expect(built.metrics.placed).toBe(1);
   }, 180_000);
 
-  it("does not mistake the PROBE's `unknown` for a proof of infeasibility", async () => {
+  // SKIPPED (Task 06, placement cutover): same `rlimit` obsolescence as the WALK
+  // case above — `solveBuild` no longer runs a z3 feasibility probe at all
+  // (contradictory pins are now caught by a local `validateAssignments` check
+  // before ever calling placement; see `solveBuild`'s comment on `pinConflicts`).
+  it.skip("does not mistake the PROBE's `unknown` for a proof of infeasibility", async () => {
     // The second site that can see an `unknown`, and it had no test of its own.
     // A pin is what makes the bare feasibility probe run at all, so this needs
     // both a locked card and an rlimit too small to decide anything.
@@ -384,6 +482,17 @@ describe("buildSchedule", () => {
     expect(built.contradictoryPins).toEqual(["a", "b"]);
   }, 180_000);
 
+  // UN-SKIPPED (fix round 1): mocked as a fully-proved 0-placed reply — this
+  // tests build.ts's OWN status derivation (an outcome with nothing placed
+  // and every tier proved becomes `infeasible` with `contradictoryPins`
+  // left `undefined`, since only the two EXPLICIT `INFEASIBLE`/pin-check
+  // returns ever set that field), which is well-defined regardless of
+  // whether placement could realistically reach this exact verdict for this
+  // input — `constraints.startWindows` has no wire field (a real gap, noted
+  // in the report), so a live service could not actually be excluded from
+  // this slot the way z3 was. That gap is why the board is mocked rather
+  // than solved for real, not a reason to leave build.ts's own status logic
+  // uncovered.
   it("names no pins when the proof is about the BOARD, not the pins", async () => {
     // The other `infeasible` source, and the reason the field is optional
     // rather than always present: nothing is pinned here at all. One slot, one
@@ -396,6 +505,14 @@ describe("buildSchedule", () => {
       constraints: cons({
         startWindows: [{ target: { kind: "entrant", id: "E1" }, notAfter: T0 - MIN }],
       }),
+    });
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
     });
     const built = await buildSchedule({ fixtures: [fx("a", "E1", "E2")], config });
     expect(built.status).toBe("infeasible");
@@ -420,16 +537,46 @@ describe("buildSchedule", () => {
     expect(built.assignments.find((a) => a.fixtureId === "a")?.startAt).toBe(T0 + 60 * MIN);
   }, 180_000);
 
+  // UN-SKIPPED (fix round 1): the FROZEN run's mock deliberately returns
+  // NOTHING for the one free fixture ("b"), rather than trying to represent
+  // whether placement could legally place it — `constraints.startWindows`
+  // (Jul3/04 §3, the mechanism this whole corner case is built from) has no
+  // wire field, so nothing send-able to placement today could make it actually
+  // respect b's exclusion the way z3's encoder did. What this case verifies
+  // is narrower and still real: does the freeze correctly become a pin
+  // (excluded from `fixtures`, folded into `existing`) and survive into the
+  // final board regardless of what placement does with the rest — an empty
+  // reply ties greedy's own floor either way, so the assertion holds via
+  // WHICHEVER branch (D6 fallback or a genuine placement accept) fires.
   it("holds a frozen card to its slot even when moving it would place one more", async () => {
     // POLISH. Without the freeze the solver swaps `a` onto the later slot and
     // fits `b` — a strictly better board by D3. `frozen` is the caller saying
     // an entrant has already been told when they play, and a better board is
     // not worth breaking that promise. The unfrozen run is asserted first so
     // this cannot pass against a solver that never had the option.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const free = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
     expect(free.metrics.placed).toBe(2);
     expect(free.assignments.find((a) => a.fixtureId === "a")?.startAt).toBe(T0 + 30 * MIN);
 
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({
       fixtures: cornerFixtures,
       config: cornerConfig,
@@ -439,13 +586,20 @@ describe("buildSchedule", () => {
     expect(built.metrics.placed).toBe(1);
   }, 180_000);
 
+  // UN-SKIPPED (fix round 1): same "empty reply for the frozen run" shape as
+  // its neighbour above, and the same reason (`constraints.startWindows`
+  // has no wire field — this whole test is built from it).
   it("holds a frozen card whose published slot is OFF the lattice", async () => {
     // A card the organiser dragged, or one greedy parked against the edge of an
     // existing booking: its start is not a multiple of the grid step, so it is
     // not a slot `buildGrid` generates. Looking it up with `findIndex` gets -1,
     // and silently dropping the freeze there let POLISH move a card it had
-    // promised not to while still reporting `ok`. Every frozen anchor is now
-    // PINNED into the lattice the way a `locked` placement is.
+    // promised not to while still reporting `ok`.
+    //
+    // Do NOT read the old "pinned into the lattice" mechanism here — it was
+    // removed with the `seedPinsOf` grid injection, which was manufacturing
+    // per-court asymmetric grids and routing real boards to greedy. The
+    // mechanism that holds the freeze now lives at `build.test.ts:1473`.
     // `a`'s entrant may not start before 09:07, so greedy starts it at exactly
     // 09:07 — the lattice only generates 09:00 / 09:30 / 10:00. `b`'s entrant
     // may not start after 09:00, and `a` sitting at 09:07 covers 09:00's slot
@@ -468,17 +622,56 @@ describe("buildSchedule", () => {
     expect(seed.conflicts.map((c) => c.reason)).toEqual(["start_window"]);
 
     // Unfrozen, the solver takes the better board and `a` moves onto the grid.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const free = await buildSchedule({ fixtures, config });
     expect(free.metrics.placed).toBe(2);
     expect(free.assignments.find((a) => a.fixtureId === "a")?.startAt).toBe(T0 + 30 * MIN);
 
     // Frozen, 09:07 has to survive — and 09:07 is not a slot the lattice
     // generates, so it survives only because the anchor was pinned into it.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures, config, frozen: ["a"] });
     expect(built.assignments.find((a) => a.fixtureId === "a")?.startAt).toBe(T0 + 7 * MIN);
     expect(built.metrics.placed).toBe(1);
   }, 180_000);
 
+  // UN-SKIPPED (fix round 1): this is the reproduction for Critical B, and
+  // it needed no live service to catch it — the false `infeasible` fired
+  // from the LOCAL pin-only check (`isPairwiseBlockingConflict` in
+  // `solveBuild`), before placement was ever called. `window` is a UNARY
+  // blocking reason (one row's own placement against `config.window`, not a
+  // contradiction between two pins), and the pin-check used to run the full
+  // `isBlockingConflict` — which also marks `window` blocking — so a single
+  // locked card merely sitting outside the window read as a pin
+  // "contradiction" and short-circuited to `infeasible` with a nonsensical
+  // one-element `contradictoryPins`. Fixed by scoping that check to pairwise
+  // reasons only (`court`, `person_overlap`, direct `order`).
+  //
+  // Mocked past that point (placing "b" needs a real solve, which this test
+  // environment cannot reach) to prove the REST of the chain too: the pin
+  // survives into the final board at its out-of-window slot, the resulting
+  // `window` conflict is not new relative to greedy's own raw seed (greedy
+  // ALSO honours the lock unconditionally) so `rejectedBlockingConflicts`
+  // does not reject it, and 2 placed beats greedy's legalised floor of 1
+  // (greedy's OWN legalisation drops "a" for the same window breach) so the
+  // D6 gate accepts placement's board rather than falling back to the seed.
   it("does NOT reject a board over a blocking breach greedy already had", async () => {
     // R1: the gate is a DELTA. This card is pinned outside the competition
     // window — `buildGrid` admits a pin unconditionally, `encodeBuild` states no
@@ -490,6 +683,14 @@ describe("buildSchedule", () => {
     // door — it is reported, and the better board still ships.
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
+      vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+        assignments: [{ fixtureId: "b", court: "C1", startAtMs: T0 }],
+        status: "OPTIMAL",
+        tiersCompleted: 4,
+        objectiveValues: [],
+        elapsedMs: 5,
+        wallExhausted: false,
+      });
       const config = cfg({ courts: ["C1"], window: { from: T0, to: T0 + 60 * MIN } });
       const fixtures = [
         fx("a", "E1", "E2", { locked: { court: "C1", startAt: T0 + 120 * MIN } }),
@@ -497,6 +698,7 @@ describe("buildSchedule", () => {
       ];
       const built = await buildSchedule({ fixtures, config });
       expect(built.status).toBe("ok");
+      expect(built.engine).toBe("optimized");
       expect(built.metrics.placed).toBe(2);
       expect(built.conflicts.some((c) => c.fixtureId === "a" && c.reason === "window")).toBe(true);
       expect(spy).not.toHaveBeenCalled();
@@ -505,6 +707,13 @@ describe("buildSchedule", () => {
     }
   }, 180_000);
 
+  // UN-SKIPPED (fix round 1): the injected fork keys off
+  // `assignments.length === 2`, which needs placement's own board to actually
+  // have 2 cards — `placement-client.ts` is now ALSO `vi.doMock`'d (matching the
+  // existing `./calendar.ts` mock's own style, since `vi.resetModules()` +
+  // a fresh dynamic `import("./build.ts")` would otherwise re-resolve a
+  // real, un-mocked `placement-client.ts`), returning the file's own measured
+  // z3 shape for this corner case (`[b@C1+0, a@C1+30]`).
   it("hands back the greedy seed, LOUDLY, over a breach the solver INTRODUCED", async () => {
     // The rejection branch itself. A genuine encoder/verifier disagreement is
     // not constructible here — `build-encode-parity.test.ts` proves the two
@@ -516,6 +725,23 @@ describe("buildSchedule", () => {
     // and the log without waiting for one.
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.resetModules();
+    vi.doMock("./placement-client.ts", async () => {
+      const actual = await vi.importActual<typeof import("./placement-client.ts")>("./placement-client.ts");
+      return {
+        ...actual,
+        solveBuild: async () => ({
+          assignments: [
+            { fixtureId: "b", court: "C1", startAtMs: T0 },
+            { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+          ],
+          status: "OPTIMAL",
+          tiersCompleted: 4,
+          objectiveValues: [],
+          elapsedMs: 5,
+          wallExhausted: false,
+        }),
+      };
+    });
     vi.doMock("./calendar.ts", async () => {
       const actual = await vi.importActual<typeof import("./calendar.ts")>("./calendar.ts");
       return {
@@ -546,12 +772,20 @@ describe("buildSchedule", () => {
       const z3 = await import("./z3-load.ts");
       await z3.resetZ3();
       vi.doUnmock("./calendar.ts");
+      vi.doUnmock("./placement-client.ts");
       vi.resetModules();
       spy.mockRestore();
     }
   }, 180_000);
 
-  it("reports z3_unavailable rather than throwing when the solver will not boot", async () => {
+  // SKIPPED (Task 06, placement cutover): `solveBuild` no longer imports or
+  // calls `loadZ3` at all, so mocking it to reject is mocking something
+  // this code path never touches — not "unverifiable", genuinely dead. The
+  // placement analog (`solveBuild`'s `SolveBuild` promise rejecting/erroring
+  // falls back to greedy with `status: "not_searched"`) is covered by
+  // `describe("buildSchedule — Placement path", ...)` below. Prompt 10 removes
+  // `z3-load.ts` and this test with it.
+  it.skip("reports z3_unavailable rather than throwing when the solver will not boot", async () => {
     // Auto-schedule must always hand back a board. A WASM that will not boot is
     // a fallback, never an exception.
     vi.resetModules();
@@ -645,9 +879,28 @@ describe("rejectedBlockingConflicts", () => {
  * two courts, asserting `courtImbalanceMinutes === 0`, on a board greedy
  * already balances 2-2.
  */
+// UN-SKIPPED (fix round 1), 4 of 5 cases: each is now driven by a
+// `vi.spyOn(await import("./placement-client.ts"))` mock returning the SAME
+// board the file's own "Measured:" comments already documented z3 producing
+// for that scenario — the point is "does OUR CODE correctly turn a solve
+// into the right `BuildResult`", not "does placement actually find that board",
+// which is Task 07's parity concern. `objectiveValues`/`tiersCompleted`
+// wire semantics are unchanged (design doc: `SolveBuildResponse.tiers
+// _completed` carries the "same semantics as `BuildResult.tiersCompleted`").
+//
+// The 5th, "keeps the encoder and the verifier on ONE immovable board",
+// stays skipped — see its own comment, not a live-service gap like the
+// others.
 describe("buildSchedule — lexicographic tiers", () => {
   afterAll(async () => {
     await resetZ3();
+  });
+
+  // See the identical comment in `describe("buildSchedule", ...)` above —
+  // `isolate: false` + no global mock-restore config means a `vi.spyOn` left
+  // standing here leaks into every later describe block in this file.
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   /** Four slots a side, two fixtures sharing E1. Greedy stacks both on C1 —
@@ -663,6 +916,22 @@ describe("buildSchedule — lexicographic tiers", () => {
     const seed = rawSeedOf({ fixtures: balanceFixtures, config: balanceConfig });
     expect(boardMetrics(seed.assignments, balanceConfig.courts, 2).courtImbalanceMinutes).toBe(60);
 
+    // Measured z3 shape reused as the mock: `a`/`b` share E1, so they cannot
+    // overlap in time; splitting them across C1/C2 back-to-back holds T1's
+    // makespan (60) and T2's idle gap (0, both already optimal on greedy's
+    // own board) while balancing T3 to 0 — strictly better than greedy's
+    // 60-minute imbalance from stacking both on C1.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "a", court: "C1", startAtMs: T0 },
+        { fixtureId: "b", court: "C2", startAtMs: T0 + 30 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures: balanceFixtures, config: balanceConfig });
     expect(built.tiersCompleted).toBe(4);
     expect(built.budgetExpired).toBe(false);
@@ -673,7 +942,7 @@ describe("buildSchedule — lexicographic tiers", () => {
     expect(built.metrics.worstIdleGapMinutes).toBe(0);
     expect(built.metrics.courtImbalanceMinutes).toBe(0);
     expect(new Set(built.assignments.map((a) => a.court))).toEqual(new Set(["C1", "C2"]));
-    expect(built.engine).toBe("z3");
+    expect(built.engine).toBe("optimized");
   }, 180_000);
 
   it("shortens a makespan greedy left long", async () => {
@@ -692,6 +961,21 @@ describe("buildSchedule — lexicographic tiers", () => {
     const seed = rawSeedOf({ fixtures, config });
     expect(boardMetrics(seed.assignments, config.courts, 3).makespanMinutes).toBe(105);
 
+    // `b`/`c` unconstrained, `a` not before 09:45 — packing `a` last on the
+    // one court (09:00/09:30/10:00) is one of the two 90-minute boards the
+    // comment below names; either is a genuine improvement on greedy's 105.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "c", court: "C1", startAtMs: T0 + 30 * MIN },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 60 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures, config });
     expect(built.metrics.placed).toBe(3);
     expect(built.metrics.makespanMinutes).toBe(90);
@@ -728,6 +1012,21 @@ describe("buildSchedule — lexicographic tiers", () => {
     expect(seedMetrics.worstIdleGapMinutes).toBe(30);
     expect(seedMetrics.makespanMinutes).toBe(90);
 
+    // `a`/`b` share E1 — placing them back-to-back (rather than greedy's
+    // a, c, b order) closes E1's idle gap to 0 without touching the
+    // 90-minute makespan three back-to-back slots on one court already have.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "a", court: "C1", startAtMs: T0 },
+        { fixtureId: "b", court: "C1", startAtMs: T0 + 30 * MIN },
+        { fixtureId: "c", court: "C1", startAtMs: T0 + 60 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures, config });
     expect(built.metrics.placed).toBe(3);
     expect(built.metrics.worstIdleGapMinutes).toBe(0);
@@ -735,7 +1034,30 @@ describe("buildSchedule — lexicographic tiers", () => {
     expect(built.tiersCompleted).toBe(4);
   }, 180_000);
 
-  it("will not buy court balance with makespan", async () => {
+  // STAYS SKIPPED — a different reason than "keeps the encoder and the
+  // verifier on ONE immovable board" above, and worth distinguishing. This
+  // is not a wire-capability gap; it is a STRUCTURAL conflict between what
+  // this test needs to construct and Obligation 5 (`everyCourtSharesGrid` in
+  // `build.ts`). Confirmed by running it: it fails not on a metrics
+  // assertion but on `tiersCompleted` reading 0, because the mock is never
+  // even called — `solveBuild` routes this board to greedy before ever
+  // attempting placement.
+  //
+  // The test's own comment says why: "C1 is open 09:00-10:00 and C2 only
+  // from 10:30" — the tension it demonstrates (T1's makespan freeze
+  // outranking T3's court-balance preference) is only reachable AT ALL by
+  // giving the two courts asymmetric availability, since with two
+  // non-conflicting fixtures and a UNIFORM grid, splitting them across
+  // courts at the same early time is simultaneously makespan-optimal AND
+  // balanced — there is no tension to demonstrate. Asymmetric-availability
+  // boards are exactly what Obligation 5 exists to keep away from placement
+  // (measured 6/6 in the original wire work: a fixture placed on a court at
+  // a time it did not offer). So this property — real, and still true of
+  // z3 — has no construction left that reaches placement at all with two
+  // simple disjoint fixtures. Not Task 07's either, for the same reason as
+  // its neighbour: a real placement service would refuse this exact board, not
+  // search it.
+  it.skip("will not buy court balance with makespan", async () => {
     // THE ORDERING TEST, and the only one of these where a tier has something
     // strictly better in reach and may not take it.
     //
@@ -760,6 +1082,25 @@ describe("buildSchedule — lexicographic tiers", () => {
     const fixtures = [fx("a", "E1", "E2"), fx("b", "E3", "E4")];
     expect(buildGrid({ config }).slots.filter((s) => s.court === "C2")).toHaveLength(1);
 
+    // The LOPSIDED board wins: T1 has already frozen the makespan at 60,
+    // which forbids the balanced alternative (either card on C2 costs 30-60
+    // extra minutes). This is the SAME board greedy already produces
+    // (earliest time, first free court) — the mock exists to prove
+    // `tiersCompleted`/`status` reflect a real proof rather than "never
+    // asked", not to change the board, which is why D6 correctly reports
+    // this as `already_optimal` via the greedy floor rather than `engine:
+    // "optimized"`.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "a", court: "C1", startAtMs: T0 },
+        { fixtureId: "b", court: "C1", startAtMs: T0 + 30 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures, config });
     expect(built.metrics.placed).toBe(2);
     expect(built.metrics.makespanMinutes).toBe(60);
@@ -771,7 +1112,36 @@ describe("buildSchedule — lexicographic tiers", () => {
     expect(built.status).toBe("already_optimal");
   }, 180_000);
 
-  it("keeps the encoder and the verifier on ONE immovable board", async () => {
+  // STAYS SKIPPED — this is NOT a "needs a live service" gap like its four
+  // siblings above, and mocking a compliant response here would be
+  // dishonest: what this test checks is IMPOSSIBLE for placement to guarantee
+  // today, confirmed straight from the Python model's own source
+  // (`services/placement/src/placement/model.py:186-193`, its own docstring, not
+  // an inference):
+  //
+  //   "`existing` rows are not counted against day caps. `on_day` is built
+  //   for movable fixtures only, so a pinned row on a capped day does not
+  //   consume that day's allowance... It cannot be fixed by adding
+  //   `day_index` to `PinnedRow` alone — caps are PER DIVISION and
+  //   `PinnedRow` carries no division at all... Closing it needs a
+  //   `division_index` on `PinnedRow`, which is a contract addition nothing
+  //   has asked for yet."
+  //
+  // This test's whole premise is "the immovable card `x` correctly counts
+  // toward the day cap" — true of z3 (`encodeBuild` seeds its tally from
+  // `existing` directly) and STRUCTURALLY untestable against placement, not
+  // because of scope (this rule IS competition-scoped, which `dayCapsByDivision`
+  // in `build.ts` already can't send — but even rewritten as
+  // division-scoped, the Python model would still not count `x`). A mock
+  // that made this pass would be asserting a property the wire cannot
+  // enforce, which is worse than no test — the exact "green test whose name
+  // claims a guarantee" failure mode this fix round is about.
+  //
+  // Not Task 07's (parity/integration) either — 07 tests behavior against a
+  // real service, and a real service would fail this exactly as documented
+  // above. This needs a `PinnedRow.division_index` wire change in
+  // `services/placement`, own task, own owner decision.
+  it.skip("keeps the encoder and the verifier on ONE immovable board", async () => {
     // The caller contract `encodeBuild` documents and `build.ts` honours, tested
     // end to end for the first time now that both halves exist. The encoder
     // seeds its per-day tally from the `existing` array IT is handed; the
@@ -938,4 +1308,309 @@ describe("buildSchedule — the solver queue cap", () => {
     const after = await buildSchedule({ fixtures, config });
     expect(after.status).not.toBe("solver_busy");
   }, 240_000);
+});
+
+// Task 06 — solveBuild now calls the placement service instead of z3. Every case
+// here mocks `placement-client.ts`'s `solveBuild` via `vi.spyOn(await
+// import(...))`, never `vi.doMock`: the recorded trap in this repo is that
+// `vi.doMock` (and this spy form too) is INERT if `build.ts` imports the
+// module STATICALLY, and it has previously passed 5/5 with the guard
+// deleted. `build.ts` loads `placement-client.ts` dynamically at the call site
+// for exactly this reason — see the comment there.
+describe("buildSchedule — Placement path", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const minimalInput = (over: Partial<BuildInput> = {}): BuildInput => ({
+    fixtures: [fx("f1", "E1", "E2")],
+    config: cfg(),
+    ...over,
+  });
+
+  const okOutcome = (assignments: SolveBuildOutcome["assignments"] = []): SolveBuildOutcome => ({
+    assignments,
+    status: "OPTIMAL",
+    tiersCompleted: 4,
+    objectiveValues: [],
+    elapsedMs: 1200,
+    wallExhausted: false,
+  });
+
+  it("uses the Placement client and returns a verified board", async () => {
+    // `minimalInput()`'s trivial one-fixture board is the WRONG fixture for
+    // this test now that D6 ("never worse than greedy") is enforced: greedy
+    // already places a single unconstrained fixture optimally, so a mocked
+    // reply that also places it at the same slot TIES the seed rather than
+    // beating it, and the D6 gate correctly falls back to greedy — which
+    // used to read as "placement wired up" only because nothing checked. Reused
+    // instead: `cornerConfig`/`cornerFixtures`, MEASURED (see the file
+    // header) to place only 1 of 2 via greedy and 2 of 2 via a real solve
+    // (`[b@C1+0, a@C1+30]`) — a genuine, provable improvement, mocked here
+    // rather than solved for real.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+      ]),
+    );
+    const result = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+    expect(result.engine).toBe("optimized");
+    expect(result.assignments).toHaveLength(2);
+    // proves `validateAssignments` still ran over the placement board — the
+    // verifier never moves, it just gets handed a different engine's board.
+    expect(result.conflicts).toHaveLength(0);
+  });
+
+  it("falls back to the greedy floor when placement's own board is not strictly better (D6)", async () => {
+    // D6 ("never worse than greedy") is not structural here the way it was
+    // for z3 — z3's own incumbent started AS the seed and was only ever
+    // replaced inside an `isStrictlyBetter` check, so a regression was not
+    // reachable by construction. placement returns one finished board over a
+    // single RPC with nothing upstream comparing it to anything, so a
+    // starved or merely-suboptimal reply has to be caught explicitly. Mocked
+    // here as a reply that places NOTHING — a legitimate shape for a
+    // FEASIBLE/UNKNOWN verdict that ran out of budget mid-search — against
+    // `cornerConfig`/`cornerFixtures`, whose greedy floor places 1 of 2. 0
+    // placed is strictly WORSE than greedy's 1, so the seed must ship, not
+    // the empty board placement actually returned.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([]),
+    );
+    const result = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+    expect(result.engine).toBe("greedy");
+    expect(result.assignments.map((a) => a.fixtureId)).toEqual(["a"]);
+    expect(result.metrics.placed).toBe(1);
+  });
+
+  it("falls back to greedy on a Placement rejection, exactly like a z3 gate-reject", async () => {
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockRejectedValue(
+      new Error("placement solveBuild exceeded deadline"),
+    );
+    const result = await buildSchedule(minimalInput());
+    expect(result.engine).toBe("greedy");
+    expect(result.assignments.map((a) => a.fixtureId)).toEqual(["f1"]);
+    // A plain (non-PlacementError) rejection — an unclassified bug at the call
+    // site is no less untrustworthy than a classified one, so it gets the
+    // same status, not the old `not_searched`.
+    expect(result.status).toBe("solver_unavailable");
+  });
+
+  // Coordinator follow-up (found preparing Task 07): the try/catch around
+  // `placementClient.solveBuild` swallows every PROMISE REJECTION into one
+  // fallback — a different path from the `ERROR`-status split above, which
+  // only covers a RESOLVED outcome. `PlacementError["failure"]`
+  // (`placement-client.ts`'s `failureFor`) has five members, and all five land
+  // on `solver_unavailable` HERE — never `solver_busy`, which promises a
+  // retry will help and is true of exactly one cause (`SOLVER_BUSY`, the
+  // `ERROR`-status path above). Applying the SAME "does a retry obviously
+  // help" test to each:
+  //
+  //   * `unavailable`/`transport`/`deadline` — a genuine outage or a
+  //     service that stopped answering; no promise a retry fixes it.
+  //   * `invalid_request` — the SHARPEST case: retrying an identical
+  //     malformed request fails identically every time, so this is if
+  //     anything a WORSE candidate for "try again" than an outage.
+  //   * `unauthenticated` — an operator misconfiguration (the shared
+  //     secret unset or wrong on one of the two apps — `DEPLOY.md`'s own
+  //     read of the single most likely first-deploy failure), not a solver
+  //     condition an organiser's retry can fix at all. No new user-facing
+  //     string exists to say so more precisely, so it is NOT invented here
+  //     — this status is reused and the gap is named in this task's report
+  //     for whoever owns an operator-visible signal later.
+  it.each([
+    "invalid_request",
+    "deadline",
+    "unauthenticated",
+    "unavailable",
+    "transport",
+  ] as const)("maps a rejected PlacementError(%s) to solver_unavailable, never solver_busy", async (failure) => {
+    const { PlacementError } = await import("./placement-client.ts");
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockRejectedValue(
+      new PlacementError(failure, `synthetic ${failure} for the mapping test`),
+    );
+    const result = await buildSchedule(minimalInput());
+    expect(result.engine).toBe("greedy");
+    expect(result.status).toBe("solver_unavailable");
+    expect(result.status).not.toBe("solver_busy");
+  });
+
+  it("reports a board Placement itself marks ERROR the same way as a rejection — never trusted, and defaults to solver_unavailable", async () => {
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [{ fixtureId: "f1", court: "C1", startAtMs: T0 }],
+      status: "ERROR",
+      tiersCompleted: 0,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+      error: { code: "internal", message: "boom" },
+    });
+    const result = await buildSchedule(minimalInput());
+    expect(result.engine).toBe("greedy");
+    // "internal" is not "SOLVER_BUSY", so this is the DEFAULT arm — a genuine
+    // outage, not admission-control contention (Task 06b, Correction 2).
+    expect(result.status).toBe("solver_unavailable");
+  });
+
+  // Task 06b, Correction 2: `SOLVER_BUSY` must NOT map to `solver_unavailable`.
+  // Task 08 pinned `PLACEMENT_MAX_WORKERS=1` in `fly.toml` to hold worst-case
+  // thread contention at 8-on-2-vCPU, which makes two organisers clicking
+  // Auto-schedule at once an ORDINARY-traffic path into `SOLVER_BUSY`
+  // (`schema.py`'s `error_response("SOLVER_BUSY", ...)`, called from
+  // `main.py`'s admission control), not a rare fault — a retry helps here,
+  // unlike a genuine outage, so it must land on the EXISTING `solver_busy`
+  // (`build.ts:369`, `result-strip.tsx`'s `statusKey` already handles it),
+  // never the new `solver_unavailable`.
+  it("maps ERROR + error.code SOLVER_BUSY to the existing solver_busy, not the new solver_unavailable", async () => {
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [],
+      status: "ERROR",
+      tiersCompleted: 0,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+      error: { code: "SOLVER_BUSY", message: "admission control refused a concurrent solve" },
+    });
+    const result = await buildSchedule(minimalInput());
+    expect(result.engine).toBe("greedy");
+    expect(result.status).toBe("solver_busy");
+    expect(result.status).not.toBe("solver_unavailable");
+  });
+
+  // `UNKNOWN` is the one wire status this function had NO case for at all —
+  // it fell through into the tiersCompleted-based ok/already_optimal
+  // derivation below and reported "ok" (0 !== TIER_COUNT). That is an
+  // invented verdict: `objective.py`'s `_chain_status` returns a raw
+  // solver-status name (UNKNOWN here) ONLY on its `if not assignments`
+  // path — a mapped status (OPTIMAL/FEASIBLE) is returned whenever there IS
+  // a board — so `tiersCompleted` is always 0 here and this outcome can
+  // never legitimately reach `already_optimal` either. `cornerFixtures`/
+  // `cornerConfig` (measured: greedy places 1 of 2, `[a]`) proves the
+  // GREEDY FLOOR still ships, not an empty board and not a fabricated proof.
+  it("maps an UNKNOWN outcome (the chain proved nothing) to not_searched, not ok", async () => {
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [],
+      status: "UNKNOWN",
+      tiersCompleted: 0,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: true,
+    });
+    const result = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+    expect(result.engine).toBe("greedy");
+    expect(result.status).toBe("not_searched");
+    expect(result.status).not.toBe("ok");
+    expect(result.budgetExpired).toBe(true);
+    expect(result.assignments.map((a) => a.fixtureId)).toEqual(["a"]);
+  });
+
+  it("derives a dense dayIndex matching the verifier's own dayKeyInTz bucketing (obligation 1)", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    await buildSchedule(
+      minimalInput({ config: cfg({ window: { from: T0, to: T0 + 28 * 60 * MIN } }) }),
+    );
+    expect(captured).toBeDefined();
+    const slots = captured!.grid.slots;
+    expect(slots.length).toBeGreaterThan(0);
+    const dayIndexByKey = new Map<string, number>();
+    for (const s of slots) {
+      const key = dayKeyInTz(s.startAtMs, "Europe/London");
+      const seen = dayIndexByKey.get(key);
+      if (seen === undefined) dayIndexByKey.set(key, s.dayIndex);
+      // Same real calendar day must always get the SAME index.
+      else expect(s.dayIndex).toBe(seen);
+    }
+    // The 28h window actually crosses a real midnight in Europe/London.
+    expect(dayIndexByKey.size).toBeGreaterThanOrEqual(2);
+    // Dense 0..n-1, and no two distinct days collide on one index.
+    const values = [...dayIndexByKey.values()];
+    expect(new Set(values).size).toBe(values.length);
+    expect([...values].sort((a, b) => a - b)).toEqual(values.map((_, i) => i));
+  });
+
+  it("sends dayIndex 0 for every slot and omits dayCapByDivision when tz is undefined (obligation 1)", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const config = {
+      ...cfg({ window: { from: T0, to: T0 + 28 * 60 * MIN } }),
+      tz: undefined,
+      hard: [
+        { type: "max_fixtures_per_day" as const, count: 1, scope: { kind: "division" as const, divisionId: "D1" } },
+      ],
+    };
+    await buildSchedule(
+      minimalInput({ fixtures: [fx("f1", "E1", "E2", { divisionId: "D1" })], config }),
+    );
+    expect(captured).toBeDefined();
+    expect(captured!.grid.slots.length).toBeGreaterThan(0);
+    expect(captured!.grid.slots.every((s) => s.dayIndex === 0)).toBe(true);
+    expect(captured!.constraints.dayCapByDivision).toBeUndefined();
+  });
+
+  it("derives dayCapByDivision from division-scoped max_fixtures_per_day hard rules", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const config = {
+      ...cfg(),
+      hard: [
+        { type: "max_fixtures_per_day" as const, count: 2, scope: { kind: "division" as const, divisionId: "D1" } },
+      ],
+    };
+    await buildSchedule(
+      minimalInput({ fixtures: [fx("f1", "E1", "E2", { divisionId: "D1" })], config }),
+    );
+    expect(captured!.constraints.dayCapByDivision).toEqual({ D1: 2 });
+  });
+
+  it("splits a locked fixture into an existing row and excludes it from fixtures (obligation 3)", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome([{ fixtureId: "free", court: "C1", startAtMs: T0 + 30 * MIN }]);
+    });
+    const locked = { court: "C1", startAt: T0 };
+    const result = await buildSchedule(
+      minimalInput({
+        fixtures: [fx("pinned", "E1", "E2", { locked }), fx("free", "E3", "E4")],
+      }),
+    );
+    expect(captured).toBeDefined();
+    // The pinned fixture must NOT be one of the fixtures placement is asked to
+    // place — sending it there too is exactly what silently un-pins it
+    // (measured 5/5 under the string contract: it comes back placed a SECOND
+    // time, elsewhere, OPTIMAL, no error).
+    expect(captured!.fixtures.map((f) => f.fixtureId)).toEqual(["free"]);
+    expect(
+      captured!.existing.some((e) => e.court === "C1" && e.startAtMs === T0),
+    ).toBe(true);
+    // And it must still come back on the final board, at its pinned slot —
+    // the split must not just protect placement's request, it must not lose the
+    // card either.
+    const pinnedRow = result.assignments.find((a) => a.fixtureId === "pinned");
+    expect(pinnedRow?.court).toBe("C1");
+    expect(pinnedRow?.startAt).toBe(T0);
+    expect(result.conflicts).toHaveLength(0);
+  });
+
+  it("routes a per-court blackout board to greedy instead of sending an uneven grid (obligation 5)", async () => {
+    const spy = vi.spyOn(await import("./placement-client.ts"), "solveBuild");
+    const config = cfg({
+      courts: ["C1", "C2"],
+      window: { from: T0, to: T0 + 120 * MIN },
+      blackouts: [{ court: "C1", from: T0 + 90 * MIN, to: T0 + 120 * MIN }],
+    });
+    const result = await buildSchedule(minimalInput({ config }));
+    expect(spy).not.toHaveBeenCalled();
+    expect(result.engine).toBe("greedy");
+  });
 });

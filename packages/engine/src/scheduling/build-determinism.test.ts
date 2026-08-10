@@ -45,7 +45,14 @@ const fixtures: SchedulableFixture[] = [
   { id: "d", home: "E2", away: "E4", roundNo: 2 },
 ];
 
-describe("buildSchedule determinism", () => {
+// SKIPPED WHOLESALE (Task 06, placement cutover): every case compares TWO real
+// z3 solves for byte-identical boards. `solveBuild` now calls the placement
+// service, which is unreachable from this test environment, so both solves
+// fall back to greedy identically and the comparison is vacuous rather than
+// false. placement's own determinism (or lack of it — CP-SAT's default search
+// is not guaranteed seed-stable the way z3's single-threaded config is) is
+// a question for whichever task exercises a live/mocked service.
+describe.skip("buildSchedule determinism", () => {
   it("returns the same board twice", async () => {
     const a = await buildSchedule({ fixtures, config });
     const b = await buildSchedule({ fixtures, config });

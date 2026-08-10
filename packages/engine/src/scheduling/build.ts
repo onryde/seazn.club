@@ -85,13 +85,15 @@
 // incumbent simply stands and `budgetExpired` says why. Both sites that can
 // see an `unknown` — the feasibility probe and the T0 walk — are pinned by
 // their own test.
-import type { Arith, Bool, Model, Solver } from "z3-solver";
+// No `z3-solver` type import here any more: `Arith`/`Bool`/`Solver` existed
+// solely for the deleted `buildTiers` encoder. The two remaining `Solver`
+// mentions in this file are prose in comments about the WASM heap, not types.
 import { boardMetrics, isStrictlyBetter, type BoardMetrics } from "./build-objectives.ts";
-import { improveByWindows, type LnsWindow } from "./build-lns.ts";
 import { buildGrid, type BuildGrid, type BuildSlot } from "./build-grid.ts";
-import { encodeBuild, type BuildConfig, type EncodedModel } from "./build-encode.ts";
+import type { BuildConfig } from "./build-encode.ts";
 import {
   deltaConflicts,
+  effectiveHard,
   isBlockingConflict,
   slotFixtures,
   validateAssignments,
@@ -103,8 +105,21 @@ import {
   type SlotConfig,
   type VerifyConfig,
 } from "./calendar.ts";
+import type { HardConstraint } from "./constraints.ts";
+import { dayKeyInTz } from "./tz.ts";
 import { repairUniverse } from "./repair-domain.ts";
-import { loadZ3, withZ3LockAndReset, type Z3Context } from "./z3-load.ts";
+// `withZ3LockAndReset` only — `Z3Context` was the deleted encoder's. The lock
+// itself is still taken around the placement solve and is vestigial rather
+// than dead; see the comment at its call site.
+import { withZ3LockAndReset } from "./z3-load.ts";
+// `placement-client.ts` is imported dynamically at the call site inside
+// `solveBuild`, never statically — see the comment there. This is a
+// TYPE-only import: `import type` is erased at compile time, so it creates
+// no runtime module binding and does not defeat the dynamic-import mocking
+// seam `build.test.ts` relies on (the repo's own recorded trap: `vi.doMock`/
+// `vi.spyOn(await import(...))` is inert against a module the file under
+// test also imports statically).
+import type { SolveBuildInput, SolveBuildOutcome } from "./placement-client.ts";
 
 const MS_PER_MIN = 60_000;
 
@@ -277,112 +292,15 @@ export function canSolveWithin(
  *  decision. */
 const AUTO_SOLVER_WALL_MS_AT_MEASUREMENT = 8_000;
 
-/**
- * One run's z3 resource budget, shared by every solve the run performs
- * (ruling R11).
- *
- * --- WHY THIS IS NOT `solver.set("rlimit", n)` ONCE ------------------------
- *
- * MEASURED, against z3-solver 5.0.0:
- *
- *   * `rlimit` is RE-ARMED ON EVERY `check()`. Three checks at `rlimit: 50_000`
- *     on ONE solver each returned `sat`, spending ~40_000 apiece — 120_000
- *     against a limit that reads like 50_000.
- *   * it is a PER-CHECK DELTA, not an absolute threshold. With the context's
- *     counter already at 86_090, a check at `rlimit: 50_000` still returned
- *     `sat` and spent 40_672. An absolute reading would have aborted at once.
- *
- * So a limit set once before the first check bounds a CHECK, never a run: the
- * old code could spend `checks x rlimit`, and with LNS re-entering the solver
- * per window it became `(windows + 1) x checks x rlimit`. That inverts D9 —
- * the deterministic budget stops binding and the wall-clock backstop becomes
- * the real stopping rule, on a machine-dependent boundary that R10 says must
- * never fire at all.
- *
- * --- HOW IT IS ACCOUNTED ---------------------------------------------------
- *
- * z3's own counter, read from `solver.statistics()` under the key
- * `rlimit count`. It is CONTEXT-GLOBAL and monotonic — a fresh `Solver` keeps
- * counting from where the last one stopped, which is exactly what makes it
- * usable as a run total across the sub-solves LNS opens. Every reading here is
- * a DELTA against `base`, so what other runs did before this one is irrelevant,
- * and `withZ3Lock` guarantees no other solve is interleaving with ours.
- *
- * Deterministic by construction: `rlimit` is a resource counter, not a clock,
- * which is the whole reason D9 chose it. Nothing here reads elapsed time.
- */
-interface RunBudget {
-  /** The whole run's allowance, in z3 resource units. */
-  readonly total: number;
-  /** `rlimit count` when the run started. Readings are deltas against it. */
-  readonly base: number;
-  /** Consumed so far by every solve in this run. MEASURED, never assumed. */
-  spent: number;
-  /**
-   * What the run has DRAWN, as opposed to what it spent: each phase is charged
-   * the smaller of what it used and what it was allotted.
-   *
-   * The two differ because a check OVERSHOOTS (see `rlimitSpent`), and the
-   * overshoot is z3's, not the next phase's to pay for. Charging it whole makes
-   * the reserve imaginary: MEASURED, the main phase's last check overran its
-   * 75% share by more than the remaining 25% in EVERY configuration tried —
-   * 500_000 spent 1_045_248, 100_000 spent 103_661, 260_000 spent 288_533 — so
-   * `spent < total` was false the moment the tiers fell short, and the fallback
-   * never ran on a single board it exists for. Allotments are drawn against
-   * this; `spent` stays the honest total and is what `rlimitSpent` reports.
-   */
-  drawn: number;
-}
-
-/**
- * z3's own resource counter. Present before the first `check()` (measured: 1 on
- * a brand-new context), but guarded anyway — a missing key must read as
- * "nothing spent yet", not as a `NaN` that would silently disable the cap.
- *
- * `release()` IS NOT OPTIONAL HERE, whatever the API docs' "can help release
- * memory sooner" suggests. `statistics()` allocates a `Z3_stats` in the WASM
- * heap and JS finalisers are not prompt enough to keep up with one reading per
- * `check()`: leaving them to the collector aborted a 14-run probe with
- * `RuntimeError: memory access out of bounds` inside
- * `smt::relevancy_propagator_imp::pop` — a corrupted heap, surfacing at the
- * next `solver.pop()` rather than anywhere near the leak.
- */
-function rlimitCount(solver: Solver<"repair">): number {
-  const stats = solver.statistics();
-  try {
-    return stats.keys().includes("rlimit count") ? stats.get("rlimit count") : 0;
-  } finally {
-    stats.release();
-  }
-}
-
-/**
- * Read a satisfying model and hand the handle straight back.
- *
- * SAME ARGUMENT AS `rlimitCount` ABOVE, and `ModelImpl` uses the same
- * FinalizationRegistry `StatisticsImpl` does. Every `sat` in this file allocates
- * a `Z3_model` in the WASM heap, and a search can produce one per bound across
- * four tier walks plus every LNS sub-solve — the exact rate at which leaving
- * `Z3_stats` to the collector corrupted the heap and aborted a probe inside
- * `smt::relevancy_propagator_imp::pop`.
- *
- * A CALLBACK RATHER THAN A RETURNED HANDLE, because the model has to outlive the
- * read and not the caller: `model.slotOf` walks every placement literal through
- * it, so releasing before that is a use-after-free and releasing after the
- * caller has moved on is what this replaces. The `finally` also covers a throw
- * out of `slotOf`, which is where an encoder-drift error surfaces.
- *
- * Bounded in practice by `withZ3LockAndReset`'s per-run teardown, so this is
- * insurance rather than a fix for a reproduced abort — see the report.
- */
-function withModel<T>(solver: Solver<"repair">, read: (model: Model<"repair">) => T): T {
-  const m = solver.model();
-  try {
-    return read(m);
-  } finally {
-    m.release();
-  }
-}
+// `RunBudget` (z3's per-run rlimit accounting), `rlimitCount` and `withModel`
+// lived here — z3-specific support code for the tier-walk `solveBuild` used
+// to run. Removed rather than left as dead code once this task's rewrite of
+// `solveBuild` (see below) took their only call sites: ESLint's
+// `no-unused-vars` is an error in this package, not a warning, and ORPHANED
+// local helpers are not "z3 code" in the sense `_RULES.md`/the task brief
+// mean by it — `build-encode.ts`, `z3-load.ts` and `build-lns.ts` (which
+// still own the actual solving logic, untouched, for Prompt 10 to remove as
+// a unit) are.
 
 export type BuildStatus =
   /** A board was produced and the gate accepted it. */
@@ -406,8 +324,23 @@ export type BuildStatus =
    *  INTRODUCED a blocking conflict. The greedy seed is returned and the
    *  disagreement is logged. */
   | "verifier_rejected"
-  /** The WASM would not boot. A fallback, never an exception. */
+  /** The WASM would not boot. A fallback, never an exception. z3-era only —
+   *  additive, not renamed, since Prompt 10 (not this task) removes z3. */
   | "z3_unavailable"
+  /** The placement era's `z3_unavailable`: the service call resolved but not
+   *  into a trustworthy board — a transport fault, an unmapped/unreadable
+   *  status, or the RPC promise rejecting outright (deadline, unavailable,
+   *  a malformed request) all land here. A DIFFERENT identifier rather than
+   *  reusing `z3_unavailable`, even though the two mean the same thing to an
+   *  organiser and share one i18n key (`board.result.unavailable`):
+   *  `z3_unavailable` is invisible to users today per the design doc, but
+   *  the NAME is misleading once z3 is gone, and carrying a stale name
+   *  forward was judged more expensive than adding one clean value now.
+   *
+   *  Deliberately NOT what `SOLVER_BUSY` maps to — that is `solver_busy`,
+   *  a few members below, because a retry helps there and this copy does
+   *  not promise one will. */
+  | "solver_unavailable"
   /**
    * THE SOLVER NEVER SEARCHED THIS BOARD, so nothing is claimed about it.
    *
@@ -464,8 +397,18 @@ export interface BuildInput {
    * it compile, and every compiled instruction rule silently stops binding —
    * `restByDivision` has no other channel at all, and a cross-division pair
    * then rests at whichever division's number happened to be asked.
+   *
+   * `tz` is named here too, for the placement wire's `dayIndex`: `solveBuild`
+   * derives it from `dayKeyInTz(slot.startAt, tz)`, the same bucketing the
+   * verifier's own day-cap pass uses (#447/#448 — `settings.tz` is DISPLAY,
+   * `settings.orgTz` is the governing clock, and the wrong one typechecks).
+   * Unlike `hard`/`restByDivision`, `SlotConfig` already declares `tz?:
+   * string` on its own (the placer's typed-rule day tallies read it too), so
+   * this entry is redundant with what the intersection already exposed —
+   * added for documentation of the placement dependency, not because
+   * `config.tz` was previously unreadable.
    */
-  config: SlotConfig & { courts: string[] } & Pick<VerifyConfig, "hard" | "restByDivision">;
+  config: SlotConfig & { courts: string[] } & Pick<VerifyConfig, "hard" | "restByDivision" | "tz">;
   existing?: readonly Assignment[];
   dependencies?: readonly OrderDependency[];
   /** POLISH only: fixture ids that may not move. Anchored to `locked` when the
@@ -520,7 +463,7 @@ export interface BuildResult {
   metrics: BoardMetrics;
   /** Where the returned board came from, not which solver was consulted: `z3`
    *  means the board on this result is one z3 produced. */
-  engine: "greedy" | "z3" | "z3+lns";
+  engine: "greedy" | "z3" | "z3+lns" | "optimized";
   status: BuildStatus;
   tiersCompleted: number;
   budgetExpired: boolean;
@@ -1055,6 +998,30 @@ export function buildSchedule(input: BuildInput): Promise<BuildResult> {
   // path too — `solveBuild` swallows a boot failure but not an encoder-drift
   // throw, and a counter that leaked one of those would refuse every subsequent
   // build in this process for as long as it lived.
+  // STILL HELD FOR THE PLACEMENT PATH TOO (fix round 1 finding, deliberately
+  // NOT changed this round — a process-wide lock is a blast-radius change
+  // and the one test that would prove dropping it safe needed writing
+  // first; see `build-teardown.test.ts`'s "still serialises, and still
+  // tears down, when two runs queue together").
+  //
+  // `solveBuild` no longer touches z3 on this path at all, so `withZ3Lock`
+  // buys this call NOTHING correctness-wise: placement is an out-of-process
+  // gRPC call, sharing no WASM heap, no `Solver` instance, no mutable
+  // process-wide state with anything this lock protects. `tearDownZ3`
+  // itself degrades gracefully (`if (loaded === null) return;` — a
+  // near-instant no-op whenever z3 was never booted, which on this path is
+  // always), so nothing is BROKEN by keeping the wrap — but it is not free
+  // either: every placement call still queues behind `MAX_SOLVER_QUEUE` AND
+  // behind this lock, needlessly serialising concurrent BUILD/POLISH
+  // requests against each other (redundant with the queue cap and the
+  // service's own `PLACEMENT_MAX_WORKERS`) and against REFLOW's concurrent z3
+  // repairs (`repairSchedule` takes the SAME lock, and shares nothing with
+  // placement either).
+  //
+  // Left in place because removing it is REFLOW's call to weigh in on too
+  // (this lock is `z3-load.ts`'s, not BUILD/POLISH's own), and because the
+  // throughput cost is unmeasured, not merely asserted — a claim worth
+  // benchmarking before acting on, not assuming.
   return withZ3LockAndReset(() => solveBuild(input)).finally(() => {
     queued--;
   });
@@ -1066,11 +1033,75 @@ export function buildSchedule(input: BuildInput): Promise<BuildResult> {
  * guard a sub-solve that also fell short of `TIER_COUNT` would open windows of
  * its own, without bound.
  */
-async function solveBuild(
-  input: BuildInput,
-  allowLns = true,
-  inherited?: RunBudget,
-): Promise<BuildResult> {
+/**
+ * Obligation 5 (placement cutover): does every declared court offer the exact
+ * same set of start times? If not, sending this grid to placement gets the
+ * whole request refused (`schema.py`'s `_validate_court_slot_coverage`)
+ * rather than mis-scheduled — measured 6/6 under the string contract, a
+ * fixture placed on a court at a time it did not actually offer.
+ * `Blackout.court?` producing an uneven grid is ordinary org data, not a
+ * synthetic edge case, so this is checked before ever calling the service.
+ */
+function everyCourtSharesGrid(grid: BuildGrid, courts: readonly string[]): boolean {
+  if (courts.length <= 1) return true;
+  let shared: Set<number> | undefined;
+  for (const court of courts) {
+    const indices = grid.byCourt.get(court) ?? [];
+    const starts = new Set(indices.map((i) => grid.slots[i]!.startAt));
+    if (shared === undefined) {
+      shared = starts;
+      continue;
+    }
+    if (starts.size !== shared.size || [...starts].some((s) => !shared!.has(s))) return false;
+  }
+  return true;
+}
+
+/**
+ * Dense 0..n-1 over the org-local calendar day of every slot, matching
+ * EXACTLY how the verifier buckets a day cap (`dayKeyInTz`, the
+ * `max_fixtures_per_day` pass in `calendar.ts`) — any other derivation (a
+ * UTC quotient, a midnight offset, a day number off the window start)
+ * reopens the placer/verifier fork `hardRestMinutesFor`'s own docstring
+ * warns about (#447). `tz` undefined returns a function that always answers
+ * 0: the verifier skips day-cap counting entirely without a zone, and
+ * `solveBuild` pairs this with omitting `dayCapByDivision` so a cap never
+ * binds against a fabricated day.
+ */
+function buildDayIndexOf(
+  slots: readonly { startAt: number }[],
+  tz: string | undefined,
+): (startAt: number) => number {
+  if (tz === undefined) return () => 0;
+  const keys = [...new Set(slots.map((s) => dayKeyInTz(s.startAt, tz)))].sort();
+  const indexByKey = new Map(keys.map((k, i) => [k, i]));
+  return (startAt) => indexByKey.get(dayKeyInTz(startAt, tz))!;
+}
+
+/**
+ * The DIVISION-scoped subset of `max_fixtures_per_day` rules, as the simple
+ * per-division map the placement wire carries (design doc: "per-division
+ * min_rest_minutes/max_fixtures_per_day"). A rule scoped to the competition,
+ * a pool, an entrant or a person has no wire representation of its own —
+ * placement v1 does not receive it. That is a real capability gap against z3
+ * (which hard-encodes every scope via `encodeBuild` §9), but not a newly
+ * silent one: `validateInstructionRules`'s reports are warn-only by design,
+ * unrelated to this task.
+ *
+ * The smallest count wins when more than one rule targets the same division
+ * — an "at most" bound, so every rule that applies has to hold at once.
+ */
+function dayCapsByDivision(hard: readonly HardConstraint[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const h of hard) {
+    if (h.type !== "max_fixtures_per_day" || h.scope.kind !== "division") continue;
+    const prev = out[h.scope.divisionId];
+    out[h.scope.divisionId] = prev === undefined ? h.count : Math.min(prev, h.count);
+  }
+  return out;
+}
+
+async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // `performance.now()`, never `Date.now()` — `scripts/engine-boundary.ts` bans
   // ambient wall-clock reads in engine source, and a monotonic clock is the
   // right one for a duration anyway.
@@ -1078,52 +1109,9 @@ async function solveBuild(
   const elapsed = (): number => performance.now() - t0;
   const { fixtures, config } = input;
   const wallMs = input.wallMs ?? DEFAULT_BUILD_WALL_MS;
-  const rlimit = input.rlimit ?? DEFAULT_BUILD_RLIMIT;
-  /**
-   * The wall, tested where the EXPENSIVE work is, not only between checks
-   * (ruling R23).
-   *
-   * Before this existed the only tests were at the top of each search loop, and
-   * everything costly happens outside them: Task 13's bench measured a
-   * 200-fixture run returning at **15_368 ms against an 8_000 ms wall** — 92 %
-   * over — because `encodeBuild` (3_706 ms) and the first `solver.push()` over
-   * the encoded model (9_837 ms) both run to completion before any loop is
-   * entered, and nothing in either reads the clock. That is a latency bug, not
-   * a measurement artefact: every caller sizing a request timeout on
-   * `AUTO_SOLVER_WALL_MS` was wrong by about a factor of two, and wrong by most
-   * on exactly the biggest boards.
-   *
-   * The bail is not a new outcome. It returns the greedy incumbent with
-   * `budgetExpired: true`, which is byte-identical to what an exhausted rlimit
-   * already produces, so D6 ("never worse than greedy") survives it by
-   * construction — `greedy()` returns `seedAssignments`/`seedMetrics` and there
-   * is no path here that can hand back anything else. It never throws.
-   *
-   * It cannot make the wall exact. `encodeBuild` and `push()` are single
-   * uninterruptible calls, so the guard catches the run at their BOUNDARIES —
-   * the overrun is bounded by one such step, not eliminated. At 200 fixtures
-   * the first tier `push()` alone is ~9_800 ms, so an 8 s wall CANNOT be held
-   * once that push has started. The fix for that case is the R22 size gate,
-   * which declines the call outright; R23 only stops a doomed run buying more.
-   *
-   * --- WHAT IS ACTUALLY COVERED, AND WHAT IS NOT ----------------------------
-   *
-   * Only the FIRST use below — the guard before `encodeBuild` — is
-   * mutation-provable, by `build-wall.test.ts`: delete it and a 200-fixture run
-   * pays a full encode it will never be allowed to search, and the test's
-   * elapsed bound reds.
-   *
-   * The other four (after `encodeBuild`, after each `solver.push()`, and before
-   * `buildTiers`) are BELT AND BRACES, and each was confirmed to survive
-   * mutation across all 131 build-suite tests. That is not an oversight waiting
-   * for a cleverer test: removing any of them changes ONLY elapsed time. Every
-   * observable field — `engine`, `status`, `tiersCompleted`, `budgetExpired`,
-   * `rlimitSpent`, the board itself — is identical either way, because each is
-   * followed by another guard that reaches the same exit a few hundred
-   * milliseconds later. They are kept because each sits in front of a real
-   * uninterruptible cost that nothing else guards at that exact point.
-   * **Do not read their presence as coverage.**
-   */
+  /** The outer wall. placement clamps its own wall server-side, so this only
+   *  has to stop THIS function from spending anything — setup or a network
+   *  round trip — once nothing would be left to search with anyway. */
   const outOfTime = (): boolean => elapsed() >= wallMs;
 
   // 1. The seed, the legalisation pass that turns it into a floor worth having,
@@ -1133,24 +1121,16 @@ async function solveBuild(
   const seed = greedySeed(input);
   const { existing, dependencies, verifyConfig, rawSeed, rawSeedConflicts } = seed;
   const { currentBoard, conflictsForBoard, movedFrom, lostFrom } = seed;
-  const seedAssignments = seed.assignments;
   const seedMetrics = seed.metrics;
-
-  /** Filled once the solver exists — `greedy(...)` is defined before that and
-   *  can return from an early exit, where nothing has been spent and the result
-   *  should say so honestly. A ref rather than a `let` so the binding itself
-   *  stays `const`. */
-  const runBudget: { current: RunBudget | undefined } = { current: undefined };
-
-  /** Filled by the LNS pass below; empty on every path that never reaches it. */
-  const lnsWindowRlimits: number[] = [];
 
   const greedy = (status: BuildStatus, budgetExpired = false): BuildResult =>
     greedyResult(seed, status, {
       budgetExpired,
       elapsedMs: elapsed(),
-      rlimitSpent: runBudget.current?.spent ?? 0,
-      lnsWindowRlimits,
+      // Neither field means anything on this path: `rlimit` and LNS windows
+      // are z3-specific machinery this function no longer has.
+      rlimitSpent: 0,
+      lnsWindowRlimits: [],
     });
 
   // 2. The lattice.
@@ -1243,587 +1223,360 @@ async function solveBuild(
       return at === undefined ? [] : [{ id, at }];
     }),
   ];
-  const pinned = pins.map((p) => p.at);
-  /** Sorted and de-duplicated: a `locked` card named in `frozen` too is one
-   *  pin, and the order is part of what makes two runs comparable. */
-  const pinnedIds = [...new Set(pins.map((p) => p.id))].sort();
-  const grid = restrictToConfiguredCourts(
-    buildGrid({ config, existing, pinned, seedPins: seedPinsOf(seedAssignments, config.courts) }),
-    config.courts,
-    pinned,
-  );
-  // NO LNS PASS HERE, AND THAT IS DELIBERATE — do not "fix" this by wiring one
-  // up. `buildGrid` never reads the fixture list at all: `overCap` is a
-  // function of the config, the immovable board and the pins alone. So every
-  // window the fallback opened would rebuild the IDENTICAL over-cap lattice,
-  // get the same empty `slots` back, and return its own greedy board — the
-  // pass is inert here by construction, not merely unhelpful. Rescuing an
-  // over-cap board means shrinking the LATTICE, i.e. slicing the horizon per
-  // window, which is a design change and out of scope (controller ruling,
-  // Task 6). Task 13's bench establishes whether this path is even reachable
-  // at the 200-fixture target; if it is, it reopens as a real gap.
+  /** De-duplicated by fixture id — `pins` can name the same fixture TWICE (a
+   *  `locked` card also listed in `frozen`). Every consumer below reads
+   *  pins through this map rather than the raw array: building
+   *  `pinnedAssignments` from the raw array sent that one fixture as two
+   *  IDENTICAL rows, and `validateAssignments` correctly reported that as a
+   *  self-collision "court" double-booking — a false `infeasible` from the
+   *  pin-contradiction check above, caught by a test (`build-polish.test.ts`,
+   *  every case using `optimal` + `frozen: ["a", "b"]` on already-`locked`
+   *  fixtures). First occurrence wins, which is inert either way: `locked`
+   *  sources are listed first in `pins`, and for a fixture that is both,
+   *  `publishedSlotOf` already resolves the `frozen` source to the exact
+   *  same slot `locked` does, so the two entries never actually disagreed —
+   *  only duplicated. */
+  const pinById = new Map(pins.map((p) => [p.id, p.at]));
+  /** Sorted, from the de-duplicated map — the order is part of what makes
+   *  two runs comparable. */
+  const pinnedIds = [...pinById.keys()].sort();
+  // NO `pinned`/`seedPins` HERE, DELIBERATELY — unlike the z3 path, where
+  // they existed to make the SOLVER's own placement variables able to
+  // express the incumbent (`seedPinsOf`'s doc: "THE SOLVER MUST NEVER BE
+  // UNABLE TO EXPRESS ITS OWN INCUMBENT"). Neither concept has a job here: a
+  // pin is never something the service treats as a placement variable (it is an `existing` row,
+  // fixed regardless of the grid — see obligation 3 above), and there is no
+  // incremental bound-walk left to protect from a vacuous ladder. Bare, this
+  // is the SAME shape `canSolveWithin` already uses for the identical reason
+  // (`buildGrid({ config, existing })`, no pins) — a coincidence worth
+  // trusting, not re-deriving differently.
+  //
+  // THIS WAS A REAL BUG, caught by a test, not a pre-emptive cleanup: with
+  // `seedPins` included, a rest-chained greedy seed that lands off-grid on
+  // ONE court (measured: `perEntrantMinRest: 45` stacks all three cards on
+  // C1) injects EXTRA slots onto that court alone, which `everyCourtSharesGrid`
+  // below then correctly reads as a per-court asymmetry and routes to greedy
+  // — even though the UNDERLYING grid (blackouts, session windows, window)
+  // is perfectly uniform and the real service would happily accept it. That
+  // silently defeated placement on exactly the boards a real solve helps most:
+  // rest-constrained multi-court ones.
+  const grid = restrictToConfiguredCourts(buildGrid({ config, existing }), config.courts, []);
+  // There is no rescue for an over-cap lattice here: `buildGrid` never reads
+  // the fixture list at all, so `overCap` is a function of the config and
+  // the immovable board alone — nothing this function could retry would
+  // shrink it. Rescuing one means shrinking the LATTICE itself (slicing
+  // the horizon per window), which is a design change and out of scope
+  // (controller ruling, Task 6).
   //
   // `not_searched`, NOT `ok`. There is no lattice, so nothing was looked at,
   // and a strip reading "the quick pass produced this board" is the most it can
   // honestly say — never that the board was produced and accepted by a solver.
   if (grid.overCap || grid.slots.length === 0) return greedy("not_searched");
 
-  /**
-   * Is the board we already have in hand REPRESENTABLE on the lattice we are
-   * about to search?
-   *
-   * Every seed placement was just pinned into it (`seedPinsOf`), so the answer
-   * is normally yes and this flag is normally false. Two residues survive that,
-   * and neither is fixable by choosing a better step:
-   *
-   *   * a pin `buildGrid` REFUSED — an inadmissible slot (inside a blackout,
-   *     outside every session window, on top of an existing booking) that the
-   *     legalisation pass kept because whatever it breaches is not blocking;
-   *   * a seed row on a court `config.courts` does not list, which is dropped
-   *     rather than buying a ghost court a lattice slot.
-   *
-   * NEITHER IS CONSTRUCTIBLE THROUGH THIS FUNCTION TODAY, and the flag stays
-   * anyway. `slotFixtures` iterates `config.courts` alone (`calendar.ts:734`),
-   * so the second cannot arise; and it refuses a start on exactly the grounds
-   * `admits` does — measured, a card ready at +25 against an existing booking
-   * at +60..+90 is placed at +100 by BOTH — so the first cannot either. That is
-   * two independent components agreeing, not one rule; this is what notices if
-   * they stop, and on the path where they agree it costs nothing at all.
-   *
-   * When the seed is off the lattice the tier ladder CAN degenerate: the first
-   * bound it is handed is the incumbent's own metric, the lattice cannot achieve
-   * it, the model goes unsat, and every subsequent walk is unsat on its first
-   * ask. All four tiers then "complete" having searched nothing, which is
-   * indistinguishable — from the outside — from a genuine optimality proof.
-   *
-   * CAN, not DOES, and that distinction is the whole of why this flag is only
-   * HALF the test. An UNREPRESENTABLE ROW is not a vacuous LADDER. One card the
-   * organiser dragged into a blackout keeps its pin refused on a board whose
-   * other twenty cards are pinned or on-grid — and the lattice carries a board
-   * every bit as good, so z3 searches properly and proves nothing better.
-   * Reporting `not_searched` off `seedOffLattice` alone flags that run, telling
-   * an organiser their schedule was never looked at when it was: the same class
-   * of lie as the `already_optimal` the status was introduced to refuse, pointed
-   * the other way. What separates the two is asked below, once, of z3.
-   *
-   * Measured on the whole seed and not just its first row: a board can be half
-   * on the grid, and half a proof is not a proof.
-   *
-   * The run continues either way. z3 may still find a board that is strictly
-   * better than the seed, and that board IS real (the verifier gate proves it) —
-   * what it may not do is claim the SEED could not be beaten.
-   */
-  const latticeKeys = new Set(grid.slots.map((s) => `${s.court}|${s.startAt}`));
-  const seedOffLattice = seedAssignments.some(
-    (a) => !latticeKeys.has(`${a.court}|${a.startAt}`),
-  );
+  // Obligation 5 (placement cutover, see `everyCourtSharesGrid`): a per-court
+  // grid is refused by the service, not mis-scheduled, and this is reachable
+  // from ordinary org data (`Blackout.court?`), not synthetic. Checked here,
+  // before ever calling the service, rather than sent and learned from an
+  // `invalid_request` error — the two are behaviourally identical (both end
+  // at the greedy board) and checking locally costs nothing extra. This is a
+  // capability gap against z3, tracked as a Prompt 10 blocker: closing it
+  // properly (a per-fixture (court, start) domain, `court_allow`) is task
+  // C2's, not this one's — do not build a narrower fix here that C2 then has
+  // to widen.
+  if (!everyCourtSharesGrid(grid, config.courts)) return greedy("not_searched");
 
-  // 3. z3. A boot failure is a fallback, never an exception: auto-schedule must
-  //    always hand back a board.
-  let Z3;
-  try {
-    ({ Z3 } = await loadZ3());
-  } catch {
-    return greedy("z3_unavailable");
-  }
-
-  const solver = new Z3.Solver();
-
-  // The run budget (R11). A sub-solve INHERITS its caller's — one run, one
-  // allowance — and is capped at the slice its caller allotted it; a top-level
-  // run opens a fresh one and keeps `1 - BUILD_MAIN_RLIMIT_SHARE` of it back
-  // for the fallback.
-  runBudget.current = inherited ?? {
-    total: rlimit,
-    base: rlimitCount(solver),
-    spent: 0,
-    drawn: 0,
-  };
-  const budget = runBudget.current;
-  const phaseCap =
-    inherited === undefined
-      // `Math.max(1, ...)` because the floor is 0 for `rlimit <= 1`, and a main
-      // phase allotted nothing declines every check while the FALLBACK still
-      // gets one — the reserve inverted, and on the exact configuration a
-      // budget that small is used to produce.
-      ? Math.max(1, Math.floor(rlimit * BUILD_MAIN_RLIMIT_SHARE))
-      : rlimit;
-  /** This solve's ceiling, expressed in the RUN's units so both caps are one
-   *  comparison: it may not push `runBudget.spent` past here, nor past the run
-   *  total however generous its own slice was. */
-  const phaseLimit = Math.min(budget.spent + phaseCap, budget.total);
-
-  /** The outer cap, refreshed before every check the way `repair.ts` does it —
-   *  one `timeout` set once would give the last check the whole budget again. */
-  const armTimeout = (): void => {
-    solver.set("timeout", Math.max(1, Math.ceil(wallMs - elapsed())));
-  };
-  /**
-   * Arm BOTH caps for exactly one `check()`, and say whether there is a check
-   * left to arm. False means the run budget is gone — a normal outcome that
-   * leaves the incumbent standing, never an error.
-   *
-   * The `rlimit` is re-set every time BECAUSE z3 re-arms it every time (see
-   * `RunBudget`); handing it the REMAINDER is what turns a per-check allowance
-   * into a run total. Never 0 — `rlimit: 0` means UNLIMITED in z3, so an
-   * exhausted budget must decline the check rather than describe itself as
-   * zero.
-   */
-  const arm = (): boolean => {
-    const room = phaseLimit - budget.spent;
-    if (room <= 0) return false;
-    solver.set("rlimit", room);
-    armTimeout();
-    return true;
-  };
-  /** Charge the run for what the check just cost. MEASURED off z3's counter,
-   *  not assumed from the limit: a check that finishes early spends less, and
-   *  charging it the whole slice would starve the fallback for nothing. */
-  const settle = (): void => {
-    // Clamped: a negative delta would make `room` enormous and silently
-    // disable the cap altogether. Unreachable today — `withZ3Lock` keeps a
-    // context reset out of the middle of a run, and the counter is monotonic
-    // — but a budget that fails OPEN is not a failure mode worth leaving to
-    // an invariant held somewhere else.
-    budget.spent = Math.max(0, rlimitCount(solver) - budget.base);
-  };
-  armTimeout();
-
-  // R23. The greedy seed, the lattice and the WASM boot are already behind us
-  // and they are not free at scale; encoding on top of a wall that has already
-  // gone buys a board nobody will be allowed to search.
-  //
-  // `not_searched` ON BOTH THIS GUARD AND THE ONE BELOW, for the same reason the
-  // universe exit carries it: neither has run a `check()`, so `rlimitSpent` is 0
-  // and no solver has looked at the board. `budgetExpired` does not carry that
-  // on its own — it is set on every partially-searched run too, so it says the
-  // run was cut short and nothing about whether a search happened at all. This
-  // is not a rare path: at the fine lattice the greedy seed alone outlasts the
-  // 8 s wall from ~40 fixtures up (Task 13 bench, `--hard-rest=45`).
+  // The seed, the lattice and the checks above are already behind us; a wall
+  // that has already gone must not pay for a network round trip nobody will
+  // be allowed to wait for.
   if (outOfTime()) return greedy("not_searched", true);
 
-  const model = encodeBuild({
-    Z3,
-    solver,
-    fixtures,
-    grid,
-    config: verifyConfig,
-    // The same binding `validateAssignments` is handed below. See its comment.
-    existing,
-    dependencies,
-  });
+  // 3. Placement.
+  //
+  // Obligation 3: a pin (`locked`, or `frozen` resolved to an anchor above)
+  // cannot be expressed to placement as "place this fixture, but only here" —
+  // the wire has no per-fixture slot-pin field, only `existing` rows
+  // (immovable) and `fixtures` (free to go anywhere the model likes). So
+  // every pin is sent as an `existing` row at its own (court, startAt) and
+  // DROPPED from `fixtures` — sending it in both is exactly how it silently
+  // stops being pinned: the `existing` row lays a fixed blocking interval
+  // while the movable fixture stays free, and it comes back placed a SECOND
+  // time elsewhere, OPTIMAL, no error (measured 5/5 under the string
+  // contract; see the field comment on `SolveBuildInput.existing` in
+  // `placement-client.ts`, which the wire being positional now does not change).
+  // This is also the documented shape of POLISH: "BUILD with a frozen set
+  // already folded into the request's existing/pinned rows."
+  const pinnedFixtureIds = new Set(pinById.keys());
+  const freeFixtures = fixtures.filter((f) => !pinnedFixtureIds.has(f.id));
+  const freeFixtureIds = new Set(freeFixtures.map((f) => f.id));
+  const fixtureById = new Map(fixtures.map((f) => [f.id, f]));
+  const matchMs = config.matchMinutes * MS_PER_MIN;
 
-  // R23. THE SINGLE MOST IMPORTANT ONE. `encodeBuild` is the largest
-  // uninterruptible step in the run — 3_706 ms at 200 fixtures / 216 slots —
-  // and at the sizes where it matters it alone can outlast the whole wall.
-  if (outOfTime()) return greedy("not_searched", true);
-
-  /** `AtLeast` takes a NON-EMPTY tuple, not varargs. `Z3.AtLeast(...lits, k)`
-   *  compiles and then fails at runtime with a spread TypeError out of z3's own
-   *  internals; `repair.ts:862` spells the same shape correctly. */
-  const atLeastPlaced = (k: number): void => {
-    const [head, ...rest] = model.placed;
-    if (head === undefined) return;
-    solver.add(Z3.AtLeast([head, ...rest], k));
-  };
-
-  // 4. POLISH freezes the cards an entrant has already been told about. Every
-  //    anchor is in `pinned` above, so the lattice is guaranteed to contain it
-  //    and `findIndex` cannot come back -1 for a card that has an anchor at all.
-  for (const id of frozenIds) {
-    const i = fixtures.findIndex((f) => f.id === id);
-    const at = publishedSlotOf(id);
-    // No anchor at all: greedy could not place it and the caller pinned
-    // nothing, so there is no placement to hold it to. Left free rather than
-    // pretended-frozen.
-    if (i < 0 || at === undefined) continue;
-    const s = grid.slots.findIndex((sl) => sl.court === at.court && sl.startAt === at.startAt);
-    if (s >= 0) solver.add(model.place[i]![s]!);
-  }
-
-  let budgetExpired = false;
-
-  // 5. The infeasibility probe — asked ONLY when something is pinned, and only
-  //    while there is budget left to ask in.
-  //
-  //    Without a pin the model is satisfiable by inspection (the empty board):
-  //    every clause `encodeBuild` writes is an at-most, a negation or an
-  //    equivalence, and `placed[i]` is free to be false. So the probe could only
-  //    ever answer "sat" and would cost a full check for it; at 200 fixtures a
-  //    bare `check()` is ~10 s of a 30 s budget. With a pin it is the only way
-  //    to tell "two cards pinned onto one slot" from "n cards will not fit",
-  //    and those want opposite answers.
-  if (pinned.length > 0) {
-    if (elapsed() >= wallMs || !arm()) {
-      // Never asked, so nothing is established. Reporting `infeasible` from a
-      // question we did not get to ask is the same error as reading it off an
-      // `unknown` — and that holds whether it was the wall backstop or the run
-      // budget that stopped us asking.
-      budgetExpired = true;
-    } else {
-      const probe = await solver.check();
-      settle();
-      // The pins are the ONLY thing that can make this model unsat (see above),
-      // so the proof is about them and the result says so by name.
-      if (probe === "unsat") return { ...greedy("infeasible"), contradictoryPins: pinnedIds };
-      // `unknown` is exhaustion, not a verdict — the ABSENCE of a proof. Fall
-      // through and let the walk below report `budgetExpired` on the greedy
-      // incumbent.
-      if (probe === "unknown") budgetExpired = true;
-    }
-  }
-
-  let incumbent: readonly Assignment[] = seedAssignments;
-  let incumbentMetrics = seedMetrics;
-  let tiersCompleted = 0;
-  let checks = 0;
-  let improved = false;
-
-  // 6. T0 — maximise the number placed. This is what turns greedy's `no_slot`
-  //    GUESS into a proof: UNSAT at `placed >= n` is the proof that n is out of
-  //    reach, and SAT is a board that reaches it. Descending from the full
-  //    count means the FIRST satisfiable bound is the optimum, by construction.
-  for (let target = fixtures.length; target > incumbentMetrics.placed; target--) {
-    if (budgetExpired || outOfTime()) {
-      budgetExpired = true;
-      break;
-    }
-    solver.push();
-    // R23. `push()` is not the bookkeeping no-op it reads as: over the fully
-    // encoded model it costs 205 / 2_923 / 9_837 ms at 20 / 90 / 200 fixtures
-    // (Task 13 bench, `--probe=encode`). It is a ONE-TIME cost — every push
-    // after the first is sub-millisecond — but the first one alone outlasts the
-    // production wall at target scale, so the loop-top test above is stale by
-    // the time we get here and has to be retaken.
-    if (outOfTime()) {
-      solver.pop();
-      budgetExpired = true;
-      break;
-    }
-    atLeastPlaced(target);
-    if (!arm()) {
-      solver.pop();
-      budgetExpired = true;
-      break;
-    }
-    checks++;
-    const verdict = await solver.check();
-    settle();
-    if (verdict === "sat") {
-      const board = withModel(solver, (m) => model.assignmentsFrom(model.slotOf(m)));
-      const metrics = boardMetrics(board, config.courts, fixtures.length);
-      solver.pop();
-      if (isStrictlyBetter(metrics, incumbentMetrics)) {
-        incumbent = board;
-        incumbentMetrics = metrics;
-        improved = true;
-      }
-      break;
-    }
-    solver.pop();
-    if (verdict === "unknown") {
-      budgetExpired = true;
-      break;
-    }
-  }
-  // Freeze the achieved count as a hard bound for every later tier: a tier that
-  // shortens the makespan must not buy it by dropping a card.
-  //
-  // OUTSIDE the loop, not in the `sat` arm. The walk has a second exit — UNSAT
-  // at every bound down to the incumbent's own count — and on that path the arm
-  // never runs, so a freeze written there leaves `placed` unbounded for exactly
-  // the boards greedy already got right.
-  atLeastPlaced(incumbentMetrics.placed);
-
-  // T0 completed iff it ran to a verdict rather than to the budget: a SAT at
-  // some bound, or UNSAT all the way down to the incumbent's own count.
-  //
-  // ...or if there was nothing to ask. `target` starts at `fixtures.length`, so
-  // a greedy board that already placed every card enters no iteration at all:
-  // the maximum is ACHIEVED and proving it costs zero checks. Reading that as
-  // "the tier did not finish" is what made a fully-placed board indistinguish-
-  // able from one whose budget died before the first check, and it is why
-  // `already_optimal` could never fire on the boards it most obviously
-  // describes.
-  const proved = !budgetExpired && (checks > 0 || incumbentMetrics.placed >= fixtures.length);
-  if (proved) tiersCompleted = 1;
-
-  // 6b. Tiers 1-3 — makespan, then worst idle gap, then court imbalance, in
-  //     D3's fixed order.
-  //
-  //     Each is the same descending-bound walk T0 is, in the opposite
-  //     direction: T0 descends from `fixtures.length` and so proves its UNSAT
-  //     bounds FIRST, one per step, before the single SAT that ends it; these
-  //     assert "strictly better than the incumbent", take the board z3 hands
-  //     back, and repeat — so the SATs come first and the walk ends on ONE
-  //     UNSAT, the expensive proof. The cheap direction is deliberate: every
-  //     intermediate board is a real improvement in hand, so a budget that
-  //     expires mid-walk still returns something better, which is not true of
-  //     an ascending walk.
-  //
-  //     A tier that completes FREEZES its achieved value as a hard bound, and
-  //     that freeze is the whole of what makes the ordering lexicographic
-  //     rather than a negotiation: with it, a later tier can only choose among
-  //     boards an earlier tier already called optimal.
-  //
-  //     WHAT THIS LOOKS LIKE TO AN ORGANISER, MEASURED (Task 13 bench, R18
-  //     sweep). At the production wall only T0 completes from 20 fixtures up,
-  //     so the ONLY metric that improves is `placed`, by +1 — and because
-  //     `placed` dominates, the solver will buy that one extra match with
-  //     everything below it. Every sweep row from n=20 to n=140 got worse on
-  //     the other three: at n=140, makespan 2_120 -> 2_160, worst idle gap
-  //     1_400 -> 2_040, court imbalance 40 -> 120.
-  //
-  //     THIS IS D3 WORKING, NOT A DEFECT. "One more match fits and the day is
-  //     longer" is the trade the owner chose when they ranked
-  //     placed > makespan > idle > balance, and it was re-affirmed against this
-  //     measurement rather than in ignorance of it. Do not "fix" it by
-  //     weighting the tiers or by refusing a board that regressed a lower one —
-  //     either change silently drops matches an organiser asked to fit, which
-  //     is the failure D3 exists to prevent. If the trade is ever revisited it
-  //     is a product decision about the ORDERING, made here, not a tweak in a
-  //     tier's walk.
-  //
-  //     NO PER-TIER BUDGET SLICE, deliberately. Splitting the WALL clock (half
-  //     the remainder each, say) would make which tier ran a property of the
-  //     machine, which is the exact defect D9 exists to prevent — the same run
-  //     on a faster box would return a differently-optimised board. Splitting
-  //     the `rlimit` is unavailable until Task 13 establishes whether it is a
-  //     per-`check()` cap or a run total (it is set once, before the first
-  //     check, and nothing here re-reads it). Neither is needed for termination:
-  //     each walk is strictly decreasing over a finite set of achievable metric
-  //     values, and every individual `check()` is capped by the rlimit, so a
-  //     tier cannot spin. The wall clock stays what the header says it is — an
-  //     outer cap that should never fire.
-  // R23. `buildTiers` is called in the `for...of` HEADER, so its cost — 43_240
-  // assertions and 730 ms at 200 fixtures — is paid before the loop-top test
-  // below can run even once. A run whose wall has already gone must not pay it.
-  if (proved && outOfTime()) budgetExpired = true;
-  if (proved && !budgetExpired) {
-    for (const tier of buildTiers({ Z3, solver, model, grid, fixtures, config })) {
-      if (budgetExpired || outOfTime()) {
-        budgetExpired = true;
-        break;
-      }
-      let best = tier.of(incumbentMetrics);
-      let settled = false;
-      for (;;) {
-        // THE METRIC'S FLOOR. All three are non-negative quantities that
-        // `boardMetrics` reports as 0 on an empty board, so a bound of -1 ms is
-        // not "one better" — it is a question with no answer, and asking it is
-        // not free: the makespan and imbalance terms say NOTHING when nothing
-        // is placed, so z3 answers SAT off a pair of unconstrained variables,
-        // hands back the same board, and the walk would loop on it. At zero the
-        // tier is already optimal and there is nothing to prove.
-        if (best <= 0) {
-          settled = true;
-          break;
-        }
-        if (outOfTime()) {
-          budgetExpired = true;
-          break;
-        }
-        solver.push();
-        // R23, same reason as T0's: `push()` is where the wall gets overrun.
-        // `tier.atMost` is charged here too — the idle-gap family restates
-        // 14_400 clauses per bound at 200 fixtures (358 ms), which the makespan
-        // and imbalance tiers, at one assertion each, do not.
-        if (outOfTime()) {
-          solver.pop();
-          budgetExpired = true;
-          break;
-        }
-        tier.atMost(best - 1);
-        if (!arm()) {
-          solver.pop();
-          budgetExpired = true;
-          break;
-        }
-        checks++;
-        const verdict = await solver.check();
-        settle();
-        if (verdict !== "sat") {
-          solver.pop();
-          // UNSAT is the proof that `best` IS the optimum — the walk asked for
-          // strictly better and no board exists. `unknown` is the absence of
-          // that proof and must never be read as one (see the header).
-          if (verdict === "unknown") budgetExpired = true;
-          else settled = true;
-          break;
-        }
-        const board = withModel(solver, (m) => model.assignmentsFrom(model.slotOf(m)));
-        const metrics = boardMetrics(board, config.courts, fixtures.length);
-        solver.pop();
-        const next = tier.of(metrics);
-        // Belt and braces. Every earlier tier is frozen and this bound is
-        // strict, so a SAT board is lexicographically better by construction;
-        // if it ever is not, the term and the metric have drifted apart and the
-        // right move is to keep the incumbent and stop counting tiers, not to
-        // accept a board D3 ranks below the one in hand.
-        if (next >= best || !isStrictlyBetter(metrics, incumbentMetrics)) break;
-        incumbent = board;
-        incumbentMetrics = metrics;
-        improved = true;
-        best = next;
-      }
-      if (!settled) break;
-      tier.atMost(tier.of(incumbentMetrics));
-      tiersCompleted++;
-    }
-  }
-
-  // 6c. LNS — the fallback for a run that did not finish (design D7's "C"
-  //     half). See `build-lns.ts` for what a window is and why it is neither
-  //     `repairSchedule` nor an `existing`-shaped sub-board.
-  //
-  //     THE TRIGGER IS `tiersCompleted < TIER_COUNT`, not `budgetExpired`.
-  //     Those are different questions: a tier can exit without ever setting
-  //     `budgetExpired` (a term and its metric drifting apart breaks the walk
-  //     on the spot), and `tiersCompleted === TIER_COUNT` is the ONLY thing
-  //     that means "every tier ran to a verdict" — the same predicate
-  //     `already_optimal` keys on below. A board that is not lexicographically
-  //     proven is a board windows may still improve.
-  //
-  //     THE WINDOWS SPEND THE SAME RUN BUDGET THE TIERS DID (R11). Each one is
-  //     allotted an equal share of WHAT IS LEFT, divided by the windows still
-  //     to come — so a window that finishes cheaply leaves the surplus to its
-  //     successors, and the last one may have the whole remainder. Derived from
-  //     the budget and the window plan only, never from elapsed time, so two
-  //     runs on identical input still open identical windows at identical
-  //     allowances on any machine.
-  //
-  //     Running out is a NORMAL outcome: the pass stops launching windows and
-  //     the incumbent stands. The result is taken only if the WHOLE board
-  //     improved, so this can never make the answer worse — the same guarantee
-  //     the greedy seed gives, and the reason it needs no escape hatch either.
-  let usedLns = false;
-  // Close the MAIN phase's account. It is charged its SHARE, never its
-  // overshoot — see `RunBudget.drawn`. Without that the fallback is unreachable
-  // by construction: the tiers only fall short when their last check overran,
-  // and that overrun is reliably bigger than the whole reserve.
-  //
-  // ONLY AT THE TOP LEVEL. `drawn` is a RUN-WIDE running total and `phaseCap`
-  // in an inherited solve is that one window's allotment, so an unguarded
-  // assignment lets every window reset the run's account down to its own small
-  // slice: `left` and `allot` inflate from window 1 onward and `hasBudget()`
-  // can never fire, which is exactly the equal-share re-levelling the window
-  // loop below claims to do. Measured at rlimit 200_000: window 1 allotted
-  // 83_334 against a correct share of 16_667.
-  if (inherited === undefined) budget.drawn = Math.min(budget.spent, phaseCap);
-  if (allowLns && tiersCompleted < TIER_COUNT && elapsed() < wallMs && budget.drawn < budget.total) {
-    const solveWindow = async (w: LnsWindow): Promise<readonly Assignment[]> => {
-      const left = budget.total - budget.drawn;
-      const drawnBefore = budget.spent;
-      const allot = Math.max(1, Math.floor(left / (w.of - w.index)));
-      lnsWindowRlimits.push(allot);
-      const sub = await solveBuild(
-        {
-          fixtures: w.fixtures,
-          config,
-          // The caller's immovables only. Everything else is a pinned FIXTURE
-          // in `w.fixtures`, which is what keeps the sub-solve's metrics the
-          // whole board's metrics.
-          existing: w.existing,
-          dependencies,
-          // This window's slice. `w.of - w.index` is how many windows are still
-          // to come, this one included, so the division re-levels after every
-          // over- or under-spend rather than committing the whole plan up front
-          // to a split the first window has already invalidated.
-          rlimit: allot,
-          wallMs: Math.max(1, wallMs - elapsed()),
-        },
-        false,
-        budget,
-      );
-      // Same rule as the main phase: a window is charged what it was allotted,
-      // not what its last check overran to, so one window cannot swallow the
-      // windows after it.
-      budget.drawn += Math.min(budget.spent - drawnBefore, allot);
-      return sub.assignments;
+  /** Same field derivation `encodeBuild`'s own `asAssignment` uses, so a
+   *  pinned row and a row placement places are built identically. */
+  const assignmentOf = (fixtureId: string, court: string, startAt: number): Assignment => {
+    const f = fixtureById.get(fixtureId);
+    return {
+      fixtureId,
+      court,
+      startAt,
+      endAt: startAt + matchMs,
+      entrants: f === undefined ? [] : [f.home, f.away].filter((e): e is string => e !== undefined),
+      people: f === undefined ? [] : [...(f.people ?? [])],
+      ...(f?.poolId !== undefined ? { poolId: f.poolId } : {}),
+      ...(f?.divisionId !== undefined ? { divisionId: f.divisionId } : {}),
     };
-    const out = await improveByWindows({
-      board: incumbent,
-      fixtures,
-      existing,
-      // `frozen` only. A caller-`locked` fixture needs no help from the window
-      // plan: it carries its pin into every sub-solve on its own fixture record
-      // and `encodeBuild` §4 asserts it as a unit clause.
-      frozen: new Set(frozenIds),
-      courts: config.courts,
-      total: fixtures.length,
-      deadlineMs: wallMs,
-      elapsed,
-      hasBudget: () => budget.drawn < budget.total,
-      solveWindow,
-    });
-    if (isStrictlyBetter(out.metrics, incumbentMetrics)) {
-      incumbent = out.board;
-      incumbentMetrics = out.metrics;
-      // DEFENSIVE, and inert as the guard above is written: `already_optimal`
-      // needs `tiersCompleted === TIER_COUNT`, which this arm excludes. Kept
-      // because the day somebody lets the fallback run on a fully-proved board,
-      // an LNS improvement reported as `already_optimal` is a lie about a proof
-      // — and the failure would be silent.
-      improved = true;
-      // NOT ASSERTED ANYWHERE, and deliberately so rather than by oversight.
-      // `engine: "z3+lns"` needs a run where the fallback both RUNS and wins,
-      // and those two do not currently overlap: the pass only runs when the
-      // tiers fall short, and at every budget where they do, T0 has already
-      // reached a board no LEGAL board beats — so a stub that "improved" on it
-      // would be refused by the verifier gate, and asserting on one would be
-      // asserting on the stub. If Task 13's bench finds a real improving board,
-      // the assertion belongs there.
-      usedLns = true;
+  };
+  const pinnedAssignments = [...pinById.entries()].map(([id, at]) => assignmentOf(id, at.court, at.startAt));
+
+  // If the pins ALONE already carry a PAIRWISE blocking conflict — two locked
+  // cards on one slot, two pinned people double-booked, a direct order breach
+  // between two pins — no amount of placing FREE fixtures can fix it: placement
+  // cannot move a pin, only place the rest around it (a pin is sent as a
+  // fixed `existing` row, and the wire never cross-checks two `existing` rows
+  // against each other — see the comment on `SolveBuildInput.existing`). This
+  // is the same fact z3's own feasibility probe rested on ("without a pin the
+  // model is satisfiable by inspection"), reproduced locally because there is
+  // no live solver handle left to probe once the request is a single RPC
+  // rather than a session.
+  //
+  // PAIRWISE ONLY — `isBlockingConflict` (calendar.ts) is deliberately NOT
+  // used here, because it also marks `window` blocking, and `window` is a
+  // UNARY fact about one row's own placement against `config.window`, not a
+  // contradiction between two pins. A single locked/frozen fixture merely
+  // sitting outside the window is an ordinary "dirty board" —
+  // `deltaConflicts`/R1 exist precisely to forgive it, the same way greedy's
+  // own seed does — and reporting `infeasible` over it here, before placement is
+  // even asked, would refuse boards neither greedy nor a real solve has any
+  // trouble with. Measured: `build.test.ts`'s "does NOT reject a board over a
+  // blocking breach greedy already had" (`a` locked outside a 60-minute
+  // window) reproduced exactly this — `isBlockingConflict` alone turned one
+  // unremarkable pin into a false `infeasible`, deterministically, with no
+  // service involved.
+  const isPairwiseBlockingConflict = (c: Conflict): boolean =>
+    c.reason === "court" || c.reason === "person_overlap" || (c.reason === "order" && c.direct === true);
+  if (pins.length > 0) {
+    const pinConflicts = validateAssignments(pinnedAssignments, verifyConfig, existing, dependencies);
+    if (pinConflicts.some(isPairwiseBlockingConflict)) {
+      return { ...greedy("infeasible"), contradictoryPins: pinnedIds };
     }
   }
 
+  // Obligation 1: `dayIndex` is the org's local calendar day, bucketed
+  // EXACTLY the way the verifier buckets a day cap — any other derivation
+  // reopens the placer/verifier fork `hardRestMinutesFor`'s own docstring
+  // warns about (#447). `tz` undefined means the verifier skips day-cap
+  // counting entirely, so every slot gets the SAME index (0) and
+  // `dayCapByDivision` is omitted below rather than binding a cap against a
+  // fabricated day (#448 — `settings.tz` is DISPLAY, `settings.orgTz` is the
+  // governing clock, and the in-scope wrong one typechecks).
+  const tz = verifyConfig.tz;
+  const dayIndexOf = buildDayIndexOf(grid.slots, tz);
+  const dayCapByDivision = tz === undefined ? undefined : dayCapsByDivision(effectiveHard(verifyConfig));
+
   /**
-   * Is the region every tier walk was asked over NON-EMPTY?
+   * `perEntrantMinRest` is a GLOBAL per-entrant rest, and the wire has no field
+   * for it — `constraints` carries `restByDivision` and nothing else rest-shaped.
+   * So it has to be folded into the per-division map, or the solver never hears
+   * about it at all.
    *
-   * THE OTHER HALF OF `seedOffLattice`, and the question that actually decides
-   * `not_searched`. By this point the solver carries, at base scope, exactly the
-   * bounds the ladder froze: `atLeastPlaced(incumbentMetrics.placed)` and one
-   * `tier.atMost(tier.of(incumbentMetrics))` per completed tier — all four read
-   * off the incumbent's OWN metrics, which is what each walk asked to beat. So a
-   * bare `check()` answers it outright:
+   * IT DID NOT, AND THAT SHIPPED A WRONG BOARD. Reproduced 2026-08-10 by
+   * `schedule-solver-telemetry.test.ts`'s "forwards the pinned set an infeasible
+   * proof is about": two cards sharing an entrant, pinned 30 minutes apart under
+   * `perEntrantMinRest: 30`. z3 received the rule and proved the board
+   * INFEASIBLE, naming the two contradictory pins. The placement service, never
+   * sent the rule, saw nothing wrong and returned **`already_optimal`**.
    *
-   *   * SAT — the lattice carries a board matching the incumbent on every
-   *     metric, so each walk's UNSAT refuted a real region and the ladder is a
-   *     proof. `already_optimal`.
-   *   * UNSAT — the region was empty from the first bound, every walk was unsat
-   *     for that reason alone, and all four tiers "completed" having established
-   *     nothing. `not_searched`.
+   * `already_optimal` is the damaging status, not a harmless one: an organiser
+   * told their schedule is optimal has no reason to look again. And nothing
+   * downstream catches it — `isBlockingConflict` (`calendar.ts:202-209`) is
+   * court / person_overlap / window / order-with-direct, so a rest violation is
+   * WARN-ONLY at the verifier gate and the board is not rejected.
    *
-   * ASKING IS THE ONLY WAY. Nothing already recorded separates the two: in this
-   * branch `!improved` means the incumbent IS the seed and no walk ever returned
-   * sat, so check counts, tier counts and per-tier verdicts are IDENTICAL on
-   * both paths — a genuinely optimal board also ends every walk on a first-ask
-   * unsat. (That rules out the cheaper narrowing of requiring one first-ask
-   * unsat: it is true of both.)
+   * MAX, not overwrite: a division rule and the global floor are both real
+   * constraints, and the binding one is the larger. Taking the division's value
+   * alone would drop the global floor; taking the global alone would drop a
+   * stricter divisional rule.
    *
-   * ONE CHECK, AND ONLY ON THE OFF-LATTICE PATH. A seed that is on the lattice
-   * satisfies its own metrics by construction, so the question is already
-   * answered for every ordinary run and none of them pays for it.
+   * Every division ON THIS BOARD gets an entry, including `""` — the id used for
+   * a fixture with no division (see `divisionId: f.divisionId ?? ""` below).
+   * Without that key a division-less board keeps the rule invisible, which is
+   * the exact shape of the bug this fixes.
    *
-   * CANNOT ASK => CANNOT CLAIM. Out of wall or out of budget answers `false`,
-   * which is the conservative direction: it declines to state a proof rather
-   * than stating one nothing backs. `unknown` lands there too, for the reason
-   * the tier walks give it — the absence of a proof is not a proof.
+   * No proto change is needed: `DivisionRule.min_rest_minutes` already exists
+   * and `model.py:303,337` already enforces `rest_by_division`. The gap was
+   * purely this translation.
    */
-  const latticeHoldsIncumbent = async (): Promise<boolean> => {
-    if (outOfTime() || !arm()) return false;
-    const verdict = await solver.check();
-    settle();
-    return verdict === "sat";
+  const restFloor = config.perEntrantMinRest ?? 0;
+  const restByDivisionForWire = ((): Record<string, number> | undefined => {
+    const declared = verifyConfig.restByDivision;
+    if (restFloor <= 0) return declared;
+    const merged: Record<string, number> = { ...(declared ?? {}) };
+    for (const f of freeFixtures) {
+      const division = f.divisionId ?? "";
+      merged[division] = Math.max(merged[division] ?? 0, restFloor);
+    }
+    return merged;
+  })();
+
+  const placementInput: SolveBuildInput = {
+    courts: config.courts,
+    fixtures: freeFixtures.map((f) => ({
+      fixtureId: f.id,
+      entrantIds: [f.home, f.away].filter((e): e is string => e !== undefined),
+      divisionId: f.divisionId ?? "",
+    })),
+    grid: {
+      slots: grid.slots.map((s) => ({
+        court: s.court,
+        startAtMs: s.startAt,
+        dayIndex: dayIndexOf(s.startAt),
+      })),
+      stepMinutes: grid.stepMinutes,
+    },
+    existing: [
+      ...existing.map((a) => ({ fixtureId: a.fixtureId, court: a.court, startAtMs: a.startAt })),
+      ...[...pinById.entries()].map(([id, at]) => ({
+        fixtureId: id,
+        court: at.court,
+        startAtMs: at.startAt,
+      })),
+    ],
+    // Filtered to pairs where BOTH ends are fixtures placement is actually being
+    // asked to place: `fixtureIndexOf` throws `invalid_request` for an id
+    // that names an `existing`/pinned row instead (positional identity has no
+    // slot for it), which would fail the WHOLE request over one dependency
+    // this run cannot violate anyway — a pin's time is fixed, and an
+    // `existing` row's order was already decided outside this run. Dropping
+    // the pair here is safe, not silent: `validateAssignments` (below) still
+    // catches an actual `order` violation as a blocking conflict.
+    dependencies: dependencies
+      .filter((d) => freeFixtureIds.has(d.fixtureId) && freeFixtureIds.has(d.dependsOn))
+      .map((d) => ({ beforeFixtureId: d.dependsOn, afterFixtureId: d.fixtureId })),
+    constraints: {
+      matchMinutes: config.matchMinutes,
+      gapMinutes: config.gapMinutes,
+      ...(restByDivisionForWire !== undefined ? { restByDivision: restByDivisionForWire } : {}),
+      ...(dayCapByDivision !== undefined && Object.keys(dayCapByDivision).length > 0
+        ? { dayCapByDivision }
+        : {}),
+    },
+    wallSeconds: Math.max(1, Math.round((wallMs - elapsed()) / 1000)),
   };
+
+  // Loaded dynamically, never `import { solveBuild } from "./placement-client.ts"`
+  // at the top of this file: this repo has a recorded trap where a mock
+  // against a module the file under test also imports statically is INERT,
+  // and it has previously passed 5/5 with the guard deleted. `build.test.ts`
+  // mocks this exact call via `vi.spyOn(await import("./placement-client.ts"),
+  // "solveBuild")`, which only observes what THIS line does if this line
+  // resolves the same module namespace object dynamically too — mirroring
+  // how `z3-load.ts` defers its own WASM import to inside `loadZ3`, one call
+  // site removed from this file. See the (type-only) import of
+  // `SolveBuildInput`/`SolveBuildOutcome` above for the rest of the reasoning.
+  // `requestId` is caller-supplied by design (`_RULES.md` §2.3): the client
+  // defaults it to empty rather than generating one itself, specifically
+  // because `packages/engine/src` may not read ambient time or randomness —
+  // `t0` (`performance.now()`, already read at the top of this function for
+  // `elapsed()`) is the one already-in-scope value with any entropy at all,
+  // so the correlator is built from it plus the shape of the request, never
+  // from a NEW `Date.now()`/`Math.random()` call. Not globally unique (two
+  // calls can share a monotonic-clock tick under the low-resolution timers
+  // some sandboxes use) — it only has to help a human match a service log
+  // line back to roughly this call, which an always-empty string cannot do
+  // at all.
+  const requestId = `build-${fixtures.length}f${config.courts.length}c-${Math.trunc(t0)}`;
+  let outcome: SolveBuildOutcome;
+  try {
+    const placementClient = await import("./placement-client.ts");
+    outcome = await placementClient.solveBuild(placementInput, {
+      secret: process.env.PLACEMENT_SERVICE_SECRET ?? "",
+      requestId,
+    });
+  } catch {
+    // Any rejection — deadline, unavailable, transport, invalid_request
+    // (`PlacementError["failure"]`, `placement-client.ts`'s `failureFor`), an
+    // unclassified bug thrown as a plain `Error`, or unauthenticated (the
+    // shared secret rejected — an OPERATOR misconfiguration, and the
+    // single most likely first-deploy failure per `DEPLOY.md`: it presents
+    // as "placement is slow", not as an auth error) — ALL of it falls back to
+    // greedy as `solver_unavailable`, uniformly, by the same test the
+    // `ERROR`-status default arm below already applies: none of these
+    // promise a retry will help. `invalid_request` is the sharpest case for
+    // that — retrying an IDENTICAL malformed request fails identically
+    // every time — which is why it is not `solver_busy`: that status is
+    // true of exactly one cause (`SOLVER_BUSY`, handled below) and would be
+    // a worse lie here than for a genuine outage. No `.failure` switch is
+    // needed because every kind lands in the same place; a caller that
+    // needs the specific reason still has it on the rejected error's
+    // `.failure`/`.message`, this function only decides the fallback board.
+    return greedy("solver_unavailable", true);
+  }
+
+  // `ERROR` is a RESOLVED outcome, not a rejection, but it carries the same
+  // instruction: an unmapped or unreadable status is a board this function
+  // has no reason to trust (see `placement-client.ts`'s comment on
+  // `STATUS_BY_WIRE_VALUE`), so it falls back to greedy exactly as a
+  // rejection does. WHICH status name it falls back to is not uniform,
+  // though (Task 06b, Correction 2): `SOLVER_BUSY` is the service's own
+  // admission control refusing a concurrent solve (`schema.py`'s
+  // `error_response("SOLVER_BUSY", ...)`, called from `main.py`), and Task
+  // 08 pinned `PLACEMENT_MAX_WORKERS=1` in `fly.toml` specifically to hold
+  // worst-case thread contention down — which makes two organisers clicking
+  // Auto-schedule at once an ORDINARY-traffic path into this, not a rare
+  // fault. A retry helps there (the other solve finishes in seconds), so it
+  // reports the EXISTING `solver_busy` (`statusKey()` already handles it,
+  // and its copy already promises a retry), never the new
+  // `solver_unavailable` — whose copy does not promise a retry will help,
+  // and would be a worse lie than "busy" for a transient queue refusal.
+  // Every other `ERROR` (a transport fault, an unmapped status the service
+  // itself could not name) genuinely offers no such promise.
+  if (outcome.status === "ERROR") {
+    return greedy(outcome.error?.code === "SOLVER_BUSY" ? "solver_busy" : "solver_unavailable", true);
+  }
+
+  // `UNKNOWN`: the chain proved nothing, closest in meaning to "don't claim
+  // anything" — the same reading z3's own `unknown` got. Not folded into the
+  // `!improved` derivation below with OPTIMAL/FEASIBLE: `objective.py`'s
+  // `_chain_status` (the service's own status derivation) returns a raw
+  // solver-status name — UNKNOWN among them — ONLY on its `if not
+  // assignments` path, since a mapped OPTIMAL/FEASIBLE status is returned
+  // whenever there IS a board. So `outcome.assignments` is always empty
+  // here and `tiersCompleted` is always 0 (every tier that increments it
+  // also extracts a non-empty board first) — meaning this outcome could
+  // never legitimately reach `already_optimal` either, and would otherwise
+  // silently fall through the `!improved` branch below as `"ok"` (0 !==
+  // `TIER_COUNT`), the exact invented verdict `not_searched` exists to
+  // refuse. `outcome.wallExhausted` carries whether the run actually spent
+  // its budget getting here rather than bailing instantly.
+  if (outcome.status === "UNKNOWN") return greedy("not_searched", outcome.wallExhausted);
+
+  // The pins are the only thing that can make this request's model unsat:
+  // without one the empty board is always a legal answer (the same reasoning
+  // z3's own feasibility probe used). So an `INFEASIBLE` verdict is a proof
+  // about the pins, and the result says so by name, exactly as the z3 path
+  // did.
+  if (outcome.status === "INFEASIBLE") {
+    return { ...greedy("infeasible"), contradictoryPins: pinnedIds };
+  }
+
+  const placedAssignments = outcome.assignments.map((a) => assignmentOf(a.fixtureId, a.court, a.startAtMs));
+  const incumbent: readonly Assignment[] = [...pinnedAssignments, ...placedAssignments];
+  const incumbentMetrics = boardMetrics(incumbent, config.courts, fixtures.length);
+  const budgetExpired = outcome.wallExhausted;
+  const tiersCompleted = outcome.tiersCompleted;
+  // Whether an absent fixture's `no_slot` conflict may honestly claim a proof
+  // ("no legal slot in the lattice") or must admit the budget ran out — see
+  // `conflictsFor`. Cosmetic wording only; it gates nothing else below.
+  const proved = tiersCompleted >= 1;
 
   // 7. The gate. Encoder and verifier disagreeing is the exact bug class this
   //    design exists to prevent, so it is never silent — but it is also never
   //    an exception, because the organiser still needs a board, and it is a
   //    DELTA rather than an absolute test (see `rejectedBlockingConflicts`).
-  //
-  //    `repair.ts` throws `RepairVerificationError` in the analogous place and
-  //    this deliberately does not, so the loudness has to come from somewhere.
+  //    UNCHANGED from the z3 path: `validateAssignments` (via
+  //    `conflictsForBoard`) runs generically over whichever engine's board it
+  //    is handed, and a placement board comes back through the exact same call
+  //    z3's did.
   const conflicts = conflictsForBoard(incumbent, proved);
   const ours = new Set(incumbent.map((a) => a.fixtureId));
   const rejected = rejectedBlockingConflicts(rawSeedConflicts, conflicts, ours);
@@ -1833,59 +1586,77 @@ async function solveBuild(
     // otherwise reach nobody until an organiser filed a ticket about it.
     // eslint-disable-next-line no-console
     console.error(
-      `buildSchedule: verifier rejected the solver's board (${rejected
+      `buildSchedule: verifier rejected the placement solver's board (${rejected
         .map((c) => `${c.fixtureId}:${c.reason}`)
         .join(", ")}) — falling back to the greedy seed`,
     );
     return { ...greedy("verifier_rejected", budgetExpired), tiersCompleted };
   }
 
+  // D6 — "never worse than greedy" — enforced explicitly, because the
+  // structure that gave z3 this property for free is gone. z3's own
+  // `incumbent` started as `seedAssignments` and was replaced ONLY inside an
+  // `if (isStrictlyBetter(...))` arm (the T0/tier walks above, before this
+  // task), so a regression was not reachable BY CONSTRUCTION — there was
+  // never a code path that could hand back something worse. placement returns
+  // one finished board over a single RPC; nothing upstream of this line
+  // compared it to anything, so `outcome.assignments` must be treated as a
+  // CANDIDATE, not a foregone incumbent. A starved or merely-suboptimal
+  // FEASIBLE/UNKNOWN reply — fewer placed, or a worse makespan/idle
+  // gap/imbalance than the seed — must not ship just because it passed the
+  // verifier gate above: the gate only proves the board is LEGAL, not that
+  // it is any good.
+  //
+  // A DELIBERATELY SIMPLER status derivation than z3's, in both branches
+  // below. The z3 path also asked whether the tier ladder was proved over a
+  // NON-EMPTY region (`seedOffLattice`/`latticeHoldsIncumbent`) before
+  // claiming `already_optimal` — that nuance has no placement equivalent here
+  // (there is no live solver handle left to ask a follow-up `check()` of
+  // once the RPC has returned) and is left to Task 06b's status-mapping work
+  // (`_RULES.md` §4).
+  const improved = isStrictlyBetter(incumbentMetrics, seedMetrics);
+
+  if (!improved) {
+    // `already_optimal`/`infeasible` are ONLY reachable here — both require
+    // `!improved` by definition (a board that is `already_optimal` is, by
+    // that word, one nothing beat), so this must not run in the `improved`
+    // arm below: a fully-proved ladder that ALSO happens to have beaten the
+    // seed is `ok`, and calling it `already_optimal` would deny the very
+    // improvement this branch exists to ship.
+    const status: BuildStatus =
+      tiersCompleted === TIER_COUNT
+        ? incumbentMetrics.placed === 0 && fixtures.length > 0
+          ? "infeasible"
+          : "already_optimal"
+        : "ok";
+    // The floor, not the candidate. `greedy()` recomputes conflicts/moved/
+    // lost off `seed.assignments` itself — the SAME derivation every other
+    // fallback exit in this function already uses — so this is not a second
+    // "what does a returned board look like" implementation, only a second
+    // call into the first one. `engine: "greedy"` here matches z3's own
+    // exact precedent: `incumbent === seedAssignments` always reported
+    // `"greedy"` there too, `already_optimal` included — the field names
+    // where the BOARD came from, not which solver was consulted.
+    return { ...greedy(status, budgetExpired), tiersCompleted };
+  }
+
   const moved = movedFrom(incumbent);
   const lost = lostFrom(incumbent);
-
-  // `already_optimal` needs BOTH halves: every tier ran to a verdict, and
-  // nothing to show for it. Without the first it would claim a proof on a board
-  // nobody looked at; without the second it would fire on a board that was just
-  // improved. It is ALL FOUR tiers, not just T0 — "greedy already placed every
-  // card" is not a statement about the makespan, and a board that could still
-  // be made shorter is not optimal in any sense an organiser would accept.
-  //
-  // AND IT NEEDS A THIRD THING: a ladder that was asked over a NON-EMPTY region.
-  // A completed ladder whose every bound was unachievable on the lattice is not
-  // a weaker proof, it is no proof at all — each walk was unsat on its first ask
-  // because the tier freeze itself is out of reach, not because nothing better
-  // exists. That case reports `not_searched`, which says the true thing.
-  //
-  // `infeasible` is unaffected and deliberately tested first: it needs
-  // `placed === 0`, and a seed that placed nothing has no row to be off the
-  // lattice, so the two can never compete for the same run.
-  let status: BuildStatus = "ok";
-  if (tiersCompleted === TIER_COUNT && !improved) {
-    status =
-      incumbentMetrics.placed === 0 && fixtures.length > 0
-        ? "infeasible"
-        : !seedOffLattice || (await latticeHoldsIncumbent())
-          ? "already_optimal"
-          : "not_searched";
-  }
 
   return {
     assignments: incumbent,
     conflicts,
     metrics: incumbentMetrics,
-    // Where the board CAME FROM. `z3+lns` is claimed only when a window pass
-    // actually produced the board being returned — an LNS pass that ran and
-    // improved nothing leaves the tiers' own answer in place, and saying
-    // otherwise would attribute the board to the wrong solver.
-    engine: usedLns ? "z3+lns" : incumbent === seedAssignments ? "greedy" : "z3",
-    status,
+    engine: "optimized",
+    // Reachable only by having just beaten the seed — see the comment above.
+    status: "ok",
     tiersCompleted,
     budgetExpired,
     elapsedMs: elapsed(),
     moved,
     lost,
-    rlimitSpent: budget.spent,
-    lnsWindowRlimits,
+    rlimitSpent: 0,
+    lnsWindowRlimits: [],
   };
 }
 
@@ -1989,267 +1760,22 @@ function restrictToConfiguredCourts(
   return { slots, byCourt, stepMinutes: grid.stepMinutes, overCap: grid.overCap };
 }
 
-// --- the three lexicographic tiers ------------------------------------------
-
-export interface Tier {
-  name: string;
-  /**
-   * The metric this tier minimises, in WHOLE MILLISECONDS.
-   *
-   * `boardMetrics` reports MINUTES, as floats: `(hi - lo) / 60_000` for the
-   * makespan and a sum of such quotients for each court's load. Every bound
-   * asserted below is a z3 integer, so the two are compared in the unit the
-   * underlying quantities actually are — milliseconds — and the float is
-   * converted back with `Math.round`, which is exact for any value that came
-   * from dividing an integer number of milliseconds by 60_000. Flooring would
-   * round a 30-second idle gap down to zero and freeze a bound the incumbent
-   * does not meet, which is the one failure mode that would make a later tier
-   * unsatisfiable against the board in hand.
-   */
-  of: (m: BoardMetrics) => number;
-  /**
-   * Assert "this metric is at most `boundMs`" into the solver's CURRENT scope.
-   *
-   * Called under `push`/`pop` while the tier walks, and once at the top level to
-   * freeze what it achieved. A function rather than an `Arith` term because only
-   * two of the three ARE terms: the idle gap is a clause family whose shape
-   * depends on the bound, and pretending otherwise would mean an integer
-   * variable per participant pair and the arithmetic encoding this whole design
-   * exists to avoid.
-   */
-  atMost: (boundMs: number) => void;
-}
-
-export interface TierInput {
-  Z3: Z3Context["Z3"];
-  solver: Solver<"repair">;
-  model: EncodedModel;
-  grid: BuildGrid;
-  fixtures: readonly SchedulableFixture[];
-  config: SlotConfig & { courts: string[] };
-}
-
-/**
- * Builds all three tiers, and every assertion they SHARE, exactly once.
- *
- * Called before the tier loop rather than lazily per tier, because two of the
- * three define themselves through assertions (`lo <= start` and friends) and an
- * assertion added inside a `push` would vanish at the matching `pop` — the tier
- * would then "optimise" a variable nothing constrains and report a bound no
- * board meets. Every definition here is an IMPLICATION off a placement literal,
- * so none of it changes which boards are legal.
- *
- * EXPORTED for `scripts/bench-build.ts` only (Task 13, question Q8: how big is
- * the idle-gap clause family at target scale, and which tier dominates). The
- * size of a tier's encoding is invisible from `BuildResult` — every symptom of
- * an expensive tier washes out into "the run stopped early", which is also what
- * a cheap tier under a small budget looks like — so measuring it means stating a
- * bound against a real encoded model and counting the assertions. The
- * alternative was for the bench to restate the clause shapes itself, which is a
- * placer/verifier fork in a new costume. No production caller outside this file.
- */
-export function buildTiers(input: TierInput): Tier[] {
-  const { Z3, solver, model, grid, fixtures, config } = input;
-  const slots = grid.slots;
-  const durMs = config.matchMinutes * MS_PER_MIN;
-
-  /** "Some fixture sits in slot s". The same abstraction `build-encode.ts`
-   *  uses and exact for the same reason: its §2 says a slot holds at most one
-   *  fixture, so an occupancy literal cannot count to two. */
-  const occAny = slots.map((_sl, s) => {
-    const o = Z3.Bool.const(`m_occ_${s}`);
-    solver.add(o.eq(Z3.Or(...fixtures.map((_f, i) => model.place[i]![s]!))));
-    return o;
-  });
-
-  // --- T1: makespan ---------------------------------------------------------
-  //
-  // `boardMetrics` reports `maxEnd - minStart` over the PLACED rows, and every
-  // row a build produces is exactly `matchMinutes` long, so both ends are known
-  // statically per slot. Two free integers squeezed onto the real extremes: the
-  // implications force `lo <= every occupied start` and `hi >= every occupied
-  // end`, hence `hi - lo >= maxEnd - minStart`, and setting them to the extremes
-  // themselves is always available — so `hi - lo <= B` holds for exactly the
-  // boards whose true makespan is at most B. Nothing pins them on an empty
-  // board, which is why the walk never asks below zero.
-  const mkLo = Z3.Int.const("mk_lo");
-  const mkHi = Z3.Int.const("mk_hi");
-  slots.forEach((sl, s) => {
-    solver.add(
-      Z3.Implies(occAny[s]!, Z3.And(mkLo.le(sl.startAt), mkHi.ge(sl.startAt + durMs))),
-    );
-  });
-  const makespan = mkHi.sub(mkLo);
-
-  // --- T3: court imbalance --------------------------------------------------
-  //
-  // `boardMetrics` measures the busiest configured-or-used court minus the
-  // quietest, so the court SET it divides by is `config.courts` plus whatever
-  // courts the board actually used — a configured court nobody plays on counts
-  // as a zero (that is the point of the metric), while an UNconfigured court
-  // nobody plays on is not in the set at all.
-  //
-  // THE SECOND HALF OF THAT SENTENCE IS UNREACHABLE HERE, and the bound is
-  // unconditional because of it. Under R3 the only slots left on an
-  // unconfigured court are exact matches for a PIN (`restrictToConfiguredCourts`
-  // deletes the rest), and every pin is force-asserted true — `encodeBuild` §4
-  // for a `locked` fixture, the frozen-anchor loop above for the other source.
-  // So an unconfigured court in `grid.byCourt` provably carries load, it is
-  // provably in `boardMetrics`' court set, and `lo <= load` is exactly right
-  // for it. An earlier draft guarded this with `Implies(load >= 1, ...)`; that
-  // guard was not merely untested but DEAD, since its antecedent holds for
-  // every reachable input, and a dead guard reads as a case somebody once saw.
-  //
-  // THAT ARGUMENT WAS BRIEFLY UNSOUND, which is worth recording: the pin builder
-  // resolved a `frozen` id through `current` without checking it named a fixture
-  // in this run, while the force loop skipped exactly those ids. Such a pin
-  // bought a lattice slot nothing could be forced onto — an unconfigured court
-  // carrying no load — and this line then pulled the minimum to zero and had T3
-  // chase an imbalance the board did not have. `ownFixture` above restores the
-  // premise: every pin names a card of this run's, so every pin is forced.
-  //
-  // (If an unforced pin source is ever added — a pin the solver may decline —
-  // this is the line that has to come back, because a court in the lattice with
-  // nothing on it would then pull the minimum to zero and report an imbalance
-  // the board does not have.)
-  const cbLo = Z3.Int.const("cb_lo");
-  const cbHi = Z3.Int.const("cb_hi");
-  const loadOf = (rowsOnCourt: readonly number[]): Arith<"repair"> =>
-    Z3.Sum(
-      Z3.Int.val(0),
-      ...rowsOnCourt.map((s) => Z3.If(occAny[s]!, Z3.Int.val(durMs), Z3.Int.val(0))),
-    );
-  for (const rowsOnCourt of grid.byCourt.values()) {
-    const load = loadOf(rowsOnCourt);
-    solver.add(cbHi.ge(load));
-    solver.add(cbLo.le(load));
-  }
-  // A configured court with no slots at all — blacked out, or outside every
-  // session window. `boardMetrics` still seeds it at zero, so it still pulls the
-  // minimum down, and leaving it out would understate the imbalance.
-  for (const court of config.courts) {
-    if (grid.byCourt.has(court)) continue;
-    solver.add(cbHi.ge(0));
-    solver.add(cbLo.le(0));
-  }
-  const imbalance = cbHi.sub(cbLo);
-
-  // --- T2: worst idle gap ---------------------------------------------------
-  //
-  // The one metric with no honest term. `boardMetrics` takes, per participant
-  // with two or more rows, the largest wait between CONSECUTIVE matches — and
-  // "consecutive" is not a static property of a slot pair, it depends on which
-  // other slots that participant occupies. Written as arithmetic it needs an
-  // integer per participant pair and an ordering between them, which is the
-  // O(n^2) encoding `build-encode.ts` exists to avoid.
-  //
-  // Stated as a BOUND it collapses. Every row is `matchMinutes` long, so a gap
-  // of at most B is the same statement as consecutive STARTS at most
-  // `W = B + matchMinutes` apart, and that is a clause family:
-  //
-  //     for each participant p and each start index k, with j the first start
-  //     beyond starts[k] + W:      ~occ[k] \/ ~tail[j] \/ (p occupies something
-  //                                in (starts[k], starts[k] + W])
-  //
-  // where `occ[k]` is "p occupies start k" and `tail[j]` is "p occupies some
-  // start >= starts[j]". Both directions hold, which is the only thing that
-  // makes the bound the metric rather than an approximation of it:
-  //
-  //   * SOUND. A violated clause means p occupies starts[k], occupies something
-  //     beyond starts[k] + W, and occupies nothing in between — so the SUCCESSOR
-  //     of starts[k] is more than W away and the real gap really does exceed B.
-  //     Nothing legal is refused.
-  //   * COMPLETE. If two consecutive occupied starts a < b are more than W
-  //     apart, the clause at k = index(a) is violated: `occ[k]` holds, `tail[j]`
-  //     holds because b lies beyond starts[k] + W, and the window between them
-  //     is empty precisely because a and b are consecutive.
-  //
-  // (An earlier draft anchored the first literal on "p occupies some start <=
-  // starts[k]" instead. It is equivalent — completeness is already argued at
-  // k = index(a), where the two agree — so the extra prefix chain bought
-  // nothing and is gone.)
-  //
-  // Cost is one clause per (participant, start) of length |window|, and only
-  // participants with two or more fixtures are built at all — everyone else
-  // contributes 0 to the metric by definition and would be pure encoding.
-  // `tail` is a chain, so it is O(|starts|) and, unlike the clauses,
-  // bound-independent, which is what lets the walk re-state only the clauses.
-  const starts = [...new Set(slots.map((s) => s.startAt))].sort((a, b) => a - b);
-  const slotsAtStart = starts.map((t) =>
-    slots.flatMap((sl, s) => (sl.startAt === t ? [s] : [])),
-  );
-  /** Fixture indexes per participant, namespaced exactly as `boardMetrics` and
-   *  `build-encode.ts` namespace them so an entrant id can never collide with a
-   *  person id. */
-  const byParticipant = new Map<string, number[]>();
-  fixtures.forEach((f, i) => {
-    for (const p of new Set([
-      ...[f.home, f.away].filter((e): e is string => e !== undefined).map((e) => `e:${e}`),
-      ...(f.people ?? []).map((p) => `p:${p}`),
-    ])) {
-      const rows = byParticipant.get(p);
-      if (rows === undefined) byParticipant.set(p, [i]);
-      else rows.push(i);
-    }
-  });
-
-  let gapGroups = 0;
-  const gapParticipants = [...byParticipant.values()]
-    .filter((group) => group.length >= 2)
-    .map((group) => {
-      const g = gapGroups++;
-      const occ = starts.map((_t, k) => {
-        const o = Z3.Bool.const(`gp_${g}_${k}`);
-        solver.add(
-          o.eq(Z3.Or(...group.flatMap((i) => slotsAtStart[k]!.map((s) => model.place[i]![s]!)))),
-        );
-        return o;
-      });
-      const tail: Bool<"repair">[] = new Array<Bool<"repair">>(occ.length);
-      for (let k = occ.length - 1; k >= 0; k--) {
-        if (k === occ.length - 1) {
-          tail[k] = occ[k]!;
-          continue;
-        }
-        const v = Z3.Bool.const(`gt_${g}_${k}`);
-        solver.add(v.eq(Z3.Or(occ[k]!, tail[k + 1]!)));
-        tail[k] = v;
-      }
-      return { occ, tail };
-    });
-
-  const assertGapAtMost = (boundMs: number): void => {
-    const width = boundMs + durMs;
-    for (const p of gapParticipants) {
-      for (let k = 0; k < starts.length; k++) {
-        let j = k + 1;
-        while (j < starts.length && starts[j]! <= starts[k]! + width) j++;
-        // Nothing lies beyond the window, so no start can be stranded past it —
-        // and `starts[k]` only grows, so neither can any later k.
-        if (j >= starts.length) break;
-        const between: Bool<"repair">[] = [];
-        for (let i = k + 1; i < j; i++) between.push(p.occ[i]!);
-        solver.add(Z3.Or(Z3.Not(p.occ[k]!), Z3.Not(p.tail[j]!), ...between));
-      }
-    }
-  };
-
-  const ms = (minutes: number): number => Math.round(minutes * MS_PER_MIN);
-  return [
-    {
-      name: "makespan",
-      of: (m) => ms(m.makespanMinutes),
-      atMost: (boundMs) => solver.add(makespan.le(boundMs)),
-    },
-    {
-      name: "idleGap",
-      of: (m) => ms(m.worstIdleGapMinutes),
-      atMost: assertGapAtMost,
-    },
-    {
-      name: "imbalance",
-      of: (m) => ms(m.courtImbalanceMinutes),
-      atMost: (boundMs) => solver.add(imbalance.le(boundMs)),
-    },
-  ];
-}
+// --- the z3 lexicographic tier encoder USED TO LIVE HERE ---------------
+//
+// `Tier`, `TierInput` and `buildTiers` were removed 2026-08-10. They were
+// z3's tier encoder for BUILD, replaced by the placement service, and by the
+// time they were deleted they had ZERO callers anywhere in packages/engine,
+// apps/web or scripts — dead code the cutover orphaned rather than code kept
+// as a fallback.
+//
+// They were found by the engine COVERAGE gate, not by review: ~230 uncovered
+// lines were on their own enough to drag the global line coverage under its
+// 90% threshold (89.76% with them, above it without).
+//
+// This is NOT Prompt 10. That task removes z3 as a CAPABILITY — the WASM
+// loader, the fallback path, repair/REFLOW's own z3 — and stays gated on
+// C1/C2/C4. Deleting an uncalled function removes no capability, because
+// nothing could reach it: `build.ts` already routes BUILD entirely through
+// `solveBuild`, and the `withZ3LockAndReset` wrapper around it is vestigial
+// (see the comment at that call site). Anything Prompt 10 needs from this
+// code is in git history.

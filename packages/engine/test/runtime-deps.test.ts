@@ -72,6 +72,14 @@ describe("engine runtime dependencies", () => {
 
   it("finds the imports it is meant to be guarding", () => {
     // A regex that silently matched nothing would make the gate above vacuous.
-    expect([...runtimeImports().keys()].sort()).toEqual(["z3-solver", "zod"]);
+    // `@grpc/grpc-js` and `@bufbuild/protobuf` arrive with the placement client and
+    // its generated stubs; both are runtime imports, so both must stay in
+    // `dependencies` for the `--prod` staging install.
+    expect([...runtimeImports().keys()].sort()).toEqual([
+      "@bufbuild/protobuf",
+      "@grpc/grpc-js",
+      "z3-solver",
+      "zod",
+    ]);
   });
 });

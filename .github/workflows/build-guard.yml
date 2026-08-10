@@ -1,0 +1,83 @@
+name: Build guard (push to main)
+
+# WHY THIS EXISTS, and why it is not part of ci.yml.
+#
+# `ci.yml` runs its test gates on PULL REQUESTS ONLY, deliberately: a
+# squash-merge lands the exact tree the PR already validated, so re-running
+# them on the main push would test the same code twice. That reasoning is
+# sound and this workflow does not change it.
+#
+# The hole it leaves is a DIFFERENT path: merging locally and pushing straight
+# to `main`. Nothing validated that tree, because no PR ever existed for it.
+# That is a known, documented pattern in this repo — and `push: main` is what
+# drives the deploy.
+#
+# One class of defect is invisible to every other gate and fatal on exactly
+# that path: a `"use client"` file importing a server-only module graph.
+# `packages/engine/src/scheduling`'s barrel re-exports `build.ts`, which
+# reaches `placement-client.ts` -> `@grpc/grpc-js` -> `net`/`tls`/`http2`/
+# `dns`/`fs`. None exist in a browser, so the build dies with
+# `Module not found: Can't resolve 'dns'` — an error naming nothing near the
+# cause. A DYNAMIC import does not help: the bundler still resolves and
+# compiles it, merely into a separate chunk.
+#
+# `tsc`, `vitest`, `eslint` and the drift gates are ALL blind to this. Only a
+# real `next build` catches it. It shipped once already — broken from the
+# cutover until Task 11, found only because E2E needs a prod build and nothing
+# in that programme had ever run one.
+#
+# PROVEN, not assumed (2026-08-10): adding a single barrel import to a
+# `"use client"` file and building reproduced it exactly —
+# `BUILD_EXIT=1`, `Module not found: Can't resolve 'dns' / 'fs' / 'http2'`.
+# Reverting restored a clean build. Re-run that negative control if you ever
+# doubt this workflow earns its minutes.
+#
+# Scoped to `push: main` ON PURPOSE. Pull requests already build inside
+# ci.yml's smoke job, so running here too would burn a second full build on
+# every PR for no new signal.
+
+on:
+  push:
+    branches: [main]
+
+# A newer push to main supersedes this one.
+concurrency:
+  group: build-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Same source-hashed cache key as ci.yml's build step, so a push to main
+      # right after a PR build usually restores rather than rebuilding.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('apps/web/src/**/*.js', 'apps/web/src/**/*.jsx', 'apps/web/src/**/*.ts', 'apps/web/src/**/*.tsx') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
+
+      # SKIP_TYPECHECK matches ci.yml: this job exists to prove the MODULE
+      # GRAPH resolves for the browser, not to re-run tsc. turbo.json declares
+      # SKIP_TYPECHECK in `build.env`, so a run with it set hashes differently
+      # from one without — a cached build can never be silently reused across
+      # the type-checked / not-type-checked split.
+      - name: Build (production)
+        run: npx turbo run build
+        env:
+          SKIP_TYPECHECK: "1"

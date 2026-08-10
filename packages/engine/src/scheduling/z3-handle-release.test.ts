@@ -51,12 +51,17 @@ describe("no z3 handle is left to the finaliser", () => {
     released: (src.match(/(?<!stats)\.release\(\);/g) ?? []).length,
   });
 
-  it("build.ts reads a model only through the releasing helper", () => {
-    // Exactly one place takes a model out. The inline
-    // `model.slotOf(solver.model())` this file was written against — there were
-    // two of them — would show up as extra occurrences with no release beside
-    // them.
-    expect(handles(read("build.ts"))).toEqual({ models: 1, released: 1 });
+  it("build.ts takes no z3 model handle at all, now that solveBuild calls placement", () => {
+    // Was `{ models: 1, released: 1 }` through `withModel`. Task 06 (the
+    // placement cutover) replaced the whole z3 tier-walk `solveBuild` used to
+    // run — including `withModel` and its one `solver.model()` call — with a
+    // single RPC to the placement service, which never touches a z3 handle.
+    // Zero and zero is the CORRECT count, not a weaker one: it says build.ts
+    // has nothing left to leak on this path, and the assertion still guards
+    // against a regression that reintroduces an unpaired `solver.model()`
+    // here. `repair.ts` (REFLOW, still z3) is unaffected — see the case
+    // below.
+    expect(handles(read("build.ts"))).toEqual({ models: 0, released: 0 });
   });
 
   it("repair.ts releases the model it reads a solution out of", () => {

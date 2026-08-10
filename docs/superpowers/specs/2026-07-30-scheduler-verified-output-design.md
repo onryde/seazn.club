@@ -360,7 +360,7 @@ so `SYSTEM_PROMPT` stays byte-frozen behind its golden snapshot:
   structural round, no cost accounting, no timeout.
 - **`EXPLAINER_PROMPT`.** A second LLM call for what the existing `summary` field
   already returns without one. Recorded as a product idea, not a build item.
-- **CP-SAT sidecar.** Their own §7 trigger is not met.
+- **Placement sidecar.** Their own §7 trigger is not met.
 
 ### 7.5 Adopt later in this programme
 

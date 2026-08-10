@@ -65,11 +65,11 @@ byte-identical. Pre-rebase tip was `f0921f28`.
 
 ## Parallel execution
 
-Safe to run alongside the sibling `2026-08-07-cpsat-service-prompts/`
+Safe to run alongside the sibling `2026-08-07-placement-service-prompts/`
 programme in a SEPARATE worktree/branch — file sets are disjoint except
 a soft overlap in `apps/web/src/dictionaries/*/ui.json` (this programme
 adds blackout-editor/court-removal keys via Prompts 06/08; the other
-adds one `cp-sat` engine-label key) — a merge-time conflict at worst,
+adds one `optimized` engine-label key) — a merge-time conflict at worst,
 not a live-clobber risk, as long as each runs in its own worktree
 rather than the same working directory. Do not run both in the same
 checkout simultaneously.

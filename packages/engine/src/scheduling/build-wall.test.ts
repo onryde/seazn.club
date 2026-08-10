@@ -214,7 +214,15 @@ describe("R23 — the wall bounds the encode path, not just the search loops", (
     expect(out.rlimitSpent).toBe(0);
   }, 120_000);
 
-  it("still encodes when the wall is intact — the guard is a skip, not a removal", async () => {
+  // SKIPPED (Task 06, placement cutover): `solveBuild` no longer calls
+  // `encodeBuild` at all, so `withEncodeSpy`'s positive witness
+  // (`calls.n === 1`) can never be satisfied on this path — genuinely dead,
+  // not merely unreachable in this test environment. The R23 guard THIS
+  // witnesses (the sibling `it` above, which is NOT skipped) still holds:
+  // an already-gone wall still returns the greedy floor without attempting
+  // placement, which is exactly what `solveBuild`'s own `outOfTime()` check
+  // before the RPC call does now.
+  it.skip("still encodes when the wall is intact — the guard is a skip, not a removal", async () => {
     // THE POSITIVE WITNESS, and without it the test above is satisfied by a
     // solver that never encodes anything at all. `rlimit: 1` starves every
     // check the moment the model exists, so this pays for the encode and

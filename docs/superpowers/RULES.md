@@ -37,9 +37,13 @@ backwards-compatible one; don't contort a design to dodge a migration.
 
 - **Scout — Sonnet, High effort.** All read-only exploration, file
   discovery, codebase Q&A.
-- **Implementer — Sonnet, xHigh effort.** Writes code. Full access to all
+- **Implementer — Sonnet, MAX effort** (raised from xHigh by the owner
+  2026-08-10; set in `.claude/agents/implementer.md` frontmatter, which is
+  where effort actually lives — the Agent tool cannot set it per-dispatch).
+  Writes code. Full access to all
   skills and tools.
-- **Reviewer — Sonnet, xHigh effort.** Reviews the implementer's diff,
+- **Reviewer — Sonnet, MAX effort** (raised from xHigh by the owner
+  2026-08-10, same place). Reviews the implementer's diff,
   reports gaps as a list, not prose.
 
 **Loop**: Implementer → Reviewer → gap list → Implementer → Reviewer → …

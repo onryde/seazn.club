@@ -37,15 +37,29 @@
 // that ends before the run starts holds nothing at all. Those still leave the
 // solver unable to search, and the fix there is to say so
 // (`status: "not_searched"`) rather than to claim a proof.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildSchedule, seedPinsOf } from "./build.ts";
 import { buildGrid } from "./build-grid.ts";
+// `gridStepMinutes` moved out of `build-grid.ts` into its own module on main
+// while this branch was in flight; the rebase conflict here was that move
+// crossing Task 06's added `placement-client` import, not a disagreement about
+// the step itself.
 import { gridStepMinutes } from "./grid-step.ts";
 import { boardMetrics } from "./build-objectives.ts";
 import { slotFixtures } from "./calendar.ts";
 import { resetZ3 } from "./z3-load.ts";
 import type { Assignment, SchedulableFixture, SlotConfig } from "./calendar.ts";
 import type { SchedulingConstraints } from "./constraints.ts";
+import type { SolveBuildOutcome } from "./placement-client.ts";
+
+const okOutcome = (assignments: SolveBuildOutcome["assignments"]): SolveBuildOutcome => ({
+  assignments,
+  status: "OPTIMAL",
+  tiersCompleted: 4,
+  objectiveValues: [],
+  elapsedMs: 5,
+  wallExhausted: false,
+});
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 7, 8, 9, 0);
@@ -194,6 +208,21 @@ describe("the lattice holds the seed", () => {
 // --- end to end -------------------------------------------------------------
 
 describe("a rest-configured board is actually searched", () => {
+  // UN-SKIPPED (fix round 1), all three: each now mocks the file's own
+  // documented board directly. `seedPinsOf`/`pinned` are NOT part of the
+  // grid `solveBuild` sends to placement any more (see build.ts's comment on
+  // that removal) — placement does not need the incumbent representable in its
+  // own lattice the way z3's incremental bound-walk did, and `build.ts`
+  // never validates that a returned position is "on grid" either, so a
+  // mocked off-grid reply (chained rest positions like +65/+130 are on no
+  // 10-minute lattice) is processed identically to an on-grid one. What
+  // these cases verify — does `solveBuild` correctly turn a returned board
+  // into the right `BuildResult` — does not depend on the mechanism that
+  // used to make such a board SEARCHABLE for z3.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("greedy stacks both cards on one court, off the lattice", () => {
     // The premise, pinned so a change in `slotFixtures` cannot quietly make the
     // case below vacuous by handing z3 a board it has nothing to improve.
@@ -206,35 +235,43 @@ describe("a rest-configured board is actually searched", () => {
   });
 
   it("z3 balances the courts instead of calling the seed optimal", async () => {
+    // Note WHICH card moves in the mock: `a` to C2 at +0, `b` keeps the
+    // seed's own +65 on C1 — the file's own documented board.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([
+        { fixtureId: "a", court: "C2", startAtMs: T0 },
+        { fixtureId: "b", court: "C1", startAtMs: T0 + 65 * MIN },
+      ]),
+    );
     const out = await buildSchedule({ fixtures: restFixtures, config: restConfig });
-    // The board, not the provenance: a z3 run that finds nothing better
-    // legitimately reports `engine: "greedy"`, so `engine === "z3"` alone would
-    // be the wrong assertion. This is a strictly better board on D3's third
-    // tier, at no cost on the two above it.
-    //
-    // Note WHICH card moved: `a` goes to C2 at +0 and `b` keeps the pinned +65.
-    // The improvement is reachable because the pin makes the incumbent's
-    // makespan achievable at all — the lattice has no +65 on C2, so a solver
-    // that could not express the seed could not have got here either.
+    // The board, not the provenance: a run that finds nothing better
+    // legitimately reports `engine: "greedy"`. This is a strictly better
+    // board on D3's third tier, at no cost on the two above it.
     expect(out.metrics.courtImbalanceMinutes).toBe(0);
     expect(out.metrics.placed).toBe(2);
     expect(out.metrics.makespanMinutes).toBe(95);
     expect(new Set(out.assignments.map((a) => a.court))).toEqual(new Set(["C1", "C2"]));
-    // The solver really ran — z3's own counter moved.
-    expect(out.rlimitSpent).toBeGreaterThan(0);
-    // And the seed is representable, so a completed ladder is a real proof.
+    // `rlimitSpent` is gone with z3 — `solveBuild` always reports 0 now (see
+    // its final `return`), so this is no longer a meaningful witness that a
+    // search happened; `engine: "optimized"` and `tiersCompleted` are.
+    expect(out.engine).toBe("optimized");
     expect(out.status).toBe("ok");
     expect(out.tiersCompleted).toBe(4);
     await resetZ3();
   }, 120_000);
 
   it("proves the chained board optimal instead of never searching it", async () => {
-    // ONE COURT, so there is nothing to rebalance and the honest verdict is
-    // `already_optimal` — the difference from the old behaviour is not the
-    // status but what stands behind it. Before the pins the same word came off
-    // four tiers that were each unsat on their first ask because the incumbent
-    // was inexpressible; here every bound was asked over a region containing the
-    // incumbent, and z3 spent real budget refuting it.
+    // ONE COURT, so there is nothing to rebalance — mocked here as EXACTLY
+    // the chained board greedy already reaches (+0/+65/+130), which is what
+    // makes the honest verdict `already_optimal` rather than `ok`: the
+    // reply ties the seed, not beats it.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([
+        { fixtureId: "a", court: "C1", startAtMs: T0 },
+        { fixtureId: "b", court: "C1", startAtMs: T0 + 65 * MIN },
+        { fixtureId: "c", court: "C1", startAtMs: T0 + 130 * MIN },
+      ]),
+    );
     const out = await buildSchedule({ fixtures: chainFixtures, config: chainConfig });
     expect({ status: out.status, tiers: out.tiersCompleted, placed: out.metrics.placed }).toEqual({
       status: "already_optimal",
@@ -242,7 +279,6 @@ describe("a rest-configured board is actually searched", () => {
       placed: 3,
     });
     expect(out.assignments.map((a) => (a.startAt - T0) / MIN)).toEqual([0, 65, 130]);
-    expect(out.rlimitSpent).toBeGreaterThan(0);
     await resetZ3();
   }, 120_000);
 
@@ -280,6 +316,12 @@ describe("a rest-configured board is actually searched", () => {
       reachable: 0,
     });
 
+    // Mocked as EXACTLY greedy's own +7 anchor — the tie is the point (see
+    // the block comment above): placement neither validates nor needs the
+    // returned position to be "on grid" the way z3's own lattice did.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([{ fixtureId: "a", court: "C1", startAtMs: T0 + 7 * MIN }]),
+    );
     const out = await buildSchedule({ fixtures, config });
     expect({ status: out.status, tiers: out.tiersCompleted }).toEqual({
       status: "already_optimal",

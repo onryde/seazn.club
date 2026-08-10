@@ -852,6 +852,7 @@ export type DictionaryKey =
   | "board.result.dur.ms"
   | "board.result.dur.s"
   | "board.result.engine.greedy"
+  | "board.result.engine.optimized"
   | "board.result.engine.z3"
   | "board.result.engine.z3lns"
   | "board.result.infeasibleAllPlaced"

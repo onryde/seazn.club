@@ -2,7 +2,7 @@
 name: reviewer
 description: Reviews code changes for correctness, security, and team conventions. Use proactively after the implementer finishes, before committing.
 model: sonnet
-effort: xhigh
+effort: max
 memory: project
 ---
 <!-- Save as .claude/agents/reviewer.md -->

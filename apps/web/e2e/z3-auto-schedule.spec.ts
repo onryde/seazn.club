@@ -221,9 +221,14 @@ test("Auto-schedule places an empty board and the strip reports the run", async 
   // The one deliberate copy assertion in this file. `board.result.provenance`
   // renders "<engine> · <elapsed> · <churn>", and the engine name is the only
   // thing on screen that says which solver produced the board — "Quick pass" is
-  // the greedy fallback, "Solver"/"Solver, then refined" are z3. A regex over
-  // the three shipped labels is what makes the difference visible; a non-empty
-  // check here would pass on all three and on a blank engine key.
+  // the greedy fallback, "Solver"/"Solver, then refined" are z3 — and, since
+  // Task 06b, "Solver" is ALSO optimized, which deliberately reuses z3's copy
+  // rather than naming a solver at the organiser. So there are now FOUR engine
+  // values behind THREE rendered labels, and this regex therefore cannot tell
+  // z3 from optimized. It is not meant to: what it makes visible is optimised vs
+  // greedy. A non-empty check would pass on all three and on a blank engine
+  // key. Asserting the cutover specifically is Prompt 11's job, against
+  // `engine` itself rather than this rendered string.
   await expect(page.getByTestId("schedule-result-provenance")).toHaveText(
     /^(Quick pass|Solver, then refined|Solver) · /,
   );
