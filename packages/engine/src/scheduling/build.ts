@@ -1368,6 +1368,51 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   const dayIndexOf = buildDayIndexOf(grid.slots, tz);
   const dayCapByDivision = tz === undefined ? undefined : dayCapsByDivision(effectiveHard(verifyConfig));
 
+  /**
+   * `perEntrantMinRest` is a GLOBAL per-entrant rest, and the wire has no field
+   * for it — `constraints` carries `restByDivision` and nothing else rest-shaped.
+   * So it has to be folded into the per-division map, or the solver never hears
+   * about it at all.
+   *
+   * IT DID NOT, AND THAT SHIPPED A WRONG BOARD. Reproduced 2026-08-10 by
+   * `schedule-solver-telemetry.test.ts`'s "forwards the pinned set an infeasible
+   * proof is about": two cards sharing an entrant, pinned 30 minutes apart under
+   * `perEntrantMinRest: 30`. z3 received the rule and proved the board
+   * INFEASIBLE, naming the two contradictory pins. The placement service, never
+   * sent the rule, saw nothing wrong and returned **`already_optimal`**.
+   *
+   * `already_optimal` is the damaging status, not a harmless one: an organiser
+   * told their schedule is optimal has no reason to look again. And nothing
+   * downstream catches it — `isBlockingConflict` (`calendar.ts:202-209`) is
+   * court / person_overlap / window / order-with-direct, so a rest violation is
+   * WARN-ONLY at the verifier gate and the board is not rejected.
+   *
+   * MAX, not overwrite: a division rule and the global floor are both real
+   * constraints, and the binding one is the larger. Taking the division's value
+   * alone would drop the global floor; taking the global alone would drop a
+   * stricter divisional rule.
+   *
+   * Every division ON THIS BOARD gets an entry, including `""` — the id used for
+   * a fixture with no division (see `divisionId: f.divisionId ?? ""` below).
+   * Without that key a division-less board keeps the rule invisible, which is
+   * the exact shape of the bug this fixes.
+   *
+   * No proto change is needed: `DivisionRule.min_rest_minutes` already exists
+   * and `model.py:303,337` already enforces `rest_by_division`. The gap was
+   * purely this translation.
+   */
+  const restFloor = config.perEntrantMinRest ?? 0;
+  const restByDivisionForWire = ((): Record<string, number> | undefined => {
+    const declared = verifyConfig.restByDivision;
+    if (restFloor <= 0) return declared;
+    const merged: Record<string, number> = { ...(declared ?? {}) };
+    for (const f of freeFixtures) {
+      const division = f.divisionId ?? "";
+      merged[division] = Math.max(merged[division] ?? 0, restFloor);
+    }
+    return merged;
+  })();
+
   const placementInput: SolveBuildInput = {
     courts: config.courts,
     fixtures: freeFixtures.map((f) => ({
@@ -1405,7 +1450,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     constraints: {
       matchMinutes: config.matchMinutes,
       gapMinutes: config.gapMinutes,
-      ...(verifyConfig.restByDivision !== undefined ? { restByDivision: verifyConfig.restByDivision } : {}),
+      ...(restByDivisionForWire !== undefined ? { restByDivision: restByDivisionForWire } : {}),
       ...(dayCapByDivision !== undefined && Object.keys(dayCapByDivision).length > 0
         ? { dayCapByDivision }
         : {}),

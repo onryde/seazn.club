@@ -389,8 +389,128 @@ jobs:
       # component suites into a Postgres job that was never meant to run them
       # (187 files collected against the 185 the paths select). Measured on
       # 2026-07-29 while chasing #339.
+      # --- a REAL solver for this job ----------------------------------------
+      #
+      # The solver is remote now (the `placement` service, over gRPC). Before
+      # the cutover it was z3-as-WASM and therefore always present, so any test
+      # in this job could call the engine and get a real solve.
+      #
+      # Without a reachable service `build.ts` catches the transport failure and
+      # returns a greedy board carrying `solver_unavailable` — correct
+      # behaviour, and useless for a test asserting `already_optimal` or
+      # `infeasible`. Those assertions failed here on 2026-08-10 as
+      # `expected 'solver_unavailable' to be 'already_optimal'`.
+      #
+      # Mirrors placement-service.yml's `integration` job rather than inventing
+      # a second pattern. The build is cached (type=gha) and shared with that
+      # workflow, so this is usually a cache hit rather than a second build.
+      - name: Build the placement service image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A literal, not a repository secret — a throwaway container talking to a
+      # throwaway client inside one ephemeral runner. It must nonetheless be
+      # non-empty and IDENTICAL on both sides: the service refuses to start
+      # without one, and `build.ts` defaults a missing secret to "", which the
+      # service rejects as UNAUTHENTICATED, which folds into a greedy board. A
+      # mismatch here would NOT fail loudly — it would look exactly like
+      # "placement lost to greedy on merit".
+      - name: Start the placement service
+        run: |
+          set -euo pipefail
+          docker run -d --name placement-smoke -p 50051:50051 \
+            -e PLACEMENT_SERVICE_SECRET=ci-smoke-secret \
+            placement-service:ci
+
+          opened=""
+          for _ in $(seq 1 15); do
+            if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/50051' 2>/dev/null; then
+              opened=1
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$opened" ]; then
+            echo "::error::placement port 50051 never accepted a TCP connection within 15s"
+            docker logs placement-smoke || true
+            exit 1
+          fi
+
       - name: Engine-db + service-layer + lib integration tests (real Postgres)
         run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-lib-server.json src/server src/lib
+        env:
+          # `localhost`, not 127.0.0.1 — consistent with the rest of this repo's
+          # local-service conventions.
+          PLACEMENT_SERVICE_HOST: localhost:50051
+          PLACEMENT_SERVICE_SECRET: ci-smoke-secret
+
+      # The solver-dependent tests gate on PLACEMENT_SERVICE_HOST
+      # (`HAS_SOLVER` in schedule-solver-telemetry.test.ts). A gate that is
+      # never asserted is how coverage disappears silently: if the container
+      # failed to start, or the env var were dropped, those tests would SKIP and
+      # this job would still be green while testing nothing.
+      #
+      # So assert they ran. A skip here is a failure, not a pass — EXCEPT for
+      # one, named below, whose skip is not an availability gate at all.
+      - name: Assert the solver-dependent telemetry tests actually ran
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync("vitest-results-lib-server.json", "utf8"));
+            const f = (r.testResults || []).find(t => t.name.includes("schedule-solver-telemetry.test.ts"));
+            if (!f) { console.error("::error::schedule-solver-telemetry.test.ts did not run at all"); process.exit(1); }
+            const all = f.assertionResults || [];
+
+            // These three gate on HAS_SOLVER and must actually PASS — a skip
+            // here means the container never got reached, which is the silent
+            // coverage loss this step exists to catch.
+            const mustPass = all.filter(a =>
+              /already_optimal|without booting the z3 WASM|polish never moves/.test(a.fullName));
+            const notPassed = mustPass.filter(a => a.status !== "passed");
+            console.log(`solver-gated telemetry tests: ${mustPass.length} found, ${mustPass.filter(a => a.status === "passed").length} passed`);
+            if (mustPass.length < 3) {
+              console.error(`::error::expected 3 solver-gated telemetry tests, found ${mustPass.length} — a rename or a lost gate`);
+              process.exit(1);
+            }
+            if (notPassed.length) {
+              console.error("::error::these gated tests did not pass (a SKIP means the placement service was not reached, not that they are optional): " + notPassed.map(a => `${a.fullName} [${a.status}]`).join("; "));
+              process.exit(1);
+            }
+
+            // "forwards the pinned set an infeasible proof is about" is a
+            // DIFFERENT shape: it is `it.skip`, unconditional on HAS_SOLVER,
+            // because the model.py wire contract cannot see a rest conflict
+            // between two PINNED rows at all (round 6 dropped entrant identity
+            // from `PinnedRow`) — a Python/proto capability gap, not a
+            // reachability problem. See the doc comment on the test itself.
+            // Asserted explicitly rather than left out of this script
+            // entirely, so a rename or an accidental un-skip is still visible
+            // here rather than silently changing what this gate covers.
+            const pinnedGap = all.find(a => /infeasible proof/.test(a.fullName));
+            if (!pinnedGap) {
+              console.error("::error::the pinned-pair infeasibility test (known capability gap) was not found at all — a rename?");
+              process.exit(1);
+            }
+            if (pinnedGap.status !== "skipped") {
+              console.error(`::error::the pinned-pair infeasibility test is no longer "skipped" (status: ${pinnedGap.status}) — if the wire contract grew pin identity and this now PASSES, remove its it.skip and update this step; if it FAILED, something else broke`);
+              process.exit(1);
+            }
+            console.log("pinned-pair infeasibility test: skipped as expected (documented capability gap, not an availability gate)");
+          '
+
+      - name: Placement service logs and teardown
+        if: always()
+        run: |
+          docker logs placement-smoke || true
+          docker rm -f placement-smoke >/dev/null 2>&1 || true
 
       # DB-gated suites that live OUTSIDE src/server / src/lib / src/app, and so
       # were selected by no step in this job and skipped in the unit job for want
