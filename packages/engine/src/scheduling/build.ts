@@ -85,10 +85,12 @@
 // incumbent simply stands and `budgetExpired` says why. Both sites that can
 // see an `unknown` — the feasibility probe and the T0 walk — are pinned by
 // their own test.
-import type { Arith, Bool, Solver } from "z3-solver";
+// No `z3-solver` type import here any more: `Arith`/`Bool`/`Solver` existed
+// solely for the deleted `buildTiers` encoder. The two remaining `Solver`
+// mentions in this file are prose in comments about the WASM heap, not types.
 import { boardMetrics, isStrictlyBetter, type BoardMetrics } from "./build-objectives.ts";
 import { buildGrid, type BuildGrid, type BuildSlot } from "./build-grid.ts";
-import type { BuildConfig, EncodedModel } from "./build-encode.ts";
+import type { BuildConfig } from "./build-encode.ts";
 import {
   deltaConflicts,
   effectiveHard,
@@ -106,7 +108,10 @@ import {
 import type { HardConstraint } from "./constraints.ts";
 import { dayKeyInTz } from "./tz.ts";
 import { repairUniverse } from "./repair-domain.ts";
-import { withZ3LockAndReset, type Z3Context } from "./z3-load.ts";
+// `withZ3LockAndReset` only — `Z3Context` was the deleted encoder's. The lock
+// itself is still taken around the placement solve and is vestigial rather
+// than dead; see the comment at its call site.
+import { withZ3LockAndReset } from "./z3-load.ts";
 // `placement-client.ts` is imported dynamically at the call site inside
 // `solveBuild`, never statically — see the comment there. This is a
 // TYPE-only import: `import type` is erased at compile time, so it creates
