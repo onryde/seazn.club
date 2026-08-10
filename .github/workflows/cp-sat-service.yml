@@ -5,18 +5,31 @@ name: cp-sat-service
 # per-service gate in this repo's CI culture (mirrors the smoke/e2e split:
 # expensive, narrowly-scoped suites stay off unrelated PRs).
 #
-# The last two paths exist only because of the proto-drift job below: the
-# TypeScript stubs live under packages/engine/, outside both of the paths
-# above, so a PR that regenerates them (or edits the codegen script itself)
-# without touching services/cp-sat/ or proto/ still has to run this
-# workflow — otherwise nothing would ever verify the two generated trees
-# agree with each other.
+# The packages/engine paths exist because two jobs below reach across the
+# language boundary, and both of their subjects live outside
+# services/cp-sat/ and proto/:
+#
+#   - proto-drift compares the two generated stub trees, and the TypeScript
+#     half lives under packages/engine/src/scheduling/generated/. A PR that
+#     regenerates only one side (or edits the codegen script) would
+#     otherwise never run this workflow, and the trees would silently
+#     diverge.
+#   - integration drives the real service through build.ts and
+#     cpsat-client.ts. Those are the two files that TALK to the service, and
+#     the original filter could not see either of them: a PR rewriting the
+#     client's deadline handling, its auth header, or build.ts's fallback
+#     branch triggered NO run of the one job that would catch it.
+#
+# Hence the whole of src/scheduling/**, not just generated/**. It is wider
+# than the rest of this filter deliberately — that directory is the entire
+# TS-side surface that this service has a contract with, and narrowing it to
+# an enumerated file list is how the gap above got created the first time.
 on:
   pull_request:
     paths:
       - "services/cp-sat/**"
       - "proto/**"
-      - "packages/engine/src/scheduling/generated/**"
+      - "packages/engine/src/scheduling/**"
       - "packages/engine/scripts/gen-proto.ts"
       - ".github/workflows/cp-sat-service.yml"
 
@@ -283,3 +296,155 @@ jobs:
             git diff -- packages/engine/src/scheduling/generated/
             exit 1
           fi
+
+  # ---------------------------------------------------------------------
+  # The only job in this repo where TypeScript talks to a REAL solver.
+  #
+  # Everything else that claims to cover the cutover is mocked or shallow:
+  # build.test.ts's "CP-SAT path" injects a fake `solveBuild`; the `docker`
+  # job above starts the container but only opens a TCP socket to it, which
+  # proves the port binds and nothing about whether the service solves; and
+  # neither ci.yml nor e2e.yml references cp-sat at all, so the app's own
+  # e2e runs with `cp-sat.internal` unreachable — which build.ts:1445 folds
+  # into `greedy("solver_unavailable")` and reports as a perfectly ordinary
+  # green board. A cutover regression is invisible to every one of those.
+  #
+  # That is not hypothetical here. Task 06's first pass wired `solveBuild`
+  # correctly and passed 8 of 8 new happy-path tests while silently running
+  # GREEDY on most real boards — every one of those tests happened to be
+  # single-court or grid-aligned, shapes where greedy also returns a
+  # plausible answer. See _INDEX.md, "The cutover nearly shipped INERT".
+  # `engine === "cp-sat"` on a multi-court, non-grid-aligned board is the
+  # assertion that would have caught it, and it lives in the suite this job
+  # runs.
+  #
+  # Affordable only because the service is stateless: no DB, no Flyway, no
+  # seeding. That is why this can be a plain PR gate rather than joining
+  # the expensive suites this repo keeps behind manual triggers.
+  # ---------------------------------------------------------------------
+  integration:
+    name: TypeScript ↔ live service (real gRPC, no mocks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+
+      # Same build as the `docker` job, sharing its GHA layer cache, so this
+      # is a cache hit rather than a second full build. Not factored into a
+      # reusable job: passing an image between jobs means a registry push or
+      # a tarball artifact, and both cost more than the cached rebuild.
+      - name: Build the cp-sat service image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/cp-sat
+          file: services/cp-sat/Dockerfile
+          push: false
+          load: true
+          tags: cp-sat-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A literal, not a repository secret. This authenticates a throwaway
+      # container to a throwaway client inside one ephemeral runner; it
+      # never leaves the job. Using a real secret here would grant every
+      # fork PR read access to the production value for no security gain.
+      # It must nonetheless be non-empty and identical on both sides:
+      # cp_sat.config.Settings.from_env() refuses to start without one, and
+      # build.ts:1442 defaults a missing secret to "" — which the service
+      # rejects as UNAUTHENTICATED, which build.ts's catch folds into a
+      # greedy board. A mismatch here would therefore NOT fail loudly; it
+      # would look exactly like "cp-sat lost to greedy on merit".
+      - name: Start the service
+        run: |
+          set -euo pipefail
+          docker run -d --name cpsat-integration -p 50051:50051 \
+            -e CPSAT_SERVICE_SECRET=ci-integration-secret \
+            cp-sat-service:ci
+
+          opened=""
+          for _ in $(seq 1 15); do
+            if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/50051' 2>/dev/null; then
+              opened=1
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$opened" ]; then
+            echo "::error::port 50051 never accepted a TCP connection within 15s"
+            docker logs cpsat-integration || true
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # `continue-on-error` so the assertion step below is what fails the
+      # job. Vitest's exit code alone is not a usable gate here: a suite
+      # that SKIPS everything exits 0, and skipping is this file's default
+      # (it gates on CPSAT_SERVICE_HOST being defined). Judging this job by
+      # exit code would make "the env var name changed" indistinguishable
+      # from "the integration tests pass".
+      - name: Run the integration suite against the live service
+        id: vitest
+        continue-on-error: true
+        working-directory: packages/engine
+        env:
+          CPSAT_SERVICE_HOST: localhost:50051
+          CPSAT_SERVICE_SECRET: ci-integration-secret
+        run: |
+          npx vitest run --reporter=json --outputFile=/tmp/cpsat-integration.json \
+            src/scheduling/__tests__/cpsat-integration.test.ts
+
+      # Counts come from the JSON report, never from the wrapper's summary
+      # or the exit code — both have lied in this repo. The zero-skip and
+      # nonzero-pass assertions are the load-bearing ones: without them this
+      # job goes green when the suite never executed, which is the single
+      # most likely way for it to rot (someone renames the env var, or the
+      # file moves, and the positional filename filter silently matches
+      # nothing).
+      - name: Assert the suite RAN, and passed
+        run: |
+          set -euo pipefail
+          if [ ! -f /tmp/cpsat-integration.json ]; then
+            echo "::error::vitest produced no JSON report — the suite failed to collect. Container logs follow."
+            docker logs cpsat-integration || true
+            exit 1
+          fi
+
+          total=$(jq '.numTotalTests'   /tmp/cpsat-integration.json)
+          passed=$(jq '.numPassedTests' /tmp/cpsat-integration.json)
+          failed=$(jq '.numFailedTests' /tmp/cpsat-integration.json)
+          skipped=$(jq '.numPendingTests' /tmp/cpsat-integration.json)
+          echo "total=$total passed=$passed failed=$failed skipped=$skipped"
+          jq -r '.testResults[].name' /tmp/cpsat-integration.json
+
+          if [ "$total" -eq 0 ]; then
+            echo "::error::0 tests collected — the file moved, or the filename filter matched nothing."
+            exit 1
+          fi
+          if [ "$skipped" -ne 0 ]; then
+            echo "::error::$skipped test(s) SKIPPED. This suite gates on CPSAT_SERVICE_HOST; a skip here means the service was not reached, not that the tests are optional in CI."
+            docker logs cpsat-integration || true
+            exit 1
+          fi
+          if [ "$passed" -eq 0 ] || [ "$failed" -ne 0 ]; then
+            echo "::error::integration suite failed: $failed failed, $passed passed."
+            docker logs cpsat-integration || true
+            exit 1
+          fi
+          echo "integration suite ran against the live service: $passed passed, 0 skipped"
+
+      # Unconditional: a failed assertion above must still surface why the
+      # solver behaved as it did, and a leaked container would poison a
+      # later job on a self-hosted runner.
+      - name: Service logs and teardown
+        if: always()
+        run: |
+          docker logs cpsat-integration || true
+          docker rm -f cpsat-integration >/dev/null 2>&1 || true
