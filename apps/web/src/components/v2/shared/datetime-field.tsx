@@ -50,7 +50,35 @@ export interface DateTimeFieldProps {
    * naked input gives neither.
    */
   labelHidden?: boolean;
+  /**
+   * Granularity of the native picker and spinner, in SECONDS. Defaults to
+   * {@link TIME_STEP_SECONDS} so every control offers 9:00 / 9:15 / 9:30 …
+   *
+   * Two spec details this default hides from the call sites:
+   *
+   *  - **Never defaulted for `kind="date"`.** On a date input `step` counts
+   *    DAYS, so the same 900 would mean "one selectable date every 900 days"
+   *    and reject every value the organiser can reach. `undefined` there
+   *    leaves the native one-day default.
+   *  - The step BASE is `min` when `min` is set, else midnight (`time`) or
+   *    1970-01-01T00:00 (`datetime-local`). With no `min` that lands the
+   *    offered values on :00/:15/:30/:45; with one it makes them relative to
+   *    `min`, which is what the blackout `to` field wants — 15-minute steps
+   *    measured from `from`.
+   *
+   * `step` constrains the picker, not this component's state: a value already
+   * stored off the quarter-hour still renders and still round-trips.
+   */
+  step?: number;
 }
+
+/**
+ * Quarter-hour granularity, in seconds. Exported so the few native time
+ * inputs that cannot use this component — `ai-wish-chips`, `move-panel`,
+ * `stages-panel`, `registration-settings`, `ai-officials-review` — step by
+ * the same number instead of each re-typing 900.
+ */
+export const TIME_STEP_SECONDS = 900;
 
 export function DateTimeField({
   kind,
@@ -61,6 +89,7 @@ export function DateTimeField({
   disabled,
   required,
   labelHidden,
+  step,
 }: DateTimeFieldProps) {
   return (
     <label className="block">
@@ -78,6 +107,9 @@ export function DateTimeField({
         className="input w-full text-base"
         value={value}
         min={min}
+        // See the `step` prop. `kind === "date"` is the load-bearing half of
+        // this expression: a date input measures `step` in days.
+        step={step ?? (kind === "date" ? undefined : TIME_STEP_SECONDS)}
         disabled={disabled}
         // ARIA only, deliberately never the native `required` attribute (#376):
         // the native one fires the browser's OWN English validation tooltip,

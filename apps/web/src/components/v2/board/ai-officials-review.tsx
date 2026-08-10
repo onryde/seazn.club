@@ -18,6 +18,7 @@ import { useMsg, usePlural } from "@/components/i18n/dict-provider";
 import { type RungInput } from "@/lib/ai-rung";
 import { AiQuoteCard, AiQuoteMismatchNote, quoteFor, type QuoteCardLine } from "./ai-quote-card";
 import { useRungConfig } from "./rung-config-provider";
+import { TIME_STEP_SECONDS } from "../shared/datetime-field";
 import type { MessageKey } from "@/lib/messages";
 import type { AiOfficialsPlanResponse } from "@/server/api-v1/schemas";
 import { OfficialAvatar } from "@/components/v2/officials-shared";
@@ -739,7 +740,13 @@ function OnlyWindowPicker({
       </label>
       <label className="block">
         <span className="mb-0.5 block text-[11px] font-medium text-slate-500">{msg("board.ai.wish.time")}</span>
-        <input type="time" className="input" value={time} onChange={(e) => setTime(e.target.value)} />
+        <input
+          type="time"
+          className="input"
+          step={TIME_STEP_SECONDS}
+          value={time}
+          onChange={(e) => setTime(e.target.value)}
+        />
       </label>
       <div className="flex items-center gap-2 pt-0.5">
         <button

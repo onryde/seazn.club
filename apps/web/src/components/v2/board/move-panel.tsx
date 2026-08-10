@@ -7,6 +7,7 @@ import { useState } from "react";
 import { toLocalInput, type FeedLabelPair } from "@/lib/schedule-board";
 import { cardTitle, type BoardFixture } from "./types";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { TIME_STEP_SECONDS } from "../shared/datetime-field";
 
 export function MovePanel({
   fixture,
@@ -49,6 +50,7 @@ export function MovePanel({
         <span className="label">{msg("board.when")}</span>
         <input
           type="datetime-local"
+          step={TIME_STEP_SECONDS}
           value={when}
           onChange={(e) => setWhen(e.target.value)}
           className="input px-2 py-1 text-xs"

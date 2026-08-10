@@ -9655,6 +9655,34 @@ async function schedRegV3Suite(
     board.status === 200 && board.body.includes("Board density"),
   );
 
+  // Quarter-hour stepping. Every CLOCK control the organiser touches offers
+  // 9:00 / 9:15 / 9:30 …; the end-DATE field beside them must NOT carry the
+  // same attribute, because on `<input type="date">` `step` counts DAYS and
+  // 900 there means one selectable date every two and a half years.
+  //
+  // Asserted over the real server-rendered HTML because nothing in the app
+  // ever reads `step` back — it is exactly the kind of attribute a refactor
+  // drops with every unit test still green. The length floors are the
+  // vacuity guard: `[].every(…)` is true, so a selector that stops matching
+  // would otherwise report this as a pass.
+  const settingsHtml = await html(
+    admin,
+    `/o/${proOrgSlug}/c/${comp.slug}/d/${div.slug}/schedule?tab=settings`,
+  );
+  const inputTags = settingsHtml.body.match(/<input\b[^>]*>/g) ?? [];
+  const clockTags = inputTags.filter((t) => /type="(?:time|datetime-local)"/.test(t));
+  const dateTags = inputTags.filter((t) => /type="date"/.test(t));
+  check(
+    "datetime: every clock control on the settings tab steps by a quarter hour",
+    settingsHtml.status === 200 &&
+      clockTags.length >= 3 &&
+      clockTags.every((t) => t.includes('step="900"')),
+  );
+  check(
+    "datetime: the end-DATE field carries no step (there it would count days)",
+    dateTags.length >= 1 && dateTags.every((t) => !/\bstep=/.test(t)),
+  );
+
   // Matchday documents (v12 PR1, Task 9): timetable PDF export renders a
   // real PDF for this division's fixtures. It renders REAL PDFs, so assert
   // validity via magic bytes + content-type, not literal text (font
