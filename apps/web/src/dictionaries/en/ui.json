@@ -3315,5 +3315,11 @@
   "constraints.waitReport.colLongestWait": "Longest wait",
   "constraints.waitReport.colFirstToLast": "First to last",
   "constraints.waitReport.footer": "Sorted worst-first. Tighten the gaps by re-flowing on the board, or raise min rest and re-run.",
-  "constraints.error.failed": "Failed"
+  "constraints.error.failed": "Failed",
+  "board.result.notSearched.tooBig": "Scheduled quickly — the optimiser could not search this board, so nothing here claims a better one exists. This board has more matches and possible times than it can search in the time it's given; scheduling fewer matches at once, or narrowing the competition window, brings it back into range.",
+  "board.result.notSearched.windowEmpty": "Scheduled quickly — the optimiser could not search this board, so nothing here claims a better one exists. Your competition's window ends before this run can even start, so there is no time left inside it to search; move the end date forward and run it again.",
+  "board.result.notSearched.latticeUnusable": "Scheduled quickly — the optimiser could not search this board, so nothing here claims a better one exists. The time window, session times and courts you have set produce more possible start times than it can hold at once (or none at all); narrowing them brings it back into range.",
+  "board.result.notSearched.perCourtGrid": "Scheduled quickly — the optimiser could not search this board, so nothing here claims a better one exists. A blackout that applies to only one of your courts is what stops it here; removing that blackout, or applying it to every court, restores it.",
+  "board.result.notSearched.outOfTime": "Scheduled quickly — the optimiser could not search this board, so nothing here claims a better one exists. The time available was already spent working out this board before the optimiser could even be asked; running it again, or scheduling fewer matches at once, gives it a chance to start.",
+  "board.result.notSearched.noVerdict": "Scheduled quickly — the optimiser could not search this board, so nothing here claims a better one exists. The optimiser was asked and came back with no verdict at all this time; running it again is the best next step."
 }

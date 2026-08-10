@@ -17114,6 +17114,17 @@
                                 "solver_unavailable"
                               ]
                             },
+                            "not_searched_reason": {
+                              "type": "string",
+                              "enum": [
+                                "too_big",
+                                "window_empty",
+                                "lattice_unusable",
+                                "per_court_grid",
+                                "out_of_time",
+                                "no_verdict"
+                              ]
+                            },
                             "tiers_completed": {
                               "type": "integer",
                               "minimum": -9007199254740991,
@@ -17208,6 +17219,7 @@
                       "engine": "greedy",
                       "mode": "build",
                       "status": "ok",
+                      "not_searched_reason": "too_big",
                       "tiers_completed": -9007199254740991,
                       "tiers_total": -9007199254740991,
                       "budget_expired": true,

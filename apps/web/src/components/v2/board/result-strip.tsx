@@ -39,6 +39,21 @@ const ENGINE_KEY = {
   optimized: "board.result.engine.optimized",
 } as const;
 
+/** `not_searched_reason` -> its own sentence, one per exit `build.ts` can leave
+ *  this status from. Six causes used to collapse onto ONE generic sentence
+ *  ("the match, gap and rest times you have set do not line up on a shared
+ *  step"), which is at best a partial description of one of them and, for
+ *  `per_court_grid`, advice that cannot possibly work — no amount of
+ *  adjusting match/gap/rest fixes a blackout scoped to a single court. */
+const NOT_SEARCHED_KEY = {
+  too_big: "board.result.notSearched.tooBig",
+  window_empty: "board.result.notSearched.windowEmpty",
+  lattice_unusable: "board.result.notSearched.latticeUnusable",
+  per_court_grid: "board.result.notSearched.perCourtGrid",
+  out_of_time: "board.result.notSearched.outOfTime",
+  no_verdict: "board.result.notSearched.noVerdict",
+} as const;
+
 /** Status -> the one sentence that says what the solver did. `ok` splits on the
  *  engine: a greedy `ok` means the quick pass produced the board and nothing was
  *  optimised, which is a different statement from an optimised `ok`. */
@@ -65,8 +80,14 @@ function statusKey(solver: ScheduleSolverInfo) {
     // it. Its own sentence rather than a fallback onto `quick`: "scheduled
     // quickly, without the optimiser" is true of the how and silent on the WHY,
     // and the why is the only part the organiser can do anything about.
+    //
+    // `not_searched_reason` picks WHICH of the six causes to name; its absence
+    // (a server one deploy behind this field) keeps the old generic sentence,
+    // which is still true of every cause, just less specific about this one.
     case "not_searched":
-      return "board.result.notSearched";
+      return solver.not_searched_reason !== undefined
+        ? NOT_SEARCHED_KEY[solver.not_searched_reason]
+        : "board.result.notSearched";
   }
 }
 

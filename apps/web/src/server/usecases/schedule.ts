@@ -1170,6 +1170,14 @@ export async function autoSchedule(
     solver: {
       engine: out.engine,
       status: out.status,
+      // Forwarded, never synthesised, and only ever present alongside
+      // `status: "not_searched"` — see `ScheduleSolverInfo.not_searched_reason`.
+      // `BuildResult` sets it on all six of `not_searched`'s exits; REFLOW's
+      // `settle()` never reports `not_searched` at all, so this stays absent on
+      // every REFLOW result, exactly like every other BUILD-only field here.
+      ...(out.notSearchedReason !== undefined
+        ? { not_searched_reason: out.notSearchedReason }
+        : {}),
       // The mode the CALLER asked for, not a property of the result. `engine`
       // names what produced the board and cannot stand in for it: an expired
       // REFLOW and a BUILD that ran out before its first tier are both

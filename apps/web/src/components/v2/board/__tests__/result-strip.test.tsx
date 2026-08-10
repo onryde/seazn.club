@@ -334,6 +334,60 @@ describe("ScheduleResultStrip — the anytime contract", () => {
    * leave an organiser believing their board had been optimised as far as it
    * goes, which is the belief this whole status exists to prevent.
    */
+  /**
+   * ONE SENTENCE PER CAUSE. The six exits `not_searched` can come from used to
+   * collapse onto the single generic sentence pinned above ("do not line up on
+   * a shared step"), which is at best a partial description of the lattice-cap
+   * exit and, for `per_court_grid`, advice that cannot possibly work — no
+   * amount of adjusting match/gap/rest fixes a blackout scoped to one court.
+   * Each probe string was checked unique to its own reason's dictionary entry,
+   * so a swapped mapping in `NOT_SEARCHED_KEY` fails here rather than passing
+   * by coincidence.
+   */
+  it.each([
+    ["too_big", "more matches and possible times than it can search"],
+    ["window_empty", "ends before this run can even start"],
+    ["lattice_unusable", "more possible start times than it can hold at once"],
+    ["per_court_grid", "blackout that applies to only one of your courts"],
+    ["out_of_time", "already spent working out this board before the optimiser could even be asked"],
+    ["no_verdict", "came back with no verdict at all"],
+  ] as const)("not_searched_reason '%s' renders its own sentence", (reason, snippet) => {
+    const html = render(metrics(), solver({ status: "not_searched", not_searched_reason: reason }));
+    expect(html).toContain(snippet);
+    // The shared opening clause survives on every reason, so the strip reads
+    // as one family of sentences rather than six unrelated ones.
+    expect(html).toContain("nothing here claims a better one exists");
+  });
+
+  /** `per_court_grid` names the fix explicitly, per the brief: removing the
+   *  blackout or applying it to every court, not a generic "adjust settings". */
+  it("per_court_grid tells the organiser exactly what to do about the blackout", () => {
+    const html = render(
+      metrics(),
+      solver({ status: "not_searched", not_searched_reason: "per_court_grid" }),
+    );
+    expect(html).toContain("removing that blackout, or applying it to every court, restores it");
+  });
+
+  /** A server one deploy behind sends `status: "not_searched"` with no reason
+   *  at all — the pre-existing generic sentence, asserted above, is what that
+   *  must keep rendering. This is the negative space: none of the six reason
+   *  sentences leak in when the field is absent. */
+  it("falls back to the generic sentence when the wire carries no reason", () => {
+    const html = render(metrics(), solver({ status: "not_searched" }));
+    expect(html).toContain("do not line up on a shared step");
+    for (const snippet of [
+      "more matches and possible times than it can search",
+      "ends before this run can even start",
+      "more possible start times than it can hold at once",
+      "blackout that applies to only one of your courts",
+      "already spent working out this board before the optimiser could even be asked",
+      "came back with no verdict at all",
+    ]) {
+      expect(html).not.toContain(snippet);
+    }
+  });
+
   it("not_searched is flagged, unlike the other two 'quick pass' statuses", () => {
     const html = render(metrics(), solver({ status: "not_searched", engine: "greedy" }));
     expect(html).toContain('data-tone="flag"');
