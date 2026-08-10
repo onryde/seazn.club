@@ -310,9 +310,13 @@ describe("ScheduleResultStrip — the anytime contract", () => {
     // Non-blank headline. A missing switch case renders `<p ...></p>` here.
     expect(html).toMatch(/data-testid="schedule-result-headline"[^>]*>[^<]/);
     expect(html).toContain("could not search this board");
-    // WHY, and WHAT TO CHANGE. The cause is the organiser's own durations, and
-    // unlike `solver_busy` a retry on the same settings reproduces it exactly.
-    expect(html).toContain("do not line up on a shared step");
+    // NO CAUSE, when the wire named none. This assertion used to require the
+    // sentence to blame the step alignment; that was the defect, not the
+    // contract. Six different exits reach this status and the reasonless
+    // rendering cannot know which — naming one is how an organiser hitting a
+    // court-scoped blackout got sent to adjust durations that were already
+    // aligned. `not_searched_reason` is what may name a cause; this may not.
+    expect(html).not.toContain("do not line up on a shared step");
     expect(html).toContain("run it again");
     // Never a quality claim. `already_optimal`'s sentence is the specific thing
     // this member exists to stop being said.
@@ -370,12 +374,16 @@ describe("ScheduleResultStrip — the anytime contract", () => {
   });
 
   /** A server one deploy behind sends `status: "not_searched"` with no reason
-   *  at all — the pre-existing generic sentence, asserted above, is what that
-   *  must keep rendering. This is the negative space: none of the six reason
-   *  sentences leak in when the field is absent. */
-  it("falls back to the generic sentence when the wire carries no reason", () => {
+   *  at all, and that is a REACHABLE state during any rollout — which is why
+   *  the generic sentence must not name a cause. It is precisely what an
+   *  organiser hitting `per_court_grid` sees in the window before the server
+   *  catches up, so the old wording would have gone on serving the wrong
+   *  advice to the one case that prompted this change. This is the negative
+   *  space: no cause named, and none of the six reason sentences leaking in. */
+  it("falls back to a cause-free sentence when the wire carries no reason", () => {
     const html = render(metrics(), solver({ status: "not_searched" }));
-    expect(html).toContain("do not line up on a shared step");
+    expect(html).toContain("could not search this board");
+    expect(html).not.toContain("do not line up on a shared step");
     for (const snippet of [
       "more matches and possible times than it can search",
       "ends before this run can even start",

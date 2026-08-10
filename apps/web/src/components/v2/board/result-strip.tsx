@@ -81,9 +81,14 @@ function statusKey(solver: ScheduleSolverInfo) {
     // quickly, without the optimiser" is true of the how and silent on the WHY,
     // and the why is the only part the organiser can do anything about.
     //
-    // `not_searched_reason` picks WHICH of the six causes to name; its absence
-    // (a server one deploy behind this field) keeps the old generic sentence,
-    // which is still true of every cause, just less specific about this one.
+    // `not_searched_reason` picks WHICH of the six causes to name. Its absence
+    // means a server one deploy behind this field, so the generic sentence
+    // renders instead — and that sentence NAMES NO CAUSE, deliberately. It used
+    // to blame the step alignment, which is the defect this whole discriminant
+    // exists to remove: during a rollout the fallback is exactly what an
+    // organiser hitting `per_court_grid` would see, so leaving the old wording
+    // here would have kept serving the wrong advice to the one case that
+    // prompted the fix.
     case "not_searched":
       return solver.not_searched_reason !== undefined
         ? NOT_SEARCHED_KEY[solver.not_searched_reason]

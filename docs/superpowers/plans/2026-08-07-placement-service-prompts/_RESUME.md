@@ -123,20 +123,36 @@ purpose; believe it, and re-run alone at low load before triaging.
 ### Open work, in dependency order
 
 1. ~~**Merge #503.**~~ DONE — merged as `c9b21798`.
-2. **`not_searched` names a cause it cannot know — NEW, reported live
-   2026-08-10.** `build.ts` has SIX exits returning `not_searched` (`:976`,
-   `:1153`, `:1274`, `:1286`, `:1291`, `:1551`) and `result-strip.tsx:69` maps
-   all six onto one hardcoded sentence, `board.result.notSearched`, which
-   blames the step alignment: "The match, gap and rest times you have set do
-   not line up on a shared step; adjust them and run it again." For five of the
-   six that advice is false, and for `:1286` (`!everyCourtSharesGrid`, i.e.
-   **C2** — a court-scoped blackout) it is advice that cannot possibly work.
-   Same defect shape as the `rule: "CAP"` trap below, on the outbound side: the
-   status is honest, the prose asserts a cause nothing established. Needs a
-   reason discriminant on the status — engine-side only, no proto change, since
-   every one of these exits fires BEFORE the RPC. Costs the usual union
-   widening (`schemas.ts` zod mirror -> `apps/web` tsc), `openapi:gen`, and
-   4 locale dictionaries.
+2. ~~**`not_searched` names a cause it cannot know.**~~ DONE — reported live by
+   the owner 2026-08-10, fixed same day. `build.ts` had SIX exits returning
+   `not_searched` and `result-strip.tsx` mapped all six onto one sentence
+   blaming the step alignment ("The match, gap and rest times you have set do
+   not line up on a shared step"). For `:1286` (`!everyCourtSharesGrid`, i.e.
+   **C2**) that is advice that cannot possibly work. Same defect shape as the
+   `rule: "CAP"` trap below, on the outbound side: the status honest, the prose
+   asserting a cause nothing established. Now a `NotSearchedReason`
+   discriminant, one value per exit, with per-cause copy in all four locales.
+
+   **Two findings worth keeping:**
+
+   * **One of the six exits is DEAD from the public entry.** `canSolveWithin`
+     — the R22 gate `buildSchedule` calls first — opens with the IDENTICAL
+     `grid.overCap || grid.slots.length === 0` test that `solveBuild`'s own
+     `lattice_unusable` exit makes, over the same config and the same pure
+     `buildGrid`. So an over-cap board reaching `buildSchedule` always reports
+     `too_big` and never `lattice_unusable`. Confirmed by probe, and
+     `solveBuild` has exactly ONE production caller (`build.ts:1083`, inside
+     `buildSchedule` — the other `solveBuild` in the greps is
+     `placementClient`'s, a different symbol). The exit is kept as defence and
+     reached in tests through a documented `solveBuildForTests` alias.
+   * **The reasonless FALLBACK still has to be cause-free.** The first cut
+     kept the old sentence for a server one deploy behind, on the reasoning
+     that it "is still true of every cause, just less specific" — it is not:
+     it names the step alignment. That fallback is exactly what an organiser
+     hitting `per_court_grid` sees during a rollout, so it would have gone on
+     serving the wrong advice to the one case that prompted the fix. Two
+     committed tests asserted the false sentence and were rewritten to assert
+     its ABSENCE.
 3. **C2 — move it UP #21's order.** It is not a quality gap: one court-scoped
    blackout silently switches the optimiser off for an org, permanently, with
    a board that looks fine. Live repro in `_INDEX.md`. Row 2 above is the same
