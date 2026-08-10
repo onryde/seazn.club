@@ -2,6 +2,7 @@
 // score-event ledger, like match_states and standings_snapshots. Pure and
 // deterministic; voided events (and their assists) never count.
 import { resolveVoids, type EventEnvelope } from "../core/events.ts";
+import type { LineupPair } from "../core/types.ts";
 
 /**
  * Resolve a payload path — a plain dotted walk through objects, so a metric can
@@ -77,18 +78,47 @@ export interface PlayerStatRow {
 }
 
 /**
+ * Person ids the team sheet marks as something other than a player (S3/#426
+ * ruling 3: `LineupSlot.role`, default `"player"`). A NEGATIVE set — ids
+ * explicitly declared `"coach"`/`"staff"` — rather than a positive allow-list,
+ * so a person the passed lineups happen not to name (an incomplete test
+ * fixture, say) still counts exactly as it always has; only an EXPLICIT
+ * non-player role ever excludes.
+ */
+function nonPlayerPersonIds(lineups: LineupPair): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const side of [lineups.home, lineups.away]) {
+    for (const slot of side.slots) {
+      if (slot.role !== undefined && slot.role !== "player") ids.add(slot.personId);
+    }
+  }
+  return ids;
+}
+
+/**
  * Fold one fixture's event ledger into per-person stat contributions
  * (Jul3/07 §3). `core.void` drops the voided event entirely — a voided goal
  * takes its assist with it (§8). Deterministic: rows come back sorted by
  * personId.
+ *
+ * `lineups` (S4/#428) is the role-discriminator boundary: a coach or team
+ * official can be shown a card (S3 ruling 3 keeps him IN the squad so that is
+ * possible) but must never earn a playing-stat row. Enforced HERE, inside the
+ * shared fold, rather than trusting every sport's `PlayerStatMetric.when` to
+ * add its own role check — a check that lives in eleven separate places is a
+ * check that is eleven times as easy to forget once. Optional and additive:
+ * omitted, this is byte-identical to the fold before this field existed.
  */
 export function aggregatePlayerStats(
   events: readonly EventEnvelope[],
   model: PlayerStatsModel,
+  lineups?: LineupPair,
 ): PlayerStatRow[] {
   const active = resolveVoids([...events]);
   const rows = new Map<string, Record<string, number>>();
+  const excluded = lineups === undefined ? undefined : nonPlayerPersonIds(lineups);
   const bump = (personId: string, key: string, by: number) => {
+    if (excluded?.has(personId) === true) return;
     const stats = rows.get(personId) ?? {};
     stats[key] = (stats[key] ?? 0) + by;
     rows.set(personId, stats);

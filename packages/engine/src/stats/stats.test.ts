@@ -5,6 +5,7 @@ import { aggregatePlayerStats, resolvePayloadPath, sumPlayerStats } from "./stat
 import { football } from "../sports/football/football.ts";
 import type { PlayerStatMetric, PlayerStatsModel } from "./stats.ts";
 import type { EventEnvelope } from "../core/events.ts";
+import type { LineupPair } from "../core/types.ts";
 
 const MODEL = football.playerStats!;
 
@@ -202,5 +203,86 @@ describe("aggregatePlayerStats (Jul3/07)", () => {
       MODEL,
     );
     expect(rows).toEqual([{ personId: "p7", stats: { motm_awards: 1, points: 0 } }]);
+  });
+});
+
+// S4 (#428) — THE bug: a card or a goal-shaped payload naming a coach's
+// personId earned a playing-stat row, because this fold reads the payload's
+// person id directly with zero cross-check against LineupSlot.role (S3/#426
+// ruling 3: role defaults "player", and every PLAYING projection —
+// core/lineup.ts's playingSquad/onFieldPersons/personsAtPosition — already
+// filters on it; this fold is not one of those callers). Enforced HERE, at
+// the aggregation boundary itself, not by trusting each sport's `when`
+// predicate to remember a check — a coach who never plays should never be
+// findable in ANY sport's leaderboard, and the fold has no per-sport hook a
+// forgetful metric declaration could skip.
+describe("role discriminator (S4/#428) — a non-player never earns a playing stat", () => {
+  const lineupWithCoach: LineupPair = {
+    home: {
+      entrantId: "H",
+      slots: [
+        { personId: "p7", slot: "starting", orderNo: 1 },
+        // Absent `role` ⇒ player (S3 ruling 3's default) — p10 must still count.
+        { personId: "p10", slot: "starting", orderNo: 2 },
+        { personId: "coach1", slot: "bench", orderNo: 90, role: "coach" },
+        { personId: "physio1", slot: "bench", orderNo: 91, role: "staff" },
+      ],
+    },
+    away: { entrantId: "A", slots: [{ personId: "a1", slot: "starting", orderNo: 1 }] },
+  };
+
+  it("a coach's card produces NO row in the aggregate output — the leaderboard, not just the field", () => {
+    const rows = aggregatePlayerStats(
+      [env(1, "football.card", { by: "H", person: "coach1", color: "yellow" })],
+      MODEL,
+      lineupWithCoach,
+    );
+    expect(rows).toEqual([]);
+    expect(rows.find((r) => r.personId === "coach1")).toBeUndefined();
+  });
+
+  it("team staff (physio, kit manager, …) is excluded the same way a coach is", () => {
+    const rows = aggregatePlayerStats(
+      [env(1, "football.card", { by: "H", person: "physio1", color: "red" })],
+      MODEL,
+      lineupWithCoach,
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it("a real player on the SAME team sheet as the excluded coach still earns his row", () => {
+    const rows = aggregatePlayerStats([goal(1, "p7")], MODEL, lineupWithCoach);
+    expect(rows).toEqual([{ personId: "p7", stats: { goals: 1, points: 1 } }]);
+  });
+
+  it("a player with no declared role (default player, S3 ruling 3) still counts", () => {
+    const rows = aggregatePlayerStats([goal(1, "p10")], MODEL, lineupWithCoach);
+    expect(rows).toEqual([{ personId: "p10", stats: { goals: 1, points: 1 } }]);
+  });
+
+  it("mixed ledger: the coach's card is dropped, the player's goal is kept, in ONE fold", () => {
+    const rows = aggregatePlayerStats(
+      [
+        goal(1, "p7"),
+        env(2, "football.card", { by: "H", person: "coach1", color: "yellow" }),
+      ],
+      MODEL,
+      lineupWithCoach,
+    );
+    expect(rows).toEqual([{ personId: "p7", stats: { goals: 1, points: 1 } }]);
+  });
+
+  it("with no lineup argument at all, behaviour is byte-identical to before (back-compat)", () => {
+    // Every existing call site that does not yet pass a roster (the DB has no
+    // column to carry role into one today — see the PR body) must keep
+    // aggregating every personId it sees, exactly as it always has.
+    const rows = aggregatePlayerStats(
+      [env(1, "football.card", { by: "H", person: "coach1", color: "yellow" })],
+      MODEL,
+    );
+    // `points` is football's derived stat (goals + assists), always computed
+    // for every row the main loop produces — unrelated to this test's point,
+    // present here only because MODEL is the real football model.
+    expect(rows).toEqual([{ personId: "coach1", stats: { yellow_cards: 1, points: 0 } }]);
   });
 });
