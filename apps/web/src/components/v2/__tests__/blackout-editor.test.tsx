@@ -397,7 +397,16 @@ describe("blackout editor — the scheduling.constraints gate", () => {
     );
     expect(html).toContain(escapeHtml(label("constraints.blackout.title")));
     expect(html).not.toContain(escapeHtml(label("constraints.blackout.add")));
-    for (const tag of html.match(/<input[^>]*type="datetime-local"[^>]*>/g) ?? []) {
+    // Each blackout instant is a `kind="datetime-local"` DateTimeField now,
+    // which renders a date <input> beside a time <select>
+    // (DateTimeSplitField) rather than one <input type="datetime-local">.
+    // Read-only means BOTH halves of BOTH instants stay disabled.
+    const dateTags = html.match(/<input[^>]*type="date"[^>]*>/g) ?? [];
+    expect(dateTags).toHaveLength(2); // from + to
+    const timeSelects =
+      html.match(new RegExp(`<select[^>]*aria-label="${escapeHtml(label("datetime.timeLabel"))}"[^>]*>`, "g")) ?? [];
+    expect(timeSelects).toHaveLength(2);
+    for (const tag of [...dateTags, ...timeSelects]) {
       // React emits `disabled=""` for true and nothing for false — the `=""` is
       // load-bearing, a bare `disabled` also matches a className.
       expect(tag).toContain('disabled=""');
@@ -428,13 +437,17 @@ describe("blackout editor — the scheduling.constraints gate", () => {
 describe("blackout editor — markup and accessibility", () => {
   const rendered = () => renderPanel(panelProps({ config: config({ blackouts: [{ from: FROM_ISO, to: TO_ISO }] }) }));
 
-  it("builds both instants with the shared DateTimeField", () => {
-    const tags = rendered().match(/<input[^>]*type="datetime-local"[^>]*>/g) ?? [];
-    expect(tags).toHaveLength(2);
-    // The shared component's fingerprint. A hand-rolled call site renders
-    // `input w-full`; `sm:text-sm` is deliberately absent (globals.css Pattern 5
-    // already forces 16px under 40rem).
-    for (const tag of tags) {
+  it("builds both instants with the shared DateTimeField (date input + time select)", () => {
+    const html = rendered();
+    const dateTags = html.match(/<input[^>]*type="date"[^>]*>/g) ?? [];
+    const timeSelects =
+      html.match(new RegExp(`<select[^>]*aria-label="${escapeHtml(label("datetime.timeLabel"))}"[^>]*>`, "g")) ?? [];
+    expect(dateTags).toHaveLength(2);
+    expect(timeSelects).toHaveLength(2);
+    // The shared component's fingerprint, on BOTH halves. A hand-rolled call
+    // site rendered `input w-full`; `sm:text-sm` is deliberately absent
+    // (globals.css Pattern 5 already forces 16px under 40rem).
+    for (const tag of [...dateTags, ...timeSelects]) {
       expect(tag).toContain('class="input w-full text-base"');
       expect(tag).not.toContain("sm:text-sm");
     }
@@ -443,15 +456,30 @@ describe("blackout editor — markup and accessibility", () => {
   it("names both instants with a VISIBLE label — no legend above them says it", () => {
     const html = rendered();
     for (const key of ["constraints.blackout.from", "constraints.blackout.to"] as const) {
-      expect(html, key).toContain(`<span class="label">${escapeHtml(label(key))}</span>`);
-      expect(html, key).not.toContain(`<span class="label sr-only">${escapeHtml(label(key))}</span>`);
+      const text = escapeHtml(label(key));
+      // The date half of the split field carries this as its VISIBLE label.
+      expect(html, key).toContain(`<span class="label">${text}</span>`);
+      // The time half of the SAME split field legitimately reuses this text
+      // but HIDES it (it names itself distinctly via aria-label="Time"
+      // instead, see DateTimeSplitField) — exactly once, not zero (the
+      // whole field silently invisible) and not twice (the date half
+      // silently hidden too).
+      const hidden = html.match(new RegExp(`<span class="label sr-only">${text}</span>`, "g")) ?? [];
+      expect(hidden, key).toHaveLength(1);
     }
   });
 
   it("announces both instants as required without the native attribute", () => {
     // #376: the native `required` fires the browser's own English validation
     // tooltip, which preempts the localized message this form shows instead.
-    for (const tag of rendered().match(/<input[^>]*type="datetime-local"[^>]*>/g) ?? []) {
+    // Both halves of the split `datetime-local` field carry `required` down.
+    const html = rendered();
+    const dateTags = html.match(/<input[^>]*type="date"[^>]*>/g) ?? [];
+    const timeSelects =
+      html.match(new RegExp(`<select[^>]*aria-label="${escapeHtml(label("datetime.timeLabel"))}"[^>]*>`, "g")) ?? [];
+    expect(dateTags).toHaveLength(2);
+    expect(timeSelects).toHaveLength(2);
+    for (const tag of [...dateTags, ...timeSelects]) {
       expect(tag).toContain('aria-required="true"');
       expect(tag).not.toMatch(/\srequired(=|\s|\/|>)/);
     }
@@ -551,7 +579,13 @@ describe("settings panel — the dead-end pointer is gone", () => {
   it("still hides the daily-hours inputs while custom windows are set", () => {
     // Guards the fixture: if `windowsToDailyHours` resolved these, the copy
     // above would never render and every assertion here would be vacuous.
-    expect(renderSettings(enUi as Dict, "en")).not.toContain('type="time"');
+    // `kind="time"` no longer emits `type="time"` (it's a <select> now,
+    // which would make that probe pass whether or not these fields render),
+    // so the fingerprint is the fields' OWN label text instead — always
+    // rendered whenever the field is, per DateTimeField's own contract.
+    const html = renderSettings(enUi as Dict, "en");
+    expect(html).not.toContain(escapeHtml(enUi["boardset.playFrom"] as string));
+    expect(html).not.toContain(escapeHtml(enUi["boardset.playUntil"] as string));
   });
 });
 

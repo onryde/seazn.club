@@ -1,17 +1,24 @@
-// Every clock control in the app steps by a quarter hour.
+// Every clock control in the app goes through the shared `DateTimeField`.
 //
-// `DateTimeField` owns that policy for the fields converted onto it, but eight
-// native inputs across five files cannot use it (they sit inside their own
-// label markup, or predate it), and those are exactly the ones a later edit
-// will add a ninth sibling to without noticing. A per-component render test
-// cannot see that: it only knows about the inputs someone remembered to write
-// a test for.
+// This suite used to assert the opposite: that every hand-rolled
+// `<input type="time"|"datetime-local">` carried `step="900"`. That premise
+// is dead — docs/superpowers/specs/2026-08-10-quarter-hour-time-select-design.md
+// found `step` alone never bounded what a click could pick. Chrome's picker
+// *popup* ignores it even though its validity engine honours it (measured,
+// Chrome 151): the dropdown renders a full 0-59 minute column regardless, so
+// quarter-hour granularity existed for the keyboard and not the mouse. The
+// fix owns the option list instead — `DateTimeField` (`kind="time"`) renders
+// a native `<select>`, and `kind="datetime-local"` composes a date `<input>`
+// with that same select (`DateTimeSplitField`) — so a raw clock `<input>`
+// should never exist anywhere in the tree again.
 //
-// So this scans the source instead and asserts the invariant over the whole
-// tree — a new `<input type="time">` anywhere under apps/web/src fails here
-// until it carries a step.
+// Rewritten, not patched (per the design doc), to protect the invariant this
+// always existed for: a later edit adding a ninth hand-rolled clock control
+// without noticing. A per-component render test cannot see that; it only
+// knows about the inputs someone remembered to write a test for. So this
+// scans the source instead, over the whole tree.
 //
-// Deliberately a SOURCE scan, not a rendered-DOM one: most of these live in
+// Deliberately a SOURCE scan, not a rendered-DOM one: most call sites live in
 // components that call hooks, and apps/web has no jsdom (vitest
 // `environment: "node"`), so there is no way to mount them.
 import { describe, expect, it } from "vitest";
@@ -19,10 +26,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 const SRC = path.resolve(__dirname, "../../../..");
-
-/** Kinds whose `step` is measured in seconds. `date` is excluded on purpose —
- *  there `step` counts DAYS and a quarter-hour value is meaningless. */
-const CLOCK_TYPES = ["time", "datetime-local"] as const;
 
 function tsxFiles(dir: string): string[] {
   const out: string[] = [];
@@ -41,7 +44,7 @@ function tsxFiles(dir: string): string[] {
 }
 
 /**
- * Comments out. Both `settings-panel.tsx` and `constraints-panel.tsx` discuss
+ * Comments out. `settings-panel.tsx` and `constraints-panel.tsx` both discuss
  * `<input type="datetime-local">` in prose, and a scan that reads those as
  * markup reports two permanent offenders no edit can ever clear — a failing
  * invariant nobody can satisfy is worse than no invariant.
@@ -66,40 +69,54 @@ function inputElements(src: string): string[] {
   return out;
 }
 
-describe("every clock input steps by a quarter hour", () => {
+/** A hand-rolled clock input: a literal `type="time"` or
+ *  `type="datetime-local"`. Literal on purpose — `DateTimeField`'s own
+ *  surviving `<input>` (the `kind="date"` branch) writes `type={kind}`, a JSX
+ *  expression, never these literal strings, so this can never flag the
+ *  component that owns the policy. */
+const isHandRolledClock = (el: string): boolean =>
+  el.includes('type="time"') || el.includes('type="datetime-local"');
+
+describe("every clock control goes through DateTimeField", () => {
   const files = tsxFiles(SRC);
 
   // Vacuity guard: a scanner that silently matches nothing passes every
-  // assertion below. These numbers are floors, not exact counts, so adding a
-  // component does not red the suite — but a broken walk or a changed JSX
-  // convention does.
+  // assertion below.
   it("the scan actually reaches the component tree", () => {
     expect(files.length).toBeGreaterThan(200);
     const inputs = files.flatMap((f) => inputElements(fs.readFileSync(f, "utf8")));
     expect(inputs.length).toBeGreaterThan(40);
   });
 
-  it("no <input type=time|datetime-local> anywhere under src/ omits step", () => {
-    const offenders: string[] = [];
-    let checked = 0;
+  // A second vacuity guard, independent of real source: proves the detector
+  // itself still flags a hand-rolled clock input rather than the zero result
+  // below being a broken matcher rather than a clean tree.
+  it("the detector still recognises a hand-rolled clock input", () => {
+    const fixture = `
+      export function Bad() {
+        return (
+          <label>
+            <input type="date" className="input" />
+            <input type="time" step={900} />
+            <input type="datetime-local" />
+          </label>
+        );
+      }
+    `;
+    const offenders = inputElements(fixture).filter(isHandRolledClock);
+    expect(offenders).toHaveLength(2);
+  });
 
+  it("no hand-rolled <input type=\"time\"> or <input type=\"datetime-local\"> anywhere under src/", () => {
+    const offenders: string[] = [];
     for (const file of files) {
       const src = fs.readFileSync(file, "utf8");
       for (const el of inputElements(src)) {
-        const isClock = CLOCK_TYPES.some(
-          (t) => el.includes(`type="${t}"`) || el.includes(`type={kind}`),
-        );
-        if (!isClock) continue;
-        checked += 1;
-        // `step=` covers both the literal and the conditional expression
-        // `DateTimeField` itself renders.
-        if (!/\bstep=/.test(el)) offenders.push(`${path.relative(SRC, file)}: ${el.slice(0, 80)}`);
+        if (isHandRolledClock(el)) {
+          offenders.push(`${path.relative(SRC, file)}: ${el.slice(0, 80)}`);
+        }
       }
     }
-
-    // The eight raw inputs plus DateTimeField's own. If this drops, the matcher
-    // stopped matching rather than the tree getting cleaner.
-    expect(checked).toBeGreaterThanOrEqual(9);
     expect(offenders).toEqual([]);
   });
 });

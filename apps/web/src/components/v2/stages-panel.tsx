@@ -5,7 +5,7 @@
 // unscheduled section with an auto-schedule CTA, "Now playing" strip, inline
 // reschedule with undo, bye/void ghost rows, sticky round headers on mobile,
 // print via the DocModel timetable export. Scoring lives on the fixture page.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
@@ -18,7 +18,11 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { DocumentsMenu } from "@/components/v2/board/documents-menu";
 import { ScheduleResultStrip } from "@/components/v2/board/result-strip";
-import { TIME_STEP_SECONDS } from "./shared/datetime-field";
+import { DateTimeField } from "./shared/datetime-field";
+import { boardSlotTimes } from "./shared/time-options";
+import { windowsToDailyHours } from "@/lib/schedule-board";
+import type { BoardConfig } from "@/components/v2/board/types";
+import { zonedTimeInput } from "@/lib/zoned-datetime";
 import type { ScheduleMetrics, ScheduleSolverInfo } from "@/server/api-v1/schemas";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -61,6 +65,11 @@ interface Props {
   canEdit: boolean;
   /** Competition timezone (schedule settings) — every time renders in it. */
   tz: string;
+  /** The GOVERNING venue clock (`settings.orgTz`, #448), resolved server-side.
+   *  Distinct from `tz`, which is display-only and which a division may
+   *  override: the board-slot grid must be anchored on this one or the offered
+   *  times drift off the board by the offset difference. */
+  orgTz: string;
   /** Documents menu goes through the Jul3/06 / v12 exports (Pro `exports` gate). */
   canExport: boolean;
 }
@@ -80,7 +89,89 @@ const FIXTURE_STATUS_STYLE: Record<string, string> = {
   cancelled: "bg-slate-100 text-slate-400",
 };
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, canEdit, tz, canExport }: Props) {
+/**
+ * The slice of GET /api/v1/divisions/{id}/schedule-settings this panel reads
+ * (quarter-hour-time-select design, "stages-panel does not currently hold the
+ * division's schedule config"). Hand-declared rather than importing
+ * `ScheduleSettingsWire`/`ScheduleSettings` wholesale — same stance as
+ * `StageRow`/`FixtureRow` above: this panel only ever reads these three
+ * fields off the response.
+ *
+ * THE ANCHOR IS RESOLVED ON `orgTz`, WHICH THIS WIRE DOES NOT CARRY. The
+ * endpoint serves only `tz` — the resolved DISPLAY zone (`displayTz`
+ * internally), which a division may override for display alone. Anchoring the
+ * slot grid on it is the #448 defect: on a division with a stored zone
+ * override the whole offered grid shifts by the offset difference, so every
+ * time the organiser picks lands hours away from the board the rest of the
+ * fixtures sit on.
+ *
+ * So `orgTz` arrives as a PROP instead, resolved server-side by the division
+ * page exactly as the schedule page already resolves it for the board
+ * (`resolveVenueTz(null, page.org.timezone)`). That keeps the governing clock
+ * correct without widening this wire — the alternative (adding `orgTz` to the
+ * response) means editing schemas.ts, usecases/schedule.ts and the exact-key
+ * assertion in `schedule-settings-wire.test.ts`, for a value the rendering
+ * pages already hold.
+ */
+interface DivisionScheduleSettings {
+  config: {
+    startAt?: string | null;
+    matchMinutes?: number;
+    gapMinutes?: number;
+    /** Play hours, stored as instants. Clips the offered grid to the hours the
+     *  division actually plays — without it the list walks to midnight and
+     *  offers slots after the day is over. */
+    sessionWindows?: BoardConfig["sessionWindows"];
+  };
+  tz: string;
+}
+
+/**
+ * Board slots for this panel's two fixture-level clock fields (fixture
+ * "When", add-match "When") — never quarter hours (design doc "Why
+ * fixture-level fields differ": a 40/0 board's matches sit on
+ * `09:00, 09:40, 10:20`, off any quarter-hour grid).
+ *
+ * `undefined` means "no explicit list" — `DateTimeField` falls back to
+ * quarter hours on its own (design rule 2) when `options` is omitted, so a
+ * fetch that hasn't landed yet, a failed fetch, a division with no settings
+ * row (`startAt`/`matchMinutes` absent), or a config that resolves to fewer
+ * than 2 slots must all land here rather than an empty or single-entry list.
+ */
+export function boardSlotOptionsFor(
+  settings: DivisionScheduleSettings | null,
+  /** The GOVERNING venue clock (#448) — never `settings.tz`, see above. */
+  orgTz: string,
+): string[] | undefined {
+  if (settings === null) return undefined;
+  // Whole thing behind one try, including the destructure: a response
+  // missing `config` entirely (a mocked/mismatched wire, a future version
+  // skew) must fall back the same as a malformed `startAt`, never crash the
+  // panel mid-render — same "never surface a picker with no usable options"
+  // stance as the fewer-than-2-slots case below.
+  try {
+    const { startAt, matchMinutes, gapMinutes, sessionWindows } = settings.config;
+    if (startAt === undefined || startAt === null || matchMinutes === undefined) return undefined;
+    const anchor = zonedTimeInput(startAt, orgTz);
+    if (anchor === "") return undefined;
+    // Same clipping the move panel applies, from the same helper — a grid that
+    // ran past the division's play hours here and stopped at them there would
+    // be two different answers to "which slots exist" on one board.
+    const daily = windowsToDailyHours(sessionWindows ?? [], orgTz);
+    const slots = boardSlotTimes({
+      anchor,
+      matchMinutes,
+      gapMinutes: gapMinutes ?? 0,
+      playFrom: daily?.from,
+      playTo: daily?.to,
+    });
+    return slots.length >= 2 ? slots : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, canEdit, tz, orgTz, canExport }: Props) {
   const msg = useMsg();
   const confirmDialog = useConfirm();
   const router = useRouter();
@@ -110,6 +201,28 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     metrics: ScheduleMetrics;
     solver: ScheduleSolverInfo;
   } | null>(null);
+  // Board slots for the fixture "When" / add-match "When" fields (quarter-
+  // hour-time-select design). This panel doesn't otherwise hold the
+  // division's schedule config, so it's fetched once here; a failed fetch or
+  // a division with no settings row leaves this null and `boardSlotOptionsFor`
+  // falls back to quarter hours. Fetched only for editors — viewers never see
+  // either field this feeds.
+  const [scheduleSettings, setScheduleSettings] = useState<DivisionScheduleSettings | null>(null);
+  useEffect(() => {
+    if (!canEdit) return;
+    let cancelled = false;
+    apiV1<DivisionScheduleSettings>(`/api/v1/divisions/${divisionId}/schedule-settings`)
+      .then((data) => {
+        if (!cancelled) setScheduleSettings(data);
+      })
+      .catch(() => {
+        // Falls back to quarter hours (design rule 2) — nothing to surface.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [divisionId, canEdit]);
+  const boardSlotOptions = boardSlotOptionsFor(scheduleSettings, orgTz);
 
   async function undoLast() {
     setError(null);
@@ -432,6 +545,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                 msg={msg}
                 stageId={stage.id}
                 entrantNames={entrantNames}
+                boardSlotOptions={boardSlotOptions}
                 onDone={() => {
                   setAddingTo(null);
                   router.refresh();
@@ -471,6 +585,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       entrantNames={entrantNames}
                       canEdit={canEdit}
                       tz={tz}
+                      boardSlotOptions={boardSlotOptions}
                       onRescheduled={() => {
                         setNotice(msg("schedule.rescheduled"));
                         setUndoable(true);
@@ -511,6 +626,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                             entrantNames={entrantNames}
                             canEdit={canEdit}
                             tz={tz}
+                            boardSlotOptions={boardSlotOptions}
                             onRescheduled={() => {
                               setNotice(msg("schedule.rescheduled"));
                               setUndoable(true);
@@ -551,6 +667,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                         entrantNames={entrantNames}
                         canEdit={canEdit}
                         tz={tz}
+                        boardSlotOptions={boardSlotOptions}
                         onRescheduled={() => {
                           setNotice(msg("schedule.rescheduled"));
                           setUndoable(true);
@@ -799,6 +916,7 @@ function FixtureLine({
   entrantNames,
   canEdit,
   tz,
+  boardSlotOptions,
   onRescheduled,
 }: {
   fixture: FixtureRow;
@@ -806,6 +924,9 @@ function FixtureLine({
   entrantNames: Record<string, string>;
   canEdit: boolean;
   tz?: string;
+  /** Board slots for the inline "When" field — see `boardSlotOptionsFor`
+   *  above. `undefined` lets `DateTimeField` fall back to quarter hours. */
+  boardSlotOptions?: string[];
   /** Fired after a schedule PATCH lands — the panel offers Undo (item 5). */
   onRescheduled?: () => void;
 }) {
@@ -935,16 +1056,13 @@ function FixtureLine({
       </div>
       {editing && (
         <div className="mt-2 flex flex-wrap items-end gap-2">
-          <label className="block">
-            <span className="label">{msg("schedule.field.when")}</span>
-            <input
-              type="datetime-local"
-              step={TIME_STEP_SECONDS}
-              value={when}
-              onChange={(e) => setWhen(e.target.value)}
-              className="input px-2 py-1 text-xs"
-            />
-          </label>
+          <DateTimeField
+            kind="datetime-local"
+            label={msg("schedule.field.when")}
+            value={when}
+            onChange={setWhen}
+            options={boardSlotOptions}
+          />
           <label className="block">
             <span className="label">{msg("schedule.field.venue")}</span>
             <input
@@ -989,12 +1107,16 @@ function AddMatchForm({
   msg,
   stageId,
   entrantNames,
+  boardSlotOptions,
   onDone,
   onCancel,
 }: {
   msg: Msg;
   stageId: string;
   entrantNames: Record<string, string>;
+  /** Board slots for the "When" field — see `boardSlotOptionsFor` above.
+   *  `undefined` lets `DateTimeField` fall back to quarter hours. */
+  boardSlotOptions?: string[];
   onDone: () => void;
   onCancel: () => void;
 }) {
@@ -1050,16 +1172,13 @@ function AddMatchForm({
             ))}
           </select>
         </label>
-        <label className="label flex flex-col gap-1 text-xs">
-          {msg("stage.addMatch.when")}
-          <input
-            type="datetime-local"
-            className="input py-1.5 text-sm"
-            step={TIME_STEP_SECONDS}
-            value={when}
-            onChange={(e) => setWhen(e.target.value)}
-          />
-        </label>
+        <DateTimeField
+          kind="datetime-local"
+          label={msg("stage.addMatch.when")}
+          value={when}
+          onChange={setWhen}
+          options={boardSlotOptions}
+        />
         <button
           type="button"
           className="btn btn-primary px-3 py-1.5 text-xs"

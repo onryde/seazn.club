@@ -1450,6 +1450,7 @@
   "schedule.field.stageName": "Nombre de la fase",
   "schedule.field.format": "Formato",
   "schedule.field.qualifyFrom": "Clasificar desde la tabla",
+  "datetime.timeLabel": "Hora",
   "schedule.topN": "Top {n}",
   "schedule.saving": "Guardando…",
   "schedule.save": "Guardar",

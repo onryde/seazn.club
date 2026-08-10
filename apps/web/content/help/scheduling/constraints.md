@@ -12,7 +12,11 @@ Constraints are the rules the auto-scheduler plays by. They live in the division
 - **Courts** — what your court is called. More than one court in parallel is Pro.
 - **Match length** — how long a fixture blocks a court, derived from the sport but overridable.
 
-Every time field on these screens moves in **quarter-hour steps** — 9:00, 9:15, 9:30 — so the picker and the up/down arrows land on the times a timetable is normally built from. Dates step a day at a time, as before. Times already saved on another minute keep their exact value; nothing is rounded behind you.
+Every time on these screens is picked from a list rather than typed to the minute. On the settings and constraints screens that list is the **quarter hours** — 9:00, 9:15, 9:30 — the times a timetable is normally built from. Dates keep their usual calendar picker.
+
+When you set the time on an individual match — the **Schedule** button on a fixture, **Add match**, or the board's **Move** panel — the list is your division's own slots instead: with 40-minute matches and no gap it offers 9:00, 9:40, 10:20, and so on. Those are the times the rest of the board already sits on, so nudging one match by hand cannot leave it stranded between everyone else's.
+
+Registration opening and closing times are quarter hours too, plus **23:59**, so "entry closes at the end of Friday" stays sayable.
 
 ## Finer control (Pro)
 

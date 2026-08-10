@@ -1450,6 +1450,7 @@
   "schedule.field.stageName": "Nom de la phase",
   "schedule.field.format": "Format",
   "schedule.field.qualifyFrom": "Qualifier depuis le classement",
+  "datetime.timeLabel": "Heure",
   "schedule.topN": "Top {n}",
   "schedule.saving": "Enregistrement…",
   "schedule.save": "Enregistrer",

@@ -119,13 +119,20 @@ test("a closing time before the opening time is refused in-panel, and never save
   const save = page.getByTestId("reg-settings-save");
   await expect(save).toBeVisible({ timeout: 20_000 });
 
-  // Opens AFTER it closes. `fill` on a datetime-local writes the value the
-  // organiser would have typed; the quarter-hour step constrains the picker,
-  // not this.
-  const clocks = page.locator('input[type="datetime-local"]');
-  expect(await clocks.count()).toBeGreaterThanOrEqual(2);
-  await clocks.nth(0).fill("2026-10-12T18:00");
-  await clocks.nth(1).fill("2026-10-12T09:00");
+  // Opens AFTER it closes. `input[type="datetime-local"]` is gone — each
+  // clock is a native date input beside a native time <select> now (Chrome's
+  // clock popup ignored `step`; quarter-hour-time-select design doc). Both
+  // time selects share the accessible name "Time" (`selectAriaLabel` beats
+  // their own hidden label), so they are told apart by DOM order — Opens
+  // above Closes, matching the field order in registration-settings.tsx.
+  const opensDate = page.getByLabel("Opens");
+  const closesDate = page.getByLabel("Closes");
+  const times = page.getByLabel("Time", { exact: true });
+  expect(await times.count()).toBeGreaterThanOrEqual(2);
+  await opensDate.fill("2026-10-12");
+  await times.nth(0).selectOption("18:00");
+  await closesDate.fill("2026-10-12");
+  await times.nth(1).selectOption("09:00");
   await save.click();
 
   const err = page.getByTestId("reg-settings-error");

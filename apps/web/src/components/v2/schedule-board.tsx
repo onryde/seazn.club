@@ -1193,6 +1193,12 @@ export function ScheduleBoard({
           venueCap={venueCap}
           entrantNames={entrantNames}
           feedLabels={feedLabels}
+          // Without this the panel's time select silently falls back to a
+          // quarter-hour grid the board is not on — a 40/0 division's matches
+          // sit on 09:00/09:40/10:20, so "nudge this fixture" would move it
+          // off the grid every other match shares. `orgTz` (never `tz`, #448)
+          // is what the slot anchor is resolved on.
+          boardConfig={{ config: cfg, orgTz: settings.orgTz }}
           onMove={(atIso, court) => {
             void place(atIso ?? new Date().toISOString(), court);
           }}

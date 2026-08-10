@@ -190,7 +190,18 @@ async function compileAndConfirm(page: Page, scope: Locator = consoleDock(page))
 /** Add the "Finish by 18:00" wish chip and confirm it compiled into the brief. */
 async function addFinishByWish(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Finish by", exact: true }).click();
-  await page.locator('input[type="time"]').fill("18:00");
+  // `kind="time"` is a native <select> now, not `input[type="time"]` — Chrome's
+  // clock popup ignored `step` (quarter-hour-time-select design doc). 18:00 is
+  // on the default quarter-hour grid this control offers.
+  //
+  // Selected STRUCTURALLY, by the option it must contain, per this file's own
+  // rule (#465: ids/roles, never copy). A `getByLabel("Time")` here would ride
+  // on a dictionary string, and "Time" is not even unique on every surface this
+  // component renders on — the split control's date half is labelled
+  // "Start date & time", which substring-matches it.
+  const wishTime = page.locator("select").filter({ has: page.locator('option[value="18:00"]') });
+  await expect(wishTime).toHaveCount(1);
+  await wishTime.selectOption("18:00");
   await page.getByRole("button", { name: "Add wish" }).click();
   await expect(page.locator("#ai-instruction")).toHaveValue(/Finish by 18:00/);
 }

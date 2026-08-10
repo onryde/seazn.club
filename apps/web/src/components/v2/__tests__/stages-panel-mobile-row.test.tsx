@@ -25,6 +25,8 @@ const baseProps = {
   entrantNames: { e1: "Alpha", e2: "Bravo" },
   canEdit: true,
   tz: "UTC",
+  // Governing venue clock (#448) — display `tz` may diverge from it.
+  orgTz: "UTC",
   canExport: false,
 };
 const fixture = {

@@ -1450,6 +1450,7 @@
   "schedule.field.stageName": "Fasenaam",
   "schedule.field.format": "Format",
   "schedule.field.qualifyFrom": "Kwalificeren via tabel",
+  "datetime.timeLabel": "Tijd",
   "schedule.topN": "Top {n}",
   "schedule.saving": "Opslaan…",
   "schedule.save": "Opslaan",

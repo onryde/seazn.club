@@ -16,6 +16,7 @@ import { listDivisionFixtures, listFixtureHeadlines } from "@/server/usecases/fi
 import { BracketPanel } from "@/components/v2/bracket-panel";
 import { listEntrants } from "@/server/usecases/entrants";
 import { getScheduleSettings } from "@/server/usecases/schedule";
+import { resolveVenueTz } from "@/lib/tz";
 import { hasFeature } from "@/lib/entitlements";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
 import { resolveModule } from "@/server/engine-db";
@@ -340,6 +341,12 @@ export default async function DivisionPage({
               entrantNames={entrantNames}
               canEdit={editable}
               tz={scheduleSettings.tz}
+              // The GOVERNING clock, resolved here exactly as the schedule page
+              // resolves it for the board: `ScheduleSettingsWire` serves only
+              // the display `tz`, and anchoring the panel's board-slot grid on
+              // that would shift every offered time on a division carrying a
+              // zone override (#448).
+              orgTz={resolveVenueTz(null, page.org.timezone)}
               canExport={canExport}
             />
           </>

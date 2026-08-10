@@ -83,6 +83,16 @@ describe("division schedule settings — no timezone field", () => {
 // component renders — `input w-full text-base`, where a hand-rolled call site
 // renders `input w-full`. (`sm:text-sm` is deliberately absent: globals.css
 // Pattern 5 already forces 16px on every control under 40rem.)
+//
+// Rewritten for the quarter-hour picker
+// (docs/superpowers/specs/2026-08-10-quarter-hour-time-select-design.md):
+// Chrome's clock POPUP ignores `step` (measured, Chrome 151), so neither
+// `type="time"` nor `type="datetime-local"` renders anywhere on this panel
+// any more. `kind="time"` (play-from/play-until) is now a native `<select>`;
+// `kind="datetime-local"` (start) splits into a date `<input>` beside that
+// same kind of select (`DateTimeSplitField`). Four logical FIELDS now render
+// as five underlying elements: two `<input type="date">` (start's date half
+// + end) and three `<select>` (start's time half + play-from + play-until).
 // ---------------------------------------------------------------------------
 
 const SHARED_FIELD_CLASS = 'class="input w-full text-base"';
@@ -106,17 +116,18 @@ function inputsOfType(html: string, type: string): string[] {
 describe("division schedule settings — date/time inputs use the shared DateTimeField", () => {
   it("renders all four date/time controls through DateTimeField", () => {
     const html = render("en", enUi as Dict);
-    const byKind: Record<string, string[]> = {
-      "datetime-local": inputsOfType(html, "datetime-local"),
-      date: inputsOfType(html, "date"),
-      time: inputsOfType(html, "time"),
-    };
-    // Start, end, and the play-hours pair — four in total, no more, no fewer.
-    expect(byKind["datetime-local"]).toHaveLength(1);
-    expect(byKind.date).toHaveLength(1);
-    expect(byKind.time).toHaveLength(2);
-    for (const [kind, tags] of Object.entries(byKind)) {
-      for (const tag of tags) expect(tag, `${kind} → ${tag}`).toContain(SHARED_FIELD_CLASS);
+    // No raw clock input survives — the datetime-local start field is now a
+    // date input + select pair, and the time fields are selects.
+    expect(inputsOfType(html, "datetime-local")).toHaveLength(0);
+    expect(inputsOfType(html, "time")).toHaveLength(0);
+    const dateTags = inputsOfType(html, "date");
+    const selectTags = html.match(/<select[^>]*>/g) ?? [];
+    // Two date inputs (start's date half + end) and three selects (start's
+    // time half + play-from + play-until) — the same four fields, split.
+    expect(dateTags).toHaveLength(2);
+    expect(selectTags).toHaveLength(3);
+    for (const tag of [...dateTags, ...selectTags]) {
+      expect(tag).toContain(SHARED_FIELD_CLASS);
     }
   });
 
@@ -139,12 +150,24 @@ describe("division schedule settings — date/time inputs use the shared DateTim
     // The end DATE may not precede the start: derived from the start field's
     // own value on the VENUE clock, and DateTimeField has to forward it as an
     // attribute. Derived rather than hardcoded, but through the org zone now —
-    // reading it in the process's zone would name a different day.
-    expect(inputsOfType(html, "date")[0]).toContain(`min="${zonedDateInput(startIso, ORG_TZ)}"`);
-    // The other three are unbounded — a `min` here would be a new constraint,
-    // not a preserved one.
-    for (const tag of [...inputsOfType(html, "datetime-local"), ...inputsOfType(html, "time")]) {
-      expect(tag).not.toContain("min=");
+    // reading it in the process's zone would name a different day. The end
+    // date is the SECOND `<input type="date">` in the grid — the first is
+    // the start field's own date half (its `kind="datetime-local"` splits
+    // into one), which the panel never bounds with a min of its own.
+    const dateTags = inputsOfType(html, "date");
+    expect(dateTags).toHaveLength(2);
+    expect(dateTags[0]).not.toContain("min=");
+    expect(dateTags[1]).toContain(`min="${zonedDateInput(startIso, ORG_TZ)}"`);
+    // The play-hours pair (and the start field's own time half) stay
+    // unbounded too — a `min` there would be a new constraint. `<select>`
+    // carries no `min` ATTRIBUTE at the DOM level at all, so the meaningful
+    // check is that each still offers the full quarter-hour grid: a real min
+    // filter (time-options.ts `filterByMin`) would have dropped its earliest
+    // entries.
+    const selectBlocks = html.match(/<select[^>]*>[\s\S]*?<\/select>/g) ?? [];
+    expect(selectBlocks).toHaveLength(3);
+    for (const block of selectBlocks) {
+      expect(block).toContain('value="00:00"');
     }
   });
 
@@ -162,9 +185,18 @@ describe("division schedule settings — date/time inputs use the shared DateTim
       expect(html, key).toContain(escapeHtml(enUi[key]));
     }
     // The play-hours pair used to carry its names as `aria-label` on a bare
-    // input. DateTimeField names them with a real wrapping <label>, so the
-    // attribute must be gone rather than duplicated onto the accessible name.
-    for (const tag of inputsOfType(html, "time")) expect(tag).not.toContain("aria-label=");
+    // input. DateTimeField names them with a real wrapping <label> instead
+    // (sr-only, since the legend above already says "Play hours"), so the
+    // attribute must be gone from THESE selects — unlike the datetime-local
+    // split's own time half, which legitimately carries its OWN "Time"
+    // aria-label to stay distinct from the date half beside it.
+    for (const key of ["boardset.playFrom", "boardset.playUntil"] as const) {
+      const found = new RegExp(`<span class="label sr-only">${escapeHtml(enUi[key])}</span><select[^>]*>`).exec(
+        html,
+      );
+      expect(found, key).not.toBeNull();
+      expect(found![0]).not.toContain("aria-label=");
+    }
   });
 
   it("hides only the play-hours labels, which the legend above already states", () => {
@@ -196,14 +228,15 @@ describe("division schedule settings — date/time inputs use the shared DateTim
         />
       </DictProvider>,
     );
-    const fields = [
-      ...inputsOfType(html, "datetime-local"),
-      ...inputsOfType(html, "date"),
-      ...inputsOfType(html, "time"),
-    ];
-    expect(fields).toHaveLength(4);
+    // Two date inputs (start's date half + end) and three selects (start's
+    // time half + play-from + play-until) — the same four fields, now five
+    // underlying elements since the datetime-local field split in two.
+    const dateTags = inputsOfType(html, "date");
+    const selectTags = html.match(/<select[^>]*>/g) ?? [];
+    expect(dateTags).toHaveLength(2);
+    expect(selectTags).toHaveLength(3);
     // React emits `disabled=""` for true and nothing for false, so the `=""`
     // is load-bearing: `disabled` alone also matches a className.
-    for (const tag of fields) expect(tag).toContain('disabled=""');
+    for (const tag of [...dateTags, ...selectTags]) expect(tag).toContain('disabled=""');
   });
 });

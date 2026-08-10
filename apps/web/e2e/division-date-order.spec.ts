@@ -53,9 +53,14 @@ test("the division wizard refuses a backwards schedule range, and creates nothin
 
   // End the day BEFORE the start. Both controls live on this tab; `fill`
   // writes what the organiser would have typed, which is exactly the input the
-  // advisory `min=` does not stop.
-  await page.locator('input[type="datetime-local"]').first().fill("2026-10-12T09:00");
-  await page.locator('input[type="date"]').first().fill("2026-10-11");
+  // advisory `min=` does not stop. Start is a native date input + time
+  // <select> now, not `input[type="datetime-local"]` — Chrome's clock popup
+  // ignored `step` (quarter-hour-time-select design doc). The tab now has
+  // TWO date inputs (Start's date half plus End's own), so both are addressed
+  // by their accessible label rather than `input[type="date"]` position.
+  await page.getByLabel("Start date & time").fill("2026-10-12");
+  await page.getByLabel("Time", { exact: true }).selectOption("09:00");
+  await page.getByLabel("End date").fill("2026-10-11");
 
   await create.click();
 
@@ -71,7 +76,7 @@ test("the division wizard refuses a backwards schedule range, and creates nothin
   // Control run through the same path: the same wizard, the same fields, the
   // dates the right way round. Without it a wizard that refused EVERY create
   // would satisfy every assertion above.
-  await page.locator('input[type="date"]').first().fill("2026-10-13");
+  await page.getByLabel("End date").fill("2026-10-13");
   await create.click();
   await expect(page).not.toHaveURL(/\/d\/new$/, { timeout: 20_000 });
   expect(await countDivisions()).toBe(1);

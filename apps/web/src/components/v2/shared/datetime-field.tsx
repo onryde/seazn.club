@@ -1,13 +1,24 @@
 "use client";
 
+import { timeOptions } from "./time-options";
+import { DateTimeSplitField } from "./datetime-split-field";
+
 /**
  * The one native date/time control. Six call sites hand-rolled
  * `<label className="block"><span className="label">…</span><input type="date" …
  * className="input w-full" /></label>`; Prompts 02-04 convert them onto this.
  *
- * Native inputs on purpose (design decision 1): `<input type="time">` cannot
- * shade a blacked-out range inline no matter how it is wrapped, so a custom
- * picker buys nothing that is in scope.
+ * `kind="date"` is still a native `<input type="date">` — Chrome's calendar
+ * popup is already correct and a custom one buys nothing here (design
+ * decision 1, see the quarter-hour-time-select design doc). `kind="time"` and
+ * `kind="datetime-local"` are NOT native clock inputs any more: Chrome's
+ * picker *popup* ignores `step` even though its validity engine honours it
+ * (measured, Chrome 151), so quarter-hour granularity existed for the
+ * keyboard and not the mouse. Owning the option list is the only way to bound
+ * what can be picked — `kind="time"` renders a `<select>` built from
+ * `timeOptions()` (time-options.ts, every rule lives there), and
+ * `kind="datetime-local"` delegates to `DateTimeSplitField`, which pairs a
+ * native date input with that same select.
  *
  * `label` is a rendered string, not a message key — every caller passes
  * `msg("…")`, which keeps the copy in the four dictionaries where it already
@@ -17,7 +28,10 @@
  * can be called directly in a test and its element tree walked (see the
  * sibling test). Adding a hook here — `useId` was the near miss — costs that.
  * Association is implicit instead, via the wrapping `<label>`, which is also
- * exactly what the division wizard does today.
+ * exactly what the division wizard does today. `DateTimeSplitField` is the
+ * one place a hook lives now (it owns the half-filled pair's state); this
+ * component only ever returns an element for it, never calls it, so nothing
+ * here invokes a hook itself.
  */
 export interface DateTimeFieldProps {
   kind: "date" | "time" | "datetime-local";
@@ -51,34 +65,56 @@ export interface DateTimeFieldProps {
    */
   labelHidden?: boolean;
   /**
-   * Granularity of the native picker and spinner, in SECONDS. Defaults to
-   * {@link TIME_STEP_SECONDS} so every control offers 9:00 / 9:15 / 9:30 …
+   * Granularity of the generated option list, in SECONDS. Defaults to
+   * {@link TIME_STEP_SECONDS} so `kind="time"` offers 9:00 / 9:15 / 9:30 …
    *
-   * Two spec details this default hides from the call sites:
+   *  - **Never applied for `kind="date"`.** Dates are not stepped — the
+   *    native calendar's own one-day granularity is correct and stays.
+   *  - **No longer a DOM attribute.** It used to be `step={900}` on the
+   *    native clock input, which Chrome's picker *popup* ignored (the popup
+   *    is browser UI, not DOM). It now drives `timeOptions()` — the list the
+   *    `<select>` actually offers — so what the keyboard could already do is
+   *    now also what the mouse can do.
    *
-   *  - **Never defaulted for `kind="date"`.** On a date input `step` counts
-   *    DAYS, so the same 900 would mean "one selectable date every 900 days"
-   *    and reject every value the organiser can reach. `undefined` there
-   *    leaves the native one-day default.
-   *  - The step BASE is `min` when `min` is set, else midnight (`time`) or
-   *    1970-01-01T00:00 (`datetime-local`). With no `min` that lands the
-   *    offered values on :00/:15/:30/:45; with one it makes them relative to
-   *    `min`, which is what the blackout `to` field wants — 15-minute steps
-   *    measured from `from`.
-   *
-   * `step` constrains the picker, not this component's state: a value already
-   * stored off the quarter-hour still renders and still round-trips.
+   * `step` constrains the OFFERED list, not this component's state: a value
+   * already stored off the grid still renders (`timeOptions` always injects
+   * the current value, sorted into place) and still round-trips.
    */
   step?: number;
+  /**
+   * Explicit option list for `kind="time"`, overriding the generated stepped
+   * list — the board-slot call sites (a division's fixtures do not sit on a
+   * quarter-hour grid once `matchMinutes` isn't a multiple of 15).
+   */
+  options?: string[];
+  /**
+   * Appended to the option list verbatim, deduped — the registration
+   * deadlines pass `["23:59"]`, since a cutoff is not a slot and the
+   * quarter-hour grid tops out at `23:45`.
+   */
+  extraOptions?: string[];
+  /**
+   * `aria-label` for the `<select>`, INTERNAL to this module: only
+   * `DateTimeSplitField` passes it, for the time half of a datetime-local
+   * pair. That half's wrapping `<label>` still carries the composite field's
+   * own label text (hidden), which is what names the DATE half; without a
+   * distinct name here the time `<select>` would read as the identical
+   * "Start date & time" a screen reader already heard on the date input right
+   * before it. Not part of the public 14-call-site contract — a bare
+   * `kind="time"` field already gets a real, distinct label via `label`.
+   */
+  selectAriaLabel?: string;
 }
 
 /**
  * Quarter-hour granularity, in seconds. Exported so the few native time
- * inputs that cannot use this component — `ai-wish-chips`, `move-panel`,
+ * inputs that cannot use this component yet — `ai-wish-chips`, `move-panel`,
  * `stages-panel`, `registration-settings`, `ai-officials-review` — step by
- * the same number instead of each re-typing 900.
+ * the same number instead of each re-typing 900. Re-exported from
+ * `time-options.ts`, the single source of truth for this value, rather than
+ * hand-typed again here.
  */
-export const TIME_STEP_SECONDS = 900;
+export { TIME_STEP_SECONDS } from "./time-options";
 
 export function DateTimeField({
   kind,
@@ -90,7 +126,60 @@ export function DateTimeField({
   required,
   labelHidden,
   step,
+  options,
+  extraOptions,
+  selectAriaLabel,
 }: DateTimeFieldProps) {
+  if (kind === "datetime-local") {
+    return (
+      <DateTimeSplitField
+        value={value}
+        onChange={onChange}
+        label={label}
+        min={min}
+        disabled={disabled}
+        required={required}
+        labelHidden={labelHidden}
+        step={step}
+        options={options}
+        extraOptions={extraOptions}
+      />
+    );
+  }
+
+  if (kind === "time") {
+    const opts = timeOptions({
+      value,
+      options,
+      stepSeconds: step,
+      extraOptions,
+      minTime: min ?? null,
+    });
+    return (
+      <label className="block">
+        {/* `sr-only` is a visual utility, never a removal — see `labelHidden`. */}
+        <span className={labelHidden ? "label sr-only" : "label"}>{label}</span>
+        <select
+          className="input w-full text-base"
+          value={value}
+          disabled={disabled}
+          aria-required={required ? "true" : undefined}
+          aria-label={selectAriaLabel}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          {/* "No time" — how the datetime-local pair clears one half. Never
+              disabled: it has to stay pickable to clear a value back out. */}
+          <option value="">{"--:--"}</option>
+          {opts.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
   return (
     <label className="block">
       {/* `sr-only` is a visual utility, never a removal — see `labelHidden`. */}
@@ -107,9 +196,9 @@ export function DateTimeField({
         className="input w-full text-base"
         value={value}
         min={min}
-        // See the `step` prop. `kind === "date"` is the load-bearing half of
-        // this expression: a date input measures `step` in days.
-        step={step ?? (kind === "date" ? undefined : TIME_STEP_SECONDS)}
+        // `kind` here is always "date" (the other two branches return above),
+        // and a date input measures `step` in DAYS — so it is never set. The
+        // (now removed) `step={900}` regression is pinned in the sibling test.
         disabled={disabled}
         // ARIA only, deliberately never the native `required` attribute (#376):
         // the native one fires the browser's OWN English validation tooltip,
