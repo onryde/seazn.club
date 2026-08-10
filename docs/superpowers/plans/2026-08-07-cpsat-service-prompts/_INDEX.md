@@ -368,6 +368,21 @@ So a red here is a moving target that tracks `uptime`, and it reads
 exactly like a real regression. Record a load reading beside any timing
 number, and never "fix" one of these by changing a timing constant.
 
+## Branch is 4 commits BEHIND `origin/main` as of 2026-08-10 09:00Z
+
+Main moved while this branch was in flight, and one of the moves is not
+neutral to this programme:
+
+- `d251d4df` — resolve the rest floor through one leaf that names the control
+- `10062c6c` — show which control sets the rest floor, and refuse below it
+- `37eb77f6` — e2e publish-gate fixture
+
+The rest-floor work touches the same concept as this programme's
+`restByDivision` wire field and `hardRestMinutesFor`. **Read those three
+commits before the next rebase** rather than resolving conflicts blind — the
+last rebase here had exactly one conflict and it was trivially an import
+move, which is not a safe expectation for this one.
+
 ## Parallel execution
 
 Safe to run alongside the sibling `2026-08-07-datetime-ux-prompts/`
