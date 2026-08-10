@@ -1232,7 +1232,7 @@ const SOLVER_SLACK_MS = 24 * 60 * MS_PER_MIN;
  * Task 13's bench sets the DETERMINISTIC budget (`rlimit`); this is only the
  * outer safety cap, and should be revisited once that lands.
  */
-export const AUTO_SOLVER_WALL_MS = 20_000;
+export const AUTO_SOLVER_WALL_MS = 30_000;
 
 /**
  * The per-ORG cooldown on the auto pass. Ten runs per five minutes.

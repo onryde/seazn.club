@@ -123,8 +123,8 @@ primary_region = "lhr"
     grace_period = "10s"
 
 [[vm]]
-  size = "shared-cpu-2x"
-  memory = "1gb"
+  size = "performance-8x"
+  memory = "16gb"
 
 [env]
   # Caps CONCURRENT solves (config.py's `Settings.max_workers`, default 4
@@ -177,8 +177,13 @@ primary_region = "lhr"
   # `NUM_SEARCH_WORKERS` is hardcoded at 8 in `model.py`, measured on a
   # 6-core dev box, against this 2-vCPU shape. Change one variable at a time
   # or neither result is attributable — see DEPLOY.md step 8.
-  PLACEMENT_WALL_SECONDS_MAX = "20"
-
+  PLACEMENT_WALL_SECONDS_MAX = "30"
+  # PLACEMENT_-prefixed, matching every other var this service reads. The
+  # unprefixed `NUM_SEARCH_WORKERS` set here on 2026-08-10 did NOTHING —
+  # `model.py` hardcoded the constant and `config.py` read only four vars — so
+  # four production runs varied the wall and the machine while everyone
+  # believed the worker count was moving. It never left 8.
+  PLACEMENT_NUM_SEARCH_WORKERS = "8"
 # --- sizing: this box is sized for PROOF TIME, not placement -----------------
 # Across two independent paired, interleaved A/B runs of 12 on the production
 # board, `placed` was 37 of 37 fixtures in every single run, regardless of

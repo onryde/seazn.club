@@ -13,3 +13,15 @@ engine/
 *.md
 !README.md
 .claude/
+__pycache__/
+**/__pycache__/
+*.pyc
+**/*.pyc
+*.egg-info/
+**/*.egg-info/
+build/
+**/build/
+.pytest_cache/
+**/.pytest_cache/
+venv/
+.venv/

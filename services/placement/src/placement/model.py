@@ -196,6 +196,7 @@ contract addition nothing has asked for yet.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -211,7 +212,42 @@ DAY_MS = 86_400_000
 
 # Same as the bench. CP-SAT's own default is the machine's core count; pinning
 # it keeps solve behaviour reproducible across the dev box and the deploy box.
-NUM_SEARCH_WORKERS = 8
+#
+# ENV-OVERRIDABLE SINCE 2026-08-10, and the reason is a full afternoon of
+# measurement that proved nothing. `NUM_SEARCH_WORKERS` was set in `fly.toml`'s
+# `[env]` and had NO EFFECT, because this was a hardcoded module constant and
+# `config.py` reads only PLACEMENT_SERVICE_SECRET / _MAX_WORKERS /
+# _WALL_SECONDS_MAX / _PORT. Four production runs — wall 10s -> 30s, machine
+# shared-cpu-2x -> performance-8x/16gb — returned a BYTE-IDENTICAL board every
+# time with `tiers_completed: 1/4`, and the one variable everybody believed was
+# being tuned had never moved off 8.
+#
+# A knob that silently does nothing is worse than no knob: it makes an
+# experiment look conclusive when it never ran.
+#
+# Read at import, not per solve: these are process-level solver settings, and a
+# per-request read would make two solves on one machine behave differently for
+# no reason anybody could see from the outside.
+NUM_SEARCH_WORKERS = int(os.environ.get("PLACEMENT_NUM_SEARCH_WORKERS", "8"))
+
+# The two presolve knobs, also env-overridable, and for a sharper reason than
+# tidiness. `objective.py` pins both to 0 to stop presolve eating the entire
+# wall on a symmetric board — a failure that returns UNKNOWN with nothing
+# placed and says nothing. That tradeoff was measured on the BENCH board
+# ("~3x slower without them"), not on a real one.
+#
+# The production board that motivated this is maximally symmetric: three
+# interchangeable courts, uniform 30-minute matches, the same slots repeating
+# daily, and 30 of 37 fixtures to choose. With symmetry breaking OFF, CP-SAT
+# must enumerate vast numbers of equivalent boards — which is exactly the shape
+# of "T0 finishes, T1 never does, and more time does not help".
+#
+# So they can now be tried WITHOUT a code deploy. Defaults are unchanged, so
+# this commit alters no behaviour on its own. If raising SYMMETRY_LEVEL makes
+# the run return UNKNOWN with `placed` collapsing, that is the failure the 0
+# was guarding against — and it is loud in the response, not silent.
+SYMMETRY_LEVEL = int(os.environ.get("PLACEMENT_SYMMETRY_LEVEL", "0"))
+CP_MODEL_PROBING_LEVEL = int(os.environ.get("PLACEMENT_PROBING_LEVEL", "0"))
 
 
 @dataclass(frozen=True)
