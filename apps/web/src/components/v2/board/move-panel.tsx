@@ -97,24 +97,28 @@ export function MovePanel({
     <div
       role="dialog"
       aria-label={msg("board.moveAria", { title: cardTitle(fixture, entrantNames, feedLabels) })}
-      className="flex flex-wrap items-end gap-2 rounded-lg border border-purple-200 bg-purple-50 p-3"
+      className="flex flex-wrap items-end gap-3 rounded-lg border border-purple-100 bg-white p-3 shadow-sm"
       onKeyDown={(e) => {
         if (e.key === "Escape") onClose();
       }}
     >
-      <p className="w-full text-xs font-medium text-purple-800">
-        {msg("board.moveLabel", { title: cardTitle(fixture, entrantNames, feedLabels) })}
-        <span className="ml-2 font-normal text-purple-700">
-          {msg("board.moveHint")}
+      <div className="mr-1 flex flex-col gap-0.5">
+        <span className="text-xs font-semibold text-purple-700">
+          {msg("board.moveLabel", { title: cardTitle(fixture, entrantNames, feedLabels) })}
         </span>
-      </p>
-      <DateTimeField
-        kind="datetime-local"
-        value={when}
-        onChange={setWhen}
-        label={msg("board.when")}
-        options={boardSlotOptions}
-      />
+        {/* 11px on white: slate-500 measures 4.35:1 here (below the 4.5:1 AA
+            floor per the ai-diff-panel axe finding, 2026-08-09) — slate-600. */}
+        <span className="text-[11px] text-slate-600">{msg("board.moveHint")}</span>
+      </div>
+      <div className="w-80 max-w-full">
+        <DateTimeField
+          kind="datetime-local"
+          value={when}
+          onChange={setWhen}
+          label={msg("board.when")}
+          options={boardSlotOptions}
+        />
+      </div>
       <label className="block">
         <span className="label">{venueCap}</span>
         <select value={court} onChange={(e) => setCourt(e.target.value)} className="input px-2 py-1 text-xs">
@@ -124,22 +128,24 @@ export function MovePanel({
           ))}
         </select>
       </label>
-      <button
-        type="button"
-        // Resolved on the venue clock, matching the seed and the option list
-        // above. `new Date(when)` here would read the wall clock the organiser
-        // just picked off the BOARD'S grid as the BROWSER's, storing an instant
-        // the offset away from the slot they chose.
-        onClick={() =>
-          onMove(when ? isoFromZonedDateTime(when, boardConfig.orgTz) : null, court || null)
-        }
-        className="btn btn-primary px-3 py-1.5 text-xs"
-      >
-        {msg("board.move")}
-      </button>
-      <button type="button" onClick={onClose} className="btn btn-ghost px-3 py-1.5 text-xs">
-        {msg("board.cancel")}
-      </button>
+      <div className="ml-auto flex gap-2">
+        <button type="button" onClick={onClose} className="btn btn-ghost px-3 py-1.5 text-xs">
+          {msg("board.cancel")}
+        </button>
+        <button
+          type="button"
+          // Resolved on the venue clock, matching the seed and the option list
+          // above. `new Date(when)` here would read the wall clock the organiser
+          // just picked off the BOARD'S grid as the BROWSER's, storing an instant
+          // the offset away from the slot they chose.
+          onClick={() =>
+            onMove(when ? isoFromZonedDateTime(when, boardConfig.orgTz) : null, court || null)
+          }
+          className="btn btn-primary px-3 py-1.5 text-xs"
+        >
+          {msg("board.move")}
+        </button>
+      </div>
     </div>
   );
 }

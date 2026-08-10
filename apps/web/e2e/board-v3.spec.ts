@@ -204,6 +204,21 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     expect(chipsAfter.sort()).toEqual(["U16B", "U16G"]);
   });
 
+  test("Move panel's When field renders at a real width, not collapsed (regression)", async ({
+    page,
+  }) => {
+    await page.goto(boardUrl);
+    await page.locator("[data-fixture-id] button[aria-pressed]").first().click();
+    const dialog = page.getByRole("dialog", { name: /^Move / });
+    const dateInput = dialog.locator('input[type="date"]');
+    await expect(dateInput).toBeVisible();
+    const box = await dateInput.boundingBox();
+    // The bug (00631754, fixed by this redesign) collapsed this to a
+    // near-zero box — a real native date input is never this narrow.
+    expect(box?.width ?? 0).toBeGreaterThan(80);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  });
+
   test("injected rest violation → badge count → panel → jump-to-fixture", async ({
     page,
     request,
