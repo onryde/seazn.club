@@ -17,6 +17,10 @@ export * from "./build-objectives.ts";
 // as `@seazn/engine/scheduling/grid-step`, which is how the browser takes it:
 // a leaf import, so the schedule page does not ship the solvers.
 export * from "./grid-step.ts";
+// The rest floor the solver, the verifier and BOTH organiser panels resolve
+// through. Also reachable as `@seazn/engine/scheduling/rest-floor`, a leaf, for
+// the same bundle reason as `grid-step` above.
+export * from "./rest-floor.ts";
 export * from "./build-grid.ts";
 // The boolean model over that lattice. Free to name here for the same reason
 // the repair block below is: its only `z3-solver` reference is `import type`.

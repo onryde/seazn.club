@@ -13,6 +13,7 @@ import type {
   SchedulingConstraints,
   WeekdayCode,
 } from "./constraints.ts";
+import { restFloor } from "./rest-floor.ts";
 import { dayKeyInTz, hhmmInTz, weekdayOfYmd, ymdAddDays, zonedTimeToUtc } from "./tz.ts";
 
 const MS_PER_MIN = 60_000;
@@ -98,7 +99,15 @@ export interface Assignment {
  *  identically. They used to disagree: `slotFixtures` took the max, the board's
  *  validation read only `perEntrantMinRest`, and the AI referee read only
  *  `constraints.restMin` — so whether a timetable was legal depended on which
- *  code path asked. */
+ *  code path asked.
+ *
+ *  The arithmetic itself now lives in `rest-floor.ts`, which also names the
+ *  WINNING source so the two organiser-facing panels can say which of the four
+ *  controls set the number. Kept as a wrapper rather than replaced at the call
+ *  sites: this name is what the placer, the verifier, `build-encode.ts` and
+ *  `repair.ts` already ask, and `build-encode-parity.test.ts` proves those two
+ *  agree placement by placement through it. The split must not become a second
+ *  implementation — that is the exact defect this subsystem keeps producing. */
 export function effectiveRestMinutes(
   // matchMinutes is optional: validateAssignments is called with configs that
   // carry no match length (the board's own callers, and every pre-existing
@@ -107,28 +116,7 @@ export function effectiveRestMinutes(
     Partial<Pick<SlotConfig, "matchMinutes">>,
   group?: { poolId?: string; divisionId?: string },
 ): number {
-  const c = config.constraints;
-  let minutes = config.perEntrantMinRest;
-  if (c?.restMin !== undefined) minutes = Math.max(minutes, c.restMin);
-  // MAX, not precedence (#459, owner ruling 2026-08-04). A row can match both a
-  // division-keyed and a pool-keyed entry; a pool entry RAISES the floor and
-  // never lowers it, exactly like `restMin` and `noBackToBack` on the lines
-  // either side of this one. Resolving with `??` instead made the pool entry
-  // shadow the division one — and, because `0 ?? x` is `0`, an explicit pool
-  // entry of zero ERASED a division rule rather than adding nothing.
-  //
-  // Nothing in the UI presents a pool rest as an override of its division, so
-  // "most specific wins" would have been a semantics no surface teaches.
-  for (const key of [group?.poolId, group?.divisionId]) {
-    const v = key !== undefined ? c?.restByGroup?.[key] : undefined;
-    if (v !== undefined) minutes = Math.max(minutes, v);
-  }
-  // "One fixture between" is only meaningful once we know how long a fixture
-  // is; callers that validate without a match length simply don't get it.
-  if (c?.noBackToBack && config.matchMinutes !== undefined) {
-    minutes = Math.max(minutes, config.matchMinutes + config.gapMinutes);
-  }
-  return minutes;
+  return restFloor(config, group).minutes;
 }
 
 export type ConflictReason =
