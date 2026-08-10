@@ -162,7 +162,56 @@ jobs:
       # probe now refuses to run through).
       #
       # `rm -rf` first: `cp -R src dst` with dst present copies INTO it.
+      # --- a REAL solver for this job --------------------------------------
+      #
+      # `placement-cutover.spec.ts` exists to prove an organiser clicking
+      # Auto-schedule gets a board the OPTIMISER produced, and it asserts
+      # exactly that: `data-engine="optimized"` on the result strip. Without a
+      # reachable service `build.ts` catches the transport failure and returns
+      # a greedy board — which is correct behaviour and makes that spec fail by
+      # design (its own negative control is "service down -> FAIL").
+      #
+      # So without this container the spec could only ever prove the fallback,
+      # which is the opposite of its purpose. Same pattern as ci.yml's smoke
+      # job and placement-service.yml's `integration` job; the image build is
+      # cached (type=gha) and shared with them.
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the placement service image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Start the placement service
+        run: |
+          set -euo pipefail
+          docker run -d --name placement-e2e -p 50051:50051 \
+            -e PLACEMENT_SERVICE_SECRET=ci-e2e-secret \
+            placement-service:ci
+          opened=""
+          for _ in $(seq 1 15); do
+            if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/50051' 2>/dev/null; then opened=1; break; fi
+            sleep 1
+          done
+          if [ -z "$opened" ]; then
+            echo "::error::placement port 50051 never accepted a TCP connection within 15s"
+            docker logs placement-e2e || true
+            exit 1
+          fi
+
       - name: Start server
+        # On the SERVER, not the Playwright step: `build.ts` runs server-side,
+        # so the server is what dials the solver. Set only on the test step,
+        # the app would keep dialling the production default
+        # (`placement.flycast:50051`) — unreachable from a runner — and every
+        # board would come back greedy while the suite reported on it.
+        env:
+          PLACEMENT_SERVICE_HOST: localhost:50051
+          PLACEMENT_SERVICE_SECRET: ci-e2e-secret
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -215,6 +264,16 @@ jobs:
       - name: Dev server log (on failure)
         if: failure()
         run: cat dev-server.log || true
+
+      # Last, so the container outlives every step that needs it. In ci.yml an
+      # earlier revision tore its container down immediately after the vitest
+      # step and the smoke run failed eleven steps later with a message that
+      # named the WASM and had nothing to do with it.
+      - name: Placement service logs and teardown
+        if: always()
+        run: |
+          docker logs placement-e2e || true
+          docker rm -f placement-e2e >/dev/null 2>&1 || true
 
   # Same suite against the deployed staging app. No Postgres/Redis services and
   # no dev server: PLAYWRIGHT_BASE points at Fly, and the SQL setup helpers
