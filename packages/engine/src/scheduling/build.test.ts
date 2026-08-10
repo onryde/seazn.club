@@ -594,8 +594,12 @@ describe("buildSchedule", () => {
     // existing booking: its start is not a multiple of the grid step, so it is
     // not a slot `buildGrid` generates. Looking it up with `findIndex` gets -1,
     // and silently dropping the freeze there let POLISH move a card it had
-    // promised not to while still reporting `ok`. Every frozen anchor is now
-    // PINNED into the lattice the way a `locked` placement is.
+    // promised not to while still reporting `ok`.
+    //
+    // Do NOT read the old "pinned into the lattice" mechanism here — it was
+    // removed with the `seedPinsOf` grid injection, which was manufacturing
+    // per-court asymmetric grids and routing real boards to greedy. The
+    // mechanism that holds the freeze now lives at `build.test.ts:1473`.
     // `a`'s entrant may not start before 09:07, so greedy starts it at exactly
     // 09:07 — the lattice only generates 09:00 / 09:30 / 10:00. `b`'s entrant
     // may not start after 09:00, and `a` sitting at 09:07 covers 09:00's slot

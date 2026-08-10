@@ -311,7 +311,11 @@ describe("buildSchedule — z3 teardown (R17)", () => {
   // depends on. It deliberately does NOT prove the lock is either NEEDED or
   // free of cost for this path; that is the open question the report flags
   // for a future round, not this test's job.
-  it("still serialises, and still tears down, when two runs queue together", async () => {
+  // Name says only what the body checks. It used to say "and still tears
+  // down"; the body no longer asserts teardown, and a name that claims an
+  // unchecked guarantee is the exact defect this task already fixed once
+  // (`build.test.ts:151`, a green test named for a floor it never exercised).
+  it("does not wedge or corrupt either run when two queue together", async () => {
     await isolated(
       async ({ build }) => {
         const [first, second] = await Promise.all([
