@@ -93,6 +93,12 @@ async function isolated<T>(
     });
   } finally {
     vi.doUnmock("./build-encode.ts");
+    // Defensive even for the tests above that never mock this — unmocking a
+    // module that was never mocked is a no-op, and the alternative is a
+    // `vi.doMock("./cpsat-client.ts", ...)` (the "still serialises" case
+    // below) leaking into whatever runs next in this worker
+    // (`isolate: false`, vitest.config.ts).
+    vi.doUnmock("./cpsat-client.ts");
     await z3.resetZ3();
     vi.resetModules();
   }
@@ -288,26 +294,57 @@ describe("buildSchedule — z3 teardown (R17)", () => {
     }
   }, 60_000);
 
-  it.skip("still serialises, and still tears down, when two runs queue together", async () => {
-    // The teardown moved INSIDE the lock, so the guard worth keeping is that
-    // holding it across both halves did not wedge the queue: two runs launched
-    // together must both complete and both leave nothing loaded.
-    //
-    // WHAT THIS DELIBERATELY DOES NOT CLAIM: that the teardown is inside the
-    // lock rather than outside it. That was written as an assertion and
-    // MEASURED to survive the mutant — `resetZ3` takes the lock itself, so the
-    // outside spelling also runs every solve to completion and also ends at
-    // zero. The reason to prefer the inside spelling is heap accounting under
-    // concurrency (see `withZ3LockAndReset`), and it is not observable from
-    // here. Left as a note rather than a green assertion about nothing.
-    await isolated(async ({ build, z3 }) => {
-      const [first, second] = await Promise.all([
-        build.buildSchedule({ fixtures, config }),
-        build.buildSchedule({ fixtures, config }),
-      ]);
-      expect(first.rlimitSpent).toBeGreaterThan(0);
-      expect(second.rlimitSpent).toBeGreaterThan(0);
-      expect(z3.z3LoadCount()).toBe(0);
-    });
+  // UN-SKIPPED (fix round 1), REWRITTEN rather than mocked-in-place: the
+  // original claim (`rlimitSpent > 0`, `z3LoadCount() === 0`) is entirely
+  // about z3's WASM heap, which `solveBuild` never touches on this path any
+  // more — both would now be checking numbers that are always 0/0
+  // regardless of whether anything ran, exactly the vacuous reading this
+  // file's own header comment warns against.
+  //
+  // What still genuinely needs covering: `buildSchedule` still wraps every
+  // call in `withZ3LockAndReset` (`build.ts`, untouched — see the report's
+  // finding on this), so two concurrent BUILD calls are still serialised
+  // through ONE process-wide lock even though cp-sat is an out-of-process
+  // RPC that shares no state between them. This case now proves the
+  // narrower, still-true half of the original claim — the lock does not
+  // wedge or corrupt either call — which is what a caller actually
+  // depends on. It deliberately does NOT prove the lock is either NEEDED or
+  // free of cost for this path; that is the open question the report flags
+  // for a future round, not this test's job.
+  it("still serialises, and still tears down, when two runs queue together", async () => {
+    await isolated(
+      async ({ build }) => {
+        const [first, second] = await Promise.all([
+          build.buildSchedule({ fixtures, config }),
+          build.buildSchedule({ fixtures, config }),
+        ]);
+        // Both calls actually reached and used the mocked cp-sat client —
+        // the positive witness that the lock serialised rather than
+        // silently dropping or corrupting one of the two concurrent calls.
+        expect(first.engine).toBe("cp-sat");
+        expect(second.engine).toBe("cp-sat");
+        expect(first.assignments.map((a) => a.fixtureId).sort()).toEqual(["a", "b"]);
+        expect(second.assignments.map((a) => a.fixtureId).sort()).toEqual(["a", "b"]);
+      },
+      () => {
+        vi.doMock("./cpsat-client.ts", async () => {
+          const actual = await vi.importActual<typeof import("./cpsat-client.ts")>("./cpsat-client.ts");
+          return {
+            ...actual,
+            solveBuild: async () => ({
+              assignments: [
+                { fixtureId: "b", court: "C1", startAtMs: T0 },
+                { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+              ],
+              status: "OPTIMAL",
+              tiersCompleted: 4,
+              objectiveValues: [],
+              elapsedMs: 5,
+              wallExhausted: false,
+            }),
+          };
+        });
+      },
+    );
   }, 180_000);
 });

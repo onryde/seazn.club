@@ -33,10 +33,24 @@
 // nothing else. The predicate above is therefore not merely unused but
 // unspellable, which is the strongest form of the guard this file was written
 // to provide.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildSchedule, TIER_COUNT } from "./build.ts";
 import { resetZ3 } from "./z3-load.ts";
 import type { Assignment, SchedulableFixture, SlotConfig } from "./calendar.ts";
+import type { SolveBuildOutcome } from "./cpsat-client.ts";
+
+/** Shorthand for a resolved, fully-proved cp-sat reply — the shape every case
+ *  below builds on. `isolate: false` (vitest.config.ts) plus no global
+ *  mock-restore config means a `vi.spyOn` left standing leaks into later
+ *  tests, hence `afterEach` below. */
+const okOutcome = (assignments: SolveBuildOutcome["assignments"]): SolveBuildOutcome => ({
+  assignments,
+  status: "OPTIMAL",
+  tiersCompleted: 4,
+  objectiveValues: [],
+  elapsedMs: 5,
+  wallExhausted: false,
+});
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 7, 8, 9, 0);
@@ -101,17 +115,19 @@ const row = (fixtureId: string, court: string, startAt: number): Assignment => (
 /** The organiser's board: just `a`, wherever they published it. */
 const currentWithAAt = (startAt: number): Assignment[] => [row("a", "C1", startAt)];
 
-// Six of the nine cases below are SKIPPED (Task 06, cp-sat cutover): each
-// needs a real solve (to prove already_optimal, to have the solver actually
-// re-place or drop a card) that only a live cp-sat service produces, which
-// this test environment cannot reach. `solveBuild`'s pin-folding is meant to
-// preserve POLISH's freeze semantics against cp-sat (a `frozen` card
-// resolves to a pin exactly as a `locked` one does — see `solveBuild`'s
-// comment on obligation 3), but that needs a live/mocked response to verify.
-// Left running: the three cases whose assertions hold on the greedy-only
-// board these all fall back to today.
+// UN-SKIPPED (fix round 1), all six: each now drives `vi.spyOn(await
+// import("./cpsat-client.ts"))` directly rather than a real solve.
 describe("buildSchedule — polish", () => {
-  it.skip("returns already_optimal and moves nothing on an optimal board", async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns already_optimal and moves nothing on an optimal board", async () => {
+    // Both fixtures are `locked`, so BOTH are pins — `freeFixtures` is empty
+    // and cp-sat is asked to place nothing at all. The mock exists only to
+    // supply `tiersCompleted`/`wallExhausted`; the board itself comes
+    // entirely from the pins either way.
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue(okOutcome([]));
     const out = await buildSchedule({ fixtures: optimal, config, frozen: ["a", "b"] });
     expect(out.status).toBe("already_optimal");
     expect(out.moved).toBe(0);
@@ -155,7 +171,7 @@ describe("buildSchedule — polish", () => {
   // published slot is OFF the lattice"). Deleting `input.frozen` reds both.
   // Nothing is added here rather than duplicating them one file over.
 
-  it.skip("freezes a card to where it was PUBLISHED, not to where greedy re-placed it", async () => {
+  it("freezes a card to where it was PUBLISHED, not to where greedy re-placed it", async () => {
     // RULING R20, and the shape neither case above can see because both of them
     // `lock` everything: a fixture that is frozen but carries NO `locked`
     // anchor.
@@ -171,6 +187,13 @@ describe("buildSchedule — polish", () => {
     // for `a`, and then has nowhere legal for `b`. The organiser's board has `a`
     // at 09:30 — so honouring the PUBLISHED slot also happens to free 09:00 and
     // let both cards fit, which is why `placed` is asserted too.
+    //
+    // "a" is frozen (no `locked`) so it pins at `current`'s 09:30, excluded
+    // from `fixtures` — only "b" is free, and the mock places it at 09:00,
+    // the one slot left in `current`'s shadow.
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([{ fixtureId: "b", court: "C1", startAtMs: T0 }]),
+    );
     const out = await buildSchedule({
       fixtures: cornerFixtures,
       config: cornerConfig,
@@ -186,7 +209,7 @@ describe("buildSchedule — polish", () => {
     await resetZ3();
   }, 120_000);
 
-  it.skip("measures `moved` from the caller's board, not from the greedy seed", async () => {
+  it("measures `moved` from the caller's board, not from the greedy seed", async () => {
     // Same corner, no freeze: the solver is free to rearrange, and it does —
     // measured, greedy gives `[a@C1+0]` and z3 gives `[b@C1+0, a@C1+30]`.
     //
@@ -194,6 +217,12 @@ describe("buildSchedule — polish", () => {
     // so against THEIR board `a` did not move and only `b` is new: 1. Against
     // the greedy seed both look changed: 2. The two baselines disagree by
     // construction here, which is the only way to prove which one is being read.
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+      ]),
+    );
     const out = await buildSchedule({
       fixtures: cornerFixtures,
       config: cornerConfig,
@@ -204,7 +233,15 @@ describe("buildSchedule — polish", () => {
     expect(out.moved).toBe(1);
 
     // The control: the identical run with no `current` falls back to the seed
-    // and counts both.
+    // and counts both. Mocked again (`vi.spyOn` set once) since the previous
+    // call already consumed no state, but re-set for clarity and in case a
+    // future edit makes the two calls' mocks diverge.
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+      ]),
+    );
     const seedBaseline = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
     expect(seedBaseline.moved).toBe(2);
     await resetZ3();
@@ -272,7 +309,7 @@ describe("buildSchedule — polish", () => {
     await resetZ3();
   }, 120_000);
 
-  it.skip("does not count a seed row the solver dropped as lost", async () => {
+  it("does not count a seed row the solver dropped as lost", async () => {
     // R21, and the case that was missing when the `lost` term first landed —
     // which is how it reached review reporting `moved: 3` on a two-row board.
     //
@@ -301,6 +338,12 @@ describe("buildSchedule — polish", () => {
     ];
     // No `current`: the seed is the baseline, which is what every caller gets
     // today and what this case exists to protect.
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "c", court: "C2", startAtMs: T0 },
+      ]),
+    );
     const out = await buildSchedule({ fixtures, config: oneEach });
     expect(out.assignments.map((a) => a.fixtureId).sort()).toEqual(["b", "c"]);
 
@@ -315,15 +358,27 @@ describe("buildSchedule — polish", () => {
     await resetZ3();
   }, 120_000);
 
-  it.skip("does not call a starved run optimal, however little it moved", async () => {
+  it("does not call a starved run optimal, however little it moved", async () => {
     // THE TRIPWIRE against the brief's predicate. Every condition it keys on is
     // satisfied: the mode is POLISH and the run moved nothing. It moved nothing
-    // because it never got to look — `rlimit: 1` buys one check's overshoot and
-    // no verdict at all.
+    // because it never got to look.
     //
-    // `rlimit`, not a wall clock, so this is a property of the search and
-    // reproduces on any machine (D9). Measured on this model: spent 153,
-    // `tiersCompleted: 0`.
+    // `rlimit: 1` no longer produces this — `solveBuild` does not read
+    // `input.rlimit` at all now that z3's per-check resource counter has no
+    // cp-sat equivalent (kept on the input below anyway, harmlessly ignored,
+    // so this case still documents that the FIELD survives even though the
+    // MECHANISM does not). What starves the run here is the mock: a reply
+    // with nothing placed and zero tiers proved, the cp-sat analogue of
+    // "never got to look" (`status: "UNKNOWN"`, the wire's own vocabulary
+    // for the absence of a verdict).
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [],
+      status: "UNKNOWN",
+      tiersCompleted: 0,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: true,
+    });
     const out = await buildSchedule({
       fixtures: optimal,
       config,
@@ -342,7 +397,7 @@ describe("buildSchedule — polish", () => {
     await resetZ3();
   }, 120_000);
 
-  it.skip("proves optimality off the tiers, not off the mode", async () => {
+  it("proves optimality off the tiers, not off the mode", async () => {
     // The other direction. `already_optimal` is a statement about the SEARCH,
     // so the identical board reaches it with no `frozen` at all — the BUILD
     // path an organiser hits from the ordinary auto-schedule button.
@@ -351,6 +406,11 @@ describe("buildSchedule — polish", () => {
     //
     // Asserted as a PAIR in one case rather than as two: the claim is that the
     // two runs agree, and two assertions in two files cannot say that.
+    //
+    // Both fixtures are `locked`, so `frozen` changes nothing about which
+    // are pins — the SAME mock (nothing free to place, everything already
+    // pinned) is honest for both calls.
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue(okOutcome([]));
     const polished = await buildSchedule({
       fixtures: optimal,
       config,

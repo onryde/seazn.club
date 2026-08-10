@@ -138,12 +138,32 @@ describe("buildSchedule", () => {
     await resetZ3();
   });
 
+  // `isolate: false` (vitest.config.ts) shares module state across the whole
+  // file, and this repo has no global `restoreMocks`/`clearMocks` — a
+  // `vi.spyOn` left standing from one `it` here is still active in the
+  // next, and in every later describe block in this file. Every case below
+  // that mocks `cpsat-client.ts` relies on this to not leak into its
+  // neighbours.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("never returns a board the greedy floor beats", async () => {
     // The floor property, and the SOLE reason design D6 ships with no escape
     // hatch back to greedy. Asserted with `isStrictlyBetter` rather than a
     // hand-written conjunction so the test and the solver's own accept
     // condition are the same function — a test that re-derived D3's ordering
     // could disagree with the code it is guarding.
+    //
+    // CURRENTLY VACUOUS ON THE CP-SAT PATH, and worth saying so rather than
+    // leaving a green name to imply otherwise: cp-sat is unreachable from
+    // this test environment, so every case here falls back to greedy and
+    // compares the floor against itself — always false, regardless of
+    // whether the D6 gate that makes this true in production actually
+    // fires. The gate itself IS covered, deterministically, by
+    // `describe("buildSchedule — CP-SAT path", ...)`'s "falls back to the
+    // greedy floor when cp-sat's own board is not strictly better (D6)",
+    // which mocks a worse cp-sat reply and asserts the seed ships instead.
     const cases: BuildInput[] = [
       { fixtures: cornerFixtures, config: cornerConfig },
       { fixtures: overSubscribedFixtures, config: overSubscribedConfig },
@@ -165,14 +185,14 @@ describe("buildSchedule", () => {
     }
   }, 180_000);
 
-  // SKIPPED (Task 06, cp-sat cutover): asserts `status: "already_optimal"`,
-  // a claim only a real solve can PROVE. `solveBuild` now calls the cp-sat
-  // service instead of z3; no such service is reachable from this test
-  // environment, so every case in this block that needs the solver to
-  // actually run falls back to greedy and cannot verify what it asserts. Not
-  // wrong, just unverifiable here — leave for whichever task wires a real
-  // (or realistically mocked) cp-sat service into this suite (Task 07?).
-  it.skip("drops a card greedy placed OUTSIDE the window, and keeps the legal board", async () => {
+  // UN-SKIPPED (fix round 1): mocked at the grid's own ceiling — `window`
+  // bounds the GRID itself (`buildGrid` reads `config.window`), so no
+  // engine, real or mocked, can offer a 3rd slot here. cp-sat is therefore
+  // capped at the same 2-placed greedy already reaches, which is what makes
+  // this `already_optimal` via the D6 floor rather than a `cp-sat`
+  // improvement — the mock exists to prove `tiersCompleted`/`status` reflect
+  // a real (tied) proof, not "never asked".
+  it("drops a card greedy placed OUTSIDE the window, and keeps the legal board", async () => {
     // R2. Greedy places all three; the third overruns the competition window,
     // which `isBlockingConflict` calls physically impossible. Counting it as
     // `placed` is what made the illegal board outrank every legal one, so the
@@ -183,6 +203,17 @@ describe("buildSchedule", () => {
     expect(raw.assignments).toHaveLength(3);
     expect(raw.conflicts).toEqual([]);
 
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "a", court: "C1", startAtMs: T0 },
+        { fixtureId: "b", court: "C1", startAtMs: T0 + 30 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures: overrunFixtures, config: overrunConfig });
     expect(validateAssignments(built.assignments, overrunConfig)).toEqual([]);
     expect(built.metrics.placed).toBe(2);
@@ -191,19 +222,31 @@ describe("buildSchedule", () => {
     expect(dropped.map((c) => c.reason)).toEqual(["window"]);
   }, 180_000);
 
-  // SKIPPED (Task 06, cp-sat cutover): asserts `engine: "z3"` literally, and
-  // needs a real solve to place the second card at all — see the block
-  // comment above.
-  it.skip("places a card greedy declared unplaceable", async () => {
+  // UN-SKIPPED (fix round 1): the file's own MEASURED z3 shape
+  // (`[b@C1+0, a@C1+30]`, see the file header) mocked directly — 2 placed
+  // strictly beats greedy's 1, so D6 accepts it and `engine` becomes
+  // `"cp-sat"`, not `"z3"`.
+  it("places a card greedy declared unplaceable", async () => {
     const seed = rawSeedOf({ fixtures: cornerFixtures, config: cornerConfig });
     // The premise, asserted rather than assumed: without it the rest of this
     // test would pass against a solver that did nothing at all.
     expect(seed.assignments).toHaveLength(1);
     expect(seed.conflicts.map((c) => `${c.fixtureId}:${c.reason}`)).toEqual(["b:start_window"]);
 
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
     expect(built.metrics.placed).toBe(2);
-    expect(built.engine).toBe("z3");
+    expect(built.engine).toBe("cp-sat");
     expect(built.status).toBe("ok");
     expect(built.tiersCompleted).toBe(4);
     expect(built.budgetExpired).toBe(false);
@@ -214,11 +257,26 @@ describe("buildSchedule", () => {
     expect(validateAssignments(built.assignments, cornerConfig)).toEqual([]);
   }, 180_000);
 
-  // SKIPPED (Task 06, cp-sat cutover): needs T3 to actually move a card off
-  // greedy's stacked board — a real solve — see the block comment above.
-  it.skip("returns a board the verifier accepts", async () => {
+  // UN-SKIPPED (fix round 1): the pairwise rest (45 min) FORCES the three
+  // starts 75 minutes apart regardless of court — T, T+75, T+150 (see the
+  // comment below) — so only the COURT assignment of the middle card is
+  // free, and mocked here on C2 (imbalance 30) against greedy's all-on-C1
+  // (imbalance 90).
+  it("returns a board the verifier accepts", async () => {
     const config = cfg({ courts: ["C1", "C2"], perEntrantMinRest: 45 });
     const fixtures = [fx("a", "E1", "E2"), fx("b", "E1", "E3"), fx("c", "E2", "E3")];
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "a", court: "C1", startAtMs: T0 },
+        { fixtureId: "b", court: "C2", startAtMs: T0 + 75 * MIN },
+        { fixtureId: "c", court: "C1", startAtMs: T0 + 150 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures, config });
     expect(validateAssignments(built.assignments, config)).toEqual([]);
     // THIS CASE USED TO ASSERT `already_optimal`, and the comment explaining
@@ -248,14 +306,27 @@ describe("buildSchedule", () => {
     expect(built.metrics.courtImbalanceMinutes).toBe(30);
   }, 180_000);
 
-  // SKIPPED (Task 06, cp-sat cutover): the whole point is a PROOF (T0 walked
-  // `placed >= 3` to unsat) that only a real solve produces — see the block
-  // comment above.
-  it.skip("reports every unplaced card, and PROVES the count is the ceiling", async () => {
+  // UN-SKIPPED (fix round 1): the session window bounds the GRID to 2 slots
+  // total, so no engine can place more than 2 of these 3 — mocked as
+  // EXACTLY greedy's own pair (a, b) so the board ties on every metric and
+  // "c" is unplaced via the SAME `conflictsForBoard` path either way.
+  it("reports every unplaced card, and PROVES the count is the ceiling", async () => {
     const input = { fixtures: overSubscribedFixtures, config: overSubscribedConfig };
     const seed = rawSeedOf(input);
     expect(seed.assignments).toHaveLength(2);
 
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: seed.assignments.map((a) => ({
+        fixtureId: a.fixtureId,
+        court: a.court,
+        startAtMs: a.startAt,
+      })),
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule(input);
     expect(built.metrics.placed).toBe(2);
     // Greedy GUESSED that a third card would not fit; T0 walked `placed >= 3`
@@ -411,11 +482,18 @@ describe("buildSchedule", () => {
     expect(built.contradictoryPins).toEqual(["a", "b"]);
   }, 180_000);
 
-  // SKIPPED (Task 06, cp-sat cutover): no pins at all here — the new local
-  // `pinConflicts` check in `solveBuild` does not apply, and proving `placed
-  // >= 1` unsat over an empty-pin lattice needs a real solve. See the block
-  // comment above.
-  it.skip("names no pins when the proof is about the BOARD, not the pins", async () => {
+  // UN-SKIPPED (fix round 1): mocked as a fully-proved 0-placed reply — this
+  // tests build.ts's OWN status derivation (an outcome with nothing placed
+  // and every tier proved becomes `infeasible` with `contradictoryPins`
+  // left `undefined`, since only the two EXPLICIT `INFEASIBLE`/pin-check
+  // returns ever set that field), which is well-defined regardless of
+  // whether cp-sat could realistically reach this exact verdict for this
+  // input — `constraints.startWindows` has no wire field (a real gap, noted
+  // in the report), so a live service could not actually be excluded from
+  // this slot the way z3 was. That gap is why the board is mocked rather
+  // than solved for real, not a reason to leave build.ts's own status logic
+  // uncovered.
+  it("names no pins when the proof is about the BOARD, not the pins", async () => {
     // The other `infeasible` source, and the reason the field is optional
     // rather than always present: nothing is pinned here at all. One slot, one
     // fixture, and a start window that excludes it, so T0 walks `placed >= 1`
@@ -427,6 +505,14 @@ describe("buildSchedule", () => {
       constraints: cons({
         startWindows: [{ target: { kind: "entrant", id: "E1" }, notAfter: T0 - MIN }],
       }),
+    });
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
     });
     const built = await buildSchedule({ fixtures: [fx("a", "E1", "E2")], config });
     expect(built.status).toBe("infeasible");
@@ -451,19 +537,46 @@ describe("buildSchedule", () => {
     expect(built.assignments.find((a) => a.fixtureId === "a")?.startAt).toBe(T0 + 60 * MIN);
   }, 180_000);
 
-  // SKIPPED (Task 06, cp-sat cutover): needs a real solve to find the better
-  // (unfrozen) board before the freeze can be shown to hold against it — see
-  // the block comment above.
-  it.skip("holds a frozen card to its slot even when moving it would place one more", async () => {
+  // UN-SKIPPED (fix round 1): the FROZEN run's mock deliberately returns
+  // NOTHING for the one free fixture ("b"), rather than trying to represent
+  // whether cp-sat could legally place it — `constraints.startWindows`
+  // (Jul3/04 §3, the mechanism this whole corner case is built from) has no
+  // wire field, so nothing send-able to cp-sat today could make it actually
+  // respect b's exclusion the way z3's encoder did. What this case verifies
+  // is narrower and still real: does the freeze correctly become a pin
+  // (excluded from `fixtures`, folded into `existing`) and survive into the
+  // final board regardless of what cp-sat does with the rest — an empty
+  // reply ties greedy's own floor either way, so the assertion holds via
+  // WHICHEVER branch (D6 fallback or a genuine cp-sat accept) fires.
+  it("holds a frozen card to its slot even when moving it would place one more", async () => {
     // POLISH. Without the freeze the solver swaps `a` onto the later slot and
     // fits `b` — a strictly better board by D3. `frozen` is the caller saying
     // an entrant has already been told when they play, and a better board is
     // not worth breaking that promise. The unfrozen run is asserted first so
     // this cannot pass against a solver that never had the option.
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const free = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
     expect(free.metrics.placed).toBe(2);
     expect(free.assignments.find((a) => a.fixtureId === "a")?.startAt).toBe(T0 + 30 * MIN);
 
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({
       fixtures: cornerFixtures,
       config: cornerConfig,
@@ -473,9 +586,10 @@ describe("buildSchedule", () => {
     expect(built.metrics.placed).toBe(1);
   }, 180_000);
 
-  // SKIPPED (Task 06, cp-sat cutover): needs a real solve for the unfrozen
-  // comparison board too — see the block comment above.
-  it.skip("holds a frozen card whose published slot is OFF the lattice", async () => {
+  // UN-SKIPPED (fix round 1): same "empty reply for the frozen run" shape as
+  // its neighbour above, and the same reason (`constraints.startWindows`
+  // has no wire field — this whole test is built from it).
+  it("holds a frozen card whose published slot is OFF the lattice", async () => {
     // A card the organiser dragged, or one greedy parked against the edge of an
     // existing booking: its start is not a multiple of the grid step, so it is
     // not a slot `buildGrid` generates. Looking it up with `findIndex` gets -1,
@@ -504,26 +618,57 @@ describe("buildSchedule", () => {
     expect(seed.conflicts.map((c) => c.reason)).toEqual(["start_window"]);
 
     // Unfrozen, the solver takes the better board and `a` moves onto the grid.
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const free = await buildSchedule({ fixtures, config });
     expect(free.metrics.placed).toBe(2);
     expect(free.assignments.find((a) => a.fixtureId === "a")?.startAt).toBe(T0 + 30 * MIN);
 
     // Frozen, 09:07 has to survive — and 09:07 is not a slot the lattice
     // generates, so it survives only because the anchor was pinned into it.
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures, config, frozen: ["a"] });
     expect(built.assignments.find((a) => a.fixtureId === "a")?.startAt).toBe(T0 + 7 * MIN);
     expect(built.metrics.placed).toBe(1);
   }, 180_000);
 
-  // SKIPPED (Task 06, cp-sat cutover): needs a real solve to place "b" next
-  // to the out-of-window pin — greedy's own legalisation DROPS "a" (its
-  // window breach is blocking), so greedy alone only places 1, not the 2
-  // this asserts. `solveBuild`'s pin-folding is believed to reproduce this
-  // correctly (the pin is forced into `existing` regardless of window,
-  // exactly as `encodeBuild` §4 forced it into the model), but that belief
-  // needs a live or mocked cp-sat response to actually verify — see the
-  // block comment above.
-  it.skip("does NOT reject a board over a blocking breach greedy already had", async () => {
+  // UN-SKIPPED (fix round 1): this is the reproduction for Critical B, and
+  // it needed no live service to catch it — the false `infeasible` fired
+  // from the LOCAL pin-only check (`isPairwiseBlockingConflict` in
+  // `solveBuild`), before cp-sat was ever called. `window` is a UNARY
+  // blocking reason (one row's own placement against `config.window`, not a
+  // contradiction between two pins), and the pin-check used to run the full
+  // `isBlockingConflict` — which also marks `window` blocking — so a single
+  // locked card merely sitting outside the window read as a pin
+  // "contradiction" and short-circuited to `infeasible` with a nonsensical
+  // one-element `contradictoryPins`. Fixed by scoping that check to pairwise
+  // reasons only (`court`, `person_overlap`, direct `order`).
+  //
+  // Mocked past that point (placing "b" needs a real solve, which this test
+  // environment cannot reach) to prove the REST of the chain too: the pin
+  // survives into the final board at its out-of-window slot, the resulting
+  // `window` conflict is not new relative to greedy's own raw seed (greedy
+  // ALSO honours the lock unconditionally) so `rejectedBlockingConflicts`
+  // does not reject it, and 2 placed beats greedy's legalised floor of 1
+  // (greedy's OWN legalisation drops "a" for the same window breach) so the
+  // D6 gate accepts cp-sat's board rather than falling back to the seed.
+  it("does NOT reject a board over a blocking breach greedy already had", async () => {
     // R1: the gate is a DELTA. This card is pinned outside the competition
     // window — `buildGrid` admits a pin unconditionally, `encodeBuild` states no
     // clause about `config.window`, and `validateAssignments` calls it a
@@ -534,6 +679,14 @@ describe("buildSchedule", () => {
     // door — it is reported, and the better board still ships.
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
+      vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+        assignments: [{ fixtureId: "b", court: "C1", startAtMs: T0 }],
+        status: "OPTIMAL",
+        tiersCompleted: 4,
+        objectiveValues: [],
+        elapsedMs: 5,
+        wallExhausted: false,
+      });
       const config = cfg({ courts: ["C1"], window: { from: T0, to: T0 + 60 * MIN } });
       const fixtures = [
         fx("a", "E1", "E2", { locked: { court: "C1", startAt: T0 + 120 * MIN } }),
@@ -541,6 +694,7 @@ describe("buildSchedule", () => {
       ];
       const built = await buildSchedule({ fixtures, config });
       expect(built.status).toBe("ok");
+      expect(built.engine).toBe("cp-sat");
       expect(built.metrics.placed).toBe(2);
       expect(built.conflicts.some((c) => c.fixtureId === "a" && c.reason === "window")).toBe(true);
       expect(spy).not.toHaveBeenCalled();
@@ -549,13 +703,14 @@ describe("buildSchedule", () => {
     }
   }, 180_000);
 
-  // SKIPPED (Task 06, cp-sat cutover): the injected fork keys off
-  // `assignments.length === 2`, which only fires once the solver actually
-  // produces a 2-card board — a real solve. The gate itself
-  // (`rejectedBlockingConflicts`) is unchanged and is covered directly by
-  // the `describe("rejectedBlockingConflicts", ...)` block below, which
-  // needs no solver at all.
-  it.skip("hands back the greedy seed, LOUDLY, over a breach the solver INTRODUCED", async () => {
+  // UN-SKIPPED (fix round 1): the injected fork keys off
+  // `assignments.length === 2`, which needs cp-sat's own board to actually
+  // have 2 cards — `cpsat-client.ts` is now ALSO `vi.doMock`'d (matching the
+  // existing `./calendar.ts` mock's own style, since `vi.resetModules()` +
+  // a fresh dynamic `import("./build.ts")` would otherwise re-resolve a
+  // real, un-mocked `cpsat-client.ts`), returning the file's own measured
+  // z3 shape for this corner case (`[b@C1+0, a@C1+30]`).
+  it("hands back the greedy seed, LOUDLY, over a breach the solver INTRODUCED", async () => {
     // The rejection branch itself. A genuine encoder/verifier disagreement is
     // not constructible here — `build-encode-parity.test.ts` proves the two
     // agree over every placement two lattices can express, which is the design
@@ -566,6 +721,23 @@ describe("buildSchedule", () => {
     // and the log without waiting for one.
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.resetModules();
+    vi.doMock("./cpsat-client.ts", async () => {
+      const actual = await vi.importActual<typeof import("./cpsat-client.ts")>("./cpsat-client.ts");
+      return {
+        ...actual,
+        solveBuild: async () => ({
+          assignments: [
+            { fixtureId: "b", court: "C1", startAtMs: T0 },
+            { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+          ],
+          status: "OPTIMAL",
+          tiersCompleted: 4,
+          objectiveValues: [],
+          elapsedMs: 5,
+          wallExhausted: false,
+        }),
+      };
+    });
     vi.doMock("./calendar.ts", async () => {
       const actual = await vi.importActual<typeof import("./calendar.ts")>("./calendar.ts");
       return {
@@ -596,6 +768,7 @@ describe("buildSchedule", () => {
       const z3 = await import("./z3-load.ts");
       await z3.resetZ3();
       vi.doUnmock("./calendar.ts");
+      vi.doUnmock("./cpsat-client.ts");
       vi.resetModules();
       spy.mockRestore();
     }
@@ -702,21 +875,28 @@ describe("rejectedBlockingConflicts", () => {
  * two courts, asserting `courtImbalanceMinutes === 0`, on a board greedy
  * already balances 2-2.
  */
-// SKIPPED WHOLESALE (Task 06, cp-sat cutover): every case below measures a
-// real z3 tier walk actually shortening a makespan / closing an idle gap /
-// balancing courts relative to greedy — a real solve, produced by a service
-// this test environment cannot reach (`solveBuild` now calls the cp-sat
-// service, never z3, and falls back to greedy on the network failure). Not
-// wrong, unverifiable here. `objectiveValues`/`tiersCompleted` semantics
-// on the wire are unchanged (`SolveBuildResponse`'s `tiers_completed` and
-// `objective_values` are documented to carry the "same semantics as
-// `BuildResult.tiersCompleted`" — design doc, `SolveBuildResponse` table),
-// so this block is very likely portable to a live/mocked cp-sat response
-// rather than needing a rewrite — that is follow-up work (Task 07?), not
-// this one's.
-describe.skip("buildSchedule — lexicographic tiers", () => {
+// UN-SKIPPED (fix round 1), 4 of 5 cases: each is now driven by a
+// `vi.spyOn(await import("./cpsat-client.ts"))` mock returning the SAME
+// board the file's own "Measured:" comments already documented z3 producing
+// for that scenario — the point is "does OUR CODE correctly turn a solve
+// into the right `BuildResult`", not "does cp-sat actually find that board",
+// which is Task 07's parity concern. `objectiveValues`/`tiersCompleted`
+// wire semantics are unchanged (design doc: `SolveBuildResponse.tiers
+// _completed` carries the "same semantics as `BuildResult.tiersCompleted`").
+//
+// The 5th, "keeps the encoder and the verifier on ONE immovable board",
+// stays skipped — see its own comment, not a live-service gap like the
+// others.
+describe("buildSchedule — lexicographic tiers", () => {
   afterAll(async () => {
     await resetZ3();
+  });
+
+  // See the identical comment in `describe("buildSchedule", ...)` above —
+  // `isolate: false` + no global mock-restore config means a `vi.spyOn` left
+  // standing here leaks into every later describe block in this file.
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   /** Four slots a side, two fixtures sharing E1. Greedy stacks both on C1 —
@@ -732,6 +912,22 @@ describe.skip("buildSchedule — lexicographic tiers", () => {
     const seed = rawSeedOf({ fixtures: balanceFixtures, config: balanceConfig });
     expect(boardMetrics(seed.assignments, balanceConfig.courts, 2).courtImbalanceMinutes).toBe(60);
 
+    // Measured z3 shape reused as the mock: `a`/`b` share E1, so they cannot
+    // overlap in time; splitting them across C1/C2 back-to-back holds T1's
+    // makespan (60) and T2's idle gap (0, both already optimal on greedy's
+    // own board) while balancing T3 to 0 — strictly better than greedy's
+    // 60-minute imbalance from stacking both on C1.
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "a", court: "C1", startAtMs: T0 },
+        { fixtureId: "b", court: "C2", startAtMs: T0 + 30 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures: balanceFixtures, config: balanceConfig });
     expect(built.tiersCompleted).toBe(4);
     expect(built.budgetExpired).toBe(false);
@@ -742,7 +938,7 @@ describe.skip("buildSchedule — lexicographic tiers", () => {
     expect(built.metrics.worstIdleGapMinutes).toBe(0);
     expect(built.metrics.courtImbalanceMinutes).toBe(0);
     expect(new Set(built.assignments.map((a) => a.court))).toEqual(new Set(["C1", "C2"]));
-    expect(built.engine).toBe("z3");
+    expect(built.engine).toBe("cp-sat");
   }, 180_000);
 
   it("shortens a makespan greedy left long", async () => {
@@ -761,6 +957,21 @@ describe.skip("buildSchedule — lexicographic tiers", () => {
     const seed = rawSeedOf({ fixtures, config });
     expect(boardMetrics(seed.assignments, config.courts, 3).makespanMinutes).toBe(105);
 
+    // `b`/`c` unconstrained, `a` not before 09:45 — packing `a` last on the
+    // one court (09:00/09:30/10:00) is one of the two 90-minute boards the
+    // comment below names; either is a genuine improvement on greedy's 105.
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "c", court: "C1", startAtMs: T0 + 30 * MIN },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 60 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures, config });
     expect(built.metrics.placed).toBe(3);
     expect(built.metrics.makespanMinutes).toBe(90);
@@ -797,6 +1008,21 @@ describe.skip("buildSchedule — lexicographic tiers", () => {
     expect(seedMetrics.worstIdleGapMinutes).toBe(30);
     expect(seedMetrics.makespanMinutes).toBe(90);
 
+    // `a`/`b` share E1 — placing them back-to-back (rather than greedy's
+    // a, c, b order) closes E1's idle gap to 0 without touching the
+    // 90-minute makespan three back-to-back slots on one court already have.
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "a", court: "C1", startAtMs: T0 },
+        { fixtureId: "b", court: "C1", startAtMs: T0 + 30 * MIN },
+        { fixtureId: "c", court: "C1", startAtMs: T0 + 60 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures, config });
     expect(built.metrics.placed).toBe(3);
     expect(built.metrics.worstIdleGapMinutes).toBe(0);
@@ -804,7 +1030,30 @@ describe.skip("buildSchedule — lexicographic tiers", () => {
     expect(built.tiersCompleted).toBe(4);
   }, 180_000);
 
-  it("will not buy court balance with makespan", async () => {
+  // STAYS SKIPPED — a different reason than "keeps the encoder and the
+  // verifier on ONE immovable board" above, and worth distinguishing. This
+  // is not a wire-capability gap; it is a STRUCTURAL conflict between what
+  // this test needs to construct and Obligation 5 (`everyCourtSharesGrid` in
+  // `build.ts`). Confirmed by running it: it fails not on a metrics
+  // assertion but on `tiersCompleted` reading 0, because the mock is never
+  // even called — `solveBuild` routes this board to greedy before ever
+  // attempting cp-sat.
+  //
+  // The test's own comment says why: "C1 is open 09:00-10:00 and C2 only
+  // from 10:30" — the tension it demonstrates (T1's makespan freeze
+  // outranking T3's court-balance preference) is only reachable AT ALL by
+  // giving the two courts asymmetric availability, since with two
+  // non-conflicting fixtures and a UNIFORM grid, splitting them across
+  // courts at the same early time is simultaneously makespan-optimal AND
+  // balanced — there is no tension to demonstrate. Asymmetric-availability
+  // boards are exactly what Obligation 5 exists to keep away from cp-sat
+  // (measured 6/6 in the original wire work: a fixture placed on a court at
+  // a time it did not offer). So this property — real, and still true of
+  // z3 — has no construction left that reaches cp-sat at all with two
+  // simple disjoint fixtures. Not Task 07's either, for the same reason as
+  // its neighbour: a real cp-sat service would refuse this exact board, not
+  // search it.
+  it.skip("will not buy court balance with makespan", async () => {
     // THE ORDERING TEST, and the only one of these where a tier has something
     // strictly better in reach and may not take it.
     //
@@ -829,6 +1078,25 @@ describe.skip("buildSchedule — lexicographic tiers", () => {
     const fixtures = [fx("a", "E1", "E2"), fx("b", "E3", "E4")];
     expect(buildGrid({ config }).slots.filter((s) => s.court === "C2")).toHaveLength(1);
 
+    // The LOPSIDED board wins: T1 has already frozen the makespan at 60,
+    // which forbids the balanced alternative (either card on C2 costs 30-60
+    // extra minutes). This is the SAME board greedy already produces
+    // (earliest time, first free court) — the mock exists to prove
+    // `tiersCompleted`/`status` reflect a real proof rather than "never
+    // asked", not to change the board, which is why D6 correctly reports
+    // this as `already_optimal` via the greedy floor rather than `engine:
+    // "cp-sat"`.
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [
+        { fixtureId: "a", court: "C1", startAtMs: T0 },
+        { fixtureId: "b", court: "C1", startAtMs: T0 + 30 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: 4,
+      objectiveValues: [],
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
     const built = await buildSchedule({ fixtures, config });
     expect(built.metrics.placed).toBe(2);
     expect(built.metrics.makespanMinutes).toBe(60);
@@ -840,7 +1108,36 @@ describe.skip("buildSchedule — lexicographic tiers", () => {
     expect(built.status).toBe("already_optimal");
   }, 180_000);
 
-  it("keeps the encoder and the verifier on ONE immovable board", async () => {
+  // STAYS SKIPPED — this is NOT a "needs a live service" gap like its four
+  // siblings above, and mocking a compliant response here would be
+  // dishonest: what this test checks is IMPOSSIBLE for cp-sat to guarantee
+  // today, confirmed straight from the Python model's own source
+  // (`services/cp-sat/src/cp_sat/model.py:186-193`, its own docstring, not
+  // an inference):
+  //
+  //   "`existing` rows are not counted against day caps. `on_day` is built
+  //   for movable fixtures only, so a pinned row on a capped day does not
+  //   consume that day's allowance... It cannot be fixed by adding
+  //   `day_index` to `PinnedRow` alone — caps are PER DIVISION and
+  //   `PinnedRow` carries no division at all... Closing it needs a
+  //   `division_index` on `PinnedRow`, which is a contract addition nothing
+  //   has asked for yet."
+  //
+  // This test's whole premise is "the immovable card `x` correctly counts
+  // toward the day cap" — true of z3 (`encodeBuild` seeds its tally from
+  // `existing` directly) and STRUCTURALLY untestable against cp-sat, not
+  // because of scope (this rule IS competition-scoped, which `dayCapsByDivision`
+  // in `build.ts` already can't send — but even rewritten as
+  // division-scoped, the Python model would still not count `x`). A mock
+  // that made this pass would be asserting a property the wire cannot
+  // enforce, which is worse than no test — the exact "green test whose name
+  // claims a guarantee" failure mode this fix round is about.
+  //
+  // Not Task 07's (parity/integration) either — 07 tests behavior against a
+  // real service, and a real service would fail this exactly as documented
+  // above. This needs a `PinnedRow.division_index` wire change in
+  // `services/cp-sat`, own task, own owner decision.
+  it.skip("keeps the encoder and the verifier on ONE immovable board", async () => {
     // The caller contract `encodeBuild` documents and `build.ts` honours, tested
     // end to end for the first time now that both halves exist. The encoder
     // seeds its per-day tally from the `existing` array IT is handed; the
@@ -1037,15 +1334,49 @@ describe("buildSchedule — CP-SAT path", () => {
   });
 
   it("uses the CP-SAT client and returns a verified board", async () => {
+    // `minimalInput()`'s trivial one-fixture board is the WRONG fixture for
+    // this test now that D6 ("never worse than greedy") is enforced: greedy
+    // already places a single unconstrained fixture optimally, so a mocked
+    // reply that also places it at the same slot TIES the seed rather than
+    // beating it, and the D6 gate correctly falls back to greedy — which
+    // used to read as "cp-sat wired up" only because nothing checked. Reused
+    // instead: `cornerConfig`/`cornerFixtures`, MEASURED (see the file
+    // header) to place only 1 of 2 via greedy and 2 of 2 via a real solve
+    // (`[b@C1+0, a@C1+30]`) — a genuine, provable improvement, mocked here
+    // rather than solved for real.
     vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue(
-      okOutcome([{ fixtureId: "f1", court: "C1", startAtMs: T0 }]),
+      okOutcome([
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
+      ]),
     );
-    const result = await buildSchedule(minimalInput());
+    const result = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
     expect(result.engine).toBe("cp-sat");
-    expect(result.assignments).toHaveLength(1);
+    expect(result.assignments).toHaveLength(2);
     // proves `validateAssignments` still ran over the cp-sat board — the
     // verifier never moves, it just gets handed a different engine's board.
     expect(result.conflicts).toHaveLength(0);
+  });
+
+  it("falls back to the greedy floor when cp-sat's own board is not strictly better (D6)", async () => {
+    // D6 ("never worse than greedy") is not structural here the way it was
+    // for z3 — z3's own incumbent started AS the seed and was only ever
+    // replaced inside an `isStrictlyBetter` check, so a regression was not
+    // reachable by construction. cp-sat returns one finished board over a
+    // single RPC with nothing upstream comparing it to anything, so a
+    // starved or merely-suboptimal reply has to be caught explicitly. Mocked
+    // here as a reply that places NOTHING — a legitimate shape for a
+    // FEASIBLE/UNKNOWN verdict that ran out of budget mid-search — against
+    // `cornerConfig`/`cornerFixtures`, whose greedy floor places 1 of 2. 0
+    // placed is strictly WORSE than greedy's 1, so the seed must ship, not
+    // the empty board cp-sat actually returned.
+    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([]),
+    );
+    const result = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+    expect(result.engine).toBe("greedy");
+    expect(result.assignments.map((a) => a.fixtureId)).toEqual(["a"]);
+    expect(result.metrics.placed).toBe(1);
   });
 
   it("falls back to greedy on a CP-SAT rejection, exactly like a z3 gate-reject", async () => {

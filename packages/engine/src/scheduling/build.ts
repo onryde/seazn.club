@@ -978,6 +978,30 @@ export function buildSchedule(input: BuildInput): Promise<BuildResult> {
   // path too — `solveBuild` swallows a boot failure but not an encoder-drift
   // throw, and a counter that leaked one of those would refuse every subsequent
   // build in this process for as long as it lived.
+  // STILL HELD FOR THE CP-SAT PATH TOO (fix round 1 finding, deliberately
+  // NOT changed this round — a process-wide lock is a blast-radius change
+  // and the one test that would prove dropping it safe needed writing
+  // first; see `build-teardown.test.ts`'s "still serialises, and still
+  // tears down, when two runs queue together").
+  //
+  // `solveBuild` no longer touches z3 on this path at all, so `withZ3Lock`
+  // buys this call NOTHING correctness-wise: cp-sat is an out-of-process
+  // gRPC call, sharing no WASM heap, no `Solver` instance, no mutable
+  // process-wide state with anything this lock protects. `tearDownZ3`
+  // itself degrades gracefully (`if (loaded === null) return;` — a
+  // near-instant no-op whenever z3 was never booted, which on this path is
+  // always), so nothing is BROKEN by keeping the wrap — but it is not free
+  // either: every cp-sat call still queues behind `MAX_SOLVER_QUEUE` AND
+  // behind this lock, needlessly serialising concurrent BUILD/POLISH
+  // requests against each other (redundant with the queue cap and the
+  // service's own `CPSAT_MAX_WORKERS`) and against REFLOW's concurrent z3
+  // repairs (`repairSchedule` takes the SAME lock, and shares nothing with
+  // cp-sat either).
+  //
+  // Left in place because removing it is REFLOW's call to weigh in on too
+  // (this lock is `z3-load.ts`'s, not BUILD/POLISH's own), and because the
+  // throughput cost is unmeasured, not merely asserted — a claim worth
+  // benchmarking before acting on, not assuming.
   return withZ3LockAndReset(() => solveBuild(input)).finally(() => {
     queued--;
   });
@@ -1077,7 +1101,6 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   const seed = greedySeed(input);
   const { existing, dependencies, verifyConfig, rawSeed, rawSeedConflicts } = seed;
   const { currentBoard, conflictsForBoard, movedFrom, lostFrom } = seed;
-  const seedAssignments = seed.assignments;
   const seedMetrics = seed.metrics;
 
   const greedy = (status: BuildStatus, budgetExpired = false): BuildResult =>
@@ -1180,19 +1203,48 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
       return at === undefined ? [] : [{ id, at }];
     }),
   ];
-  const pinned = pins.map((p) => p.at);
-  /** Sorted and de-duplicated: a `locked` card named in `frozen` too is one
-   *  pin, and the order is part of what makes two runs comparable. */
-  const pinnedIds = [...new Set(pins.map((p) => p.id))].sort();
-  const grid = restrictToConfiguredCourts(
-    buildGrid({ config, existing, pinned, seedPins: seedPinsOf(seedAssignments, config.courts) }),
-    config.courts,
-    pinned,
-  );
+  /** De-duplicated by fixture id — `pins` can name the same fixture TWICE (a
+   *  `locked` card also listed in `frozen`). Every consumer below reads
+   *  pins through this map rather than the raw array: building
+   *  `pinnedAssignments` from the raw array sent that one fixture as two
+   *  IDENTICAL rows, and `validateAssignments` correctly reported that as a
+   *  self-collision "court" double-booking — a false `infeasible` from the
+   *  pin-contradiction check above, caught by a test (`build-polish.test.ts`,
+   *  every case using `optimal` + `frozen: ["a", "b"]` on already-`locked`
+   *  fixtures). First occurrence wins, which is inert either way: `locked`
+   *  sources are listed first in `pins`, and for a fixture that is both,
+   *  `publishedSlotOf` already resolves the `frozen` source to the exact
+   *  same slot `locked` does, so the two entries never actually disagreed —
+   *  only duplicated. */
+  const pinById = new Map(pins.map((p) => [p.id, p.at]));
+  /** Sorted, from the de-duplicated map — the order is part of what makes
+   *  two runs comparable. */
+  const pinnedIds = [...pinById.keys()].sort();
+  // NO `pinned`/`seedPins` HERE, DELIBERATELY — unlike the z3 path, where
+  // they existed to make the SOLVER's own placement variables able to
+  // express the incumbent (`seedPinsOf`'s doc: "THE SOLVER MUST NEVER BE
+  // UNABLE TO EXPRESS ITS OWN INCUMBENT"). Neither concept has a job here: a
+  // pin is never a placement variable for cp-sat (it is an `existing` row,
+  // fixed regardless of the grid — see obligation 3 above), and there is no
+  // incremental bound-walk left to protect from a vacuous ladder. Bare, this
+  // is the SAME shape `canSolveWithin` already uses for the identical reason
+  // (`buildGrid({ config, existing })`, no pins) — a coincidence worth
+  // trusting, not re-deriving differently.
+  //
+  // THIS WAS A REAL BUG, caught by a test, not a pre-emptive cleanup: with
+  // `seedPins` included, a rest-chained greedy seed that lands off-grid on
+  // ONE court (measured: `perEntrantMinRest: 45` stacks all three cards on
+  // C1) injects EXTRA slots onto that court alone, which `everyCourtSharesGrid`
+  // below then correctly reads as a per-court asymmetry and routes to greedy
+  // — even though the UNDERLYING grid (blackouts, session windows, window)
+  // is perfectly uniform and the real service would happily accept it. That
+  // silently defeated cp-sat on exactly the boards a real solve helps most:
+  // rest-constrained multi-court ones.
+  const grid = restrictToConfiguredCourts(buildGrid({ config, existing }), config.courts, []);
   // There is no rescue for an over-cap lattice here: `buildGrid` never reads
-  // the fixture list at all, so `overCap` is a function of the config, the
-  // immovable board and the pins alone — nothing this function could retry
-  // would shrink it. Rescuing one means shrinking the LATTICE itself (slicing
+  // the fixture list at all, so `overCap` is a function of the config and
+  // the immovable board alone — nothing this function could retry would
+  // shrink it. Rescuing one means shrinking the LATTICE itself (slicing
   // the horizon per window), which is a design change and out of scope
   // (controller ruling, Task 6).
   //
@@ -1233,7 +1285,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // `cpsat-client.ts`, which the wire being positional now does not change).
   // This is also the documented shape of POLISH: "BUILD with a frozen set
   // already folded into the request's existing/pinned rows."
-  const pinnedFixtureIds = new Set(pins.map((p) => p.id));
+  const pinnedFixtureIds = new Set(pinById.keys());
   const freeFixtures = fixtures.filter((f) => !pinnedFixtureIds.has(f.id));
   const freeFixtureIds = new Set(freeFixtures.map((f) => f.id));
   const fixtureById = new Map(fixtures.map((f) => [f.id, f]));
@@ -1254,20 +1306,37 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
       ...(f?.divisionId !== undefined ? { divisionId: f.divisionId } : {}),
     };
   };
-  const pinnedAssignments = pins.map((p) => assignmentOf(p.id, p.at.court, p.at.startAt));
+  const pinnedAssignments = [...pinById.entries()].map(([id, at]) => assignmentOf(id, at.court, at.startAt));
 
-  // If the pins ALONE already carry a blocking conflict — two locked cards on
-  // one slot, or a locked card colliding with an `existing` row — no amount
-  // of placing FREE fixtures can fix it: cp-sat cannot move a pin, only place
-  // the rest around it (a pin is sent as a fixed `existing` row, and the wire
-  // never cross-checks two `existing` rows against each other — see the
-  // comment on `SolveBuildInput.existing`). This is the same fact z3's own
-  // feasibility probe rested on ("without a pin the model is satisfiable by
-  // inspection"), reproduced locally because there is no live solver handle
-  // left to probe once the request is a single RPC rather than a session.
+  // If the pins ALONE already carry a PAIRWISE blocking conflict — two locked
+  // cards on one slot, two pinned people double-booked, a direct order breach
+  // between two pins — no amount of placing FREE fixtures can fix it: cp-sat
+  // cannot move a pin, only place the rest around it (a pin is sent as a
+  // fixed `existing` row, and the wire never cross-checks two `existing` rows
+  // against each other — see the comment on `SolveBuildInput.existing`). This
+  // is the same fact z3's own feasibility probe rested on ("without a pin the
+  // model is satisfiable by inspection"), reproduced locally because there is
+  // no live solver handle left to probe once the request is a single RPC
+  // rather than a session.
+  //
+  // PAIRWISE ONLY — `isBlockingConflict` (calendar.ts) is deliberately NOT
+  // used here, because it also marks `window` blocking, and `window` is a
+  // UNARY fact about one row's own placement against `config.window`, not a
+  // contradiction between two pins. A single locked/frozen fixture merely
+  // sitting outside the window is an ordinary "dirty board" —
+  // `deltaConflicts`/R1 exist precisely to forgive it, the same way greedy's
+  // own seed does — and reporting `infeasible` over it here, before cp-sat is
+  // even asked, would refuse boards neither greedy nor a real solve has any
+  // trouble with. Measured: `build.test.ts`'s "does NOT reject a board over a
+  // blocking breach greedy already had" (`a` locked outside a 60-minute
+  // window) reproduced exactly this — `isBlockingConflict` alone turned one
+  // unremarkable pin into a false `infeasible`, deterministically, with no
+  // service involved.
+  const isPairwiseBlockingConflict = (c: Conflict): boolean =>
+    c.reason === "court" || c.reason === "person_overlap" || (c.reason === "order" && c.direct === true);
   if (pins.length > 0) {
     const pinConflicts = validateAssignments(pinnedAssignments, verifyConfig, existing, dependencies);
-    if (pinConflicts.some(isBlockingConflict)) {
+    if (pinConflicts.some(isPairwiseBlockingConflict)) {
       return { ...greedy("infeasible"), contradictoryPins: pinnedIds };
     }
   }
@@ -1301,7 +1370,11 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     },
     existing: [
       ...existing.map((a) => ({ fixtureId: a.fixtureId, court: a.court, startAtMs: a.startAt })),
-      ...pins.map((p) => ({ fixtureId: p.id, court: p.at.court, startAtMs: p.at.startAt })),
+      ...[...pinById.entries()].map(([id, at]) => ({
+        fixtureId: id,
+        court: at.court,
+        startAtMs: at.startAt,
+      })),
     ],
     // Filtered to pairs where BOTH ends are fixtures cp-sat is actually being
     // asked to place: `fixtureIndexOf` throws `invalid_request` for an id
@@ -1335,11 +1408,24 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // how `z3-load.ts` defers its own WASM import to inside `loadZ3`, one call
   // site removed from this file. See the (type-only) import of
   // `SolveBuildInput`/`SolveBuildOutcome` above for the rest of the reasoning.
+  // `requestId` is caller-supplied by design (`_RULES.md` §2.3): the client
+  // defaults it to empty rather than generating one itself, specifically
+  // because `packages/engine/src` may not read ambient time or randomness —
+  // `t0` (`performance.now()`, already read at the top of this function for
+  // `elapsed()`) is the one already-in-scope value with any entropy at all,
+  // so the correlator is built from it plus the shape of the request, never
+  // from a NEW `Date.now()`/`Math.random()` call. Not globally unique (two
+  // calls can share a monotonic-clock tick under the low-resolution timers
+  // some sandboxes use) — it only has to help a human match a service log
+  // line back to roughly this call, which an always-empty string cannot do
+  // at all.
+  const requestId = `build-${fixtures.length}f${config.courts.length}c-${Math.trunc(t0)}`;
   let outcome: SolveBuildOutcome;
   try {
     const cpsatClient = await import("./cpsat-client.ts");
     outcome = await cpsatClient.solveBuild(cpsatInput, {
       secret: process.env.CPSAT_SERVICE_SECRET ?? "",
+      requestId,
     });
   } catch {
     // Any rejection — deadline, unavailable, transport, or a request this
@@ -1399,30 +1485,63 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     return { ...greedy("verifier_rejected", budgetExpired), tiersCompleted };
   }
 
+  // D6 — "never worse than greedy" — enforced explicitly, because the
+  // structure that gave z3 this property for free is gone. z3's own
+  // `incumbent` started as `seedAssignments` and was replaced ONLY inside an
+  // `if (isStrictlyBetter(...))` arm (the T0/tier walks above, before this
+  // task), so a regression was not reachable BY CONSTRUCTION — there was
+  // never a code path that could hand back something worse. cp-sat returns
+  // one finished board over a single RPC; nothing upstream of this line
+  // compared it to anything, so `outcome.assignments` must be treated as a
+  // CANDIDATE, not a foregone incumbent. A starved or merely-suboptimal
+  // FEASIBLE/UNKNOWN reply — fewer placed, or a worse makespan/idle
+  // gap/imbalance than the seed — must not ship just because it passed the
+  // verifier gate above: the gate only proves the board is LEGAL, not that
+  // it is any good.
+  //
+  // A DELIBERATELY SIMPLER status derivation than z3's, in both branches
+  // below. The z3 path also asked whether the tier ladder was proved over a
+  // NON-EMPTY region (`seedOffLattice`/`latticeHoldsIncumbent`) before
+  // claiming `already_optimal` — that nuance has no cp-sat equivalent here
+  // (there is no live solver handle left to ask a follow-up `check()` of
+  // once the RPC has returned) and is left to Task 06b's status-mapping work
+  // (`_RULES.md` §4).
+  const improved = isStrictlyBetter(incumbentMetrics, seedMetrics);
+
+  if (!improved) {
+    // `already_optimal`/`infeasible` are ONLY reachable here — both require
+    // `!improved` by definition (a board that is `already_optimal` is, by
+    // that word, one nothing beat), so this must not run in the `improved`
+    // arm below: a fully-proved ladder that ALSO happens to have beaten the
+    // seed is `ok`, and calling it `already_optimal` would deny the very
+    // improvement this branch exists to ship.
+    const status: BuildStatus =
+      tiersCompleted === TIER_COUNT
+        ? incumbentMetrics.placed === 0 && fixtures.length > 0
+          ? "infeasible"
+          : "already_optimal"
+        : "ok";
+    // The floor, not the candidate. `greedy()` recomputes conflicts/moved/
+    // lost off `seed.assignments` itself — the SAME derivation every other
+    // fallback exit in this function already uses — so this is not a second
+    // "what does a returned board look like" implementation, only a second
+    // call into the first one. `engine: "greedy"` here matches z3's own
+    // exact precedent: `incumbent === seedAssignments` always reported
+    // `"greedy"` there too, `already_optimal` included — the field names
+    // where the BOARD came from, not which solver was consulted.
+    return { ...greedy(status, budgetExpired), tiersCompleted };
+  }
+
   const moved = movedFrom(incumbent);
   const lost = lostFrom(incumbent);
-
-  // A DELIBERATELY SIMPLER status derivation than z3's. The z3 path also asked
-  // whether the tier ladder was proved over a NON-EMPTY region
-  // (`seedOffLattice`/`latticeHoldsIncumbent`) before claiming
-  // `already_optimal` — that nuance has no cp-sat equivalent here (there is no
-  // live solver handle left to ask a follow-up `check()` of once the RPC has
-  // returned) and is left to Task 06b's status-mapping work (`_RULES.md` §4).
-  // What is kept: a board that matches or loses to the greedy seed, with
-  // every tier proved, is `already_optimal`; one that proved nothing placed
-  // is `infeasible`; everything else is `ok`.
-  const improved = isStrictlyBetter(incumbentMetrics, seedMetrics);
-  let status: BuildStatus = "ok";
-  if (tiersCompleted === TIER_COUNT && !improved) {
-    status = incumbentMetrics.placed === 0 && fixtures.length > 0 ? "infeasible" : "already_optimal";
-  }
 
   return {
     assignments: incumbent,
     conflicts,
     metrics: incumbentMetrics,
     engine: "cp-sat",
-    status,
+    // Reachable only by having just beaten the seed — see the comment above.
+    status: "ok",
     tiersCompleted,
     budgetExpired,
     elapsedMs: elapsed(),
