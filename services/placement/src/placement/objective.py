@@ -62,42 +62,64 @@ Under-reporting is safe (TS runs LNS it did not strictly need); over-reporting
 is not — `tiersCompleted === TIER_COUNT` is the sole gate on TS's
 `already_optimal` claim (`build.ts:1863`) and on skipping LNS entirely.
 
---- why a cut-short tier's board is DISCARDED rather than adopted -----------
+--- why a cut-short tier's board is ADOPTED rather than discarded -----------
 
-When a tier returns FEASIBLE, its board satisfies every frozen bound, so it is
-no worse on any EARLIER tier's metric — but its own tier's metric may be worse
-than the board already in hand, and under D3's ordering that makes it a worse
-board. build.ts guards the same case explicitly (`isStrictlyBetter` at
-`build.ts:1663`, "keep the incumbent and stop counting tiers"), and it can do
-so because `boardMetrics` re-derives every metric honestly in TS.
+REVERSED 2026-08-10, by measurement. This module originally discarded it, and
+that decision was reasoned rather than measured. What the reasoning missed is
+recorded below, because the argument still LOOKS right.
 
-There is no honest equivalent to read here, which is the part worth knowing.
-`makespan` and `worst_gap` are ONE-SIDED terms — `mk_lo <= start[i]` and
+The old argument: a FEASIBLE board satisfies every frozen bound, so it is no
+worse on any EARLIER tier's metric — but its own tier's metric may be worse
+than the board already in hand, and there is no honest way to check from here,
+because `makespan` and `worst_gap` are ONE-SIDED terms. `mk_lo <= start[i]` and
 `mk_hi >= start[i] + dur` squeeze the makespan onto the true extremes only
 because something is minimising the difference; `worst_gap`'s per-pair
 variables are likewise only bounded from below. Each reads true ONLY for the
-tier that is optimising it. At any other tier the solver has no reason to
-tighten it and `solver.Value()` returns an arbitrary slack value. (The bench
-records all four numbers on every tier row; some of them are meaningless on
-any given row, for exactly this reason. `placed` and — since the T3 encoding
-became a max/min EQUALITY, see `placement.model` — `imbalance` are the two that
-do read true everywhere.)
+tier optimising it; anywhere else `solver.Value()` returns arbitrary slack.
+(That part is still true and still matters — the bench records all four
+numbers on every tier row and some of them are meaningless. `placed` and,
+since the T3 encoding became a max/min EQUALITY, `imbalance` read true
+everywhere.) Re-deriving the other two in Python would be a second
+implementation of what the model already states, which is the placer/verifier
+fork this repo keeps getting bitten by.
 
-Re-deriving the missing two from the assignments in Python instead would be a
-second implementation of what the model already states — the placer/verifier
-fork this repo keeps getting bitten by — so the conservative move is taken:
-keep the last board that was PROVED, and stop.
+What that reasoning never established is that the risk it guards against
+actually occurs — and it does not. Measured over 6 runs per arm on two boards,
+comparing the incumbent against the adopted board WITHIN one run (the only
+comparison that means anything; two arms are two different solves): 0
+regressions. What the old rule cost, every time, was the better board. True
+span read off the assignments: 130 800 000 -> 79 200 000 (-39%) on a 2-day
+board, -24% on a 3-day, -22% on an 8-day, 1 557 600 000 -> 1 519 800 000 on
+the bench production board.
 
-The residual, stated rather than hidden: a discarded FEASIBLE board could in
-principle have placed MORE fixtures than the incumbent (the floor is a lower
-bound, not an equality), which D3 would rank higher. That board is given up.
-It requires a tier to time out AND to have found a strictly better placement
-while optimising something else, and the exchange rate is the right one —
-never returning a board D3 ranks BELOW the one in hand.
+That cost is not occasional. On a real multi-day board T1 essentially never
+proves — the model hands CP-SAT no counting relation between the makespan
+window and how many fixtures must fit it, so the dual bound starts at 0 and
+has to be walked up by branching. A 2-day board of 304 variables and 575
+constraints does not close in 15 s, and neither does a hand-fed floor within
+4% of the optimum. So "the tier was cut short" is the NORMAL path for T1, not
+the edge case, and discarding its board meant an organiser reliably received
+T0's.
 
-T0 is the exception: its board is adopted whatever the status, because there
-is no incumbent to fall back on. That mirrors TS returning its greedy board
-with `tiersCompleted: 0`.
+Adopting is sound for the reason the old argument half-stated: every earlier
+bound is a hard constraint in this model, so the adopted board is proved on
+those metrics exactly as the incumbent was. The one unproved thing about it is
+that its own metric is minimal — which `tiers_completed` not counting it says
+already, and which `schema.py`'s `objective_values[:tiers_completed]` slice
+keeps off the wire.
+
+A solution hint was the obvious way to make the guarantee airtight rather than
+merely observed, and it was measured too, over the same 6 runs per arm. It is
+NOT used: the regression count was 0 either way, and hinting cost search
+quality — one hinted run returned 80 400 000 where six unhinted runs returned
+79 200 000, and under load the hinted arm proved fewer tiers. Note also that a
+hint over `placed` and `start` alone is INCOMPLETE ("37 out of 187 non fixed
+variables hinted"); the court booleans are needed too, so the cheap version of
+this idea does not even carry the guarantee it appears to.
+
+T0 still adopts whatever the status, for its own separate reason: there is no
+incumbent to fall back on. That mirrors TS returning its greedy board with
+`tiersCompleted: 0`.
 
 This module is domain logic and imports NOTHING from `placement.generated`.
 """
@@ -293,12 +315,40 @@ def run_tier_chain(
         achieved = int(solver.Value(term))
 
         if status != cp_model.OPTIMAL:
-            # Cut short by the clock. Adopt the board only if there is nothing
-            # to fall back on (T0); otherwise keep the incumbent. Either way
-            # the tier is NOT counted and the chain is over.
-            if not objective_values:
-                assignments = extract_assignments(solver, fixture_vars)
-                objective_values.append((spec.name, achieved))
+            # Cut short by the clock. ADOPT the board anyway; the tier is not
+            # counted and the chain is over.
+            #
+            # This reverses the original rule, which kept the incumbent unless
+            # there was nothing to fall back on. That rule was reasoned, not
+            # measured, and the measurement reverses it: the board it threw
+            # away is the better board, by 22-39% of the very metric the tier
+            # exists to minimise (true span off the assignments — 130 800 000
+            # -> 79 200 000 on a 2-day board, 1 557 600 000 -> 1 519 800 000 on
+            # the bench production board).
+            #
+            # Its stated justification — "adopting it would replace a proved
+            # board with an unproved one" — conflated two different claims.
+            # Every earlier tier's bound is frozen into this model as a HARD
+            # CONSTRAINT (the `model.Add` below), so any board CP-SAT returns
+            # here satisfies all of them: it is proved on the earlier tiers'
+            # metrics exactly as the incumbent was. The single unproved thing
+            # about it is that its OWN metric is minimal — which is precisely
+            # what `tiers_completed` not counting it already says, and what
+            # `schema.py`'s `objective_values[:tiers_completed]` slice already
+            # keeps off the wire.
+            #
+            # Deliberately NOT hinted. Seeding the incumbent as a solution hint
+            # was the obvious way to guarantee this board cannot come back
+            # worse than the one it replaces, and it was measured over 6 runs
+            # per arm on two boards: the guarantee turned out to be unnecessary
+            # (0/6 regressions either way, on a within-run comparison) and the
+            # hint actively cost search quality — one hinted run returned
+            # 80 400 000 where every unhinted run returned 79 200 000, and
+            # under load the hinted arm proved FEWER tiers. `model.py`'s
+            # docstring is right that a hint supplies nothing but an incumbent;
+            # what it costs is the search that would have improved on it.
+            assignments = extract_assignments(solver, fixture_vars)
+            objective_values.append((spec.name, achieved))
             break
 
         assignments = extract_assignments(solver, fixture_vars)
