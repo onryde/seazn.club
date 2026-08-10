@@ -469,7 +469,13 @@ jobs:
           set -euo pipefail
           node -e '
             const fs = require("fs");
-            const r = JSON.parse(fs.readFileSync("vitest-results-lib-server.json", "utf8"));
+            // apps/web/, NOT the repo root: `--outputFile` is resolved
+            // relative to the WORKSPACE vitest runs in, and this job invokes it
+            // via `npm test --workspace apps/web`. The reconciliation step
+            // further down already spells the same path correctly; reading it
+            // from the root here was an ENOENT that failed this step while the
+            // suite it checks had passed.
+            const r = JSON.parse(fs.readFileSync("apps/web/vitest-results-lib-server.json", "utf8"));
             const f = (r.testResults || []).find(t => t.name.includes("schedule-solver-telemetry.test.ts"));
             if (!f) { console.error("::error::schedule-solver-telemetry.test.ts did not run at all"); process.exit(1); }
             const all = f.assertionResults || [];
