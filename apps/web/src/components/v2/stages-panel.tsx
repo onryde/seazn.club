@@ -18,6 +18,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { DocumentsMenu } from "@/components/v2/board/documents-menu";
 import { ScheduleResultStrip } from "@/components/v2/board/result-strip";
+import { TIME_STEP_SECONDS } from "./shared/datetime-field";
 import type { ScheduleMetrics, ScheduleSolverInfo } from "@/server/api-v1/schemas";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -938,6 +939,7 @@ function FixtureLine({
             <span className="label">{msg("schedule.field.when")}</span>
             <input
               type="datetime-local"
+              step={TIME_STEP_SECONDS}
               value={when}
               onChange={(e) => setWhen(e.target.value)}
               className="input px-2 py-1 text-xs"
@@ -1053,6 +1055,7 @@ function AddMatchForm({
           <input
             type="datetime-local"
             className="input py-1.5 text-sm"
+            step={TIME_STEP_SECONDS}
             value={when}
             onChange={(e) => setWhen(e.target.value)}
           />

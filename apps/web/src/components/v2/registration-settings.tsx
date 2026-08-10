@@ -12,6 +12,7 @@ import { Tip } from "@/components/ui/tip";
 import type { Pulse } from "@/lib/registration-derive";
 import type { FormField, Settings } from "./registrations-panel";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { TIME_STEP_SECONDS } from "./shared/datetime-field";
 
 function toLocalInput(iso: string | null): string {
   if (!iso) return "";
@@ -128,6 +129,7 @@ export function RegistrationSettings({
             <input
               type="datetime-local"
               disabled={!canEdit}
+              step={TIME_STEP_SECONDS}
               value={toLocalInput(settings.opens_at)}
               onChange={(e) => set({ opens_at: fromLocalInput(e.target.value) })}
               className="input mt-1 w-full"
@@ -138,6 +140,7 @@ export function RegistrationSettings({
             <input
               type="datetime-local"
               disabled={!canEdit}
+              step={TIME_STEP_SECONDS}
               value={toLocalInput(settings.closes_at)}
               onChange={(e) => set({ closes_at: fromLocalInput(e.target.value) })}
               className="input mt-1 w-full"
@@ -321,6 +324,7 @@ export function RegistrationSettings({
             <input
               type="datetime-local"
               disabled={!canEdit}
+              step={TIME_STEP_SECONDS}
               value={toLocalInput(settings.refund_lock_at)}
               onChange={(e) => set({ refund_lock_at: fromLocalInput(e.target.value) })}
               className="input mt-1 w-full"

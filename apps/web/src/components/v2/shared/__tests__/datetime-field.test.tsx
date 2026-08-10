@@ -15,7 +15,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, walk } from "../../../__tests__/_hook-harness";
-import { DateTimeField, type DateTimeFieldProps } from "../datetime-field";
+import { DateTimeField, TIME_STEP_SECONDS, type DateTimeFieldProps } from "../datetime-field";
 
 const inputOf = (props: DateTimeFieldProps) => {
   const el = walk(DateTimeField(props)).find((e) => e.type === "input");
@@ -150,5 +150,33 @@ describe("DateTimeField", () => {
     // pass it are unchanged.
     expect(String(labelSpanOf(base).className).split(/\s+/)).toEqual(["label"]);
     expect(renderToStaticMarkup(<DateTimeField {...base} />)).not.toContain("sr-only");
+  });
+
+  it("steps the clock by a quarter hour, and NEVER steps a date input", () => {
+    const onChange = () => {};
+
+    // 900 seconds. The organiser's picker offers 9:00 / 9:15 / 9:30 …
+    expect(TIME_STEP_SECONDS).toBe(900);
+    for (const kind of ["time", "datetime-local"] as const) {
+      const props: DateTimeFieldProps = { kind, value: "", onChange, label: "When" };
+      expect(inputOf(props).step).toBe(900);
+      // Prop-walking alone would pass for a value React drops on the way out.
+      expect(renderToStaticMarkup(<DateTimeField {...props} />)).toContain('step="900"');
+    }
+
+    // THE regression half. `step` on `<input type="date">` counts DAYS, so the
+    // obvious one-line implementation — step={TIME_STEP_SECONDS} on every kind
+    // — makes the end-date fields in settings-panel and division-builder offer
+    // one selectable date every 900 days and reject everything between. The
+    // default has to stop at the clock kinds.
+    const date: DateTimeFieldProps = { kind: "date", value: "", onChange, label: "End date" };
+    expect(inputOf(date).step).toBeUndefined();
+    expect(renderToStaticMarkup(<DateTimeField {...date} />)).not.toContain("step=");
+
+    // Explicit wins over the default in both directions: a finer clock step
+    // where a caller needs one, and a real day step on a date field — so the
+    // `kind === "date"` branch governs only the DEFAULT, not the prop.
+    expect(inputOf({ kind: "time", value: "", onChange, label: "When", step: 300 }).step).toBe(300);
+    expect(inputOf({ ...date, step: 7 }).step).toBe(7);
   });
 });

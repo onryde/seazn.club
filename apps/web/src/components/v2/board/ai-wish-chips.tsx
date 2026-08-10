@@ -12,6 +12,7 @@ import { useState } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import type { Wish } from "./wish-compile";
+import { TIME_STEP_SECONDS } from "../shared/datetime-field";
 
 type Kind = Wish["kind"];
 type Edge = "before" | "after";
@@ -296,7 +297,13 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function TimeInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <input type="time" className="input" value={value} onChange={(e) => onChange(e.target.value)} />
+    <input
+      type="time"
+      className="input"
+      step={TIME_STEP_SECONDS}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    />
   );
 }
 

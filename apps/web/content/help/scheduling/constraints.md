@@ -12,6 +12,8 @@ Constraints are the rules the auto-scheduler plays by. They live in the division
 - **Courts** — what your court is called. More than one court in parallel is Pro.
 - **Match length** — how long a fixture blocks a court, derived from the sport but overridable.
 
+Every time field on these screens moves in **quarter-hour steps** — 9:00, 9:15, 9:30 — so the picker and the up/down arrows land on the times a timetable is normally built from. Dates step a day at a time, as before. Times already saved on another minute keep their exact value; nothing is rounded behind you.
+
 ## Finer control (Pro)
 
 - **Multiple courts** — run matches in parallel across a venue.

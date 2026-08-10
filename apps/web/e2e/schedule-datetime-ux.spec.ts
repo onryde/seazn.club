@@ -529,3 +529,44 @@ test.describe("minimum-rest floor note explains which control is winning (case d
     await expect(constraintsNote).toContainText("35");
   });
 });
+
+// ---------------------------------------------------------------------------
+// (e) Quarter-hour stepping. `DateTimeField` sets `step` for the two CLOCK
+// kinds and deliberately not for `kind="date"`, because on a date input the
+// same attribute counts DAYS — 900 there means one selectable date every two
+// and a half years. The unit suite pins the rendered prop; only a real browser
+// on the real page proves the attribute survives hydration and lands on the
+// controls the organiser actually touches.
+//
+// Written as an invariant over every clock input ON the page rather than a
+// list of known ones, so a field added later is covered without editing this.
+// SELECTORS ARE STRUCTURAL (input type), NEVER COPY (#465).
+// ---------------------------------------------------------------------------
+test("board settings offers quarter-hour times, and leaves the end DATE alone (case e)", async ({
+  page,
+  request,
+}) => {
+  const { divisionId } = await seedDivision(request, "QuarterStep");
+  await page.goto(await divisionPath(request, divisionId, "/schedule?tab=settings"));
+  await expect(page.locator("#boardset-rest")).toBeVisible({ timeout: 20_000 });
+
+  const clocks = page.locator('input[type="time"], input[type="datetime-local"]');
+  // startAt + the play-hours pair. A zero count would make every assertion
+  // below vacuously true, which is how a broken selector reads as a pass.
+  expect(await clocks.count()).toBeGreaterThanOrEqual(3);
+  for (let i = 0; i < (await clocks.count()); i += 1) {
+    expect(await clocks.nth(i).getAttribute("step")).toBe("900");
+  }
+
+  // THE regression half, and the reason this is not one blanket default.
+  const dates = page.locator('input[type="date"]');
+  expect(await dates.count()).toBeGreaterThanOrEqual(1);
+  for (let i = 0; i < (await dates.count()); i += 1) {
+    expect(await dates.nth(i).getAttribute("step")).toBeNull();
+  }
+
+  // The organiser can still reach a quarter-hour value through the control.
+  const startAt = page.locator('input[type="datetime-local"]').first();
+  await startAt.fill("2026-10-12T09:15");
+  await expect(startAt).toHaveValue("2026-10-12T09:15");
+});
