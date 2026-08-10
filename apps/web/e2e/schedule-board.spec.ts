@@ -557,10 +557,21 @@ test("the publish gate offers a way through for warnings, and none for a blocker
   expect(published.data!.status).toBe("scheduled");
 
   // --- and now the half with no way through ---------------------------------
-  // Pull the timetable's last day back behind the board: every placed card is
-  // outside the competition window, which IS blocking. Done through settings
+  // Pull the timetable's whole window back behind the board: every placed card
+  // is outside the competition window, which IS blocking. Done through settings
   // because a card-level clash cannot be created through the API at all — the
   // delta gate refuses the PATCH that would introduce one.
+  //
+  // Both bounds move to the DAY BEFORE, and the pair stays correctly ordered.
+  // It used to leave `startAt` at `at(9)` and pull only `endAt` back, which made
+  // the range run backwards by ten hours — a state `PutScheduleSettings` now
+  // refuses outright (`checkInstantOrder`), because a reversed window is one no
+  // fixture can ever satisfy and it produced an empty board with no error.
+  // `applyWindow` buckets the end to the START of the following day, so an end
+  // anywhere on the 11th closes the window at 12th 00:00 and leaves every card
+  // (09:00 onward on the 12th) outside it — which is the blocking state this
+  // half of the test needs. Keeping both bounds on the 11th preserves that
+  // exactly, without asking the API to store something invalid.
   const blockSettings = await apiJson(
     request,
     `/api/v1/divisions/${divisionId}/schedule-settings`,
@@ -568,7 +579,7 @@ test("the publish gate offers a way through for warnings, and none for a blocker
     {
       tz: "UTC",
       config: {
-        startAt: at(9),
+        startAt: new Date(DAY - 2 * 3_600_000).toISOString(),
         endAt: new Date(DAY - 3_600_000).toISOString(),
         matchMinutes: 30,
         gapMinutes: 0,
