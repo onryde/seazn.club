@@ -89,7 +89,7 @@ export function FixtureBlock({
         <span
           aria-hidden
           className={`absolute -top-1.5 -right-1.5 grid h-4 w-4 place-items-center rounded-full ring-2 ring-white ${
-            blocking ? "bg-red-600 text-white" : "bg-amber-500 text-white"
+            blocking ? "bg-red-600 text-white" : "bg-amber-700 text-white"
           }`}
         >
           <AlertTriangle className="h-2.5 w-2.5" strokeWidth={2.5} />

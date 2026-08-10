@@ -261,9 +261,13 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     // two identical, indistinguishable badges).
     const card = page.locator(`[data-fixture-id="${fa}"]`);
     await expect(card.getByText("rest", { exact: true })).toHaveCount(1);
-    // No raw pin/lock emoji anywhere on the board — real icons only.
+    // No raw pin/lock emoji anywhere on the board — real icons only. Absence
+    // of the emoji alone doesn't prove an icon replaced it (a silently empty
+    // button would pass that check too), so also assert the real icon is on
+    // screen — every unlocked, movable card carries one.
     await expect(page.getByText("📌")).toHaveCount(0);
     await expect(page.getByText("🔒")).toHaveCount(0);
+    await expect(page.locator("[data-fixture-id] svg.lucide-pin").first()).toBeVisible();
 
     await panel.getByRole("button", { name: "Jump to fixture →" }).first().click();
     await expect(panel).toBeHidden();

@@ -60,9 +60,12 @@ describe("FixtureBlock", () => {
   });
 
   it("keeps two DIFFERENT conflict codes as two separate badges", () => {
+    // Both entries share the same `blocking` value on purpose — the grouping
+    // key is `code`, and a case where `blocking` also happens to differ
+    // would pass just as well if the code grouped by `blocking` instead.
     const conflicts: BoardConflict[] = [
       { fixture_id: "fx-1", code: "warn.rest", blocking: false, detail: "D needs rest" },
-      { fixture_id: "fx-1", code: "conflict.court", blocking: true, detail: "Court double-booked" },
+      { fixture_id: "fx-1", code: "conflict.court", blocking: false, detail: "Court double-booked" },
     ];
     const html = renderToStaticMarkup(<FixtureBlock {...baseProps} conflicts={conflicts} />);
     expect(html.match(/>rest</g)).toHaveLength(1);
@@ -84,7 +87,12 @@ describe("FixtureBlock", () => {
       <FixtureBlock {...baseProps} fixture={{ ...fixture, schedule_locked: true }} />,
     );
     const unlocked = renderToStaticMarkup(<FixtureBlock {...baseProps} />);
+    // Absence of the old emoji alone doesn't prove the new icon is there — a
+    // button that silently rendered nothing would pass that check too.
+    // lucide-react stamps every icon's own name onto its rendered class list.
+    expect(locked).toContain("lucide-lock");
     expect(locked).not.toContain("\u{1F512}"); // 🔒
+    expect(unlocked).toContain("lucide-pin");
     expect(unlocked).not.toContain("\u{1F4CC}"); // 📌
   });
 
