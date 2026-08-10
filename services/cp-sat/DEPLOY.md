@@ -112,11 +112,19 @@ still only one machine to route to no matter how the proxy load-balances.
 Ten matches the owner's stated concurrent-organiser target; it is not a
 worst-case pad.
 
-Nine of those ten sit `suspended` almost all the time, which is cheap: Fly's
-pricing page documents suspended/stopped billing as rootfs storage only,
-$0.15/GB per 30 days — not machine-hours. Ten machines suspended costs cents;
-ten machines actually solving concurrently is the scenario this whole task
-exists to make possible.
+Nine of those ten sit `suspended` almost all the time, and the expectation is
+that this is cheap — but **check the first invoice rather than trusting this
+paragraph.** Fly's pricing page documents rootfs storage billing at $0.15/GB
+per 30 days for **`stopped`** machines. It does **not** document the
+suspended state, which also holds a memory snapshot; whether that is billed,
+and at what rate, is not stated anywhere we could find. `fly.toml` carries
+the same caveat beside `auto_stop_machines`.
+
+The expected cost either way is cents against machine-hours that are not, so
+this remains a latency choice rather than a cost one — and `"stop"` is a
+one-word change costing only a 1-3s cold start if an invoice disagrees. What
+is NOT in doubt is that ten idle machines do not cost ten machine-hours;
+autostop is what makes `fly scale count 10` affordable at all.
 
 This is the setting that makes step 2 non-optional. Suspended plus
 `.internal` equals unreachable.
