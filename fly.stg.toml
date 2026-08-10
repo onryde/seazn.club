@@ -26,7 +26,20 @@ primary_region = "lhr"
 [http_service]
   internal_port        = 3000
   force_https          = true
-  auto_stop_machines   = "stop"
+  # "suspend", not "stop": a suspended machine "preserve[s] memory and disk
+  # state, and resume[s] faster than `stopped`" (Fly's machine-states docs).
+  # Same scale-to-zero cost shape, materially faster first request — which on
+  # staging is usually a human waiting on a cold Next.js boot, or an e2e run
+  # whose first navigation would otherwise eat the cold start. Billing for the
+  # suspended state is not documented by Fly (the pricing page covers
+  # `stopped` only, rootfs at $0.15/GB per 30 days); the amounts are cents
+  # either way. If an invoice ever disagrees, "stop" is a one-word revert.
+  #
+  # Unlike services/cp-sat/fly.toml, no .flycast work is owed here: this app
+  # is reached over the PUBLIC internet through Fly Proxy, which is what
+  # performs the autostart. The .internal-bypasses-the-proxy trap applies only
+  # to private 6PN callers.
+  auto_stop_machines   = "suspend"
   auto_start_machines  = true
   min_machines_running = 0            # staging can cold-start; saves cost
 

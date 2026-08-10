@@ -386,32 +386,43 @@ the rebase and covers a different source (typed `min_rest_minutes` rules).
 The refactor makes gap **C5** more visible, not less: there is now a clean
 shared leaf, and `build.ts`'s cp-sat translation still does not call it.
 
-## The gate is a DELTA, so cp-sat can ship an ILLEGAL board
+## cp-sat can ship a board violating a rule it never received
 
-Found 2026-08-10 while verifying Task 07, and it converts C1/C2 from
-"missing capability" into "wrong output reaches the organiser".
+Found 2026-08-10 while verifying Task 07. It converts C1/C2 from "missing
+capability" into "wrong output reaches the organiser".
 
-`build.ts`'s acceptance gate uses `rejectedBlockingConflicts` — a DELTA
-against the greedy seed's conflicts, not a test against zero. So whenever
-greedy already violates a rule, cp-sat may violate **the same rule** and pass:
-the delta is zero and nothing rejects it.
+`SolveBuildInput.constraints` (`cpsat-client.ts:71-76`) carries exactly four
+fields — matchMinutes, gapMinutes, restByDivision, dayCapByDivision. **No
+rule under `config.constraints` reaches the solver at all.** Greedy and the
+verifier both read the full config; cp-sat reads four scalars.
 
-Demonstrated, not theorised. Task 07's Board 1 puts a `startWindows` rule on
-an entrant. `SolveBuildInput.constraints` carries exactly four fields —
-matchMinutes, gapMinutes, restByDivision, dayCapByDivision — so the rule
-never reaches the solver (that is C1/C2). cp-sat then places the stranded
-fixture, "beats" greedy on placed count, and `validateAssignments` flags the
-violation the gate just waved through.
+Demonstrated: Task 07's first regression board put a `startWindows` rule on
+an entrant. cp-sat, blind to it, placed the fixture greedy had correctly
+stranded, "beat" greedy on placed count, and `validateAssignments` then
+flagged the violation.
+
+**Why D6 did not catch it.** `isBlockingConflict` (`calendar.ts:202-209`) is
+`court` / `person_overlap` / `window` / `order` with `direct === true`.
+`start_window` is not in that list, so it is warn-only for the gate — it
+never reaches `rejectedBlockingConflicts` at all, in any form.
+
+**A SECOND, independent defect, same investigation.** For the reasons that
+ARE blocking, the gate is `deltaConflicts(before.filter(isBlockingConflict),
+after.filter(isBlockingConflict))`, keyed `fixtureId|reason|detail`. So a
+blocking conflict whose key matches one the greedy seed already carried does
+not register as new, and ships un-rejected. Confirmed from both functions'
+implementations; no repro board built. This is NOT what caused the board
+above — an earlier revision of this section wrongly said it was.
 
 Two consequences, both load-bearing:
 
 1. **Any test whose win condition is a constraint cp-sat never receives is
-   green by luck.** Board 1 flipped between pass and fail on consecutive runs
-   against one unchanged service — cp-sat sometimes lands the fixture inside
-   the window by coincidence. A single green run proves nothing here.
-2. Closing C1/C2 is no longer only about board quality. Until they land, the
-   delta gate is the only thing between a rule-violating board and an
-   organiser, and it is not doing that job.
+   green by luck.** That board flipped pass/fail on consecutive runs against
+   one unchanged service — cp-sat sometimes satisfied the window by
+   coincidence. A single green run proves nothing against this solver.
+2. Closing C1/C2 is no longer only about board quality. Until they land,
+   nothing reliably stops a rule-violating board: the unsent rules are
+   invisible to the solver, and half of them are warn-only at the gate.
 
 ## Parallel execution
 
