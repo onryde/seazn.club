@@ -3226,7 +3226,7 @@
   "board.result.alreadyOptimal": "Ya era la mejor disposición: no quedaba nada por mejorar.",
   "board.result.busy": "Programado rápidamente: el optimizador estaba ocupado. Vuelve a intentarlo para obtener un cuadro mejor.",
   "board.result.unavailable": "Programado rápidamente: el optimizador no estaba disponible. El cuadro es válido, solo que sin optimizar.",
-  "board.result.notSearched": "Programado rápidamente: el optimizador no pudo analizar este cuadro, así que nada de lo que aparece aquí afirma que exista uno mejor. Los tiempos de partido, intervalo y descanso que has configurado no coinciden en un paso común; ajústalos y vuelve a ejecutarlo.",
+  "board.result.notSearched": "Programado rápidamente: el optimizador no pudo analizar este cuadro, así que nada de lo que aparece aquí afirma que exista uno mejor. Esta versión no puede indicar cuál de las posibles causas lo impidió; vuelve a ejecutarlo tras la próxima actualización y se indicará la causa concreta.",
   "board.result.verifierRejected": "Programado con el planificador estándar. El cuadro es válido.",
   "board.result.infeasibleAllPlaced": "No se pudieron respetar todos los partidos fijados, pero todo encontró hueco.",
   "board.result.partial.one": "{placed} de {total} programados: un partido no se pudo colocar.",
@@ -3315,5 +3315,11 @@
   "constraints.waitReport.colLongestWait": "Espera más larga",
   "constraints.waitReport.colFirstToLast": "Primero a último",
   "constraints.waitReport.footer": "Ordenado de peor a mejor. Reduce los huecos reorganizando el tablero, o sube el descanso mínimo y vuelve a ejecutar.",
-  "constraints.error.failed": "Error"
+  "constraints.error.failed": "Error",
+  "board.result.notSearched.tooBig": "Programado rápidamente: el optimizador no pudo analizar este cuadro, así que nada de lo que aparece aquí afirma que exista uno mejor. Este cuadro tiene más partidos y horarios posibles de los que puede analizar en el tiempo disponible; programar menos partidos a la vez, o acortar el periodo de la competición, lo vuelve a poner dentro de rango.",
+  "board.result.notSearched.windowEmpty": "Programado rápidamente: el optimizador no pudo analizar este cuadro, así que nada de lo que aparece aquí afirma que exista uno mejor. El periodo de tu competición termina antes de que esta ejecución pueda siquiera empezar, así que no queda tiempo dentro de él para analizar; adelanta la fecha de fin y vuelve a ejecutarlo.",
+  "board.result.notSearched.latticeUnusable": "Programado rápidamente: el optimizador no pudo analizar este cuadro, así que nada de lo que aparece aquí afirma que exista uno mejor. La franja horaria, los horarios de sesión y las pistas que has configurado producen más horarios posibles de los que puede manejar a la vez (o ninguno en absoluto); acórtalos para volver a ponerlo dentro de rango.",
+  "board.result.notSearched.perCourtGrid": "Programado rápidamente: el optimizador no pudo analizar este cuadro, así que nada de lo que aparece aquí afirma que exista uno mejor. Un bloqueo que se aplica solo a una de tus pistas es lo que lo detiene aquí; elimina ese bloqueo, o aplícalo a todas las pistas, para restablecerlo.",
+  "board.result.notSearched.outOfTime": "Programado rápidamente: el optimizador no pudo analizar este cuadro, así que nada de lo que aparece aquí afirma que exista uno mejor. El tiempo disponible ya se agotó calculando este cuadro antes de que se pudiera siquiera consultar al optimizador; volver a ejecutarlo, o programar menos partidos a la vez, le da una oportunidad de empezar.",
+  "board.result.notSearched.noVerdict": "Programado rápidamente: el optimizador no pudo analizar este cuadro, así que nada de lo que aparece aquí afirma que exista uno mejor. Esta vez se consultó al optimizador y no devolvió ningún veredicto; volver a ejecutarlo es el mejor paso siguiente."
 }

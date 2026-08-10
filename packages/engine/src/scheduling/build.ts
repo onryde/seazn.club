@@ -345,8 +345,13 @@ export type BuildStatus =
    * THE SOLVER NEVER SEARCHED THIS BOARD, so nothing is claimed about it.
    *
    * The greedy board is returned and it is a perfectly good board; what is
-   * missing is any statement about whether a better one exists. Four causes, in
-   * two families.
+   * missing is any statement about whether a better one exists. FOUR causes, in
+   * two families, are catalogued below — written for the pre-placement-cutover
+   * z3 tier walk this function used to run, and kept for the shape it still
+   * rhymes with. `NotSearchedReason` (a few lines down) is the CURRENT and
+   * authoritative map: six members, one per exit `solveBuild` and
+   * `buildSchedule` actually have today, including two — `per_court_grid` and
+   * the R22 size gate's own `too_big` — this paragraph never named.
    *
    * NOTHING WAS EVER ASKED — no `check()` ran and `rlimitSpent` is 0:
    *
@@ -387,6 +392,44 @@ export type BuildStatus =
    *  back at once and the solver was never consulted. Ordinary rather than an
    *  error — the board is valid, and a retry can do better. */
   | "solver_busy";
+
+/**
+ * WHICH of `not_searched`'s exits produced this board — the fact `status`
+ * alone cannot carry, because all of them collapse onto that one member. One
+ * member per call site in this file, in the order they appear:
+ *
+ *   * `too_big` — the R22 size gate (`canSolveWithin`) refused the board
+ *     before it ever queued. THE FIRST GATE EVERY CALLER PASSES THROUGH: an
+ *     over-cap or empty lattice is refused here too (`canSolveWithin` opens
+ *     with the identical `grid.overCap || grid.slots.length === 0` test
+ *     `lattice_unusable` names below), so a board that would otherwise reach
+ *     that check never does — this member, not that one, is what a caller
+ *     actually observes for those boards. `lattice_unusable` stays its own
+ *     member anyway: it documents what that second check is FOR, and stops
+ *     being shadowed the moment anything ever calls the lower-level solve
+ *     path directly.
+ *   * `window_empty` — the competition/session window ends at or before this
+ *     run's own start.
+ *   * `lattice_unusable` — the lattice exceeds `MAX_SLOTS`, or comes back
+ *     empty, discovered where `solveBuild` builds its own copy of the grid.
+ *   * `per_court_grid` — the configured courts do not all offer the same
+ *     start times, so the board cannot be expressed as one shared grid.
+ *   * `out_of_time` — the wall was already spent before the RPC would have
+ *     gone out.
+ *   * `no_verdict` — the service resolved with `UNKNOWN`: the chain proved
+ *     nothing, so nothing here claims a better board exists.
+ *
+ * Optional, and meaningful only when `status === "not_searched"` — absent on
+ * every other status, and absent on a `not_searched` from a server one
+ * deploy behind this field.
+ */
+export type NotSearchedReason =
+  | "too_big"
+  | "window_empty"
+  | "lattice_unusable"
+  | "per_court_grid"
+  | "out_of_time"
+  | "no_verdict";
 
 export interface BuildInput {
   fixtures: readonly SchedulableFixture[];
@@ -465,6 +508,8 @@ export interface BuildResult {
    *  means the board on this result is one z3 produced. */
   engine: "greedy" | "z3" | "z3+lns" | "optimized";
   status: BuildStatus;
+  /** Set only when `status === "not_searched"` — see `NotSearchedReason`. */
+  notSearchedReason?: NotSearchedReason;
   tiersCompleted: number;
   budgetExpired: boolean;
   elapsedMs: number;
@@ -877,6 +922,7 @@ function greedyResult(
     rlimitSpent: number;
     lnsWindowRlimits: readonly number[];
   },
+  notSearchedReason?: NotSearchedReason,
 ): BuildResult {
   return {
     assignments: seed.assignments,
@@ -884,6 +930,12 @@ function greedyResult(
     metrics: seed.metrics,
     engine: "greedy",
     status,
+    // Conditional spread, not a bare `notSearchedReason` property: every other
+    // caller of this function passes `undefined` for a status that is not
+    // `not_searched`, and a literal `notSearchedReason: undefined` on the
+    // object is a KEY the caller has to know to strip, not an absent one —
+    // `ScheduleSolverInfo`'s own optional fields follow the same rule.
+    ...(notSearchedReason !== undefined ? { notSearchedReason } : {}),
     tiersCompleted: 0,
     budgetExpired: spent.budgetExpired,
     elapsedMs: spent.elapsedMs,
@@ -914,15 +966,21 @@ function greedyOnly(
   input: BuildInput,
   status: BuildStatus,
   budgetExpired = false,
+  notSearchedReason?: NotSearchedReason,
 ): BuildResult {
   const t0 = performance.now();
   const seed = greedySeed(input);
-  return greedyResult(seed, status, {
-    budgetExpired,
-    elapsedMs: performance.now() - t0,
-    rlimitSpent: 0,
-    lnsWindowRlimits: [],
-  });
+  return greedyResult(
+    seed,
+    status,
+    {
+      budgetExpired,
+      elapsedMs: performance.now() - t0,
+      rlimitSpent: 0,
+      lnsWindowRlimits: [],
+    },
+    notSearchedReason,
+  );
 }
 
 /**
@@ -973,7 +1031,7 @@ export function buildSchedule(input: BuildInput): Promise<BuildResult> {
   // Wiring it in here, ahead of the queue and the lock, covers every caller at
   // once and keeps the threshold in the one place it is meant to live.
   if (!canSolveWithin(input.fixtures, input.config, input.wallMs ?? DEFAULT_BUILD_WALL_MS, input.existing ?? []))
-    return Promise.resolve(greedyOnly(input, "not_searched", true));
+    return Promise.resolve(greedyOnly(input, "not_searched", true, "too_big"));
   queued++;
   // `withZ3Lock` is NOT reentrant. It is taken exactly here, and nothing below
   // may take it again — `loadZ3` deliberately does not, neither does anything
@@ -1123,15 +1181,24 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   const { currentBoard, conflictsForBoard, movedFrom, lostFrom } = seed;
   const seedMetrics = seed.metrics;
 
-  const greedy = (status: BuildStatus, budgetExpired = false): BuildResult =>
-    greedyResult(seed, status, {
-      budgetExpired,
-      elapsedMs: elapsed(),
-      // Neither field means anything on this path: `rlimit` and LNS windows
-      // are z3-specific machinery this function no longer has.
-      rlimitSpent: 0,
-      lnsWindowRlimits: [],
-    });
+  const greedy = (
+    status: BuildStatus,
+    budgetExpired = false,
+    notSearchedReason?: NotSearchedReason,
+  ): BuildResult =>
+    greedyResult(
+      seed,
+      status,
+      {
+        budgetExpired,
+        elapsedMs: elapsed(),
+        // Neither field means anything on this path: `rlimit` and LNS windows
+        // are z3-specific machinery this function no longer has.
+        rlimitSpent: 0,
+        lnsWindowRlimits: [],
+      },
+      notSearchedReason,
+    );
 
   // 2. The lattice.
   //
@@ -1150,7 +1217,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   //    result saying a solver was never consulted. The organiser reaching it is
   //    one who edited the competition window to end before the run's own start.
   const universe = repairUniverse({ proposal: [], existing, config });
-  if (config.startAt >= universe.to) return greedy("not_searched");
+  if (config.startAt >= universe.to) return greedy("not_searched", false, "window_empty");
 
   /**
    * Where a card the caller says may not move actually IS.
@@ -1271,7 +1338,8 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // `not_searched`, NOT `ok`. There is no lattice, so nothing was looked at,
   // and a strip reading "the quick pass produced this board" is the most it can
   // honestly say — never that the board was produced and accepted by a solver.
-  if (grid.overCap || grid.slots.length === 0) return greedy("not_searched");
+  if (grid.overCap || grid.slots.length === 0)
+    return greedy("not_searched", false, "lattice_unusable");
 
   // Obligation 5 (placement cutover, see `everyCourtSharesGrid`): a per-court
   // grid is refused by the service, not mis-scheduled, and this is reachable
@@ -1283,12 +1351,13 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // properly (a per-fixture (court, start) domain, `court_allow`) is task
   // C2's, not this one's — do not build a narrower fix here that C2 then has
   // to widen.
-  if (!everyCourtSharesGrid(grid, config.courts)) return greedy("not_searched");
+  if (!everyCourtSharesGrid(grid, config.courts))
+    return greedy("not_searched", false, "per_court_grid");
 
   // The seed, the lattice and the checks above are already behind us; a wall
   // that has already gone must not pay for a network round trip nobody will
   // be allowed to wait for.
-  if (outOfTime()) return greedy("not_searched", true);
+  if (outOfTime()) return greedy("not_searched", true, "out_of_time");
 
   // 3. Placement.
   //
@@ -1548,7 +1617,8 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // `TIER_COUNT`), the exact invented verdict `not_searched` exists to
   // refuse. `outcome.wallExhausted` carries whether the run actually spent
   // its budget getting here rather than bailing instantly.
-  if (outcome.status === "UNKNOWN") return greedy("not_searched", outcome.wallExhausted);
+  if (outcome.status === "UNKNOWN")
+    return greedy("not_searched", outcome.wallExhausted, "no_verdict");
 
   // The pins are the only thing that can make this request's model unsat:
   // without one the empty board is always a legal answer (the same reasoning
@@ -1659,6 +1729,25 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     lnsWindowRlimits: [],
   };
 }
+
+/**
+ * TEST-ONLY alias for `solveBuild`. NOT for production use: calling it
+ * directly skips both guards `buildSchedule` puts in front of it — the
+ * `MAX_SOLVER_QUEUE` cap and the R22 size gate (`canSolveWithin`) — which
+ * exist to protect z3's WASM heap and the request budget.
+ *
+ * It exists because `canSolveWithin` opens with the IDENTICAL
+ * `grid.overCap || grid.slots.length === 0` test `solveBuild`'s own
+ * `lattice_unusable` exit makes (same `config`, same `existing`, same pure
+ * `buildGrid`), and runs first on every call `buildSchedule` admits. So
+ * whenever that test would be true here, `canSolveWithin` has ALREADY
+ * returned `false` and reported `too_big` — this function's matching branch
+ * cannot fire from any input reachable through `buildSchedule` (see
+ * `NotSearchedReason`'s doc comment, and the pair of tests in
+ * `build-rest-lattice.test.ts` that pins both halves: `too_big` through
+ * `buildSchedule` for a real over-cap board, `lattice_unusable` here).
+ */
+export const solveBuildForTests = solveBuild;
 
 /**
  * THE INVARIANT: THE SOLVER MUST NEVER BE UNABLE TO EXPRESS ITS OWN INCUMBENT.

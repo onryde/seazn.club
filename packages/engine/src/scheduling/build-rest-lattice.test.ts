@@ -38,7 +38,7 @@
 // solver unable to search, and the fix there is to say so
 // (`status: "not_searched"`) rather than to claim a proof.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSchedule, seedPinsOf } from "./build.ts";
+import { buildSchedule, seedPinsOf, solveBuildForTests } from "./build.ts";
 import { buildGrid } from "./build-grid.ts";
 // `gridStepMinutes` moved out of `build-grid.ts` into its own module on main
 // while this branch was in flight; the rebase conflict here was that move
@@ -355,6 +355,38 @@ describe("a board the lattice cannot hold is never called optimal", () => {
     expect(out.status).toBe("not_searched");
     expect(out.engine).toBe("greedy");
     expect(out.assignments).toHaveLength(1);
+    // `too_big`, NOT `lattice_unusable` — measured, not assumed. `canSolveWithin`
+    // (the R22 gate `buildSchedule` calls before `solveBuild` ever runs) opens
+    // with this SAME `grid.overCap || grid.slots.length === 0` test on the SAME
+    // (config, existing), so it already answers `false` here and reports
+    // `too_big` before `solveBuild`'s own copy of the check is ever reached. See
+    // the `solveBuildForTests` test below for that copy, proved directly.
+    expect(out.notSearchedReason).toBe("too_big");
+  }, 120_000);
+
+  // THE SHADOWED EXIT, proved directly. `canSolveWithin` refuses every board
+  // that would trip this check before `buildSchedule` ever calls `solveBuild`
+  // (see the assertion above and `solveBuildForTests`'s doc comment) — so this
+  // is the one `not_searched` reason with no input that reaches it through the
+  // public `buildSchedule` entry point. Calling the un-gated alias directly is
+  // what makes it observable at all.
+  it("solveBuild's own lattice_unusable exit reports itself correctly, once reached", async () => {
+    const config: Cfg = {
+      startAt: T0,
+      matchMinutes: 30,
+      gapMinutes: 10,
+      courts: ["C1"],
+      perEntrantMinRest: 35,
+      tz: "Europe/London",
+      window: { from: T0, to: T0 + 200 * 24 * 60 * MIN },
+    };
+    const fixtures: SchedulableFixture[] = [{ id: "a", home: "E1", away: "E2", roundNo: 1 }];
+    expect(buildGrid({ config }).overCap).toBe(true);
+    const out = await solveBuildForTests({ fixtures, config });
+    expect(out.status).toBe("not_searched");
+    expect(out.notSearchedReason).toBe("lattice_unusable");
+    expect(out.engine).toBe("greedy");
+    expect(out.assignments).toHaveLength(1);
   }, 120_000);
 
   /**
@@ -392,16 +424,71 @@ describe("a board the lattice cannot hold is never called optimal", () => {
     const out = await buildSchedule({ fixtures, config });
     expect({
       status: out.status,
+      reason: out.notSearchedReason,
       engine: out.engine,
       expired: out.budgetExpired,
       tiers: out.tiersCompleted,
       spent: out.rlimitSpent,
     }).toEqual({
       status: "not_searched",
+      reason: "window_empty",
       engine: "greedy",
       expired: false,
       tiers: 0,
       spent: 0,
     });
+  }, 120_000);
+});
+
+// --- per-court asymmetry (Obligation 5, gap C2) -----------------------------
+
+describe("a board split across mismatched court grids is refused, not mis-scheduled", () => {
+  /**
+   * `Blackout.court?` scoped to ONE of several configured courts is ordinary
+   * org data (a single-court closure for maintenance, a court double-booked
+   * outside this system), not a synthetic edge case — reachable from the
+   * ordinary settings UI. It leaves that court's set of offered start times a
+   * strict subset of its neighbours', so `everyCourtSharesGrid` refuses the
+   * board rather than send placement a lattice it cannot express per-court
+   * (`schema.py`'s `_validate_court_slot_coverage`).
+   *
+   * Neither the over-cap gate nor the window check fires first here: the
+   * lattice is small and well within `MAX_SLOTS`, and the window comfortably
+   * contains the run's own start — this exit is reached on its own, not
+   * shadowed the way `lattice_unusable` is above.
+   */
+  it("reports not_searched with per_court_grid when one court is blacked out and its siblings are not", async () => {
+    const config: Cfg = {
+      startAt: T0,
+      matchMinutes: 30,
+      gapMinutes: 10,
+      courts: ["C1", "C2"],
+      perEntrantMinRest: 0,
+      tz: "Europe/London",
+      window: { from: T0, to: T0 + 180 * MIN },
+      // C1 alone loses its middle hour; C2's slots are untouched, so the two
+      // courts' start-time sets differ in both size and membership.
+      blackouts: [{ court: "C1", from: T0 + 60 * MIN, to: T0 + 120 * MIN }],
+    };
+    const fixtures: SchedulableFixture[] = [{ id: "a", home: "E1", away: "E2", roundNo: 1 }];
+
+    // Pinned preconditions: neither court is starved, and the two sets really
+    // do disagree — without this, a passing result below could just as easily
+    // mean the blackout emptied C1 outright (a DIFFERENT exit) or matched C2 by
+    // coincidence.
+    const grid = buildGrid({ config });
+    expect(grid.overCap).toBe(false);
+    const c1Starts = new Set((grid.byCourt.get("C1") ?? []).map((i) => grid.slots[i]!.startAt));
+    const c2Starts = new Set((grid.byCourt.get("C2") ?? []).map((i) => grid.slots[i]!.startAt));
+    expect(c1Starts.size).toBeGreaterThan(0);
+    expect(c2Starts.size).toBeGreaterThan(c1Starts.size);
+
+    const out = await buildSchedule({ fixtures, config });
+    expect(out.status).toBe("not_searched");
+    expect(out.notSearchedReason).toBe("per_court_grid");
+    expect(out.engine).toBe("greedy");
+    // The greedy floor still ships — this status is a refusal to OPTIMISE, not
+    // a refusal to schedule.
+    expect(out.assignments).toHaveLength(1);
   }, 120_000);
 });

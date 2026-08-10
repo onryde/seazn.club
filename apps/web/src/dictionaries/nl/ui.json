@@ -3226,7 +3226,7 @@
   "board.result.alreadyOptimal": "Dit was al de beste indeling — er viel niets meer te verbeteren.",
   "board.result.busy": "Snel ingepland — de optimalisatie was bezet. Probeer het opnieuw voor een beter schema.",
   "board.result.unavailable": "Snel ingepland — de optimalisatie was niet beschikbaar. Het schema is geldig, alleen niet geoptimaliseerd.",
-  "board.result.notSearched": "Snel ingepland — de optimalisatie kon dit schema niet doorzoeken, dus niets hier beweert dat er een beter schema bestaat. De wedstrijd-, pauze- en rusttijden die je hebt ingesteld sluiten niet aan op een gedeelde stap; stem ze af en start opnieuw.",
+  "board.result.notSearched": "Snel ingepland — de optimalisatie kon dit schema niet doorzoeken, dus niets hier beweert dat er een beter schema bestaat. Deze versie kan niet aangeven welke van de mogelijke oorzaken dit veroorzaakte; voer het na de volgende update opnieuw uit, dan wordt de oorzaak wel genoemd.",
   "board.result.verifierRejected": "Ingepland met de standaardplanner. Het schema is geldig.",
   "board.result.infeasibleAllPlaced": "Niet elke vastgezette wedstrijd kon worden gerespecteerd, maar alles heeft toch een plek gekregen.",
   "board.result.partial.one": "{placed} van {total} ingepland — één wedstrijd kon niet worden geplaatst.",
@@ -3315,5 +3315,11 @@
   "constraints.waitReport.colLongestWait": "Langste wachttijd",
   "constraints.waitReport.colFirstToLast": "Eerste tot laatste",
   "constraints.waitReport.footer": "Gesorteerd van slechtst naar best. Verklein de gaten door het bord opnieuw te schikken, of verhoog de minimale rust en voer opnieuw uit.",
-  "constraints.error.failed": "Mislukt"
+  "constraints.error.failed": "Mislukt",
+  "board.result.notSearched.tooBig": "Snel ingepland — de optimalisatie kon dit schema niet doorzoeken, dus niets hier beweert dat er een beter schema bestaat. Dit schema heeft meer wedstrijden en mogelijke tijden dan de optimalisatie binnen de beschikbare tijd kan doorzoeken; minder wedstrijden tegelijk inplannen, of de competitieperiode verkorten, brengt het weer binnen bereik.",
+  "board.result.notSearched.windowEmpty": "Snel ingepland — de optimalisatie kon dit schema niet doorzoeken, dus niets hier beweert dat er een beter schema bestaat. De periode van je competitie eindigt voordat deze run zelfs maar kan beginnen, dus er blijft geen tijd over om te doorzoeken; verzet de einddatum naar later en start opnieuw.",
+  "board.result.notSearched.latticeUnusable": "Snel ingepland — de optimalisatie kon dit schema niet doorzoeken, dus niets hier beweert dat er een beter schema bestaat. De periode, sessietijden en banen die je hebt ingesteld leveren meer mogelijke starttijden op dan de optimalisatie in één keer aankan (of helemaal geen); maak ze kleiner om weer binnen bereik te komen.",
+  "board.result.notSearched.perCourtGrid": "Snel ingepland — de optimalisatie kon dit schema niet doorzoeken, dus niets hier beweert dat er een beter schema bestaat. Een blackout die maar voor één van je banen geldt, is wat dit hier tegenhoudt; verwijder die blackout, of pas hem toe op elke baan, om het te herstellen.",
+  "board.result.notSearched.outOfTime": "Snel ingepland — de optimalisatie kon dit schema niet doorzoeken, dus niets hier beweert dat er een beter schema bestaat. De beschikbare tijd was al op aan het uitwerken van dit schema voordat de optimalisatie er zelfs maar naar gevraagd kon worden; opnieuw uitvoeren, of minder wedstrijden tegelijk inplannen, geeft het een kans om te starten.",
+  "board.result.notSearched.noVerdict": "Snel ingepland — de optimalisatie kon dit schema niet doorzoeken, dus niets hier beweert dat er een beter schema bestaat. De optimalisatie is deze keer geraadpleegd en kwam terug zonder enig oordeel; opnieuw uitvoeren is de beste volgende stap."
 }
