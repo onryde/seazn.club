@@ -62,6 +62,15 @@ export interface DisciplineCard {
   // this, a bench minor accumulates against whoever happens to sit in
   // `personId`, which is the wrong player.
   servedBy?: string;
+  // S4 (#428) — the AWARDED length of a timed sanction, in minutes. W4 ruled
+  // this out of that pass's scope; a duration-keyed accumulation rule ("any
+  // 10-minute misconduct counts double") needs it. PLUMBING, not new design:
+  // `PeriodSuspensionStart.minutes` and `FootballSinBinStart.minutes` (the
+  // W4a §5.2 duration model) already carry this value and are already read by
+  // each sport's own fold (`suspensions.ts`'s `SuspensionDetail.minutes`,
+  // football's sin-bin expiry) — `extractCards()` only has to copy it across,
+  // same optional/absent-when-uncoarse shape as `reason`.
+  minutes?: number;
 }
 
 // SPEC-1 — the optional sport-module discipline descriptor: which colours the

@@ -1382,6 +1382,11 @@ export function makePeriodModule(
                 // minor accumulates against the player who actually sits.
                 ...(card.reason === undefined ? {} : { reason: card.reason }),
                 ...(card.servedBy === undefined ? {} : { servedBy: card.servedBy }),
+                // S4 (#428) — the duration the official actually awarded
+                // (`SuspensionDetail.minutes`'s own doc: "an FIH yellow is a
+                // MINIMUM of 5 — the umpire may give 10"), same optional shape
+                // as reason/servedBy above.
+                ...(card.minutes === undefined ? {} : { minutes: card.minutes }),
               });
             }
             return cards;

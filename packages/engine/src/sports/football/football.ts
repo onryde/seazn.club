@@ -1976,6 +1976,10 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
             color: "sin_bin",
             eventId: ev.id,
             ...(bin.reason === undefined ? {} : { reason: bin.reason }),
+            // S4 (#428) — the length the scorer actually recorded (else the
+            // sin bin runs on `cfg.sinBinMinutes`, which extractCards has no
+            // cfg to read); absent when the scorer left it to the default.
+            ...(bin.minutes === undefined ? {} : { minutes: bin.minutes }),
           });
           continue;
         }

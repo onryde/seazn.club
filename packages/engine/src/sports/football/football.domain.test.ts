@@ -555,6 +555,8 @@ describe("event union disambiguation", () => {
           color: "sin_bin",
           eventId: "e-0",
           reason: "dissent",
+          // S4 (#428) — DisciplineCard.minutes now carries the recorded length.
+          minutes: 10,
         },
       ]);
     });
