@@ -80,18 +80,21 @@ describe("DivisionBuilder — scheduling step date/time controls", () => {
   // carried two hand-rolled native controls (`<input type="datetime-local">`
   // and `<input type="date">`, each in its own `<label className="block">`).
   // They now go through the shared `DateTimeField`, so all six date/time call
-  // sites in the app share one control. The swap is markup-only: same kinds,
-  // same labels, same hint, same `min` derivation.
+  // sites in the app share one control.
   //
-  // The observable fingerprint is the class. Hand-rolled was `input w-full`;
-  // DateTimeField renders `input w-full text-base` (see its own suite for why
-  // `text-base` and not `text-base sm:text-sm`). apps/web has no jsdom, so the
-  // rendered markup is the only place a shared child is visible from here.
-  const inputTag = (html: string, type: string): string => {
-    const found = new RegExp(`<input[^>]*type="${type}"[^>]*>`).exec(html);
-    if (!found) throw new Error(`no <input type="${type}"> in the wizard markup`);
-    return found[0];
-  };
+  // Rewritten for the quarter-hour picker
+  // (docs/superpowers/specs/2026-08-10-quarter-hour-time-select-design.md):
+  // Chrome's clock POPUP ignores `step` (measured, Chrome 151), so
+  // `kind="datetime-local"` (the start field) is no longer one
+  // `<input type="datetime-local">` — `DateTimeSplitField` renders a date
+  // `<input>` beside a time `<select>` instead, joined back into the same
+  // string. `kind="date"` (the end field) is unchanged.
+  //
+  // The observable fingerprint is still the class. Hand-rolled was
+  // `input w-full`; DateTimeField renders `input w-full text-base` on BOTH
+  // the date input and the select (see its own suite for why `text-base` and
+  // not `text-base sm:text-sm`). apps/web has no jsdom, so the rendered
+  // markup is the only place a shared child is visible from here.
   // React escapes text nodes, so a dictionary sentence with `&` or `'` in it
   // ("Start date & time") is never a raw substring of the markup.
   const escapeHtml = (s: string): string =>
@@ -103,26 +106,47 @@ describe("DivisionBuilder — scheduling step date/time controls", () => {
       .replace(/'/g, "&#x27;");
   const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+  /** The `<input type="date">` immediately preceded by one field's own
+   *  visible label — disambiguates the start field's date HALF from the end
+   *  field's own (bare) date input, since both are now `type="date"`. */
+  const dateInputAfterLabel = (html: string, labelText: string): string => {
+    const found = new RegExp(`<span class="label">${escapeRe(labelText)}</span><input[^>]*type="date"[^>]*>`).exec(
+      html,
+    );
+    if (!found) throw new Error(`no <input type="date"> labelled "${labelText}" in the wizard markup`);
+    return found[0];
+  };
+
   it("renders schedule start and end through the shared DateTimeField", () => {
     const html = render(true);
-    expect(inputTag(html, "datetime-local")).toContain('class="input w-full text-base"');
-    expect(inputTag(html, "date")).toContain('class="input w-full text-base"');
-    // Nothing the organiser reads changes: both labels still render, each as
-    // the shared component's `<span class="label">` immediately before its
-    // control, and the end-date hint still follows the end control.
-    for (const [key, type] of [
-      ["boardset.startAt", "datetime-local"],
-      ["boardset.endAt", "date"],
-    ] as const) {
-      expect(html).toMatch(
-        new RegExp(
-          `<span class="label">${escapeRe(escapeHtml(msg(key)))}</span><input[^>]*type="${type}"`,
-        ),
-      );
+    const startLabel = escapeHtml(msg("boardset.startAt"));
+    const endLabel = escapeHtml(msg("boardset.endAt"));
+    const timeLabel = escapeRe(escapeHtml(msg("datetime.timeLabel")));
+
+    // The visible label immediately precedes each date input — pairing
+    // intact for both the start field's date half and the end field.
+    expect(html).toMatch(new RegExp(`<span class="label">${escapeRe(startLabel)}</span><input[^>]*type="date"`));
+    expect(html).toMatch(new RegExp(`<span class="label">${escapeRe(endLabel)}</span><input[^>]*type="date"`));
+    // The start field's HIDDEN label precedes its time select instead — same
+    // pairing rule, for the half that names itself "Time" beside it.
+    expect(html).toMatch(
+      new RegExp(`<span class="label sr-only">${escapeRe(startLabel)}</span><select[^>]*aria-label="${timeLabel}"`),
+    );
+
+    // Exactly two date inputs (start's date half + end) and one time select
+    // (start's time half): end stays a bare date, never gains a pair.
+    const dateTags = html.match(/<input[^>]*type="date"[^>]*>/g) ?? [];
+    const timeSelects = html.match(new RegExp(`<select[^>]*aria-label="${timeLabel}"[^>]*>`, "g")) ?? [];
+    expect(dateTags).toHaveLength(2);
+    expect(timeSelects).toHaveLength(1);
+    for (const tag of [...dateTags, ...timeSelects]) {
+      expect(tag).toContain('class="input w-full text-base"');
     }
+
+    // The end-date hint still follows the END field's date input specifically.
     expect(html).toMatch(
       new RegExp(
-        `<input[^>]*type="date"[^>]*>.*${escapeRe(escapeHtml(msg("wizard.endDateHint")))}`,
+        `<span class="label">${escapeRe(endLabel)}</span><input[^>]*type="date"[^>]*>.*${escapeRe(escapeHtml(msg("wizard.endDateHint")))}`,
         "s",
       ),
     );
@@ -132,7 +156,10 @@ describe("DivisionBuilder — scheduling step date/time controls", () => {
     // `min` is derived from the start value and handed to DateTimeField as a
     // prop; an always-present `min=""` would make every date unselectable.
     // (DateTimeField's own suite red-proves that it forwards a set `min`.)
-    expect(inputTag(render(true), "date")).not.toContain("min=");
+    // Targeted at the END field specifically — the start field's own date
+    // half is never given a `min` at all, which would pass vacuously.
+    const html = render(true);
+    expect(dateInputAfterLabel(html, escapeHtml(msg("boardset.endAt")))).not.toContain("min=");
   });
 });
 

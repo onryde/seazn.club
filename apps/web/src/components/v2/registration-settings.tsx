@@ -12,7 +12,8 @@ import { Tip } from "@/components/ui/tip";
 import type { Pulse } from "@/lib/registration-derive";
 import type { FormField, Settings } from "./registrations-panel";
 import { useMsg } from "@/components/i18n/dict-provider";
-import { TIME_STEP_SECONDS } from "./shared/datetime-field";
+import { DateTimeField } from "./shared/datetime-field";
+import { TIME_STEP_SECONDS } from "./shared/time-options";
 
 function toLocalInput(iso: string | null): string {
   if (!iso) return "";
@@ -123,29 +124,32 @@ export function RegistrationSettings({
           </select>
         </label>
 
-        <div className="grid grid-cols-2 gap-2">
-          <label className="block text-xs text-slate-500">
-            {msg("reg.settings.opens")}
-            <input
-              type="datetime-local"
-              disabled={!canEdit}
-              step={TIME_STEP_SECONDS}
-              value={toLocalInput(settings.opens_at)}
-              onChange={(e) => set({ opens_at: fromLocalInput(e.target.value) })}
-              className="input mt-1 w-full"
-            />
-          </label>
-          <label className="block text-xs text-slate-500">
-            {msg("reg.settings.closes")}
-            <input
-              type="datetime-local"
-              disabled={!canEdit}
-              step={TIME_STEP_SECONDS}
-              value={toLocalInput(settings.closes_at)}
-              onChange={(e) => set({ closes_at: fromLocalInput(e.target.value) })}
-              className="input mt-1 w-full"
-            />
-          </label>
+        {/* One per row, not two. This pair sits in the registrations sidebar,
+            which `registrations-panel` pins to 340px at lg — about 300px of
+            usable width. Each of these is now a DATE INPUT PLUS A TIME SELECT
+            rather than the single `datetime-local` that used to fit here, so
+            2-up gave each half ~82px and ~55px: measured, and unusable. The
+            split field's own stacking rule cannot save it — that is a viewport
+            media query, and the viewport is wide while this column is not. */}
+        <div className="grid grid-cols-1 gap-3">
+          <DateTimeField
+            kind="datetime-local"
+            label={msg("reg.settings.opens")}
+            disabled={!canEdit}
+            step={TIME_STEP_SECONDS}
+            extraOptions={["23:59"]}
+            value={toLocalInput(settings.opens_at)}
+            onChange={(v) => set({ opens_at: fromLocalInput(v) })}
+          />
+          <DateTimeField
+            kind="datetime-local"
+            label={msg("reg.settings.closes")}
+            disabled={!canEdit}
+            step={TIME_STEP_SECONDS}
+            extraOptions={["23:59"]}
+            value={toLocalInput(settings.closes_at)}
+            onChange={(v) => set({ closes_at: fromLocalInput(v) })}
+          />
         </div>
       </Group>
 
@@ -319,22 +323,22 @@ export function RegistrationSettings({
         )}
 
         {paidConfigured && (
-          <label className="block text-xs text-slate-500">
-            {msg("reg.settings.refundLock")}
-            <input
-              type="datetime-local"
+          <div>
+            <DateTimeField
+              kind="datetime-local"
+              label={msg("reg.settings.refundLock")}
               disabled={!canEdit}
               step={TIME_STEP_SECONDS}
+              extraOptions={["23:59"]}
               value={toLocalInput(settings.refund_lock_at)}
-              onChange={(e) => set({ refund_lock_at: fromLocalInput(e.target.value) })}
-              className="input mt-1 w-full"
+              onChange={(v) => set({ refund_lock_at: fromLocalInput(v) })}
             />
             <span className="mt-1 block text-[11px] text-slate-400">
               {settings.refund_lock_at
                 ? msg("reg.settings.refundLockSet")
                 : msg("reg.settings.refundLockNone")}
             </span>
-          </label>
+          </div>
         )}
       </Group>
 

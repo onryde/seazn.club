@@ -1,4 +1,4 @@
-import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 // Type-only, so nothing from the app is pulled into the Playwright runtime —
 // the same import event-pass.spec.ts already makes. Naming the rung union here
 // rather than re-declaring it is what keeps a new rung from needing a sixth
@@ -1000,4 +1000,33 @@ export async function seedScoredDivision(
   }
   void entrants;
   return { competitionId, divisionId, stageId };
+}
+
+/**
+ * Fill a `kind="datetime-local"` `DateTimeField` pair — a native
+ * `<input type="date">` beside a native `<select>` of times (quarter hours,
+ * or a division's board slots), joined by the component into the
+ * "YYYY-MM-DDTHH:MM" string every caller already passes/receives. See
+ * docs/superpowers/specs/2026-08-10-quarter-hour-time-select-design.md:
+ * Chrome's clock POPUP ignores `step` even though its own validity engine
+ * honours it, so `fill()` on a bare `input[type="datetime-local"]` no
+ * longer has an element to land on.
+ *
+ * `scope` must resolve to exactly one such pair — the select's accessible
+ * name is always "Time" (`datetime.timeLabel`, all 4 dictionaries;
+ * `aria-label` wins over the pair's own — hidden — visible label), so two
+ * pairs in one scope (e.g. two datetime-local fields on the same page) are
+ * ambiguous here and must be driven directly instead.
+ */
+export async function setDateTime(scope: Page | Locator, value: string): Promise<void> {
+  const [date, time] = value.split("T");
+  if (!date || !time) {
+    throw new Error(`setDateTime: expected "YYYY-MM-DDTHH:MM", got ${JSON.stringify(value)}`);
+  }
+  await scope.locator('input[type="date"]').first().fill(date);
+  // `exact` is load-bearing: getByLabel substring-matches, and the split
+  // control's own date half is labelled "Start date & time" on several
+  // surfaces — so a bare "Time" resolves to both halves (plus any radio whose
+  // label happens to contain the word) and throws a strict-mode violation.
+  await scope.getByLabel("Time", { exact: true }).selectOption(time);
 }

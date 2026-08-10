@@ -7,6 +7,7 @@ import {
   activeOrg,
   setOrgPlanBySql,
   expectNoHorizontalScroll,
+  setDateTime,
 } from "./helpers";
 
 // PROMPT-33 acceptance (v3/04 §2 + v3/11 gaps 10/11/15): five-division board
@@ -338,7 +339,11 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     const move = async (p: Page, when: string) => {
       await p.locator("[data-fixture-id] button[aria-pressed]").first().click();
       const dialog = p.getByRole("dialog", { name: /^Move / });
-      await dialog.locator("input[type=datetime-local]").fill(when);
+      // MovePanel's "When" is a native date input + time <select> now, not
+      // `input[type=datetime-local]` — Chrome's clock popup ignored `step`
+      // (quarter-hour-time-select design doc). The dialog holds exactly one
+      // such pair, so setDateTime's scoping is unambiguous.
+      await setDateTime(dialog, when);
       await dialog.getByRole("button", { name: "Move", exact: true }).click();
     };
     // Wait for the move's PATCH — whatever its status — then assert on it, so

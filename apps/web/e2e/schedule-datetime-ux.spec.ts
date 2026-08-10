@@ -531,18 +531,25 @@ test.describe("minimum-rest floor note explains which control is winning (case d
 });
 
 // ---------------------------------------------------------------------------
-// (e) Quarter-hour stepping. `DateTimeField` sets `step` for the two CLOCK
-// kinds and deliberately not for `kind="date"`, because on a date input the
-// same attribute counts DAYS — 900 there means one selectable date every two
-// and a half years. The unit suite pins the rendered prop; only a real browser
-// on the real page proves the attribute survives hydration and lands on the
-// controls the organiser actually touches.
+// (e) Quarter-hour stepping. `DateTimeField` used to set `step={900}` on the
+// two CLOCK kinds and deliberately not on `kind="date"`, because on a date
+// input the same attribute counts DAYS — 900 there means one selectable date
+// every two and a half years. That attribute is GONE now
+// (2026-08-10-quarter-hour-time-select-design.md): Chrome's picker *popup*
+// ignored it even though its validity engine honoured it (measured live,
+// Chrome 151), so quarter-hour granularity existed for the keyboard and not
+// the mouse. The fix owns the option list instead — `kind="time"` renders a
+// native `<select>` built from `timeOptions()` (time-options.ts, every rule
+// lives there) and `kind="datetime-local"` pairs a native date input with
+// that same select. `input[type="time"|"datetime-local"]` no longer exist on
+// this panel at all, so this case is rewritten against the new contract
+// rather than patched.
 //
-// Written as an invariant over every clock input ON the page rather than a
+// Written as an invariant over every clock control ON the page rather than a
 // list of known ones, so a field added later is covered without editing this.
-// SELECTORS ARE STRUCTURAL (input type), NEVER COPY (#465).
+// SELECTORS ARE STRUCTURAL (element type), NEVER COPY (#465).
 // ---------------------------------------------------------------------------
-test("board settings offers quarter-hour times, and leaves the end DATE alone (case e)", async ({
+test("board settings offers quarter-hour times through a select, and leaves the end DATE alone (case e)", async ({
   page,
   request,
 }) => {
@@ -550,23 +557,118 @@ test("board settings offers quarter-hour times, and leaves the end DATE alone (c
   await page.goto(await divisionPath(request, divisionId, "/schedule?tab=settings"));
   await expect(page.locator("#boardset-rest")).toBeVisible({ timeout: 20_000 });
 
-  const clocks = page.locator('input[type="time"], input[type="datetime-local"]');
-  // startAt + the play-hours pair. A zero count would make every assertion
-  // below vacuously true, which is how a broken selector reads as a pass.
-  expect(await clocks.count()).toBeGreaterThanOrEqual(3);
-  for (let i = 0; i < (await clocks.count()); i += 1) {
-    expect(await clocks.nth(i).getAttribute("step")).toBe("900");
+  // startAt's time half + play-from + play-until — the only <select>
+  // elements this tab renders. A zero count would make every assertion below
+  // vacuously true, which is how a broken selector reads as a pass; assert
+  // the count before asserting the contents.
+  const timeSelects = page.locator("select");
+  const selectCount = await timeSelects.count();
+  expect(selectCount).toBeGreaterThanOrEqual(3);
+
+  for (let i = 0; i < selectCount; i += 1) {
+    const optionValues = await timeSelects
+      .nth(i)
+      .locator("option")
+      .evaluateAll((opts) => opts.map((o) => (o as HTMLOptionElement).value));
+    // The leading "--:--" is the empty "no time" option every select carries
+    // (how a datetime-local pair clears one half); every other entry must be
+    // one of the 96 quarter hours and nothing else — a single stray minute
+    // off the :00/:15/:30/:45 grid is exactly the "the popup let the mouse
+    // pick :34" bug this change exists to close.
+    const times = optionValues.filter((v) => v !== "");
+    expect(times.length, `select #${i} offered ${times.length} times, want 96`).toBe(96);
+    for (const t of times) {
+      expect(t).toMatch(/^([01]\d|2[0-3]):(00|15|30|45)$/);
+    }
   }
 
-  // THE regression half, and the reason this is not one blanket default.
+  // THE regression half, and the reason this is not one blanket default: a
+  // date input's `step` counts DAYS, so it must stay absent.
   const dates = page.locator('input[type="date"]');
-  expect(await dates.count()).toBeGreaterThanOrEqual(1);
-  for (let i = 0; i < (await dates.count()); i += 1) {
+  const dateCount = await dates.count();
+  expect(dateCount).toBeGreaterThanOrEqual(1);
+  for (let i = 0; i < dateCount; i += 1) {
     expect(await dates.nth(i).getAttribute("step")).toBeNull();
   }
 
-  // The organiser can still reach a quarter-hour value through the control.
-  const startAt = page.locator('input[type="datetime-local"]').first();
-  await startAt.fill("2026-10-12T09:15");
-  await expect(startAt).toHaveValue("2026-10-12T09:15");
+  // The organiser can still reach a quarter-hour value through the control —
+  // "startAt" is now a date input plus this select, joined into the one
+  // datetime-local string every caller already expects. Both are first in
+  // DOM order (rendered before the end-date field and the play-hours pair).
+  await dates.first().fill("2026-10-12");
+  await timeSelects.first().selectOption("09:15");
+  await expect(dates.first()).toHaveValue("2026-10-12");
+  await expect(timeSelects.first()).toHaveValue("09:15");
+});
+
+// ---------------------------------------------------------------------------
+// (f) A board off the quarter-hour grid offers ITS OWN slots — not quarter
+// hours. This is the case the whole change exists for (design doc "Why
+// fixture-level fields differ"): Match length 40 / Gap 0 mints
+// 09:00, 09:40, 10:20 ... on every auto-schedule run — fresh data, not
+// legacy — and a quarter-hour list cannot express 09:40 at all, so
+// hand-nudging a fixture through a quarter-hour-only control would move it
+// onto :45, off the grid every other match on the board sits on.
+//
+// `stages-panel.tsx` fetches the division's schedule settings once and feeds
+// `boardSlotTimes()` (time-options.ts) to the fixture "When" field. The
+// settings tab (case e, above) is deliberately NOT fed the same list — it
+// defines the grid rather than living on it.
+//
+// SELECTORS ARE STRUCTURAL/ROLE, NEVER COPY (#465). "Edit time" is the one
+// non-structural hook below, but it is a static, non-interpolated label this
+// surface already carries — the same way a sibling spec keys off it
+// (division-schedule.spec.ts:93) — not the fragile interpolated-copy pattern
+// #465 bans.
+// ---------------------------------------------------------------------------
+test("a 40/0 board offers 09:40 through the fixture When control, not quarter hours (case f)", async ({
+  page,
+  request,
+}) => {
+  const { divisionId } = await seedDivision(request, "BoardSlotWhen");
+  const { fixtureIds } = await createStageAndGenerate(request, divisionId);
+  expect(fixtureIds.length).toBe(6);
+
+  const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
+    tz: "UTC",
+    config: {
+      startAt: new Date(Date.UTC(2026, 9, 19, 9, 0)).toISOString(),
+      matchMinutes: 40,
+      gapMinutes: 0,
+      courts: ["Court A"],
+    },
+  });
+  expect(settings.status).toBe(200);
+
+  // Pre-place fixture 0 so its row already reads "Edit time" — a fixture
+  // with no scheduled_at instead reads "Schedule", which opens the identical
+  // form but is a less specific, more collision-prone accessible name to key
+  // a locator off.
+  const placed = await apiJson(request, `/api/v1/fixtures/${fixtureIds[0]!}`, "PATCH", {
+    scheduled_at: new Date(Date.UTC(2026, 9, 19, 9, 0)).toISOString(),
+    court_label: "Court A",
+  });
+  expect(placed.status).toBe(200);
+
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await page.getByRole("button", { name: "Edit time", exact: true }).first().click();
+
+  // The fixture "When" field is `kind="datetime-local"`, so its time half
+  // carries the distinct `aria-label="Time"` `DateTimeSplitField` gives it
+  // (see datetime-split-field.tsx) — the date half keeps "When" as its name.
+  const whenSelect = page.getByRole("combobox", { name: "Time" });
+  await expect(whenSelect).toBeVisible({ timeout: 20_000 });
+  const optionValues = await whenSelect
+    .locator("option")
+    .evaluateAll((opts) => opts.map((o) => (o as HTMLOptionElement).value));
+  const times = optionValues.filter((v) => v !== "");
+  // A zero-length list would make every assertion below vacuously true.
+  expect(times.length).toBeGreaterThan(0);
+
+  expect(times).toContain("09:40");
+  // The discriminator against the quarter-hour fallback: 09:15 sits on the
+  // quarter-hour grid but not on this board's 40/0 stride from 09:00
+  // (09:00, 09:40, 10:20, ...), so its presence would mean this select
+  // silently fell back to quarter hours instead of using the board's slots.
+  expect(times).not.toContain("09:15");
 });

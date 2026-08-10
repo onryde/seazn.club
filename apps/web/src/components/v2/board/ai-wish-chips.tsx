@@ -12,7 +12,7 @@ import { useState } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import type { Wish } from "./wish-compile";
-import { TIME_STEP_SECONDS } from "../shared/datetime-field";
+import { DateTimeField } from "../shared/datetime-field";
 
 type Kind = Wish["kind"];
 type Edge = "before" | "after";
@@ -207,9 +207,7 @@ function WishPicker({
   return (
     <div className="space-y-2.5 rounded-lg border border-violet-100 bg-violet-50/40 p-2.5">
       {kind === "finish_by" && (
-        <Field label={msg("board.ai.wish.time")}>
-          <TimeInput value={time} onChange={setTime} />
-        </Field>
+        <DateTimeField kind="time" label={msg("board.ai.wish.time")} value={time} onChange={setTime} />
       )}
 
       {kind === "start_window" && (
@@ -234,9 +232,7 @@ function WishPicker({
               ))}
             </div>
           </Field>
-          <Field label={msg("board.ai.wish.time")}>
-            <TimeInput value={time} onChange={setTime} />
-          </Field>
+          <DateTimeField kind="time" label={msg("board.ai.wish.time")} value={time} onChange={setTime} />
         </>
       )}
 
@@ -292,18 +288,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="mb-0.5 block text-[11px] font-medium text-slate-500">{label}</span>
       {children}
     </label>
-  );
-}
-
-function TimeInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  return (
-    <input
-      type="time"
-      className="input"
-      step={TIME_STEP_SECONDS}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-    />
   );
 }
 

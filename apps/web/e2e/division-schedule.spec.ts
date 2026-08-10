@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { TAG, apiJson, activeOrg } from "./helpers";
+import { TAG, apiJson, activeOrg, setDateTime } from "./helpers";
 
 // PROMPT-33 item 4 (v3/04 §3): the division fixtures page groups rounds with
 // date ranges, renders times in the COMPETITION timezone (browser pinned to
@@ -91,7 +91,11 @@ test("rounds group with dates, times honour the competition tz, reschedule undoe
     await apiJson<{ scheduled_at: string }>(request, `/api/v1/fixtures/${ids[0]!}`)
   ).data!.scheduled_at;
   await page.getByRole("button", { name: "Edit time" }).first().click();
-  await page.locator("input[type=datetime-local]").first().fill("2026-09-16T15:00");
+  // The inline "When" field is a native date input + time <select> now, not
+  // `input[type=datetime-local]` — Chrome's clock popup ignored `step`
+  // (quarter-hour-time-select design doc). Only one row is ever "editing" at
+  // once, so exactly one such pair is on the page here.
+  await setDateTime(page, "2026-09-16T15:00");
   await page.getByRole("button", { name: "Save", exact: true }).first().click();
   await expect(page.getByRole("button", { name: "Undo" })).toBeVisible({ timeout: 15_000 });
   await page.getByRole("button", { name: "Undo" }).click();

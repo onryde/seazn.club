@@ -1450,6 +1450,7 @@
   "schedule.field.stageName": "Stage name",
   "schedule.field.format": "Format",
   "schedule.field.qualifyFrom": "Qualify from table",
+  "datetime.timeLabel": "Time",
   "schedule.topN": "Top {n}",
   "schedule.saving": "Saving…",
   "schedule.save": "Save",

@@ -9655,32 +9655,50 @@ async function schedRegV3Suite(
     board.status === 200 && board.body.includes("Board density"),
   );
 
-  // Quarter-hour stepping. Every CLOCK control the organiser touches offers
-  // 9:00 / 9:15 / 9:30 …; the end-DATE field beside them must NOT carry the
-  // same attribute, because on `<input type="date">` `step` counts DAYS and
-  // 900 there means one selectable date every two and a half years.
+  // Quarter-hour granularity. Chrome's date/time PICKER POPUP ignores `step`
+  // (measured, Chrome 151 — the dropdown renders a full 0-59 minute column
+  // regardless), so `step="900"` alone never bounded what a click could
+  // pick, only the keyboard. The fix owns the option list instead: every
+  // clock control on this tab is now a native <select> built from the
+  // quarter-hour grid (`time-options.ts`), and no <input type="time"> or
+  // type="datetime-local"> renders anywhere on the page any more — even the
+  // start field, which used to be one `datetime-local` input, is now a date
+  // <input> beside that same select. The end-DATE field stays a bare
+  // <input type="date"> and is unaffected: `step` there counts DAYS, and 900
+  // would mean one selectable date every two and a half years, which is why
+  // it must carry none.
   //
   // Asserted over the real server-rendered HTML because nothing in the app
-  // ever reads `step` back — it is exactly the kind of attribute a refactor
-  // drops with every unit test still green. The length floors are the
-  // vacuity guard: `[].every(…)` is true, so a selector that stops matching
-  // would otherwise report this as a pass.
+  // ever reads this back — it is exactly the kind of thing a refactor drops
+  // with every unit test still green. The length floors are the vacuity
+  // guard: `[].every(…)` is true, so a selector that stops matching would
+  // otherwise report this as a pass.
   const settingsHtml = await html(
     admin,
     `/o/${proOrgSlug}/c/${comp.slug}/d/${div.slug}/schedule?tab=settings`,
   );
   const inputTags = settingsHtml.body.match(/<input\b[^>]*>/g) ?? [];
-  const clockTags = inputTags.filter((t) => /type="(?:time|datetime-local)"/.test(t));
+  const clockInputTags = inputTags.filter((t) => /type="(?:time|datetime-local)"/.test(t));
+  // Start's date half + the end date — both bare <input type="date">.
   const dateTags = inputTags.filter((t) => /type="date"/.test(t));
+  const selectBlocks = settingsHtml.body.match(/<select\b[^>]*>[\s\S]*?<\/select>/g) ?? [];
+  // Start's time half + play-from + play-until: every select offering the
+  // full quarter-hour grid, not a truncated or coarser one.
+  const clockSelects = selectBlocks.filter(
+    (s) => s.includes('value="00:00"') && s.includes('value="23:45"'),
+  );
   check(
-    "datetime: every clock control on the settings tab steps by a quarter hour",
-    settingsHtml.status === 200 &&
-      clockTags.length >= 3 &&
-      clockTags.every((t) => t.includes('step="900"')),
+    "datetime: the settings tab renders no raw clock input any more",
+    settingsHtml.status === 200 && inputTags.length >= 5 && clockInputTags.length === 0,
+  );
+  check(
+    "datetime: every clock control on the settings tab offers the quarter-hour grid",
+    clockSelects.length >= 3 &&
+      clockSelects.every((s) => s.includes('value="09:00"') && s.includes('value="09:15"')),
   );
   check(
     "datetime: the end-DATE field carries no step (there it would count days)",
-    dateTags.length >= 1 && dateTags.every((t) => !/\bstep=/.test(t)),
+    dateTags.length >= 2 && dateTags.every((t) => !/\bstep=/.test(t)),
   );
 
   // Matchday documents (v12 PR1, Task 9): timetable PDF export renders a

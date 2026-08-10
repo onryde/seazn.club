@@ -1308,6 +1308,7 @@ export type DictionaryKey =
   | "danger.keptLabel"
   | "danger.keptText"
   | "danger.suggestArchive"
+  | "datetime.timeLabel"
   | "device.askFreshLink"
   | "device.courtsideFooter"
   | "device.failed"
