@@ -20,6 +20,18 @@ dependency, not yet used under `components/v2/board/`), vitest
 `renderToStaticMarkup` or the shared `_hook-harness`, matching this
 workspace's existing convention).
 
+**Agent topology (`docs/superpowers/RULES.md`):** Scout (Sonnet, High) for
+any exploration beyond what this plan already nails down. Implementer
+(Sonnet, MAX effort — set in `.claude/agents/implementer.md` frontmatter)
+writes each task. Reviewer (Sonnet, MAX effort) reviews the diff before the
+next task starts; loop Implementer → Reviewer → gap list → Implementer →
+Reviewer until clean and every test is green. The 5 tasks below touch
+disjoint primary files (`move-panel.tsx` / `fixture-block.tsx` /
+`board-grid.tsx`+`use-disruption-signals.ts`+`globals.css`+dictionaries /
+`schedule-board.tsx`+`board-v3.spec.ts`+`smoke.ts`), so each gets its own
+Implementer → Reviewer loop — the batching rule ("several tasks touching the
+SAME files → one inline pass") doesn't trigger here.
+
 ## Global Constraints
 
 - Scope is exactly `move-panel.tsx`, `fixture-block.tsx`, `board-grid.tsx`,
@@ -32,7 +44,21 @@ workspace's existing convention).
   `npm run i18n:gen-keys` (repo root) after any `en/ui.json` change, then
   `npm run i18n:check` for parity.
 - Every task ships a test that fails against the current code and passes
-  after the change (TDD, not written after the fact).
+  after the change (TDD, not written after the fact) — this is the
+  "regression" leg of the four below.
+- **All 4 test types per task, per `docs/superpowers/RULES.md`: unit, E2E
+  (Playwright), smoke (`scripts/smoke.ts`), regression.** Below, a task that
+  has no NEW behavior beyond what a sibling task's E2E/smoke already drives
+  through the same live page says so explicitly and points at that
+  coverage — never skipped as N/A. Every UI scenario is checked in BOTH
+  shapes the redesign has to handle: single-division (no legend, no
+  division chip — the shape in the original bug screenshot) and
+  multi-division (legend renders, chips render).
+- Before every commit: `npm run openapi:gen && git status --porcelain`
+  must be empty (pre-commit OpenAPI drift check, RULES.md). This change
+  touches no API/schema, so this should be a no-op confirmation every time
+  — if it isn't, something unexpected happened and needs investigating
+  before the commit, not after.
 - UI is verified by screenshot at desktop (1280px), 320px, and 768px, with
   no horizontal page scroll at any of them (Task 5).
 - This workspace has no jsdom. A component that calls a real hook (`useMsg`,
@@ -147,10 +173,59 @@ primary action last/rightmost, matching the approved mockup.
 Run: `cd apps/web && npx vitest run src/components/v2/board/__tests__/move-panel.test.tsx`
 Expected: PASS, all 6 tests (5 existing + 1 new).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: E2E — a new test that measures the rendered width (RULES.md requires all 4 test types)**
+
+The existing e2e suite (`apps/web/e2e/board-v3.spec.ts`) already drives the
+Move dialog through a real submit ("two clients: the stale one 409s..."),
+but that proves the FUNCTIONAL path, not the visual one — Playwright can
+`fill()`/`selectOption()` a CSS-collapsed element just fine, so that test
+would have passed even with the bug. Add a new test that measures the
+rendered box, inside `test.describe.serial("board v3 (PROMPT-33)", ...)`,
+right after the `"legend filters to two divisions..."` test:
+
+```tsx
+  test("Move panel's When field renders at a real width, not collapsed (regression)", async ({
+    page,
+  }) => {
+    await page.goto(boardUrl);
+    await page.locator("[data-fixture-id] button[aria-pressed]").first().click();
+    const dialog = page.getByRole("dialog", { name: /^Move / });
+    const dateInput = dialog.locator('input[type="date"]');
+    await expect(dateInput).toBeVisible();
+    const box = await dateInput.boundingBox();
+    // The bug (00631754, fixed by this redesign) collapsed this to a
+    // near-zero box — a real native date input is never this narrow.
+    expect(box?.width ?? 0).toBeGreaterThan(80);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  });
+```
+
+Run: `cd apps/web && npx playwright test board-v3.spec.ts -g "renders at a real width"`
+Expected: on a checkout of this task's change, PASS. (Reviewer: confirm
+this test FAILS on the pre-fix `move-panel.tsx` before approving — checkout
+the parent commit, rerun, confirm the box width assertion trips, then
+return to this task's commit.)
+
+- [ ] **Step 6: Smoke — covered by Task 3's `boardRedesignSuite`, not duplicated here**
+
+`scripts/smoke.ts` has no browser and cannot measure a rendered box width —
+this bug is CSS-layout-only, outside what an HTTP-only smoke check can see.
+Task 3 adds `boardRedesignSuite`, which does assert the schedule board page
+still renders 200 after this redesign; that is this task's smoke
+touchpoint (page doesn't 500), not a duplicate-purpose new suite.
+
+- [ ] **Step 7: OpenAPI drift check**
 
 ```bash
-git add apps/web/src/components/v2/board/move-panel.tsx apps/web/src/components/v2/board/__tests__/move-panel.test.tsx
+npm run openapi:gen && git status --porcelain
+```
+
+Expected: no diff (this task touches no API/schema).
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add apps/web/src/components/v2/board/move-panel.tsx apps/web/src/components/v2/board/__tests__/move-panel.test.tsx apps/web/e2e/board-v3.spec.ts
 git commit -m "fix(board): give the Move panel's When field a definite width
 
 The quarter-hour datetime split field (00631754) collapsed to a near-empty
@@ -425,10 +500,50 @@ Replace the body from `const movable = ...` through the end of the function (lin
 Run: `cd apps/web && npx vitest run src/components/v2/board/__tests__/fixture-block.test.tsx`
 Expected: PASS, all 5.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: E2E — extend the existing rest-violation test with a card-level assertion**
+
+`apps/web/e2e/board-v3.spec.ts`'s `"injected rest violation → badge count →
+panel → jump-to-fixture"` test (around line 207) already injects the exact
+two-entrant `warn.rest` scenario this task's merge fix targets — it just
+never checked the CARD's own badge, only the side panel's list. Extend it
+rather than duplicate the rig. Insert right before the existing
+`await panel.getByRole("button", { name: "Jump to fixture →" }).first().click();`
+line (still inside the same test, `fa`/`fb` already in scope):
+
+```tsx
+    // The card itself must show ONE merged "rest" badge, not two (the
+    // original bug: two warn.rest entries — one per entrant — rendered as
+    // two identical, indistinguishable badges).
+    const card = page.locator(`[data-fixture-id="${fa}"]`);
+    await expect(card.getByText("rest", { exact: true })).toHaveCount(1);
+    // No raw pin/lock emoji anywhere on the board — real icons only.
+    await expect(page.getByText("📌")).toHaveCount(0);
+    await expect(page.getByText("🔒")).toHaveCount(0);
+
+```
+
+Run: `cd apps/web && npx playwright test board-v3.spec.ts -g "injected rest violation"`
+Expected: PASS. (Reviewer: confirm this specific assertion block fails
+against the pre-Task-2 `fixture-block.tsx` — two "rest" text nodes, not
+one.)
+
+- [ ] **Step 6: Smoke — covered by Task 3's `boardRedesignSuite`**
+
+That suite's `"no raw pin emoji in the markup"` check exercises this task's
+icon swap on a real rendered fixture card; not duplicated here.
+
+- [ ] **Step 7: OpenAPI drift check**
 
 ```bash
-git add apps/web/src/components/v2/board/fixture-block.tsx apps/web/src/components/v2/board/__tests__/fixture-block.test.tsx
+npm run openapi:gen && git status --porcelain
+```
+
+Expected: no diff.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add apps/web/src/components/v2/board/fixture-block.tsx apps/web/src/components/v2/board/__tests__/fixture-block.test.tsx apps/web/e2e/board-v3.spec.ts
 git commit -m "feat(board): fixture cards wash with division color, conflicts move to an icon badge
 
 Conflict state used to overwrite the card's own bg-red-50/bg-amber-50,
@@ -859,6 +974,7 @@ Replace the entire `{columns.map((court) => { ... })}` block (the whole callback
                         }`}
                         tabIndex={pickedId ? 0 : -1}
                         disabled={!pickedId}
+                        data-blackout={blackout ? "true" : undefined}
                       >
                         {blackout ? (
                           msg("board.conflict.warn.blackout")
@@ -874,6 +990,10 @@ Replace the entire `{columns.map((court) => { ... })}` block (the whole callback
               })}
 ```
 
+(`data-blackout` is a plain DOM marker for tests, deliberately independent
+of the `board-blackout` CSS class name — a future restyle shouldn't have to
+touch the E2E/smoke selectors below.)
+
 The rest of the file (`fixturesOn`, `GHOST_TONE`, `GhostBlockView`) is unchanged.
 
 - [ ] **Step 7: Run tests to verify they pass**
@@ -886,10 +1006,196 @@ Expected: PASS, all 5.
 Run: `cd apps/web && npx vitest run src/components/v2/__tests__/schedule-board-ghosts.test.tsx src/components/v2/__tests__/schedule-board-grid-step.test.tsx --reporter=json --outputFile=/tmp/board-grid-siblings.json`
 Expected: same pass count as before this task (the new `blackouts` prop defaults to `[]`, so these callers — which never pass it — are unaffected). Read `/tmp/board-grid-siblings.json`'s `numFailedTests`; must be `0`.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 9: E2E — a new blackout test (genuinely new behavior, no existing coverage to extend)**
+
+Add to `apps/web/e2e/board-v3.spec.ts`, inside the same `describe.serial`
+block, after the `"pick-then-place is keyboard-operable..."` test. Uses
+`rig.divisions[2]` — untouched by the rest-violation test's settings PUT on
+`divisions[0]` — to stay fully isolated from the other tests in this file:
+
+```tsx
+  test("blackout window: hatched, always visible, and still placeable (soft, not blocked)", async ({
+    page,
+    request,
+  }) => {
+    const d2 = rig.divisions[2]!;
+    await apiJson(request, `/api/v1/divisions/${d2.id}/schedule-settings`, "PUT", {
+      config: {
+        startAt: "2026-09-15T09:00:00.000Z",
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: courtsOf(2),
+        perEntrantMinRest: 0,
+        blackouts: [
+          { court: courtsOf(2)[0], from: "2026-09-15T09:00:00.000Z", to: "2026-09-15T09:30:00.000Z" },
+        ],
+        sessionWindows: [],
+      },
+      tz: "UTC",
+    });
+    const target = rig.fixtures[d2.id]![6]!;
+    await apiJson(request, `/api/v1/fixtures/${target}`, "PATCH", {
+      scheduled_at: null,
+      court_label: null,
+    });
+
+    await page.goto(`${boardUrl}?d=${d2.slug}`);
+    const blackoutCell = page.locator('[data-blackout="true"]').first();
+    await expect(blackoutCell).toBeVisible();
+
+    // Soft: pick the unscheduled fixture, place it INTO the hatched cell —
+    // it must succeed, matching the server's own warn.blackout-is-a-warning
+    // (not a rejection) behavior.
+    await page.getByRole("button", { name: /^Unscheduled/ }).click();
+    const sheet = page.getByRole("region", { name: "Unscheduled fixtures" });
+    await sheet.locator("[data-fixture-id] button[aria-pressed]").first().click();
+    await blackoutCell.click();
+
+    await expect
+      .poll(
+        async () =>
+          (await apiJson<{ scheduled_at: string | null }>(request, `/api/v1/fixtures/${target}`))
+            .data!.scheduled_at,
+        { timeout: 15_000 },
+      )
+      .not.toBeNull();
+  });
+```
+
+Run: `cd apps/web && npx playwright test board-v3.spec.ts -g "blackout window"`
+Expected: PASS.
+
+- [ ] **Step 10: Smoke — new `boardRedesignSuite`, additive-only**
+
+`scripts/smoke.ts`'s existing `schedRegV3Suite` (line ~9727) is a single,
+very long function this task should NOT edit blind — its full blast radius
+past the point this plan has read is unknown, and RULES.md's own rule is to
+escalate rather than risk that, not silently expand scope into it. Add a
+new, fully self-contained function instead — own competition, own 2-division
+rig (division count needed for Task 4's legend check, folded in here since
+it's the same page load) — called once, right after the existing
+`schedRegV3Suite` call:
+
+In `scripts/smoke.ts`, add this new function (near the other `*Suite`
+functions, e.g. right after `schedRegV3Suite`'s closing brace):
+
+```ts
+// --- Board redesign (2026-08-10): legend duplicated below the grid, and
+// blackout windows highlighted on the grid. Own tiny 2-division rig,
+// additive only — isolated from schedRegV3Suite's much larger one so this
+// never risks any of that suite's assertions. Competition dates are pinned
+// explicitly (both here AND on the division's own schedule config) because
+// the board's initial `day` is `days[0]`, derived from competitionStart/
+// competitionEnd with no URL override — smoke has no browser, so it only
+// ever sees whatever day the SSR'd page opens on by default.
+async function boardRedesignSuite(admin: Session, orgSlug: string): Promise<void> {
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(admin, "/api/v1/competitions", "POST", {
+      starts_on: "2026-10-05",
+      ends_on: "2026-10-06",
+      name: `Board redesign ${tag}`,
+      visibility: "public",
+    }),
+  );
+
+  const divA = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Board Redesign A",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  await v1(admin, `/api/v1/divisions/${divA.id}/entrants`, "POST", [
+    { kind: "individual", display_name: "Redesign A P1", seed: 1 },
+    { kind: "individual", display_name: "Redesign A P2", seed: 2 },
+  ]);
+  const stageA = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/divisions/${divA.id}/stages`, "POST", {
+      seq: 1,
+      kind: "league",
+      name: "League",
+    }),
+  );
+  await v1(admin, `/api/v1/divisions/${divA.id}/schedule-settings`, "PUT", {
+    config: {
+      startAt: "2026-10-05T09:00:00.000Z",
+      matchMinutes: 30,
+      gapMinutes: 0,
+      courts: ["A", "B"],
+      perEntrantMinRest: 0,
+      blackouts: [{ court: "A", from: "2026-10-05T09:00:00.000Z", to: "2026-10-05T09:30:00.000Z" }],
+      sessionWindows: [],
+    },
+  });
+  const genA = v1data<{ fixtures: { id: string }[] }>(
+    await v1(admin, `/api/v1/stages/${stageA.id}/generate`, "POST"),
+  );
+  // Court B, same time — outside the court-A-scoped blackout — so a real
+  // FixtureBlock renders on the initial page load for the pin-icon check.
+  await v1(admin, `/api/v1/fixtures/${genA.fixtures[0]!.id}`, "PATCH", {
+    scheduled_at: "2026-10-05T09:00:00.000Z",
+    court_label: "B",
+  });
+
+  // Division B exists purely so the division-filter legend has 2+ divisions
+  // to render at all (BoardLegend returns null at divisions.length <= 1).
+  const divB = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Board Redesign B",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  await v1(admin, `/api/v1/divisions/${divB.id}/entrants`, "POST", [
+    { kind: "individual", display_name: "Redesign B P1", seed: 1 },
+    { kind: "individual", display_name: "Redesign B P2", seed: 2 },
+  ]);
+  await v1(admin, `/api/v1/divisions/${divB.id}/stages`, "POST", {
+    seq: 1,
+    kind: "league",
+    name: "League",
+  });
+
+  const board = await html(admin, `/o/${orgSlug}/c/${comp.slug}/schedule`);
+  check("board redesign: page renders (pro)", board.status === 200);
+  check(
+    "board redesign: blackout cell marked on the grid",
+    board.body.includes('data-blackout="true"'),
+  );
+  check(
+    "board redesign: legend renders twice (above the grid and below it)",
+    (board.body.match(/aria-label="Filter by division"/g) ?? []).length === 2,
+  );
+  check(
+    "board redesign: no raw pin emoji in the markup (real fixture is on screen)",
+    board.body.includes("Redesign A P1") && !board.body.includes("\u{1F4CC}"),
+  );
+}
+```
+
+The call site (`await boardRedesignSuite(admin, renamed.slug);`, reusing the
+already-Pro `org2`/`renamed` from `schedRegV3Suite`'s call just above it) is
+added in Task 4, since Task 4 is what makes the legend actually render
+twice — wiring the call here would 1/4-fail until Task 4 lands.
+
+Run (once Task 4 has wired the call site): `npx tsx scripts/smoke.ts` (or
+this repo's usual smoke invocation) and grep its output for `board redesign:`
+— all 4 lines must read `PASS`.
+
+- [ ] **Step 11: OpenAPI drift check**
 
 ```bash
-git add apps/web/src/components/v2/board/board-grid.tsx apps/web/src/components/v2/board/use-disruption-signals.ts apps/web/src/app/globals.css apps/web/src/dictionaries/en/ui.json apps/web/src/dictionaries/nl/ui.json apps/web/src/dictionaries/fr/ui.json apps/web/src/dictionaries/es/ui.json apps/web/src/lib/i18n-keys.ts apps/web/src/components/v2/board/__tests__/board-grid-blackout.test.tsx
+npm run openapi:gen && git status --porcelain
+```
+
+Expected: no diff.
+
+- [ ] **Step 12: Commit**
+
+```bash
+git add apps/web/src/components/v2/board/board-grid.tsx apps/web/src/components/v2/board/use-disruption-signals.ts apps/web/src/app/globals.css apps/web/src/dictionaries/en/ui.json apps/web/src/dictionaries/nl/ui.json apps/web/src/dictionaries/fr/ui.json apps/web/src/dictionaries/es/ui.json apps/web/src/lib/i18n-keys.ts apps/web/src/components/v2/board/__tests__/board-grid-blackout.test.tsx apps/web/e2e/board-v3.spec.ts scripts/smoke.ts
 git commit -m "feat(board): quiet empty cells, condensed headers, blackout highlighting
 
 Empty cells stop repeating 'Place here' on every open slot (~30x on a
@@ -1093,10 +1399,146 @@ Immediately after the closing `</div>` of the "Board + tray share the row" conta
 Run: `cd apps/web && npx vitest run src/components/v2/__tests__/schedule-board-legend.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: E2E — multi-division: fix the now-ambiguous locator, assert the legend count**
+
+The legend now renders twice, so `apps/web/e2e/board-v3.spec.ts`'s
+`"legend filters to two divisions in two taps..."` test (around line 186)
+breaks: `page.getByRole("button", { name: "U16 Boys", exact: true }).click()`
+matches TWO elements once this task lands (one per legend instance) and
+Playwright's strict mode throws. This is caused directly by this task, so
+it's fixed here, not filed separately (RULES.md: fix inline within blast
+radius). Right after `await page.goto(boardUrl);`, add the count assertion,
+then scope both existing clicks to `.first()`:
+
+```tsx
+    // Legend now renders twice — once above the grid, once below it — both
+    // sharing one filter state (board redesign, 2026-08-10).
+    await expect(page.getByRole("group", { name: "Filter by division" })).toHaveCount(2);
+```
+
+then change:
+
+```tsx
+    await page.getByRole("button", { name: "U16 Boys", exact: true }).click();
+    await page.getByRole("button", { name: "U16 Girls", exact: true }).click();
+```
+
+to:
+
+```tsx
+    await page.getByRole("button", { name: "U16 Boys", exact: true }).first().click();
+    await page.getByRole("button", { name: "U16 Girls", exact: true }).first().click();
+```
+
+Run: `cd apps/web && npx playwright test board-v3.spec.ts -g "legend filters"`
+Expected: PASS.
+
+- [ ] **Step 7: E2E — single-division: no legend, no chip, at all (the original bug's own shape)**
+
+Everything above runs against `board-v3.spec.ts`'s 5-division rig. The
+screenshot that started this redesign was a SINGLE-division board — legend
+absent entirely (`BoardLegend` returns `null` at `divisions.length <= 1`),
+no division chip on cards (`showDivision = multi = false`). Add a new,
+fully independent test to `apps/web/e2e/schedule-board.spec.ts` (which
+already has an established single-division rig pattern — see its
+`test.describe.serial("schedule board", ...)` block), as a standalone test
+after the file's `"the publish gate offers a way through..."` test:
+
+```tsx
+// Board redesign (2026-08-10): a SINGLE-division board — no legend at all
+// (BoardLegend returns null at divisions.length <= 1), no division chip on
+// cards (multi = false) — is the exact scenario the redesign started from.
+// Own rig, independent of the describe.serial block above.
+test("single-division board: no legend, no division chip, Move panel still works at a real width", async ({
+  page,
+  request,
+}) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Single division ${TAG}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Solo",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  const divisionId = div.data!.id;
+  await addEntrantsViaApi(request, divisionId, ["Ash", "Birch", "Cedar", "Dune"]);
+  const out = await createStageAndGenerate(request, divisionId);
+  await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
+    tz: "UTC",
+    config: {
+      startAt: new Date(Date.UTC(2026, 9, 20, 9, 0)).toISOString(),
+      matchMinutes: 30,
+      gapMinutes: 0,
+      courts: ["Court A"],
+      perEntrantMinRest: 0,
+    },
+  });
+  await apiJson(request, `/api/v1/fixtures/${out.fixtureIds[0]!}`, "PATCH", {
+    scheduled_at: new Date(Date.UTC(2026, 9, 20, 9, 0)).toISOString(),
+    court_label: "Court A",
+  });
+
+  await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
+  await expect(page.getByText("Ash").first()).toBeVisible({ timeout: 20_000 });
+
+  // No legend anywhere on a single-division board — neither instance.
+  await expect(page.getByRole("group", { name: "Filter by division" })).toHaveCount(0);
+  // No division chip on the card either (showDivision = multi = false).
+  await expect(page.locator("[data-fixture-id] [data-division-chip]")).toHaveCount(0);
+  // No raw pin/lock emoji.
+  await expect(page.getByText("📌")).toHaveCount(0);
+  await expect(page.getByText("🔒")).toHaveCount(0);
+
+  // The Move panel bug this redesign fixes was reported on exactly this
+  // single-division shape — confirm the When field renders at a real width.
+  await page.locator("[data-fixture-id] button[aria-pressed]").first().click();
+  const dialog = page.getByRole("dialog", { name: /^Move / });
+  const dateInput = dialog.locator('input[type="date"]');
+  await expect(dateInput).toBeVisible();
+  const box = await dateInput.boundingBox();
+  expect(box?.width ?? 0).toBeGreaterThan(80);
+});
+```
+
+Run: `cd apps/web && npx playwright test schedule-board.spec.ts -g "single-division board"`
+Expected: PASS.
+
+- [ ] **Step 8: Smoke — wire `boardRedesignSuite`'s call site**
+
+Task 3 wrote the suite function itself but deferred its call site here,
+since the legend only actually renders twice once THIS task lands. In
+`scripts/smoke.ts`, right after the existing line
+`await schedRegV3Suite(admin, renamed.slug, org2.id);` (around line 659),
+add:
+
+```ts
+  await boardRedesignSuite(admin, renamed.slug);
+```
+
+Run: `npx tsx scripts/smoke.ts` (or this repo's usual smoke invocation) and
+grep the output for `board redesign:` — expect 4 lines, all `PASS`.
+
+- [ ] **Step 9: OpenAPI drift check**
 
 ```bash
-git add apps/web/src/components/v2/schedule-board.tsx apps/web/src/components/v2/__tests__/schedule-board-legend.test.tsx
+npm run openapi:gen && git status --porcelain
+```
+
+Expected: no diff.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add apps/web/src/components/v2/schedule-board.tsx apps/web/src/components/v2/__tests__/schedule-board-legend.test.tsx apps/web/e2e/board-v3.spec.ts apps/web/e2e/schedule-board.spec.ts scripts/smoke.ts
 git commit -m "feat(board): pass blackouts into the grid, repeat the legend below it
 
 Two independent asks folded into the same redesign pass: BoardGrid can now
@@ -1135,6 +1577,23 @@ path actually resolves under `apps/web/src/components/v2/` — if the shell's
 cwd drifted to a worktree's main checkout mid-session, these paths would
 resolve on the wrong tree and still report green.
 
+- [ ] **Step 1b: Run every E2E test this plan touched or added, then the smoke script**
+
+```bash
+cd apps/web && npx playwright test board-v3.spec.ts schedule-board.spec.ts
+```
+
+Expected: every test in both files PASSES — not just the ones this plan
+added (Tasks 1-4's diffs to `board-v3.spec.ts` and `schedule-board.spec.ts`
+modify shared setup/locators in a few places; a green run here is what
+proves those edits didn't break a sibling test in the same file).
+
+```bash
+npx tsx scripts/smoke.ts 2>&1 | grep -E "board redesign:|sched board v3"
+```
+
+Expected: every matched line reads `PASS`.
+
 - [ ] **Step 2: i18n parity**
 
 ```bash
@@ -1161,14 +1620,18 @@ wrapped summary.
 
 Follow the `seazn-local-env` skill (`~/.claude/skills/seazn-local-env/SKILL.md`)
 to bring up a fresh DB + prod server on a fresh port — never `:3000`, never
-the local dev DB. Sign in, create (or open) a competition with a division
-that has 2+ sibling divisions (so the legend renders — it returns `null` at
+the local dev DB. Sign in, create (or open) a competition with 2+ sibling
+divisions (so the legend renders — it returns `null` at
 `divisions.length <= 1`), at least one pair of fixtures scheduled close
 enough to trigger a `warn.rest` conflict on both entrants (to see the merged
 badge), and a blackout window configured on the Constraints panel's blackout
 editor (court-specific or venue-wide — either exercises the highlight).
+Separately, also open (or create) a competition with exactly ONE division —
+the shape the original bug screenshot was — since the automated coverage
+(Task 4, Step 7) checks it too and a human pass should confirm the same
+thing renders as expected: no legend anywhere, no division chip on cards.
 
-Using the browser tools, on the schedule board:
+Using the browser tools, on the multi-division schedule board:
 
 1. Screenshot at 1280px, 320px, and 768px. Confirm no horizontal page
    scroll at any width.
@@ -1187,6 +1650,9 @@ Using the browser tools, on the schedule board:
    afterward, same as before this change).
 6. Confirm the pin/lock glyphs render as real icons, not the raw
    📌/🔒 emoji.
+7. On the SINGLE-division competition: confirm no legend renders anywhere
+   (above or below the grid), no division chip appears on any card, and the
+   Move panel's When field still renders at a real width there too.
 
 If any of these fail, fix before considering this plan complete — this is
 the verification step, not a formality; per project rule, a UI change isn't
@@ -1199,3 +1665,17 @@ done until it's been seen rendering for real.
 **Placeholder scan** — no TBD/TODO; every step carries the actual diff or the actual command, not a description of one.
 
 **Type consistency** — `BoardGrid`'s new `blackouts?: BoardConfig["blackouts"]` (Task 3) is the exact type `schedule-board.tsx` already holds as `cfg.blackouts` (Task 4) and the exact shape `use-disruption-signals.ts` already consumes — no shape translation needed anywhere. `FixtureBlock`'s prop signature is untouched by Task 2, so Task 3's call site needs no changes beyond what's already written into its diff.
+
+**Four test types, per RULES.md** — every task carries all four, or points
+at exactly which sibling task's coverage subsumes it and why (never a bare
+"N/A"): Task 1 (unit + E2E width measurement + smoke via Task 3's page-200
+check + the failing-first unit test as regression), Task 2 (unit + E2E
+extension of the existing rest-violation test + smoke via Task 3's no-emoji
+check + regression), Task 3 (unit + new E2E blackout test + new
+`boardRedesignSuite` smoke + regression), Task 4 (unit + E2E fix/addition
+covering BOTH multi-division and single-division shapes + smoke call-site
+wiring + regression). Single-division (no legend, no chip — the original
+bug's own shape) and multi-division (legend, chips) are both exercised at
+the unit level (every `fixture-block.test.tsx`/`board-grid-blackout.test.tsx`
+case defaults `showDivision`/`multi` to `false`) and the E2E level (Task 4
+Step 6 is multi-division, Step 7 is single-division).
