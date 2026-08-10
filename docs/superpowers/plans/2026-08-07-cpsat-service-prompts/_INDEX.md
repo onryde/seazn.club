@@ -100,8 +100,34 @@ compaction-proof summary. Keep them in step.
 | 05c | Contract + boundary hardening | **complete** — `a554961e..5774439e`, after 6 fix rounds. Rounds 4 and 5 each tried a *character* rule for id canonicality (`.strip()`, then `isprintable()`) and each was defeated — by Cf characters, then by ten code points in Lo/Mn/So. Homoglyphs (`'Сourt 1'`, Cyrillic Es U+0421) defeat any such rule, so round 6 re-cut the contract to **positional identity**: index is identity, the service compares no strings, `court_names` is display-only |
 | 06 | Wire `solveBuild` in `build.ts` | **complete** — `b673faa6..bc6bb663`, approved after 1 fix round. Read the box below before touching this code |
 | 06b | Status vocabulary translation | not started — **carries an obligation Task 08 discovered**: `CPSAT_MAX_WORKERS=1` on the deploy shape means a second concurrent organiser gets `SOLVER_BUSY`, and **nothing maps that to a greedy board today**. `build.ts`'s existing `"solver_busy"` path is `MAX_SOLVER_QUEUE`, the LOCAL z3 queue cap — unrelated. The service's `SOLVER_BUSY` (`schema.py:473`) reaches `toOutcome` as `status:"ERROR"` + `error.code` and is read by nobody. 06b must map it, or one of two simultaneous organisers gets an error rather than a board |
-| 07 | Integration tests (parity, regression, fallback) | not started |
-| 11 | E2E + smoke coverage | not started — **brief written** |
+| 07 | Integration tests (parity, regression, fallback) | not started — **its base prompt has three errors, verified 2026-08-10 against the code**, see below |
+
+### Prompt 07's base prompt does not compile as written
+
+Checked before dispatching rather than after, because two of this
+programme's briefs have already shipped a confident claim about code that
+had only been grepped:
+
+1. **`buildSchedule` takes ONE argument** (`build.ts:951`). The prompt's
+   fallback test calls `buildSchedule(input, { cpsatHost: "localhost:1" })`.
+   No such parameter exists — the host is read from
+   `process.env.CPSAT_SERVICE_HOST` (`cpsat-client.ts:564`), so the test has
+   to stub the environment instead.
+2. **`npm run test:integration --workspace packages/engine` does not
+   exist.** `packages/engine/package.json` has no `test:integration` script.
+   Use the direct `npx vitest run <path>` form the prompt's own Step 3 uses,
+   or add the script deliberately.
+3. **The fallback test's `status` assertion is a guess.** The prompt pins
+   `"solver_unavailable"`, but an unreachable service does not return a
+   status at all — the client THROWS `CpSatError` with a `failure`
+   discriminant (`cpsat-client.ts:295`, `failureFor` at :479), and
+   `build.ts`'s catch swallows every rejection into one greedy fallback. What
+   that becomes is whatever Task 06b lands. Assert 06b's actual mapping;
+   do not assume this string.
+
+`validateAssignments(assignments, config, existing, dependencies)` — the one
+signature the prompt gets right (`calendar.ts:1257`).
+| 11 | E2E + smoke coverage | not started — no brief yet (an earlier revision of this row claimed one was written; it was not, and the SDD workspace has no `task-11-brief.md`) |
 | 08 | Deployment (Dockerfile, fly.toml) | **complete** — `befd49eb..d292e33f`, approved after 1 fix round. App is `cp-sat` (NOT the plan's `seazn-cpsat-prod` sample — `.internal` DNS derives from the app name and must match `cpsat-client.ts:127`'s `cp-sat.internal:50051`). Warm-start is carried by `auto_stop_machines = "off"`; `min_machines_running = 1` is set but inert beside it |
 | 09 | CI workflow | **complete** — `8d78c595..befd49eb` plus `c57eefe6`, spec PASS + quality approved, 0 Critical/Important. Builds AND runs the image; drift gate covers Python and TS stubs |
 | 10 | Remove BUILD/POLISH's z3 code | **blocked, but no longer indefinitely** — owner ruled 2026-08-10 to CLOSE the capability gaps and remove z3 fully, rather than close the programme at 11 and leave z3 dormant. Gates: 01-09 and 11 live for one full deploy cycle, **plus all three gaps below closed** |
