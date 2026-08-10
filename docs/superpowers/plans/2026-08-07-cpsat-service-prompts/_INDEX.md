@@ -75,6 +75,20 @@ invisible to a fresh clone: `.superpowers/sdd/2026-08-07-cpsat-service-build-cut
 That ledger is authoritative on *what happened*; this table is the
 compaction-proof summary. Keep them in step.
 
+> **Every commit sha in the table below predates a rebase and NO LONGER
+> EXISTS.** The branch `worktree-cpsat-service-build` was rebased onto
+> `origin/main` `3bab9f43` on 2026-08-10 (60 commits replayed, 0 behind
+> after). Post-rebase tips, newest first: `e07ee222` (06 docs) ·
+> `29562567` · `8159998b` (06 fix round) · `a584843e` · `32cdf9f3` (06 WIP)
+> · `7e11a303` · `64b64f5e` · `1861f363` (08 fix round) · `ece815cf` ·
+> `88f484cd` · `fb8a5bab` (08) · `fac91b97` (09) · `d6ffaf9f` · `bf5ac722`.
+> The ranges below still read correctly as *what changed in which task* —
+> resolve one with `git log --oneline --grep=<subject>` rather than by sha.
+> Only ONE conflict arose: `build-rest-lattice.test.ts`, imports only —
+> main's `409ae00d` moved `gridStepMinutes` into a new `grid-step.ts` and
+> that crossed Task 06's added `cpsat-client` import. Verified after:
+> `src/scheduling` **567 passed / 0 failed / 19 skipped**, `tsc` 0 errors.
+
 | # | Prompt | State |
 |---|---|---|
 | 01 | Proto contract | **complete** — `0c8eb752..e854b978`, review clean |
