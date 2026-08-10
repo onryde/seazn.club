@@ -26,7 +26,17 @@ export type SuspensionStatus = "pending" | "active" | "served" | "waived";
 export type SuspensionSource = "auto_accumulation" | "auto_dismissal" | "manual" | "report";
 
 export interface DisciplineRules {
-  accumulation: { key: string; color: string; count: number; ban_matches: number }[];
+  accumulation: {
+    key: string;
+    color: string;
+    count: number;
+    ban_matches: number;
+    // S4 (#428) — scope the rule to ONE DisciplineCard.reason ("three cards
+    // for dissent"), not just the colour. Omitted ⇒ every card of the colour
+    // is eligible, exactly the pre-#428 behaviour — every existing rules
+    // document in the DB parses and fires identically with this absent.
+    reason?: string;
+  }[];
   dismissal: { key: string; color: string; ban_matches: number }[];
 }
 
@@ -105,6 +115,8 @@ interface ExtractedCard {
   recordedAt: Date;
   seq: number;
   fixtureId: string;
+  // S4 (#428) — carried through so an accumulation rule can scope to it.
+  reason?: string;
 }
 
 interface WantRow {
@@ -187,6 +199,7 @@ async function detect(
         recordedAt: m.recordedAt,
         seq: m.seq,
         fixtureId: m.fixtureId,
+        ...(c.reason !== undefined ? { reason: c.reason } : {}),
       });
     }
   }
@@ -214,14 +227,22 @@ async function detect(
     const byPerson = groupByPerson(attributed.filter((c) => c.color === color));
     for (const [personId, personCards] of byPerson) {
       sorted.forEach((rule, idx) => {
-        if (personCards.length < rule.count) return;
-        const trigger = personCards.slice(0, rule.count);
+        // S4 (#428) — "three cards for the same offence": a rule scoped to a
+        // `reason` counts only cards carrying THAT reason, not every card of
+        // the colour. Unscoped (the pre-#428 shape, still the common case)
+        // keeps every card of the colour eligible.
+        const eligible =
+          rule.reason === undefined ? personCards : personCards.filter((c) => c.reason === rule.reason);
+        if (eligible.length < rule.count) return;
+        const trigger = eligible.slice(0, rule.count);
         wants.push({
           personId,
           source: "auto_accumulation",
           ruleKey: rule.key,
           bucket: idx + 1,
-          reason: `${ordinal(rule.count)} ${(colorLabel.get(color) ?? color).toLowerCase()}`,
+          reason:
+            `${ordinal(rule.count)} ${(colorLabel.get(color) ?? color).toLowerCase()}` +
+            (rule.reason === undefined ? "" : ` (${rule.reason})`),
           matchesTotal: rule.ban_matches,
           triggerEventIds: trigger.map((c) => c.eventId),
           fixtureId: trigger[trigger.length - 1]!.fixtureId,

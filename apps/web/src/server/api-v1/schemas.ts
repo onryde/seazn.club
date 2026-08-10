@@ -2760,6 +2760,12 @@ const AccumulationRule = z.object({
   color: z.string().min(1),
   count: z.number().int().positive(),
   ban_matches: z.number().int().positive(),
+  // S4 (#428) — scope the rule to one DisciplineCard.reason ("three cards for
+  // dissent"), not just the colour. Optional: a plain `z.object` here already
+  // STRIPS an unrecognized key on parse rather than rejecting it, so without
+  // this the usecase's new reason-scoped rule would be silently unreachable
+  // from the real PUT endpoint.
+  reason: z.string().min(1).optional(),
 });
 const DismissalRule = z.object({
   key: z.string().min(1),
