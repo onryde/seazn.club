@@ -285,7 +285,7 @@ def test_a_wall_too_short_to_finish_reports_fewer_tiers_not_a_lie(board):
     assert outcome.tiers_completed <= len(names) <= outcome.tiers_completed + 1
 
 
-def test_a_tier_cut_short_is_neither_counted_nor_adopted(board):
+def test_a_tier_cut_short_is_adopted_but_not_counted(board):
     """The FEASIBLE case, isolated — the semantic the whole `tiers_completed`
     contract turns on.
 
@@ -301,9 +301,21 @@ def test_a_tier_cut_short_is_neither_counted_nor_adopted(board):
         real makespan on a FEASIBLE verdict, and counting it would tell TS that
         the makespan tier was PROVED optimal when nothing proved it — TS gates
         `already_optimal` and its whole LNS fallback on that number.
-      * the T1 board is DISCARDED — one recorded objective value, not two. Its
-        makespan is whatever the solver happened to reach when the clock fired;
-        adopting it would replace a proved board with an unproved one.
+      * the T1 board is ADOPTED all the same — two recorded objective values,
+        not one. `schema.py` slices `objective_values[:tiers_completed]` before
+        the wire, so the extra entry publishes nothing; it is what lets the
+        board that came back BE the better one.
+
+    This reverses the rule that shipped originally ("the T1 board is
+    DISCARDED... adopting it would replace a proved board with an unproved
+    one"). That rationale conflated two claims. The adopted board satisfies
+    every frozen bound as a HARD CONSTRAINT, so it is proved on T0's metric
+    exactly as the discarded board was; the only thing unproved about it is
+    that its makespan is minimal, which `tiers_completed == 1` already says.
+    Measured cost of the old rule, true span read off the assignments rather
+    than off the relaxation variables: 130 800 000 -> 79 200 000 (-39%) on a
+    2-day board, -24% on a 3-day, -22% on an 8-day, and 1 557 600 000 ->
+    1 519 800 000 on this one. See `test_the_adopted_board_is_the_better_one`.
     """
     model = _model_for(board)
     outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=1.5)
@@ -317,9 +329,45 @@ def test_a_tier_cut_short_is_neither_counted_nor_adopted(board):
 
     assert outcome.status == "FEASIBLE"  # a board, but an unfinished chain
     assert outcome.tiers_completed == 1
-    assert [name for name, _ in outcome.objective_values] == [TIER_PLACED]
-    # T0's board survives intact — the fallback, not an empty result.
+    assert [name for name, _ in outcome.objective_values] == [TIER_PLACED, TIER_MAKESPAN]
+    # The whole board survives — adopting T1's is not the same as losing rows.
     assert len(outcome.assignments) == len(board[0])
+    # A cut-short tier cannot have beaten the proved optimum; if it claims to,
+    # the recorded value belongs to some other board than the one returned.
+    reported = dict(outcome.objective_values)
+    fixtures, _num_courts, _slots, _step, constraints, _existing, _deps = board
+    dur_ms = constraints["match_minutes"] * MIN_MS
+    assert reported[TIER_MAKESPAN] >= T1_PROVED_MAKESPAN_MS
+    assert _makespan(outcome.assignments, dur_ms) <= reported[TIER_MAKESPAN]
+
+
+def test_the_adopted_board_is_the_better_one(board):
+    """The point of adopting: the board an organiser receives is T1's, and T1's
+    is shorter than the one T0 alone produces.
+
+    Asserted with `<`, not `<=`, deliberately. Under the old discard rule the
+    returned board simply WAS T0's, so a `<=` would pass vacuously against the
+    behaviour this test exists to pin.
+
+    Load hazard, stated because this repo has been bitten by it: both walls are
+    1.5 s, so a heavily loaded box gives T1 less search and narrows the margin.
+    Measured stable at 1 557 600 000 -> 1 519 800 000 across two load averages
+    (17.4 and 27.6) and 6 runs, and 6/6 on three synthetic shapes. A red here
+    with the two spans EQUAL means T1 found nothing in its slice, which is the
+    box; a red with the adopted span LARGER is the code.
+    """
+    fixtures, _num_courts, _slots, _step, constraints, _existing, _deps = board
+    dur_ms = constraints["match_minutes"] * MIN_MS
+
+    t0_model = _model_for(board)
+    t0_only = run_tier_chain(t0_model, t0_model.fixture_vars, 1.5, tiers=(TIER_PLACED,))
+    two_tier_model = _model_for(board)
+    two_tier = run_tier_chain(two_tier_model, two_tier_model.fixture_vars, 1.5)
+
+    assert t0_only.tiers_completed == 1
+    assert two_tier.tiers_completed == 1  # T1 ran and was cut short
+    assert len(two_tier.assignments) == len(t0_only.assignments)
+    assert _makespan(two_tier.assignments, dur_ms) < _makespan(t0_only.assignments, dur_ms)
 
 
 # --- each tier's optimisation DIRECTION, pinned two-sidedly -----------------
