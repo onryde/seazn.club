@@ -2,7 +2,7 @@
 
 // Constraints v2 console (Jul3/04 §6): constraint editor, bulk time shift,
 // and the pre-publish wait-time report.
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
@@ -273,7 +273,56 @@ export function ConstraintsPanel({
       applied();
     }, true);
 
-  const save = (next: Constraints) => savePatch({ constraints: next }, () => setConstraints(next));
+  // `constraints` mirrored into a ref, kept in sync ONLY where `setConstraints`
+  // itself is called (`applied` below) rather than on every render — reading
+  // or writing `.current` during render is a lint error (react-hooks/refs:
+  // refs are for event handlers and effects, not render). The two can never
+  // drift: both start from the same initial value and both change together,
+  // exactly once, inside `applied`. The point of the ref rather than reading
+  // `constraints` state directly is timing, not staleness: a save that had
+  // to wait its turn (below) builds its patch from what the save ahead of it
+  // just wrote, without waiting for a re-render to observe it.
+  const constraintsRef = useRef(constraints);
+
+  // Every control on this sheet used to call a `save(next)` built from the
+  // `constraints` closure AT KEYSTROKE TIME, firing its GET-then-PUT
+  // immediately — so two edits close together (typing a second digit before
+  // the first digit's round trip returned; a field's own retype after
+  // clearing it) started two independent GET+PUT pairs, and the LAST
+  // RESPONSE TO ARRIVE won the write — not the last one SENT, and not
+  // necessarily the request built from the most recent keystroke. Whichever
+  // request's network happened to be slower, for any reason, silently
+  // overwrote a newer value with a stale one. That is how typing "5" into
+  // max-per-day was stored as 10, then 8 (division
+  // 7f41f7c4-e1d6-4432-b65c-7343f504e866, Aug 2026) — confirmed by racing two
+  // deliberately-delayed requests in constraints-panel-save-race.test.tsx.
+  //
+  // `saveConstraints` fixes this by chaining every call onto ONE promise: at
+  // most one GET-then-PUT for this panel's `constraints` key is ever in
+  // flight, so responses can only arrive in the order they were sent.
+  // `producer` runs once it is this task's turn — reading `constraintsRef`
+  // fresh at that moment, never at enqueue time — so a save queued behind
+  // another sees what that one just wrote. That is what keeps
+  // `withMaxFixturesPerDay`'s "every other hard rule untouched" guarantee
+  // true across queued saves, not just within a single one.
+  const constraintsQueue = useRef<Promise<void>>(Promise.resolve());
+  const saveConstraints = (producer: (current: Constraints) => Constraints) => {
+    constraintsQueue.current = constraintsQueue.current
+      // `run()` already reports a failed save to the user and never
+      // rethrows — but a defensive `.catch` here costs nothing, and without
+      // it a hypothetical future rejection would permanently wedge every
+      // save queued after it (a `.then` chained onto a rejected promise
+      // never runs its handler), which would be a worse bug than the one
+      // this file fixes.
+      .catch(() => {})
+      .then(() => {
+        const next = producer(constraintsRef.current);
+        return savePatch({ constraints: next }, () => {
+          constraintsRef.current = next;
+          setConstraints(next);
+        });
+      });
+  };
 
   const updateBlackout = (index: number, patch: Partial<BlackoutDraft>) =>
     setBlackouts((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
@@ -331,9 +380,10 @@ export function ConstraintsPanel({
             className="shrink-0"
             checked={constraints.crossPersonClash === "hard"}
             disabled={!canEdit || busy}
-            onChange={(e) =>
-              void save({ ...constraints, crossPersonClash: e.target.checked ? "hard" : "warn" })
-            }
+            onChange={(e) => {
+              const checked = e.target.checked;
+              saveConstraints((current) => ({ ...current, crossPersonClash: checked ? "hard" : "warn" }));
+            }}
           />
         </label>
 
@@ -351,7 +401,10 @@ export function ConstraintsPanel({
             className="shrink-0"
             checked={constraints.noBackToBack === true}
             disabled={!canEdit || busy}
-            onChange={(e) => void save({ ...constraints, noBackToBack: e.target.checked })}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              saveConstraints((current) => ({ ...current, noBackToBack: checked }));
+            }}
           />
         </label>
 
@@ -401,9 +454,10 @@ export function ConstraintsPanel({
               className="input w-20 text-right"
               value={constraints.restMin ?? 0}
               disabled={!canEdit || busy}
-              onChange={(e) =>
-                void save({ ...constraints, restMin: Math.max(0, Number(e.target.value)) })
-              }
+              onChange={(e) => {
+                const restMin = Math.max(0, Number(e.target.value));
+                saveConstraints((current) => ({ ...current, restMin }));
+              }}
             />
             <span id="rest-min-unit">{msg("constraints.restMin.unit")}</span>
           </span>
@@ -428,7 +482,7 @@ export function ConstraintsPanel({
               onChange={(e) => {
                 const raw = e.target.value;
                 const count = raw === "" ? undefined : Math.max(1, Math.trunc(Number(raw)));
-                void save({ ...constraints, hard: withMaxFixturesPerDay(constraints.hard, divisionId, count) });
+                saveConstraints((current) => ({ ...current, hard: withMaxFixturesPerDay(current.hard, divisionId, count) }));
               }}
             />
             {msg("constraints.maxPerDay.unit")}
@@ -455,12 +509,10 @@ export function ConstraintsPanel({
               className="select w-full sm:w-44"
             value={constraints.fieldFairness ?? "off"}
             disabled={!canEdit || busy}
-            onChange={(e) =>
-              void save({
-                ...constraints,
-                fieldFairness: e.target.value as Constraints["fieldFairness"],
-              })
-            }
+            onChange={(e) => {
+              const fieldFairness = e.target.value as Constraints["fieldFairness"];
+              saveConstraints((current) => ({ ...current, fieldFairness }));
+            }}
           >
               <option value="off">{msg("constraints.fieldFairness.off")}</option>
               <option value="balance">{msg("constraints.fieldFairness.balance")}</option>
