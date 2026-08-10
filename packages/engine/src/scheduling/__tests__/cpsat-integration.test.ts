@@ -158,9 +158,29 @@ function nonAlignedBoard(): BuildInput {
  * optimal on both makespan and court balance before CP-SAT is ever asked.
  * This board is NOT expected to prove `engine === "cp-sat"`
  * (`nonAlignedBoard` owns that assertion, on a board where beating greedy
- * is provably possible); its job is to prove the service round-trips a
- * request at production-ish SCALE — encodes, transports, decodes, and
- * verifies clean — without erroring or timing out.
+ * is provably possible) — cp-sat may legitimately tie here and D6 keeps the
+ * greedy seed, `status: "already_optimal"`, which is a CORRECT outcome this
+ * test must not fail on.
+ *
+ * FIX ROUND 2 (coordinator finding): this is exactly why the ORIGINAL two
+ * assertions here (`assignments` length 32, zero verifier conflicts) proved
+ * nothing about the SERVICE. Greedy alone, unaided, legally places all 32 —
+ * traced through `slotFixtures`/`calendar.ts`, confirmed by the same
+ * "nothing ever repeats an entrant" fact two paragraphs up — so a wall
+ * timeout, an `UNAUTHENTICATED` secret mismatch, or a dead service all fall
+ * back to greedy (`build.ts`'s catch block, `greedy("solver_unavailable",
+ * true)`) and BOTH original assertions still pass. The docstring claimed
+ * this proves the service "round-trips a request... without erroring or
+ * timing out" while the assertions could not see an error OR a timeout —
+ * a comment asserting a guarantee the code did not provide, the exact
+ * no-teeth shape `nonAlignedBoard`'s own `restByDivision` fix already
+ * corrected once in this file. The test below now asserts
+ * `status !== "solver_unavailable"` for real: that status is reached ONLY
+ * through the catch block (rejection) or an `ERROR` outcome whose code is
+ * not `SOLVER_BUSY` — i.e. exactly "the RPC failed", which is the one thing
+ * this board's own D6-tie possibility must not be confused with.
+ * `engine === "cp-sat"` is still deliberately NOT asserted here, for the
+ * same reason as before: this board legitimately may not need it.
  */
 function scaleBoard(): BuildInput {
   const courts = ["C1", "C2", "C3", "C4", "C5"];
@@ -250,6 +270,21 @@ describe.skipIf(!RUN_INTEGRATION)("cp-sat integration (requires a running servic
   it("solves a 32-fixture/5-court board end to end with zero verifier conflicts", async () => {
     const input = scaleBoard();
     const result = await buildSchedule(input);
+
+    // FIX ROUND 2: the load-bearing assertion for THIS board. Greedy alone
+    // places all 32 legally (see `scaleBoard`'s comment), so neither
+    // `assignments` length nor `conflicts` below can ever fail — a broken
+    // service, a wall timeout, or a wrong `CPSAT_SERVICE_SECRET` all fall
+    // back to greedy and both would still pass. `solver_unavailable` is
+    // reached ONLY through an RPC rejection or a non-`SOLVER_BUSY` `ERROR`
+    // outcome (`build.ts`'s catch block / `ERROR`-status arm) — i.e. it is
+    // reached if and only if the real RPC to the real service failed. This
+    // does NOT assert `engine === "cp-sat"`: D6 may legitimately keep the
+    // greedy seed here (`status: "already_optimal"`), and that is a correct
+    // outcome this test must not fail on — `nonAlignedBoard`'s test owns
+    // the engine-selection assertion, on a board where beating greedy is
+    // provably possible.
+    expect(result.status).not.toBe("solver_unavailable");
 
     expect(result.assignments).toHaveLength(32);
     const conflicts = validateAssignments(

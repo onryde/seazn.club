@@ -14,6 +14,11 @@ Start the service:
 
 ```bash
 cd services/cp-sat
+# First time only, or if venv/ does not exist yet. Plain `python3 -m venv`
+# will NOT work here: this repo's system Python is 3.9.6 and this package
+# declares `requires-python = ">=3.11"` (pyproject.toml) — use `uv` to get a
+# venv on a Python new enough, downloading one if it has to:
+uv venv --python 3.11 venv
 venv/bin/pip install -e ".[dev]"
 CPSAT_SERVICE_SECRET=dev-secret CPSAT_PORT=50051 venv/bin/python3 -m cp_sat.main
 ```
