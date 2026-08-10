@@ -172,19 +172,21 @@ const STATUS_BY_WIRE_VALUE = new Map<number, SolveBuildOutcome["status"]>([
 ]);
 
 /**
- * One channel per host. The brief's single module-level cache returns the first
- * host's channel for every subsequent host, which silently sends a solve to the
- * wrong service the moment anything (a test, a second environment) uses two.
+ * One channel per SOLVE, not one cached per host. A shared, long-lived channel
+ * is exactly what defeats Fly Proxy's connection-based load balancing: ten
+ * concurrent organisers riding one cached client ride ten HTTP/2 streams over
+ * ONE TCP connection, and the proxy fans work out by CONNECTION — so all ten
+ * pin to a single machine no matter how many are running or suspended.
+ * `services/cp-sat/fly.toml`'s `[services.concurrency] hard_limit = 1` is the
+ * other half of this fix; it only means anything if each solve actually opens
+ * its own connection for the proxy to count.
+ *
+ * The cost accepted for this: a TCP + HTTP/2 handshake per solve, milliseconds
+ * on Fly's private 6PN network, against a solve that runs for seconds — cheap
+ * insurance for the fan-out `fly scale count` is meant to buy.
  */
-const channelsByHost = new Map<string, SchedulerServiceClientType>();
-
-function clientFor(host: string): SchedulerServiceClientType {
-  let client = channelsByHost.get(host);
-  if (!client) {
-    client = new SchedulerServiceClient(host, grpc.credentials.createInsecure());
-    channelsByHost.set(host, client);
-  }
-  return client;
+function newClientFor(host: string): SchedulerServiceClientType {
+  return new SchedulerServiceClient(host, grpc.credentials.createInsecure());
 }
 
 /**
@@ -582,8 +584,13 @@ export async function solveBuild(
   // immediately rather than after a wire round trip.
   const indices = buildIndexSpace(input);
 
-  const client =
-    injectedCall ?? clientFor(opts.host ?? process.env.CPSAT_SERVICE_HOST ?? DEFAULT_HOST);
+  // Constructed fresh for this call, never cached — see {@link newClientFor}.
+  // `undefined` when a call seam is injected: that object is caller-owned
+  // (see the seam's own doc comment) and never ours to close.
+  const constructedClient = injectedCall
+    ? undefined
+    : newClientFor(opts.host ?? process.env.CPSAT_SERVICE_HOST ?? DEFAULT_HOST);
+  const client = injectedCall ?? constructedClient!;
 
   const metadata = new grpc.Metadata();
   metadata.set("x-internal-secret", opts.secret);
@@ -634,6 +641,17 @@ export async function solveBuild(
             { cause: thrown },
           ),
         );
+      } finally {
+        // `settle` is the one chokepoint every settle path passes through —
+        // success, gRPC error, watchdog timeout, and the synchronous-throw
+        // path below all call it exactly once (guarded by `settled` above),
+        // so closing here closes exactly once too. `run` already ran (and
+        // `toOutcome`, if this was the success path, already read the
+        // response inside it) by the time this `finally` fires, so the close
+        // cannot race the read. `constructedClient` is `undefined` when a
+        // call seam was injected, and `?.close()` is then a no-op — that
+        // object is caller-owned, never ours to close.
+        constructedClient?.close();
       }
     }
 

@@ -1,12 +1,72 @@
-// Transport tests for the cp-sat gRPC client wrapper. Everything here injects a
-// call seam as `solveBuild`'s third argument, so no gRPC channel, no server, no
-// network — the wrapper's own behaviour is the whole subject: metadata, request
-// shaping, status vocabulary, and settling instead of hanging.
+// Transport tests for the cp-sat gRPC client wrapper. Almost everything here
+// injects a call seam as `solveBuild`'s third argument, so no gRPC channel, no
+// server, no network — the wrapper's own behaviour is the whole subject:
+// metadata, request shaping, status vocabulary, and settling instead of
+// hanging. The exception is the "channel lifecycle" block at the bottom, which
+// omits the seam on purpose so that the client-CONSTRUCTION path is exercised
+// too; see the module mock below.
 import { describe, expect, it, vi } from "vitest";
 import type { SolveBuildCall } from "./cpsat-client.ts";
 import { CpSatError, solveBuild } from "./cpsat-client.ts";
 import { fixedClock } from "../core/clock.ts";
 import { SolveBuildRequest, SolveStatus } from "./generated/scheduler.ts";
+
+/**
+ * Recording double for the generated gRPC client, so the channel lifecycle
+ * (constructed how often, closed how often) is observable without a server.
+ *
+ * `vi.hoisted` because the `vi.mock` factory below is hoisted above every
+ * import in this file: a plain module-level `const` would still be in its TDZ
+ * when the factory runs.
+ */
+const channelLog = vi.hoisted(() => ({
+  hosts: [] as string[],
+  closes: 0,
+  /** What the recording client's RPC does — one per settle path under test. */
+  mode: "respond",
+}));
+
+// Hoisted `vi.mock`, NOT `vi.doMock`: `cpsat-client.ts` imports
+// `SchedulerServiceClient` and `SolveStatus` statically, and a `doMock` against
+// a statically-imported module has already been proven inert in this repo (a
+// suite passed with the guard it was supposed to protect deleted).
+//
+// Only `SchedulerServiceClient` is replaced; every other export is passed
+// through from `importActual`. `SolveStatus` above all: `cpsat-client.ts`
+// builds `STATUS_BY_WIRE_VALUE` from it at module load, so a mocked-away enum
+// would map every wire status to `ERROR` and silently gut the rest of this file.
+vi.mock("./generated/scheduler.ts", async (importActual) => {
+  const actual = await importActual<typeof import("./generated/scheduler.ts")>();
+  class RecordingSchedulerServiceClient {
+    constructor(address: string, _credentials: unknown) {
+      channelLog.hosts.push(address);
+    }
+
+    solveBuild(
+      _request: unknown,
+      _metadata: unknown,
+      _options: unknown,
+      callback: (err: unknown, response: unknown) => void,
+    ): unknown {
+      if (channelLog.mode === "throw") throw new Error("channel closed");
+      callback(null, {
+        assignments: [],
+        status: actual.SolveStatus.SOLVE_STATUS_FEASIBLE,
+        tiersCompleted: 0,
+        objectiveValues: [],
+        elapsedMs: 0,
+        wallExhausted: false,
+        error: undefined,
+      });
+      return undefined;
+    }
+
+    close(): void {
+      channelLog.closes += 1;
+    }
+  }
+  return { ...actual, SchedulerServiceClient: RecordingSchedulerServiceClient };
+});
 
 /** The minimum a valid request needs; individual tests override what they probe. */
 const INPUT = {
@@ -591,5 +651,69 @@ describe("solveBuild", () => {
     expect(rejection).toBeInstanceOf(CpSatError);
     expect((rejection as CpSatError).failure).toBe("invalid_request");
     expect(mockClient.solveBuild).not.toHaveBeenCalled();
+  });
+});
+
+// The only block in this file that does NOT inject a call seam: `solveBuild`
+// constructs the client itself here, which is the path the mock above exists to
+// observe.
+describe("channel lifecycle", () => {
+  const HOST = "cp-sat.test:50051";
+
+  function resetChannelLog(mode: "respond" | "throw"): void {
+    channelLog.hosts.length = 0;
+    channelLog.closes = 0;
+    channelLog.mode = mode;
+  }
+
+  // A channel per SOLVE, not per host — and the reason is Fly Proxy, not
+  // tidiness. Ten concurrent organisers sharing one cached client ride ten
+  // HTTP/2 streams over ONE TCP connection, and Fly's TCP proxy load-balances
+  // by CONNECTION: all ten pin to a single machine however many are scaled up,
+  // so `fly scale count` buys nothing and nine solves queue behind the first
+  // (services/cp-sat/fly.toml's `[services.concurrency] hard_limit = 1`).
+  //
+  // Two solves against the SAME host are therefore two clients and two closes.
+  // Under a per-host cache this reads 1 construction and 0 closes, which is
+  // exactly the failure this test exists to catch.
+  it("constructs and closes one client per solve, even for the same host", async () => {
+    resetChannelLog("respond");
+
+    await solveBuild(INPUT, { secret: "s3cr3t", host: HOST });
+    await solveBuild(INPUT, { secret: "s3cr3t", host: HOST });
+
+    expect(channelLog.hosts).toEqual([HOST, HOST]);
+    expect(channelLog.closes).toBe(2);
+  });
+
+  // Closing only on the happy path leaks a channel for every failed solve, and
+  // failures are exactly when the service is already struggling. `settle()` is
+  // the one chokepoint every settle path goes through — success, gRPC error,
+  // watchdog, and this one — so proving a non-success path closes proves the
+  // `finally` is on the chokepoint rather than beside one branch of it.
+  it("closes the client it constructed when the call throws before it starts", async () => {
+    resetChannelLog("throw");
+
+    await expect(solveBuild(INPUT, { secret: "s3cr3t", host: HOST })).rejects.toThrow(
+      /channel closed/,
+    );
+
+    expect(channelLog.hosts).toEqual([HOST]);
+    expect(channelLog.closes).toBe(1);
+  });
+
+  // The caller-owned seam is NOT ours to close: `SolveBuildCall` declares one
+  // method, and an injected object is under no obligation to have `close()` at
+  // all — calling it would be a TypeError on a path that is otherwise fine.
+  it("never closes an injected call seam", async () => {
+    resetChannelLog("respond");
+    const injected = respondingClient();
+
+    await solveBuild(INPUT, { secret: "s3cr3t", host: HOST }, injected);
+
+    expect(injected.solveBuild).toHaveBeenCalledTimes(1);
+    // Nothing was constructed, so nothing was ours to close.
+    expect(channelLog.hosts).toEqual([]);
+    expect(channelLog.closes).toBe(0);
   });
 });

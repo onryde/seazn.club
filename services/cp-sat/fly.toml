@@ -7,14 +7,17 @@
 # IPv4/v6 for this app — that is a separate, explicit `fly ips allocate-*`
 # step nothing here performs, and doing it would contradict that assumption.
 #
-# `app` MUST be exactly "cp-sat". Fly's private DNS is always
-# <app-name>.internal, and packages/engine/src/scheduling/cpsat-client.ts's
-# DEFAULT_HOST is the literal string "cp-sat.internal:50051" — it only yields
-# to an explicit CPSAT_SERVICE_HOST env var, which nothing in this repo
-# currently sets (checked: no reference anywhere outside that one file).
-# Naming this app anything else breaks the zero-config path silently: every
-# solve dials a host that does not exist, the gRPC call fails, and
-# build.ts falls back to greedy placement with nothing surfacing why.
+# `app` MUST be exactly "cp-sat". Fly's private DNS derives from the app
+# name, and packages/engine/src/scheduling/cpsat-client.ts's DEFAULT_HOST is
+# the literal string "cp-sat.flycast:50051" (cpsat-client.ts:157) — NOT
+# "cp-sat.internal:50051" (an earlier draft of this comment said .internal;
+# see the SCALE TO ZERO note below for why .flycast, not .internal, is
+# required once the machine can suspend). It only yields to an explicit
+# CPSAT_SERVICE_HOST env var, which nothing in this repo currently sets
+# (checked: no reference anywhere outside that one file). Naming this app
+# anything else breaks the zero-config path silently: every solve dials a
+# host that does not exist, the gRPC call fails, and build.ts falls back to
+# greedy placement with nothing surfacing why.
 app = "cp-sat"
 # Matches apps/web's root fly.toml — same Fly region, minimal added latency
 # for an RPC that is already budgeted to the second.
@@ -68,6 +71,34 @@ primary_region = "lhr"
 
   [[services.ports]]
     port = 50051
+
+  # Fan-out for `fly scale count 10` (see DEPLOY.md step 5). `hard_limit = 1`
+  # tells Fly Proxy a machine is FULL at one connection, so a second
+  # concurrent solve is routed to another machine, autostarting it if it is
+  # suspended. Without this block the proxy has no reason to prefer an idle
+  # machine over the one it already has a connection to, no matter how many
+  # are scaled up — this is the half of Task 12 that makes `cpsat-client.ts`'s
+  # channel-per-solve change (see that file's comment above `newClientFor`)
+  # actually reach ten machines instead of ten streams on one connection.
+  # `soft_limit` matches `hard_limit` here on purpose: with exactly one
+  # in-flight solve meaning "full", there is no useful middle state to prefer
+  # one warm machine over another before rejecting/spawning.
+  #
+  # Whether `tcp_checks` below count against this connection limit — i.e.
+  # whether a passing health check could itself pin a machine at "full" and
+  # make it look permanently unavailable — is NOT documented. Checked
+  # directly against https://fly.io/docs/reference/configuration/,
+  # https://fly.io/docs/networking/services/, and
+  # https://fly.io/docs/reference/fly-proxy/ (2026-08-10): none states
+  # whether a health-check connection is counted toward
+  # `services.concurrency`. Could not establish either way; flagged for the
+  # owner rather than assumed. If it turns out checks DO count, `hard_limit`
+  # needs to be at least 2 (one check + one solve) to avoid a
+  # falsely-full machine.
+  [services.concurrency]
+    type       = "connections"
+    hard_limit = 1
+    soft_limit = 1
 
   # A TCP accept, not a gRPC Health/Check — and kept that way deliberately.
   # The Task 04 audit found the original health servicer shared the solve
@@ -138,20 +169,25 @@ primary_region = "lhr"
 #     `SOLVER_BUSY` (main.py's admission control,
 #     `BoundedSemaphore.acquire(blocking=False)`).
 #
-#     WHAT THE CALLER DOES WITH THAT IS NOT WIRED YET — do not read this
-#     block as saying the fallback works today. `build.ts` does not import
-#     `cpsat-client.ts` at all yet (Task 06), and the `"solver_busy"` +
-#     greedy path `build.ts` already has is `MAX_SOLVER_QUEUE`, the LOCAL
-#     z3/WASM queue cap, which has nothing to do with this service. The
-#     service's `SOLVER_BUSY` (`schema.py:473`) reaches `cpsat-client.ts`'s
-#     `toOutcome` as `status:"ERROR"` plus an `error.code`, and nothing
-#     reads that back until Task 06b writes the status translation.
+#     THE CALLER SIDE IS WIRED, as of Task 06b — this note used to say
+#     otherwise and that is now stale. `build.ts` imports `cpsat-client.ts`,
+#     and the service's `SOLVER_BUSY` (`schema.py:473`) reaches
+#     `cpsat-client.ts`'s `toOutcome` as `status:"ERROR"` plus
+#     `error.code === "SOLVER_BUSY"`, which `build.ts:1483-1484` maps to
+#     `greedy("solver_busy")` — a valid board, plus copy (`board.result.busy`,
+#     all four locales) that promises a retry helps. That is a different
+#     answer from the LOCAL `MAX_SOLVER_QUEUE`/z3-WASM `"solver_busy"` path
+#     `build.ts` already had; both land on the same status key on purpose.
 #
-#     So until 06 and 06b land, a second concurrent organiser does not get
-#     a graceful greedy board — they get whatever the unwired error path
-#     does. That is the reason 1 is a floor rather than a recommendation.
-#     Raise it once concurrent-solve behaviour has actually been measured
-#     on this machine shape.
+#     So a second concurrent organiser against ONE machine (CPSAT_MAX_WORKERS
+#     = 1) already gets a graceful greedy board today, not an unwired error.
+#     `[services.concurrency]` above plus `fly scale count 10` (DEPLOY.md
+#     step 5) is what turns "graceful fallback for organiser #2" into
+#     "organiser #2 gets a real solve on a second machine" — 1 stays a floor
+#     for per-machine concurrency; it is machine COUNT that now carries the
+#     ten-organiser target, not this value. Raise this only once
+#     concurrent-solve behaviour has actually been measured on this machine
+#     shape.
 
 # Secrets (fly secrets set --app cp-sat):
 #   CPSAT_SERVICE_SECRET — new, distinct from apps/web's CRON_SECRET. Never
