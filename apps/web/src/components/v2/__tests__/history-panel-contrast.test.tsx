@@ -13,7 +13,7 @@
 // can't reach the checkpoint list — it loads via an effect on mount.
 import { describe, expect, it, vi } from "vitest";
 import { renderIsland, propsOf, textOf } from "@/components/__tests__/_hook-harness";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -57,7 +57,7 @@ async function renderWithCheckpoints(checkpoints: unknown[]): Promise<Island> {
 }
 
 const findByText = (island: Island, text: string): ReactElement | undefined =>
-  island.tree().find((el: ReactElement) => textOf(propsOf(el).children) === text);
+  island.tree().find((el: ReactElement) => textOf(propsOf(el).children as ReactNode) === text);
 
 describe("HistoryPanel — save-point list stays legible (contrast regression)", () => {
   it("carries no dark: utility anywhere in the panel", async () => {
