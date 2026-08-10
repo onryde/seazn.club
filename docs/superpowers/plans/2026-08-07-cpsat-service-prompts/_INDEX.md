@@ -130,6 +130,57 @@ greedy fallback firing on a board cp-sat should have solved.
 C0's ruling (**soft, new T1**) was ratified by the owner on 2026-08-10 and
 gates the placer halves of C1 and C2. It is settled — do not re-ask it.
 
+### Close all three through ONE contract revision, not three
+
+Owner ruling 2026-08-10. Every one of C1, C2 and C4 needs a wire addition:
+
+- C1 — a representation for rules scoped above the division
+- C2 — `court_allow`, i.e. a per-fixture domain over (court, start)
+- C4 — `division_index` on `PinnedRow`
+
+Three separate proto bumps would each cost a regen of BOTH stub sets, an
+ACL pass, and a drift-gate cycle. **Revise the contract once, covering all
+three, then build the three model halves independently against it.** Do not
+let a task ship a narrow proto change that a later one has to widen — that
+is the same mistake the per-court-grid note above already warns against.
+
+### The rename rides on that same revision
+
+`cp-sat` names the algorithm family, not the domain, and it currently spells
+SEVEN different namespaces identically: the directory, the Python package
+`cp_sat`, the `CPSAT_*` env prefix, the proto package `seazn.cpsat.v1`, the
+Fly app (hence `cp-sat.internal`), the `BuildResult.engine` label, and this
+plan directory. Leaking a theorem-prover family name into the product is
+backwards, and the whole point of the ACL is that `build.ts` cannot know
+what solves.
+
+**Recommended, pending final sign-off on the word itself: `placement`** —
+directory `services/placement`, package `placement`, env `PLACEMENT_*`,
+proto `seazn.placement.v1`, Fly app `placement` → `placement.internal`. It
+is this repo's own ubiquitous language (placer vs verifier) and it names the
+domain act. `scheduler-*` was considered and rejected: scheduling is what
+the entire application does, so it does not distinguish this service.
+
+The `engine` label needs a DIFFERENT word — `placement` would not
+distinguish it from greedy, which also places. Recommended:
+**`greedy | optimized`**, which survives the next solver swap too.
+
+Measured cost, 2026-08-10: **1013 references across 66 files** — 482 of them
+prose in `docs/`, 531 code and config. It is nearly free today and gets
+expensive at exactly two moments:
+
+1. **Tasks 07 and 11 add assertions** on the label and the paths.
+2. **First deploy** — after that, renaming the Fly app means recreating it
+   and re-issuing `CPSAT_SERVICE_SECRET`.
+
+Checked rather than assumed: the engine label is **not persisted** — not in
+`core`, not event-sourced, absent from every golden and corpus. So there is
+no migration and no re-baseline. Only `DEFAULT_HOST` (`cpsat-client.ts:127`)
+must move in lockstep with the app name.
+
+**Order of work:** 06b → 07 → 11 → rename + unified contract revision →
+C2 → C1 → C4 → deploy cycle → Prompt 10.
+
 ### Prompt 10 has a second gate now: the per-court-grid capability gap
 
 Prompt 05c found that CP-SAT was placing fixtures at start times the
