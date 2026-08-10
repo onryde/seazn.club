@@ -117,10 +117,12 @@ describe("SPEC-1 discipline card detail (W4)", () => {
         by: "H",
         person: "H-p3",
         class: "green",
-        reason: "dangerous play",
+        // S4 (#428) — reason is now PeriodSuspensionReason, a closed enum;
+        // "dangerous_play" is FIH's own declared member (hockey.ts).
+        reason: "dangerous_play",
       }),
     );
-    expect(card).toMatchObject({ personId: "H-p3", color: "green", reason: "dangerous play" });
+    expect(card).toMatchObject({ personId: "H-p3", color: "green", reason: "dangerous_play" });
   });
 
   it("ice hockey names the player who serves a bench minor", () => {
@@ -128,14 +130,15 @@ describe("SPEC-1 discipline card detail (W4)", () => {
       ledger("icehockey.suspension.start", {
         by: "A",
         class: "bench_minor",
-        reason: "too many men",
+        // S4 (#428) — IIHF's own declared member (icehockey.ts).
+        reason: "too_many_men",
         servedBy: "A-p9",
       }),
     );
     expect(card).toMatchObject({
       entrantSide: "A",
       color: "bench_minor",
-      reason: "too many men",
+      reason: "too_many_men",
       servedBy: "A-p9",
     });
     // A bench minor has no offender, only a server.

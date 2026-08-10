@@ -237,6 +237,54 @@ export const PeriodAdvance = z.strictObject({
   // `asOf` and the kernel's monotonic high-water mark.
   at: GameTime.optional(),
 });
+// S4 (#428) — the closed infraction vocabulary for BOTH sports on this
+// kernel. ONE shared union, deliberately: the kernel's job is to accept a
+// structurally valid payload from whichever sport's fold reads it — same
+// posture as `SetBasedSanctionLevel` (one shared ladder, per-sport mapping
+// lives beside each sport, not enforced by the shared schema) — the
+// discriminator that actually tells hockey from icehockey is the envelope's
+// event type (`hockey.suspension.start` vs `icehockey.suspension.start`),
+// exactly as `PeriodSuspensionStart`/`PeriodSuspensionEnd` already rely on
+// the envelope type rather than the payload shape (see the "ambiguous
+// suspension shape" test). Which subset each FEDERATION actually offers is
+// declared per sport — `HOCKEY_SUSPENSION_REASONS` / `ICEHOCKEY_SUSPENSION_
+// REASONS` — "gate by variant, not by kernel" (S04 prompt gotcha).
+//
+// IIHF's 18 named infractions + `other` (icehockey.ts), FIH's smaller
+// physical-infraction subset (`tripping`/`hooking`/`obstruction`/
+// `dangerous_play`) plus FIH-specific `dissent`/`time_wasting` + `other`
+// (hockey.ts) — union, no duplicates. Sourced from secondary IIHF/FIH rule
+// summaries this session, not the primary IIHF Situation Handbook PDF or the
+// FIH Rules of Hockey PDF — recorded in DOMAIN.md, not overclaimed as a
+// primary citation the way football's Law 12 (theifab.com, read directly)
+// is.
+export const PeriodSuspensionReason = z.enum([
+  "tripping",
+  "hooking",
+  "holding",
+  "holding_the_stick",
+  "slashing",
+  "high_sticking",
+  "cross_checking",
+  "roughing",
+  "elbowing",
+  "charging",
+  "boarding",
+  "checking_from_behind",
+  "interference",
+  "delay_of_game",
+  "too_many_men",
+  "unsportsmanlike_conduct",
+  "fighting",
+  "illegal_equipment",
+  "obstruction",
+  "dangerous_play",
+  "dissent",
+  "time_wasting",
+  "other",
+]);
+export type PeriodSuspensionReason = z.infer<typeof PeriodSuspensionReason>;
+
 export const PeriodSuspensionStart = z.strictObject({
   by: EntrantId,
   person: PersonId.optional(),
@@ -245,7 +293,7 @@ export const PeriodSuspensionStart = z.strictObject({
   clockRef: z.string().min(1).optional(), // scorer's clock note, display only
   // W4 (#407) — the rest of an IIHF penalty row / FIH card row. See
   // SuspensionDetail in ./suspensions.ts for what each one is.
-  reason: z.string().min(1).optional(),
+  reason: PeriodSuspensionReason.optional(),
   servedBy: PersonId.optional(),
   minutes: z.number().int().positive().optional(),
   // W4a — the stamp that turns a recorded card into a TIMED one: with it the

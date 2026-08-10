@@ -502,7 +502,31 @@
             "type": "string"
           },
           "reason": {
-            "minLength": 1,
+            "enum": [
+              "boarding",
+              "charging",
+              "checking_from_behind",
+              "cross_checking",
+              "dangerous_play",
+              "delay_of_game",
+              "dissent",
+              "elbowing",
+              "fighting",
+              "high_sticking",
+              "holding",
+              "holding_the_stick",
+              "hooking",
+              "illegal_equipment",
+              "interference",
+              "obstruction",
+              "other",
+              "roughing",
+              "slashing",
+              "time_wasting",
+              "too_many_men",
+              "tripping",
+              "unsportsmanlike_conduct"
+            ],
             "type": "string"
           },
           "servedBy": {

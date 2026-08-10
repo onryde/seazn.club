@@ -7,8 +7,26 @@
 // competition demands a winner.
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { PlayerStatsModel } from "../../stats/stats.ts";
-import { makePeriodModule } from "../period/kernel.ts";
+import { makePeriodModule, type PeriodSuspensionReason } from "../period/kernel.ts";
 import { HOCKEY_SUSPENSIONS } from "../period/suspensions.ts";
+
+// S4 (#428) — FIH's own subset of the shared `PeriodSuspensionReason` union:
+// the physical-infraction core common to both codes on this kernel
+// (tripping/hooking/obstruction/dangerous_play) plus FIH-specific
+// (dissent/time_wasting) plus other. Deliberately SMALLER than icehockey's
+// set and excludes every icehockey-only member (fighting, boarding,
+// cross_checking, …) — an FIH card never offers those. Declared here, not
+// enforced by the (shared) event schema — see kernel.ts's comment on
+// PeriodSuspensionReason for why. Secondary-source sourced; see DOMAIN.md.
+export const HOCKEY_SUSPENSION_REASONS: readonly PeriodSuspensionReason[] = [
+  "tripping",
+  "hooking",
+  "obstruction",
+  "dangerous_play",
+  "dissent",
+  "time_wasting",
+  "other",
+];
 
 const positions: PositionCatalog = {
   groups: [

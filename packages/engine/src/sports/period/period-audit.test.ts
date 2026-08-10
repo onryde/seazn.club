@@ -183,7 +183,9 @@ describe("W4 audit — suspension infraction, server and awarded duration", () =
       start,
       {
         type: "icehockey.suspension.start",
-        payload: { by: IA, class: "bench_minor", reason: "too many men", servedBy: "ia-9" },
+        // S4 (#428) — reason is now PeriodSuspensionReason, a closed enum;
+        // "too_many_men" is IIHF's own declared member (icehockey.ts).
+        payload: { by: IA, class: "bench_minor", reason: "too_many_men", servedBy: "ia-9" },
       },
     ] as ModuleEvent[];
     const state = foldIce(events);
@@ -198,7 +200,8 @@ describe("W4 audit — suspension infraction, server and awarded duration", () =
       start,
       {
         type: "hockey.suspension.start",
-        payload: { by: FA, person: "fa-3", class: "yellow", minutes: 10, reason: "dangerous play" },
+        // S4 (#428) — "dangerous_play" is FIH's own declared member (hockey.ts).
+        payload: { by: FA, person: "fa-3", class: "yellow", minutes: 10, reason: "dangerous_play" },
       },
     ]);
     expect(state.suspensions[0]?.minutes).toBe(10);
