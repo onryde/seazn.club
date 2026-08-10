@@ -214,6 +214,72 @@ than "the cutover works". A four-value allow-list is also not an assertion:
 Task 11 owes a scenario that REQUIRES the optimised engine and skips loudly
 when the service is down.
 
+### The solver was winning boards by IGNORING a rule it was never sent
+
+Found 2026-08-10 by CI on PR #501 — the first time the app's server layer ever
+ran against a real remote solver. It is the most consequential defect this
+programme shipped, and every gate was green while it was live.
+
+**`perEntrantMinRest` was never sent.** It is a GLOBAL per-entrant rest in
+`SlotConfig` (`calendar.ts:39`), and `SolveBuildInput.constraints` carries only
+matchMinutes / gapMinutes / restByDivision / dayCapByDivision. So the solver
+never heard about it.
+
+**What that produced was not a slow path, it was a WRONG WIN.** Measured on a
+5-entrant board: before the fix the service returned a board that "beat"
+greedy and reported `engine: "optimized"` — achieved by placing cards greedy
+had correctly kept apart. After forwarding the rule, the same board comes back
+`OPTIMAL`, `tiersCompleted=4`, `placed=10`, with metrics **byte-identical to
+the greedy seed** (makespan 270 / idle gap 90 / imbalance 0). `isStrictlyBetter`
+is strict, so `!improved` and the board is reported `engine: "greedy"`,
+`status: "already_optimal"`.
+
+So the greedy fallback appearing after the fix is not a regression — **it is
+the fake win disappearing.** Read any pre-fix `engine: "optimized"` measurement
+with that in mind.
+
+Worse, on a board whose pins genuinely contradict, the status was
+`already_optimal` — the damaging one, per `build.ts`'s own comment: an
+organiser told their board is optimal has no reason to look again. Nothing
+downstream catches it either: `isBlockingConflict` (`calendar.ts:202-209`) is
+court / person_overlap / window / order-with-direct, so a rest violation is
+**warn-only** at the verifier gate.
+
+**Fixed in `build.ts`'s translation only** — no proto change, no stub regen, no
+Python change. `DivisionRule.min_rest_minutes` already existed and
+`model.py:303,337` already enforced it; the global floor is folded into
+`restByDivision` as a MAX per division, covering every division on the board
+including `""`. Semantics verified identical: `model.py:341`'s participant-rest
+interval is `match_minutes + rest` wide, which is what `perEntrantMinRest`
+always meant, so there is no off-by-`match_minutes`.
+
+Engine suite unchanged at **591/0/613** without a solver; 594 with one, the +3
+being previously-gated integration tests, **zero other boards moved**.
+
+### C6 — pinned rows carry no entrant identity, so rest between PINS is undetectable
+
+Same investigation. `model.py`'s `by_entrant` rest grouping is built from
+`fixtures` ONLY. `PinnedRow` has carried no entrant identity since contract
+round 6 stripped it to reach positional identity, so the model cannot see that
+two PINNED rows violate rest with respect to each other.
+
+Consequence: the board z3 proved INFEASIBLE — two cards sharing an entrant,
+pinned 30 minutes apart under a 30-minute rest — comes back `OPTIMAL` even
+with the rest rule correctly forwarded. Measured: `tiersCompleted=4`,
+`placed=4`, never `INFEASIBLE`.
+
+**This is a wire-contract capability gap, not a TS bug**, and it is the same
+family as C4 (`existing` rows not consuming day-cap allowance): both are
+"pinned/existing rows are inert input the model does not constrain". Fold it
+into **#21**, the unified contract revision, rather than patching separately —
+it needs entrant identity on `PinnedRow`, exactly as C4 needs
+`division_index`.
+
+Its test is a live tripwire: `schedule-solver-telemetry.test.ts` >
+"forwards the pinned set an infeasible proof is about" is `it.skip` with the
+reason written at the skip, **assertions untouched**. Un-skip it when C6
+closes; it should pass unchanged.
+
 ### The three capability gaps that gate Prompt 10
 
 Owner decision 2026-08-10: **close all three, then delete z3.** The
