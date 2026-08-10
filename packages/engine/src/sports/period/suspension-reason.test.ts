@@ -10,7 +10,7 @@
 // `SetBasedSanctionLevel` is a shared union with the per-sport mapping living
 // beside each sport, not enforced by the shared schema.
 import { describe, expect, it } from "vitest";
-import { PeriodSuspensionReason } from "./kernel.ts";
+import { PeriodSuspensionReason, PeriodSuspensionStart } from "./kernel.ts";
 import { HOCKEY_SUSPENSION_REASONS } from "../hockey/hockey.ts";
 import { ICEHOCKEY_SUSPENSION_REASONS } from "../icehockey/icehockey.ts";
 
@@ -50,7 +50,7 @@ describe("PeriodSuspensionReason — shared union, per-sport subsetting (S4/#428
     }
   });
 
-  it("PeriodSuspensionStart accepts a valid reason from either sport's set, and rejects a foreign one", () => {
+  it("PeriodSuspensionReason (the bare enum) rejects a value outside the 23 declared members", () => {
     expect(
       PeriodSuspensionReason.safeParse(HOCKEY_SUSPENSION_REASONS[0]).success,
     ).toBe(true);
@@ -58,5 +58,38 @@ describe("PeriodSuspensionReason — shared union, per-sport subsetting (S4/#428
       PeriodSuspensionReason.safeParse(ICEHOCKEY_SUSPENSION_REASONS[0]).success,
     ).toBe(true);
     expect(PeriodSuspensionReason.safeParse("professional_foul").success).toBe(false);
+  });
+
+  // Review round 1, finding 2 — `reason` on `hockey.suspension.start` /
+  // `icehockey.suspension.start` has been API-writable free text since W4
+  // (#407), before this session's enum existed. `parsePayload` throws
+  // INVALID_EVENT on a schema mismatch and nothing catches it on the read
+  // path (engine-db/fold.ts), so hard-narrowing the FIELD (not just adding
+  // the enum) risked a 500 on any already-recorded suspension whose reason
+  // is not one of the 23 members — the exact "no existing recorded payload
+  // becomes invalid" constraint the brief itself states. `reason` is
+  // therefore a UNION (enum members parse identically to before; ANY other
+  // non-empty string also still parses, exactly as it did pre-#428) — only
+  // the bare `PeriodSuspensionReason` export (used for ENUM_VOCAB, the
+  // per-sport declared subsets, and the adjudication rule's canonical
+  // values) stays closed.
+  it("PeriodSuspensionStart.reason still accepts pre-existing free text — no throw on an unrecognized value", () => {
+    const legacy = { by: "H", class: "yellow", reason: "dangerous tackle, ref's own words" };
+    const parsed = PeriodSuspensionStart.safeParse(legacy);
+    expect(parsed.success, JSON.stringify(parsed.success ? null : parsed.error.issues)).toBe(true);
+    expect(parsed.success && parsed.data.reason).toBe("dangerous tackle, ref's own words");
+  });
+
+  it("PeriodSuspensionStart.reason still accepts every canonical enum member", () => {
+    for (const r of PeriodSuspensionReason.options) {
+      const parsed = PeriodSuspensionStart.safeParse({ by: "H", class: "yellow", reason: r });
+      expect(parsed.success, r).toBe(true);
+    }
+  });
+
+  it("PeriodSuspensionStart.reason still rejects an EMPTY string (both branches require min(1))", () => {
+    expect(PeriodSuspensionStart.safeParse({ by: "H", class: "yellow", reason: "" }).success).toBe(
+      false,
+    );
   });
 });

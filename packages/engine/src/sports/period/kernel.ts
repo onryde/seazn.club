@@ -293,7 +293,19 @@ export const PeriodSuspensionStart = z.strictObject({
   clockRef: z.string().min(1).optional(), // scorer's clock note, display only
   // W4 (#407) — the rest of an IIHF penalty row / FIH card row. See
   // SuspensionDetail in ./suspensions.ts for what each one is.
-  reason: PeriodSuspensionReason.optional(),
+  //
+  // Review round 1, finding 2 — a UNION, not a hard narrowing to
+  // PeriodSuspensionReason. `reason` has been free-text API-writable since
+  // W4/#407, before S4's enum existed, and `parsePayload` (called from the
+  // fold) throws INVALID_EVENT on a schema mismatch with nothing catching it
+  // on the read path — so a hard narrow would 500 on read for any
+  // already-recorded suspension whose reason is not one of the 23 declared
+  // members, which is exactly the "no existing recorded payload becomes
+  // invalid" constraint the brief itself states. Canonical members still
+  // parse identically (and are what the per-sport declared subsets and the
+  // adjudication rule use); any other non-empty string also still parses,
+  // exactly as it did pre-#428.
+  reason: z.union([PeriodSuspensionReason, z.string().min(1)]).optional(),
   servedBy: PersonId.optional(),
   minutes: z.number().int().positive().optional(),
   // W4a — the stamp that turns a recorded card into a TIMED one: with it the
