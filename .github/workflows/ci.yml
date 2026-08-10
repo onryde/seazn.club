@@ -570,11 +570,16 @@ jobs:
             console.log("pinned-pair infeasibility test: skipped as expected (documented capability gap, not an availability gate)");
           '
 
-      - name: Placement service logs and teardown
-        if: always()
-        run: |
-          docker logs placement-smoke || true
-          docker rm -f placement-smoke >/dev/null 2>&1 || true
+      # NOTE: the placement container is deliberately NOT torn down here. The
+      # smoke suite near the end of this job needs it too — `scripts/smoke.ts`
+      # asserts the solver answered, and `placementOptimizedSuite` gates itself
+      # on PLACEMENT_SERVICE_HOST. Teardown lives at the END of the job.
+      #
+      # An earlier revision removed it right here and smoke duly failed eleven
+      # steps later with "z3 build: the WASM loaded in prod" — a z3-era check
+      # that reads `solver_unavailable` + `tiers_completed: 0` when the board
+      # falls back to greedy. The failure named the WASM and had nothing to do
+      # with it.
 
       # DB-gated suites that live OUTSIDE src/server / src/lib / src/app, and so
       # were selected by no step in this job and skipped in the unit job for want
@@ -720,6 +725,15 @@ jobs:
       # at .next/standalone/apps/web/server.js — not the .next/standalone/
       # server.js that Next's own warning names.
       - name: Start server
+        # The SERVER is what talks to the solver — `build.ts` runs server-side,
+        # so these must be in the server's environment, not the test process's.
+        # Putting them only on the `Run smoke test` step would leave the app
+        # dialling the production default (`placement.flycast:50051`),
+        # unreachable from a runner, and every board would quietly come back
+        # greedy while smoke reported on it.
+        env:
+          PLACEMENT_SERVICE_HOST: localhost:50051
+          PLACEMENT_SERVICE_SECRET: ci-smoke-secret
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -758,6 +772,14 @@ jobs:
       - name: Dev server log (on failure)
         if: failure()
         run: cat dev-server.log || true
+
+      # End of the job, so every step above — the vitest suites AND the smoke
+      # run against the started server — had a reachable solver.
+      - name: Placement service logs and teardown
+        if: always()
+        run: |
+          docker logs placement-smoke || true
+          docker rm -f placement-smoke >/dev/null 2>&1 || true
 
   # -------------------------------------------------------------------------
   # CD (staging): Flyway migrate against the staging database, THEN deploy the
