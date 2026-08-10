@@ -404,6 +404,11 @@ jobs:
       # Mirrors placement-service.yml's `integration` job rather than inventing
       # a second pattern. The build is cached (type=gha) and shared with that
       # workflow, so this is usually a cache hit rather than a second build.
+      # Required before `build-push-action`, and easy to omit when copying that
+      # step alone — this job had no buildx, so the build failed in 56s having
+      # never reached a test. placement-service.yml's `integration` job carries
+      # the same pair; `cache-from`/`cache-to: type=gha` need it too.
+      - uses: docker/setup-buildx-action@v3
       - name: Build the placement service image
         uses: docker/build-push-action@v6
         with:
