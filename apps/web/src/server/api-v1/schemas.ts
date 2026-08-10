@@ -781,6 +781,70 @@ export const ScheduleConfig = z.object({
 });
 export type ScheduleConfig = z.infer<typeof ScheduleConfig>;
 
+/** A blackout or a session window, not a whole schedule — worth its own wording
+ *  so a 422 points the organiser at the row they inverted rather than at the
+ *  competition dates, which is what `ENDS_BEFORE_STARTS` reads as. */
+export const WINDOW_ENDS_BEFORE_STARTS = "A window's end cannot be before its start.";
+
+/** Every ordered instant pair a schedule config carries, checked on the way IN.
+ *
+ *  Deliberately on this wrapper and NOT on `ScheduleConfig` itself. That schema
+ *  is the READ path too — `schedule.ts:296` runs `ScheduleConfig.parse` over the
+ *  stored `schedule_settings.config` jsonb and `.parse` throws, and
+ *  `competition-schedule-ai.ts:2429` `safeParse`s the same rows. A refine there
+ *  would take every division that ALREADY holds a reversed range and turn its
+ *  schedule page into a 500, punishing organisers for a value the product let
+ *  them save. Refusing new bad writes fixes the source without breaking the
+ *  divisions the gap already produced; the stored rows stay readable and become
+ *  correctable through this very endpoint.
+ *
+ *  `startAt` is an instant and `endAt` is the venue-local END of its day (the
+ *  panel stores 23:59 in the org zone), so a same-day range is `startAt < endAt`
+ *  and equality is not expected — but it is permitted rather than rejected,
+ *  because a zero-length window is merely empty, not incoherent, and the
+ *  organiser gets a clearer signal from an unschedulable board than from a
+ *  validation error they cannot act on. Only strict inversion is refused. */
+function checkInstantOrder(
+  v: { config?: { startAt?: string | null; endAt?: string | null; blackouts?: { from: string; to: string }[]; sessionWindows?: { from: string; to: string }[] } },
+  ctx: z.RefinementCtx,
+): void {
+  const c = v.config;
+  if (c === undefined) return;
+  // EPOCH comparison, never string order. `IsoDateTime` is
+  // `z.iso.datetime({ offset: true })`, which accepts ANY offset, not just `Z`
+  // — and lexicographic order is chronological only within a single offset.
+  // `2026-03-01T01:00:00-05:00` (06:00 UTC) is genuinely later than
+  // `2026-03-01T02:00:00+02:00` (00:00 UTC), yet sorts BEFORE it as a string,
+  // so a reversed range from a mixed-offset client would sail straight through
+  // and reproduce the exact empty-board-no-error bug this check exists to stop.
+  // The console only ever emits `Z` (`isoFromZonedParts`), but this endpoint is
+  // a documented platform API and does not get to assume its own console is the
+  // only caller. The sibling `checkDateOrder` above IS safe on string order —
+  // it compares date-only `YYYY-MM-DD`, which carries no offset at all; do not
+  // read it as precedent for instants.
+  const at = (s: string): number => Date.parse(s);
+  const reversed = (from: string, to: string): boolean => {
+    const [a, b] = [at(from), at(to)];
+    // An unparseable value is not this check's to report — the field schema
+    // already rejected it, and guessing here would add a second, confusing
+    // issue on the same path.
+    return Number.isFinite(a) && Number.isFinite(b) && b < a;
+  };
+  if (typeof c.startAt === "string" && typeof c.endAt === "string" && reversed(c.startAt, c.endAt)) {
+    ctx.addIssue({ code: "custom", path: ["config", "endAt"], message: ENDS_BEFORE_STARTS });
+  }
+  for (const [key, rows] of [
+    ["blackouts", c.blackouts],
+    ["sessionWindows", c.sessionWindows],
+  ] as const) {
+    (rows ?? []).forEach((row, i) => {
+      if (reversed(row.from, row.to)) {
+        ctx.addIssue({ code: "custom", path: ["config", key, i, "to"], message: WINDOW_ENDS_BEFORE_STARTS });
+      }
+    });
+  }
+}
+
 export const PutScheduleSettings = z.object({
   config: ScheduleConfig,
   /**
@@ -797,7 +861,7 @@ export const PutScheduleSettings = z.object({
    *   string   → pin this division to an explicit zone
    */
   tz: z.string().min(1).max(64).nullish(),
-});
+}).superRefine(checkInstantOrder);
 export type PutScheduleSettings = z.infer<typeof PutScheduleSettings>;
 
 export const ScheduleSettings = z.object({

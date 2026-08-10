@@ -16,6 +16,12 @@ import {
  * transaction (case b) and real layout at a real viewport (case c) all live
  * outside a `renderToStaticMarkup` / jsdom-less suite.
  *
+ * Case (d), added in a later P09 follow-up: the minimum-rest floor note
+ * (`RestFloorNote`, #459) — a CLIENT COMPONENT that conditionally renders
+ * NOTHING at all (not a hidden/empty element, the whole node is absent).
+ * That branch is exactly what a jsdom-less unit test cannot watch happen
+ * against a real DOM, so it gets the same real-page treatment as (a)-(c).
+ *
  * Screenshot debt for the programme's converted surfaces (division builder,
  * competition wizard, board settings tab, blackout editor) is captured
  * separately, once, as verification evidence under the scratchpad — see the
@@ -404,5 +410,122 @@ test.describe("board renders cleanly at 375px under the new segmentation (case c
     // THIS exact page — so a real regression here would be caught, not just
     // a hypothetical one.
     await expectNoHorizontalScroll(page);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Case (d): the minimum-rest FLOOR note (`RestFloorNote`, #459) names
+// whichever of the four rest controls actually won, on the tab that is NOT
+// that control — and stays silent on the tab that IS.
+//
+// `restFloor` (packages/engine/src/scheduling/rest-floor.ts) is already
+// unit-tested and mutation-proven (engine 14/14, app 15/15); nothing here
+// re-derives that logic. What only e2e can prove is the WIRING: a real PUT
+// to /api/v1/divisions/{id}/schedule-settings, a real page load of the
+// Settings tab (StandaloneScheduleSettings → SettingsPanel) and the
+// Constraints tab (ConstraintsPanel), and the CLIENT COMPONENT actually
+// rendering the winning source's note beside the LOSING field — never
+// beside the winning one.
+//
+// CRITICAL (this repo's standing trap): assertions anchor on `="`, never on
+// bare attribute presence. React serialises an omitted prop as the literal
+// string "$undefined", so a probe that checks only the attribute NAME can
+// match in both the "note shown" and "note hidden" states. Every positive
+// assertion below therefore selects on the full `[data-rest-floor-source="…"]`
+// VALUE. The negative assertion is the one place a value can't be anchored
+// (there is no value — RestFloorNote returns null, so the whole `<span>` is
+// absent, not merely attribute-less), so it instead asserts a page-wide
+// COUNT of zero for the bare attribute selector; that is unambiguous because
+// each tab mounts exactly one RestFloorNote instance, proven by the sibling
+// positive assertions' own `toHaveCount(1)`.
+//
+// Tests 1 and 2 each double as the brief's negative case: the SAME stored
+// config is read from BOTH tabs in one test, so the assertion that the note
+// renders on the losing tab and the assertion that it is absent on the
+// winning tab share one seed — a suite that only ever checked the positive
+// half would pass against a note that always renders next to every field.
+// ---------------------------------------------------------------------------
+test.describe("minimum-rest floor note explains which control is winning (case d)", () => {
+  test("Settings 10 / Constraints 30: Settings tab explains the Constraints rule (30); Constraints tab — the actual winner — shows nothing", async ({
+    page,
+    request,
+  }) => {
+    const { divisionId } = await seedDivision(request, "RestFloorA");
+    const saved = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
+      config: { perEntrantMinRest: 10, constraints: { restMin: 30 } },
+    });
+    expect(saved.status).toBe(200);
+
+    await page.goto(await divisionPath(request, divisionId, "/schedule?tab=settings"));
+    await expect(page.locator("#boardset-rest")).toBeVisible({ timeout: 20_000 });
+    const settingsNote = page.locator('[data-rest-floor-source="restMin"]');
+    await expect(settingsNote).toBeVisible();
+    await expect(settingsNote).toContainText("30");
+    // Exactly one note on the page — no duplicate / stray render.
+    await expect(page.locator("[data-rest-floor-source]")).toHaveCount(1);
+
+    await page.goto(await divisionPath(request, divisionId, "/schedule?tab=constraints"));
+    await expect(page.locator("#rest-min")).toBeVisible({ timeout: 20_000 });
+    // (d) Negative case: restMin (30) IS the winner here, so the note beside
+    // IT must be entirely absent from the DOM — not present-with-blank-text.
+    await expect(page.locator("[data-rest-floor-source]")).toHaveCount(0);
+  });
+
+  test("Settings 45 / Constraints 10: Constraints tab explains the Settings rule (45); Settings tab — the actual winner — shows nothing", async ({
+    page,
+    request,
+  }) => {
+    const { divisionId } = await seedDivision(request, "RestFloorB");
+    const saved = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
+      config: { perEntrantMinRest: 45, constraints: { restMin: 10 } },
+    });
+    expect(saved.status).toBe(200);
+
+    await page.goto(await divisionPath(request, divisionId, "/schedule?tab=constraints"));
+    await expect(page.locator("#rest-min")).toBeVisible({ timeout: 20_000 });
+    const constraintsNote = page.locator('[data-rest-floor-source="perEntrantMinRest"]');
+    await expect(constraintsNote).toBeVisible();
+    await expect(constraintsNote).toContainText("45");
+    await expect(page.locator("[data-rest-floor-source]")).toHaveCount(1);
+
+    await page.goto(await divisionPath(request, divisionId, "/schedule?tab=settings"));
+    await expect(page.locator("#boardset-rest")).toBeVisible({ timeout: 20_000 });
+    // (d) Negative case, the other direction: perEntrantMinRest (45) IS the
+    // winner here, so ITS tab shows nothing.
+    await expect(page.locator("[data-rest-floor-source]")).toHaveCount(0);
+  });
+
+  test("'at least one break between a team's matches' (30+5=35) outranks both smaller numeric rests, silently, on BOTH tabs", async ({
+    page,
+    request,
+  }) => {
+    const { divisionId } = await seedDivision(request, "RestFloorC");
+    // matchMinutes 30 + gapMinutes 5 -> noBackToBack resolves to 35, which
+    // must beat BOTH numeric rests (20 and 15) without either tab's own
+    // field knowing why — the rest-floor-note.tsx docstring's own point:
+    // this control "routinely outranks both numbers without looking like a
+    // rest setting at all". Neither field is the winner here, so — unlike
+    // tests 1 and 2 — BOTH tabs show the note.
+    const saved = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
+      config: {
+        matchMinutes: 30,
+        gapMinutes: 5,
+        perEntrantMinRest: 20,
+        constraints: { restMin: 15, noBackToBack: true },
+      },
+    });
+    expect(saved.status).toBe(200);
+
+    await page.goto(await divisionPath(request, divisionId, "/schedule?tab=settings"));
+    await expect(page.locator("#boardset-rest")).toBeVisible({ timeout: 20_000 });
+    const settingsNote = page.locator('[data-rest-floor-source="noBackToBack"]');
+    await expect(settingsNote).toBeVisible();
+    await expect(settingsNote).toContainText("35");
+
+    await page.goto(await divisionPath(request, divisionId, "/schedule?tab=constraints"));
+    await expect(page.locator("#rest-min")).toBeVisible({ timeout: 20_000 });
+    const constraintsNote = page.locator('[data-rest-floor-source="noBackToBack"]');
+    await expect(constraintsNote).toBeVisible();
+    await expect(constraintsNote).toContainText("35");
   });
 });

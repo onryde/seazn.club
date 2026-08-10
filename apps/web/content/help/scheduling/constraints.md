@@ -22,6 +22,21 @@ Constraints are the rules the auto-scheduler plays by. They live in the division
 
 To go further and have the same plain-language instruction lay out the whole timetable, see [AI Schedule](/help/scheduling/ai-scheduling).
 
+## Minimum rest is set in four places, and the strictest wins
+
+Rest is the one setting with more than one home, so it is worth knowing which of them is in charge:
+
+- **Minimum rest per entrant** on the **Settings** tab.
+- **Minimum rest** on the **Constraints** tab.
+- **At least one break between a team's matches**, the checkbox below it.
+- A per-pool or per-division override, if your competition has one.
+
+They do not override one another and they are not ranked by how specific they are. The scheduler takes the **largest** of them. Put 30 in one and 10 in the other and entrants rest 30 — raising either raises the floor, and leaving one at 0 simply lets the others decide.
+
+The checkbox is the one that surprises people, because it is not a number. "At least one break" means a whole fixture has to fit in the gap, so it works out as **match length plus the gap between matches**. With 30-minute matches and a 5-minute changeover that is 35 minutes — more than a *Minimum rest* of 30, so the 30 stops mattering the moment you tick the box.
+
+You do not have to work this out yourself. Whenever one of the other settings outranks the rest field you are looking at, a line appears under it naming the setting that won and the rest entrants will actually get.
+
 ## Field fairness
 
 Over a long day some entrants end up on the same court every round while others move about. **Field fairness** evens that out — but only as a tie-break.

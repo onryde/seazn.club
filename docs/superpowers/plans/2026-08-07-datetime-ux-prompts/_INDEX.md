@@ -60,8 +60,8 @@ byte-identical. Pre-rebase tip was `f0921f28`.
 | 08 | Court-removal guard | **done** — `761b4ff4` |
 | 08b | Widen guard to OCCUPYING-not-movable | **done** — `c05ad9ed`. Owner ruling applied; `FIXED_OCCUPYING` derived, never a literal list. |
 | 11 | All 3 date/time fields resolve via `settings.orgTz` | **done** — `1372437b`, `fa289a71`, `3cdf6b33` |
-| 09 | E2E + smoke coverage | not started |
-| 10 | Regression audit (`disruption-signals.test.ts`) | not started — must run AFTER 08b, which changed the premise being audited |
+| 09 | E2E + smoke coverage | **done** — merged in PR #496 (`3bab9f43`); `schedule-datetime-ux.spec.ts` cases a/b/c observed running on `main` at `[205-207/240]` |
+| 10 | Regression audit (`disruption-signals.test.ts`) | **done** — audited inline, NO CHANGE NEEDED; see the section of that name below |
 
 ## Parallel execution
 
@@ -504,6 +504,7 @@ label and hint at whichever input rendered first.
 **Still unfixed from the list above:** neither control shows the *other's*
 current value or the resulting effective floor. The tip explains the rule; it
 does not show the arithmetic for the organiser's actual numbers.
+**→ ACTIONED 2026-08-10, see "The effective rest floor" below.**
 
 Screenshots for this change were **waived by the owner** ("don't need screenshot
 for me"), so the #349 bar (1280 / 320 / 768) was not exercised. The reviewer
@@ -512,3 +513,132 @@ flagged one speculative visual risk it would have covered: the tip sits in a
 exact grid carries a comment recording a prior 20px row mismatch
 (`settings-panel.tsx:252-259`). CSS reading found no height delta — 14px small
 button inside a `text-xs` label with `items-center` — but it is unverified.
+
+## The effective rest floor — 2026-08-10, branch `worktree-min-rest-i18n`
+
+Closes the "still unfixed" line above, and closes the remaining i18n debt in
+`constraints-panel.tsx` that the previous round left behind.
+
+### The finding that changed the design
+
+The rest floor is the MAX of **four** controls, not the two the owner spotted:
+
+    perEntrantMinRest              Settings tab
+    constraints.restMin            Constraints tab
+    constraints.restByGroup[k]     per-pool / per-division override
+    noBackToBack                   → matchMinutes + gapMinutes
+
+The fourth is the one that actually bites. "At least one break between a team's
+matches" is a CHECKBOX two rows under the number, and with a 30-minute match and
+a 5-minute gap it sets a floor of 35 — silently outranking a `restMin` of 30 on
+the same screen. A tip reciting the rule cannot fix that; the surface has to
+show the resolved number and name the winner.
+
+### What shipped
+
+- `packages/engine/src/scheduling/rest-floor.ts` — a LEAF (imports nothing, like
+  `grid-step.ts`) exporting `restFloor()` → `{minutes, source, groupId?}`, plus
+  subpath export `@seazn/engine/scheduling/rest-floor` so the schedule page's
+  client bundle does not pull the solvers.
+- `effectiveRestMinutes` in `calendar.ts` is now `restFloor(…).minutes`. Kept as
+  a wrapper rather than replaced at the call sites: that name is what the placer,
+  the verifier, `build-encode.ts` and `repair.ts` ask, and
+  `build-encode-parity.test.ts` proves those two agree through it.
+- `apps/web/src/components/v2/rest-floor-note.tsx` — one line under either
+  control, CONDITIONAL: silent when the field it sits beside is the winner, and
+  silent at a floor of 0. Emits `data-rest-floor-source`.
+- `board/types.ts` `BoardConfig.constraints?` and `constraints-panel.tsx`
+  `Settings.config.{perEntrantMinRest,matchMinutes,gapMinutes}?` — both were on
+  the prop ALL ALONG (one `getScheduleSettings` feeds both panels the same
+  object, `schedule/page.tsx:106` → 318 and 331); nothing had declared them.
+  This was a type gap, not a data gap, so no prop threading was needed.
+- 36 new keys × 4 locales (3313 each), help page section, `constraints.md`.
+
+### Rulings worth not re-deriving
+
+- **Tie goes to the earlier source.** Each source displaces the running max only
+  when STRICTLY greater, so a `restMin` of 30 equal to a `perEntrantMinRest` of
+  30 does not claim the credit. Pinned by test; without a tie case the
+  pool-vs-division lookup ORDER is invisible (mutant M6 survived until one was
+  added).
+- **A `restByGroup` entry can never win in the panels.** Neither knows which pool
+  an entrant is in, so neither passes a `group`. The note must not quote that
+  number — asserted, because showing a pool's 60 to an organiser who set 20
+  would be worse than saying nothing.
+- **The guard went on `PutScheduleSettings`, never on `ScheduleConfig`** (this is
+  the date-order change, same branch). `ScheduleConfig` is the READ path too:
+  `schedule.ts:296` runs `.parse` over the stored jsonb and it THROWS, and
+  `competition-schedule-ai.ts:2429` `safeParse`s the same rows. A refine there
+  turns every division that already holds a reversed range into a 500.
+
+### Two traps this round paid for again
+
+- **A parity test between a wrapper and its delegate is a TAUTOLOGY.** The first
+  version asserted `restFloor(x).minutes === effectiveRestMinutes(x)` after
+  making the latter return exactly the former — it could not fail under any
+  mutation. Replaced with an independent oracle (candidates into an array, one
+  `Math.max`), and both functions are checked against that across 1,152 combos.
+- **A mutant that stops the suite COLLECTING scores as a survivor.** Substituting
+  an undefined identifier gave `total=0 failed=0`, which the runner read as
+  "mutant survived". Any mutation runner here must compare the mutant's test
+  COUNT against the baseline and report INVALID, not SURVIVED. Re-run with a
+  compiling mutant, it died with 3 reds.
+
+### Gates, orchestrator-measured
+
+engine 14/14 · calendar+shared-semantics+parity 67/67 · apps/web
+`src/components/v2` 840/840 across 95 suites, 0 foreign paths · engine tsc 0 ·
+apps/web tsc 0 · eslint 0 on all changed files · `openapi:gen` +
+`i18n:gen-keys` + `schema:snapshot` all clean (the `superRefine` does not alter
+the emitted JSON Schema, so `openapi/v1.json` is unchanged) · 14 mutants killed
+across the two suites, every file restored byte-identically.
+
+### Owed / not done
+
+- Screenshots waived again by the owner. The #349 bar (1280/320/768) is NOT
+  exercised for the new note; the seven-width e2e matrix remains the backstop.
+- The note is a `<span>` OUTSIDE the inputs' `aria-describedby` set. Deliberate
+  for now — it is a live-updating explanation, not a static description — but
+  under review; if it should be described, the ids are `boardset-rest-hint` and
+  `rest-min-hint rest-min-unit`.
+
+### Review round — 4 findings, all actioned
+
+1. **CRITICAL, mine.** `checkInstantOrder` compared ISO instants with string
+   `<`. `IsoDateTime` is `z.iso.datetime({ offset: true })` and accepts ANY
+   offset, so lexicographic order is chronological only within one offset. The
+   reviewer produced a working counter-example: `2026-03-01T01:00:00-05:00`
+   (06:00 UTC) → `2026-03-01T02:00:00+02:00` (00:00 UTC) is genuinely reversed
+   yet sorts the right way round, so it was accepted — reproducing the exact
+   empty-board-no-error bug the check exists to stop. Reachable because
+   `/api/v1/divisions/[id]/schedule-settings` is a documented platform endpoint;
+   the console's own `isoFromZonedParts` only ever emits `Z`, which is what my
+   comment wrongly reasoned from. **The sibling `checkDateOrder` at
+   `schemas.ts:44` IS safe on string order — it compares date-only
+   `YYYY-MM-DD`, which carries no offset. Do not read it as precedent for
+   instants.** Now compares `Date.parse`; three mixed-offset cases added, and
+   reverting to string compare reds all three.
+2. **Important, a11y.** The note rendered as a bare `<span>` in neither input's
+   `aria-describedby`, while the sibling hint and unit spans were both in it —
+   so a screen-reader user heard everything except the line explaining why their
+   number is ignored. Fixed by giving the note a required `id` and appending it
+   to the described set, but ONLY when it renders: a dangling
+   `aria-describedby` is worse than none, and an always-rendered empty span is
+   an empty description. `restFloorNoteShown()` is exported so the panel and the
+   component share one predicate instead of two copies of the condition.
+3. **Judgement call, accepted.** The copy said "will actually rest N min" as
+   unqualified fact, but a `restByGroup` override can raise the real floor above
+   anything the panel can resolve (no `group` is passed). Reworded to "will rest
+   at least N min" in all four locales.
+4. **Minor.** `SOURCE_KEY` was `Record<string, MessageKey>`, so a fifth
+   `RestFloorSource` would have compiled and hit `msg(undefined)` at runtime.
+   Now `Record<RestFloorSource, MessageKey>`.
+
+Reviewer explicitly cleared: `restFloor` vs the old `effectiveRestMinutes`
+(byte-equivalent, including `noBackToBack === true`), the oracle tests as
+non-tautological, the pool-before-division tie credit, the leaf-import bundle
+claim, fr/es grammar, and amber-700-on-white contrast (~5.02:1, AA at 12px).
+
+**Note for the next round: `vitest` does not typecheck.** The suite was 1134/1134
+green while `tsc` had five TS2741 errors in that very file, from a prop the
+review fix had just made required.
