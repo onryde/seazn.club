@@ -211,6 +211,13 @@ export function ScheduleResultStrip({
       data-testid="schedule-result-strip"
       data-tone={flagged ? "flag" : "plain"}
       data-status={solver.status}
+      // Task 11: the only DOM-observable proof of which engine produced this
+      // board. `ENGINE_KEY` above deliberately renders "optimized" with the
+      // SAME copy as z3 in every locale, so the rendered text cannot tell them
+      // apart — this attribute is additive, carries no new copy, and owes no
+      // i18n. Assert it as `data-engine="optimized"`, never bare presence:
+      // React serialises an omitted prop as the string "$undefined".
+      data-engine={solver.engine}
       aria-label={msg("board.result.aria")}
       className={`rounded-lg border px-3 py-2.5 ${
         flagged ? "border-amber-200 bg-amber-50/70" : "border-slate-200 bg-slate-50"

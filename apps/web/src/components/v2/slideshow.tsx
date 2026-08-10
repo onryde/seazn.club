@@ -18,7 +18,16 @@ import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { BracketSlideFixture, Slide } from "@/server/slideshow-data";
 import { slideAt, stepFor } from "@/components/v2/slideshow-rotation";
-import { doubleElimBracket, lbRowUnit, pagePlayoffBracket, rowCenter, twoSidedBracket } from "@seazn/engine/scheduling";
+// Leaf import, not the barrel — see bracket-panel.tsx's comment: the barrel
+// now drags `build.ts` -> `placement-client.ts` -> `@grpc/grpc-js` (Node-only)
+// into this client component's browser bundle and breaks `next build` outright.
+import {
+  doubleElimBracket,
+  lbRowUnit,
+  pagePlayoffBracket,
+  rowCenter,
+  twoSidedBracket,
+} from "@seazn/engine/scheduling/bracket-layout";
 
 const SLIDE_MS = 9000;
 const POLL_MS = 45_000;

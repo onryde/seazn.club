@@ -16,6 +16,7 @@
     "./import": "./src/import/index.ts",
     "./officials": "./src/officials/index.ts",
     "./scheduling": "./src/scheduling/index.ts",
+    "./scheduling/bracket-layout": "./src/scheduling/bracket-layout.ts",
     "./scheduling/grid-step": "./src/scheduling/grid-step.ts",
     "./scheduling/rest-floor": "./src/scheduling/rest-floor.ts",
     "./scheduling/tz": "./src/scheduling/tz.ts",

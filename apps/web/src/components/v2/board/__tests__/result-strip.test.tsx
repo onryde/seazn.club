@@ -70,10 +70,36 @@ describe("ScheduleResultStrip — the numbers", () => {
     expect(html).toMatch(/Scheduled<\/dt><dd[^>]*>22 \/ 22<\/dd>/);
   });
 
+  /**
+   * Task 11 (placement cutover) — `data-engine` is the ONLY DOM-observable
+   * proof of which engine produced a board: the rendered provenance text
+   * gives "optimized" the SAME copy as `z3` in every locale (`it.each` below),
+   * so an e2e spec asserting the cutover has nothing else to read. Anchored on
+   * `="` for every value, never bare presence — React serialises an omitted
+   * prop as the string `"$undefined"`, so a probe that only checked the
+   * attribute existed would pass whether or not `solver.engine` ever reached
+   * the DOM at all.
+   */
+  it.each(["greedy", "z3", "z3+lns", "optimized"] as const)(
+    "carries engine '%s' on data-engine, not a different value",
+    (engine) => {
+      const html = render(metrics(), solver({ engine }));
+      expect(html).toContain(`data-engine="${engine}"`);
+      for (const other of ["greedy", "z3", "z3+lns", "optimized"] as const) {
+        if (other !== engine) expect(html).not.toContain(`data-engine="${other}"`);
+      }
+    },
+  );
+
   it("reports the run's provenance in the organiser's words, never the engine key", () => {
     const html = render(metrics(), solver({ engine: "z3+lns", elapsed_ms: 3200, moved: 6 }));
     expect(html).toContain("Solver, then refined");
-    expect(html).not.toContain("z3+lns");
+    // Scoped to the READABLE copy line, not the whole markup: Task 11 added
+    // `data-engine="z3+lns"`, a machine-readable attribute for e2e that is
+    // deliberately NOT organiser-facing copy — `provenance()` strips it out,
+    // so this still pins "the engine key never leaks into the sentence a
+    // person reads" without also forbidding the DOM hook that carries it.
+    expect(provenance(html)).not.toContain("z3+lns");
     expect(html).toContain("3.2s");
     expect(html).toContain("6 matches moved");
   });

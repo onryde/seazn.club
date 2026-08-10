@@ -39,7 +39,15 @@ export function stepFor(slideIndex: number, slides: readonly object[]): number {
 // G-audit: which bracket-shaped stages earn a slideshow slide, and whether
 // the shape actually lays out. Pure — shared by the server slide builder and
 // its unit tests (stepladder always lays out: the rung list IS the shape).
-import { doubleElimBracket, pagePlayoffBracket, twoSidedBracket } from "@seazn/engine/scheduling";
+//
+// Leaf import, not the barrel (Task 11 fix) — imported by slideshow.tsx, a
+// client component; see bracket-panel.tsx's comment for why the barrel breaks
+// `next build`.
+import {
+  doubleElimBracket,
+  pagePlayoffBracket,
+  twoSidedBracket,
+} from "@seazn/engine/scheduling/bracket-layout";
 
 export const BRACKET_SLIDE_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
 
