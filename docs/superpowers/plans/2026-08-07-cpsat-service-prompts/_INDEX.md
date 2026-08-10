@@ -368,20 +368,50 @@ So a red here is a moving target that tracks `uptime`, and it reads
 exactly like a real regression. Record a load reading beside any timing
 number, and never "fix" one of these by changing a timing constant.
 
-## Branch is 4 commits BEHIND `origin/main` as of 2026-08-10 09:00Z
+## Rebased onto `origin/main` 2026-08-10 09:1xZ — clean, 0 behind
 
-Main moved while this branch was in flight, and one of the moves is not
-neutral to this programme:
+73 commits replayed, ZERO conflicts, despite six overlapping files (the four
+`ui.json` dicts, `i18n-keys.ts`, `schemas.ts`, `packages/engine/package.json`).
+`git merge-tree --write-tree` predicted it correctly beforehand — use that to
+preview, it cost nothing and was right.
 
-- `d251d4df` — resolve the rest floor through one leaf that names the control
-- `10062c6c` — show which control sets the rest floor, and refuse below it
-- `37eb77f6` — e2e publish-gate fixture
+**Every sha recorded in the git-ignored ledger before this point is
+historical.** Take BASE from live `git log` when generating a review package.
 
-The rest-floor work touches the same concept as this programme's
-`restByDivision` wire field and `hardRestMinutesFor`. **Read those three
-commits before the next rebase** rather than resolving conflicts blind — the
-last rebase here had exactly one conflict and it was trivially an import
-move, which is not a safe expectation for this one.
+Upstream brought `packages/engine/src/scheduling/rest-floor.ts` (NEW) plus
+`calendar.ts`/`index.ts` changes — `d251d4df`, `10062c6c`, `37eb77f6`.
+Verdict after reading them: `restFloor()` does not change this programme's
+answers, and `hardRestMinutesFor` is NOT a new unifying leaf — it predates
+the rebase and covers a different source (typed `min_rest_minutes` rules).
+The refactor makes gap **C5** more visible, not less: there is now a clean
+shared leaf, and `build.ts`'s cp-sat translation still does not call it.
+
+## The gate is a DELTA, so cp-sat can ship an ILLEGAL board
+
+Found 2026-08-10 while verifying Task 07, and it converts C1/C2 from
+"missing capability" into "wrong output reaches the organiser".
+
+`build.ts`'s acceptance gate uses `rejectedBlockingConflicts` — a DELTA
+against the greedy seed's conflicts, not a test against zero. So whenever
+greedy already violates a rule, cp-sat may violate **the same rule** and pass:
+the delta is zero and nothing rejects it.
+
+Demonstrated, not theorised. Task 07's Board 1 puts a `startWindows` rule on
+an entrant. `SolveBuildInput.constraints` carries exactly four fields —
+matchMinutes, gapMinutes, restByDivision, dayCapByDivision — so the rule
+never reaches the solver (that is C1/C2). cp-sat then places the stranded
+fixture, "beats" greedy on placed count, and `validateAssignments` flags the
+violation the gate just waved through.
+
+Two consequences, both load-bearing:
+
+1. **Any test whose win condition is a constraint cp-sat never receives is
+   green by luck.** Board 1 flipped between pass and fail on consecutive runs
+   against one unchanged service — cp-sat sometimes lands the fixture inside
+   the window by coincidence. A single green run proves nothing here.
+2. Closing C1/C2 is no longer only about board quality. Until they land, the
+   delta gate is the only thing between a rule-violating board and an
+   organiser, and it is not doing that job.
 
 ## Parallel execution
 
