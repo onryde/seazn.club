@@ -1,10 +1,10 @@
-# CP-SAT Service — Scaffolding + BUILD/POLISH Cutover Implementation Plan
+# Placement Service — Scaffolding + BUILD/POLISH Cutover Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stand up the CP-SAT gRPC service and cut BUILD/POLISH over to it from z3, with greedy as the only fallback — exactly as designed in `docs/superpowers/specs/2026-08-07-cpsat-scheduler-design.md`.
+**Goal:** Stand up the Placement gRPC service and cut BUILD/POLISH over to it from z3, with greedy as the only fallback — exactly as designed in `docs/superpowers/specs/2026-08-07-placement-scheduler-design.md`.
 
-**Architecture:** A stateless Python gRPC service (`services/cp-sat`, `grpcio` sync + bounded `ThreadPoolExecutor`) receives a pre-computed slot grid + fixtures + constraints from `apps/web`'s `schedule.ts` (via a `packages/engine`-side client), solves with CP-SAT's interval/`NoOverlap` primitives, and returns assignments only. `schedule.ts`'s existing `validateAssignments` remains the sole verifier — CP-SAT is a placer, exactly like greedy and z3 are placers today. Fly 6PN private network, shared-secret auth, straight no-flag cutover once green.
+**Architecture:** A stateless Python gRPC service (`services/placement`, `grpcio` sync + bounded `ThreadPoolExecutor`) receives a pre-computed slot grid + fixtures + constraints from `apps/web`'s `schedule.ts` (via a `packages/engine`-side client), solves with CP-SAT's interval/`NoOverlap` primitives, and returns assignments only. `schedule.ts`'s existing `validateAssignments` remains the sole verifier — CP-SAT is a placer, exactly like greedy and z3 are placers today. Fly 6PN private network, shared-secret auth, straight no-flag cutover once green.
 
 **Tech Stack:** Python 3.11+, `ortools` (CP-SAT), `grpcio` + `grpcio-tools` + `grpcio-health-checking`, `pytest`. TypeScript side: `@grpc/grpc-js` + `ts-proto`, existing `vitest`.
 
@@ -13,10 +13,10 @@
 - Every change ships a test that fails without it (AGENTS.md standing rule).
 - No new user-facing string without all 4 locale dictionaries — N/A for this plan (no UI strings; internal service only).
 - `wall_seconds` requested by the caller is always clamped server-side to the 8-10s target — never trust a larger caller-supplied value (design spec, Target Wall Budget section).
-- CP-SAT is a placer only. It must never call or reimplement `validateAssignments` — TS remains the sole verifier (design spec, Service Boundary section; this is the direct fix for the placer/verifier-fork bug class on record in this repo's engine history).
+- Placement is a placer only. It must never call or reimplement `validateAssignments` — TS remains the sole verifier (design spec, Service Boundary section; this is the direct fix for the placer/verifier-fork bug class on record in this repo's engine history).
 - Straight cutover, no feature flag, z3's BUILD/POLISH code path removed in the same wave once this plan's tasks are green (design spec, z3 removal scope + resolved open item 12). Does not apply to REFLOW/`repair.ts` — out of scope for this plan entirely.
-- Shared secret for service auth is a **new**, distinct env var (`CPSAT_SERVICE_SECRET`) — never reuse `CRON_SECRET` (design spec, Internal Communication section).
-- New CI workflow is path-filtered to `services/cp-sat/**` and `proto/**` only — must never fire on unrelated PRs (design spec, CI section).
+- Shared secret for service auth is a **new**, distinct env var (`PLACEMENT_SERVICE_SECRET`) — never reuse `CRON_SECRET` (design spec, Internal Communication section).
+- New CI workflow is path-filtered to `services/placement/**` and `proto/**` only — must never fire on unrelated PRs (design spec, CI section).
 
 ---
 
@@ -24,13 +24,13 @@
 
 ```
 proto/scheduler.proto                                  # NEW — shared contract
-services/cp-sat/
+services/placement/
 ├── pyproject.toml                                      # NEW
-├── src/cp_sat/
+├── src/placement/
 │   ├── __init__.py                                     # NEW
 │   ├── config.py                                       # NEW — env-driven settings
 │   ├── schema.py                                       # NEW — proto <-> internal validation
-│   ├── model.py                                        # NEW — promoted from bench/cpsat_bench.py
+│   ├── model.py                                        # NEW — promoted from bench/placement_bench.py
 │   ├── objective.py                                    # NEW — T0-T3 chain, promoted from bench
 │   └── main.py                                         # NEW — gRPC server entrypoint
 ├── tests/
@@ -39,12 +39,12 @@ services/cp-sat/
 │   └── test_config.py                                  # NEW
 ├── Dockerfile                                           # NEW
 └── fly.toml                                             # NEW
-.github/workflows/cp-sat-service.yml                     # NEW — path-filtered CI
+.github/workflows/placement-service.yml                     # NEW — path-filtered CI
 packages/engine/src/scheduling/
-├── cpsat-client.ts                                      # NEW — gRPC client wrapper, mirrors z3-load.ts's role
+├── placement-client.ts                                      # NEW — gRPC client wrapper, mirrors z3-load.ts's role
 └── generated/scheduler.ts                                # NEW — ts-proto codegen output, not hand-written
 packages/engine/scripts/gen-proto.ts                     # NEW — codegen script (npm-runnable)
-packages/engine/src/scheduling/build.ts                  # MODIFY — solveBuild calls cpsat-client instead of z3
+packages/engine/src/scheduling/build.ts                  # MODIFY — solveBuild calls placement-client instead of z3
 packages/engine/src/scheduling/build-encode.ts           # DELETE (final task, once everything else is green)
 packages/engine/src/scheduling/build-lns.ts              # DELETE (final task)
 ```
@@ -55,7 +55,7 @@ packages/engine/src/scheduling/build-lns.ts              # DELETE (final task)
 
 **Files:**
 - Create: `proto/scheduler.proto`
-- Test: `services/cp-sat/tests/test_proto_compiles.py`
+- Test: `services/placement/tests/test_proto_compiles.py`
 
 **Interfaces:**
 - Produces: `SolveBuildRequest`, `SolveBuildResponse`, `SchedulerService.SolveBuild` RPC — every later task depends on the exact field names below. Field names/types must match the design spec's Contract section verbatim.
@@ -65,7 +65,7 @@ packages/engine/src/scheduling/build-lns.ts              # DELETE (final task)
 ```protobuf
 syntax = "proto3";
 
-package seazn.cpsat.v1;
+package seazn.placement.v1;
 
 // -- Build/Polish (tier solver) --------------------------------------------
 
@@ -161,7 +161,7 @@ service SchedulerService {
 - [ ] **Step 2: Write the failing test**
 
 ```python
-# services/cp-sat/tests/test_proto_compiles.py
+# services/placement/tests/test_proto_compiles.py
 import subprocess
 import sys
 from pathlib import Path
@@ -169,7 +169,7 @@ from pathlib import Path
 def test_proto_compiles_to_python():
     repo_root = Path(__file__).resolve().parents[2]
     proto_path = repo_root / "proto" / "scheduler.proto"
-    out_dir = repo_root / "services" / "cp-sat" / "src" / "cp_sat" / "generated"
+    out_dir = repo_root / "services" / "placement" / "src" / "placement" / "generated"
     out_dir.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         [
@@ -188,14 +188,14 @@ def test_proto_compiles_to_python():
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `cd services/cp-sat && python3 -m pytest tests/test_proto_compiles.py -v`
+Run: `cd services/placement && python3 -m pytest tests/test_proto_compiles.py -v`
 Expected: FAIL — `grpc_tools` not installed yet, or `proto/scheduler.proto` not found.
 
-- [ ] **Step 4: Create `services/cp-sat/pyproject.toml` and install deps**
+- [ ] **Step 4: Create `services/placement/pyproject.toml` and install deps**
 
 ```toml
 [project]
-name = "cp-sat-service"
+name = "placement-service"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
@@ -213,18 +213,18 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 ```
 
-Run: `cd services/cp-sat && python3 -m venv venv && venv/bin/pip install -e ".[dev]"`
+Run: `cd services/placement && python3 -m venv venv && venv/bin/pip install -e ".[dev]"`
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cd services/cp-sat && venv/bin/python3 -m pytest tests/test_proto_compiles.py -v`
+Run: `cd services/placement && venv/bin/python3 -m pytest tests/test_proto_compiles.py -v`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add proto/scheduler.proto services/cp-sat/pyproject.toml services/cp-sat/tests/test_proto_compiles.py
-git commit -m "feat(cp-sat): add shared proto contract for SolveBuild"
+git add proto/scheduler.proto services/placement/pyproject.toml services/placement/tests/test_proto_compiles.py
+git commit -m "feat(placement): add shared proto contract for SolveBuild"
 ```
 
 ---
@@ -232,9 +232,9 @@ git commit -m "feat(cp-sat): add shared proto contract for SolveBuild"
 ### Task 2: BUILD model — promote from bench, verify against the proven production board
 
 **Files:**
-- Create: `services/cp-sat/src/cp_sat/model.py`
-- Test: `services/cp-sat/tests/test_model.py`
-- Reference (read fully before writing, do not reinvent): `services/cp-sat/bench/cpsat_bench.py`, specifically `build_model` (line 596) and `run_full_chain` (line 843) — this is already-validated code (14-point sweep, hand-rolled constraint checker, zero violations, per the design spec's Investigation Summary). Adapt its interval/`NoOverlap` construction; do not rewrite the modeling approach.
+- Create: `services/placement/src/placement/model.py`
+- Test: `services/placement/tests/test_model.py`
+- Reference (read fully before writing, do not reinvent): `services/placement/bench/placement_bench.py`, specifically `build_model` (line 596) and `run_full_chain` (line 843) — this is already-validated code (14-point sweep, hand-rolled constraint checker, zero violations, per the design spec's Investigation Summary). Adapt its interval/`NoOverlap` construction; do not rewrite the modeling approach.
 
 **Interfaces:**
 - Consumes: nothing from other tasks (pure Python, no proto dependency — takes plain dicts/dataclasses so it's testable without a server).
@@ -242,20 +242,20 @@ git commit -m "feat(cp-sat): add shared proto contract for SolveBuild"
 
 - [ ] **Step 1: Read the reference implementation**
 
-Read `services/cp-sat/bench/cpsat_bench.py` lines 245-843 in full (the `Fixture`/`Slot`/`Existing`/`Board` dataclasses, `build_board`, `build_model`, `run_full_chain`). Note which parts are sweep-harness-specific (random board generation, JSON progress logging) versus core modeling (interval vars, `NoOverlap` calls, `symmetry_level=0`/`cp_model_probing_level=0` presolve settings — these MUST carry over, they are the fix for the silent-presolve-failure trap on record).
+Read `services/placement/bench/placement_bench.py` lines 245-843 in full (the `Fixture`/`Slot`/`Existing`/`Board` dataclasses, `build_board`, `build_model`, `run_full_chain`). Note which parts are sweep-harness-specific (random board generation, JSON progress logging) versus core modeling (interval vars, `NoOverlap` calls, `symmetry_level=0`/`cp_model_probing_level=0` presolve settings — these MUST carry over, they are the fix for the silent-presolve-failure trap on record).
 
 - [ ] **Step 2: Write the failing test using the proven production board**
 
 ```python
-# services/cp-sat/tests/test_model.py
-from cp_sat.model import build_model, solve
+# services/placement/tests/test_model.py
+from placement.model import build_model, solve
 
 def _production_board():
     # Mirrors the investigation's production shape: 37 fixtures, 5 courts,
     # 30/10 min match/gap, ~77k fixture-slots. Exact fixture/slot generation
-    # ported from services/cp-sat/bench/cpsat_bench.py's board builder for
+    # ported from services/placement/bench/placement_bench.py's board builder for
     # this same shape — reuse that function, don't hand-roll a second one.
-    from cp_sat_bench_boards import production_board  # see Step 2b
+    from placement_bench_boards import production_board  # see Step 2b
     return production_board()
 
 def test_production_board_solves_optimal_under_budget():
@@ -279,29 +279,29 @@ def test_no_court_double_booking():
 
 - [ ] **Step 2b: Extract the board-generation helper so both the bench and this test share it**
 
-Create `services/cp-sat/bench/cpsat_bench_boards.py` by moving the production-board-shape generation code out of `cpsat_bench.py`'s sweep list into a standalone `production_board()` function; re-import it back into `cpsat_bench.py` so the existing sweep still runs unchanged. This avoids a second, drifting copy of board-generation logic (the exact class of bug the REFLOW investigation already hit once with `syntheticBoard()`).
+Create `services/placement/bench/placement_bench_boards.py` by moving the production-board-shape generation code out of `placement_bench.py`'s sweep list into a standalone `production_board()` function; re-import it back into `placement_bench.py` so the existing sweep still runs unchanged. This avoids a second, drifting copy of board-generation logic (the exact class of bug the REFLOW investigation already hit once with `syntheticBoard()`).
 
-Run: `cd services/cp-sat && venv/bin/python3 -m pytest bench/ -v` (confirm the existing sweep still passes after the extraction, before moving on)
+Run: `cd services/placement && venv/bin/python3 -m pytest bench/ -v` (confirm the existing sweep still passes after the extraction, before moving on)
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `cd services/cp-sat && venv/bin/python3 -m pytest tests/test_model.py -v`
-Expected: FAIL — `cp_sat.model` does not exist yet.
+Run: `cd services/placement && venv/bin/python3 -m pytest tests/test_model.py -v`
+Expected: FAIL — `placement.model` does not exist yet.
 
 - [ ] **Step 4: Write `model.py`, adapting `build_model`/solve loop from the bench**
 
-Port `build_model` from `cpsat_bench.py:596-843` into `services/cp-sat/src/cp_sat/model.py`, changing only: (a) inputs become the plain-Python parameter list in the Interfaces block above instead of the bench's `Board` dataclass; (b) wrap the solve loop (the sweep's per-tier `cp_model.CpSolver()` + `solver.Solve(model)` calls) into a `solve(model, wall_seconds)` function returning the `SolveOutcome` dataclass; (c) strip sweep-only instrumentation (JSON progress printing). Keep `symmetry_level=0`, `cp_model_probing_level=0`, and every interval/`NoOverlap` construction byte-for-byte identical to the reference — these are proven, not being redesigned.
+Port `build_model` from `placement_bench.py:596-843` into `services/placement/src/placement/model.py`, changing only: (a) inputs become the plain-Python parameter list in the Interfaces block above instead of the bench's `Board` dataclass; (b) wrap the solve loop (the sweep's per-tier `cp_model.CpSolver()` + `solver.Solve(model)` calls) into a `solve(model, wall_seconds)` function returning the `SolveOutcome` dataclass; (c) strip sweep-only instrumentation (JSON progress printing). Keep `symmetry_level=0`, `cp_model_probing_level=0`, and every interval/`NoOverlap` construction byte-for-byte identical to the reference — these are proven, not being redesigned.
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cd services/cp-sat && venv/bin/python3 -m pytest tests/test_model.py -v`
+Run: `cd services/placement && venv/bin/python3 -m pytest tests/test_model.py -v`
 Expected: PASS — both tests green, production board OPTIMAL under 8s.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add services/cp-sat/src/cp_sat/model.py services/cp-sat/tests/test_model.py services/cp-sat/bench/cpsat_bench_boards.py services/cp-sat/bench/cpsat_bench.py
-git commit -m "feat(cp-sat): promote validated BUILD model from bench into the service package"
+git add services/placement/src/placement/model.py services/placement/tests/test_model.py services/placement/bench/placement_bench_boards.py services/placement/bench/placement_bench.py
+git commit -m "feat(placement): promote validated BUILD model from bench into the service package"
 ```
 
 ---
@@ -309,10 +309,10 @@ git commit -m "feat(cp-sat): promote validated BUILD model from bench into the s
 ### Task 3: T0-T3 objective chain
 
 **Files:**
-- Create: `services/cp-sat/src/cp_sat/objective.py`
-- Modify: `services/cp-sat/src/cp_sat/model.py` (`solve()` calls into this module)
-- Test: `services/cp-sat/tests/test_objective.py`
-- Reference: `cpsat_bench.py`'s `run_full_chain` (line 843), and `packages/engine/src/scheduling/build.ts` lines ~2051-2145 (`buildTiers`) for the four tier definitions this must match exactly: **T0 max-placed → T1 makespan → T2 worst idle gap → T3 court imbalance** (confirmed by direct read this session, not assumed).
+- Create: `services/placement/src/placement/objective.py`
+- Modify: `services/placement/src/placement/model.py` (`solve()` calls into this module)
+- Test: `services/placement/tests/test_objective.py`
+- Reference: `placement_bench.py`'s `run_full_chain` (line 843), and `packages/engine/src/scheduling/build.ts` lines ~2051-2145 (`buildTiers`) for the four tier definitions this must match exactly: **T0 max-placed → T1 makespan → T2 worst idle gap → T3 court imbalance** (confirmed by direct read this session, not assumed).
 
 **Interfaces:**
 - Consumes: `cp_model.CpModel`, fixture/interval variables from `model.py`.
@@ -321,9 +321,9 @@ git commit -m "feat(cp-sat): promote validated BUILD model from bench into the s
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# services/cp-sat/tests/test_objective.py
-from cp_sat.model import build_model, solve
-from tests.cp_sat_bench_boards_import import production_board  # re-exported from bench for test use
+# services/placement/tests/test_objective.py
+from placement.model import build_model, solve
+from tests.placement_bench_boards_import import production_board  # re-exported from bench for test use
 
 def test_all_four_tiers_complete_on_production_board():
     fixtures, courts, grid_slots, step_minutes, constraints, existing, deps = production_board()
@@ -345,23 +345,23 @@ def test_tier_order_is_lexicographic_not_weighted():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd services/cp-sat && venv/bin/python3 -m pytest tests/test_objective.py -v`
-Expected: FAIL — `cp_sat.objective` does not exist.
+Run: `cd services/placement && venv/bin/python3 -m pytest tests/test_objective.py -v`
+Expected: FAIL — `placement.objective` does not exist.
 
 - [ ] **Step 3: Write `objective.py`**
 
-Port `run_full_chain` from `cpsat_bench.py:843-941`. Each tier: solve for its own objective, freeze the achieved value as a constraint (`model.Add(objective_var <= achieved_bound)`), move to the next tier — the CP-SAT-native equivalent of z3's push/pop bound-walk (see `build.ts:2009-2020`'s `Tier.of`/`Tier.atMost` for the semantics being matched, not the z3 mechanism itself). Wire `model.py`'s `solve()` to call this instead of a single `solver.Solve(model)`.
+Port `run_full_chain` from `placement_bench.py:843-941`. Each tier: solve for its own objective, freeze the achieved value as a constraint (`model.Add(objective_var <= achieved_bound)`), move to the next tier — the CP-SAT-native equivalent of z3's push/pop bound-walk (see `build.ts:2009-2020`'s `Tier.of`/`Tier.atMost` for the semantics being matched, not the z3 mechanism itself). Wire `model.py`'s `solve()` to call this instead of a single `solver.Solve(model)`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd services/cp-sat && venv/bin/python3 -m pytest tests/test_objective.py tests/test_model.py -v`
+Run: `cd services/placement && venv/bin/python3 -m pytest tests/test_objective.py tests/test_model.py -v`
 Expected: PASS, all tests including Task 2's.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add services/cp-sat/src/cp_sat/objective.py services/cp-sat/src/cp_sat/model.py services/cp-sat/tests/test_objective.py
-git commit -m "feat(cp-sat): port T0-T3 lexicographic objective chain"
+git add services/placement/src/placement/objective.py services/placement/src/placement/model.py services/placement/tests/test_objective.py
+git commit -m "feat(placement): port T0-T3 lexicographic objective chain"
 ```
 
 ---
@@ -369,26 +369,26 @@ git commit -m "feat(cp-sat): port T0-T3 lexicographic objective chain"
 ### Task 4: gRPC server — bootstrap, auth, health, request/response mapping
 
 **Files:**
-- Create: `services/cp-sat/src/cp_sat/config.py`, `services/cp-sat/src/cp_sat/schema.py`, `services/cp-sat/src/cp_sat/main.py`
-- Test: `services/cp-sat/tests/test_config.py`, `services/cp-sat/tests/test_server.py`
+- Create: `services/placement/src/placement/config.py`, `services/placement/src/placement/schema.py`, `services/placement/src/placement/main.py`
+- Test: `services/placement/tests/test_config.py`, `services/placement/tests/test_server.py`
 
 **Interfaces:**
-- Consumes: `cp_sat.model.build_model`/`solve` (Task 2/3), `cp_sat.generated.scheduler_pb2`/`scheduler_pb2_grpc` (Task 1).
+- Consumes: `placement.model.build_model`/`solve` (Task 2/3), `placement.generated.scheduler_pb2`/`scheduler_pb2_grpc` (Task 1).
 - Produces: a `SchedulerServicer` class registered on a `grpc.server`, listening on `config.PORT`, requiring metadata key `x-internal-secret` to equal `config.SHARED_SECRET`.
 
 - [ ] **Step 1: Write `config.py` and its test first (smallest piece)**
 
 ```python
-# services/cp-sat/tests/test_config.py
+# services/placement/tests/test_config.py
 import os
 import pytest
-from cp_sat.config import Settings
+from placement.config import Settings
 
 def test_settings_load_from_env(monkeypatch):
-    monkeypatch.setenv("CPSAT_PORT", "50051")
-    monkeypatch.setenv("CPSAT_MAX_WORKERS", "4")
-    monkeypatch.setenv("CPSAT_SERVICE_SECRET", "test-secret")
-    monkeypatch.setenv("CPSAT_WALL_SECONDS_MAX", "10")
+    monkeypatch.setenv("PLACEMENT_PORT", "50051")
+    monkeypatch.setenv("PLACEMENT_MAX_WORKERS", "4")
+    monkeypatch.setenv("PLACEMENT_SERVICE_SECRET", "test-secret")
+    monkeypatch.setenv("PLACEMENT_WALL_SECONDS_MAX", "10")
     s = Settings.from_env()
     assert s.port == 50051
     assert s.max_workers == 4
@@ -396,15 +396,15 @@ def test_settings_load_from_env(monkeypatch):
     assert s.wall_seconds_max == 10.0
 
 def test_settings_requires_secret(monkeypatch):
-    monkeypatch.delenv("CPSAT_SERVICE_SECRET", raising=False)
-    with pytest.raises(ValueError, match="CPSAT_SERVICE_SECRET"):
+    monkeypatch.delenv("PLACEMENT_SERVICE_SECRET", raising=False)
+    with pytest.raises(ValueError, match="PLACEMENT_SERVICE_SECRET"):
         Settings.from_env()
 ```
 
-Run: `cd services/cp-sat && venv/bin/python3 -m pytest tests/test_config.py -v` → FAIL (module doesn't exist)
+Run: `cd services/placement && venv/bin/python3 -m pytest tests/test_config.py -v` → FAIL (module doesn't exist)
 
 ```python
-# services/cp-sat/src/cp_sat/config.py
+# services/placement/src/placement/config.py
 from __future__ import annotations
 import os
 from dataclasses import dataclass
@@ -418,14 +418,14 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        secret = os.environ.get("CPSAT_SERVICE_SECRET")
+        secret = os.environ.get("PLACEMENT_SERVICE_SECRET")
         if not secret:
-            raise ValueError("CPSAT_SERVICE_SECRET is required")
+            raise ValueError("PLACEMENT_SERVICE_SECRET is required")
         return cls(
-            port=int(os.environ.get("CPSAT_PORT", "50051")),
-            max_workers=int(os.environ.get("CPSAT_MAX_WORKERS", "4")),
+            port=int(os.environ.get("PLACEMENT_PORT", "50051")),
+            max_workers=int(os.environ.get("PLACEMENT_MAX_WORKERS", "4")),
             shared_secret=secret,
-            wall_seconds_max=float(os.environ.get("CPSAT_WALL_SECONDS_MAX", "10")),
+            wall_seconds_max=float(os.environ.get("PLACEMENT_WALL_SECONDS_MAX", "10")),
         )
 ```
 
@@ -434,10 +434,10 @@ Run again → PASS.
 - [ ] **Step 2: Write `schema.py`'s failing test — request validation + proto-to-model mapping**
 
 ```python
-# services/cp-sat/tests/test_schema.py
+# services/placement/tests/test_schema.py
 import pytest
-from cp_sat.generated import scheduler_pb2
-from cp_sat.schema import request_to_model_input, InvalidRequestError
+from placement.generated import scheduler_pb2
+from placement.schema import request_to_model_input, InvalidRequestError
 
 def test_rejects_empty_fixtures():
     req = scheduler_pb2.SolveBuildRequest(request_id="r1", courts=["Court 1"])
@@ -467,7 +467,7 @@ Run: FAIL (module doesn't exist).
 - [ ] **Step 3: Write `schema.py`**
 
 ```python
-# services/cp-sat/src/cp_sat/schema.py
+# services/placement/src/placement/schema.py
 from __future__ import annotations
 from dataclasses import dataclass
 
@@ -512,17 +512,17 @@ Run: PASS.
 - [ ] **Step 4: Write `test_server.py` — in-process server, no real socket**
 
 ```python
-# services/cp-sat/tests/test_server.py
+# services/placement/tests/test_server.py
 import grpc
 import grpc_testing
 import pytest
-from cp_sat.generated import scheduler_pb2, scheduler_pb2_grpc
-from cp_sat.main import SchedulerServicer
-from cp_sat.config import Settings
+from placement.generated import scheduler_pb2, scheduler_pb2_grpc
+from placement.main import SchedulerServicer
+from placement.config import Settings
 
 @pytest.fixture
 def test_server(monkeypatch):
-    monkeypatch.setenv("CPSAT_SERVICE_SECRET", "test-secret")
+    monkeypatch.setenv("PLACEMENT_SERVICE_SECRET", "test-secret")
     settings = Settings.from_env()
     servicer = SchedulerServicer(settings)
     return grpc_testing.server_from_dictionary(
@@ -556,12 +556,12 @@ def test_accepts_valid_request_with_correct_secret(test_server):
     assert response.status in (scheduler_pb2.SOLVE_STATUS_OPTIMAL, scheduler_pb2.SOLVE_STATUS_FEASIBLE)
 ```
 
-Run: FAIL (`cp_sat.main` doesn't exist; add `grpcio-testing` to `pyproject.toml` dev deps first).
+Run: FAIL (`placement.main` doesn't exist; add `grpcio-testing` to `pyproject.toml` dev deps first).
 
 - [ ] **Step 5: Write `main.py`**
 
 ```python
-# services/cp-sat/src/cp_sat/main.py
+# services/placement/src/placement/main.py
 from __future__ import annotations
 import logging
 from concurrent import futures
@@ -569,10 +569,10 @@ from concurrent import futures
 import grpc
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 
-from cp_sat.config import Settings
-from cp_sat.generated import scheduler_pb2, scheduler_pb2_grpc
-from cp_sat.model import build_model, solve
-from cp_sat.schema import request_to_model_input, InvalidRequestError
+from placement.config import Settings
+from placement.generated import scheduler_pb2, scheduler_pb2_grpc
+from placement.model import build_model, solve
+from placement.schema import request_to_model_input, InvalidRequestError
 
 STATUS_MAP = {
     "OPTIMAL": scheduler_pb2.SOLVE_STATUS_OPTIMAL,
@@ -631,7 +631,7 @@ def serve() -> None:
 
     server.add_insecure_port(f"[::]:{settings.port}")
     server.start()
-    logging.info("cp-sat service listening on :%d (max_workers=%d)", settings.port, settings.max_workers)
+    logging.info("placement service listening on :%d (max_workers=%d)", settings.port, settings.max_workers)
     server.wait_for_termination()
 
 
@@ -641,14 +641,14 @@ if __name__ == "__main__":
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `cd services/cp-sat && venv/bin/pip install grpcio-testing && venv/bin/python3 -m pytest tests/ -v`
+Run: `cd services/placement && venv/bin/pip install grpcio-testing && venv/bin/python3 -m pytest tests/ -v`
 Expected: PASS, all tests across Tasks 1-4 green.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add services/cp-sat/src/cp_sat/config.py services/cp-sat/src/cp_sat/schema.py services/cp-sat/src/cp_sat/main.py services/cp-sat/tests/test_config.py services/cp-sat/tests/test_schema.py services/cp-sat/tests/test_server.py services/cp-sat/pyproject.toml
-git commit -m "feat(cp-sat): gRPC server with auth interceptor, health check, request validation"
+git add services/placement/src/placement/config.py services/placement/src/placement/schema.py services/placement/src/placement/main.py services/placement/tests/test_config.py services/placement/tests/test_schema.py services/placement/tests/test_server.py services/placement/pyproject.toml
+git commit -m "feat(placement): gRPC server with auth interceptor, health check, request validation"
 ```
 
 ---
@@ -656,9 +656,9 @@ git commit -m "feat(cp-sat): gRPC server with auth interceptor, health check, re
 ### Task 5: TS-side codegen + client wrapper
 
 **Files:**
-- Create: `packages/engine/scripts/gen-proto.ts`, `packages/engine/src/scheduling/cpsat-client.ts`
+- Create: `packages/engine/scripts/gen-proto.ts`, `packages/engine/src/scheduling/placement-client.ts`
 - Modify: `packages/engine/package.json` (add `ts-proto`, `@grpc/grpc-js`, `@grpc/proto-loader` as devDependencies/dependencies; add a `gen:proto` script)
-- Test: `packages/engine/src/scheduling/cpsat-client.test.ts`
+- Test: `packages/engine/src/scheduling/placement-client.test.ts`
 
 **Interfaces:**
 - Consumes: `proto/scheduler.proto` (Task 1).
@@ -693,9 +693,9 @@ Expected: `packages/engine/src/scheduling/generated/scheduler.ts` is created (me
 - [ ] **Step 2: Write the failing test for the client wrapper**
 
 ```typescript
-// packages/engine/src/scheduling/cpsat-client.test.ts
+// packages/engine/src/scheduling/placement-client.test.ts
 import { describe, expect, it, vi } from "vitest";
-import { solveBuild } from "./cpsat-client.ts";
+import { solveBuild } from "./placement-client.ts";
 
 describe("solveBuild", () => {
   it("attaches the shared secret as call metadata", async () => {
@@ -724,13 +724,13 @@ describe("solveBuild", () => {
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `cd packages/engine && npx vitest run src/scheduling/cpsat-client.test.ts`
-Expected: FAIL — `cpsat-client.ts` doesn't exist.
+Run: `cd packages/engine && npx vitest run src/scheduling/placement-client.test.ts`
+Expected: FAIL — `placement-client.ts` doesn't exist.
 
-- [ ] **Step 4: Write `cpsat-client.ts`**
+- [ ] **Step 4: Write `placement-client.ts`**
 
 ```typescript
-// packages/engine/src/scheduling/cpsat-client.ts
+// packages/engine/src/scheduling/placement-client.ts
 import * as grpc from "@grpc/grpc-js";
 import { SchedulerServiceClient } from "./generated/scheduler.ts";
 
@@ -767,7 +767,7 @@ export async function solveBuild(
   input: SolveBuildInput,
   opts: { host?: string; secret: string; wallSeconds: number; client?: Pick<SchedulerServiceClient, "solveBuild"> },
 ): Promise<SolveBuildOutcome> {
-  const client = opts.client ?? clientFor(opts.host ?? process.env.CPSAT_SERVICE_HOST ?? "cp-sat.internal:50051");
+  const client = opts.client ?? clientFor(opts.host ?? process.env.PLACEMENT_SERVICE_HOST ?? "placement.internal:50051");
   const metadata = new grpc.Metadata();
   metadata.set("x-internal-secret", opts.secret);
   const deadline = new Date(Date.now() + (opts.wallSeconds + 2) * 1000);
@@ -779,7 +779,7 @@ export async function solveBuild(
       { deadline },
       (err: grpc.ServiceError | null, res: never) => {
         if (err) {
-          reject(err.code === grpc.status.DEADLINE_EXCEEDED ? new Error(`cp-sat solveBuild exceeded deadline: ${err.message}`) : err);
+          reject(err.code === grpc.status.DEADLINE_EXCEEDED ? new Error(`placement solveBuild exceeded deadline: ${err.message}`) : err);
           return;
         }
         const r = res as { status: number; assignments: unknown; tiersCompleted: number; objectiveValues: unknown; elapsedMs: number; wallExhausted: boolean; error?: { code: string; message: string } };
@@ -800,55 +800,55 @@ export async function solveBuild(
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cd packages/engine && npx vitest run src/scheduling/cpsat-client.test.ts`
+Run: `cd packages/engine && npx vitest run src/scheduling/placement-client.test.ts`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add packages/engine/scripts/gen-proto.ts packages/engine/src/scheduling/cpsat-client.ts packages/engine/src/scheduling/cpsat-client.test.ts packages/engine/package.json
-git commit -m "feat(engine): add generated proto stubs and cp-sat gRPC client wrapper"
+git add packages/engine/scripts/gen-proto.ts packages/engine/src/scheduling/placement-client.ts packages/engine/src/scheduling/placement-client.test.ts packages/engine/package.json
+git commit -m "feat(engine): add generated proto stubs and placement gRPC client wrapper"
 ```
 
 (`generated/scheduler.ts` is mechanically produced — commit it too, since CI shouldn't need `protoc` installed just to typecheck; regenerate via `npm run gen:proto` whenever `proto/scheduler.proto` changes.)
 
 ---
 
-### Task 6: Wire `solveBuild` in `build.ts` to call CP-SAT instead of z3
+### Task 6: Wire `solveBuild` in `build.ts` to call Placement instead of z3
 
 **Files:**
 - Modify: `packages/engine/src/scheduling/build.ts` (the `solveBuild` function, line ~1069 — read it in full first, this task changes its internals, not its exported signature)
 - Test: `packages/engine/src/scheduling/build.test.ts` (existing file — add cases, do not remove existing greedy-path coverage)
 
 **Interfaces:**
-- Consumes: `cpsat-client.ts`'s `solveBuild` (Task 5).
+- Consumes: `placement-client.ts`'s `solveBuild` (Task 5).
 - Produces: `buildSchedule(input: BuildInput): Promise<BuildResult>` — **signature unchanged**, callers in `schedule.ts` require no changes.
 
 - [ ] **Step 1: Read the current implementation**
 
 Read `packages/engine/src/scheduling/build.ts` lines 1013-1600 in full (`buildSchedule` and `solveBuild`) before changing anything. Identify exactly where z3 gets loaded (`loadZ3`/`withZ3Lock`), where the tier walk happens, and where `BuildResult` gets assembled — this task replaces the z3-specific middle section only; the R18 gate check, greedy seed, and final `validateAssignments` call before returning must be preserved unchanged (verification never moves, per Global Constraints).
 
-- [ ] **Step 2: Write the failing test — CP-SAT path produces a verified board**
+- [ ] **Step 2: Write the failing test — Placement path produces a verified board**
 
 ```typescript
 // packages/engine/src/scheduling/build.test.ts (additions)
 import { vi } from "vitest";
 
-describe("buildSchedule — CP-SAT path", () => {
-  it("uses the CP-SAT client and returns a verified board", async () => {
-    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
+describe("buildSchedule — Placement path", () => {
+  it("uses the Placement client and returns a verified board", async () => {
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
       assignments: [{ fixtureId: "f1", court: "Court 1", startAtMs: 0 }],
       status: "OPTIMAL", tiersCompleted: 4,
       objectiveValues: [], elapsedMs: 1200, wallExhausted: false,
     });
     const result = await buildSchedule(minimalBuildInput());
-    expect(result.engine).toBe("cp-sat");
+    expect(result.engine).toBe("optimized");
     expect(result.assignments).toHaveLength(1);
     expect(result.conflicts).toHaveLength(0); // validateAssignments still ran
   });
 
-  it("falls back to greedy on CP-SAT timeout, exactly like a z3 gate-reject", async () => {
-    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockRejectedValue(new Error("cp-sat solveBuild exceeded deadline"));
+  it("falls back to greedy on Placement timeout, exactly like a z3 gate-reject", async () => {
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockRejectedValue(new Error("placement solveBuild exceeded deadline"));
     const result = await buildSchedule(minimalBuildInput());
     expect(result.engine).toBe("greedy");
     expect(result.status).not.toBe("z3_unavailable"); // see Task 6b — status mapping
@@ -858,12 +858,12 @@ describe("buildSchedule — CP-SAT path", () => {
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `cd packages/engine && npx vitest run src/scheduling/build.test.ts -t "CP-SAT path"`
-Expected: FAIL — `result.engine` is still `"z3"`/`"greedy"` via the old code path, `"cp-sat"` never appears.
+Run: `cd packages/engine && npx vitest run src/scheduling/build.test.ts -t "Placement path"`
+Expected: FAIL — `result.engine` is still `"z3"`/`"greedy"` via the old code path, `"optimized"` never appears.
 
-- [ ] **Step 4: Replace the z3 middle section of `solveBuild` with a CP-SAT call**
+- [ ] **Step 4: Replace the z3 middle section of `solveBuild` with a Placement call**
 
-Within `solveBuild`, replace the `loadZ3`/`encodeBuild`/tier-walk/LNS block with: build a `SolveBuildInput` from the function's existing `grid`/`fixtures`/`config`/`existing`/`dependencies` locals (these are already computed earlier in the function, unchanged), call `cpsatClient.solveBuild(...)` with `wallSeconds` from the existing `wallMs` budget math, and on success map its `assignments`/`tiersCompleted`/`elapsedMs`/`wallExhausted` into the same local variables the rest of the function already expects before falling through to the existing `validateAssignments` call. On rejection (any error, including deadline-exceeded), fall through to the existing greedy-seed path exactly as today's z3-unavailable/gate-reject branches already do — do not add a new fallback mechanism, reuse the one that exists. Set `engine: "cp-sat"` (new literal, added to `BuildResult["engine"]`'s type union alongside `"greedy"`/`"z3"`/`"z3+lns"` — do not remove the old values yet, Task 10 does that once the rest of this plan is green).
+Within `solveBuild`, replace the `loadZ3`/`encodeBuild`/tier-walk/LNS block with: build a `SolveBuildInput` from the function's existing `grid`/`fixtures`/`config`/`existing`/`dependencies` locals (these are already computed earlier in the function, unchanged), call `placementClient.solveBuild(...)` with `wallSeconds` from the existing `wallMs` budget math, and on success map its `assignments`/`tiersCompleted`/`elapsedMs`/`wallExhausted` into the same local variables the rest of the function already expects before falling through to the existing `validateAssignments` call. On rejection (any error, including deadline-exceeded), fall through to the existing greedy-seed path exactly as today's z3-unavailable/gate-reject branches already do — do not add a new fallback mechanism, reuse the one that exists. Set `engine: "optimized"` (new literal, added to `BuildResult["engine"]`'s type union alongside `"greedy"`/`"z3"`/`"z3+lns"` — do not remove the old values yet, Task 10 does that once the rest of this plan is green).
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -874,7 +874,7 @@ Expected: PASS — new tests green, all pre-existing tests in this file still gr
 
 ```bash
 git add packages/engine/src/scheduling/build.ts packages/engine/src/scheduling/build.test.ts
-git commit -m "feat(engine): wire BUILD/POLISH's solveBuild to the cp-sat service"
+git commit -m "feat(engine): wire BUILD/POLISH's solveBuild to the placement service"
 ```
 
 ---
@@ -886,20 +886,20 @@ git commit -m "feat(engine): wire BUILD/POLISH's solveBuild to the cp-sat servic
 - Test: `packages/engine/src/scheduling/build.test.ts` (additions)
 
 **Interfaces:**
-- Consumes: CP-SAT's native status (`"OPTIMAL"|"FEASIBLE"|"INFEASIBLE"|"UNKNOWN"|"ERROR"`) from `cpsat-client.ts`.
+- Consumes: CP-SAT's native status (`"OPTIMAL"|"FEASIBLE"|"INFEASIBLE"|"UNKNOWN"|"ERROR"`) from `placement-client.ts`.
 - Produces: the existing `BuildStatus` union (`build.ts:387`) — decides here, concretely, what the design spec left open: `UNKNOWN` → `not_searched` (both mean "nothing proven, don't claim otherwise" — closest semantic match); `ERROR` → a **new** `"solver_unavailable"` value added to `BuildStatus` (not reusing `z3_unavailable`, since the string is user-invisible per the design spec's UI/wire-surface section but the identifier itself is misleading once z3 is gone — cheaper to add one clean value now than carry a stale name forward); `INFEASIBLE` → `infeasible` (same semantics, a real proof); `OPTIMAL`/`FEASIBLE` → `ok` or `already_optimal` per the existing rule already in `build.ts` (already_optimal when no tier improved on the greedy seed — unchanged logic, just fed by CP-SAT's numbers now).
 
 - [ ] **Step 1: Write the failing test**
 
 ```typescript
-describe("CP-SAT status -> BuildStatus mapping", () => {
+describe("Placement status -> BuildStatus mapping", () => {
   it.each([
     ["UNKNOWN", "not_searched"],
     ["ERROR", "solver_unavailable"],
     ["INFEASIBLE", "infeasible"],
-  ] as const)("%s maps to %s", async (cpsatStatus, expected) => {
-    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue({
-      assignments: [], status: cpsatStatus, tiersCompleted: 0, objectiveValues: [], elapsedMs: 100, wallExhausted: false,
+  ] as const)("%s maps to %s", async (placementStatus, expected) => {
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+      assignments: [], status: placementStatus, tiersCompleted: 0, objectiveValues: [], elapsedMs: 100, wallExhausted: false,
     });
     const result = await buildSchedule(minimalBuildInput());
     expect(result.status).toBe(expected);
@@ -923,14 +923,14 @@ Expected: PASS.
 
 - [ ] **Step 5: Update the UI's `statusKey()` switch**
 
-Modify `apps/web/src/components/v2/board/result-strip.tsx`'s `statusKey()` (line ~42) to add a `case "solver_unavailable"` returning a **new** i18n key `"board.result.unavailable"` reused as-is (the existing z3_unavailable copy — "does not promise a retry will help" — is equally true for a CP-SAT outage; no new user-facing string needed, same key, new case). Add `cp-sat: "board.result.engine.cpsat"` to `ENGINE_KEY` (line 33) — this **is** a new string, add it to all 4 dictionaries (`apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`) with the same "Solver" / "Solveur" / "Solucionador" copy the existing `z3` key already uses (per the design spec's finding that this copy is already engine-neutral).
+Modify `apps/web/src/components/v2/board/result-strip.tsx`'s `statusKey()` (line ~42) to add a `case "solver_unavailable"` returning a **new** i18n key `"board.result.unavailable"` reused as-is (the existing z3_unavailable copy — "does not promise a retry will help" — is equally true for a Placement outage; no new user-facing string needed, same key, new case). Add `placement: "board.result.engine.placement"` to `ENGINE_KEY` (line 33) — this **is** a new string, add it to all 4 dictionaries (`apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`) with the same "Solver" / "Solveur" / "Solucionador" copy the existing `z3` key already uses (per the design spec's finding that this copy is already engine-neutral).
 
 - [ ] **Step 6: Write and run a UI test**
 
 ```typescript
 // apps/web/src/components/v2/board/__tests__/result-strip.test.tsx (addition)
-it("cp-sat engine renders the same neutral 'Solver' copy as z3 did", () => {
-  const html = render(metrics(), solver({ engine: "cp-sat", status: "ok" }));
+it("placement engine renders the same neutral 'Solver' copy as z3 did", () => {
+  const html = render(metrics(), solver({ engine: "optimized", status: "ok" }));
   expect(html).toContain("Solver");
 });
 ```
@@ -942,7 +942,7 @@ Expected: PASS.
 
 ```bash
 git add packages/engine/src/scheduling/build.ts apps/web/src/components/v2/board/result-strip.tsx apps/web/src/dictionaries apps/web/src/components/v2/board/__tests__/result-strip.test.tsx
-git commit -m "feat: translate cp-sat's native status vocabulary into BuildStatus, add cp-sat engine label"
+git commit -m "feat: translate placement's native status vocabulary into BuildStatus, add placement engine label"
 ```
 
 ---
@@ -950,39 +950,39 @@ git commit -m "feat: translate cp-sat's native status vocabulary into BuildStatu
 ### Task 7: Integration tests — parity, production-board regression, fallback path
 
 **Files:**
-- Create: `packages/engine/src/scheduling/__tests__/cpsat-integration.test.ts` (requires a real running `services/cp-sat` instance — tagged to skip in the default fast suite, run explicitly)
-- Create: `services/cp-sat/README.md` section "local dev" (how to start the service for this test)
+- Create: `packages/engine/src/scheduling/__tests__/placement-integration.test.ts` (requires a real running `services/placement` instance — tagged to skip in the default fast suite, run explicitly)
+- Create: `services/placement/README.md` section "local dev" (how to start the service for this test)
 
 **Interfaces:**
-- Consumes: a real running CP-SAT service on `localhost` (started per the README recipe), `build.ts`'s `buildSchedule`.
+- Consumes: a real running Placement service on `localhost` (started per the README recipe), `build.ts`'s `buildSchedule`.
 
 - [ ] **Step 1: Write the local-dev recipe in the README**
 
 ```markdown
 ## Local dev (for integration tests)
 
-    cd services/cp-sat
+    cd services/placement
     venv/bin/pip install -e ".[dev]"
-    CPSAT_SERVICE_SECRET=dev-secret CPSAT_PORT=50051 venv/bin/python3 -m cp_sat.main
+    PLACEMENT_SERVICE_SECRET=dev-secret PLACEMENT_PORT=50051 venv/bin/python3 -m placement.main
 
-In another terminal: `CPSAT_SERVICE_HOST=localhost:50051 CPSAT_SERVICE_SECRET=dev-secret npm run test:integration --workspace packages/engine`
+In another terminal: `PLACEMENT_SERVICE_HOST=localhost:50051 PLACEMENT_SERVICE_SECRET=dev-secret npm run test:integration --workspace packages/engine`
 ```
 
 - [ ] **Step 2: Write the failing integration tests**
 
 ```typescript
-// packages/engine/src/scheduling/__tests__/cpsat-integration.test.ts
+// packages/engine/src/scheduling/__tests__/placement-integration.test.ts
 import { describe, expect, it } from "vitest";
 import { buildSchedule } from "../build.ts";
 import { validateAssignments } from "../calendar.ts";
 
-const RUN_INTEGRATION = process.env.CPSAT_SERVICE_HOST !== undefined;
+const RUN_INTEGRATION = process.env.PLACEMENT_SERVICE_HOST !== undefined;
 
-describe.skipIf(!RUN_INTEGRATION)("cp-sat integration (requires a running service)", () => {
+describe.skipIf(!RUN_INTEGRATION)("placement integration (requires a running service)", () => {
   it("solves the production board to OPTIMAL with zero verifier conflicts", async () => {
     const input = productionShapeBuildInput(); // 37 fixtures, 5 courts, 30/10 match/gap — same shape as the investigation
     const result = await buildSchedule(input);
-    expect(result.engine).toBe("cp-sat");
+    expect(result.engine).toBe("optimized");
     expect(result.status).toBe("ok");
     expect(result.assignments.length).toBeGreaterThanOrEqual(35);
     const conflicts = validateAssignments(result.assignments, input.config, input.existing ?? [], input.dependencies ?? []);
@@ -990,10 +990,10 @@ describe.skipIf(!RUN_INTEGRATION)("cp-sat integration (requires a running servic
   });
 
   it("falls back to greedy with the service stopped", async () => {
-    // Run with CPSAT_SERVICE_HOST pointed at an unused port to simulate this
+    // Run with PLACEMENT_SERVICE_HOST pointed at an unused port to simulate this
     // rather than actually stopping the fixture server mid-suite.
     const input = productionShapeBuildInput();
-    const result = await buildSchedule({ ...input }, { cpsatHost: "localhost:1" });
+    const result = await buildSchedule({ ...input }, { placementHost: "localhost:1" });
     expect(result.engine).toBe("greedy");
     expect(result.status).toBe("solver_unavailable");
   });
@@ -1002,19 +1002,19 @@ describe.skipIf(!RUN_INTEGRATION)("cp-sat integration (requires a running servic
 
 - [ ] **Step 3: Run to verify the first test fails without the service running, and document the run command**
 
-Run: `cd packages/engine && npx vitest run src/scheduling/__tests__/cpsat-integration.test.ts`
-Expected: SKIPPED (no `CPSAT_SERVICE_HOST` set) — this is correct default behavior, not a failure. Then start the service per the README and re-run with `CPSAT_SERVICE_HOST=localhost:50051 CPSAT_SERVICE_SECRET=dev-secret` set: expect FAIL (parity/fallback not wired yet if Task 6/6b are incomplete; if this task runs after Task 6b, expect PASS immediately — in which case this task is confirming, not driving, TDD-style — still valuable as the parity gate for CI in Task 9).
+Run: `cd packages/engine && npx vitest run src/scheduling/__tests__/placement-integration.test.ts`
+Expected: SKIPPED (no `PLACEMENT_SERVICE_HOST` set) — this is correct default behavior, not a failure. Then start the service per the README and re-run with `PLACEMENT_SERVICE_HOST=localhost:50051 PLACEMENT_SERVICE_SECRET=dev-secret` set: expect FAIL (parity/fallback not wired yet if Task 6/6b are incomplete; if this task runs after Task 6b, expect PASS immediately — in which case this task is confirming, not driving, TDD-style — still valuable as the parity gate for CI in Task 9).
 
 - [ ] **Step 4: Run to verify it passes** (with the service running per the README)
 
-Run: `cd packages/engine && CPSAT_SERVICE_HOST=localhost:50051 CPSAT_SERVICE_SECRET=dev-secret npx vitest run src/scheduling/__tests__/cpsat-integration.test.ts`
+Run: `cd packages/engine && PLACEMENT_SERVICE_HOST=localhost:50051 PLACEMENT_SERVICE_SECRET=dev-secret npx vitest run src/scheduling/__tests__/placement-integration.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/engine/src/scheduling/__tests__/cpsat-integration.test.ts services/cp-sat/README.md
-git commit -m "test(engine): cp-sat integration suite — production-board parity + fallback path"
+git add packages/engine/src/scheduling/__tests__/placement-integration.test.ts services/placement/README.md
+git commit -m "test(engine): placement integration suite — production-board parity + fallback path"
 ```
 
 ---
@@ -1022,7 +1022,7 @@ git commit -m "test(engine): cp-sat integration suite — production-board parit
 ### Task 8: Deployment
 
 **Files:**
-- Create: `services/cp-sat/Dockerfile`, `services/cp-sat/fly.toml`
+- Create: `services/placement/Dockerfile`, `services/placement/fly.toml`
 
 - [ ] **Step 1: Write the Dockerfile**
 
@@ -1032,17 +1032,17 @@ WORKDIR /app
 COPY pyproject.toml .
 COPY src/ src/
 RUN pip install --no-cache-dir .
-RUN useradd -m cpsat
-USER cpsat
-ENV CPSAT_PORT=50051
+RUN useradd -m placement
+USER placement
+ENV PLACEMENT_PORT=50051
 EXPOSE 50051
-CMD ["python3", "-m", "cp_sat.main"]
+CMD ["python3", "-m", "placement.main"]
 ```
 
 - [ ] **Step 2: Write `fly.toml`**
 
 ```toml
-app = "seazn-cpsat-prod"
+app = "seazn-placement-prod"
 primary_region = "lhr"
 
 [build]
@@ -1069,19 +1069,19 @@ primary_region = "lhr"
 # a cold start would eat directly into the 8-10s wall budget.
 
 # Secrets (fly secrets set):
-#   CPSAT_SERVICE_SECRET — new, distinct from apps/web's CRON_SECRET
+#   PLACEMENT_SERVICE_SECRET — new, distinct from apps/web's CRON_SECRET
 ```
 
 - [ ] **Step 3: Verify the Docker image builds**
 
-Run: `cd services/cp-sat && docker build -t cpsat-service-test .`
+Run: `cd services/placement && docker build -t placement-service-test .`
 Expected: build succeeds.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add services/cp-sat/Dockerfile services/cp-sat/fly.toml
-git commit -m "feat(cp-sat): Dockerfile and Fly app config"
+git add services/placement/Dockerfile services/placement/fly.toml
+git commit -m "feat(placement): Dockerfile and Fly app config"
 ```
 
 ---
@@ -1089,17 +1089,17 @@ git commit -m "feat(cp-sat): Dockerfile and Fly app config"
 ### Task 9: CI workflow
 
 **Files:**
-- Create: `.github/workflows/cp-sat-service.yml`
+- Create: `.github/workflows/placement-service.yml`
 
 - [ ] **Step 1: Write the workflow**
 
 ```yaml
-name: cp-sat-service
+name: placement-service
 
 on:
   pull_request:
     paths:
-      - "services/cp-sat/**"
+      - "services/placement/**"
       - "proto/**"
 
 jobs:
@@ -1110,19 +1110,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: cd services/cp-sat && pip install -e ".[dev]"
-      - run: cd services/cp-sat && python3 -m pytest tests/ bench/ -v
+      - run: cd services/placement && pip install -e ".[dev]"
+      - run: cd services/placement && python3 -m pytest tests/ bench/ -v
 ```
 
 - [ ] **Step 2: Verify it's path-filtered correctly**
 
-Confirm via `gh workflow view cp-sat-service.yml` after pushing (or by reading the `paths:` block above against the Global Constraints requirement) that a PR touching only `apps/web/**` does not trigger this workflow.
+Confirm via `gh workflow view placement-service.yml` after pushing (or by reading the `paths:` block above against the Global Constraints requirement) that a PR touching only `apps/web/**` does not trigger this workflow.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add .github/workflows/cp-sat-service.yml
-git commit -m "ci: path-filtered workflow for the cp-sat service"
+git add .github/workflows/placement-service.yml
+git commit -m "ci: path-filtered workflow for the placement service"
 ```
 
 ---
@@ -1157,7 +1157,7 @@ Expected: `numFailedTests: 0`. Read the JSON file's counts directly per this rep
 
 ```bash
 git add -A packages/engine/src/scheduling/
-git commit -m "refactor(engine): remove z3 tier-solver code now that BUILD/POLISH runs on cp-sat"
+git commit -m "refactor(engine): remove z3 tier-solver code now that BUILD/POLISH runs on placement"
 ```
 
 ---

@@ -81,12 +81,12 @@ const legalSeed = (): Assignment[] => {
   return raw.assignments.filter((a) => !bad.has(a.fixtureId));
 };
 
-// Two of the three cases below are SKIPPED (Task 06, cp-sat cutover):
-// `solveBuild` now calls the cp-sat service instead of z3 and no longer
+// Two of the three cases below are SKIPPED (Task 06, placement cutover):
+// `solveBuild` now calls the placement service instead of z3 and no longer
 // reads `input.rlimit`/z3's `rlimit` counter at all, so a test asserting on
 // `rlimitSpent` or on rlimit-bounded search behaviour is exercising a
 // mechanism this code path no longer has. Not wrong, just testing something
-// that moved to the (untested-here) cp-sat side of the wire. Left running:
+// that moved to the (untested-here) placement side of the wire. Left running:
 // "stops in the same place on the same budget, and a bigger budget is never
 // worse" — it happens to hold trivially once both runs fall back to the
 // same deterministic greedy board, so it is not asserting anything false.

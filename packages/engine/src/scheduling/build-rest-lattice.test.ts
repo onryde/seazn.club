@@ -42,7 +42,7 @@ import { buildSchedule, seedPinsOf } from "./build.ts";
 import { buildGrid } from "./build-grid.ts";
 // `gridStepMinutes` moved out of `build-grid.ts` into its own module on main
 // while this branch was in flight; the rebase conflict here was that move
-// crossing Task 06's added `cpsat-client` import, not a disagreement about
+// crossing Task 06's added `placement-client` import, not a disagreement about
 // the step itself.
 import { gridStepMinutes } from "./grid-step.ts";
 import { boardMetrics } from "./build-objectives.ts";
@@ -50,7 +50,7 @@ import { slotFixtures } from "./calendar.ts";
 import { resetZ3 } from "./z3-load.ts";
 import type { Assignment, SchedulableFixture, SlotConfig } from "./calendar.ts";
 import type { SchedulingConstraints } from "./constraints.ts";
-import type { SolveBuildOutcome } from "./cpsat-client.ts";
+import type { SolveBuildOutcome } from "./placement-client.ts";
 
 const okOutcome = (assignments: SolveBuildOutcome["assignments"]): SolveBuildOutcome => ({
   assignments,
@@ -210,8 +210,8 @@ describe("the lattice holds the seed", () => {
 describe("a rest-configured board is actually searched", () => {
   // UN-SKIPPED (fix round 1), all three: each now mocks the file's own
   // documented board directly. `seedPinsOf`/`pinned` are NOT part of the
-  // grid `solveBuild` sends to cp-sat any more (see build.ts's comment on
-  // that removal) — cp-sat does not need the incumbent representable in its
+  // grid `solveBuild` sends to placement any more (see build.ts's comment on
+  // that removal) — placement does not need the incumbent representable in its
   // own lattice the way z3's incremental bound-walk did, and `build.ts`
   // never validates that a returned position is "on grid" either, so a
   // mocked off-grid reply (chained rest positions like +65/+130 are on no
@@ -237,7 +237,7 @@ describe("a rest-configured board is actually searched", () => {
   it("z3 balances the courts instead of calling the seed optimal", async () => {
     // Note WHICH card moves in the mock: `a` to C2 at +0, `b` keeps the
     // seed's own +65 on C1 — the file's own documented board.
-    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue(
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
       okOutcome([
         { fixtureId: "a", court: "C2", startAtMs: T0 },
         { fixtureId: "b", court: "C1", startAtMs: T0 + 65 * MIN },
@@ -253,8 +253,8 @@ describe("a rest-configured board is actually searched", () => {
     expect(new Set(out.assignments.map((a) => a.court))).toEqual(new Set(["C1", "C2"]));
     // `rlimitSpent` is gone with z3 — `solveBuild` always reports 0 now (see
     // its final `return`), so this is no longer a meaningful witness that a
-    // search happened; `engine: "cp-sat"` and `tiersCompleted` are.
-    expect(out.engine).toBe("cp-sat");
+    // search happened; `engine: "optimized"` and `tiersCompleted` are.
+    expect(out.engine).toBe("optimized");
     expect(out.status).toBe("ok");
     expect(out.tiersCompleted).toBe(4);
     await resetZ3();
@@ -265,7 +265,7 @@ describe("a rest-configured board is actually searched", () => {
     // the chained board greedy already reaches (+0/+65/+130), which is what
     // makes the honest verdict `already_optimal` rather than `ok`: the
     // reply ties the seed, not beats it.
-    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue(
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
       okOutcome([
         { fixtureId: "a", court: "C1", startAtMs: T0 },
         { fixtureId: "b", court: "C1", startAtMs: T0 + 65 * MIN },
@@ -317,9 +317,9 @@ describe("a rest-configured board is actually searched", () => {
     });
 
     // Mocked as EXACTLY greedy's own +7 anchor — the tie is the point (see
-    // the block comment above): cp-sat neither validates nor needs the
+    // the block comment above): placement neither validates nor needs the
     // returned position to be "on grid" the way z3's own lattice did.
-    vi.spyOn(await import("./cpsat-client.ts"), "solveBuild").mockResolvedValue(
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
       okOutcome([{ fixtureId: "a", court: "C1", startAtMs: T0 + 7 * MIN }]),
     );
     const out = await buildSchedule({ fixtures, config });

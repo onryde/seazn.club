@@ -637,7 +637,7 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   the same blind gate. Fix: seed the test from the engine's authoritative type
   list, then add 5 keys × 4 locales (`en`,`es`,`fr`,`nl`, flat dotted keys).
 - 2026-08-09 — S3/#426 — **engine lint was 18 errors on `main` before this
-  branch**, all in `packages/engine/scripts/repair-cpsat-harness.ts`, all
+  branch**, all in `packages/engine/scripts/repair-placement-harness.ts`, all
   downstream of two untyped `JSON.parse` calls (`no-unsafe-assignment` /
   `no-unsafe-member-access` / `no-unsafe-argument`). Measured with
   `cd packages/engine && npx eslint` — the root lint task does NOT cover
@@ -646,7 +646,7 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   rather than as the wrong invocation. Fixed inline as an unplanned fix
   (`99d47c37`) because the ship checklist requires `✖ 0 problems`: the payloads
   are now named via indexed access on `RepairInput`, so the harness cannot drift
-  from the production shapes it exists to compare CP-SAT against. Engine lint on
+  from the production shapes it exists to compare Placement against. Engine lint on
   the branch is now EXIT=0 with zero output.
 - 2026-08-09 — S3/#426 — **pass B landed as three directory-disjoint lanes
   (football / three kernels + six sports / cricket), and ALL THREE died to the

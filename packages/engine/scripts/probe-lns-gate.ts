@@ -2,7 +2,7 @@
 // same spirit as `bench-build.ts` in this directory.
 //
 // Question: on the production board shape that motivated the CP-SAT
-// investigation (see `docs/superpowers/specs/2026-08-07-cpsat-scheduler-
+// investigation (see `docs/superpowers/specs/2026-08-07-placement-scheduler-
 // design.md`) — 37 fixtures, 5 courts, matchMinutes=30, gapMinutes=10, ~77k
 // fixture-slots, confirmed by
 // `apps/web/src/server/usecases/__tests__/schedule-auto-day-spread.test.ts`'s

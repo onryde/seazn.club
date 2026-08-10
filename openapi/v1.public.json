@@ -17090,7 +17090,7 @@
                                 "greedy",
                                 "z3",
                                 "z3+lns",
-                                "cp-sat"
+                                "optimized"
                               ]
                             },
                             "mode": {

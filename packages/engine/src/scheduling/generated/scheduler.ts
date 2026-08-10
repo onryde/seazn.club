@@ -19,7 +19,7 @@ import {
   type UntypedServiceImplementation,
 } from "@grpc/grpc-js";
 
-export const protobufPackage = "seazn.cpsat.v1";
+export const protobufPackage = "seazn.placement.v1";
 
 export enum SolveStatus {
   SOLVE_STATUS_UNSPECIFIED = 0,
@@ -1549,7 +1549,7 @@ export const SolveBuildResponse: MessageFns<SolveBuildResponse> = {
 export type SchedulerServiceService = typeof SchedulerServiceService;
 export const SchedulerServiceService = {
   solveBuild: {
-    path: "/seazn.cpsat.v1.SchedulerService/SolveBuild" as const,
+    path: "/seazn.placement.v1.SchedulerService/SolveBuild" as const,
     requestStream: false as const,
     responseStream: false as const,
     requestSerialize: (value: SolveBuildRequest): Buffer => Buffer.from(SolveBuildRequest.encode(value).finish()),
@@ -1583,7 +1583,7 @@ export interface SchedulerServiceClient extends Client {
 
 export const SchedulerServiceClient = makeGenericClientConstructor(
   SchedulerServiceService,
-  "seazn.cpsat.v1.SchedulerService",
+  "seazn.placement.v1.SchedulerService",
 ) as unknown as {
   new (address: string, credentials: ChannelCredentials, options?: Partial<ClientOptions>): SchedulerServiceClient;
   service: typeof SchedulerServiceService;

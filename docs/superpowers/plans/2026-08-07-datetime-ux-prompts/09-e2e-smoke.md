@@ -2,7 +2,7 @@
 
 **Context**: `docs/superpowers/RULES.md` — every task ultimately owes
 E2E + smoke coverage; this is where it lands for this whole programme,
-once the full chain is visible end-to-end (mirrors the CP-SAT
+once the full chain is visible end-to-end (mirrors the Placement
 programme's own Prompt 11 for the same reason). **Needs Prompts 02-08
 all done** — this is the only prompt in this index that depends on
 nearly everything else.

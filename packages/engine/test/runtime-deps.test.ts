@@ -72,7 +72,7 @@ describe("engine runtime dependencies", () => {
 
   it("finds the imports it is meant to be guarding", () => {
     // A regex that silently matched nothing would make the gate above vacuous.
-    // `@grpc/grpc-js` and `@bufbuild/protobuf` arrive with the cp-sat client and
+    // `@grpc/grpc-js` and `@bufbuild/protobuf` arrive with the placement client and
     // its generated stubs; both are runtime imports, so both must stay in
     // `dependencies` for the `--prod` staging install.
     expect([...runtimeImports().keys()].sort()).toEqual([

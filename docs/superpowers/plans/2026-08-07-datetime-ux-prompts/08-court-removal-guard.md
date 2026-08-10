@@ -19,7 +19,7 @@ no fixtures at all, still succeeds.
 `repair.ts` — this guard prevents the bad state from being SAVED, it
 does not change what either engine does with an already-orphaned
 assignment (that behavior is unchanged and correct to leave as-is, per
-the CP-SAT design doc's own note on this exact case).
+the Placement design doc's own note on this exact case).
 
 **Files:**
 - Modify: `apps/web/src/server/usecases/schedule.ts:157-188` (`putScheduleSettings`)

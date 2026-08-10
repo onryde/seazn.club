@@ -1,0 +1,450 @@
+name: placement-service
+
+# Path-filtered, PR-only, and this MUST NOT fire on a PR touching neither
+# services/placement/** nor proto/** — that is the entire point of a
+# per-service gate in this repo's CI culture (mirrors the smoke/e2e split:
+# expensive, narrowly-scoped suites stay off unrelated PRs).
+#
+# The packages/engine paths exist because two jobs below reach across the
+# language boundary, and both of their subjects live outside
+# services/placement/ and proto/:
+#
+#   - proto-drift compares the two generated stub trees, and the TypeScript
+#     half lives under packages/engine/src/scheduling/generated/. A PR that
+#     regenerates only one side (or edits the codegen script) would
+#     otherwise never run this workflow, and the trees would silently
+#     diverge.
+#   - integration drives the real service through build.ts and
+#     placement-client.ts. Those are the two files that TALK to the service, and
+#     the original filter could not see either of them: a PR rewriting the
+#     client's deadline handling, its auth header, or build.ts's fallback
+#     branch triggered NO run of the one job that would catch it.
+#
+# Hence the whole of src/scheduling/**, not just generated/**. It is wider
+# than the rest of this filter deliberately — that directory is the entire
+# TS-side surface that this service has a contract with, and narrowing it to
+# an enumerated file list is how the gap above got created the first time.
+on:
+  pull_request:
+    paths:
+      - "services/placement/**"
+      - "proto/**"
+      - "packages/engine/src/scheduling/**"
+      - "packages/engine/scripts/gen-proto.ts"
+      - ".github/workflows/placement-service.yml"
+
+concurrency:
+  group: placement-service-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Python 3.14, NOT the design doc's original 3.11. The service is built
+  # and tested on CPython 3.14.6, and every dependency wheel installed
+  # against it is native cp314 (ortools, grpcio, grpcio-tools all publish
+  # manylinux cp314 wheels for x86_64). pyproject.toml's
+  # `requires-python = ">=3.11"` is a floor, not a target: CI on 3.11 would
+  # install cleanly and silently validate an interpreter nobody actually
+  # runs. grpcio itself resolves to 1.83.0 here (1.81.1, the version
+  # grpcio-tools and the generated stubs are pinned to, has no cp314
+  # wheel) — expected, and matches every dev machine.
+  # ---------------------------------------------------------------------
+  test:
+    name: Test (pytest, Python 3.14)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install (editable, dev extras)
+        working-directory: services/placement
+        run: pip install -e ".[dev]"
+
+      # The pins here are an exact constraint intersection (ortools caps
+      # protobuf<6.34; grpcio-testing is pinned to sit inside that), and
+      # the generated grpc stub (scheduler_pb2_grpc.py) hard-embeds
+      # GRPC_GENERATED_VERSION and RAISES at import if the resolved grpcio
+      # runtime is older than what it was compiled against. A resolver
+      # that picks a satisfying-but-wrong combination has to fail the job
+      # here, loudly, not at first import in production.
+      - name: pip check (dependency conflict gate)
+        working-directory: services/placement
+        run: pip check
+
+      # bench/ is a standalone script directory, not a test package — it
+      # has no test_*.py and `pytest bench/` exits 5 ("no tests ran"). Its
+      # BUILD/POLISH model is deliberately divergent from placement.model and
+      # contributes nothing here; the bench *contract* (that the two boards
+      # cannot silently drift apart) is already guarded from inside
+      # tests/test_bench_contract.py, which this run covers.
+      #
+      # --- the load-sensitive production-board test, handled deliberately ---
+      #
+      # tests/test_model.py::test_production_board_meets_the_stated_acceptance_criterion
+      # asserts status == "OPTIMAL" on the production board inside an 8s
+      # wall. Its own docstring says it is LOAD-SENSITIVE ON PURPOSE: the
+      # same board measures ~4.9s/OPTIMAL idle and ~8.0s/FEASIBLE under
+      # contention (observed: FEASIBLE, placed=37, tiers_completed=2, at
+      # load 11) — only the proof ladder truncates early; placement stays
+      # 35-37/37 throughout. A shared GitHub-hosted runner is exactly that
+      # kind of contended box.
+      #
+      # This task owns .github/workflows/ only — services/placement/tests/ is
+      # out of scope — so the assertion cannot be loosened or marked
+      # in-source, and it should not be: a gate that can never fail is a
+      # failure mode this repo has hit repeatedly (see AGENTS.md). Instead,
+      # this ONE proof-time-sensitive test is deselected from the blocking
+      # run below and re-run on its own, unmodified, as an advisory step —
+      # so a proof-time truncation under load surfaces as its own visibly
+      # failed (but non-blocking) step, distinguishable from a real
+      # placement regression, rather than either silently passing or
+      # blocking merges on the runner's load average.
+      #
+      # What still catches a real PLACEMENT regression, all blocking and
+      # all untouched by the deselect. Named exactly, because the honest
+      # question about this step is "what goes red at 30 of 37?":
+      #   * test_model.py:147 test_assignments_satisfy_every_stated_constraint
+      #     — exact equality, len(assignments) == len(fixtures), at :194
+      #   * test_objective.py:159 test_chain_fits_the_production_budget
+      #     — the same equality at :186, same 8s wall, separate file
+      #   * test_model.py:125 (35 <= len <= 37) and test_objective.py:156
+      #     (>= 35) as the wider band
+      #
+      # NOT test_no_court_double_booking (test_model.py:130): it checks
+      # non-empty plus no double-booking among whatever got placed, so it
+      # passes at placed=1. It defends correctness, not completeness —
+      # do not cite it as placement coverage.
+      - name: pytest (blocking — full suite except the proof-time-sensitive test)
+        working-directory: services/placement
+        run: |
+          python -m pytest tests/ -q \
+            --deselect tests/test_model.py::test_production_board_meets_the_stated_acceptance_criterion
+
+      - name: pytest (advisory — proof-time acceptance criterion, load-sensitive)
+        working-directory: services/placement
+        continue-on-error: true
+        run: python -m pytest tests/test_model.py::test_production_board_meets_the_stated_acceptance_criterion -v
+
+  # ---------------------------------------------------------------------
+  # This job is the ONLY gate on services/placement/Dockerfile before a real
+  # deploy — the developer machine has no container runtime at all (no
+  # docker, no usable podman/colima), so nobody can build or run this
+  # image locally. If this job is wrong, nothing else catches a broken
+  # Dockerfile before `fly deploy` does.
+  # ---------------------------------------------------------------------
+  docker:
+    name: Docker build + image smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only. No login, no push, no deploy. `load: true` puts the
+      # built image in the local daemon so the steps below can `docker
+      # run` it; `push: false` is stated explicitly (it is also the
+      # action's default) because this job is the sole gate on this image
+      # before a real deploy, and a silently-added push/login step here
+      # would be a supply-chain surprise, not a convenience.
+      - name: Build the placement service image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          # Explicit, not left to default resolution: this repo already has
+          # a root Dockerfile (the Next.js app's), and build-push-action's
+          # default `file` path is not documented clearly enough to trust
+          # it wouldn't resolve there instead of services/placement/Dockerfile.
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report image size
+        run: docker images placement-service:ci --format '{{.Size}}'
+
+      # A build that succeeds and an image that runs are different claims.
+      # Import the committed stubs exactly as the running server does,
+      # inside the actual built image — proving the generated code works
+      # WITHOUT grpcio-tools, which the Dockerfile deliberately excludes
+      # from the runtime layer (`pip install .`, no `[dev]` extra: the
+      # codegen toolchain that produced these files has no business
+      # shipping in the image that just imports them).
+      - name: Committed proto stubs import inside the image
+        run: |
+          docker run --rm placement-service:ci python3 -c \
+            "from placement.generated import scheduler_pb2, scheduler_pb2_grpc; import placement.main"
+
+      # The other half of that same claim: prove grpcio-tools is actually
+      # absent, not merely unneeded by this one import chain (which could
+      # be true even if it were still installed).
+      - name: grpc_tools is genuinely absent from the runtime image
+        run: |
+          if docker run --rm placement-service:ci python3 -c "import grpc_tools" 2>/dev/null; then
+            echo "::error::grpc_tools imported inside the runtime image — a dev-only compiler toolchain leaked into the production image."
+            exit 1
+          fi
+          echo "confirmed: grpc_tools is not importable in the runtime image"
+
+      # The container actually starts and the port accepts a TCP
+      # connection — the same shape of check fly.toml's tcp_checks will
+      # run against in production. Only PLACEMENT_SERVICE_SECRET is passed
+      # explicitly: the Dockerfile already bakes in ENV PLACEMENT_PORT=50051 /
+      # EXPOSE 50051, and exercising that baked-in default (rather than
+      # overriding it here too) is the more faithful test of what a real
+      # deploy experiences. PLACEMENT_SERVICE_SECRET has no default by design
+      # (placement.config.Settings.from_env() refuses to start without one,
+      # fail-closed rather than authenticating everyone on an empty-string
+      # compare), so the container cannot start at all without it.
+      - name: Container starts and the port accepts a TCP connection
+        run: |
+          set -euo pipefail
+          docker run -d --name placement-smoke -p 50051:50051 \
+            -e PLACEMENT_SERVICE_SECRET=ci-smoke-secret \
+            placement-service:ci
+          trap 'echo "--- container logs ---"; docker logs placement-smoke || true; docker rm -f placement-smoke >/dev/null 2>&1 || true' EXIT
+
+          opened=""
+          for _ in $(seq 1 15); do
+            if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/50051' 2>/dev/null; then
+              opened=1
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$opened" ]; then
+            echo "::error::port 50051 never accepted a TCP connection within 15s"
+            exit 1
+          fi
+
+          running="$(docker inspect -f '{{.State.Running}}' placement-smoke)"
+          if [ "$running" != "true" ]; then
+            echo "::error::container exited after the port opened"
+            exit 1
+          fi
+          echo "container is running and the port accepted a TCP connection"
+
+  # ---------------------------------------------------------------------
+  # Closes a real gap in the original design: the trigger above fires on
+  # proto/** but nothing else in this workflow ever touches the
+  # TypeScript stubs. Without this job, a PR that edits proto/scheduler.proto,
+  # regenerates only the Python side (which the `test` job above would
+  # catch via tests/test_proto_compiles.py) and stops there passes this
+  # workflow green while packages/engine/src/scheduling/generated/ silently
+  # drifts — the proto changes, Python regenerates and passes, and nothing
+  # is red. This repo has been bitten by CI-only drift gates five times
+  # already (openapi:gen, i18n:gen-keys, schema:snapshot, the engine
+  # golden corpora, the event-copy gate) — same shape here, per language.
+  #
+  # Deliberately the SAME shape for both languages — regenerate into the
+  # tracked source tree, then check `git status --porcelain` — even though
+  # the Python side already has an equivalent, self-contained check inside
+  # tests/test_proto_compiles.py (that one regenerates into a tmp dir and
+  # byte-compares, so it never touches the source tree). Keeping this job
+  # symmetric means a failure here always names its own language
+  # unambiguously, and the two gates read the same way side by side.
+  # ---------------------------------------------------------------------
+  proto-drift:
+    name: Cross-language proto stub drift gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - run: pnpm install --frozen-lockfile
+
+      # grpc_tools.protoc is what regenerates the Python stubs; it lives in
+      # the dev extra (see the `test` job's comment above), so this job
+      # needs the same install the test suite uses.
+      - name: Install placement service (dev extras, for grpc_tools.protoc)
+        working-directory: services/placement
+        run: pip install -e ".[dev]"
+
+      - name: Regenerate Python proto stubs
+        run: python3 services/placement/tests/test_proto_compiles.py
+
+      - name: Python stub drift gate
+        run: |
+          drift="$(git status --porcelain -- services/placement/src/placement/generated/)"
+          if [ -n "$drift" ]; then
+            echo "$drift"
+            echo "::error::Python proto stubs are stale — proto/scheduler.proto changed but services/placement/src/placement/generated/ was not regenerated and committed. Run 'venv/bin/python tests/test_proto_compiles.py' from services/placement/ and commit the result."
+            git diff -- services/placement/src/placement/generated/
+            exit 1
+          fi
+
+      - name: Regenerate TypeScript proto stubs
+        run: npm run gen:proto --workspace packages/engine
+
+      - name: TypeScript stub drift gate
+        run: |
+          drift="$(git status --porcelain -- packages/engine/src/scheduling/generated/)"
+          if [ -n "$drift" ]; then
+            echo "$drift"
+            echo "::error::TypeScript proto stubs are stale — proto/scheduler.proto changed but packages/engine/src/scheduling/generated/ was not regenerated and committed. Run 'npm run gen:proto --workspace packages/engine' and commit the result."
+            git diff -- packages/engine/src/scheduling/generated/
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------
+  # The only job in this repo where TypeScript talks to a REAL solver.
+  #
+  # Everything else that claims to cover the cutover is mocked or shallow:
+  # build.test.ts's "Placement path" injects a fake `solveBuild`; the `docker`
+  # job above starts the container but only opens a TCP socket to it, which
+  # proves the port binds and nothing about whether the service solves; and
+  # neither ci.yml nor e2e.yml references placement at all, so the app's own
+  # e2e runs with `placement.internal` unreachable — which build.ts:1445 folds
+  # into `greedy("solver_unavailable")` and reports as a perfectly ordinary
+  # green board. A cutover regression is invisible to every one of those.
+  #
+  # That is not hypothetical here. Task 06's first pass wired `solveBuild`
+  # correctly and passed 8 of 8 new happy-path tests while silently running
+  # GREEDY on most real boards — every one of those tests happened to be
+  # single-court or grid-aligned, shapes where greedy also returns a
+  # plausible answer. See _INDEX.md, "The cutover nearly shipped INERT".
+  # `engine === "optimized"` on a multi-court, non-grid-aligned board is the
+  # assertion that would have caught it, and it lives in the suite this job
+  # runs.
+  #
+  # Affordable only because the service is stateless: no DB, no Flyway, no
+  # seeding. That is why this can be a plain PR gate rather than joining
+  # the expensive suites this repo keeps behind manual triggers.
+  # ---------------------------------------------------------------------
+  integration:
+    name: TypeScript ↔ live service (real gRPC, no mocks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+
+      # Same build as the `docker` job, sharing its GHA layer cache, so this
+      # is a cache hit rather than a second full build. Not factored into a
+      # reusable job: passing an image between jobs means a registry push or
+      # a tarball artifact, and both cost more than the cached rebuild.
+      - name: Build the placement service image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A literal, not a repository secret. This authenticates a throwaway
+      # container to a throwaway client inside one ephemeral runner; it
+      # never leaves the job. Using a real secret here would grant every
+      # fork PR read access to the production value for no security gain.
+      # It must nonetheless be non-empty and identical on both sides:
+      # placement.config.Settings.from_env() refuses to start without one, and
+      # build.ts:1442 defaults a missing secret to "" — which the service
+      # rejects as UNAUTHENTICATED, which build.ts's catch folds into a
+      # greedy board. A mismatch here would therefore NOT fail loudly; it
+      # would look exactly like "placement lost to greedy on merit".
+      - name: Start the service
+        run: |
+          set -euo pipefail
+          docker run -d --name placement-integration -p 50051:50051 \
+            -e PLACEMENT_SERVICE_SECRET=ci-integration-secret \
+            placement-service:ci
+
+          opened=""
+          for _ in $(seq 1 15); do
+            if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/50051' 2>/dev/null; then
+              opened=1
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$opened" ]; then
+            echo "::error::port 50051 never accepted a TCP connection within 15s"
+            docker logs placement-integration || true
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # `continue-on-error` so the assertion step below is what fails the
+      # job. Vitest's exit code alone is not a usable gate here: a suite
+      # that SKIPS everything exits 0, and skipping is this file's default
+      # (it gates on PLACEMENT_SERVICE_HOST being defined). Judging this job by
+      # exit code would make "the env var name changed" indistinguishable
+      # from "the integration tests pass".
+      - name: Run the integration suite against the live service
+        id: vitest
+        continue-on-error: true
+        working-directory: packages/engine
+        env:
+          PLACEMENT_SERVICE_HOST: localhost:50051
+          PLACEMENT_SERVICE_SECRET: ci-integration-secret
+        run: |
+          npx vitest run --reporter=json --outputFile=/tmp/placement-integration.json \
+            src/scheduling/__tests__/placement-integration.test.ts
+
+      # Counts come from the JSON report, never from the wrapper's summary
+      # or the exit code — both have lied in this repo. The zero-skip and
+      # nonzero-pass assertions are the load-bearing ones: without them this
+      # job goes green when the suite never executed, which is the single
+      # most likely way for it to rot (someone renames the env var, or the
+      # file moves, and the positional filename filter silently matches
+      # nothing).
+      - name: Assert the suite RAN, and passed
+        run: |
+          set -euo pipefail
+          if [ ! -f /tmp/placement-integration.json ]; then
+            echo "::error::vitest produced no JSON report — the suite failed to collect. Container logs follow."
+            docker logs placement-integration || true
+            exit 1
+          fi
+
+          total=$(jq '.numTotalTests'   /tmp/placement-integration.json)
+          passed=$(jq '.numPassedTests' /tmp/placement-integration.json)
+          failed=$(jq '.numFailedTests' /tmp/placement-integration.json)
+          skipped=$(jq '.numPendingTests' /tmp/placement-integration.json)
+          echo "total=$total passed=$passed failed=$failed skipped=$skipped"
+          jq -r '.testResults[].name' /tmp/placement-integration.json
+
+          if [ "$total" -eq 0 ]; then
+            echo "::error::0 tests collected — the file moved, or the filename filter matched nothing."
+            exit 1
+          fi
+          if [ "$skipped" -ne 0 ]; then
+            echo "::error::$skipped test(s) SKIPPED. This suite gates on PLACEMENT_SERVICE_HOST; a skip here means the service was not reached, not that the tests are optional in CI."
+            docker logs placement-integration || true
+            exit 1
+          fi
+          if [ "$passed" -eq 0 ] || [ "$failed" -ne 0 ]; then
+            echo "::error::integration suite failed: $failed failed, $passed passed."
+            docker logs placement-integration || true
+            exit 1
+          fi
+          echo "integration suite ran against the live service: $passed passed, 0 skipped"
+
+      # Unconditional: a failed assertion above must still surface why the
+      # solver behaved as it did, and a leaked container would poison a
+      # later job on a self-hosted runner.
+      - name: Service logs and teardown
+        if: always()
+        run: |
+          docker logs placement-integration || true
+          docker rm -f placement-integration >/dev/null 2>&1 || true

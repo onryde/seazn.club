@@ -95,10 +95,10 @@ async function isolated<T>(
     vi.doUnmock("./build-encode.ts");
     // Defensive even for the tests above that never mock this — unmocking a
     // module that was never mocked is a no-op, and the alternative is a
-    // `vi.doMock("./cpsat-client.ts", ...)` (the "still serialises" case
+    // `vi.doMock("./placement-client.ts", ...)` (the "still serialises" case
     // below) leaking into whatever runs next in this worker
     // (`isolate: false`, vitest.config.ts).
-    vi.doUnmock("./cpsat-client.ts");
+    vi.doUnmock("./placement-client.ts");
     await z3.resetZ3();
     vi.resetModules();
   }
@@ -109,7 +109,7 @@ async function isolated<T>(
 const shape = (rows: readonly { fixtureId: string; court: string; startAt: number }[]): string[] =>
   rows.map((a) => `${a.fixtureId}@${a.court}+${(a.startAt - T0) / MIN}`).sort();
 
-// Three of the five cases below are SKIPPED (Task 06, cp-sat cutover):
+// Three of the five cases below are SKIPPED (Task 06, placement cutover):
 // `solveBuild` no longer boots z3 (`loadZ3`) at all on the path these
 // exercise, so `z3LoadCount()` returning to 0 after a "solve" is no longer
 // evidence of a teardown — it is evidence that z3 was never touched in the
@@ -304,7 +304,7 @@ describe("buildSchedule — z3 teardown (R17)", () => {
   // What still genuinely needs covering: `buildSchedule` still wraps every
   // call in `withZ3LockAndReset` (`build.ts`, untouched — see the report's
   // finding on this), so two concurrent BUILD calls are still serialised
-  // through ONE process-wide lock even though cp-sat is an out-of-process
+  // through ONE process-wide lock even though placement is an out-of-process
   // RPC that shares no state between them. This case now proves the
   // narrower, still-true half of the original claim — the lock does not
   // wedge or corrupt either call — which is what a caller actually
@@ -322,17 +322,17 @@ describe("buildSchedule — z3 teardown (R17)", () => {
           build.buildSchedule({ fixtures, config }),
           build.buildSchedule({ fixtures, config }),
         ]);
-        // Both calls actually reached and used the mocked cp-sat client —
+        // Both calls actually reached and used the mocked placement client —
         // the positive witness that the lock serialised rather than
         // silently dropping or corrupting one of the two concurrent calls.
-        expect(first.engine).toBe("cp-sat");
-        expect(second.engine).toBe("cp-sat");
+        expect(first.engine).toBe("optimized");
+        expect(second.engine).toBe("optimized");
         expect(first.assignments.map((a) => a.fixtureId).sort()).toEqual(["a", "b"]);
         expect(second.assignments.map((a) => a.fixtureId).sort()).toEqual(["a", "b"]);
       },
       () => {
-        vi.doMock("./cpsat-client.ts", async () => {
-          const actual = await vi.importActual<typeof import("./cpsat-client.ts")>("./cpsat-client.ts");
+        vi.doMock("./placement-client.ts", async () => {
+          const actual = await vi.importActual<typeof import("./placement-client.ts")>("./placement-client.ts");
           return {
             ...actual,
             solveBuild: async () => ({

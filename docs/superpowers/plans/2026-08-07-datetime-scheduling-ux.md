@@ -12,7 +12,7 @@
 
 - Every new/changed user-facing string → all 4 locale dictionaries (`apps/web/src/dictionaries/{en,es,fr,nl}/*.json`), never hardcoded English.
 - Every UI surface verified at desktop AND 375px, no horizontal page scroll.
-- Every task ships all 4 test types per `docs/superpowers/RULES.md`: unit, E2E (Playwright), smoke (`scripts/smoke.ts`), regression (a test that fails without the fix). Tasks 1-4 are unit+regression only where nothing new is E2E/smoke-visible yet — Task 9 is where cumulative E2E+smoke coverage for the whole feature set lands, same pattern as the CP-SAT plan's own Task 11.
+- Every task ships all 4 test types per `docs/superpowers/RULES.md`: unit, E2E (Playwright), smoke (`scripts/smoke.ts`), regression (a test that fails without the fix). Tasks 1-4 are unit+regression only where nothing new is E2E/smoke-visible yet — Task 9 is where cumulative E2E+smoke coverage for the whole feature set lands, same pattern as the Placement plan's own Task 11.
 - Agent topology for dispatch: Scout=Sonnet High, Implementer=Sonnet xHigh, Reviewer=Sonnet xHigh (`docs/superpowers/RULES.md` — supersedes any older Opus guidance).
 - Blackout config is gated behind the `scheduling.constraints` feature (`usesConstraints()`, `schedule.ts:146-155`) — the editor UI must respect this, not just the backend.
 - Pre-commit: `npm run openapi:gen && git status --porcelain` must be empty — none of these tasks change the OpenAPI-documented wire shape (`config` stays an opaque JSON blob to the API layer), but verify anyway, don't assume.
@@ -563,7 +563,7 @@ the bad state from being SAVED in the first place; it does not change
 what either engine does with an already-orphaned assignment (that
 behavior — pinned exempt from AUTO's filter, REFLOW's `{original} ∪
 {configured}` domain — is unchanged and correct to leave as-is per the
-CP-SAT design doc's own note on this).
+Placement design doc's own note on this).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -646,7 +646,7 @@ git commit -m "fix(web): reject removing a court with pinned/frozen fixtures sti
 
 Per `docs/superpowers/RULES.md`: every task ultimately owes E2E +
 smoke coverage; this task is where it lands for this whole programme,
-once the full chain is visible end-to-end (mirrors the CP-SAT plan's
+once the full chain is visible end-to-end (mirrors the Placement plan's
 own Task 11 for the same reason).
 
 - [ ] **Step 1: Write the E2E spec**

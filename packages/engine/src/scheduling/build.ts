@@ -107,14 +107,14 @@ import type { HardConstraint } from "./constraints.ts";
 import { dayKeyInTz } from "./tz.ts";
 import { repairUniverse } from "./repair-domain.ts";
 import { withZ3LockAndReset, type Z3Context } from "./z3-load.ts";
-// `cpsat-client.ts` is imported dynamically at the call site inside
+// `placement-client.ts` is imported dynamically at the call site inside
 // `solveBuild`, never statically — see the comment there. This is a
 // TYPE-only import: `import type` is erased at compile time, so it creates
 // no runtime module binding and does not defeat the dynamic-import mocking
 // seam `build.test.ts` relies on (the repo's own recorded trap: `vi.doMock`/
 // `vi.spyOn(await import(...))` is inert against a module the file under
 // test also imports statically).
-import type { SolveBuildInput, SolveBuildOutcome } from "./cpsat-client.ts";
+import type { SolveBuildInput, SolveBuildOutcome } from "./placement-client.ts";
 
 const MS_PER_MIN = 60_000;
 
@@ -322,7 +322,7 @@ export type BuildStatus =
   /** The WASM would not boot. A fallback, never an exception. z3-era only —
    *  additive, not renamed, since Prompt 10 (not this task) removes z3. */
   | "z3_unavailable"
-  /** The cp-sat era's `z3_unavailable`: the service call resolved but not
+  /** The placement era's `z3_unavailable`: the service call resolved but not
    *  into a trustworthy board — a transport fault, an unmapped/unreadable
    *  status, or the RPC promise rejecting outright (deadline, unavailable,
    *  a malformed request) all land here. A DIFFERENT identifier rather than
@@ -393,14 +393,14 @@ export interface BuildInput {
    * `restByDivision` has no other channel at all, and a cross-division pair
    * then rests at whichever division's number happened to be asked.
    *
-   * `tz` is named here too, for the cp-sat wire's `dayIndex`: `solveBuild`
+   * `tz` is named here too, for the placement wire's `dayIndex`: `solveBuild`
    * derives it from `dayKeyInTz(slot.startAt, tz)`, the same bucketing the
    * verifier's own day-cap pass uses (#447/#448 — `settings.tz` is DISPLAY,
    * `settings.orgTz` is the governing clock, and the wrong one typechecks).
    * Unlike `hard`/`restByDivision`, `SlotConfig` already declares `tz?:
    * string` on its own (the placer's typed-rule day tallies read it too), so
    * this entry is redundant with what the intersection already exposed —
-   * added for documentation of the cp-sat dependency, not because
+   * added for documentation of the placement dependency, not because
    * `config.tz` was previously unreadable.
    */
   config: SlotConfig & { courts: string[] } & Pick<VerifyConfig, "hard" | "restByDivision" | "tz">;
@@ -458,7 +458,7 @@ export interface BuildResult {
   metrics: BoardMetrics;
   /** Where the returned board came from, not which solver was consulted: `z3`
    *  means the board on this result is one z3 produced. */
-  engine: "greedy" | "z3" | "z3+lns" | "cp-sat";
+  engine: "greedy" | "z3" | "z3+lns" | "optimized";
   status: BuildStatus;
   tiersCompleted: number;
   budgetExpired: boolean;
@@ -993,25 +993,25 @@ export function buildSchedule(input: BuildInput): Promise<BuildResult> {
   // path too — `solveBuild` swallows a boot failure but not an encoder-drift
   // throw, and a counter that leaked one of those would refuse every subsequent
   // build in this process for as long as it lived.
-  // STILL HELD FOR THE CP-SAT PATH TOO (fix round 1 finding, deliberately
+  // STILL HELD FOR THE PLACEMENT PATH TOO (fix round 1 finding, deliberately
   // NOT changed this round — a process-wide lock is a blast-radius change
   // and the one test that would prove dropping it safe needed writing
   // first; see `build-teardown.test.ts`'s "still serialises, and still
   // tears down, when two runs queue together").
   //
   // `solveBuild` no longer touches z3 on this path at all, so `withZ3Lock`
-  // buys this call NOTHING correctness-wise: cp-sat is an out-of-process
+  // buys this call NOTHING correctness-wise: placement is an out-of-process
   // gRPC call, sharing no WASM heap, no `Solver` instance, no mutable
   // process-wide state with anything this lock protects. `tearDownZ3`
   // itself degrades gracefully (`if (loaded === null) return;` — a
   // near-instant no-op whenever z3 was never booted, which on this path is
   // always), so nothing is BROKEN by keeping the wrap — but it is not free
-  // either: every cp-sat call still queues behind `MAX_SOLVER_QUEUE` AND
+  // either: every placement call still queues behind `MAX_SOLVER_QUEUE` AND
   // behind this lock, needlessly serialising concurrent BUILD/POLISH
   // requests against each other (redundant with the queue cap and the
-  // service's own `CPSAT_MAX_WORKERS`) and against REFLOW's concurrent z3
+  // service's own `PLACEMENT_MAX_WORKERS`) and against REFLOW's concurrent z3
   // repairs (`repairSchedule` takes the SAME lock, and shares nothing with
-  // cp-sat either).
+  // placement either).
   //
   // Left in place because removing it is REFLOW's call to weigh in on too
   // (this lock is `z3-load.ts`'s, not BUILD/POLISH's own), and because the
@@ -1029,8 +1029,8 @@ export function buildSchedule(input: BuildInput): Promise<BuildResult> {
  * its own, without bound.
  */
 /**
- * Obligation 5 (cp-sat cutover): does every declared court offer the exact
- * same set of start times? If not, sending this grid to cp-sat gets the
+ * Obligation 5 (placement cutover): does every declared court offer the exact
+ * same set of start times? If not, sending this grid to placement gets the
  * whole request refused (`schema.py`'s `_validate_court_slot_coverage`)
  * rather than mis-scheduled — measured 6/6 under the string contract, a
  * fixture placed on a court at a time it did not actually offer.
@@ -1075,10 +1075,10 @@ function buildDayIndexOf(
 
 /**
  * The DIVISION-scoped subset of `max_fixtures_per_day` rules, as the simple
- * per-division map the cp-sat wire carries (design doc: "per-division
+ * per-division map the placement wire carries (design doc: "per-division
  * min_rest_minutes/max_fixtures_per_day"). A rule scoped to the competition,
  * a pool, an entrant or a person has no wire representation of its own —
- * cp-sat v1 does not receive it. That is a real capability gap against z3
+ * placement v1 does not receive it. That is a real capability gap against z3
  * (which hard-encodes every scope via `encodeBuild` §9), but not a newly
  * silent one: `validateInstructionRules`'s reports are warn-only by design,
  * unrelated to this task.
@@ -1104,7 +1104,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   const elapsed = (): number => performance.now() - t0;
   const { fixtures, config } = input;
   const wallMs = input.wallMs ?? DEFAULT_BUILD_WALL_MS;
-  /** The outer wall. cp-sat clamps its own wall server-side, so this only
+  /** The outer wall. placement clamps its own wall server-side, so this only
    *  has to stop THIS function from spending anything — setup or a network
    *  round trip — once nothing would be left to search with anyway. */
   const outOfTime = (): boolean => elapsed() >= wallMs;
@@ -1239,7 +1239,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // they existed to make the SOLVER's own placement variables able to
   // express the incumbent (`seedPinsOf`'s doc: "THE SOLVER MUST NEVER BE
   // UNABLE TO EXPRESS ITS OWN INCUMBENT"). Neither concept has a job here: a
-  // pin is never a placement variable for cp-sat (it is an `existing` row,
+  // pin is never something the service treats as a placement variable (it is an `existing` row,
   // fixed regardless of the grid — see obligation 3 above), and there is no
   // incremental bound-walk left to protect from a vacuous ladder. Bare, this
   // is the SAME shape `canSolveWithin` already uses for the identical reason
@@ -1253,7 +1253,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // below then correctly reads as a per-court asymmetry and routes to greedy
   // — even though the UNDERLYING grid (blackouts, session windows, window)
   // is perfectly uniform and the real service would happily accept it. That
-  // silently defeated cp-sat on exactly the boards a real solve helps most:
+  // silently defeated placement on exactly the boards a real solve helps most:
   // rest-constrained multi-court ones.
   const grid = restrictToConfiguredCourts(buildGrid({ config, existing }), config.courts, []);
   // There is no rescue for an over-cap lattice here: `buildGrid` never reads
@@ -1268,7 +1268,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // honestly say — never that the board was produced and accepted by a solver.
   if (grid.overCap || grid.slots.length === 0) return greedy("not_searched");
 
-  // Obligation 5 (cp-sat cutover, see `everyCourtSharesGrid`): a per-court
+  // Obligation 5 (placement cutover, see `everyCourtSharesGrid`): a per-court
   // grid is refused by the service, not mis-scheduled, and this is reachable
   // from ordinary org data (`Blackout.court?`), not synthetic. Checked here,
   // before ever calling the service, rather than sent and learned from an
@@ -1285,10 +1285,10 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // be allowed to wait for.
   if (outOfTime()) return greedy("not_searched", true);
 
-  // 3. cp-sat.
+  // 3. Placement.
   //
   // Obligation 3: a pin (`locked`, or `frozen` resolved to an anchor above)
-  // cannot be expressed to cp-sat as "place this fixture, but only here" —
+  // cannot be expressed to placement as "place this fixture, but only here" —
   // the wire has no per-fixture slot-pin field, only `existing` rows
   // (immovable) and `fixtures` (free to go anywhere the model likes). So
   // every pin is sent as an `existing` row at its own (court, startAt) and
@@ -1297,7 +1297,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // while the movable fixture stays free, and it comes back placed a SECOND
   // time elsewhere, OPTIMAL, no error (measured 5/5 under the string
   // contract; see the field comment on `SolveBuildInput.existing` in
-  // `cpsat-client.ts`, which the wire being positional now does not change).
+  // `placement-client.ts`, which the wire being positional now does not change).
   // This is also the documented shape of POLISH: "BUILD with a frozen set
   // already folded into the request's existing/pinned rows."
   const pinnedFixtureIds = new Set(pinById.keys());
@@ -1307,7 +1307,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   const matchMs = config.matchMinutes * MS_PER_MIN;
 
   /** Same field derivation `encodeBuild`'s own `asAssignment` uses, so a
-   *  pinned row and a cp-sat-placed row are built identically. */
+   *  pinned row and a row placement places are built identically. */
   const assignmentOf = (fixtureId: string, court: string, startAt: number): Assignment => {
     const f = fixtureById.get(fixtureId);
     return {
@@ -1325,7 +1325,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
 
   // If the pins ALONE already carry a PAIRWISE blocking conflict — two locked
   // cards on one slot, two pinned people double-booked, a direct order breach
-  // between two pins — no amount of placing FREE fixtures can fix it: cp-sat
+  // between two pins — no amount of placing FREE fixtures can fix it: placement
   // cannot move a pin, only place the rest around it (a pin is sent as a
   // fixed `existing` row, and the wire never cross-checks two `existing` rows
   // against each other — see the comment on `SolveBuildInput.existing`). This
@@ -1340,7 +1340,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // contradiction between two pins. A single locked/frozen fixture merely
   // sitting outside the window is an ordinary "dirty board" —
   // `deltaConflicts`/R1 exist precisely to forgive it, the same way greedy's
-  // own seed does — and reporting `infeasible` over it here, before cp-sat is
+  // own seed does — and reporting `infeasible` over it here, before placement is
   // even asked, would refuse boards neither greedy nor a real solve has any
   // trouble with. Measured: `build.test.ts`'s "does NOT reject a board over a
   // blocking breach greedy already had" (`a` locked outside a 60-minute
@@ -1368,7 +1368,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   const dayIndexOf = buildDayIndexOf(grid.slots, tz);
   const dayCapByDivision = tz === undefined ? undefined : dayCapsByDivision(effectiveHard(verifyConfig));
 
-  const cpsatInput: SolveBuildInput = {
+  const placementInput: SolveBuildInput = {
     courts: config.courts,
     fixtures: freeFixtures.map((f) => ({
       fixtureId: f.id,
@@ -1391,7 +1391,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
         startAtMs: at.startAt,
       })),
     ],
-    // Filtered to pairs where BOTH ends are fixtures cp-sat is actually being
+    // Filtered to pairs where BOTH ends are fixtures placement is actually being
     // asked to place: `fixtureIndexOf` throws `invalid_request` for an id
     // that names an `existing`/pinned row instead (positional identity has no
     // slot for it), which would fail the WHOLE request over one dependency
@@ -1413,11 +1413,11 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     wallSeconds: Math.max(1, Math.round((wallMs - elapsed()) / 1000)),
   };
 
-  // Loaded dynamically, never `import { solveBuild } from "./cpsat-client.ts"`
+  // Loaded dynamically, never `import { solveBuild } from "./placement-client.ts"`
   // at the top of this file: this repo has a recorded trap where a mock
   // against a module the file under test also imports statically is INERT,
   // and it has previously passed 5/5 with the guard deleted. `build.test.ts`
-  // mocks this exact call via `vi.spyOn(await import("./cpsat-client.ts"),
+  // mocks this exact call via `vi.spyOn(await import("./placement-client.ts"),
   // "solveBuild")`, which only observes what THIS line does if this line
   // resolves the same module namespace object dynamically too — mirroring
   // how `z3-load.ts` defers its own WASM import to inside `loadZ3`, one call
@@ -1437,18 +1437,18 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   const requestId = `build-${fixtures.length}f${config.courts.length}c-${Math.trunc(t0)}`;
   let outcome: SolveBuildOutcome;
   try {
-    const cpsatClient = await import("./cpsat-client.ts");
-    outcome = await cpsatClient.solveBuild(cpsatInput, {
-      secret: process.env.CPSAT_SERVICE_SECRET ?? "",
+    const placementClient = await import("./placement-client.ts");
+    outcome = await placementClient.solveBuild(placementInput, {
+      secret: process.env.PLACEMENT_SERVICE_SECRET ?? "",
       requestId,
     });
   } catch {
     // Any rejection — deadline, unavailable, transport, invalid_request
-    // (`CpSatError["failure"]`, `cpsat-client.ts`'s `failureFor`), an
+    // (`PlacementError["failure"]`, `placement-client.ts`'s `failureFor`), an
     // unclassified bug thrown as a plain `Error`, or unauthenticated (the
     // shared secret rejected — an OPERATOR misconfiguration, and the
     // single most likely first-deploy failure per `DEPLOY.md`: it presents
-    // as "cp-sat is slow", not as an auth error) — ALL of it falls back to
+    // as "placement is slow", not as an auth error) — ALL of it falls back to
     // greedy as `solver_unavailable`, uniformly, by the same test the
     // `ERROR`-status default arm below already applies: none of these
     // promise a retry will help. `invalid_request` is the sharpest case for
@@ -1464,13 +1464,13 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
 
   // `ERROR` is a RESOLVED outcome, not a rejection, but it carries the same
   // instruction: an unmapped or unreadable status is a board this function
-  // has no reason to trust (see `cpsat-client.ts`'s comment on
+  // has no reason to trust (see `placement-client.ts`'s comment on
   // `STATUS_BY_WIRE_VALUE`), so it falls back to greedy exactly as a
   // rejection does. WHICH status name it falls back to is not uniform,
   // though (Task 06b, Correction 2): `SOLVER_BUSY` is the service's own
   // admission control refusing a concurrent solve (`schema.py`'s
   // `error_response("SOLVER_BUSY", ...)`, called from `main.py`), and Task
-  // 08 pinned `CPSAT_MAX_WORKERS=1` in `fly.toml` specifically to hold
+  // 08 pinned `PLACEMENT_MAX_WORKERS=1` in `fly.toml` specifically to hold
   // worst-case thread contention down — which makes two organisers clicking
   // Auto-schedule at once an ORDINARY-traffic path into this, not a rare
   // fault. A retry helps there (the other solve finishes in seconds), so it
@@ -1525,7 +1525,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   //    DELTA rather than an absolute test (see `rejectedBlockingConflicts`).
   //    UNCHANGED from the z3 path: `validateAssignments` (via
   //    `conflictsForBoard`) runs generically over whichever engine's board it
-  //    is handed, and a cp-sat board comes back through the exact same call
+  //    is handed, and a placement board comes back through the exact same call
   //    z3's did.
   const conflicts = conflictsForBoard(incumbent, proved);
   const ours = new Set(incumbent.map((a) => a.fixtureId));
@@ -1536,7 +1536,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     // otherwise reach nobody until an organiser filed a ticket about it.
     // eslint-disable-next-line no-console
     console.error(
-      `buildSchedule: verifier rejected the cp-sat solver's board (${rejected
+      `buildSchedule: verifier rejected the placement solver's board (${rejected
         .map((c) => `${c.fixtureId}:${c.reason}`)
         .join(", ")}) — falling back to the greedy seed`,
     );
@@ -1548,7 +1548,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // `incumbent` started as `seedAssignments` and was replaced ONLY inside an
   // `if (isStrictlyBetter(...))` arm (the T0/tier walks above, before this
   // task), so a regression was not reachable BY CONSTRUCTION — there was
-  // never a code path that could hand back something worse. cp-sat returns
+  // never a code path that could hand back something worse. placement returns
   // one finished board over a single RPC; nothing upstream of this line
   // compared it to anything, so `outcome.assignments` must be treated as a
   // CANDIDATE, not a foregone incumbent. A starved or merely-suboptimal
@@ -1560,7 +1560,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // A DELIBERATELY SIMPLER status derivation than z3's, in both branches
   // below. The z3 path also asked whether the tier ladder was proved over a
   // NON-EMPTY region (`seedOffLattice`/`latticeHoldsIncumbent`) before
-  // claiming `already_optimal` — that nuance has no cp-sat equivalent here
+  // claiming `already_optimal` — that nuance has no placement equivalent here
   // (there is no live solver handle left to ask a follow-up `check()` of
   // once the RPC has returned) and is left to Task 06b's status-mapping work
   // (`_RULES.md` §4).
@@ -1597,7 +1597,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     assignments: incumbent,
     conflicts,
     metrics: incumbentMetrics,
-    engine: "cp-sat",
+    engine: "optimized",
     // Reachable only by having just beaten the seed — see the comment above.
     status: "ok",
     tiersCompleted,

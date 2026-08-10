@@ -35,7 +35,7 @@ primary_region = "lhr"
   # `stopped` only, rootfs at $0.15/GB per 30 days); the amounts are cents
   # either way. If an invoice ever disagrees, "stop" is a one-word revert.
   #
-  # Unlike services/cp-sat/fly.toml, no .flycast work is owed here: this app
+  # Unlike services/placement/fly.toml, no .flycast work is owed here: this app
   # is reached over the PUBLIC internet through Fly Proxy, which is what
   # performs the autostart. The .internal-bypasses-the-proxy trap applies only
   # to private 6PN callers.

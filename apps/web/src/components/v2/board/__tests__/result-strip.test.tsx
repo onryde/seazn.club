@@ -97,7 +97,7 @@ describe("ScheduleResultStrip — the numbers", () => {
     ["z3+lns", "Solver, then refined"],
     // Task 06b: same neutral copy as `z3` — the organiser is never told
     // which solver ran, only whether one did.
-    ["cp-sat", "Solver"],
+    ["optimized", "Solver"],
   ] as const)("names the '%s' engine exactly '%s'", (engine, label) => {
     const html = render(metrics(), solver({ engine, elapsed_ms: 3200, moved: 6 }));
     expect(provenance(html)).toBe(`${label} · 3.2s · 6 matches moved`);
@@ -237,9 +237,9 @@ describe("ScheduleResultStrip — the anytime contract", () => {
     expect(html).toContain('data-tone="plain"');
   });
 
-  // Task 06b: the cp-sat era's `z3_unavailable`. Same copy, same tone, by
+  // Task 06b: the placement era's `z3_unavailable`. Same copy, same tone, by
   // design (the brief's semantic argument: "does not promise a retry will
-  // help" is equally true for a CP-SAT outage) — this is what proves the
+  // help" is equally true for a placement outage) — this is what proves the
   // two statuses actually share a rendering path rather than one silently
   // falling through a switch with no case (which throws, per the
   // `not_searched` test below).

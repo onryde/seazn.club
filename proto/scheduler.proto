@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package seazn.cpsat.v1;
+package seazn.placement.v1;
 
 // -- Build/Polish (tier solver) --------------------------------------------
 //
