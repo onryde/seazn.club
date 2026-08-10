@@ -184,11 +184,21 @@ what solves.
 `services/placement`, package `placement`, env `PLACEMENT_*`, proto
 `seazn.placement.v1`, Fly app `placement` → `placement.internal:50051`. It
 is this repo's own ubiquitous language (placer vs verifier) and it names the
-domain act. Two alternatives were put up and rejected: `scheduler-decision`
+domain act. Three alternatives were put up and rejected: `scheduler-decision`
 (scheduling is what the entire application does, so it does not distinguish
 this service, and "decision" is rules-engine vocabulary absent from this
-domain) and `board-solver` (keeps a technology word, which is the thing
-being removed).
+domain), `board-solver` (keeps a technology word, which is the thing being
+removed), and `placement-solver`.
+
+`placement-solver` was the closest call and was raised twice, so record why
+it lost rather than re-deriving it: it does NOT reoffend against the
+original objection — that was to an *algorithm* name (`cp-sat`) reaching the
+product, and "solver" is a role noun, not an algorithm. It lost on three
+smaller points. `services/` already says it is a service, so the suffix
+earns little. The env names get long (`PLACEMENT_SOLVER_SERVICE_SECRET`).
+And if the solver is ever replaced by something not solver-shaped — a
+heuristic, a learned ranker — `placement` still describes it while
+`placement-solver` becomes the next `cp-sat`.
 
 The `engine` label takes a DIFFERENT word — `placement` would not
 distinguish it from greedy, which also places. Settled:
