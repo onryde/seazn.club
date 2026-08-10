@@ -93,13 +93,26 @@ next task, so they are recorded here rather than left in a transcript.
 
 ### Q1 — "we should say solver busy when it can't solve or not reachable"
 
-**Today those are the same thing, and that is the bug.** All five
-`CpSatError` failure kinds, plus a plain `Error`, plus the service's own
-`SOLVER_BUSY`, collapse into `greedy("solver_unavailable")` at `build.ts`'s
-catch. Task 06b did that deliberately and it was right at the time; it is
-no longer.
+> **SUPERSEDED 2026-08-10, and this section was WRONG when written.** The
+> split described below was already landed by Task 06b. Verified against
+> the code, not grepped: `build.ts:1483-1484` maps
+> `outcome.error?.code === "SOLVER_BUSY"` to `greedy("solver_busy")` and
+> every other `ERROR` to `solver_unavailable`; `build.ts:1445-1462`'s catch
+> (all five `CpSatError` failure kinds plus a plain `Error`) returns
+> `solver_unavailable`. Both members are in the union (`build.ts:338`,
+> `:384`) AND in the hand-written zod mirror
+> (`apps/web/src/server/api-v1/schemas.ts:1029`, `:1059`). Copy exists in
+> all four locales as `board.result.busy` / `board.result.unavailable`
+> (`ui.json:3225-3226`). **So there is no union to widen, no `openapi:gen`
+> to run, and no i18n owed.** `_INDEX.md`'s 06b row said so ("obligation
+> discharged") and this file contradicted it; `_INDEX.md` was right.
+>
+> Kept rather than deleted because the vocabulary below is still the
+> reference for what each status means, and because "the handoff asserted
+> a bug that was already fixed" is the eighth instance of this programme's
+> habit of trusting a written claim over the code.
 
-Split into three:
+The three statuses, as shipped:
 
 | status | meaning | user sees |
 |---|---|---|
@@ -107,32 +120,43 @@ Split into three:
 | `solver_unavailable` | unreachable / transport / deadline | "Couldn't reach the solver; showing a basic schedule" |
 | `ok` / `already_optimal` | normal | unchanged |
 
-**Two code sites, not one.** `SOLVER_BUSY` does not arrive as a thrown
-failure kind — it comes back as `status: "ERROR"` with an `error.code`
-(`schema.py:473` -> `cpsat-client.ts`'s `toOutcome`). So the catch block and
-the outcome mapping both need it.
+**Two code sites, not one — and 06b wired both.** `SOLVER_BUSY` does not
+arrive as a thrown failure kind; it comes back as `status: "ERROR"` with an
+`error.code` (`schema.py:473` -> `cpsat-client.ts`'s `toOutcome`). So the
+catch block and the outcome mapping each needed their own arm, and each has
+one. Read `build.ts:1439-1484` before believing any claim about this path.
 
-**Two costs to know before starting.** Adding `solver_busy` widens a union
-that `apps/web/src/server/api-v1/schemas.ts` hand-mirrors as a zod enum —
-that reds `apps/web` tsc while the engine's own tsc stays green, and it
-drives `openapi:gen`. Both are CI-only gates this repo has been bitten by
-repeatedly. And the new user-facing strings need all four locale
-dictionaries.
+**The costs this section warned about are already paid**, and are recorded
+here only so a future union change remembers them: a status added to
+`BuildResult` widens a union that
+`apps/web/src/server/api-v1/schemas.ts` hand-mirrors as a zod enum — which
+reds `apps/web` tsc while the engine's own tsc stays green — and it drives
+`openapi:gen`. Both are CI-only gates this repo has been bitten by
+repeatedly. New user-facing strings need all four locale dictionaries.
 
 ### Q2 — "what happens if 10 orgs schedule a board with MAX_WORKERS=1"
 
-**One org gets a real solve. The other nine get greedy boards, silently, in
-milliseconds.** Verified chain:
+**One org gets a real solve. The other nine get greedy boards in
+milliseconds.** Verified chain, corrected 2026-08-10 against the code — the
+original had two errors, marked below:
 
-1. `main.py`'s admission control is `BoundedSemaphore.acquire(blocking=False)`
-   — it refuses immediately, there is no queue.
+1. `main.py:94`, `:120` — admission control is
+   `BoundedSemaphore(max_workers)` with `acquire(blocking=False)`. It
+   refuses immediately; there is no queue.
 2. Nine requests get `SOLVER_BUSY`.
-3. `cpsat-client.ts` maps that to `status: "ERROR"` and throws.
-4. `build.ts` folds it into `greedy("solver_unavailable")`.
+3. `cpsat-client.ts`'s `toOutcome` resolves with `status: "ERROR"` plus
+   `error.code`. **It does not throw** — the original said it did. The
+   rejection path and the `ERROR`-status path are different arms.
+4. `build.ts:1483-1484` returns `greedy("solver_busy")`. **Not
+   `solver_unavailable`** — the original said that too, and 06b had already
+   made it false.
 
-Nine organisers get a plausible-looking schedule that is measurably worse,
-with nothing saying so. Not a slow path — a *fast wrong* path. This is a
-cliff, not a slope, and it is invisible.
+So it is no longer *silent*: those nine organisers see
+`board.result.busy` — "Scheduled quickly — the optimiser was busy. Try
+again for a better board." A correct label on a worse board. What remains
+wrong is the board itself, and no label fixes that: nine of ten organisers
+still get greedy output on a solve the fleet could have served. That is
+what machine count, not copy, has to fix.
 
 **10 solvers means 10 MACHINES, not 10 workers:**
 
@@ -169,21 +193,36 @@ streams over one TCP connection, and Fly's TCP proxy balances by
 cost on 6PN is milliseconds against a 2.5s solve, and it deletes the pooling
 trap rather than working around it.
 
-**Ordering:** channel-per-solve -> status split (+ i18n + `openapi:gen`) ->
-`hard_limit` + `fly scale count`. Doing `hard_limit` first achieves nothing;
-doing autostop before the status split turns every contention event into an
-invisible downgrade.
+**Ordering, as revised 2026-08-10 once the status split turned out to be
+already done:** channel-per-solve -> `hard_limit = 1` + `fly scale count 10`.
+Doing `hard_limit` first achieves nothing, because one pooled connection is
+one connection however the proxy is configured. The status-split step that
+used to sit between them is discharged (see Q1).
 
 ---
 
 ## Open work, in dependency order
 
-1. **Solver concurrency + status honesty** — Q1/Q2/Q3 above. One cohesive
-   task: `build.ts` + `cpsat-client.ts`, one test story. **Owner has
-   approved the 10-concurrent-org target**, which moves this ahead of the
-   contract revision. Order within it: channel-per-solve, then the
-   `solver_busy` split (+ 4 locales + `openapi:gen`), then `hard_limit = 1`
-   + `fly scale count`.
+**Owner ordering, set 2026-08-10: concurrency, then the rename, then the
+owner runs DEPLOY.md.** The rename must precede the first deploy — after it,
+renaming the Fly app means recreating it and re-issuing
+`CPSAT_SERVICE_SECRET`. Accepted cost of not waiting for #21: the proto
+rename pays its own stub regen now, and #21 pays a second one later.
+
+1. **Solver concurrency — Task 12, in flight.** Q2/Q3 above. Four files:
+   `cpsat-client.ts` (channel-per-solve), `cpsat-client.test.ts`,
+   `fly.toml` (`[services.concurrency]`, absent today), `DEPLOY.md`
+   (`fly scale count 10`). **`build.ts` is NOT in scope** — its status
+   mapping is already correct. Brief:
+   `.superpowers/sdd/.../task-12-brief.md`.
+   1b. **Not yet briefed, and owed before the concurrency story is whole:**
+   the UI must disable other boards' buttons while a solve is in flight
+   (`_INDEX.md` decision, 2026-08-10) — otherwise "one at a time" is an
+   intention, not a guarantee — and the wake-on-page-load route that pings
+   gRPC `Health/Check` to resume a suspended machine, authenticated and
+   rate-limited because it starts a machine.
+1c. **Rename `cp-sat` -> `placement`** (item 6 below), immediately after
+   Task 12 — same files, so strictly sequential. Then the owner deploys.
 2. **Task 11 (E2E + smoke)** — no brief written. E2E and smoke are deferred
    in full to it for every task 01-07; **no task has paid either**. Until it
    lands the cutover has zero end-to-end coverage.
