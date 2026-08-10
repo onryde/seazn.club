@@ -256,6 +256,15 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     const panel = page.getByRole("region", { name: "Schedule conflicts" });
     await expect(panel).toBeVisible();
     await expect(panel.getByText("rest", { exact: true }).first()).toBeVisible();
+    // The card itself must show ONE merged "rest" badge, not two (the
+    // original bug: two warn.rest entries — one per entrant — rendered as
+    // two identical, indistinguishable badges).
+    const card = page.locator(`[data-fixture-id="${fa}"]`);
+    await expect(card.getByText("rest", { exact: true })).toHaveCount(1);
+    // No raw pin/lock emoji anywhere on the board — real icons only.
+    await expect(page.getByText("📌")).toHaveCount(0);
+    await expect(page.getByText("🔒")).toHaveCount(0);
+
     await panel.getByRole("button", { name: "Jump to fixture →" }).first().click();
     await expect(panel).toBeHidden();
     // The offending block is highlighted and scrolled into view.
