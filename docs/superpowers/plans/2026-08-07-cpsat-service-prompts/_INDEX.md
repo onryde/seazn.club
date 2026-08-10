@@ -154,16 +154,21 @@ plan directory. Leaking a theorem-prover family name into the product is
 backwards, and the whole point of the ACL is that `build.ts` cannot know
 what solves.
 
-**Recommended, pending final sign-off on the word itself: `placement`** —
-directory `services/placement`, package `placement`, env `PLACEMENT_*`,
-proto `seazn.placement.v1`, Fly app `placement` → `placement.internal`. It
+**SETTLED by the owner 2026-08-10: `placement`.** Directory
+`services/placement`, package `placement`, env `PLACEMENT_*`, proto
+`seazn.placement.v1`, Fly app `placement` → `placement.internal:50051`. It
 is this repo's own ubiquitous language (placer vs verifier) and it names the
-domain act. `scheduler-*` was considered and rejected: scheduling is what
-the entire application does, so it does not distinguish this service.
+domain act. Two alternatives were put up and rejected: `scheduler-decision`
+(scheduling is what the entire application does, so it does not distinguish
+this service, and "decision" is rules-engine vocabulary absent from this
+domain) and `board-solver` (keeps a technology word, which is the thing
+being removed).
 
-The `engine` label needs a DIFFERENT word — `placement` would not
-distinguish it from greedy, which also places. Recommended:
-**`greedy | optimized`**, which survives the next solver swap too.
+The `engine` label takes a DIFFERENT word — `placement` would not
+distinguish it from greedy, which also places. Settled:
+**`engine: "greedy" | "optimized"`**, which survives the next solver swap
+too. During the transition the union also still carries `"z3"`/`"z3+lns"`
+until Prompt 10 deletes them.
 
 Measured cost, 2026-08-10: **1013 references across 66 files** — 482 of them
 prose in `docs/`, 531 code and config. It is nearly free today and gets
