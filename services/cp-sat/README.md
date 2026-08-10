@@ -1,0 +1,64 @@
+# CP-SAT scheduling service
+
+gRPC service wrapping Google OR-Tools CP-SAT for the BUILD/POLISH scheduler.
+`packages/engine/src/scheduling/build.ts` calls it through `cpsat-client.ts`,
+the TS anti-corruption layer — see
+[`docs/superpowers/specs/2026-08-07-cpsat-scheduler-design.md`](../../docs/superpowers/specs/2026-08-07-cpsat-scheduler-design.md)
+for the design and [`DEPLOY.md`](./DEPLOY.md) for the production runbook.
+[`bench/README.md`](./bench/README.md) covers the offline sweep this
+service's own board generator (`bench/cpsat_bench_boards.py`) is shared with.
+
+## Local dev (for integration tests)
+
+Start the service:
+
+```bash
+cd services/cp-sat
+venv/bin/pip install -e ".[dev]"
+CPSAT_SERVICE_SECRET=dev-secret CPSAT_PORT=50051 venv/bin/python3 -m cp_sat.main
+```
+
+It logs `cp-sat service listening on :50051 (max_workers=4)` and then blocks
+in the foreground — leave that terminal open, or background it yourself
+(`... &`, noting the PID) if you need the terminal back.
+
+In another terminal, run the TS integration suite against it. There is no
+`test:integration` script in `packages/engine/package.json` — this is the
+direct `vitest` invocation:
+
+```bash
+cd packages/engine
+CPSAT_SERVICE_HOST=localhost:50051 CPSAT_SERVICE_SECRET=dev-secret \
+  npx vitest run src/scheduling/__tests__/cpsat-integration.test.ts
+```
+
+Without `CPSAT_SERVICE_HOST` set, that same suite SKIPS instead of dialing
+the production default (`cp-sat.internal:50051`, unreachable from a dev
+machine) — that is the correct, expected behaviour, not a failure:
+
+```bash
+cd packages/engine
+npx vitest run src/scheduling/__tests__/cpsat-integration.test.ts
+```
+
+### Stop it when you're done
+
+This is a plain foreground (or backgrounded) process on your machine, not a
+container — nothing stops it for you, and a copy left listening on `:50051`
+is stale the moment you next edit `src/cp_sat/**`: a later run (yours, or
+someone else's) that dials `localhost:50051` reaches that stale process and
+reports a false green against code that has since changed, which is worse
+than a connection refused. `Ctrl-C` the foreground terminal, or if you
+backgrounded it:
+
+```bash
+kill %1                     # if it's a job in the current shell, or:
+lsof -t -i :50051 | xargs kill
+
+# confirm the port is free before trusting your next run:
+lsof -t -i :50051            # prints nothing once it's actually down
+```
+
+If `lsof -t -i :50051` prints a PID *before* you start your own server, that
+port is already occupied by something else's process — do not assume it is
+safe to reuse; find out whose it is first.
