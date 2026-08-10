@@ -104,7 +104,31 @@ compaction-proof summary. Keep them in step.
 | 11 | E2E + smoke coverage | not started — **brief written** |
 | 08 | Deployment (Dockerfile, fly.toml) | **complete** — `befd49eb..d292e33f`, approved after 1 fix round. App is `cp-sat` (NOT the plan's `seazn-cpsat-prod` sample — `.internal` DNS derives from the app name and must match `cpsat-client.ts:127`'s `cp-sat.internal:50051`). Warm-start is carried by `auto_stop_machines = "off"`; `min_machines_running = 1` is set but inert beside it |
 | 09 | CI workflow | **complete** — `8d78c595..befd49eb` plus `c57eefe6`, spec PASS + quality approved, 0 Critical/Important. Builds AND runs the image; drift gate covers Python and TS stubs |
-| 10 | Remove BUILD/POLISH's z3 code | **blocked** — 01-09 and 11 live in production for one full deploy cycle, **AND the per-court-grid gap closed** (see below) |
+| 10 | Remove BUILD/POLISH's z3 code | **blocked, but no longer indefinitely** — owner ruled 2026-08-10 to CLOSE the capability gaps and remove z3 fully, rather than close the programme at 11 and leave z3 dormant. Gates: 01-09 and 11 live for one full deploy cycle, **plus all three gaps below closed** |
+
+### The three capability gaps that gate Prompt 10
+
+Owner decision 2026-08-10: **close all three, then delete z3.** The
+alternative on the table — end the programme at Task 11 and leave z3 in
+place as dead-but-present code — was rejected.
+
+Do not remove z3 while any of these is open; each one is a board z3
+schedules correctly and cp-sat does not.
+
+| Gap | What z3 does that cp-sat does not | Cost to close |
+|---|---|---|
+| **C2 — per-court start grids** | z3 accepts courts offering different start times. The ACL now REFUSES that shape, so `Blackout.court?` (`calendar.ts:21`) routes those orgs permanently to greedy | Per-fixture domain restriction over (court, start). Same primitive `court_allow` needs — build once, both close |
+| **C1 — rule scopes above the division** | `encodeBuild` §9 honours EVERY scope via `scopeCoversFixture` (`build-encode.ts:506`). The cp-sat wire carries `day_cap_by_division` / `rest_by_division` only, so a rule scoped to a competition, pool, entrant or **person** is silently not sent (`build.ts:1063-1068`) | A wire representation for scoped rules. This is what task C1 already tracks |
+| **C4 — `existing` rows don't consume day-cap allowance** | z3 subtracts immovable rows from each day's room: `room = h.count - immovable` (`build-encode.ts:507`). cp-sat builds `on_day` for movable fixtures only (`model.py:506-511`), so a pinned row on a capped day consumes nothing and the solver may add another | `division_index` on `PinnedRow` — a proto change, both codegen sides, ACL. Round 6 stripped even fixture identity from `PinnedRow` to reach positional identity, so nothing can attribute a pin to a cap today |
+
+C4 is the one that produces a **wrong board that CP-SAT reports OPTIMAL**:
+a division capped at 2/day with one fixture already on Saturday gets two
+more added, three on the day. The TS verifier catches it afterwards, so it
+surfaces as a rejected board rather than a bad schedule — but that is the
+greedy fallback firing on a board cp-sat should have solved.
+
+C0's ruling (**soft, new T1**) was ratified by the owner on 2026-08-10 and
+gates the placer halves of C1 and C2. It is settled — do not re-ask it.
 
 ### Prompt 10 has a second gate now: the per-court-grid capability gap
 
@@ -250,3 +274,6 @@ simultaneously.
 | Engine label rename | Add a new `"cp-sat"` value alongside existing `"z3"`/`"z3+lns"` (Task 06b) — do not remove the old ones yet, that's part of Task 10 |
 | Status mapping | `UNKNOWN`→`not_searched`, `ERROR`→new `"solver_unavailable"` (not reusing `z3_unavailable`), `INFEASIBLE`→`infeasible` (Task 06b) |
 | Deployment | Own Fly app, `min_machines_running=1` (always warm — cold start eats the wall budget), `lhr` region |
+| Programme end state (2026-08-10) | **Close C2, C1 and C4, then remove z3 entirely.** Not "stop at Task 11 and leave z3 dormant" |
+| C0 rule enforcement (2026-08-10) | **Ratified: soft, inserted as the NEW T1.** Settled — gates C1/C2's placer halves |
+| Who deploys (2026-08-10) | Owner runs `fly` by hand from a written runbook. CI builds and RUNS the image but never pushes or deploys, by design (`cp-sat-service.yml:131`). No agent runs `fly deploy` |
