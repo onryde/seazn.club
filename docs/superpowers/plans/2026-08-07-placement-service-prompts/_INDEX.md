@@ -214,6 +214,66 @@ than "the cutover works". A four-value allow-list is also not an assertion:
 Task 11 owes a scenario that REQUIRES the optimised engine and skips loudly
 when the service is down.
 
+### C2 is REAL and reachable from the UI — confirmed in production 2026-08-10
+
+One court-scoped blackout, added through the ordinary settings UI, silently
+removes the optimiser from an org **permanently**. Not hypothetical, not
+synthetic — reproduced on staging:
+
+    "blackouts": [
+      { "from": "2026-08-11T11:00Z", "to": "2026-08-11T12:00Z" },
+      { "from": "2026-08-12T14:00Z", "to": "2026-08-12T14:30Z", "court": "Board 1" }
+    ]
+
+The second one scopes to a single court, so the three courts stop offering
+identical start times. The ACL's uniform-grid check refuses to send a
+per-court grid, the request never leaves the app, and the response is
+`status: "not_searched"`, `tiers_completed: 0`, `elapsed_ms: 103` — the
+solver was never asked. The board is fine (37/37, no conflicts, and the BEST
+court imbalance measured that day at 30 minutes), so nothing looks wrong.
+
+**This is the failure mode that gates Prompt 10**, stated in the C2 row as
+"routes those orgs permanently to greedy". It now has a live reproduction and
+a one-line UI recipe. Weight C2 accordingly in #21: it is not a quality gap,
+it is the optimiser silently switching itself off for an org.
+
+### DO NOT benchmark the solver over an ALREADY-APPLIED board
+
+The single most expensive mistake of 2026-08-10, and it invalidated four
+production deploys.
+
+Runs 1-4 varied the wall (10s -> 20s -> 30s) and the machine (shared-cpu-2x
+-> performance-1x -> performance-8x/16gb) and returned a **byte-identical
+board every time**: same 30 assignments, same makespan 7270 / idle 2850 /
+imbalance 210, always `tiers_completed: 1/4`. That looked like a solver that
+was immune to resources. It was not: the board's 30 rows were **already in
+the database**, so every run was re-solving around its own previous output as
+`existing` rows. The input was identical AND already saturated.
+
+Clear the schedule and the same org, same settings, same service produced
+**37/37 with zero conflicts**.
+
+So before any solver measurement:
+
+    select count(*) filter (where scheduled_at is not null) as scheduled,
+           count(*) as total
+      from fixtures f join stages s on s.id = f.stage_id
+     where s.division_id = '<id>';
+
+`scheduled` must be 0. A non-zero value does not fail loudly — it produces a
+plausible, stable, wrong answer, which is the worst kind.
+
+Two corollaries worth carrying:
+
+  * `placed: 30/37` with seven `warn.no_slot` conflicts is NOT evidence that
+    seven fixtures are unplaceable. `status: FEASIBLE` means CP-SAT never
+    PROVED the maximum; 30 was greedy's number and the solver merely failed to
+    beat it inside the wall.
+  * read the conflict's `rule` field, not its `detail` prose. `rule: "CAP"`
+    names the day cap; the detail string says "no court/time within horizon",
+    which reads like a capacity limit and is not one. That misreading cost
+    several hours.
+
 ### T0 cannot PROVE a maximum on an over-subscribed board — measured in production
 
 2026-08-10, first production incident, and it cost four deploys to reach a

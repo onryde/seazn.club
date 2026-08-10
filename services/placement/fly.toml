@@ -123,8 +123,8 @@ primary_region = "lhr"
     grace_period = "10s"
 
 [[vm]]
-  size = "performance-8x"
-  memory = "16gb"
+  size = "shared-cpu-2x"
+  memory = "1gb"
 
 [env]
   # Caps CONCURRENT solves (config.py's `Settings.max_workers`, default 4
@@ -177,7 +177,7 @@ primary_region = "lhr"
   # `NUM_SEARCH_WORKERS` is hardcoded at 8 in `model.py`, measured on a
   # 6-core dev box, against this 2-vCPU shape. Change one variable at a time
   # or neither result is attributable — see DEPLOY.md step 8.
-  PLACEMENT_WALL_SECONDS_MAX = "30"
+  PLACEMENT_WALL_SECONDS_MAX = "10"
   # PLACEMENT_-prefixed, matching every other var this service reads. The
   # unprefixed `NUM_SEARCH_WORKERS` set here on 2026-08-10 did NOTHING —
   # `model.py` hardcoded the constant and `config.py` read only four vars — so
