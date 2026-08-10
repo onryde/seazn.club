@@ -19,7 +19,7 @@ claude
 ```
 
 Do **not** `cd` to the main checkout, and do not `git checkout` this branch
-anywhere else — it is `worktree-placement-service-build`, checked out only here.
+anywhere else — it is `worktree-cpsat-service-build`, checked out only here.
 Shell cwd resets to the main checkout between tool calls in this repo, so
 every verify command must carry its own `cd <abs worktree> &&` in the SAME
 call, and resolved paths in `.testResults[].name` must be confirmed to sit
@@ -33,7 +33,7 @@ cleaner and cheaper.
 
 ## State as of this file
 
-- Branch `worktree-placement-service-build`, **0 behind `origin/main`**, tree
+- Branch `worktree-cpsat-service-build`, **0 behind `origin/main`**, tree
   clean. Never pushed — no PR, no force-push concern. Take the current HEAD
   from live `git log`; do not trust a sha written here.
 - Rebased onto `origin/main` this session: 73 commits, zero conflicts.
@@ -221,16 +221,17 @@ rename pays its own stub regen now, and #21 pays a second one later.
    intention, not a guarantee — and the wake-on-page-load route that pings
    gRPC `Health/Check` to resume a suspended machine, authenticated and
    rate-limited because it starts a machine.
-1c. **Rename `placement` -> `placement`** (item 6 below), immediately after
-   Task 12 — same files, so strictly sequential. Then the owner deploys.
+1c. **Rename `cp-sat` -> `placement` — DONE (Task 13, 2026-08-10).** Spec
+   PASS, quality approved. The engine label became **`"optimized"`**, a
+   different word on purpose. Next is Task 11, then the owner deploys.
 2. **Task 11 (E2E + smoke)** — no brief written. E2E and smoke are deferred
    in full to it for every task 01-07; **no task has paid either**. Until it
    lands the cutover has zero end-to-end coverage.
 3. **#21 unified contract revision** covering C1, C2, C4, C5.
 5. **C2, C1, C4, C5** — blocked on #21.
-6. **#20 rename `placement` -> `placement`** across seven namespaces (1013 refs
-   / 66 files, measured). Cheap now, expensive after deploy — the engine
-   label is not persisted anywhere.
+6. **#20 rename `cp-sat` -> `placement` — CLOSED** (Task 13, 2026-08-10),
+   ahead of the first deploy as the owner directed. It was cheap then and
+   would have cost a recreated Fly app and a re-issued secret afterwards.
 7. **Task 10** — delete BUILD/POLISH z3. Blocked on all the gaps + a deploy.
 8. **Owner:** run `services/placement/DEPLOY.md`. Then re-measure
    `NUM_SEARCH_WORKERS` on the real machine shape (hardcoded 8, measured on
@@ -266,7 +267,7 @@ rename pays its own stub regen now, and #21 pays a second one later.
 Paste this into a fresh `claude` started in the worktree:
 
 > Continue the placement scheduler cutover programme in this worktree
-> (`worktree-placement-service-build`). Read
+> (`worktree-cpsat-service-build`). Read
 > `docs/superpowers/plans/2026-08-07-placement-service-prompts/_RESUME.md`
 > first, then `_INDEX.md` beside it, then the SDD ledger at
 > `.superpowers/sdd/2026-08-07-cpsat-service-build-cutover/progress.md` if it
