@@ -84,7 +84,7 @@ compaction-proof summary. Keep them in step.
 | 05 | TS codegen + client wrapper | **complete** — `f19605a6..b33ac2fb`, approved after 1 fix round |
 | 05b | Corpus + coverage hardening (Python tests) | **complete** — `b33ac2fb..a554961e`, clean after fix rounds |
 | 05c | Contract + boundary hardening | **complete** — `a554961e..5774439e`, after 6 fix rounds. Rounds 4 and 5 each tried a *character* rule for id canonicality (`.strip()`, then `isprintable()`) and each was defeated — by Cf characters, then by ten code points in Lo/Mn/So. Homoglyphs (`'Сourt 1'`, Cyrillic Es U+0421) defeat any such rule, so round 6 re-cut the contract to **positional identity**: index is identity, the service compares no strings, `court_names` is display-only |
-| 06 | Wire `solveBuild` in `build.ts` | not started — **unblocked**; brief rewritten for positional identity at `.superpowers/…/task-06-brief.md` (the prompt's obligations 2, 3 and 4 dissolved; 1, 5, 6 survive) |
+| 06 | Wire `solveBuild` in `build.ts` | **complete** — `b673faa6..bc6bb663`, approved after 1 fix round. Read the box below before touching this code |
 | 06b | Status vocabulary translation | not started — **carries an obligation Task 08 discovered**: `CPSAT_MAX_WORKERS=1` on the deploy shape means a second concurrent organiser gets `SOLVER_BUSY`, and **nothing maps that to a greedy board today**. `build.ts`'s existing `"solver_busy"` path is `MAX_SOLVER_QUEUE`, the LOCAL z3 queue cap — unrelated. The service's `SOLVER_BUSY` (`schema.py:473`) reaches `toOutcome` as `status:"ERROR"` + `error.code` and is read by nobody. 06b must map it, or one of two simultaneous organisers gets an error rather than a board |
 | 07 | Integration tests (parity, regression, fallback) | not started |
 | 11 | E2E + smoke coverage | not started — **brief written** |
@@ -154,6 +154,38 @@ free. Escape hatch if per-rule strictness is wanted later: a per-rule
 Tasks 01-04 were re-audited on 2026-08-09 at the owner's request (four
 parallel Opus reviewers, mutation-first, one per task). Suite at that
 point: 86 passed, 0 failed, exit 0.
+
+### The cutover nearly shipped INERT, and no happy-path test could see it
+
+Task 06's first pass wired `solveBuild` correctly and passed 8/8 new tests —
+and on real boards it would have run **greedy, not CP-SAT**, on most of them.
+
+`seedPinsOf`/`pinned` was ported unchanged from z3 and injected the greedy
+seed's slots into the grid. Those slots are not grid-aligned, and they were
+injected **asymmetrically across courts**. Obligation 5's uniform-grid check
+then did its job perfectly: it saw a per-court grid, refused to send it, and
+routed the board to greedy.
+
+`seedPins` was built from the **entire greedy board, unconditionally** — not
+just from pins. So the trigger is not "a board with pins": it is any
+2+-court board whose greedy seed is not grid-aligned, pinned or not.
+`build.test.ts:265` is a zero-pin case that failed before the fix.
+
+Three things worth carrying:
+
+- **Every one of the 8 new happy-path tests passed** while this was live.
+  They were single-court or grid-aligned. A green cutover test says nothing
+  about whether the new placer is being reached.
+- The defect was found by **rewriting a pre-existing test that had been
+  marked `.skip`**, not by reviewing the diff. Two independent reviews read
+  this code and neither saw it.
+- The first written account of it — including mine in the SDD ledger — said
+  the blast radius was "every POLISH run and every BUILD with locked cards".
+  That undersold it. The correction came from the re-review measuring it
+  rather than repeating the report.
+
+If a future change makes CP-SAT "stop being used", look here first: assert
+`engine === "cp-sat"` on a multi-court board with a non-aligned seed.
 
 ### Owed after first deploy: re-measure `NUM_SEARCH_WORKERS`
 
