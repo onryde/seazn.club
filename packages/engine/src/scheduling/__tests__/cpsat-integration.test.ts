@@ -46,73 +46,74 @@ const fx = (id: string, home: string, away: string): SchedulableFixture => ({
 });
 
 /**
- * Combines two patterns already proven elsewhere in this suite, because
- * neither survives alone against how the cp-sat path actually works — both
- * halves below are MEASURED against this service, not hand-derived and
- * assumed correct.
+ * FIX ROUND 1 (coordinator finding, `23fb5756` review): the PREVIOUS version
+ * of this board used `config.constraints.startWindows` to strand a 4th
+ * fixture, mirroring `cornerConfig`'s trap — and that is not wire-legitimate.
+ * `SolveBuildInput.constraints` (`cpsat-client.ts`) carries exactly four
+ * fields: `matchMinutes`, `gapMinutes`, `restByDivision`,
+ * `dayCapByDivision`. `startWindows`, like every other
+ * `SchedulingConstraints` field, is not on the wire at all (tracked gap
+ * C1/C2 — not this task's to fix). cp-sat never learned the stranded
+ * fixture had a window, so it placed it with no idea a constraint existed,
+ * and the test only passed when it happened to land inside that window by
+ * luck. Measured by the coordinator, independently: two consecutive live
+ * runs on the same commit gave `{placed:4,conflicts:0}` and
+ * `{placed:4,conflicts:1}` — a real coin flip, and the exact "green means
+ * the opposite of what it reads as" failure mode this file exists to catch.
  *
- * `a`/`b` (2 courts, `perEntrantMinRest: 45`, both sharing entrant E1) is
- * lifted from `build.test.ts:265`'s "returns a board the verifier accepts"
- * — the exact case `_INDEX.md` cites as `build.test.ts:265`, "a zero-pin
- * case that failed before the fix" during Task 06's first pass. It reliably
- * gives greedy an off-grid seed: greedy's raw seed places `a@C1` at T0 and
- * `b@C1` at T0+75 (30 min match + 45 min rest, chained), and 75 is not a
- * multiple of the 30-minute grid step (`gridStepMinutes(30, 0)` = `gcd(30,
- * 0)` = 30) — asserted below via `slotFixtures` directly, not assumed.
+ * (SEPARATE finding, confirmed on review and reported rather than fixed
+ * here — `build.ts` is out of scope: `rejectedBlockingConflicts` is a DELTA
+ * against the greedy seed's own blocking conflicts, not an absolute zero,
+ * so a blocking conflict identical in SHAPE — same `fixtureId`/`reason`/
+ * `detail` — to one the seed already carried can ship un-rejected. That is
+ * real and independent of this board's own defect, which was simpler and
+ * did not even need the delta to be exploitable: `start_window` was never
+ * in `isBlockingConflict`'s list at all, so it was never a candidate for
+ * rejection, delta or absolute, in either direction.)
  *
- * BUT `a`/`b` ALONE cannot prove `engine === "cp-sat"`, which was the
- * first draft of this board and it failed for a real, structural reason:
- * cp-sat's grid has NO seed-pin injection on this path (`build.ts`: "NO
- * `pinned`/`seedPins` HERE, DELIBERATELY ... Neither concept has a job
- * here" — removing that injection is Task 06's own fix for the ORIGINAL
- * "nearly shipped INERT" bug, see `_INDEX.md`). So cp-sat is bound to the
- * bare 30-minute lattice and can only reach 90-minute spacing for a pair
- * that needs >=75 apart — never the continuous 75 minutes greedy achieves
- * directly. That is a WORSE makespan, and makespan is tier 2, strictly
- * ahead of the court-imbalance tier (4) a 2/1 court split would otherwise
- * win on — so D6 ("never worse than greedy") rejects cp-sat's board every
- * time on THIS shape alone, regardless of how good it is later in the
- * ladder. Observed directly against this service before `x`/`y` below were
- * added: `status: "already_optimal"`, `tiersCompleted: 4` — cp-sat proved
- * its OWN board optimal and still lost, on merit, not on time or a routing
- * failure.
+ * This version rebuilds the SAME shape — greedy's single-pass ordering
+ * strands a fixture a look-ahead solver would place, on a board whose seed
+ * is also off-grid — out of ONLY fields confirmed to reach cp-sat's solver:
+ * `dependencies` (`SolveBuildInput.dependencies`, sent verbatim) and
+ * `restByDivision`. Verified directly in
+ * `services/cp-sat/src/cp_sat/model.py` (section 8), not assumed: the
+ * dependency constraint is `start[after] >= start[before] + dur_ms +
+ * rest_ms[after]`, where `rest_ms[i]` is resolved per-fixture off THAT
+ * fixture's own division's `restByDivision` entry — so a dependency pair,
+ * with `restByDivision` set for their division, is a real constraint
+ * cp-sat's solver enforces, not one it can silently ignore the way it
+ * ignores `startWindows`.
  *
- * `x`/`y` graft on this file's OTHER proven pattern: `build.test.ts`'s
- * `cornerConfig`/`cornerFixtures` scarcity trap (see that file's header —
- * greedy places one card first because nothing stops it, leaving a second,
- * start-window-bound card with no slot, where a solver considering both at
- * once places them both). `y`'s start window (entrant E6, `notAfter: T0`)
- * admits exactly one instant, and by the time greedy reaches `y` (processed
- * last, id order a/b/x/y) both courts are already occupied at that instant
- * — `a` on C1 (placed first) and `x` on C2 (placed third; nothing about
- * `x` ITSELF delays it, it is only there first because `y` sorts after it).
- * `y` is stranded — measured: greedy places 3 of 4, `y` reports
- * `start_window`. A solver weighing all four at once is not stuck with that
- * trade: placing `y` at T0 and shifting `a`/`b` later (still >=45 apart,
- * still grid-aligned, still legal) places all four — verified against this
- * service, not merely proposed (it found `y@C1[0,30)`, `x@C1[30,60)`,
- * `b@C2[0,30)`, `a@C2[90,120)`, court-perfectly balanced besides). 4 > 3
- * decides `isStrictlyBetter` at tier 1, BEFORE makespan is ever compared —
- * which is exactly the tier `a`/`b` alone lost on, and why this shape
- * survives cp-sat being grid-bound where the first draft did not.
+ * `m` depends on `z` (`dependencies: [{ fixtureId: "m", dependsOn: "z",
+ * direct: true }]`) and shares entrant E1 with it, so the SAME
+ * `perEntrantMinRest: 45` / `restByDivision: { "": 45 }` this board needs
+ * anyway for the off-grid-seed property also governs their order gap —
+ * one pair, two jobs, no second constraint channel to keep in sync. Greedy
+ * processes fixtures in (roundNo, id) order — "m" sorts before "x" and
+ * "z" — so it places `m` FIRST, with no way to know a later fixture depends
+ * on it staying second. `x` is independent filler (no shared entrant, no
+ * dependency) so the board genuinely uses both configured courts without
+ * complicating the mechanism above.
  *
- * `restByDivision: { "": 45 }` is separately load-bearing, and is a
- * workaround for a found-not-fixed defect (out of this task's scope —
- * `build.ts` is on the do-not-touch list; reported separately, and
- * unrelated to the tier-ordering issue above). `config.perEntrantMinRest`
- * alone reaches greedy and the verifier fine (both resolve rest through
- * `effectiveRestMinutes` -> `rest-floor.ts`'s `restFloor()`, which reads
- * `perEntrantMinRest`/`constraints.restMin`/`restByGroup`/`noBackToBack` —
- * none of which is `restByDivision`), but `build.ts`'s translation to
- * `SolveBuildInput.constraints` sends ONLY the caller-supplied
- * `verifyConfig.restByDivision` map verbatim — never derived from
- * `restFloor`/`effectiveRestMinutes`/`perEntrantMinRest`. Without this
- * field cp-sat receives no rest constraint at all and returns a board with
- * `a`/`b` back-to-back — legal by cp-sat's own (unconstrained) model, but a
- * "rest" verifier conflict once checked for real (measured: 6/6 conflicts
- * on the `a`/`b`-only draft). Every fixture here has no explicit
- * `divisionId`, so `build.ts` sends `divisionId: f.divisionId ?? ""` on the
- * wire — `""` is therefore the right (only) key to reach them.
+ * MEASURED, not assumed (verified against this service, not merely
+ * proposed): greedy's raw seed places `m@C1+0`, `x@C2+0`, `z@C1+75` — `z`
+ * at +75 minutes, not a multiple of the 30-minute grid step
+ * (`gridStepMinutes(30, 0)` = `gcd(30, 0)` = 30), asserted below via
+ * `slotFixtures` directly. That SAME seed, checked against the real
+ * dependency (which `slotFixtures` itself never evaluates — only
+ * `validateAssignments` does, which is why `slotFixtures`' own
+ * `.conflicts` is empty here and a SEPARATE `validateAssignments` call is
+ * needed to see it), has `m` starting 150 minutes before `z` even ends: a
+ * `direct` `order` conflict, BLOCKING per `isBlockingConflict`, so `m` is
+ * dropped from the LEGAL floor `isStrictlyBetter` actually compares
+ * against — floor placed = 2 (`x`, `z`). cp-sat, receiving the dependency
+ * and the rest for real, places all three legally (measured: `m@C2+90`,
+ * `x@C2+0`, `z@C1+0` — `m` waits for `z`'s end (30) plus its own
+ * 45-minute rest, rounded up to the next grid point, 90). 3 > 2 decides
+ * tier 1 before makespan or any other tier is ever compared — and unlike
+ * the previous draft, this win is a real feasibility fact about a
+ * constraint cp-sat was actually given, not a coincidence about one it was
+ * not.
  */
 function nonAlignedBoard(): BuildInput {
   // `BuildInput["config"]`, not the narrower `SlotConfig & { courts:
@@ -128,17 +129,11 @@ function nonAlignedBoard(): BuildInput {
     window: { from: T0, to: T0 + 240 * MIN },
     tz: "UTC",
     restByDivision: { "": 45 },
-    constraints: {
-      noBackToBack: false,
-      startWindows: [{ target: { kind: "entrant", id: "E6" }, notAfter: T0 }],
-      fieldFairness: "off",
-      parallelism: "mixed",
-      crossPersonClash: "warn",
-    },
   };
   return {
-    fixtures: [fx("a", "E1", "E2"), fx("b", "E1", "E3"), fx("x", "E4", "E5"), fx("y", "E6", "E7")],
+    fixtures: [fx("m", "E1", "E3"), fx("x", "E4", "E5"), fx("z", "E1", "E2")],
     config,
+    dependencies: [{ fixtureId: "m", dependsOn: "z", direct: true }],
   };
 }
 
@@ -202,15 +197,27 @@ describe.skipIf(!RUN_INTEGRATION)("cp-sat integration (requires a running servic
     const input = nonAlignedBoard();
 
     // The premise, proven rather than assumed (see `nonAlignedBoard`'s
-    // comment): greedy's OWN floor places only 3 of 4 — `y` is stranded by
-    // its start window — and `b` lands at an offset the 30-minute grid does
-    // not contain.
+    // comment): greedy's raw seed places `z` at an offset the 30-minute
+    // grid does not contain — and, checked against the real dependency
+    // (`slotFixtures` itself never evaluates `dependencies`, so this is a
+    // SEPARATE `validateAssignments` call, not `seed.conflicts`), that same
+    // seed has `m` starting before `z` even ends: a BLOCKING, direct
+    // `order` conflict, which is what drops `m` from the legal floor below.
     const seed = slotFixtures({ fixtures: input.fixtures, config: input.config });
     expect(seed.assignments).toHaveLength(3);
-    expect(seed.conflicts.map((c) => `${c.fixtureId}:${c.reason}`)).toEqual(["y:start_window"]);
-    const bSeed = seed.assignments.find((a) => a.fixtureId === "b");
-    expect(bSeed).toBeDefined();
-    expect((bSeed!.startAt - input.config.startAt) % (30 * MIN)).not.toBe(0);
+    const zSeed = seed.assignments.find((a) => a.fixtureId === "z");
+    expect(zSeed).toBeDefined();
+    expect((zSeed!.startAt - input.config.startAt) % (30 * MIN)).not.toBe(0);
+
+    const seedConflicts = validateAssignments(
+      seed.assignments,
+      input.config,
+      input.existing ?? [],
+      input.dependencies ?? [],
+    );
+    expect(seedConflicts.map((c) => `${c.fixtureId}:${c.reason}:${c.direct ?? false}`)).toEqual([
+      "m:order:true",
+    ]);
 
     const result = await buildSchedule(input);
 
@@ -221,12 +228,13 @@ describe.skipIf(!RUN_INTEGRATION)("cp-sat integration (requires a running servic
     // having just beaten the seed").
     expect(result.engine).toBe("cp-sat");
     expect(result.status).toBe("ok");
-    // The PROOF that beating greedy was possible at all: greedy's floor
-    // places 3 (above), cp-sat places all 4 — decided at tier 1 (placed
-    // count), before makespan (tier 2) is ever compared, which is what
-    // makes this assertion robust to cp-sat's own grid-quantized cost on
-    // `a`/`b`'s timing (see the comment on `nonAlignedBoard`).
-    expect(result.assignments).toHaveLength(4);
+    // The PROOF that beating greedy was possible at all: greedy's LEGAL
+    // floor drops `m` (above) and places only 2 (`x`, `z`); cp-sat, given
+    // the dependency and the rest for real, places all 3 — decided at tier
+    // 1 (placed count), before makespan (tier 2) is ever compared. Unlike
+    // the reverted draft, this is a feasibility fact about a constraint
+    // cp-sat actually received, not a coincidence about one it did not.
+    expect(result.assignments).toHaveLength(3);
 
     // Not a mock, not a reimplemented checker: the real verifier over the
     // real board a real service produced.
