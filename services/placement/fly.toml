@@ -152,7 +152,32 @@ primary_region = "lhr"
   # measured (`NUM_SEARCH_WORKERS` is still owed a re-measurement, step 8),
   # and doing both at once makes neither attributable. Decide it as one
   # change AFTER the first deploy, with the re-measurement in hand.
-  # PLACEMENT_WALL_SECONDS_MAX = "20"
+  # RAISED FROM THE DEFAULT 10 TO 20 on 2026-08-10, on a production
+  # measurement rather than a guess. A real 37-fixture, 3-board Auto-schedule
+  # came back:
+  #
+  #   status=ok  engine=greedy  tiers_completed=1/4
+  #   budget_expired=true  elapsed_ms=10644
+  #
+  # `status=ok` proves the solve REACHED the service — this was never the
+  # fallback. What it did not get was time: the app asks for 20s
+  # (`AUTO_SOLVER_WALL_MS`), `config.py:39` defaulted the ceiling to 10, and
+  # `main.py:142` clamps `min(parsed.wall_seconds, wall_seconds_max)`. The
+  # solver burned the whole 10s completing only T0 (maximise placed), so
+  # T1 makespan / T2 idle gap / T3 court imbalance never ran — and with no
+  # tier beyond T0 it had no chance to strictly beat the greedy seed, which
+  # is exactly why `engine` reads `greedy`.
+  #
+  # 20 matches what the caller actually asks for, so the clamp stops silently
+  # discarding half the budget. It does NOT make the wall unbounded: the app
+  # still sets it per request, and a machine still answers one solve at a time
+  # (`PLACEMENT_MAX_WORKERS = 1` above).
+  #
+  # STILL OWED, and deliberately NOT changed in the same breath:
+  # `NUM_SEARCH_WORKERS` is hardcoded at 8 in `model.py`, measured on a
+  # 6-core dev box, against this 2-vCPU shape. Change one variable at a time
+  # or neither result is attributable — see DEPLOY.md step 8.
+  PLACEMENT_WALL_SECONDS_MAX = "20"
 
 # --- sizing: this box is sized for PROOF TIME, not placement -----------------
 # Across two independent paired, interleaved A/B runs of 12 on the production
