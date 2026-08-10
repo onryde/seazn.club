@@ -10,8 +10,11 @@
 // new happy-path tests while silently running greedy, not Placement, on most
 // real (multi-court, non-grid-aligned-seed) boards — every one of those 8
 // tests was single-court or grid-aligned, so none of them could see it. Its
-// own conclusion: "assert `engine === 'placement'` on a multi-court board with
+// own conclusion: "assert `engine === 'optimized'` on a multi-court board with
 // a non-aligned seed." That is this file's one load-bearing assertion.
+// (`'optimized'`, not `'placement'`: the service is named placement, but the
+// ENGINE label had to take a different word — `placement` would not
+// distinguish it from greedy, which also places.)
 //
 // `.superpowers/sdd/2026-08-07-cpsat-service-build-cutover/task-07-brief.md`
 // corrects three compile errors in this prompt's base spec
