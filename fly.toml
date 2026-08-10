@@ -13,7 +13,31 @@ primary_region = "lhr"
 [http_service]
   internal_port       = 3000
   force_https         = true
-  auto_stop_machines  = "stop"
+  # "suspend", not "stop": a suspended machine "preserve[s] memory and disk
+  # state, and resume[s] faster than `stopped`" (Fly's machine-states docs),
+  # so a burst machine rejoining under load does not pay a cold Next.js boot
+  # in front of a real request.
+  #
+  # Only machines ABOVE min_machines_running are ever affected — the floor of
+  # 2 never stops or suspends, so the deploy-overlap and matchday-headroom
+  # guarantees below are untouched.
+  #
+  # ONE REAL DIFFERENCE FROM "stop", and it is the reason this needed a
+  # decision rather than a config tweak. `broadcastRevalidate`
+  # (src/lib/peer-revalidate.ts) fans revalidateTag out over 6PN to every
+  # peer. A suspended machine cannot answer that POST, and — unlike a stopped
+  # machine, which boots with an EMPTY cache — it resumes with its in-memory
+  # ISR cache exactly as it was, including entries invalidated while it slept.
+  #
+  # That is acceptable because it is the failure mode this design already
+  # declares and bounds: the broadcast is `Promise.allSettled` + fail-open,
+  # and "a lost broadcast is bounded by the 30s public ISR window
+  # (REVALIDATE_FAST)" — peer-revalidate.ts's own header. A resumed machine is
+  # precisely a lost-broadcast peer, and converges on the same 30s bound.
+  # If that window is ever tightened to where 30s of staleness matters, or if
+  # `expire` mode gains a correctness requirement SWR does not have, revisit
+  # this line first.
+  auto_stop_machines  = "suspend"
   auto_start_machines = true
   min_machines_running = 2          # deploy overlap + matchday headroom; peers
                                     # stay ISR-coherent via /api/internal/revalidate
