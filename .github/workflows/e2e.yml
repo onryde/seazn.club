@@ -17,8 +17,6 @@ name: E2E
 # skip the specs that assert dev link exposure. Runs leave TAG-prefixed e2e
 # users/orgs behind in whichever DB they targeted.
 on:
-  push:
-    branches: [main]
   pull_request: 
   workflow_dispatch:
     inputs:
