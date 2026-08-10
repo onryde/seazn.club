@@ -156,11 +156,64 @@ jobs:
         env:
           BILLING_LIVE: "1"
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      # A REAL solver for the engine coverage gate.
+      #
+      # `placement-integration.test.ts` gates itself on PLACEMENT_SERVICE_HOST,
+      # so without a service those suites SKIP — and skipped code is uncovered
+      # code. Measured 2026-08-10: 89.97% lines without a service (already
+      # under the 90% threshold, on this branch, before the rest fix), 90.64%
+      # with one. The shortfall is `placement-client.ts`'s transport paths,
+      # which have tests that simply never ran.
+      #
+      # Raising the threshold's exception list or excluding the file would both
+      # be gate-weakening for a coverage hole that has real tests sitting right
+      # there. Run them instead. Same container pattern as the smoke job and
+      # placement-service.yml's `integration` job.
+      - uses: docker/setup-buildx-action@v3
+        if: steps.engine-changes.outputs.engine == 'true'
+      - name: Build the placement service image
+        if: steps.engine-changes.outputs.engine == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Start the placement service
+        if: steps.engine-changes.outputs.engine == 'true'
+        run: |
+          set -euo pipefail
+          docker run -d --name placement-engine-cov -p 50051:50051 \
+            -e PLACEMENT_SERVICE_SECRET=ci-engine-secret \
+            placement-service:ci
+          opened=""
+          for _ in $(seq 1 15); do
+            if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/50051' 2>/dev/null; then opened=1; break; fi
+            sleep 1
+          done
+          if [ -z "$opened" ]; then
+            echo "::error::placement port 50051 never accepted a TCP connection within 15s"
+            docker logs placement-engine-cov || true
+            exit 1
+          fi
+
       # Engine suite includes the PROMPT-14 simulation harness (SIM_RUNS
       # defaults to 200 divisions per sport×format when CI=true) and the
       # coverage gate (≥90% lines; 100% on core/ and tiebreakers.ts).
       - run: npm run test:coverage --workspace packages/engine
         if: steps.engine-changes.outputs.engine == 'true'
+        env:
+          PLACEMENT_SERVICE_HOST: localhost:50051
+          PLACEMENT_SERVICE_SECRET: ci-engine-secret
+
+      - name: Placement service logs and teardown (engine coverage)
+        if: always() && steps.engine-changes.outputs.engine == 'true'
+        run: |
+          docker logs placement-engine-cov || true
+          docker rm -f placement-engine-cov >/dev/null 2>&1 || true
       # Sim matrix (v3/09 §3): bounded profile — every module × format ×
       # SIM_SEEDS seeds + the permanent scenario suites; emits sim-report.json.
       # A failure line prints its reproducing seed token.
