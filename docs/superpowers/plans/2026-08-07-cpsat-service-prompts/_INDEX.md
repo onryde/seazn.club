@@ -317,6 +317,29 @@ Three things worth carrying:
 If a future change makes CP-SAT "stop being used", look here first: assert
 `engine === "cp-sat"` on a multi-court board with a non-aligned seed.
 
+### An engine union widening reds `apps/web` tsc, and the engine's own tsc stays green
+
+Task 06 added `"cp-sat"` to `BuildResult["engine"]` (`build.ts:446`). It
+touched only engine files, so its verify ran `packages/engine` tsc — clean.
+Its implementer, its reviewer and my own wave-boundary gate all called it
+green.
+
+**`apps/web` tsc was red at that commit and stayed red across two tasks.**
+`apps/web/src/server/api-v1/schemas.ts:935` hand-mirrors that union as a zod
+enum, and `schedule.ts` assigns `BuildResult` into it one-for-one: TS2322 at
+`schedule.ts:1102`. It surfaced only because Task 06b's implementer tripped
+over it doing unrelated work and reported it as pre-existing instead of
+quietly fixing it. Confirmed independently against the base commit before
+being believed.
+
+The mirror is manual — no codegen, and no test asserts the two agree. So:
+**any change to a public engine type needs `apps/web` tsc too.** At least two
+zod mirrors live in that file (`engine`, and `ScheduleSolverInfo`'s status
+union).
+
+This can reach `main` with every gate green, because `apps/web` typecheck is
+PR-only (it OOMs CI's heap) and this branch has been merging locally.
+
 ### Owed after first deploy: re-measure `NUM_SEARCH_WORKERS`
 
 It is **hardcoded at 8** in the Python source. The deploy shape is
