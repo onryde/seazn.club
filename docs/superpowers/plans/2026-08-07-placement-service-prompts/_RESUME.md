@@ -50,42 +50,121 @@ Staging DB access: `REMOTE_DATABASE_URL` is COMMENTED OUT in the repo-root
 `.env.local` (line 9). Uncomment or export it; `psql` works directly.
 `set search_path = seazn_club;` first.
 
-### The one genuinely open solver question
+### The T1 question — ANSWERED 2026-08-10, and the lead was wrong
 
-**T1 never completes on a real board, even when T0 is trivially satisfied.**
-So the organiser waits for tiers that never run and gets greedy's board.
+**T1 does not complete on a real board and it is not going to.** That is now
+a property to design around, not a bug to fix. Closed by `52ca2747`.
 
-The lead, and it is specific: the day cap uses **range-reified indicators**
-(`model.py:505-515`, two linear constraints per fixture/day). That relaxation
-hides the counting bound, so CP-SAT's dual bound cannot close and it branches
-instead. A redundant `sum(placed) <= sum_of_day_caps` should hand it the bound
-directly. Same SHAPE of fix that rescued T3 — the term's encoding, NOT a warm
-start (`model.py`'s docstring: "a hint supplies nothing but an incumbent",
-and the incumbent was never the problem).
+The lead recorded here — the range-reified day-cap encoding hiding a counting
+bound, fixable with a redundant `sum(placed) <= sum_of_day_caps` — is
+**refuted, both halves**. Do not re-derive it:
 
-Rejected by measurement, do not re-run: symmetry level (six runs, no effect),
-and fewer search workers (8 -> OPTIMAL/4 tiers in 3.8 s; 4 -> timeout at 3).
+  * **Not the day cap.** With a NON-binding cap (999) on the same board, T1
+    stalls identically and the dual bound is unchanged at 9 600 000. The cap
+    was never the obstruction.
+  * **Not fixable by a redundant bound.** A valid window-capacity floor (per
+    court, `match+gap` spacing over the admissible ticks, capped by the
+    per-day division caps) is exactly tight on 2 of 5 shapes and unlocks T1
+    there — FEASIBLE to OPTIMAL in 1.65 s. On the other 3 it moves nothing.
+    Separately: a hand-fed floor within **4%** of the incumbent still does not
+    close in 15 s. Only an exactly-tight bound works, which is circular.
+  * **Not a size problem.** A 2-day board of **304 variables / 575
+    constraints** does not close in 15 s. The production board's size was
+    never the issue.
+
+What is actually missing: CP-SAT gets no counting relation between the
+makespan window and how many fixtures must fit inside it, so the dual bound
+starts at 0 (`#Bound 0.02s best:inf next:[0,131400000]`) and has to be walked
+up by branching. The incumbent is found immediately in every run; only the
+proof is missing — the same signature as T0's production story.
+
+**So the fix was to stop throwing T1's board away.** A cut-short tier's board
+is now ADOPTED rather than discarded. `tiers_completed` still counts only
+PROVED tiers and `schema.py` already sliced `objective_values[:tiers_completed]`,
+so no wire field moved. Measured gain, true span read off the ASSIGNMENTS (the
+`makespan`/`worst_gap` variables are only bounded, not pinned, on any tier not
+currently optimising them — reading them across arms compares noise):
+
+| board | discarded (was) | adopted (now) | |
+|---|---|---|---|
+| 2-day | 130 800 000 | 79 200 000 | -39% |
+| 3-day | 199 200 000 | 150 600 000 | -24% |
+| 8-day | 618 600 000 | 481 200 000 | -22% |
+| bench prod | 1 557 600 000 | 1 519 800 000 | |
+
+**A solution hint was measured and REJECTED.** It would have made "the adopted
+board is never worse" a guarantee instead of an observation, but over 6 runs
+per arm on two boards the regression count was 0 either way (compared WITHIN a
+run — two arms are two different solves and cannot be compared), while hinting
+cost search quality: one hinted run returned 80 400 000 where six unhinted runs
+returned 79 200 000, and under load the hinted arm proved fewer tiers. Note too
+that a hint over `placed` and `start` alone is INCOMPLETE — CP-SAT says so:
+"37 out of 187 non fixed variables hinted" — so the obvious cheap version of
+this idea carries no guarantee at all.
+
+Rejected by measurement earlier, still do not re-run: symmetry level (six runs,
+no effect), and fewer search workers (8 -> OPTIMAL/4 tiers in 3.8 s; 4 ->
+timeout at 3).
+
+**Reproducing any of this:** `services/placement/bench/placement_bench_boards.py`
+`build_board(n=37, courts_n=3, target_slots=108, not_after_entrants=0)` is the
+2-day board, and it stalls T1 in under a second of setup. The starved local
+repro that was said not to reproduce production does not need to — every shape
+tried reproduces it.
+
+### `test_production_board_meets_the_stated_acceptance_criterion` is load-bound
+
+Red at load average 17-22, green at 8.8, same commit. Confirmed as pre-existing
+rather than assumed: baseline and change interleaved 3 runs each fail 3/3 at
+loads 11.7-19.5. A single baseline pass at load 14.9 was the outlier — n=1
+against this solver decides nothing. Its docstring says it is load-sensitive on
+purpose; believe it, and re-run alone at low load before triaging.
 
 ### Open work, in dependency order
 
-1. **Merge #503.**
-2. **C2 — move it UP #21's order.** It is not a quality gap: one court-scoped
+1. ~~**Merge #503.**~~ DONE — merged as `c9b21798`.
+2. **`not_searched` names a cause it cannot know — NEW, reported live
+   2026-08-10.** `build.ts` has SIX exits returning `not_searched` (`:976`,
+   `:1153`, `:1274`, `:1286`, `:1291`, `:1551`) and `result-strip.tsx:69` maps
+   all six onto one hardcoded sentence, `board.result.notSearched`, which
+   blames the step alignment: "The match, gap and rest times you have set do
+   not line up on a shared step; adjust them and run it again." For five of the
+   six that advice is false, and for `:1286` (`!everyCourtSharesGrid`, i.e.
+   **C2** — a court-scoped blackout) it is advice that cannot possibly work.
+   Same defect shape as the `rule: "CAP"` trap below, on the outbound side: the
+   status is honest, the prose asserts a cause nothing established. Needs a
+   reason discriminant on the status — engine-side only, no proto change, since
+   every one of these exits fires BEFORE the RPC. Costs the usual union
+   widening (`schemas.ts` zod mirror -> `apps/web` tsc), `openapi:gen`, and
+   4 locale dictionaries.
+3. **C2 — move it UP #21's order.** It is not a quality gap: one court-scoped
    blackout silently switches the optimiser off for an org, permanently, with
-   a board that looks fine. Live repro in `_INDEX.md`.
-3. **The T1 encoding fix** above. Its own task — solver behaviour, needs a
-   board that actually reproduces the stall (the local starved repro does not).
-4. **#21 unified contract revision** — one proto bump covering C1, C2, C4, C6.
+   a board that looks fine. Live repro in `_INDEX.md`. Row 2 above is the same
+   defect wearing a misleading label, which raises its priority again.
+4. ~~**The T1 encoding fix.**~~ ANSWERED — see the section above. The lead was
+   wrong; the fix was to adopt the cut-short board (`52ca2747`).
+5. **#21 unified contract revision** — one proto bump covering C1, C2, C4, C6.
    Revisit the shared staging service BEFORE it lands: with one service
    serving both, deploying a contract change to staging IS deploying to prod.
-5. **A5** — disable other boards' buttons mid-solve. **A6** — wake-on-load
+6. **A5** — disable other boards' buttons mid-solve. **A6** — wake-on-load
    `Health/Check` route (server-side, authed, rate-limited).
-6. **Task 10** — remove z3 as a capability. Gated on C1/C2/C4/C6. The dead
+7. **Task 10** — remove z3 as a capability. Gated on C1/C2/C4/C6. The dead
    tier encoder is already deleted; this is the WASM loader and fallback path.
-7. **Owner:** re-measure `NUM_SEARCH_WORKERS` on the real box — now that the
+8. **Owner:** re-measure `NUM_SEARCH_WORKERS` on the real box — now that the
    knob actually works. Decide it WITH `PLACEMENT_WALL_SECONDS_MAX`, one
-   variable at a time.
-8. **Check why a "max 5 per day" setting saved as 10, then 8.** Independent of
-   the solver; looks like a UI/save path issue.
+   variable at a time. **Re-measure the WALL too, now that a cut-short tier's
+   board is kept**: before `52ca2747` extra wall bought nothing unless a whole
+   tier proved, so it was close to worthless; now every extra second improves
+   the board that actually ships.
+9. **Check why a "max 5 per day" setting saved as 10, then 8.** Independent of
+   the solver; looks like a UI/save path issue. **Leading candidate, not yet
+   reproduced:** `constraints-panel.tsx:427-431` calls `save()` on every
+   keystroke (`onChange`, not blur or debounce) and builds the payload from
+   `withMaxFixturesPerDay(constraints.hard, ...)` — i.e. from the `constraints`
+   prop captured in that closure. Typing into an existing value fires several
+   overlapping saves, each computed from state that predates the ones already
+   in flight, and the last response to land wins. That fits "5 became 10 then
+   8" but is unverified — do not write it up as the cause without a repro.
 
 ### Reading a solver response
 
