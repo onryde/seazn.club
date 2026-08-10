@@ -34,21 +34,37 @@ primary_region = "lhr"
   # independently, after an earlier draft of this file wrongly claimed
   # min_machines_running only exists under [http_service]; it does not).
   #
-  # min_machines_running only takes effect "when auto_stop_machines is
-  # `stop` or `suspend`" (the docs' own wording) — so it is meaningless on
-  # its own. A bare [[services]] block defaults auto_stop_machines to
-  # "off" (also verified against the same page), which already means
-  # machines are never auto-stopped today — but leaving that as an
-  # unstated default is exactly the kind of implicit behaviour this
-  # service can't afford to depend on: a cold start (~1-3s) eats directly
-  # into the 8-10s wall budget the whole investigation was built around.
-  # Both are pinned explicitly so "always warm" is this file's own
-  # guarantee, not a currently-safe accident of a platform default that
-  # could change or get overridden by a later edit chasing idle-cost
-  # savings. Nothing further is owed post-deploy: no `fly scale` call is
-  # needed for this, unlike an earlier draft of this file claimed.
-  auto_stop_machines = "off"
-  min_machines_running = 1
+  # SCALE TO ZERO — owner decision 2026-08-10, reversing this file's
+  # original "always warm" stance. The machine is sized for proof time, so
+  # it is an expensive thing to leave idle between two organisers clicking
+  # a button minutes apart.
+  #
+  # "suspend", NOT "stop", and the difference is the wall budget:
+  # a suspended machine "preserve[s] memory and disk state, and resume[s]
+  # faster than `stopped`" (Fly's machine-states docs). A cold start is
+  # ~1-3s, an eighth of the 8-10s budget this whole investigation was built
+  # around; a resume is not. Billing for the suspended state is NOT
+  # documented by Fly (checked: the pricing page covers `stopped` only, at
+  # $0.15/GB of rootfs per 30 days) — the expected cost either way is cents,
+  # against machine-hours that are not, so this is a latency choice rather
+  # than a cost one. If an invoice ever disagrees, "stop" is a one-word
+  # change and costs only the cold start.
+  #
+  # min_machines_running = 0 is what actually permits zero. It only takes
+  # effect "when auto_stop_machines is `stop` or `suspend`" (the docs' own
+  # wording), so it was inert beside the previous "off".
+  #
+  # *** THIS SETTING IS INERT — WORSE, SILENTLY HARMFUL — UNLESS THE CALLER
+  # DIALS `.flycast`. *** Autostart is a Fly Proxy feature. `<app>.internal`
+  # bypasses the proxy and resolves straight to machine IPs, so a suspended
+  # machine is simply unreachable: `build.ts` catches the failure and
+  # returns a greedy board, which looks like "cp-sat lost on merit" rather
+  # than an outage. `cpsat-client.ts`'s DEFAULT_HOST is `cp-sat.flycast:50051`
+  # for exactly this reason, and the private IPv6 that makes `.flycast`
+  # resolve is a ONE-TIME manual step (`fly ips allocate-v6 --private`) that
+  # nothing here performs. See DEPLOY.md.
+  auto_stop_machines = "suspend"
+  min_machines_running = 0
 
   [[services.ports]]
     port = 50051

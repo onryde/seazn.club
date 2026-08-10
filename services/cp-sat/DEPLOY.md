@@ -13,7 +13,7 @@ Two names are load-bearing and must not be changed:
 
 | | |
 |---|---|
-| Service app | `cp-sat` — Fly's private DNS is always `<app>.internal`, and `cpsat-client.ts:127`'s `DEFAULT_HOST` is the literal `cp-sat.internal:50051` |
+| Service app | `cp-sat` — Fly's private DNS derives from the app name, and `cpsat-client.ts`'s `DEFAULT_HOST` is the literal `cp-sat.flycast:50051` |
 | Web app | `seazn-club-prod` (root `fly.toml`) |
 
 Rename the service app and every solve dials a host that does not exist: the
@@ -28,23 +28,44 @@ why**. That is the failure this runbook most wants to avoid.
 fly apps create cp-sat        # add --org <org> if you belong to more than one
 ```
 
-## 2. Confirm it has NO public IP
+## 2. Allocate the PRIVATE IPv6 that makes `.flycast` resolve
 
-The design's security model is that 6PN is already WireGuard-encrypted and
-not internet-reachable, which is *why* a shared secret substitutes for mTLS.
-A public IP invalidates that assumption.
+**Do not skip this, and do not confuse it with a public IP.** `fly.toml` sets
+`auto_stop_machines = "suspend"`, so the machine spends most of its life
+suspended. Autostart is a **Fly Proxy** feature: `<app>.internal` resolves
+straight to machine IPs and bypasses the proxy, so a suspended machine on an
+`.internal` host is simply unreachable. `.flycast` routes through the proxy,
+which is what wakes the machine on the first request.
+
+Fly's own docs, on Flycast: *"unlike private networking using `.internal`
+addresses you don't need to keep Machines running for the app to be
+reachable."*
 
 ```bash
-fly ips list --app cp-sat     # must print an empty list
+fly ips allocate-v6 --private --app cp-sat
 ```
 
-If Fly allocated one anyway, release it before deploying:
+Skip it and the symptom is not an error — it is **greedy boards, silently**,
+for every organiser, presenting as "cp-sat got worse".
+
+## 3. Confirm it has NO *public* IP
+
+The private v6 above is expected and required. What must not exist is a
+public address. The design's security model is that 6PN is already
+WireGuard-encrypted and not internet-reachable, which is *why* a shared
+secret substitutes for mTLS. A public IP invalidates that assumption.
+
+```bash
+fly ips list --app cp-sat     # expect the private v6 ONLY — no public v4/v6
+```
+
+If Fly allocated a public one anyway, release it before deploying:
 
 ```bash
 fly ips release <address> --app cp-sat
 ```
 
-## 3. Set the shared secret on BOTH apps
+## 4. Set the shared secret on BOTH apps
 
 `CPSAT_SERVICE_SECRET` is new. **Never reuse `CRON_SECRET`** — a shared value
 would let either service authenticate as the other.
@@ -65,29 +86,38 @@ secret as `UNAUTHENTICATED` — which `cpsat-client.ts:485` maps to a failure
 and `build.ts` turns into a greedy board. A missing secret on the web app
 therefore looks exactly like "CP-SAT is slow", not like an auth error.
 
-## 4. Deploy
+## 5. Deploy
 
 ```bash
 fly deploy services/cp-sat --app cp-sat
 ```
 
-`fly.toml` pins `auto_stop_machines = "off"`, so the machine stays warm —
-a cold start of 1-3s would eat a third of the 8-10s wall budget. Nothing
-further is owed: **no `fly scale` call is needed.**
+`fly.toml` pins `auto_stop_machines = "suspend"` with
+`min_machines_running = 0`, so the machine scales to zero between solves and
+**resumes from a memory snapshot** on the first request through the proxy —
+much faster than the 1-3s cold start a full `stop` would cost, which matters
+against an 8-10s wall budget. Nothing further is owed: **no `fly scale` call
+is needed.**
 
-## 5. Verify before touching the web app
+This is the setting that makes step 2 non-optional. Suspended plus
+`.internal` equals unreachable.
+
+## 6. Verify before touching the web app
 
 ```bash
-fly status --app cp-sat       # 1 machine, started, tcp check passing
+fly status --app cp-sat       # 1 machine, tcp check passing
 fly logs --app cp-sat         # expect a bind on 50051, no tracebacks
 ```
+
+Expect the machine to report `suspended` shortly after deploy once traffic
+stops. That is the configuration working, not a fault.
 
 The health check is a TCP accept, not a gRPC `Health/Check`, on purpose —
 a gRPC probe once shared the solve thread pool and would kill the machine
 mid-solve. A passing check proves the port accepts, not that a solve works.
-Step 6 is what proves that.
+Step 7 is what proves that.
 
-## 6. Prove the cutover is actually live
+## 7. Prove the cutover is actually live
 
 The one assertion that matters: run a real Auto-schedule on a **multi-court**
 board and confirm the result strip reports the CP-SAT engine, not the greedy
@@ -96,10 +126,12 @@ returns a plausible board, and the entire cutover once shipped inert while
 every happy-path test passed (`_INDEX.md`, "The cutover nearly shipped
 INERT").
 
-If it says greedy, work through, in order: secret set on both apps (step 3),
-app named exactly `cp-sat` (step 1), machine actually started (step 5).
+If it says greedy, work through, in order: **private v6 allocated so
+`.flycast` resolves (step 2)** — the most likely cause now that the machine
+suspends — then secret set on both apps (step 4), app named exactly `cp-sat`
+(step 1), machine actually deployed (step 5).
 
-## 7. Owed immediately after this deploy
+## 8. Owed immediately after this deploy
 
 **Re-measure `NUM_SEARCH_WORKERS`.** It is hardcoded at 8
 (`src/cp_sat/model.py`), measured on a 6-physical-core dev box. This shape is

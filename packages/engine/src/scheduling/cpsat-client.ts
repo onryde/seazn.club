@@ -132,7 +132,29 @@ function deadlineMsFor(input: SolveBuildInput): number {
   return Math.round((input.wallSeconds + DEADLINE_MARGIN_SECONDS) * 1000);
 }
 
-const DEFAULT_HOST = "cp-sat.internal:50051";
+/**
+ * `.flycast`, NOT `.internal` — and the difference is load-bearing the moment
+ * the service is allowed to scale to zero.
+ *
+ * Both names resolve on Fly's private 6PN network, but `<app>.internal`
+ * resolves straight to machine IPs and bypasses Fly Proxy, while `.flycast`
+ * routes THROUGH the proxy. Autostart is a proxy feature: Fly's own docs say
+ * of Flycast that "unlike private networking using `.internal` addresses you
+ * don't need to keep Machines running for the app to be reachable".
+ *
+ * So with `auto_stop_machines = "suspend"` (fly.toml) and an `.internal`
+ * host, every solve against a suspended machine dials an address with
+ * nothing listening. `build.ts` catches the rejection and returns
+ * `greedy("solver_unavailable")` — a perfectly ordinary-looking board. The
+ * failure presents as "cp-sat stopped winning", not as an outage, which is
+ * the hardest possible shape to diagnose.
+ *
+ * `.flycast` requires a private IPv6 allocated once per app
+ * (`fly ips allocate-v6 --private --app cp-sat`) — see DEPLOY.md. It is NOT
+ * automatic, and the failure mode if it is skipped is the same silent greedy
+ * board as above.
+ */
+const DEFAULT_HOST = "cp-sat.flycast:50051";
 
 /**
  * Wire enum -> outcome vocabulary. An unmapped value (including proto3's
