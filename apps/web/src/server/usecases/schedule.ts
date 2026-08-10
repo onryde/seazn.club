@@ -175,8 +175,28 @@ export async function putScheduleSettings(
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
   return withTenant(auth.orgId, async (tx) => {
-    const [division] = await tx<{ competition_id: string }[]>`
-      select competition_id from divisions where id = ${divisionId}`;
+    // The competition's own dates and the org zone come back with the division:
+    // the containment guard below needs all three, and a second round trip for
+    // two date columns on a hot endpoint is not worth it. `::text` is load
+    // bearing — postgres hands a bare `date` back as a Date object, and
+    // `zonedTimeToUtc` wants the `YYYY-MM-DD` key, not a JS date in the server's
+    // own zone.
+    const [division] = await tx<
+      {
+        competition_id: string;
+        starts_on: string | null;
+        ends_on: string | null;
+        org_tz: string | null;
+      }[]
+    >`
+      select d.competition_id,
+             c.starts_on::text as starts_on,
+             c.ends_on::text   as ends_on,
+             o.timezone        as org_tz
+      from divisions d
+      join competitions c on c.id = d.competition_id
+      left join organizations o on o.id = d.org_id
+      where d.id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
     assertNotFrozen(frozen, division.competition_id);
     // COURT-REMOVAL GUARD (date/time UX P08). Dropping a court that still
@@ -210,7 +230,56 @@ export async function putScheduleSettings(
     // above, derived once from OCCUPYING/MOVABLE_STATUS and shared with the
     // #350 joint builder. A second copy of either is exactly the fork this
     // area has already been bitten by.
-    const removedCourts = (await loadSettings(tx, divisionId)).config.courts.filter(
+    const stored = await loadSettings(tx, divisionId);
+
+    // CONTAINMENT GUARD. A division's schedule window must sit inside its
+    // competition's own dates. Nothing checked this before — not the wire
+    // schema, not this use-case, not a DB constraint — so a division could be
+    // timetabled entirely outside the competition it belongs to, and
+    // `SlotConfig.window` is resolved from THIS range (`applyWindow`), never
+    // from `competitions.starts_on/ends_on`, so the solver had no idea either.
+    //
+    // Only checked when the range CHANGED. That is the same stance the write
+    // gate below this function takes — refuse what this change introduces, not
+    // what the product already allowed to be stored. A division whose dates
+    // already sit outside its competition must stay editable, or the organiser
+    // cannot fix its courts or match length without first fixing dates they may
+    // not own; and the range is fixable through this very endpoint.
+    //
+    // Bounds are wall-clock days ON THE ORG CLOCK (#397/#448), converted rather
+    // than computed: a DST day is 23 or 25 hours long, so adding 86_400_000 is
+    // wrong twice a year. `ends_on` is inclusive as a date, so its bound is the
+    // START of the following day — exactly how `applyWindow` and `windowBounds`
+    // already read an end date.
+    const tzForWindow = resolveVenueTz(null, division.org_tz);
+    const rangeChanged =
+      (input.config.startAt ?? null) !== (stored.config.startAt ?? null) ||
+      (input.config.endAt ?? null) !== (stored.config.endAt ?? null);
+    if (rangeChanged) {
+      const compFrom =
+        division.starts_on !== null
+          ? zonedTimeToUtc(division.starts_on, "00:00", tzForWindow)
+          : null;
+      const compTo =
+        division.ends_on !== null
+          ? zonedTimeToUtc(ymdAddDays(division.ends_on, 1), "00:00", tzForWindow)
+          : null;
+      const outside: string[] = [];
+      if (compFrom !== null && input.config.startAt && ms(input.config.startAt) < compFrom) {
+        outside.push(`starts before the competition opens on ${division.starts_on}`);
+      }
+      if (compTo !== null && input.config.endAt && ms(input.config.endAt) >= compTo) {
+        outside.push(`ends after the competition closes on ${division.ends_on}`);
+      }
+      if (outside.length > 0) {
+        throw new HttpError(
+          422,
+          `this division's schedule ${outside.join(" and ")} — widen the competition dates, or bring the division inside them`,
+        );
+      }
+    }
+
+    const removedCourts = stored.config.courts.filter(
       (court) => !input.config.courts.includes(court),
     );
     if (removedCourts.length > 0) {

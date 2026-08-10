@@ -14,6 +14,7 @@
 // instant the solver actually reads.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { RestFloorNote, restFloorNoteShown } from "@/components/v2/rest-floor-note";
 import { apiV1 } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { dailyHoursToWindows, windowsToDailyHours } from "@/lib/schedule-board";
@@ -123,6 +124,16 @@ export function SettingsPanel({
   const [playFrom, setPlayFrom] = useState(daily?.from ?? "");
   const [playTo, setPlayTo] = useState(daily?.to ?? "");
 
+  // LIVE state for the three numbers, not `config.*` — the rest-floor note has
+  // to move as the organiser types or it explains the value they just replaced.
+  // `constraints` comes off `config` unchanged: this panel never edits it.
+  const restNoteConfig = {
+    perEntrantMinRest: rest,
+    matchMinutes,
+    gapMinutes,
+    ...(config.constraints !== undefined ? { constraints: config.constraints } : {}),
+  };
+
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)} className="text-xs text-purple-600 hover:underline">
@@ -151,6 +162,25 @@ export function SettingsPanel({
     // far-enough zone a different day.
     const endIso =
       endAt === "" ? null : (isoFromZonedParts(endAt, DAY_END_HHMM, orgTz) ?? config.endAt ?? null);
+    // A range that runs backwards is refused HERE, before anything is sent.
+    //
+    // The `min=` on the end-date input is advisory only: this panel saves from a
+    // click handler, not a form submit, so nothing enforces it. Left unchecked
+    // the reversed pair persists happily and the damage is invisible —
+    // `applyWindow` turns it into `SlotConfig.window`, and `calendar.ts` places
+    // a fixture only when `startAt >= w.from && endAt <= w.to`, which NOTHING
+    // satisfies when `from > to`. The organiser gets an empty board and no
+    // error. (`PutScheduleSettings` now refuses it server-side too; this exists
+    // so the message lands in the panel instead of arriving as a raw 422.)
+    //
+    // Compared as instants, never as strings: both sides are built by
+    // `isoFromZonedParts` on the venue clock, and comparing the raw `YYYY-MM-DD`
+    // text of two fields that carry different times of day is how this check
+    // would quietly stop working.
+    if (startIso !== null && endIso !== null && Date.parse(endIso) < Date.parse(startIso)) {
+      setHoursError(msg("boardset.datesError"));
+      return;
+    }
     // Play hours → session windows. Both set: expand across the schedule
     // span. Both blank: clear a previously-uniform pattern (all hours play),
     // but never clobber hand-built windows. Half-filled or inverted: refuse.
@@ -317,10 +347,20 @@ export function SettingsPanel({
               of the input's accessible name. Splitting the label out to host the
               tip would have dropped it entirely; `aria-describedby` keeps it, and
               as a description rather than a name — which is what it always was. */}
-          <input id="boardset-rest" aria-describedby="boardset-rest-hint" type="number" min={0} inputMode="numeric" value={rest} onChange={(e) => setRest(Number(e.target.value))} className="input w-full" disabled={!canEdit || constrained} />
+          {/* The floor note joins the described set only when it RENDERS —
+              `aria-describedby` pointing at an absent id is a dangling
+              reference, and an always-rendered empty span is an empty
+              description. `restFloorNoteShown` is the component's own
+              predicate, so the attribute and the markup cannot disagree. */}
+          <input id="boardset-rest" aria-describedby={restFloorNoteShown(restNoteConfig, "perEntrantMinRest") ? "boardset-rest-hint boardset-rest-floor" : "boardset-rest-hint"} type="number" min={0} inputMode="numeric" value={rest} onChange={(e) => setRest(Number(e.target.value))} className="input w-full" disabled={!canEdit || constrained} />
           <span id="boardset-rest-hint" className="mt-0.5 block text-xs text-slate-400">
             {msg("boardset.restHint")}{constrained ? msg("boardset.proSuffix") : ""}
           </span>
+          {/* Live state, not `config.*`, for `rest`/`matchMinutes`/`gapMinutes`
+              — the note has to move as the organiser types or it explains the
+              value they just replaced. `constraints` comes off `config`
+              unchanged: this panel never edits it. */}
+          <RestFloorNote id="boardset-rest-floor" field="perEntrantMinRest" config={restNoteConfig} />
         </div>
       </div>
 

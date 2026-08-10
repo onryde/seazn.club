@@ -51,6 +51,21 @@ export interface BoardConfig {
   blackouts: { court?: string; from: string; to: string }[];
   sessionWindows: { from: string; to: string }[];
   roundMinutes?: number | null;
+  /** Present on the wire and in `schedule_settings.config` all along — one GET
+   *  serves this object to BOTH the Settings panel and the Constraints panel —
+   *  but never declared here, so the Settings tab could not see the three other
+   *  controls that raise its own rest floor. Optional, because the board's own
+   *  callers build a `BoardConfig` without one and a missing constraints block
+   *  means "no extra rule", which is what `restFloor` already assumes.
+   *
+   *  Structural rather than `SchedulingConstraints`: only the rest-bearing
+   *  fields are read here, and importing the zod-inferred type would pull the
+   *  scheduling barrel — and the solvers behind it — into this client bundle. */
+  constraints?: {
+    restMin?: number;
+    restByGroup?: Record<string, number>;
+    noBackToBack?: boolean;
+  };
 }
 
 export interface BoardConflict {
