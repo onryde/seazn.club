@@ -36,7 +36,7 @@ jobs:
     timeout-minutes: 10
     env:
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
-      BASE_URL: https://seazn-club-stg.fly.dev
+      BASE_URL: https://stg.seazn.club
     steps:
       - name: Secret missing — skip
         if: env.CRON_SECRET == ''

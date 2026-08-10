@@ -7,15 +7,15 @@ describe("siteOrigin", () => {
   });
 
   it("prefers OAUTH_BASE_URL and strips a trailing slash", () => {
-    vi.stubEnv("OAUTH_BASE_URL", "https://seazn-club-stg.fly.dev/");
+    vi.stubEnv("OAUTH_BASE_URL", "https://stg.seazn.club/");
     vi.stubEnv("NEXT_PUBLIC_BASE_URL", "https://other.example");
-    expect(siteOrigin()).toBe("https://seazn-club-stg.fly.dev");
+    expect(siteOrigin()).toBe("https://stg.seazn.club");
   });
 
   it("falls back to NEXT_PUBLIC_BASE_URL", () => {
     vi.stubEnv("OAUTH_BASE_URL", "");
-    vi.stubEnv("NEXT_PUBLIC_BASE_URL", "https://seazn-club-stg.fly.dev");
-    expect(siteOrigin()).toBe("https://seazn-club-stg.fly.dev");
+    vi.stubEnv("NEXT_PUBLIC_BASE_URL", "https://stg.seazn.club");
+    expect(siteOrigin()).toBe("https://stg.seazn.club");
   });
 
   it("defaults to the production domain when nothing is set", () => {

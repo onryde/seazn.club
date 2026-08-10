@@ -288,7 +288,7 @@ jobs:
       cancel-in-progress: false
     env:
       DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-      PLAYWRIGHT_BASE: https://seazn-club-stg.fly.dev
+      PLAYWRIGHT_BASE: https://stg.seazn.club
       E2E_PROD_TARGET: "1"
       NEXT_TELEMETRY_DISABLED: "1"
 
