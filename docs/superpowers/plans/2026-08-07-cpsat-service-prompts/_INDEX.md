@@ -128,10 +128,43 @@ had only been grepped:
 
 `validateAssignments(assignments, config, existing, dependencies)` — the one
 signature the prompt gets right (`calendar.ts:1257`).
-| 11 | E2E + smoke coverage | not started — no brief yet (an earlier revision of this row claimed one was written; it was not, and the SDD workspace has no `task-11-brief.md`) |
+| 11 | E2E + smoke coverage | **brief written 2026-08-10** (`task-11-brief.md`; an earlier revision of this row claimed one existed when it did not — this time the file is on disk). Not started. **Runs AFTER Task 13**, not before: it adds assertions on the engine label, which is one of the two moments the rename gets expensive. Two blockers it must clear first are recorded in the brief and repeated below |
+| 12 | Solver concurrency — channel-per-solve + Fly fan-out | **complete** — spec PASS, quality approved, 0 Critical / 0 Important, 3 Minors (one fixed inline, two judged inert). Gate rerun by the coordinator AND independently by the reviewer: 591 passed / 0 failed / 613 total, 22 pending (live-container suite). Negative control reproduced from both sides: 30/2/32 against the unmodified `clientFor`, 32/32 after |
+| 13 | Rename `cp-sat` -> `placement` (#20) | **brief written 2026-08-10** (`task-13-brief.md`). Not started. **Must precede the first deploy** — owner ordering, 2026-08-10 |
 | 08 | Deployment (Dockerfile, fly.toml) | **complete** — `befd49eb..d292e33f`, approved after 1 fix round. App is `cp-sat` (NOT the plan's `seazn-cpsat-prod` sample — `.internal` DNS derives from the app name and must match `cpsat-client.ts:127`'s `cp-sat.internal:50051`). Warm-start is carried by `auto_stop_machines = "off"`; `min_machines_running = 1` is set but inert beside it |
 | 09 | CI workflow | **complete** — `8d78c595..befd49eb` plus `c57eefe6`, spec PASS + quality approved, 0 Critical/Important. Builds AND runs the image; drift gate covers Python and TS stubs |
 | 10 | Remove BUILD/POLISH's z3 code | **blocked, but no longer indefinitely** — owner ruled 2026-08-10 to CLOSE the capability gaps and remove z3 fully, rather than close the programme at 11 and leave z3 dormant. Gates: 01-09 and 11 live for one full deploy cycle, **plus all three gaps below closed** |
+
+### Task 11 cannot assert the cutover today — two blockers, both measured
+
+Found 2026-08-10 while writing `task-11-brief.md`. Recorded here because both
+are defects in committed code, not brief-local notes.
+
+**1. `solver.engine` is not observable from the DOM.**
+`apps/web/src/components/v2/board/result-strip.tsx` exposes
+`data-testid="schedule-result-strip"`, `data-tone`, `data-status` and an
+`aria-label` — and nothing carrying the engine. The engine reaches the page
+only as rendered i18n copy through `schedule-result-provenance`, and
+`ENGINE_KEY` (`:34-39`) deliberately maps the cp-sat value to **z3's own
+key**, so both render the identical string "Solver".
+`apps/web/e2e/z3-auto-schedule.spec.ts:221-234` states this and defers the
+problem: its regex "cannot tell z3 from cp-sat. It is not meant to...
+Asserting the cutover specifically is Prompt 11's job, against `engine`
+itself rather than this rendered string." So Task 11 owes a small additive
+production change — `data-engine={solver.engine}` on the strip — before its
+central assertion is even expressible. Assert it as `data-engine="..."`,
+never as bare attribute presence: React serialises an omitted prop as
+`"$undefined"`, so a bare probe passes in both states.
+
+**2. `scripts/smoke.ts:7759-7761` allow-lists an engine set that excludes the
+new one.** `z3AutoScheduleSuite` (defined `:7631`, called `:672`) asserts
+`engine === "greedy" || "z3" || "z3+lns"`. The cp-sat value is absent. It
+passes today **only because the service is unreachable from a local smoke
+run**, so every board falls back to greedy — which means the first smoke run
+against a live service fails, and fails reading as "smoke is broken" rather
+than "the cutover works". A four-value allow-list is also not an assertion:
+Task 11 owes a scenario that REQUIRES the optimised engine and skips loudly
+when the service is down.
 
 ### The three capability gaps that gate Prompt 10
 
