@@ -93,3 +93,55 @@ test("pulse, queue order, #N in line, and public waitlist count all match one se
     `register-${rig.compSlug}.png`,
   );
 });
+
+// ---------------------------------------------------------------------------
+// A backwards registration window is refused in the panel, in the organiser's
+// own language, and never reaches the wire.
+//
+// `registrations.ts` has always refused this with a 422, but the panel renders
+// `err.message` raw — so the organiser got an untranslated English server
+// string, and only after a round trip. The client guard is what makes the
+// refusal localized and immediate; the server one stays as the backstop for
+// every other caller of the endpoint.
+//
+// The load-bearing half is the LAST assertion: an error on screen proves a
+// message was shown, not that the save was withheld. Re-reading the stored
+// settings is what proves nothing was sent.
+// ---------------------------------------------------------------------------
+test("a closing time before the opening time is refused in-panel, and never saved", async ({
+  page,
+  request,
+}) => {
+  const org = await activeOrg(page);
+  const rig = await seedRig(request);
+
+  await page.goto(`/o/${org.slug}/c/${rig.compSlug}/d/${rig.divSlug}/registrations?tab=settings`);
+  const save = page.getByTestId("reg-settings-save");
+  await expect(save).toBeVisible({ timeout: 20_000 });
+
+  // Opens AFTER it closes. `fill` on a datetime-local writes the value the
+  // organiser would have typed; the quarter-hour step constrains the picker,
+  // not this.
+  const clocks = page.locator('input[type="datetime-local"]');
+  expect(await clocks.count()).toBeGreaterThanOrEqual(2);
+  await clocks.nth(0).fill("2026-10-12T18:00");
+  await clocks.nth(1).fill("2026-10-12T09:00");
+  await save.click();
+
+  const err = page.getByTestId("reg-settings-error");
+  await expect(err).toBeVisible();
+  // Localized, not the server's English. Asserting the absence of the server
+  // string is what would catch a "fix" that simply forwarded the 422.
+  await expect(err).not.toContainText("closes_at must be after opens_at");
+
+  // THE assertion. The stored settings still hold the seed's nulls, so no PUT
+  // was made — an error banner over a saved backwards window would satisfy
+  // every check above.
+  const stored = await apiJson<{ opens_at: string | null; closes_at: string | null }>(
+    request,
+    `/api/v1/divisions/${rig.divisionId}/registration-settings`,
+  );
+  expect(stored.status).toBe(200);
+  expect(stored.data!.opens_at).toBeNull();
+  expect(stored.data!.closes_at).toBeNull();
+});

@@ -21,6 +21,7 @@ import {
 import { RegistrationSettings } from "./registration-settings";
 import { RegistrationPulse, type Tab } from "./registration-pulse";
 import { RegistrationList, type ActionVerb } from "./registration-list";
+import { windowIsBackwards } from "@/lib/date-order";
 
 export interface FormField {
   key: string;
@@ -169,6 +170,20 @@ export function RegistrationsPanel({
   async function save() {
     if (!settings) return;
     setSaved(false);
+
+    // `registrations.ts` already refuses a closing time at or before the
+    // opening one (422), but its message is plain English and `run()` renders
+    // `err.message` raw — so the one surface that sets these fields showed an
+    // untranslated server string. Refuse here instead, in all four locales,
+    // and never send the PUT.
+    //
+    // `windowIsBackwards` compares INSTANTS with `Date.parse` and uses `>=`,
+    // matching the server's own test exactly — see its docstring for why
+    // string order lies here and why a zero-length window counts.
+    if (windowIsBackwards(settings.opens_at, settings.closes_at)) {
+      setError(msg("reg.settings.datesError"));
+      return;
+    }
     // Sanitise questions so one incomplete row can't 400 the whole save:
     // drop blank labels, snake_case + de-duplicate keys, keep select options.
     const seen = new Set<string>();
@@ -282,7 +297,14 @@ export function RegistrationsPanel({
         />
 
         {paywall && <UpgradeGate feature={paywall} />}
-        {error && <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
+        {error && (
+          <p
+            data-testid="reg-settings-error"
+            className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600"
+          >
+            {error}
+          </p>
+        )}
         {notice && <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{notice}</p>}
       </aside>
 

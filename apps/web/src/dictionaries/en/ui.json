@@ -1549,6 +1549,7 @@
   "reg.settings.entrant.pair": "Pair",
   "reg.settings.opens": "Opens",
   "reg.settings.closes": "Closes",
+  "reg.settings.datesError": "The closing time is at or before the opening time. A registration window that closes before it opens accepts nobody, so fix the dates before saving.",
   "reg.settings.capacity": "Capacity",
   "reg.settings.uncapped": "Uncapped",
   "reg.settings.spots": "{n} spots",

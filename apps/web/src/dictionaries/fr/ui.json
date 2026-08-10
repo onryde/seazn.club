@@ -1549,6 +1549,7 @@
   "reg.settings.entrant.pair": "Paire",
   "reg.settings.opens": "Ouvre",
   "reg.settings.closes": "Ferme",
+  "reg.settings.datesError": "L’heure de fermeture est antérieure ou égale à l’heure d’ouverture. Une période d’inscription qui se ferme avant de s’ouvrir n’accepte personne : corrigez les dates avant d’enregistrer.",
   "reg.settings.capacity": "Capacité",
   "reg.settings.uncapped": "Illimitée",
   "reg.settings.spots": "{n} places",

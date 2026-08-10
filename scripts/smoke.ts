@@ -9700,6 +9700,66 @@ async function schedRegV3Suite(
       docPdfBytes.byteLength > 1024,
   );
 
+  // Backwards date ranges are refused server-side on BOTH endpoints the
+  // organiser can reach them through. The panels now refuse first, in the
+  // organiser's own language — these are the backstop for every other caller,
+  // and the reason the client guards are an improvement in ergonomics rather
+  // than the only thing standing between a user and a broken division.
+  //
+  // On a THROWAWAY division: the control runs write real settings, and doing
+  // that to `div` would move the board every later check in this suite reads.
+  const orderDiv = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: `Date order ${tag}`,
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+
+  // Schedule window (#498, `PutScheduleSettings`). Every field carries a
+  // `.default()`, so a rejected PUT leaves a usable config behind and the only
+  // symptom is silence — which is why this is asserted on the STATUS.
+  const badWindow = await v1(admin, `/api/v1/divisions/${orderDiv.id}/schedule-settings`, "PUT", {
+    config: { startAt: "2026-10-12T09:00:00Z", endAt: "2026-10-11T09:00:00Z" },
+  });
+  check("date order: a schedule window that ends before it starts is refused", badWindow.status >= 400);
+  // The control run: identical shape, dates the right way round, same path.
+  // Without it a blanket-broken endpoint would satisfy the assertion above.
+  const goodWindow = await v1(admin, `/api/v1/divisions/${orderDiv.id}/schedule-settings`, "PUT", {
+    config: { startAt: "2026-10-12T09:00:00Z", endAt: "2026-10-13T09:00:00Z" },
+  });
+  check("date order: the same window the right way round saves", goodWindow.status === 200);
+
+  // Registration window (`registrations.ts`). `>=`, so the zero-length case
+  // is refused too — a window that opens and closes at one instant accepts
+  // nobody, which is a control that silently does not work.
+  const regBase = {
+    enabled: true,
+    entrant_kind: "individual",
+    fee_cents: 0,
+    currency: "gbp",
+    form_fields: [],
+  };
+  const badReg = await v1(admin, `/api/v1/divisions/${orderDiv.id}/registration-settings`, "PUT", {
+    ...regBase,
+    opens_at: "2026-10-12T18:00:00Z",
+    closes_at: "2026-10-12T09:00:00Z",
+  });
+  check("date order: a registration window that closes before it opens is refused", badReg.status === 422);
+  const zeroReg = await v1(admin, `/api/v1/divisions/${orderDiv.id}/registration-settings`, "PUT", {
+    ...regBase,
+    opens_at: "2026-10-12T09:00:00Z",
+    closes_at: "2026-10-12T09:00:00Z",
+  });
+  check("date order: a zero-length registration window is refused too", zeroReg.status === 422);
+  const goodReg = await v1(admin, `/api/v1/divisions/${orderDiv.id}/registration-settings`, "PUT", {
+    ...regBase,
+    opens_at: "2026-10-12T09:00:00Z",
+    closes_at: "2026-10-12T18:00:00Z",
+  });
+  check("date order: the same registration window the right way round saves", goodReg.status === 200);
+
   // Matchday documents (v12, Task 17): the officials rota only emits duty
   // rows for fixtures carrying a live assignment (buildOfficialsRotaDoc
   // reads fixture_officials joined to still-scheduled fixtures) — assign one
