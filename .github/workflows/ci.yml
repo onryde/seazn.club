@@ -392,6 +392,30 @@ jobs:
       - name: Engine-db + service-layer + lib integration tests (real Postgres)
         run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-lib-server.json src/server src/lib
 
+      # DB-gated suites that live OUTSIDE src/server / src/lib / src/app, and so
+      # were selected by no step in this job and skipped in the unit job for want
+      # of DATABASE_URL — i.e. they ran nowhere, and reported green by reporting
+      # nothing. Found 2026-08-10.
+      #
+      # Named FILE BY FILE, deliberately. Adding `src/components` or `src/demo`
+      # as a path would drag every pure component suite in those trees into a
+      # Postgres job that was never meant to run them — the same over-selection
+      # the comment above records costing 187-vs-185 files on 2026-07-29.
+      # `drift.test.ts` beside these is deliberately NOT DB-gated and already
+      # runs in the unit job; pulling it in would be that mistake in miniature.
+      #
+      # capture.test.ts is here for ONE of its three blocks: its `capture a real
+      # architect run` describe also needs CAPTURING, which is unset, so that
+      # half still skips. The block that runs is the one its own banner calls
+      # "The guard — always on" — which was not on, in any job, until this step.
+      #
+      # db-suite-ci-wiring.test.ts fails if a new DB-gated suite appears outside
+      # those three trees without a line here, so this list cannot silently rot.
+      # It is how capture.test.ts was found, after the first draft of this step
+      # listed only the other two.
+      - name: DB-gated suites outside src/server|lib|app (real Postgres)
+        run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-outliers.json src/components/__tests__/upgrade-gate-pass-features.test.ts src/demo/ai-templates/__capture__/__tests__/seeds.test.ts src/demo/ai-templates/__capture__/capture.test.ts
+
       # The DB-gated suites under src/app. src/lib is NOT repeated here: the
       # Engine-db step above already runs it, and running it in both steps shares
       # one migrated schema across two passes — a suite that writes a fixed

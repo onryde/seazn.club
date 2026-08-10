@@ -18,6 +18,7 @@ import { FormatRecommendStrip } from "@/components/v2/format-recommend-strip";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { useMsg, useLocale } from "@/components/i18n/dict-provider";
 import { sportLabel } from "@/lib/scoring-vocab";
+import { endDateIsBackwards, startDay } from "@/lib/date-order";
 
 export interface SportOption {
   key: string;
@@ -236,6 +237,21 @@ export function DivisionBuilder({
     setError(null);
     setPaywallFeature(null);
 
+    // A backwards range IS refused server-side now (`PutScheduleSettings`,
+    // #498) — but that refusal arrives on the schedule-settings SEED PUT
+    // below, which is deliberately non-fatal and swallows every error so a
+    // paywalled court list cannot block the create. So without this check the
+    // organiser gets no message at all and a division whose dates silently
+    // did not save. The end-date input's `min=` is advisory only; a typed or
+    // pasted value walks straight past it.
+    //
+    // `endDateIsBackwards` and the `min=` advisory below are one expression
+    // (`startDay`), so the input cannot permit what this then rejects.
+    if (endDateIsBackwards(scheduleStart, scheduleEnd)) {
+      setError(msg("boardset.datesError"));
+      return;
+    }
+
     // Only rules the user actually set become overrides; the rest stay on
     // the variant's defaults.
     const overrides = buildRuleOverride(sportKey, ruleValues);
@@ -409,6 +425,7 @@ export function DivisionBuilder({
           <input
             autoFocus
             required
+            data-testid="division-builder-name"
             maxLength={200}
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -779,7 +796,7 @@ export function DivisionBuilder({
               kind="date"
               label={msg("boardset.endAt")}
               value={scheduleEnd}
-              min={scheduleStart ? scheduleStart.slice(0, 10) : undefined}
+              min={startDay(scheduleStart)}
               onChange={setScheduleEnd}
             />
             <span className="mt-0.5 block text-xs text-slate-400">{msg("wizard.endDateHint")}</span>
@@ -862,7 +879,12 @@ export function DivisionBuilder({
         </div>
       )}
       {error && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
+        <p
+          data-testid="division-builder-error"
+          className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600"
+        >
+          {error}
+        </p>
       )}
 
       <div className="flex items-center justify-between gap-2">
@@ -886,6 +908,7 @@ export function DivisionBuilder({
           {isLastTab ? (
             <button
               type="button"
+              data-testid="division-builder-create"
               onClick={() => void submit()}
               disabled={busy || !name.trim() || !sportKey || !variantKey}
               className="btn btn-primary"
@@ -893,7 +916,12 @@ export function DivisionBuilder({
               {busy ? msg("wizard.creating") : msg("wizard.create")}
             </button>
           ) : (
-            <button type="button" onClick={goNext} className="btn btn-primary">
+            <button
+              type="button"
+              data-testid="division-builder-next"
+              onClick={goNext}
+              className="btn btn-primary"
+            >
               {msg("wizard.next")}
             </button>
           )}

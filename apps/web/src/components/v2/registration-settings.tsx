@@ -343,7 +343,13 @@ export function RegistrationSettings({
       </Group>
 
       {canEdit && (
-        <button type="button" disabled={busy} onClick={onSave} className="btn btn-primary w-full">
+        <button
+          type="button"
+          data-testid="reg-settings-save"
+          disabled={busy}
+          onClick={onSave}
+          className="btn btn-primary w-full"
+        >
           {busy ? "…" : msg("reg.settings.save")}
         </button>
       )}

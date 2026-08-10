@@ -3001,6 +3001,7 @@ export type DictionaryKey =
   | "reg.settings.closes"
   | "reg.settings.connectStripeFirst"
   | "reg.settings.currency"
+  | "reg.settings.datesError"
   | "reg.settings.entrant.individual"
   | "reg.settings.entrant.pair"
   | "reg.settings.entrant.team"

@@ -1549,6 +1549,7 @@
   "reg.settings.entrant.pair": "Paar",
   "reg.settings.opens": "Opent",
   "reg.settings.closes": "Sluit",
+  "reg.settings.datesError": "De sluitingstijd ligt op of vóór de openingstijd. Een inschrijfperiode die sluit voordat ze opent, accepteert niemand, dus corrigeer de datums voordat je opslaat.",
   "reg.settings.capacity": "Capaciteit",
   "reg.settings.uncapped": "Onbeperkt",
   "reg.settings.spots": "{n} plaatsen",

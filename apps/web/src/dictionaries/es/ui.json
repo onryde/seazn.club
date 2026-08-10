@@ -1549,6 +1549,7 @@
   "reg.settings.entrant.pair": "Pareja",
   "reg.settings.opens": "Abre",
   "reg.settings.closes": "Cierra",
+  "reg.settings.datesError": "La hora de cierre es anterior o igual a la de apertura. Un plazo de inscripción que se cierra antes de abrirse no admite a nadie, así que corrige las fechas antes de guardar.",
   "reg.settings.capacity": "Capacidad",
   "reg.settings.uncapped": "Sin límite",
   "reg.settings.spots": "{n} plazas",
