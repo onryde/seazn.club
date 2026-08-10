@@ -16,7 +16,7 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 | S1 | #429 | `S01-429-golden-corpus-policy.md` | — | **DONE** |
 | S2 | #430 | `S02-430-fidelity-tier-4-decision.md` | — | **DONE** — no code. Fidelity ladder closed at 0–3; tier 4 will never exist |
 | S3 | #426 | `S03-426-w4b-mutable-squads.md` | S1 | **DONE** — all 9 deferred rows closed; 4 owner rulings; e2e+smoke deferred to S12/S13 |
-| S4 | #428 | `S04-428-offence-taxonomies.md` | S3 (person-role decision) | TODO — **person-role decision ANSWERED by S3 ruling 3**: `LineupSlot.role: player\|coach\|staff`, stat projections filter `role === "player"`. S4 does NOT re-decide it, and owes the `persons.lane` DB extension (`'official'` there means MATCH official) |
+| S4 | #428 | `S04-428-offence-taxonomies.md` | S3 (person-role decision) | **DONE** — 3 enums adopted (football `PenaltyOffence`, hockey/icehockey `PeriodSuspensionReason`), 6 rows deferred with reasons recorded, person-role discriminator enforced at `aggregatePlayerStats`'s boundary, `persons.lane` extended (V356) |
 | S5 | #431 | `S05-431-decisions-register.md` | S3, S4 | TODO |
 | S6 | #416 | `S06-416-w5-padspec.md` | S2, S3, S5 | TODO |
 | S7 | #427 | `S07-427-pad-vocabulary-i18n.md` | S3, S4, S6 | TODO |
@@ -740,6 +740,92 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   more. `football.sub` is retained deliberately (recorded goldens contain it);
   only its FOLD changed, and the dossier records both it and
   `core.lineup.substitution` routing to `reduceLineupEvent`.
+- 2026-08-11 — S4/#428 — **per-sport decision table, final (copy verbatim into
+  the PR body too).**
+
+  | Sport | Field | Decision | Why |
+  |---|---|---|---|
+  | Football | new `offence` on `FootballPenalty` | **ADOPT** | IFAB Law 12 direct-free-kick/penalty offences: 8 closed types — `kicking`, `tripping`, `jumping_at`, `charging`, `pushing`, `striking`, `tackling`, `handball`. Short, closed, primary-source (theifab.com Law 12). Named `PenaltyOffence`, distinct from `CardReason` — different fields, different questions (not every penalty carries a card). |
+  | Football | card `reason` (`CardReason`) | **Already shipped, no action** | 13-member closed enum, wired end to end since before this session. Not re-touched. |
+  | Icehockey | suspension `reason` | **ADOPT** | `PeriodSuspensionReason` (shared kernel union, 23 members): IIHF's 18 named infractions + `other`. `ICEHOCKEY_SUSPENSION_REASONS` (icehockey.ts) declares the subset. Secondary IIHF rule summaries, not the primary Situation Handbook PDF. |
+  | Hockey (FIH) | suspension `reason` | **ADOPT, shared kernel, gated by variant** | Same `PeriodSuspensionReason` union as icehockey (kernel schema stays ONE permissive shape — the discriminator is the envelope's event type, mirroring how `SetBasedSanctionLevel` is a shared union with per-sport mapping). `HOCKEY_SUSPENSION_REASONS` (hockey.ts) declares FIH's own smaller subset: physical-infraction core (`tripping`/`hooking`/`obstruction`/`dangerous_play`) + FIH-specific (`dissent`/`time_wasting`) + `other` — 7 of 23, deliberately smaller than and excluding every icehockey-only member (proven by a regression test, not just asserted). |
+  | Tennis | code-violation `reason` | **DEFER, free text kept** | Reaffirmed. ITF/ATP/WTA top-level categories (~12-14: audible/visible obscenity, verbal/physical/ball/racket abuse, coaching, unsportsmanlike conduct, time violation, best efforts, leaving court…) vary by tour/division in exact codification and fine schedule. Researched list recorded below for a future session with a real product ask. |
+  | Carrom | umpire-adjustment `reason` | **DEFER, free text kept, no code change** | Reaffirmed. Already `z.string().min(1)` (required), tied to "Laws 51/55". No well-documented closed taxonomy found for the arbiter conduct-penalty case specifically. `carrom.ts` untouched. |
+  | Boardgame | — | **DEFER, no-op** | Reaffirmed. No misconduct/conduct-penalty concept exists in `boardgame.ts` at all. Consistent with #430's PARKED stance. |
+  | Volleyball / Badminton / Tabletennis | `SetBasedSanction.reason` | **DEFER, free text kept — new finding** | Not named in the S04 prompt's "Why" section; identical gap shape to the others (severity closed via `SetBasedSanctionLevel`, reason open). Recorded as a new row in each of the three dossiers per the "record it anyway" instruction. |
+  | Cricket | — | **Not in scope** | No dossier flagged this; untouched. |
+
+  **Tennis's researched ITF/ATP/WTA code-violation category list** (starting
+  point only, not implemented): audible obscenity, visible obscenity, verbal
+  abuse, physical abuse, ball abuse, racket/equipment abuse, coaching (illegal),
+  unsportsmanlike conduct, time violations, failure to follow reasonable
+  instructions, best-efforts violation, leaving the court without permission,
+  return-to-play lateness. Fine schedules and exact codification differ by tour
+  (ATP/WTA/ITF/Grand Slam) and by singles vs. doubles — a real product ask
+  should pin which tour(s) before any enum lands.
+
+  **Label keys declared this session (input to S7, #427):** `ENUM_VOCAB.offence`
+  (new field, 8 members) and 21 new `ENUM_VOCAB.reason` members (hockey/
+  icehockey's `PeriodSuspensionReason`, 2 of 23 — `dissent`/`other` — already
+  had a key from football/cricket). All in `apps/web/src/lib/scoring-vocab.ts`,
+  translated in all 4 dictionaries. Nothing else declared: every DEFERRED row
+  above stays free text, so no pad picker owes it a closed vocabulary yet.
+
+  **Person-role model, as finally shipped.** S3 (#426) shipped the DATA model
+  (`LineupSlot.role: 'player'|'coach'|'staff'`, default `player`) and the READ
+  selectors (`core/lineup.ts`'s `playingSquad`/`onFieldPersons`/
+  `personsAtPosition`, already filtered). S4 closed the actual bug: THE bug was
+  never "does role exist" but "is it ENFORCED at the stats boundary", and it was
+  not — `aggregatePlayerStats` (`stats/stats.ts`) read a payload's person id
+  directly with zero cross-check against role, so a coach's card silently
+  earned a leaderboard row. Fixed with a new optional third argument
+  (`lineups?: LineupPair`): every credit is checked against the set of person
+  ids the team sheet marks anything other than `player`, enforced once inside
+  the shared fold rather than trusted to each of eleven sports'
+  `PlayerStatMetric.when`. Mutation-verified (neutering the check reds exactly
+  the 3 tests that assert it). Omitted `lineups` ⇒ byte-identical to the fold
+  before this parameter existed, so no existing call site broke.
+  **Not closed end to end**: `apps/web`'s two callers
+  (`server/usecases/player-stats.ts`, `org-posts.ts`) do not pass `lineups`
+  yet, because the `lineups` DB table (`db/migration/v2-engine/tables/
+  V215__lineups.sql`) has no `role` column at all — only `persons.lane`
+  (registration, a different axis, extended this session by V356 to `coach`/
+  `staff` in parallel) — so wiring those two call sites today would filter
+  against an always-empty set. Follow-on for a session that also builds a
+  coach-registration flow: add `lineups.role`, thread it through
+  `putLineup`/`getLineup` and their zod schemas, and pass the resulting
+  `LineupPair` into both usecases' `aggregatePlayerStats` calls.
+
+  **DisciplineCard.minutes**, S4/#428: additive `minutes?: number` on
+  `core/types.ts`'s `DisciplineCard`, threaded through football's
+  (`FootballSinBinStart.minutes`) and the period kernel's
+  (`PeriodSuspensionStart.minutes`) `extractCards()`. Plumbing only — both
+  producers already read the value into their own fold
+  (`suspensions.ts`'s `SuspensionDetail.minutes`, football's sin-bin expiry);
+  grepping `minutes` across `src/core` and `src/sports` before and after
+  shows the same set of distinct duration-COMPUTATION call sites, only the
+  discipline PROJECTION gained a new copy site. No accumulation rule keyed on
+  minutes was implemented this session (the S04 prompt's own "any 10-minute
+  yellow counts double" example was suggested, not mandated); the adjudication
+  acceptance criterion is met instead by a `reason`-scoped accumulation rule
+  (`DisciplineRules.accumulation[].reason`, apps/web) — "three cards for the
+  same offence" fires, DB-backed test.
+
+  **DB migration V356** (`persons_lane_coach_staff.sql`) extends
+  `persons.lane`'s check constraint to `'coach'`/`'staff'`, mirroring
+  `LineupSlot.role` exactly. Schema-only, closes S3's carried caveat; the
+  partial unique index `persons_org_user_lane_uq` (V348) still excludes the
+  new lanes automatically — verified live (two `coach` rows, same org+user, no
+  collision) and by a new DB-backed regression test.
+
+  **Unplanned fix** (RULES.md §1 — found, fixed inline, not deferred): the
+  api-v1 `AccumulationRule` zod schema (`schemas.ts`) is a plain `z.object`,
+  which STRIPS an unrecognized key rather than rejecting it — without adding
+  `reason` there too, a real PUT to the discipline-rules endpoint would have
+  silently dropped it before reaching the usecase, leaving the new capability
+  unreachable from the actual product surface. `openapi:gen` regenerated
+  `openapi/v1.json` to match.
+
 - _(append below)_
 
 ## Open questions for the owner

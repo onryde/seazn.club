@@ -39,7 +39,7 @@ state, `summary.` = `module.summary(state)`.
 | Game-winning goal (GWG) | all | person | — | deferred | Derivable from the fold — the (loser's final total + 1)-th goal of the winner. Recording it would duplicate state and could contradict it. |
 | Plus/minus, and the six players on the ice at each goal | all | up to 12 persons per goal | — | deferred | Needs continuous on-ice personnel tracking. Wrong fidelity for our tiers: no phone scorer enters twelve ids per goal, and a half-entered on-ice set produces wrong plus/minus rather than none. Product decision. |
 | Penalty: the offending player | all | person | `Ev.PeriodSuspensionStart.person` → `State.suspensions[].person`, `State.cardLog[].person` | modelled | Optional, so coarse scoring stays legal. |
-| Penalty: the infraction | all | — | `Ev.PeriodSuspensionStart.reason` → `State.suspensions[].reason`, `State.cardLog[].reason` | extended | Free text or an IIHF code. Recorded, never adjudicated (v6/00 §6.4). |
+| Penalty: the infraction | all | — | `Ev.PeriodSuspensionStart.reason` → `State.suspensions[].reason`, `State.cardLog[].reason` | extended | S4 (#428) closed the vocabulary: `PeriodSuspensionReason` (`period/kernel.ts`), a union shared with `hockey` at the SCHEMA level (a payload from either federation still validates structurally — the discriminator is the envelope's event type), with each sport declaring its own subset (`ICEHOCKEY_SUSPENSION_REASONS`, 19 of 23 members, `icehockey.ts`). No longer "never adjudicated": `DisciplineRules.accumulation[].reason` (apps/web) can now scope a rule to one offence, e.g. "three for the same infraction". |
 | Penalty: class and its recorded minutes | all | entrant | `Ev.PeriodSuspensionStart.class` against `Cfg.suspensions.classes` | modelled | minor 2 · bench minor 2 · double minor 4 · major 5 · misconduct 10 · game misconduct 20 · match 25 PIM. |
 | Penalty: the player who SERVES it | all | person | `Ev.PeriodSuspensionStart.servedBy` → `State.suspensions[].servedBy`, `playerStats.pen_served` | extended | Bench minors (Rule 33) and goalkeeper penalties are served by a team-mate. Before this, the only slot for him was `person`, which charged him the PIM he did not earn. Existing `pen_*` metrics still read `person` — the convention is now: `person` = penalised, `servedBy` = sits. |
 | Penalty: a duration different from the class nominal | all | — | `Ev.PeriodSuspensionStart.minutes` | extended | Rare on ice, the norm in field hockey; the field lives in the shared kernel. Pads prefer it over the class minutes for a countdown. |
@@ -76,11 +76,11 @@ state, `summary.` = `module.summary(state)`.
 | Per-player PIM | all | person | `playerStats.derived.pim` | modelled | Derived from the counted classes (2/4/5/10/20/25). |
 | Forfeit; abandonment | all | entrant | `core.forfeit` → `Cfg.awardScore{goals:5}`; `core.abandon` → `Cfg.abandonPolicy:"replay"` | modelled | |
 | Rosters, captains, jersey numbers | all | persons | `positions`, `entrantModel.team{squadNumbers,captain}` | modelled | Layer 2 — lineups, not the event ledger. |
-| A penalty against a team official / the bench staff | all | person (non-player) | `Ev.PeriodSuspensionStart.person` / `.servedBy` | deferred | Nothing marks the named person as a non-player, so a coach's game misconduct lands in the player stat table. `servedBy` at least names who actually sits. A `role` discriminator needs a product decision on whether non-players exist in the person model at all. |
+| A penalty against a team official / the bench staff | all | person (non-player) | `Ev.PeriodSuspensionStart.person` / `.servedBy` | **extended** | S3/#426 ruling 3 answered the product question this row deferred: `LineupSlot.role: 'player'\|'coach'\|'staff'`, default `player`. S4 (#428) is what actually stops a coach's game misconduct landing in the player stat table: `aggregatePlayerStats` (`stats/stats.ts`) takes an optional `lineups` argument and drops any credit to a person the team sheet marks non-player, enforced at the shared aggregation fold rather than trusted to each sport's metric declarations. Caveat: `apps/web`'s two callers do not pass `lineups` yet — the `lineups` DB table has no `role` column (only `persons.lane`, V356, which is a different axis: registration, not a per-fixture team-sheet slot) — so the fix is real and tested at the engine boundary but not yet wired end to end from a real fixture. `servedBy` still names who actually sits when it differs from `person`. |
 
 | Where in the match an event happened (the position axis) | all | — | `SportModule.position(state)` -> `period` + `clock` segments, e.g. `P2 . 12:41` | extended | W4a T6b. A **read-side projection**, never a payload: a `MatchPosition` on every stamped event was considered this wave and rejected, because position is derivable from state the fold already computes and recording it would create a recorded value and a derived value of the same type that can silently disagree — the `DisciplineCard.entrantSide` shape. A wrong recorded value is in the hash-chained ledger forever; a wrong projection is one deploy away from fixed. Ordered segments rather than a display string, so W8 can drop a segment for a 375px scorebug, localise each `key` and order two positions in one match; `formatPosition` is the plain-text path. Nothing is materialised into state, so every frozen golden is byte-identical. Shares ONE function reference with hockey through the period kernel, asserted by identity. SHOOTOUT is evidenced from `State.shootout` and sorts last, so a fixture decided there reports `SHOOTOUT` rather than the third period. The clock is attached only when `asOf.period` matches the phase that resolved — an unstamped period change leaves the newest stamp naming the period before it, and printing 19:59 beside `P3` asserts something false about where play is. |
 
-**Row counts:** 22 modelled, 22 extended, 9 deferred (53 rows).
+**Row counts:** 22 modelled, 23 extended, 8 deferred (53 rows).
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## Downstream owed
@@ -107,11 +107,13 @@ Asserted against the table itself by `src/testkit/dossiers.test.ts`.
    is a consumer — no federation ranks on conversion rate (FIH is points → GD →
    GF → head-to-head, IIHF points → head-to-head → GD → GF), so emitting it
    today would move eleven corpora and every standings delta for display only.
-6. **`DisciplineCard` cannot see the new detail.** It carries
-   `{personId, entrantSide, color, eventId}` only, so discipline accumulation
-   still keys on colour + person: no "three of the same infraction" rule, and a
-   bench minor accumulates against whoever is in `person`. `DisciplineCard`
-   lives in `core/types.ts`, outside this wave's blast radius.
+6. **Closed in S4 (#428).** `DisciplineCard` now carries `reason` and `minutes`
+   too (`core/types.ts`; `period/kernel.ts`'s `extractCards()` copies both
+   across from `PeriodSuspensionStart`/`SuspensionDetail`, which already had
+   them). `reason` is a closed, adjudicable enum (`PeriodSuspensionReason`) and
+   `DisciplineRules.accumulation[].reason` (apps/web) can scope a rule to it —
+   "three of the same infraction" now fires. `minutes` is plumbing only, not a
+   new computation (grep confirms no second duration implementation).
 7. **Shots on goal / saves / faceoffs** are the honest next fidelity step for
    this sport and would be a tier-4 conversation, not an extension of tier 3.
 8. **`Cfg.overtime.skaters` is LIVE** as of the row above — it is the overtime
