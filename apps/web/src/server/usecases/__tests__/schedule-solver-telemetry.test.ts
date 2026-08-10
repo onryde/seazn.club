@@ -739,34 +739,32 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
 
     const out = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
 
-    // A full, proof-grade tier walk happened — unreachable from any fallback
-    // status, all of which leave `tiers_completed` short of the ladder. This is
-    // what makes the `z3LoadCount()` check below non-vacuous: together they say
-    // "a real solve ran to completion, and it was not the local WASM."
-    expect(out.solver.tiers_completed).toBe(TIERS_TOTAL);
-
-    // `ok` OR `already_optimal`, NOT one of them — and this is the whole
-    // lesson of this test's history.
+    // THREE assertions have now been tried here and each was a RACE. Recorded
+    // so a fourth is not attempted:
     //
-    // Which one you get depends on whether the solver's board strictly beats
-    // the greedy seed, and that is a RACE, not a property of the board:
-    // measured `already_optimal` (an exact metric tie) on a loaded developer
-    // box and `ok` (a strict improvement) on a quieter CI runner, same commit,
-    // same board. An earlier revision pinned `already_optimal` and duly went
-    // red in CI with `expected 'ok' to be 'already_optimal'` — a false red that
-    // reads exactly like a regression. Same shape as the production-board
-    // pytest test, which CI deliberately runs as advisory for this reason.
+    //   `status === "already_optimal"`  red in CI as `expected 'ok' to be
+    //       'already_optimal'`. Whether the solver's board STRICTLY beats the
+    //       greedy seed decides between `ok` and `already_optimal`; measured a
+    //       tie on a loaded developer box and a win on a quieter runner, same
+    //       commit, same board.
+    //   `engine === "greedy"`  the same race by another name — `greedy` on a
+    //       tie, `optimized` on a win.
+    //   `tiers_completed === TIERS_TOTAL`  red in CI as `expected 2 to be 4`.
+    //       How much of the T0->T3 ladder is PROVEN inside the wall is
+    //       proof-time, and a shared GitHub runner is a contended box. This is
+    //       exactly why `test_production_board_meets_the_stated_acceptance_criterion`
+    //       is deselected from the blocking pytest run and re-run as advisory.
     //
-    // What is NOT a race is that the service answered at all. Every fallback
-    // status (`solver_unavailable`, `solver_busy`, `not_searched`) is excluded
-    // here, so this still fails loudly if the solve never reached the service —
-    // which is the failure this test exists to catch.
+    // What is NOT a race is that the service ANSWERED. Every fallback status
+    // (`solver_unavailable`, `solver_busy`, `not_searched`) is excluded below,
+    // so this still fails loudly if the solve never reached the service —
+    // which is the failure this test exists to catch, and what makes the
+    // `z3LoadCount()` check non-vacuous rather than a 0 that means "nothing
+    // ran".
     expect(["ok", "already_optimal"]).toContain(out.solver.status);
 
     // The point of the test, and the one thing that must never drift: BUILD
-    // reaches the remote solver and boots no WASM at all. `engine` is
-    // deliberately NOT asserted — it is `greedy` on a tie and `optimized` on a
-    // win, i.e. the same race as the status above.
+    // reaches the remote solver and boots no WASM at all.
     expect(z3LoadCount()).toBe(0);
     await resetZ3();
   }, 120_000);
