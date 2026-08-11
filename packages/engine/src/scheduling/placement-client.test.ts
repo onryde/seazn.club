@@ -464,8 +464,11 @@ describe("solveBuild", () => {
       { courtIndex: 1, startAtMs: 1_700_003_600_000, dayIndex: 0 },
     ]);
     // `existing[].fixtureId` ("pinned-1") is dropped, not translated: PinnedRow
-    // carries no identity on the wire any more.
-    expect(request.existing).toEqual([{ courtIndex: 1, startAtMs: 1_700_007_200_000 }]);
+    // carries no identity on the wire any more. `ruleGroupIndices`/
+    // `entrantIndices` default to `[]` when the input row sets neither (C4/C6).
+    expect(request.existing).toEqual([
+      { courtIndex: 1, startAtMs: 1_700_007_200_000, ruleGroupIndices: [], entrantIndices: [] },
+    ]);
     expect(request.dependencies).toEqual([{ beforeIndex: 0, afterIndex: 1 }]);
     expect(request.divisionRules).toEqual([
       { divisionIndex: 0, minRestMinutes: 45, maxFixturesPerDay: undefined },
@@ -651,6 +654,144 @@ describe("solveBuild", () => {
     expect(rejection).toBeInstanceOf(PlacementError);
     expect((rejection as PlacementError).failure).toBe("invalid_request");
     expect(mockClient.solveBuild).not.toHaveBeenCalled();
+  });
+
+  // --- C1/C4/C6: rule_groups, and PinnedRow's rule_group_indices/entrant_indices ---
+
+  // The main shape test: `ruleGroups` maps onto the wire like `divisionRules`
+  // does (id -> index through the SAME `fixtureIndexOf`/`entrantIndexOf`
+  // tables everything else uses), and a pinned row's `entrantIds` can name an
+  // entrant that appears NOWHERE in a movable fixture — the whole point of C6
+  // (two pinned rows sharing an entrant are otherwise invisible to a rest
+  // rule) requires exactly that to still resolve to a valid index.
+  it("maps rule groups and pinned rule/entrant references onto the wire", async () => {
+    const mockClient = respondingClient();
+
+    await solveBuild(
+      {
+        ...INPUT,
+        fixtures: [
+          { fixtureId: "f1", entrantIds: ["alice", "bob"], divisionId: "div-a" },
+          { fixtureId: "f2", entrantIds: ["carol", "dave"], divisionId: "div-a" },
+        ],
+        existing: [
+          {
+            fixtureId: "pinned-1",
+            court: "Court 1",
+            startAtMs: 1_700_000_000_000,
+            // "erin" appears ONLY here, never on a movable fixture.
+            entrantIds: ["erin", "alice"],
+            ruleGroupIndices: [0],
+          },
+        ],
+        ruleGroups: [
+          { fixtureIds: ["f1", "f2"], minRestMinutes: 20 },
+          { fixtureIds: [], maxFixturesPerDay: 3 },
+        ],
+      },
+      { secret: "s3cr3t" },
+      mockClient,
+    );
+
+    const [request] = mockClient.solveBuild.mock.calls[0]!;
+    // alice=0, bob=1 (from f1), carol=2, dave=3 (from f2), erin=4 (NEW, from
+    // the pin only) -- proves `buildIndexSpace` registers `existing[].
+    // entrantIds` too, not just `fixtures[].entrantIds`.
+    expect(request.entrantCount).toBe(5);
+    // Group 1 resolves both fixture ids to their positions and carries only
+    // the half it actually has (`maxFixturesPerDay` stays `undefined`, not a
+    // false zero); group 2's EMPTY `fixtureIds` maps to an empty array, not
+    // to a dropped group -- dropping it would shift group 2 to index 0 out
+    // from under the pinned row's `ruleGroupIndices: [0]` below.
+    expect(request.ruleGroups).toEqual([
+      { fixtureIndices: [0, 1], minRestMinutes: 20, maxFixturesPerDay: undefined },
+      { fixtureIndices: [], minRestMinutes: undefined, maxFixturesPerDay: 3 },
+    ]);
+    // `ruleGroupIndices` is a straight passthrough; `entrantIndices` resolves
+    // ["erin", "alice"] to [4, 0] in the SAME order the caller gave them.
+    expect(request.existing).toEqual([
+      { courtIndex: 0, startAtMs: 1_700_000_000_000, ruleGroupIndices: [0], entrantIndices: [4, 0] },
+    ]);
+  });
+
+  // The C1 counterpart of "refuses a dependency that references an unknown
+  // fixture": `ruleGroups[].fixtureIds` resolves through the exact same
+  // `fixtureIndexOf` table, so an id it does not recognise must be refused
+  // the same way, not silently dropped from the group.
+  it("refuses a rule group that references an unknown fixture", async () => {
+    const mockClient = respondingClient();
+
+    const rejection = await solveBuild(
+      {
+        ...INPUT,
+        fixtures: [{ fixtureId: "f1", entrantIds: [], divisionId: "div-a" }],
+        ruleGroups: [{ fixtureIds: ["ghost"] }],
+      },
+      { secret: "s3cr3t" },
+      mockClient,
+    ).catch((err: unknown) => err);
+
+    expect(rejection).toBeInstanceOf(PlacementError);
+    expect((rejection as PlacementError).failure).toBe("invalid_request");
+    expect(mockClient.solveBuild).not.toHaveBeenCalled();
+  });
+
+  // The real-encoder counterpart of "builds a request the generated encoder
+  // can round-trip": `minRestMinutes: 0` specifically, because it is the
+  // proto3-`optional` case that a naive encoder drops as a default — the same
+  // trap `divisionRules`' own round-trip test exists to catch, now on the
+  // generalised field.
+  it("round-trips rule groups and pinned rule/entrant references through the real encoder", async () => {
+    const mockClient = respondingClient();
+
+    await solveBuild(
+      {
+        ...INPUT,
+        fixtures: [{ fixtureId: "f1", entrantIds: ["alice"], divisionId: "div-a" }],
+        existing: [
+          {
+            fixtureId: "pinned-1",
+            court: "Court 1",
+            startAtMs: 1_700_000_000_000,
+            entrantIds: ["alice"],
+            ruleGroupIndices: [0],
+          },
+        ],
+        ruleGroups: [{ fixtureIds: ["f1"], minRestMinutes: 0, maxFixturesPerDay: 2 }],
+      },
+      { secret: "s3cr3t" },
+      mockClient,
+    );
+
+    const [request] = mockClient.solveBuild.mock.calls[0]!;
+    const decoded = SolveBuildRequest.decode(SolveBuildRequest.encode(request).finish());
+
+    expect(decoded.ruleGroups).toEqual([
+      { fixtureIndices: [0], minRestMinutes: 0, maxFixturesPerDay: 2 },
+    ]);
+    expect(decoded.existing).toEqual([
+      { courtIndex: 0, startAtMs: 1_700_000_000_000, ruleGroupIndices: [0], entrantIndices: [0] },
+    ]);
+  });
+
+  // When neither `ruleGroups` nor any `existing[].entrantIds`/
+  // `ruleGroupIndices` is supplied at all (every pre-#21 caller), the wire
+  // still gets well-formed empty collections rather than `undefined` fields
+  // the generated encoder cannot iterate.
+  it("defaults rule groups and pinned rule/entrant references to empty when omitted", async () => {
+    const mockClient = respondingClient();
+
+    await solveBuild(
+      { ...INPUT, existing: [{ fixtureId: "pinned-1", court: "Court 1", startAtMs: 1 }] },
+      { secret: "s3cr3t" },
+      mockClient,
+    );
+
+    const [request] = mockClient.solveBuild.mock.calls[0]!;
+    expect(request.ruleGroups).toEqual([]);
+    expect(request.existing).toEqual([
+      { courtIndex: 0, startAtMs: 1, ruleGroupIndices: [], entrantIndices: [] },
+    ]);
   });
 });
 

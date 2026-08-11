@@ -115,6 +115,7 @@ EXPECTED_REQUEST_FIELDS = {
     "division_rules": (10, FieldDescriptor.TYPE_MESSAGE, True,  False),
     "constraints":    (11, FieldDescriptor.TYPE_MESSAGE, False, True),
     "wall_seconds":   (12, FieldDescriptor.TYPE_DOUBLE,  False, False),
+    "rule_groups":    (13, FieldDescriptor.TYPE_MESSAGE, True,  False),
 }
 
 EXPECTED_RESPONSE_FIELDS = {
@@ -142,8 +143,15 @@ EXPECTED_MESSAGE_FIELDS = {
         "division_index":  (2, FieldDescriptor.TYPE_UINT32, False, True),
     },
     "PinnedRow": {
-        "court_index": (1, FieldDescriptor.TYPE_UINT32, False, True),
-        "start_at_ms": (2, FieldDescriptor.TYPE_INT64,  False, False),
+        "court_index":        (1, FieldDescriptor.TYPE_UINT32, False, True),
+        "start_at_ms":        (2, FieldDescriptor.TYPE_INT64,  False, False),
+        "rule_group_indices": (3, FieldDescriptor.TYPE_UINT32, True,  False),
+        "entrant_indices":    (4, FieldDescriptor.TYPE_UINT32, True,  False),
+    },
+    "RuleGroup": {
+        "fixture_indices":      (1, FieldDescriptor.TYPE_UINT32, True,  False),
+        "min_rest_minutes":     (2, FieldDescriptor.TYPE_INT32,  False, True),
+        "max_fixtures_per_day": (3, FieldDescriptor.TYPE_INT32,  False, True),
     },
     "Assignment": {
         "fixture_index": (1, FieldDescriptor.TYPE_UINT32, False, False),

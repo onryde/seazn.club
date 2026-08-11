@@ -95,6 +95,7 @@ import {
   deltaConflicts,
   effectiveHard,
   isBlockingConflict,
+  scopeCoversFixture,
   slotFixtures,
   validateAssignments,
   RULE_BY_REASON,
@@ -102,6 +103,7 @@ import {
   type Conflict,
   type OrderDependency,
   type SchedulableFixture,
+  type ScopeRow,
   type SlotConfig,
   type VerifyConfig,
 } from "./calendar.ts";
@@ -1126,13 +1128,21 @@ function buildDayIndexOf(
 
 /**
  * The DIVISION-scoped subset of `max_fixtures_per_day` rules, as the simple
- * per-division map the placement wire carries (design doc: "per-division
- * min_rest_minutes/max_fixtures_per_day"). A rule scoped to the competition,
- * a pool, an entrant or a person has no wire representation of its own —
- * placement v1 does not receive it. That is a real capability gap against z3
- * (which hard-encodes every scope via `encodeBuild` §9), but not a newly
- * silent one: `validateInstructionRules`'s reports are warn-only by design,
- * unrelated to this task.
+ * per-division map the placement wire's `division_rules` field carries
+ * (design doc: "per-division min_rest_minutes/max_fixtures_per_day"). A rule
+ * scoped to the competition, a pool, an entrant or a person has no
+ * representation on THIS field — it is dropped here, unconditionally, by
+ * `.kind !== "division"` below.
+ *
+ * That used to be a real capability gap against z3 (which hard-encodes every
+ * scope via `encodeBuild` §9); it no longer is, now that `buildRuleGroups`
+ * (below) sends the full scope union over the wire's OTHER field,
+ * `rule_groups` (#21 / C1). This function is UNCHANGED by that addition on
+ * purpose — `division_rules` stays exactly as division-only as it always
+ * was, and `rule_groups` is additive alongside it, not a replacement (see the
+ * proto's own comment on `SolveBuildRequest.rule_groups`). The domain does
+ * not read `rule_groups` yet, so `division_rules` is still the only field
+ * that does anything.
  *
  * The smallest count wins when more than one rule targets the same division
  * — an "at most" bound, so every rule that applies has to hold at once.
@@ -1145,6 +1155,82 @@ function dayCapsByDivision(hard: readonly HardConstraint[]): Record<string, numb
     out[h.scope.divisionId] = prev === undefined ? h.count : Math.min(prev, h.count);
   }
   return out;
+}
+
+/** The `ScopeRow` a MOVABLE fixture would carry once placed — the same
+ *  `entrants`/`people`/`poolId`/`divisionId` derivation `assignmentOf` (below,
+ *  in `solveBuild`) uses for a real `Assignment`, minus the placement-specific
+ *  fields (`court`/`startAt`/`endAt`) a fixture that has not been placed yet
+ *  does not have. Exists so `buildRuleGroups` can ask `scopeCoversFixture`
+ *  the IDENTICAL question the verifier asks of an already-placed row — same
+ *  shape, same fields, before and after placement, which is what keeps this
+ *  from becoming a second, drifting definition of "does this rule bind this
+ *  fixture" (the placer/verifier fork this subsystem has hit three times —
+ *  `hardRestMinutesFor`'s own docstring, #447). */
+function scopeRowOf(f: SchedulableFixture): ScopeRow {
+  return {
+    entrants: [f.home, f.away].filter((e): e is string => e !== undefined),
+    people: [...(f.people ?? [])],
+    ...(f.poolId !== undefined ? { poolId: f.poolId } : {}),
+    ...(f.divisionId !== undefined ? { divisionId: f.divisionId } : {}),
+  };
+}
+
+/**
+ * C1 (#21) — one `RuleGroup` per `min_rest_minutes`/`max_fixtures_per_day`
+ * hard rule, covering EVERY scope (competition, division, pool, entrant,
+ * person) rather than the division-only subset `dayCapsByDivision` above
+ * sends. Membership is resolved through `scopeCoversFixture` — the SAME
+ * function `calendar.ts`'s own typed-rule pass and the verifier both call —
+ * so this cannot fork from what a real board is checked against; deriving it
+ * a second, independent way is exactly the recurring bug `_RULES.md`'s
+ * anti-fork instruction (and #447) both exist to rule out.
+ *
+ * ONE GROUP PER RULE, not merged by scope the way `dayCapsByDivision` merges
+ * same-division caps down to their minimum count: a `RuleGroup` has no
+ * identity of its own beyond its ARRAY POSITION (see `SolveBuildInput.
+ * ruleGroups`'s own doc comment in `placement-client.ts`), and a pinned row
+ * references one by that position via `indicesFor` below. Merging two rules
+ * into one group would need to inventing a merged identity for no
+ * behavioural gain this round — the domain does not read `rule_groups` yet
+ * (module docstring, "no model, no behaviour change").
+ *
+ * NOT gated on `tz`, unlike `dayCapByDivision`'s own wiring further down:
+ * `min_rest_minutes` needs no calendar-day concept at all, and this task
+ * changes no behaviour regardless (nothing downstream reads this field), so
+ * there is nothing to protect by withholding it. A day-bucketing concern for
+ * `max_fixtures_per_day` specifically is real once the C1 MODEL half lands,
+ * but is that task's decision to make with full knowledge of how it consumes
+ * `day_index`, not one to guess at here.
+ *
+ * Fixture references are FIXTURE IDS at this layer, exactly like every other
+ * collection `solveBuild` hands `placement-client.ts` — id -> wire-index
+ * translation is that module's job alone (`_RULES.md` §2.2), and this
+ * function never sees or invents a wire index.
+ */
+function buildRuleGroups(
+  hard: readonly HardConstraint[],
+  freeFixtures: readonly SchedulableFixture[],
+): {
+  /** In wire order — becomes `SolveBuildInput.ruleGroups` verbatim. */
+  groups: NonNullable<SolveBuildInput["ruleGroups"]>;
+  /** Which of `groups` (by array position) a pinned/existing row counts
+   *  against. Derived from the SAME filtered `hard` list `groups` was built
+   *  from, in the SAME order, so position i always means "the i-th entry of
+   *  `groups`" on both sides — by construction, not by two loops kept in
+   *  sync by hand. */
+  indicesFor: (row: ScopeRow) => number[];
+} {
+  const rules = hard.filter((h) => h.type === "min_rest_minutes" || h.type === "max_fixtures_per_day");
+  const freeRows = freeFixtures.map((f) => ({ id: f.id, row: scopeRowOf(f) }));
+  return {
+    groups: rules.map((h) => ({
+      fixtureIds: freeRows.filter(({ row }) => scopeCoversFixture(h.scope, undefined, row)).map(({ id }) => id),
+      minRestMinutes: h.type === "min_rest_minutes" ? h.minutes : undefined,
+      maxFixturesPerDay: h.type === "max_fixtures_per_day" ? h.count : undefined,
+    })),
+    indicesFor: (row) => rules.flatMap((h, i) => (scopeCoversFixture(h.scope, undefined, row) ? [i] : [])),
+  };
 }
 
 async function solveBuild(input: BuildInput): Promise<BuildResult> {
@@ -1429,7 +1515,11 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // governing clock, and the in-scope wrong one typechecks).
   const tz = verifyConfig.tz;
   const dayIndexOf = buildDayIndexOf(grid.slots, tz);
-  const dayCapByDivision = tz === undefined ? undefined : dayCapsByDivision(effectiveHard(verifyConfig));
+  const hard = effectiveHard(verifyConfig);
+  const dayCapByDivision = tz === undefined ? undefined : dayCapsByDivision(hard);
+  // C1 (#21). UNCONDITIONAL, unlike `dayCapByDivision` just above — see
+  // `buildRuleGroups`'s own docstring for why `tz` does not gate this.
+  const ruleGroupSet = buildRuleGroups(hard, freeFixtures);
 
   /**
    * `perEntrantMinRest` is a GLOBAL per-entrant rest, and the wire has no field
@@ -1491,14 +1581,29 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
       })),
       stepMinutes: grid.stepMinutes,
     },
-    existing: [
-      ...existing.map((a) => ({ fixtureId: a.fixtureId, court: a.court, startAtMs: a.startAt })),
-      ...[...pinById.entries()].map(([id, at]) => ({
-        fixtureId: id,
-        court: at.court,
-        startAtMs: at.startAt,
-      })),
-    ],
+    // `build.ts` holds a pinned row as a full fixture — `existing` (other
+    // divisions' cards, obstacles) is already `Assignment[]`, and
+    // `pinnedAssignments` (this run's own locked/frozen cards) is built
+    // through the SAME `assignmentOf` helper above — so entrants/pool/
+    // division are already in hand for both halves, and identity is only
+    // stripped once, here, at the wire boundary. Concatenated before mapping
+    // (rather than two separate `.map`s, as before #21) because both halves
+    // now produce the identical shape.
+    //
+    // `ruleGroupIndices` (C4) is resolved through `ruleGroupSet.indicesFor`,
+    // which asks `scopeCoversFixture` the SAME question `buildRuleGroups`
+    // asked of every FREE fixture above — an `Assignment` already satisfies
+    // `ScopeRow` structurally, so no conversion is needed. `entrantIds` (C6)
+    // is `a.entrants` verbatim: exactly what closes #447's "two pinned rows
+    // sharing an entrant are invisible to each other" gap, once the C1 model
+    // half reads it.
+    existing: [...existing, ...pinnedAssignments].map((a) => ({
+      fixtureId: a.fixtureId,
+      court: a.court,
+      startAtMs: a.startAt,
+      entrantIds: a.entrants,
+      ruleGroupIndices: ruleGroupSet.indicesFor(a),
+    })),
     // Filtered to pairs where BOTH ends are fixtures placement is actually being
     // asked to place: `fixtureIndexOf` throws `invalid_request` for an id
     // that names an `existing`/pinned row instead (positional identity has no
@@ -1510,6 +1615,10 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     dependencies: dependencies
       .filter((d) => freeFixtureIds.has(d.fixtureId) && freeFixtureIds.has(d.dependsOn))
       .map((d) => ({ beforeFixtureId: d.dependsOn, afterFixtureId: d.fixtureId })),
+    // C1 (#21). See `buildRuleGroups` — every `min_rest_minutes`/
+    // `max_fixtures_per_day` rule, every scope, sent alongside (never instead
+    // of) `division_rules` above.
+    ruleGroups: ruleGroupSet.groups,
     constraints: {
       matchMinutes: config.matchMinutes,
       gapMinutes: config.gapMinutes,

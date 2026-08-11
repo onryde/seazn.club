@@ -30,6 +30,7 @@ import { boardMetrics, isStrictlyBetter } from "./build-objectives.ts";
 import { buildGrid } from "./build-grid.ts";
 import {
   isBlockingConflict,
+  scopeCoversFixture,
   slotFixtures,
   validateAssignments,
   validateInstructionRules,
@@ -37,9 +38,10 @@ import {
   type Conflict,
   type RuleFixture,
   type SchedulableFixture,
+  type ScopeRow,
   type SlotConfig,
 } from "./calendar.ts";
-import type { SchedulingConstraints } from "./constraints.ts";
+import type { HardConstraint, SchedulingConstraints } from "./constraints.ts";
 import { resetZ3 } from "./z3-load.ts";
 import { dayKeyInTz } from "./tz.ts";
 import type { SolveBuildInput, SolveBuildOutcome } from "./placement-client.ts";
@@ -1621,5 +1623,215 @@ describe("buildSchedule — Placement path", () => {
     expect(result.status).toBe("already_optimal");
     expect(result.notSearchedReason).toBeUndefined();
     expect(result.assignments).toHaveLength(1);
+  });
+
+  // #21 (C1/C4/C6) — `ruleGroups`, and pinned rows' `entrantIds`/
+  // `ruleGroupIndices`. ANTI-CORRUPTION LAYER ONLY: the domain does not read
+  // any of these three fields this round (`schema.py`'s module docstring,
+  // "no model, no behaviour change"), so every case below is about what
+  // `build.ts` SENDS — never about what a mocked `solveBuild` reply does with
+  // it, which would be unable to tell the difference either way.
+
+  // THE ANTI-FORK ASSERTION. Written as a comparison against
+  // `scopeCoversFixture` itself, not a hand-listed set: the row shape below is
+  // built directly from the raw `SchedulableFixture`s, independently of
+  // `build.ts`'s own (private) `scopeRowOf`, so a bug in THAT derivation (say,
+  // swapping `poolId`/`divisionId`, or dropping `people`) is exactly what this
+  // test is positioned to catch, and a re-implementation of the scope switch
+  // inside `buildRuleGroups` instead of calling the shared function would stop
+  // this comparing against the real thing.
+  it("derives a rule group's fixture set from scopeCoversFixture itself, for every scope kind", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+
+    const fixtures = [
+      fx("f1", "E1", "E2", { divisionId: "D1", poolId: "P1", people: ["alice"] }),
+      fx("f2", "E3", "E4", { divisionId: "D1", poolId: "P2", people: ["bob"] }),
+      fx("f3", "E1", "E5", { divisionId: "D2", people: ["alice", "carol"] }),
+    ];
+    const scopes = [
+      { kind: "competition" as const },
+      { kind: "division" as const, divisionId: "D1" },
+      { kind: "pool" as const, divisionId: "D1", pool: "P1" },
+      { kind: "entrant" as const, entrantId: "E1" },
+      { kind: "person" as const, personKey: "alice" },
+    ];
+    const hard: HardConstraint[] = scopes.map((scope) => ({
+      type: "min_rest_minutes",
+      minutes: 30,
+      rest_scope: "per_person",
+      scope,
+    }));
+    const config = { ...cfg(), hard };
+
+    await buildSchedule({ fixtures, config });
+    expect(captured).toBeDefined();
+    expect(captured!.ruleGroups).toHaveLength(scopes.length);
+
+    const rowOf = (f: SchedulableFixture): ScopeRow => ({
+      entrants: [f.home, f.away].filter((e): e is string => e !== undefined),
+      people: [...(f.people ?? [])],
+      ...(f.poolId !== undefined ? { poolId: f.poolId } : {}),
+      ...(f.divisionId !== undefined ? { divisionId: f.divisionId } : {}),
+    });
+    scopes.forEach((scope, i) => {
+      const expectedIds = fixtures.filter((f) => scopeCoversFixture(scope, undefined, rowOf(f))).map((f) => f.id);
+      expect(captured!.ruleGroups![i]!.fixtureIds.slice().sort()).toEqual(expectedIds.slice().sort());
+    });
+    // The premise, so the per-scope loop above is not vacuously comparing
+    // empty arrays to empty arrays: at least one scope must select a STRICT
+    // subset of the three fixtures.
+    expect(captured!.ruleGroups!.some((g) => g.fixtureIds.length > 0 && g.fixtureIds.length < 3)).toBe(true);
+  });
+
+  // The brief's explicit requirement: "Today dayCapsByDivision drops every
+  // scope that is not division — the new path must NOT." Same request, same
+  // rule, checked on BOTH wire fields at once so a regression on either one
+  // is visible.
+  it("sends a competition-scoped max_fixtures_per_day rule via ruleGroups even though dayCapByDivision (division-only) drops it", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const fixtures = [fx("f1", "E1", "E2", { divisionId: "D1" }), fx("f2", "E3", "E4", { divisionId: "D2" })];
+    const hard: HardConstraint[] = [
+      { type: "max_fixtures_per_day", count: 3, scope: { kind: "competition" } },
+    ];
+    const config = { ...cfg(), hard };
+
+    await buildSchedule({ fixtures, config });
+    expect(captured).toBeDefined();
+    // The OLD, division-only field (`dayCapsByDivision`, build.ts) — UNCHANGED:
+    // still empty for a competition-scoped rule.
+    expect(captured!.constraints.dayCapByDivision).toBeUndefined();
+    // The NEW field: the same rule, not dropped, covering both fixtures.
+    expect(captured!.ruleGroups).toEqual([
+      { fixtureIds: ["f1", "f2"], minRestMinutes: undefined, maxFixturesPerDay: 3 },
+    ]);
+  });
+
+  // C4's "EMPTY IS A REAL ANSWER, not a missing one" (proto comment) has a
+  // sharp edge: if an empty-fixtureIds group were DROPPED instead of kept, a
+  // later group's array position would shift, and a pinned row's
+  // `ruleGroupIndices` (which names a position, not an id) would silently
+  // start pointing at the WRONG rule. This proves both halves survive it: the
+  // empty group stays at position 0, and BOTH an obstacle (`existing`) and
+  // this run's own pinned fixture correctly reference positions 0 and 1.
+  it("keeps an empty-fixture-set rule group at its own array position, and attributes both an obstacle and a pin to it", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const locked = { court: "C1", startAt: T0 };
+    const fixtures = [fx("pinned", "E1", "E2", { divisionId: "D9", locked })];
+    // Another division's card, already on the board — never a movable
+    // fixture placement is asked to place at all.
+    const obstacle: Assignment = {
+      fixtureId: "other-div",
+      court: "C1",
+      startAt: T0 + 90 * MIN,
+      endAt: T0 + 120 * MIN,
+      entrants: ["E9"],
+      people: [],
+      divisionId: "D8",
+    };
+    const hard: HardConstraint[] = [
+      // Matches no FREE fixture — the only fixture in this run is pinned, so
+      // `freeFixtures` is empty — but must still be a real group at position
+      // 0, not dropped.
+      { type: "min_rest_minutes", minutes: 15, rest_scope: "per_person", scope: { kind: "competition" } },
+      // Position 1 — would silently become 0 if the empty group above were
+      // dropped instead of kept.
+      { type: "max_fixtures_per_day", count: 2, scope: { kind: "division", divisionId: "D9" } },
+    ];
+    const config = { ...cfg(), hard };
+
+    await buildSchedule({ fixtures, config, existing: [obstacle] });
+    expect(captured).toBeDefined();
+    expect(captured!.ruleGroups).toEqual([
+      { fixtureIds: [], minRestMinutes: 15, maxFixturesPerDay: undefined },
+      { fixtureIds: [], minRestMinutes: undefined, maxFixturesPerDay: 2 },
+    ]);
+
+    const byCourtTime = new Map(captured!.existing.map((e) => [`${e.court}@${e.startAtMs}`, e]));
+    // The pin: division D9 (matches rule 1) AND the competition scope
+    // (matches rule 0, which covers everything) — both, at their real
+    // positions.
+    expect(byCourtTime.get(`C1@${T0}`)).toEqual({
+      fixtureId: "pinned",
+      court: "C1",
+      startAtMs: T0,
+      entrantIds: ["E1", "E2"],
+      ruleGroupIndices: [0, 1],
+    });
+    // The obstacle: division D8, so only the competition-scoped rule 0 covers it.
+    expect(byCourtTime.get(`C1@${T0 + 90 * MIN}`)).toEqual({
+      fixtureId: "other-div",
+      court: "C1",
+      startAtMs: T0 + 90 * MIN,
+      entrantIds: ["E9"],
+      ruleGroupIndices: [0],
+    });
+  });
+
+  // `build.ts`'s own half of the no-behaviour-change proof. The DEEP proof —
+  // that the SOLVED BOARD is unaffected — lives in `schema.py`'s
+  // `test_populating_the_new_fields_does_not_change_the_board`, because
+  // `solveBuild` is MOCKED in this file: a "same assignments" assertion
+  // against a canned mock reply cannot fail no matter what request was built,
+  // so it would not be the load-bearing test the brief asks for and is
+  // deliberately NOT duplicated here. What CAN genuinely fail at this layer,
+  // and is this module's own job to guard, is that adding `ruleGroups` /
+  // pinned `entrantIds`/`ruleGroupIndices` did not also perturb any of the
+  // OTHER fields the domain actually reads.
+  it("leaves every pre-#21 field of the request unchanged whether ruleGroups is populated or not", async () => {
+    const capture = async (hard: HardConstraint[] | undefined): Promise<SolveBuildInput> => {
+      let captured: SolveBuildInput | undefined;
+      vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+        captured = input;
+        return okOutcome();
+      });
+      const fixtures = [
+        fx("f1", "E1", "E2", { divisionId: "D1" }),
+        fx("f2", "E3", "E4", { divisionId: "D1", locked: { court: "C1", startAt: T0 } }),
+      ];
+      const config = { ...cfg(), ...(hard !== undefined ? { hard } : {}) };
+      await buildSchedule({ fixtures, config });
+      vi.restoreAllMocks();
+      return captured!;
+    };
+
+    const without = await capture(undefined);
+    const populated = await capture([
+      { type: "min_rest_minutes", minutes: 20, rest_scope: "per_person", scope: { kind: "competition" } },
+      { type: "max_fixtures_per_day", count: 4, scope: { kind: "entrant", entrantId: "E1" } },
+    ]);
+
+    // First: the new fields really did differ, so the equality checks below
+    // are not vacuously comparing two identical requests.
+    expect(populated.ruleGroups).not.toEqual(without.ruleGroups);
+    expect(populated.existing[0]!.ruleGroupIndices).not.toEqual(without.existing[0]!.ruleGroupIndices);
+
+    // Second, the actual claim: every OTHER field — the ones `build_model`
+    // will read once it exists, and today the only ones ANY server reads — is
+    // byte-identical.
+    expect(populated.courts).toEqual(without.courts);
+    expect(populated.fixtures).toEqual(without.fixtures);
+    expect(populated.grid).toEqual(without.grid);
+    expect(populated.dependencies).toEqual(without.dependencies);
+    expect(populated.constraints.matchMinutes).toEqual(without.constraints.matchMinutes);
+    expect(populated.constraints.gapMinutes).toEqual(without.constraints.gapMinutes);
+    expect(populated.constraints.restByDivision).toEqual(without.constraints.restByDivision);
+    expect(populated.constraints.dayCapByDivision).toEqual(without.constraints.dayCapByDivision);
+    expect(populated.wallSeconds).toEqual(without.wallSeconds);
+    // `existing` minus the one field that is SUPPOSED to differ.
+    expect(populated.existing.map(({ ruleGroupIndices: _rgi, ...rest }) => rest)).toEqual(
+      without.existing.map(({ ruleGroupIndices: _rgi, ...rest }) => rest),
+    );
   });
 });

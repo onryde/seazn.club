@@ -66,8 +66,59 @@ export interface SolveBuildInput {
    *  free, and the fixture comes back placed a SECOND time elsewhere. A
    *  pinned/locked/frozen fixture must be excluded from `fixtures` when it is
    *  added here. */
-  existing: { fixtureId: string; court: string; startAtMs: number }[];
+  existing: {
+    fixtureId: string;
+    court: string;
+    startAtMs: number;
+    /**
+     * C6 — who is playing in this pinned/existing row, so a rest rule can see
+     * it even though the row itself never moves. IDs, not indices, like every
+     * other caller-facing field here: {@link solveBuild} resolves each one
+     * through the SAME `entrantIndexOf` that `fixtures[].entrantIds` uses
+     * (see {@link buildIndexSpace}), so an id that appears ONLY on a pinned
+     * row still gets a valid, in-range wire index. Omitted/`undefined` is "no
+     * entrants recorded for this row" — a real answer, not a refusal; see
+     * `PinnedRow.entrant_indices`'s own comment in the proto.
+     */
+    entrantIds?: string[];
+    /**
+     * C4 — which of {@link SolveBuildInput.ruleGroups} this row counts
+     * against, by ARRAY POSITION in that list. `ruleGroups` has no id space
+     * of its own (see its own doc comment below), so position is the only
+     * handle there is — exactly what the wire's own `rule_group_indices`
+     * names a position in `SolveBuildRequest.rule_groups`. {@link toRequest}
+     * sends `ruleGroups` in the same order it receives it, so a position here
+     * IS the wire position: straight passthrough, no lookup. Omitted/
+     * `undefined` is "counts against nothing", a real answer per
+     * `PinnedRow.rule_group_indices`'s own comment in the proto.
+     */
+    ruleGroupIndices?: number[];
+  }[];
   dependencies: { beforeFixtureId: string; afterFixtureId: string }[];
+  /**
+   * C1 — one rule and the exact fixture ids it binds, resolved by the CALLER
+   * (`build.ts`'s `scopeCoversFixture`) rather than sent as a scope this
+   * client would have to understand — see `RuleGroup`'s own comment in the
+   * proto and `_RULES.md` section 1 (this context does not own org/tenant
+   * concepts, so a division/pool/entrant/person vocabulary stops at
+   * `build.ts`). `fixtureIds` must each name an entry in {@link
+   * SolveBuildInput.fixtures}; an EMPTY array is legal (see the field's own
+   * comment below) and is not the same as omitting the group entirely —
+   * dropping an empty group would shift every later group's array position
+   * and silently misdirect any pinned row that references one by index.
+   *
+   * Optional at the type level only for the tests and callers that do not
+   * care about it; `build.ts` always supplies the array (possibly empty).
+   */
+  ruleGroups?: {
+    fixtureIds: string[];
+    /** Presence, not `>= 0`: 0 is "no minimum rest", a legitimate rule,
+     *  distinct from this group carrying no rest rule at all. */
+    minRestMinutes?: number;
+    /** Presence, then `> 0` when set: 0 would forbid the group outright,
+     *  which is never what "no cap" means. Absent = uncapped. */
+    maxFixturesPerDay?: number;
+  }[];
   constraints: {
     matchMinutes: number;
     gapMinutes: number;
@@ -245,15 +296,35 @@ function toRequest(input: SolveBuildInput, requestId: string, indices: IndexSpac
     // reached only a debug label on the interval variable's name, never a
     // constraint). The field stays on `SolveBuildInput` so Task 06 does not
     // have to change what it passes; the client just has nowhere left to put it.
-    existing: input.existing.map(({ court, startAtMs }) => ({
+    //
+    // `ruleGroupIndices` is a straight passthrough (C4): it already names a
+    // position in `input.ruleGroups`, and `ruleGroups` below is sent in that
+    // SAME order, so no lookup is needed or possible — `indices` has no table
+    // for a rule group, because a rule group has no id of its own to look up.
+    // `entrantIndices` (C6) DOES need one: `entrantIds` are domain ids, like
+    // every other id on this type, and `entrantIndexOf` resolves them exactly
+    // as `fixtures[].entrantIds` are resolved above (see `buildIndexSpace`,
+    // which registers `existing[].entrantIds` into the same total map).
+    existing: input.existing.map(({ court, startAtMs, entrantIds, ruleGroupIndices }) => ({
       courtIndex: indices.courtIndexOf(court),
       startAtMs,
+      ruleGroupIndices: [...(ruleGroupIndices ?? [])],
+      entrantIndices: (entrantIds ?? []).map((entrantId) => indices.entrantIndexOf(entrantId)),
     })),
     dependencies: input.dependencies.map(({ beforeFixtureId, afterFixtureId }) => ({
       beforeIndex: indices.fixtureIndexOf(beforeFixtureId),
       afterIndex: indices.fixtureIndexOf(afterFixtureId),
     })),
     divisionRules: toDivisionRules(input.constraints, indices.divisionIndexOf),
+    // C1. `fixtureIndices` resolves through the SAME `fixtureIndexOf` a
+    // dependency endpoint does just above — an id `input.ruleGroups` names
+    // that is not in `input.fixtures` is refused the same way a dependency
+    // naming an unknown fixture already is, rather than silently dropped.
+    ruleGroups: (input.ruleGroups ?? []).map(({ fixtureIds, minRestMinutes, maxFixturesPerDay }) => ({
+      fixtureIndices: fixtureIds.map((fixtureId) => indices.fixtureIndexOf(fixtureId)),
+      minRestMinutes,
+      maxFixturesPerDay,
+    })),
     constraints: {
       matchMinutes: input.constraints.matchMinutes,
       gapMinutes: input.constraints.gapMinutes,
@@ -372,17 +443,23 @@ interface IndexSpace {
    */
   fixtureIds: string[];
   /**
-   * Resolves a `dependencies[].beforeFixtureId`/`afterFixtureId` to a fixture
-   * index. Throws `PlacementError("invalid_request", ...)` if the id does not
-   * name any entry in `fixtures` — `existing` never contributes to this
-   * table, matching half 1's finding that a dependency naming a pinned row's
-   * id was already meaningless under the old string contract.
+   * Resolves a `dependencies[].beforeFixtureId`/`afterFixtureId` or a
+   * `ruleGroups[].fixtureIds` entry (C1) to a fixture index. Throws
+   * `PlacementError("invalid_request", ...)` if the id does not name any
+   * entry in `fixtures` — `existing` never contributes to this table,
+   * matching half 1's finding that a dependency naming a pinned row's id was
+   * already meaningless under the old string contract, and a rule group is
+   * no different: it binds MOVABLE fixtures, and a pinned row counts against
+   * a group through `ruleGroupIndices` instead (see `SolveBuildInput.
+   * existing[].ruleGroupIndices`).
    */
   fixtureIndexOf: (fixtureId: string) => number;
   /**
-   * Total: every entrant id in every fixture's `entrantIds` was assigned an
-   * index while building this `IndexSpace`, so this never fails for an id
-   * that genuinely came from the input.
+   * Total: every entrant id in every fixture's `entrantIds`, AND every
+   * entrant id in every `existing[].entrantIds` (C6), was assigned an index
+   * while building this `IndexSpace`, so this never fails for an id that
+   * genuinely came from the input — a pinned row is allowed to name an
+   * entrant no MOVABLE fixture uses.
    */
   entrantIndexOf: (entrantId: string) => number;
   entrantCount: number;
@@ -414,12 +491,13 @@ function totalLookup(byId: ReadonlyMap<string, number>, id: string): number {
  * Derives the complete id<->index mapping for one request; see
  * {@link IndexSpace}. Ordering always comes from the input itself — `courts`/
  * `fixtures` array position for the declared lists, first-sighting order over
- * `fixtures` (then `constraints.restByDivision`/`dayCapByDivision` keys, for
- * a division no fixture references yet) for the inferred ones — never a
- * `Set`/`Map` assembled from some OTHER collection's iteration order, and
- * never anything random: `packages/engine/src` bans `Math.random()` as well
- * as ambient time, and identity here comes entirely from the caller's own
- * arrays.
+ * `fixtures` (then `existing[].entrantIds`, C6, for an entrant no MOVABLE
+ * fixture names yet; then `constraints.restByDivision`/`dayCapByDivision`
+ * keys, for a division no fixture references yet) for the inferred ones —
+ * never a `Set`/`Map` assembled from some OTHER collection's iteration order,
+ * and never anything random: `packages/engine/src` bans `Math.random()` as
+ * well as ambient time, and identity here comes entirely from the caller's
+ * own arrays.
  */
 function buildIndexSpace(input: SolveBuildInput): IndexSpace {
   // Courts: DECLARED. `i` (the raw array position), not a running dedup
@@ -452,6 +530,18 @@ function buildIndexSpace(input: SolveBuildInput): IndexSpace {
       divisionIndexById.set(fixture.divisionId, divisionIndexById.size);
     }
   }
+  // C6 — `existing[].entrantIds` can name an entrant no MOVABLE fixture uses
+  // (a pin from another division, say), so it gets the same first-sighting
+  // registration `fixtures` did above — after, so an entrant already seen on
+  // a movable fixture keeps the SAME index it always has; only a genuinely
+  // new id is appended. Without this, `entrantIndexOf` (a TOTAL lookup) would
+  // throw the internal-error branch on a perfectly legitimate id that simply
+  // never appeared in `fixtures`.
+  for (const row of input.existing) {
+    for (const entrantId of row.entrantIds ?? []) {
+      if (!entrantIndexById.has(entrantId)) entrantIndexById.set(entrantId, entrantIndexById.size);
+    }
+  }
   // A division-only rule — rest or day cap set for a division no fixture in
   // THIS solve uses yet — still needs a valid index: `DivisionRule
   // .division_index` is range-checked against `division_count` exactly like
@@ -482,8 +572,8 @@ function buildIndexSpace(input: SolveBuildInput): IndexSpace {
       if (index === undefined) {
         throw new PlacementError(
           "invalid_request",
-          `placement client: dependency references fixture ${JSON.stringify(fixtureId)}, which ` +
-            "does not appear in fixtures.",
+          `placement client: fixture ${JSON.stringify(fixtureId)} is referenced by a dependency ` +
+            "or a rule group but does not appear in fixtures.",
         );
       }
       return index;

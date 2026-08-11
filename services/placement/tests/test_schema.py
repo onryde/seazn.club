@@ -620,6 +620,240 @@ def test_a_rule_may_carry_only_rest_leaving_the_division_uncapped():
     assert parsed.constraints["day_cap_by_division"] == {}
 
 
+# --- #21 / C1: rule_groups -----------------------------------------------
+#
+# `RuleGroup` generalises `DivisionRule` past a division-only scope (module
+# docstring, "#21"): the CALLER resolves whatever scope it actually means
+# (competition, division, pool, entrant, person) into a fixture-index set and
+# sends the set, never the scope. So this service's own tests never see scope
+# vocabulary at all -- only fixture indices, exactly like every other index
+# family in this file. Validated and carried on `ModelInput`, NOT read by
+# `build_model` this round -- see the module docstring and
+# `test_populating_the_new_fields_does_not_change_the_board` below, which is
+# the proof of that claim rather than a restatement of it.
+
+
+def test_accepts_a_rule_group_with_empty_fixture_indices():
+    """Legal, not a caller error: a competition-scoped rule on an all-pinned
+    board resolves to exactly this, and the rule still has to reach the
+    service because a pinned row's `rule_group_indices` references it by
+    POSITION -- dropping an empty group would shift every later group's index
+    and silently misdirect every pin that names one by number."""
+    req = _valid_request(rule_groups=[scheduler_pb2.RuleGroup(min_rest_minutes=30)])
+    parsed = request_to_model_input(req)
+    assert parsed.rule_groups == [([], 30, None)]
+
+
+def test_zero_is_legitimate_rule_group_rest_but_not_a_legitimate_day_cap():
+    """The `RuleGroup` restatement of `test_zero_is_legitimate_rest_but_not_a_
+    legitimate_day_cap`: the same asymmetry, on the generalised field. 0
+    minutes of rest is a real rule and must be RECORDED, not silently dropped;
+    0 fixtures/day is the shape that comes back OPTIMAL having placed none of
+    the group, so it is refused rather than recorded."""
+    req = _valid_request(rule_groups=[scheduler_pb2.RuleGroup(min_rest_minutes=0)])
+    assert request_to_model_input(req).rule_groups == [([], 0, None)]
+
+    capped = _valid_request(rule_groups=[scheduler_pb2.RuleGroup(max_fixtures_per_day=0)])
+    with pytest.raises(InvalidRequestError, match=r"rule_groups\[0\]\.max_fixtures_per_day"):
+        request_to_model_input(capped)
+
+
+def test_rejects_negative_rule_group_min_rest_minutes():
+    req = _valid_request(rule_groups=[scheduler_pb2.RuleGroup(min_rest_minutes=-1)])
+    with pytest.raises(InvalidRequestError, match=r"rule_groups\[0\]\.min_rest_minutes"):
+        request_to_model_input(req)
+
+
+@pytest.mark.parametrize("cap", [0, -1])
+def test_rejects_non_positive_rule_group_max_fixtures_per_day(cap):
+    req = _valid_request(rule_groups=[scheduler_pb2.RuleGroup(max_fixtures_per_day=cap)])
+    with pytest.raises(InvalidRequestError, match=r"rule_groups\[0\]\.max_fixtures_per_day"):
+        request_to_model_input(req)
+
+
+def test_a_rule_group_may_carry_both_rest_and_cap_for_one_set_of_fixtures():
+    req = _valid_request(
+        entrant_count=4,
+        division_count=1,
+        fixtures=[
+            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0),
+            scheduler_pb2.Fixture(entrant_indices=[2, 3], division_index=0),
+        ],
+        rule_groups=[
+            scheduler_pb2.RuleGroup(fixture_indices=[0, 1], min_rest_minutes=20, max_fixtures_per_day=2)
+        ],
+    )
+    parsed = request_to_model_input(req)
+    assert parsed.rule_groups == [([0, 1], 20, 2)]
+
+
+def test_rejects_a_rule_groups_out_of_range_fixture_index_naming_the_field():
+    """The general `INDEX_FIELDS` sweep further down proves every index field
+    in the contract is range-checked; this pins that the message additionally
+    NAMES the offending field, which the brief calls out specifically."""
+    req = _valid_request(rule_groups=[scheduler_pb2.RuleGroup(fixture_indices=[5])])
+    with pytest.raises(
+        InvalidRequestError, match=r"rule_groups\[0\]\.fixture_indices\[0\] = 5 is out of range"
+    ):
+        request_to_model_input(req)
+
+
+# --- #21 / C4 & C6: PinnedRow.rule_group_indices / PinnedRow.entrant_indices --
+
+
+def test_accepts_a_pinned_row_with_empty_rule_group_indices_and_entrant_indices():
+    """The C4/C6 counterpart of the empty-fixture_indices case above: a pin
+    covered by no rule group counts against nothing, and a pin the caller
+    never attributed any player to carries no entrants -- both are real
+    answers, not missing ones."""
+    req = _valid_request(existing=[scheduler_pb2.PinnedRow(court_index=0, start_at_ms=SLOT_MS)])
+    parsed = request_to_model_input(req)
+    assert parsed.pinned_rule_group_indices == [[]]
+    assert parsed.pinned_entrant_indices == [[]]
+
+
+def test_a_pinned_row_may_reference_several_rule_groups_and_entrants():
+    req = _valid_request(
+        entrant_count=4,
+        rule_groups=[
+            scheduler_pb2.RuleGroup(min_rest_minutes=10),
+            scheduler_pb2.RuleGroup(max_fixtures_per_day=3),
+        ],
+        existing=[
+            scheduler_pb2.PinnedRow(
+                court_index=0,
+                start_at_ms=SLOT_MS,
+                rule_group_indices=[0, 1],
+                entrant_indices=[2, 3],
+            )
+        ],
+    )
+    parsed = request_to_model_input(req)
+    assert parsed.pinned_rule_group_indices == [[0, 1]]
+    assert parsed.pinned_entrant_indices == [[2, 3]]
+
+
+def test_rejects_a_pinned_rows_out_of_range_rule_group_index_naming_the_field():
+    # No `rule_groups` declared at all, so index 0 is out of range for `[]`.
+    req = _valid_request(
+        existing=[scheduler_pb2.PinnedRow(court_index=0, start_at_ms=SLOT_MS, rule_group_indices=[0])]
+    )
+    with pytest.raises(
+        InvalidRequestError,
+        match=r"existing\[0\]\.rule_group_indices\[0\] = 0 is out of range",
+    ):
+        request_to_model_input(req)
+
+
+def test_rejects_a_pinned_rows_out_of_range_entrant_index_naming_the_field():
+    # `_valid_request()`'s default `entrant_count` is 2, so index 9 is out of range.
+    req = _valid_request(
+        existing=[scheduler_pb2.PinnedRow(court_index=0, start_at_ms=SLOT_MS, entrant_indices=[9])]
+    )
+    with pytest.raises(
+        InvalidRequestError,
+        match=r"existing\[0\]\.entrant_indices\[0\] = 9 is out of range",
+    ):
+        request_to_model_input(req)
+
+
+# --- #21: the no-behaviour-change proof -------------------------------------
+#
+# The whole point of this revision (proto comment on `SolveBuildRequest.
+# rule_groups`; `_RULES.md`'s Task-21 brief): the ACL parses and validates the
+# three new fields, but NOTHING downstream of `request_to_model_input` may be
+# able to tell whether they were sent. This is the load-bearing test for that
+# claim, checked two ways: first by value (every field `build_model`/`solve`
+# actually read must be byte-identical whether or not the new fields were
+# populated -- which IS "does not pass them to build_model", proven rather
+# than read off the source), and then by actually solving both parses on a
+# FORCED board -- one movable fixture, one admissible slot, so the outcome
+# cannot vary with CP-SAT's own run-to-run nondeterminism (`_RULES.md` section
+# 6b: "remove the nondeterminism instead of averaging over it").
+
+
+def test_populating_the_new_fields_does_not_change_the_board():
+    from placement.model import build_model, solve
+
+    base_kwargs = dict(
+        request_id="r1",
+        court_names=["Court 1"],
+        entrant_count=2,
+        division_count=1,
+        fixtures=[scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0)],
+        existing=[scheduler_pb2.PinnedRow(court_index=0, start_at_ms=SLOT_MS)],
+        slots=[scheduler_pb2.Slot(court_index=0, start_at_ms=SLOT_MS + 3_600_000, day_index=0)],
+        step_minutes=10,
+        constraints=scheduler_pb2.BuildConstraints(match_minutes=30, gap_minutes=10),
+        wall_seconds=5.0,
+    )
+    without = scheduler_pb2.SolveBuildRequest(**base_kwargs)
+    populated = scheduler_pb2.SolveBuildRequest(
+        **{
+            **base_kwargs,
+            "rule_groups": [
+                scheduler_pb2.RuleGroup(
+                    fixture_indices=[0], min_rest_minutes=45, max_fixtures_per_day=2
+                )
+            ],
+            "existing": [
+                scheduler_pb2.PinnedRow(
+                    court_index=0,
+                    start_at_ms=SLOT_MS,
+                    rule_group_indices=[0],
+                    entrant_indices=[0, 1],
+                )
+            ],
+        }
+    )
+
+    parsed_without = request_to_model_input(without)
+    parsed_populated = request_to_model_input(populated)
+
+    # First: the new fields really did parse to something different, so the
+    # equality assertions below are not vacuously comparing two empty results.
+    assert parsed_populated.rule_groups == [([0], 45, 2)]
+    assert parsed_populated.pinned_rule_group_indices == [[0]]
+    assert parsed_populated.pinned_entrant_indices == [[0, 1]]
+    assert parsed_without.rule_groups == []
+    assert parsed_without.pinned_rule_group_indices == [[]]
+    assert parsed_without.pinned_entrant_indices == [[]]
+
+    # Second, and this is the actual claim: every field `build_model`/`solve`
+    # read is untouched by the three new ones.
+    assert parsed_populated.fixtures == parsed_without.fixtures
+    assert parsed_populated.courts == parsed_without.courts
+    assert parsed_populated.grid_slots == parsed_without.grid_slots
+    assert parsed_populated.step_minutes == parsed_without.step_minutes
+    assert parsed_populated.constraints == parsed_without.constraints
+    assert parsed_populated.existing == parsed_without.existing
+    assert parsed_populated.dependencies == parsed_without.dependencies
+    assert parsed_populated.wall_seconds == parsed_without.wall_seconds
+
+    # Third: actually solve both. One movable fixture and one admissible slot
+    # well clear of the pinned row (SLOT_MS vs. SLOT_MS + 1h, match_minutes=30)
+    # -- feasible and the ONLY candidate, so T0 (maximise placed) forces the
+    # same single answer regardless of search order.
+    def _solved(parsed):
+        model = build_model(
+            parsed.fixtures,
+            parsed.courts,
+            parsed.grid_slots,
+            parsed.step_minutes,
+            parsed.constraints,
+            parsed.existing,
+            parsed.dependencies,
+        )
+        return solve(model, wall_seconds=parsed.wall_seconds).assignments
+
+    solved_without = _solved(parsed_without)
+    solved_populated = _solved(parsed_populated)
+    assert solved_without == [(0, 0, SLOT_MS + 3_600_000)], solved_without
+    assert solved_populated == solved_without, (
+        f"populated={solved_populated} without={solved_without}"
+    )
+
+
 def test_rejects_a_fixture_with_no_entrants():
     """An entrant-less fixture joins no `by_entrant` group, so the participant-
     rest NoOverlap and every T2 idle-gap term skip it entirely."""
@@ -666,9 +900,14 @@ def _maximal_request() -> scheduler_pb2.SolveBuildRequest:
             scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0),
             scheduler_pb2.Fixture(entrant_indices=[2, 3], division_index=0),
         ],
-        existing=[scheduler_pb2.PinnedRow(court_index=0, start_at_ms=SLOT_MS)],
+        existing=[
+            scheduler_pb2.PinnedRow(
+                court_index=0, start_at_ms=SLOT_MS, rule_group_indices=[0], entrant_indices=[0]
+            )
+        ],
         dependencies=[scheduler_pb2.OrderPair(before_index=0, after_index=1)],
         division_rules=[scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=45)],
+        rule_groups=[scheduler_pb2.RuleGroup(fixture_indices=[0, 1], min_rest_minutes=15)],
         constraints=_constraints(),
         wall_seconds=8.0,
     )
@@ -682,9 +921,12 @@ INDEX_FIELDS = {
     "Fixture.entrant_indices": lambda r: r.fixtures[0].entrant_indices.__setitem__(0, 999),
     "Slot.court_index": lambda r: setattr(r.slots[0], "court_index", 999),
     "PinnedRow.court_index": lambda r: setattr(r.existing[0], "court_index", 999),
+    "PinnedRow.rule_group_indices": lambda r: r.existing[0].rule_group_indices.__setitem__(0, 999),
+    "PinnedRow.entrant_indices": lambda r: r.existing[0].entrant_indices.__setitem__(0, 999),
     "OrderPair.before_index": lambda r: setattr(r.dependencies[0], "before_index", 999),
     "OrderPair.after_index": lambda r: setattr(r.dependencies[0], "after_index", 999),
     "DivisionRule.division_index": lambda r: setattr(r.division_rules[0], "division_index", 999),
+    "RuleGroup.fixture_indices": lambda r: r.rule_groups[0].fixture_indices.__setitem__(0, 999),
 }
 
 #: Deliberately outside the range/presence policy, with the reason. Listed
@@ -751,6 +993,12 @@ def test_the_maximal_request_is_valid_unperturbed():
     parsed = request_to_model_input(_maximal_request())
     assert len(parsed.fixtures) == 2
     assert parsed.existing == [(0, SLOT_MS)]
+    # C1/C4/C6, mapped through unperturbed: one rule group covering both
+    # movable fixtures, and the one pinned row counting against it and
+    # carrying one entrant.
+    assert parsed.rule_groups == [([0, 1], 15, None)]
+    assert parsed.pinned_rule_group_indices == [[0]]
+    assert parsed.pinned_entrant_indices == [[0]]
 
 
 def test_an_exempt_field_carries_no_range_or_presence_check():
@@ -778,8 +1026,10 @@ def test_an_exempt_field_carries_no_range_or_presence_check():
 # of the brief, not a silent one — this is exactly the kind of place the
 # brief invites pushback.
 #
-# `Fixture.entrant_indices` is excluded: it is REPEATED, and a repeated
-# field's elements carry no presence ambiguity of their own.
+# `Fixture.entrant_indices`, `RuleGroup.fixture_indices`,
+# `PinnedRow.rule_group_indices` and `PinnedRow.entrant_indices` are all
+# excluded: each is REPEATED, and a repeated field's elements carry no
+# presence ambiguity of their own.
 PRESENCE_FIELDS = {
     "Fixture.division_index": lambda r: r.fixtures[0].ClearField("division_index"),
     "Slot.court_index": lambda r: r.slots[0].ClearField("court_index"),
@@ -789,12 +1039,21 @@ PRESENCE_FIELDS = {
     "DivisionRule.division_index": lambda r: r.division_rules[0].ClearField("division_index"),
 }
 
+#: The repeated index fields -- excluded from `PRESENCE_FIELDS` above because
+#: a repeated field's elements carry no presence ambiguity of their own.
+REPEATED_INDEX_FIELDS = {
+    "Fixture.entrant_indices",
+    "RuleGroup.fixture_indices",
+    "PinnedRow.rule_group_indices",
+    "PinnedRow.entrant_indices",
+}
 
-def test_presence_fields_are_the_singular_index_fields_minus_entrant_indices():
-    """Pins the two tables to the same key set minus the one repeated field,
-    so a field added to one and not the other (when it should be in both) is
+
+def test_presence_fields_are_the_singular_index_fields_minus_the_repeated_ones():
+    """Pins the two tables to the same key set minus the repeated fields, so a
+    field added to one and not the other (when it should be in both) is
     caught rather than silently under-tested."""
-    assert set(PRESENCE_FIELDS) == set(INDEX_FIELDS) - {"Fixture.entrant_indices"}
+    assert set(PRESENCE_FIELDS) == set(INDEX_FIELDS) - REPEATED_INDEX_FIELDS
 
 
 @pytest.mark.parametrize("path", sorted(PRESENCE_FIELDS))
