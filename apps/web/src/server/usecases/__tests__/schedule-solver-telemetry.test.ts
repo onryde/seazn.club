@@ -43,7 +43,7 @@ import {
   autoSchedule,
   boundSolverWindow,
   putScheduleSettings,
-  AUTO_SOLVER_WALL_MS,
+  autoSolverWallMs,
   TIERS_TOTAL,
 } from "../schedule";
 import { patchFixture } from "../fixtures";
@@ -217,7 +217,7 @@ describe("TIERS_TOTAL is the engine's ladder, not a constant that agrees with it
     const built = await buildSchedule({
       fixtures: [{ id: "a", home: "E1", away: "E2", people: [] }],
       config: cfg,
-      wallMs: AUTO_SOLVER_WALL_MS,
+      wallMs: autoSolverWallMs(),
     });
     expect(built.status).toBe("already_optimal");
     expect(built.tiersCompleted).toBe(TIERS_TOTAL);
@@ -353,7 +353,7 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
     expect(out.solver.elapsed_ms).toBeGreaterThan(0);
     // The wall is the web's, not the engine's 30-second default: this response
     // is one an organiser is sitting and watching.
-    expect(out.solver.elapsed_ms).toBeLessThan(AUTO_SOLVER_WALL_MS * 2);
+    expect(out.solver.elapsed_ms).toBeLessThan(autoSolverWallMs() * 2);
     // Absent unless the engine PROVED an infeasibility about the pins. Never
     // synthesised from `total - placed`.
     expect(out.solver.contradictory_pins).toBe(undefined);

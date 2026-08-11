@@ -241,9 +241,27 @@
 # [6] WALL BUDGET
 #
 # *** THE SERVER CAN HALVE THE CALLER'S WALL BUDGET, SILENTLY. ***
-# `main.py:142` clamps every request to `min(parsed.wall_seconds,
-# wall_seconds_max)`. The TS side asks for up to 20s (`AUTO_SOLVER_WALL_MS`,
-# apps/web/src/server/usecases/schedule.ts).
+# `main.py` clamps every request to `min(parsed.wall_seconds,
+# wall_seconds_max)`.
+#
+# THERE ARE TWO CEILINGS AND RAISING EITHER ONE ALONE IS INERT. The caller's
+# ASK is `PLACEMENT_WALL_SECONDS` on the WEB app (`autoSolverWallMs()`,
+# apps/web/src/server/usecases/schedule.ts), default 10. The server's CAP is
+# `PLACEMENT_WALL_SECONDS_MAX` below, default 10. A board gets the smaller of
+# the two. Raise the cap to 60 while the caller still asks 10 and every board
+# still gets 10; raise the ask while the cap is 10 and every board still gets
+# 10. Both, or nothing moves. They live in different apps and are deployed
+# separately, so this is easy to half-do and see no change.
+#
+# TWO THINGS MOVE WITH THE ASK, one of them automatically:
+#   * the per-org cooldown window is now DERIVED from it, holding one org to
+#     ~27% of an instance's solver capacity at any wall (it used to be a
+#     hand-re-derived constant, and had already been missed once);
+#   * `build.ts:286`'s size gate scales the admitted encoding by
+#     `wallMs / AUTO_SOLVER_WALL_MS_AT_MEASUREMENT`, so DOUBLING THE ASK
+#     DOUBLES THE BOARD SIZE ADMITTED. Boards previously refused start being
+#     solved. That is a behaviour change, not just more time, and it is not
+#     announced anywhere at runtime.
 #
 # Measured on a real 37-fixture, 3-board Auto-schedule (2026-08-10):
 #
@@ -304,12 +322,24 @@
 #     beside it said "left UNSET here, so config.py's default of 10 applies";
 #     another said "RAISED FROM THE DEFAULT 10 TO 20 on 2026-08-10... 20
 #     matches what the caller actually asks for". All three cannot be true.
-#     What IS certain: the value in force is 10, the app asks for 20, and half
-#     the requested proof budget is therefore discarded on every board. Raising
-#     it to 20 trades machine-seconds for proof depth on a box whose real shape
-#     has never been measured, so it should be decided as ONE change alongside
-#     the NUM_SEARCH_WORKERS re-measurement (DEPLOY.md step 8) — not folded in
-#     with the concurrency change above.
+#     RESOLVED 2026-08-11, and the resolution is the opposite of what the
+#     paragraph above concluded. The caller does NOT ask 20 — it asked 10, so
+#     NOTHING was being discarded, and the sentence "half the requested proof
+#     budget is therefore discarded on every board" was false at the time it
+#     was written. It argued for a change that would have been a no-op.
+#
+#     Both ends are now env vars (`PLACEMENT_WALL_SECONDS` on the web app,
+#     `PLACEMENT_WALL_SECONDS_MAX` here), both still 10, so the contradiction
+#     cannot recur silently: the cooldown window derives from the ask, and a
+#     malformed value is REFUSED rather than defaulted.
+#
+#     STILL OPEN, and genuinely: whether to raise them. It trades
+#     machine-seconds for proof depth on a box whose real shape has never been
+#     measured, and it also widens `build.ts:286`'s size gate (see [6]). Decide
+#     it as ONE change alongside the NUM_SEARCH_WORKERS re-measurement
+#     (DEPLOY.md step 8). Before spending any of it, note the 2026-08-11
+#     staging run burned the full 10s at `tiers=1/2` WITHOUT proving — if T1
+#     never closes its bound, more wall is wasted machine-seconds.
 #
 # (b) DO `tcp_checks` COUNT TOWARD `services.concurrency`? Still undocumented.
 #     Checked directly against https://fly.io/docs/reference/configuration/,
@@ -355,5 +385,14 @@ primary_region = "lhr"                # [1] matches apps/web
 
 [env]
   PLACEMENT_MAX_WORKERS = "2"         # [3] MUST be >= hard_limit above
-  PLACEMENT_WALL_SECONDS_MAX = "10"   # [6] caller asks 20 — see [9](a)
+  PLACEMENT_WALL_SECONDS_MAX = "10"   # [6] the CAP. The caller's ASK is
+                                      #     PLACEMENT_WALL_SECONDS on the WEB
+                                      #     app, also 10. Raising one alone
+                                      #     does nothing.
+  # PLACEMENT_LOG_LEVEL = "DEBUG"     # default INFO. An unknown name warns on
+                                      #     stderr and falls back rather than
+                                      #     refusing to boot — unlike the knobs
+                                      #     above, it changes only what the
+                                      #     service PRINTS, and it is the one
+                                      #     setting you reach for mid-incident.
   PLACEMENT_NUM_SEARCH_WORKERS = "8"  # [7] owed a re-measurement, DEPLOY.md §8

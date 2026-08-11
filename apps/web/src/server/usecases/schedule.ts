@@ -903,7 +903,7 @@ export async function autoSchedule(
 ): Promise<AutoScheduleOut> {
   // ---- Phase 0: the cooldown. Before the read, before the solver, before
   // anything that costs more than a Redis INCR.
-  await rateLimit(`auto-schedule:${auth.orgId}`, AUTO_SCHEDULE_COOLDOWN);
+  await rateLimit(`auto-schedule:${auth.orgId}`, autoScheduleCooldown());
 
   // ---- Phase 1: read. The connection goes back to the pool at the `}` below.
   const plan = await withTenant(auth.orgId, async (tx): Promise<AutoSchedulePlan> => {
@@ -1101,7 +1101,7 @@ export async function autoSchedule(
         config,
         existing: board,
         dependencies,
-        wallMs: AUTO_SOLVER_WALL_MS,
+        wallMs: autoSolverWallMs(),
         ...(body.mode === "polish"
           ? {
               frozen: plan.frozen,
@@ -1239,8 +1239,37 @@ const SOLVER_SLACK_MS = 24 * 60 * MS_PER_MIN;
  *
  * Task 13's bench sets the DETERMINISTIC budget (`rlimit`); this is only the
  * outer safety cap, and should be revisited once that lands.
+ *
+ * CONFIGURABLE AT RUNTIME, via `PLACEMENT_WALL_SECONDS` (seconds, to match the
+ * service's own units). This is the caller's ASK. The service applies its own
+ * independent CEILING, `PLACEMENT_WALL_SECONDS_MAX`, as a `min()` — so the wall
+ * a board actually gets is the smaller of the two, and RAISING EITHER ONE ALONE
+ * CHANGES NOTHING. Both, or no board's budget moves.
+ *
+ * Read per call rather than captured at module load: the value must come from
+ * the running process's environment, so a `fly secrets set` takes effect on
+ * restart without a rebuild. A module-scope read risks being evaluated during
+ * the build instead, which would bake the wrong number in silently.
  */
-export const AUTO_SOLVER_WALL_MS = 10_000;
+const DEFAULT_AUTO_SOLVER_WALL_SECONDS = 10;
+
+export function autoSolverWallMs(): number {
+  const raw = process.env.PLACEMENT_WALL_SECONDS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_AUTO_SOLVER_WALL_SECONDS * 1_000;
+  const seconds = Number(raw);
+  // Refused, not defaulted, and deliberately: the failure this guards is a
+  // typo'd env var that leaves every board silently running the old wall while
+  // the operator believes they changed it. `config.py` refuses the same way on
+  // its side of the wire. A loud failure on the one surface that reads this is
+  // cheaper than a plausible, stable, wrong answer.
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error(
+      `PLACEMENT_WALL_SECONDS must be a finite number > 0, got ${JSON.stringify(raw)}. It is the ` +
+        `solve budget in seconds asked of the placement service.`,
+    );
+  }
+  return Math.round(seconds * 1_000);
+}
 
 /**
  * The per-ORG cooldown on the auto pass. Ten runs per five minutes.
@@ -1264,8 +1293,10 @@ export const AUTO_SOLVER_WALL_MS = 10_000;
  * settings change between each. Anyone clicking faster than one run per 75
  * seconds sustained is not reading the results.
  *
- * BOTH NUMBERS ARE POLICY, not a derived constant — they are here to be moved.
- * Re-derive `windowSeconds` the same way if `AUTO_SOLVER_WALL_MS` moves again.
+ * `max` IS POLICY and is here to be moved. `windowSeconds` no longer is — it is
+ * computed from the wall below, because the wall became an env var and a
+ * hand-re-derived constant cannot track a value an operator can change without
+ * touching this file.
  *
  * FAIL-OPEN, deliberately, and matching every other limiter on this surface
  * (`ai-plan` 5/hr, `ai-plan-competition` 3/hr, `ai-officials` 5/hr). A Redis
@@ -1284,11 +1315,37 @@ export const AUTO_SOLVER_WALL_MS = 10_000;
  * `schedule-auto-solver-busy-latency.test.ts`, which now runs with the limiter
  * live for exactly that reason.
  */
-// 375, re-derived as this block instructs when the wall moves: 10 runs x 10 s
-// / 0.2667 = 375 s. It was 750 while `AUTO_SOLVER_WALL_MS` was 20_000; leaving
-// it there against a 10 s wall would have silently doubled one org's share of
-// solver capacity, which is the ratio this number exists to hold.
-export const AUTO_SCHEDULE_COOLDOWN: RateLimitConfig = { max: 10, windowSeconds: 375 };
+/** Ten runs. A UX number about button-presses, and it does NOT move with the
+ *  wall — see the block above. */
+const AUTO_SCHEDULE_COOLDOWN_MAX = 10;
+
+/** The share of one instance's solver capacity a single org may occupy, ~27%.
+ *  THIS is the invariant being held; `windowSeconds` is merely what holds it at
+ *  the current wall. */
+const AUTO_SCHEDULE_ORG_CAPACITY_SHARE = 0.2667;
+
+/**
+ * DERIVED, not a literal, now that the wall is an env var.
+ *
+ * It was `375` hardcoded, with a comment instructing whoever moved the wall to
+ * re-derive it by hand. That instruction was correct and had already been
+ * missed once — it sat at 750 (right for a 20 s wall) against a 10 s wall.
+ * A hand-maintained constant cannot survive a value that an operator can now
+ * change with `fly secrets set` and no code review at all: raising
+ * `PLACEMENT_WALL_SECONDS` to 20 while this stayed 375 would silently double
+ * one org's share of solver capacity, which is the exact ratio it exists to
+ * hold. So it is computed instead. At the default 10 s wall this is
+ * `10 * 10 / 0.2667 = 375`, byte-for-byte the value it replaces.
+ */
+export function autoScheduleCooldown(): RateLimitConfig {
+  const wallSeconds = autoSolverWallMs() / 1_000;
+  return {
+    max: AUTO_SCHEDULE_COOLDOWN_MAX,
+    windowSeconds: Math.round(
+      (AUTO_SCHEDULE_COOLDOWN_MAX * wallSeconds) / AUTO_SCHEDULE_ORG_CAPACITY_SHARE,
+    ),
+  };
+}
 
 /**
  * A FINITE search window, replacing an open-ended one.
@@ -1643,7 +1700,7 @@ async function reflowExisting(args: {
     // The same wall the tier solver is held to. `repairSchedule`'s own default
     // is 20s, and a clean board is answered without loading the WASM at all, so
     // this only binds the run that is actually searching.
-    budgetMs: AUTO_SOLVER_WALL_MS,
+    budgetMs: autoSolverWallMs(),
   });
   switch (repaired.status) {
     case "clean":

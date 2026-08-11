@@ -56,6 +56,8 @@ from __future__ import annotations
 
 import hmac
 import logging
+import os
+import sys
 import threading
 import time
 from concurrent import futures
@@ -267,8 +269,53 @@ def build_server(settings: Settings) -> tuple[grpc.Server, int]:
     return server, port
 
 
+#: The level names `PLACEMENT_LOG_LEVEL` accepts. An explicit table rather than
+#: `getattr(logging, name)`: that reads ANY module attribute, and `logging` has
+#: public ones that are ints or int-like without being levels (`raiseExceptions`
+#: is a bool, and `bool` is a subclass of `int`, so an `isinstance` guard does
+#: not exclude it). A table can only ever return a level.
+_LOG_LEVELS = {
+    "CRITICAL": logging.CRITICAL,
+    "ERROR": logging.ERROR,
+    "WARNING": logging.WARNING,
+    "WARN": logging.WARNING,
+    "INFO": logging.INFO,
+    "DEBUG": logging.DEBUG,
+}
+
+
+def resolve_log_level(raw: str | None) -> int:
+    """`PLACEMENT_LOG_LEVEL` -> a logging level. Default INFO.
+
+    Accepts a level NAME, case-insensitively and ignoring surrounding space.
+    `NOTSET` is deliberately absent: on the root logger it does not mean "log
+    everything", it defers to a parent that does not exist, and the effective
+    level silently becomes WARNING — quieter than the default the operator was
+    trying to change.
+
+    UNKNOWN VALUES FALL BACK TO INFO with a complaint on stderr rather than
+    raising, and the asymmetry with `Settings.from_env` — which refuses to start
+    on a bad wall or worker count — is deliberate. Those change what the service
+    COMPUTES; this changes only what it PRINTS. Taking the service down over a
+    typo in an observability knob would mean the one setting you reach for while
+    diagnosing an incident is also the one that can end it.
+    """
+    if raw is None or raw.strip() == "":
+        return logging.INFO
+    name = raw.strip().upper()
+    level = _LOG_LEVELS.get(name)
+    if level is None:
+        print(
+            f"PLACEMENT_LOG_LEVEL={raw!r} is not a known level name "
+            f"({', '.join(sorted(_LOG_LEVELS))}); using INFO",
+            file=sys.stderr,
+        )
+        return logging.INFO
+    return level
+
+
 def serve() -> None:
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=resolve_log_level(os.environ.get("PLACEMENT_LOG_LEVEL")))
     settings = Settings.from_env()
     server, port = build_server(settings)
     if port == 0:

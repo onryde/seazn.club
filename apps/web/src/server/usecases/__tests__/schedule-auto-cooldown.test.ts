@@ -65,7 +65,8 @@ const { createCompetition } = await import("../competitions");
 const { createDivision } = await import("../divisions");
 const { createEntrants } = await import("../entrants");
 const { createStages, generateStageFixtures } = await import("../stages");
-const { autoSchedule, putScheduleSettings, AUTO_SCHEDULE_COOLDOWN } = await import("../schedule");
+const { autoSchedule, putScheduleSettings, autoScheduleCooldown } = await import("../schedule");
+const AUTO_SCHEDULE_COOLDOWN = autoScheduleCooldown();
 type AuthCtx = import("@/server/api-v1/auth").AuthCtx;
 
 const HAS_DB = !!process.env.DATABASE_URL;
