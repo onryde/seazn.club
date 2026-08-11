@@ -5,7 +5,7 @@
 // hanging. The exception is the "channel lifecycle" block at the bottom, which
 // omits the seam on purpose so that the client-CONSTRUCTION path is exercised
 // too; see the module mock below.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SolveBuildCall } from "./placement-client.ts";
 import { PlacementError, solveBuild } from "./placement-client.ts";
 import { fixedClock } from "../core/clock.ts";
@@ -807,6 +807,51 @@ describe("channel lifecycle", () => {
     channelLog.mode = mode;
   }
 
+  /**
+   * `solveBuild` from a FRESH module graph, and this is load-bearing rather
+   * than tidiness.
+   *
+   * These two tests are the only ones in this file that depend on the hoisted
+   * `vi.mock` above actually intercepting, because they are the only ones that
+   * let `solveBuild` construct its own client. The engine runs
+   * `isolate: false` (`vitest.config.ts`), so THE MODULE CACHE IS SHARED
+   * ACROSS FILES in a worker: if any sibling file in the same worker imported
+   * `./generated/scheduler.ts` first, the cached REAL module is what
+   * `placement-client.ts` gets, the mock never intercepts, and these tests
+   * open a real gRPC channel to a host that does not exist.
+   *
+   * Which sibling lands in which worker is not fixed. `maxWorkers` is computed
+   * from the machine — `min(cores - 1, floor(mem / 3GB))` — so a 12-core dev
+   * box runs 5 workers and a 4-core CI runner runs 3, and the file
+   * distribution differs with it. That is exactly how this failed: green on
+   * every dev box and on `main`'s CI, then deterministically red on a PR that
+   * only ADDED tests to this file, with
+   * `Name resolution failed for target dns:placement.test:50051` and
+   * `ServiceClientImpl.solveBuild` from `make-client.js` in the stack — the
+   * genuine generated client. `main` was green by luck, not by correctness.
+   *
+   * `vi.resetModules()` drops the shared cache and the dynamic import rebuilds
+   * the graph, so the hoisted mock is consulted rather than a neighbour's
+   * leftovers. Same instrument, and same reason, as
+   * `build-lns-wiring.test.ts:152` — whose own header records this failure
+   * mode after it cost two misdiagnoses there.
+   *
+   * A STATIC import cannot be used here: the module would already be bound
+   * before `resetModules` runs, which is the inert-mock trap this repo has hit
+   * before.
+   */
+  async function freshSolveBuild(): Promise<typeof solveBuild> {
+    vi.resetModules();
+    const mod = await import("./placement-client.ts");
+    return mod.solveBuild;
+  }
+
+  // Leave the worker's cache as we found it. With `isolate: false` a mocked
+  // graph left cached here is a graph some other file inherits.
+  afterEach(() => {
+    vi.resetModules();
+  });
+
   // A channel per SOLVE, not per host — and the reason is Fly Proxy, not
   // tidiness. Ten concurrent organisers sharing one cached client ride ten
   // HTTP/2 streams over ONE TCP connection, and Fly's TCP proxy load-balances
@@ -819,9 +864,10 @@ describe("channel lifecycle", () => {
   // exactly the failure this test exists to catch.
   it("constructs and closes one client per solve, even for the same host", async () => {
     resetChannelLog("respond");
+    const solveBuildFresh = await freshSolveBuild();
 
-    await solveBuild(INPUT, { secret: "s3cr3t", host: HOST });
-    await solveBuild(INPUT, { secret: "s3cr3t", host: HOST });
+    await solveBuildFresh(INPUT, { secret: "s3cr3t", host: HOST });
+    await solveBuildFresh(INPUT, { secret: "s3cr3t", host: HOST });
 
     expect(channelLog.hosts).toEqual([HOST, HOST]);
     expect(channelLog.closes).toBe(2);
@@ -834,8 +880,9 @@ describe("channel lifecycle", () => {
   // `finally` is on the chokepoint rather than beside one branch of it.
   it("closes the client it constructed when the call throws before it starts", async () => {
     resetChannelLog("throw");
+    const solveBuildFresh = await freshSolveBuild();
 
-    await expect(solveBuild(INPUT, { secret: "s3cr3t", host: HOST })).rejects.toThrow(
+    await expect(solveBuildFresh(INPUT, { secret: "s3cr3t", host: HOST })).rejects.toThrow(
       /channel closed/,
     );
 
