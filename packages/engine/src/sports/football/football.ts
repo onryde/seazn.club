@@ -41,7 +41,17 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import type { ModuleEvent, SportModule, TiebreakerKey } from "../../sport/module.ts";
+import type {
+  ModuleEvent,
+  PadAction,
+  PadAttributionItem,
+  PadField,
+  PadGate,
+  PadPanel,
+  PadSpec,
+  SportModule,
+  TiebreakerKey,
+} from "../../sport/module.ts";
 import { expectedKicker, shootoutDecision } from "../period/shootout.ts";
 
 // ---------------------------------------------------------------------------
@@ -375,6 +385,23 @@ export const FootballEv = z.union([
   FootballSinBinEnd,
 ]);
 export type FootballEv = z.infer<typeof FootballEv>;
+
+// S6/#416 (W5) — event type -> its own payload schema, the SAME schema OBJECT
+// REFERENCES already used as FootballEv's union members and in applyEvent's
+// dispatch switch below, now also keyed by type string in one place.
+// `testkit/conformance-pad.ts` asserts this is a bijection onto FootballEv's
+// 8 branches, by reference. Unlike cricket's registry, no two type strings
+// share one schema object here — every branch has exactly one envelope type.
+export const FOOTBALL_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
+  "football.goal": FootballGoal,
+  "football.card": FootballCard,
+  "football.sub": FootballSub,
+  "football.period": FootballPeriod,
+  "football.shootout.kick": FootballShootoutKick,
+  "football.penalty": FootballPenalty,
+  "football.sinbin.start": FootballSinBinStart,
+  "football.sinbin.end": FootballSinBinEnd,
+};
 
 // ---------------------------------------------------------------------------
 // State — spec 04 §1.3
@@ -1804,11 +1831,258 @@ function applyEvent(
   }
 }
 
+// ---------------------------------------------------------------------------
+// S6/#416 (W5) — padSpec. Pure function of resolved cfg (base ⊕ variant
+// preset ⊕ org overrides, already resolved by the caller); every bound below
+// reads cfg, never a hardcoded preset number — see `periodMarkers` and the
+// sin-bin `minutes` cap for the two variant-sensitive cases this session's
+// brief names (11-a-side vs mini-soccer, S5/#431's quarters).
+// ---------------------------------------------------------------------------
+
+// A generously large, finite stand-in for "elapsed may legitimately overrun
+// the nominal period length" (core/time.ts's GameTime doc comment — football's
+// own "90+3"). Not a rules number, only a property-testing upper bound
+// comfortably past any plausible stoppage-inclusive reading — mirrors
+// cricket's own UNBOUNDED_BALLS_SENTINEL.
+const MAX_ELAPSED_SECONDS = 7200;
+// Law 7 allowance for time lost has no fixed cap; this is a plausible upper
+// bound for a UI control, not a Law constant.
+const MAX_ADDED_MINUTES = 30;
+
+/**
+ * Legal `football.period` MARKER strings for this cfg — the padSpec-level
+ * twin of `applyPeriod`'s own gating (S5/#431), so a pad can never offer a
+ * marker the fold would then refuse for the wrong mode. Quarters
+ * (`cfg.halves === 4`) get "QT"/"HT"/"3QT"/"FT" (Q1 itself is "H1" reused,
+ * never a marker of its own — see `PlayPhase`'s comment); halves get
+ * "HT"/"FT". Both add "ET_HT"/"ET_FT" when `cfg.extraTime.enabled`, because
+ * `applyPeriod`'s ET arms are not gated on `quarters` at all.
+ */
+function periodMarkers(cfg: FootballCfg): string[] {
+  return [
+    ...(cfg.halves === 4 ? ["QT", "HT", "3QT", "FT"] : ["HT", "FT"]),
+    ...(cfg.extraTime.enabled ? ["ET_HT", "ET_FT"] : []),
+  ];
+}
+
+/**
+ * `at.period` / `at.elapsed` — the W4a (#425) stamp every FootballEv branch
+ * carries (`GameTime.optional()`). `at.period` reuses `playPhases(cfg)`
+ * VERBATIM: it is the exact list `apply()`'s own strict-fold guard checks a
+ * stamp's `period` against (§7), so a pad can never offer a period label the
+ * fold would then reject as unrecognised — one function, every action, never
+ * eight copies that could drift (this repo's recurring placer/verifier
+ * fork).
+ *
+ * DOMAIN.md ("W4a — what the pad owes the time model (PadSpec, #416)") names
+ * the stamp as an owed pad fact: without these two fields the whole W4a time
+ * model (lazy sin-bin expiry, substitution windows, the monotonic guard) is
+ * unreachable from the declared scoring surface. The deprecated `minute`
+ * display integer is deliberately NOT modelled as its own field here — `at`
+ * is what every post-W4a fold path actually reads, and a second control for
+ * "when" is the second-vocabulary trap this programme keeps finding
+ * elsewhere (S2/#430's `quick|standard|full`).
+ */
+function stampFields(cfg: FootballCfg): PadField[] {
+  return [
+    { kind: "enum", path: "at.period", values: playPhases(cfg) },
+    { kind: "number", path: "at.elapsed", min: 0, max: MAX_ELAPSED_SECONDS },
+  ];
+}
+
+const BY_SIDE: PadAttributionItem = { kind: "side", path: "by" };
+
+export function padSpec(cfg: FootballCfg): PadSpec {
+  const stamp = stampFields(cfg);
+
+  // --- Goals ---------------------------------------------------------------
+  const goalAction: PadAction = {
+    type: "football.goal",
+    labelKey: { key: "pad.football.action.goal", label: "Goal" },
+    fields: [{ kind: "toggle", path: "ownGoal" }, { kind: "toggle", path: "penalty" }, ...stamp],
+    attribution: [BY_SIDE, { kind: "person", path: "scorer" }, { kind: "person", path: "assist" }],
+  };
+
+  // --- Cards (Law 12.3/12.4) -------------------------------------------------
+  const cardAction: PadAction = {
+    type: "football.card",
+    labelKey: { key: "pad.football.action.card", label: "Card" },
+    fields: [
+      { kind: "enum", path: "color", values: CardColor.options },
+      // S4 (#428) — the SAME closed enum already shipped end to end
+      // (discipline usecase, DB, dictionaries); not a second list.
+      { kind: "enum", path: "reason", values: CardReason.options },
+      ...stamp,
+    ],
+    attribution: [BY_SIDE, { kind: "person", path: "person" }],
+  };
+
+  // --- Substitutions (Law 3) -------------------------------------------------
+  const subAction: PadAction = {
+    type: "football.sub",
+    labelKey: { key: "pad.football.action.sub", label: "Substitution" },
+    fields: [...stamp],
+    attribution: [BY_SIDE, { kind: "person", path: "off" }, { kind: "person", path: "on" }],
+  };
+
+  // --- Period flow, incl. mini-soccer quarters (S5/#431) ---------------------
+  const periodAction: PadAction = {
+    type: "football.period",
+    labelKey: { key: "pad.football.action.period", label: "Period marker" },
+    fields: [
+      { kind: "enum", path: "phase", values: periodMarkers(cfg) },
+      { kind: "number", path: "addedMinutes", min: 0, max: MAX_ADDED_MINUTES },
+      ...stamp,
+    ],
+    attribution: [], // a whistle belongs to neither side — FootballPeriod has no `by`
+  };
+
+  // --- Shoot-out (spec 04 §1.4) -----------------------------------------------
+  const shootoutKickAction: PadAction = {
+    type: "football.shootout.kick",
+    labelKey: { key: "pad.football.action.shootoutKick", label: "Shoot-out kick" },
+    fields: [{ kind: "toggle", path: "scored" }, ...stamp],
+    attribution: [BY_SIDE, { kind: "person", path: "person" }],
+  };
+
+  // --- Unconverted penalty (Law 14) ------------------------------------------
+  const penaltyAction: PadAction = {
+    type: "football.penalty",
+    labelKey: { key: "pad.football.action.penalty", label: "Penalty" },
+    fields: [
+      { kind: "enum", path: "outcome", values: PenaltyOutcome.options },
+      // S4 (#428) — optional everywhere, same as football.card's reason.
+      { kind: "enum", path: "offence", values: PenaltyOffence.options },
+      ...stamp,
+    ],
+    attribution: [BY_SIDE, { kind: "person", path: "taker" }, { kind: "person", path: "goalkeeper" }],
+  };
+
+  // --- Sin bin (Law 12 addendum, temporary dismissal) -------------------------
+  // `minutes`' bound is `cfg.halfMinutes`: a temporary dismissal outlasting a
+  // whole play period has no meaning under this Law, and it is the one cfg
+  // number this sport already has for "how long is a period" — the same
+  // scalar `phaseLengths`/`expiryOf` read to compute the real expiry.
+  const sinBinStartAction: PadAction = {
+    type: "football.sinbin.start",
+    labelKey: { key: "pad.football.action.sinbinStart", label: "Sin bin" },
+    fields: [
+      { kind: "enum", path: "reason", values: CardReason.options },
+      { kind: "number", path: "minutes", min: 1, max: cfg.halfMinutes },
+      ...stamp,
+    ],
+    attribution: [BY_SIDE, { kind: "person", path: "person" }],
+  };
+  const sinBinEndAction: PadAction = {
+    type: "football.sinbin.end",
+    labelKey: { key: "pad.football.action.sinbinEnd", label: "Sin bin return" },
+    fields: [...stamp],
+    attribution: [BY_SIDE, { kind: "person", path: "person" }],
+  };
+
+  // Shoot-out panel: cfg decides whether the FORMAT can ever reach one
+  // (`cfg.shootout`) — a league fixture never declares it, so the panel is
+  // simply absent, the cfg-only inclusion case the module-level note on
+  // `PadGate` describes. Whether it is reachable RIGHT NOW is state (a level
+  // knockout tie may finish in regulation or ET and never reach kicks), so
+  // the panel also carries a runtime gate — same two-layer shape as
+  // cricket's super-over panel.
+  const shootoutPanels: PadPanel[] = cfg.shootout
+    ? [
+        {
+          labelKey: { key: "pad.football.panel.shootout", label: "Shoot-out" },
+          phase: "live",
+          layout: "drawer",
+          actions: [shootoutKickAction],
+          gate: { op: "path-equals", path: "state.phase", value: "SHOOTOUT" } satisfies PadGate,
+        },
+      ]
+    : [];
+
+  // No "pre" or "post" panel: football's own `eventSchema` has no pre-match
+  // (toss/colour) or post-match (scorecard-line) branch the way cricket does
+  // — a pre-kickoff card is still `football.card` (legal in phase "pre", see
+  // `applyCard`), so every one of this module's 8 registered types is a
+  // "live" action.
+  const panels: PadPanel[] = [
+    {
+      labelKey: { key: "pad.football.panel.goals", label: "Goals" },
+      phase: "live",
+      layout: "primary",
+      actions: [goalAction],
+    },
+    {
+      labelKey: { key: "pad.football.panel.period", label: "Period" },
+      phase: "live",
+      layout: "primary",
+      actions: [periodAction],
+    },
+    {
+      labelKey: { key: "pad.football.panel.cards", label: "Cards" },
+      phase: "live",
+      layout: "grid",
+      actions: [cardAction],
+    },
+    {
+      labelKey: { key: "pad.football.panel.subs", label: "Substitutions" },
+      phase: "live",
+      layout: "grid",
+      actions: [subAction],
+    },
+    {
+      labelKey: { key: "pad.football.panel.penalties", label: "Penalties" },
+      phase: "live",
+      layout: "drawer",
+      actions: [penaltyAction],
+    },
+    {
+      labelKey: { key: "pad.football.panel.sinbin", label: "Sin bin" },
+      phase: "live",
+      layout: "drawer",
+      actions: [sinBinStartAction, sinBinEndAction],
+    },
+    ...shootoutPanels,
+  ];
+
+  return {
+    panels,
+    // S6 owner ruling (_INDEX.md, "redesign the fidelity model, in S6") — one
+    // band per event type, no repetition. Football's OLD (untouched)
+    // `fidelityTiers` duplicates tier 0/tier 1 and duplicates tier 2/tier 3
+    // (S2/#430 finding); the two REAL levels underneath both duplicates are
+    // "the bare score" and "the full timeline", which is exactly what these
+    // two bands carry. Band 1 is deliberately unused: this sport has no
+    // admin/context event group between them (no toss/interruption/powerplay
+    // equivalent exists for football today) — a different reason from
+    // carrom's stop-at-1, but the same shape, a module using only the bands
+    // it needs. Band 3 is likewise unused: S2/#430 found football's tier 3 is
+    // an unfilled duplicate of tier 2, and splitting it into real detail-level
+    // content is a separately-scoped future session, not this one.
+    fidelity: {
+      "football.goal": 0,
+      "football.period": 0,
+      "football.shootout.kick": 0,
+      "football.card": 2,
+      "football.sub": 2,
+      "football.penalty": 2,
+      "football.sinbin.start": 2,
+      "football.sinbin.end": 2,
+    },
+    // Matches the OLD ladder's own paid boundary exactly: `fidelityTiers`'
+    // tier 2 AND tier 3 both carry `entitlement: "scoring.match_timeline"`
+    // and nothing below does — see the note above for why that array itself
+    // is left untouched this session.
+    fidelityEntitlements: { 2: "scoring.match_timeline" },
+  };
+}
+
 export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
   key: "football",
   version: "1.0.0",
   configSchema: FootballCfg,
   eventSchema: FootballEv,
+  eventSchemas: FOOTBALL_EVENT_SCHEMAS,
+  padSpec,
   positions,
   positionsFor,
   entrantModel: { kinds: ["team"], defaultKind: "team", team: { squadNumbers: true, captain: true } },
