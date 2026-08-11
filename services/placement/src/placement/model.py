@@ -274,11 +274,50 @@ C6 widens an existing gap rather than opening a new one — but it is a gap,
 not the safety this paragraph originally claimed, and closing it needs a
 per-PAIR bound the one-interval-per-row encoding cannot express.
 
-Movable-fixture rest is UNCHANGED
-by this task, still `rest_by_division` only — a rule group's own
-`min_rest_minutes` applying to its MOVABLE fixtures (rather than only to the
-pins that count against it) is a separate, later task, and closing it must
-not fold a max across the pair the way this task closes the pin half.
+Movable-fixture rest was UNCHANGED by C6, still `rest_by_division` only at
+the time — a rule group's own `min_rest_minutes` applying to its MOVABLE
+fixtures (rather than only to the pins that count against it) was left as a
+separate, later task, explicitly recorded here as not folding a max across
+the pair the way C6 closes the pin half. That later task is CLOSED below.
+
+A SEVENTH is CLOSED as of release 1 of retiring `division_rules`
+(`SolveBuildRequest.division_rules`, proto field 10 — see that field's own
+comment for the three-release retirement plan this is the first of; this
+module still never reads the proto or names a field number anywhere else):
+**a movable fixture's OWN rest now also folds in the rule groups that cover
+it**, not `rest_by_division` alone.
+
+Before this, a movable fixture's rest was exactly the `rest_ms` line above.
+The verifier was already stricter: `calendar.ts`'s `hardRestMinutesFor`
+resolves a fixture's own typed rest as the MAX `min_rest_minutes` over every
+rule whose scope covers it (confirmed by reading it for this task rather
+than assumed), folded into `pairRestMinutesWith` on both sides of a pair —
+so the placer could ignore a typed rule the verifier would enforce, and ship
+a board the verifier then rejected. Same class of defect C6 closed for a
+pin's own rest, now closed for a movable fixture's, and resolved the
+identical way: the MAX over every covering group's `min_rest_minutes`
+(`RuleGroup.fixture_indices` containing this fixture's own position), never
+a sum and never a first match, matching `hardRestMinutesFor`'s own
+`Math.max` fold rule for rule. `None` (a group with no rest rule — C1's
+presence tracking) contributes nothing and is skipped rather than folded in
+as 0; a negative value floors at 0 — the same clamp idiom section 6 already
+applies to a pin's own resolved rest.
+
+A no-op, byte for byte, when `rule_groups` is empty: the fold is a loop over
+`rule_groups`, so with none it never executes and `rest_ms` is left exactly
+as the expression above computed it — no caller still on the previous
+contract shape can observe any difference, structural or numeric.
+`tests/test_model.py`'s `test_rule_groups_empty_leaves_the_model_byte_
+identical` proves this at the `CpModel` proto level, not merely by argument.
+
+Does NOT close the one-directional `AddNoOverlap` gap recorded above — it
+NARROWS it, the same way C6 narrowed rather than closed it: more pairs now
+carry the correct rest on the movable side, but the encoding still enforces
+only the earlier interval's own width, so a movable fixture placed
+immediately before a stricter partner can still under-constrain in one
+direction. Closing that needs a per-PAIR bound the one-interval-per-row
+encoding still cannot express — unchanged from C6's own note above, and out
+of this task's scope for the identical reason.
 """
 
 from __future__ import annotations
@@ -486,9 +525,13 @@ def build_model(
         rule_groups: (fixture_indices, min_rest_minutes, max_fixtures_per_day)
             per rule group — C1/C4 of the #21 contract revision (see
             `placement.schema`'s module docstring). `fixture_indices` are the
-            group's own MOVABLE fixture positions; `min_rest_minutes` is
-            unread here (a separate task's job). `max_fixtures_per_day`, when
-            set, caps this group's placements on each day exactly as
+            group's own MOVABLE fixture positions. `min_rest_minutes` is read
+            TWICE: here, folded into a movable fixture's own rest as the MAX
+            over every covering group (module docstring, "A SEVENTH is
+            CLOSED"), and again below via `pinned_rule_group_indices`, for a
+            PIN's own rest (C6) — both resolve the same way, 0 if no covering
+            group carries a rest rule. `max_fixtures_per_day`, when set, caps
+            this group's placements on each day exactly as
             `day_cap_by_division` used to cap a whole division — section 9
             below PREFERS this over `day_cap_by_division` whenever it is
             non-empty, and falls back to the division cap unchanged otherwise,
@@ -574,6 +617,41 @@ def build_model(
     # one `hard_rest_min` for the whole board; this is that generalised, and
     # reduces to it exactly when every division shares a value.
     rest_ms = [int(rest_by_division.get(division, 0)) * MIN_MS for division in divisions]
+    # Release 1 of retiring `division_rules` (module docstring, "A SEVENTH is
+    # CLOSED") -- a movable fixture's OWN rest additionally folds in the rule
+    # groups that cover it: the MAX of the line above and the largest
+    # `min_rest_minutes` over every group whose `fixture_indices` contains
+    # this fixture's own position. Matches `calendar.ts`'s `hardRestMinutesFor`
+    # fold, rule for rule (confirmed by reading it for this task, not
+    # assumed) -- a placer and a verifier disagreeing about one fixture's own
+    # rest is the recurring defect this programme keeps producing, so this
+    # must not invent a second resolution.
+    #
+    # A no-op, byte for byte, when `rule_groups` is empty: the loop below
+    # never executes, so `rest_ms` is left exactly as the line above computed
+    # it -- no caller still on the previous contract shape can observe any
+    # difference, structural or numeric
+    # (`test_rule_groups_empty_leaves_the_model_byte_identical`).
+    #
+    # `None` (this group carries no rest rule at all -- C1's presence-tracked,
+    # distinct from a deliberate 0) contributes nothing and is skipped rather
+    # than folded in as 0 -- `max(0, None)` raises, so the skip is load-
+    # bearing, not merely tidy. A negative value floors at 0 -- the identical
+    # clamp idiom section 6 already uses for a pin's own resolved rest,
+    # defence for a direct domain caller bypassing `placement.schema`'s own
+    # >= 0 guard on this field.
+    for fixture_indices, min_rest_minutes, _cap in rule_groups:
+        if min_rest_minutes is None:
+            continue
+        minutes = max(0, min_rest_minutes)
+        for i in fixture_indices:
+            if 0 <= i < n:
+                # MAX, not assignment. A plain `=` here let a group's SMALLER
+                # rest silently overwrite the division's larger one, which
+                # relaxes a hard rule the verifier still enforces -- the exact
+                # placer/verifier fork this release exists to close, reproduced
+                # inside the fix for it.
+                rest_ms[i] = max(rest_ms[i], minutes * MIN_MS)
 
     admissible_starts = sorted({start_ms for _court, start_ms, _day in grid_slots})
     full_domain = cp_model.Domain.FromValues(admissible_starts or [0])

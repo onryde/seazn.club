@@ -1180,6 +1180,194 @@ def test_two_pinned_rows_sharing_an_entrant_stay_independent_without_rule_groups
     )
 
 
+# --- release 1 of retiring `division_rules`: a movable fixture's OWN rest --
+# --- now also folds in rule_groups (module docstring, "A SEVENTH is CLOSED")
+#
+# Before this, a movable fixture's rest was `rest_by_division` alone --
+# `rule_groups[].min_rest_minutes` was already read for a PIN's own rest (C6,
+# above) and for a rule group's day cap (C4), never for a movable fixture's
+# own width. The verifier's `hardRestMinutesFor` (`calendar.ts`) was already
+# resolving a fixture's own typed rest as the MAX over every covering rule,
+# so the placer could ship a board the verifier then rejected -- the
+# recurring placer/verifier fork this programme keeps producing.
+#
+# All boards below share one two-tick, two-court shape: fixtures 0 and 1
+# both cover entrant 0 (so participant rest is the only thing that can ever
+# separate them -- court exclusivity cannot bind, matching
+# `rest_contended_board`'s own convention), and the two ticks are
+# `match_minutes` + a chosen "slack" apart. Run as a T0-ONLY chain
+# (`tiers=(TIER_PLACED,)`), the same technique `test_participant_rest_is_
+# binding` and `test_the_court_turnaround_gap_is_binding` already use: the
+# PLACED COUNT is a PROVEN optimum on a board this small, not a matter of
+# which of several equally-good boards CP-SAT's nondeterministic search
+# happens to land on -- so unlike a test asserting WHICH tick was chosen,
+# these are not a coin flip. Still measured 6x each per `_RULES.md` section
+# 6b's own standing advice for anything CP-SAT decides ("a small
+# deterministic board beats a large stochastic one every time"); the tally is
+# reported in the task report rather than asserted here.
+
+
+def _rest_probe_board(rest_by_division_minutes, rule_groups, slack_minutes):
+    """Two fixtures sharing entrant 0, two ticks `match_minutes +
+    slack_minutes` apart. Both fit iff `slack_minutes >= ` the resolved
+    binding rest; otherwise only one does -- see each test's own docstring
+    for why its `slack_minutes` was chosen.
+    """
+    t0 = _GROUP_ANCHOR
+    t1 = t0 + (30 + slack_minutes) * MIN_MS
+    num_courts = 2
+    grid_slots = [(c, t, 0) for c in (0, 1) for t in (t0, t1)]
+    fixtures = [([0], 0), ([0], 0)]
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 0,
+        "rest_by_division": {0: rest_by_division_minutes},
+        "day_cap_by_division": {},
+    }
+    return build_model(
+        fixtures, num_courts, grid_slots, 30, constraints, [], [], rule_groups=rule_groups
+    )
+
+
+def _rest_probe_capacity(model):
+    from placement.objective import TIER_PLACED, run_tier_chain
+
+    outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=5.0, tiers=(TIER_PLACED,))
+    detail = f"status={outcome.status} tiers={outcome.tiers_completed} board={sorted(outcome.assignments)}"
+    assert outcome.tiers_completed == 1, detail
+    assert outcome.status == "OPTIMAL", detail
+    return len(outcome.assignments), detail
+
+
+def test_a_covering_rule_groups_larger_rest_binds_over_the_division_value():
+    """THE LOAD-BEARING TEST for this task. A rule group's `min_rest_minutes`
+    (45) is LARGER than the division's (30), and covers both fixtures. With
+    30 minutes' slack between the two ticks:
+
+        division alone: 30 <= 30 slack        -> BOTH fit, capacity 2
+        max(division, group) = 45 > 30 slack  -> only ONE fits, capacity 1
+
+    Genuinely red without the change: reverting the production hunk leaves
+    `rest_ms` at the division value alone (30), and the solver proves 2, not
+    1 (see task report for the actual failure text).
+    """
+    model = _rest_probe_board(
+        rest_by_division_minutes=30,
+        rule_groups=[([0, 1], 45, None)],
+        slack_minutes=30,
+    )
+    capacity, detail = _rest_probe_capacity(model)
+    assert capacity == 1, (
+        f"expected the group's 45-minute rest (not the division's 30) to bind, giving capacity "
+        f"1: {detail}"
+    )
+
+
+def test_a_covering_rule_groups_smaller_rest_does_not_override_the_division_value():
+    """The converse direction of the MAX claim: a rule group's
+    `min_rest_minutes` (15) SMALLER than the division's (30) must not
+    override it -- the division's 30 still binds. 20 minutes' slack this
+    time (deliberately between 15 and 30, not 30 as above) is what makes
+    this board discriminate a MAX fold from an OVERRIDE bug that replaces
+    the division value with the group's whenever a group covers the
+    fixture:
+
+        correctly max(30, 15) = 30 > 20 slack  -> only ONE fits, capacity 1
+        wrongly overridden to 15 <= 20 slack    -> BOTH fit, capacity 2
+
+    Reverting the WHOLE production hunk does not redden this particular
+    board -- with no group logic at all the division's 30 alone is already
+    the correct answer here (30 > 20 slack) -- so this test's red/green
+    proof is against the narrower OVERRIDE mutation instead (see task
+    report), not the full-hunk revert used above and below.
+    """
+    model = _rest_probe_board(
+        rest_by_division_minutes=30,
+        rule_groups=[([0, 1], 15, None)],
+        slack_minutes=20,
+    )
+    capacity, detail = _rest_probe_capacity(model)
+    assert capacity == 1, (
+        f"expected the division's 30-minute rest (not the group's smaller 15) to bind, giving "
+        f"capacity 1: {detail}"
+    )
+
+
+def test_a_covering_rule_groups_none_rest_contributes_nothing():
+    """`min_rest_minutes = None` on a covering group ('this group carries no
+    rest rule at all' -- C1's presence tracking, module docstring) must
+    contribute nothing, distinct from contributing 0 -- and, more sharply,
+    must not CRASH: `max(0, None)` raises `TypeError`, so a fold that omits
+    the presence check does not silently misbehave here, it stops the solve
+    outright. Division alone (30) with 30 minutes' slack gives capacity 2
+    (both fit) whether the group is skipped correctly or the board simply
+    had no group at all -- the meaningful red/green proof for this one is
+    the crash, not a capacity difference (see task report).
+    """
+    model = _rest_probe_board(
+        rest_by_division_minutes=30,
+        rule_groups=[([0, 1], None, None)],
+        slack_minutes=30,
+    )
+    capacity, detail = _rest_probe_capacity(model)
+    assert capacity == 2, (
+        f"a covering group with no rest rule must leave the division's 30-minute rest as the "
+        f"only bound, giving capacity 2: {detail}"
+    )
+
+
+def test_rule_groups_empty_leaves_the_model_byte_identical():
+    """Backward compatibility -- proved at the `CpModel` level, not merely by
+    argument. The fold this task adds (module docstring, "A SEVENTH is
+    CLOSED") is a loop over `rule_groups`; with none, the loop body never
+    executes and `rest_ms` is left exactly as the untouched line above
+    computed it. Two calls on the SAME board, differing only in whether
+    `rule_groups` is passed explicitly as `[]` or omitted entirely (the
+    calling convention every other test in this file still uses), must
+    therefore be indistinguishable at the `CpModel` proto level.
+
+    This does not, on its own, rule out a bug shared by BOTH call styles --
+    that half is covered by the pre-existing suite instead: none of this
+    file's other tests pass `rule_groups` at all, and this task's own
+    verification run confirms their count is unchanged, before this diff and
+    after (task report has the raw numbers).
+
+    `CpModel.Proto()` here is a pybind11-wrapped `CpModelProto`
+    (`ortools.sat.python.cp_model_helper`), not a `google.protobuf.Message`
+    -- it has no `SerializeToString`, and `==` between two structurally
+    identical instances is object identity, not structural (both confirmed
+    by hand, not assumed). `str()` on it IS the text-format serialisation
+    (confirmed: two structurally-identical-but-distinct models produce equal
+    strings, and a genuinely different one does not), so it is the
+    byte-for-byte comparison this test needs.
+    """
+    t0 = _GROUP_ANCHOR
+    t1 = t0 + 60 * MIN_MS
+    num_courts = 2
+    grid_slots = [(c, t, 0) for c in (0, 1) for t in (t0, t1)]
+    fixtures = [([0], 0), ([1], 0)]
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 0,
+        "rest_by_division": {0: 30},
+        "day_cap_by_division": {},
+    }
+
+    omitted = build_model(fixtures, num_courts, grid_slots, 30, constraints, [], [])
+    explicit_empty = build_model(
+        fixtures, num_courts, grid_slots, 30, constraints, [], [], rule_groups=[]
+    )
+
+    omitted_text = str(omitted.Proto())
+    explicit_text = str(explicit_empty.Proto())
+    assert omitted_text == explicit_text
+
+    # Not vacuous: the two protos are non-trivial and actually contain the
+    # participant-rest intervals this task's fold could have touched.
+    names = {c.name for c in omitted.Proto().constraints}
+    assert "ivr_0" in names and "ivr_1" in names, sorted(names)
+
+
 # --- degenerate constraint values must fail loudly, not solve quietly -------
 #
 # proto3 scalars are non-optional: an unset `max_fixtures_per_day` or
