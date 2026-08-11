@@ -76,6 +76,34 @@ export const HOCKEY_SUSPENSIONS: SuspensionClasses = {
   red: { minutes: null, teamShort: true, permanent: true },
 };
 
+// W5 (#416) — youth: same card GRADES as the adult ladder (green/yellow/red
+// — a youth umpire still shows the same three cards, per hockey/DOMAIN.md's
+// "Other youth divergences" row), shorter DURATIONS. Scaled by the same
+// ratio the `youth` preset already shortens periods by (10 of 15 minutes,
+// 2/3): green 2' -> 1.33' -> 1', yellow 5' -> 3.33' -> 3', both rounded down
+// to a whole minute. Red stays permanent — a send-off has no duration to
+// scale. Not an official youth-hockey federation figure (none was supplied);
+// recorded here, not silently, so a real one can replace it later.
+export const HOCKEY_YOUTH_SUSPENSIONS: SuspensionClasses = {
+  green: { minutes: 1, teamShort: true },
+  yellow: { minutes: 3, teamShort: true },
+  red: { minutes: null, teamShort: true, permanent: true },
+};
+
+// W5 (#416) — recreational: icehockey/DOMAIN.md's own words for the target
+// shape — "2 minutes, that's it". Keeps ONLY the two classes that are
+// literally 2 minutes (minor, bench_minor — a bench minor is still served by
+// a teammate the recreational side names, same duration); drops
+// double_minor (4'), major (5'), misconduct/game_misconduct (parked, not
+// team-short) and match (5', 25 PIM) — the whole ESCALATION ladder a
+// low-stakes rec league has no use for. `releaseOnGoal: true` carries over
+// unchanged: Rule 20.4's early-release-on-a-powerplay-goal is a property of
+// the minor itself, not of how strict the competition is.
+export const ICEHOCKEY_RECREATIONAL_SUSPENSIONS: SuspensionClasses = {
+  minor: { minutes: 2, teamShort: true, releaseOnGoal: true },
+  bench_minor: { minutes: 2, teamShort: true, releaseOnGoal: true },
+};
+
 // W4 (#407) — the scoresheet detail an IIHF penalty row / FIH card row carries
 // beyond "who and what colour". All three are optional and only ever present
 // when the scorer recorded them, so a coarse card folds to exactly the shape it

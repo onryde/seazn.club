@@ -229,6 +229,72 @@ describe("period kernel — suspensions & strength", () => {
   });
 });
 
+// #416 (W5) — regression: a named variant preset must not silently inherit
+// the adult/full-federation cfg it never overrode. Both rows were flagged
+// `deferred` in the sports' own DOMAIN.md dossiers (hockey/DOMAIN.md:71,
+// icehockey/DOMAIN.md:74) precisely because editing a preset's resolved
+// defaults COULD shift the config baked into an already-frozen golden
+// stream — checked, not assumed: `verifyStream`/`recomputeStream` read
+// `corpus.configs[stream.config]`, a snapshot frozen on disk at whatever
+// time the corpus was last (re)written, and NEVER re-read `module.variants`
+// at replay time. Editing the live `youth`/`recreational` preset objects
+// below is therefore invisible to golden replay — proven empirically too,
+// see the golden-replay run in this session's verification, not just here.
+describe("period kernel — named variant presets do not inherit adult/full cfg (#416 regression)", () => {
+  it("hockey youth: the strength chip reflects a 7-a-side roster, not adult's 11", () => {
+    const carded = [
+      start,
+      { type: "hockey.suspension.start", payload: { by: FA, class: "green" } },
+    ] as ModuleEvent[];
+    const detail = hockey.summary(foldFih(carded, "youth")).detail as { strength: string | null };
+    // Pre-fix this read "11v10" — the adult roster the youth preset never
+    // overrode, even though `periods` was already correctly shortened.
+    expect(detail.strength).toBe("7v6");
+  });
+
+  it("hockey youth: card durations are shorter than the adult ladder, not copied from it", () => {
+    const cfg = hockey.configSchema.parse(hockey.variants.youth);
+    const classes = cfg.suspensions?.classes ?? {};
+    expect(classes.green?.minutes).toBeLessThan(2);
+    expect(classes.yellow?.minutes).toBeLessThan(5);
+    // A send-off does not scale down — still for the rest of the match.
+    expect(classes.red?.minutes).toBeNull();
+    expect(classes.red?.permanent).toBe(true);
+  });
+
+  it("hockey adult (fih-outdoor) is unmoved: still 11-a-side, still the adult durations", () => {
+    const carded = [
+      start,
+      { type: "hockey.suspension.start", payload: { by: FA, class: "green" } },
+    ] as ModuleEvent[];
+    const detail = hockey.summary(foldFih(carded)).detail as { strength: string | null };
+    expect(detail.strength).toBe("11v10");
+    const cfg = hockey.configSchema.parse({});
+    expect(cfg.suspensions?.classes.yellow?.minutes).toBe(5);
+  });
+
+  it("icehockey recreational: the full IIHF ladder is not available — only the minors", () => {
+    const cfg = icehockey.configSchema.parse(icehockey.variants.recreational);
+    expect(Object.keys(cfg.suspensions?.classes ?? {}).sort()).toEqual(["bench_minor", "minor"]);
+  });
+
+  it("icehockey recreational: a major/misconduct/match class is refused, not silently accepted", () => {
+    // Pre-fix this folded exactly as it does under the full `iihf` ladder —
+    // the variant inherited every class it never overrode.
+    for (const cls of ["double_minor", "major", "misconduct", "game_misconduct", "match"]) {
+      expect(() =>
+        foldIce([start, { type: "icehockey.suspension.start", payload: { by: IA, class: cls } }], "recreational"),
+        cls,
+      ).toThrowError(EngineError);
+    }
+  });
+
+  it("icehockey iihf (full ladder) is unmoved: a major still folds", () => {
+    const state = foldIce([start, { type: "icehockey.suspension.start", payload: { by: IA, class: "major" } }]);
+    expect(state.suspensions).toHaveLength(1);
+  });
+});
+
 describe("period kernel — OT-aware points (Event Code §219)", () => {
   const deltasFor = (events: ModuleEvent[]): [number, number] => {
     const state = foldIce(events);

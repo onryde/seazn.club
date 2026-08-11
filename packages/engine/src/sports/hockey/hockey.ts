@@ -8,7 +8,7 @@
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { PlayerStatsModel } from "../../stats/stats.ts";
 import { makePeriodModule, type PeriodSuspensionReason } from "../period/kernel.ts";
-import { HOCKEY_SUSPENSIONS } from "../period/suspensions.ts";
+import { HOCKEY_SUSPENSIONS, HOCKEY_YOUTH_SUSPENSIONS } from "../period/suspensions.ts";
 
 // S4 (#428) — FIH's own subset of the shared `PeriodSuspensionReason` union:
 // the physical-infraction core common to both codes on this kernel
@@ -120,7 +120,27 @@ export const hockey = makePeriodModule({
       shootout: { attempts: 5, suddenDeath: true, clockSeconds: 8 },
       points: { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 },
     },
-    youth: { periods: { count: 4, minutes: 10 } },
+    // W5 (#416) — regression fix, hockey/DOMAIN.md's "Other youth
+    // divergences" row: `periods` was already correctly shortened, but
+    // `strength`/`suspensions` were left at the adult 11-a-side figures, so
+    // a real 7-a-side youth fixture reported the wrong strength chip
+    // (AGENTS.md names this exact defect). `strength.base: 7` is the
+    // confirmed figure; `min: 4` scales the adult ratio (7 of 11, ~64%) onto
+    // the smaller roster rather than reusing adult's absolute 4-card
+    // allowance, so a card threshold means roughly the same fraction of the
+    // side either way. `HOCKEY_YOUTH_SUSPENSIONS` (period/suspensions.ts)
+    // scales durations by the same 2/3 ratio `periods` already uses.
+    //
+    // Golden-corpus mechanics checked, not assumed, before this landed:
+    // `verifyStream`/`recomputeStream` (testkit/golden.ts) read
+    // `corpus.configs["youth"]` — a snapshot frozen on disk — and never
+    // re-read this live `variants.youth` object, so this edit cannot move a
+    // single byte of the 5 already-recorded "youth" streams. No re-baseline.
+    youth: {
+      periods: { count: 4, minutes: 10 },
+      strength: { base: 7, min: 4 },
+      suspensions: { classes: HOCKEY_YOUTH_SUSPENSIONS },
+    },
   },
   positions,
   keeperGroup: "GK",
