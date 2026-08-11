@@ -278,11 +278,33 @@ jobs:
         run: docker build -t seazn:ci .
 
   # -------------------------------------------------------------------------
-  # Integration gate: real Postgres container -> real HTTP -> real DB.
-  # Exercises the /api/v1 service layer + engine-db adapter end to end.
+  # The original single "smoke" job ran its DB/Redis vitest suites AND the
+  # full production build + server + e2e smoke test in one linear chain, even
+  # though `npx turbo run build` touches no database at all — it was waiting
+  # on ~6 unrelated steps for no real reason. Split in two so the build starts
+  # immediately instead of queuing behind tests it doesn't depend on; wall
+  # clock is max(job) instead of sum(job).
+  #
+  # Both jobs independently migrate + sync their OWN Postgres service (GH
+  # Actions services are job-scoped — there is no way to share a live
+  # container across jobs) and independently build the placement service
+  # image (shared `cache-from/to: type=gha`, so the second build is normally
+  # a cache hit, not a second real build). That duplication is the accepted
+  # cost of true parallelism; each duplicated step costs seconds, not minutes.
+  #
+  # Both jobs also carry the FULL original env block unchanged, even where a
+  # given job doesn't obviously need every var (e.g. smoke-db doesn't run
+  # scripts/smoke.ts's AI fixture) — narrowing per-job risks silently
+  # starving a test that reads one of these without it being obvious from
+  # this file. An unused env var is free; a silently-skipped assertion is not.
   # -------------------------------------------------------------------------
-  smoke:
-    name: Smoke (Postgres container)
+
+  # -------------------------------------------------------------------------
+  # DB + Redis vitest suites: real Postgres container -> real HTTP -> real
+  # DB. Exercises the /api/v1 service layer + engine-db adapter end to end.
+  # -------------------------------------------------------------------------
+  smoke-db:
+    name: Smoke — DB + Redis suites (Postgres container)
     runs-on: ubuntu-latest
 
     services:
@@ -544,16 +566,10 @@ jobs:
             console.log("pinned-pair infeasibility test: skipped as expected (documented capability gap, not an availability gate)");
           '
 
-      # NOTE: the placement container is deliberately NOT torn down here. The
-      # smoke suite near the end of this job needs it too — `scripts/smoke.ts`
-      # asserts the solver answered, and `placementOptimizedSuite` gates itself
-      # on PLACEMENT_SERVICE_HOST. Teardown lives at the END of the job.
-      #
-      # An earlier revision removed it right here and smoke duly failed eleven
-      # steps later with "z3 build: the WASM loaded in prod" — a z3-era check
-      # that reads `solver_unavailable` + `tiers_completed: 0` when the board
-      # falls back to greedy. The failure named the WASM and had nothing to do
-      # with it.
+      # `scripts/smoke.ts` (which also needs the placement container) now runs
+      # in the separate smoke-e2e job below, with its own container — so
+      # nothing later in THIS job needs placement, and teardown at the end of
+      # this job is just housekeeping, not a dependency the way it used to be.
 
       # DB-gated suites that live OUTSIDE src/server / src/lib / src/app, and so
       # were selected by no step in this job and skipped in the unit job for want
@@ -604,35 +620,28 @@ jobs:
           node --experimental-strip-types scripts/check-vitest-collection.ts \
             --results apps/web/vitest-results-app.json -- src/app
 
-      # REDIS_URL is scoped to this step only. Setting it job-wide would switch
-      # the entitlement cache (lib/entitlements.ts) on for the src/server suite,
-      # whose tests mutate entitlements via raw SQL without invalidating the
-      # cache — stale reads, false failures. The limiter test is self-contained.
-      - name: Rate-limiter integration tests (real Redis)
-        run: npm test --workspace apps/web -- run src/lib/__tests__/rate-limit.redis.test.ts
-        env:
-          REDIS_URL: redis://localhost:6379
-
-      # v17 #287: the counterpart REDIS_URL-scoped step. patchCompetition
-      # (and the pass grant/refund paths) must bust ent:<org>:* the instant
-      # they write — a cached Event Pass answer must not outlive the write
-      # it rode in on. Needs its own step for the same reason as the
-      # limiter above: with REDIS_URL unset (the step above's
-      # src/server+src/lib run, and any plain local `npm test`), cacheGet
-      # always misses and every read hits Postgres fresh (lib/cache.ts) —
-      # the bug this suite catches is structurally invisible without a
-      # real Redis actually going stale.
-      - name: Entitlement cache invalidation tests (real Redis)
-        run: npm test --workspace apps/web -- run src/lib/__tests__/entitlements-cache-invalidation.redis.test.ts
-        env:
-          REDIS_URL: redis://localhost:6379
-
-      # #336: platform-settings.ts's cached fee is namespaced by DB_SCHEMA now,
-      # but the regression that catches it going back to a single global key
-      # needs a real Redis actually holding a warm, cross-schema entry — same
-      # REDIS_URL-scoping reason as the two steps above.
-      - name: Platform fee cache isolation tests (real Redis)
-        run: npm test --workspace apps/web -- run src/lib/__tests__/platform-fee-cache-isolation.redis.test.ts
+      # REDIS_URL is scoped to this step only, and only to this step — never
+      # job-wide. Setting it job-wide would switch the entitlement cache
+      # (lib/entitlements.ts) on for the src/server suite above, whose tests
+      # mutate entitlements via raw SQL without invalidating the cache — stale
+      # reads, false failures.
+      #
+      # All three suites below are merged into one step (each already needs
+      # Redis for its own reasons, so there is no isolation concern BETWEEN
+      # them — only between all three and the src/server+src/lib step, which
+      # this step still doesn't touch):
+      #   * rate-limit.redis.test.ts — the real rate-limiter path, Lua EVAL /
+      #     TTL / 429, end to end.
+      #   * entitlements-cache-invalidation.redis.test.ts (v17 #287) —
+      #     patchCompetition (and pass grant/refund) must bust ent:<org>:* the
+      #     instant they write; with REDIS_URL unset elsewhere, cacheGet always
+      #     misses and every read hits Postgres fresh, so this bug is
+      #     structurally invisible without a real Redis actually going stale.
+      #   * platform-fee-cache-isolation.redis.test.ts (#336) — the cached fee
+      #     is namespaced by DB_SCHEMA; needs a real Redis holding a warm,
+      #     cross-schema entry to catch a regression back to a single global key.
+      - name: Redis-gated integration tests (rate limiter, entitlement cache, platform fee cache)
+        run: npm test --workspace apps/web -- run src/lib/__tests__/rate-limit.redis.test.ts src/lib/__tests__/entitlements-cache-invalidation.redis.test.ts src/lib/__tests__/platform-fee-cache-isolation.redis.test.ts
         env:
           REDIS_URL: redis://localhost:6379
 
@@ -649,6 +658,126 @@ jobs:
         run: |
           npm run stripe:sync
           BILLING_LIVE=1 npm test --workspace apps/web -- src/lib/__tests__/billing-tiers.live.test.ts src/lib/__tests__/billing-proration.live.test.ts
+
+      # Nothing after this needs the placement container.
+      - name: Placement service logs and teardown
+        if: always()
+        run: |
+          docker logs placement-smoke || true
+          docker rm -f placement-smoke >/dev/null 2>&1 || true
+
+  # -------------------------------------------------------------------------
+  # Build + serve + e2e smoke: production build against a REAL Postgres and a
+  # REAL placement service, then hit the running server the way a browser
+  # would. This job's own Postgres is separate from smoke-db's — see the
+  # header comment above smoke-db for why. No Redis service: neither "Start
+  # server" nor "Run smoke test" ever set REDIS_URL, so the app under test
+  # already ran without Redis in the original combined job too — the rate
+  # limiter degrades to its no-Redis fallback, same as before this split.
+  # -------------------------------------------------------------------------
+  smoke-e2e:
+    name: Smoke — build + server + e2e (Postgres container)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        command: postgres -c timezone=Etc/GMT-14
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      DATABASE_SSL: disable
+      AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      NEXT_PUBLIC_SUPABASE_URL: ""
+      NEXT_TELEMETRY_DISABLED: "1"
+      SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
+      AI_FIXTURE_PORT: "4319"
+      ANTHROPIC_API_KEY: sk-ant-ci-smoke-fixture
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      STRIPE_WEBHOOK_SECRET: whsec_ci_smoke
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Cache Flyway CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/seazn-flyway
+          key: flyway-cli-10.22.0-linux-x64
+
+      - name: Bootstrap database (Flyway migrate)
+        run: npm run db:apply
+
+      - name: RLS guard (every org_id table isolated)
+        run: npm run check:rls
+
+      # Must land before the app deploys/serves or the division builder reads
+      # a stale sport_variants catalog (known gotcha) — same reasoning as
+      # stage.yml/prod.yml's identical step.
+      - name: Sync sport catalog from the engine registry
+        run: npm run sync:sports
+
+      # This job's OWN DB has no synced Stripe prices yet — smoke-db's
+      # `stripe:sync` (in its "Live-Stripe integration tests" step) only
+      # populates smoke-db's own database, a separate Postgres instance in a
+      # separate job. Without this, checkout paths in the smoke suite below
+      # would 503 exactly the way stage.yml's comment describes for a real
+      # deploy. Skips cleanly on fork PRs, where STRIPE_SECRET_KEY is withheld.
+      - name: Sync Stripe products/prices
+        if: env.STRIPE_SECRET_KEY != ''
+        run: npm run stripe:sync
+
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the placement service image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start the placement service
+        run: |
+          set -euo pipefail
+          docker run -d --name placement-smoke -p 50051:50051 \
+            -e PLACEMENT_SERVICE_SECRET=ci-smoke-secret \
+            placement-service:ci
+
+          opened=""
+          for _ in $(seq 1 15); do
+            if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/50051' 2>/dev/null; then
+              opened=1
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$opened" ]; then
+            echo "::error::placement port 50051 never accepted a TCP connection within 15s"
+            docker logs placement-smoke || true
+            exit 1
+          fi
 
       # Smoke runs against a PRODUCTION build, not `next dev`. The dev server
       # restarts itself once used heap crosses 80% of its V8 limit (which
@@ -747,8 +876,6 @@ jobs:
         if: failure()
         run: cat dev-server.log || true
 
-      # End of the job, so every step above — the vitest suites AND the smoke
-      # run against the started server — had a reachable solver.
       - name: Placement service logs and teardown
         if: always()
         run: |
