@@ -137,7 +137,7 @@ v1 observation, not this one.
 
 --- what the wire contract cannot carry (and this model therefore cannot state)
 
-Three constraint families the bench models are NOT expressible from
+Two constraint families the bench models are NOT expressible from
 `SolveBuildRequest` as it stands. They are listed here rather than silently
 omitted, because each one makes this solver's answer strictly more permissive
 than z3's, and TS re-runs its own verifier on the result:
@@ -149,30 +149,34 @@ than z3's, and TS re-runs its own verifier on the result:
     round 6 no fixture identity of any kind — so only the court-turnaround
     half of section 7 survives; a pinned row still blocks its own court but
     no longer blocks a participant it shares.
-  * per-court grids. `admissible_starts` is the union of every slot's start
-    across all courts (exactly as the bench does, where every court offers the
-    identical tick set), so a court with a DIFFERENT slot set — a per-court
-    blackout — can receive a fixture at a tick it does not offer. Measured:
-    with C0 offering {T, T+40} and C1 only {T+40}, a fixture was placed on C1
-    at T, OPTIMAL; and with C1 declared but slotless, on C1 at any tick at all.
 
-    **This is NOT unclosable, and an earlier version of this note said it was.**
-    `placement.schema._validate_court_slot_coverage` now REFUSES any request
-    whose courts do not all offer the same start times, so the wrong board is
-    unreachable — at the cost of the capability: a per-court blackout is
-    rejected rather than mis-scheduled, and the caller falls back to its own
-    placer.
+A third — per-court grids — is CLOSED as of task C2, and is recorded here
+because the earlier state of this note got the capability question wrong
+twice and both corrections are worth keeping. `admissible_starts` is still
+the union of every slot's start across all courts, but `start[i]` is no
+longer free to take any value in that union regardless of which court it
+lands on: section 1b now adds, for every court whose tick set is a STRICT
+SUBSET of the union, `AddLinearExpressionInDomain(start[i],
+Domain.FromValues(starts_of(c))).OnlyEnforceIf(presence_court[i][c])` — and
+for a court no slot mentions at all, forces `presence_court[i][c] == 0`
+directly rather than building the (invalid) empty-values domain. A
+homogeneous board — every court sharing one tick set, the common case — hits
+neither branch and pays nothing extra.
 
-    Closing it here INSTEAD, and getting the capability back, is a bounded
-    change and is the right one if callers turn out to need it: give each
-    fixture an enforced per-court start domain,
-    `AddLinearExpressionInDomain(start[i], Domain.FromValues(starts_of(c)))
-    .OnlyEnforceIf(presence_court[i][c])`, emitted only for courts whose tick
-    set is a strict subset of the union, so a homogeneous board pays nothing.
-    Not done here because it is a solver-hot-path change that no task has
-    asked for and that needs its own timing evidence.
+Measured before the fix: with C0 offering {T, T+40} and C1 only {T+40}, a
+fixture was placed on C1 at T, OPTIMAL; with C1 declared but slotless, on C1
+at any tick at all — both now INFEASIBLE if forced, and unreachable by a free
+solve (`tests/test_model.py`'s per-court-grid section).
 
-A fourth is CLOSED, and is recorded because the fix shows where the seam
+The first correction: an earlier version of this note called the gap
+unclosable and said `placement.schema._validate_court_slot_coverage` REFUSED
+any request whose courts disagreed, trading the capability away for safety.
+The second correction is this task: that refusal is gone, not merely
+relaxed — see `placement.schema`'s own docstring, "task C2: the per-court
+coverage refusal is GONE, not renamed". A per-court blackout is now placed
+correctly instead of bouncing the caller back to its own greedy fallback.
+
+A fourth is also CLOSED, and is recorded because the fix shows where the seam
 sits. Day-cap buckets used to be `start_ms // DAY_MS`, a UTC day, so any org
 not on UTC had its caps applied against the wrong boundary — at UTC+10 a
 09:00 and a 19:00 local match on one day fall in two UTC buckets and a cap of
@@ -183,7 +187,7 @@ bounded context; the solver never reasons about a zone. Computing that index
 is the caller's obligation and getting it wrong reintroduces the same bug one
 layer up, which is Prompt 06's problem and needs its own test there.
 
-A FIFTH is open and is a real permissiveness gap, listed here with the three
+A FIFTH is open and is a real permissiveness gap, listed here with the ones
 above rather than left to be rediscovered: **`existing` rows are not counted
 against day caps.** `on_day` is built for movable fixtures only, so a pinned
 row on a capped day does not consume that day's allowance and the solver may
@@ -414,6 +418,39 @@ def build_model(
         presence_court.append(pcs)
         # section 1: at most one court, and `placed[i]` tracks it exactly.
         model.Add(sum(pcs) == placed[i])
+
+    # section 1b (task C2 — closes the per-court grid gap the module
+    # docstring recorded): `start[i]`'s domain above is `full_domain`, the
+    # UNION of every court's own admissible starts, so nothing yet stops a
+    # fixture presence on court c from landing on a tick c does not actually
+    # offer. Restrict each fixture's start to court c's OWN tick set whenever
+    # it is placed there — emitted only for a court whose set is a STRICT
+    # SUBSET of the union (a subset of EQUAL size to the union must equal it,
+    # since every court's tick set is by construction a subset of the union),
+    # so a homogeneous board — every court sharing the identical tick set,
+    # the common case — pays nothing extra at all.
+    #
+    # A court that no slot mentions is the degenerate end of the same
+    # spectrum: `placement.schema` no longer refuses a declared-but-slotless
+    # court (a court blacked out for the whole horizon is a legitimate thing
+    # to configure), so this module is the only place left to keep a fixture
+    # off it. `Domain.FromValues([])` is deliberately NOT used to say
+    # "never" — fixing the boolean directly is the unambiguous statement of
+    # the same fact and does not lean on empty-domain propagation behaviour.
+    starts_by_court: dict[int, set[int]] = {}
+    for court_index, start_ms, _day in grid_slots:
+        starts_by_court.setdefault(court_index, set()).add(start_ms)
+    for c in range(num_courts):
+        court_starts = starts_by_court.get(c, set())
+        if not court_starts:
+            for i in range(n):
+                model.Add(presence_court[i][c] == 0)
+        elif len(court_starts) < len(admissible_starts):
+            court_domain = cp_model.Domain.FromValues(sorted(court_starts))
+            for i in range(n):
+                model.AddLinearExpressionInDomain(start[i], court_domain).OnlyEnforceIf(
+                    presence_court[i][c]
+                )
 
     # sections 2+3 fused: one optional interval per (fixture, court), sized
     # matchMinutes+gapMinutes, all sharing that fixture's single `start[i]`.

@@ -83,15 +83,33 @@ because the defect they closed cannot occur positionally any more:
     compared, never required unique. Two entries that render identically are
     simply two distinct, correctly-disambiguated indices.
 
-Everything else the old referential-integrity pass enforced — a pinned row on
-a court nobody declared, a dependency naming an unresolvable fixture, a rule
-naming an undeclared division, a court declared without slots, courts
-offering different tick sets — survives, now as a range check instead of a
+Most of what the old referential-integrity pass enforced — a pinned row on a
+court nobody declared, a dependency naming an unresolvable fixture, a rule
+naming an undeclared division — survives, now as a range check instead of a
 dict-membership check. `model.py`'s own tolerance of an out-of-range index
 (skip rather than crash) is UNCHANGED, for the same reason it was unchanged
 in the string contract: the wire is where the mistake is caught, not the
 domain, and moving the check there would take away the domain's own ability
 to be fed a partial board directly (by tests, or any future caller).
+
+--- task C2: the per-court coverage refusal is GONE, not renamed --------------
+
+Two shapes used to be refused here by `_validate_court_slot_coverage`, which
+no longer exists: a court declared without slots, and courts offering
+different tick sets from one another. Both were a REFUSAL standing in for a
+missing capability — `model.py` unioned every court's admissible starts into
+one shared domain, so a per-court blackout could not be expressed and the
+whole request was bounced back to the caller's own greedy fallback instead of
+risking a fixture placed on a tick its court never actually offered.
+
+`model.py` now enforces each court's own tick set directly (see its
+docstring, "per-court grids"), so neither shape needs a refusal any more —
+one is simply modelled correctly (a per-fixture domain restriction, court by
+court), and the other (a court no slot mentions at all — a legitimate way to
+configure a court blacked out for the whole horizon) is handled by forcing
+that court's `presence_court[i][c]` to 0 for every fixture, in the domain,
+rather than by rejecting the request at the ACL. The RULE survives; only the
+REFUSAL does not.
 """
 
 from __future__ import annotations
@@ -243,43 +261,6 @@ def _validated_slots(proto_slots, num_courts: int) -> list[tuple[int, int, int]]
             raise InvalidRequestError(f"slots[{i}].day_index must be >= 0, got {s.day_index!r}.")
         out.append((court_index, s.start_at_ms, s.day_index))
     return out
-
-
-def _validate_court_slot_coverage(num_courts: int, slots: list[tuple[int, int, int]]) -> None:
-    """Every declared court must offer the SAME start times, and at least one.
-
-    Positional port of `_validate_court_grids`: `model.py` builds a per-court
-    interval list for EVERY index in `range(num_courts)`, while the admissible
-    start domain is the union of every slot's start across ALL courts — so a
-    declared-but-slotless court inherits the whole lattice and gets fixtures
-    placed on it at arbitrary times, and a court with a narrower tick set than
-    another lets a fixture land on a tick it never offered. Same mechanism as
-    the string contract, keyed on index instead of name.
-    """
-    starts_by_court: dict[int, set[int]] = {c: set() for c in range(num_courts)}
-    for court_index, start_ms, _day in slots:
-        starts_by_court[court_index].add(start_ms)
-
-    slotless = sorted(c for c, starts in starts_by_court.items() if not starts)
-    if slotless:
-        raise InvalidRequestError(
-            f"court_names indices {slotless} are declared but no slot offers them. A court with no "
-            "slots is not an unused court — the model gives it a column and the solver places "
-            "matches on it at ticks taken from the OTHER courts, then proves that OPTIMAL. Either "
-            "give it slots or drop it from `court_names`."
-        )
-
-    distinct = {frozenset(starts) for starts in starts_by_court.values()}
-    if len(distinct) > 1:
-        offenders = sorted(
-            c for c, starts in starts_by_court.items()
-            if frozenset(starts) != frozenset(starts_by_court[0])
-        )
-        raise InvalidRequestError(
-            f"every court must offer the same start times; court_names indices {offenders} differ "
-            "from index 0. The model unions the starts across courts, so a per-court grid is "
-            "flattened and a fixture can be placed on a court at a tick that court does not offer."
-        )
 
 
 def _validated_existing(rows, num_courts: int) -> list[tuple[int, int]]:
@@ -441,9 +422,15 @@ def request_to_model_input(req) -> ModelInput:
     fixtures = _validated_fixtures(req.fixtures, entrant_count, division_count)
 
     grid_slots = _validated_slots(req.slots, num_courts)
-    # After the slots, because it reads both sides: how many courts are
-    # declared and which ticks the slots actually offer per court.
-    _validate_court_slot_coverage(num_courts, grid_slots)
+    # No per-court coverage refusal here any more (task C2). This used to be
+    # `_validate_court_slot_coverage(num_courts, grid_slots)`, rejecting both
+    # a declared-but-slotless court and courts whose tick sets merely
+    # differed — `placement.model.build_model` now enforces each court's OWN
+    # tick set directly (a per-fixture domain restriction, and a forced
+    # `presence_court[i][c] == 0` on a court no slot mentions), so a
+    # per-court blackout is placed correctly instead of the whole request
+    # bouncing the caller back to its own greedy fallback. See that module's
+    # docstring, "per-court grids" / "task C2".
     existing = _validated_existing(req.existing, num_courts)
     dependencies = _validated_dependencies(req.dependencies, len(fixtures))
     rest_by_division, day_cap_by_division = _validated_division_rules(

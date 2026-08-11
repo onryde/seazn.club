@@ -336,25 +336,33 @@ def test_zero_is_legitimate_rest_but_not_a_legitimate_day_cap():
 # any more, by construction, so there is no guard left to test.
 
 
-def test_rejects_a_declared_court_that_no_slot_offers():
-    """A court with NO slots is placeable. `court_names` is what the model
-    builds per-court interval lists from, while the admissible start domain is
-    the union of every slot's start across ALL courts — so a declared court
-    inherits the whole lattice regardless of what the grid says about it.
+def test_accepts_a_declared_court_that_no_slot_offers():
+    """Task C2: a court with no slots at all used to be refused here
+    (`_validate_court_slot_coverage`'s "no slot offers them"). It no longer
+    is — a court blacked out for its whole horizon is a legitimate thing to
+    configure, and `placement.model.build_model` now forces that court's
+    `presence_court[i][c]` to 0 for every fixture directly, in the domain,
+    rather than the ACL rejecting the request. See `placement.model`'s
+    docstring, "per-court grids".
     """
     req = _valid_request(
         court_names=["Court 1", "Court 2"],
         slots=[scheduler_pb2.Slot(court_index=0, start_at_ms=SLOT_MS, day_index=0)],
     )
-    with pytest.raises(InvalidRequestError, match="no slot offers them"):
-        request_to_model_input(req)
+    parsed = request_to_model_input(req)  # must NOT raise
+    assert parsed.courts == 2
+    assert parsed.grid_slots == [(0, SLOT_MS, 0)]
 
 
-def test_rejects_courts_that_offer_different_tick_sets():
-    """A court need not be slotless to receive an impossible placement — it
-    only needs a tick set DIFFERENT from another court's, because the model
-    unions the starts. Refusing this is a deliberate trade of capability
-    (per-court blackouts) for correctness; see `placement.model`'s docstring."""
+def test_accepts_courts_that_offer_different_tick_sets():
+    """Task C2 lifts this refusal too. A court need not be slotless to have
+    been rejected before — it only needed a tick set DIFFERENT from another
+    court's, because `build_model` used to union the starts and place a
+    fixture on a court at a tick it never actually offered. Now each court's
+    OWN tick set is enforced directly (`placement.model`'s "per-court grids"
+    / task C2), so the capability that refusal traded away is back: this
+    exact shape must map cleanly instead of raising.
+    """
     req = _valid_request(
         court_names=["Court 1", "Court 2"],
         slots=[
@@ -363,13 +371,17 @@ def test_rejects_courts_that_offer_different_tick_sets():
             scheduler_pb2.Slot(court_index=1, start_at_ms=SLOT_MS + 3_600_000, day_index=0),
         ],
     )
-    with pytest.raises(InvalidRequestError, match="same start times"):
-        request_to_model_input(req)
+    parsed = request_to_model_input(req)  # must NOT raise
+    assert parsed.grid_slots == [
+        (0, SLOT_MS, 0),
+        (0, SLOT_MS + 3_600_000, 0),
+        (1, SLOT_MS + 3_600_000, 0),
+    ]
 
 
 def test_accepts_several_courts_offering_the_identical_tick_set():
-    """The guard must not have become "one court only". This is the shape
-    every board in `bench/` has, and the shape a normal request has."""
+    """The homogeneous shape must still map too. This is the shape every
+    board in `bench/` has, and the shape a normal request has."""
     req = _valid_request(
         court_names=["Court 1", "Court 2"],
         slots=[
@@ -379,6 +391,96 @@ def test_accepts_several_courts_offering_the_identical_tick_set():
         ],
     )
     assert len(request_to_model_input(req).grid_slots) == 4
+
+
+def test_a_per_court_blackout_now_solves_instead_of_being_refused():
+    """The exact shape reported live (staging, org `hhhh` / division
+    `test001`): a global blackout every court loses alike (a uniform
+    removal, so it alone creates no asymmetry) plus a second blackout scoped
+    to ONE of three courts — a strict subset on that court alone.
+
+    Before task C2, the second blackout by itself was enough to make
+    `request_to_model_input` refuse the whole request via
+    `_validate_court_slot_coverage`'s "every court must offer the same start
+    times" check — which took the board off the optimiser permanently, on a
+    schedule that otherwise looks fine, for as long as the blackout stood.
+    That function is gone; this is the regression test for it, carried all
+    the way through to an actual solve rather than stopping at "did not
+    raise".
+    """
+    step = 30 * 60_000
+    day1_start = 1_786_438_800_000  # 2026-08-11T09:00:00Z
+    day2_start = 1_786_525_200_000  # 2026-08-12T09:00:00Z
+    ticks_per_day = 16  # 09:00 .. 16:30 at a 30-minute lattice
+
+    def day_ticks(day_start):
+        return [day_start + k * step for k in range(ticks_per_day)]
+
+    day1 = day_ticks(day1_start)
+    day2 = day_ticks(day2_start)
+    # 2026-08-11T11:00Z-12:00Z, EVERY court: removes ticks 4 and 5 (11:00,
+    # 11:30) uniformly, so this half alone creates no asymmetry.
+    day1_blacked = {day1[4], day1[5]}
+    # 2026-08-12T14:00Z-14:30Z, Board 1 (court 0) ONLY: removes tick 10
+    # (14:00) from court 0 alone — the one thing that used to trip the
+    # refusal.
+    day2_blacked_court0_only = {day2[10]}
+
+    slots = []
+    for court in range(3):
+        for start in day1:
+            if start in day1_blacked:
+                continue
+            slots.append(scheduler_pb2.Slot(court_index=court, start_at_ms=start, day_index=0))
+        for start in day2:
+            if court == 0 and start in day2_blacked_court0_only:
+                continue
+            slots.append(scheduler_pb2.Slot(court_index=court, start_at_ms=start, day_index=1))
+
+    # The premise: court 0's tick set really is a strict subset of court 1's
+    # / court 2's (one tick fewer), and the other two remain identical to
+    # each other — otherwise this test could pass for the wrong reason.
+    starts_by_court = {c: {s.start_at_ms for s in slots if s.court_index == c} for c in range(3)}
+    assert len(starts_by_court[0]) == len(starts_by_court[1]) - 1 == len(starts_by_court[2]) - 1
+    assert starts_by_court[1] == starts_by_court[2]
+    assert starts_by_court[0] < starts_by_court[1]
+
+    req = scheduler_pb2.SolveBuildRequest(
+        request_id="r1",
+        court_names=["Board 1", "Board 2", "Board 3"],
+        entrant_count=6,
+        division_count=1,
+        fixtures=[
+            scheduler_pb2.Fixture(entrant_indices=[2 * i, 2 * i + 1], division_index=0)
+            for i in range(3)
+        ],
+        slots=slots,
+        step_minutes=30,
+        constraints=scheduler_pb2.BuildConstraints(match_minutes=30, gap_minutes=0),
+        wall_seconds=5.0,
+    )
+
+    parsed = request_to_model_input(req)  # must NOT raise -- this is the regression
+
+    from placement.model import build_model, solve
+
+    model = build_model(
+        parsed.fixtures,
+        parsed.courts,
+        parsed.grid_slots,
+        parsed.step_minutes,
+        parsed.constraints,
+        parsed.existing,
+        parsed.dependencies,
+    )
+    outcome = solve(model, wall_seconds=5.0)
+    detail = f"status={outcome.status} assignments={outcome.assignments}"
+    assert len(outcome.assignments) == 3, detail  # every fixture placed
+    legal = {(court, start) for court, start, _day in parsed.grid_slots}
+    for _fi, court, start in outcome.assignments:
+        assert (court, start) in legal, (
+            f"fixture placed on an illegal (court, start) pair: {(court, start)} -- {detail}"
+        )
 
 
 def test_rejects_duplicate_entrant_indices_within_a_fixture():
