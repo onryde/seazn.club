@@ -207,6 +207,29 @@ export function evalPadGate(gate: PadGate, ctx: PadGateCtx): boolean {
 
 export type PadFieldValue = string | number | boolean;
 
+/**
+ * S7/#427 — what a control is CALLED. `PadAction`/`PadPanel` have carried a
+ * required `labelKey` since S6; a field and an attribution item had none at
+ * all, so a number input, a toggle and a person picker were nameless and
+ * S10's renderer would have had exactly two options: invent English in the
+ * web layer (the hardcoded-string defect `scoring-vocab.ts` exists to
+ * prevent) or print the dotted `path` at a scorer.
+ *
+ * OPTIONAL, unlike the action/panel one, and the asymmetry is deliberate. An
+ * action always needs a name — it is a button. A field frequently does not:
+ * cricket's `runs.bat` sits inside a labelled "Ball" action whose whole
+ * layout names it, and volleyball's `home`/`away` set-score pair are named by
+ * the two entrants either side of them. Requiring a key everywhere would mint
+ * dozens of dictionary entries no surface will ever draw, and translating
+ * copy nothing renders is exactly the waste #427 exists to stop. So: label
+ * the ones a scorer would otherwise have to guess at, leave the rest.
+ *
+ * KEY CONVENTION (extends S6's `pad.<sport>.action.<action>` /
+ * `pad.<sport>.panel.<panel>`): `pad.<sport>.action.<action>.field.<name>`,
+ * scoped by the ACTION rather than by the payload path, so two actions that
+ * collect the same path can still word it differently and
+ * `checkLabelKeysUnique` stays a real check rather than a false alarm.
+ */
 export interface PadFieldEnum {
   kind: "enum";
   /** Dotted path into the built payload (`buildPathObject`'s target). */
@@ -215,6 +238,7 @@ export interface PadFieldEnum {
    *  a single preset: the classic case is a dismissal-kind list that differs
    *  by variant). */
   values: readonly string[];
+  labelKey?: PadLabel;
 }
 export interface PadFieldNumber {
   kind: "number";
@@ -222,21 +246,24 @@ export interface PadFieldNumber {
   min: number;
   max: number;
   step?: number;
+  labelKey?: PadLabel;
 }
 export interface PadFieldToggle {
   kind: "toggle";
   path: string;
+  labelKey?: PadLabel;
 }
 export type PadField = PadFieldEnum | PadFieldNumber | PadFieldToggle;
 
 /**
  * One person/side destination the renderer's attribution picker must collect
  * before an action can fire, and where the resolved id lands in the built
- * payload.
+ * payload. `labelKey` is optional for the same reason a field's is — see
+ * `PadFieldEnum` above.
  */
 export type PadAttributionItem =
-  | { kind: "side"; path: string }
-  | { kind: "person"; path: string; role?: string };
+  | { kind: "side"; path: string; labelKey?: PadLabel }
+  | { kind: "person"; path: string; role?: string; labelKey?: PadLabel };
 
 /**
  * A LIST of attribution requirements, not a single discriminated choice —

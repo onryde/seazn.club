@@ -8,7 +8,7 @@ import { evalPadGate, type PadField, type PadSpec } from "../../sport/module.ts"
 import { buildStream, conformanceSuite, makeEnvelope } from "../../testkit/index.ts";
 // S6/#416 (W5) — deliberately NOT from the testkit barrel: conformance-pad.ts
 // touches node:fs (DOMAIN.md presence), mirroring golden.ts's own exclusion.
-import { checkActionCoverage, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
+import { checkActionCoverage, padItemLabelKey, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
 import { cricket, padSpec, CRICKET_EVENT_SCHEMAS, type CricketBallEv, type CricketCfg, type CricketEv } from "./cricket.ts";
 import { dlsTarget, resources, resourcesFromBalls } from "./dls.ts";
 
@@ -1084,6 +1084,32 @@ describe("cricket padSpec — action coverage across the format space", () => {
     ];
     const problems = checkActionCoverage(specsWithoutSuperOver, CRICKET_EVENT_SCHEMAS);
     expect(problems.join(" ")).toMatch(/cricket\.superover\.ball/);
+  });
+});
+
+// S7/#427 — the two wicket prompts the dossier names as owed. Both are
+// OPTIONAL person slots on an action whose own label ("Wicket") names none of
+// them: a scorer looking at four person pickers in a row cannot tell the
+// assisting fielder from the incoming batter without copy, and the renderer
+// has nothing but the dotted path to fall back on.
+describe("cricket padSpec — wicket prompts carry their own label keys (S7/#427)", () => {
+  const spec = padSpec(cricket.configSchema.parse({}));
+
+  it("labels wicket.fielderAssist and wicket.incoming", () => {
+    expect(padItemLabelKey(spec, "cricket.ball", "wicket.fielderAssist")).toMatchObject({
+      key: "pad.cricket.action.wicket.field.fielderAssist",
+      where: "attribution",
+    });
+    expect(padItemLabelKey(spec, "cricket.ball", "wicket.incoming")).toMatchObject({
+      key: "pad.cricket.action.wicket.field.incoming",
+      where: "attribution",
+    });
+  });
+
+  it("ships an English fallback beside each key (nothing renders a bare path)", () => {
+    for (const path of ["wicket.fielderAssist", "wicket.incoming"]) {
+      expect(padItemLabelKey(spec, "cricket.ball", path)?.label ?? "").not.toBe("");
+    }
   });
 });
 

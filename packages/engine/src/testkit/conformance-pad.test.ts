@@ -10,7 +10,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../core/errors.ts";
 import type { LineupPair, MatchOutcome, ScoreSummary, StandingsDelta } from "../core/types.ts";
-import { type FidelityBand, type PadSpec, type SportModule } from "../sport/module.ts";
+import { type FidelityBand, type PadField, type PadSpec, type SportModule } from "../sport/module.ts";
 import {
   checkActionCoverage,
   checkActionPayloadsAccepted,
@@ -20,9 +20,11 @@ import {
   checkLabelKeysUnique,
   checkRegisteredTypesDispatch,
   checkTotalDeterministicAndPureData,
+  collectPadLabels,
   domainMdPath,
   eventsAtOrBelowBand,
   isPadReady,
+  padItemLabelKey,
   padSpecConformanceSuite,
   SPORT_DIRS,
 } from "./conformance-pad.ts";
@@ -336,6 +338,19 @@ describe("checkActionPayloadsAccepted", () => {
 
 // --------------------------------------------------------------- (c) labels
 
+/** `goodSpec` with the run action's field list swapped — the one shape every
+ *  S7 field-label case below needs, built once. */
+function withRunFields(fields: readonly PadField[]): PadSpec {
+  const live = goodSpec.panels[0] as PadSpec["panels"][number];
+  return {
+    ...goodSpec,
+    panels: [
+      { ...live, actions: [{ ...(live.actions[0] as PadSpec["panels"][number]["actions"][number]), fields }] },
+      goodSpec.panels[1] as PadSpec["panels"][number],
+    ],
+  };
+}
+
 describe("checkLabelKeysUnique", () => {
   it("passes when every labelKey.key is unique", () => {
     expect(checkLabelKeysUnique(goodSpec)).toEqual([]);
@@ -368,6 +383,92 @@ describe("checkLabelKeysUnique", () => {
       panels: [{ ...(goodSpec.panels[0] as PadSpec["panels"][number]), labelKey: { key: "pad.fake.action.reset", label: "Live" } }, goodSpec.panels[1] as PadSpec["panels"][number]],
     };
     expect(checkLabelKeysUnique(dup)).not.toEqual([]);
+  });
+
+  // S7/#427 — the SAME check now covers field / attribution labels. Written
+  // as three cases because the interesting one is the third: a field key that
+  // collides with an ACTION key would previously have been invisible to every
+  // check in this file, and it is the collision a translator actually sees
+  // (one dictionary entry, two meanings).
+  it("fails on a duplicate labelKey between two fields of one action", () => {
+    const dup = withRunFields([
+      { kind: "number", path: "runs", min: 0, max: 3, labelKey: { key: "pad.fake.action.run.field.runs", label: "Runs" } },
+      { kind: "toggle", path: "wide", labelKey: { key: "pad.fake.action.run.field.runs", label: "Wide" } },
+    ]);
+    expect(checkLabelKeysUnique(dup)).not.toEqual([]);
+  });
+
+  it("fails on a duplicate labelKey between a field and an action", () => {
+    const dup = withRunFields([
+      { kind: "number", path: "runs", min: 0, max: 3, labelKey: { key: "pad.fake.action.run", label: "Runs" } },
+    ]);
+    expect(checkLabelKeysUnique(dup)).not.toEqual([]);
+  });
+
+  it("passes when field labels are present and distinct", () => {
+    const ok = withRunFields([
+      { kind: "number", path: "runs", min: 0, max: 3, labelKey: { key: "pad.fake.action.run.field.runs", label: "Runs" } },
+    ]);
+    expect(checkLabelKeysUnique(ok)).toEqual([]);
+  });
+});
+
+// S7/#427 — `collectPadLabels` is what the extended (c) check and every
+// per-sport field-label assertion read. Vacuity guard first: a walker that
+// returned nothing would make all three cases above pass while proving
+// nothing.
+describe("collectPadLabels / padItemLabelKey", () => {
+  it("returns every panel and action label, and omits unlabelled fields", () => {
+    const refs = collectPadLabels(goodSpec);
+    expect(refs.filter((r) => r.where === "panel").map((r) => r.key)).toEqual([
+      "pad.fake.panel.live",
+      "pad.fake.panel.reset",
+    ]);
+    expect(refs.filter((r) => r.where === "action").map((r) => r.key)).toEqual([
+      "pad.fake.action.run",
+      "pad.fake.action.reset",
+    ]);
+    // `goodSpec`'s one field carries no labelKey — absent, not a hole.
+    expect(refs.filter((r) => r.where === "field" || r.where === "attribution")).toEqual([]);
+    expect(padItemLabelKey(goodSpec, "fake.run", "runs")).toBeUndefined();
+  });
+
+  it("finds a field label by (action type, payload path), tagged with both", () => {
+    const spec = withRunFields([
+      { kind: "number", path: "runs", min: 0, max: 3, labelKey: { key: "pad.fake.action.run.field.runs", label: "Runs" } },
+    ]);
+    expect(padItemLabelKey(spec, "fake.run", "runs")).toEqual({
+      key: "pad.fake.action.run.field.runs",
+      label: "Runs",
+      where: "field",
+      type: "fake.run",
+      path: "runs",
+    });
+    expect(padItemLabelKey(spec, "fake.reset", "runs")).toBeUndefined();
+  });
+
+  it("finds an attribution-item label the same way", () => {
+    const spec: PadSpec = {
+      ...goodSpec,
+      panels: [
+        {
+          ...(goodSpec.panels[0] as PadSpec["panels"][number]),
+          actions: [
+            {
+              type: "fake.run",
+              labelKey: { key: "pad.fake.action.run", label: "Run" },
+              fields: [],
+              attribution: [
+                { kind: "person", path: "striker", labelKey: { key: "pad.fake.action.run.field.striker", label: "Striker" } },
+              ],
+            },
+          ],
+        },
+        goodSpec.panels[1] as PadSpec["panels"][number],
+      ],
+    };
+    expect(padItemLabelKey(spec, "fake.run", "striker")?.where).toBe("attribution");
+    expect(padItemLabelKey(spec, "fake.run", "striker")?.key).toBe("pad.fake.action.run.field.striker");
   });
 });
 

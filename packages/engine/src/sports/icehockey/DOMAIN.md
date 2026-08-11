@@ -91,6 +91,12 @@ Asserted against the table itself by `src/testkit/dossiers.test.ts`.
    unknown types, so nothing breaks today; a real label is owed.
 2. **New payload keys a pad should prompt for**: goal `emptyNet`, `clockRef`;
    suspension `reason`, `servedBy`, `minutes`; shoot-out `goalkeeper`.
+   *S7/#427: all of these are now declared padSpec fields carrying label keys
+   — except `clockRef`, deliberately. It is `@deprecated` in `period/kernel.ts`
+   (superseded by `at`, display-only, kept only so the frozen goldens parse),
+   so it is not a padSpec field at all and a scorer is never prompted for it;
+   labelling it would ship copy in four locales for a control that will never
+   be drawn. The identical line in `hockey/DOMAIN.md` §2 reads the same way.*
 3. **New `summary.detail` keys**: `goalLog` (array of attributed goals) and
    `setPieces`. Both are ABSENT until attributed data exists — every consumer
    must treat them as optional, never as `[]`/`{}`.

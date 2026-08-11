@@ -7,7 +7,7 @@ import { foldMatch, type EventEnvelope } from "../../core/events.ts";
 import type { LineupPair, StageCtx } from "../../core/types.ts";
 import { aggregatePlayerStats } from "../../stats/stats.ts";
 import { conformanceSuite, defaultLineupPair, makeEnvelope } from "../../testkit/index.ts";
-import { checkActionCoverage, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
+import { checkActionCoverage, padItemLabelKey, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
 import {
   carrom,
   CARROM_EVENT_SCHEMAS,
@@ -489,6 +489,39 @@ describe("carrom padSpec — action coverage", () => {
   it("every registered event type is reachable from some action (no cfg-mutual-exclusivity in this module)", () => {
     const specs = [padSpec(carrom.configSchema.parse({}))];
     expect(checkActionCoverage(specs, CARROM_EVENT_SCHEMAS)).toEqual([]);
+  });
+});
+
+// S7/#427 — "carrom: per-board player pickers", the dossier's own owed line.
+// `boardQueen` asks for FOUR ids in a row (two sides, two persons); without
+// copy a scorer cannot tell the breaker from the player who covered the queen,
+// and they are frequently different people.
+describe("carrom padSpec — per-board player pickers carry label keys (S7/#427)", () => {
+  const spec = padSpec(carrom.configSchema.parse({}));
+
+  it("labels breaker on both board actions and queenBy on the queen one", () => {
+    expect(padItemLabelKey(spec, "carrom.board.summary", "breaker")).toMatchObject({
+      key: "pad.carrom.action.board.field.breaker",
+      where: "attribution",
+    });
+    expect(padItemLabelKey(spec, "carrom.board.summary", "queenBy")).toMatchObject({
+      key: "pad.carrom.action.boardQueen.field.queenBy",
+      where: "attribution",
+    });
+  });
+
+  it("the queen-covered action labels its OWN breaker picker, scoped to that action", () => {
+    // Two actions share the type `carrom.board.summary`; keys are scoped by
+    // ACTION so the queen board can word its breaker differently if it ever
+    // needs to — and so `checkLabelKeysUnique` stays a real check.
+    const keys = spec.panels
+      .flatMap((panel) => panel.actions)
+      .filter((action) => action.type === "carrom.board.summary")
+      .map((action) => action.attribution.find((item) => item.path === "breaker")?.labelKey?.key);
+    expect(keys).toEqual([
+      "pad.carrom.action.board.field.breaker",
+      "pad.carrom.action.boardQueen.field.breaker",
+    ]);
   });
 });
 

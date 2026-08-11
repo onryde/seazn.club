@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { foldMatch } from "../../core/events.ts";
 import { defaultLineupPair, makeEnvelope } from "../../testkit/helpers.ts";
 import { resolvePositions } from "../../sport/catalog.ts";
-import { checkActionCoverage, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
+import { checkActionCoverage, padItemLabelKey, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
 import { evalPadGate, type ModuleEvent, type PadField, type PadSpec } from "../../sport/module.ts";
 import { hockey } from "../hockey/hockey.ts";
 import { icehockey } from "../icehockey/icehockey.ts";
@@ -122,6 +122,70 @@ describe("icehockey padSpec — action coverage across the variant space", () =>
       icehockeyPadSpec(icehockey.configSchema.parse(icehockey.variants["recreational"])),
     ];
     expect(checkActionCoverage(specs, ICEHOCKEY_EVENT_SCHEMAS)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S7/#427 — the pad prompts both dossiers list as owed under "New payload keys
+// a pad should prompt for": goal `emptyNet`, suspension `minutes` and
+// `servedBy`, shoot-out `goalkeeper`. Every one of them is a bare toggle,
+// number box or person picker on an action whose own label ("Goal", "Card",
+// "GWS attempt") names none of them.
+//
+// `clockRef` is on both dossiers' owed lists too and is deliberately NOT
+// labelled — it is `@deprecated` in kernel.ts, superseded by `at`, and is not
+// a padSpec field at all, so a label would be copy for a control that will
+// never be drawn. Recorded in `icehockey/DOMAIN.md` §2 rather than left silent.
+// ---------------------------------------------------------------------------
+
+describe("period padSpec — the dossiers' owed pad prompts carry label keys (S7/#427)", () => {
+  const cases: readonly [string, ReturnType<typeof hockeyPadSpec>][] = [
+    ["hockey", hockeyPadSpec(hockey.configSchema.parse(hockey.variants["fih-shootout"]))],
+    ["icehockey", icehockeyPadSpec(icehockey.configSchema.parse({}))],
+  ];
+
+  for (const [key, spec] of cases) {
+    it(`${key}: goal emptyNet, suspension minutes + servedBy, shoot-out goalkeeper are all labelled`, () => {
+      expect(padItemLabelKey(spec, `${key}.goal`, "emptyNet")).toMatchObject({
+        key: `pad.${key}.action.goal.field.emptyNet`,
+        where: "field",
+      });
+      expect(padItemLabelKey(spec, `${key}.suspension.start`, "minutes")).toMatchObject({
+        key: `pad.${key}.action.suspensionStart.field.minutes`,
+        where: "field",
+      });
+      expect(padItemLabelKey(spec, `${key}.suspension.start`, "servedBy")).toMatchObject({
+        key: `pad.${key}.action.suspensionStart.field.servedBy`,
+        where: "attribution",
+      });
+      expect(padItemLabelKey(spec, `${key}.shootout.attempt`, "goalkeeper")).toMatchObject({
+        key: `pad.${key}.action.shootoutAttempt.field.goalkeeper`,
+        where: "attribution",
+      });
+    });
+
+    it(`${key}: every one of those four ships an English fallback`, () => {
+      const owed: readonly [string, string][] = [
+        [`${key}.goal`, "emptyNet"],
+        [`${key}.suspension.start`, "minutes"],
+        [`${key}.suspension.start`, "servedBy"],
+        [`${key}.shootout.attempt`, "goalkeeper"],
+      ];
+      for (const [type, path] of owed) {
+        expect(padItemLabelKey(spec, type, path)?.label ?? "", `${type}.${path}`).not.toBe("");
+      }
+    });
+  }
+
+  it("the two sports get DISTINCT keys for the same shared-kernel prompt", () => {
+    // The kernel builds one spec for both codes; a key that forgot
+    // `preset.key` would collide across sports in one flat dictionary
+    // namespace and silently force the IIHF's wording onto the FIH's pad.
+    const [, hockeySpec] = cases[0] as [string, ReturnType<typeof hockeyPadSpec>];
+    const [, iceSpec] = cases[1] as [string, ReturnType<typeof icehockeyPadSpec>];
+    expect(padItemLabelKey(hockeySpec, "hockey.goal", "emptyNet")?.key).not.toBe(
+      padItemLabelKey(iceSpec, "icehockey.goal", "emptyNet")?.key,
+    );
   });
 });
 
