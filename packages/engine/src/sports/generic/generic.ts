@@ -121,16 +121,28 @@ function applyResult(state: GenericState, payload: z.infer<typeof GenericResult>
       invalid("draws are not allowed in this division", { score });
     }
   } else {
-    // S6/#416 (W5): also reads as a draw whenever `winnerId` is absent,
-    // regardless of `isDraw`'s exact value — the padSpec field DSL has no
+    // S6/#416 (W5): also reads as a draw when `isDraw` is PRESENT (even as
+    // `false`) and `winnerId` is absent — the padSpec field DSL has no
     // "constant" PadField kind (a toggle is genuinely bivalent, `fc.boolean()`
     // in the conformance property test), so a "Draw" action's `isDraw` toggle
-    // field could never be pinned to always fire `true`. Purely additive:
-    // every payload that was previously accepted (`winnerId` set, or
-    // `isDraw: true`) still means exactly what it meant; only the previously
-    // rejected "no winnerId, isDraw false-or-absent" shape newly reads as a
-    // draw, gated by `allowDraws` exactly like `isDraw: true` already was.
-    const declaredDraw = payload.isDraw === true || payload.winnerId === undefined;
+    // field could never be pinned to always fire `true`.
+    //
+    // Fixed post-review (CI caught it): the first cut keyed this off
+    // `winnerId === undefined` ALONE, with no requirement that `isDraw` was
+    // even sent. That silently swallowed a real, pre-existing validation path
+    // — a payload with neither field (e.g. a score-shaped `{p1Score,
+    // p2Score}` mistakenly posted against a `win_loss` division) now read as
+    // an implicit draw and threw "draws are not allowed in this division"
+    // instead of the clearer, actionable "win_loss mode requires winnerId or
+    // isDraw" (`apps/web`'s `config-snapshot.test.ts` pinned exactly this
+    // message for exactly that shape). Requiring the `isDraw` KEY to be
+    // present distinguishes "a Draw action fired with a false toggle" from
+    // "no draw signal was sent at all" — the only two cases this fold sees
+    // and the only distinction that matters. Every payload previously
+    // accepted (`winnerId` set, or `isDraw: true`) still means exactly what
+    // it meant.
+    const declaredDraw =
+      payload.isDraw === true || (payload.isDraw !== undefined && payload.winnerId === undefined);
     if (declaredDraw && payload.winnerId !== undefined) {
       invalid("isDraw and winnerId are mutually exclusive");
     }

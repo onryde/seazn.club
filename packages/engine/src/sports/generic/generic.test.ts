@@ -258,9 +258,17 @@ describe("generic — win_loss mode: an absent winnerId reads as a draw regardle
     expect(viaFalse).toEqual(viaTrue);
   });
 
-  it("an empty payload with no winnerId also settles as a draw", () => {
+  it("a truly empty payload is still invalid, even when draws are allowed — isDraw must be PRESENT to declare one", () => {
+    // Post-review fix: `{}` carries no signal at all — not the same as a
+    // "Draw" action firing with `isDraw: false`. Requiring the `isDraw` KEY
+    // (not just winnerId's absence) is what keeps a genuinely malformed or
+    // wrong-mode payload (e.g. a score-shaped `{p1Score,p2Score}` posted
+    // against a win_loss division — `apps/web`'s `config-snapshot.test.ts`
+    // pins exactly this) from being silently swallowed as an implicit draw.
     const drawCfg = { ...winLossCfg, allowDraws: true };
-    expect(fold(drawCfg, stream(["generic.result", {}])).outcome).toEqual({ kind: "draw" });
+    expect(() => fold(drawCfg, stream(["generic.result", {}]))).toThrowError(
+      expect.objectContaining({ code: "INVALID_EVENT" }),
+    );
   });
 
   it("still rejects the implicit draw when allowDraws is off (same as explicit isDraw: true)", () => {
