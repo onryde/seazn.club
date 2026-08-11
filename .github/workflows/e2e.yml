@@ -171,7 +171,7 @@ jobs:
       #
       # So without this container the spec could only ever prove the fallback,
       # which is the opposite of its purpose. Same pattern as ci.yml's smoke
-      # job and placement-service.yml's `integration` job; the image build is
+      # job and placement-ci.yml's `integration` job; the image build is
       # cached (type=gha) and shared with them.
       - uses: docker/setup-buildx-action@v3
       - name: Build the placement service image
