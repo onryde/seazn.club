@@ -22,12 +22,25 @@ import {
   draftPostsForDecidedFixture,
 } from "../org-posts";
 import { scoreEvent } from "../scoring";
+import { putLineup, getLineup } from "../fixtures";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
 // Full parsed football config — the module's fold needs it to initialize state
 // (an empty {} makes applyForfeit read undefined score fields).
 const FOOTBALL_CFG = builtinModules.find((m) => m.key === "football")!.configSchema.parse({});
+// S4/#428 review round 2 — icehockey, not football, for the coach-scorer
+// exclusion test below: football's applyGoal validates the scorer is
+// state.squads[side].onPitch (players only, structurally — see
+// reference_football_squad_is_players_only_structurally in agent memory),
+// so a coach could never be recorded as a goal scorer there at all and the
+// exclusion would be unfalsifiable (true regardless of whether the role
+// filter works). icehockey's applyGoal (period/kernel.ts) has no such
+// check — any person id folds — so it is the sport where "the coach is
+// excluded from the scorers list" can ONLY be true because
+// aggregatePlayerStats's lineups argument actually filtered him.
+const ICEHOCKEY_CFG = builtinModules.find((m) => m.key === "icehockey")!.configSchema.parse({});
+const icehockeyPositions = builtinModules.find((m) => m.key === "icehockey")!.positions;
 
 interface Ctx {
   auth: AuthCtx;
@@ -576,5 +589,104 @@ describe.skipIf(!HAS_DB)("org-posts auto-drafts", () => {
     const results = (await listPosts(ctx.auth, ctx.orgId)).filter((p) => p.kind === "result");
     expect(results).toHaveLength(1);
     expect(results[0]!.autoSource?.fixture_id).toBe(fx);
+  });
+
+  // S4/#428 review round 2 — the finding-1 standard ("must hold through the
+  // real API path, not just a bare engine unit test") applied to the SECOND
+  // aggregatePlayerStats call site named in the finding. Same shape as
+  // player-stats.test.ts's coach regression: real putLineup (writes
+  // LineupSlot.role over the real V357 column) -> real getLineup round-trip
+  // -> real scoreEvent ledger -> the real auto-draft path
+  // (draftPostsForDecidedFixture, fired here by the "scoring decided seam"
+  // exactly like the sibling test above) -> assert on the PUBLISHED POST'S
+  // OWN TEXT, not an intermediate return value.
+  it("a coach's goal-shaped stat never appears in the auto-drafted result post's scorers", async () => {
+    const ctx = await seedOrg();
+    await sql`
+      insert into sports (key, name, module_version, position_catalog)
+      values ('icehockey', 'Ice Hockey', '1.0.0', ${sql.json(icehockeyPositions as never)})
+      on conflict (key) do nothing`;
+    const suffix = randomUUID().slice(0, 8);
+    const [{ id: compId }] = await sql<{ id: string }[]>`
+      insert into competitions (org_id, name, slug, visibility, created_by)
+      values (${ctx.orgId}, 'Ice Cup', ${"ice-cup-" + suffix}, 'public', ${ctx.userId})
+      returning id`;
+    const [{ id: divisionId }] = await sql<{ id: string }[]>`
+      insert into divisions (competition_id, org_id, name, slug, sport_key, variant_key,
+        config, module_version, auto_posts)
+      values (${compId}, ${ctx.orgId}, 'Ice Premier', ${"ice-prem-" + suffix}, 'icehockey', 'iihf',
+        ${sql.json(ICEHOCKEY_CFG as never)}, '1.0.0', true)
+      returning id`;
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const [{ id: stageId }] = await sql<{ id: string }[]>`
+      insert into stages (division_id, org_id, seq, kind, name)
+      values (${divisionId}, ${ctx.orgId}, 1, 'league', 'League') returning id`;
+    const [{ id: entrantA }] = await sql<{ id: string }[]>`
+      insert into entrants (division_id, org_id, kind, display_name, seed)
+      values (${divisionId}, ${ctx.orgId}, 'team', 'Icebergs', 1) returning id`;
+    const [{ id: entrantB }] = await sql<{ id: string }[]>`
+      insert into entrants (division_id, org_id, kind, display_name, seed)
+      values (${divisionId}, ${ctx.orgId}, 'team', 'Glaciers', 2) returning id`;
+
+    const [{ id: playerId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name) values (${ctx.orgId}, 'Pat Player') returning id`;
+    const [{ id: coachId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name) values (${ctx.orgId}, 'Cara Coach') returning id`;
+    // A coach is a squad member (entrant_members) same as any player, S3
+    // ruling 3 -- role lives on the per-fixture lineup slot, not here.
+    await sql`
+      insert into entrant_members (entrant_id, person_id, org_id)
+      values (${entrantA}, ${playerId}, ${ctx.orgId}), (${entrantA}, ${coachId}, ${ctx.orgId})`;
+
+    const [{ id: fx }] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round,
+        home_entrant_id, away_entrant_id, status)
+      values (${stageId}, ${divisionId}, ${ctx.orgId}, 1, 1,
+        ${entrantA}, ${entrantB}, 'scheduled') returning id`;
+
+    // Real putLineup, real role write.
+    await putLineup(ctx.auth, fx, entrantA, {
+      slots: [
+        { person_id: playerId, slot: "starting", position_key: null, order_no: 1, roles: [] },
+        { person_id: coachId, slot: "bench", position_key: null, order_no: 2, roles: [], role: "coach" },
+      ],
+    });
+    // Real read path round-trip, same assertion shape as player-stats.test.ts.
+    const lineup = await getLineup(ctx.auth, fx, entrantA);
+    const coachSlot = (lineup.slots as { person_id: string; role: string }[]).find(
+      (s) => s.person_id === coachId,
+    );
+    expect(coachSlot?.role).toBe("coach");
+
+    await scoreEvent(ctx.auth, fx, { expected_seq: 0, type: "core.start", payload: {} });
+    // THE event under test: icehockey.goal carries zero on-ice validation
+    // (period/kernel.ts's applyGoal never checks the lineup at all, unlike
+    // football's applyGoal), so this folds and counts for ANY person id
+    // unless aggregatePlayerStats's role filter is the thing stopping it —
+    // proving the wiring, not a structural fold-level accident.
+    await scoreEvent(ctx.auth, fx, {
+      expected_seq: 1,
+      type: "icehockey.goal",
+      payload: { by: entrantA, person: coachId },
+    });
+    await scoreEvent(ctx.auth, fx, {
+      expected_seq: 2,
+      type: "icehockey.goal",
+      payload: { by: entrantA, person: playerId },
+    });
+    // Decides the fixture; the scoring decided seam drafts the result post
+    // as a side effect of this call (same mechanism the sibling test above
+    // exercises), which is what actually reaches extractScorers/org-posts.ts.
+    await scoreEvent(ctx.auth, fx, {
+      expected_seq: 3,
+      type: "core.forfeit",
+      payload: { by: entrantB, reason: "walkover" },
+    });
+
+    const results = (await listPosts(ctx.auth, ctx.orgId)).filter((p) => p.kind === "result");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.autoSource?.fixture_id).toBe(fx);
+    expect(results[0]!.bodyMd).toContain("Pat Player");
+    expect(results[0]!.bodyMd).not.toContain("Cara Coach");
   });
 });
