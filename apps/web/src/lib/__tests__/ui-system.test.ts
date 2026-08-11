@@ -135,4 +135,42 @@ describe("pin tip copy (PROMPT-33 follow-up)", () => {
     expect(tip.body).toMatch(/still drag|move .* yourself/i);
     expect(tip.body).toMatch(/freeze/i);
   });
+
+  it("schedule.locking never quotes the retired pin/lock EMOJI (board redesign, 2026-08-10)", async () => {
+    // Regression: the board redesign (docs/superpowers/specs/2026-08-10-
+    // board-view-redesign-design.md) replaced the raw 📌/🔒 glyphs on the
+    // fixture card with real lucide icons (Pin/Lock), but this tip — rendered
+    // right on the same page (`<Tip id="schedule.locking" />` in
+    // schedule-board.tsx) — still told the user to look for the OLD glyphs in
+    // its copy. Caught by scripts/smoke.ts's `boardRedesignSuite`: SSR'd page
+    // markup still carried the emoji, in the dictionaries, even though no
+    // fixture card does anymore. `Tip`'s rendered body text comes from
+    // `useMsg("tips.<id>.body")`, i.e. the DICTIONARIES — not this config
+    // object's own `.body` field (only its `helpSlug` is read at runtime) —
+    // so the four dictionaries are the ones that actually reach the page and
+    // must be checked directly, not just this config's mirror of them.
+    const PIN = "\u{1F4CC}"; // 📌
+    const LOCK = "\u{1F512}"; // 🔒
+    const { TIPS } = await import("@/config/tips");
+    const configBody = TIPS["schedule.locking"].body;
+    expect(configBody).not.toContain(PIN);
+    expect(configBody).not.toContain(LOCK);
+
+    const [uiEn, uiNl, uiFr, uiEs] = await Promise.all([
+      import("@/dictionaries/en/ui.json"),
+      import("@/dictionaries/nl/ui.json"),
+      import("@/dictionaries/fr/ui.json"),
+      import("@/dictionaries/es/ui.json"),
+    ]);
+    for (const [locale, dict] of [
+      ["en", uiEn.default],
+      ["nl", uiNl.default],
+      ["fr", uiFr.default],
+      ["es", uiEs.default],
+    ] as const) {
+      const body = (dict as Record<string, string>)["tips.schedule.locking.body"];
+      expect(body, `${locale} tips.schedule.locking.body`).not.toContain(PIN);
+      expect(body, `${locale} tips.schedule.locking.body`).not.toContain(LOCK);
+    }
+  });
 });
