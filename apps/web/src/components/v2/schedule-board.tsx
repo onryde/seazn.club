@@ -1241,7 +1241,7 @@ export function ScheduleBoard({
               highlightId={highlightId}
               ghosts={dayGhosts}
               blackouts={cfg.blackouts}
-              matchMinutes={cfg.matchMinutes}
+              matchMinutes={matchMinutes}
             />
           )}
 
