@@ -9,6 +9,8 @@ import {
   createStageAndGenerate,
   competitionPath,
   divisionPath,
+  loginUi,
+  claimProfileBySql,
 } from "./helpers";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
@@ -151,6 +153,50 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
   ];
   for (const { path, allowancePx } of routes) {
     await auditRoute(page, path, { allowancePx });
+  }
+});
+
+// #516: an organiser who is ALSO a claimed player (nav.tsx's `isPlayer`,
+// dual-role seam PROMPT-53) gets a 4th "Player home" nav link. At this
+// project's width that pushes the header's fixed-width budget (wordmark +
+// org chip + 4 nav links + help + logout) past what the #349 min-w-0/
+// shrink-0 mechanism can reclaim by shrinking the display-name span alone
+// (it was already fully collapsed) — the row overflows and "Sign out"
+// renders clipped past the right edge. Own throwaway account + org: must
+// NOT touch the shared pro.json identity other specs (and other projects
+// sharing its storageState) depend on staying a 3-link organiser.
+test("dual-role header (#516): organiser + claimed player profile holds no horizontal scroll", async ({
+  browser,
+}) => {
+  const email = `e2e-dualrole-${TAG}@example.com`;
+  const ctx = await browser.newContext({ viewport: projectViewport() ?? undefined });
+  try {
+    const dual = await ctx.newPage();
+    await loginUi(dual, email);
+    // requirePageAuth (src/app/dashboard/page.tsx) is what auto-provisions
+    // "My organization" for a member of none — a raw API call doesn't run
+    // it, so visit a page before asking activeOrg for a slug.
+    await dual.goto("/dashboard", { waitUntil: "load" });
+    await claimProfileBySql(email);
+    const org = await activeOrg(dual);
+
+    for (const path of ["/dashboard", `/o/${org.slug}/settings`]) {
+      await auditRoute(dual, path);
+    }
+
+    // Geometry alone (expectNoHorizontalScroll, inside auditRoute) proves the
+    // PAGE doesn't overflow — it does not prove Sign out is the thing that
+    // stayed on-screen rather than something else giving way. Pin that too.
+    await dual.goto("/dashboard", { waitUntil: "load" });
+    await dual.waitForTimeout(300);
+    const signOut = dual.getByRole("button", { name: /sign out/i });
+    await expect(signOut).toBeVisible();
+    const box = await signOut.boundingBox();
+    expect(box, "Sign out button has no layout box").not.toBeNull();
+    const vw = dual.viewportSize()?.width ?? 0;
+    expect(box!.x + box!.width, "Sign out button right edge must stay within the viewport").toBeLessThanOrEqual(vw);
+  } finally {
+    await ctx.close();
   }
 });
 
