@@ -131,7 +131,6 @@
         },
         "required": [
           "opponentCoinsLeft",
-          "queenTo",
           "winner"
         ],
         "type": "object"

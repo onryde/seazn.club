@@ -120,9 +120,6 @@
             "type": "string"
           }
         },
-        "required": [
-          "winner"
-        ],
         "type": "object"
       },
       {
