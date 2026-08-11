@@ -4,7 +4,8 @@ import { foldMatch, type EventEnvelope } from "../../core/events.ts";
 import type { LineupPair, StageCtx } from "../../core/types.ts";
 import { aggregatePlayerStats } from "../../stats/stats.ts";
 import { conformanceSuite, makeEnvelope } from "../../testkit/index.ts";
-import { generic, type GenericCfg } from "./generic.ts";
+import { checkActionCoverage, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
+import { generic, GENERIC_EVENT_SCHEMAS, padSpec, type GenericCfg } from "./generic.ts";
 
 const lineups: LineupPair = {
   home: { entrantId: "H", slots: [{ personId: "h1", slot: "starting", orderNo: 1 }] },
@@ -241,7 +242,117 @@ describe("generic — event union stays unambiguous (W4)", () => {
   });
 });
 
+// S6/#416 (W5) — the padSpec field/attribution DSL has no "constant" PadField
+// kind (a toggle is genuinely bivalent — `fc.boolean()` — so it cannot be
+// pinned to always fire `isDraw: true`). Widened win_loss mode's draw
+// detection so "no winnerId" alone (isDraw true, false, or absent) reads as
+// a draw — a padSpec "Draw" action's toggle field can then never build a
+// payload the fold rejects, whichever way the toggle lands.
+describe("generic — win_loss mode: an absent winnerId reads as a draw regardless of isDraw's exact value (S6 padSpec representability)", () => {
+  it("isDraw: false with no winnerId settles exactly like isDraw: true", () => {
+    const drawCfg = { ...winLossCfg, allowDraws: true };
+    const viaFalse = fold(drawCfg, stream(["generic.result", { isDraw: false }]));
+    const viaTrue = fold(drawCfg, stream(["generic.result", { isDraw: true }]));
+    expect(viaFalse.outcome).toEqual({ kind: "draw" });
+    expect(viaFalse).toEqual(viaTrue);
+  });
+
+  it("an empty payload with no winnerId also settles as a draw", () => {
+    const drawCfg = { ...winLossCfg, allowDraws: true };
+    expect(fold(drawCfg, stream(["generic.result", {}])).outcome).toEqual({ kind: "draw" });
+  });
+
+  it("still rejects the implicit draw when allowDraws is off (same as explicit isDraw: true)", () => {
+    expect(() => fold(winLossCfg, stream(["generic.result", { isDraw: false }]))).toThrowError(
+      expect.objectContaining({ code: "INVALID_EVENT" }),
+    );
+  });
+
+  it("a real winnerId still decides — presence of winnerId, not isDraw, is what makes it decisive", () => {
+    const state = fold({ ...winLossCfg, allowDraws: true }, stream(["generic.result", { winnerId: "H", isDraw: false }]));
+    expect(state.outcome).toEqual({ kind: "win", winner: "H", loser: "A", method: "regulation" });
+  });
+});
+
 // PROMPT-03 §5 — the generic module must pass the conformance kit in both
 // result modes.
 conformanceSuite(generic, { cfg: winLossCfg, lineups, label: "win_loss" });
 conformanceSuite(generic, { cfg: scoreCfg, lineups, label: "score" });
+
+// ---------------------------------------------------------------------------
+// S6/#416 (W5) — padSpec conformance.
+// ---------------------------------------------------------------------------
+
+const winLossDrawsCfg: GenericCfg = { ...winLossCfg, allowDraws: true };
+
+padSpecConformanceSuite(generic, { cfg: winLossCfg, lineups, label: "win_loss, draws off" });
+padSpecConformanceSuite(generic, { cfg: winLossDrawsCfg, lineups, label: "win_loss, draws on" });
+padSpecConformanceSuite(generic, { cfg: scoreCfg, lineups, label: "score" });
+
+describe("generic padSpec — action coverage across the format space", () => {
+  it("every registered event type is reachable from some action, across win_loss/score and draws on/off", () => {
+    const specs = [padSpec(winLossCfg), padSpec(winLossDrawsCfg), padSpec(scoreCfg)];
+    expect(checkActionCoverage(specs, GENERIC_EVENT_SCHEMAS)).toEqual([]);
+  });
+
+  it("generic.result is reachable from a SINGLE cfg alone too — no cfg-mutual-exclusivity hides it", () => {
+    for (const cfg of [winLossCfg, winLossDrawsCfg, scoreCfg]) {
+      expect(checkActionCoverage(padSpec(cfg), GENERIC_EVENT_SCHEMAS)).toEqual([]);
+    }
+  });
+});
+
+describe("generic padSpec — no core.* actions (match lifecycle is universal renderer chrome)", () => {
+  it("declares zero actions outside its own eventSchemas registry", () => {
+    for (const cfg of [winLossCfg, winLossDrawsCfg, scoreCfg]) {
+      const spec = padSpec(cfg);
+      for (const panel of spec.panels) {
+        for (const action of panel.actions) {
+          expect(action.type in GENERIC_EVENT_SCHEMAS, action.type).toBe(true);
+        }
+      }
+    }
+  });
+});
+
+describe("generic padSpec — variant reshaping: win_loss vs score produce different panels from the same module", () => {
+  const winLossSpec = padSpec(winLossCfg);
+  const scoreSpec = padSpec(scoreCfg);
+  const actionKeysOf = (spec: ReturnType<typeof padSpec>) =>
+    new Set(spec.panels.flatMap((p) => p.actions.map((a) => a.labelKey.key)));
+
+  it("score mode offers score entry + settle-from-tally, never the win_loss decisive/draw actions", () => {
+    const keys = actionKeysOf(scoreSpec);
+    expect(keys.has("pad.generic.action.scoreEntry")).toBe(true);
+    expect(keys.has("pad.generic.action.settleFromTally")).toBe(true);
+    expect(keys.has("pad.generic.action.decisive")).toBe(false);
+    expect(keys.has("pad.generic.action.draw")).toBe(false);
+  });
+
+  it("win_loss mode offers the decisive action, never score entry", () => {
+    const keys = actionKeysOf(winLossSpec);
+    expect(keys.has("pad.generic.action.decisive")).toBe(true);
+    expect(keys.has("pad.generic.action.scoreEntry")).toBe(false);
+  });
+
+  it("win_loss mode drops the draw action entirely when allowDraws is off, adds it when on", () => {
+    expect(actionKeysOf(winLossSpec).has("pad.generic.action.draw")).toBe(false);
+    expect(actionKeysOf(padSpec(winLossDrawsCfg)).has("pad.generic.action.draw")).toBe(true);
+  });
+
+  it("both modes offer the running tally (add + correct)", () => {
+    for (const spec of [winLossSpec, scoreSpec]) {
+      const keys = actionKeysOf(spec);
+      expect(keys.has("pad.generic.action.addPoints")).toBe(true);
+      expect(keys.has("pad.generic.action.correctPoints")).toBe(true);
+    }
+  });
+});
+
+describe("generic padSpec — settle-from-tally is gated on state.running, not always visible", () => {
+  it("declares a state-dependent gate on the settle panel", () => {
+    const spec = padSpec(scoreCfg);
+    const settle = spec.panels.find((p) => p.labelKey.key === "pad.generic.panel.settle")!;
+    expect(settle.gate).toEqual({ op: "path-truthy", path: "state.running" });
+  });
+});
