@@ -90,6 +90,27 @@ describe("buildRuleOverride — sports the picker did not cover at all before", 
     ).toEqual({ gameTo: 25, tieBoard: "draw", queenFollowsBoard: true });
   });
 
+  it("carrom: a gameTo above the schema's queenCapAt default leaves it untouched", () => {
+    // 25 >= 22 (the pinned schema's own queenCapAt default), so the default
+    // stays valid without a redundant override.
+    expect(buildRuleOverride("carrom", { gameTo: "25" })).toEqual({ gameTo: 25 });
+  });
+
+  it("carrom: a quick-game gameTo below 22 pulls queenCapAt down with it", () => {
+    // Reproduces a real schema-refine failure this once shipped: gameTo=15
+    // alone left queenCapAt at its schema default of 22, and the pinned
+    // config's own queenCapAt <= gameTo refine rejected the combination on
+    // a field the organizer never touched.
+    expect(buildRuleOverride("carrom", { gameTo: "15" })).toEqual({ gameTo: 15, queenCapAt: 15 });
+  });
+
+  it("carrom: an explicit queenCapAt always wins over gameTo's fallback", () => {
+    expect(buildRuleOverride("carrom", { gameTo: "15", queenCapAt: "10" })).toEqual({
+      gameTo: 15,
+      queenCapAt: 10,
+    });
+  });
+
   it("generic: resultMode and allowDraws", () => {
     expect(buildRuleOverride("generic", { resultMode: "score", allowDraws: "on" })).toEqual({
       resultMode: "score",

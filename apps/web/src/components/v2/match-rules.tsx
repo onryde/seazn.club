@@ -66,7 +66,7 @@ const VOLLEYBALL_RULES: RuleField[] = [
   {
     key: "cap",
     label: "Hard cap (deciding point)",
-    help: "Blank inherits the variant's own cap, if it has one.",
+    help: "Must be at least the points needed to win a set. Blank inherits the variant's own cap, if it has one.",
     kind: "number",
     min: 15,
     max: 35,
@@ -445,10 +445,27 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
     {
       key: "gameTo",
       label: "Points to win a game",
+      help: "Also lowers the queen bonus cutoff below if that field is left blank.",
       kind: "number",
       min: 5,
       max: 50,
-      build: (v) => ({ gameTo: Number(v) }),
+      // The pinned schema refines queenCapAt <= gameTo. queenCapAt's own
+      // schema default (22) is only valid for gameTo >= 22 — a blank
+      // queenCapAt below that would otherwise fail server-side the moment
+      // gameTo is lowered for a shorter game, on a field the organizer never
+      // touched. Carry a coherent fallback here since queenCapAt's own field
+      // never runs at all while blank (buildRuleOverride skips blank fields
+      // entirely, so it can't rescue itself).
+      build: (v, values) => {
+        const gameTo = Number(v);
+        const override: Record<string, unknown> = { gameTo };
+        // Only the actual conflict case (below the schema's own default)
+        // needs the fallback — a gameTo at or above 22 leaves the default
+        // valid, so leave queenCapAt untouched rather than writing a
+        // redundant override.
+        if (!values.queenCapAt && gameTo < 22) override.queenCapAt = gameTo;
+        return override;
+      },
     },
     {
       key: "maxBoards",

@@ -1959,9 +1959,10 @@ const positions: PositionCatalog = {
 // The catalog for a resolved config, mirroring football's positionsFor (W4,
 // #407). Only the starting size moves: `playersPerSide` already carries a
 // schema default of 11 (== positions.lineup.size), so the common case returns
-// the static catalog unchanged. `pairs-6-a-side` (playersPerSide: 6) is the
-// shipped variant this closes the gap for — validateLineup compared the
-// starting count exactly and had no way to see this knob before.
+// the static catalog unchanged. Closes a real gap: validateLineup compared
+// the starting count exactly and had no way to see this knob before, so any
+// config with a non-default playersPerSide (a raw override, or a future
+// variant) would reject every lineup that wasn't exactly eleven.
 function positionsFor(cfg: CricketCfg): PositionCatalog {
   if (cfg.playersPerSide === positions.lineup.size) return positions;
   return { ...positions, lineup: { ...positions.lineup, size: cfg.playersPerSide } };
