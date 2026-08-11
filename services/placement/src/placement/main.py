@@ -180,6 +180,7 @@ class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
                 parsed.dependencies,
                 parsed.rule_groups,
                 parsed.pinned_rule_group_indices,
+                parsed.pinned_entrant_indices,
             )
             solve_started = time.perf_counter()
             outcome = solve(model, wall_seconds=wall, knobs=self._knobs)

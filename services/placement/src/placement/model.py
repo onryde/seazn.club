@@ -145,11 +145,11 @@ than z3's, and TS re-runs its own verifier on the result:
 
   * build-encode.ts section 5, per-fixture start windows (`notAfter`).
     `Fixture` carries (entrant_indices, division_index) only.
-  * build-encode.ts section 7's PARTICIPANT-REST half. `existing` rows arrive
-    as `PinnedRow (court_index, start_at_ms)` — no entrant list, and as of
-    round 6 no fixture identity of any kind — so only the court-turnaround
-    half of section 7 survives; a pinned row still blocks its own court but
-    no longer blocks a participant it shares.
+  * build-encode.ts section 7's PARTICIPANT-REST half — CLOSED as of task C6,
+    on the `rule_groups` path only. See "A SIXTH is CLOSED as of task C6"
+    below for the mechanics. A caller still sending only `rest_by_division` /
+    `day_cap_by_division` (`rule_groups` empty) keeps today's behaviour: a
+    pinned row blocks its own court but not a participant it shares.
 
 A third — per-court grids — is CLOSED as of task C2, and is recorded here
 because the earlier state of this note got the capability question wrong
@@ -223,6 +223,62 @@ sending just `day_cap_by_division` gets the permissive behaviour above,
 unchanged (section 9's `else` branch) — the division path has no
 pin-to-group attribution to draw on, and retrofitting one would need the very
 `division_index` addition this note originally, and wrongly, asked for.
+
+A SIXTH is CLOSED as of task C6, on the `rule_groups` path only: **a pinned
+row now joins its entrants' participant-rest groups.** `PinnedRow.
+entrant_indices` (also #21, forwarded as `pinned_entrant_indices`, parallel to
+`existing` exactly like `pinned_rule_group_indices`) says who is playing in
+it; a pin's own rest is the MAX of `min_rest_minutes` over the rule groups it
+counts against (`pinned_rule_group_indices` — C4's field, read a second way
+here), 0 if it belongs to none. That resolution has to match the verifier
+side exactly — `calendar.ts`'s `effectiveRestMinutes` resolves the identical
+"max over applicable rules" for the same pin — because a placer and a
+verifier disagreeing about one number is the recurring defect in this
+programme, not a hypothetical one.
+
+Modelled as a second FIXED interval per pin (`ivr_existing_{k}`, sized
+`dur_ms + pin's own rest`), folded into the SAME per-entrant `AddNoOverlap`
+group a movable fixture's own `ivr_{i}` sits in — mirroring section 7's
+court-overlap half (`ivc_existing_{k}`) exactly, just against a different
+grouping. Two pins alone can now share a group with no movable fixture
+present at all: the defect this closes was measured on exactly that shape —
+two pinned rows, thirty minutes apart, sharing an entrant, thirty minutes'
+rest owed, reported OPTIMAL where z3 proved INFEASIBLE, because `by_entrant`
+was built by walking `fixtures` (the movable rows) alone and a pin
+contributed nothing to it.
+
+Asymmetric interval widths between the two sides of one `AddNoOverlap` group
+are expected: a pin's own resolved rest and a movable fixture's own
+`rest_by_division` figure are independent numbers — the same asymmetry the
+model already accepts between two movable fixtures in different divisions.
+
+Be precise about what that actually enforces, because the obvious reading is
+wrong and this file is where placer/verifier forks get re-derived.
+`AddNoOverlap` over two differently-sized intervals does NOT enforce the
+stricter of the pair in both directions — it enforces the EARLIER interval's
+OWN width. MEASURED 2026-08-11, not reasoned: two fixed-size intervals of 10
+and 100, the short one pinned to t=0, minimising the long one's start, gives
+10 — not 100.
+
+The consequence is a real one-directional gap against the verifier, which
+resolves a pin/movable pair as ONE number for the pair:
+`validateAssignments` only ever evaluates a movable-vs-immovable pair in the
+order `pairRestMinutes(config, movable, immovable)` (`calendar.ts`'s own note
+above `pairRestMinutes`), and that number maxes in any typed rule covering
+EITHER side. So a movable owing 0 placed immediately BEFORE a pin owing 30 is
+accepted here and rejected there — `calendar.ts:1150`'s "under-constrains …
+the verifier then rejects" case. It is the same class of gap the model
+already carries between two movable fixtures in different divisions
+(the verifier takes `max` of both directions there; the placer does not), so
+C6 widens an existing gap rather than opening a new one — but it is a gap,
+not the safety this paragraph originally claimed, and closing it needs a
+per-PAIR bound the one-interval-per-row encoding cannot express.
+
+Movable-fixture rest is UNCHANGED
+by this task, still `rest_by_division` only — a rule group's own
+`min_rest_minutes` applying to its MOVABLE fixtures (rather than only to the
+pins that count against it) is a separate, later task, and closing it must
+not fold a max across the pair the way this task closes the pin half.
 """
 
 from __future__ import annotations
@@ -396,6 +452,7 @@ def build_model(
     dependencies: list[tuple[int, int]],
     rule_groups: list[tuple[list[int], int | None, int | None]] | None = None,
     pinned_rule_group_indices: list[list[int]] | None = None,
+    pinned_entrant_indices: list[list[int]] | None = None,
 ) -> cp_model.CpModel:
     """Build the full constraint model. No objective is set — `solve()` owns
     that, so the tier chain (Prompt 03) can drive one model through several
@@ -440,10 +497,19 @@ def build_model(
             order) — `pinned_rule_group_indices[k]` is which rule groups
             `existing[k]` counts against. See `_day_of_pin` for how a pin's
             day is determined.
+        pinned_entrant_indices: parallel to `existing` the same way —
+            `pinned_entrant_indices[k]` is who is playing in `existing[k]`.
+            Section 6 folds each pin into its entrants' participant-rest
+            groups, resolving that pin's own rest as the max
+            `min_rest_minutes` over the rule groups it counts against
+            (`pinned_rule_group_indices[k]`), 0 if none. Read only when
+            `rule_groups` is non-empty — see the module docstring, "A SIXTH
+            is CLOSED as of task C6".
     """
     del step_minutes  # see the docstring: contractual, not load-bearing.
     rule_groups = rule_groups or []
     pinned_rule_group_indices = pinned_rule_group_indices or []
+    pinned_entrant_indices = pinned_entrant_indices or []
 
     rest_by_division: dict[int, int] = constraints.get("rest_by_division") or {}
     day_cap_by_division: dict[int, int] = constraints.get("day_cap_by_division") or {}
@@ -600,9 +666,61 @@ def build_model(
         for i in range(n)
     ]
 
-    for group in by_entrant.values():
+    # C6 (task #21) — a pin joins the SAME entrant-keyed rest groups, via
+    # `pinned_entrant_indices`. Gated on `rule_groups` being non-empty, the
+    # same fallback section 9's day cap uses: a pin's own rest has no OTHER
+    # source (unlike a movable fixture, `existing` carries no `division_index`
+    # to resolve `rest_by_division` against), so with no rule_groups there is
+    # nothing to resolve it from and this is a no-op — a caller still on the
+    # previous contract shape keeps its previous behaviour exactly (module
+    # docstring, "A SIXTH is CLOSED as of task C6"). One FIXED interval per
+    # pin, mirroring section 7's court-overlap half (`ivc_existing_{k}`)
+    # exactly, just against a different grouping, because a pin has no
+    # presence literal — it is on the board unconditionally.
+    pinned_rest_by_entrant: dict[int, list[Any]] = {}
+    if rule_groups:
+        for k, (_existing_court, existing_start) in enumerate(existing):
+            entrant_indices = pinned_entrant_indices[k] if k < len(pinned_entrant_indices) else []
+            if not entrant_indices:
+                continue
+            group_indices = pinned_rule_group_indices[k] if k < len(pinned_rule_group_indices) else []
+            # MAX over the groups this pin counts against, 0 if none — the
+            # same resolution `calendar.ts`'s `effectiveRestMinutes` applies
+            # on the verifier side (module docstring); the placer must not
+            # resolve it differently. Floored at 0 with the same clamp idiom
+            # section 9 uses for a negative `cap - pinned`: a value this
+            # negative can only reach here through a direct domain caller,
+            # never through `placement.schema`, which already rejects it.
+            pin_rest_minutes = max(
+                0,
+                max(
+                    (rule_groups[g][1] or 0 for g in group_indices if 0 <= g < len(rule_groups)),
+                    default=0,
+                ),
+            )
+            interval = model.NewFixedSizeIntervalVar(
+                existing_start, dur_ms + pin_rest_minutes * MIN_MS, f"ivr_existing_{k}"
+            )
+            # Deduplicated: `placement.schema` guards a repeated entrant WITHIN
+            # one movable fixture (it would overlap itself, unsatisfiably) but
+            # has no equivalent guard for a pin's `entrant_indices` — so this
+            # module closes it the same way, rather than relying on the wire.
+            for entrant in dict.fromkeys(entrant_indices):
+                pinned_rest_by_entrant.setdefault(entrant, []).append(interval)
+
+    # Union of both sides: an entrant two PINS share (no movable fixture at
+    # all) must still get a group — that shape is the C6 defect itself,
+    # measured as two pinned rows, thirty minutes apart, thirty minutes' rest
+    # owed, reported OPTIMAL where z3 proved INFEASIBLE. `sorted()` keeps
+    # constraint-construction order reproducible across runs (`set`'s own
+    # order is already stable for small ints, but this matches the file's
+    # existing `sorted(day_bounds)` convention rather than leaning on that).
+    for entrant in sorted(set(by_entrant) | set(pinned_rest_by_entrant)):
+        group = [interval_rest[i] for i in by_entrant.get(entrant, [])] + pinned_rest_by_entrant.get(
+            entrant, []
+        )
         if len(group) >= 2:
-            model.AddNoOverlap([interval_rest[i] for i in group])
+            model.AddNoOverlap(group)
 
     # section 8: order dependencies. The dependent may not START until the
     # feeder's END plus the DEPENDENT's own rest (resolved off the dependent's

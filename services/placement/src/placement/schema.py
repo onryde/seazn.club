@@ -127,14 +127,17 @@ module — every index in range, every value where "unset" and "legitimately
 zero" could collide presence-tracked — and, like every other validated field,
 they land on `ModelInput`. What happens next has PARTIALLY changed since this
 was first written: task C4 taught `build_model` to enforce a rule group's DAY
-CAP (`max_fixtures_per_day`) against the fixtures and pins it covers, so
-`main.py` now calls `build_model` with NINE positional arguments, not seven —
-`rule_groups` and `pinned_rule_group_indices` join the original seven.
-`pinned_entrant_indices` is still not among them: C6 (participant rest, keyed
-by a pin's entrants) and C1's `min_rest_minutes` half of `rule_groups` remain
-separate, later tasks, and `build_model` does not read either yet. See
-`placement.model`'s own module docstring ("A FIFTH is CLOSED as of task C4")
-for the day-cap half's mechanics.
+CAP (`max_fixtures_per_day`) against the fixtures and pins it covers, and task
+C6 taught it to fold a pin into its entrants' participant-rest groups,
+resolving that pin's own rest as the max `min_rest_minutes` over the rule
+groups it counts against (`pinned_rule_group_indices`) — so `main.py` now
+calls `build_model` with TEN positional arguments, not seven: `rule_groups`,
+`pinned_rule_group_indices` and `pinned_entrant_indices` all join the
+original seven. A rule group's `min_rest_minutes` applying directly to its
+own MOVABLE fixtures (rather than only to the pins that count against it) is
+still unread and a separate, later task. See `placement.model`'s own module
+docstring ("A FIFTH is CLOSED as of task C4" / "A SIXTH is CLOSED as of task
+C6") for both halves' mechanics.
 """
 
 from __future__ import annotations
@@ -180,11 +183,9 @@ class ModelInput:
     The three fields after `wall_seconds` were, when this was written, an
     exception to "exactly `build_model`'s arguments": C1/C4/C6, validated here
     like everything else but not among the seven `main.py` passed to
-    `build_model`. That is now true of only ONE of the three — task C4 added
-    `rule_groups` and `pinned_rule_group_indices` to `main.py`'s call, which
-    now passes NINE arguments (see the module docstring, "#21").
-    `pinned_entrant_indices` remains carried here and unread: C6 is still a
-    separate, later task.
+    `build_model`. All three now flow: task C4 added `rule_groups` and
+    `pinned_rule_group_indices`, and task C6 added `pinned_entrant_indices` —
+    `main.py` now passes TEN arguments (see the module docstring, "#21").
     """
 
     courts: int  # the COUNT of courts (len(court_names)); names never reach the domain

@@ -904,6 +904,118 @@ def test_rule_groups_and_day_cap_by_division_are_not_both_applied():
     )
 
 
+# --- C6: a pinned row joins its entrants' participant-rest groups -----------
+#
+# `by_entrant` used to be built by walking `fixtures` (movable rows) alone, so
+# two PINNED rows sharing an entrant were invisible to section 6 no matter
+# what rest was owed -- a board z3 proves INFEASIBLE came back OPTIMAL.
+# `pinned_entrant_indices` (#21, parallel to `existing`) carries the identity
+# section 6 was missing; a pin's own rest is the max `min_rest_minutes` over
+# the rule groups it counts against (`pinned_rule_group_indices`).
+
+
+def test_two_pinned_rows_sharing_an_entrant_conflict_under_group_rest():
+    """THE C6 DEFECT, closed. Two PINNED rows -- no movable fixture on the
+    board at all -- thirty minutes apart on DIFFERENT courts, sharing one
+    entrant, under a rule group requiring thirty minutes' rest.
+
+    Different courts, so section 7's court-overlap half cannot be what trips
+    this; no movable fixtures at all, so there is nothing else on the board
+    that could produce INFEASIBLE. The only path left to it is section 6's
+    pin-rest fold this task adds: each pin becomes a FIXED interval sized
+    dur_ms + 30 minutes, both folded into entrant 0's group, and two FIXED
+    intervals thirty minutes apart at that width cannot both hold.
+
+    Before this change: OPTIMAL, unconditionally -- the pair never shared a
+    group. Same board `schedule-solver-telemetry.test.ts`'s tripwire drives
+    over the wire (two cards, 30 minutes apart, 30 minutes' rest, sharing an
+    entrant).
+    """
+    num_courts = 2
+    grid_slots = [
+        (0, _GROUP_ANCHOR, 0),
+        (1, _GROUP_ANCHOR, 0),
+        (0, _GROUP_ANCHOR + 30 * MIN_MS, 0),
+        (1, _GROUP_ANCHOR + 30 * MIN_MS, 0),
+    ]
+    fixtures: list[tuple[list[int], int]] = []
+    existing = [(0, _GROUP_ANCHOR), (1, _GROUP_ANCHOR + 30 * MIN_MS)]
+    pinned_entrant_indices = [[0], [0]]
+    pinned_rule_group_indices = [[0], [0]]
+    rule_groups = [([], 30, None)]  # 30 minutes' rest, no cap, no movable fixtures
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 0,
+        "rest_by_division": {},
+        "day_cap_by_division": {},
+    }
+
+    model = build_model(
+        fixtures,
+        num_courts,
+        grid_slots,
+        30,
+        constraints,
+        existing,
+        [],
+        rule_groups=rule_groups,
+        pinned_rule_group_indices=pinned_rule_group_indices,
+        pinned_entrant_indices=pinned_entrant_indices,
+    )
+    outcome = solve(model, wall_seconds=5.0)
+
+    assert outcome.status == "INFEASIBLE", (
+        f"two pins 30 minutes apart sharing an entrant, 30 minutes' rest owed, must be proven "
+        f"impossible together: status={outcome.status} assignments={outcome.assignments}"
+    )
+
+
+def test_two_pinned_rows_sharing_an_entrant_stay_independent_without_rule_groups():
+    """The converse, so the test above cannot pass by `existing` having
+    somehow become load-bearing unconditionally. Identical board, but the
+    caller has not upgraded to `rule_groups` -- `pinned_entrant_indices` is
+    sent (a caller could populate it on the old contract shape too) but
+    `rule_groups` itself is empty, so there is no rest figure to resolve a
+    pin's own rest from. Section 6 must stay a no-op for pins here, exactly
+    today's behaviour, matching the fallback `test_a_caller_without_rule_
+    groups_gets_the_old_uncounted_pin_behaviour` proves for the day-cap half.
+    """
+    num_courts = 2
+    grid_slots = [
+        (0, _GROUP_ANCHOR, 0),
+        (1, _GROUP_ANCHOR, 0),
+        (0, _GROUP_ANCHOR + 30 * MIN_MS, 0),
+        (1, _GROUP_ANCHOR + 30 * MIN_MS, 0),
+    ]
+    fixtures: list[tuple[list[int], int]] = []
+    existing = [(0, _GROUP_ANCHOR), (1, _GROUP_ANCHOR + 30 * MIN_MS)]
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 0,
+        "rest_by_division": {},
+        "day_cap_by_division": {},
+    }
+
+    model = build_model(
+        fixtures,
+        num_courts,
+        grid_slots,
+        30,
+        constraints,
+        existing,
+        [],
+        rule_groups=[],
+        pinned_rule_group_indices=[],
+        pinned_entrant_indices=[[0], [0]],
+    )
+    outcome = solve(model, wall_seconds=5.0)
+
+    assert outcome.status != "INFEASIBLE", (
+        f"a caller still on the previous contract shape (no rule_groups) must keep today's "
+        f"behaviour -- pins uncounted for rest: status={outcome.status}"
+    )
+
+
 # --- degenerate constraint values must fail loudly, not solve quietly -------
 #
 # proto3 scalars are non-optional: an unset `max_fixtures_per_day` or
