@@ -110,6 +110,30 @@ configure a court blacked out for the whole horizon) is handled by forcing
 that court's `presence_court[i][c]` to 0 for every fixture, in the domain,
 rather than by rejecting the request at the ACL. The RULE survives; only the
 REFUSAL does not.
+
+--- #21: rule_groups / PinnedRow.rule_group_indices / PinnedRow.entrant_indices --
+
+Three more fields this module owns: C1/C4/C6 of the contract revision that
+generalises `division_rules` past a division-only scope. `RuleGroup` is a rule
+and the exact MOVABLE fixture set it binds — the caller resolves any scope
+(competition, division, pool, entrant, person) via its own `scopeCoversFixture`
+and sends the RESULT, so this service still never learns what a division, pool,
+entrant or person IS (`_RULES.md` section 1). `PinnedRow.rule_group_indices` is
+which of those groups a pin counts against, and `PinnedRow.entrant_indices` is
+who is playing in it.
+
+All three are parsed and validated here exactly like every other field in this
+module — every index in range, every value where "unset" and "legitimately
+zero" could collide presence-tracked — and, like every other validated field,
+they land on `ModelInput`. What is different is what happens next: `main.py`
+still calls `build_model` with the same seven positional arguments it always
+has (`fixtures`, `courts`, `grid_slots`, `step_minutes`, `constraints`,
+`existing`, `dependencies`), none of which is `rule_groups`,
+`pinned_rule_group_indices` or `pinned_entrant_indices`. The domain cannot see
+them yet — this revision is ACL-only, exactly as `proto/scheduler.proto`'s own
+comment on `rule_groups` says: "changes no behaviour". The C1/C4/C6 MODEL
+halves — teaching `build_model` to actually enforce a rule group's cap against
+the fixtures and pins it covers — are separate tasks after this one.
 """
 
 from __future__ import annotations
@@ -151,6 +175,12 @@ class ModelInput:
     `main.py` is out of scope for this round and reads these fields by NAME
     (`parsed.courts`, `parsed.step_minutes`, ...) — every name below is
     unchanged from the string contract even though several TYPES are not.
+
+    The three fields after `wall_seconds` are the exception to "exactly
+    `build_model`'s arguments": they are C1/C4/C6, validated here like
+    everything else, but NOT among the seven `main.py` passes to `build_model`
+    (see the module docstring, "#21"). Carried on this dataclass anyway so a
+    later task reads them off `ModelInput` instead of re-parsing the proto.
     """
 
     courts: int  # the COUNT of courts (len(court_names)); names never reach the domain
@@ -161,6 +191,21 @@ class ModelInput:
     existing: list[tuple[int, int]]  # (court_index, start_at_ms) -- no fixture identity
     dependencies: list[tuple[int, int]]  # (before_index, after_index) -- fixture positions
     wall_seconds: float
+    # C1 -- one rule and the MOVABLE fixture indices it binds, plus its two
+    # value fields (each `None` when unset -- presence-tracked the same way
+    # `DivisionRule`'s are). Validated, unread by `build_model` this round;
+    # see the module docstring, "#21".
+    rule_groups: list[tuple[list[int], int | None, int | None]]
+    # (fixture_indices, min_rest_minutes, max_fixtures_per_day)
+    # C4 -- parallel to `existing` (same length, same order; `existing[k]`'s
+    # entry is `pinned_rule_group_indices[k]`). Kept OFF `existing`'s own tuple
+    # shape rather than widening it: `existing` is passed to `build_model`
+    # UNCHANGED, and `model.py`'s `for k, (existing_court, existing_start) in
+    # enumerate(existing)` unpacks it as a bare 2-tuple -- a 4-tuple there is a
+    # crash, not a behaviour change.
+    pinned_rule_group_indices: list[list[int]]
+    # C6 -- parallel to `existing` the same way.
+    pinned_entrant_indices: list[list[int]]
 
 
 def _require_index_present(has_field: bool, where: str) -> None:
@@ -239,6 +284,58 @@ def _validated_fixtures(
     return fixtures
 
 
+def _validated_rule_groups(
+    groups, num_fixtures: int
+) -> list[tuple[list[int], int | None, int | None]]:
+    """C1 -- one rule and the exact MOVABLE fixture set it binds, resolved by
+    the CALLER (`build.ts`'s `scopeCoversFixture`) and sent as the result
+    rather than as a scope this service would have to understand itself — see
+    `RuleGroup`'s own comment in the proto. Validated and carried on
+    `ModelInput` only: this revision changes no behaviour, so `build_model`
+    never sees it (module docstring, "#21").
+
+    Runs right after `_validated_fixtures`, before anything else, because
+    `existing[].rule_group_indices` (validated in `_validated_existing`)
+    resolves against `len(rule_groups)` -- the same "bounds before the things
+    that reference them" ordering `request_to_model_input`'s own docstring
+    already follows for `fixtures`/`dependencies`.
+    """
+    out: list[tuple[list[int], int | None, int | None]] = []
+    for i, g in enumerate(groups):
+        # An EMPTY `fixture_indices` is legal, not a caller error -- a
+        # competition-scoped rule on an all-pinned board resolves to exactly
+        # this, and the rule still has to reach the service because a pinned
+        # row's `rule_group_indices` references it by position in THIS list.
+        fixture_indices = [
+            _require_index_range(idx, num_fixtures, f"rule_groups[{i}].fixture_indices[{j}]")
+            for j, idx in enumerate(g.fixture_indices)
+        ]
+
+        min_rest_minutes: int | None = None
+        if g.HasField("min_rest_minutes"):
+            min_rest_minutes = g.min_rest_minutes
+            if min_rest_minutes < 0:
+                raise InvalidRequestError(
+                    f"rule_groups[{i}].min_rest_minutes must be >= 0, got {min_rest_minutes!r}. "
+                    "0 is a legitimate 'no minimum rest' rule, distinct from this group carrying "
+                    "no rest rule at all -- a negative value has no meaning either way."
+                )
+
+        max_fixtures_per_day: int | None = None
+        if g.HasField("max_fixtures_per_day"):
+            max_fixtures_per_day = g.max_fixtures_per_day
+            if max_fixtures_per_day <= 0:
+                raise InvalidRequestError(
+                    f"rule_groups[{i}].max_fixtures_per_day must be > 0, got "
+                    f"{max_fixtures_per_day!r}. A cap of 0 forbids the whole group from being "
+                    "placed at all, which is never what 'no cap' means -- omit the field instead "
+                    "of sending 0."
+                )
+
+        out.append((fixture_indices, min_rest_minutes, max_fixtures_per_day))
+    return out
+
+
 def _validated_slots(proto_slots, num_courts: int) -> list[tuple[int, int, int]]:
     out: list[tuple[int, int, int]] = []
     for i, s in enumerate(proto_slots):
@@ -263,8 +360,19 @@ def _validated_slots(proto_slots, num_courts: int) -> list[tuple[int, int, int]]
     return out
 
 
-def _validated_existing(rows, num_courts: int) -> list[tuple[int, int]]:
+def _validated_existing(
+    rows, num_courts: int, num_rule_groups: int, entrant_count: int
+) -> tuple[list[tuple[int, int]], list[list[int]], list[list[int]]]:
+    """`existing`, plus its two C4/C6 companions -- kept as SEPARATE parallel
+    lists (same length and order as the returned `existing`) rather than
+    widened onto its `(court_index, start_at_ms)` tuple. `existing` is
+    `build_model`'s argument, UNCHANGED, and `model.py` unpacks it as a bare
+    2-tuple (`for k, (existing_court, existing_start) in enumerate(existing)`)
+    -- a 4-tuple there is a crash, not a behaviour change.
+    """
     out: list[tuple[int, int]] = []
+    rule_group_indices_by_row: list[list[int]] = []
+    entrant_indices_by_row: list[list[int]] = []
     for i, a in enumerate(rows):
         _require_index_present(a.HasField("court_index"), f"existing[{i}].court_index")
         court_index = _require_index_range(a.court_index, num_courts, f"existing[{i}].court_index")
@@ -275,7 +383,27 @@ def _validated_existing(rows, num_courts: int) -> list[tuple[int, int]]:
                 "is silently ignored and a movable fixture takes the pinned slot."
             )
         out.append((court_index, a.start_at_ms))
-    return out
+
+        # C4 -- which rule groups this pin counts against. EMPTY IS A REAL
+        # ANSWER ("counts against nothing"), not a missing one -- see
+        # `RuleGroup.rule_group_indices`'s own field comment in the proto --
+        # so there is no not-empty guard here, only range.
+        rule_group_indices_by_row.append(
+            [
+                _require_index_range(
+                    idx, num_rule_groups, f"existing[{i}].rule_group_indices[{j}]"
+                )
+                for j, idx in enumerate(a.rule_group_indices)
+            ]
+        )
+        # C6 -- who is playing in this pinned match.
+        entrant_indices_by_row.append(
+            [
+                _require_index_range(idx, entrant_count, f"existing[{i}].entrant_indices[{j}]")
+                for j, idx in enumerate(a.entrant_indices)
+            ]
+        )
+    return out, rule_group_indices_by_row, entrant_indices_by_row
 
 
 def _validated_dependencies(pairs, num_fixtures: int) -> list[tuple[int, int]]:
@@ -386,7 +514,9 @@ def request_to_model_input(req) -> ModelInput:
     points into. Order matters — `court_names`/`entrant_count`/`division_count`
     are read first because they are the BOUNDS everything else resolves
     against; `fixtures` next because `len(fixtures)` is the bound
-    `dependencies` resolves against.
+    `dependencies` (and `rule_groups[].fixture_indices`) resolve against; then
+    `rule_groups` itself, because `existing[].rule_group_indices` (C4) resolves
+    against `len(rule_groups)` in turn.
 
     Args:
         req: a `scheduler_pb2.SolveBuildRequest`. Untyped in the signature so
@@ -420,6 +550,9 @@ def request_to_model_input(req) -> ModelInput:
     division_count = req.division_count
 
     fixtures = _validated_fixtures(req.fixtures, entrant_count, division_count)
+    # C1. Must run before `existing` below: `existing[].rule_group_indices`
+    # resolves against `len(rule_groups)`.
+    rule_groups = _validated_rule_groups(req.rule_groups, len(fixtures))
 
     grid_slots = _validated_slots(req.slots, num_courts)
     # No per-court coverage refusal here any more (task C2). This used to be
@@ -431,7 +564,9 @@ def request_to_model_input(req) -> ModelInput:
     # per-court blackout is placed correctly instead of the whole request
     # bouncing the caller back to its own greedy fallback. See that module's
     # docstring, "per-court grids" / "task C2".
-    existing = _validated_existing(req.existing, num_courts)
+    existing, pinned_rule_group_indices, pinned_entrant_indices = _validated_existing(
+        req.existing, num_courts, len(rule_groups), entrant_count
+    )
     dependencies = _validated_dependencies(req.dependencies, len(fixtures))
     rest_by_division, day_cap_by_division = _validated_division_rules(
         req.division_rules, division_count
@@ -454,6 +589,9 @@ def request_to_model_input(req) -> ModelInput:
         existing=existing,
         dependencies=dependencies,
         wall_seconds=req.wall_seconds,
+        rule_groups=rule_groups,
+        pinned_rule_group_indices=pinned_rule_group_indices,
+        pinned_entrant_indices=pinned_entrant_indices,
     )
 
 

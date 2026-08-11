@@ -5,7 +5,7 @@
 // hanging. The exception is the "channel lifecycle" block at the bottom, which
 // omits the seam on purpose so that the client-CONSTRUCTION path is exercised
 // too; see the module mock below.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SolveBuildCall } from "./placement-client.ts";
 import { PlacementError, solveBuild } from "./placement-client.ts";
 import { fixedClock } from "../core/clock.ts";
@@ -464,8 +464,11 @@ describe("solveBuild", () => {
       { courtIndex: 1, startAtMs: 1_700_003_600_000, dayIndex: 0 },
     ]);
     // `existing[].fixtureId` ("pinned-1") is dropped, not translated: PinnedRow
-    // carries no identity on the wire any more.
-    expect(request.existing).toEqual([{ courtIndex: 1, startAtMs: 1_700_007_200_000 }]);
+    // carries no identity on the wire any more. `ruleGroupIndices`/
+    // `entrantIndices` default to `[]` when the input row sets neither (C4/C6).
+    expect(request.existing).toEqual([
+      { courtIndex: 1, startAtMs: 1_700_007_200_000, ruleGroupIndices: [], entrantIndices: [] },
+    ]);
     expect(request.dependencies).toEqual([{ beforeIndex: 0, afterIndex: 1 }]);
     expect(request.divisionRules).toEqual([
       { divisionIndex: 0, minRestMinutes: 45, maxFixturesPerDay: undefined },
@@ -652,6 +655,144 @@ describe("solveBuild", () => {
     expect((rejection as PlacementError).failure).toBe("invalid_request");
     expect(mockClient.solveBuild).not.toHaveBeenCalled();
   });
+
+  // --- C1/C4/C6: rule_groups, and PinnedRow's rule_group_indices/entrant_indices ---
+
+  // The main shape test: `ruleGroups` maps onto the wire like `divisionRules`
+  // does (id -> index through the SAME `fixtureIndexOf`/`entrantIndexOf`
+  // tables everything else uses), and a pinned row's `entrantIds` can name an
+  // entrant that appears NOWHERE in a movable fixture — the whole point of C6
+  // (two pinned rows sharing an entrant are otherwise invisible to a rest
+  // rule) requires exactly that to still resolve to a valid index.
+  it("maps rule groups and pinned rule/entrant references onto the wire", async () => {
+    const mockClient = respondingClient();
+
+    await solveBuild(
+      {
+        ...INPUT,
+        fixtures: [
+          { fixtureId: "f1", entrantIds: ["alice", "bob"], divisionId: "div-a" },
+          { fixtureId: "f2", entrantIds: ["carol", "dave"], divisionId: "div-a" },
+        ],
+        existing: [
+          {
+            fixtureId: "pinned-1",
+            court: "Court 1",
+            startAtMs: 1_700_000_000_000,
+            // "erin" appears ONLY here, never on a movable fixture.
+            entrantIds: ["erin", "alice"],
+            ruleGroupIndices: [0],
+          },
+        ],
+        ruleGroups: [
+          { fixtureIds: ["f1", "f2"], minRestMinutes: 20 },
+          { fixtureIds: [], maxFixturesPerDay: 3 },
+        ],
+      },
+      { secret: "s3cr3t" },
+      mockClient,
+    );
+
+    const [request] = mockClient.solveBuild.mock.calls[0]!;
+    // alice=0, bob=1 (from f1), carol=2, dave=3 (from f2), erin=4 (NEW, from
+    // the pin only) -- proves `buildIndexSpace` registers `existing[].
+    // entrantIds` too, not just `fixtures[].entrantIds`.
+    expect(request.entrantCount).toBe(5);
+    // Group 1 resolves both fixture ids to their positions and carries only
+    // the half it actually has (`maxFixturesPerDay` stays `undefined`, not a
+    // false zero); group 2's EMPTY `fixtureIds` maps to an empty array, not
+    // to a dropped group -- dropping it would shift group 2 to index 0 out
+    // from under the pinned row's `ruleGroupIndices: [0]` below.
+    expect(request.ruleGroups).toEqual([
+      { fixtureIndices: [0, 1], minRestMinutes: 20, maxFixturesPerDay: undefined },
+      { fixtureIndices: [], minRestMinutes: undefined, maxFixturesPerDay: 3 },
+    ]);
+    // `ruleGroupIndices` is a straight passthrough; `entrantIndices` resolves
+    // ["erin", "alice"] to [4, 0] in the SAME order the caller gave them.
+    expect(request.existing).toEqual([
+      { courtIndex: 0, startAtMs: 1_700_000_000_000, ruleGroupIndices: [0], entrantIndices: [4, 0] },
+    ]);
+  });
+
+  // The C1 counterpart of "refuses a dependency that references an unknown
+  // fixture": `ruleGroups[].fixtureIds` resolves through the exact same
+  // `fixtureIndexOf` table, so an id it does not recognise must be refused
+  // the same way, not silently dropped from the group.
+  it("refuses a rule group that references an unknown fixture", async () => {
+    const mockClient = respondingClient();
+
+    const rejection = await solveBuild(
+      {
+        ...INPUT,
+        fixtures: [{ fixtureId: "f1", entrantIds: [], divisionId: "div-a" }],
+        ruleGroups: [{ fixtureIds: ["ghost"] }],
+      },
+      { secret: "s3cr3t" },
+      mockClient,
+    ).catch((err: unknown) => err);
+
+    expect(rejection).toBeInstanceOf(PlacementError);
+    expect((rejection as PlacementError).failure).toBe("invalid_request");
+    expect(mockClient.solveBuild).not.toHaveBeenCalled();
+  });
+
+  // The real-encoder counterpart of "builds a request the generated encoder
+  // can round-trip": `minRestMinutes: 0` specifically, because it is the
+  // proto3-`optional` case that a naive encoder drops as a default — the same
+  // trap `divisionRules`' own round-trip test exists to catch, now on the
+  // generalised field.
+  it("round-trips rule groups and pinned rule/entrant references through the real encoder", async () => {
+    const mockClient = respondingClient();
+
+    await solveBuild(
+      {
+        ...INPUT,
+        fixtures: [{ fixtureId: "f1", entrantIds: ["alice"], divisionId: "div-a" }],
+        existing: [
+          {
+            fixtureId: "pinned-1",
+            court: "Court 1",
+            startAtMs: 1_700_000_000_000,
+            entrantIds: ["alice"],
+            ruleGroupIndices: [0],
+          },
+        ],
+        ruleGroups: [{ fixtureIds: ["f1"], minRestMinutes: 0, maxFixturesPerDay: 2 }],
+      },
+      { secret: "s3cr3t" },
+      mockClient,
+    );
+
+    const [request] = mockClient.solveBuild.mock.calls[0]!;
+    const decoded = SolveBuildRequest.decode(SolveBuildRequest.encode(request).finish());
+
+    expect(decoded.ruleGroups).toEqual([
+      { fixtureIndices: [0], minRestMinutes: 0, maxFixturesPerDay: 2 },
+    ]);
+    expect(decoded.existing).toEqual([
+      { courtIndex: 0, startAtMs: 1_700_000_000_000, ruleGroupIndices: [0], entrantIndices: [0] },
+    ]);
+  });
+
+  // When neither `ruleGroups` nor any `existing[].entrantIds`/
+  // `ruleGroupIndices` is supplied at all (every pre-#21 caller), the wire
+  // still gets well-formed empty collections rather than `undefined` fields
+  // the generated encoder cannot iterate.
+  it("defaults rule groups and pinned rule/entrant references to empty when omitted", async () => {
+    const mockClient = respondingClient();
+
+    await solveBuild(
+      { ...INPUT, existing: [{ fixtureId: "pinned-1", court: "Court 1", startAtMs: 1 }] },
+      { secret: "s3cr3t" },
+      mockClient,
+    );
+
+    const [request] = mockClient.solveBuild.mock.calls[0]!;
+    expect(request.ruleGroups).toEqual([]);
+    expect(request.existing).toEqual([
+      { courtIndex: 0, startAtMs: 1, ruleGroupIndices: [], entrantIndices: [] },
+    ]);
+  });
 });
 
 // The only block in this file that does NOT inject a call seam: `solveBuild`
@@ -666,6 +807,51 @@ describe("channel lifecycle", () => {
     channelLog.mode = mode;
   }
 
+  /**
+   * `solveBuild` from a FRESH module graph, and this is load-bearing rather
+   * than tidiness.
+   *
+   * These two tests are the only ones in this file that depend on the hoisted
+   * `vi.mock` above actually intercepting, because they are the only ones that
+   * let `solveBuild` construct its own client. The engine runs
+   * `isolate: false` (`vitest.config.ts`), so THE MODULE CACHE IS SHARED
+   * ACROSS FILES in a worker: if any sibling file in the same worker imported
+   * `./generated/scheduler.ts` first, the cached REAL module is what
+   * `placement-client.ts` gets, the mock never intercepts, and these tests
+   * open a real gRPC channel to a host that does not exist.
+   *
+   * Which sibling lands in which worker is not fixed. `maxWorkers` is computed
+   * from the machine — `min(cores - 1, floor(mem / 3GB))` — so a 12-core dev
+   * box runs 5 workers and a 4-core CI runner runs 3, and the file
+   * distribution differs with it. That is exactly how this failed: green on
+   * every dev box and on `main`'s CI, then deterministically red on a PR that
+   * only ADDED tests to this file, with
+   * `Name resolution failed for target dns:placement.test:50051` and
+   * `ServiceClientImpl.solveBuild` from `make-client.js` in the stack — the
+   * genuine generated client. `main` was green by luck, not by correctness.
+   *
+   * `vi.resetModules()` drops the shared cache and the dynamic import rebuilds
+   * the graph, so the hoisted mock is consulted rather than a neighbour's
+   * leftovers. Same instrument, and same reason, as
+   * `build-lns-wiring.test.ts:152` — whose own header records this failure
+   * mode after it cost two misdiagnoses there.
+   *
+   * A STATIC import cannot be used here: the module would already be bound
+   * before `resetModules` runs, which is the inert-mock trap this repo has hit
+   * before.
+   */
+  async function freshSolveBuild(): Promise<typeof solveBuild> {
+    vi.resetModules();
+    const mod = await import("./placement-client.ts");
+    return mod.solveBuild;
+  }
+
+  // Leave the worker's cache as we found it. With `isolate: false` a mocked
+  // graph left cached here is a graph some other file inherits.
+  afterEach(() => {
+    vi.resetModules();
+  });
+
   // A channel per SOLVE, not per host — and the reason is Fly Proxy, not
   // tidiness. Ten concurrent organisers sharing one cached client ride ten
   // HTTP/2 streams over ONE TCP connection, and Fly's TCP proxy load-balances
@@ -678,9 +864,10 @@ describe("channel lifecycle", () => {
   // exactly the failure this test exists to catch.
   it("constructs and closes one client per solve, even for the same host", async () => {
     resetChannelLog("respond");
+    const solveBuildFresh = await freshSolveBuild();
 
-    await solveBuild(INPUT, { secret: "s3cr3t", host: HOST });
-    await solveBuild(INPUT, { secret: "s3cr3t", host: HOST });
+    await solveBuildFresh(INPUT, { secret: "s3cr3t", host: HOST });
+    await solveBuildFresh(INPUT, { secret: "s3cr3t", host: HOST });
 
     expect(channelLog.hosts).toEqual([HOST, HOST]);
     expect(channelLog.closes).toBe(2);
@@ -693,8 +880,9 @@ describe("channel lifecycle", () => {
   // `finally` is on the chokepoint rather than beside one branch of it.
   it("closes the client it constructed when the call throws before it starts", async () => {
     resetChannelLog("throw");
+    const solveBuildFresh = await freshSolveBuild();
 
-    await expect(solveBuild(INPUT, { secret: "s3cr3t", host: HOST })).rejects.toThrow(
+    await expect(solveBuildFresh(INPUT, { secret: "s3cr3t", host: HOST })).rejects.toThrow(
       /channel closed/,
     );
 

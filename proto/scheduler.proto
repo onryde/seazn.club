@@ -65,6 +65,83 @@ message Slot {
 message PinnedRow {
   optional uint32 court_index = 1;
   int64 start_at_ms = 2;
+  // C4 -- which rule groups this pin COUNTS AGAINST.
+  //
+  // A pinned row is a real match on a real day, and until this field existed
+  // the model could not attribute one to any rule, so a pin consumed none of
+  // its day's allowance and the solver was free to add a full cap's worth on
+  // top of it. Measured on a staging board: day cap 7, six pinned matches on
+  // one day, and the solver legitimately placed seven more -- thirteen
+  // matches on a day the organiser capped at seven.
+  //
+  // Indices into `SolveBuildRequest.rule_groups`, not a division: caps are
+  // NOT division-scoped by construction. `max_fixtures_per_day` accepts the
+  // full scope union in the engine (competition, division, entrant, person,
+  // pool) and only `build.ts` narrowed it to division, so a `division_index`
+  // here would have carved that accident into the contract.
+  //
+  // Repeated, because a single pin can sit inside a division cap and a
+  // competition cap at once, and must count against both.
+  //
+  // EMPTY IS A REAL ANSWER, not a missing one: a pin covered by no rule group
+  // counts against nothing. That is why this is `repeated` rather than an
+  // `optional` index -- repeated fields carry no presence ambiguity, every
+  // element that exists was explicitly appended, so only the RANGE is checked.
+  repeated uint32 rule_group_indices = 3;
+  // C6 -- who is playing in this pinned match. Each element
+  // 0 <= idx < `SolveBuildRequest.entrant_count`.
+  //
+  // Round 6 stripped `fixture_id` from this message and was right to: that
+  // field reached nothing but a debug label on a CP-SAT interval variable.
+  // This is not that field returning. It is the one fact about a pin the
+  // REST rules need and could not get, and it is an index into a list the
+  // request already carries -- no string is compared, and `court_names` stays
+  // display-only.
+  //
+  // What it closes: `by_entrant` is built from movable fixtures only, so two
+  // PINNED rows sharing an entrant thirty minutes apart under a 30-minute
+  // rest rule are invisible to each other. The service returns OPTIMAL on a
+  // board z3 proves INFEASIBLE.
+  repeated uint32 entrant_indices = 4;
+}
+
+// C1 -- a rule and the exact set of fixtures it binds.
+//
+// The obvious shape for scopes-above-the-division was to put the SCOPE on the
+// wire: a oneof over competition / division / entrant / person / pool. That
+// is the wrong shape, and rejecting it is the whole design.
+//
+// It would require teaching this service what a pool and a person ARE. The
+// service has no person concept at all -- `Fixture` carries entrant indices
+// and persons appear nowhere -- and `_RULES.md` section 1 is explicit that
+// this context does not own org/tenant concepts. Generalising the scope onto
+// the wire leaks the domain in precisely the direction the DDD standard
+// forbids.
+//
+// So the ACL resolves the scope and sends the RESULT. `build.ts` already owns
+// `scopeCoversFixture` and already resolves any scope to a set of fixtures;
+// it does that and sends the set. The service applies a rule to a set of
+// fixture positions, which is the only thing it was ever doing -- it never
+// learns what a division, pool, entrant or person is.
+//
+// This subsumes `DivisionRule`: a division is one such group. `division_rules`
+// is kept for now and migrated separately, because THIS revision changes no
+// behaviour -- see `SolveBuildRequest.rule_groups`.
+message RuleGroup {
+  // Each element 0 <= idx < len(`SolveBuildRequest.fixtures`). Range-checked
+  // only, per the repeated-field rule above.
+  //
+  // An EMPTY set is legal and means the rule binds no movable fixture. That
+  // is not a caller error: a competition-scoped rule on a board where every
+  // fixture is pinned resolves to exactly this, and the rule still has to
+  // reach the service because pins reference it via `rule_group_indices`.
+  repeated uint32 fixture_indices = 1;
+  // Presence, not `>= 0`: 0 is "no minimum rest", a legitimate rule, and
+  // distinct from this group carrying no rest rule at all.
+  optional int32 min_rest_minutes = 2;
+  // Presence, then `> 0` when set: 0 would forbid the group outright, which
+  // is never what "no cap" means. Absent = uncapped.
+  optional int32 max_fixtures_per_day = 3;
 }
 
 // (before, after) as FIXTURE indices -- 0 <= idx < len(`SolveBuildRequest.
@@ -171,6 +248,19 @@ message SolveBuildRequest {
   repeated DivisionRule division_rules = 10;
   BuildConstraints constraints = 11;
   double wall_seconds = 12;
+  // C1. Added ALONGSIDE `division_rules` rather than replacing it, and the
+  // staging split (DEPLOY.md section 4b) is why: a contract revision runs on
+  // `placement-stg` while production still runs the previous one, so for that
+  // window both services must tolerate the other's messages. Adding a field
+  // is safe in both directions under proto3; renumbering or repurposing one
+  // is not, and no runbook step saves you from that.
+  //
+  // So the migration is staged. This revision adds the field and changes NO
+  // behaviour -- the ACL parses and validates it, the domain never receives
+  // it, and the same request produces the same board. `division_rules`
+  // becomes redundant when the C1 model half lands, and field 10 is reserved
+  // rather than reused when it finally goes.
+  repeated RuleGroup rule_groups = 13;
 }
 
 message SolveBuildResponse {

@@ -126,6 +126,97 @@ export interface Slot {
 export interface PinnedRow {
   courtIndex?: number | undefined;
   startAtMs: number;
+  /**
+   * C4 -- which rule groups this pin COUNTS AGAINST.
+   *
+   * A pinned row is a real match on a real day, and until this field existed
+   * the model could not attribute one to any rule, so a pin consumed none of
+   * its day's allowance and the solver was free to add a full cap's worth on
+   * top of it. Measured on a staging board: day cap 7, six pinned matches on
+   * one day, and the solver legitimately placed seven more -- thirteen
+   * matches on a day the organiser capped at seven.
+   *
+   * Indices into `SolveBuildRequest.rule_groups`, not a division: caps are
+   * NOT division-scoped by construction. `max_fixtures_per_day` accepts the
+   * full scope union in the engine (competition, division, entrant, person,
+   * pool) and only `build.ts` narrowed it to division, so a `division_index`
+   * here would have carved that accident into the contract.
+   *
+   * Repeated, because a single pin can sit inside a division cap and a
+   * competition cap at once, and must count against both.
+   *
+   * EMPTY IS A REAL ANSWER, not a missing one: a pin covered by no rule group
+   * counts against nothing. That is why this is `repeated` rather than an
+   * `optional` index -- repeated fields carry no presence ambiguity, every
+   * element that exists was explicitly appended, so only the RANGE is checked.
+   */
+  ruleGroupIndices: number[];
+  /**
+   * C6 -- who is playing in this pinned match. Each element
+   * 0 <= idx < `SolveBuildRequest.entrant_count`.
+   *
+   * Round 6 stripped `fixture_id` from this message and was right to: that
+   * field reached nothing but a debug label on a CP-SAT interval variable.
+   * This is not that field returning. It is the one fact about a pin the
+   * REST rules need and could not get, and it is an index into a list the
+   * request already carries -- no string is compared, and `court_names` stays
+   * display-only.
+   *
+   * What it closes: `by_entrant` is built from movable fixtures only, so two
+   * PINNED rows sharing an entrant thirty minutes apart under a 30-minute
+   * rest rule are invisible to each other. The service returns OPTIMAL on a
+   * board z3 proves INFEASIBLE.
+   */
+  entrantIndices: number[];
+}
+
+/**
+ * C1 -- a rule and the exact set of fixtures it binds.
+ *
+ * The obvious shape for scopes-above-the-division was to put the SCOPE on the
+ * wire: a oneof over competition / division / entrant / person / pool. That
+ * is the wrong shape, and rejecting it is the whole design.
+ *
+ * It would require teaching this service what a pool and a person ARE. The
+ * service has no person concept at all -- `Fixture` carries entrant indices
+ * and persons appear nowhere -- and `_RULES.md` section 1 is explicit that
+ * this context does not own org/tenant concepts. Generalising the scope onto
+ * the wire leaks the domain in precisely the direction the DDD standard
+ * forbids.
+ *
+ * So the ACL resolves the scope and sends the RESULT. `build.ts` already owns
+ * `scopeCoversFixture` and already resolves any scope to a set of fixtures;
+ * it does that and sends the set. The service applies a rule to a set of
+ * fixture positions, which is the only thing it was ever doing -- it never
+ * learns what a division, pool, entrant or person is.
+ *
+ * This subsumes `DivisionRule`: a division is one such group. `division_rules`
+ * is kept for now and migrated separately, because THIS revision changes no
+ * behaviour -- see `SolveBuildRequest.rule_groups`.
+ */
+export interface RuleGroup {
+  /**
+   * Each element 0 <= idx < len(`SolveBuildRequest.fixtures`). Range-checked
+   * only, per the repeated-field rule above.
+   *
+   * An EMPTY set is legal and means the rule binds no movable fixture. That
+   * is not a caller error: a competition-scoped rule on a board where every
+   * fixture is pinned resolves to exactly this, and the rule still has to
+   * reach the service because pins reference it via `rule_group_indices`.
+   */
+  fixtureIndices: number[];
+  /**
+   * Presence, not `>= 0`: 0 is "no minimum rest", a legitimate rule, and
+   * distinct from this group carrying no rest rule at all.
+   */
+  minRestMinutes?:
+    | number
+    | undefined;
+  /**
+   * Presence, then `> 0` when set: 0 would forbid the group outright, which
+   * is never what "no cap" means. Absent = uncapped.
+   */
+  maxFixturesPerDay?: number | undefined;
 }
 
 /**
@@ -253,6 +344,21 @@ export interface SolveBuildRequest {
   divisionRules: DivisionRule[];
   constraints: BuildConstraints | undefined;
   wallSeconds: number;
+  /**
+   * C1. Added ALONGSIDE `division_rules` rather than replacing it, and the
+   * staging split (DEPLOY.md section 4b) is why: a contract revision runs on
+   * `placement-stg` while production still runs the previous one, so for that
+   * window both services must tolerate the other's messages. Adding a field
+   * is safe in both directions under proto3; renumbering or repurposing one
+   * is not, and no runbook step saves you from that.
+   *
+   * So the migration is staged. This revision adds the field and changes NO
+   * behaviour -- the ACL parses and validates it, the domain never receives
+   * it, and the same request produces the same board. `division_rules`
+   * becomes redundant when the C1 model half lands, and field 10 is reserved
+   * rather than reused when it finally goes.
+   */
+  ruleGroups: RuleGroup[];
 }
 
 export interface SolveBuildResponse {
@@ -466,7 +572,7 @@ export const Slot: MessageFns<Slot> = {
 };
 
 function createBasePinnedRow(): PinnedRow {
-  return { courtIndex: undefined, startAtMs: 0 };
+  return { courtIndex: undefined, startAtMs: 0, ruleGroupIndices: [], entrantIndices: [] };
 }
 
 export const PinnedRow: MessageFns<PinnedRow> = {
@@ -477,6 +583,16 @@ export const PinnedRow: MessageFns<PinnedRow> = {
     if (message.startAtMs !== 0) {
       writer.uint32(16).int64(message.startAtMs);
     }
+    writer.uint32(26).fork();
+    for (const v of message.ruleGroupIndices) {
+      writer.uint32(v);
+    }
+    writer.join();
+    writer.uint32(34).fork();
+    for (const v of message.entrantIndices) {
+      writer.uint32(v);
+    }
+    writer.join();
     return writer;
   },
 
@@ -503,6 +619,42 @@ export const PinnedRow: MessageFns<PinnedRow> = {
           message.startAtMs = longToNumber(reader.int64());
           continue;
         }
+        case 3: {
+          if (tag === 24) {
+            message.ruleGroupIndices.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 26) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.ruleGroupIndices.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+        case 4: {
+          if (tag === 32) {
+            message.entrantIndices.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 34) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.entrantIndices.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -524,6 +676,16 @@ export const PinnedRow: MessageFns<PinnedRow> = {
         : isSet(object.start_at_ms)
         ? globalThis.Number(object.start_at_ms)
         : 0,
+      ruleGroupIndices: globalThis.Array.isArray(object?.ruleGroupIndices)
+        ? object.ruleGroupIndices.map((e: any) => globalThis.Number(e))
+        : globalThis.Array.isArray(object?.rule_group_indices)
+        ? object.rule_group_indices.map((e: any) => globalThis.Number(e))
+        : [],
+      entrantIndices: globalThis.Array.isArray(object?.entrantIndices)
+        ? object.entrantIndices.map((e: any) => globalThis.Number(e))
+        : globalThis.Array.isArray(object?.entrant_indices)
+        ? object.entrant_indices.map((e: any) => globalThis.Number(e))
+        : [],
     };
   },
 
@@ -535,6 +697,12 @@ export const PinnedRow: MessageFns<PinnedRow> = {
     if (message.startAtMs !== 0) {
       obj.startAtMs = Math.round(message.startAtMs);
     }
+    if (message.ruleGroupIndices?.length) {
+      obj.ruleGroupIndices = message.ruleGroupIndices.map((e) => Math.round(e));
+    }
+    if (message.entrantIndices?.length) {
+      obj.entrantIndices = message.entrantIndices.map((e) => Math.round(e));
+    }
     return obj;
   },
 
@@ -545,6 +713,124 @@ export const PinnedRow: MessageFns<PinnedRow> = {
     const message = createBasePinnedRow();
     message.courtIndex = object.courtIndex ?? undefined;
     message.startAtMs = object.startAtMs ?? 0;
+    message.ruleGroupIndices = object.ruleGroupIndices?.map((e) => e) || [];
+    message.entrantIndices = object.entrantIndices?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseRuleGroup(): RuleGroup {
+  return { fixtureIndices: [], minRestMinutes: undefined, maxFixturesPerDay: undefined };
+}
+
+export const RuleGroup: MessageFns<RuleGroup> = {
+  encode(message: RuleGroup, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    writer.uint32(10).fork();
+    for (const v of message.fixtureIndices) {
+      writer.uint32(v);
+    }
+    writer.join();
+    if (message.minRestMinutes !== undefined) {
+      writer.uint32(16).int32(message.minRestMinutes);
+    }
+    if (message.maxFixturesPerDay !== undefined) {
+      writer.uint32(24).int32(message.maxFixturesPerDay);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): RuleGroup {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseRuleGroup();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag === 8) {
+            message.fixtureIndices.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 10) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.fixtureIndices.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.minRestMinutes = reader.int32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.maxFixturesPerDay = reader.int32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): RuleGroup {
+    return {
+      fixtureIndices: globalThis.Array.isArray(object?.fixtureIndices)
+        ? object.fixtureIndices.map((e: any) => globalThis.Number(e))
+        : globalThis.Array.isArray(object?.fixture_indices)
+        ? object.fixture_indices.map((e: any) => globalThis.Number(e))
+        : [],
+      minRestMinutes: isSet(object.minRestMinutes)
+        ? globalThis.Number(object.minRestMinutes)
+        : isSet(object.min_rest_minutes)
+        ? globalThis.Number(object.min_rest_minutes)
+        : undefined,
+      maxFixturesPerDay: isSet(object.maxFixturesPerDay)
+        ? globalThis.Number(object.maxFixturesPerDay)
+        : isSet(object.max_fixtures_per_day)
+        ? globalThis.Number(object.max_fixtures_per_day)
+        : undefined,
+    };
+  },
+
+  toJSON(message: RuleGroup): unknown {
+    const obj: any = {};
+    if (message.fixtureIndices?.length) {
+      obj.fixtureIndices = message.fixtureIndices.map((e) => Math.round(e));
+    }
+    if (message.minRestMinutes !== undefined) {
+      obj.minRestMinutes = Math.round(message.minRestMinutes);
+    }
+    if (message.maxFixturesPerDay !== undefined) {
+      obj.maxFixturesPerDay = Math.round(message.maxFixturesPerDay);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RuleGroup>, I>>(base?: I): RuleGroup {
+    return RuleGroup.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RuleGroup>, I>>(object: I): RuleGroup {
+    const message = createBaseRuleGroup();
+    message.fixtureIndices = object.fixtureIndices?.map((e) => e) || [];
+    message.minRestMinutes = object.minRestMinutes ?? undefined;
+    message.maxFixturesPerDay = object.maxFixturesPerDay ?? undefined;
     return message;
   },
 };
@@ -1091,6 +1377,7 @@ function createBaseSolveBuildRequest(): SolveBuildRequest {
     divisionRules: [],
     constraints: undefined,
     wallSeconds: 0,
+    ruleGroups: [],
   };
 }
 
@@ -1131,6 +1418,9 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
     }
     if (message.wallSeconds !== 0) {
       writer.uint32(97).double(message.wallSeconds);
+    }
+    for (const v of message.ruleGroups) {
+      RuleGroup.encode(v!, writer.uint32(106).fork()).join();
     }
     return writer;
   },
@@ -1238,6 +1528,14 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
           message.wallSeconds = reader.double();
           continue;
         }
+        case 13: {
+          if (tag !== 106) {
+            break;
+          }
+
+          message.ruleGroups.push(RuleGroup.decode(reader, reader.uint32()));
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1295,6 +1593,11 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
         : isSet(object.wall_seconds)
         ? globalThis.Number(object.wall_seconds)
         : 0,
+      ruleGroups: globalThis.Array.isArray(object?.ruleGroups)
+        ? object.ruleGroups.map((e: any) => RuleGroup.fromJSON(e))
+        : globalThis.Array.isArray(object?.rule_groups)
+        ? object.rule_groups.map((e: any) => RuleGroup.fromJSON(e))
+        : [],
     };
   },
 
@@ -1336,6 +1639,9 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
     if (message.wallSeconds !== 0) {
       obj.wallSeconds = message.wallSeconds;
     }
+    if (message.ruleGroups?.length) {
+      obj.ruleGroups = message.ruleGroups.map((e) => RuleGroup.toJSON(e));
+    }
     return obj;
   },
 
@@ -1358,6 +1664,7 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
       ? BuildConstraints.fromPartial(object.constraints)
       : undefined;
     message.wallSeconds = object.wallSeconds ?? 0;
+    message.ruleGroups = object.ruleGroups?.map((e) => RuleGroup.fromPartial(e)) || [];
     return message;
   },
 };
