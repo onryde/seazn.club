@@ -10,6 +10,7 @@ import { resolvePositions } from "../../sport/catalog.ts";
 import { evalPadGate, type PadField, type PadSpec } from "../../sport/module.ts";
 import {
   checkActionCoverage,
+  padItemLabelKey,
   padSpecConformanceSuite,
 } from "../../testkit/conformance-pad.ts";
 import { defaultLineupPair, makeEnvelope } from "../../testkit/helpers.ts";
@@ -18,6 +19,7 @@ import {
   SetBasedExpediteStart,
   SetBasedRally,
   SetBasedSanction,
+  SetBasedSanctionLevel,
   SetBasedSub,
   SetBasedSummary,
   SetBasedTimeout,
@@ -204,6 +206,122 @@ describe("badminton / table tennis padSpec — no cfg-mutual-exclusivity (assert
     const { "badminton.sanction": _dropped, ...missingSanction } = BADMINTON_RECORDABLE_SCHEMAS;
     const problems = checkActionCoverage(spec, { ...missingSanction, "badminton.bogus": SetBasedSanction });
     expect(problems.join(" ")).toMatch(/badminton\.bogus/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S7/#427 — PER-SPORT SUBSETTING of the shared sanction ladder.
+//
+// The S7 prompt states this criterion as "ITTF sanctions are yellow/red only,
+// BWF adds black". There is no colour FIELD anywhere on this kernel — the
+// premise is false as written. What exists is `SetBasedSanctionLevel`, the
+// FIVB's four-step SEVERITY ladder, shared verbatim by all three sports, plus
+// a colour→step mapping written down separately in each dossier:
+//
+//   badminton  (DOMAIN.badminton.md:35)  yellow = warning, red = penalty,
+//                                        BLACK = disqualification
+//   tabletennis(DOMAIN.tabletennis.md:36) yellow = warning, red = penalty;
+//                                        "a pad should probably surface just
+//                                        those two" — expulsion and
+//                                        disqualification are the REFEREE's
+//                                        removal, not the umpire's card
+//   volleyball (DOMAIN.volleyball.md:38)  the FIVB ladder verbatim, all four
+//
+// So the asymmetry the criterion names is real (badminton's umpire has a
+// black card; table tennis's has no third card at all) and the kernel did NOT
+// gate it: every sport's pad offered `SetBasedSanctionLevel.options` whole.
+// Fixed here, through the SAME preset-data mechanism `coarseEventType` /
+// `unitLabel` / `defaults.records` already use — not a second gating layer.
+// `arbitraryEvent` and `discipline.colors` deliberately keep the full ladder:
+// narrowing the generator would move frozen goldens, and `extractCards` must
+// still project a referee removal that WAS recorded.
+// ---------------------------------------------------------------------------
+
+describe("setbased padSpec — the sanction ladder is subset per sport (S7/#427)", () => {
+  function sanctionLevels(module: typeof volleyball): readonly string[] {
+    const spec = module.padSpec!(module.configSchema.parse({}));
+    const field = findField(spec, `${module.key}.sanction`, "level");
+    if (field?.kind !== "enum") throw new Error(`${module.key}: no sanction level enum field`);
+    return field.values;
+  }
+
+  it("badminton's pad offers disqualification (the BWF black card); table tennis's does not", () => {
+    expect(sanctionLevels(badminton)).toContain("disqualification");
+    expect(sanctionLevels(tabletennis)).not.toContain("disqualification");
+  });
+
+  it("table tennis offers exactly the two ITTF cards; badminton and volleyball keep the full ladder", () => {
+    expect([...sanctionLevels(tabletennis)]).toEqual(["warning", "penalty"]);
+    expect([...sanctionLevels(badminton)]).toEqual([...SetBasedSanctionLevel.options]);
+    expect([...sanctionLevels(volleyball)]).toEqual([...SetBasedSanctionLevel.options]);
+  });
+
+  it("every sport's subset is a real subset of the shared enum, in the enum's own order", () => {
+    // Guards the two ways a per-sport list goes wrong: a typo'd member the
+    // schema would reject at append time, and a re-ordering that would make
+    // one sport's pad list the ladder in a different sequence from another's.
+    for (const module of [volleyball, badminton, tabletennis]) {
+      const levels = sanctionLevels(module);
+      for (const level of levels) expect(SetBasedSanctionLevel.options).toContain(level);
+      expect([...levels]).toEqual(SetBasedSanctionLevel.options.filter((o) => levels.includes(o)));
+      expect(levels.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("the narrowing does NOT touch what the schema accepts, only what the pad offers", () => {
+    // The kernel-union schema stays permissive on purpose: a referee removal
+    // recorded by an admin, or a golden corpus payload, must still parse.
+    expect(SetBasedSanction.safeParse({ by: "H", level: "disqualification" }).success).toBe(true);
+    expect(SetBasedSanctionLevel.options).toEqual([
+      "warning",
+      "penalty",
+      "expulsion",
+      "disqualification",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S7/#427 — `rally.server` / `rally.scorer`, the two prompts all three
+// dossiers list as owed. They are adjacent person pickers on ONE action
+// ("Rally (server / scorer)") and they are NOT interchangeable: `server` is
+// the player who served, `scorer` the player credited with the terminating
+// action. A renderer with no copy for them would draw two identical pickers.
+// ---------------------------------------------------------------------------
+
+describe("setbased padSpec — rally server / scorer prompts carry label keys (S7/#427)", () => {
+  const modules = [volleyball, badminton, tabletennis];
+
+  for (const module of modules) {
+    const key = module.key;
+    const spec = module.padSpec!(module.configSchema.parse({}));
+
+    it(`${key}: both rally person prompts are labelled, with the sport's own key`, () => {
+      expect(padItemLabelKey(spec, `${key}.rally`, "server")).toMatchObject({
+        key: `pad.${key}.action.rallyAttributed.field.server`,
+        where: "attribution",
+      });
+      expect(padItemLabelKey(spec, `${key}.rally`, "scorer")).toMatchObject({
+        key: `pad.${key}.action.rallyAttributed.field.scorer`,
+        where: "attribution",
+      });
+    });
+
+    it(`${key}: the two prompts do not share a key or an English fallback`, () => {
+      const server = padItemLabelKey(spec, `${key}.rally`, "server");
+      const scorer = padItemLabelKey(spec, `${key}.rally`, "scorer");
+      expect(server?.key).not.toBe(scorer?.key);
+      expect(server?.label).not.toBe(scorer?.label);
+      expect(server?.label ?? "").not.toBe("");
+      expect(scorer?.label ?? "").not.toBe("");
+    });
+  }
+
+  it("all three sports get distinct keys off the shared kernel", () => {
+    const keys = modules.map(
+      (m) => padItemLabelKey(m.padSpec!(m.configSchema.parse({})), `${m.key}.rally`, "server")?.key,
+    );
+    expect(new Set(keys).size).toBe(3);
   });
 });
 

@@ -850,6 +850,27 @@ export interface SetBasedPreset {
   officialLabel: { scorer: string };
   coarseEventType: "set.summary" | "game.summary";
   rallyEntitlement: string; // doc 10 FeatureKey for Tier-2/3 rally scoring
+  /**
+   * S7/#427 — which steps of the shared `SetBasedSanctionLevel` ladder THIS
+   * federation's umpire can actually award, in the enum's own order. Read by
+   * `setBasedPadSpec` for the sanction action's enum bounds and by nothing
+   * else.
+   *
+   * REQUIRED, not optional with a full-ladder default, and that is the whole
+   * point: a sport added to this kernel must state its own card ladder rather
+   * than silently inherit the FIVB's. The three shipped answers are all
+   * different questions, not variations on one — badminton's black card IS
+   * `disqualification` (BWF Law 16), table tennis has no third card at all
+   * (`expulsion`/`disqualification` are the REFEREE removing a player, not
+   * the umpire's ladder — DOMAIN.tabletennis.md:36), and volleyball uses the
+   * FIVB four verbatim.
+   *
+   * SCOPE: this bounds THE PAD ONLY. `eventSchema` keeps the full union (a
+   * referee removal that was recorded must still parse, and narrowing it
+   * would move frozen goldens), `arbitraryEvent` keeps generating all four,
+   * and `discipline.colors` keeps projecting all four.
+   */
+  sanctionLevels: readonly SetBasedSanctionLevel[];
   entrantModel?: EntrantModel;
   // W4 (#407) — which interruptions THIS sport's scoresheet carries. A sport
   // that does not declare one refuses the event outright rather than silently
@@ -940,11 +961,33 @@ function summaryScoreBound(cfg: SetBasedCfg): number {
 }
 
 const RALLY_ATTRIBUTION: PadAttribution = [{ kind: "side", path: "wonBy" }];
-const RALLY_ATTRIBUTED_ATTRIBUTION: PadAttribution = [
-  { kind: "side", path: "wonBy" },
-  { kind: "person", path: "server" },
-  { kind: "person", path: "scorer" },
-];
+
+/**
+ * S7/#427 — was a module-level constant; it is now a function of the sport
+ * key, because the two person prompts finally carry label keys and a label
+ * key is per-sport (one flat dictionary namespace across all eleven modules,
+ * so a shared `pad.setbased.*` key would force the FIVB's wording onto the
+ * BWF's and ITTF's pads). All three dossiers list `rally.server` and
+ * `rally.scorer` as owed prompts for exactly the reason they need copy: they
+ * are adjacent person pickers that are NOT interchangeable — `server` is the
+ * player who served (it feeds the `serves` tally), `scorer` the player
+ * credited with the terminating kill/block/ace/winner.
+ */
+function rallyAttributedAttribution(key: string): PadAttribution {
+  return [
+    { kind: "side", path: "wonBy" },
+    {
+      kind: "person",
+      path: "server",
+      labelKey: { key: `pad.${key}.action.rallyAttributed.field.server`, label: "Server" },
+    },
+    {
+      kind: "person",
+      path: "scorer",
+      labelKey: { key: `pad.${key}.action.rallyAttributed.field.scorer`, label: "Point scored by" },
+    },
+  ];
+}
 
 function setBasedPadSpec(preset: SetBasedPreset, cfg: SetBasedCfg): PadSpec {
   const key = preset.key;
@@ -966,7 +1009,7 @@ function setBasedPadSpec(preset: SetBasedPreset, cfg: SetBasedCfg): PadSpec {
     type: rallyType,
     labelKey: { key: `pad.${key}.action.rallyAttributed`, label: "Rally (server / scorer)" },
     fields: [],
-    attribution: RALLY_ATTRIBUTED_ATTRIBUTION,
+    attribution: rallyAttributedAttribution(key),
   };
   const summaryAction: PadAction = {
     type: summaryType,
@@ -987,7 +1030,11 @@ function setBasedPadSpec(preset: SetBasedPreset, cfg: SetBasedCfg): PadSpec {
   const sanctionAction: PadAction = {
     type: sanctionType,
     labelKey: { key: `pad.${key}.action.sanction`, label: "Sanction" },
-    fields: [{ kind: "enum", path: "level", values: SetBasedSanctionLevel.options }],
+    // S7/#427 — PER SPORT, not the whole kernel union: the ITTF umpire has
+    // two cards and the BWF three, so offering all four steps on both pads
+    // put a sanction on screen the federation has no concept of. See
+    // `SetBasedPreset.sanctionLevels`.
+    fields: [{ kind: "enum", path: "level", values: preset.sanctionLevels }],
     attribution: [
       { kind: "side", path: "by" },
       { kind: "person", path: "person" },

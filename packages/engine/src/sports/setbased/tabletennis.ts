@@ -58,6 +58,14 @@ export const tabletennis = makeSetBasedModule({
   officialLabel: { scorer: "Umpire" }, // doc 13 §1
   coarseEventType: "game.summary",
   rallyEntitlement: "scoring.rally_by_rally", // doc 10 / table-tennis.md §3
+  // S7/#427 — the ITTF umpire has exactly two cards, yellow and red, and no
+  // third: "only `warning` and `penalty` correspond to the ITTF yellow and
+  // red cards; a pad should probably surface just those two"
+  // (DOMAIN.tabletennis.md:75-77). `expulsion`/`disqualification` are the
+  // REFEREE removing a player — not a card an umpire shows, and not a control
+  // that belongs on the umpire's pad. Still accepted by `eventSchema`, so a
+  // removal that was recorded (or a golden corpus payload) parses unchanged.
+  sanctionLevels: ["warning", "penalty"],
   entrantModel: { kinds: ["individual", "pair"], defaultKind: "individual" },
   // `tabletennis.expedite.start` records that the umpire introduced the
   // expedite system, and every later rally carrying `returns` + `serving` is
