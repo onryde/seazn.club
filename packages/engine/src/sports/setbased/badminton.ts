@@ -57,6 +57,12 @@ export const badminton = makeSetBasedModule({
   officialLabel: { scorer: "Umpire" }, // doc 13 §1
   coarseEventType: "game.summary",
   rallyEntitlement: "scoring.rally_by_rally", // doc 10 / badminton.md §3
+  // S7/#427 — BWF has THREE umpire cards and the black one is the reason this
+  // list is per sport at all: yellow = `warning`, red = `penalty`, BLACK =
+  // `disqualification` (DOMAIN.badminton.md:35). `expulsion` is the referee
+  // removing a player from the match, which a badminton umpire's sheet does
+  // record, so all four stay reachable here.
+  sanctionLevels: ["warning", "penalty", "expulsion", "disqualification"],
   entrantModel: { kinds: ["individual", "pair"], defaultKind: "individual" },
   playerStats: {
     metrics: [

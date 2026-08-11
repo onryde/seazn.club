@@ -296,17 +296,61 @@ export function checkActionPayloadsAccepted(
 }
 
 // ---------------------------------------------------------------------------
-// (c) Label keys unique within the module — across BOTH panels and actions,
-// since both render from the same dictionary namespace.
+// (c) Label keys unique within the module — across panels, actions AND (S7/
+// #427) the optional per-field / per-attribution-item labels, since all four
+// render from the same dictionary namespace. Extending the SAME check rather
+// than adding a second, weaker one: a field key that collides with an action
+// key is the identical defect (one dictionary entry, two meanings, and the
+// translator sees one string).
 // ---------------------------------------------------------------------------
+
+/** Every declared label on a spec, tagged by where it sits. `undefined`
+ *  labels (an unlabelled field — the common case, see `PadFieldEnum`'s doc
+ *  comment) are simply absent from the result, never a hole. */
+export interface PadLabelRef {
+  key: string;
+  label: string;
+  where: "panel" | "action" | "field" | "attribution";
+  /** The owning action's event type; absent for a panel's own label. */
+  type?: string;
+  /** The owning field's / attribution item's payload path. */
+  path?: string;
+}
+
+export function collectPadLabels(spec: PadSpec): PadLabelRef[] {
+  const out: PadLabelRef[] = [];
+  for (const panel of spec.panels) {
+    out.push({ ...panel.labelKey, where: "panel" });
+    for (const action of panel.actions) {
+      out.push({ ...action.labelKey, where: "action", type: action.type });
+      for (const field of action.fields) {
+        if (field.labelKey) out.push({ ...field.labelKey, where: "field", type: action.type, path: field.path });
+      }
+      for (const item of action.attribution) {
+        if (item.labelKey) {
+          out.push({ ...item.labelKey, where: "attribution", type: action.type, path: item.path });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** The label a given action declares for one of its fields or attribution
+ *  items, by payload path. `undefined` = that item carries no label (legal)
+ *  or the action/path pair does not exist (which the caller's own coverage
+ *  assertions catch). Exported so each sport's padspec test asks the question
+ *  the same way instead of re-walking the tree four times. */
+export function padItemLabelKey(spec: PadSpec, type: string, path: string): PadLabelRef | undefined {
+  return collectPadLabels(spec).find(
+    (ref) => ref.type === type && ref.path === path && (ref.where === "field" || ref.where === "attribution"),
+  );
+}
 
 export function checkLabelKeysUnique(spec: PadSpec): string[] {
   const seen = new Map<string, number>();
-  for (const panel of spec.panels) {
-    seen.set(panel.labelKey.key, (seen.get(panel.labelKey.key) ?? 0) + 1);
-    for (const action of panel.actions) {
-      seen.set(action.labelKey.key, (seen.get(action.labelKey.key) ?? 0) + 1);
-    }
+  for (const ref of collectPadLabels(spec)) {
+    seen.set(ref.key, (seen.get(ref.key) ?? 0) + 1);
   }
   const problems: string[] = [];
   for (const [key, count] of seen) {

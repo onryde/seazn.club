@@ -206,6 +206,17 @@ export function describeEvent(
   if (/\.ball$/.test(type)) {
     return { label: badge, text: scalars(p), tone: "score" };
   }
+  // tennis.sanction, volleyball/badminton/tabletennis.sanction — NestedSanction
+  // and SetBasedSanction share the same {by, level, person?} shape. The level
+  // IS the badge, mirroring football.card's colour-as-badge choice; `person`
+  // names an individual where the sport records one, else `by` names the side.
+  if (/\.sanction$/.test(type)) {
+    return {
+      label: typeof p.level === "string" ? enumLabel("level", p.level, m) : badge,
+      text: name(names, p.person ?? p.by, m),
+      tone: "card",
+    };
+  }
 
   // A type no shipped module declares: `eventLabel` already prettified it.
   return { label: badge, text: scalars(p), tone: "note" };

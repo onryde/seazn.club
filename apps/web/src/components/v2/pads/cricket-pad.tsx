@@ -49,6 +49,8 @@ const WICKET_KINDS = [
   "retired",
   "obstructed",
   "timedout",
+  // W4/Law 34 — credited to no bowler; absent from BOWLER_CREDITED is correct.
+  "hitballtwice",
 ] as const;
 // Bowler is credited per Laws (spec 04 §2.3).
 const BOWLER_CREDITED = new Set(["bowled", "caught", "lbw", "stumped", "hitwicket"]);

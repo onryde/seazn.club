@@ -95,6 +95,9 @@ export const volleyball = makeSetBasedModule({
   officialLabel: { scorer: "Referee" }, // doc 13 §1
   coarseEventType: "set.summary",
   rallyEntitlement: "scoring.rally_by_rally", // doc 10 / volleyball.md §3
+  // S7/#427 — the FIVB ladder verbatim; the kernel enum IS volleyball's own
+  // vocabulary (DOMAIN.volleyball.md:38), so all four steps are on the pad.
+  sanctionLevels: ["warning", "penalty", "expulsion", "disqualification"],
   // Entrant shapes are declared per sport, not per variant: indoor is 6v6 teams
   // (the default), `beach` is 2v2 pairs. Both kinds stay open at the sport level
   // and a division narrows them via config.entrants when the organiser wants.

@@ -15,12 +15,12 @@
 // `__tests__/scoring-vocab.test.ts` does instead, by DERIVING the expected sets
 // from the engine's own declarations at test time.
 import type { MessageKey } from "@/lib/messages";
-import type { EngineErrorCode } from "@seazn/engine/core";
+import type { EngineErrorCode, SquadProvenance, SquadRole } from "@seazn/engine/core";
 import { swatchName } from "@/lib/brand-palette";
 
 export type WicketKind =
   | "bowled" | "caught" | "lbw" | "runout" | "stumped"
-  | "hitwicket" | "retired" | "obstructed" | "timedout";
+  | "hitwicket" | "retired" | "obstructed" | "timedout" | "hitballtwice";
 export type ExtraKind = "wide" | "noball" | "bye" | "legbye" | "penalty";
 export type SportKey =
   | "badminton" | "boardgame" | "carrom" | "cricket" | "football" | "generic"
@@ -30,6 +30,12 @@ const WICKET_KEY: Record<WicketKind, MessageKey> = {
   bowled: "wicket.bowled", caught: "wicket.caught", lbw: "wicket.lbw",
   runout: "wicket.runout", stumped: "wicket.stumped", hitwicket: "wicket.hitwicket",
   retired: "wicket.retired", obstructed: "wicket.obstructed", timedout: "wicket.timedout",
+  // Reuses ENUM_VOCAB's existing "kind.hitballtwice" key rather than minting a
+  // duplicate — wicketLabel() previously checked ONLY this map, never falling
+  // through to KIND_KEY the way enumLabel("kind", …) does, so the picker
+  // rendered "Hitballtwice" (naive capitalize) though the correct translated
+  // string already existed and was reachable from every OTHER kind lookup.
+  hitballtwice: "kind.hitballtwice",
 };
 const EXTRA_KEY: Record<ExtraKind, MessageKey> = {
   wide: "extra.wide", noball: "extra.noball", bye: "extra.bye",
@@ -441,6 +447,245 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   GAME_AWARD_DURING_TIEBREAK: "engineError.GAME_AWARD_DURING_TIEBREAK",
 };
 
+/**
+ * S3/W4b (#426)'s two lineup enums, neither of which had display copy anywhere
+ * — a squad list could show a coach and a mid-match call-up and had no word for
+ * either. Both are TRUE closed TS unions (`core/lineup.ts`), so unlike
+ * `EVENT_KEY`/`ENUM_VOCAB`/`PAD_LABEL_KEYS` below these get the full
+ * `Record<Enum, MessageKey>` treatment: the Record forces every member to be
+ * mapped and the MessageKey forces the copy to exist, both at compile time.
+ * Add a member to `SquadRole` in the engine and this file stops typechecking.
+ */
+const SQUAD_ROLE_KEY: Record<SquadRole, MessageKey> = {
+  player: "squadRole.player",
+  coach: "squadRole.coach",
+  staff: "squadRole.staff",
+};
+const SQUAD_PROVENANCE_KEY: Record<SquadProvenance, MessageKey> = {
+  named: "squadProvenance.named",
+  added: "squadProvenance.added",
+};
+
+/**
+ * Sport CONFIG knobs a scoring surface names, as distinct from the match
+ * vocabulary above. One entry today, and the entry is the point: #431 item 8
+ * flagged that `generic.score.points` (the per-person running tally, labelled
+ * `stat.generic.points` → "Points") and `GenericCfg.points` (the win/draw/loss
+ * points table) "are different things" sharing one word.
+ *
+ * `points` therefore points at the EXISTING `divset.standingsPoints`
+ * ("Standings points"), which `division-settings.tsx` already draws over that
+ * exact cfg object — the same reuse `PLAYER_STAT_KEY`'s award rows make of
+ * `AWARD_KEY`, and for the same reason: minting a second string for one
+ * concept is how two labels for one knob drift apart in four locales.
+ *
+ * NOT here: cricket's `Cfg.reviews.perInnings`. S7 checked and it has no
+ * renderer anywhere in `apps/web` (`git grep perInnings` hits only
+ * `packages/engine`), so a label would be copy with nothing to attach it to —
+ * deferred alongside PadSpec's own renderer (S10), not forgotten.
+ */
+const CONFIG_KEY: Record<string, MessageKey> = {
+  points: "divset.standingsPoints",
+};
+
+/**
+ * S6's `PadSpec` label keys — every `PadLabel.key` the eleven sport modules'
+ * `padSpec(cfg)` can emit for a panel, an action, or (S7) a field or
+ * attribution item, across each module's whole cfg space.
+ *
+ * OPEN-ENDED, like `EVENT_KEY`: `PadLabel.key` is a plain `string` on a
+ * cfg-driven function's return value, not a closed TS union, so no
+ * exhaustiveness check the compiler can perform exists here. The typed
+ * `MessageKey` element still forces every key LISTED to exist in `en/ui.json`
+ * at compile time; COMPLETENESS is enforced at test time instead, by
+ * `__tests__/scoring-vocab.test.ts` enumerating `padSpec(cfg)` over every
+ * module × (default + named variants + single-cfg-leaf overrides) and reding
+ * on any key absent here or from any of the four dictionaries.
+ *
+ * Note the prefix collision with the v1 pad's own `pad.<abbrev>.*` namespace
+ * (`pad.ck.ballByBall`, `pad.fb.*`, `pad.tn.*`): different vocabulary, and
+ * they cannot collide because these always carry a FULL sport key plus
+ * `.action.`/`.panel.`.
+ */
+export const PAD_LABEL_KEYS: readonly MessageKey[] = [
+  "pad.badminton.action.expediteStart",
+  "pad.badminton.action.rally",
+  "pad.badminton.action.rallyAttributed",
+  "pad.badminton.action.rallyAttributed.field.scorer",
+  "pad.badminton.action.rallyAttributed.field.server",
+  "pad.badminton.action.rallyExpedite",
+  "pad.badminton.action.sanction",
+  "pad.badminton.action.setScore",
+  "pad.badminton.action.sub",
+  "pad.badminton.action.timeout",
+  "pad.badminton.panel.expedite",
+  "pad.badminton.panel.expediteRally",
+  "pad.badminton.panel.rally",
+  "pad.badminton.panel.sanctions",
+  "pad.badminton.panel.setScore",
+  "pad.badminton.panel.subs",
+  "pad.badminton.panel.timeouts",
+
+  "pad.boardgame.action.draw",
+  "pad.boardgame.action.pairing",
+  "pad.boardgame.action.result",
+  "pad.boardgame.panel.draw",
+  "pad.boardgame.panel.pre",
+  "pad.boardgame.panel.result",
+
+  "pad.carrom.action.adjustCredit",
+  "pad.carrom.action.adjustDeduct",
+  "pad.carrom.action.board",
+  "pad.carrom.action.board.field.breaker",
+  "pad.carrom.action.boardQueen",
+  "pad.carrom.action.boardQueen.field.breaker",
+  "pad.carrom.action.boardQueen.field.queenBy",
+  "pad.carrom.action.toss",
+  "pad.carrom.panel.adjust",
+  "pad.carrom.panel.board",
+  "pad.carrom.panel.pre",
+
+  "pad.cricket.action.ball",
+  "pad.cricket.action.declare",
+  "pad.cricket.action.extra",
+  "pad.cricket.action.followOn",
+  "pad.cricket.action.inningsClose",
+  "pad.cricket.action.inningsSummary",
+  "pad.cricket.action.interruption",
+  "pad.cricket.action.matchClose",
+  "pad.cricket.action.newBall",
+  "pad.cricket.action.playerLine",
+  "pad.cricket.action.powerplay",
+  "pad.cricket.action.retire",
+  "pad.cricket.action.review",
+  "pad.cricket.action.revise",
+  "pad.cricket.action.superOverBall",
+  "pad.cricket.action.toss",
+  "pad.cricket.action.wicket",
+  "pad.cricket.action.wicket.field.fielderAssist",
+  "pad.cricket.action.wicket.field.incoming",
+  "pad.cricket.panel.dls",
+  "pad.cricket.panel.extras",
+  "pad.cricket.panel.innings",
+  "pad.cricket.panel.over",
+  "pad.cricket.panel.post",
+  "pad.cricket.panel.pre",
+  "pad.cricket.panel.reviews",
+  "pad.cricket.panel.superOver",
+  "pad.cricket.panel.wicket",
+
+  "pad.football.action.card",
+  "pad.football.action.goal",
+  "pad.football.action.penalty",
+  "pad.football.action.period",
+  "pad.football.action.shootoutKick",
+  "pad.football.action.sinbinEnd",
+  "pad.football.action.sinbinStart",
+  "pad.football.action.sub",
+  "pad.football.panel.cards",
+  "pad.football.panel.goals",
+  "pad.football.panel.penalties",
+  "pad.football.panel.period",
+  "pad.football.panel.shootout",
+  "pad.football.panel.sinbin",
+  "pad.football.panel.subs",
+
+  "pad.generic.action.addPoints",
+  "pad.generic.action.correctPoints",
+  "pad.generic.action.decisive",
+  "pad.generic.action.draw",
+  "pad.generic.action.scoreEntry",
+  "pad.generic.action.settleFromTally",
+  "pad.generic.panel.draw",
+  "pad.generic.panel.result",
+  "pad.generic.panel.score",
+  "pad.generic.panel.settle",
+  "pad.generic.panel.tally",
+
+  "pad.hockey.action.advance",
+  "pad.hockey.action.goal",
+  "pad.hockey.action.goal.field.emptyNet",
+  "pad.hockey.action.setPiece",
+  "pad.hockey.action.shootoutAttempt",
+  "pad.hockey.action.shootoutAttempt.field.goalkeeper",
+  "pad.hockey.action.suspensionEnd",
+  "pad.hockey.action.suspensionStart",
+  "pad.hockey.action.suspensionStart.field.minutes",
+  "pad.hockey.action.suspensionStart.field.servedBy",
+  "pad.hockey.panel.discipline",
+  "pad.hockey.panel.goal",
+  "pad.hockey.panel.period",
+  "pad.hockey.panel.setPiece",
+  "pad.hockey.panel.shootout",
+
+  "pad.icehockey.action.advance",
+  "pad.icehockey.action.goal",
+  "pad.icehockey.action.goal.field.emptyNet",
+  "pad.icehockey.action.setPiece",
+  "pad.icehockey.action.shootoutAttempt",
+  "pad.icehockey.action.shootoutAttempt.field.goalkeeper",
+  "pad.icehockey.action.suspensionEnd",
+  "pad.icehockey.action.suspensionStart",
+  "pad.icehockey.action.suspensionStart.field.minutes",
+  "pad.icehockey.action.suspensionStart.field.servedBy",
+  "pad.icehockey.panel.discipline",
+  "pad.icehockey.panel.goal",
+  "pad.icehockey.panel.period",
+  "pad.icehockey.panel.setPiece",
+  "pad.icehockey.panel.shootout",
+
+  "pad.tabletennis.action.expediteStart",
+  "pad.tabletennis.action.rally",
+  "pad.tabletennis.action.rallyAttributed",
+  "pad.tabletennis.action.rallyAttributed.field.scorer",
+  "pad.tabletennis.action.rallyAttributed.field.server",
+  "pad.tabletennis.action.rallyExpedite",
+  "pad.tabletennis.action.sanction",
+  "pad.tabletennis.action.setScore",
+  "pad.tabletennis.action.sub",
+  "pad.tabletennis.action.timeout",
+  "pad.tabletennis.panel.expedite",
+  "pad.tabletennis.panel.expediteRally",
+  "pad.tabletennis.panel.rally",
+  "pad.tabletennis.panel.sanctions",
+  "pad.tabletennis.panel.setScore",
+  "pad.tabletennis.panel.subs",
+  "pad.tabletennis.panel.timeouts",
+
+  "pad.tennis.action.gameAward",
+  "pad.tennis.action.interruption",
+  "pad.tennis.action.point",
+  "pad.tennis.action.pointAttributed",
+  "pad.tennis.action.sanction",
+  "pad.tennis.action.setScore",
+  "pad.tennis.action.setScoreTiebreak",
+  "pad.tennis.panel.gameAward",
+  "pad.tennis.panel.interruptions",
+  "pad.tennis.panel.points",
+  "pad.tennis.panel.sanctions",
+  "pad.tennis.panel.setScore",
+
+  "pad.volleyball.action.expediteStart",
+  "pad.volleyball.action.rally",
+  "pad.volleyball.action.rallyAttributed",
+  "pad.volleyball.action.rallyAttributed.field.scorer",
+  "pad.volleyball.action.rallyAttributed.field.server",
+  "pad.volleyball.action.rallyExpedite",
+  "pad.volleyball.action.sanction",
+  "pad.volleyball.action.setScore",
+  "pad.volleyball.action.sub",
+  "pad.volleyball.action.timeout",
+  "pad.volleyball.panel.expedite",
+  "pad.volleyball.panel.expediteRally",
+  "pad.volleyball.panel.rally",
+  "pad.volleyball.panel.sanctions",
+  "pad.volleyball.panel.setScore",
+  "pad.volleyball.panel.subs",
+  "pad.volleyball.panel.timeouts",
+];
+
+const PAD_LABEL_SET: ReadonlySet<string> = new Set<string>(PAD_LABEL_KEYS);
+
 /** Bound translator: client `useMsg()` or server `(k)=>msgFor(locale,k)`. */
 export type MsgFn = (key: MessageKey) => string;
 
@@ -507,6 +752,35 @@ export const playerStatLabel = (
 export const awardLabel = (key: string, m: MsgFn): string | null =>
   key in AWARD_KEY ? m(AWARD_KEY[key]) : null;
 
+/**
+ * Localized copy for a `PadSpec` panel / action / field label, keyed by the
+ * engine's own `PadLabel.key`. `engineLabel` is that label's baked English
+ * fallback and is REQUIRED here (unlike `positionLabel`'s): the engine always
+ * ships one, and a pad control with no text at all is not a thing a scorer can
+ * press — a humanized token off a key like `pad.cricket.action.superOverBall`
+ * would read "Superoverball".
+ */
+export const padLabel = (key: string, m: MsgFn, engineLabel: string): string =>
+  PAD_LABEL_SET.has(key) ? m(key as MessageKey) : engineLabel;
+
+/** Localized name for a lineup slot's role (`player` | `coach` | `staff`). */
+export const squadRoleLabel = (role: string, m: MsgFn): string =>
+  role in SQUAD_ROLE_KEY ? m(SQUAD_ROLE_KEY[role as SquadRole]) : humanize(role);
+
+/** Localized name for how a squad member got there (`named` | `added`). */
+export const squadProvenanceLabel = (provenance: string, m: MsgFn): string =>
+  provenance in SQUAD_PROVENANCE_KEY
+    ? m(SQUAD_PROVENANCE_KEY[provenance as SquadProvenance])
+    : humanize(provenance);
+
+/**
+ * Localized name for a sport CONFIG knob, or null when this app has no copy
+ * for it. Deliberately null rather than a humanized token: an unlabelled cfg
+ * knob should be invisible, not shown to an organiser as "Perinnings".
+ */
+export const configLabel = (key: string, m: MsgFn): string | null =>
+  key in CONFIG_KEY ? m(CONFIG_KEY[key]) : null;
+
 /** Localized copy for an engine refusal; null when the code isn't an engine one. */
 export const engineErrorLabel = (code: string, m: MsgFn): string | null =>
   code in ENGINE_ERROR_KEY ? m(ENGINE_ERROR_KEY[code as EngineErrorCode]) : null;
@@ -534,5 +808,7 @@ export const SCORING_VOCAB_KEYS: readonly MessageKey[] = [
   ...Object.values(EVENT_KEY), ...Object.values(ENGINE_ERROR_KEY),
   ...Object.values(POSITION_KEY), ...Object.values(PLAYER_STAT_KEY),
   ...Object.values(AWARD_KEY),
+  ...Object.values(SQUAD_ROLE_KEY), ...Object.values(SQUAD_PROVENANCE_KEY),
+  ...Object.values(CONFIG_KEY), ...PAD_LABEL_KEYS,
   ...Object.values(ENUM_VOCAB).flatMap((maps) => maps.flatMap((m) => Object.values(m))),
 ];

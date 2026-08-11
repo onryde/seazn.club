@@ -19,7 +19,7 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 | S4 | #428 | `S04-428-offence-taxonomies.md` | S3 (person-role decision) | **DONE, post-review** — 3 enums adopted (football `PenaltyOffence`, hockey/icehockey `PeriodSuspensionReason`), 6 rows deferred with reasons recorded, person-role discriminator closed END TO END (`lineups.role`, V357, wired into both stats call sites — round-1 review caught the first pass shipping it engine-only/unreachable), `persons.lane` extended (V356) |
 | S5 | #431 | `S05-431-decisions-register.md` | S3, S4 | **DONE** — register closed, all 8 rulings accounted for; items 2 (tennis game-award) and 4 (football quarters) BUILT this session on owner instruction rather than re-homed, cricket `pairs-6-a-side` dropped with a DB prune fix |
 | S6 | #416 | `S06-416-w5-padspec.md` | S2, S3, S5 | **DONE** — `PadSpec` contract + bidirectional conformance shipped for all 11 modules; fidelity model redesigned per the S2 ruling; 3 named variant-gating regressions fixed; e2e/smoke deferred to S12/S13 |
-| S7 | #427 | `S07-427-pad-vocabulary-i18n.md` | S3, S4, S6 | TODO |
+| S7 | #427 | `S07-427-pad-vocabulary-i18n.md` | S3, S4, S6 | **DONE** — prompt's own "owed by sport" list was stale (S3/S4/S5 shipped most of it early); real gap was S6's 164-key `PadLabel` namespace never reaching apps/web, a missing per-field label slot, and 3 review-caught rendering bugs. Real e2e shipped, independently verified twice |
 | S8 | #417 | `S08-417-w6-player-stats.md` | S6 | TODO |
 | S9 | #418 | `S09-418-w7-career-rollup.md` | S3, S8 | TODO |
 | S10 | #419 | `S10-419-w8-chassis-renderer.md` | S6 | TODO |
@@ -1081,6 +1081,118 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   `reference_engine_only_diff_can_still_break_apps_web_tests` (global
   memory) — either run `apps/web`'s relevant suites locally before opening
   the PR, or budget time for exactly this fix-forward round-trip.
+
+- 2026-08-11 — S7/#427 — **the prompt's "owed by sport" list was stale before
+  the session started, and re-verifying it first changed the whole shape of
+  the work.** Written 2026-08-06, before S3/S4/S5/S6 executed; those sessions
+  shipped most of the named items opportunistically while doing their own
+  apps/web wiring — `core.lineup.*` labels, `PenaltyOffence`/
+  `PeriodSuspensionReason`, `tennis.game.award`, football `QT`/`3QT`, all of
+  cricket's new event types, `SetBasedSanctionLevel`'s 4 members — confirmed
+  present by grep before any implementer work started. Re-scouting first (two
+  parallel passes: apps/web vocab gap, engine `PadSpec` coverage) turned a
+  40-item stale checklist into the real remaining gap.
+- 2026-08-11 — S7/#427 — **the real gap: S6's `PadSpec` declared 164
+  `PadLabel` keys (`pad.<sport>.action.*`/`.panel.*`) that had never reached
+  apps/web at all.** S6 was engine-only by its own convention, so these keys
+  existed only as `{key, label}` pairs baked into `packages/engine`'s
+  `padSpec()` functions with zero dictionary entries — confirmed by exact-set
+  diff, zero overlap. `declaredPadLabels()` (`apps/web/src/lib/__tests__/
+  scoring-vocab.test.ts`) enumerates them by walking each module's live cfg
+  space (not just presets — a partial cfg override undercounted badminton
+  3/27 vs 27/27 until fixed to merge onto the parsed default), and is a
+  RUNTIME completeness test, not compiler-forced — `PadLabel.key` is a plain
+  `string` on a cfg-driven function's return, not a TS-level closed union.
+- 2026-08-11 — S7/#427 — **`PadField`/`PadAttributionItem` had no label slot
+  at all, and the original brief named fields that need one.** Added optional
+  `labelKey?: PadLabel` to `PadFieldEnum`/`Number`/`Toggle` and
+  `PadAttributionItem`'s `person`/`side` variants (`packages/engine/src/
+  sport/module.ts`), wired at cricket's `wicket.fielderAssist`/`.incoming`,
+  the period kernel's goal `emptyNet`/suspension `minutes`/`servedBy`/
+  shoot-out `goalkeeper`, the setbased kernel's `rally.server`/`.scorer`, and
+  carrom's `breaker`/`queenBy`. `clockRef` deliberately skipped (deprecated/
+  display-only per `icehockey/DOMAIN.md`, never a pad input) — noted there,
+  not silently dropped.
+- 2026-08-11 — S7/#427 — **a real, previously-ungated asymmetry: the
+  brief's "ITTF yellow/red only, BWF adds black" pointed at the wrong field
+  (`SetBasedSanctionLevel` is severity, not colour) but the underlying gap was
+  real.** No card-colour field existed at all; fixed via a new required
+  `SetBasedPreset.sanctionLevels` (badminton/volleyball get all 4 severity
+  levels, tabletennis gets `["warning","penalty"]` only) rather than inventing
+  the colour axis the brief assumed. `git grep` confirmed no second gating
+  mechanism exists in apps/web.
+- 2026-08-11 — S7/#427 — **three real, pre-existing, unrelated bugs found
+  while writing the session's own e2e proof — all fixed, not deferred.**
+  Writing e2e for "a labelled dismissal and sanction render as words" (the
+  acceptance criterion, not optional) surfaced that the two target strings
+  were correct in the dictionaries but **unreachable** for reasons that had
+  nothing to do with S7's own diff:
+  1. `cricket-pad.tsx`'s hardcoded `WICKET_KINDS` picker offered 9 of the
+     engine's 10 `CricketWicket.kind` members — Law 34's `hitballtwice` was
+     never selectable. Fixed (`e55e10b7`).
+  2. `event-copy.ts`'s activity-feed renderer had no case for `*.sanction`
+     events (tennis/volleyball/badminton/tabletennis all share it) — fell
+     through to a raw payload dump, `"level: default"`, for every sanction
+     level on every one of those sports, not just the one S7 added. Fixed
+     with a shared regex case mirroring the file's own `football.card`
+     precedent (`e55e10b7`).
+  3. **Found in review, not by the implementer**: fixing (1) made the option
+     selectable but not correctly labelled — `wicketLabel()` checks only a
+     separate, hand-maintained `WICKET_KEY` map and never falls through to
+     `KIND_KEY` the way `enumLabel("kind", …)` does, so it rendered
+     "Hitballtwice" (naive capitalize) in every locale even though the
+     correct string already existed and was reachable from every OTHER
+     lookup path. Fixed by reusing the existing `kind.hitballtwice` key
+     (`366ef5a7`). The reviewer also caught that the shipped regression test
+     was tautological — it derived "expected" by calling `wicketLabel()`,
+     the same function under test — so a second, literal-string test was
+     added; the original was kept as an honest existence-only check.
+  All three are the same defect class this programme keeps finding: a
+  correct value that never reaches the real render path is indistinguishable
+  from a missing one until something actually looks at a screen.
+- 2026-08-11 — S7/#427 — **real e2e shipped and independently verified
+  twice** (`716ffeee`, `apps/web/e2e/scoring-vocab-labels.spec.ts`): cricket
+  drives a real `cricket.ball` carrying the `hitballtwice` dismissal through
+  the real API/fold/fixture-console and asserts the picker reads "Hit the
+  ball twice"; tennis drives a real `tennis.sanction{level:"default"}` and
+  asserts the activity feed badges it "Default", scoped to that event's own
+  ledger row (`title="tennis.sanction …"`) since "Default" is a common word.
+  Both mutation-proved via `cp` backup/revert, both independently re-run by
+  the calling session against a second, fresh dev server with byte-identical
+  results (4 expected / 0 unexpected / 0 flaky, both times). Local prod
+  build (`next build`) was confirmed broken for unrelated reasons before
+  falling back to `next dev` — see the environment note below.
+- 2026-08-11 — S7/#427 — **environment note: local `next build` (Next
+  16.2.9) is currently broken, for reasons unrelated to any session's own
+  diff.** `InvariantError: Expected workUnitAsyncStorage to have a store`
+  during static-page prerendering, hitting a shifting subset of unrelated
+  routes (`/help/*`, `/clubs`, `/[lang]/(marketing)/*`, `/_not-found`,
+  `/_global-error`) across repeated attempts — reproduced identically under
+  Turbopack, `--webpack`, and `rtk proxy` (ruling out the bundler and the
+  wrapper), confirmed as a known, already-tracked upstream Next.js bug
+  (vercel/next.js#85251, #86978, #87719), not a code regression. No
+  `experimental.ppr`/`dynamicIO` flag exists in this repo's `next.config.js`
+  to toggle as a workaround. `next dev` was used instead for e2e — same
+  routes, same assertions, just not the static-export path — and worked
+  cleanly both times. A `next dev`-specific Turbopack quirk recurred twice:
+  the fixture-console's `[no]` dynamic route silently fails to register at
+  server start (curl returns 404 for a route that should 307 to `/login`);
+  `touch`ing the page file after the server is up flips it to registering
+  correctly. Not S7's to fix — flagged here since it blocks local e2e for
+  every future session in this programme until someone looks at it, and
+  `.github/workflows/e2e.yml` stays deliberately disabled per standing
+  project rule, so CI does not cover this either.
+- 2026-08-11 — S7/#427 — **deferred, recorded not re-decided: `Cfg.reviews.
+  perInnings` has no consumer anywhere in apps/web** (`git grep -a` hits only
+  `packages/engine` and the S7 prompt itself) — no label invented, matching
+  how the rest of the programme treats a declared-but-unwired field. `Cfg.
+  points` (the generic win/draw/loss points-table config) already had a
+  label (`divset.standingsPoints`, reused rather than duplicated) distinct
+  from `generic.score.points`'s own `stat.generic.points` — the brief's
+  "disambiguate" ask turned out to already be half-done. `generic.result{}`
+  has no client-side (or api-v1) schema to relax — `AppendEventRequest.
+  payload` is `z.unknown()`, pads post raw payloads unvalidated client-side —
+  a tripwire test was added instead of validation nothing calls.
 
 - _(append below)_
 

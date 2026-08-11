@@ -2185,12 +2185,29 @@ const BALL_ATTRIBUTION: PadAttribution = [
 ];
 
 // Every dismissal name a scorebook records, on top of who was at the crease.
+//
+// S7/#427 labels the two the dossier lists as owed prompts. `out` and
+// `fielder` are left unlabelled deliberately (see `PadFieldEnum`'s doc
+// comment in sport/module.ts): a "Wicket" action's first two person slots
+// are the batter dismissed and the fielder who did it, which is what a
+// scorebook's own columns say, whereas ASSIST and INCOMING are the two a
+// scorer cannot infer from position alone — the assist is a second fielder
+// (Law 19 run-out credit) and `incoming` is not a dismissal participant at
+// all but the NEXT batter, an optional captain's-choice override.
 const WICKET_ATTRIBUTION: PadAttribution = [
   ...BALL_ATTRIBUTION,
   { kind: "person", path: "wicket.out" },
   { kind: "person", path: "wicket.fielder" },
-  { kind: "person", path: "wicket.fielderAssist" },
-  { kind: "person", path: "wicket.incoming" },
+  {
+    kind: "person",
+    path: "wicket.fielderAssist",
+    labelKey: { key: "pad.cricket.action.wicket.field.fielderAssist", label: "Assisting fielder" },
+  },
+  {
+    kind: "person",
+    path: "wicket.incoming",
+    labelKey: { key: "pad.cricket.action.wicket.field.incoming", label: "Incoming batter" },
+  },
 ];
 
 function ballBaseFields(cfg: CricketCfg): PadField[] {

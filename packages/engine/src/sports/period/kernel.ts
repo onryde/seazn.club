@@ -1514,7 +1514,17 @@ export function makePeriodModule(
       labelKey: { key: `pad.${preset.key}.action.goal`, label: "Goal" },
       fields: [
         { kind: "enum", path: "kind", values: goalKindValues },
-        { kind: "toggle", path: "emptyNet" },
+        // S7/#427 — both dossiers' "new payload keys a pad should prompt
+        // for" list opens with this one, and a bare toggle beside a goal
+        // kind is unreadable without it. `clockRef`, the other name on that
+        // list, is deliberately NOT given a label: it is `@deprecated` here
+        // (superseded by `at`), display-only, and is not a padSpec field at
+        // all — see the note in `icehockey/DOMAIN.md` §2.
+        {
+          kind: "toggle",
+          path: "emptyNet",
+          labelKey: { key: `pad.${preset.key}.action.goal.field.emptyNet`, label: "Empty net" },
+        },
       ],
       attribution: [
         { kind: "side", path: "by" },
@@ -1537,7 +1547,16 @@ export function makePeriodModule(
       ...(preset.suspensionReasons === undefined
         ? []
         : [{ kind: "enum", path: "reason", values: preset.suspensionReasons } as const]),
-      { kind: "number", path: "minutes", min: 1, max: suspensionMinutesMax },
+      // S7/#427 — the awarded minutes. `class` above already carries the
+      // sport's own vocabulary in its enum values (minor/major/green/yellow)
+      // and needs no noun; a naked number box does.
+      {
+        kind: "number",
+        path: "minutes",
+        min: 1,
+        max: suspensionMinutesMax,
+        labelKey: { key: `pad.${preset.key}.action.suspensionStart.field.minutes`, label: "Minutes" },
+      },
     ];
     const suspensionStartAction: PadAction = {
       type: suspStartType,
@@ -1546,7 +1565,15 @@ export function makePeriodModule(
       attribution: [
         { kind: "side", path: "by" },
         { kind: "person", path: "person" },
-        { kind: "person", path: "servedBy" },
+        // S7/#427 — the OTHER person on this action. `person` is the offender;
+        // `servedBy` is the team-mate sitting the penalty out (IIHF Rule 21 /
+        // FIH substitution rules), routinely someone else, and two unlabelled
+        // person pickers in a row cannot be told apart.
+        {
+          kind: "person",
+          path: "servedBy",
+          labelKey: { key: `pad.${preset.key}.action.suspensionStart.field.servedBy`, label: "Served by" },
+        },
       ],
     };
 
@@ -1575,7 +1602,14 @@ export function makePeriodModule(
       attribution: [
         { kind: "side", path: "by" },
         { kind: "person", path: "person" },
-        { kind: "person", path: "goalkeeper" },
+        // S7/#427 — the keeper FACING the attempt, i.e. the other side's
+        // player. Unlabelled, a scorer picking from a person list has no way
+        // to know this slot is not a second shooter.
+        {
+          kind: "person",
+          path: "goalkeeper",
+          labelKey: { key: `pad.${preset.key}.action.shootoutAttempt.field.goalkeeper`, label: "Goalkeeper" },
+        },
       ],
     };
 

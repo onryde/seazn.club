@@ -75,6 +75,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   "volleyball.set.summary": { home: 25, away: 22 },
   "badminton.game.summary": { home: 21, away: 19, partial: true },
   "volleyball.rally": { wonBy: "e1" },
+  "tennis.sanction": { by: "e1", level: "default" },
 };
 const sample = (type: string) => SAMPLES[type] ?? {};
 
@@ -222,6 +223,24 @@ describe("the activity feed authors no English of its own", () => {
       .toBe("Second yellow");
     expect(describeEvent("football.card", { by: "p1", color: "red" }, NAMES, fr).label)
       .toBe(uiFr["cardColor.red"]);
+  });
+
+  it("resolves a sanction's level instead of dumping the raw payload (S7/#427)", () => {
+    // Regression: before this fix, `.sanction` matched no case and no regex
+    // guard, so it fell through to `scalars(p)` — the activity feed showed the
+    // literal string "level: default", never the translated word, for every
+    // sport's sanction, not just the new `default` value.
+    const d = describeEvent("tennis.sanction", { by: "e1", level: "default" }, NAMES, en);
+    expect(d.label).toBe("Default");
+    expect(d.text).not.toContain("level");
+    expect(d.text).toBe("Lions U12");
+    // The shared setbased kernel (volleyball/badminton/tabletennis) carries the
+    // same {by, level, person?} shape through the same `.sanction$` suffix.
+    expect(describeEvent("volleyball.sanction", { by: "e1", level: "expulsion" }, NAMES, en).label)
+      .toBe("Expulsion");
+    // A named individual takes priority over the side.
+    expect(describeEvent("tennis.sanction", { by: "e1", level: "warning", person: "p1" }, NAMES, en).text)
+      .toBe("Ashokkumar K S");
   });
 
   it("lets the badge carry core.start rather than repeating it as a sentence", () => {

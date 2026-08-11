@@ -595,7 +595,14 @@ export function padSpec(cfg: CarromCfg): PadSpec {
     fields: [{ kind: "number", path: "opponentCoinsLeft", min: 0, max: 9 }], // Law 52(b)(ii) — fixed rules bound, not cfg-derived
     attribution: [
       { kind: "side", path: "winner" },
-      { kind: "person", path: "breaker" },
+      // S7/#427 — the dossier's "per-board player pickers". Keys are scoped
+      // by ACTION, not by path, so the two board actions each name their own
+      // breaker picker (see `PadFieldEnum`'s doc comment in sport/module.ts).
+      {
+        kind: "person",
+        path: "breaker",
+        labelKey: { key: "pad.carrom.action.board.field.breaker", label: "Breaker" },
+      },
     ],
   };
   const boardQueenAction: PadAction = {
@@ -605,8 +612,18 @@ export function padSpec(cfg: CarromCfg): PadSpec {
     attribution: [
       { kind: "side", path: "winner" },
       { kind: "side", path: "queenTo" },
-      { kind: "person", path: "breaker" },
-      { kind: "person", path: "queenBy" },
+      {
+        kind: "person",
+        path: "breaker",
+        labelKey: { key: "pad.carrom.action.boardQueen.field.breaker", label: "Breaker" },
+      },
+      // The player who pocketed AND covered the queen (Laws 44-47) — a
+      // different person from the breaker on most boards.
+      {
+        kind: "person",
+        path: "queenBy",
+        labelKey: { key: "pad.carrom.action.boardQueen.field.queenBy", label: "Queen covered by" },
+      },
     ],
   };
 
