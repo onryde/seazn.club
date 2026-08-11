@@ -1262,6 +1262,7 @@ export type DictionaryKey =
   | "constraints.crossPersonClash.hint"
   | "constraints.crossPersonClash.label"
   | "constraints.error.failed"
+  | "constraints.field.saved"
   | "constraints.fieldFairness.balance"
   | "constraints.fieldFairness.hint"
   | "constraints.fieldFairness.label"

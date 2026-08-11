@@ -13,12 +13,24 @@
 // request behind an earlier, slower keystroke from landing after a later,
 // faster one and silently overwriting it.
 //
+// `saveConstraints`'s queue fix (below) is unaffected by the LATER change
+// that moved restMin/max-per-day off per-keystroke saving onto draft-then-
+// commit (blur, Enter — constraints-panel-commit-semantics.test.tsx): that
+// change only moved WHEN `saveConstraints` is called, not what it does once
+// called. So the race this file exists to pin still exists, one level up —
+// two rapid COMMITS (not keystrokes) on the same field still queue two
+// independent GET+PUT pairs, and the fix must still serialize them. Every
+// `fireChange` below is followed by `fireBlur` for exactly that reason: a
+// change alone no longer reaches the save path at all (that is now pinned
+// separately), so the race has to be driven the way an organiser actually
+// triggers two saves under the new model — type, commit, type again, commit
+// again — for this suite to still be exercising the real mechanism rather
+// than dead code.
+//
 // Reproduced here with vitest's fake timers rather than real ones: the mock
 // `apiV1` gives each GET a caller-controlled delay, so "the first request's
 // round trip happens to be slower" is deterministic instead of a timing
-// gamble. The same test body runs unmodified against the fixed code — it
-// simply can no longer observe two GETs in flight at once, because the fix
-// serializes them.
+// gamble.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConstraintsPanel } from "../constraints-panel";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
@@ -104,6 +116,12 @@ function fireChange(el: ReactElement, value: string) {
   (propsOf(el).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
 }
 
+/** Commits a draft the way a blur does — see the module comment above for
+ *  why every race in this file now needs one after each `fireChange`. */
+function fireBlur(el: ReactElement) {
+  (propsOf(el).onBlur as (e: unknown) => void)({});
+}
+
 type HardRule = { type: string; count?: number; scope?: { kind: string; divisionId?: string } };
 function storedHard(): HardRule[] | undefined {
   return (api.storedConfig as { constraints?: { hard?: HardRule[] } }).constraints?.hard;
@@ -121,16 +139,21 @@ afterEach(() => {
 });
 
 describe("max-per-day — out-of-order network responses", () => {
-  it("stores the LAST-typed value even when the EARLIER keystroke's round trip is the slower one", async () => {
-    // Typing "1" fires the SLOW request; a moment later, typing "10" (still
-    // before the first request has returned) fires a FAST one.
+  it("stores the LAST-committed value even when the EARLIER commit's round trip is the slower one", async () => {
+    // Committing "1" fires the SLOW request; a moment later, committing "10"
+    // (still before the first request has returned) fires a FAST one. Each
+    // edit needs its own `fireBlur` now — a bare `fireChange` only updates
+    // the draft and never reaches the save path at all (pinned separately in
+    // constraints-panel-commit-semantics.test.tsx).
     api.getDelaysMs.push(200, 10);
 
     const island = renderIsland(ConstraintsPanel, panelProps(baseConfig({ hard: [SENTINEL_RULE] })));
     const input = () => findMaxPerDayInput(island.tree());
 
     fireChange(input(), "1");
+    fireBlur(input());
     fireChange(input(), "10");
+    fireBlur(input());
 
     // Let every scheduled timer fire in simulated-time order, and every
     // promise continuation between them settle, regardless of how many
@@ -141,8 +164,8 @@ describe("max-per-day — out-of-order network responses", () => {
     expect(puts.length, `calls: ${api.calls.map((c) => c.options?.method ?? "GET").join(",")}`).toBeGreaterThanOrEqual(2);
 
     const rule = storedHard()?.find((r) => r.type === "max_fixtures_per_day");
-    // The organiser's LAST keystroke was "10" — that is what must be
-    // persisted, never the "1" from the keystroke whose round trip merely
+    // The organiser's LAST commit was "10" — that is what must be
+    // persisted, never the "1" from the commit whose round trip merely
     // happened to be slower.
     expect(rule?.count).toBe(10);
     // A debounce or a batched write must not regress this: an unrelated
@@ -156,7 +179,9 @@ describe("max-per-day — out-of-order network responses", () => {
     const input = () => findMaxPerDayInput(island.tree());
 
     fireChange(input(), "7"); // slow
+    fireBlur(input());
     fireChange(input(), ""); // fast — clears it
+    fireBlur(input());
 
     await vi.advanceTimersByTimeAsync(1000);
 
@@ -166,13 +191,15 @@ describe("max-per-day — out-of-order network responses", () => {
 });
 
 describe("restMin — same shape, same fix", () => {
-  it("stores the LAST-typed rest minutes even when the EARLIER keystroke's round trip is the slower one", async () => {
+  it("stores the LAST-committed rest minutes even when the EARLIER commit's round trip is the slower one", async () => {
     api.getDelaysMs.push(200, 10);
     const island = renderIsland(ConstraintsPanel, panelProps(baseConfig({ hard: [SENTINEL_RULE] })));
     const input = () => findRestMinInput(island.tree());
 
     fireChange(input(), "3");
+    fireBlur(input());
     fireChange(input(), "35");
+    fireBlur(input());
 
     await vi.advanceTimersByTimeAsync(1000);
 
@@ -186,15 +213,17 @@ describe("restMin — same shape, same fix", () => {
 });
 
 describe("max-per-day — a single edit, no race (sanity backstop)", () => {
-  it("stores a freshly-typed multi-digit value exactly", async () => {
+  it("stores a freshly-typed multi-digit value exactly, once committed", async () => {
     const island = renderIsland(ConstraintsPanel, panelProps(baseConfig({})));
-    fireChange(findMaxPerDayInput(island.tree()), "42");
+    const input = () => findMaxPerDayInput(island.tree());
+    fireChange(input(), "42");
+    fireBlur(input());
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(storedHard()?.find((r) => r.type === "max_fixtures_per_day")?.count).toBe(42);
   });
 
-  it("removes the rule when cleared, leaving other hard rules untouched", async () => {
+  it("removes the rule when cleared and committed, leaving other hard rules untouched", async () => {
     const island = renderIsland(
       ConstraintsPanel,
       panelProps(
@@ -203,7 +232,9 @@ describe("max-per-day — a single edit, no race (sanity backstop)", () => {
         }),
       ),
     );
-    fireChange(findMaxPerDayInput(island.tree()), "");
+    const input = () => findMaxPerDayInput(island.tree());
+    fireChange(input(), "");
+    fireBlur(input());
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(storedHard()?.find((r) => r.type === "max_fixtures_per_day")).toBeUndefined();

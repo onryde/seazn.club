@@ -2,7 +2,7 @@
 
 // Constraints v2 console (Jul3/04 §6): constraint editor, bulk time shift,
 // and the pre-publish wait-time report.
-import { useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
@@ -157,6 +157,79 @@ export function draftsToBlackouts(
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Draft-then-commit numeric fields (restMin, max-per-day). Every OTHER
+// control on this sheet commits instantly (see the module comment above
+// `saveConstraints` below) — correct for a checkbox or a select, where every
+// intermediate state is itself a valid value. A number typed digit-by-digit
+// is not: "1" on the way to typing "12" is briefly a real, storable value,
+// and until now it was briefly the LIVE constraint. PR #505 fixed WHICH of
+// several concurrent writes wins; it did not stop every keystroke from being
+// a write at all. An Auto-schedule kicked off, or another tab reading the
+// division, while an organiser was mid-type built the board against
+// whatever partial number happened to be on the wire at that instant.
+//
+// `DraftFieldState` is a local typing buffer that commits explicitly on blur
+// or Enter instead, the same idea the blackout editor above already applies
+// to a whole row (draft array + `savedBlackouts` + an explicit save button) —
+// scaled down to one scalar value with no button of its own (see
+// `constraints.field.saved` in the render below for why: a button per row on
+// a settings LIST reads as a form).
+//
+// Exported and unit-tested standalone, the same way
+// `readMaxFixturesPerDay`/`withMaxFixturesPerDay` above are, since this
+// workspace has no jsdom to drive an `<input>` directly.
+// ---------------------------------------------------------------------------
+
+export interface DraftFieldState {
+  /** What the input currently shows. */
+  text: string;
+  /** The last value this draft is known to agree with the committed state
+   *  on — the Escape target, and the yardstick `dirty` is measured against.
+   *  Moves on every commit AND on every `committedChanged`, so Escape always
+   *  lands on the freshest known-good value, never a stale one. */
+  seed: string;
+  /** True once the organiser has typed something not yet committed (or
+   *  reverted). Gates two things at the call site: an unchanged blur must
+   *  not write (§ requirement 4), and an external update to the committed
+   *  value must not overwrite a live edit (§ requirement 5). */
+  dirty: boolean;
+}
+
+export function initDraftField(committedText: string): DraftFieldState {
+  return { text: committedText, seed: committedText, dirty: false };
+}
+
+export type DraftFieldAction =
+  | { type: "type"; text: string }
+  | { type: "commit" }
+  | { type: "revert" }
+  /** Dispatched when the value this draft shadows moves for a reason OTHER
+   *  than this draft's own commit — another control's save landing, a
+   *  division switch. */
+  | { type: "committedChanged"; text: string };
+
+/**
+ * Pure transition for one draft field. A dirty draft is left showing what
+ * the organiser typed on `committedChanged` — the same "don't yank a
+ * deliberate action" rule the schedule board's day-tab re-derivation uses
+ * (schedule-board.tsx) — an unrelated update landing mid-edit is no reason
+ * to discard it. The seed still moves, so a SUBSEQUENT Escape reverts to the
+ * fresh value rather than the one that was current when the edit started.
+ */
+export function draftFieldReducer(state: DraftFieldState, action: DraftFieldAction): DraftFieldState {
+  switch (action.type) {
+    case "type":
+      return { ...state, text: action.text, dirty: action.text !== state.seed };
+    case "commit":
+      return { text: state.text, seed: state.text, dirty: false };
+    case "revert":
+      return { text: state.seed, seed: state.seed, dirty: false };
+    case "committedChanged":
+      return state.dirty ? { ...state, seed: action.text } : initDraftField(action.text);
+  }
+}
+
 interface Constraints {
   restMin?: number;
   noBackToBack?: boolean;
@@ -188,6 +261,52 @@ interface WaitRow {
   minGapMinutes: number | null;
   maxGapMinutes: number | null;
   spanMinutes: number;
+}
+
+/** Wires {@link draftFieldReducer} to one committed text value: seeds on
+ *  mount, and re-seeds during render whenever `committedText` moves — the
+ *  same render-time "derive from props" adjustment `useBoardActions` and the
+ *  schedule board's day tab use (no effect cascade; the corrected draft
+ *  renders in this same pass). Comparing by VALUE, not object identity, so
+ *  an unrelated save elsewhere on this sheet (which changes `constraints`'
+ *  identity but not this field's value) is not mistaken for this field
+ *  changing.
+ *
+ *  `seen` is `useState`, not `useRef`, on purpose — matching the day tab's
+ *  own choice, not an arbitrary one: refs are for event handlers and
+ *  effects, and reading or writing `.current` during render (which this
+ *  comparison runs in) is a lint error (react-hooks/refs) for real reasons —
+ *  a discarded/retried render must not leave a mutation behind that a
+ *  thrown-away state update WOULD roll back. */
+function useDraftField(committedText: string) {
+  const [state, dispatch] = useReducer(draftFieldReducer, committedText, initDraftField);
+  const [seen, setSeen] = useState(committedText);
+  if (seen !== committedText) {
+    setSeen(committedText);
+    dispatch({ type: "committedChanged", text: committedText });
+  }
+  return [state, dispatch] as const;
+}
+
+/** The transient "Saved" pulse: true for `ms`, then clears itself. Reset on
+ *  every call so two commits close together do not race their own timeouts;
+ *  cleared on unmount so a pulse mid-flight cannot set state after this
+ *  panel is gone (switching off the Constraints tab unmounts it — the tab
+ *  bar renders `{tab === "constraints" && <ConstraintsPanel .../>}`). */
+function useSavedPulse(ms = 2000) {
+  const [saved, setSaved] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, []);
+  const pulse = () => {
+    if (timer.current) clearTimeout(timer.current);
+    setSaved(true);
+    timer.current = setTimeout(() => setSaved(false), ms);
+  };
+  return [saved, pulse] as const;
 }
 
 export function ConstraintsPanel({
@@ -306,7 +425,15 @@ export function ConstraintsPanel({
   // `withMaxFixturesPerDay`'s "every other hard rule untouched" guarantee
   // true across queued saves, not just within a single one.
   const constraintsQueue = useRef<Promise<void>>(Promise.resolve());
-  const saveConstraints = (producer: (current: Constraints) => Constraints) => {
+  const saveConstraints = (
+    producer: (current: Constraints) => Constraints,
+    // Fired from INSIDE `applied()`, i.e. only on this task's own genuine
+    // success — `run()` swallows a failed save into `error` state and never
+    // rethrows, so the queue promise itself resolves either way and cannot
+    // be used to tell success from failure. Optional and additive: the three
+    // instant-commit controls below don't pass one and are unaffected.
+    onSaved?: () => void,
+  ) => {
     constraintsQueue.current = constraintsQueue.current
       // `run()` already reports a failed save to the user and never
       // rethrows — but a defensive `.catch` here costs nothing, and without
@@ -320,8 +447,38 @@ export function ConstraintsPanel({
         return savePatch({ constraints: next }, () => {
           constraintsRef.current = next;
           setConstraints(next);
+          onSaved?.();
         });
       });
+  };
+
+  // restMin / max-per-day: draft-then-commit (blur, Enter), not per keystroke
+  // — see the module comment above `DraftFieldState`. `constraints.restMin`/
+  // `maxPerDay` (both already LIVE, committed state) are what each draft
+  // shadows; re-seeding on THAT rather than on `initialSettings` keeps this
+  // in step with how every other control on this sheet already resolves its
+  // value, including this field's own commit landing.
+  const [restMinField, dispatchRestMin] = useDraftField(String(constraints.restMin ?? 0));
+  const [restMinSaved, pulseRestMinSaved] = useSavedPulse();
+  const commitRestMin = () => {
+    if (!restMinField.dirty) return; // requirement 4: unchanged blur must not write
+    const text = restMinField.text;
+    dispatchRestMin({ type: "commit" });
+    const restMin = Math.max(0, Number(text)); // coercion preserved exactly
+    saveConstraints((current) => ({ ...current, restMin }), pulseRestMinSaved);
+  };
+
+  const [maxPerDayField, dispatchMaxPerDay] = useDraftField(maxPerDay === undefined ? "" : String(maxPerDay));
+  const [maxPerDaySaved, pulseMaxPerDaySaved] = useSavedPulse();
+  const commitMaxPerDay = () => {
+    if (!maxPerDayField.dirty) return;
+    const raw = maxPerDayField.text;
+    dispatchMaxPerDay({ type: "commit" });
+    const count = raw === "" ? undefined : Math.max(1, Math.trunc(Number(raw))); // coercion preserved exactly
+    saveConstraints(
+      (current) => ({ ...current, hard: withMaxFixturesPerDay(current.hard, divisionId, count) }),
+      pulseMaxPerDaySaved,
+    );
   };
 
   const updateBlackout = (index: number, patch: Partial<BlackoutDraft>) =>
@@ -432,6 +589,22 @@ export function ConstraintsPanel({
                 absent means "no match length known", and `restFloor` then skips
                 the no-back-to-back source instead of resolving it to the gap. */}
             <RestFloorNote id="rest-min-floor" field="restMin" config={restNoteConfig} />
+            {/* Transient save feedback, not a per-row button — several rows
+                each with a button reads as a form, not a settings list (the
+                blackout editor's button works because it commits a whole
+                collection, not one scalar). Always mounted, fixed height, so
+                it never reflows the row when it appears; `aria-live` so it
+                is announced without moving focus. */}
+            <span
+              id="rest-min-saved"
+              aria-live="polite"
+              role="status"
+              className={`mt-0.5 block h-4 truncate text-xs text-emerald-600 motion-safe:transition-opacity ${
+                restMinSaved ? "opacity-100" : "opacity-0"
+              }`}
+            >
+              {restMinSaved ? msg("constraints.field.saved") : ""}
+            </span>
           </span>
           <span className="flex shrink-0 items-center gap-2 text-sm text-slate-500">
             {/* Same tip id as the Settings tab's field: one wording for one
@@ -442,7 +615,9 @@ export function ConstraintsPanel({
               // The floor note joins the described set only when it RENDERS.
               // `aria-describedby` pointing at an absent id is a dangling
               // reference; `restFloorNoteShown` is the component's own
-              // predicate, so attribute and markup cannot disagree.
+              // predicate, so attribute and markup cannot disagree. The
+              // save-pulse is deliberately NOT in this set: it is announced
+              // via `aria-live` on mutation, not read out on every focus.
               aria-describedby={
                 restFloorNoteShown(restNoteConfig, "restMin")
                   ? "rest-min-hint rest-min-unit rest-min-floor"
@@ -452,42 +627,67 @@ export function ConstraintsPanel({
               min={0}
               inputMode="numeric"
               className="input w-20 text-right"
-              value={constraints.restMin ?? 0}
+              value={restMinField.text}
               disabled={!canEdit || busy}
-              onChange={(e) => {
-                const restMin = Math.max(0, Number(e.target.value));
-                saveConstraints((current) => ({ ...current, restMin }));
+              onChange={(e) => dispatchRestMin({ type: "type", text: e.target.value })}
+              onBlur={commitRestMin}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRestMin();
+                else if (e.key === "Escape") dispatchRestMin({ type: "revert" });
               }}
             />
             <span id="rest-min-unit">{msg("constraints.restMin.unit")}</span>
           </span>
         </div>
 
-        <label className="flex flex-col items-start gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
+        {/* A <div> with an explicit htmlFor, not a wrapping <label> — the
+            same reason restMin above uses one: a wrapping <label> folds
+            EVERY text node inside it (hint, save-pulse) into the input's
+            accessible NAME, so a transient "Saved." would make the name
+            change every time it appears. Association stays real via the id;
+            the hint and save-pulse move to `aria-describedby` instead. */}
+        <div className="flex flex-col items-start gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
           <span className="min-w-0">
-            <span className="block text-sm text-slate-800">{msg("constraints.maxPerDay.label")}</span>
-            <span className="mt-0.5 block text-xs text-slate-400">
+            <label htmlFor="max-per-day" className="block text-sm text-slate-800">
+              {msg("constraints.maxPerDay.label")}
+            </label>
+            <span id="max-per-day-hint" className="mt-0.5 block text-xs text-slate-400">
               {msg("constraints.maxPerDay.hint")}
+            </span>
+            {/* Same transient-save pattern as restMin above — see its
+                comment for why this is not a per-row button. */}
+            <span
+              id="max-per-day-saved"
+              aria-live="polite"
+              role="status"
+              className={`mt-0.5 block h-4 truncate text-xs text-emerald-600 motion-safe:transition-opacity ${
+                maxPerDaySaved ? "opacity-100" : "opacity-0"
+              }`}
+            >
+              {maxPerDaySaved ? msg("constraints.field.saved") : ""}
             </span>
           </span>
           <span className="flex shrink-0 items-center gap-2 text-sm text-slate-500">
             <input
+              id="max-per-day"
+              aria-describedby="max-per-day-hint max-per-day-unit"
               type="number"
               min={1}
               inputMode="numeric"
               placeholder={msg("constraints.maxPerDay.placeholder")}
               className="input w-20 text-right"
-              value={maxPerDay ?? ""}
+              value={maxPerDayField.text}
               disabled={!canEdit || busy}
-              onChange={(e) => {
-                const raw = e.target.value;
-                const count = raw === "" ? undefined : Math.max(1, Math.trunc(Number(raw)));
-                saveConstraints((current) => ({ ...current, hard: withMaxFixturesPerDay(current.hard, divisionId, count) }));
+              onChange={(e) => dispatchMaxPerDay({ type: "type", text: e.target.value })}
+              onBlur={commitMaxPerDay}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitMaxPerDay();
+                else if (e.key === "Escape") dispatchMaxPerDay({ type: "revert" });
               }}
             />
-            {msg("constraints.maxPerDay.unit")}
+            <span id="max-per-day-unit">{msg("constraints.maxPerDay.unit")}</span>
           </span>
-        </label>
+        </div>
 
         {/* Row, not <label>: the Tip is a <button>, and a button inside a label
             both pollutes the label's accessible name and re-targets clicks at

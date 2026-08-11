@@ -314,6 +314,7 @@
   "constraints.restMin.label": "Minimum rest",
   "constraints.restMin.hint": "Breathing room between one entrant's matches.",
   "constraints.restMin.unit": "min",
+  "constraints.field.saved": "Saved.",
   "restFloor.note": "Entrants will rest at least {minutes} min — set by {source}.",
   "restFloor.source.perEntrantMinRest": "minimum rest per entrant, on the Settings tab",
   "restFloor.source.restMin": "minimum rest, on the Constraints tab",

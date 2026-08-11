@@ -314,6 +314,7 @@
   "constraints.restMin.label": "Repos minimum",
   "constraints.restMin.hint": "Temps de récupération entre les matchs d'un participant.",
   "constraints.restMin.unit": "min",
+  "constraints.field.saved": "Enregistré.",
   "restFloor.note": "Les participants se reposeront au moins {minutes} min — défini par {source}.",
   "restFloor.source.perEntrantMinRest": "le repos minimum par participant, dans l’onglet Paramètres",
   "restFloor.source.restMin": "le repos minimum, dans l’onglet Contraintes",
