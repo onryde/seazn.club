@@ -39,20 +39,6 @@ import type { PassKey } from "../src/lib/currency";
  * `allowancePx` exists for sub-pixel rounding on transformed/scaled elements
  * only. It is NOT a place to park a real overflow — raise it and you are
  * turning the check back off.
- *
- * Stripe.js is excluded from the measurement, narrowly. It injects a
- * `__privateStripeController*` telemetry iframe straight onto `<body>` the
- * moment `loadStripe()` runs (pass-upgrade.tsx does this eagerly, not only
- * once checkout opens) — sized by Stripe's own script, not by any of our
- * CSS, and on at least one CI runner it measured a few px wider than
- * `clientWidth` while sitting flush with the edge on a machine with overlay
- * scrollbars (most likely: Stripe sizes it against the full viewport
- * including the scrollbar gutter, which `clientWidth` excludes). Real users
- * never see this either way — `globals.css:63`'s `overflow-x: clip` already
- * hides it in production; only THIS check's deliberately stricter measurement
- * (clip lifted, to catch what a future CSS regression would expose) can. So
- * it is hidden here, by name, before measuring — not by loosening
- * `allowancePx` for every route, which would also swallow a real one.
  */
 export async function expectNoHorizontalScroll(
   page: Page,
@@ -64,12 +50,6 @@ export async function expectNoHorizontalScroll(
     const body = document.body;
     const vw = html.clientWidth;
 
-    const stripeFrames = Array.from(
-      document.querySelectorAll<HTMLIFrameElement>('iframe[name^="__privateStripeController"]'),
-    );
-    const stripeFramesPrevDisplay = stripeFrames.map((f) => f.style.display);
-    for (const f of stripeFrames) f.style.display = "none";
-
     const htmlPrev = html.style.overflowX;
     const bodyPrev = body.style.overflowX;
     html.style.overflowX = "visible";
@@ -77,8 +57,6 @@ export async function expectNoHorizontalScroll(
     const scrollWidth = html.scrollWidth;
     html.style.overflowX = htmlPrev;
     body.style.overflowX = bodyPrev;
-
-    stripeFrames.forEach((f, i) => (f.style.display = stripeFramesPrevDisplay[i]));
 
     const overflowPx = Math.max(0, scrollWidth - vw);
     let culprit = "";
