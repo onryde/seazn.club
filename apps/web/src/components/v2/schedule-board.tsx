@@ -1240,6 +1240,8 @@ export function ScheduleBoard({
               venueCap={venueCap}
               highlightId={highlightId}
               ghosts={dayGhosts}
+              blackouts={cfg.blackouts}
+              matchMinutes={cfg.matchMinutes}
             />
           )}
 
@@ -1304,6 +1306,18 @@ export function ScheduleBoard({
           onTogglePin={(f) => void actions.togglePin(f)}
         />
       </div>
+
+      {/* Same filter state as the legend above — repeated so a tall board
+          never scrolls the division filter out of reach (board redesign,
+          docs/superpowers/specs/2026-08-10-board-view-redesign-design.md). */}
+      {density === "board" && view === "day" && (
+        <BoardLegend
+          divisions={divisions}
+          selected={selectedSlugs}
+          onToggle={toggleFilter}
+          onClear={() => toggleFilter(null)}
+        />
+      )}
 
       {panelOpen && (
         <ConflictsPanel

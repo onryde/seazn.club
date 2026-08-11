@@ -603,6 +603,69 @@ test("the publish gate offers a way through for warnings, and none for a blocker
   await expect(page.getByTestId("board-gate-cancel")).toBeVisible();
 });
 
+// Board redesign (2026-08-10): a SINGLE-division board — no legend at all
+// (BoardLegend returns null at divisions.length <= 1), no division chip on
+// cards (multi = false) — is the exact scenario the redesign started from.
+// Own rig, independent of the describe.serial block above.
+test("single-division board: no legend, no division chip, Move panel still works at a real width", async ({
+  page,
+  request,
+}) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Single division ${TAG}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Solo",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  const divisionId = div.data!.id;
+  await addEntrantsViaApi(request, divisionId, ["Ash", "Birch", "Cedar", "Dune"]);
+  const out = await createStageAndGenerate(request, divisionId);
+  await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
+    tz: "UTC",
+    config: {
+      startAt: new Date(Date.UTC(2026, 9, 20, 9, 0)).toISOString(),
+      matchMinutes: 30,
+      gapMinutes: 0,
+      courts: ["Court A"],
+      perEntrantMinRest: 0,
+    },
+  });
+  await apiJson(request, `/api/v1/fixtures/${out.fixtureIds[0]!}`, "PATCH", {
+    scheduled_at: new Date(Date.UTC(2026, 9, 20, 9, 0)).toISOString(),
+    court_label: "Court A",
+  });
+
+  await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
+  await expect(page.getByText("Ash").first()).toBeVisible({ timeout: 20_000 });
+
+  // No legend anywhere on a single-division board — neither instance.
+  await expect(page.getByRole("group", { name: "Filter by division" })).toHaveCount(0);
+  // No division chip on the card either (showDivision = multi = false).
+  await expect(page.locator("[data-fixture-id] [data-division-chip]")).toHaveCount(0);
+  // No raw pin/lock emoji.
+  await expect(page.getByText("📌")).toHaveCount(0);
+  await expect(page.getByText("🔒")).toHaveCount(0);
+
+  // The Move panel bug this redesign fixes was reported on exactly this
+  // single-division shape — confirm the When field renders at a real width.
+  await page.locator("[data-fixture-id] button[aria-pressed]").first().click();
+  const dialog = page.getByRole("dialog", { name: /^Move / });
+  const dateInput = dialog.locator('input[type="date"]');
+  await expect(dateInput).toBeVisible();
+  const box = await dateInput.boundingBox();
+  expect(box?.width ?? 0).toBeGreaterThan(80);
+});
+
 // Regression: with zero divisions the competition schedule page fed the
 // competition id into the settings lookup and crashed with 404
 // "division not found". It must render an empty state instead.

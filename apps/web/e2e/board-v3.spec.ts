@@ -185,8 +185,11 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
 
   test("legend filters to two divisions in two taps; the URL is shareable", async ({ page }) => {
     await page.goto(boardUrl);
-    await page.getByRole("button", { name: "U16 Boys", exact: true }).click();
-    await page.getByRole("button", { name: "U16 Girls", exact: true }).click();
+    // Legend now renders twice — once above the grid, once below it — both
+    // sharing one filter state (board redesign, 2026-08-10).
+    await expect(page.getByRole("group", { name: "Filter by division" })).toHaveCount(2);
+    await page.getByRole("button", { name: "U16 Boys", exact: true }).first().click();
+    await page.getByRole("button", { name: "U16 Girls", exact: true }).first().click();
     await expect(page).toHaveURL(/d=u16-boys(%2C|,)u16-girls/);
 
     // Only the two selected divisions' chips render on blocks.
@@ -348,16 +351,6 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     page,
     request,
   }) => {
-    // BLOCKED ON TASK 4 (docs/superpowers/plans/2026-08-10-board-view-redesign.md):
-    // `BoardGrid`'s `blackouts` prop (this task) isn't threaded through yet —
-    // schedule-board.tsx's own <BoardGrid> call (Task 4's file, Task 4's own
-    // Step 1) still omits it, so the live page always renders `blackouts=[]`
-    // regardless of what's PUT to any division's schedule-settings. Verified
-    // this test passes end-to-end (including the d0-not-d2 correction below)
-    // against a build with `blackouts={cfg.blackouts}` temporarily added at
-    // that call site, then reverted before commit — out of this task's scope.
-    // Remove this skip once Task 4 lands that one line.
-    test.skip(true, "needs Task 4's blackouts={cfg.blackouts} wiring in schedule-board.tsx");
     // d0, not d2: the multi-division board's grid config (courts aside) is
     // ALWAYS divisions[0]'s schedule-settings (page.tsx, "Grid config: first
     // division's settings") — the `?d=` filter only narrows what's DISPLAYED,

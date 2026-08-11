@@ -658,6 +658,11 @@ async function main() {
   // seq-tokened reschedule + stale 409, SZ refs + /r/[ref] on pro AND free.
   await schedRegV3Suite(admin, renamed.slug, org2.id);
 
+  // --- Board redesign (2026-08-10): legend duplicated below the grid, and
+  // blackout windows highlighted on the grid (own tiny rig, see the suite
+  // function below).
+  await boardRedesignSuite(admin, renamed.slug);
+
   // --- #452 scheduling CONSTRAINT surface: a durable `constraints.hard` rule
   // on a real bracket and a pool-targeted `restByGroup` on a `group` stage,
   // asserted on auto / apply / board report / drag. Keyless (no model), own Pro
@@ -10546,11 +10551,6 @@ async function boardRedesignSuite(admin: Session, orgSlug: string): Promise<void
     board.body.includes("Redesign A P1") && !board.body.includes("\u{1F4CC}"),
   );
 }
-
-// The call site (`await boardRedesignSuite(admin, renamed.slug);`, reusing the
-// already-Pro `org2`/`renamed` from `schedRegV3Suite`'s call just above it) is
-// added in Task 4, since Task 4 is what makes the legend actually render
-// twice — wiring the call here would 1/4-fail until Task 4 lands.
 
 // v1 responses: { ok, data | error: {code, message, …}, requestId }.
 interface V1Res {
