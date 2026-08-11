@@ -13,11 +13,22 @@
 # "placement.internal:50051" (an earlier draft of this comment said .internal;
 # see the SCALE TO ZERO note below for why .flycast, not .internal, is
 # required once the machine can suspend). It only yields to an explicit
-# PLACEMENT_SERVICE_HOST env var, which nothing in this repo currently sets
-# (checked: no reference anywhere outside that one file). Naming this app
-# anything else breaks the zero-config path silently: every solve dials a
-# host that does not exist, the gRPC call fails, and build.ts falls back to
-# greedy placement with nothing surfacing why.
+# PLACEMENT_SERVICE_HOST env var. Naming this app anything else breaks the
+# zero-config path silently: every solve dials a host that does not exist, the
+# gRPC call fails, and build.ts falls back to greedy placement with nothing
+# surfacing why.
+#
+# SINCE 2026-08-11 that override IS in use: `seazn-club-stg` sets
+# PLACEMENT_SERVICE_HOST=placement-stg.flycast:50051, so staging calls its own
+# service rather than this one (DEPLOY.md §4b). It is set as a Fly secret on
+# the web app, not here — nothing in the repo names it, which is why an earlier
+# version of this comment said nothing sets it.
+#
+# THIS FILE IS ALSO STAGING'S. `placement-stg` deploys the same config with
+# `--app placement-stg`, deliberately: a forked TOML would be 200 duplicated
+# lines, and each one that drifted would make staging a worse rehearsal for the
+# thing it exists to rehearse. Machine size, concurrency, health checks and
+# solver knobs must be production's for a staging result to mean anything.
 app = "placement"
 # Matches apps/web's root fly.toml — same Fly region, minimal added latency
 # for an RPC that is already budgeted to the second.

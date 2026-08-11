@@ -86,42 +86,118 @@ secret as `UNAUTHENTICATED` — which `placement-client.ts:507` maps to a failur
 and `build.ts` turns into a greedy board. A missing secret on the web app
 therefore looks exactly like "placement is slow", not like an auth error.
 
-## 4b. Staging shares THIS service (owner decision 2026-08-10)
+## 4b. Staging gets its OWN service, `placement-stg` (owner decision 2026-08-11)
 
-`seazn-club-stg` calls the same `placement` app as production. No second
-service, no `placement-stg`. It needs nothing but the secret — the host is
-already right, because `placement-client.ts` falls back to
-`DEFAULT_HOST = "placement.flycast:50051"` when `PLACEMENT_SERVICE_HOST` is
-unset, and `.flycast` resolves for any app in the same Fly organisation.
+**This supersedes the 2026-08-10 decision to share.** Sharing was correct while
+the contract was frozen; it stops being correct the moment a contract revision
+is due, and #21 is due.
+
+Why it had to change, in one sentence: with one service behind both web apps,
+**deploying a proto revision to staging IS deploying it to production**, so the
+rehearsal and the performance are the same event. The two accepted consequences
+recorded under the old decision — staging stealing machines from the pool of
+ten, and no way to validate a contract first — are both closed by the split.
+
+### There is no `fly.stg.toml`, deliberately
+
+Staging deploys the **same** `fly.toml` with the app name overridden:
 
 ```bash
-fly secrets set PLACEMENT_SERVICE_SECRET="$SECRET" --app seazn-club-stg
+fly deploy services/placement --config services/placement/fly.toml --app placement-stg
 ```
 
-Miss this and staging silently serves greedy boards — the same
-`UNAUTHENTICATED` → greedy path step 4 describes, which reads as "the
-optimiser got worse", not as an auth failure.
+A second TOML would be ~200 lines duplicated, and every line that drifted would
+make staging a worse and worse rehearsal for production. The point of this app
+is to answer "will the real service behave like this?", and it can only answer
+that while its machine size, concurrency limits, health checks and solver knobs
+are the production ones. Everything that legitimately differs — the secret, the
+machine count, the web app's host override — is a `fly secrets` / `fly scale`
+call below, not file content.
 
-**Two consequences of sharing, accepted deliberately.** Record them here so
-neither is rediscovered as a bug:
+If a future change genuinely needs staging-only configuration, add it as an
+`[env]` override on the `fly secrets set`/`fly scale` line rather than forking
+this file.
 
-1. **Staging contends with production for machines.** `hard_limit = 1` means
-   one solve occupies a whole machine, and staging solves draw from the same
-   pool of ten. Someone testing on staging can push a real organiser onto
-   `solver_busy` and therefore onto a greedy board. Correctly labelled since
-   Task 06b, but still a worse board caused by non-production traffic.
-2. **A contract change cannot be validated on staging first.** One service
-   serves both, so deploying a proto/contract revision to staging *is*
-   deploying it to production. Every such change must therefore be
-   backward-compatible in both directions, or be accepted as a production
-   risk. **This bites #21**, the planned unified contract revision covering
-   C1/C2/C4/C5. Revisit the shared-service decision before that lands.
+### Standing it up (once)
 
-Both share one secret, so its blast radius now includes staging.
+```bash
+fly apps create placement-stg
+fly ips allocate-v6 --private --app placement-stg
+fly ips list --app placement-stg        # expect the private v6 ONLY
+```
 
-To split later: create `placement-stg`, allocate its own private v6, and set
-`PLACEMENT_SERVICE_HOST=placement-stg.flycast:50051` on `seazn-club-stg`. It
-is config only — no code change — because the override already exists.
+Steps 2 and 3's reasoning applies unchanged and is not optional: without the
+private v6 the `.flycast` host does not resolve, and the symptom is not an
+error but **greedy boards, silently**.
+
+### Its own secret — not production's
+
+```bash
+STG_SECRET=$(openssl rand -base64 32)
+fly secrets set PLACEMENT_SERVICE_SECRET="$STG_SECRET" --app placement-stg
+fly secrets set PLACEMENT_SERVICE_SECRET="$STG_SECRET" --app seazn-club-stg
+unset STG_SECRET
+```
+
+A **different** value from production's, which is the second thing the split
+buys. Under the old shared arrangement one secret's blast radius covered both
+environments; now a staging leak costs staging.
+
+### Point the staging web app at it
+
+```bash
+fly secrets set PLACEMENT_SERVICE_HOST="placement-stg.flycast:50051" --app seazn-club-stg
+```
+
+This is the whole code-side story. `placement-client.ts` reads
+`PLACEMENT_SERVICE_HOST` and falls back to `DEFAULT_HOST =
+"placement.flycast:50051"` only when it is unset, so the override already
+exists and nothing ships to make this work.
+
+**Verify it took, and do not skip this.** If the variable is missing or
+misspelled, `seazn-club-stg` silently keeps calling **production** — which is
+exactly the state the split exists to end, and it looks identical to success
+from the outside. Check the value is set, then confirm a staging solve appears
+in `placement-stg`'s log and not in `placement`'s:
+
+```bash
+fly secrets list --app seazn-club-stg | grep PLACEMENT_SERVICE_HOST
+fly logs --app placement-stg    # run a staging Auto-schedule; expect one `solve request=` line
+fly logs --app placement        # the same run must add NOTHING here
+```
+
+That per-solve log line is the one added after four production deploys measured
+nothing; this is the second job it does.
+
+### Scale
+
+```bash
+fly scale count 2 --app placement-stg
+```
+
+Two, not ten. `hard_limit = 1` means one solve per machine, and staging does
+not have ten concurrent organisers — but one is not enough either, since a
+second tester would get `SOLVER_BUSY` and a greedy board, and mistake it for a
+regression in the thing they were testing.
+
+### Deploying a contract change — the reason all of the above exists
+
+Production deploys from CI on push to `main` (step 5). **Staging does not**, and
+must not: if both deployed from `main` they would always be the same revision
+and there would be no window to validate anything in.
+
+So a contract revision goes:
+
+1. `fly deploy services/placement --config services/placement/fly.toml --app placement-stg`
+   **from the feature branch**, before the PR merges.
+2. Exercise it on `stg.seazn.club` — a real Auto-schedule on a real board, and
+   confirm the per-solve log line comes from `placement-stg`.
+3. Only then merge, letting CI deploy production.
+
+Between 1 and 3 the two services run **different contracts**, which is the
+point. Both sides must therefore still tolerate the other's messages for that
+window — proto3 makes added fields safe in both directions, but a **renumbered
+or repurposed field number is not**, and no runbook step can save you from one.
 
 ## 5. Deploy
 
