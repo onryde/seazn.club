@@ -1834,4 +1834,122 @@ describe("buildSchedule — Placement path", () => {
       without.existing.map(({ ruleGroupIndices: _rgi, ...rest }) => rest),
     );
   });
+
+  // B5 (#21) — a Settings-level `restByDivision` (no typed `min_rest_minutes`
+  // hard rule at all) used to reach the wire ONLY on `constraints.restByDivision`,
+  // a field `ruleGroupIndices` cannot name. This is the common production case
+  // (measured 2026-08-11 against a live service: two pinned rows 30 minutes
+  // apart sharing an entrant, under exactly this Settings-only rest, cleared
+  // `OPTIMAL` where `INFEASIBLE` was owed) — so it must ALSO produce a
+  // `RuleGroup`, scoped to that division's own free fixtures, same as any typed
+  // rule would.
+  it("turns a settings-level restByDivision with no typed rest rule into a rule group scoped to that division", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const fixtures = [
+      fx("f1", "E1", "E2", { divisionId: "D1" }),
+      fx("f2", "E3", "E4", { divisionId: "D1" }),
+      // A different division, to prove the group is SCOPED, not every free
+      // fixture on the board — a group covering f3 too would pass a vacuous
+      // "some group exists" check without proving membership is correct.
+      fx("f3", "E5", "E6", { divisionId: "D2" }),
+    ];
+    const config = { ...cfg(), restByDivision: { D1: 25 } };
+    await buildSchedule({ fixtures, config });
+    expect(captured).toBeDefined();
+    expect(captured!.ruleGroups).toEqual([{ fixtureIds: ["f1", "f2"], minRestMinutes: 25, maxFixturesPerDay: undefined }]);
+  });
+
+  // A pin can only ever be attributed a rest rule through `ruleGroupIndices` —
+  // C6's whole fold-in rests on it. This proves the synthetic group from the
+  // test above is actually reachable by a pinned row, not merely present in
+  // `ruleGroups` and orphaned.
+  it("carries a pin's synthetic division-rest group index in its ruleGroupIndices on the wire", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const locked = { court: "C1", startAt: T0 };
+    const fixtures = [
+      fx("pinned", "E1", "E2", { divisionId: "D1", locked }),
+      fx("free", "E3", "E4", { divisionId: "D1" }),
+    ];
+    const config = { ...cfg(), restByDivision: { D1: 20 } };
+    await buildSchedule({ fixtures, config });
+    expect(captured).toBeDefined();
+    expect(captured!.ruleGroups).toEqual([{ fixtureIds: ["free"], minRestMinutes: 20, maxFixturesPerDay: undefined }]);
+    const pinnedRow = captured!.existing.find((e) => e.fixtureId === "pinned");
+    expect(pinnedRow?.ruleGroupIndices).toEqual([0]);
+  });
+
+  // Typed rules are appended FIRST, synthetic division-rest groups SECOND
+  // (`buildRuleGroups`'s own docstring) — so an index a pin already resolves
+  // against a typed rule must never move once a division-rest group joins the
+  // list beside it. Proved both ways: the array shape itself, and a pinned row
+  // that matches BOTH sources ending up with BOTH indices, in order.
+  it("keeps a typed rule's index stable when a synthetic division-rest group is appended after it", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const locked = { court: "C1", startAt: T0 };
+    const fixtures = [
+      fx("pinned", "E1", "E2", { divisionId: "D1", locked }),
+      fx("free", "E3", "E4", { divisionId: "D2" }),
+    ];
+    const hard: HardConstraint[] = [{ type: "max_fixtures_per_day", count: 3, scope: { kind: "competition" } }];
+    const config = { ...cfg(), hard, restByDivision: { D1: 20 } };
+    await buildSchedule({ fixtures, config });
+    expect(captured).toBeDefined();
+    // Index 0 is still the typed, competition-scoped rule (covers the one free
+    // fixture, "free"); index 1 is the new synthetic D1 group, appended after
+    // it (covers no FREE fixture — "pinned" is D1 but is not free).
+    expect(captured!.ruleGroups).toEqual([
+      { fixtureIds: ["free"], minRestMinutes: undefined, maxFixturesPerDay: 3 },
+      { fixtureIds: [], minRestMinutes: 20, maxFixturesPerDay: undefined },
+    ]);
+    const pinnedRow = captured!.existing.find((e) => e.fixtureId === "pinned");
+    // Matches BOTH: the competition-scoped typed rule (0, covers everything)
+    // and D1's synthetic rest group (1) — at their real, stable positions.
+    expect(pinnedRow?.ruleGroupIndices).toEqual([0, 1]);
+  });
+
+  // `dayCapByDivision` (the OLDER, division-only field) is gated on `tz` for
+  // exactly this reason (obligation 1, above): with no zone the verifier's own
+  // day-cap pass buckets every slot into ONE day, so a real cap would bind the
+  // whole board against a fabricated bucket. `buildRuleGroups`'s
+  // `maxFixturesPerDay` must honour the SAME gate, or the service (which reads
+  // `RuleGroup.max_fixtures_per_day` since C4) enforces a cap the verifier
+  // cannot see at all. `minRestMinutes` needs no such gate and must be
+  // unaffected either way.
+  it("omits maxFixturesPerDay from a rule group when tz is undefined, and includes it when tz is set", async () => {
+    const run = async (tz: string | undefined): Promise<SolveBuildInput> => {
+      let captured: SolveBuildInput | undefined;
+      vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+        captured = input;
+        return okOutcome();
+      });
+      const fixtures = [fx("f1", "E1", "E2", { divisionId: "D1" })];
+      const hard: HardConstraint[] = [
+        { type: "max_fixtures_per_day", count: 2, scope: { kind: "division", divisionId: "D1" } },
+      ];
+      const config = { ...cfg(), tz, hard };
+      await buildSchedule({ fixtures, config });
+      vi.restoreAllMocks();
+      return captured!;
+    };
+
+    const withoutTz = await run(undefined);
+    expect(withoutTz.ruleGroups).toEqual([
+      { fixtureIds: ["f1"], minRestMinutes: undefined, maxFixturesPerDay: undefined },
+    ]);
+
+    const withTz = await run("Europe/London");
+    expect(withTz.ruleGroups).toEqual([{ fixtureIds: ["f1"], minRestMinutes: undefined, maxFixturesPerDay: 2 }]);
+  });
 });

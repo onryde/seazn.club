@@ -601,70 +601,45 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
    * prove it about the PINS rather than about the board. Rest is warn-only at
    * the write gate, which is what lets the board reach this state at all.
    *
-   * UNCONDITIONALLY SKIPPED — not gated on `HAS_SOLVER` — because this is not
-   * "needs a reachable service", it is a CAPABILITY GAP in the placement wire
-   * contract that no reachable service can close. `model.py`'s own docstring
-   * says so directly ("what the wire contract cannot carry", section 7's
-   * PARTICIPANT-REST half): `existing` rows go over the wire as
-   * `PinnedRow(court_index, start_at_ms)` only, round 6 having dropped even
-   * their fixture identity — no entrant list at all. `by_entrant` (`model.py`
-   * ~L415-427), the map `AddNoOverlap`'s rest intervals are grouped by, is
-   * built by walking `fixtures` (the MOVABLE rows) alone; a pinned row
-   * contributes nothing to it. Two pinned rows can therefore never be seen to
-   * share an entrant, whatever `restByDivision` says — the rule the fold-in
-   * fix (`build.ts`'s `restByDivisionForWire`) now correctly sends binds
-   * `fixtures` against `fixtures`, never `existing` against `existing`.
+   * LIVE as of task B5 (#21), after two years of being a skipped tripwire and
+   * TWO wrong statements of its own exit condition. Both of the changes this
+   * comment previously named as the fix — `PinnedRow.entrant_indices` on the
+   * wire, and `model.py` folding a pin into its entrants' rest groups — landed
+   * (#517, #525) and it still failed. Recording why, because the failure mode
+   * is not visible from either side alone.
    *
-   * MEASURED 2026-08-10, with instrumented logging (not inferred): after the
-   * fold-in fix, THIS exact scenario — two pins, 30 minutes apart, 30-minute
-   * rest, sharing an entrant — sends `restByDivision` correctly and comes back
-   * `status: "OPTIMAL"`, `tiersCompleted: 4`, `placed: 4` (the four FREE
-   * fixtures placed cleanly around the two pins). No infeasibility, because
-   * the solver never had the information to see one. This is the same family
-   * as the OTHER open gap the module's docstring separately confirms —
-   * `existing` rows are not counted against day caps either, for the identical
-   * reason (no identity to attribute them by).
+   * The service resolves a PIN's rest from the rule groups the pin counts
+   * against, and `buildRuleGroups` used to emit a group only for a TYPED
+   * `min_rest_minutes` rule. The 30 minutes this scenario owes is a
+   * settings-level `restByDivision` value, so the request carried ZERO rule
+   * groups and the fold-in was inert — while a pin cannot fall back to
+   * `rest_by_division`, since `existing` rows deliberately carry no
+   * `division_index` (that field was considered for #21 and rejected: day caps
+   * are not division-scoped by construction). Neither half was missing. The
+   * two halves just never met.
    *
-   * Closing this needs `entrant_indices` added to `PinnedRow` on the proto,
-   * plus a `model.py` change to fold `existing` into `by_entrant` — a wire
-   * and solver-model change, out of scope here by the task's own constraints
-   * (no `.proto`, no Python). (The day-cap gap named above is a DIFFERENT
-   * field and closed separately, task C4: `PinnedRow.rule_group_indices`,
-   * not a `division_index` — this service never learns what a division is,
-   * and `max_fixtures_per_day` was already scoped to the full RuleGroup
-   * union, `constraints.ts:69-72`; `build.ts:1143` merely narrows it to
-   * division for now.) The assertions below are UNCHANGED from what z3 once
-   * satisfied: this is a live tripwire, not a weakened test.
+   * B5 closes it by emitting a synthetic rule group per division carrying its
+   * resolved rest, which `ruleGroupSet.indicesFor` then attributes to these
+   * two pins.
    *
-   * BOTH HALVES NAMED ABOVE HAVE NOW LANDED — and this still does not pass.
-   * `PinnedRow.entrant_indices` shipped with the #21 wire, and task C6 taught
-   * `model.py` to fold a pin into its entrants' rest groups. The exit
-   * condition stated above was simply WRONG about which change closes this,
-   * so it is restated here rather than left to be re-derived a third time.
+   * MEASURED 2026-08-11 against a fresh DB and a live service, not inferred —
+   * the SAME request shape either side of the change:
    *
-   * MEASURED 2026-08-11 against a fresh DB and a local service running C6,
-   * not inferred: this test reaches the solver (`build-6f2c` in the service
-   * log) and comes back `status=OPTIMAL placed=4/4`, failing here as
-   * `expected 'already_optimal' to be 'infeasible'`.
+   *   before B5   build-6f2c   status=OPTIMAL    placed=4/4
+   *   after  B5   build-6f2c   status=INFEASIBLE placed=0/4
    *
-   * The reason is a PATH mismatch, not a missing field. C6's fold-in is gated
-   * on `rule_groups` being non-empty, and `buildRuleGroups` (`build.ts`) emits
-   * a group only for a TYPED `min_rest_minutes`/`max_fixtures_per_day` rule.
-   * The 30 minutes this scenario owes is a settings-level `restByDivision`
-   * value, so the request carries ZERO rule groups — and a pin cannot resolve
-   * rest off `rest_by_division` on its own, because `existing` rows carry no
-   * `division_index` (deliberately: that field was considered for #21 and
-   * rejected, since day caps are not division-scoped by construction).
+   * What it guards: `contradictory_pins` POPULATED, end to end. Every other
+   * spec in this file only ever sees that field absent — and "absent" is also
+   * what a field that is declared and never written looks like. Rest is
+   * warn-only at the write gate (`isBlockingConflict`, `calendar.ts:202-209`),
+   * which is what lets a board reach this state at all.
    *
-   * So the real exit condition is the C1 REST HALF: migrate `division_rules`
-   * into rule groups, at which point `ruleGroupSet.indicesFor` — which
-   * `build.ts:1605` ALREADY calls for every pin, an `Assignment` satisfying
-   * `ScopeRow` structurally — attributes the division's rest group to these
-   * two pins and C6's existing fold-in does the rest. No further Python or
-   * proto change is owed. When that lands and this starts passing, THAT is
-   * the signal to remove the skip.
+   * If this ever goes green by returning `already_optimal` again, the cause is
+   * a rest that reaches the wire on some path `rule_groups` cannot name — the
+   * defect above, in a new coat. Check what the request actually carried
+   * before touching the assertions.
    */
-  it.skip("forwards the pinned set an infeasible proof is about, when the engine names one", async () => {
+  it("forwards the pinned set an infeasible proof is about, when the engine names one", async () => {
     const auth = await seedOrg();
     const { stageId } = await seedStage(auth, 4, { courts: ["C1", "C2"] });
 
