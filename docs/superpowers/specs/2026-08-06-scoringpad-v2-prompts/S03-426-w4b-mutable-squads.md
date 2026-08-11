@@ -5,6 +5,15 @@ then this. Engine-only session. **Blocks S6 (W5).**
 
 Branch `feat/s3-w4b-mutable-squads` in a fresh worktree. One PR. Issue #426.
 
+> **Addendum, 2026-08-11 (S5/#431):** the W4 decisions register mapped item 4
+> (football — quarters instead of halves / mini-soccer) to land in this
+> session. It did not — S3 shipped squads/lineups only, and neither this file
+> nor the session's own decision-log entries ever named quarters. S5 found the
+> gap, built it there instead (three new `PlayPhase` members, two new period
+> markers, a new `mini-soccer` variant), and is recording it here for
+> traceability. See `packages/engine/src/sports/football/DOMAIN.md`'s quarters
+> row and `_INDEX.md`'s 2026-08-11 decision log.
+
 ## Why this blocks W5
 
 What the schema cannot express by W5 can never reach a `PadSpec`, the renderer,

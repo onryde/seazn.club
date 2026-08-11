@@ -5,6 +5,16 @@ Paste this whole file as the session opener. Read `_RULES.md`, then `_INDEX.md`
 
 Branch `feat/s4-offence-taxonomies` in a fresh worktree. One PR. Issue #428.
 
+> **Addendum, 2026-08-11 (S5/#431):** the W4 decisions register mapped item 2
+> (tennis — the game a game penalty concedes) to land in this session. It did
+> not — S4 shipped offence/reason enums and the person-role fix only, and
+> neither this file nor the session's own decision-log entries ever named a
+> game-award mechanic. S5 found the gap, built it there instead (a new
+> `tennis.game.award` event, additive alongside the unchanged sanction
+> record), and is recording it here for traceability. See
+> `packages/engine/src/sports/tennis/DOMAIN.md`'s game-penalty row and
+> `_INDEX.md`'s 2026-08-11 decision log.
+
 ## Why
 
 Four dossiers deferred the same thing: the **reason** for a sanction is recorded

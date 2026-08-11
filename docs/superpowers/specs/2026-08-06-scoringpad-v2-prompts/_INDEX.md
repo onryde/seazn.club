@@ -17,7 +17,7 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 | S2 | #430 | `S02-430-fidelity-tier-4-decision.md` | — | **DONE** — no code. Fidelity ladder closed at 0–3; tier 4 will never exist |
 | S3 | #426 | `S03-426-w4b-mutable-squads.md` | S1 | **DONE** — all 9 deferred rows closed; 4 owner rulings; e2e+smoke deferred to S12/S13 |
 | S4 | #428 | `S04-428-offence-taxonomies.md` | S3 (person-role decision) | **DONE, post-review** — 3 enums adopted (football `PenaltyOffence`, hockey/icehockey `PeriodSuspensionReason`), 6 rows deferred with reasons recorded, person-role discriminator closed END TO END (`lineups.role`, V357, wired into both stats call sites — round-1 review caught the first pass shipping it engine-only/unreachable), `persons.lane` extended (V356) |
-| S5 | #431 | `S05-431-decisions-register.md` | S3, S4 | TODO |
+| S5 | #431 | `S05-431-decisions-register.md` | S3, S4 | **DONE** — register closed, all 8 rulings accounted for; items 2 (tennis game-award) and 4 (football quarters) BUILT this session on owner instruction rather than re-homed, cricket `pairs-6-a-side` dropped with a DB prune fix |
 | S6 | #416 | `S06-416-w5-padspec.md` | S2, S3, S5 | TODO |
 | S7 | #427 | `S07-427-pad-vocabulary-i18n.md` | S3, S4, S6 | TODO |
 | S8 | #417 | `S08-417-w6-player-stats.md` | S6 | TODO |
@@ -883,6 +883,49 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   reproduced exactly one failure, this test). With this, the person-role
   discriminator is closed end to end at both real call sites named in the
   original review, each with its own DB-backed, mutation-verified test.
+
+- 2026-08-11 — S5/#431 — **deferred, recorded not re-decided: cricket penalty runs
+  to the fielding side (register item 1).** Law 41 adds penalty runs to the
+  fielding side's OWN score — i.e. to a *different* innings that may not exist
+  yet — so it would change `aggregate()`, the innings-victory test and the NRR
+  ledger. It reaches net run rate, so a half-done version corrupts standings
+  silently; over-rate penalties ride along with it. Needs a decision on how a
+  penalty bank scores for net run rate before any schema lands. Not touched this
+  session — `_RULES.md` forbids "improving" a deferred item while in the file.
+- 2026-08-11 — S5/#431 — **deferred, recorded not re-decided: carrom fresh toss
+  for an extra board (register item 6b).** A mid-match toss would have to
+  override the deterministic break alternation. No mechanism proposed; stays
+  deferred pending a real product ask.
+- 2026-08-11 — S5/#431 — **refusal reaffirmed, not re-litigated: football
+  disallowed goal / VAR (register item 7).** Standing answer is "not a scorebook
+  entry: a disallowed goal is not a goal." No code change.
+- 2026-08-11 — S5/#431 — **items 2 and 4 were BUILT this session, not re-homed.**
+  Scout confirmed both were ruled `build` on 2026-08-03 but never landed: the
+  register mapped item 2 (tennis — the game a game penalty concedes) to S4/#428
+  and item 4 (football — quarters/mini-soccer) to S3/#426, both already
+  merged, and neither session's prompt file, decision log, or shipped code ever
+  mentions either mechanic — both sports' own `DOMAIN.md` still read `deferred`.
+  Flagged to the owner rather than silently re-homed or silently built (three
+  options given: keep #431 open scoped to just these two per the #430
+  precedent; re-home into S6/S7; build now). **Owner chose: build now.**
+  Shipped: `tennis.game.award` (nested/kernel.ts — reuses the existing
+  `winGame` cascade, refuses loudly mid-tie-break, sanction event at
+  `level:"game_penalty"` stays an untouched no-op so no golden re-baseline is
+  forced) and football `mini-soccer` (Q1 reuses `H1`, three new `PlayPhase`
+  members, two new period markers `QT`/`3QT`, every `applyPeriod` arm gated on
+  `cfg.halves` so a marker legal in one mode is refused, not silently
+  reinterpreted, from the other mode's matching phase). Both additive, both
+  golden-safe (tennis: append-only `EXTEND_GOLDEN`, byte-prefix-identical;
+  football: `git diff` on the corpus is empty). `S03-426-w4b-mutable-squads.md`
+  and `S04-428-offence-taxonomies.md` carry a pointer addendum each rather than
+  a rewrite, since both sessions are already merged history.
+- 2026-08-11 — S5/#431 — **register CLOSED.** All 8 rulings accounted for:
+  3 (cricket `pairs-6-a-side`) dropped this session; 2 and 4 built this session
+  (above); 5 and 6a confirmed already present in `S06-416-w5-padspec.md`; 8
+  confirmed already present in `S07-427-pad-vocabulary-i18n.md`; 1, 6b deferred
+  and 7's refusal reaffirmed (above, with reasons carried forward so nobody
+  re-derives them). #431 closed with a comment pointing at the PR and this
+  entry.
 
 - _(append below)_
 
