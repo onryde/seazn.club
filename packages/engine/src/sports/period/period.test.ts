@@ -145,6 +145,42 @@ describe("period kernel — phase machine", () => {
   });
 });
 
+// #416 (W5) — kernel wiring for the shoot-out retake fix: a real
+// `hockey.shootout.attempt` payload's `void` flag must reach
+// `State.shootout.kicks[].void`, and an event recorded before this field
+// existed (no `void` key at all) must fold to EXACTLY the same shape it
+// always did — checked directly, not assumed, because this is the backward-
+// compatibility claim the recorded goldens depend on.
+describe("period kernel — shoot-out attempt payload threads `void` into the kick (#416)", () => {
+  const toSo = (): ModuleEvent[] => fihRegulation([]); // 0-0 -> fih-shootout has no OT, straight to SHOOTOUT
+
+  it("a void attempt is recorded on the kick and does not consume the taker's entitlement", () => {
+    const events: ModuleEvent[] = [
+      ...toSo(),
+      { type: "hockey.shootout.attempt", payload: { by: FH, scored: false, void: true } },
+    ];
+    const state = foldFih(events, "fih-shootout");
+    expect(state.shootout?.kicks).toEqual([{ side: "home", scored: false, void: true }]);
+    // Still FIH's turn next — the void kick did not hand the turn to away.
+    const summary = hockey.summary(state).detail as { shootoutNext: "home" | "away" | null };
+    expect(summary.shootoutNext).toBe("home");
+  });
+
+  it("backward compatible: an attempt with no `void` key folds to the exact pre-existing kick shape", () => {
+    const events: ModuleEvent[] = [
+      ...toSo(),
+      { type: "hockey.shootout.attempt", payload: { by: FH, scored: true } },
+    ];
+    const state = foldFih(events, "fih-shootout");
+    // Byte-shape check, not just a loose equality: an absent `void` must be
+    // OMITTED from the recorded kick, not written as `void: undefined` —
+    // the same convention `person`/`goalkeeper` already follow, and the one
+    // pre-existing golden-corpus assertion of this exact shape
+    // (period-audit.test.ts) must stay true.
+    expect(JSON.stringify(state.shootout?.kicks)).toBe('[{"side":"home","scored":true}]');
+  });
+});
+
 const minor = (by: string, person?: string): ModuleEvent => ({
   type: "icehockey.suspension.start",
   payload: { by, class: "minor", ...(person === undefined ? {} : { person }) },

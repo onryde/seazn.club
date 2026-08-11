@@ -329,6 +329,13 @@ export const PeriodShootoutAttempt = z.strictObject({
   scored: z.boolean(),
   // W4 (#407) — the keeper facing the attempt; both sheets name him.
   goalkeeper: PersonId.optional(),
+  // W5 (#416) — App 12 / GWS foul outcomes: a defender foul during the
+  // one-on-one sends it to a RETAKE rather than recording a real attempt
+  // (hockey/DOMAIN.md's "a foul during the shoot-out" row). See
+  // `ShootoutKick.void` (./shootout.ts) for the full reasoning; this is the
+  // same flag, one layer up, on the recorded payload. Optional and defaults
+  // to falsy, so no existing recorded attempt is affected.
+  void: z.boolean().optional(),
   meta: z
     .strictObject({
       clockSeconds: z.number().int().positive().optional(), // FIH 8 s attempt
@@ -1203,12 +1210,14 @@ function applyShootoutAttempt(
     });
   }
   // W4 — taker + defending keeper join the kick when recorded (absent keys keep
-  // the pre-W4 kick shape byte-identical).
+  // the pre-W4 kick shape byte-identical). W5 (#416) — `void` follows the same
+  // convention: absent unless the scorer actually recorded a retake foul.
   const kick: ShootoutKick = {
     side,
     scored: payload.scored,
     ...(payload.person === undefined ? {} : { person: payload.person }),
     ...(payload.goalkeeper === undefined ? {} : { goalkeeper: payload.goalkeeper }),
+    ...(payload.void === undefined ? {} : { void: payload.void }),
   };
   const kicks = [...state.shootout.kicks, kick];
   const winnerSide = shootoutDecision(kicks, state.cfg.shootout.attempts);
@@ -1898,12 +1907,20 @@ export function makePeriodModule(
         const metaRoll = rng();
         const withClock = metaRoll >= 0.45 && metaRoll < 0.8;
         const withIneligible = metaRoll >= 0.65;
+        // W5 (#416) — App 12 / GWS retake foul. A separate, low-probability
+        // draw: a void kick is the exception, not the rule, and this must
+        // not perturb the odds the other three draws above were tuned
+        // against. `expected` above already reads `state.shootout.kicks`
+        // through the (now void-aware) `expectedKicker`, so a voided kick
+        // correctly does not hand the next draw to the other side.
+        const voided = rng() < 0.12;
         return {
           type: attemptType,
           payload: {
             by: sideId(expected),
             scored: rng() < 0.7,
             at: stamp("SHOOTOUT"),
+            ...(voided ? { void: true } : {}),
             ...(named
               ? {
                   person: `${sideId(expected)}-p3`,
