@@ -1956,6 +1956,17 @@ const positions: PositionCatalog = {
   lineup: { size: 11, benchMax: 4 }, // substitutes: fielding only (spec §2.7)
 };
 
+// The catalog for a resolved config, mirroring football's positionsFor (W4,
+// #407). Only the starting size moves: `playersPerSide` already carries a
+// schema default of 11 (== positions.lineup.size), so the common case returns
+// the static catalog unchanged. `pairs-6-a-side` (playersPerSide: 6) is the
+// shipped variant this closes the gap for — validateLineup compared the
+// starting count exactly and had no way to see this knob before.
+function positionsFor(cfg: CricketCfg): PositionCatalog {
+  if (cfg.playersPerSide === positions.lineup.size) return positions;
+  return { ...positions, lineup: { ...positions.lineup, size: cfg.playersPerSide } };
+}
+
 // ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
@@ -2106,6 +2117,7 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   configSchema: CricketCfg,
   eventSchema: CricketEv,
   positions,
+  positionsFor,
   entrantModel: { kinds: ["team"], defaultKind: "team", team: { squadNumbers: true, captain: true } },
   // The concussion allowance is declared ONLY on the three formats the ICC's
   // playing conditions cover (DOMAIN.md, "Batters coming and going"). `hundred`
