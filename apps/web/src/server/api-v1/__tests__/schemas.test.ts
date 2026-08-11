@@ -2,6 +2,7 @@
 // with the unified Add-Entrant + team-squad work.
 import { describe, expect, it } from "vitest";
 import {
+  AppendEventRequest,
   CreateClubContact,
   CreateCompetition,
   CreateDivision,
@@ -242,6 +243,54 @@ describe("competition ends_on >= starts_on (#376)", () => {
   it("accepts a PATCH carrying only one of the two dates", () => {
     expect(PatchCompetition.safeParse({ ends_on: "2020-01-01" }).success).toBe(true);
     expect(PatchCompetition.safeParse({ starts_on: "2030-01-01" }).success).toBe(true);
+  });
+});
+
+// S7/#427 (#431 item 8) — a tally-settled `generic.result` is the EMPTY object:
+// no winnerId, no scores, no isDraw, "settle from whatever the running tally
+// says" (generic.ts's `applyResult`, and padSpec's own `settleFromTally`
+// action). The acceptance line asks that client validation accept it.
+//
+// FINDING: no client-side or api-v1 payload validation exists to relax.
+// `AppendEventRequest.payload` is `z.unknown()` and the pads post the raw
+// object (`components/v2/pads/generic-pad.tsx`), so the engine is the only
+// validator — the payload shape crosses this boundary untouched. That is the
+// right design here (one validator, in the engine, that the fold and the API
+// cannot disagree about) and nothing was changed.
+//
+// What this test IS: the tripwire for the S4-shaped defect on the OTHER side.
+// S4's own unplanned fix this same programme was a plain `z.object` in this
+// file silently STRIPPING an unrecognised key instead of accepting it. If a
+// later wave narrows `payload` to a `z.object` union to "improve" the API,
+// `{}` is exactly the shape it will most easily drop or reject, and it would
+// do so silently — a tally-settled result would just stop arriving.
+describe("AppendEventRequest passes an event payload through untouched (#427)", () => {
+  const base = { expected_seq: 3, type: "generic.result" };
+
+  it("accepts a bare {} payload and keeps the key", () => {
+    const r = AppendEventRequest.safeParse({ ...base, payload: {} });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(Object.prototype.hasOwnProperty.call(r.data, "payload")).toBe(true);
+      expect(r.data.payload).toEqual({});
+    }
+  });
+
+  it("strips nothing from a populated payload, including keys no schema names", () => {
+    // A narrowing `z.object` would drop `fielderAssist`/`incoming` (S7's own
+    // new wicket prompts) exactly as S4's did — same defect, same silence.
+    const payload = { wicket: { kind: "runout", fielderAssist: "p7", incoming: "p9" }, runs: { bat: 1 } };
+    const r = AppendEventRequest.safeParse({ ...base, type: "cricket.ball", payload });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.payload).toEqual(payload);
+  });
+
+  it("still rejects a request missing the envelope fields it DOES own", () => {
+    // Vacuity guard: a schema that accepted everything would pass both cases
+    // above while validating nothing.
+    expect(AppendEventRequest.safeParse({ type: "generic.result", payload: {} }).success).toBe(false);
+    expect(AppendEventRequest.safeParse({ expected_seq: 3, payload: {} }).success).toBe(false);
+    expect(AppendEventRequest.safeParse({ ...base, payload: {}, expected_seq: -1 }).success).toBe(false);
   });
 });
 
