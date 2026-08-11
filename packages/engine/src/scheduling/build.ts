@@ -122,6 +122,7 @@ import { withZ3LockAndReset } from "./z3-load.ts";
 // `vi.spyOn(await import(...))` is inert against a module the file under
 // test also imports statically).
 import type { SolveBuildInput, SolveBuildOutcome } from "./placement-client.ts";
+import { log } from "./logger.ts";
 
 const MS_PER_MIN = 60_000;
 
@@ -1026,6 +1027,10 @@ export const MAX_SOLVER_QUEUE = 2;
 let queued = 0;
 
 export function buildSchedule(input: BuildInput): Promise<BuildResult> {
+  log.info(
+    { fixtures: input.fixtures.length, courts: input.config.courts.length },
+    "buildSchedule: start",
+  );
   // The queue cap comes FIRST, ahead of every other reason to fall back to
   // greedy (Gap 4). The R22 size gate (`canSolveWithin`) and `solveBuild`'s own
   // lattice checks also end in a greedy board, but each of them has to build the
@@ -1739,7 +1744,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
       secret: process.env.PLACEMENT_SERVICE_SECRET ?? "",
       requestId,
     });
-  } catch {
+  } catch (err) {
     // Any rejection — deadline, unavailable, transport, invalid_request
     // (`PlacementError["failure"]`, `placement-client.ts`'s `failureFor`), an
     // unclassified bug thrown as a plain `Error`, or unauthenticated (the
@@ -1756,6 +1761,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     // needed because every kind lands in the same place; a caller that
     // needs the specific reason still has it on the rejected error's
     // `.failure`/`.message`, this function only decides the fallback board.
+    log.warn({ err }, "buildSchedule: placement service unavailable, falling back to greedy");
     return greedy("solver_unavailable", true);
   }
 
@@ -1829,14 +1835,13 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   const ours = new Set(incumbent.map((a) => a.fixtureId));
   const rejected = rejectedBlockingConflicts(rawSeedConflicts, conflicts, ours);
   if (rejected.length > 0) {
-    // The one place this library prints. The caller is handed a VALID board and
-    // a status field they may never read, so an encoder/verifier fork would
-    // otherwise reach nobody until an organiser filed a ticket about it.
-    // eslint-disable-next-line no-console
-    console.error(
-      `buildSchedule: verifier rejected the placement solver's board (${rejected
-        .map((c) => `${c.fixtureId}:${c.reason}`)
-        .join(", ")}) — falling back to the greedy seed`,
+    // Structured error log, not a fallback-and-forget: the caller is handed a
+    // VALID board and a status field they may never read, so an
+    // encoder/verifier fork would otherwise reach nobody until an organiser
+    // filed a ticket about it.
+    log.error(
+      { rejected: rejected.map((c) => `${c.fixtureId}:${c.reason}`) },
+      "buildSchedule: verifier rejected the placement solver's board — falling back to the greedy seed",
     );
     return { ...greedy("verifier_rejected", budgetExpired), tiersCompleted };
   }

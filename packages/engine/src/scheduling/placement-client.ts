@@ -17,6 +17,7 @@ import type {
   SolveBuildResponse,
 } from "./generated/scheduler.ts";
 import { SchedulerServiceClient, SolveStatus } from "./generated/scheduler.ts";
+import { log } from "./logger.ts";
 
 /**
  * @internal The RPC seam, declared explicitly rather than `Pick`ed off the
@@ -667,6 +668,15 @@ export async function solveBuild(
   injectedCall?: SolveBuildCall,
 ): Promise<SolveBuildOutcome> {
   assertNoAmbiguousZeros(input);
+  log.debug(
+    {
+      requestId: opts.requestId,
+      fixtures: input.fixtures.length,
+      courts: input.courts.length,
+      wallSeconds: input.wallSeconds,
+    },
+    "placement solveBuild: call start",
+  );
   // Derives the id<->index mapping once so `toRequest` (forward) and
   // `toOutcome` (reverse, once the response arrives) share ONE translation —
   // see {@link buildIndexSpace}. Synchronous and before the Promise executor,
@@ -706,6 +716,10 @@ export async function solveBuild(
     const watchdog = setTimeout(() => {
       settle(() => {
         cancelCall(call);
+        log.warn(
+          { requestId: opts.requestId, deadlineMs },
+          "placement solveBuild: watchdog timeout, no response from the service",
+        );
         reject(deadlineError(deadlineMs, "no response from the service"));
       });
     }, deadlineMs);
@@ -755,6 +769,10 @@ export async function solveBuild(
             if (err) {
               // The raw ServiceError carries a `grpc.status` integer. It stops
               // here: everything past this point speaks `PlacementFailure`.
+              log.warn(
+                { requestId: opts.requestId, code: err.code, message: err.message },
+                "placement solveBuild: RPC error",
+              );
               reject(
                 err.code === grpc.status.DEADLINE_EXCEEDED
                   ? deadlineError(deadlineMs, err.message, err)
@@ -766,7 +784,12 @@ export async function solveBuild(
               );
               return;
             }
-            resolve(toOutcome(response, indices));
+            const outcome = toOutcome(response, indices);
+            log.debug(
+              { requestId: opts.requestId, status: outcome.status, elapsedMs: outcome.elapsedMs },
+              "placement solveBuild: response received",
+            );
+            resolve(outcome);
           });
         },
       );
@@ -774,7 +797,11 @@ export async function solveBuild(
       // A synchronous throw (a request the generated encoder rejects, a closed
       // channel) would otherwise leave the watchdog armed and hold the process
       // open for the full deadline before anyone learned the call never started.
-      settle(() =>
+      settle(() => {
+        log.warn(
+          { requestId: opts.requestId, err: thrown },
+          "placement solveBuild: synchronous throw before the call started",
+        );
         reject(
           new PlacementError(
             "transport",
@@ -783,8 +810,8 @@ export async function solveBuild(
             }`,
             { cause: thrown },
           ),
-        ),
-      );
+        );
+      });
     }
   });
 }
