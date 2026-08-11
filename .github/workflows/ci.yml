@@ -533,10 +533,16 @@ jobs:
             // tracks the skip is the other half.
             //
             // It is a normal member of `mustPass` now: the capability gap it
-            // documented is closed (a division's rest reaches the wire as a
-            // rule group, so a pin can be attributed one — #517 wire, #525
-            // fold-in, #526 attribution), and from here a SKIP means the same
-            // thing it means for the other three, an unreached container.
+            // documented is closed (a per-division rest now reaches the wire
+            // as a rule group, so a pin can be attributed one — #517 wire,
+            // #525 fold-in, #526 attribution), and from here a SKIP means the
+            // same thing it means for the other three, an unreached container.
+            //
+            // NO APOSTROPHES ANYWHERE IN THIS SCRIPT. The whole block is a
+            // single-quoted shell argument to `node -e`, so one apostrophe in
+            // a COMMENT closes the string early and the step dies with exit
+            // 126 before node parses a byte. Cost a CI round trip to find,
+            // because 126 looks like a permissions problem, not a quoting one.
             const mustPass = all.filter(a =>
               /already_optimal|without booting the z3 WASM|polish never moves|infeasible proof/.test(a.fullName));
             const notPassed = mustPass.filter(a => a.status !== "passed");
