@@ -170,23 +170,57 @@ describe("toolchain: no V8 heap ceiling for typecheck", () => {
    * The container job exists to catch one specific failure: the TypeScript 7 Go
    * binary building cleanly into the alpine image and then being unable to
    * execute, which `docker build` alone cannot detect because SKIP_TYPECHECK=1
-   * means it never invokes tsc. A job that catches that but is wired into
-   * nothing blocks nothing — it was originally absent from deploy-staging's
-   * `needs`, so a musl failure would have shipped.
+   * means it never invokes tsc.
+   *
+   * CI/Stage/Prod split into separate workflow files (2026-08-11): ci.yml runs
+   * ONLY on pull_request now, and the deploy jobs live in stg.yml/prod.yml
+   * (renamed from stage.yml the same day, to match the repo's existing "stg"
+   * convention — fly.stg.toml, stg.seazn.club, the placement-stg Fly app),
+   * which run on push/tag. `needs:` only resolves within ONE workflow run, so
+   * a deploy job in a different file literally cannot `needs:` a job defined
+   * here — there is no syntax for it.
+   *
+   * The PREVIOUS same-file `needs: [..., container]` on `deploy-staging`
+   * (asserted here before this split) never actually gated the push trigger
+   * either: `deploy-staging` only ran when `github.event_name == 'push'`, and
+   * every job it needed — including `container` — carried
+   * `if: github.event_name == 'pull_request'`. So in the one run where
+   * deploy-staging's own `if` was true, everything it needed was `skipped`,
+   * never `failure`, and `!contains(needs.*.result, 'failure')` was trivially
+   * satisfied regardless of whether the PR's own run had passed. The real
+   * enforcement was always GitHub's required-status-checks branch protection
+   * on the PR, which this test cannot see from the filesystem either way.
+   *
+   * What's still real to assert: `container` carries no leftover per-job
+   * `if:` guard (dead code now the whole workflow is PR-only), and no deploy
+   * workflow declares a `needs:` — since cross-workflow `needs:` is a SILENT
+   * no-op in GitHub Actions (the job simply never runs, no validation error),
+   * a stray one here is worth catching rather than trusting it "looks right".
    */
-  it("the container job is wired into the deploy gate", () => {
+  it("container has no dead per-job guard; no deploy workflow declares needs:", () => {
     const ci = readFileSync(
       join(REPO_ROOT, ".github/workflows/ci.yml"),
       "utf8",
     );
-    const needs = /^\s*needs:\s*\[([^\]]+)\]/m.exec(ci);
-    expect(needs, "deploy-staging has no needs: list").not.toBeNull();
-    expect(needs![1].split(",").map((s) => s.trim())).toContain("container");
-    // …and it runs on the same trigger as the other gates, or it would be
-    // skipped on PRs and gate nothing there either.
     const job = ci.slice(ci.indexOf("\n  container:"));
     const header = job.slice(0, job.indexOf("steps:"));
-    expect(header).toContain("github.event_name == 'pull_request'");
+    expect(header).not.toContain("github.event_name");
+
+    for (const file of [
+      "stg.yml",
+      "prod.yml",
+      "placement-stg.yml",
+      "placement-prod.yml",
+    ]) {
+      const text = readFileSync(
+        join(REPO_ROOT, ".github/workflows", file),
+        "utf8",
+      );
+      expect(
+        text,
+        `${file} must not declare needs: — cross-workflow needs: is a silent no-op, not a validation error`,
+      ).not.toMatch(/^\s*needs:/m);
+    }
   });
 
   /**
@@ -199,10 +233,10 @@ describe("toolchain: no V8 heap ceiling for typecheck", () => {
    *     do(es) not exist, hence no cache is being saved.
    *
    * This is nasty because it fails AFTER every step of the job has succeeded.
-   * The security job's audit passed and the job still went red; db-baseline
-   * would have baselined the database and then reported failure. So any job
-   * that sets up node must either install (which creates the store) or create
-   * the directory itself.
+   * The security job's audit passed and the job still went red; a bootstrap
+   * job could baseline the database and then still report failure. So any
+   * job that sets up node must either install (which creates the store) or
+   * create the directory itself.
    */
   it("every setup-node job either installs or creates the pnpm store", () => {
     const dir = join(REPO_ROOT, ".github/workflows");

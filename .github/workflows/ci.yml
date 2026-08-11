@@ -1,12 +1,9 @@
 name: CI
 
-# Test gates (test/smoke/security) run on PULL REQUESTS ONLY — a squash-merge
-# lands the exact tree the PR already validated, so re-running them on the
-# main push would test the same code twice. The push:main trigger stays
-# solely to drive the staging deploy, which trusts the PR gates.
+# PULL REQUESTS ONLY. Deploys live in their own workflows now (stg.yml on
+# push:main, prod.yml on a v*.*.* tag) so this file's only job is validating
+# a PR's tree before it merges — it never builds or ships anything.
 on:
-  push:
-    branches: [main]
   pull_request:
 
 # Cancel superseded runs on the same ref.
@@ -35,7 +32,6 @@ jobs:
   # -------------------------------------------------------------------------
   test:
     name: Unit + typecheck
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     # paths-filter reads the PR's changed files via the API; the repo's
     # default GITHUB_TOKEN is restricted and 403s without this.
@@ -163,7 +159,7 @@ jobs:
       # without a service it SKIPS, and skipped code is uncovered code. Pointing
       # this job at a container does lift coverage (measured 89.97% -> 90.64%),
       # and it was tried — but it made the job RED, while the identical three
-      # tests passed in placement-service.yml's `integration` job on the same
+      # tests passed in placement-ci.yml's `integration` job on the same
       # commit, same image: `total=3 passed=3 failed=0 skipped=0`.
       #
       # The difference is contention. That job runs those three tests alone;
@@ -209,7 +205,6 @@ jobs:
   # -------------------------------------------------------------------------
   security:
     name: Security scan
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -247,11 +242,6 @@ jobs:
 
   container:
     name: docker build + TS 7 musl exec
-    # PR-only, matching test/smoke/security: a squash-merge lands the exact tree
-    # the PR validated, and deploy-staging trusts the PR gates. It is also in
-    # deploy-staging's `needs` so that if this job ever DOES run and fail, the
-    # deploy halts rather than shipping an image whose compiler cannot execute.
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -288,12 +278,33 @@ jobs:
         run: docker build -t seazn:ci .
 
   # -------------------------------------------------------------------------
-  # Integration gate: real Postgres container -> real HTTP -> real DB.
-  # Exercises the /api/v1 service layer + engine-db adapter end to end.
+  # The original single "smoke" job ran its DB/Redis vitest suites AND the
+  # full production build + server + e2e smoke test in one linear chain, even
+  # though `npx turbo run build` touches no database at all — it was waiting
+  # on ~6 unrelated steps for no real reason. Split in two so the build starts
+  # immediately instead of queuing behind tests it doesn't depend on; wall
+  # clock is max(job) instead of sum(job).
+  #
+  # Both jobs independently migrate + sync their OWN Postgres service (GH
+  # Actions services are job-scoped — there is no way to share a live
+  # container across jobs) and independently build the placement service
+  # image (shared `cache-from/to: type=gha`, so the second build is normally
+  # a cache hit, not a second real build). That duplication is the accepted
+  # cost of true parallelism; each duplicated step costs seconds, not minutes.
+  #
+  # Both jobs also carry the FULL original env block unchanged, even where a
+  # given job doesn't obviously need every var (e.g. smoke-db doesn't run
+  # scripts/smoke.ts's AI fixture) — narrowing per-job risks silently
+  # starving a test that reads one of these without it being obvious from
+  # this file. An unused env var is free; a silently-skipped assertion is not.
   # -------------------------------------------------------------------------
-  smoke:
-    name: Smoke (Postgres container)
-    if: github.event_name == 'pull_request'
+
+  # -------------------------------------------------------------------------
+  # DB + Redis vitest suites: real Postgres container -> real HTTP -> real
+  # DB. Exercises the /api/v1 service layer + engine-db adapter end to end.
+  # -------------------------------------------------------------------------
+  smoke-db:
+    name: Smoke — DB + Redis suites (Postgres container)
     runs-on: ubuntu-latest
 
     services:
@@ -439,12 +450,12 @@ jobs:
       # `infeasible`. Those assertions failed here on 2026-08-10 as
       # `expected 'solver_unavailable' to be 'already_optimal'`.
       #
-      # Mirrors placement-service.yml's `integration` job rather than inventing
+      # Mirrors placement-ci.yml's `integration` job rather than inventing
       # a second pattern. The build is cached (type=gha) and shared with that
       # workflow, so this is usually a cache hit rather than a second build.
       # Required before `build-push-action`, and easy to omit when copying that
       # step alone — this job had no buildx, so the build failed in 56s having
-      # never reached a test. placement-service.yml's `integration` job carries
+      # never reached a test. placement-ci.yml's `integration` job carries
       # the same pair; `cache-from`/`cache-to: type=gha` need it too.
       - uses: docker/setup-buildx-action@v3
       - name: Build the placement service image
@@ -555,16 +566,10 @@ jobs:
             console.log("pinned-pair infeasibility test: skipped as expected (documented capability gap, not an availability gate)");
           '
 
-      # NOTE: the placement container is deliberately NOT torn down here. The
-      # smoke suite near the end of this job needs it too — `scripts/smoke.ts`
-      # asserts the solver answered, and `placementOptimizedSuite` gates itself
-      # on PLACEMENT_SERVICE_HOST. Teardown lives at the END of the job.
-      #
-      # An earlier revision removed it right here and smoke duly failed eleven
-      # steps later with "z3 build: the WASM loaded in prod" — a z3-era check
-      # that reads `solver_unavailable` + `tiers_completed: 0` when the board
-      # falls back to greedy. The failure named the WASM and had nothing to do
-      # with it.
+      # `scripts/smoke.ts` (which also needs the placement container) now runs
+      # in the separate smoke-e2e job below, with its own container — so
+      # nothing later in THIS job needs placement, and teardown at the end of
+      # this job is just housekeeping, not a dependency the way it used to be.
 
       # DB-gated suites that live OUTSIDE src/server / src/lib / src/app, and so
       # were selected by no step in this job and skipped in the unit job for want
@@ -615,35 +620,28 @@ jobs:
           node --experimental-strip-types scripts/check-vitest-collection.ts \
             --results apps/web/vitest-results-app.json -- src/app
 
-      # REDIS_URL is scoped to this step only. Setting it job-wide would switch
-      # the entitlement cache (lib/entitlements.ts) on for the src/server suite,
-      # whose tests mutate entitlements via raw SQL without invalidating the
-      # cache — stale reads, false failures. The limiter test is self-contained.
-      - name: Rate-limiter integration tests (real Redis)
-        run: npm test --workspace apps/web -- run src/lib/__tests__/rate-limit.redis.test.ts
-        env:
-          REDIS_URL: redis://localhost:6379
-
-      # v17 #287: the counterpart REDIS_URL-scoped step. patchCompetition
-      # (and the pass grant/refund paths) must bust ent:<org>:* the instant
-      # they write — a cached Event Pass answer must not outlive the write
-      # it rode in on. Needs its own step for the same reason as the
-      # limiter above: with REDIS_URL unset (the step above's
-      # src/server+src/lib run, and any plain local `npm test`), cacheGet
-      # always misses and every read hits Postgres fresh (lib/cache.ts) —
-      # the bug this suite catches is structurally invisible without a
-      # real Redis actually going stale.
-      - name: Entitlement cache invalidation tests (real Redis)
-        run: npm test --workspace apps/web -- run src/lib/__tests__/entitlements-cache-invalidation.redis.test.ts
-        env:
-          REDIS_URL: redis://localhost:6379
-
-      # #336: platform-settings.ts's cached fee is namespaced by DB_SCHEMA now,
-      # but the regression that catches it going back to a single global key
-      # needs a real Redis actually holding a warm, cross-schema entry — same
-      # REDIS_URL-scoping reason as the two steps above.
-      - name: Platform fee cache isolation tests (real Redis)
-        run: npm test --workspace apps/web -- run src/lib/__tests__/platform-fee-cache-isolation.redis.test.ts
+      # REDIS_URL is scoped to this step only, and only to this step — never
+      # job-wide. Setting it job-wide would switch the entitlement cache
+      # (lib/entitlements.ts) on for the src/server suite above, whose tests
+      # mutate entitlements via raw SQL without invalidating the cache — stale
+      # reads, false failures.
+      #
+      # All three suites below are merged into one step (each already needs
+      # Redis for its own reasons, so there is no isolation concern BETWEEN
+      # them — only between all three and the src/server+src/lib step, which
+      # this step still doesn't touch):
+      #   * rate-limit.redis.test.ts — the real rate-limiter path, Lua EVAL /
+      #     TTL / 429, end to end.
+      #   * entitlements-cache-invalidation.redis.test.ts (v17 #287) —
+      #     patchCompetition (and pass grant/refund) must bust ent:<org>:* the
+      #     instant they write; with REDIS_URL unset elsewhere, cacheGet always
+      #     misses and every read hits Postgres fresh, so this bug is
+      #     structurally invisible without a real Redis actually going stale.
+      #   * platform-fee-cache-isolation.redis.test.ts (#336) — the cached fee
+      #     is namespaced by DB_SCHEMA; needs a real Redis holding a warm,
+      #     cross-schema entry to catch a regression back to a single global key.
+      - name: Redis-gated integration tests (rate limiter, entitlement cache, platform fee cache)
+        run: npm test --workspace apps/web -- run src/lib/__tests__/rate-limit.redis.test.ts src/lib/__tests__/entitlements-cache-invalidation.redis.test.ts src/lib/__tests__/platform-fee-cache-isolation.redis.test.ts
         env:
           REDIS_URL: redis://localhost:6379
 
@@ -660,6 +658,126 @@ jobs:
         run: |
           npm run stripe:sync
           BILLING_LIVE=1 npm test --workspace apps/web -- src/lib/__tests__/billing-tiers.live.test.ts src/lib/__tests__/billing-proration.live.test.ts
+
+      # Nothing after this needs the placement container.
+      - name: Placement service logs and teardown
+        if: always()
+        run: |
+          docker logs placement-smoke || true
+          docker rm -f placement-smoke >/dev/null 2>&1 || true
+
+  # -------------------------------------------------------------------------
+  # Build + serve + e2e smoke: production build against a REAL Postgres and a
+  # REAL placement service, then hit the running server the way a browser
+  # would. This job's own Postgres is separate from smoke-db's — see the
+  # header comment above smoke-db for why. No Redis service: neither "Start
+  # server" nor "Run smoke test" ever set REDIS_URL, so the app under test
+  # already ran without Redis in the original combined job too — the rate
+  # limiter degrades to its no-Redis fallback, same as before this split.
+  # -------------------------------------------------------------------------
+  smoke-e2e:
+    name: Smoke — build + server + e2e (Postgres container)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        command: postgres -c timezone=Etc/GMT-14
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      DATABASE_SSL: disable
+      AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      NEXT_PUBLIC_SUPABASE_URL: ""
+      NEXT_TELEMETRY_DISABLED: "1"
+      SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
+      AI_FIXTURE_PORT: "4319"
+      ANTHROPIC_API_KEY: sk-ant-ci-smoke-fixture
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      STRIPE_WEBHOOK_SECRET: whsec_ci_smoke
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Cache Flyway CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/seazn-flyway
+          key: flyway-cli-10.22.0-linux-x64
+
+      - name: Bootstrap database (Flyway migrate)
+        run: npm run db:apply
+
+      - name: RLS guard (every org_id table isolated)
+        run: npm run check:rls
+
+      # Must land before the app deploys/serves or the division builder reads
+      # a stale sport_variants catalog (known gotcha) — same reasoning as
+      # stg.yml/prod.yml's identical step.
+      - name: Sync sport catalog from the engine registry
+        run: npm run sync:sports
+
+      # This job's OWN DB has no synced Stripe prices yet — smoke-db's
+      # `stripe:sync` (in its "Live-Stripe integration tests" step) only
+      # populates smoke-db's own database, a separate Postgres instance in a
+      # separate job. Without this, checkout paths in the smoke suite below
+      # would 503 exactly the way stg.yml's comment describes for a real
+      # deploy. Skips cleanly on fork PRs, where STRIPE_SECRET_KEY is withheld.
+      - name: Sync Stripe products/prices
+        if: env.STRIPE_SECRET_KEY != ''
+        run: npm run stripe:sync
+
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the placement service image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start the placement service
+        run: |
+          set -euo pipefail
+          docker run -d --name placement-smoke -p 50051:50051 \
+            -e PLACEMENT_SERVICE_SECRET=ci-smoke-secret \
+            placement-service:ci
+
+          opened=""
+          for _ in $(seq 1 15); do
+            if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/50051' 2>/dev/null; then
+              opened=1
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$opened" ]; then
+            echo "::error::placement port 50051 never accepted a TCP connection within 15s"
+            docker logs placement-smoke || true
+            exit 1
+          fi
 
       # Smoke runs against a PRODUCTION build, not `next dev`. The dev server
       # restarts itself once used heap crosses 80% of its V8 limit (which
@@ -758,170 +876,8 @@ jobs:
         if: failure()
         run: cat dev-server.log || true
 
-      # End of the job, so every step above — the vitest suites AND the smoke
-      # run against the started server — had a reachable solver.
       - name: Placement service logs and teardown
         if: always()
         run: |
           docker logs placement-smoke || true
           docker rm -f placement-smoke >/dev/null 2>&1 || true
-
-  # -------------------------------------------------------------------------
-  # CD (staging): Flyway migrate against the staging database, THEN deploy the
-  # app to Fly. Only on push to main, and only once every gate above is green;
-  # PRs never deploy. Migration-before-deploy means every migration must be
-  # backward compatible with the app version still running (expand/contract) —
-  # if the migrate step fails, the old app keeps running untouched.
-  #
-  # Requires the STAGING_DATABASE_URL secret (Supabase SESSION pooler, port
-  # 5432 — Flyway's JDBC driver doesn't get along with the transaction
-  # pooler's statement handling on 6543). One-time setup on a pre-Flyway
-  # database: run the "Baseline staging DB" workflow (db-baseline.yml).
-  # -------------------------------------------------------------------------
-  deploy-staging:
-    name: Deploy (staging)
-    runs-on: ubuntu-latest
-    needs: [test, smoke, security, container]
-    # The gates are PR-only now, so on a main push they report 'skipped' —
-    # always() + no-failure lets the deploy proceed past skipped needs while
-    # still halting if a gate somehow ran and failed.
-    if: >-
-      always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-      && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
-    concurrency:
-      group: deploy-staging
-      # Staging is latest-wins: stacked merges to main supersede the deploy in
-      # flight instead of queuing three identical ones (2026-07-18 merge train).
-      cancel-in-progress: true
-    env:
-      # Job-level mapping so the sync step's `if:` can see whether the secret
-      # exists (the secrets context isn't readable from step conditionals).
-      STAGING_STRIPE_SECRET_KEY: ${{ secrets.STAGING_STRIPE_SECRET_KEY }}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.5
-      - uses: actions/setup-node@v5 # scripts/flyway.sh parses DATABASE_URL with node
-        with:
-          node-version: 26
-          cache: pnpm
-      # stripe-sync.ts and sync-sports.ts import postgres, stripe and
-      # @seazn/engine/sports from the repo ROOT, so those three are root
-      # PRODUCTION dependencies — --prod honours the section, unlike npm ci
-      # --omit=dev which used to find them hoisted out of apps/web.
-      #
-      # That reasoning is TRANSITIVE: @seazn/engine's own runtime imports must
-      # be in ITS `dependencies` too. pnpm gives no walk-up to a hoisted copy,
-      # so a devDependency-only entry resolves in every other job and dies with
-      # ERR_MODULE_NOT_FOUND here alone. packages/engine/test/runtime-deps.test.ts
-      # is the gate; it is why zod sits in dependencies, not devDependencies.
-      - run: pnpm install --frozen-lockfile --prod
-
-      - name: Cache Flyway CLI
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/seazn-flyway
-          key: flyway-cli-10.22.0-linux-x64
-
-      - name: Pending migrations
-        run: bash scripts/flyway.sh info
-        env:
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-
-      - name: Migrate staging database (Flyway)
-        run: bash scripts/flyway.sh migrate
-        env:
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-
-      # Sport catalog rows are GENERATED from the engine registry — new
-      # sports ship as rows, not schema (v6/00). Idempotent upserts keyed by
-      # sport/variant; must land before the app deploys or the division
-      # builder serves a stale sport_variants catalog (known gotcha).
-      - name: Sync sport catalog
-        run: npm run sync:sports
-        env:
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-
-      # Idempotent by design: prices matched by lookup_key, currency_options
-      # re-asserted, resulting ids written into `plans` (checkout 503s when
-      # unsynced, so this must land before the app). Skips with a notice
-      # until the STAGING_STRIPE_SECRET_KEY secret (test-mode key) exists —
-      # a missing secret must not brick every main deploy.
-      - name: Sync Stripe products/prices
-        if: env.STAGING_STRIPE_SECRET_KEY != ''
-        run: npm run stripe:sync
-        env:
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-          STRIPE_SECRET_KEY: ${{ secrets.STAGING_STRIPE_SECRET_KEY }}
-      - name: Stripe sync skipped
-        if: env.STAGING_STRIPE_SECRET_KEY == ''
-        run: echo "::warning::STAGING_STRIPE_SECRET_KEY not set — Stripe prices not synced; checkout will 503 until 'npm run stripe:sync' runs against staging."
-
-      # The image is built HERE, on the runner, and pushed to fly's registry —
-      # `flyctl deploy` then only ships a digest it already has.
-      #
-      # `flyctl deploy --remote-only` builds on a fly Depot builder, and that
-      # builder cannot hold this build: it reports nproc=4 and NO cgroup memory
-      # limit, so nothing bounds `next build` until the VM runs out and the
-      # kernel SIGKILLs it. That happened deterministically once #480 moved the
-      # builder stage to node:26-alpine — 80s/88s/117s across three attempts —
-      # and capping the JS heap did not help, because the 3.83 GB peak is mostly
-      # Turbopack's native side, outside anything NODE_OPTIONS bounds. A runner
-      # has 16 GB and already proves this exact stage builds (the PR-only
-      # `docker build --target builder` job).
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-
-      # fly.stg.toml's [build.args] are read by flyctl's own builder, which is
-      # no longer doing the build — so they are parsed out and handed to
-      # `docker build` instead. Parsed rather than duplicated into this file:
-      # NEXT_PUBLIC_* vars are baked into the client bundle at build time, and a
-      # copy that silently drifted from fly.stg.toml would ship a bundle
-      # pointing at the wrong Supabase/Stripe/base URL with nothing failing.
-      - name: Read app name and build args from fly.stg.toml
-        id: flycfg
-        run: |
-          node -e '
-            const fs = require("fs");
-            const toml = fs.readFileSync("fly.stg.toml", "utf8");
-            const app = toml.match(/^\s*app\s*=\s*"([^"]+)"/m)?.[1];
-            if (!app) { console.error("::error::no app name in fly.stg.toml"); process.exit(1); }
-            const section = toml.split(/^\s*\[build\.args\]\s*$/m)[1] ?? "";
-            const args = [];
-            for (const line of section.split(/\r?\n/)) {
-              if (/^\s*\[/.test(line)) break;
-              const m = line.match(/^\s*([A-Za-z0-9_]+)\s*=\s*"([^"]*)"\s*$/);
-              if (m) args.push(m[1] + "=" + m[2]);
-            }
-            if (!args.length) { console.error("::error::no [build.args] in fly.stg.toml"); process.exit(1); }
-            console.log("app=" + app + ", " + args.length + " build args");
-            fs.appendFileSync(process.env.GITHUB_OUTPUT,
-              "app=" + app + "\nargs<<FLYARGS\n" + args.join("\n") + "\nFLYARGS\n");
-          '
-
-      - name: Authenticate Docker against the fly registry
-        run: flyctl auth docker
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN }}
-
-      - uses: docker/setup-buildx-action@v3
-      - name: Build and push the image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: registry.fly.io/${{ steps.flycfg.outputs.app }}:${{ github.sha }}
-          # SENTRY_AUTH_TOKEN is a secret and stays out of fly.stg.toml; it is
-          # passed the same way flyctl passed it (--build-arg), so its exposure
-          # in image history is unchanged from before.
-          build-args: |
-            ${{ steps.flycfg.outputs.args }}
-            SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_AUTH_TOKEN }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # --image, so no builder is involved at all: fly pulls the digest above.
-      - name: Deploy the pushed image
-        run: flyctl deploy -c fly.stg.toml --image registry.fly.io/${{ steps.flycfg.outputs.app }}:${{ github.sha }}
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN }}

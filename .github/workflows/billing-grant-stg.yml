@@ -6,7 +6,7 @@
 # new allowance; purchased packs (D2) are never touched. Without this
 # schedule the route exists but never runs, so the monthly grant (and its
 # use-or-lose reset) never fires in staging/prod — same failure mode
-# billing-quantity.yml exists to avoid for seat-quantity drift.
+# billing-quantity-stg.yml exists to avoid for seat-quantity drift.
 #
 # Idempotent per wallet-period (`lib/credits.ts`'s `grantMonthly`), keyed on
 # the plain calendar month for EVERY wallet — paid or Community — never on a
@@ -17,7 +17,7 @@
 # that grants.
 #
 # Auth: the x-cron-secret header must match the app's CRON_SECRET env — the
-# same secret billing-quantity.yml already uses, set in BOTH places:
+# same secret billing-quantity-stg.yml already uses, set in BOTH places:
 #   gh secret set CRON_SECRET                                  # this workflow
 #   flyctl secrets set -c fly.stg.toml CRON_SECRET=<same>      # the app
 # For PRODUCTION, duplicate this file with the prod BASE_URL and mirror the
@@ -25,10 +25,10 @@
 #
 # Skips with a warning until the GitHub secret exists, fails loud on any
 # non-200, and warns when a wallet's grant fails (`failed` from
-# grantMonthlyForAllWallets — mirrors billing-quantity.yml's own
+# grantMonthlyForAllWallets — mirrors billing-quantity-stg.yml's own
 # corrected/failed/orphanOrgs conditional warning) — so a persistent problem
 # is visible in the Actions tab.
-name: Billing AI credit grant
+name: Billing AI Credit Grant STAGE
 
 on:
   schedule:

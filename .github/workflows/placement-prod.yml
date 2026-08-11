@@ -1,0 +1,99 @@
+name: placement-prod
+
+# Deploy — a v*.*.* release tag only, behind every gate placement-ci.yml runs
+# on PRs. SUPERSEDES the push:main trigger this job used to carry (up to
+# 2026-08-11): production now moves only when someone deliberately cuts a
+# release, same as the web app's prod.yml, so both services ship together
+# under one tag rather than the web app waiting on a tag while this one kept
+# shipping on every merge.
+#
+# No path filter, unlike placement-ci.yml/placement-stg.yml: a release tag
+# is a deliberate "ship what's on main right now" act, not a narrow per-PR
+# signal, and GitHub Actions' path-filter diff is computed against a
+# ref's prior state — which a newly-created tag doesn't meaningfully have.
+# Filtering here would be decorative at best, so this always builds and
+# deploys the tagged commit's placement service.
+#
+# The image is built ON THE RUNNER and pushed to fly's registry, then
+# deployed by digest — the same pattern the web app's prod.yml uses.
+# `flyctl deploy` without `--image` would rebuild on a fly builder and
+# discard the artifact placement-ci.yml just proved boots and answers gRPC
+# (well, proved on whatever PR last merged this tree — a tag pushed without
+# going through a gated PR first bypasses that entirely, same trade
+# push:main always made here).
+#
+# `fly scale count` is NOT run here. Machine count is deployment SHAPE, set
+# once by hand (DEPLOY.md step 5); a deploy rolls existing machines and
+# preserves the count. If a deploy ever resets it, that is a bug worth
+# seeing rather than papering over with a scale call on every push — hence
+# the reporting step at the end, which notices but does not fail.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+jobs:
+  deploy:
+    name: Deploy to fly (production)
+    runs-on: ubuntu-latest
+    # Serialise: a second tag must not race a rollout mid-flight.
+    concurrency:
+      group: placement-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # The app name is read from fly.toml and ASSERTED, not hardcoded and not
+      # trusted. Fly's private DNS derives from it and `placement-client.ts`'s
+      # DEFAULT_HOST is the literal "placement.flycast:50051" — if the two ever
+      # drift, every solve dials a host that does not exist, `build.ts` falls
+      # back to greedy, and the symptom is "the optimiser got worse" rather
+      # than any error. Failing the deploy is much cheaper than debugging that.
+      - name: Read and verify the app name
+        id: flycfg
+        run: |
+          app="$(sed -n 's/^[[:space:]]*app[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' services/placement/fly.toml | head -1)"
+          if [ -z "$app" ]; then
+            echo "::error::no app name in services/placement/fly.toml"
+            exit 1
+          fi
+          if [ "$app" != "placement" ]; then
+            echo "::error::fly.toml app is '$app', expected 'placement' — placement-client.ts's DEFAULT_HOST is placement.flycast:50051 and would no longer resolve"
+            exit 1
+          fi
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate Docker against the fly registry
+        run: flyctl auth docker
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and push the image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          push: true
+          tags: registry.fly.io/${{ steps.flycfg.outputs.app }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy the pushed digest
+        run: |
+          flyctl deploy \
+            --app "${{ steps.flycfg.outputs.app }}" \
+            --config services/placement/fly.toml \
+            --image "registry.fly.io/${{ steps.flycfg.outputs.app }}:${{ github.sha }}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN }}
+
+      # Reports, never blocks. Machine count is owner-managed shape, and a
+      # mismatch should be visible without failing a deploy that already
+      # passed every correctness gate.
+      - name: Report machine count
+        if: always()
+        run: |
+          flyctl status --app "${{ steps.flycfg.outputs.app }}" || true
+          echo "::notice::DEPLOY.md step 5 sets 'fly scale count 10'. If the count above is not 10, the fan-out that makes hard_limit=1 useful is not in place."
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN }}
