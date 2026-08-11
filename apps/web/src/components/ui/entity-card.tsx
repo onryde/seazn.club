@@ -151,8 +151,17 @@ export function EntityCard({
   );
 
   return (
+    // `min-w-0`: ViewToggleContainer parents this in a CSS grid (bare `grid`
+    // below `sm`, one implicit column). A grid item's default min-width is
+    // `auto` — its own content's min-content size, not 0 — so without this
+    // the article never shrinks to the actual column width; it was only ever
+    // padded down to whatever its widest unbreakable content demanded. The
+    // inner `min-w-0 flex-1` on the name <h3> above did nothing until this
+    // line existed, because the grid item wrapping it never got constrained
+    // in the first place. Found via the 320/360px mobile.spec.ts widths
+    // (#349 §1 seven-width matrix) — 375/390 happened to already fit.
     <article
-      className={`ecard group relative rounded-xl border border-slate-200 bg-white shadow-sm transition hover:border-purple-300 hover:shadow ${
+      className={`ecard group relative min-w-0 rounded-xl border border-slate-200 bg-white shadow-sm transition hover:border-purple-300 hover:shadow ${
         banner ? "" : "p-4"
       }`}
       style={accent ? { borderLeft: `3px solid ${accent}` } : undefined}
