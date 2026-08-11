@@ -910,9 +910,22 @@ function Comparison({
                     isCeiling ? "bg-lime-50/70" : ""
                   }`}
                 >
+                  {/* `break-words`: this column has no explicit width, so
+                      table-layout:auto's min-content sizing takes the widest
+                      UNBREAKABLE word in it as a floor. upgrade.limit.formats
+                      reads "Advanced formats — double elimination, ladders,
+                      americano" — "elimination" has no space to wrap at, and
+                      that word alone plus the three fixed w-20/w-24 data
+                      columns is what CI's mobile-320 e2e caught as a few px
+                      of page-level horizontal overflow (#528 follow-up; not
+                      reproducible on every font stack, which is why it only
+                      showed up once the earlier EntityCard bug on `/dashboard`
+                      stopped masking every route after it in the same test).
+                      break-words lets it wrap mid-word instead, so the column
+                      only needs as much width as its narrowest line. */}
                   <th
                     scope="row"
-                    className="py-2.5 pr-3 text-left text-sm font-normal text-slate-600"
+                    className="break-words py-2.5 pr-3 text-left text-sm font-normal text-slate-600"
                   >
                     {isCeiling && (
                       <span
