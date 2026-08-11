@@ -288,6 +288,13 @@ describe("scoring-vocab covers what the engine declares", () => {
     );
   });
 
+  it("resolves the new S5 (#431) vocabulary against the real en dictionary", () => {
+    expect(eventLabel("tennis.game.award", en)).toBe("Game award");
+    expect(engineErrorLabel("GAME_AWARD_DURING_TIEBREAK", en)).toBe(
+      "A game can't be awarded during a tie-break — the tie-break itself is the deciding game.",
+    );
+  });
+
   it("falls back rather than throwing on vocabulary it does not know", () => {
     expect(eventLabel("kabaddi.raid", echo)).toBe("Raid");
     expect(enumLabel("kind", "mankad", echo)).toBe("Mankad");
@@ -308,6 +315,9 @@ describe("scoringErrorText keeps engine English off the scorer's screen", () => 
     expect(
       scoringErrorText("SUB_WINDOW_EXCEEDED", "sub window exceeded", fr, "device.failed"),
     ).toBe(uiFr["engineError.SUB_WINDOW_EXCEEDED"]);
+    expect(
+      scoringErrorText("GAME_AWARD_DURING_TIEBREAK", "game award during tiebreak", fr, "device.failed"),
+    ).toBe(uiFr["engineError.GAME_AWARD_DURING_TIEBREAK"]);
     expect(scoringErrorText("NON_MONOTONIC_TIME", "at precedes high-water mark", fr, "device.failed"))
       .not.toContain("high-water");
   });
