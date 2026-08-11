@@ -134,11 +134,10 @@ from typing import Any
 from ortools.sat.python import cp_model
 
 from placement.model import (
-    CP_MODEL_PROBING_LEVEL,
-    NUM_SEARCH_WORKERS,
-    SYMMETRY_LEVEL,
+    DEFAULT_SOLVER_KNOBS,
     FixtureVars,
     SolveOutcome,
+    SolverKnobs,
     extract_assignments,
 )
 
@@ -199,6 +198,7 @@ def run_tier_chain(
     fixture_vars: FixtureVars,
     wall_seconds: float,
     tiers: Sequence[str] = TIER_ORDER,
+    knobs: SolverKnobs = DEFAULT_SOLVER_KNOBS,
 ) -> SolveOutcome:
     """Drive `model` through the lexicographic tier chain under ONE wall clock.
 
@@ -218,6 +218,10 @@ def run_tier_chain(
         tiers: the rungs to attempt. Defaults to all four, and must be a PREFIX
             of `TIER_ORDER` — the bench's `tiers=("placed",)` isolation run is
             the reason this is a parameter at all, and the only subset in use.
+        knobs: the CP-SAT search settings every tier in this chain runs under.
+            One value for the whole chain, never per tier. Defaults to the
+            shipped settings; the service resolves its own from the
+            environment via `config.Settings` and passes them down.
 
     Raises:
         ValueError: on a non-positive `wall_seconds`, an unknown tier name, or
@@ -301,7 +305,7 @@ def run_tier_chain(
         else:
             model.Minimize(term)
 
-        solver = _tier_solver(deadline)
+        solver = _tier_solver(deadline, knobs)
         status = solver.Solve(model)
         last_barren_status = solver.StatusName(status)
 
@@ -405,20 +409,20 @@ def _chain_status(
     return "OPTIMAL" if tiers_completed == tiers_requested else "FEASIBLE"
 
 
-def _tier_solver(deadline: float) -> cp_model.CpSolver:
-    """A solver for one tier, given the CHAIN's shared deadline."""
+def _tier_solver(deadline: float, knobs: SolverKnobs = DEFAULT_SOLVER_KNOBS) -> cp_model.CpSolver:
+    """A solver for one tier, given the CHAIN's shared deadline and the search
+    settings the whole chain runs under.
+
+    `knobs` arrives as an argument rather than being read from module state:
+    see `SolverKnobs` for why the domain may not read the environment, and for
+    what each of the three settings guards against. Read those notes before
+    concluding the two presolve knobs are dead weight — no test fails without
+    them (they measure ~3x slower on the BENCH board), but the failure they
+    guard against is silent.
+    """
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = max(MIN_TIER_SECONDS, deadline - time.perf_counter())
-    solver.parameters.num_search_workers = NUM_SEARCH_WORKERS
-    # Read `placement.model`'s notes before concluding these are dead weight:
-    # no test fails without them (measured ~3x slower on the BENCH board), but
-    # the failure they guard against — presolve eating the entire wall and
-    # returning UNKNOWN with nothing placed — is silent.
-    #
-    # Both default to 0, exactly as before; they are now env-overridable so the
-    # tradeoff can be re-measured on a REAL board without a code deploy. The
-    # bench board is not symmetric the way a three-interchangeable-court,
-    # repeating-daily-slots production board is.
-    solver.parameters.symmetry_level = SYMMETRY_LEVEL
-    solver.parameters.cp_model_probing_level = CP_MODEL_PROBING_LEVEL
+    solver.parameters.num_search_workers = knobs.num_search_workers
+    solver.parameters.symmetry_level = knobs.symmetry_level
+    solver.parameters.cp_model_probing_level = knobs.cp_model_probing_level
     return solver

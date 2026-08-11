@@ -66,9 +66,7 @@ from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 from placement.config import Settings
 from placement.generated import scheduler_pb2_grpc
 from placement.model import (
-    CP_MODEL_PROBING_LEVEL,
-    NUM_SEARCH_WORKERS,
-    SYMMETRY_LEVEL,
+    DEFAULT_SOLVER_KNOBS,
     build_model,
     solve,
 )
@@ -94,6 +92,20 @@ HEALTH_RESERVE_THREADS = 2
 class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
     def __init__(self, settings: Settings):
         self._settings = settings
+        # THIS LINE IS THE JOIN, and it is the whole reason the knobs moved out
+        # of `model.py`. `config.py` reads the environment and may not import
+        # the domain; the domain owns the defaults and may not read the
+        # environment; `main.py` is the only layer that sees both, so it is the
+        # only layer that can put them together.
+        #
+        # Resolved ONCE, at construction: these are process-level search
+        # settings, and resolving them per request would let two solves on one
+        # machine behave differently for no visible reason.
+        self._knobs = DEFAULT_SOLVER_KNOBS.with_overrides(
+            num_search_workers=settings.num_search_workers,
+            symmetry_level=settings.symmetry_level,
+            cp_model_probing_level=settings.cp_model_probing_level,
+        )
         # Admission control. `BoundedSemaphore` rather than `Semaphore` so a
         # release without a matching acquire — the shape a future refactor of
         # the try/finally below would take — raises instead of silently
@@ -168,7 +180,7 @@ class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
                 parsed.dependencies,
             )
             solve_started = time.perf_counter()
-            outcome = solve(model, wall_seconds=wall)
+            outcome = solve(model, wall_seconds=wall, knobs=self._knobs)
             solve_elapsed_ms = (time.perf_counter() - solve_started) * 1000.0
         except ValueError as exc:
             logging.warning("solve rejected request %s: %s", request.request_id, exc)
@@ -205,9 +217,9 @@ class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
             len(outcome.objective_values) or outcome.tiers_completed,
             wall,
             solve_elapsed_ms,
-            NUM_SEARCH_WORKERS,
-            SYMMETRY_LEVEL,
-            CP_MODEL_PROBING_LEVEL,
+            self._knobs.num_search_workers,
+            self._knobs.symmetry_level,
+            self._knobs.cp_model_probing_level,
         )
 
         # `wall`, not `parsed.wall_seconds`: the budget the solve was actually

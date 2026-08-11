@@ -270,31 +270,41 @@ commands as part of its constraints block. A layering violation is an
 
 ### Known deviations
 
-**1. `model.py` reads `os.environ` — OPEN, not accepted, found 2026-08-11.**
+**1. `model.py` read the environment — CLOSED 2026-08-11, open for two days.**
 
-§2.1's table says `model.py` must NEVER import `os.environ`. It does:
+§2.1's table says `model.py` must never read the process environment. From
+`8eabc7f9` ("make the solver knobs real") until the fix, it did:
 
-    model.py:235  NUM_SEARCH_WORKERS      = int(os.environ.get("PLACEMENT_NUM_SEARCH_WORKERS", "8"))
-    model.py:253  SYMMETRY_LEVEL          = int(os.environ.get("PLACEMENT_SYMMETRY_LEVEL", "0"))
-    model.py:254  CP_MODEL_PROBING_LEVEL  = int(os.environ.get("PLACEMENT_PROBING_LEVEL", "0"))
+    model.py:235  NUM_SEARCH_WORKERS      = int(...get("PLACEMENT_NUM_SEARCH_WORKERS", "8"))
+    model.py:253  SYMMETRY_LEVEL          = int(...get("PLACEMENT_SYMMETRY_LEVEL", "0"))
+    model.py:254  CP_MODEL_PROBING_LEVEL  = int(...get("PLACEMENT_PROBING_LEVEL", "0"))
 
-Introduced by `8eabc7f9` ("make the solver knobs real"), which was the right
-fix to a real problem — the knobs had been set in `fly.toml` while the code
-read hardcoded constants, so four production experiments measured nothing.
-The deviation is that the knobs landed in the DOMAIN rather than in
-`config.py`, which is the layer that owns the environment.
+`8eabc7f9` was the right fix to a real problem — the knobs had been set in
+`fly.toml` while the code read hardcoded constants, so four production
+experiments measured nothing. The deviation was that they landed in the DOMAIN
+rather than in `config.py`, the layer that owns the environment.
 
-It went unrecorded for two days and was found by C2's implementer while doing
-unrelated work, which is precisely the failure §7 exists to prevent: the check
-command in §2.1 (`grep -n "scheduler_pb2\|import grpc\|os.environ" model.py
-objective.py  # expect: no output`) has been failing that whole time, and
-every reviewer who ran it either did not run it or did not report it.
+**Closed by:** `model.SolverKnobs`, a frozen value with the defaults on it;
+`config.Settings` carrying `int | None` per knob (`None` = not overridden, so
+the defaults exist in exactly one place and cannot drift); `main.py` joining
+the two, since it is the only layer that may see both. §2.1's grep is clean
+again — including of prose, which is why `model.py`'s own note about this
+describes the function rather than naming it.
 
-**Not fixed here on purpose.** The fix is to move the three reads into
-`config.py` and inject the values, which touches `model.py`, `objective.py`
-and their call sites — outside C2's stated files, and `docs/superpowers/RULES.md`
-forbids silently absorbing scope. Recorded here rather than in a commit
-message, per the rule below. Queued as its own task.
+**The re-introduction risk that fix creates, and what holds it.** `solve()` and
+`run_tier_chain()` take `knobs` with a DEFAULT, so a domain test can still call
+them with two arguments. That means `main.py` can drop the argument, compile,
+run, return a good board, log the right numbers, and search with 8/0/0 — the
+2026-08-10 incident again, one layer along.
+`test_solver_knobs.py::test_the_service_carries_its_env_knobs_all_the_way_into_the_search`
+spies on `_tier_solver` through a real servicer call and is the assertion that
+fails; verified by deleting `knobs=self._knobs` from `main.py` (1 failed, and
+the failure prints `SolverKnobs(8, 0, 0)`). `test_server.py`'s four `solve`
+stubs also take `knobs` as a REQUIRED parameter for the same reason.
+
+**Two days is the finding, not the fix.** It went unrecorded until C2's
+implementer hit it during unrelated work. §2.1's check command had been failing
+that whole time and every reviewer either did not run it or did not report it.
 
 If it is ever decided that solver knobs legitimately belong in the domain,
 amend §2.1's table rather than leaving the table and the code disagreeing —
