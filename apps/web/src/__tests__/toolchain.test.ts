@@ -233,10 +233,10 @@ describe("toolchain: no V8 heap ceiling for typecheck", () => {
    *     do(es) not exist, hence no cache is being saved.
    *
    * This is nasty because it fails AFTER every step of the job has succeeded.
-   * The security job's audit passed and the job still went red; db-baseline
-   * would have baselined the database and then reported failure. So any job
-   * that sets up node must either install (which creates the store) or create
-   * the directory itself.
+   * The security job's audit passed and the job still went red; a bootstrap
+   * job could baseline the database and then still report failure. So any
+   * job that sets up node must either install (which creates the store) or
+   * create the directory itself.
    */
   it("every setup-node job either installs or creates the pnpm store", () => {
     const dir = join(REPO_ROOT, ".github/workflows");

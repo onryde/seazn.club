@@ -11,7 +11,7 @@
 # Skips with a warning until the GitHub secret exists (a missing secret must
 # not fill the Actions tab with red), and fails loud on any non-200 so a
 # mismatch or a broken endpoint is visible.
-name: Funnel reminders (stg)
+name: Funnel Reminders STAGE
 
 on:
   schedule:

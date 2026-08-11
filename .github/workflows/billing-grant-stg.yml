@@ -28,7 +28,7 @@
 # grantMonthlyForAllWallets — mirrors billing-quantity-stg.yml's own
 # corrected/failed/orphanOrgs conditional warning) — so a persistent problem
 # is visible in the Actions tab.
-name: Billing AI credit grant (stg)
+name: Billing AI Credit Grant STAGE
 
 on:
   schedule:

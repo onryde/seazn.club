@@ -16,7 +16,7 @@
 #
 # Skips with a warning until the GitHub secret exists (a missing secret must not
 # fill the Actions tab with red), and fails loud on any non-200.
-name: AI preview retention sweep (stg)
+name: AI Preview Retention Sweep STAGE
 
 on:
   schedule:

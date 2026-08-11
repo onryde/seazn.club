@@ -18,8 +18,10 @@ name: Stg
 #
 # Requires the STAGING_DATABASE_URL secret (Supabase SESSION pooler, port
 # 5432 — Flyway's JDBC driver doesn't get along with the transaction
-# pooler's statement handling on 6543). One-time setup on a pre-Flyway
-# database: run the "Baseline staging DB" workflow (db-baseline.yml).
+# pooler's statement handling on 6543). Staging was already baselined once
+# (the one-time "Baseline staging DB" workflow that did it was removed
+# 2026-08-11, its job done); a NEW pre-Flyway database would need
+# `bash scripts/flyway.sh baseline` run by hand before this can migrate it.
 on:
   push:
     branches: [main]
