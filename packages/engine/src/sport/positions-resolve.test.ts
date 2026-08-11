@@ -94,13 +94,12 @@ describe("cricket — a smaller side uses fewer starting slots", () => {
     expect(resolvePositions(cricket, cfgFor({ playersPerSide: 6 })).lineup.size).toBe(6);
   });
 
-  it("shrinks the starting lineup for the pairs-6-a-side variant", () => {
-    const catalog = resolvePositions(cricket, cfgFor(cricket.variants["pairs-6-a-side"]));
-    expect(catalog.lineup.size).toBe(6);
-  });
-
   it("accepts a lineup of exactly six and rejects an eleven", () => {
-    const cfg = cfgFor(cricket.variants["pairs-6-a-side"]);
+    // Deliberately a raw playersPerSide override, not a named variant — the
+    // one variant that used to exercise this (cricket's "pairs-6-a-side")
+    // is removed by a sibling, not-yet-merged branch (S5/#431); a reference
+    // to it here would compile today and break on the next rebase.
+    const cfg = cfgFor({ playersPerSide: 6 });
     const catalog = resolvePositions(cricket, cfg);
     expect(validateLineup(catalog, lineupFromCatalog(catalog, "H"))).toEqual([]);
 
