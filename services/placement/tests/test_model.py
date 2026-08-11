@@ -19,9 +19,11 @@ after generation, so `build_model` only ever sees the positional shape a real
 caller would send after this round.
 """
 
+import logging
 import os
 
 import pytest
+import structlog
 from ortools.sat.python import cp_model
 
 from _board_positional import to_positional
@@ -518,6 +520,49 @@ def test_a_placed_board_still_reports_its_real_makespan():
 
     assert len(outcome.assignments) == 2
     assert dict(outcome.objective_values)["makespan"] == step + 30 * MIN_MS
+
+
+def test_model_built_debug_event_reports_fixture_and_court_counts():
+    """`build_model` had no logging at all before this — the ONLY visibility
+    into how big a board the CP-SAT model ended up encoding. DEBUG, not INFO:
+    this runs on the hot, latency-sensitive path and `PLACEMENT_LOG_LEVEL`
+    defaults to INFO in production, so the event costs nothing there; it only
+    fires once an operator has explicitly turned the level down to look.
+
+    `capture_logs()` overrides the processor chain but not the filtering
+    level (`wrapper_class`), so a DEBUG event is invisible to it under any
+    config that filters DEBUG out — production's default INFO, for one. The
+    level is pinned to DEBUG here and restored afterwards so this test's
+    result does not depend on which other test last touched global structlog
+    configuration.
+    """
+    num_courts = 1
+    step = 40 * MIN_MS
+    grid_slots = [(0, _STRADDLE_A + k * step, 0) for k in range(2)]
+    fixtures = [([0, 1], 0), ([2, 3], 0)]
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 10,
+        "rest_by_division": {0: 0},
+        "day_cap_by_division": {},
+    }
+
+    old_wrapper_class = structlog.get_config()["wrapper_class"]
+    structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG))
+    try:
+        with structlog.testing.capture_logs() as captured:
+            build_model(fixtures, num_courts, grid_slots, 40, constraints, [], [])
+    finally:
+        structlog.configure(wrapper_class=old_wrapper_class)
+
+    events = [entry for entry in captured if entry["event"] == "model_built"]
+    assert len(events) == 1, f"expected exactly one model_built event, got {captured}"
+    entry = events[0]
+    assert entry["fixtures"] == 2
+    assert entry["courts"] == num_courts
+    assert entry["existing"] == 0
+    assert entry["dependencies"] == 0
+    assert entry["rule_groups"] == 0
 
 
 # --- T1's span now includes pinned rows (#511) -------------------------------

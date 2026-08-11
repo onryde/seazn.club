@@ -63,8 +63,10 @@ import time
 from concurrent import futures
 
 import grpc
+import structlog
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 
+from placement._logging import configure_structlog
 from placement.config import Settings
 from placement.generated import scheduler_pb2_grpc
 from placement.model import (
@@ -78,6 +80,8 @@ from placement.schema import (
     outcome_to_response,
     request_to_model_input,
 )
+
+log = structlog.get_logger(__name__)
 
 AUTH_METADATA_KEY = "x-internal-secret"
 
@@ -139,7 +143,7 @@ class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
         # the health check's reserved threads and turns a busy service into a
         # dead-looking one.
         if not self._solve_slots.acquire(blocking=False):
-            logging.warning("solver busy, refused request %s", request.request_id)
+            log.warning("solver_busy", request_id=request.request_id)
             return error_response(
                 "SOLVER_BUSY",
                 f"all {self._settings.max_workers} solve slots are in use. Retry, or fall back to "
@@ -188,7 +192,7 @@ class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
             outcome = solve(model, wall_seconds=wall, knobs=self._knobs)
             solve_elapsed_ms = (time.perf_counter() - solve_started) * 1000.0
         except ValueError as exc:
-            logging.warning("solve rejected request %s: %s", request.request_id, exc)
+            log.warning("solve_rejected", request_id=request.request_id, error=str(exc))
             return error_response("INVALID_REQUEST", str(exc))
 
         # ONE LINE PER SOLVE, and it is not decoration.
@@ -211,20 +215,19 @@ class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
         # env-overridable and a knob you cannot see is a knob you cannot trust —
         # `NUM_SEARCH_WORKERS` spent that same afternoon set in `fly.toml` while
         # having no effect whatsoever.
-        logging.info(
-            "solve request=%s status=%s placed=%d/%d tiers=%d/%d "
-            "granted=%.1fs solver_elapsed_ms=%.0f workers=%d symmetry=%d probing=%d",
-            request.request_id or "-",
-            outcome.status,
-            len(outcome.assignments),
-            len(parsed.fixtures),
-            outcome.tiers_completed,
-            len(outcome.objective_values) or outcome.tiers_completed,
-            wall,
-            solve_elapsed_ms,
-            self._knobs.num_search_workers,
-            self._knobs.symmetry_level,
-            self._knobs.cp_model_probing_level,
+        log.info(
+            "solve_completed",
+            request_id=request.request_id or "-",
+            status=outcome.status,
+            placed=len(outcome.assignments),
+            fixtures=len(parsed.fixtures),
+            tiers_completed=outcome.tiers_completed,
+            tiers_total=len(outcome.objective_values) or outcome.tiers_completed,
+            granted_wall_seconds=wall,
+            solver_elapsed_ms=solve_elapsed_ms,
+            workers=self._knobs.num_search_workers,
+            symmetry=self._knobs.symmetry_level,
+            probing=self._knobs.cp_model_probing_level,
         )
 
         # `wall`, not `parsed.wall_seconds`: the budget the solve was actually
@@ -316,12 +319,13 @@ def resolve_log_level(raw: str | None) -> int:
 
 def serve() -> None:
     logging.basicConfig(level=resolve_log_level(os.environ.get("PLACEMENT_LOG_LEVEL")))
+    configure_structlog(resolve_log_level(os.environ.get("PLACEMENT_LOG_LEVEL")))
     settings = Settings.from_env()
     server, port = build_server(settings)
     if port == 0:
         raise RuntimeError(f"failed to bind port {settings.port}")
     server.start()
-    logging.info("placement service listening on :%d (max_workers=%d)", port, settings.max_workers)
+    log.info("service_listening", port=port, max_workers=settings.max_workers)
     server.wait_for_termination()
 
 

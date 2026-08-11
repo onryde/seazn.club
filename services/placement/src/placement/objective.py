@@ -131,6 +131,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import structlog
 from ortools.sat.python import cp_model
 
 from placement.model import (
@@ -140,6 +141,8 @@ from placement.model import (
     SolverKnobs,
     extract_assignments,
 )
+
+log = structlog.get_logger(__name__)
 
 # --- the protocol constant --------------------------------------------------
 #
@@ -317,6 +320,14 @@ def run_tier_chain(
             break
 
         achieved = int(solver.Value(term))
+
+        log.debug(
+            "tier_completed",
+            tier=spec.name,
+            status=last_barren_status,
+            achieved=achieved,
+            elapsed_seconds=time.perf_counter() - started,
+        )
 
         if status != cp_model.OPTIMAL:
             # Cut short by the clock. ADOPT the board anyway; the tier is not
