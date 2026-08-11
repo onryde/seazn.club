@@ -40,16 +40,16 @@ const ENGINE_KEY = {
 } as const;
 
 /** `not_searched_reason` -> its own sentence, one per exit `build.ts` can leave
- *  this status from. Six causes used to collapse onto ONE generic sentence
+ *  this status from. Five causes used to collapse onto ONE generic sentence
  *  ("the match, gap and rest times you have set do not line up on a shared
- *  step"), which is at best a partial description of one of them and, for
- *  `per_court_grid`, advice that cannot possibly work — no amount of
- *  adjusting match/gap/rest fixes a blackout scoped to a single court. */
+ *  step"), which is at best a partial description of most of them — a
+ *  sixth cause, `per_court_grid` (a blackout scoped to one court), used to
+ *  live here too; task C2 closed the gap that produced it, so the solver is
+ *  now actually asked about a per-court blackout instead of refusing it. */
 const NOT_SEARCHED_KEY = {
   too_big: "board.result.notSearched.tooBig",
   window_empty: "board.result.notSearched.windowEmpty",
   lattice_unusable: "board.result.notSearched.latticeUnusable",
-  per_court_grid: "board.result.notSearched.perCourtGrid",
   out_of_time: "board.result.notSearched.outOfTime",
   no_verdict: "board.result.notSearched.noVerdict",
 } as const;
@@ -81,14 +81,11 @@ function statusKey(solver: ScheduleSolverInfo) {
     // quickly, without the optimiser" is true of the how and silent on the WHY,
     // and the why is the only part the organiser can do anything about.
     //
-    // `not_searched_reason` picks WHICH of the six causes to name. Its absence
+    // `not_searched_reason` picks WHICH of the five causes to name. Its absence
     // means a server one deploy behind this field, so the generic sentence
     // renders instead — and that sentence NAMES NO CAUSE, deliberately. It used
     // to blame the step alignment, which is the defect this whole discriminant
-    // exists to remove: during a rollout the fallback is exactly what an
-    // organiser hitting `per_court_grid` would see, so leaving the old wording
-    // here would have kept serving the wrong advice to the one case that
-    // prompted the fix.
+    // exists to remove.
     case "not_searched":
       return solver.not_searched_reason !== undefined
         ? NOT_SEARCHED_KEY[solver.not_searched_reason]

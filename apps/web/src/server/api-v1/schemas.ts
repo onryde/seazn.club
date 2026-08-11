@@ -1059,13 +1059,19 @@ export const ScheduleSolverInfo = z.object({
     "solver_unavailable",
   ]),
   /**
-   * WHICH of `not_searched`'s six exits produced this board — `status` alone
-   * cannot say, because all six collapse onto that one member (see the engine's
+   * WHICH of `not_searched`'s five exits produced this board — `status` alone
+   * cannot say, because all five collapse onto that one member (see the engine's
    * `NotSearchedReason` doc comment, `build.ts`). Present only when
    * `status === "not_searched"`; absent on every other status, and absent from
    * a server one deploy behind this field — a reader untaught about it degrades
    * to the shared `board.result.notSearched` sentence, which is still true, just
    * less specific.
+   *
+   * A sixth member, `per_court_grid`, lived here until task C2 closed the gap
+   * that produced it (`placement.model.build_model` now enforces each court's
+   * own tick set directly, so a per-court blackout reaches the solver instead
+   * of being refused) — removed, not merely undocumented, matching the
+   * engine's own union.
    *
    * HAND-MIRRORED, not generated: this file has no codegen link to
    * `packages/engine`, so a member added to the engine union without a match
@@ -1075,14 +1081,7 @@ export const ScheduleSolverInfo = z.object({
    * about.
    */
   not_searched_reason: z
-    .enum([
-      "too_big",
-      "window_empty",
-      "lattice_unusable",
-      "per_court_grid",
-      "out_of_time",
-      "no_verdict",
-    ])
+    .enum(["too_big", "window_empty", "lattice_unusable", "out_of_time", "no_verdict"])
     .optional(),
   tiers_completed: z.number().int(),
   /** How many improvement targets the ladder HAS — the denominator
