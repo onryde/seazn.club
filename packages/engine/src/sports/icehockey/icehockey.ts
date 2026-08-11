@@ -214,6 +214,7 @@ export const icehockey = makePeriodModule({
   // the existing comparator registry, v6/00 §1).
   defaultTiebreakers: ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "seed"],
   officialLabel: { scorer: "Scorekeeper" },
+  suspensionReasons: ICEHOCKEY_SUSPENSION_REASONS,
   shootoutLabel: "GWS",
   // IIHF Rule 87 / NHL Rule 84.4 — the game-winning shot is credited as a goal
   // in the official score (2-2 on the GWS is recorded 3-2). Derived at the

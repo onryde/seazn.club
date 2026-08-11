@@ -189,6 +189,7 @@ export const hockey = makePeriodModule({
   // FIH standard: points → GD → GF → H2H (v6/00 §4).
   defaultTiebreakers: ["points", "diff", "for", "h2h_points", "seed"],
   officialLabel: { scorer: "Umpire" },
+  suspensionReasons: HOCKEY_SUSPENSION_REASONS,
   shootoutLabel: "SO",
   timelineEntitlement: "scoring.match_timeline",
   playerStats,
