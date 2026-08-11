@@ -249,11 +249,14 @@ describe("NestedEv union (§8)", () => {
     expect(NestedEv.parse(payload)).toEqual(payload);
   });
 
-  it("keeps the interruption branch LAST", () => {
+  it("keeps the interruption branch appended before game.award (§8)", () => {
     // Appended, never reordered (§8). Structural matching is first-match-wins,
     // so branch position is behaviour: this reds the moment someone moves it.
-    expect(NestedEv.options).toHaveLength(4);
-    expect(NestedEv.options[NestedEv.options.length - 1]).toBe(NestedInterruption);
+    // No longer LAST as of S5 (#431) — `NestedGameAward` was appended after
+    // it (see `game-award.test.ts`), which is itself additive: interruption
+    // keeps its position relative to point/summary/sanction.
+    expect(NestedEv.options.length).toBeGreaterThanOrEqual(5);
+    expect(NestedEv.options[3]).toBe(NestedInterruption);
   });
 
   it("does not let the interruption branch accept a point, a summary or a sanction", () => {

@@ -381,6 +381,23 @@
           "kind"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "winner": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "winner"
+        ],
+        "type": "object"
       }
     ]
   },

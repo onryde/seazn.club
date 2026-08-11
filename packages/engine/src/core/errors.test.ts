@@ -50,6 +50,8 @@ describe("EngineError", () => {
       "UNKNOWN_PHASE",
       "EXPEDITE_WRONG_WINNER",
       "SUB_WINDOW_EXCEEDED",
+      // S5 (#431) — tennis game-penalty awards, appended last, existing order frozen
+      "GAME_AWARD_DURING_TIEBREAK",
     ]);
   });
 });
