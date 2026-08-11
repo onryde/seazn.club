@@ -116,6 +116,12 @@ variants) + **golden replay** (frozen corpora, 11 sports) + **mutation proof**
   in `.testResults[].name` before believing a count.
 - Lint via `rtk proxy npm run lint`, read `✖ N problems`. The root lint does
   **not** cover `packages/engine` — that has its own `@seazn/engine#lint`.
+- S6 — a bare `tsc`/`vitest`/`eslint` invocation (no `rtk proxy` prefix) can
+  return FABRICATED output, not just a misleading summary: `npx tsc --version`
+  returned the string "TypeScript: No errors found" and `npx vitest --version`
+  returned a fabricated `PASS (3139) FAIL (0)`, neither a real version string.
+  Prefix **every** tsc/vitest/eslint command with `rtk proxy`, always — for
+  `--version` probes as much as for real runs.
 - `grep -a` always (this repo reports source files as `Binary file … matches`).
   Use `git grep`; a plain grep under `apps/` counts `.next/types/`.
 - Worktree: symlink `node_modules` **and** `.claude/agent-memory` in. Check
