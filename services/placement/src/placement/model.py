@@ -859,7 +859,26 @@ def build_model(
                     model.Add(sum(lits) <= int(cap))
 
     placed_sum = sum(placed)
-    max_end = (max(admissible_starts) + dur_ms) if admissible_starts else dur_ms
+    # The horizon `mk_lo`/`mk_hi` (and T2's gap vars) live on. It must cover
+    # PINS as well as admissible ticks, because #511's `mk_hi >= pin + dur_ms`
+    # is a HARD constraint, not a reified one.
+    #
+    # Derived from `admissible_starts` alone this was a live infeasibility: a
+    # pin is deliberately allowed to sit OFF the lattice (module docstring —
+    # it counts against no day by design), and an organiser who drags a match
+    # past the last admissible tick makes `pin + dur_ms > max_end`, which no
+    # value of `mk_hi` can satisfy. The whole solve then returns INFEASIBLE and
+    # the organiser gets NO BOARD — not a worse board, none — from a pin the
+    # wire accepts as valid (`schema.py`'s `_validated_existing` ties a pin to
+    # no grid bound, and should not have to).
+    #
+    # Confirmed both directions on one board: with the bound narrow, INFEASIBLE
+    # and 0 placed; with it widened, OPTIMAL and the movable placed. Widening
+    # only loosens a DOMAIN — it adds no solution that the constraints above do
+    # not already permit.
+    horizon_ends = [start_ms + dur_ms for start_ms in admissible_starts]
+    horizon_ends += [existing_start + dur_ms for _court, existing_start in existing]
+    max_end = max(horizon_ends) if horizon_ends else dur_ms
 
     # T1: makespan, exact native term (mk_hi - mk_lo), squeezed onto the true
     # extremes exactly as build.ts:2075-2082 does.
@@ -868,6 +887,26 @@ def build_model(
     for i in range(n):
         model.Add(mk_lo <= start[i]).OnlyEnforceIf(placed[i])
         model.Add(mk_hi >= start[i] + dur_ms).OnlyEnforceIf(placed[i])
+    # `existing` rows are IN the span (#511). They are matches on the
+    # organiser's board, at instants the organiser chose, and a span that
+    # excludes them is a span of a board nobody is looking at.
+    #
+    # Left out until now, and it was never argued for — the docstring's list of
+    # `existing` gaps is entirely about day caps. The cost was measured on a
+    # real staging board: 37 fixtures Mon-Sun, day cap 7, SIX pinned on Monday
+    # afternoon. With the pins outside the span the solver's own interval began
+    # Tuesday, so putting anything in Monday's morning would have dragged
+    # `mk_lo` back a day and a half — the objective PAID to leave a whole
+    # morning empty, and the organiser could find no constraint that explained
+    # it, because there was none.
+    #
+    # No reification and no new variables: a pinned row's start is an integer
+    # known at build time, so these are plain bounds. They also strengthen the
+    # `mk_hi >= mk_lo` clamp below on any board with a pin — `mk_lo` and
+    # `mk_hi` can no longer both float when nothing movable is placed.
+    for _court, existing_start in existing:
+        model.Add(mk_lo <= existing_start)
+        model.Add(mk_hi >= existing_start + dur_ms)
     # A duration cannot be negative — and without this it can be, spectacularly.
     # Both squeeze constraints above are `OnlyEnforceIf(placed[i])`, so on a
     # board where NOTHING is placed `mk_lo` and `mk_hi` float freely over

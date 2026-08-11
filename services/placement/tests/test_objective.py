@@ -109,7 +109,33 @@ CHAIN_WALL_SECONDS = 30.0
 # If a deliberate board change moves these, `tests/test_bench_contract.py`
 # fails first and says which part of the board moved. Do not re-baseline them
 # without reading that test's failure.
-T1_PROVED_MAKESPAN_MS = 1_519_800_000
+#
+# T1 RE-BASELINED 2026-08-11 by #511 (pinned rows join the makespan span),
+# 1 519 800 000 -> 1 557 600 000, deliberately and with the board unchanged.
+# The board did not move; what T1 MEASURES did. `production_board()` carries
+# three pins, and the old term squeezed `mk_lo`/`mk_hi` onto placed MOVABLE
+# fixtures only, so it reported the span of a board nobody was looking at.
+#
+# The new value is not a worse optimum, it is the honest one — and it was
+# already written down as such: `test_a_tier_cut_short_is_adopted_but_not_
+# counted`'s docstring quotes 1 557 600 000 as the "true span read off the
+# assignments" on this very board. T1 now proves exactly that number.
+#
+# This is a re-baseline, so it is stated rather than silently edited: the code
+# change ships with it, the old value is recorded above, and the reason is a
+# term change, not a board change. `test_bench_contract.py` is untouched and
+# still green, which is the evidence that the BOARD is the same one.
+T1_PROVED_MAKESPAN_MS = 1_557_600_000
+
+#: The same optimum on the PIN-FREE board (`_model_without_pins`), for the two
+#: chain-behaviour tests that run there. Measured 3/3 identical at a 30 s wall
+#: with all four tiers proved.
+#:
+#: It is the OLD pinned value, and that is the useful part: T1's optimum moved
+#: only because three pins joined the span, so with them removed the board
+#: proves exactly what it always did. That is the evidence that #511 changed
+#: what T1 MEASURES and not the board itself.
+T1_PROVED_MAKESPAN_PIN_FREE_MS = 1_519_800_000
 T2_PROVED_IDLE_GAP_MS = 132_600_000
 T3_PROVED_IMBALANCE_MS = 2_400_000
 
@@ -131,6 +157,42 @@ def board():
 def _model_for(board):
     fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = board
     return build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
+
+
+def _model_without_pins(board):
+    """The SAME board with `existing` stripped, for the two tests that need a
+    tier the clock can cut short.
+
+    Not a weaker board and not a different one — same fixtures, same courts,
+    same grid, same constraints. Only the three pinned rows are removed.
+
+    Why it has to exist (#511): pins now bound `mk_lo`/`mk_hi` directly rather
+    than through `OnlyEnforceIf(placed[i])`, and on this board that collapses
+    T1's search. T1 used to take upwards of 2 260 ms to prove and now takes
+    ~450-670 ms — but the number that matters is not the speedup, it is that
+    the window between "T1 has found an incumbent" and "T1 has proved it" has
+    closed. Measured 8 runs per wall, counting the state these tests actually
+    need (`tiers_completed == 1` AND two objective values):
+
+        0.20 s -> 0/8   T1 returns NOTHING; one objective value, not two
+        0.25 s -> 1/8
+        0.30 s -> 0/8   T1 proves
+        0.40 s -> 0/8   T1 proves
+        pins stripped, 1.5 s -> 8/8
+
+    So there is no wall on the pinned board that reliably produces "adopted but
+    not counted", and re-tuning to one would have shipped a 1-in-8 test. The
+    contract under test is the TIER CHAIN's, not the pin encoding's, so the
+    honest move is to keep the original 1.5 s wall and its load-safety argument
+    (T0 ~100 ms, T1 never under 2 260 ms, load only widens that gap) and run it
+    on a board where that argument is still true.
+
+    `test_t1_reports_the_proved_minimum_makespan_not_merely_a_ceiling` still
+    uses the PINNED board — the proved optimum is what #511 changed, and that
+    test is where the new value is asserted.
+    """
+    fixtures, num_courts, grid_slots, step_minutes, constraints, _existing, deps = board
+    return build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, [], deps)
 
 
 @pytest.fixture(scope="module")
@@ -291,9 +353,15 @@ def test_a_tier_cut_short_is_adopted_but_not_counted(board):
 
     The wall is chosen so that exactly one tier settles and the next one is
     provably cut short: T0 proves in ~100 ms, T1 has never proved in under
-    2 260 ms on any box measured, so 1.5 s starts T1 and guarantees it cannot
+    2 260 ms on this board, so 1.5 s starts T1 and guarantees it cannot
     finish. Load can only widen that gap, never close it, which is what makes
     this deterministic where an 8 s chain is not.
+
+    Runs on the PIN-FREE board as of #511 — `_model_without_pins`, whose
+    docstring carries the measurement. The wall and the reasoning above are
+    unchanged; what changed is that pins now bound the makespan directly and
+    close the gap that argument depends on. Verified 8/8 in the required state
+    on the pin-free board at this wall.
 
     Two things must then be true, and neither is implied by the other:
 
@@ -317,7 +385,7 @@ def test_a_tier_cut_short_is_adopted_but_not_counted(board):
     2-day board, -24% on a 3-day, -22% on an 8-day, and 1 557 600 000 ->
     1 519 800 000 on this one. See `test_the_adopted_board_is_the_better_one`.
     """
-    model = _model_for(board)
+    model = _model_without_pins(board)
     outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=1.5)
 
     # T1 RAN and was cut short — without this the test would pass vacuously on
@@ -337,7 +405,7 @@ def test_a_tier_cut_short_is_adopted_but_not_counted(board):
     reported = dict(outcome.objective_values)
     fixtures, _num_courts, _slots, _step, constraints, _existing, _deps = board
     dur_ms = constraints["match_minutes"] * MIN_MS
-    assert reported[TIER_MAKESPAN] >= T1_PROVED_MAKESPAN_MS
+    assert reported[TIER_MAKESPAN] >= T1_PROVED_MAKESPAN_PIN_FREE_MS
     assert _makespan(outcome.assignments, dur_ms) <= reported[TIER_MAKESPAN]
 
 
@@ -359,9 +427,15 @@ def test_the_adopted_board_is_the_better_one(board):
     fixtures, _num_courts, _slots, _step, constraints, _existing, _deps = board
     dur_ms = constraints["match_minutes"] * MIN_MS
 
-    t0_model = _model_for(board)
+    # Pin-free as of #511, both arms, for the reason `_model_without_pins`
+    # records: with pins on the board T1 proves inside this wall, so "T1 ran
+    # and was cut short" (asserted below) silently stopped holding and the two
+    # arms returned the SAME board, making the final comparison 1557600000 <
+    # 1557600000. Both arms must use the same board or the comparison is
+    # meaningless.
+    t0_model = _model_without_pins(board)
     t0_only = run_tier_chain(t0_model, t0_model.fixture_vars, 1.5, tiers=(TIER_PLACED,))
-    two_tier_model = _model_for(board)
+    two_tier_model = _model_without_pins(board)
     two_tier = run_tier_chain(two_tier_model, two_tier_model.fixture_vars, 1.5)
 
     assert t0_only.tiers_completed == 1
