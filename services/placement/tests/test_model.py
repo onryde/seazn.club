@@ -25,7 +25,7 @@ import pytest
 from ortools.sat.python import cp_model
 
 from _board_positional import to_positional
-from placement.model import MIN_MS, build_model, solve
+from placement.model import DAY_MS, MIN_MS, build_model, solve
 
 #: The production budget from the design spec, and the wall the acceptance
 #: criterion is stated at.
@@ -518,6 +518,170 @@ def test_a_placed_board_still_reports_its_real_makespan():
 
     assert len(outcome.assignments) == 2
     assert dict(outcome.objective_values)["makespan"] == step + 30 * MIN_MS
+
+
+# --- T1's span now includes pinned rows (#511) -------------------------------
+
+_T1_PIN_ANCHOR = 1_800_000_000_000  # arbitrary positive ms epoch, see _GROUP_ANCHOR below
+
+
+def test_pins_join_the_makespan_span_so_the_solver_places_near_them():
+    """THE LOAD-BEARING TEST for #511. A naive "pin on day 0, assert movables
+    land on day 0" board is a TIE without the fix -- the movable-only span is
+    identical either way, and CP-SAT is nondeterministic, so it would pass by
+    luck roughly half the time even with the fix reverted. This board is
+    built so the two arms are STRICTLY ordered in BOTH directions instead.
+
+    One pin, two movable fixtures, two candidate placements:
+      * "day 0": the pin's own instant, plus a second admissible tick 6 hours
+        later on a different court -- FAR APART, so the movable-only span
+        there is wide even before the pin is considered at all.
+      * "day 1": a single admissible instant, offered on BOTH courts, a full
+        day after the pin -- ADJACENT (colocated), so the movable-only span
+        there is the narrowest one can be: one match duration.
+
+    Computed spans (dur_ms = 1_800_000, one match, checkable by eye):
+      WITHOUT the fix (movable-only, pin excluded):
+        day 0: A0_2 + dur - A0_1 = 6h + dur  = 23_400_000 ms
+        day 1: dur                           =  1_800_000 ms  <- narrower, wins
+      WITH the fix (pin included):
+        day 0: unchanged -- the pin coincides with A0_1, adding nothing
+                                              = 23_400_000 ms  <- now the winner
+        day 1: (B + dur) - P = DAY_MS + dur  = 88_200_000 ms  <- a whole day worse
+
+    T0 ties either way (both movables fit on either day), so T1 alone decides
+    -- and T1 (minimised) strictly prefers day 1 without the fix and strictly
+    prefers day 0 with it. Neither arm is a tie, so this cannot pass by
+    nondeterministic luck the way a "pin on day 0, assert day 0" board would.
+    Measured 6/6 red with the fix reverted (see task report).
+    """
+    dur_ms = 30 * MIN_MS
+    six_hours = 6 * 60 * MIN_MS
+    pin_start = _T1_PIN_ANCHOR
+    day0_far_tick = _T1_PIN_ANCHOR + six_hours
+    day1_tick = _T1_PIN_ANCHOR + DAY_MS
+
+    num_courts = 2
+    grid_slots = [
+        (1, pin_start, 0),  # day 0, court 1 -- same instant as the pin (court 0)
+        (1, day0_far_tick, 0),  # day 0, court 1 -- 6h later: FAR APART
+        (0, day1_tick, 1),  # day 1, both courts -- ADJACENT (colocated)
+        (1, day1_tick, 1),
+    ]
+    fixtures = [([0, 1], 0), ([2, 3], 0)]
+    existing = [(0, pin_start)]
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 0,
+        "rest_by_division": {0: 0},
+        "day_cap_by_division": {},
+    }
+
+    model = build_model(fixtures, num_courts, grid_slots, 30, constraints, existing, [])
+    outcome = solve(model, wall_seconds=5.0)
+    detail = f"status={outcome.status} assignments={sorted(outcome.assignments)}"
+
+    assert len(outcome.assignments) == 2, detail
+    starts = {start for _fixture, _court, start in outcome.assignments}
+    assert starts == {pin_start, day0_far_tick}, (
+        f"expected both movables on day 0 (the pin's tick + the far tick), got {detail}"
+    )
+
+
+def test_a_lone_pin_stops_the_makespan_from_collapsing_to_zero():
+    """The hunk's own comment claims the pin bounds "strengthen the `mk_hi >=
+    mk_lo` clamp below on any board with a pin -- `mk_lo` and `mk_hi` can no
+    longer both float when nothing movable is placed." Verified directly: no
+    movable fixtures at all (fixtures=[]), one pin.
+
+    Without the fix this is `test_an_empty_board_reports_a_non_negative_makespan`'s
+    scenario restated with a pin present: nothing constrains `mk_lo`/`mk_hi`
+    beyond the `mk_hi >= mk_lo` clamp (Task 05c), so T1 collapses them to the
+    same point and the reported span is 0 -- degenerate, and a pin sitting
+    right there does nothing to stop it, because nothing reads `existing` in
+    the T1 section at all yet.
+
+    With the fix, `mk_lo <= P` and `mk_hi >= P + dur_ms` are hard bounds
+    regardless of placement. The sole grid slot sits AT `P`, so
+    `max_end == P + dur_ms` -- `mk_hi`'s own domain upper bound forces it to
+    exactly `P + dur_ms`, and minimising `mk_hi - mk_lo` then pushes `mk_lo`
+    up to its only upper bound, `P`. The span is therefore provably exactly
+    `dur_ms`, not just "at least" it (verified: 1_800_000 both times run), but
+    the assertion below only claims the non-degenerate half, matching what
+    the comment actually promises rather than over-claiming from one board.
+    """
+    num_courts = 1
+    dur_ms = 30 * MIN_MS
+    pin_start = 5_000_000
+    grid_slots = [(0, pin_start, 0)]  # sole admissible start == the pin's own
+    fixtures: list = []
+    existing = [(0, pin_start)]
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 0,
+        "rest_by_division": {},
+        "day_cap_by_division": {},
+    }
+
+    model = build_model(fixtures, num_courts, grid_slots, 30, constraints, existing, [])
+    outcome = solve(model, wall_seconds=5.0)
+
+    reported = dict(outcome.objective_values)
+    assert reported["placed"] == 0
+    assert reported["makespan"] >= dur_ms, (
+        f"a lone pin should have forced a non-degenerate span, got {outcome.objective_values}"
+    )
+
+
+def test_an_in_range_pin_does_not_cost_a_movable_its_placement():
+    """T0 (placed count) is lexicographically first, so adding `existing` to
+    the T1 span must not cost placements. A board where everything fits
+    places the same number of fixtures with the pin present as without it.
+
+    NOT falsifiable by reverting the 3-line loop, and that is reported here
+    rather than hidden: verified (scratch script, not this test) that on this
+    board the assignment set is BYTE-IDENTICAL with the loop present and
+    reverted. T0's objective (`placed_sum`) never references `mk_lo`/`mk_hi`,
+    and the new pin bounds never reference `start[i]`/`placed[i]` either --
+    the two families share no variable, so the only way reverting them could
+    ever change T0's optimum is if they render `mk_lo`/`mk_hi` themselves
+    infeasible against their OWN declared domain (`max_end`, computed from
+    `grid_slots` alone -- never from `existing`, see line ~862).
+
+    That mechanism is real, just not on an in-range board: a pin whose
+    `start_at_ms` exceeds `max(admissible_starts)` makes `mk_hi >=
+    existing_start + dur_ms` unsatisfiable against `mk_hi`'s own upper bound,
+    and `placement.schema._validated_existing` (schema.py:369-412) does not
+    bound-check a pin's start against the grid at all. Confirmed empirically
+    (scratch script, not committed here, reported to the task controller): an
+    otherwise-solvable one-fixture board went from OPTIMAL/1-placed to
+    INFEASIBLE/0-placed purely by adding the fix's two bounds for a pin 9M ms
+    past the grid's own last tick -- with the loop reverted the same board
+    stayed OPTIMAL/1-placed. That is a genuine hole in the #511 hunk, out of
+    this task's scope to fix, and it is why this test's own claim -- "an
+    in-range pin is free" -- is written as a positive assertion rather than a
+    reverted one: reverting only ever matters in the OUT-of-range case, where
+    the CURRENT tree is the one that regresses, not the reverted one.
+    """
+    dur_ms = 30 * MIN_MS
+    anchor = 1_000_000_000
+    grid_slots = [(0, anchor + k * dur_ms, 0) for k in range(3)]
+    fixtures = [([0, 1], 0), ([2, 3], 0)]
+    existing = [(0, anchor)]  # in-range: coincides with the grid's own earliest tick
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 0,
+        "rest_by_division": {0: 0},
+        "day_cap_by_division": {},
+    }
+
+    model = build_model(fixtures, 1, grid_slots, 30, constraints, existing, [])
+    outcome = solve(model, wall_seconds=5.0)
+
+    assert len(outcome.assignments) == 2, (
+        f"both movables should have fit around the in-range pin: "
+        f"status={outcome.status} assignments={outcome.assignments}"
+    )
 
 
 # --- the day cap binds on the CALLER's day, not on a UTC boundary -----------
@@ -1283,4 +1447,43 @@ def test_per_court_domain_adds_constraints_only_when_courts_disagree():
         f"a court offering a strict subset of the shared tick set should add per-court domain "
         f"constraints the homogeneous board does not need: homogeneous={homogeneous_count} "
         f"asymmetric={asymmetric_count}"
+    )
+
+
+def test_a_pin_past_the_last_admissible_tick_does_not_brick_the_whole_solve():
+    """#511 REGRESSION. `mk_hi >= pin + dur_ms` is a HARD constraint, so the
+    horizon `mk_hi` is declared over has to cover pins and not only admissible
+    ticks. Derived from `admissible_starts` alone, a pin past the last tick
+    made `pin + dur_ms > max_end` unsatisfiable and the ENTIRE model came back
+    INFEASIBLE -- the organiser gets no board at all, from a pin the wire
+    accepts as valid.
+
+    Not a contrived input: a pin is deliberately allowed to sit OFF the grid
+    lattice (module docstring -- it counts against no day by design), and
+    `schema.py`'s `_validated_existing` ties a pin to no grid bound. Dragging
+    one match past the end of the last play window is enough.
+
+    The movable fixture here is placeable on its own tick and shares nothing
+    with the pin -- no entrant, no court -- so the ONLY thing that can make
+    this board infeasible is the horizon bound. That is what keeps this test
+    pointed at the bug rather than at some incidental conflict.
+    """
+    t = 3_600_000
+    constraints = {"match_minutes": 30, "gap_minutes": 0, "rest_by_division": {}, "day_cap_by_division": {}}
+    slots = [(0, t, 0), (0, t + 40 * MIN_MS, 0)]
+
+    # A whole day PAST the last admissible tick, on a court the movable
+    # fixture is not using, with an entrant the movable fixture does not share.
+    late_pin = [(1, t + DAY_MS)]
+
+    model = build_model([([0], 0)], 2, slots, 40, constraints, late_pin, [])
+    outcome = solve(model, wall_seconds=8.0)
+
+    assert outcome.status != "infeasible", (
+        f"a pin past the last admissible tick must not make the board infeasible; "
+        f"status={outcome.status!r} assignments={outcome.assignments!r}"
+    )
+    assert len(outcome.assignments) == 1, (
+        f"the one movable fixture is placeable and shares nothing with the pin, so it must "
+        f"still be placed: {outcome.assignments!r}"
     )
