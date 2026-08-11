@@ -45,6 +45,16 @@ import type { HardConstraint, SchedulingConstraints } from "./constraints.ts";
 import { resetZ3 } from "./z3-load.ts";
 import { dayKeyInTz } from "./tz.ts";
 import type { SolveBuildInput, SolveBuildOutcome } from "./placement-client.ts";
+// Bound at file-load time, same as `buildSchedule` above — so it is the SAME
+// `./logger.ts` instance `build.ts`'s own internal `import { log }` resolved
+// to, for every test that calls the plain statically-imported `buildSchedule`.
+// Tests that instead re-import `./build.ts` dynamically after
+// `vi.resetModules()` (to see a `vi.doMock`'d dependency — see that test's own
+// comment) must NOT use this binding: the reset gives their fresh `build.ts` a
+// fresh `./logger.ts` too, and a spy on this stale object would watch
+// something that run never touches. Those tests re-import `./logger.ts`
+// dynamically, alongside their fresh `./build.ts`, instead.
+import { log } from "./logger.ts";
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 7, 8, 9, 0);
@@ -683,7 +693,7 @@ describe("buildSchedule", () => {
     // `person_overlap` too, which is the population `deltaConflicts` exists to
     // keep editable. The breach is greedy's, so it is not laid at the solver's
     // door — it is reported, and the better board still ships.
-    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const spy = vi.spyOn(log, "error").mockImplementation(() => undefined);
     try {
       vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
         assignments: [{ fixtureId: "b", court: "C1", startAtMs: T0 }],
@@ -725,7 +735,6 @@ describe("buildSchedule", () => {
     // greedy's one-card board. That is exactly the shape a future encoder
     // regression would take, and it is the only way to exercise the fallback
     // and the log without waiting for one.
-    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.resetModules();
     vi.doMock("./placement-client.ts", async () => {
       const actual = await vi.importActual<typeof import("./placement-client.ts")>("./placement-client.ts");
@@ -761,6 +770,14 @@ describe("buildSchedule", () => {
     });
     try {
       const mod = await import("./build.ts");
+      // Spied AFTER the fresh import, matching it: `vi.resetModules()` gives
+      // this run's `build.ts` a fresh `./logger.ts` instance too (it is
+      // imported transitively), so a spy attached to a pre-reset `log` would
+      // watch an object this call never touches. Restoring it is left to the
+      // describe block's own `afterEach(() => vi.restoreAllMocks())` — this
+      // spy cannot outlive the `vi.resetModules()` below either way.
+      const { log } = await import("./logger.ts");
+      const spy = vi.spyOn(log, "error").mockImplementation(() => undefined);
       const built = await mod.buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
       expect(built.status).toBe("verifier_rejected");
       expect(built.engine).toBe("greedy");
@@ -768,15 +785,14 @@ describe("buildSchedule", () => {
       // gets a board, and it is the one nothing new is wrong with.
       expect(built.assignments).toHaveLength(1);
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(String(spy.mock.calls[0]?.[0])).toContain("verifier rejected");
-      expect(String(spy.mock.calls[0]?.[0])).toContain("b:person_overlap");
+      expect(spy.mock.calls[0]?.[1]).toContain("verifier rejected");
+      expect(spy.mock.calls[0]?.[0]).toMatchObject({ rejected: ["b:person_overlap"] });
     } finally {
       const z3 = await import("./z3-load.ts");
       await z3.resetZ3();
       vi.doUnmock("./calendar.ts");
       vi.doUnmock("./placement-client.ts");
       vi.resetModules();
-      spy.mockRestore();
     }
   }, 180_000);
 
@@ -1377,9 +1393,9 @@ describe("buildSchedule — Placement path", () => {
   });
 
   it("falls back to greedy on a Placement rejection, exactly like a z3 gate-reject", async () => {
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockRejectedValue(
-      new Error("placement solveBuild exceeded deadline"),
-    );
+    const rejection = new Error("placement solveBuild exceeded deadline");
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockRejectedValue(rejection);
+    const spy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     const result = await buildSchedule(minimalInput());
     expect(result.engine).toBe("greedy");
     expect(result.assignments.map((a) => a.fixtureId)).toEqual(["f1"]);
@@ -1387,6 +1403,13 @@ describe("buildSchedule — Placement path", () => {
     // site is no less untrustworthy than a classified one, so it gets the
     // same status, not the old `not_searched`.
     expect(result.status).toBe("solver_unavailable");
+    // Regression test for the placement-unavailable catch in `build.ts`:
+    // before structured logging landed, this branch discarded `err`
+    // completely (`catch {`), so a misconfigured shared secret presented as
+    // "placement is slow" with nothing anywhere naming the actual cause.
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({ err: rejection });
+    expect(spy.mock.calls[0]?.[1]).toContain("placement service unavailable");
   });
 
   // Coordinator follow-up (found preparing Task 07): the try/catch around
