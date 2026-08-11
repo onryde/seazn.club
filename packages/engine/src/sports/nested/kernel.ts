@@ -311,18 +311,50 @@ export const NestedInterruption = z.strictObject({
 });
 export type NestedInterruption = z.infer<typeof NestedInterruption>;
 
+// S5 (#431) — the game-penalty scoring path. DOMAIN.md's "game a game penalty
+// concedes" row was `deferred`: there was no "award a game" event, and a
+// scorer had to hand-enter four points. This is that event, one level up from
+// `tennis.point` / `tennis.sanction{level:"point_penalty"}`, and the same
+// two-events pattern: `tennis.sanction{level:"game_penalty"}` stays a pure
+// no-op on score (`applySanction` below, UNCHANGED — existing frozen corpora
+// already replay `game_penalty` sanctions and must keep folding exactly as
+// they do), and THIS event is the separate, score-moving fact the chair
+// enters alongside it — the way a point penalty is entered as an ordinary
+// `tennis.point` for the opponent (DOMAIN.md row above).
+//
+// `winner`, not `by`. `NestedSanction.by` (above) names the OFFENDER — this
+// engine's established convention (`DisciplineCard.entrantSide` is also the
+// offender's side). This field names the entrant CREDITED with the game,
+// which on a game-penalty award is the OPPOSITE party. `NestedPoint`'s own
+// doc comment already names the fix: `winner` is the engine-wide word for
+// "the entrant awarded something" (`MatchOutcome.winner`), so naming this
+// field for exactly what it holds sidesteps the by-means-two-things trap
+// rather than reusing a name that means the opposite thing one event away.
+export const NestedGameAward = z.strictObject({
+  winner: EntrantId,
+  // Free text, mirroring `NestedSanction.reason` exactly: the fold never
+  // reads it, so no recorded state and no golden moves whether it is present.
+  reason: z.string().min(1).optional(),
+});
+export type NestedGameAward = z.infer<typeof NestedGameAward>;
+
 // Appended, never reordered: `{by, level}` cannot parse as a point (strict
 // branches reject the extra key) and a summary needs home+away, so every
 // pre-W4 payload still lands on the branch it always did. `NestedInterruption`
-// is LAST and is the only branch with a required `kind`, so it neither swallows
-// a sibling nor is swallowed — `interruption.test.ts` asserts every shape
-// parses against exactly ONE branch, which is the claim that actually fails
-// when a branch is widened.
+// is the only earlier branch with a required `kind`, so it neither swallows a
+// sibling nor is swallowed. S5 (#431) appends `NestedGameAward` last: its only
+// required key is `winner`, which no sibling schema declares (`NestedPoint`
+// requires `by`, `NestedSanction` requires `by`+`level`, `NestedSetSummary`
+// requires `home`+`away`, `NestedInterruption` requires `kind`), so it neither
+// swallows a sibling nor is swallowed either. `interruption.test.ts` and
+// `game-award.test.ts` both assert every shape parses against exactly ONE
+// branch, which is the claim that actually fails when a branch is widened.
 export const NestedEv = z.union([
   NestedPoint,
   NestedSetSummary,
   NestedSanction,
   NestedInterruption,
+  NestedGameAward,
 ]);
 export type NestedEv = z.infer<typeof NestedEv>;
 
@@ -938,6 +970,50 @@ function applyInterruption(
   return { ...state, interruptions: [...(state.interruptions ?? []), record] };
 }
 
+// S5 (#431) — the game-penalty scoring path, one level up from a point
+// penalty (entered as an ordinary `tennis.point` for the opponent —
+// DOMAIN.md). Calls the EXISTING `winGame` directly: it already does the
+// whole correct cascade (games increment, points reset to `FRESH_GAME`, serve
+// rotation via `serveAfterGame`, tie-break-entry check, `setGamesWinner` /
+// `bankSet` if the game decides the set), so this function adds nothing
+// beyond resolving the side and refusing the one state `winGame` was never
+// designed for.
+//
+// `strict` is the §3.3 seam (review finding, cfg-replay.conformance.test.ts).
+// `state.points.kind` is CFG-DERIVED, not a payload fact: whether a tie-break
+// was entered by the time this event replays depends on `rules.tiebreakAt`,
+// read live out of `division.config` on every fold. An organiser lowering
+// `tiebreakAt` after the fact can make a stream that reaches this event in
+// "standard" play at write time reach it mid-tie-break on REPLAY — and a
+// refusal computed from cfg must never fire on replay (§3.3, same rule
+// `NestedInterruptionRules` and the period kernel's `periodSeconds` both
+// state): there is no event to void and no scorer action that recovers a
+// fixture that throws on every read. So the check gates ONLY the write path;
+// a non-strict replay always proceeds to `winGame`, exactly like
+// `applySetSummary`'s tie-break-score fallback below falls back to banking on
+// games alone rather than refusing.
+function applyGameAward(state: NestedState, payload: NestedGameAward, strict: boolean): NestedState {
+  if (state.phase !== "live") wrongPhase(`game award not allowed in phase "${state.phase}"`);
+  // The SAME condition `applyPoint` switches on to route a point to
+  // `applyTbPoint` over `applyStandardPoint`. A tie-break (or match
+  // tie-break) IS the deciding game — `nestedPosition`'s doc comment: "games
+  // is held at 6-6 through it, so it falls out as game 13" — so there is no
+  // separate "game" left to concede; the concession would have to be a SET
+  // (or the match), a genuinely different, undesigned cascade this session
+  // does not build (DOMAIN.md). Refused loudly on the write path, rather than
+  // silently corrupting `state.games` — `winGame` would bump it regardless,
+  // and could even re-enter a tie-break immediately under a low `tiebreakAt`.
+  if (strict && state.points.kind !== "standard") {
+    const breaker = state.points.kind === "matchTiebreak" ? "a match tie-break" : "a tie-break";
+    throw new EngineError(
+      "GAME_AWARD_DURING_TIEBREAK",
+      `a game cannot be awarded during ${breaker} — the breaker itself is the deciding game`,
+      { pointsKind: state.points.kind },
+    );
+  }
+  return winGame(state, sideOf(state, payload.winner));
+}
+
 // ---------------------------------------------------------------------------
 // Set-summary application (tier 0) — v6/00 §2, mirrors setbased summary mode.
 // ---------------------------------------------------------------------------
@@ -1204,6 +1280,7 @@ export function makeNestedModule(
   const summaryType = `${preset.key}.set_summary`;
   const sanctionType = `${preset.key}.sanction`;
   const interruptionType = `${preset.key}.interruption`;
+  const gameAwardType = `${preset.key}.game.award`;
   // One per module — see `sports/squad-state.ts` for the init handshake it
   // keys on.
   const squadAdopter = makeSquadAdopter<NestedState>();
@@ -1248,12 +1325,12 @@ export function makeNestedModule(
     { tier: 1, eventTypes: [summaryType] },
     {
       tier: 2,
-      eventTypes: [pointType, sanctionType, interruptionType],
+      eventTypes: [pointType, sanctionType, interruptionType, gameAwardType],
       entitlement: preset.rallyEntitlement,
     },
     {
       tier: 3,
-      eventTypes: [pointType, sanctionType, interruptionType],
+      eventTypes: [pointType, sanctionType, interruptionType, gameAwardType],
       entitlement: preset.rallyEntitlement,
     },
   ];
@@ -1320,6 +1397,12 @@ export function makeNestedModule(
           return applyInterruption(
             state,
             parsePayload(NestedInterruption, ev.payload, ev.type),
+            isStrictFold(ctx),
+          );
+        case gameAwardType:
+          return applyGameAward(
+            state,
+            parsePayload(NestedGameAward, ev.payload, ev.type),
             isStrictFold(ctx),
           );
         case "core.forfeit":
@@ -1515,7 +1598,21 @@ export function makeNestedModule(
       // restarts at every set boundary. It is non-decreasing within a set, so
       // every generated stream is monotone by construction and the kernel's
       // guard (§3.3) accepts all of them.
-      if (rng() < 0.03) {
+      // S5 (#431) review — game-award used to draw its OWN unconditional
+      // `rng()` on every "standard" call (nearly every call), which is a
+      // NET NEW draw whether or not the branch fires: `position.conformance
+      // .test.ts` walks five FIXED seeds (spec 03 §6's determinism
+      // requirement, not this event's own logic), and shifting every
+      // downstream draw for the rest of a generated match collapsed three of
+      // them into 3-4 event streams (a `tennis.set_summary` deciding a whole
+      // set is already ~86% likely the moment a fresh set's `roll` below
+      // lands >=0.14, and a shift can walk straight into that). Reusing
+      // interruption's OWN roll as an `else if` on the SAME draw — rather
+      // than adding a new one — means a call where neither fires consumes
+      // EXACTLY the draws it did before this event existed, so the fix is
+      // "don't add a draw", not a change to `applyGameAward`/`winGame`.
+      const breakRoll = rng();
+      if (breakRoll < 0.03) {
         const kinds = NestedInterruptionKind.options;
         const by = randomEntrant();
         return {
@@ -1526,6 +1623,20 @@ export function makeNestedModule(
             person: randomPerson(by),
             duration: 120,
             at: { period: setLabel(currentSet(state)), elapsed: generatorSetElapsed(state) },
+          },
+        };
+      }
+      // Guarded on `points.kind === "standard"` — the SAME condition
+      // `applyGameAward` refuses on — because every generated emission must
+      // be valid for the state it is generated in: `buildStream` applies
+      // each event as it walks, so an invalid one throws during generation,
+      // not during assertion.
+      if (breakRoll < 0.06 && state.points.kind === "standard") {
+        return {
+          type: gameAwardType,
+          payload: {
+            winner: randomEntrant(),
+            ...(rng() < 0.5 ? { reason: "code violation" } : {}),
           },
         };
       }

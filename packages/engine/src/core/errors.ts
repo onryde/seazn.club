@@ -46,6 +46,12 @@ export const EngineErrorCode = z.enum([
   // Football substitution beyond `subWindows` or `cfg.maxSubs` (spec §5.2).
   // Declared here, thrown by the football module in a later task.
   "SUB_WINDOW_EXCEEDED",
+  // S5 (#431) — a `tennis.game.award` posted while the match is inside a
+  // tie-break or match tie-break (nested/kernel.ts `applyGameAward`, its only
+  // throw site): the breaker IS the deciding game, so there is no separate
+  // game left to concede — conceding a SET would be a genuinely different,
+  // undesigned cascade, deliberately out of scope this session.
+  "GAME_AWARD_DURING_TIEBREAK",
 ]);
 export type EngineErrorCode = z.infer<typeof EngineErrorCode>;
 

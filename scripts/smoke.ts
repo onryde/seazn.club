@@ -5230,11 +5230,17 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
 //   A. `hundred` — the OVERS axis. 5-ball overs, so 10 "overs" is 50 balls, not
 //      60. Reading them as 6-ball overs inflates both resource percentages and
 //      hands the chasing side a target that is simply wrong (86, not 84).
-//   B. `pairs-6-a-side` — the WICKETS axis, and the one that reverses a RESULT.
+//   B. Six-a-side — the WICKETS axis, and the one that reverses a RESULT.
 //      Six players a side means 5 wickets in hand, not 10; scaled wrongly the
 //      chase gets a target of 43 and "wins by 1 wicket" a match it actually
 //      LOST by 4 runs. The winner is the assertion that matters here — the
 //      number is incidental to a published result being wrong.
+//      Built on `t20` with `playersPerSide`/`ballsPerInnings`/
+//      `maxOversPerBowler` overridden directly in `config`, rather than a
+//      named variant: the engine's own `pairs-6-a-side` preset was dropped
+//      (#431 ruling 3, 2026-08-11) — it never modelled real pairs scoring
+//      either, it was exactly this same shrunk-side/shortened-innings
+//      shape, which is why the override reproduces it byte-for-byte.
 //
 // Nothing paints `revisedTarget` or `targetSource` in the UI yet (#467), so
 // both read the fold through `/api/v1/fixtures/{id}/state`. `cricket.revise`
@@ -5306,14 +5312,21 @@ async function cricketDlsSuite(): Promise<void> {
     aFold.revisedTarget === 84 && aFold.targetSource === "dls",
   );
 
-  // === B — the wickets axis (`pairs-6-a-side`: 6 a side ⇒ 5 wickets) ========
+  // === B — the wickets axis (six-a-side ⇒ 5 wickets) =========================
   // The reversal: under the misread the chase reaches a target of 43 and is
   // recorded as the winner; scaled correctly it falls 4 short of 53.
   const b = await timedFixture(owner, comp.id, {
     name: `Pairs DLS ${tag}`,
     sport_key: "cricket",
-    variant_key: "pairs-6-a-side",
-    config: dls,
+    variant_key: "t20",
+    // Overrides `t20`'s own ballsPerInnings/maxOversPerBowler — `config`
+    // always wins over the variant preset (divisions.ts's `{...variant.config,
+    // ...input.config}` merge) — and adds playersPerSide, which no shipped
+    // variant sets. Reproduces the dropped `pairs-6-a-side` preset's cfg
+    // exactly: byte-for-byte the same {playersPerSide, ballsPerInnings,
+    // maxOversPerBowler}, t20's leftover `lineupChanges.concussionReplacements`
+    // is inert here (this scenario never sends a lineup/concussion event).
+    config: { ...dls, playersPerSide: 6, ballsPerInnings: 60, maxOversPerBowler: 2 },
     entrants: [
       { kind: "team", display_name: `Pairs Lions ${tag}`, seed: 1 },
       { kind: "team", display_name: `Pairs Tigers ${tag}`, seed: 2 },

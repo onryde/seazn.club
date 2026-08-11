@@ -63,9 +63,17 @@
         "type": "integer"
       },
       "halves": {
-        "const": 2,
-        "default": 2,
-        "type": "number"
+        "anyOf": [
+          {
+            "const": 2,
+            "type": "number"
+          },
+          {
+            "const": 4,
+            "type": "number"
+          }
+        ],
+        "default": 2
       },
       "maxSubs": {
         "maximum": 9007199254740991,
@@ -345,10 +353,12 @@
           },
           "phase": {
             "enum": [
+              "3QT",
               "ET_FT",
               "ET_HT",
               "FT",
-              "HT"
+              "HT",
+              "QT"
             ],
             "type": "string"
           }

@@ -391,6 +391,24 @@ jobs:
       - name: Sync sport catalog from the engine registry
         run: npm run sync:sports
 
+      # scripts/__tests__/sync-sports.test.ts is the only test proving the
+      # prune step's `is_system = true` scope — the guarantee #431 ruling 3
+      # needed PROVED, not asserted (dropping a variant is not additive: a
+      # stale `sport_variants` row survives forever without it). Repo-root
+      # scripts have no home in either workspace's own `npm test`: both
+      # packages/engine and apps/web restrict their vitest `include` to their
+      # own src/**, so neither would ever collect a file under scripts/, and
+      # there is no root-level vitest install (`npx vitest`/`pnpm exec
+      # vitest` from the repo root both fail to resolve the binary — proved
+      # locally, not assumed). Invoking packages/engine's already-installed
+      # binary directly, with an EXPLICIT path argument rather than a
+      # config-driven include glob, sidesteps both: vitest's config
+      # auto-discovery walks up from cwd, and the repo root has no
+      # vitest.config.*, so packages/engine's own restrictive one is never
+      # picked up.
+      - name: Repo-root scripts tests (real Postgres)
+        run: ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile=vitest-results-scripts.json scripts/__tests__
+
       # src/lib is in scope alongside src/server. It used to be excluded, which
       # meant the two suites guarding the Event Pass invariant —
       # entitlements-sql-parity (SQL resolver == TS resolver) and

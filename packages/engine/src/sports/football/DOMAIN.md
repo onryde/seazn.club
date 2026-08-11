@@ -78,7 +78,7 @@ is initialised with.
 | Half length | all | n/a | `Cfg.halfMinutes` | modelled | Variant presets: 45 / 30 / 20. |
 | Extra time (two halves) | `11-a-side` in knockout stages | n/a | `Cfg.extraTime`, phases `ET_H1`/`ET_H2`, markers `ET_HT`/`ET_FT` | modelled | Only entered when the score is level at FT. |
 | **Added time (allowance for time lost)** | all | n/a | `Ev.FootballPeriod.addedMinutes` → `State.periods[].addedMinutes` → `summary.detail.periods` | **extended** | Stamped on the period the marker **closes**, not the one it opens. A match report writes "90+3", which a bare integer `minute` cannot tell apart from the 93rd minute of extra time. |
-| Quarters instead of halves | `youth` (mini-soccer age groups) | n/a | `Cfg.halves` is `z.literal(2)` | deferred | Needs three new `PlayPhase` values, two new period markers and a change to what triggers full time — a state-machine extension, not a field. The declared `youth` variant is 2×30 (FA U13+); quarters appear in U7–U10, which the module does not declare as a variant. Needs a product decision to declare a `mini-soccer` variant first. |
+| Quarters instead of halves | `mini-soccer` | n/a | `Cfg.halves`: `z.literal(2)` → `z.union([z.literal(2), z.literal(4)])`; `PlayPhase` +`Q2`/`Q3`/`Q4`; `Ev.FootballPeriod.phase` +`QT`/`3QT` | extended | S5 (#431), owner-ruled `build` 2026-08-03 (decision log: `docs/superpowers/specs/2026-08-06-scoringpad-v2-prompts/_INDEX.md`, 2026-08-11 entry). Q1 is `H1` REUSED, never renamed — `core.start` is unchanged. The Q2/Q3 boundary reuses marker `HT` (the real half-time interval); the Q4/done boundary reuses `FT`; only the Q1/Q2 and Q3/Q4 boundaries needed new markers. Every `applyPeriod` arm gates on `cfg.halves`, not merely on `state.phase` — a marker legal in one mode sent from the other mode's matching `state.phase` is refused (`WRONG_PHASE`), never silently reinterpreted. New variant `mini-soccer` (FA U7–U10, 10-minute quarters, 7-a-side, rolling subs); the declared `youth` preset (FA U13+, 2×30 halves) is unchanged — see the per-variant table. |
 | Kick-off, and which side kicks off | all | entrant | — | deferred | `core.start` is kernel-owned, carries no side, and is outside this family's blast radius; a `football.kickoff` would duplicate the start semantics. Needs a product decision. |
 | Ends changed at half-time | all | n/a | — | deferred | Not entered in a match record. |
 | **Temporary suspension of play, then resumption** | all | n/a | `core.suspend` / `core.resume` (kernel-owned) | **extended** | Unblocked later in W4: the pair landed in `src/core/events.ts` and is folded inside `foldMatch`, so it never reaches a module's `apply` and no sport re-implements it. A suspension that is never resumed leaves the stoppage open; `core.abandon`/`core.forfeit` close it in the same step they decide. |
@@ -98,7 +98,7 @@ is initialised with.
 
 | Where in the match an event happened (the position axis) | all | — | `SportModule.position(state)` -> `period` + `clock` segments, e.g. `H2 . 48:12` | extended | W4a T6b. A **read-side projection**, never a payload: a `MatchPosition` on every stamped event was considered this wave and rejected, because position is derivable from state the fold already computes and recording it would create a recorded value and a derived value of the same type that can silently disagree — the `DisciplineCard.entrantSide` shape. A wrong recorded value is in the hash-chained ledger forever; a wrong projection is one deploy away from fixed. Ordered segments rather than a display string, so W8 can drop a segment for a 375px scorebug, localise each `key` and order two positions in one match; `formatPosition` is the plain-text path. Nothing is materialised into state, so every frozen golden is byte-identical. Football and the period kernel have different state types and cannot share a module member, so both delegate to the core `periodClockPosition` and the conformance suite holds them to ONE shape. That is the direct answer to this wave's five hand-rolled time-model divergences in this file. Ranked against `playPhases(cfg)` — the wider list an event's `at.period` is validated against — never the narrower `PLAY_PHASES`. |
 
-**Row counts:** 25 modelled, 24 extended, 10 deferred (59 rows). No blank cells.
+**Row counts:** 25 modelled, 25 extended, 9 deferred (59 rows). No blank cells.
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## Per-variant divergence
@@ -106,8 +106,9 @@ Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 | variant | where the model diverges | how it is expressed |
 | --- | --- | --- |
 | `11-a-side` | Baseline. Return-forbidden substitutions under a competition cap; extra time and kicks from the penalty mark in knockout; sin bins below NLS step 4. | `Cfg.maxSubs`, `Cfg.extraTime`, `Cfg.shootout`, `Ev.FootballSinBinStart` / `Ev.FootballSinBinEnd`. |
-| `youth` | 2×30 halves; **repeat substitutions**; sin bins are standard, at a shorter pro-rata period; quarters in the mini-soccer age groups the module does not declare. | `halfMinutes: 30` + `rollingSubs: true` on the preset; `Cfg.sinBinMinutes` per competition. Quarters are **deferred**. |
+| `youth` | 2×30 halves (FA U13+); **repeat substitutions**; sin bins are standard, at a shorter pro-rata period. | `halfMinutes: 30` + `rollingSubs: true` on the preset; `Cfg.sinBinMinutes` per competition. |
 | `small-sided` | 2×20 halves; **flying substitutions**, uncapped; time penalties of sin-bin shape; **a 5-, 7- or 9-man team**. | `halfMinutes: 20` + `rollingSubs: true` on the preset; `Ev.FootballSinBinStart` / `Ev.FootballSinBinEnd`. Squad size is **deferred** — `positions.lineup.size` is a single module-level `11`. |
+| `mini-soccer` | S5/#431. FOUR 10-minute quarters (FA Mini-Soccer, U7–U10) instead of `youth`'s 2×30 halves — a disjoint age group, not a replacement; **repeat substitutions**; **a 7-man team**. Q1 is `H1` reused; the real half-time (Q2→Q3) reuses marker `HT`, full time (Q4→done/ET/shootout) reuses `FT`; only the Q1→Q2 and Q3→Q4 boundaries needed new markers (`QT`, `3QT`). | `halves: 4` + `halfMinutes: 10` + `rollingSubs: true` + `teamSize: 7` on the preset; `Ev.FootballPeriod.phase` gains `QT`/`3QT`; `PlayPhase` gains `Q2`/`Q3`/`Q4`; every `applyPeriod` arm additionally gates on `cfg.halves`. |
 
 ## Person attribution — what is complete, what is not
 
@@ -264,16 +265,29 @@ because of these are now `extended`, each naming what implements it.
 | `src/stats/stats.test.ts` blocked an `own_goals` metric | done | `playerStats.own_goals` in `football.ts`; the closed-set assertion in `stats.test.ts` was widened to the new correct row |
 
 **Still genuinely deferred** (and still marked `deferred` in the table above):
-the shootout kicker is validated but not retained in `State`; quarters instead
-of halves need three new `PlayPhase` values; the injury behind a substitution
-is medical data with consent implications. Each of those needs a product
-decision or a state-machine extension, not a shared-engine field.
+the shootout kicker is validated but not retained in `State`; the injury
+behind a substitution is medical data with consent implications. Each of
+those needs a product decision or a state-machine extension, not a
+shared-engine field.
 
 **Closed in S4 (#428):** the Law 12 direct-free-kick offence taxonomy behind a
 conceded penalty. It never actually needed a declared fidelity tier — that was
 this row's own premise, and it was wrong: the taxonomy is short (8 members) and
 closed (IFAB Law 12 §3), so it shipped as `PenaltyOffence`, additive and
 optional on `Ev.FootballPenalty`, at the module's existing fidelity tiers.
+
+**Closed in S5 (#431):** quarters instead of halves. This row's own premise —
+that it needed a product decision to declare a `mini-soccer` variant first —
+was the blocker, not the state-machine work itself: the owner ruled `build`
+2026-08-03, and the mechanism turned out to be a bounded, additive extension
+of the SAME pattern extra time already used (a cfg-gated switch arm plus a
+compile-time preset), not a new kind of machinery. `PlayPhase` gained three
+members (`Q2`/`Q3`/`Q4` — Q1 is `H1` reused, not a fourth), the marker enum
+gained two (`QT`, `3QT`; the other two quarter boundaries reuse `HT`/`FT`
+verbatim), and `applyPeriod` gates every arm on `cfg.halves` so the two modes
+cannot be confused for each other even though they share `state.phase ===
+"H1"` as their opening state. See the mapping table row above and the
+per-variant table for the shipped shape.
 
 **Cleared in S3/W4b (#426)** by the kernel-owned lineup model
 (`src/core/lineup.ts`): the keeper is nameable by person id at every fold point

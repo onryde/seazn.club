@@ -620,6 +620,26 @@ describe("DLS scales: table units vs config units (#451)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// #431 ruling 3 (2026-08-11) — the declared `pairs-6-a-side` variant only ever
+// shrank the side and the innings length; the real pairs convention is a
+// different scoring grammar, not an extension of this one, so the preset was
+// dropped rather than left half-built. Full reasoning:
+// docs/superpowers/specs/2026-08-06-scoringpad-v2-prompts/_INDEX.md, the
+// 2026-08-11 decision log entry.
+//
+// Drift guard: pins the exact surviving key set, not just the one removed
+// key, so ANY future addition or removal of a cricket variant has to touch
+// this test deliberately instead of drifting in silently.
+// ---------------------------------------------------------------------------
+
+describe("#431 ruling 3: pairs-6-a-side dropped", () => {
+  it("is no longer a declared cricket variant", () => {
+    expect(cricket.variants).not.toHaveProperty("pairs-6-a-side");
+    expect(Object.keys(cricket.variants).sort()).toEqual(["hundred", "odi", "t20", "test"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // #451 regression — the issue's two worked examples, end to end through the
 // fold. Both are RED without the source fix.
 // ---------------------------------------------------------------------------
@@ -629,8 +649,14 @@ describe("#451 regression: cfg-scaled DLS inputs", () => {
     ...cricket.variants.hundred,
     dls: { enabled: true, edition: "standard" },
   });
+  // #431 ruling 3 dropped the `pairs-6-a-side` preset (see above), so the
+  // six-a-side config this regression needs is inlined directly instead of
+  // spread from a now-removed preset. Byte-identical to the old
+  // `{...cricket.variants["pairs-6-a-side"], dls: {...}}` spread.
   const pairsDls = cricket.configSchema.parse({
-    ...cricket.variants["pairs-6-a-side"],
+    playersPerSide: 6,
+    ballsPerInnings: 60,
+    maxOversPerBowler: 2,
     dls: { enabled: true, edition: "standard" },
   });
 

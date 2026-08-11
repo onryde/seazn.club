@@ -323,3 +323,8 @@ conformanceSuite(football, {
   label: "knockout",
   stageCtxs: [{ kind: "knockout" }, { kind: "group" }],
 });
+// S5/#431 — quarters instead of halves (mini-soccer). No explicit `lineups`:
+// `teamSize: 7` on the preset means the default must resolve against ITS OWN
+// catalog (`resolvePositions`), which an 11-a-side-sized lineup would fail
+// "accepts the conformance lineups against its own catalog" against.
+conformanceSuite(football, { cfg: football.variants["mini-soccer"], label: "mini-soccer" });

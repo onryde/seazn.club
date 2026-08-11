@@ -46,7 +46,7 @@ ticks and the signature line.
 | Winner / unforced error | all | person `scorer` | `Ev.Point.meta.kind`, `Ev.Point.scorer` | modelled | the shot type already existed; attribution now rides with it. |
 | Code violation ladder: warning → point penalty → game penalty → default | all | entrant + optional person | `Ev.Sanction.level`, `.person`, `.reason` → `State.sanctions[]`, `summary.detail.sanctions`, `discipline.extractCards` | extended | new `tennis.sanction` event; never moves the score. `reason` is optional free text and reaches the discipline projection only — the fold never reads it, so no recorded state moves. |
 | The point a **point penalty** concedes | all | entrant | recorded as a `tennis.point` for the opponent | modelled | as the chair writes it into the card. |
-| The game a **game penalty** concedes | all | entrant | — | deferred | there is no "award a game" event, and adding one would be a new scoring path rather than an additive field. A scorer can enter the four points; a proper fix needs a product decision. |
+| The game a **game penalty** concedes | all | entrant | `Ev.GameAward.winner` → `State.games`/`.points`/`.serving`/`.sets` (via the existing `winGame`); error `GAME_AWARD_DURING_TIEBREAK` | extended | S5 (#431) — new `tennis.game.award` event, one level up from the point-penalty pattern above: `tennis.sanction{level:"game_penalty"}` stays a pure no-op on score (`applySanction`, unchanged), and this event carries the scoring consequence, entered alongside it. `winner`, not `by` — `NestedSanction.by` names the offender; this field names the entrant credited with the game, the engine-wide `winner` convention (`MatchOutcome.winner`). Calls the existing `winGame` directly, so no new fold logic and no new `State` field. Refuses mid-tie-break and mid-match-tie-break: the breaker itself IS the deciding game (`games` holds at 6-6 through a regular tie-break), so conceding a set there is a genuinely different, undesigned cascade — a deliberate, named boundary, not a silent gap. See `_INDEX.md`'s 2026-08-11 S5/#431 decision-log entry for the ruling context. |
 | The specific code-violation offence (racquet abuse, audible obscenity, coaching, time violation, …) | all | person | `Ev.Sanction.reason` (free text) | deferred | still deferred as a *taxonomy*: the ITF offence list is long and tour-specific, and a closed enum needs a product decision plus four locale dictionaries. W4's review added the free-text `reason` so the chair's own words reach `DisciplineCard.reason` — which is what an accumulation rule keyed on the offence ("three for racquet abuse") actually needs. Carrom's dossier records the same compromise. **Reconsidered and reaffirmed in S4 (#428)**: adopting now risks the "enum guessed at from broadcast vocabulary" anti-pattern the S4 prompt itself warns against — ITF/ATP/WTA top-level categories (~12-14: audible/visible obscenity, verbal/physical/ball/racket abuse, coaching, unsportsmanlike conduct, time violation, best efforts, leaving court…) vary by tour/division in exact codification and fine schedule. The researched category list is recorded in `_INDEX.md` as a starting point for a future session with a real product ask. |
 | Break of serve | all | entrant | derived from `State.serving` + `State.games` | modelled | the card marks it; the ledger already determines it. |
 | First serve vs second serve | all | person | — | deferred | the chair's card records only the outcome (a double fault). First-serve percentage is a broadcast statistic, wrong fidelity for our tiers. |
@@ -68,7 +68,7 @@ ticks and the signature line.
 
 | Where in the match an event happened (the position axis) | all | — | `SportModule.position(state)` -> `set` + `game` + `points` segments, e.g. `Set 2 . Game 4 . 30-15` | extended | W4a T6b. A **read-side projection**, never a payload: a `MatchPosition` on every stamped event was considered this wave and rejected, because position is derivable from state the fold already computes and recording it would create a recorded value and a derived value of the same type that can silently disagree — the `DisciplineCard.entrantSide` shape. A wrong recorded value is in the hash-chained ledger forever; a wrong projection is one deploy away from fixed. Ordered segments rather than a display string, so W8 can drop a segment for a 375px scorebug, localise each `key` and order two positions in one match; `formatPosition` is the plain-text path. Nothing is materialised into state, so every frozen golden is byte-identical. The tie-break needs no special case: `State.games` is held at 6-6 through it, so it falls out as game 13 of the set. A MATCH tie-break replaces the final set and has no games, so the game segment is omitted rather than reported as a phantom `Game 1`. The point score deliberately carries NO ordinal — points played is not derivable from `GamePoints` past deuce, so `comparePosition` is told to stop at the game rather than handed an invented rank it would sort by. Once a set banks the kernel resets `games` and `points`, so a decided match reads its games off the set that was actually played and drops the points segment. |
 
-**Row counts:** 24 modelled, 10 extended, 8 deferred (42 rows).
+**Row counts:** 24 modelled, 11 extended, 7 deferred (42 rows).
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## Downstream owed
@@ -127,7 +127,21 @@ Asserted against the table itself by `src/testkit/dossiers.test.ts`.
   `NON_MONOTONIC_TIME`; correcting one is void **then** re-append (W4a §4.1).
 - **`summary().detail`** gains `interruptions` when non-empty, alongside
   `persons` and `sanctions`.
-- **One substantive unmet fact** still needs a product decision before schema
-  work: a game penalty has no representation. The medical-timeout gap that sat
-  beside it is closed above — the engine still owns no clock, and does not need
-  one: the chair's stamp and the break's length both arrive as recorded values.
+- **New event type** `tennis.game.award` (S5, #431) resolves the one
+  substantive fact this dossier used to flag as still needing a product
+  decision: the game a **game penalty** concedes now has a representation,
+  mirroring the point-penalty pattern one level up —
+  `tennis.sanction{level:"game_penalty"}` stays an unchanged, score-neutral
+  record (`applySanction` untouched; the existing frozen corpora's
+  `game_penalty` sanctions still fold exactly as they always did) and this new
+  event carries the actual scoring consequence, entered alongside it. It calls
+  the existing `winGame` directly — no new fold logic, no new `State` field —
+  and refuses (`GAME_AWARD_DURING_TIEBREAK`) mid-tie-break and
+  mid-match-tie-break: the breaker itself IS the deciding game, so conceding a
+  SET there would be a genuinely different, undesigned cascade, deliberately
+  out of scope this session. Reachable at fidelity tiers 2 and 3 under the
+  existing `scoring.rally_by_rally` entitlement; no new FeatureKey. See
+  `_INDEX.md`'s 2026-08-11 S5/#431 decision-log entry for the ruling context.
+  The medical-timeout gap that used to sit beside this one is closed above —
+  the engine still owns no clock, and does not need one: the chair's stamp and
+  the break's length both arrive as recorded values.

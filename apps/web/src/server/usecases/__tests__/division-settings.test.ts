@@ -5,8 +5,8 @@
 // DATABASE_URL (same convention as registrations.test.ts).
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
+import { cricket } from "@seazn/engine/sports/cricket";
 import { sql } from "@/lib/db";
-import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision, getDivision, patchDivision } from "../divisions";
@@ -128,6 +128,78 @@ describe.skipIf(!HAS_DB)("format lock (v8)", () => {
     const { division } = await rig(owner);
     await expect(patchDivision(owner, division.id, { variant_key: "nope" })).rejects.toMatchObject({
       status: 422,
+    });
+  });
+});
+
+// #431 ruling 3 (2026-08-11): cricket's `pairs-6-a-side` preset was dropped
+// from the engine (it only ever shrank the side, never modelled real pairs
+// scoring). Nothing NEW guards this — patchDivision's existing variant
+// revalidation (above, "rejects an unknown variant") already 422s on any
+// unresolvable (sport_key, variant_key) pair. This proves that guarantee
+// covers the REAL scenario end to end: a division that was pinned to
+// `pairs-6-a-side` before removal must fail loudly on its next save, not
+// silently fall back to some default cricket format.
+async function seedCricketCatalog(): Promise<void> {
+  await sql`
+    insert into sports (key, name, module_version, position_catalog)
+    values ('cricket', 'Cricket', ${cricket.version}, ${sql.json(cricket.positions as never)})
+    on conflict (key) do nothing`;
+  await sql`
+    insert into sport_variants (sport_key, key, name, config, is_system)
+    values ('cricket', 't20', 'T20', ${sql.json(cricket.variants.t20 as never)}, true)
+    on conflict do nothing`;
+}
+
+describe.skipIf(!HAS_DB)("cricket pairs-6-a-side removal (#431 ruling 3)", () => {
+  it("a division pinned to the removed variant fails LOUDLY on revalidation — 422, not a silent fallback", async () => {
+    const owner = await seedOwner();
+    await seedCricketCatalog();
+    // Deliberately does NOT seed a `pairs-6-a-side` row: the whole point is
+    // that this key resolves to nothing in `sport_variants` any more.
+    expect(cricket.variants).not.toHaveProperty("pairs-6-a-side");
+
+    const competition = await createCompetition(owner, {
+      name: "Pairs Legacy Cup " + randomUUID().slice(0, 6),
+      visibility: "public",
+      branding: {},
+      starts_on: "2026-10-01",
+      ends_on: "2026-10-02",
+    });
+
+    // A division row inserted DIRECTLY, bypassing createDivision — simulating
+    // one that existed before removal. createDivision itself would now 422 on
+    // this variant_key (the same guard this test exercises on patch), so the
+    // only way to construct the "pinned before removal" division is a direct
+    // insert. Mirrors createDivision's own column list exactly.
+    const slug = "pairs-legacy-" + randomUUID().slice(0, 6);
+    const staleConfig = {
+      playersPerSide: 6,
+      ballsPerInnings: 60,
+      maxOversPerBowler: 2,
+      dls: { enabled: false, edition: "standard" },
+    };
+    const [division] = await sql<{ id: string }[]>`
+      insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
+                             module_version, eligibility, tiebreakers, youth)
+      values (${competition.id}, 'Pairs Legacy', ${slug}, 'cricket', 'pairs-6-a-side',
+              ${sql.json(staleConfig)}, ${cricket.version}, ${sql.json([])}, null, false)
+      returning id`;
+
+    // A CONFIG-ONLY patch — variant_key is not even in the payload. The guard
+    // still fires: patchDivision derives `variantKey = patch.variant_key ??
+    // current.variant_key`, so any config-shaped save on a division pinned to
+    // a since-removed variant re-triggers the lookup, not just an explicit
+    // variant_key change. Asserts the status AND the exact message — a bare
+    // `rejects.toThrow()` would pass for any refusal at all, including the
+    // wrong one (e.g. FORMAT_LOCKED or ENTRANT_KIND_IN_USE).
+    await expect(
+      patchDivision(owner, division!.id, {
+        config: { ...staleConfig, dls: { enabled: true, edition: "standard" } },
+      }),
+    ).rejects.toMatchObject({
+      status: 422,
+      message: "unknown variant 'pairs-6-a-side' for cricket",
     });
   });
 });

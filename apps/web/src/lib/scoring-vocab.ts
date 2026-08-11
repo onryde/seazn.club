@@ -124,6 +124,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "tabletennis.sanction": "event.tabletennis.sanction",
   "tabletennis.timeout": "event.tabletennis.timeout",
 
+  "tennis.game.award": "event.tennis.game.award",
   "tennis.interruption": "event.tennis.interruption",
   "tennis.point": "event.tennis.point",
   "tennis.sanction": "event.tennis.sanction",
@@ -343,11 +344,16 @@ const OFFENCE_KEY: Record<string, MessageKey> = {
 // until #427's second pass, because `event-copy.ts` carried its own PERIOD_LABEL
 // table and nothing forced the two to agree — the exact drift a single
 // vocabulary exists to prevent.
+// S5/#431 — QT/3QT are football's two new quarters-mode markers (mini-soccer,
+// `Cfg.halves === 4`): quarter-time (Q1 -> Q2) and three-quarter-time
+// (Q3 -> Q4). The other two quarter boundaries reuse HT/FT verbatim, so they
+// need no new key here.
 const PHASE_KEY: Record<string, MessageKey> = {
   start: "matchPhase.start", end: "matchPhase.end",
   HT: "matchPhase.HT", FT: "matchPhase.FT",
   ET_H1: "matchPhase.ET_H1", ET_HT: "matchPhase.ET_HT",
   ET_H2: "matchPhase.ET_H2", ET_FT: "matchPhase.ET_FT",
+  QT: "matchPhase.QT", "3QT": "matchPhase.3QT",
 };
 // Penalty / shoot-out outcomes and cricket's review outcomes share the field.
 const OUTCOME_KEY: Record<string, MessageKey> = {
@@ -432,6 +438,7 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   UNKNOWN_PHASE: "engineError.UNKNOWN_PHASE",
   EXPEDITE_WRONG_WINNER: "engineError.EXPEDITE_WRONG_WINNER",
   SUB_WINDOW_EXCEEDED: "engineError.SUB_WINDOW_EXCEEDED",
+  GAME_AWARD_DURING_TIEBREAK: "engineError.GAME_AWARD_DURING_TIEBREAK",
 };
 
 /** Bound translator: client `useMsg()` or server `(k)=>msgFor(locale,k)`. */

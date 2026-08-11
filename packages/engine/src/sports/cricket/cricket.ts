@@ -2109,11 +2109,19 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   entrantModel: { kinds: ["team"], defaultKind: "team", team: { squadNumbers: true, captain: true } },
   // The concussion allowance is declared ONLY on the three formats the ICC's
   // playing conditions cover (DOMAIN.md, "Batters coming and going"). `hundred`
-  // and `pairs-6-a-side` are deliberately left without it: ruling 1's default
-  // is off, and a variant that says nothing keeps the squad its team sheets
-  // declared. Changing `variants` is golden-safe — the corpus stores and
-  // re-parses the RAW config objects it was recorded with, and `configsFor()`
-  // only runs under UPDATE_GOLDEN=1.
+  // is deliberately left without it: ruling 1's default is off, and a variant
+  // that says nothing keeps the squad its team sheets declared. Changing
+  // `variants` is golden-safe — the corpus stores and re-parses the RAW config
+  // objects it was recorded with, and `configsFor()` only runs under
+  // UPDATE_GOLDEN=1.
+  //
+  // A fifth variant, `pairs-6-a-side`, was dropped 2026-08-11 (#431 ruling 3):
+  // it only ever shrank the side to 6 and the innings to 60 balls, and the
+  // real pairs convention (fixed pairs, a dismissal costs runs instead of
+  // ending the partnership) is a different scoring grammar, not an extension
+  // of this one — "a variant that cannot score its own sport is worse than no
+  // variant." See docs/superpowers/specs/2026-08-06-scoringpad-v2-prompts/
+  // _INDEX.md, the 2026-08-11 decision log entry, for the full reasoning.
   variants: {
     // spec 04 §2.1
     t20: { ballsPerInnings: 120, maxOversPerBowler: 4, lineupChanges: { concussionReplacements: 1 } },
@@ -2133,7 +2141,6 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
       minOversForResult: 0,
       lineupChanges: { concussionReplacements: 1 },
     },
-    "pairs-6-a-side": { playersPerSide: 6, ballsPerInnings: 60, maxOversPerBowler: 2 },
   },
 
   // spec 03 §2 guarantee 4 — post-match scorecards append after the decision.

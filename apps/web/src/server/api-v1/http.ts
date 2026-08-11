@@ -45,6 +45,10 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   EXPEDITE_WRONG_WINNER: 422,
   SUB_WINDOW_EXCEEDED: 422,
   UNKNOWN_PHASE: 422,
+  // S5 (#431) — a `tennis.game.award` posted mid-tie-break: the scorer typed
+  // something that isn't valid right now and can retype it once the breaker
+  // ends.
+  GAME_AWARD_DURING_TIEBREAK: 422,
 };
 
 // HTTP status → stable machine code for non-engine errors.

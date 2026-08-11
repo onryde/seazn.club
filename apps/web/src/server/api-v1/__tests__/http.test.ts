@@ -60,6 +60,8 @@ describe("v1 envelope", () => {
     ["EXPEDITE_WRONG_WINNER", 422],
     ["SUB_WINDOW_EXCEEDED", 422],
     ["UNKNOWN_PHASE", 422],
+    // S5 (#431) — tennis game-penalty award refused mid-tie-break.
+    ["GAME_AWARD_DURING_TIEBREAK", 422],
   ] as const)("maps EngineError %s → %d", async (code, status) => {
     const res = await v1(async () => {
       throw new EngineError(code, "boom");
