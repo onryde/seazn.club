@@ -58,6 +58,16 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
   }
   const logoUrl = activeOrg ? orgLogoUrl(activeOrg) : null;
   const isPlayer = !!user && (await hasClaimedProfile(user.id));
+  // #516: the 4-link dual-role nav (below) doesn't fit this row's #349
+  // budget at 640-1023px with every label shown — the display-name span was
+  // already the sole shrink target and was already fully collapsed, so the
+  // 4th link just pushed "Sign out" past the viewport instead of wrapping or
+  // shrinking. isPlayer is the only thing that adds a 4th link, so it's the
+  // only case that needs the later reveal; the common 3-link header is
+  // unchanged (still `sm:inline`, confirmed to hold at every matrix width).
+  // Applied uniformly to all four labels — icons-together or labels-together,
+  // never a mismatched partial collapse.
+  const navLabelClass = isPlayer ? "hidden lg:inline" : "hidden sm:inline";
   // Tour targets editor flows (rename org, create competition) — viewers skip it.
   const canTour =
     !!user && !!activeOrg && (EDITOR_ROLES as readonly string[]).includes(activeOrg.role);
@@ -128,15 +138,16 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 wrap points that would hit the exact "Sign out" failure fix
                 round 1 found, invisibly to every automated check here. */}
             <nav className="flex shrink-0 items-center gap-0.5">
-              {/* Labels collapse to icons under `sm` — aria-label keeps the
-                  accessible name (axe link-name, v3/11 gap 11). */}
+              {/* Labels collapse to icons under `sm` (navLabelClass: `lg` for
+                  the 4-link dual-role case, #516 above) — aria-label keeps
+                  the accessible name either way (axe link-name, v3/11 gap 11). */}
               <Link
                 href={activeOrg ? routes.orgHome(activeOrg.slug) : "/orgs/new"}
                 aria-label={t(dict, "nav.dashboard")}
                 className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
               >
                 <LayoutDashboard className="h-4 w-4" strokeWidth={1.75} />
-                <span className="hidden sm:inline">{t(dict, "nav.dashboard")}</span>
+                <span className={navLabelClass}>{t(dict, "nav.dashboard")}</span>
               </Link>
               <Link
                 href="/directory"
@@ -144,7 +155,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
               >
                 <Users className="h-4 w-4" strokeWidth={1.75} />
-                <span className="hidden sm:inline">{t(dict, "nav.directory")}</span>
+                <span className={navLabelClass}>{t(dict, "nav.directory")}</span>
               </Link>
               <Link
                 href={activeOrg ? routes.orgSettings(activeOrg.slug) : "/orgs/new"}
@@ -152,18 +163,27 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
               >
                 <Settings className="h-4 w-4" strokeWidth={1.75} />
-                <span className="hidden sm:inline">{t(dict, "nav.settings")}</span>
+                <span className={navLabelClass}>{t(dict, "nav.settings")}</span>
               </Link>
               {/* Dual-role seam (PROMPT-53): an organiser who is ALSO a
-                  claimed player keeps a door to their own player home. */}
+                  claimed player keeps a door to their own player home.
+                  #516: a 4th icon is ~32px more than Dashboard/Directory/
+                  Settings alone (proven to hold at every matrix width on
+                  their own) — below 350px even icon-only four don't fit
+                  (measured: 8px overflow at 330px, 0 at 340px; 350px keeps
+                  clear of both that seam and the 320/360 matrix widths on
+                  either side). `hidden min-[350px]:flex` is scoped to THIS
+                  link only — Dashboard/Directory/Settings are unaffected at
+                  every width, and this link still degrades icons-only up to
+                  `lg` same as the rest (navLabelClass above). */}
               {isPlayer && (
                 <Link
                   href={routes.me()}
                   aria-label={t(dict, "nav.playerHome")}
-                  className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
+                  className="hidden min-[350px]:flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
                 >
                   <CircleUserRound className="h-4 w-4" strokeWidth={1.75} />
-                  <span className="hidden sm:inline">{t(dict, "nav.playerHome")}</span>
+                  <span className={navLabelClass}>{t(dict, "nav.playerHome")}</span>
                 </Link>
               )}
             </nav>

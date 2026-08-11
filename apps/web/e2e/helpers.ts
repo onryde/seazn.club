@@ -348,6 +348,29 @@ export async function setOrgConnectSql(
 }
 
 /**
+ * Give a user a claimed player profile — a `persons` row with `user_id` set
+ * — directly in the DB (#516). This is the exact precondition nav.tsx's
+ * `isPlayer` reads (hasClaimedProfile: `persons.user_id = X`, no org
+ * filter), which renders a 4th "Player home" nav link for an organiser who
+ * is ALSO a claimed player. Driving the real invite→claim flow to reach this
+ * state is player-accounts.spec.ts's job, not this one's — this helper only
+ * sets up the precondition. Scoped to the user's own first org membership so
+ * the FK is satisfiable regardless of which org a test is looking at.
+ */
+export async function claimProfileBySql(email: string): Promise<void> {
+  await withDb(async (sql) => {
+    const res = await sql`
+      insert into persons (org_id, full_name, user_id, lane)
+      select m.org_id, u.display_name, u.id, 'player'
+      from users u
+      join org_members m on m.user_id = u.id
+      where u.email = ${email}
+      limit 1`;
+    if (res.count === 0) throw new Error(`claimProfileBySql: no org membership for ${email}`);
+  });
+}
+
+/**
  * Seed N prior AI-generation ledger rows for a division (v4 Task 17 quota path).
  * Mirrors the exact shape schedule-ai.ts counts against the per-division run cap:
  * competition_events of type 'schedule.ai_generated' whose payload.division_id
