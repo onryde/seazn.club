@@ -634,9 +634,35 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
    * and `max_fixtures_per_day` was already scoped to the full RuleGroup
    * union, `constraints.ts:69-72`; `build.ts:1143` merely narrows it to
    * division for now.) The assertions below are UNCHANGED from what z3 once
-   * satisfied: this is a live tripwire, not a weakened test. If the wire
-   * contract ever grows pin identity and this starts passing, THAT is the
-   * signal to remove the skip.
+   * satisfied: this is a live tripwire, not a weakened test.
+   *
+   * BOTH HALVES NAMED ABOVE HAVE NOW LANDED — and this still does not pass.
+   * `PinnedRow.entrant_indices` shipped with the #21 wire, and task C6 taught
+   * `model.py` to fold a pin into its entrants' rest groups. The exit
+   * condition stated above was simply WRONG about which change closes this,
+   * so it is restated here rather than left to be re-derived a third time.
+   *
+   * MEASURED 2026-08-11 against a fresh DB and a local service running C6,
+   * not inferred: this test reaches the solver (`build-6f2c` in the service
+   * log) and comes back `status=OPTIMAL placed=4/4`, failing here as
+   * `expected 'already_optimal' to be 'infeasible'`.
+   *
+   * The reason is a PATH mismatch, not a missing field. C6's fold-in is gated
+   * on `rule_groups` being non-empty, and `buildRuleGroups` (`build.ts`) emits
+   * a group only for a TYPED `min_rest_minutes`/`max_fixtures_per_day` rule.
+   * The 30 minutes this scenario owes is a settings-level `restByDivision`
+   * value, so the request carries ZERO rule groups — and a pin cannot resolve
+   * rest off `rest_by_division` on its own, because `existing` rows carry no
+   * `division_index` (deliberately: that field was considered for #21 and
+   * rejected, since day caps are not division-scoped by construction).
+   *
+   * So the real exit condition is the C1 REST HALF: migrate `division_rules`
+   * into rule groups, at which point `ruleGroupSet.indicesFor` — which
+   * `build.ts:1605` ALREADY calls for every pin, an `Assignment` satisfying
+   * `ScopeRow` structurally — attributes the division's rest group to these
+   * two pins and C6's existing fold-in does the rest. No further Python or
+   * proto change is owed. When that lands and this starts passing, THAT is
+   * the signal to remove the skip.
    */
   it.skip("forwards the pinned set an infeasible proof is about, when the engine names one", async () => {
     const auth = await seedOrg();
