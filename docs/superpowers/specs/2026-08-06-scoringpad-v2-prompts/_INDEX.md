@@ -862,6 +862,27 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   adjudication case; `DismissalRule` growing a `reason` field) left
   as-is per the coordinator's own "no action needed unless cheap"/
   "no action needed" framing.
+- 2026-08-11 — S4/#428 review round 2 — **one finding, resolved.** Round 1's
+  re-review flagged that finding 1's own standard ("must hold through the
+  real API path, not just a bare engine unit test") was only proven at
+  `player-stats.ts`; `org-posts.ts`'s wiring was type-correct and traced but
+  had zero test proving a non-player is actually excluded. Closed:
+  `org-posts.test.ts` gained a DB-backed regression
+  ("a coach's goal-shaped stat never appears in the auto-drafted result
+  post's scorers"). The implementer caught its own near-miss before
+  shipping it: a football-based version of this test would have been
+  VACUOUS, because football's `applyGoal` already independently rejects a
+  non-player scorer structurally (`state.squads`), so the test would pass
+  whether or not the new `lineups`/role wiring worked at all. Used
+  icehockey instead, whose `applyGoal` has no such check, so the
+  assertion's pass/fail genuinely depends on the fix. Both the report's
+  claim and the underlying structural reason were independently verified
+  by the re-reviewer (read `period/kernel.ts`'s `applyGoal` directly,
+  confirmed `state.squads` is never read there; reproduced the mutation
+  kill itself rather than trusting the report — neutering the wiring
+  reproduced exactly one failure, this test). With this, the person-role
+  discriminator is closed end to end at both real call sites named in the
+  original review, each with its own DB-backed, mutation-verified test.
 
 - _(append below)_
 
