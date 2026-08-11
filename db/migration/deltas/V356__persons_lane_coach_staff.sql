@@ -14,16 +14,24 @@
 -- stay 'player'/'official', and this migration does not attempt to guess
 -- which already-registered persons are actually coaches or staff.
 --
--- Schema-only: this completes S3's caveat but is not load-bearing for S4's
--- acceptance criteria. App-layer plumbing (a coach registration flow, a
--- `lineups` table column to carry role into the engine's LineupPair) is
--- follow-on, not implemented here — see the PR body.
+-- Schema-only: this completes S3's caveat for PERSON REGISTRATION (this
+-- table), a different axis from the per-FIXTURE lineup slot role
+-- (LineupSlot.role) `aggregatePlayerStats` filters on — that gap was closed
+-- separately, same review round, by V357 (`lineups.role`) plus the app-layer
+-- wiring in `player-stats.ts`/`org-posts.ts`. A coach registering in the
+-- person model (this migration) and a coach being named on a specific
+-- fixture's team sheet (V357) are independent facts about independent
+-- tables; neither implies the other.
 --
--- persons_org_user_lane_uq (V348) stays untouched: it is a PARTIAL index
--- scoped `where user_id is not null and lane = 'player'`, so 'coach' and
--- 'staff' rows are excluded from it automatically, the same way 'official'
--- already is — verified live this session (two 'coach' rows, same org_id +
--- user_id, insert with no unique violation).
+-- persons_org_user_lane_uq stays untouched (its CURRENT definition is V349,
+-- not V348 — V349 dropped and recreated it with an added
+-- `and merged_into is null` clause; the citation below is to where the
+-- functional claim was last true, which is still correct): it is a PARTIAL
+-- index scoped `where user_id is not null and lane = 'player' and
+-- merged_into is null`, so 'coach' and 'staff' rows are excluded from it
+-- automatically, the same way 'official' already is — verified live this
+-- session (two 'coach' rows, same org_id + user_id, insert with no unique
+-- violation).
 --
 -- Defensive/idempotent drop-if-exists + re-add, same shape as
 -- V330/V331/V336 (ai_credit_ledger_source_check); Flyway runs

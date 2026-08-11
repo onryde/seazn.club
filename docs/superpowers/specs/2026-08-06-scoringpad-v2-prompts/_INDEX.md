@@ -16,7 +16,7 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 | S1 | #429 | `S01-429-golden-corpus-policy.md` | — | **DONE** |
 | S2 | #430 | `S02-430-fidelity-tier-4-decision.md` | — | **DONE** — no code. Fidelity ladder closed at 0–3; tier 4 will never exist |
 | S3 | #426 | `S03-426-w4b-mutable-squads.md` | S1 | **DONE** — all 9 deferred rows closed; 4 owner rulings; e2e+smoke deferred to S12/S13 |
-| S4 | #428 | `S04-428-offence-taxonomies.md` | S3 (person-role decision) | **DONE** — 3 enums adopted (football `PenaltyOffence`, hockey/icehockey `PeriodSuspensionReason`), 6 rows deferred with reasons recorded, person-role discriminator enforced at `aggregatePlayerStats`'s boundary, `persons.lane` extended (V356) |
+| S4 | #428 | `S04-428-offence-taxonomies.md` | S3 (person-role decision) | **DONE, post-review** — 3 enums adopted (football `PenaltyOffence`, hockey/icehockey `PeriodSuspensionReason`), 6 rows deferred with reasons recorded, person-role discriminator closed END TO END (`lineups.role`, V357, wired into both stats call sites — round-1 review caught the first pass shipping it engine-only/unreachable), `persons.lane` extended (V356) |
 | S5 | #431 | `S05-431-decisions-register.md` | S3, S4 | TODO |
 | S6 | #416 | `S06-416-w5-padspec.md` | S2, S3, S5 | TODO |
 | S7 | #427 | `S07-427-pad-vocabulary-i18n.md` | S3, S4, S6 | TODO |
@@ -771,30 +771,36 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   translated in all 4 dictionaries. Nothing else declared: every DEFERRED row
   above stays free text, so no pad picker owes it a closed vocabulary yet.
 
-  **Person-role model, as finally shipped.** S3 (#426) shipped the DATA model
-  (`LineupSlot.role: 'player'|'coach'|'staff'`, default `player`) and the READ
-  selectors (`core/lineup.ts`'s `playingSquad`/`onFieldPersons`/
-  `personsAtPosition`, already filtered). S4 closed the actual bug: THE bug was
-  never "does role exist" but "is it ENFORCED at the stats boundary", and it was
-  not — `aggregatePlayerStats` (`stats/stats.ts`) read a payload's person id
-  directly with zero cross-check against role, so a coach's card silently
-  earned a leaderboard row. Fixed with a new optional third argument
-  (`lineups?: LineupPair`): every credit is checked against the set of person
-  ids the team sheet marks anything other than `player`, enforced once inside
-  the shared fold rather than trusted to each of eleven sports'
-  `PlayerStatMetric.when`. Mutation-verified (neutering the check reds exactly
-  the 3 tests that assert it). Omitted `lineups` ⇒ byte-identical to the fold
-  before this parameter existed, so no existing call site broke.
-  **Not closed end to end**: `apps/web`'s two callers
-  (`server/usecases/player-stats.ts`, `org-posts.ts`) do not pass `lineups`
-  yet, because the `lineups` DB table (`db/migration/v2-engine/tables/
-  V215__lineups.sql`) has no `role` column at all — only `persons.lane`
-  (registration, a different axis, extended this session by V356 to `coach`/
-  `staff` in parallel) — so wiring those two call sites today would filter
-  against an always-empty set. Follow-on for a session that also builds a
-  coach-registration flow: add `lineups.role`, thread it through
-  `putLineup`/`getLineup` and their zod schemas, and pass the resulting
-  `LineupPair` into both usecases' `aggregatePlayerStats` calls.
+  **Person-role model, as finally shipped — CLOSED end to end (review round
+  1, finding 1).** S3 (#426) shipped the DATA model (`LineupSlot.role:
+  'player'|'coach'|'staff'`, default `player`) and the READ selectors
+  (`core/lineup.ts`'s `playingSquad`/`onFieldPersons`/`personsAtPosition`,
+  already filtered). S4's first pass closed the bug at the engine boundary
+  only — `aggregatePlayerStats` (`stats/stats.ts`) gained an optional
+  `lineups?: LineupPair` argument checked against the set of person ids the
+  team sheet marks anything other than `player` — but shipped it
+  UNREACHABLE: neither `apps/web` caller passed `lineups`, and the `lineups`
+  DB table had no `role` column to source one from at all (only
+  `persons.lane`, a different axis: registration, not a per-fixture team
+  sheet). A coach's card scored through the real API still earned a
+  leaderboard row. Both review agents caught this independently before this
+  index was updated to say otherwise, which is worth recording: **a
+  correct, well-tested engine fix is not the same claim as "the acceptance
+  criterion is met" when nothing calls it with real data.**
+  Closed in the same review round: V357 adds `lineups.role`; `putLineup`/
+  `getLineup` (`fixtures.ts`) and their zod schemas
+  (`api-v1/schemas.ts`'s `LineupSlotInput.role`, `.optional()` not
+  `.default()` — a `.default()` makes it a REQUIRED key on the inferred TS
+  type and breaks every direct `putLineup()` caller that builds a slots
+  array without it) read/write it; `engine-db/lineups.ts` threads it into
+  `LineupSlot` and gained a new batched `loadLineupPairsForDivision`; both
+  `player-stats.ts` and `org-posts.ts` now load and pass `lineups`. A second,
+  independent bug surfaced building the real end-to-end test: football's
+  `applyCard` rejected a card to ANY non-player outright (`state.squads`'s
+  `onPitch`/`bench` are correctly PLAYERS-ONLY, so a coach was never in
+  them) — fixed additively with `FootballSquad.nonPlayers`. Proven by a
+  DB-backed regression test through the real usecases
+  (`player-stats.test.ts`), mutation-verified twice.
 
   **DisciplineCard.minutes**, S4/#428: additive `minutes?: number` on
   `core/types.ts`'s `DisciplineCard`, threaded through football's
@@ -825,6 +831,37 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   silently dropped it before reaching the usecase, leaving the new capability
   unreachable from the actual product surface. `openapi:gen` regenerated
   `openapi/v1.json` to match.
+
+- 2026-08-11 — S4/#428 review round 1 — **three findings, resolved.**
+  (1) CRITICAL, closed: the person-role discriminator was engine-tested but
+  unreachable from real app code — see the "Person-role model, as finally
+  shipped" entry above for the full mechanism (V357, `lineups.role`, both
+  usecases wired, plus a second bug found along the way: football's
+  `applyCard` structurally could not accept a card to a non-player at all).
+  (2) IMPORTANT, closed: `PeriodSuspensionStart.reason` had been hard-narrowed
+  to the closed `PeriodSuspensionReason` enum, which would 500 on read for
+  any already-recorded suspension whose reason predates the enum (free text
+  since W4/#407) — widened to `z.union([PeriodSuspensionReason,
+  z.string().min(1)])`; canonical members and any legacy free text both still
+  parse. (3) IMPORTANT, deferred with a documented reason, not fixed: nothing
+  at parse or fold time stops a `hockey.suspension.start` event from carrying
+  an icehockey-only reason (e.g. `fighting`) — gating stays prose (now in both
+  hockey/icehockey `DOMAIN.md`, next to the rows it caveats) plus the
+  regression test, matching the pre-existing `SetBasedSanctionLevel`
+  precedent exactly (same shape, same absence of runtime enforcement, checked
+  before citing it). Enforcing it would mean making `PeriodEv`/
+  `PeriodSuspensionStart` preset-specific instead of the one shared top-level
+  schema every period test imports directly — a restructuring under time
+  pressure right after finding 2's fix, which the coordinator's brief for
+  this round explicitly said to avoid forcing.
+  Minor: V356's citation of `persons_org_user_lane_uq`'s definition fixed
+  from V348 to V349 (the migration that last redefined it, adding
+  `and merged_into is null`); required a `flyway repair` on the local
+  scratch DB since the file's checksum changed after V356 had already
+  applied. Two more minor items (a hockey/icehockey-specific DB-backed
+  adjudication case; `DismissalRule` growing a `reason` field) left
+  as-is per the coordinator's own "no action needed unless cheap"/
+  "no action needed" framing.
 
 - _(append below)_
 
