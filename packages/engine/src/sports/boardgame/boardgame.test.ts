@@ -4,7 +4,14 @@ import { foldMatch, type CoreEv, type EventEnvelope } from "../../core/events.ts
 import type { LineupPair, StageCtx } from "../../core/types.ts";
 import { aggregatePlayerStats } from "../../stats/stats.ts";
 import { conformanceSuite, defaultLineupPair, makeEnvelope } from "../../testkit/index.ts";
-import { boardgame, BOARDGAME_TIEBREAKERS, type BoardgameState } from "./boardgame.ts";
+import { checkActionCoverage, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
+import {
+  boardgame,
+  BOARDGAME_EVENT_SCHEMAS,
+  BOARDGAME_TIEBREAKERS,
+  padSpec,
+  type BoardgameState,
+} from "./boardgame.ts";
 
 // W4a (#425) §3.3 — every fold below is PAD-SHAPED: it is building a stream
 // event by event, which is the write path. `strictFromSeq: 0` marks the whole
@@ -337,5 +344,80 @@ describe("boardgame: increment and delay are independent clock facts", () => {
   });
 });
 
+// S6/#416 (W5) — the padSpec field/attribution DSL has no primitive that can
+// emit a literal `null` (a `side` attribution item always resolves to a real
+// entrant id; there is no "constant" PadField kind), so a required-nullable
+// `winner` made a draw/no-result action unbuildable through it. Widened
+// `winner` to ALSO tolerate omission, treated identically to explicit `null`.
+describe("boardgame: an omitted winner settles exactly like an explicit null (S6 padSpec representability)", () => {
+  it("records a draw with no `winner` key at all, matching explicit winner: null", () => {
+    const omitted = fold(stream(["core.start"], ["boardgame.result", { method: "agreement" }]));
+    const explicit = fold(stream(["core.start"], ["boardgame.result", { winner: null, method: "agreement" }]));
+    expect(omitted.outcome).toEqual({ kind: "draw" });
+    expect(omitted).toEqual(explicit);
+  });
+
+  it("records a no-result double forfeit with no `winner` key at all", () => {
+    const omitted = fold(stream(["core.start"], ["boardgame.result", { method: "double_forfeit" }]));
+    expect(omitted.outcome).toEqual({ kind: "no_result" });
+  });
+
+  it("still rejects a completely empty payload (disambiguation from boardgame.pairing survives)", () => {
+    expect(() => fold(stream(["core.start"], ["boardgame.result", {}]))).toThrowError(
+      expect.objectContaining({ code: "INVALID_EVENT" }),
+    );
+  });
+});
+
 // PROMPT-07 acceptance — conformance green.
 conformanceSuite(boardgame);
+
+// ---------------------------------------------------------------------------
+// S6/#416 (W5) — padSpec conformance.
+// ---------------------------------------------------------------------------
+
+padSpecConformanceSuite(boardgame, { cfg: {}, lineups, label: "default (colours on)" });
+padSpecConformanceSuite(boardgame, { cfg: { colors: false }, lineups, label: "colours off" });
+
+describe("boardgame padSpec — action coverage", () => {
+  it("every registered event type is reachable from some action (single cfg — no cfg-mutual-exclusivity in this module)", () => {
+    const specs = [padSpec(boardgame.configSchema.parse({})), padSpec(boardgame.configSchema.parse({ colors: false }))];
+    expect(checkActionCoverage(specs, BOARDGAME_EVENT_SCHEMAS)).toEqual([]);
+  });
+});
+
+describe("boardgame padSpec — cfg-only inclusion: pairing drops the `white` attribution when colours are off", () => {
+  it("offers a side attribution for `white` when colours are on", () => {
+    const spec = padSpec(boardgame.configSchema.parse({}));
+    const pairing = spec.panels.flatMap((p) => p.actions).find((a) => a.type === "boardgame.pairing")!;
+    expect(pairing.attribution.some((item) => item.kind === "side" && item.path === "white")).toBe(true);
+  });
+
+  it("omits it entirely when colours are off — the fold refuses `white` on every cfg it would render for", () => {
+    const spec = padSpec(boardgame.configSchema.parse({ colors: false }));
+    const pairing = spec.panels.flatMap((p) => p.actions).find((a) => a.type === "boardgame.pairing")!;
+    expect(pairing.attribution.some((item) => item.kind === "side" && item.path === "white")).toBe(false);
+  });
+});
+
+describe("boardgame padSpec — no core.* actions (match lifecycle is universal renderer chrome, not per-module data)", () => {
+  it("declares zero actions outside its own eventSchemas registry — every action.type is a real key", () => {
+    const spec = padSpec(cfg);
+    for (const panel of spec.panels) {
+      for (const action of panel.actions) {
+        expect(action.type in BOARDGAME_EVENT_SCHEMAS, action.type).toBe(true);
+      }
+    }
+  });
+
+  it("single forfeit rides boardgame.result's own method enum, not core.forfeit", () => {
+    const spec = padSpec(cfg);
+    const decisive = spec.panels.flatMap((p) => p.actions).find((a) => a.labelKey.key === "pad.boardgame.action.result")!;
+    const method = decisive.fields.find((f) => f.path === "method");
+    expect(method?.kind).toBe("enum");
+    if (method?.kind === "enum") expect(method.values).toContain("forfeit");
+    const drawn = spec.panels.flatMap((p) => p.actions).find((a) => a.labelKey.key === "pad.boardgame.action.draw")!;
+    const drawnMethod = drawn.fields.find((f) => f.path === "method");
+    if (drawnMethod?.kind === "enum") expect(drawnMethod.values).toContain("double_forfeit");
+  });
+});

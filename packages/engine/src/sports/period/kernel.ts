@@ -32,6 +32,11 @@ import type { PositionCatalog } from "../../sport/catalog.ts";
 import type {
   FidelityTier,
   ModuleEvent,
+  PadAction,
+  PadField,
+  PadGate,
+  PadPanel,
+  PadSpec,
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
@@ -329,6 +334,13 @@ export const PeriodShootoutAttempt = z.strictObject({
   scored: z.boolean(),
   // W4 (#407) — the keeper facing the attempt; both sheets name him.
   goalkeeper: PersonId.optional(),
+  // W5 (#416) — App 12 / GWS foul outcomes: a defender foul during the
+  // one-on-one sends it to a RETAKE rather than recording a real attempt
+  // (hockey/DOMAIN.md's "a foul during the shoot-out" row). See
+  // `ShootoutKick.void` (./shootout.ts) for the full reasoning; this is the
+  // same flag, one layer up, on the recorded payload. Optional and defaults
+  // to falsy, so no existing recorded attempt is affected.
+  void: z.boolean().optional(),
   meta: z
     .strictObject({
       clockSeconds: z.number().int().positive().optional(), // FIH 8 s attempt
@@ -1203,12 +1215,14 @@ function applyShootoutAttempt(
     });
   }
   // W4 — taker + defending keeper join the kick when recorded (absent keys keep
-  // the pre-W4 kick shape byte-identical).
+  // the pre-W4 kick shape byte-identical). W5 (#416) — `void` follows the same
+  // convention: absent unless the scorer actually recorded a retake foul.
   const kick: ShootoutKick = {
     side,
     scored: payload.scored,
     ...(payload.person === undefined ? {} : { person: payload.person }),
     ...(payload.goalkeeper === undefined ? {} : { goalkeeper: payload.goalkeeper }),
+    ...(payload.void === undefined ? {} : { void: payload.void }),
   };
   const kicks = [...state.shootout.kicks, kick];
   const winnerSide = shootoutDecision(kicks, state.cfg.shootout.attempts);
@@ -1377,6 +1391,32 @@ export interface PeriodPreset {
   // (a superset/relabel of the suspension classes). Omitted → derived from the
   // suspension class keys; absent suspensions → no discipline descriptor.
   disciplineColors?: { key: string; label: string }[];
+  // S6/#416 (W5) — the sport's OWN declared subset of the shared
+  // `PeriodSuspensionReason` union (`HOCKEY_SUSPENSION_REASONS` /
+  // `ICEHOCKEY_SUSPENSION_REASONS`, both in hockey.ts/icehockey.ts), fed
+  // through so `padSpec`'s suspension-start action can offer a closed
+  // `reason` picker. Omitted → the action declares no `reason` field at all
+  // (free text has no PadField representation); the schema itself stays
+  // permissive either way (`PeriodSuspensionStart.reason`'s union with
+  // `z.string()`, kernel comment above `PeriodSuspensionReason`).
+  //
+  // DELIBERATELY preset-level (whole-sport), NOT cfg/variant-derived like
+  // `suspensionClassKeys` below — reviewed and kept this way (S6/#416 gap
+  // list item 2). The two axes are independent facts about a card: `reason`
+  // names the INFRACTION (boarding, cross-checking, …), `class` is the
+  // SEVERITY a referee assesses it at (minor/major/match). Real IIHF/FIH
+  // discipline does not fix one from the other — the same named infraction
+  // can be called at more than one severity depending on intent/injury, which
+  // is exactly why `class` is a referee's live decision, not a lookup keyed
+  // on `reason`. So `recreational` (icehockey) correctly narrowing
+  // `suspensions.classes` to `minor`/`bench_minor` does NOT imply narrowing
+  // `reason` too: a recreational referee still needs to name what happened,
+  // they only lose the ability to escalate it past minor — the reason
+  // vocabulary staying universal is the CORRECT model of that, not a missed
+  // fix. No `reason` → `class` mapping exists anywhere in this codebase to
+  // narrow by even if that were the intent; inventing one would be asserting
+  // a rules fact this session has no source for.
+  suspensionReasons?: readonly string[];
   // W4 (#407) — the DEFAULT set pieces this sport records as AWARDED, not just
   // scored (FIH penalty corner / stroke, IIHF penalty shot). Seeds
   // `cfg.setPieceKinds`, which a competition may replace. Omitted → the sport
@@ -1410,6 +1450,249 @@ export function makePeriodModule(
     { tier: 2, eventTypes: attributedTypes, entitlement: preset.timelineEntitlement },
     { tier: 3, eventTypes: attributedTypes, entitlement: preset.timelineEntitlement },
   ];
+
+  // S6/#416 (W5) — event type -> its own payload schema, keyed by THIS
+  // module's own prefixed type strings but pointing at the SAME six shared
+  // schema objects both hockey and icehockey import from this file.
+  // `PeriodEv` is one shared `z.union([PeriodGoal, PeriodAdvance,
+  // PeriodSuspensionStart, PeriodSuspensionEnd, PeriodShootoutAttempt,
+  // PeriodSetPiece])` — the identical six object references for both sports
+  // — so `testkit/conformance-pad.ts`'s reference-bijection check needs each
+  // module's registry to point at those exact six objects, never a
+  // freshly-built equivalent shape (a second `z.strictObject({...})` with the
+  // same fields would fail the check by reference even though it "looks"
+  // identical).
+  const eventSchemas: Readonly<Record<string, z.ZodTypeAny>> = {
+    [goalType]: PeriodGoal,
+    [advanceType]: PeriodAdvance,
+    [suspStartType]: PeriodSuspensionStart,
+    [suspEndType]: PeriodSuspensionEnd,
+    [attemptType]: PeriodShootoutAttempt,
+    [setPieceType]: PeriodSetPiece,
+  };
+
+  // S6/#416 (W5) — the pad's own contract, shared machinery for both period
+  // sports (hockey + icehockey pull the SAME builder through
+  // `makePeriodModule`, exactly like `fidelityTiers`/`init`/`apply` above);
+  // sport-specific vocabulary (label text, the shoot-out's own name, the
+  // declared suspension-reason subset) comes from `preset`, cfg-derived
+  // bounds come from `cfg` — never a hardcoded preset number, so a variant
+  // that changes a bound (youth's roster, recreational's class list) is
+  // reflected here automatically rather than needing its own case.
+  const padSpec = (cfg: PeriodCfg): PadSpec => {
+    const suspensionClassKeys = cfg.suspensions === null ? [] : Object.keys(cfg.suspensions.classes);
+    // Cfg-derived, not a hardcoded ceiling: an umpire may award MORE than a
+    // class's nominal (an FIH yellow is a MINIMUM of 5, 10 is common —
+    // suspensions.ts's own SuspensionDetail.minutes doc), so double the
+    // longest FINITE nominal this cfg actually declares (permanent classes
+    // carry `minutes: null` and award no duration at all, so they are
+    // excluded from the bound they cannot inform). This is also the field
+    // that makes hockey `youth` vs adult padSpec DEMONSTRABLY different:
+    // both declare the same three class NAMES (green/yellow/red — only the
+    // durations were wrong), so the class enum alone cannot witness the
+    // fix; this bound does. Falls back to a generic 20 when no class
+    // carries a finite duration at all (every class permanent, or no
+    // suspension track).
+    const finiteClassMinutes = (cfg.suspensions === null ? [] : Object.values(cfg.suspensions.classes))
+      .map((cls) => cls.minutes)
+      .filter((m): m is number => m !== null);
+    const suspensionMinutesMax = finiteClassMinutes.length > 0 ? Math.max(...finiteClassMinutes) * 2 : 20;
+
+    // "fg"/"og" are ALWAYS valid regardless of `cfg.goalKinds` (applyGoal's
+    // own check: `kind !== "fg" && kind !== "og" && !goalKinds.includes(kind)`
+    // is the only refusal) — included unconditionally so this enum is never
+    // empty even for a hypothetical org override that empties `goalKinds`.
+    const goalKindValues = [...new Set(["fg", "og", ...cfg.goalKinds])];
+    // The real domain of `PeriodAdvance.to` (expectedAdvance()'s own
+    // possible outputs across the whole match) — NOT `playPhases(cfg)`,
+    // which is a different, wider list (also stamps "pre"/"SHOOTOUT", which
+    // `to` can never target). Always non-empty: "FT" is unconditional.
+    const advanceTargets = [...periodLabels(cfg).slice(1), ...otLabels(cfg), "FT"];
+
+    const goalAction: PadAction = {
+      type: goalType,
+      labelKey: { key: `pad.${preset.key}.action.goal`, label: "Goal" },
+      fields: [
+        { kind: "enum", path: "kind", values: goalKindValues },
+        { kind: "toggle", path: "emptyNet" },
+      ],
+      attribution: [
+        { kind: "side", path: "by" },
+        { kind: "person", path: "person" },
+      ],
+    };
+
+    const advanceAction: PadAction = {
+      type: advanceType,
+      labelKey: { key: `pad.${preset.key}.action.advance`, label: "Advance period" },
+      fields: [{ kind: "enum", path: "to", values: advanceTargets }],
+      attribution: [],
+    };
+
+    // Optional: only declared when the sport has a closed reason vocabulary
+    // (both hockey and icehockey do — HOCKEY_SUSPENSION_REASONS /
+    // ICEHOCKEY_SUSPENSION_REASONS). Free text has no PadField shape.
+    const suspensionStartFields: PadField[] = [
+      { kind: "enum", path: "class", values: suspensionClassKeys },
+      ...(preset.suspensionReasons === undefined
+        ? []
+        : [{ kind: "enum", path: "reason", values: preset.suspensionReasons } as const]),
+      { kind: "number", path: "minutes", min: 1, max: suspensionMinutesMax },
+    ];
+    const suspensionStartAction: PadAction = {
+      type: suspStartType,
+      labelKey: { key: `pad.${preset.key}.action.suspensionStart`, label: "Card" },
+      fields: suspensionStartFields,
+      attribution: [
+        { kind: "side", path: "by" },
+        { kind: "person", path: "person" },
+        { kind: "person", path: "servedBy" },
+      ],
+    };
+
+    const suspensionEndAction: PadAction = {
+      type: suspEndType,
+      labelKey: { key: `pad.${preset.key}.action.suspensionEnd`, label: "Release" },
+      fields: [{ kind: "enum", path: "class", values: suspensionClassKeys }],
+      attribution: [
+        { kind: "side", path: "by" },
+        { kind: "person", path: "person" },
+      ],
+    };
+
+    const shootoutAction: PadAction = {
+      type: attemptType,
+      labelKey: {
+        key: `pad.${preset.key}.action.shootoutAttempt`,
+        label: `${preset.shootoutLabel} attempt`,
+      },
+      fields: [
+        { kind: "toggle", path: "scored" },
+        // W5 (#416) — the retake-void flag (shootout.ts's ShootoutKick.void)
+        // one layer up, on the declared pad surface.
+        { kind: "toggle", path: "void" },
+      ],
+      attribution: [
+        { kind: "side", path: "by" },
+        { kind: "person", path: "person" },
+        { kind: "person", path: "goalkeeper" },
+      ],
+    };
+
+    const setPieceAction: PadAction = {
+      type: setPieceType,
+      labelKey: { key: `pad.${preset.key}.action.setPiece`, label: "Set piece awarded" },
+      fields: [
+        { kind: "enum", path: "kind", values: cfg.setPieceKinds },
+        { kind: "enum", path: "outcome", values: [...AttemptOutcome.options] },
+      ],
+      attribution: [
+        { kind: "side", path: "by" },
+        { kind: "person", path: "person" },
+        { kind: "person", path: "goalkeeper" },
+      ],
+    };
+
+    // cfg-only inclusion (module-level PadGate note in sport/module.ts): no
+    // gate needed for whether the PANEL EXISTS at all, since `padSpec(cfg)`
+    // already only builds it when this cfg can ever reach it. Also guards
+    // against an empty enum — `Object.keys({})` for a pathological
+    // `suspensions:{classes:{}}` cfg the schema technically accepts.
+    const disciplinePanels: PadPanel[] =
+      cfg.suspensions === null || suspensionClassKeys.length === 0
+        ? []
+        : [
+            {
+              labelKey: { key: `pad.${preset.key}.panel.discipline`, label: "Discipline" },
+              phase: "live",
+              layout: "grid",
+              actions: [suspensionStartAction, suspensionEndAction],
+            },
+          ];
+
+    // The format CAN ever reach a shoot-out (cfg.shootout !== null) is a cfg
+    // fact; whether the match ACTUALLY has, right now, is state — same split
+    // cricket's super-over panel makes. A runtime gate on top of the cfg-only
+    // inclusion, not instead of it.
+    const shootoutPanels: PadPanel[] =
+      cfg.shootout === null
+        ? []
+        : [
+            {
+              labelKey: { key: `pad.${preset.key}.panel.shootout`, label: preset.shootoutLabel },
+              phase: "live",
+              layout: "drawer",
+              actions: [shootoutAction],
+              gate: { op: "path-equals", path: "state.phase", value: "SHOOTOUT" } satisfies PadGate,
+            },
+          ];
+
+    const setPiecePanels: PadPanel[] =
+      cfg.setPieceKinds.length === 0
+        ? []
+        : [
+            {
+              labelKey: { key: `pad.${preset.key}.panel.setPiece`, label: "Set pieces" },
+              phase: "live",
+              layout: "grid",
+              actions: [setPieceAction],
+            },
+          ];
+
+    const panels: PadPanel[] = [
+      {
+        labelKey: { key: `pad.${preset.key}.panel.goal`, label: "Goal" },
+        phase: "live",
+        layout: "primary",
+        actions: [goalAction],
+      },
+      {
+        labelKey: { key: `pad.${preset.key}.panel.period`, label: "Period" },
+        phase: "live",
+        layout: "drawer",
+        actions: [advanceAction],
+      },
+      ...disciplinePanels,
+      ...shootoutPanels,
+      ...setPiecePanels,
+    ];
+
+    return {
+      panels,
+      // S6 owner ruling (`_INDEX.md`, "redesign the fidelity model") — one
+      // band per event type, no repetition.
+      //
+      // goal / advance / attempt are band 0 ("result"): unlike cricket
+      // (which has a coarser `cricket.innings.summary` alternative to
+      // `cricket.ball`), this kernel has NO coarser way to record a goal or
+      // reach a decided outcome — `${key}.goal` is the only event that ever
+      // credits a score, at every fidelity level, just with progressively
+      // more populated optional fields. A free-tier scorer must be able to
+      // reach all three, matching this kernel's own (untouched)
+      // `fidelityTiers` above, which already puts exactly these three in
+      // tier 0.
+      //
+      // suspension start/end are band 1 — literally "card", `FIDELITY[1]`.
+      //
+      // Set piece (PC/stroke/penalty-shot AWARDED, not merely converted) is
+      // band 2 ("timeline") — attributed detail beyond the bare goal,
+      // matching this file's own comment above `attributedTypes` ("Set
+      // pieces are attributed-scoring detail... so they join tiers 2/3
+      // only").
+      //
+      // Nothing is band 3 ("detail"): shot/save/faceoff-level detail is the
+      // T2 lane `_INDEX.md` parks for a later session, not built here.
+      fidelity: {
+        [goalType]: 0,
+        [advanceType]: 0,
+        [attemptType]: 0,
+        [suspStartType]: 1,
+        [suspEndType]: 1,
+        [setPieceType]: 2,
+      },
+      fidelityEntitlements: { 2: preset.timelineEntitlement },
+    };
+  };
 
   // SPEC-1 — read-only card projection over the suspension.start events (voids
   // un-count). Colours come from disciplineColors, else the suspension class
@@ -1634,6 +1917,8 @@ export function makePeriodModule(
     version: preset.version,
     configSchema,
     eventSchema: PeriodEv,
+    eventSchemas,
+    padSpec,
     positions: preset.positions,
     // W4a (#425) §7 — the fold's monotonic time guard orders stamps by this
     // list. Handed over as the function itself, not as a wrapper computing its
@@ -1898,12 +2183,20 @@ export function makePeriodModule(
         const metaRoll = rng();
         const withClock = metaRoll >= 0.45 && metaRoll < 0.8;
         const withIneligible = metaRoll >= 0.65;
+        // W5 (#416) — App 12 / GWS retake foul. A separate, low-probability
+        // draw: a void kick is the exception, not the rule, and this must
+        // not perturb the odds the other three draws above were tuned
+        // against. `expected` above already reads `state.shootout.kicks`
+        // through the (now void-aware) `expectedKicker`, so a voided kick
+        // correctly does not hand the next draw to the other side.
+        const voided = rng() < 0.12;
         return {
           type: attemptType,
           payload: {
             by: sideId(expected),
             scored: rng() < 0.7,
             at: stamp("SHOOTOUT"),
+            ...(voided ? { void: true } : {}),
             ...(named
               ? {
                   person: `${sideId(expected)}-p3`,

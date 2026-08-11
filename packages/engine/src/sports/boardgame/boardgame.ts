@@ -21,7 +21,14 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import type { ModuleEvent, SportModule, TiebreakerKey } from "../../sport/module.ts";
+import type {
+  ModuleEvent,
+  PadAction,
+  PadPanel,
+  PadSpec,
+  SportModule,
+  TiebreakerKey,
+} from "../../sport/module.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — spec 04 §6.1
@@ -110,19 +117,34 @@ export const BoardgameMethod = z.enum([
 export type BoardgameMethod = z.infer<typeof BoardgameMethod>;
 
 // winner: entrantId to decide; null = draw (or, with method double_forfeit, a
-// no-result double default — chess.md §7).
-export const BoardgameResult = z.strictObject({
-  winner: EntrantId.nullable(),
-  method: BoardgameMethod.optional(),
-  // W4: move number the scoresheet finished on (Art. 8.1 — each player records
-  // every move). The game length, not the moves themselves; per-ply recording
-  // is deliberately out of scope (see DOMAIN.md).
-  moves: z.number().int().nonnegative().optional(),
-  // W4: the player who won the board. In an individual event the entrant IS
-  // the player; in a team match (board order, chess.md §5) the entrant is the
-  // club and the person is what a stat model needs. Always optional.
-  winnerPerson: PersonId.optional(),
-});
+// no-result double default — chess.md §7). S6/#416 (W5): ALSO tolerates
+// omission, treated identically to explicit `null` at the one call site below
+// — the padSpec field/attribution DSL (`sport/module.ts`) has no primitive
+// that can emit a literal `null` (an attribution item always resolves to a
+// real entrant id; there is no "constant" PadField kind), so a
+// required-but-nullable `winner` made a draw/no-result padSpec action
+// unbuildable. Purely additive: every payload that was valid before (an
+// explicit string or explicit `null`) still means exactly what it meant; only
+// the previously-impossible "winner key absent" shape newly parses. The
+// `.refine()` below is copied from `BoardgamePairing`'s own (a payload with
+// every field absent must still fail) so `{}` stays disambiguated from a
+// pairing card and the union's structural-lookahead comment stays true.
+export const BoardgameResult = z
+  .strictObject({
+    winner: EntrantId.nullable().optional(),
+    method: BoardgameMethod.optional(),
+    // W4: move number the scoresheet finished on (Art. 8.1 — each player records
+    // every move). The game length, not the moves themselves; per-ply recording
+    // is deliberately out of scope (see DOMAIN.md).
+    moves: z.number().int().nonnegative().optional(),
+    // W4: the player who won the board. In an individual event the entrant IS
+    // the player; in a team match (board order, chess.md §5) the entrant is the
+    // club and the person is what a stat model needs. Always optional.
+    winnerPerson: PersonId.optional(),
+  })
+  .refine((result) => Object.values(result).some((value) => value !== undefined), {
+    message: "a result must record at least one fact",
+  });
 export type BoardgameResult = z.infer<typeof BoardgameResult>;
 
 // W4: the arbiter's pairing card — the facts a scoresheet header carries and
@@ -331,6 +353,130 @@ function pointsText(halfPoints: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// S6/#416 (W5) — padSpec. Pure function of resolved cfg. Board games have the
+// smallest event surface in the engine — one terminal result, one pairing
+// card — so this stays proportionally small; chess.md §6 already made the
+// same call for `fidelityTiers` ("no coarse/fine split").
+// ---------------------------------------------------------------------------
+
+export const BOARDGAME_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
+  "boardgame.result": BoardgameResult,
+  "boardgame.pairing": BoardgamePairing,
+};
+
+// Sentinels for fields with no cfg knob to derive a bound from (spec 04 §6
+// has no move-count or board-count cap) — generous, not a rules number, only
+// a property-testing upper bound. Mirrors cricket's UNBOUNDED_BALLS_SENTINEL.
+const MOVES_MAX = 400; // FIDE games rarely exceed ~200 full moves (400 plies)
+const BOARD_MAX = 200; // team-match board-number sentinel
+
+// Every decisive method needs a winner; every drawn/no-result method needs
+// none — `decideResult` refuses `winnerPerson` whenever winner is null, so
+// the two actions below never share a field. "adjudication" appears in BOTH:
+// an arbiter's discretionary ruling (FIDE Art. 5.2) can go either way.
+const DECISIVE_METHODS = ["checkmate", "resign", "time", "forfeit", "adjudication", "illegal_move"] as const;
+const DRAWN_METHODS = [
+  "agreement", "stalemate", "insufficient", "adjudication",
+  "repetition", "fifty_move", "dead_position", "double_forfeit",
+] as const;
+
+export function padSpec(cfg: BoardgameCfg): PadSpec {
+  // --- Pre-match: the arbiter's pairing card -------------------------------
+  const pairingAction: PadAction = {
+    type: "boardgame.pairing",
+    labelKey: { key: "pad.boardgame.action.pairing", label: "Pairing card" },
+    fields: [{ kind: "number", path: "board", min: 1, max: BOARD_MAX }],
+    // cfg-only inclusion, no gate needed (cricket's declare/followOn
+    // precedent): offering a `white` picker when the division plays without
+    // colours would build a payload `applyPairing` refuses on every cfg it
+    // would ever render for (the STRICT-ONLY §3.3 seam above).
+    attribution: cfg.colors
+      ? [
+          { kind: "side", path: "white" },
+          { kind: "person", path: "homePerson" },
+          { kind: "person", path: "awayPerson" },
+        ]
+      : [
+          { kind: "person", path: "homePerson" },
+          { kind: "person", path: "awayPerson" },
+        ],
+  };
+
+  // --- Live: the terminal result, decisive vs drawn/no-result -------------
+  // Two actions, ONE type ("boardgame.result") — the cricket ballAction/
+  // extraAction/wicketAction precedent. `winner` cannot be a third "no side"
+  // attribution choice (a `side` item always resolves to a real entrant); see
+  // `BoardgameResult`'s own comment for why draws are representable at all.
+  const decisiveResultAction: PadAction = {
+    type: "boardgame.result",
+    labelKey: { key: "pad.boardgame.action.result", label: "Result" },
+    fields: [
+      { kind: "enum", path: "method", values: DECISIVE_METHODS },
+      { kind: "number", path: "moves", min: 0, max: MOVES_MAX },
+    ],
+    attribution: [
+      { kind: "side", path: "winner" },
+      { kind: "person", path: "winnerPerson" },
+    ],
+  };
+  const drawnResultAction: PadAction = {
+    type: "boardgame.result",
+    labelKey: { key: "pad.boardgame.action.draw", label: "Draw / no result" },
+    fields: [
+      { kind: "enum", path: "method", values: DRAWN_METHODS },
+      { kind: "number", path: "moves", min: 0, max: MOVES_MAX },
+    ],
+    attribution: [], // `winner` omitted — decideResult treats that like null.
+  };
+
+  // Deliberately NO action for core.abandon / core.finalize / core.forfeit
+  // here. `PadAction.type` is documented as "a key in SportModule.eventSchemas"
+  // and `checkActionCoverage` enforces that literally (an action naming a type
+  // outside the module's own registry is flagged, not silently ignored) —
+  // confirmed empirically this session, and matching cricket's OWN spec,
+  // which declares zero `core.*` actions. Match lifecycle (start / forfeit /
+  // abandon / finalize) is IDENTICAL shape across all eleven sports, so it
+  // reads as universal renderer chrome (S10), not per-module declarative
+  // data — the one boardgame-specific exception is a single forfeit, which
+  // already has a native path: `boardgame.result` with `method: "forfeit"`
+  // (decisive action above) or `"double_forfeit"` (drawn action above).
+
+  const panels: PadPanel[] = [
+    {
+      labelKey: { key: "pad.boardgame.panel.pre", label: "Pre-match" },
+      phase: "pre",
+      layout: "primary",
+      actions: [pairingAction],
+    },
+    {
+      labelKey: { key: "pad.boardgame.panel.result", label: "Result" },
+      phase: "live",
+      layout: "primary",
+      actions: [decisiveResultAction],
+    },
+    {
+      labelKey: { key: "pad.boardgame.panel.draw", label: "Draw / no result" },
+      phase: "live",
+      layout: "grid",
+      actions: [drawnResultAction],
+    },
+  ];
+
+  return {
+    panels,
+    // Modelled on boardgame's OWN existing (untouched) `fidelityTiers`
+    // (below): tier 0 is the result alone, tier 1 adds the pairing card.
+    // Neither entry carries an entitlement — board games ship free at every
+    // band they currently declare.
+    fidelity: {
+      "boardgame.result": 0,
+      "boardgame.pairing": 1,
+    },
+    fidelityEntitlements: {},
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
 
@@ -339,6 +485,8 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   version: "1.0.0",
   configSchema: BoardgameCfg,
   eventSchema: BoardgameEv,
+  eventSchemas: BOARDGAME_EVENT_SCHEMAS,
+  padSpec,
   positions,
   entrantModel: { kinds: ["individual"], defaultKind: "individual" },
   variants: {
@@ -368,7 +516,10 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
         return { ...state, phase: "live" };
       case "boardgame.result": {
         const payload = parsePayload(BoardgameResult, ev.payload, ev.type);
-        return decideResult(state, payload.winner, payload.method, {
+        // `winner` omitted reads exactly like explicit `null` (see the
+        // schema's own comment) — coerced once, here, so `decideResult`
+        // keeps its existing `string | null` signature unchanged.
+        return decideResult(state, payload.winner ?? null, payload.method, {
           ...(payload.moves === undefined ? {} : { moves: payload.moves }),
           ...(payload.winnerPerson === undefined ? {} : { winnerPerson: payload.winnerPerson }),
         });

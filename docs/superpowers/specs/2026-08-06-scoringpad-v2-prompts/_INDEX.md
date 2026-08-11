@@ -18,7 +18,7 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 | S3 | #426 | `S03-426-w4b-mutable-squads.md` | S1 | **DONE** — all 9 deferred rows closed; 4 owner rulings; e2e+smoke deferred to S12/S13 |
 | S4 | #428 | `S04-428-offence-taxonomies.md` | S3 (person-role decision) | **DONE, post-review** — 3 enums adopted (football `PenaltyOffence`, hockey/icehockey `PeriodSuspensionReason`), 6 rows deferred with reasons recorded, person-role discriminator closed END TO END (`lineups.role`, V357, wired into both stats call sites — round-1 review caught the first pass shipping it engine-only/unreachable), `persons.lane` extended (V356) |
 | S5 | #431 | `S05-431-decisions-register.md` | S3, S4 | **DONE** — register closed, all 8 rulings accounted for; items 2 (tennis game-award) and 4 (football quarters) BUILT this session on owner instruction rather than re-homed, cricket `pairs-6-a-side` dropped with a DB prune fix |
-| S6 | #416 | `S06-416-w5-padspec.md` | S2, S3, S5 | TODO |
+| S6 | #416 | `S06-416-w5-padspec.md` | S2, S3, S5 | **DONE** — `PadSpec` contract + bidirectional conformance shipped for all 11 modules; fidelity model redesigned per the S2 ruling; 3 named variant-gating regressions fixed; e2e/smoke deferred to S12/S13 |
 | S7 | #427 | `S07-427-pad-vocabulary-i18n.md` | S3, S4, S6 | TODO |
 | S8 | #417 | `S08-417-w6-player-stats.md` | S6 | TODO |
 | S9 | #418 | `S09-418-w7-career-rollup.md` | S3, S8 | TODO |
@@ -926,6 +926,161 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   and 7's refusal reaffirmed (above, with reasons carried forward so nobody
   re-derives them). #431 closed with a comment pointing at the PR and this
   entry.
+
+- 2026-08-11 — S6/#416 — **`PadSpec` contract + bidirectional conformance
+  shipped for all 11 modules, branch `feat/s6-w5-padspec`, 21 commits.**
+  Executed as one foundation dispatch (shared types + conformance harness +
+  cricket as the reference module) followed by four parallel family
+  dispatches on provably disjoint files (football; setbased+nested —
+  volleyball/badminton/tabletennis/tennis; period — hockey/icehockey;
+  boardgame+carrom+generic), then a holistic reviewer pass over the combined
+  diff, then three gap fixes. Full engine suite **3489/3489**, `tsc EXIT=0`,
+  engine lint `EXIT=0`, `git diff --stat` engine-only (no `apps/web`),
+  rebased clean onto `origin/main` (9 unrelated commits in between, all
+  CI/workflow/placement-side). **E2E + smoke deferred to S12/S13** per this
+  session's own engine-only convention — the renderer that consumes
+  `PadSpec` does not exist until S10.
+- 2026-08-11 — S6/#416 — **the design problem the brief didn't anticipate:
+  `eventSchema` is a bare `z.union` with no per-branch type discriminant.**
+  Payload schemas (e.g. `CricketBall`) carry no literal `type` field — the
+  type string lives only on the envelope, and the only place that ever
+  paired a type string to its schema was each module's hand-written `apply()`
+  dispatch switch, imperative code, not introspectable data. Solved
+  additively, touching no fold logic: a new per-module `eventSchemas: Record
+  <string, ZodTypeAny>` registry, reusing the SAME schema object references
+  already in the union and the switch; `testkit/conformance-pad.ts` proves
+  it's a true bijection onto `eventSchema`'s branches by REFERENCE (closes
+  the set both directions, not a one-way subset check — this repo has hit
+  the one-way-subset false-green shape before) plus a behavioral proof that
+  every registered type really dispatches through the module's real
+  `apply()`. `SportModule.eventSchemas`/`.padSpec` both landed OPTIONAL so
+  the 10 not-yet-wired modules kept typechecking mid-wave.
+- 2026-08-11 — S6/#416 — **the fidelity model redesign (ruled by S2/#430) is
+  live.** `FIDELITY = {0:"result",1:"card",2:"timeline",3:"detail"}` +
+  `PadSpec.fidelity: Record<eventType, 0|1|2|3>`, one band per event type, no
+  repetition — nesting is now structural (`eventsAtOrBelowBand` grows
+  monotonically by construction) rather than a hand-maintained claim. The
+  SEALED `FidelityTier.tier` union this replaces-in-spirit is untouched
+  (`sport/module.ts`, confirmed zero diff on that declaration) — the new
+  per-event map is additive, reuses the same closed 0-3 scale, mints no
+  second vocabulary (`git grep` for `quick`/`standard`/`full` as tier names:
+  zero new hits across the whole diff).
+- 2026-08-11 — S6/#416 — **`PadAttribution` redesigned from the brief's
+  `none|side|person(role?)|persons(n)` one-of-four to a LIST**, found while
+  wiring cricket's real `cricket.review` action: it needs a side (`by`) AND,
+  independently, up to two optional persons (`person`, `against`) on the
+  same action — a shape the one-of-four choice cannot express without
+  dropping a field or splitting one action into several for no product
+  reason. A list composes all four original cases as "zero or more items";
+  cricket's wicket action needs four items at once (`out`, `fielder`,
+  `fielderAssist`, `incoming`).
+- 2026-08-11 — S6/#416 — **`checkActionCoverage` (acceptance criterion (a),
+  "every branch reachable from some action") is a MODULE-LEVEL property, not
+  a per-`padSpec(cfg)` one, and is not auto-run inside
+  `padSpecConformanceSuite`.** Found wiring cricket: `cricket.superOver`
+  requires `inningsPerSide===1`, `cricket.followon`/`.declare` require
+  `inningsPerSide===2` — no single legal cfg ever reaches both, so "every
+  branch reachable" only holds across the module's variant space, unioning
+  specs. Each module's own test file calls `checkActionCoverage` explicitly
+  over whichever variants it tests. (A gap in this — badminton/tabletennis
+  skipping the call entirely, reasoning "records never varies across our
+  variants so there's nothing to union" — was true but missed that the
+  check is still valuable with a SINGLE spec, to catch a flipped
+  `records.X` gate that would be wrong identically across every variant;
+  closed in review, see below.)
+- 2026-08-11 — S6/#416 — **three named variant-gating regressions fixed**
+  (S06 prompt acceptance criteria): (1) beach volleyball wrongly accepted
+  `volleyball.sub` — root cause was worse than "beach forgot to override a
+  default": `records` was a whole-module CLOSURE CONSTANT, structurally
+  incapable of varying by variant at all; moved into `SetBasedCfg.records`
+  as a real per-cfg field, `beach` now overrides `substitutions:false`.
+  Consequence found along the way: 4 (not the expected fewer)
+  cfg-derived refusals in `apply()`/`applyRally` were ungated on `strict` —
+  this repo's own named recurring defect ("a cfg-derived throw inside a fold
+  permanently bricks recorded fixtures", hit 6x in W4a) — all gated, plus 2
+  pre-existing tests that were silently asserting nothing given explicit
+  strict opt-in. (2) hockey `youth` and (3) icehockey `recreational` both
+  inherited adult/full-ladder discipline config — fixed via `Cfg.strength`
+  (NOT roster/`lineup.size`, which variants cannot structurally override at
+  all — `Cfg.strength.base:7` is what actually drives the "wrong strength
+  chip" bug named in `AGENTS.md`) and a narrowed `ICEHOCKEY_RECREATIONAL_
+  SUSPENSIONS` (minor/bench_minor only) respectively. Golden-corpus risk
+  (editing a named variant preset can shift a frozen stream's recorded cfg)
+  was checked mechanically before either edit — `verifyStream` reads the
+  corpus's OWN frozen `configs`, never live `module.variants`, confirmed
+  both mechanically and empirically (24/24 green, corpora byte-untouched) —
+  both fixes landed as plain in-place edits, no re-baseline needed. (4) the
+  hockey shoot-out retake overcount, a fourth fix bundled in: added an
+  additive `void` field to the kick payload, gated the attempt counter on
+  it, used the sanctioned `EXTEND_GOLDEN=1` path (new field, so allow-listing
+  would have been dishonest), verified against recorded bytes. Closed a
+  SECOND placer/verifier fork along the way (`shootoutDecision`/
+  `expectedKicker` also needed the same gate). DOMAIN.md rows for hockey
+  (`:65`, `:71`) and icehockey (`:74`) updated from `deferred` to `extended`
+  with the shipped mechanism, mirroring S3's own closure pattern.
+- 2026-08-11 — S6/#416 — **the carrom stale-comment carry-in (S2/#430) was
+  itself imprecise, corrected rather than copied.** S2 said `apply()` has
+  "no rejecting arm" for `carrom.strike` and the union simply omits
+  `CarromStrike` structurally (a schema-level 422). True in outcome, wrong
+  in mechanism: `apply()`'s switch DOES have a live `case "carrom.strike":
+  return invalid(...)` — an explicit runtime rejection, not an absence.
+  Traced further: `eventSchema` (the union) has **zero production readers**
+  in `apps/web` — the real write-path gate is entirely each module's own
+  `apply()` switch, not the union. Doesn't change the ruling (`CarromStrike`
+  stays out of `CarromEv` and the registry, "keep the one, replicate for
+  none") — only the comment's claimed mechanism was fixed. Worth remembering
+  for any future session reasoning about what `eventSchema` actually gates.
+- 2026-08-11 — S6/#416 — **holistic reviewer pass over the combined 20-commit
+  diff found 3 real gaps, all fixed same-session (commit `de7ee5d3`), none
+  were production bugs:** (a) `checkActionCoverage` never called for
+  badminton/tabletennis (only volleyball) — added, and it immediately caught
+  a real mistake in the fix itself (badminton/tabletennis's set-score type
+  is `<sport>.game.summary`, `coarseEventType`, not `<sport>.set.summary`
+  like volleyball — different terminology per sport sharing one kernel).
+  (b) generic's gated settle-panel test only checked gate SHAPE
+  (`toEqual`), never proved reachability against real folded state via
+  `evalPadGate`, unlike every other gated panel this session — added the
+  missing integration test. (c) icehockey `recreational`'s suspension
+  `reason` enum stays the full IIHF list while `class` was narrowed —
+  reviewed and DELIBERATELY left as-is, documented in `period/kernel.ts`:
+  `reason` (the infraction) and `class` (the referee's severity call) are
+  independent facts in real hockey discipline, a narrowed `class` list does
+  not imply a narrowed `reason` vocabulary, and no `reason`→`class` mapping
+  exists in this codebase to narrow by even if that were the intent —
+  inventing one would assert a rules fact this session has no source for.
+- 2026-08-11 — S6/#416 — **environment note for any session, not specific to
+  this one:** a Claude Code hook in this environment (the `rtk` proxy)
+  silently rewrites bare `tsc`/`vitest`/`eslint` invocations and can return
+  FABRICATED output unrelated to the flags given — `npx tsc --version`
+  returned the string `"TypeScript: No errors found"`, `npx vitest
+  --version` returned a fake `"PASS (3139) FAIL (0)"`-shaped summary.
+  Prefix `rtk proxy` on any such command to get real output. One line
+  already added to `_RULES.md` §6; full detail in the global memory
+  `reference_rtk_masks_suite_failures.md`.
+
+- 2026-08-11 — S6/#416 — **PR #529's first CI run caught a real regression
+  local verification missed: "engine-only diff" does NOT mean `apps/web`'s
+  own tests still pass.** `apps/web/src/server/engine-db/__tests__/
+  config-snapshot.test.ts` broke — `generic.ts`'s new implicit-draw
+  inference (`declaredDraw = isDraw===true || winnerId===undefined`) treated
+  ANY payload missing `winnerId` as a draw, including a score-shaped payload
+  carrying no draw signal at all, silently swallowing the pre-existing
+  "win_loss mode requires winnerId or isDraw" validation that test pins.
+  `tsc`/lint/the full engine suite were all green and `git diff --stat` was
+  genuinely engine-only — none of that caught it, because `apps/web` calls
+  the engine's real fold logic at RUNTIME (`appendEvent`→`foldMatch`→
+  `apply()`), and this was a pure behavior change no type check sees. Fixed
+  in `a5795482`: requires the `isDraw` KEY to be present (even as `false`)
+  before inferring a draw — distinguishes "a Draw action fired with a
+  bivalent false toggle" (the real problem being solved) from "no draw
+  signal was sent at all" (the case that broke). Second CI run: 7/8 green,
+  the one remaining failure (`Playwright e2e — mobile/tablet, 7 widths`) is
+  a confirmed pre-existing, already-tracked `EntityCard` overflow bug (#528,
+  unrelated CI/Stage/Prod-split session), not this session's diff. Recorded
+  as a standing lesson for future engine-only sessions in this programme:
+  `reference_engine_only_diff_can_still_break_apps_web_tests` (global
+  memory) — either run `apps/web`'s relevant suites locally before opening
+  the PR, or budget time for exactly this fix-forward round-trip.
 
 - _(append below)_
 

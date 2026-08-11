@@ -1,9 +1,22 @@
 // Football goldens + conformance — spec 04 §1, PROMPT-04 §10.
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { foldMatch, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { LineupPair, StageCtx } from "../../core/types.ts";
+import { evalPadGate, type PadField, type PadSpec } from "../../sport/module.ts";
 import { conformanceSuite, lineupFromCatalog, makeEnvelope } from "../../testkit/index.ts";
-import { football, FOOTBALL_TIEBREAKERS, type FootballCfg, type FootballEv } from "./football.ts";
+// S6/#416 (W5) — deliberately NOT from the testkit barrel: conformance-pad.ts
+// touches node:fs (DOMAIN.md presence), mirroring golden.ts's own exclusion
+// (see cricket.test.ts, the reference wiring for this harness).
+import { checkActionCoverage, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
+import {
+  football,
+  FOOTBALL_EVENT_SCHEMAS,
+  FOOTBALL_TIEBREAKERS,
+  padSpec,
+  type FootballCfg,
+  type FootballEv,
+} from "./football.ts";
 
 // Direct module.apply calls need the module's payload union on the envelope.
 const asFootball = (event: EventEnvelope) => event as EventEnvelope<FootballEv | CoreEv>;
@@ -328,3 +341,172 @@ conformanceSuite(football, {
 // catalog (`resolvePositions`), which an 11-a-side-sized lineup would fail
 // "accepts the conformance lineups against its own catalog" against.
 conformanceSuite(football, { cfg: football.variants["mini-soccer"], label: "mini-soccer" });
+
+// ---------------------------------------------------------------------------
+// S6/#416 (W5) — padSpec conformance. Football owns goals/cards/subs/period
+// flow (incl. mini-soccer quarters, S5/#431); cricket is the reference/pilot
+// module this harness was proven against first.
+// ---------------------------------------------------------------------------
+
+// Randomises the cfg knobs padSpec's own bounds/inclusion logic actually
+// reads, so the never-throws/determinism property gets more than the named
+// presets: the halves/quarters split, extra time (both keys — the inner
+// object is required whole, no per-field default), the shoot-out panel's
+// cfg-only inclusion, and the half length the sin-bin `minutes` bound reads.
+// `FootballCfg` has no `.refine()`, so this practically never gets skipped as
+// "not a cfg this module accepts".
+const footballCfgPerturbations = fc.record(
+  {
+    halves: fc.constantFrom(2 as const, 4 as const),
+    extraTime: fc.record({ enabled: fc.boolean(), halfMinutes: fc.integer({ min: 5, max: 30 }) }),
+    shootout: fc.boolean(),
+    halfMinutes: fc.integer({ min: 5, max: 60 }),
+  },
+  { requiredKeys: [] },
+);
+
+// No explicit `lineups` on ANY of these — see the mini-soccer `conformanceSuite`
+// call above for why: `padSpecConformanceSuite` must resolve its own lineup
+// pair against each cfg's OWN catalog (`resolvePositions`), and a fixed
+// 11-a-side lineup would silently mismatch `teamSize: 7`.
+padSpecConformanceSuite(football, {
+  cfg: {},
+  label: "11-a-side",
+  numRuns: 150,
+  cfgPerturbations: footballCfgPerturbations,
+});
+padSpecConformanceSuite(football, {
+  cfg: football.variants["mini-soccer"],
+  label: "mini-soccer",
+  numRuns: 100,
+});
+padSpecConformanceSuite(football, {
+  cfg: { extraTime: { enabled: true, halfMinutes: 15 }, shootout: true },
+  label: "knockout (shoot-out)",
+  numRuns: 100,
+});
+
+// (a), the module-level half: `football.shootout.kick` can only ever be
+// reached from a cfg with `shootout: true` — `applyShootoutKick` refuses it
+// in every other phase, and no fixture reaches phase "SHOOTOUT" unless
+// `cfg.shootout` is set (`resolveFullTime`). None of football's own named
+// `variants` (11-a-side/youth/small-sided/mini-soccer) sets it, so "every
+// branch reachable from some action" is checked once, across the union of
+// cfgs this file actually exercises — same shape as cricket's superOver case,
+// verified for football per the S6 brief's instruction to check.
+describe("football padSpec — action coverage across the format space", () => {
+  it("every registered event type is reachable from some action, across variants", () => {
+    const specs = [
+      padSpec(football.configSchema.parse({})),
+      padSpec(football.configSchema.parse({ extraTime: { enabled: true, halfMinutes: 15 }, shootout: true })),
+    ];
+    expect(checkActionCoverage(specs, FOOTBALL_EVENT_SCHEMAS)).toEqual([]);
+  });
+
+  it("MUTATION SHAPE — coverage fails if the shoot-out cfg is dropped from the union (uniquely covering football.shootout.kick)", () => {
+    const specsWithoutShootout = [padSpec(football.configSchema.parse({}))];
+    const problems = checkActionCoverage(specsWithoutShootout, FOOTBALL_EVENT_SCHEMAS);
+    expect(problems.join(" ")).toMatch(/football\.shootout\.kick/);
+  });
+});
+
+function findField(spec: PadSpec, type: string, path: string): PadField | undefined {
+  for (const panel of spec.panels) {
+    for (const action of panel.actions) {
+      if (action.type !== type) continue;
+      const field = action.fields.find((f) => f.path === path);
+      if (field) return field;
+    }
+  }
+  return undefined;
+}
+
+function actionTypesOf(spec: PadSpec): Set<string> {
+  return new Set(spec.panels.flatMap((panel) => panel.actions.map((action) => action.type)));
+}
+
+describe("football padSpec — variant reshaping: mini-soccer vs 11-a-side are demonstrably different", () => {
+  const baseSpec = padSpec(football.configSchema.parse({}));
+  const miniSpec = padSpec(football.configSchema.parse(football.variants["mini-soccer"]));
+
+  it("period markers differ: 11-a-side offers HT/FT, mini-soccer's quarters add QT/3QT", () => {
+    const baseMarker = findField(baseSpec, "football.period", "phase");
+    const miniMarker = findField(miniSpec, "football.period", "phase");
+    expect(baseMarker?.kind).toBe("enum");
+    expect(miniMarker?.kind).toBe("enum");
+    if (baseMarker?.kind === "enum" && miniMarker?.kind === "enum") {
+      expect(baseMarker.values).toEqual(["HT", "FT"]);
+      expect(miniMarker.values).toEqual(["QT", "HT", "3QT", "FT"]);
+    }
+  });
+
+  it("the stamp's at.period bound tracks the same split: mini-soccer's includes Q2/Q3/Q4", () => {
+    const baseAt = findField(baseSpec, "football.goal", "at.period");
+    const miniAt = findField(miniSpec, "football.goal", "at.period");
+    if (baseAt?.kind === "enum" && miniAt?.kind === "enum") {
+      expect(baseAt.values).toEqual(["pre", "H1", "H2"]);
+      expect(miniAt.values).toEqual(["pre", "H1", "Q2", "Q3", "Q4"]);
+    }
+  });
+
+  it("sin-bin minutes bound is cfg-derived, not a hardcoded preset number: mini-soccer's 10-minute quarters cap it far below 11-a-side's 45", () => {
+    const baseMinutes = findField(baseSpec, "football.sinbin.start", "minutes");
+    const miniMinutes = findField(miniSpec, "football.sinbin.start", "minutes");
+    expect(baseMinutes?.kind).toBe("number");
+    expect(miniMinutes?.kind).toBe("number");
+    if (baseMinutes?.kind === "number" && miniMinutes?.kind === "number") {
+      expect(baseMinutes.max).toBe(45); // cfg.halfMinutes default
+      expect(miniMinutes.max).toBe(10); // mini-soccer preset's halfMinutes
+      expect(miniMinutes.max).toBeLessThan(baseMinutes.max);
+    }
+  });
+
+  it("both variants declare the same action-type set — this pair's reshaping is bounds-only, not panel presence", () => {
+    expect(actionTypesOf(miniSpec)).toEqual(actionTypesOf(baseSpec));
+  });
+});
+
+describe("football padSpec — shoot-out panel: cfg gates existence, a runtime gate governs reachability", () => {
+  it("is absent from the spec entirely when cfg.shootout is false (the default)", () => {
+    const spec = padSpec(football.configSchema.parse({}));
+    expect(spec.panels.some((panel) => panel.labelKey.key === "pad.football.panel.shootout")).toBe(false);
+  });
+
+  it("is present but its gate is a path-equals against the real football phase value, not a typo", () => {
+    const spec = padSpec(football.configSchema.parse({ shootout: true }));
+    const panel = spec.panels.find((p) => p.labelKey.key === "pad.football.panel.shootout");
+    expect(panel?.gate).toEqual({ op: "path-equals", path: "state.phase", value: "SHOOTOUT" });
+  });
+
+  it("integration: the gate is false pre-match and false while merely live, against REAL football state", () => {
+    const cfg = football.configSchema.parse({ shootout: true });
+    const spec = padSpec(cfg);
+    const panel = spec.panels.find((p) => p.labelKey.key === "pad.football.panel.shootout");
+    const gate = panel?.gate;
+    expect(gate).toBeDefined();
+    const preState = football.init(cfg, lineups);
+    expect(
+      evalPadGate(gate as NonNullable<typeof gate>, { state: preState, summary: football.summary(preState) }),
+    ).toBe(false);
+    const liveState = fold(cfg, stream(["core.start"]));
+    expect(
+      evalPadGate(gate as NonNullable<typeof gate>, { state: liveState, summary: football.summary(liveState) }),
+    ).toBe(false);
+  });
+
+  it("integration: the gate is true once the match actually reaches the shoot-out — reachable, not merely configured", () => {
+    const cfg = football.configSchema.parse({ shootout: true });
+    const spec = padSpec(cfg);
+    const panel = spec.panels.find((p) => p.labelKey.key === "pad.football.panel.shootout");
+    const gate = panel?.gate;
+    expect(gate).toBeDefined();
+    // Mirrors the existing "goes straight to a shootout when shootout is on
+    // but ET is off" state-machine test above: 0-0 at FT with no extra time
+    // configured goes straight to phase "SHOOTOUT".
+    const tiedState = fold(cfg, stream(["core.start"], ["football.period", { phase: "HT" }], ["football.period", { phase: "FT" }]));
+    expect(tiedState.phase).toBe("SHOOTOUT"); // sanity: this really is reachable, not a fixture bug
+    expect(
+      evalPadGate(gate as NonNullable<typeof gate>, { state: tiedState, summary: football.summary(tiedState) }),
+    ).toBe(true);
+  });
+});

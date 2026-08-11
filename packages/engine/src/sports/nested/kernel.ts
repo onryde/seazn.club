@@ -35,8 +35,13 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type {
+  FidelityBand,
   FidelityTier,
   ModuleEvent,
+  PadAction,
+  PadGate,
+  PadPanel,
+  PadSpec,
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
@@ -1271,6 +1276,209 @@ function nestedPosition(state: NestedState): MatchPosition {
   return { segments };
 }
 
+// ---------------------------------------------------------------------------
+// S6/#416 (W5) — padSpec. Pure function of (preset, resolved cfg). Unlike the
+// set-based kernel, `NestedEv`'s five branches (Point/SetSummary/Sanction/
+// Interruption/GameAward) are ALWAYS reachable — this kernel has no
+// `records`-shaped per-preset gating at all (every `apply()` case dispatches
+// unconditionally). So `eventSchemas` (built in `makeNestedModule` below) has
+// no kernel-union over-registration problem, and `checkActionCoverage` is
+// not called for tennis: a single cfg's action set already reaches every
+// registered type, for every named variant — there is no cfg under which any
+// branch becomes unreachable, so there is nothing a union across variants
+// would add.
+// ---------------------------------------------------------------------------
+
+/** cfg-derived plausibility bound for `NestedSetSummary.home`/`.away`
+ *  (`z.number().int().nonnegative()`, no upper bound in the schema): the
+ *  ordinary games target with a deuce margin, OR — if this cfg's deciding set
+ *  is a match tie-break — the MTB point target, whichever is larger (the
+ *  SAME field carries games in an ordinary set and MTB points in a decider
+ *  under `finalSet.matchTiebreakTo`, so the bound has to cover both). An
+ *  advantage set (`tiebreakAt: null`) has no games ceiling at all, so it gets
+ *  a generous open-ended sentinel instead — the same plausibility-sentinel
+ *  pattern cricket's padSpec uses for `ballsPerInnings: null`. */
+function gamesFieldBound(cfg: NestedCfg): number {
+  const UNBOUNDED_ADVANTAGE_SET_SENTINEL = 200;
+  const base =
+    cfg.set.tiebreakAt === null
+      ? UNBOUNDED_ADVANTAGE_SET_SENTINEL
+      : cfg.set.gamesTo + cfg.set.winBy + 2;
+  const mtb =
+    cfg.finalSet !== "same" && "matchTiebreakTo" in cfg.finalSet ? cfg.finalSet.matchTiebreakTo + 2 : 0;
+  return Math.max(base, mtb);
+}
+
+/** Bound for `NestedSetSummary.tb.{home,away}` — the ordinary tie-break
+ *  target, or the decider's own `finalSet.tiebreakTo` (the slam rule) if
+ *  larger. */
+function tbFieldBound(cfg: NestedCfg): number {
+  const ordinary = cfg.set.tiebreakTo + cfg.tiebreak.winBy + 2;
+  const decider =
+    cfg.finalSet !== "same" && "tiebreakTo" in cfg.finalSet
+      ? cfg.finalSet.tiebreakTo + cfg.tiebreak.winBy + 2
+      : 0;
+  return Math.max(ordinary, decider);
+}
+
+/** ITF Rule 30 break allowance is per-kind and per-competition
+ *  (`NestedInterruptionCfg`, no default — see `NestedParams.interruptions`'s
+ *  own doc comment), so there is no single cfg-derived ceiling to read for a
+ *  generic "duration" field. A plausibility sentinel, matching cricket's own
+ *  approach for a schema field the DOMAIN leaves genuinely unbounded. */
+const PLAUSIBLE_INTERRUPTION_SECONDS = 3600;
+
+function nestedPadSpec(preset: NestedPreset, cfg: NestedCfg): PadSpec {
+  const key = preset.key;
+  const pointType = `${key}.point`;
+  const summaryType = `${key}.set_summary`;
+  const sanctionType = `${key}.sanction`;
+  const interruptionType = `${key}.interruption`;
+  const gameAwardType = `${key}.game.award`;
+  const gamesBound = gamesFieldBound(cfg);
+  const tbBound = tbFieldBound(cfg);
+
+  const pointAction: PadAction = {
+    type: pointType,
+    labelKey: { key: `pad.${key}.action.point`, label: "Point" },
+    fields: [],
+    attribution: [{ kind: "side", path: "by" }],
+  };
+  const pointAttributedAction: PadAction = {
+    type: pointType,
+    labelKey: { key: `pad.${key}.action.pointAttributed`, label: "Point (server / scorer)" },
+    fields: [
+      { kind: "enum", path: "meta.kind", values: ["ace", "double_fault", "winner", "ue"] },
+      { kind: "enum", path: "meta.receiverSide", values: ["deuce", "ad"] },
+    ],
+    attribution: [
+      { kind: "side", path: "by" },
+      { kind: "person", path: "server" },
+      { kind: "person", path: "scorer" },
+    ],
+  };
+  const summaryAction: PadAction = {
+    type: summaryType,
+    labelKey: { key: `pad.${key}.action.setScore`, label: "Set score" },
+    fields: [
+      { kind: "number", path: "home", min: 0, max: gamesBound },
+      { kind: "number", path: "away", min: 0, max: gamesBound },
+    ],
+    attribution: [],
+  };
+  // A separate action for a tie-break-ending set — same type, richer fields
+  // (the `tb` block), exactly the cricket ball/extra/wicket pattern of
+  // several actions sharing one `eventSchema` branch.
+  const summaryTbAction: PadAction = {
+    type: summaryType,
+    labelKey: { key: `pad.${key}.action.setScoreTiebreak`, label: "Set score (tie-break)" },
+    fields: [
+      { kind: "number", path: "home", min: 0, max: gamesBound },
+      { kind: "number", path: "away", min: 0, max: gamesBound },
+      { kind: "number", path: "tb.home", min: 0, max: tbBound },
+      { kind: "number", path: "tb.away", min: 0, max: tbBound },
+    ],
+    attribution: [],
+  };
+  const sanctionAction: PadAction = {
+    type: sanctionType,
+    labelKey: { key: `pad.${key}.action.sanction`, label: "Code violation" },
+    fields: [{ kind: "enum", path: "level", values: NestedSanctionLevel.options }],
+    attribution: [
+      { kind: "side", path: "by" },
+      { kind: "person", path: "person" },
+    ],
+  };
+  const interruptionAction: PadAction = {
+    type: interruptionType,
+    labelKey: { key: `pad.${key}.action.interruption`, label: "Interruption" },
+    fields: [
+      { kind: "enum", path: "kind", values: NestedInterruptionKind.options },
+      { kind: "number", path: "duration", min: 0, max: PLAUSIBLE_INTERRUPTION_SECONDS },
+    ],
+    attribution: [
+      { kind: "side", path: "by" },
+      { kind: "person", path: "person" },
+    ],
+  };
+  const gameAwardAction: PadAction = {
+    type: gameAwardType,
+    labelKey: { key: `pad.${key}.action.gameAward`, label: "Award game" },
+    fields: [],
+    attribution: [{ kind: "side", path: "winner" }],
+  };
+
+  const panels: PadPanel[] = [
+    {
+      labelKey: { key: `pad.${key}.panel.points`, label: "Points" },
+      phase: "live",
+      layout: "primary",
+      actions: [pointAction, pointAttributedAction],
+    },
+    {
+      labelKey: { key: `pad.${key}.panel.setScore`, label: "Set score" },
+      phase: "live",
+      layout: "grid",
+      actions: [summaryAction, summaryTbAction],
+    },
+    {
+      labelKey: { key: `pad.${key}.panel.sanctions`, label: "Code violations" },
+      phase: "live",
+      layout: "drawer",
+      actions: [sanctionAction],
+    },
+    {
+      labelKey: { key: `pad.${key}.panel.interruptions`, label: "Interruptions" },
+      phase: "live",
+      layout: "drawer",
+      actions: [interruptionAction],
+    },
+    {
+      labelKey: { key: `pad.${key}.panel.gameAward`, label: "Award game" },
+      phase: "live",
+      layout: "drawer",
+      actions: [gameAwardAction],
+      // Reachable, not merely configured: `applyGameAward` refuses
+      // mid-tie-break (the breaker itself IS the deciding game — no
+      // separate "game" left to concede), and whether a tie-break is in
+      // force right now is STATE, never derivable from cfg alone.
+      gate: {
+        op: "and",
+        of: [
+          { op: "not", of: { op: "path-equals", path: "state.points.kind", value: "tiebreak" } },
+          { op: "not", of: { op: "path-equals", path: "state.points.kind", value: "matchTiebreak" } },
+        ],
+      } satisfies PadGate,
+    },
+  ];
+
+  return {
+    panels,
+    // One band per registered type (all 5 — see the module-level note
+    // above). The bare set score alone (band 0) already reaches a decided
+    // match (`bankSet` off summaries, exactly like the set-based kernel);
+    // code violations and interruptions are administrative records that
+    // never move the score, band 1 (matching the set-based kernel's own
+    // timeout/sanction placement); points and game-awards are both
+    // SCORE-MOVING facts at the kernel's maximum granularity — a game award
+    // is one level up from a point ("the game a code violation concedes"),
+    // not a discipline record like sanction/interruption — so both sit at
+    // band 3, matching `rallyEntitlement`'s name
+    // ("scoring.rally_by_rally", tennis's own `scoring.ball_by_ball`
+    // sibling). Band 2 is unoccupied — same honest gap as the set-based
+    // kernel's (no player-line/box-score analogue here either); S2/#430
+    // parked this kernel's own T3 addition (1st-vs-2nd serve, rally length)
+    // as future work, not this session's.
+    fidelity: {
+      [summaryType]: 0,
+      [sanctionType]: 1,
+      [interruptionType]: 1,
+      [pointType]: 3,
+      [gameAwardType]: 3,
+    } satisfies Record<string, FidelityBand>,
+    fidelityEntitlements: { 3: preset.rallyEntitlement },
+  };
+}
 
 export function makeNestedModule(
   preset: NestedPreset,
@@ -1281,6 +1489,19 @@ export function makeNestedModule(
   const sanctionType = `${preset.key}.sanction`;
   const interruptionType = `${preset.key}.interruption`;
   const gameAwardType = `${preset.key}.game.award`;
+  // S6/#416 (W5) — type string -> its own payload schema, by reference, the
+  // SAME 5 schema objects `NestedEv` unions (top of this file). Unlike the
+  // set-based kernel, this is a true bijection with no kernel-union
+  // over-registration: every branch here dispatches unconditionally in
+  // `apply()` below, for every preset this kernel has ever had (tennis is
+  // still the only one).
+  const eventSchemas: Readonly<Record<string, z.ZodTypeAny>> = {
+    [pointType]: NestedPoint,
+    [summaryType]: NestedSetSummary,
+    [sanctionType]: NestedSanction,
+    [interruptionType]: NestedInterruption,
+    [gameAwardType]: NestedGameAward,
+  };
   // One per module — see `sports/squad-state.ts` for the init handshake it
   // keys on.
   const squadAdopter = makeSquadAdopter<NestedState>();
@@ -1353,6 +1574,8 @@ export function makeNestedModule(
     version: preset.version,
     configSchema,
     eventSchema: NestedEv,
+    eventSchemas,
+    padSpec: (padCfg) => nestedPadSpec(preset, padCfg),
     positions: preset.positions,
     variants: preset.variants,
 

@@ -55,6 +55,35 @@
         },
         "type": "object"
       },
+      "records": {
+        "default": {
+          "expedite": false,
+          "sanctions": true,
+          "substitutions": false,
+          "timeouts": false
+        },
+        "properties": {
+          "expedite": {
+            "type": "boolean"
+          },
+          "sanctions": {
+            "type": "boolean"
+          },
+          "substitutions": {
+            "type": "boolean"
+          },
+          "timeouts": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "expedite",
+          "sanctions",
+          "substitutions",
+          "timeouts"
+        ],
+        "type": "object"
+      },
       "setTo": {
         "default": 21,
         "exclusiveMinimum": 0,

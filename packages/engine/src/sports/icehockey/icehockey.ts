@@ -6,7 +6,7 @@
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { PlayerStatsModel } from "../../stats/stats.ts";
 import { makePeriodModule, type PeriodSuspensionReason } from "../period/kernel.ts";
-import { ICEHOCKEY_SUSPENSIONS } from "../period/suspensions.ts";
+import { ICEHOCKEY_RECREATIONAL_SUSPENSIONS, ICEHOCKEY_SUSPENSIONS } from "../period/suspensions.ts";
 
 // S4 (#428) — IIHF's own subset of the shared `PeriodSuspensionReason` union:
 // the common named infractions plus `other`. Deliberately LARGER than
@@ -156,10 +156,26 @@ export const icehockey = makePeriodModule({
   variants: {
     iihf: {},
     // Rec leagues: no OT, draws stand, 2/1/0.
+    //
+    // W5 (#416) — regression fix, icehockey/DOMAIN.md's "A recreational
+    // league's simplified penalty ladder" row: `overtime`/`shootout`/`points`
+    // were overridden but `suspensions` was left at the full IIHF ladder.
+    // `ICEHOCKEY_RECREATIONAL_SUSPENSIONS` (period/suspensions.ts) is the
+    // DOMAIN.md row's own target shape, read literally — "2 minutes, that's
+    // it" — minor + bench_minor only; every major/misconduct/match class is
+    // dropped, not merely relabelled.
+    //
+    // Golden-corpus mechanics checked, not assumed: `verifyStream`/
+    // `recomputeStream` (testkit/golden.ts) read
+    // `corpus.configs["recreational"]` — a snapshot frozen on disk — and
+    // never re-read this live `variants.recreational` object, so this edit
+    // cannot move a single byte of the 5 already-recorded "recreational"
+    // streams. No re-baseline.
     recreational: {
       overtime: null,
       shootout: null,
       points: { win: 2, draw: 1, loss: 0 },
+      suspensions: { classes: ICEHOCKEY_RECREATIONAL_SUSPENSIONS },
     },
   },
   positions,
@@ -198,6 +214,7 @@ export const icehockey = makePeriodModule({
   // the existing comparator registry, v6/00 §1).
   defaultTiebreakers: ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "seed"],
   officialLabel: { scorer: "Scorekeeper" },
+  suspensionReasons: ICEHOCKEY_SUSPENSION_REASONS,
   shootoutLabel: "GWS",
   // IIHF Rule 87 / NHL Rule 84.4 — the game-winning shot is credited as a goal
   // in the official score (2-2 on the GWS is recorded 3-2). Derived at the

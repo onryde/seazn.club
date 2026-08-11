@@ -15,7 +15,14 @@ import {
   type StageKind,
   type StandingsDelta,
 } from "../../core/types.ts";
-import type { ModuleEvent, SportModule } from "../../sport/module.ts";
+import type {
+  ModuleEvent,
+  PadAction,
+  PadGate,
+  PadPanel,
+  PadSpec,
+  SportModule,
+} from "../../sport/module.ts";
 
 // spec 04 §8 Cfg
 export const GenericCfg = z.object({
@@ -114,7 +121,28 @@ function applyResult(state: GenericState, payload: z.infer<typeof GenericResult>
       invalid("draws are not allowed in this division", { score });
     }
   } else {
-    const declaredDraw = payload.isDraw === true;
+    // S6/#416 (W5): also reads as a draw when `isDraw` is PRESENT (even as
+    // `false`) and `winnerId` is absent — the padSpec field DSL has no
+    // "constant" PadField kind (a toggle is genuinely bivalent, `fc.boolean()`
+    // in the conformance property test), so a "Draw" action's `isDraw` toggle
+    // field could never be pinned to always fire `true`.
+    //
+    // Fixed post-review (CI caught it): the first cut keyed this off
+    // `winnerId === undefined` ALONE, with no requirement that `isDraw` was
+    // even sent. That silently swallowed a real, pre-existing validation path
+    // — a payload with neither field (e.g. a score-shaped `{p1Score,
+    // p2Score}` mistakenly posted against a `win_loss` division) now read as
+    // an implicit draw and threw "draws are not allowed in this division"
+    // instead of the clearer, actionable "win_loss mode requires winnerId or
+    // isDraw" (`apps/web`'s `config-snapshot.test.ts` pinned exactly this
+    // message for exactly that shape). Requiring the `isDraw` KEY to be
+    // present distinguishes "a Draw action fired with a false toggle" from
+    // "no draw signal was sent at all" — the only two cases this fold sees
+    // and the only distinction that matters. Every payload previously
+    // accepted (`winnerId` set, or `isDraw: true`) still means exactly what
+    // it meant.
+    const declaredDraw =
+      payload.isDraw === true || (payload.isDraw !== undefined && payload.winnerId === undefined);
     if (declaredDraw && payload.winnerId !== undefined) {
       invalid("isDraw and winnerId are mutually exclusive");
     }
@@ -129,7 +157,15 @@ function applyResult(state: GenericState, payload: z.infer<typeof GenericResult>
   if (payload.winnerId !== undefined && winnerSide !== sideOf(state, payload.winnerId)) {
     invalid("winnerId contradicts the scores", { payload });
   }
-  if (payload.isDraw !== undefined && payload.isDraw !== (winnerSide === null)) {
+  // Only an EXPLICIT `isDraw: true` can contradict a decisive result. The
+  // reverse (`isDraw: false` while the derived result IS a draw) was already
+  // unreachable before S6 in win_loss mode — mutually exclusive with
+  // `winnerId` and, absent a `winnerId`, intercepted earlier by "win_loss
+  // mode requires winnerId or isDraw" — and after the S6 widening above,
+  // `isDraw: false` with no `winnerId` is now a DELIBERATE implicit-draw
+  // shape (a padSpec toggle field that lands on `false` must still build a
+  // valid draw payload), so it must not throw here either.
+  if (payload.isDraw === true && winnerSide !== null) {
     invalid("isDraw contradicts the result", { payload });
   }
   if (score && winnerSide !== null && score[winnerSide] <= score[opponent(winnerSide)]) {
@@ -194,11 +230,159 @@ function sideMetrics(state: GenericState, side: Side): Record<string, number> {
   return { for: forScore, against, diff: forScore - against };
 }
 
+// ---------------------------------------------------------------------------
+// S6/#416 (W5) — padSpec. Pure function of resolved cfg. The boundary this
+// module's own DOMAIN.md draws ("generic will not model anything with
+// structure") applies here too: no per-sport vocabulary, just the flat
+// tally + terminal card the module actually folds.
+// ---------------------------------------------------------------------------
+
+export const GENERIC_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
+  "generic.result": GenericResult,
+  "generic.score": GenericScore,
+};
+
+// Sentinels for fields with no cfg knob to derive a bound from (GenericCfg
+// has no score cap) — generous, not a rules number, only a property-testing
+// upper bound. Mirrors cricket's UNBOUNDED_BALLS_SENTINEL / MAX_PLAUSIBLE_RUNS.
+const MAX_PLAUSIBLE_SCORE = 500; // a final score.{p1,p2}Score
+const MAX_TALLY_STEP = 50; // a single generic.score press
+
+export function padSpec(cfg: GenericCfg): PadSpec {
+  // --- Live: the running tally, both modes (DOMAIN.md: "all") --------------
+  // `points` is `.refine(p => p !== 0)` — a single field spanning both signs
+  // would let the property test roll 0 and fail; split at zero instead, the
+  // same shape as carrom's credit/deduct adjustment actions.
+  const addPointsAction: PadAction = {
+    type: "generic.score",
+    labelKey: { key: "pad.generic.action.addPoints", label: "Add points" },
+    fields: [{ kind: "number", path: "points", min: 1, max: MAX_TALLY_STEP }],
+    attribution: [
+      { kind: "side", path: "by" },
+      { kind: "person", path: "person" },
+    ],
+  };
+  const correctPointsAction: PadAction = {
+    type: "generic.score",
+    labelKey: { key: "pad.generic.action.correctPoints", label: "Correct (subtract)" },
+    fields: [{ kind: "number", path: "points", min: -MAX_TALLY_STEP, max: -1 }],
+    attribution: [
+      { kind: "side", path: "by" },
+      { kind: "person", path: "person" },
+    ],
+  };
+
+  // --- Live/post: the terminal result — shape depends on cfg.resultMode ---
+  // cfg-only inclusion throughout (cricket's declare/followOn precedent): a
+  // score-mode field set or a win_loss field set the fold would refuse on
+  // EVERY cfg the other mode renders for is never built at all.
+  const scoreEntryAction: PadAction = {
+    type: "generic.result",
+    labelKey: { key: "pad.generic.action.scoreEntry", label: "Enter final score" },
+    fields: [
+      { kind: "number", path: "p1Score", min: 0, max: MAX_PLAUSIBLE_SCORE },
+      { kind: "number", path: "p2Score", min: 0, max: MAX_PLAUSIBLE_SCORE },
+    ],
+    attribution: [],
+  };
+  const settleFromTallyAction: PadAction = {
+    type: "generic.result",
+    labelKey: { key: "pad.generic.action.settleFromTally", label: "Settle from tally" },
+    fields: [],
+    attribution: [],
+  };
+  const decisiveResultAction: PadAction = {
+    type: "generic.result",
+    labelKey: { key: "pad.generic.action.decisive", label: "Result" },
+    fields: [],
+    attribution: [{ kind: "side", path: "winnerId" }],
+  };
+  // `isDraw` is a toggle — genuinely bivalent (`fc.boolean()`), so it cannot
+  // be pinned to always fire `true`. `applyResult`'s S6 widening (this
+  // file, `declaredDraw`) makes "no winnerId" alone read as a draw
+  // regardless of which way the toggle lands, so this action always builds
+  // a valid draw payload either way.
+  const drawAction: PadAction = {
+    type: "generic.result",
+    labelKey: { key: "pad.generic.action.draw", label: "Draw" },
+    fields: [{ kind: "toggle", path: "isDraw" }],
+    attribution: [],
+  };
+
+  const resultPanels: PadPanel[] =
+    cfg.resultMode === "score"
+      ? [
+          {
+            labelKey: { key: "pad.generic.panel.score", label: "Score" },
+            phase: "live",
+            layout: "primary",
+            actions: [scoreEntryAction],
+          },
+          {
+            labelKey: { key: "pad.generic.panel.settle", label: "Settle from tally" },
+            phase: "live",
+            layout: "grid",
+            actions: [settleFromTallyAction],
+            // Genuinely state-dependent — DOMAIN.md: "the tally alone never
+            // ends a fixture", and `{}` is refused unless `state.running` is
+            // already set (`applyResult`: `score = hasP1 ? ... : (state.running
+            // ?? null)`, `if (!score) invalid(...)`).
+            gate: { op: "path-truthy", path: "state.running" } satisfies PadGate,
+          },
+        ]
+      : [
+          {
+            labelKey: { key: "pad.generic.panel.result", label: "Result" },
+            phase: "live",
+            layout: "primary",
+            actions: [decisiveResultAction],
+          },
+          // cfg-only inclusion: offering a draw action the fold refuses on
+          // every cfg it would render for (`allowDraws: false`) is exactly
+          // the anti-pattern cricket's declare/followOn actions avoid.
+          ...(cfg.allowDraws
+            ? [
+                {
+                  labelKey: { key: "pad.generic.panel.draw", label: "Draw" },
+                  phase: "live" as const,
+                  layout: "grid" as const,
+                  actions: [drawAction],
+                },
+              ]
+            : []),
+        ];
+
+  const panels: PadPanel[] = [
+    {
+      labelKey: { key: "pad.generic.panel.tally", label: "Tally" },
+      phase: "live",
+      layout: "grid",
+      actions: [addPointsAction, correctPointsAction],
+    },
+    ...resultPanels,
+  ];
+
+  return {
+    panels,
+    // Modelled on generic's OWN existing (untouched) `fidelityTiers` (below):
+    // tier 0 is the terminal card alone, tier 1 adds the running tally.
+    // Neither entry carries an entitlement — the fallback ships free at
+    // every band it currently declares.
+    fidelity: {
+      "generic.result": 0,
+      "generic.score": 1,
+    },
+    fidelityEntitlements: {},
+  };
+}
+
 export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
   key: "generic",
   version: "1.0.0",
   configSchema: GenericCfg,
   eventSchema: GenericEvent,
+  eventSchemas: GENERIC_EVENT_SCHEMAS,
+  padSpec,
   // spec 04 §8 / doc 02 §3 — generic tracks entrants, not people; adapters
   // pass a single placeholder slot per side (like chess: lineup size 1).
   positions: { groups: [], lineup: { size: 1, benchMax: 0 } },
