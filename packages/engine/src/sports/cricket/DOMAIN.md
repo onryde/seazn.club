@@ -186,18 +186,24 @@ Recorded, not acted on.
    `cricket.ball` (see the `Player leaderboards from the ledger` row above):
    runs, balls faced, balls bowled, runs conceded, wickets, catches, stumpings,
    run outs. Arrays remain a leaf — no traversal, no query syntax.
-2. **`apps/web/src/lib/scoring-vocab.ts` does not know `hitballtwice`.** Its
-   `WicketKind` union is closed at nine values; the humanising fallback will
-   render it as "Hitballtwice" until a label is added (and translated into all
-   four dictionaries). No other engine-side value it knows was removed.
-3. **New event types a pad must be able to prompt for**: `cricket.retire`
-   (person + hurt/out + optional incoming), `cricket.newball`,
-   `cricket.powerplay` (kind + start/end), `cricket.review` (side + player/
-   umpire + outcome). All four need vocabulary and i18n on the web side.
-4. **New fields on an existing branch**: `wicket.fielderAssist` and
-   `wicket.incoming`. A scoring pad that records a run out should offer two
-   fielder slots, and a pad that records any dismissal should offer "who's
-   in?" rather than assuming lineup order.
+2. ~~**`apps/web/src/lib/scoring-vocab.ts` does not know `hitballtwice`.**~~ —
+   **DONE**, S7/#427 (`366ef5a7`). `WicketKind` widened to ten values,
+   `WICKET_KEY["hitballtwice"]` reuses the existing `kind.hitballtwice` key
+   (already correct in all four dictionaries) rather than minting a duplicate.
+   A first pass (`e55e10b7`) made the option *selectable* without fixing
+   `wicketLabel()` itself, which checks only `WICKET_KEY` and never falls
+   through to `KIND_KEY` the way `enumLabel("kind", …)` does — caught in
+   review before merge.
+3. ~~**New event types a pad must be able to prompt for**: `cricket.retire`
+   … `cricket.newball` … `cricket.powerplay` … `cricket.review`~~ — **DONE**,
+   S3-S5 shipped the vocabulary and i18n for all four opportunistically while
+   wiring their own apps/web work; S7 confirmed presence rather than
+   re-adding it.
+4. ~~**New fields on an existing branch**: `wicket.fielderAssist` and
+   `wicket.incoming`.~~ — **DONE**, S7/#427 (`af581d0e`). `PadAttributionItem`
+   gained an optional `labelKey`, wired at cricket's wicket action for both
+   fields; the fielder slots and "who's in?" pad affordance are S10's
+   (renderer) to build once `PadSpec` is consumed.
 5. **New close reasons.** `summary.detail.innings[].closeReason` is now
    sometimes present. Any renderer that enumerates that object must tolerate
    it (it is additive, so a spread-based renderer is already fine).
