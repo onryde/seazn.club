@@ -5,11 +5,19 @@ import { foldMatch, type CoreEv, type EventEnvelope } from "../../core/events.ts
 import { shuffle } from "../../core/rng.ts";
 import type { LineupPair, StageCtx, StandingsDelta } from "../../core/types.ts";
 import { evalPadGate, type PadField, type PadSpec } from "../../sport/module.ts";
-import { buildStream, conformanceSuite, makeEnvelope } from "../../testkit/index.ts";
+import { buildWalk, conformanceSuite, makeEnvelope } from "../../testkit/index.ts";
 // S6/#416 (W5) — deliberately NOT from the testkit barrel: conformance-pad.ts
 // touches node:fs (DOMAIN.md presence), mirroring golden.ts's own exclusion.
 import { checkActionCoverage, padItemLabelKey, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
-import { cricket, padSpec, CRICKET_EVENT_SCHEMAS, type CricketBallEv, type CricketCfg, type CricketEv } from "./cricket.ts";
+import {
+  cricket,
+  padSpec,
+  CRICKET_EVENT_SCHEMAS,
+  type CricketBallEv,
+  type CricketCfg,
+  type CricketEv,
+  type CricketState,
+} from "./cricket.ts";
 import { dlsTarget, resources, resourcesFromBalls } from "./dls.ts";
 
 // W4a (#425) §3.3 — every fold below is PAD-SHAPED: it is building a stream
@@ -929,28 +937,42 @@ describe("cricket golden (e): two-innings matches", () => {
 // PROMPT-05 acceptance — bowler-legality property over generated streams.
 // ---------------------------------------------------------------------------
 
+// Segments fine deliveries into innings by the engine's OWN innings ordinal
+// (`states[i].innings.length` right after that ball was applied), not by
+// re-deriving boundaries from over/ballInOver arithmetic. An over/ball-
+// counter heuristic (originally: "new segment when the counter goes backward
+// to over 0, ball 1") is ambiguous exactly when an innings closes after its
+// very first ball (e.g. a rain-shortened "time" close): the next innings'
+// first ball is ALSO over 0/ball 1, an identical key rather than a smaller
+// one, so the heuristic silently merged two different innings — with two
+// different bowling sides — into one fake segment (seed 1224485596, length
+// 20 reproduced this: A-3 bowled the only ball of innings 1, H-4 opened
+// innings 2, both read as "the same over"). The innings ordinal has no such
+// ambiguity. Shared by the property below and its pinned regression case so
+// a reversion of this fix reds both, not just the one an editor happens to
+// touch (see reference_parallel_vocab_lookup_paths_drift in project memory).
+function segmentBallsByInnings(
+  events: EventEnvelope[],
+  states: CricketState[],
+): Map<number, CricketBallEv[]> {
+  const segments = new Map<number, CricketBallEv[]>();
+  events.forEach((event, i) => {
+    if (event.type !== "cricket.ball") return;
+    const inningsNo = (states[i] as CricketState).innings.length;
+    const segment = segments.get(inningsNo) ?? [];
+    segment.push(event.payload as CricketBallEv);
+    segments.set(inningsNo, segment);
+  });
+  return segments;
+}
+
 describe("cricket property: generated streams respect bowling legality", () => {
   it("never violates consecutive-over or quota rules", () => {
     fc.assert(
       fc.property(fc.nat(), fc.integer({ min: 20, max: 300 }), (seed, length) => {
-        const events = buildStream(cricket, t20, lineups, seed, length);
-        // Segment fine deliveries into innings on over-counter resets.
-        const segments: CricketBallEv[][] = [];
-        let current: CricketBallEv[] = [];
-        let prevKey = -1;
-        for (const event of events) {
-          if (event.type !== "cricket.ball") continue;
-          const ball = event.payload as CricketBallEv;
-          const key = ball.over * 100 + ball.ballInOver;
-          if (key < prevKey && ball.over === 0 && ball.ballInOver === 1) {
-            if (current.length > 0) segments.push(current);
-            current = [];
-          }
-          prevKey = key;
-          current.push(ball);
-        }
-        if (current.length > 0) segments.push(current);
-        for (const segment of segments) {
+        const { events, states } = buildWalk(cricket, t20, lineups, seed, length);
+        const segments = segmentBallsByInnings(events, states);
+        for (const segment of segments.values()) {
           const overBowler = new Map<number, string>();
           for (const ball of segment) {
             const existing = overBowler.get(ball.over);
@@ -971,6 +993,17 @@ describe("cricket property: generated streams respect bowling legality", () => {
       }),
       { numRuns: 60 },
     );
+  });
+
+  // Pins the exact counterexample the segmentation bug above shipped with
+  // (CI run https://github.com/ashokhein/seazn.club/actions/runs/31544606387,
+  // S7/#427) — an UNSEEDED property run only re-finds a rare edge case by
+  // luck, so this is the actual regression guard, not the property above.
+  it("does not merge a one-ball innings into the next innings' first over (regression)", () => {
+    const { events, states } = buildWalk(cricket, t20, lineups, 1224485596, 20);
+    const ballsByInnings = segmentBallsByInnings(events, states);
+    expect(ballsByInnings.get(1)).toMatchObject([{ over: 0, ballInOver: 1, bowler: "A-3" }]);
+    expect(ballsByInnings.get(2)).toMatchObject([{ over: 0, ballInOver: 1, bowler: "H-4" }]);
   });
 });
 
