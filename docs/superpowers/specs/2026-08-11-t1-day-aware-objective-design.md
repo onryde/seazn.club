@@ -31,6 +31,47 @@ Observed on staging, division `test001`, 37 fixtures over Aug 10–16,
 |---|---|---|---|---|---|---|
 | 6 | 7 | 7 | 7 | 7 | **3** | **0** |
 
+### 1.1 Read off staging 2026-08-11, and it confirms the thesis exactly
+
+Division `7f41f7c4-e1d6-4432-b65c-7343f504e866`, org zone `Europe/London`,
+play window 10:30–16:00:
+
+```
+Mon 10 Aug | 6 | 14:30-15:30 | locked=0    <- first day starts LATE
+Tue 11 Aug | 7 | 10:30-14:00 | locked=0
+Wed 12 Aug | 7 | 10:30-12:30 | locked=0
+Thu 13 Aug | 7 | 10:30-13:00 | locked=0
+Fri 14 Aug | 7 | 10:30-12:30 | locked=0
+Sat 15 Aug | 3 | 10:30-10:30 | locked=0    <- last day ends EARLY
+```
+
+Front of the first day shaved, back of the last day shaved, middle days packed
+from the window's open. That is the predicted signature of `mk_hi - mk_lo`,
+observed rather than argued.
+
+**`locked = 0` on all 37 rows — this board has NO pins.** That matters for
+attribution: the empty Monday morning is this objective, not #511. An earlier
+diagnosis in the programme attributed it to six pins on Monday sitting outside
+the span; whatever was true then, the board as it stands has none, and #511 has
+nothing to act on here. Do not carry that explanation forward.
+
+### 1.2 What this objective does NOT fix, stated before anyone expects it to
+
+**Summed per-day span is indifferent to when a day STARTS.** Monday's six
+matches span 14:30–15:30; moved to 10:30–11:30 they span exactly the same
+hour, so T1b scores both identically. T1a is unaffected either way — the day is
+used in both.
+
+So the two rungs stop the empty morning being *rewarded*; they do not make an
+early start *preferred*. If "the day should begin when the window opens" is
+the organiser's expectation — and the reported symptom suggests it is — that
+needs a THIRD term (minimise summed start offsets, or per-day earliest finish),
+and it should be argued for separately rather than assumed to fall out of this
+change.
+
+This is the single most likely way for this work to ship, pass its tests, and
+still not satisfy the person who filed the issue.
+
 ## 2. What the motivating board actually proves — read this before costing the work
 
 **The day-count term wins nothing on the board that motivated the issue.**
