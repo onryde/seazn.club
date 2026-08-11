@@ -1,23 +1,54 @@
 name: E2E
 
 # Playwright UI e2e suite, split out of the CI smoke job so PRs stay fast.
-# Runs automatically on pushes to main; for a PR, trigger it manually and
-# pass the PR number (Actions -> E2E -> Run workflow).
+# Runs automatically on pull requests; workflow_dispatch also lets you target
+# a specific PR number or run against staging.
 #
-# Both targets now run against a PRODUCTION build, never `next dev`: `next dev`
+# Split into three independent jobs — e2e-parallel / e2e-serial / e2e-mobile —
+# instead of one job chaining `playwright test --project=X && ... && ...`.
+# That `&&` chain meant a `parallel` failure silently skipped `serial` and
+# `mobile` entirely: they never ran, and their absence read as "not
+# applicable" rather than "untested". Separate GitHub Actions jobs have no
+# such chain — each runs and reports regardless of the others' outcome.
+#
+# `e2e-mobile` now also runs the FIVE width/device projects
+# (mobile-320/360/430, tablet-768/834) that `playwright.config.ts` has always
+# defined but that no workflow ever invoked — confirmed by grepping every
+# workflow file for their project names before this change; only mobile-se
+# (375) and mobile-14 (390) ever ran in CI. AGENTS.md calls the seven-width
+# matrix "the enforcement backstop"; it was 2 of 7 in practice. All seven now
+# run in ONE job with `--workers=1` (deliberately NOT one job per width): the
+# global `fullyParallel: true` config means Playwright runs projects
+# concurrently by default, and these seven all exercise mobile.spec.ts
+# against the SAME org minted by the `setup` project within one job — running
+# them concurrently is exactly the "7 width projects race each other over ONE
+# org" flakiness this repo has already hit (a settings-rename hangs 60s on a
+# disabled Save under contention). `--workers=1` serializes them: no race,
+# one DB/server/placement-container boot shared across all seven, at the cost
+# of losing cross-width parallelism — which nothing was actually paying for
+# before this change anyway, since 5 of the 7 never ran at all.
+#
+# Each job independently migrates its own fresh Postgres and mints its own
+# `setup`-project org — GitHub Actions `services:` are job-scoped, so there
+# is no live database or server to share across jobs (see ci.yml's
+# smoke-db/smoke-e2e split for the same reasoning). That duplication also
+# means the mobile job's org is now structurally isolated from parallel's and
+# serial's too, not just from its own seven widths.
+#
+# Both targets run against a PRODUCTION build, never `next dev`: `next dev`
 # pins its V8 heap to half the runner's RAM and restarts itself past ~80% use
 # (with transient 404s from Turbopack's on-demand compiles as it nears the
 # ceiling) — flaky under a full Playwright run. `next start` has neither the
 # watchdog nor per-request compiles, and is what production runs anyway. The
 # compiler cache is persisted between runs so the build only pays for changes.
 #
-# Because production builds never dev-expose `login_url`, both targets set
+# Because production builds never dev-expose `login_url`, all targets set
 # E2E_PROD_TARGET=1: the auth helpers mint login tokens straight in the DB
 # (the local Postgres service here, the staging DB for target=staging) and
 # skip the specs that assert dev link exposure. Runs leave TAG-prefixed e2e
 # users/orgs behind in whichever DB they targeted.
 on:
-  pull_request: 
+  pull_request:
   workflow_dispatch:
     inputs:
       pr:
@@ -36,8 +67,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  e2e:
-    name: Playwright e2e (Postgres container)
+  # ---------------------------------------------------------------------
+  # Specs that only touch state they create (own competitions/divisions) —
+  # safe at several workers, tests within a file too. See
+  # playwright.config.ts's `parallel` project.
+  # ---------------------------------------------------------------------
+  e2e-parallel:
+    name: Playwright e2e — parallel (Postgres container)
     if: ${{ (inputs.target || 'local') == 'local' }}
     runs-on: ubuntu-latest
 
@@ -245,8 +281,8 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
         working-directory: apps/web
-      - name: Run Playwright e2e
-        run: npm run test:e2e
+      - name: Run Playwright e2e (parallel project)
+        run: npx playwright test --project=parallel
         working-directory: apps/web
         env:
           PLAYWRIGHT_BASE: http://localhost:3000
@@ -255,7 +291,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-report-parallel
           path: apps/web/playwright-report
           retention-days: 7
 
@@ -273,10 +309,354 @@ jobs:
           docker logs placement-e2e || true
           docker rm -f placement-e2e >/dev/null 2>&1 || true
 
+  # ---------------------------------------------------------------------
+  # Specs entangled with shared org-level state: owned-org quota (billing,
+  # billing-states, org-management all mint orgs on the shared Pro user — cap
+  # + reasoning in e2e/auth.setup.ts, "ORG BUDGET"), the community org's
+  # competitions.max_active slots (journey-community, device-links), org
+  # renames, plan flips, and the single Pro scorer seat. One worker, one file
+  # at a time. See playwright.config.ts's `serial` project (fullyParallel:
+  # false there too — belt and suspenders with this job's own --workers=1).
+  # ---------------------------------------------------------------------
+  e2e-serial:
+    name: Playwright e2e — serial (Postgres container)
+    if: ${{ (inputs.target || 'local') == 'local' }}
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      DATABASE_SSL: disable
+      AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
+      NEXT_TELEMETRY_DISABLED: "1"
+      E2E_PROD_TARGET: "1"
+      STRIPE_SECRET_KEY: sk_test_ci_e2e_dummy
+      STRIPE_WEBHOOK_SECRET: whsec_e2e_payments
+      SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
+      ANTHROPIC_API_KEY: sk-ant-e2e-fixture
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.pr && format('refs/pull/{0}/head', inputs.pr) || github.ref }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Cache Flyway CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/seazn-flyway
+          key: flyway-cli-10.22.0-linux-x64
+
+      - name: Bootstrap database (Flyway migrate)
+        run: npm run db:apply
+
+      - name: Sync sport catalog from the engine registry
+        run: npm run sync:sports
+
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('apps/web/src/**/*.js', 'apps/web/src/**/*.jsx', 'apps/web/src/**/*.ts', 'apps/web/src/**/*.tsx') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
+
+      - name: Build (production)
+        run: npm run build --workspace apps/web
+        env:
+          SKIP_TYPECHECK: "1"
+
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the placement service image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Start the placement service
+        run: |
+          set -euo pipefail
+          docker run -d --name placement-e2e -p 50051:50051 \
+            -e PLACEMENT_SERVICE_SECRET=ci-e2e-secret \
+            placement-service:ci
+          opened=""
+          for _ in $(seq 1 15); do
+            if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/50051' 2>/dev/null; then opened=1; break; fi
+            sleep 1
+          done
+          if [ -z "$opened" ]; then
+            echo "::error::placement port 50051 never accepted a TCP connection within 15s"
+            docker logs placement-e2e || true
+            exit 1
+          fi
+
+      - name: Start server
+        env:
+          PLACEMENT_SERVICE_HOST: localhost:50051
+          PLACEMENT_SERVICE_SECRET: ci-e2e-secret
+        run: |
+          rm -rf apps/web/.next/standalone/apps/web/.next/static
+          cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
+          node apps/web/.next/standalone/apps/web/server.js > dev-server.log 2>&1 &
+          echo "waiting for server…"
+          up=""
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:3000/api/health >/dev/null; then
+              echo "server up after ${i}s window"; up=1; break
+            fi
+            sleep 2
+          done
+          if [ -z "$up" ]; then
+            echo "server did not become healthy"; cat dev-server.log; exit 1
+          fi
+          chunk=$(ls apps/web/.next/static/chunks/*.js 2>/dev/null | head -1)
+          if [ -z "$chunk" ]; then
+            echo "no built chunks found — build output is not where expected"; exit 1
+          fi
+          asset="/_next/${chunk#apps/web/.next/}"
+          if ! curl -sf "http://localhost:3000$asset" >/dev/null; then
+            echo "static asset $asset 404s — standalone tree not staged"
+            cat dev-server.log; exit 1
+          fi
+          echo "static assets serve ($asset)"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      - name: Run Playwright e2e (serial project)
+        run: npx playwright test --project=serial --workers=1
+        working-directory: apps/web
+        env:
+          PLAYWRIGHT_BASE: http://localhost:3000
+
+      - name: Upload Playwright report (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-serial
+          path: apps/web/playwright-report
+          retention-days: 7
+
+      - name: Dev server log (on failure)
+        if: failure()
+        run: cat dev-server.log || true
+
+      - name: Placement service logs and teardown
+        if: always()
+        run: |
+          docker logs placement-e2e || true
+          docker rm -f placement-e2e >/dev/null 2>&1 || true
+
+  # ---------------------------------------------------------------------
+  # v3/02 §4 viewport gate + #349 responsive matrix, all seven widths, in ONE
+  # job — see this file's header comment for why `--workers=1` and one job
+  # rather than one job per width: all seven run mobile.spec.ts against the
+  # SAME org this job's `setup` project mints, and running them concurrently
+  # is the documented "7 width projects race each other over ONE org"
+  # flakiness. Full suite per width (owner decision, spec §1): every gate
+  # assertion holds at every width; LCP self-pins to 375/390 inside the test.
+  # ---------------------------------------------------------------------
+  e2e-mobile:
+    name: Playwright e2e — mobile/tablet, 7 widths (Postgres container)
+    if: ${{ (inputs.target || 'local') == 'local' }}
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      DATABASE_SSL: disable
+      AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
+      NEXT_TELEMETRY_DISABLED: "1"
+      E2E_PROD_TARGET: "1"
+      STRIPE_SECRET_KEY: sk_test_ci_e2e_dummy
+      STRIPE_WEBHOOK_SECRET: whsec_e2e_payments
+      SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
+      ANTHROPIC_API_KEY: sk-ant-e2e-fixture
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.pr && format('refs/pull/{0}/head', inputs.pr) || github.ref }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Cache Flyway CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/seazn-flyway
+          key: flyway-cli-10.22.0-linux-x64
+
+      - name: Bootstrap database (Flyway migrate)
+        run: npm run db:apply
+
+      - name: Sync sport catalog from the engine registry
+        run: npm run sync:sports
+
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('apps/web/src/**/*.js', 'apps/web/src/**/*.jsx', 'apps/web/src/**/*.ts', 'apps/web/src/**/*.tsx') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
+
+      - name: Build (production)
+        run: npm run build --workspace apps/web
+        env:
+          SKIP_TYPECHECK: "1"
+
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the placement service image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Start the placement service
+        run: |
+          set -euo pipefail
+          docker run -d --name placement-e2e -p 50051:50051 \
+            -e PLACEMENT_SERVICE_SECRET=ci-e2e-secret \
+            placement-service:ci
+          opened=""
+          for _ in $(seq 1 15); do
+            if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/50051' 2>/dev/null; then opened=1; break; fi
+            sleep 1
+          done
+          if [ -z "$opened" ]; then
+            echo "::error::placement port 50051 never accepted a TCP connection within 15s"
+            docker logs placement-e2e || true
+            exit 1
+          fi
+
+      - name: Start server
+        env:
+          PLACEMENT_SERVICE_HOST: localhost:50051
+          PLACEMENT_SERVICE_SECRET: ci-e2e-secret
+        run: |
+          rm -rf apps/web/.next/standalone/apps/web/.next/static
+          cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
+          node apps/web/.next/standalone/apps/web/server.js > dev-server.log 2>&1 &
+          echo "waiting for server…"
+          up=""
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:3000/api/health >/dev/null; then
+              echo "server up after ${i}s window"; up=1; break
+            fi
+            sleep 2
+          done
+          if [ -z "$up" ]; then
+            echo "server did not become healthy"; cat dev-server.log; exit 1
+          fi
+          chunk=$(ls apps/web/.next/static/chunks/*.js 2>/dev/null | head -1)
+          if [ -z "$chunk" ]; then
+            echo "no built chunks found — build output is not where expected"; exit 1
+          fi
+          asset="/_next/${chunk#apps/web/.next/}"
+          if ! curl -sf "http://localhost:3000$asset" >/dev/null; then
+            echo "static asset $asset 404s — standalone tree not staged"
+            cat dev-server.log; exit 1
+          fi
+          echo "static assets serve ($asset)"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      # All seven, serialized (--workers=1) — see this job's header comment.
+      - name: Run Playwright e2e (mobile + tablet projects, all 7 widths)
+        run: npx playwright test --project=mobile-se --project=mobile-14 --project=mobile-320 --project=mobile-360 --project=mobile-430 --project=tablet-768 --project=tablet-834 --workers=1
+        working-directory: apps/web
+        env:
+          PLAYWRIGHT_BASE: http://localhost:3000
+
+      - name: Upload Playwright report (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-mobile
+          path: apps/web/playwright-report
+          retention-days: 7
+
+      - name: Dev server log (on failure)
+        if: failure()
+        run: cat dev-server.log || true
+
+      - name: Placement service logs and teardown
+        if: always()
+        run: |
+          docker logs placement-e2e || true
+          docker rm -f placement-e2e >/dev/null 2>&1 || true
+
   # Same suite against the deployed staging app. No Postgres/Redis services and
   # no dev server: PLAYWRIGHT_BASE points at Fly, and the SQL setup helpers
   # (plan flips, login-token minting) reach the staging DB through the same
   # STAGING_DATABASE_URL secret the deploy job migrates with. Manual-only.
+  # Unaffected by the parallel/serial/mobile split above — still runs the
+  # unified `npm run test:e2e` script (parallel && serial && mobile-se +
+  # mobile-14 only, NOT the 5 extra widths), same as before this change: a
+  # deployed target is a single shared environment, not one this repo spins
+  # up fresh per job, so the && chain's failure mode here is unchanged.
   e2e-staging:
     name: Playwright e2e (staging)
     if: ${{ inputs.target == 'staging' }}
