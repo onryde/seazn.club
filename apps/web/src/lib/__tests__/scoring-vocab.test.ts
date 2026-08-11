@@ -193,7 +193,9 @@ describe("scoring-vocab covers what the engine declares", () => {
 
     const enums = declaredEnumMembers();
     expect([...enums.keys()].sort()).toEqual(
-      ["color", "elected", "kind", "level", "method", "outcome", "phase", "reason", "receiverSide"],
+      // S4 (#428) — `offence` joined this list: FootballPenalty.offence, the
+      // Law 12 offence that conceded the kick.
+      ["color", "elected", "kind", "level", "method", "offence", "outcome", "phase", "reason", "receiverSide"],
     );
     // W4a's own additions, one per sport that grew an enum.
     expect([...(enums.get("method") ?? [])]).toEqual(

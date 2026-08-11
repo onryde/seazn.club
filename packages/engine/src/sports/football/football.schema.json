@@ -433,6 +433,19 @@
             "minimum": 0,
             "type": "integer"
           },
+          "offence": {
+            "enum": [
+              "charging",
+              "handball",
+              "jumping_at",
+              "kicking",
+              "pushing",
+              "striking",
+              "tackling",
+              "tripping"
+            ],
+            "type": "string"
+          },
           "outcome": {
             "enum": [
               "missed",
@@ -647,6 +660,9 @@
         "string"
       ],
       "penalties[].goalkeeper": [
+        "string"
+      ],
+      "penalties[].offence": [
         "string"
       ],
       "penalties[].outcome": [

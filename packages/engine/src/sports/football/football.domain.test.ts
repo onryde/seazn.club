@@ -173,6 +173,53 @@ describe("card offence codes (Law 12)", () => {
   });
 });
 
+// S4/#428 review round 1, finding 1 — a coach/team official is a squad
+// member (S3/#426 ruling 3: he can be carded, LineupSlot.role) but never a
+// PLAYER, and `applyCard`'s "in the lineup" check reads `state.squads[side]`
+// — football's own `onPitch`/`bench`/`offUsed`/`sinBin`, all built from
+// `playingSquad(side)` (`initialFootballSquad`, deliberately PLAYERS ONLY —
+// that is the correct behaviour for on-pitch tracking). A coach is
+// therefore never in ANY of them, so a card addressed to him was
+// structurally unrecordable — not merely miscounted downstream, which is
+// what this test caught building the real end-to-end regression test.
+describe("a card to a non-player squad member (coach/staff) is recordable (S4/#428)", () => {
+  const coachedLineups: LineupPair = {
+    home: {
+      ...lineupWithBench("H"),
+      slots: [...lineupWithBench("H").slots, { personId: "H-coach", slot: "bench", orderNo: 90, role: "coach" }],
+    },
+    away: lineupWithBench("A"),
+  };
+  const foldCoached = (cfg: FootballCfg, events: EventEnvelope[]) =>
+    foldMatch(football, cfg, coachedLineups, events);
+
+  it("accepts a card whose person is a non-player squad member", () => {
+    const state = foldCoached(
+      cfgOf({}),
+      stream(["core.start"], ["football.card", { by: "H", person: "H-coach", color: "yellow" }]),
+    );
+    expect(state.cards[0]).toEqual({ side: "home", person: "H-coach", color: "yellow" });
+  });
+
+  it("still rejects a person who is in NEITHER the playing squad NOR the non-player list", () => {
+    expect(() =>
+      foldCoached(
+        cfgOf({}),
+        stream(["core.start"], ["football.card", { by: "H", person: "H-nobody", color: "yellow" }]),
+      ),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
+  });
+
+  it("a fixture with no non-player squad member folds exactly as before (additive, byte-identical)", () => {
+    // The default `lineups` (module-level, no coach) must still reject an
+    // unknown person exactly as it always has — the fix must not widen who
+    // counts as "in the lineup" for a genuinely unlisted person.
+    expect(() =>
+      fold(cfgOf({}), stream(["core.start"], ["football.card", { by: "H", person: "H-ghost", color: "yellow" }])),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Law 7 — allowance for time lost. A match report records "90+3", which a bare
 // integer `minute` cannot distinguish from the 93rd minute of extra time.
@@ -314,6 +361,36 @@ describe("penalties in open play (Law 14)", () => {
   it("rejects an outcome outside the Law 14 vocabulary", () => {
     expect(() =>
       fold(cfgOf({}), stream(["core.start"], pen({ by: "H", outcome: "scored" }))),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
+  });
+
+  // S4 (#428) — the Law 12 direct-free-kick/penalty offence that CONCEDED the
+  // kick. Distinct from CardReason: a penalty need not carry a card at all
+  // (a foul with no misconduct still concedes one), and a card's reason can
+  // differ from the offence that gave away the penalty in the first place
+  // (e.g. a penalty for handball plus a separate caution for dissent).
+  it("records which Law 12 offence conceded the kick", () => {
+    const state = fold(
+      cfgOf({}),
+      stream(["core.start"], pen({ by: "H", taker: "H-p9", outcome: "saved", offence: "handball" })),
+    );
+    expect(state.penalties).toEqual([
+      { side: "home", outcome: "saved", taker: "H-p9", offence: "handball" },
+    ]);
+  });
+
+  it("stays a legal, unchanged penalty when the offence is omitted (additive)", () => {
+    const state = fold(cfgOf({}), stream(["core.start"], pen({ by: "H", outcome: "post" })));
+    expect(state.penalties).toEqual([{ side: "home", outcome: "post" }]);
+    expect(Object.hasOwn(state.penalties![0]!, "offence")).toBe(false);
+  });
+
+  it("rejects an offence outside the closed Law 12 vocabulary", () => {
+    expect(() =>
+      fold(
+        cfgOf({}),
+        stream(["core.start"], pen({ by: "H", outcome: "saved", offence: "professional_foul" })),
+      ),
     ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
   });
 
@@ -555,6 +632,8 @@ describe("event union disambiguation", () => {
           color: "sin_bin",
           eventId: "e-0",
           reason: "dissent",
+          // S4 (#428) — DisciplineCard.minutes now carries the recorded length.
+          minutes: 10,
         },
       ]);
     });

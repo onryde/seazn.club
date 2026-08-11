@@ -20054,6 +20054,14 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "role": {
+                          "type": "string",
+                          "enum": [
+                            "player",
+                            "coach",
+                            "staff"
+                          ]
                         }
                       },
                       "required": [

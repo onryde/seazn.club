@@ -48,7 +48,7 @@ is initialised with.
 | Disallowed goal and its reason (offside / VAR) | all | n/a | — | deferred | Not a scorebook entry: a disallowed goal is not a goal, and the FA/IFAB match record has no field for it. VAR exists only above every declared variant's level. Needs a product decision if the pad wants a "chalked off" timeline entry. |
 | Penalty awarded in open play and **not** converted (saved / missed / woodwork) | all | `taker`; the defending `goalkeeper` | `Ev.FootballPenalty` → `State.penalties[]` | **extended** | New branch `{by, taker?, goalkeeper?, outcome, minute?}`. `outcome` is a required enum `saved\|missed\|post` — that is also what keeps the branch distinct in the union. A **converted** penalty stays `football.goal {penalty:true}`, so no pre-W4 stream changes meaning. `goalkeeper` is validated against the **defending** side. |
 | Who took, and who saved, a missed penalty | all | `taker`, `goalkeeper` | `Ev.FootballPenalty.taker`, `.goalkeeper` → `State.penalties[].taker\|goalkeeper`, `playerStats.penalties_missed` | **extended** | Both optional, per the person-attribution convention. |
-| The offence that conceded a penalty | all | offender | — | deferred | Requires the Law 12 direct-free-kick offence taxonomy, which no declared fidelity tier records. Needs a product decision. |
+| The offence that conceded a penalty | all | offender | `Ev.FootballPenalty.offence` → `State.penalties[].offence` | **extended** | S4 (#428). New optional `PenaltyOffence` enum: IFAB Law 12's 8 direct-free-kick/penalty offences (`kicking`, `tripping`, `jumping_at`, `charging`, `pushing`, `striking`, `tackling`, `handball`). Deliberately a DIFFERENT field from `CardReason` on the same event — not every penalty carries a card at all, and a card's reason can diverge from the offence that gave the kick away. |
 | Yellow card | all | `person` | `Ev.FootballCard.color = "yellow"` → `State.cards[]` | modelled | Anonymous cards legal; a second plain yellow for the same person is refused (must be recorded as `second_yellow`). |
 | Second yellow, and the red that follows it | all | `person` | `Ev.FootballCard.color = "second_yellow"` → `State.squads[].sentOff` | modelled | Refused without a prior yellow for that person; the fold removes the player permanently. FIFA fair play scores it −3, a direct red −4, yellow + direct red −5. |
 | Direct red card | all | `person` | `Ev.FootballCard.color = "red"` | modelled | Legal pre-kickoff too (football.md §9). |
@@ -98,7 +98,7 @@ is initialised with.
 
 | Where in the match an event happened (the position axis) | all | — | `SportModule.position(state)` -> `period` + `clock` segments, e.g. `H2 . 48:12` | extended | W4a T6b. A **read-side projection**, never a payload: a `MatchPosition` on every stamped event was considered this wave and rejected, because position is derivable from state the fold already computes and recording it would create a recorded value and a derived value of the same type that can silently disagree — the `DisciplineCard.entrantSide` shape. A wrong recorded value is in the hash-chained ledger forever; a wrong projection is one deploy away from fixed. Ordered segments rather than a display string, so W8 can drop a segment for a 375px scorebug, localise each `key` and order two positions in one match; `formatPosition` is the plain-text path. Nothing is materialised into state, so every frozen golden is byte-identical. Football and the period kernel have different state types and cannot share a module member, so both delegate to the core `periodClockPosition` and the conformance suite holds them to ONE shape. That is the direct answer to this wave's five hand-rolled time-model divergences in this file. Ranked against `playPhases(cfg)` — the wider list an event's `at.period` is validated against — never the narrower `PLAY_PHASES`. |
 
-**Row counts:** 25 modelled, 23 extended, 11 deferred (59 rows). No blank cells.
+**Row counts:** 25 modelled, 24 extended, 10 deferred (59 rows). No blank cells.
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## Per-variant divergence
@@ -265,11 +265,15 @@ because of these are now `extended`, each naming what implements it.
 
 **Still genuinely deferred** (and still marked `deferred` in the table above):
 the shootout kicker is validated but not retained in `State`; quarters instead
-of halves need three new `PlayPhase` values; the Law 12 direct-free-kick offence
-taxonomy behind a conceded penalty has no declared fidelity tier; the injury
-behind a substitution is medical data with consent implications. Each of those
-needs a product decision or a state-machine extension, not a shared-engine
-field.
+of halves need three new `PlayPhase` values; the injury behind a substitution
+is medical data with consent implications. Each of those needs a product
+decision or a state-machine extension, not a shared-engine field.
+
+**Closed in S4 (#428):** the Law 12 direct-free-kick offence taxonomy behind a
+conceded penalty. It never actually needed a declared fidelity tier — that was
+this row's own premise, and it was wrong: the taxonomy is short (8 members) and
+closed (IFAB Law 12 §3), so it shipped as `PenaltyOffence`, additive and
+optional on `Ev.FootballPenalty`, at the module's existing fidelity tiers.
 
 **Cleared in S3/W4b (#426)** by the kernel-owned lineup model
 (`src/core/lineup.ts`): the keeper is nameable by person id at every fold point

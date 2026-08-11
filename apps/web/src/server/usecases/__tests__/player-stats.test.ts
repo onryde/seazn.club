@@ -201,6 +201,87 @@ describe.skipIf(!HAS_DB)("player statistics (Jul3/07)", () => {
     expect(card.divisions[0]!.stats.goals).toBe(1);
   });
 
+  // S4/#428, review round 1 finding 1 — THE acceptance criterion this whole
+  // session exists for: "a card issued to a non-player produces no
+  // player-stat row", proven through the REAL product surface (putLineup +
+  // scoreEvent + divisionPlayerStats), not a bare aggregatePlayerStats unit
+  // call. A coach is a squad member (S3 ruling 3: he can be carded) but must
+  // never earn a leaderboard row.
+  it("a coach's card never reaches the leaderboard, scored through the real API path", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures, teamA, entrants } = await seedDivision(auth);
+    const f = fixtures[0]!;
+    const redsId = entrants[0]!.id;
+
+    const coach = await createPerson(auth, {
+      full_name: "Cara Coach",
+      consent: { public_name: true },
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+    // A coach is a squad member (entrant_members), same as any player — the
+    // ROLE that excludes him from the leaderboard lives on the per-fixture
+    // lineup slot, not on squad membership itself.
+    await sql`
+      insert into entrant_members (entrant_id, person_id, org_id)
+      values (${redsId}, ${coach.id}, ${auth.orgId})`;
+    // putLineup REPLACES the whole lineup for this entrant — re-declare the
+    // players seedDivision already named, plus the coach, through the REAL
+    // usecase (proves the wire actually carries `role`, not just the DB).
+    await putLineup(auth, f.id, redsId, {
+      slots: [
+        ...teamA.map((p, i) => ({
+          person_id: p.id,
+          slot: "starting" as const,
+          position_key: null,
+          order_no: i + 1,
+          roles: [],
+        })),
+        {
+          person_id: coach.id,
+          slot: "bench" as const,
+          position_key: null,
+          order_no: teamA.length + 1,
+          roles: [],
+          role: "coach" as const,
+        },
+      ],
+    });
+    // Round-trips through the real read path too.
+    const lineup = await getLineup(auth, f.id, redsId);
+    const coachSlot = (lineup.slots as { person_id: string; role: string }[]).find(
+      (s) => s.person_id === coach.id,
+    );
+    expect(coachSlot?.role).toBe("coach");
+
+    await scoreEvent(auth, f.id, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(auth, f.id, {
+      expected_seq: 1,
+      type: "football.goal",
+      payload: { by: redsId, scorer: teamA[0]!.id },
+    });
+    // THE event under test: a yellow card shown to the coach, not a player.
+    await scoreEvent(auth, f.id, {
+      expected_seq: 2,
+      type: "football.card",
+      payload: { by: redsId, person: coach.id, color: "yellow" },
+    });
+
+    const table = await divisionPlayerStats(auth, division.id, { metric: "goals" });
+    expect(table.rows.find((r) => r.person_id === coach.id)).toBeUndefined();
+    // The real player's goal still counts — the fix must not be a blanket
+    // suppression, only the coach's credit is dropped.
+    expect(table.rows.find((r) => r.person_id === teamA[0]!.id)?.stats.goals).toBe(1);
+
+    // The per-person card (personStats) must not surface the coach's
+    // "stats" either, since he never entered the fold as a player.
+    const coachCard = await personStats(auth, coach.id);
+    expect(
+      coachCard.divisions.find((d) => d.division_id === division.id)?.stats.yellow_cards ?? 0,
+    ).toBe(0);
+  });
+
   // W4 gave the generic fallback a playerStats model (generic.score → person),
   // which flipped every result-level generic division out of the empty board
   // and into the notice. Nothing asserted that branch, so the flip surfaced as

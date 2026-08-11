@@ -472,8 +472,40 @@
             "type": "string"
           },
           "reason": {
-            "minLength": 1,
-            "type": "string"
+            "anyOf": [
+              {
+                "enum": [
+                  "boarding",
+                  "charging",
+                  "checking_from_behind",
+                  "cross_checking",
+                  "dangerous_play",
+                  "delay_of_game",
+                  "dissent",
+                  "elbowing",
+                  "fighting",
+                  "high_sticking",
+                  "holding",
+                  "holding_the_stick",
+                  "hooking",
+                  "illegal_equipment",
+                  "interference",
+                  "obstruction",
+                  "other",
+                  "roughing",
+                  "slashing",
+                  "time_wasting",
+                  "too_many_men",
+                  "tripping",
+                  "unsportsmanlike_conduct"
+                ],
+                "type": "string"
+              },
+              {
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
           },
           "servedBy": {
             "minLength": 1,

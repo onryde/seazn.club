@@ -270,6 +270,25 @@ export const FootballShootoutKick = z.strictObject({
 // scored penalty is the goal event, and accepting it here would let one kick
 // be counted twice.
 export const PenaltyOutcome = AttemptOutcome.exclude(["scored"]);
+// S4 (#428) — IFAB Law 12 §3: the direct-free-kick offence that CONCEDED the
+// penalty (theifab.com Law 12, checked this session). Short and closed —
+// unlike `CardReason` (Law 12.3/12.4 cautionable/sending-off offences), this
+// answers a DIFFERENT question: not every penalty carries a card at all, and
+// a card's reason can diverge from the offence that gave the kick away (a
+// penalty for handball plus a separate caution for dissent). Named distinctly
+// from `CardReason` on purpose — conflating the two fields would make one
+// enum answer two questions.
+export const PenaltyOffence = z.enum([
+  "kicking",
+  "tripping",
+  "jumping_at",
+  "charging",
+  "pushing",
+  "striking",
+  "tackling",
+  "handball",
+]);
+export type PenaltyOffence = z.infer<typeof PenaltyOffence>;
 export const FootballPenalty = z.strictObject({
   by: EntrantId, // the side awarded the kick
   taker: PersonId.optional(),
@@ -279,6 +298,9 @@ export const FootballPenalty = z.strictObject({
   // "GK", IIHF "G"). One fact, one key, one pad control.
   goalkeeper: PersonId.optional(),
   outcome: PenaltyOutcome,
+  // S4 (#428) — optional everywhere: coarse scoring records a kick and
+  // nothing else, exactly like FootballCard.reason.
+  offence: PenaltyOffence.optional(),
   /** @deprecated W4a §5.2 — MINUTES, display only. Prefer `at` (seconds). */
   minute: z.number().int().nonnegative().optional(),
   // W4a §5.2 — a `strictObject` with no `at` does not merely LACK the field, it
@@ -410,6 +432,20 @@ interface FootballSquad {
   // Absent until the first exempt replacement, so every frozen stream
   // serialises exactly as it did.
   exemptUsed?: Readonly<Record<string, number>>;
+  // S4 (#428) review round 1, finding 1 — squad members `initialFootballSquad`
+  // deliberately excludes from `onPitch`/`bench` (`playingSquad` is
+  // players-only, correctly, for ON-PITCH tracking): a coach or other team
+  // official. S3/#426 ruling 3 put them ON the team sheet specifically so
+  // they CAN be shown a card (`core/types.ts`'s `LineupSlot.role` doc
+  // comment), but `applyCard`'s "in the lineup" check reads only this
+  // struct, so before this field existed a card addressed to a non-player
+  // was unconditionally `INVALID_EVENT` — not merely miscounted in stats,
+  // unrecordable. STATIC: football's `lineupPolicy` sets
+  // `allowSquadGrowth: false`, so nobody — player or not — joins mid-fixture;
+  // this list is fixed at `init` and never touched by a substitution or
+  // lineup-change fold. Absent when empty, so a fixture with no non-player
+  // squad member serialises exactly as it did before this field existed.
+  nonPlayers?: readonly string[];
 }
 
 interface CardRecord {
@@ -469,6 +505,8 @@ interface PenaltyRecord {
   goalkeeper?: string;
   minute?: number;
   at?: GameTime; // W4a §5.2 — the stamp, when the pad recorded one
+  // S4 (#428) — the Law 12 offence that conceded the kick, when recorded.
+  offence?: PenaltyOffence;
 }
 
 const PLAY_PHASES: readonly Phase[] = ["H1", "H2", "ET_H1", "ET_H2"];
@@ -932,7 +970,10 @@ function applyCard(state: FootballState, payload: z.infer<typeof FootballCard>):
       squad.offUsed.includes(person) ||
       // W4 — a player serving a temporary dismissal is off the pitch but very
       // much still cardable (a sin bin is frequently followed by a red).
-      (squad.sinBin ?? []).some((entry) => entry.person === person);
+      (squad.sinBin ?? []).some((entry) => entry.person === person) ||
+      // S4 (#428) — a coach/team official (S3 ruling 3) is on the team sheet
+      // and cardable, but never appears in any of the PLAYING lists above.
+      (squad.nonPlayers ?? []).includes(person);
     if (squad.sentOff.includes(person)) {
       invalid(`"${person}" was already sent off`, { person });
     }
@@ -1254,6 +1295,9 @@ function applyPenalty(state: FootballState, payload: z.infer<typeof FootballPena
     // W4a §5.2 — the stamp rides beside the display integer, absent when the
     // pad recorded none, so a pre-wave penalty record is byte-identical.
     ...(payload.at === undefined ? {} : { at: payload.at }),
+    // S4 (#428) — absent unless the referee's Law 12 offence was recorded, so
+    // a pre-wave penalty record is byte-identical.
+    ...(payload.offence === undefined ? {} : { offence: payload.offence }),
   };
   return { ...state, penalties: [...(state.penalties ?? []), record] };
 }
@@ -1472,11 +1516,16 @@ function lineupPolicy(cfg: FootballCfg): LineupPolicy {
  *  the team sheet's `orderNo` — the order every frozen stream recorded. */
 function initialFootballSquad(side: SideSquad): FootballSquad {
   const byOrder = [...playingSquad(side)].sort((a, b) => a.orderNo - b.orderNo);
+  // S4 (#428) — the inverse of playingSquad: every team-sheet member who is
+  // NOT a player (role !== "player"). Static for the whole fixture — see the
+  // field's own doc comment on FootballSquad.
+  const nonPlayers = side.members.filter((m) => m.role !== "player").map((m) => m.personId);
   return {
     onPitch: byOrder.filter((m) => m.onField).map((m) => m.personId),
     bench: byOrder.filter((m) => !m.onField).map((m) => m.personId),
     offUsed: [],
     sentOff: [],
+    ...(nonPlayers.length > 0 ? { nonPlayers } : {}),
   };
 }
 
@@ -1976,6 +2025,10 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
             color: "sin_bin",
             eventId: ev.id,
             ...(bin.reason === undefined ? {} : { reason: bin.reason }),
+            // S4 (#428) — the length the scorer actually recorded (else the
+            // sin bin runs on `cfg.sinBinMinutes`, which extractCards has no
+            // cfg to read); absent when the scorer left it to the default.
+            ...(bin.minutes === undefined ? {} : { minutes: bin.minutes }),
           });
           continue;
         }
@@ -2133,6 +2186,11 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
       const goalkeeper = rng() < 0.5 ? state.squads[opponent(side)].onPitch[0] : undefined;
       const outcomes = PenaltyOutcome.options;
       const outcome = outcomes[Math.floor(rng() * outcomes.length)] ?? "saved";
+      // S4 (#428) — SOMETIMES, same idiom as goalkeeper/minute above: a
+      // seeded walk has to actually witness this field for the golden
+      // coverage gate to consider it protected (golden.test.ts).
+      const offences = PenaltyOffence.options;
+      const offence = rng() < 0.5 ? offences[Math.floor(rng() * offences.length)] : undefined;
       return {
         type: "football.penalty",
         payload: {
@@ -2140,6 +2198,7 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
           ...(taker === undefined ? {} : { taker }),
           ...(goalkeeper === undefined ? {} : { goalkeeper }),
           outcome,
+          ...(offence === undefined ? {} : { offence }),
           at: stamp(state.phase),
         },
       };

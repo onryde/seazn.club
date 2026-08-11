@@ -5,8 +5,36 @@
 // Event Code §219 points (3 · 2 · 1 · 0) and the §220 H2H-first tie-break.
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { PlayerStatsModel } from "../../stats/stats.ts";
-import { makePeriodModule } from "../period/kernel.ts";
+import { makePeriodModule, type PeriodSuspensionReason } from "../period/kernel.ts";
 import { ICEHOCKEY_SUSPENSIONS } from "../period/suspensions.ts";
+
+// S4 (#428) — IIHF's own subset of the shared `PeriodSuspensionReason` union:
+// the common named infractions plus `other`. Deliberately LARGER than
+// hockey's FIH set (this federation's ladder has more named categories, e.g.
+// fighting, which FIH has no equivalent of at all). Declared here, not
+// enforced by the (shared) event schema — see kernel.ts's comment on
+// PeriodSuspensionReason for why. Secondary-source sourced; see DOMAIN.md.
+export const ICEHOCKEY_SUSPENSION_REASONS: readonly PeriodSuspensionReason[] = [
+  "tripping",
+  "hooking",
+  "holding",
+  "holding_the_stick",
+  "slashing",
+  "high_sticking",
+  "cross_checking",
+  "roughing",
+  "elbowing",
+  "charging",
+  "boarding",
+  "checking_from_behind",
+  "interference",
+  "delay_of_game",
+  "too_many_men",
+  "unsportsmanlike_conduct",
+  "fighting",
+  "illegal_equipment",
+  "other",
+];
 
 // G/D/F with the classic bench: 6 on the ice, rolling changes (no sub events
 // — line changes are not scoring facts; person checks stay loose).

@@ -117,10 +117,12 @@ describe("SPEC-1 discipline card detail (W4)", () => {
         by: "H",
         person: "H-p3",
         class: "green",
-        reason: "dangerous play",
+        // S4 (#428) — reason is now PeriodSuspensionReason, a closed enum;
+        // "dangerous_play" is FIH's own declared member (hockey.ts).
+        reason: "dangerous_play",
       }),
     );
-    expect(card).toMatchObject({ personId: "H-p3", color: "green", reason: "dangerous play" });
+    expect(card).toMatchObject({ personId: "H-p3", color: "green", reason: "dangerous_play" });
   });
 
   it("ice hockey names the player who serves a bench minor", () => {
@@ -128,14 +130,15 @@ describe("SPEC-1 discipline card detail (W4)", () => {
       ledger("icehockey.suspension.start", {
         by: "A",
         class: "bench_minor",
-        reason: "too many men",
+        // S4 (#428) — IIHF's own declared member (icehockey.ts).
+        reason: "too_many_men",
         servedBy: "A-p9",
       }),
     );
     expect(card).toMatchObject({
       entrantSide: "A",
       color: "bench_minor",
-      reason: "too many men",
+      reason: "too_many_men",
       servedBy: "A-p9",
     });
     // A bench minor has no offender, only a server.
@@ -149,6 +152,56 @@ describe("SPEC-1 discipline card detail (W4)", () => {
     expect(card).toBeDefined();
     expect(Object.hasOwn(card as object, "servedBy")).toBe(false);
     expect(Object.hasOwn(card as object, "reason")).toBe(false);
+  });
+
+  // S4 (#428) — DisciplineCard.minutes is plumbing over an ALREADY-RECORDED
+  // value (PeriodSuspensionStart.minutes / FootballSinBinStart.minutes), not a
+  // new computation. Both producers already read it into their own fold
+  // (suspensions.ts's SuspensionDetail, football's sin-bin expiry); this pins
+  // that the discipline PROJECTION carries it too, so a duration-keyed
+  // accumulation rule ("any 10-minute misconduct counts double") has something
+  // to read.
+  it("hockey projects the umpire-awarded suspension minutes onto the card", () => {
+    const [card] = hockey.discipline!.extractCards(
+      ledger("hockey.suspension.start", {
+        by: "H",
+        person: "H-p3",
+        class: "yellow",
+        minutes: 10,
+        reason: "dangerous_play",
+      }),
+    );
+    expect(card).toMatchObject({ personId: "H-p3", color: "yellow", minutes: 10 });
+  });
+
+  it("ice hockey projects the penalty minutes onto the card", () => {
+    const [card] = icehockey.discipline!.extractCards(
+      ledger("icehockey.suspension.start", {
+        by: "A",
+        person: "A-p4",
+        class: "minor",
+        minutes: 2,
+      }),
+    );
+    expect(card).toMatchObject({ personId: "A-p4", color: "minor", minutes: 2 });
+  });
+
+  it("football projects the sin-bin length onto the card", () => {
+    const [card] = football.discipline!.extractCards(
+      ledger("football.sinbin.start", { by: "H", person: "H-p9", minutes: 8 }),
+    );
+    expect(card).toMatchObject({ personId: "H-p9", color: "sin_bin", minutes: 8 });
+  });
+
+  it("omits minutes in both families when the scorer did not record one (golden guard)", () => {
+    const [ice] = icehockey.discipline!.extractCards(
+      ledger("icehockey.suspension.start", { by: "A", person: "A-p4", class: "minor" }),
+    );
+    expect(Object.hasOwn(ice as object, "minutes")).toBe(false);
+    const [fb] = football.discipline!.extractCards(
+      ledger("football.sinbin.start", { by: "H", person: "H-p9" }),
+    );
+    expect(Object.hasOwn(fb as object, "minutes")).toBe(false);
   });
 
   it("lets an accumulation rule count cards by offence, not just by colour", () => {

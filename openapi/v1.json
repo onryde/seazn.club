@@ -25596,6 +25596,14 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "role": {
+                          "type": "string",
+                          "enum": [
+                            "player",
+                            "coach",
+                            "staff"
+                          ]
                         }
                       },
                       "required": [
@@ -67823,6 +67831,10 @@
                                         "type": "integer",
                                         "exclusiveMinimum": 0,
                                         "maximum": 9007199254740991
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "minLength": 1
                                       }
                                     },
                                     "required": [
@@ -68177,6 +68189,10 @@
                               "type": "integer",
                               "exclusiveMinimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "reason": {
+                              "type": "string",
+                              "minLength": 1
                             }
                           },
                           "required": [
@@ -68301,6 +68317,10 @@
                                         "type": "integer",
                                         "exclusiveMinimum": 0,
                                         "maximum": 9007199254740991
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "minLength": 1
                                       }
                                     },
                                     "required": [

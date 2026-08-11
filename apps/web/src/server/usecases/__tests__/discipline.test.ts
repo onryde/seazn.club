@@ -160,8 +160,11 @@ async function insertCard(
   person: string | null,
   color: string,
   recordedAt?: string,
+  // S4 (#428) — the Law 12 offence (CardReason), so a rule can be scoped to
+  // ONE offence rather than to the colour alone.
+  reason?: string,
 ): Promise<string> {
-  const payload = { by, ...(person ? { person } : {}), color };
+  const payload = { by, ...(person ? { person } : {}), color, ...(reason ? { reason } : {}) };
   const [{ id }] = await sql<{ id: string }[]>`
     insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
     values (${fixtureId}, ${ctx.orgId}, ${nextSeq(fixtureId)}, 'football.card', ${sql.json(payload)},
@@ -346,6 +349,45 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
     )!;
     expect(served.matchesServed).toBe(3); // fx1 + fx2 + fx3 (forfeit-by-A)
     expect(served.status).toBe("served");
+  });
+
+  // S4 (#428) acceptance: "DisciplineCard.reason is adjudicable: a test
+  // expresses a real league rule over it (e.g. 'three cards for the same
+  // offence') and that rule fires." Extends DisciplineRules.accumulation with
+  // an optional `reason` scope rather than forking the fold — an unscoped
+  // rule (every other test in this file) is unaffected, since `reason ===
+  // undefined` keeps every card of the colour eligible exactly as before.
+  it("(g) an accumulation rule scoped to one offence fires only when THAT offence repeats", async () => {
+    const ctx = await seedFootballDivision();
+    await setRules(ctx, {
+      accumulation: [
+        { key: "dissent_x3", color: "yellow", count: 3, ban_matches: 1, reason: "dissent" },
+      ],
+      dismissal: [],
+    });
+    const fx = await makeFixture(ctx, 1, ctx.entrantA, ctx.entrantB);
+
+    // Two dissent cards plus one for a DIFFERENT offence: three yellows total,
+    // but only two share "dissent" — the scoped rule must not fire yet. If the
+    // scope were ignored (colour-only, the pre-#428 shape) this would already
+    // be a match at count 3.
+    await insertCard(ctx, fx, ctx.entrantA, ctx.personX, "yellow", undefined, "dissent");
+    await insertCard(ctx, fx, ctx.entrantA, ctx.personX, "yellow", undefined, "unsporting_behaviour");
+    await insertCard(ctx, fx, ctx.entrantA, ctx.personX, "yellow", undefined, "dissent");
+    await detect(ctx);
+    expect(
+      (await listSuspensions(ctx.auth, ctx.divisionId)).filter((r) => r.source === "auto_accumulation"),
+    ).toHaveLength(0);
+
+    // A third DISSENT card completes it — the rule fires now.
+    await insertCard(ctx, fx, ctx.entrantA, ctx.personX, "yellow", undefined, "dissent");
+    await detect(ctx);
+    const acc = (await listSuspensions(ctx.auth, ctx.divisionId)).filter(
+      (r) => r.source === "auto_accumulation",
+    );
+    expect(acc).toHaveLength(1);
+    expect(acc[0]!.matchesTotal).toBe(1);
+    expect(acc[0]!.personId).toBe(ctx.personX);
   });
 
   it("the scoring decided seam folds discipline without a discipline read", async () => {

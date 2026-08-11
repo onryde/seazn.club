@@ -279,7 +279,9 @@ const CARD_COLOR_KEY: Record<string, MessageKey> = {
   yellow: "cardColor.yellow", red: "cardColor.red",
   second_yellow: "cardColor.second_yellow",
 };
-// Football's 13 CardReason members plus cricket's innings-close / retire reasons.
+// Football's 13 CardReason members, cricket's innings-close / retire reasons,
+// plus S4 (#428)'s hockey/icehockey PeriodSuspensionReason members (23 total,
+// 2 of which — dissent, other — already had a key from football/cricket).
 const REASON_KEY: Record<string, MessageKey> = {
   delaying_restart: "reason.delaying_restart",
   denying_goal_by_handball: "reason.denying_goal_by_handball",
@@ -298,6 +300,44 @@ const REASON_KEY: Record<string, MessageKey> = {
   target_reached: "reason.target_reached", forfeited: "reason.forfeited",
   hurt: "reason.hurt", out: "reason.out", time: "reason.time",
   weather: "reason.weather", other: "reason.other",
+  // S4 (#428) — PeriodSuspensionReason (period/kernel.ts), shared by hockey
+  // (FIH) and icehockey (IIHF); see HOCKEY_SUSPENSION_REASONS /
+  // ICEHOCKEY_SUSPENSION_REASONS for which federation offers which member.
+  tripping: "reason.tripping",
+  hooking: "reason.hooking",
+  holding: "reason.holding",
+  holding_the_stick: "reason.holding_the_stick",
+  slashing: "reason.slashing",
+  high_sticking: "reason.high_sticking",
+  cross_checking: "reason.cross_checking",
+  roughing: "reason.roughing",
+  elbowing: "reason.elbowing",
+  charging: "reason.charging",
+  boarding: "reason.boarding",
+  checking_from_behind: "reason.checking_from_behind",
+  interference: "reason.interference",
+  delay_of_game: "reason.delay_of_game",
+  too_many_men: "reason.too_many_men",
+  unsportsmanlike_conduct: "reason.unsportsmanlike_conduct",
+  fighting: "reason.fighting",
+  illegal_equipment: "reason.illegal_equipment",
+  obstruction: "reason.obstruction",
+  dangerous_play: "reason.dangerous_play",
+  time_wasting: "reason.time_wasting",
+};
+// S4 (#428) — FootballPenalty.offence: the closed IFAB Law 12 direct-free-
+// kick/penalty offence that CONCEDED the kick. A different field, a different
+// question, from `reason` (the card the referee separately showed, if any) —
+// see PenaltyOffence's own doc comment in football.ts.
+const OFFENCE_KEY: Record<string, MessageKey> = {
+  kicking: "offence.kicking",
+  tripping: "offence.tripping",
+  jumping_at: "offence.jumping_at",
+  charging: "offence.charging",
+  pushing: "offence.pushing",
+  striking: "offence.striking",
+  tackling: "offence.tackling",
+  handball: "offence.handball",
 };
 // ET_H1/ET_H2 arrive from `football.period` payloads. They were absent here
 // until #427's second pass, because `event-copy.ts` carried its own PERIOD_LABEL
@@ -363,6 +403,7 @@ export const ENUM_VOCAB: Record<string, readonly Record<string, MessageKey>[]> =
   method: [METHOD_KEY],
   level: [SANCTION_KEY],
   receiverSide: [COURT_KEY],
+  offence: [OFFENCE_KEY], // S4 (#428) — FootballPenalty.offence
 };
 
 /**
