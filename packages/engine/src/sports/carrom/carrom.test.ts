@@ -7,7 +7,14 @@ import { foldMatch, type EventEnvelope } from "../../core/events.ts";
 import type { LineupPair, StageCtx } from "../../core/types.ts";
 import { aggregatePlayerStats } from "../../stats/stats.ts";
 import { conformanceSuite, defaultLineupPair, makeEnvelope } from "../../testkit/index.ts";
-import { carrom, CARROM_TIEBREAKERS, type CarromState } from "./carrom.ts";
+import { checkActionCoverage, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
+import {
+  carrom,
+  CARROM_EVENT_SCHEMAS,
+  CARROM_TIEBREAKERS,
+  padSpec,
+  type CarromState,
+} from "./carrom.ts";
 
 // W4a (#425) §3.3 — every fold below is PAD-SHAPED: it is building a stream
 // event by event, which is the write path. `strictFromSeq: 0` marks the whole
@@ -426,6 +433,37 @@ describe("carrom: event union stays unambiguous", () => {
 });
 
 // ---------------------------------------------------------------------------
+// S6/#416 (W5) — the padSpec field/attribution DSL has no primitive that can
+// emit a literal `null` (a `side` attribution item always resolves to a real
+// entrant id), so a required-nullable `queenTo` made a "no queen covered"
+// board-summary action unbuildable — a common case: 25% of generated boards.
+// Widened to ALSO tolerate omission, treated identically to explicit `null`.
+// ---------------------------------------------------------------------------
+describe("carrom: an omitted queenTo settles exactly like an explicit null (S6 padSpec representability)", () => {
+  it("records a board with no `queenTo` key at all, matching explicit queenTo: null", () => {
+    const omitted = fold(
+      stream(["core.start"], ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 5 }]),
+    );
+    const explicit = fold(
+      stream(["core.start"], ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 5, queenTo: null }]),
+    );
+    expect(omitted).toEqual(explicit);
+    expect(omitted.games[0]!.boards[0]).toMatchObject({ queenTo: null, queenScored: false });
+  });
+
+  it("still rejects a queenBy credited to a player when queenTo is omitted (same refusal as explicit null)", () => {
+    expect(() =>
+      fold(
+        stream(["core.start"], [
+          "carrom.board.summary",
+          { winner: "H", opponentCoinsLeft: 5, queenBy: "H-p1" },
+        ]),
+      ),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Conformance — spec 04 §9 (PROMPT-03 kit) at the ICF default and under the
 // tie-board 'draw' house rule (drawn matches reachable).
 // ---------------------------------------------------------------------------
@@ -434,4 +472,53 @@ conformanceSuite(carrom, { cfg: { tieBoard: "draw" }, label: "tie-board draw" })
 conformanceSuite(carrom, {
   cfg: { gameTo: 29, queenPoints: 5, queenCapAt: 24 },
   label: "club-29",
+});
+
+// ---------------------------------------------------------------------------
+// S6/#416 (W5) — padSpec conformance.
+// ---------------------------------------------------------------------------
+
+padSpecConformanceSuite(carrom, { cfg: {}, lineups, label: "icf default" });
+padSpecConformanceSuite(carrom, {
+  cfg: { gameTo: 29, queenPoints: 5, queenCapAt: 24 },
+  lineups,
+  label: "club-29",
+});
+
+describe("carrom padSpec — action coverage", () => {
+  it("every registered event type is reachable from some action (no cfg-mutual-exclusivity in this module)", () => {
+    const specs = [padSpec(carrom.configSchema.parse({}))];
+    expect(checkActionCoverage(specs, CARROM_EVENT_SCHEMAS)).toEqual([]);
+  });
+});
+
+describe("carrom padSpec — no core.* actions (match lifecycle is universal renderer chrome)", () => {
+  it("declares zero actions outside its own eventSchemas registry", () => {
+    const spec = padSpec(cfg);
+    for (const panel of spec.panels) {
+      for (const action of panel.actions) {
+        expect(action.type in CARROM_EVENT_SCHEMAS, action.type).toBe(true);
+      }
+    }
+  });
+});
+
+describe("carrom padSpec — variant reshaping: club-29 vs icf produce different bounds from the same module", () => {
+  it("the umpire-adjustment delta bound tracks cfg.gameTo, not a hardcoded preset number", () => {
+    const icfSpec = padSpec(carrom.configSchema.parse({}));
+    const clubSpec = padSpec(carrom.configSchema.parse({ gameTo: 29, queenPoints: 5, queenCapAt: 24 }));
+    const creditField = (spec: ReturnType<typeof padSpec>) =>
+      spec.panels
+        .flatMap((p) => p.actions)
+        .find((a) => a.labelKey.key === "pad.carrom.action.adjustCredit")!
+        .fields.find((f) => f.path === "delta");
+    const icfDelta = creditField(icfSpec);
+    const clubDelta = creditField(clubSpec);
+    expect(icfDelta?.kind).toBe("number");
+    expect(clubDelta?.kind).toBe("number");
+    if (icfDelta?.kind === "number" && clubDelta?.kind === "number") {
+      expect(icfDelta.max).toBe(25); // cfg.gameTo (icf default)
+      expect(clubDelta.max).toBe(29); // cfg.gameTo (club-29)
+    }
+  });
 });

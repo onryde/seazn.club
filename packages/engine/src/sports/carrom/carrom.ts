@@ -20,7 +20,14 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import type { ModuleEvent, SportModule, TiebreakerKey } from "../../sport/module.ts";
+import type {
+  ModuleEvent,
+  PadAction,
+  PadPanel,
+  PadSpec,
+  SportModule,
+  TiebreakerKey,
+} from "../../sport/module.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — carrom.md §1 (ICF Laws 52, 54, 56, 57)
@@ -77,7 +84,15 @@ const PersonId = z.string().min(1);
 export const CarromBoardSummary = z.strictObject({
   winner: EntrantId,
   opponentCoinsLeft: z.number().int().min(0).max(9), // winner's coin points ×pointsPerCoin (Law 53a)
-  queenTo: EntrantId.nullable(), // who pocketed AND covered the queen (null = board lost with queen on… impossible, or untracked)
+  // who pocketed AND covered the queen (null = nobody). S6/#416 (W5): ALSO
+  // tolerates omission, treated identically to explicit `null` at the one
+  // call site below — the padSpec field/attribution DSL has no primitive
+  // that can emit a literal `null` (a `side` attribution item always
+  // resolves to a real entrant id), so a required-but-nullable `queenTo`
+  // made the (common — 25% of boards) "queen not covered" action
+  // unbuildable. `winner`/`opponentCoinsLeft` stay required, so this cannot
+  // create an ambiguous `{}` the way a fully-optional object would.
+  queenTo: EntrantId.nullable().optional(),
   // W4 — the individual acts inside a board. The ICF scoresheet books points
   // to a side, but Law 49 rotates the break through the players (four of them
   // in doubles) and Law 53 credits the queen to the player who pocketed AND
@@ -111,9 +126,29 @@ export const CarromGameAdjust = z.strictObject({
 export type CarromGameAdjust = z.infer<typeof CarromGameAdjust>;
 
 // RESERVED — Pro strike-by-strike fidelity (carrom.md §6, entitlement key
-// `scoring.strike_by_strike`, doc 10). Typed placeholder only: apply()
-// rejects `carrom.strike` until the fine-fidelity prompt lands, and the
-// fidelity ladder declares no tier for it.
+// `scoring.strike_by_strike`, doc 10). Typed placeholder only, deliberately
+// NOT a member of the `CarromEv` union below (`:153` at time of writing) —
+// owner ruling "keep the one, replicate for none" (S2/#430): this is the
+// sole #430 placeholder kept; the other nine deferred rows get none. Being
+// absent from `CarromEv` is what matters for S6's padSpec conformance
+// (`testkit/conformance-pad.ts`): `eventSchemas` bijects onto `CarromEv`'s
+// actual members only, so this needs no registry entry and no exemption
+// anywhere in that check.
+//
+// `apply()`'s dispatch switch below ALSO carries an explicit
+// `case "carrom.strike"` that unconditionally throws — that is LIVE code on
+// the real write path, re-verified this session, not dead code as an earlier
+// finding (S2/#430) concluded ("no rejecting arm ... never reaches apply()
+// at all"). `module.eventSchema` (the bare union) has no production reader
+// anywhere in this repo — only `testkit/` introspection reads it (conformance,
+// golden, schema-snapshot) — so nothing upstream of `apply()` structurally
+// 422s this type; `apply()`'s own switch is the actual and only gate a
+// submitted `carrom.strike` event meets (traced: `apps/web`'s `appendEvent`
+// → `core/events.ts`'s `foldMatch`/`foldMatchWithStoppage` → `module.apply()`,
+// no type/payload check above it). Whoever eventually wires `CarromStrike`
+// into `CarromEv` (T4, the tier-3 extension lane) must also delete that case
+// arm below — adding the union member and an `eventSchemas` entry alone
+// would still 422 every submission.
 export const CarromStrike = z.strictObject({
   striker: EntrantId,
   pocketed: z.array(z.enum(["white", "black", "queen"])),
@@ -330,7 +365,9 @@ function applyToss(state: CarromState, payload: CarromToss): CarromState {
 function applyBoard(state: CarromState, payload: CarromBoardSummary): CarromState {
   if (state.phase !== "live") wrongPhase(`board summary not allowed in phase "${state.phase}"`);
   const winnerSide = sideOf(state, payload.winner);
-  const queenSide = payload.queenTo === null ? null : sideOf(state, payload.queenTo);
+  // `queenTo` omitted reads exactly like explicit `null` — see the schema's
+  // own comment.
+  const queenSide = payload.queenTo == null ? null : sideOf(state, payload.queenTo);
   // A player can only be credited with the queen if a side covered her
   // (Law 53) — `queenTo: null` means she went to nobody.
   if (payload.queenBy !== undefined && queenSide === null) {
@@ -516,6 +553,140 @@ function entrantIdsIn(events: readonly EventEnvelope[]): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// S6/#416 (W5) — padSpec. Pure function of resolved cfg. Board-level fidelity
+// only (carrom.md §6) — strike-by-strike is reserved (`CarromStrike` above),
+// not an `eventSchema` branch, so it needs no action and no fidelity band.
+// ---------------------------------------------------------------------------
+
+export const CARROM_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
+  "carrom.toss": CarromToss,
+  "carrom.board.summary": CarromBoardSummary,
+  "carrom.game.adjust": CarromGameAdjust,
+};
+
+// No closed foul taxonomy exists for Laws 51/55 (DOMAIN.md: "reaffirmed in
+// S4/#428 — no well-documented closed taxonomy was found ... carrom.ts was
+// explicitly out of scope"; `reason` stays free text on the SCHEMA). This is
+// a padSpec-only, mechanical consequence of the field DSL having no
+// free-text `PadField` kind — `reason` is REQUIRED (`min(1)`), so some enum
+// is unavoidable to build any accepted payload at all. Deliberately minimal,
+// with an "other" escape hatch, so it does not read as a taxonomy the ruling
+// declined to build.
+const ADJUST_REASONS = ["due_coins", "foul", "other"] as const;
+
+export function padSpec(cfg: CarromCfg): PadSpec {
+  // --- Pre-match: the toss (Laws 39/42/43) ---------------------------------
+  const tossAction: PadAction = {
+    type: "carrom.toss",
+    labelKey: { key: "pad.carrom.action.toss", label: "Toss" },
+    fields: [],
+    attribution: [{ kind: "side", path: "firstBreak" }],
+  };
+
+  // --- Live: board summary, queen covered vs not ---------------------------
+  // Two actions, ONE type ("carrom.board.summary") — the cricket
+  // ballAction/extraAction/wicketAction precedent. `queenTo` cannot be a
+  // third "nobody" attribution choice (a `side` item always resolves to a
+  // real entrant); see `CarromBoardSummary`'s own comment for why the
+  // no-queen case is representable through this DSL at all.
+  const boardAction: PadAction = {
+    type: "carrom.board.summary",
+    labelKey: { key: "pad.carrom.action.board", label: "Board (no queen)" },
+    fields: [{ kind: "number", path: "opponentCoinsLeft", min: 0, max: 9 }], // Law 52(b)(ii) — fixed rules bound, not cfg-derived
+    attribution: [
+      { kind: "side", path: "winner" },
+      { kind: "person", path: "breaker" },
+    ],
+  };
+  const boardQueenAction: PadAction = {
+    type: "carrom.board.summary",
+    labelKey: { key: "pad.carrom.action.boardQueen", label: "Board (queen covered)" },
+    fields: [{ kind: "number", path: "opponentCoinsLeft", min: 0, max: 9 }],
+    attribution: [
+      { kind: "side", path: "winner" },
+      { kind: "side", path: "queenTo" },
+      { kind: "person", path: "breaker" },
+      { kind: "person", path: "queenBy" },
+    ],
+  };
+
+  // --- Live: umpire adjustment, credit vs deduction (Laws 51/55) -----------
+  // `delta` is `.refine(d => d !== 0)` — a single field spanning both signs
+  // would let the property test roll 0 and fail; split at zero instead, the
+  // same shape as `generic.score`'s add/correct split below in generic.ts.
+  // Bounded by `cfg.gameTo`: an adjustment cannot plausibly exceed the whole
+  // game's target.
+  const adjustCreditAction: PadAction = {
+    type: "carrom.game.adjust",
+    labelKey: { key: "pad.carrom.action.adjustCredit", label: "Adjustment — credit" },
+    fields: [
+      { kind: "number", path: "delta", min: 1, max: cfg.gameTo },
+      { kind: "enum", path: "reason", values: ADJUST_REASONS },
+    ],
+    attribution: [
+      { kind: "side", path: "entrantId" },
+      { kind: "person", path: "person" },
+      { kind: "side", path: "offendingEntrantId" },
+    ],
+  };
+  const adjustDeductAction: PadAction = {
+    type: "carrom.game.adjust",
+    labelKey: { key: "pad.carrom.action.adjustDeduct", label: "Adjustment — deduction" },
+    fields: [
+      { kind: "number", path: "delta", min: -cfg.gameTo, max: -1 },
+      { kind: "enum", path: "reason", values: ADJUST_REASONS },
+    ],
+    attribution: [
+      { kind: "side", path: "entrantId" },
+      { kind: "person", path: "person" },
+      { kind: "side", path: "offendingEntrantId" },
+    ],
+  };
+
+  // Deliberately NO action for core.forfeit / core.abandon: match lifecycle
+  // is identical shape across all eleven sports (universal renderer chrome,
+  // S10), not per-module data — see boardgame.ts's padSpec for the full
+  // reasoning and the empirical confirmation (`checkActionCoverage` flags any
+  // action naming a type outside the module's own `eventSchemas` registry).
+
+  const panels: PadPanel[] = [
+    {
+      labelKey: { key: "pad.carrom.panel.pre", label: "Pre-match" },
+      phase: "pre",
+      layout: "primary",
+      actions: [tossAction],
+    },
+    {
+      labelKey: { key: "pad.carrom.panel.board", label: "Board" },
+      phase: "live",
+      layout: "primary",
+      actions: [boardAction, boardQueenAction],
+    },
+    {
+      labelKey: { key: "pad.carrom.panel.adjust", label: "Umpire adjustment" },
+      phase: "live",
+      layout: "drawer",
+      actions: [adjustCreditAction, adjustDeductAction],
+    },
+  ];
+
+  return {
+    panels,
+    // Modelled on carrom's OWN existing (untouched) `fidelityTiers` (below):
+    // tier 0 is the board summary alone, tier 1 adds the toss and umpire
+    // adjustments. Neither entry carries an entitlement — both bands ship
+    // free; strike-by-strike (reserved, `CarromStrike`) would be tiers 2/3
+    // whenever T4 lands, and is out of scope here (no `eventSchema` branch).
+    fidelity: {
+      "carrom.board.summary": 0,
+      "carrom.toss": 1,
+      "carrom.game.adjust": 1,
+    },
+    fidelityEntitlements: {},
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
 
@@ -524,6 +695,8 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
   version: "1.0.0",
   configSchema: CarromCfg,
   eventSchema: CarromEv,
+  eventSchemas: CARROM_EVENT_SCHEMAS,
+  padSpec,
   positions,
   entrantModel: { kinds: ["individual", "pair"], defaultKind: "individual" },
   variants: {
