@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest";
 import type { Lineup } from "../core/types.ts";
 import { builtinModules } from "../sports/index.ts";
+import { cricket } from "../sports/cricket/index.ts";
 import { football } from "../sports/football/index.ts";
 import { hockey } from "../sports/hockey/index.ts";
 import { icehockey } from "../sports/icehockey/index.ts";
@@ -79,6 +80,40 @@ describe("football — a small-sided lineup is smaller than eleven", () => {
   it("leaves the static positions property untouched", () => {
     // Back-compat: apps/web still reads `module.positions` directly.
     expect(football.positions.lineup.size).toBe(11);
+  });
+});
+
+describe("cricket — a smaller side uses fewer starting slots", () => {
+  const cfgFor = (raw: unknown) => cricket.configSchema.parse(raw);
+
+  it("keeps eleven for the default config", () => {
+    expect(resolvePositions(cricket, cfgFor({})).lineup.size).toBe(11);
+  });
+
+  it("scales the starting lineup directly off playersPerSide", () => {
+    expect(resolvePositions(cricket, cfgFor({ playersPerSide: 6 })).lineup.size).toBe(6);
+  });
+
+  it("accepts a lineup of exactly six and rejects an eleven", () => {
+    // Deliberately a raw playersPerSide override, not a named variant — the
+    // one variant that used to exercise this (cricket's "pairs-6-a-side")
+    // is removed by a sibling, not-yet-merged branch (S5/#431); a reference
+    // to it here would compile today and break on the next rebase.
+    const cfg = cfgFor({ playersPerSide: 6 });
+    const catalog = resolvePositions(cricket, cfg);
+    expect(validateLineup(catalog, lineupFromCatalog(catalog, "H"))).toEqual([]);
+
+    const eleven = lineupFromCatalog(resolvePositions(cricket, cfgFor({})), "H");
+    expect(validateLineup(catalog, eleven)).toContainEqual({
+      kind: "starting_size",
+      expected: catalog.lineup.size,
+      actual: 11,
+    });
+  });
+
+  it("leaves the static positions property untouched", () => {
+    // Back-compat: apps/web still reads `module.positions` directly.
+    expect(cricket.positions.lineup.size).toBe(11);
   });
 });
 
