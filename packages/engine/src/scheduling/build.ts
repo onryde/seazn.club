@@ -1186,22 +1186,53 @@ function scopeRowOf(f: SchedulableFixture): ScopeRow {
  * a second, independent way is exactly the recurring bug `_RULES.md`'s
  * anti-fork instruction (and #447) both exist to rule out.
  *
- * ONE GROUP PER RULE, not merged by scope the way `dayCapsByDivision` merges
- * same-division caps down to their minimum count: a `RuleGroup` has no
- * identity of its own beyond its ARRAY POSITION (see `SolveBuildInput.
- * ruleGroups`'s own doc comment in `placement-client.ts`), and a pinned row
- * references one by that position via `indicesFor` below. Merging two rules
- * into one group would need to inventing a merged identity for no
- * behavioural gain this round — the domain does not read `rule_groups` yet
- * (module docstring, "no model, no behaviour change").
+ * B5 (#21) APPENDS a second source: one synthetic group per division whose
+ * RESOLVED rest (`restByDivision` below — the caller's
+ * `restByDivisionForWire`, already the max of the Settings-tab floor and any
+ * stored per-division override) is `> 0`. Before this, a division's rest
+ * reached the wire only on `constraints.restByDivision`, a field
+ * `ruleGroupIndices` cannot name — so a pin could be attributed a
+ * `min_rest_minutes` HARD RULE but never the common case, rest configured
+ * purely in Settings, which left C6's fold-in inert for exactly the case that
+ * matters (measured 2026-08-11: two pinned rows sharing an entrant 30 minutes
+ * apart, under a Settings-only 30-minute division rest, cleared `OPTIMAL`
+ * where `INFEASIBLE` was owed). Division-keyed the same way
+ * `restByDivisionForWire` keys its map — `divisionId ?? ""` — because that map
+ * deliberately gives the no-division board an entry under `""`; comparing
+ * against a raw, unnormalised `divisionId` here would make a division-less
+ * board's rest silently emit no group, the exact shape of the bug being
+ * fixed. Entries `=== 0` are skipped: a zero-rest group binds nothing on
+ * either side (a pin's rest is a MAX over its groups, and a movable fixture's
+ * own rest is resolved elsewhere, untouched by this list), so emitting one
+ * would be pure wire weight.
  *
- * NOT gated on `tz`, unlike `dayCapByDivision`'s own wiring further down:
- * `min_rest_minutes` needs no calendar-day concept at all, and this task
- * changes no behaviour regardless (nothing downstream reads this field), so
- * there is nothing to protect by withholding it. A day-bucketing concern for
- * `max_fixtures_per_day` specifically is real once the C1 MODEL half lands,
- * but is that task's decision to make with full knowledge of how it consumes
- * `day_index`, not one to guess at here.
+ * ONE GROUP PER RULE (or per division-rest entry), not merged by scope the
+ * way `dayCapsByDivision` merges same-division caps down to their minimum
+ * count: a `RuleGroup` has no identity of its own beyond its ARRAY POSITION
+ * (see `SolveBuildInput.ruleGroups`'s own doc comment in
+ * `placement-client.ts`), and a pinned row references one by that position
+ * via `indicesFor` below. Merging two rules into one group would need
+ * inventing a merged identity for no behavioural gain this round — the
+ * domain does not read `rule_groups` yet (module docstring, "no model, no
+ * behaviour change"). Typed rules keep their existing relative order and
+ * come FIRST; every synthetic division-rest group is appended after them, so
+ * an index a pin already resolves against a typed rule never moves.
+ *
+ * `minRestMinutes` is NOT gated on `tz`: it needs no calendar-day concept at
+ * all. `maxFixturesPerDay` NOW IS (B5) — `tz === undefined` is exactly the
+ * condition under which `dayCapByDivision` further down is omitted entirely,
+ * because the verifier's own day-cap pass skips counting without a zone and
+ * buckets every slot into dayIndex 0 (`buildDayIndexOf` above). This
+ * paragraph used to read "this task changes no behaviour regardless (nothing
+ * downstream reads this field)" — true while C1's MODEL half did not exist,
+ * false since C4 taught the placement service to enforce
+ * `RuleGroup.max_fixtures_per_day`, bucketed by the caller's `day_index`: with
+ * `tz` undefined and this field left ungated, the service would cap the WHOLE
+ * BOARD at N as one fabricated day while the verifier enforces no cap at
+ * all — a silent over-constraint, not a no-op. The GROUP itself still ships
+ * either way (never dropped — see the empty-array comment on
+ * `SolveBuildInput.ruleGroups`), just without this one field when `tz` is
+ * absent, so array positions stay stable regardless of which branch runs.
  *
  * Fixture references are FIXTURE IDS at this layer, exactly like every other
  * collection `solveBuild` hands `placement-client.ts` — id -> wire-index
@@ -1211,25 +1242,64 @@ function scopeRowOf(f: SchedulableFixture): ScopeRow {
 function buildRuleGroups(
   hard: readonly HardConstraint[],
   freeFixtures: readonly SchedulableFixture[],
+  /** The resolved, wire-ready division rest map — `restByDivisionForWire` at
+   *  the call site, already merged with the Settings-tab floor. `undefined`
+   *  and `{}` both mean "no division carries a resolved rest". */
+  restByDivision: Record<string, number> | undefined,
+  /** The same value `dayCapByDivision`'s own gate reads (`verifyConfig.tz`) —
+   *  passed through rather than re-derived so the two gates cannot drift
+   *  apart. */
+  tz: string | undefined,
 ): {
   /** In wire order — becomes `SolveBuildInput.ruleGroups` verbatim. */
   groups: NonNullable<SolveBuildInput["ruleGroups"]>;
   /** Which of `groups` (by array position) a pinned/existing row counts
-   *  against. Derived from the SAME filtered `hard` list `groups` was built
-   *  from, in the SAME order, so position i always means "the i-th entry of
+   *  against. Derived from the SAME `sources` list `groups` was built from,
+   *  in the SAME order, so position i always means "the i-th entry of
    *  `groups`" on both sides — by construction, not by two loops kept in
    *  sync by hand. */
   indicesFor: (row: ScopeRow) => number[];
 } {
-  const rules = hard.filter((h) => h.type === "min_rest_minutes" || h.type === "max_fixtures_per_day");
+  const typedRules = hard.filter((h) => h.type === "min_rest_minutes" || h.type === "max_fixtures_per_day");
+  const divisionRestEntries = Object.entries(restByDivision ?? {}).filter(([, minutes]) => minutes > 0);
   const freeRows = freeFixtures.map((f) => ({ id: f.id, row: scopeRowOf(f) }));
-  return {
-    groups: rules.map((h) => ({
-      fixtureIds: freeRows.filter(({ row }) => scopeCoversFixture(h.scope, undefined, row)).map(({ id }) => id),
-      minRestMinutes: h.type === "min_rest_minutes" ? h.minutes : undefined,
-      maxFixturesPerDay: h.type === "max_fixtures_per_day" ? h.count : undefined,
+
+  // ONE list, ONE construction — `groups` and `indicesFor` below both walk
+  // `sources` via the SAME `coversRow` predicate, so array position cannot
+  // mean different things on the two sides (the placer/verifier fork this
+  // subsystem has hit repeatedly; see this function's own docstring, #447).
+  const sources: (
+    | { kind: "typed"; rule: HardConstraint }
+    | { kind: "division-rest"; divisionId: string; minRestMinutes: number }
+  )[] = [
+    ...typedRules.map((rule) => ({ kind: "typed" as const, rule })),
+    ...divisionRestEntries.map(([divisionId, minRestMinutes]) => ({
+      kind: "division-rest" as const,
+      divisionId,
+      minRestMinutes,
     })),
-    indicesFor: (row) => rules.flatMap((h, i) => (scopeCoversFixture(h.scope, undefined, row) ? [i] : [])),
+  ];
+
+  const coversRow = (source: (typeof sources)[number], row: ScopeRow): boolean =>
+    source.kind === "typed"
+      ? scopeCoversFixture(source.rule.scope, undefined, row)
+      : (row.divisionId ?? "") === source.divisionId;
+
+  return {
+    groups: sources.map((source) => ({
+      fixtureIds: freeRows.filter(({ row }) => coversRow(source, row)).map(({ id }) => id),
+      minRestMinutes:
+        source.kind === "division-rest"
+          ? source.minRestMinutes
+          : source.rule.type === "min_rest_minutes"
+            ? source.rule.minutes
+            : undefined,
+      maxFixturesPerDay:
+        source.kind === "typed" && source.rule.type === "max_fixtures_per_day" && tz !== undefined
+          ? source.rule.count
+          : undefined,
+    })),
+    indicesFor: (row) => sources.flatMap((source, i) => (coversRow(source, row) ? [i] : [])),
   };
 }
 
@@ -1517,9 +1587,6 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   const dayIndexOf = buildDayIndexOf(grid.slots, tz);
   const hard = effectiveHard(verifyConfig);
   const dayCapByDivision = tz === undefined ? undefined : dayCapsByDivision(hard);
-  // C1 (#21). UNCONDITIONAL, unlike `dayCapByDivision` just above — see
-  // `buildRuleGroups`'s own docstring for why `tz` does not gate this.
-  const ruleGroupSet = buildRuleGroups(hard, freeFixtures);
 
   /**
    * `perEntrantMinRest` is a GLOBAL per-entrant rest, and the wire has no field
@@ -1553,6 +1620,12 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
    * No proto change is needed: `DivisionRule.min_rest_minutes` already exists
    * and `model.py:303,337` already enforces `rest_by_division`. The gap was
    * purely this translation.
+   *
+   * Resolved BEFORE `buildRuleGroups` (B5, #21) and fed into it: a rest that
+   * lives only here — the common case, Settings-tab rest with no typed
+   * `min_rest_minutes` hard rule at all — used to reach the wire solely on
+   * `constraints.restByDivision`, a field `ruleGroupIndices` cannot name, so a
+   * pin could never be attributed it. See `buildRuleGroups`'s own docstring.
    */
   const restFloor = config.perEntrantMinRest ?? 0;
   const restByDivisionForWire = ((): Record<string, number> | undefined => {
@@ -1565,6 +1638,13 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     }
     return merged;
   })();
+
+  // C1/B5 (#21). Fed BOTH the resolved `restByDivisionForWire` (so a
+  // Settings-level division rest becomes a rule group too, not only a typed
+  // hard rule) and `tz` (so an emitted `max_fixtures_per_day` group honours
+  // the SAME gate `dayCapByDivision` just above does) — see `buildRuleGroups`'s
+  // own docstring for why each half is, or isn't, gated.
+  const ruleGroupSet = buildRuleGroups(hard, freeFixtures, restByDivisionForWire, tz);
 
   const placementInput: SolveBuildInput = {
     courts: config.courts,

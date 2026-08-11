@@ -529,41 +529,43 @@ jobs:
             if (!f) { console.error("::error::schedule-solver-telemetry.test.ts did not run at all"); process.exit(1); }
             const all = f.assertionResults || [];
 
-            // These three gate on HAS_SOLVER and must actually PASS — a skip
+            // These FOUR gate on HAS_SOLVER and must actually PASS — a skip
             // here means the container never got reached, which is the silent
             // coverage loss this step exists to catch.
+            //
+            // "infeasible proof" JOINED this set in B5 (#526), and the way it
+            // joined is worth keeping. It used to be `it.skip`, unconditional
+            // on HAS_SOLVER, guarded below by a separate assertion that it was
+            // STILL skipped — so that an accidental un-skip could not silently
+            // change what this gate covers. That guard fired exactly as
+            // designed: B5 made the test pass, and this job went red with
+            // "no longer skipped (status: passed)" rather than quietly
+            // widening. Deleting a skip is only half the change; the gate that
+            // tracks the skip is the other half.
+            //
+            // It is a normal member of `mustPass` now: the capability gap it
+            // documented is closed (a per-division rest now reaches the wire
+            // as a rule group, so a pin can be attributed one — #517 wire,
+            // #525 fold-in, #526 attribution), and from here a SKIP means the
+            // same thing it means for the other three, an unreached container.
+            //
+            // NO APOSTROPHES ANYWHERE IN THIS SCRIPT. The whole block is a
+            // single-quoted shell argument to `node -e`, so one apostrophe in
+            // a COMMENT closes the string early and the step dies with exit
+            // 126 before node parses a byte. Cost a CI round trip to find,
+            // because 126 looks like a permissions problem, not a quoting one.
             const mustPass = all.filter(a =>
-              /already_optimal|without booting the z3 WASM|polish never moves/.test(a.fullName));
+              /already_optimal|without booting the z3 WASM|polish never moves|infeasible proof/.test(a.fullName));
             const notPassed = mustPass.filter(a => a.status !== "passed");
             console.log(`solver-gated telemetry tests: ${mustPass.length} found, ${mustPass.filter(a => a.status === "passed").length} passed`);
-            if (mustPass.length < 3) {
-              console.error(`::error::expected 3 solver-gated telemetry tests, found ${mustPass.length} — a rename or a lost gate`);
+            if (mustPass.length < 4) {
+              console.error(`::error::expected 4 solver-gated telemetry tests, found ${mustPass.length} — a rename or a lost gate`);
               process.exit(1);
             }
             if (notPassed.length) {
               console.error("::error::these gated tests did not pass (a SKIP means the placement service was not reached, not that they are optional): " + notPassed.map(a => `${a.fullName} [${a.status}]`).join("; "));
               process.exit(1);
             }
-
-            // "forwards the pinned set an infeasible proof is about" is a
-            // DIFFERENT shape: it is `it.skip`, unconditional on HAS_SOLVER,
-            // because the model.py wire contract cannot see a rest conflict
-            // between two PINNED rows at all (round 6 dropped entrant identity
-            // from `PinnedRow`) — a Python/proto capability gap, not a
-            // reachability problem. See the doc comment on the test itself.
-            // Asserted explicitly rather than left out of this script
-            // entirely, so a rename or an accidental un-skip is still visible
-            // here rather than silently changing what this gate covers.
-            const pinnedGap = all.find(a => /infeasible proof/.test(a.fullName));
-            if (!pinnedGap) {
-              console.error("::error::the pinned-pair infeasibility test (known capability gap) was not found at all — a rename?");
-              process.exit(1);
-            }
-            if (pinnedGap.status !== "skipped") {
-              console.error(`::error::the pinned-pair infeasibility test is no longer "skipped" (status: ${pinnedGap.status}) — if the wire contract grew pin identity and this now PASSES, remove its it.skip and update this step; if it FAILED, something else broke`);
-              process.exit(1);
-            }
-            console.log("pinned-pair infeasibility test: skipped as expected (documented capability gap, not an availability gate)");
           '
 
       # `scripts/smoke.ts` (which also needs the placement container) now runs
