@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { foldMatch, type EventEnvelope } from "../../core/events.ts";
 import type { LineupPair, StageCtx } from "../../core/types.ts";
+import { evalPadGate } from "../../sport/module.ts";
 import { aggregatePlayerStats } from "../../stats/stats.ts";
 import { conformanceSuite, makeEnvelope } from "../../testkit/index.ts";
 import { checkActionCoverage, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
@@ -354,5 +355,24 @@ describe("generic padSpec — settle-from-tally is gated on state.running, not a
     const spec = padSpec(scoreCfg);
     const settle = spec.panels.find((p) => p.labelKey.key === "pad.generic.panel.settle")!;
     expect(settle.gate).toEqual({ op: "path-truthy", path: "state.running" });
+  });
+
+  // Review finding (S6/#416 gap list): the test above only proves the gate is
+  // CONFIGURED with the right shape, not that it is actually REACHABLE against
+  // a real fold — every other gated panel this session (cricket's super-over,
+  // table tennis's expedite, tennis's tie-break) additionally proves this
+  // against `evalPadGate` over real folded state. Mirrors
+  // `setbased/padspec.test.ts`'s table tennis expedite integration test.
+  it("is false before any tally is pressed, true once one is — against REAL folded state", () => {
+    const spec = padSpec(scoreCfg);
+    const settle = spec.panels.find((p) => p.labelKey.key === "pad.generic.panel.settle")!;
+    expect(settle.gate).toBeDefined();
+    const gate = settle.gate!;
+
+    const preState = fold(scoreCfg, []);
+    expect(evalPadGate(gate, { state: preState, summary: generic.summary(preState) })).toBe(false);
+
+    const liveState = fold(scoreCfg, stream(["generic.score", { by: "H", points: 5 }]));
+    expect(evalPadGate(gate, { state: liveState, summary: generic.summary(liveState) })).toBe(true);
   });
 });

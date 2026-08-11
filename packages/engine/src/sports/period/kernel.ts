@@ -1399,6 +1399,23 @@ export interface PeriodPreset {
   // (free text has no PadField representation); the schema itself stays
   // permissive either way (`PeriodSuspensionStart.reason`'s union with
   // `z.string()`, kernel comment above `PeriodSuspensionReason`).
+  //
+  // DELIBERATELY preset-level (whole-sport), NOT cfg/variant-derived like
+  // `suspensionClassKeys` below — reviewed and kept this way (S6/#416 gap
+  // list item 2). The two axes are independent facts about a card: `reason`
+  // names the INFRACTION (boarding, cross-checking, …), `class` is the
+  // SEVERITY a referee assesses it at (minor/major/match). Real IIHF/FIH
+  // discipline does not fix one from the other — the same named infraction
+  // can be called at more than one severity depending on intent/injury, which
+  // is exactly why `class` is a referee's live decision, not a lookup keyed
+  // on `reason`. So `recreational` (icehockey) correctly narrowing
+  // `suspensions.classes` to `minor`/`bench_minor` does NOT imply narrowing
+  // `reason` too: a recreational referee still needs to name what happened,
+  // they only lose the ability to escalate it past minor — the reason
+  // vocabulary staying universal is the CORRECT model of that, not a missed
+  // fix. No `reason` → `class` mapping exists anywhere in this codebase to
+  // narrow by even if that were the intent; inventing one would be asserting
+  // a rules fact this session has no source for.
   suspensionReasons?: readonly string[];
   // W4 (#407) — the DEFAULT set pieces this sport records as AWARDED, not just
   // scored (FIH penalty corner / stroke, IIHF penalty shot). Seeds

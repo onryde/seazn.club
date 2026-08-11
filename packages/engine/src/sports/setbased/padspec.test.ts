@@ -15,6 +15,7 @@ import {
 import { defaultLineupPair, makeEnvelope } from "../../testkit/helpers.ts";
 import { badminton } from "./badminton.ts";
 import {
+  SetBasedExpediteStart,
   SetBasedRally,
   SetBasedSanction,
   SetBasedSub,
@@ -128,10 +129,37 @@ describe("volleyball padSpec — action coverage across indoor vs beach (the rea
 
 // badminton and table tennis: `records` never varies across their named
 // variants (`bwf`/`short`; `bo5`/`bo7`/`hardbat-21` — see records.test.ts),
-// so a single cfg's action set already reaches every type each sport can
-// ever record. No cfg-mutual-exclusivity exists for either, so
-// `checkActionCoverage` is deliberately NOT called for them — asserted
-// directly instead, so the "nothing to check" claim is itself checked.
+// so there is no CFG-MUTUAL-EXCLUSIVITY case the way volleyball's
+// indoor/beach split needs a union across specs. That does NOT mean
+// `checkActionCoverage` has nothing to check here: a single cfg's action set
+// still needs to cover exactly "the types this sport can ever record" —
+// review finding (S6/#416 gap list): the identical-across-variants check
+// below proves internal self-consistency, but a flipped `records.X` flag
+// (e.g. reading `records.timeouts` where `records.sanctions` was meant)
+// would be WRONG THE SAME WAY on every variant and still pass it, since
+// `records` itself never varies. `checkActionCoverage` against the sport's
+// own recordable-type dict is the check that actually catches that shape —
+// added below, not skipped.
+//
+// Each dict is "the types this sport can ever record", i.e. the base
+// (rally + set summary) plus whichever `records.*` flags this SPECIFIC
+// sport declares `true` (badminton.ts:37, tabletennis.ts:37) — mirrors
+// `VOLLEYBALL_RECORDABLE_SCHEMAS` above, sized to what each sport actually
+// turns on rather than volleyball's own set.
+const BADMINTON_RECORDABLE_SCHEMAS = {
+  "badminton.rally": SetBasedRally,
+  "badminton.game.summary": SetBasedSummary, // badminton.ts coarseEventType: "game.summary", not "set.summary"
+  "badminton.sanction": SetBasedSanction, // records.sanctions: true; timeouts/substitutions/expedite all false
+};
+
+const TABLETENNIS_RECORDABLE_SCHEMAS = {
+  "tabletennis.rally": SetBasedRally,
+  "tabletennis.game.summary": SetBasedSummary, // tabletennis.ts coarseEventType: "game.summary" too
+  "tabletennis.timeout": SetBasedTimeout,
+  "tabletennis.sanction": SetBasedSanction,
+  "tabletennis.expedite.start": SetBasedExpediteStart, // records.timeouts/sanctions/expedite: true; substitutions: false
+};
+
 describe("badminton / table tennis padSpec — no cfg-mutual-exclusivity (asserted, not merely claimed)", () => {
   it("every badminton variant produces the identical action-type set", () => {
     const variantNames = Object.keys(badminton.variants);
@@ -159,6 +187,23 @@ describe("badminton / table tennis padSpec — no cfg-mutual-exclusivity (assert
     );
     const [first, ...rest] = typeSets;
     for (const set of rest) expect([...set].sort()).toEqual([...first!].sort());
+  });
+
+  it("badminton's single action-type set covers every type badminton can ever record", () => {
+    const spec = badminton.padSpec!(badminton.configSchema.parse({}));
+    expect(checkActionCoverage(spec, BADMINTON_RECORDABLE_SCHEMAS)).toEqual([]);
+  });
+
+  it("table tennis's single action-type set covers every type table tennis can ever record", () => {
+    const spec = tabletennis.padSpec!(tabletennis.configSchema.parse({}));
+    expect(checkActionCoverage(spec, TABLETENNIS_RECORDABLE_SCHEMAS)).toEqual([]);
+  });
+
+  it("MUTATION SHAPE — coverage fails if a recordable type is missing from badminton's declared set", () => {
+    const spec = badminton.padSpec!(badminton.configSchema.parse({}));
+    const { "badminton.sanction": _dropped, ...missingSanction } = BADMINTON_RECORDABLE_SCHEMAS;
+    const problems = checkActionCoverage(spec, { ...missingSanction, "badminton.bogus": SetBasedSanction });
+    expect(problems.join(" ")).toMatch(/badminton\.bogus/);
   });
 });
 
