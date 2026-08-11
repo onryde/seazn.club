@@ -109,8 +109,9 @@ a side-effect of a contract-hardening task.
 
 --- the two presolve knobs: keep them, but know what is and isn't proven -----
 
-`symmetry_level = 0` and `cp_model_probing_level = 0` in `solve()` are carried
-over from the bench unchanged. Be precise about the evidence for them, because
+`symmetry_level = 0` and `cp_model_probing_level = 0` — `SolverKnobs`'s
+defaults, applied by `objective._tier_solver` — are carried over from the bench
+unchanged. Be precise about the evidence for them, because
 the obvious experiment does NOT support the strong version of the claim:
 
   * The trap is real and on record — CP-SAT's default symmetry detection and
@@ -200,8 +201,7 @@ contract addition nothing has asked for yet.
 
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ortools.sat.python import cp_model
@@ -214,44 +214,82 @@ DAY_MS = 86_400_000
 # they live in `placement.objective`, with the chain that uses them — all four in
 # one place, since the ORDER is as much of the constant as the names are.
 
-# Same as the bench. CP-SAT's own default is the machine's core count; pinning
-# it keeps solve behaviour reproducible across the dev box and the deploy box.
-#
-# ENV-OVERRIDABLE SINCE 2026-08-10, and the reason is a full afternoon of
-# measurement that proved nothing. `NUM_SEARCH_WORKERS` was set in `fly.toml`'s
-# `[env]` and had NO EFFECT, because this was a hardcoded module constant and
-# `config.py` reads only PLACEMENT_SERVICE_SECRET / _MAX_WORKERS /
-# _WALL_SECONDS_MAX / _PORT. Four production runs — wall 10s -> 30s, machine
-# shared-cpu-2x -> performance-8x/16gb — returned a BYTE-IDENTICAL board every
-# time with `tiers_completed: 1/4`, and the one variable everybody believed was
-# being tuned had never moved off 8.
-#
-# A knob that silently does nothing is worse than no knob: it makes an
-# experiment look conclusive when it never ran.
-#
-# Read at import, not per solve: these are process-level solver settings, and a
-# per-request read would make two solves on one machine behave differently for
-# no reason anybody could see from the outside.
-NUM_SEARCH_WORKERS = int(os.environ.get("PLACEMENT_NUM_SEARCH_WORKERS", "8"))
+@dataclass(frozen=True)
+class SolverKnobs:
+    """The CP-SAT search settings one solve runs under.
 
-# The two presolve knobs, also env-overridable, and for a sharper reason than
-# tidiness. `objective.py` pins both to 0 to stop presolve eating the entire
-# wall on a symmetric board — a failure that returns UNKNOWN with nothing
-# placed and says nothing. That tradeoff was measured on the BENCH board
-# ("~3x slower without them"), not on a real one.
-#
-# The production board that motivated this is maximally symmetric: three
-# interchangeable courts, uniform 30-minute matches, the same slots repeating
-# daily, and 30 of 37 fixtures to choose. With symmetry breaking OFF, CP-SAT
-# must enumerate vast numbers of equivalent boards — which is exactly the shape
-# of "T0 finishes, T1 never does, and more time does not help".
-#
-# So they can now be tried WITHOUT a code deploy. Defaults are unchanged, so
-# this commit alters no behaviour on its own. If raising SYMMETRY_LEVEL makes
-# the run return UNKNOWN with `placed` collapsing, that is the failure the 0
-# was guarding against — and it is loud in the response, not silent.
-SYMMETRY_LEVEL = int(os.environ.get("PLACEMENT_SYMMETRY_LEVEL", "0"))
-CP_MODEL_PROBING_LEVEL = int(os.environ.get("PLACEMENT_PROBING_LEVEL", "0"))
+    A VALUE, passed in — not three module constants read from the environment.
+    Both halves of that sentence are load-bearing, and each was learned the
+    expensive way.
+
+    --- passed in, because the domain may not read the environment ------------
+
+    `_RULES.md` §2.1 forbids environment reads in `model.py` and
+    `objective.py`: dependencies point inward, and reading the process
+    environment is infrastructure reaching into the domain. These three lived
+    here as module constants resolved at import from 2026-08-10 until this
+    commit, recorded openly as a deviation (§7) rather than pretended away.
+    `config.py` now does the reading and `main.py` hands the result down, so
+    §2.1's grep — which is a literal search, and would match this paragraph if
+    it named the function — passes, and the knobs stay settable without a code
+    deploy.
+
+    Defaults live HERE and nowhere else. `Settings` carries `None` for "not
+    overridden" rather than repeating 8/0/0, so the shipped default cannot
+    drift away from the documented one — there is only one copy to change.
+
+    --- settable at all, because a knob that does nothing is worse than none ---
+
+    THE PRODUCTION INCIDENT, 2026-08-10. `NUM_SEARCH_WORKERS` was set in
+    `fly.toml`'s `[env]` and had NO EFFECT: it was a hardcoded constant and
+    `config.py` read only PLACEMENT_SERVICE_SECRET / _MAX_WORKERS /
+    _WALL_SECONDS_MAX / _PORT. Four production runs — wall 10s -> 30s, machine
+    shared-cpu-2x -> performance-8x/16gb — returned a BYTE-IDENTICAL board
+    every time at `tiers_completed: 1/4`, while the one variable everybody
+    believed was being tuned never moved off 8. A knob that silently does
+    nothing makes an experiment look conclusive when it never ran.
+
+    --- what each one is for -------------------------------------------------
+
+    `num_search_workers`: CP-SAT's own default is the machine's core count;
+    pinning it keeps solve behaviour reproducible across the dev box and the
+    deploy box. Owed a re-measurement on the real 2-vCPU target.
+
+    `symmetry_level` / `cp_model_probing_level`: both pinned to 0 to stop
+    presolve eating the entire wall on a symmetric board — a failure that
+    returns UNKNOWN with nothing placed and says nothing. That tradeoff was
+    measured on the BENCH board ("~3x slower without them"), not on a real one,
+    and the production board that motivated the override is maximally
+    symmetric: three interchangeable courts, uniform 30-minute matches, the
+    same slots repeating daily. If raising `symmetry_level` makes a run return
+    UNKNOWN with `placed` collapsing, that is the failure the 0 guards against
+    — and it is loud in the response, not silent.
+
+    --- one value per PROCESS, not per request -------------------------------
+
+    `main.py` builds this once at startup from `Settings` and reuses it. These
+    are process-level search settings; resolving them per request would let two
+    solves on one machine behave differently for no reason anybody could see
+    from outside.
+    """
+
+    num_search_workers: int = 8
+    symmetry_level: int = 0
+    cp_model_probing_level: int = 0
+
+    def with_overrides(self, **overrides: int | None) -> "SolverKnobs":
+        """A copy with each non-`None` override applied.
+
+        `None` means "the environment did not set this", which is not the same
+        as "set it to zero" — 0 is a meaningful value for both presolve knobs.
+        Built on `dataclasses.replace`, so a misspelled field name raises
+        rather than being silently ignored.
+        """
+        return replace(self, **{name: value for name, value in overrides.items() if value is not None})
+
+
+#: The shipped defaults, and the single source of them.
+DEFAULT_SOLVER_KNOBS = SolverKnobs()
 
 
 @dataclass(frozen=True)
@@ -697,14 +735,24 @@ def build_model(
     return model
 
 
-def solve(model: cp_model.CpModel, wall_seconds: float) -> SolveOutcome:
+def solve(
+    model: cp_model.CpModel,
+    wall_seconds: float,
+    knobs: SolverKnobs = DEFAULT_SOLVER_KNOBS,
+) -> SolveOutcome:
     """Solve `model` through the full lexicographic T0->T3 tier chain within
     `wall_seconds`.
 
     A thin wrapper over `placement.objective.run_tier_chain`, which owns the
     objectives and the frozen bounds between them. Everything a solve needs to
     know about tiers lives there, including why a tier cut short by the clock
-    does not count and why its board is discarded.
+    is not counted and why its board is adopted anyway.
+
+    `knobs` defaults to the shipped settings so a domain test can call this
+    with two arguments. The SERVICE must pass its own, resolved from the
+    environment — `test_solver_knobs.py` asserts end to end that it does,
+    because a defaulted argument nobody passes is precisely how the 2026-08-10
+    incident happened the first time.
     """
     # Imported HERE, not at module scope: `placement.objective` imports this
     # module for `SolveOutcome`/`FixtureVars`/`extract_assignments`, so a
@@ -713,7 +761,7 @@ def solve(model: cp_model.CpModel, wall_seconds: float) -> SolveOutcome:
     # single call site is the seam.
     from placement.objective import run_tier_chain
 
-    return run_tier_chain(model, model.fixture_vars, wall_seconds)
+    return run_tier_chain(model, model.fixture_vars, wall_seconds, knobs=knobs)
 
 
 def extract_assignments(solver: cp_model.CpSolver, fixture_vars: FixtureVars) -> list[tuple[int, int, int]]:

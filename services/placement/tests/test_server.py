@@ -155,7 +155,7 @@ def test_clamps_wall_seconds_to_the_server_ceiling(test_server, monkeypatch):
     a worker thread for as long as it likes."""
     seen: list[float] = []
 
-    def _spy_solve(model, wall_seconds):
+    def _spy_solve(model, wall_seconds, knobs):
         seen.append(wall_seconds)
         return SolveOutcome(
             assignments=[], status="OPTIMAL", tiers_completed=4, objective_values=[], elapsed_ms=1
@@ -241,7 +241,7 @@ def test_publishes_only_confirmed_objective_values(test_server, monkeypatch):
     completed. Publishing it would tell the caller a value was proved when it
     was not."""
 
-    def _cut_short_solve(model, wall_seconds):
+    def _cut_short_solve(model, wall_seconds, knobs):
         return SolveOutcome(
             assignments=[(0, 0, 0)],
             status="FEASIBLE",
@@ -263,7 +263,7 @@ def test_publishes_every_objective_value_when_all_tiers_proved(test_server, monk
     """The other side of the slice: a completed chain must not lose a tier to
     an off-by-one."""
 
-    def _full_chain_solve(model, wall_seconds):
+    def _full_chain_solve(model, wall_seconds, knobs):
         return SolveOutcome(
             assignments=[(0, 0, 0)],
             status="OPTIMAL",
@@ -413,7 +413,7 @@ def _saturating_solve(started: threading.Semaphore, release: threading.Event):
     how fast CP-SAT is that afternoon says nothing about topology.
     """
 
-    def _solve(model, wall_seconds):
+    def _solve(model, wall_seconds, knobs):
         started.release()
         release.wait(timeout=20)
         return SolveOutcome(

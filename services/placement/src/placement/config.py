@@ -12,12 +12,43 @@ import os
 from dataclasses import dataclass
 
 
+def _optional_int(name: str) -> int | None:
+    """An env var that may be absent, parsed as an int.
+
+    `None` means UNSET, and the caller keeps its own default — which is why
+    this returns `None` rather than taking a default here. The solver knobs'
+    defaults live on `model.SolverKnobs`, in the domain, and `config.py` may
+    not import the domain (`_RULES.md` §2.1), so repeating them here is the one
+    thing this function exists to avoid. Two copies of `8` would be two copies
+    to keep in step, and the one that drifts would drift silently.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except ValueError as exc:  # a typo'd value must not be read as "unset"
+        raise ValueError(
+            f"{name} must be an integer, got {raw!r}. Treating an unparseable value as unset would "
+            "put the process back in the 2026-08-10 failure mode: a knob that appears to be set, "
+            "reads as the default, and makes an experiment look conclusive when it never ran."
+        ) from exc
+
+
 @dataclass(frozen=True)
 class Settings:
     port: int
     max_workers: int
     shared_secret: str
     wall_seconds_max: float
+
+    # --- the CP-SAT search knobs. `None` means "not overridden here", and the
+    # --- domain's own default applies. They are typed as plain ints rather
+    # --- than a `SolverKnobs` because this module may not import the domain;
+    # --- `main.py` is the layer that owns both sides and does the joining.
+    num_search_workers: int | None = None
+    symmetry_level: int | None = None
+    cp_model_probing_level: int | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -57,9 +88,23 @@ class Settings:
                 "be starved by a full solver."
             )
 
+        # A negative worker count is rejected; ZERO is not, and the difference
+        # is CP-SAT's, not ours — `num_search_workers = 0` means "choose for
+        # me", which is a legitimate thing to ask for on an unfamiliar box.
+        num_search_workers = _optional_int("PLACEMENT_NUM_SEARCH_WORKERS")
+        if num_search_workers is not None and num_search_workers < 0:
+            raise ValueError(
+                f"PLACEMENT_NUM_SEARCH_WORKERS must be >= 0, got {num_search_workers!r}. It is the "
+                "number of parallel CP-SAT search workers per solve; 0 asks the solver to pick, and "
+                "a negative value is not a request the solver can refuse loudly."
+            )
+
         return cls(
             port=int(os.environ.get("PLACEMENT_PORT", "50051")),
             max_workers=max_workers,
             shared_secret=secret,
             wall_seconds_max=wall_seconds_max,
+            num_search_workers=num_search_workers,
+            symmetry_level=_optional_int("PLACEMENT_SYMMETRY_LEVEL"),
+            cp_model_probing_level=_optional_int("PLACEMENT_PROBING_LEVEL"),
         )

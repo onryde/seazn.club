@@ -173,17 +173,29 @@ primary_region = "lhr"
   # still sets it per request, and a machine still answers one solve at a time
   # (`PLACEMENT_MAX_WORKERS = 1` above).
   #
-  # STILL OWED, and deliberately NOT changed in the same breath:
-  # `NUM_SEARCH_WORKERS` is hardcoded at 8 in `model.py`, measured on a
-  # 6-core dev box, against this 2-vCPU shape. Change one variable at a time
-  # or neither result is attributable — see DEPLOY.md step 8.
+  # STILL OWED, and deliberately NOT changed in the same breath: the worker
+  # count below is 8, measured on a 6-core dev box, against this 2-vCPU shape.
+  # Change one variable at a time or neither result is attributable — see
+  # DEPLOY.md step 8.
   PLACEMENT_WALL_SECONDS_MAX = "10"
   # PLACEMENT_-prefixed, matching every other var this service reads. The
   # unprefixed `NUM_SEARCH_WORKERS` set here on 2026-08-10 did NOTHING —
   # `model.py` hardcoded the constant and `config.py` read only four vars — so
   # four production runs varied the wall and the machine while everyone
   # believed the worker count was moving. It never left 8.
+  #
+  # Since 2026-08-11 `config.py` reads all three solver knobs and `main.py`
+  # passes them into the solve as a `SolverKnobs` value; the domain holds the
+  # DEFAULTS only. So an unset variable here is not "8 hardcoded somewhere" —
+  # it is `SolverKnobs`'s own default, and the two cannot disagree.
   PLACEMENT_NUM_SEARCH_WORKERS = "8"
+  # The two presolve knobs are settable here too and are left UNSET, which
+  # means the shipped defaults (symmetry 0, probing 0). Set them to re-measure
+  # the "~3x faster with them" tradeoff on a real board without a code deploy:
+  #   PLACEMENT_SYMMETRY_LEVEL = "2"
+  #   PLACEMENT_PROBING_LEVEL  = "1"
+  # If a run comes back UNKNOWN with `placed` collapsing, that is the failure
+  # the 0 guards against — loud in the response, and reverted by unsetting.
 # --- sizing: this box is sized for PROOF TIME, not placement -----------------
 # Across two independent paired, interleaved A/B runs of 12 on the production
 # board, `placed` was 37 of 37 fixtures in every single run, regardless of
@@ -200,14 +212,13 @@ primary_region = "lhr"
 # not a sizing tradeoff.
 #
 # Two oversubscription axes feed that risk, and they MULTIPLY:
-#   * NUM_SEARCH_WORKERS (src/placement/model.py, hardcoded — not settable
-#     from this file or the Dockerfile) is 8, measured on a
-#     6-physical-core dev box. shared-cpu-2x is 2 vCPU: unmeasured here,
-#     and plausibly oversubscribed even alone — a dev-box A/B already
-#     found 4 workers beating 8 and 12 under load (task-3-report.md,
-#     task-5b-report.md in the SDD workspace). Re-measure on this machine
-#     shape after first deploy; changing the constant is Python source
-#     and out of this task's scope.
+#   * PLACEMENT_NUM_SEARCH_WORKERS (set above; the default lives on
+#     `model.SolverKnobs`) is 8, measured on a 6-physical-core dev box.
+#     shared-cpu-2x is 2 vCPU: unmeasured here, and plausibly oversubscribed
+#     even alone — a dev-box A/B already found 4 workers beating 8 and 12
+#     under load (task-3-report.md, task-5b-report.md in the SDD workspace).
+#     Re-measure on this machine shape; since 2026-08-11 that is an `[env]`
+#     change here, NOT a Python edit and a deploy.
 #   * PLACEMENT_MAX_WORKERS (set above, default 4 if left unset) caps
 #     CONCURRENT solves and is this file's to set. Every NUM_SEARCH_WORKERS
 #     measurement above was taken with exactly ONE solve in flight, so the

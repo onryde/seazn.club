@@ -236,11 +236,20 @@ raised to 20 here: see the commented line in `fly.toml`'s `[env]`, and decide
 it together with the re-measurement below rather than changing two variables
 at once.
 
-**Re-measure `NUM_SEARCH_WORKERS`.** It is hardcoded at 8
-(`src/placement/model.py`), measured on a 6-physical-core dev box. This shape is
-`shared-cpu-2x` — 2 vCPU, so 4x oversubscribed — and a dev-box A/B already
-found 4 beating both 8 and 12 under load. It cannot be measured anywhere but
-the real machine shape.
+**Re-measure the search worker count.** It defaults to 8
+(`model.SolverKnobs`, the one place that number exists), measured on a
+6-physical-core dev box. This shape is `shared-cpu-2x` — 2 vCPU, so 4x
+oversubscribed — and a dev-box A/B already found 4 beating both 8 and 12 under
+load. It cannot be measured anywhere but the real machine shape.
+
+Since 2026-08-11 this is an `[env]` change, not a code change:
+`PLACEMENT_NUM_SEARCH_WORKERS` in `fly.toml` (already present, set to 8), plus
+`PLACEMENT_SYMMETRY_LEVEL` / `PLACEMENT_PROBING_LEVEL` for the two presolve
+knobs. Every solve echoes what it actually used —
+`workers=N symmetry=N probing=N` on the per-solve log line — so confirm the
+number moved before believing the run measured anything. That confirmation is
+the whole point: four production deploys were spent on a knob that was set and
+had no effect.
 
 Two prior task reports already recommended this and nothing changed, because
 they recorded it in the git-ignored SDD workspace. It is in `_INDEX.md` too,
