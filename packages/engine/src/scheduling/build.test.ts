@@ -1034,30 +1034,21 @@ describe("buildSchedule — lexicographic tiers", () => {
     expect(built.tiersCompleted).toBe(4);
   }, 180_000);
 
-  // STAYS SKIPPED — a different reason than "keeps the encoder and the
-  // verifier on ONE immovable board" above, and worth distinguishing. This
-  // is not a wire-capability gap; it is a STRUCTURAL conflict between what
-  // this test needs to construct and Obligation 5 (`everyCourtSharesGrid` in
-  // `build.ts`). Confirmed by running it: it fails not on a metrics
-  // assertion but on `tiersCompleted` reading 0, because the mock is never
-  // even called — `solveBuild` routes this board to greedy before ever
-  // attempting placement.
-  //
-  // The test's own comment says why: "C1 is open 09:00-10:00 and C2 only
-  // from 10:30" — the tension it demonstrates (T1's makespan freeze
-  // outranking T3's court-balance preference) is only reachable AT ALL by
-  // giving the two courts asymmetric availability, since with two
+  // UN-SKIPPED (task C2). This was blocked by a STRUCTURAL conflict between
+  // what this test needs to construct and Obligation 5
+  // (`everyCourtSharesGrid` in `build.ts`): the test's own premise ("C1 is
+  // open 09:00-10:00 and C2 only from 10:30") REQUIRES asymmetric court
+  // availability to demonstrate the ordering tension at all — with two
   // non-conflicting fixtures and a UNIFORM grid, splitting them across
   // courts at the same early time is simultaneously makespan-optimal AND
-  // balanced — there is no tension to demonstrate. Asymmetric-availability
-  // boards are exactly what Obligation 5 exists to keep away from placement
-  // (measured 6/6 in the original wire work: a fixture placed on a court at
-  // a time it did not offer). So this property — real, and still true of
-  // z3 — has no construction left that reaches placement at all with two
-  // simple disjoint fixtures. Not Task 07's either, for the same reason as
-  // its neighbour: a real placement service would refuse this exact board, not
-  // search it.
-  it.skip("will not buy court balance with makespan", async () => {
+  // balanced, so there is no tension left to show. Confirmed before this
+  // change: it failed not on a metrics assertion but on `tiersCompleted`
+  // reading 0, because the mock was never even called — `solveBuild` routed
+  // this exact board to greedy before ever attempting placement. Obligation
+  // 5 is gone (`placement.model.build_model` now enforces each court's own
+  // tick set directly), so the board this test needs now reaches the mock
+  // like any other.
+  it("will not buy court balance with makespan", async () => {
     // THE ORDERING TEST, and the only one of these where a tier has something
     // strictly better in reach and may not take it.
     //
@@ -1602,15 +1593,33 @@ describe("buildSchedule — Placement path", () => {
     expect(result.conflicts).toHaveLength(0);
   });
 
-  it("routes a per-court blackout board to greedy instead of sending an uneven grid (obligation 5)", async () => {
-    const spy = vi.spyOn(await import("./placement-client.ts"), "solveBuild");
+  it("sends a per-court blackout board to Placement instead of routing it to greedy (task C2)", async () => {
+    // Obligation 5 used to refuse this exact grid before ever calling
+    // Placement (`everyCourtSharesGrid` in `build.ts`, gated on
+    // `not_searched`/`per_court_grid`) -- gone now that
+    // `placement.model.build_model` enforces each court's own tick set
+    // directly. This is the INVERSE of the test it replaces: it proves the
+    // client IS reached, not that it is skipped. See
+    // `build-rest-lattice.test.ts`'s sibling test (the same regression,
+    // proven with real asymmetric grid slots reaching the mock) and
+    // `placement-cutover.spec.ts`'s e2e test (the same regression, against a
+    // live, unmocked service) for the fuller picture this one unit doesn't
+    // need to carry alone.
+    const spy = vi
+      .spyOn(await import("./placement-client.ts"), "solveBuild")
+      .mockResolvedValue(okOutcome([{ fixtureId: "f1", court: "C1", startAtMs: T0 }]));
     const config = cfg({
       courts: ["C1", "C2"],
       window: { from: T0, to: T0 + 120 * MIN },
       blackouts: [{ court: "C1", from: T0 + 90 * MIN, to: T0 + 120 * MIN }],
     });
     const result = await buildSchedule(minimalInput({ config }));
-    expect(spy).not.toHaveBeenCalled();
-    expect(result.engine).toBe("greedy");
+    expect(spy).toHaveBeenCalledOnce();
+    // The mocked reply ties greedy's own placement of the single, otherwise
+    // unconstrained fixture (both land it on C1 at T0, the earliest legal
+    // tick), so the honest verdict is a proved tie, not a refusal.
+    expect(result.status).toBe("already_optimal");
+    expect(result.notSearchedReason).toBeUndefined();
+    expect(result.assignments).toHaveLength(1);
   });
 });
