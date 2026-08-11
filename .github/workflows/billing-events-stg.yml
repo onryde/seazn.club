@@ -14,7 +14,7 @@
 # Skips with a warning until the GitHub secret exists (a missing secret must not
 # fill the Actions tab with red), fails loud on any non-200, and warns when the
 # sweep reports failures or parked events so a persistent problem is visible.
-name: Billing events sweep
+name: Billing events sweep (stg)
 
 on:
   schedule:

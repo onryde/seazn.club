@@ -1,4 +1,4 @@
-name: Stage
+name: Stg
 
 # Flyway migrate against the staging database, THEN deploy the app to Fly.
 # Fires on every push to main — i.e. every merge — and trusts that ci.yml
@@ -25,11 +25,11 @@ on:
     branches: [main]
 
 jobs:
-  deploy-staging:
-    name: Deploy (staging)
+  deploy-stg:
+    name: Deploy (stg)
     runs-on: ubuntu-latest
     concurrency:
-      group: deploy-staging
+      group: deploy-stg
       # Staging is latest-wins: stacked merges to main supersede the deploy in
       # flight instead of queuing three identical ones (2026-07-18 merge train).
       cancel-in-progress: true

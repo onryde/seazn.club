@@ -173,7 +173,9 @@ describe("toolchain: no V8 heap ceiling for typecheck", () => {
    * means it never invokes tsc.
    *
    * CI/Stage/Prod split into separate workflow files (2026-08-11): ci.yml runs
-   * ONLY on pull_request now, and the deploy jobs live in stage.yml/prod.yml,
+   * ONLY on pull_request now, and the deploy jobs live in stg.yml/prod.yml
+   * (renamed from stage.yml the same day, to match the repo's existing "stg"
+   * convention — fly.stg.toml, stg.seazn.club, the placement-stg Fly app),
    * which run on push/tag. `needs:` only resolves within ONE workflow run, so
    * a deploy job in a different file literally cannot `needs:` a job defined
    * here — there is no syntax for it.
@@ -205,9 +207,9 @@ describe("toolchain: no V8 heap ceiling for typecheck", () => {
     expect(header).not.toContain("github.event_name");
 
     for (const file of [
-      "stage.yml",
+      "stg.yml",
       "prod.yml",
-      "placement-stage.yml",
+      "placement-stg.yml",
       "placement-prod.yml",
     ]) {
       const text = readFileSync(

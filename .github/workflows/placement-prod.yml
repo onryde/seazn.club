@@ -7,7 +7,7 @@ name: placement-prod
 # under one tag rather than the web app waiting on a tag while this one kept
 # shipping on every merge.
 #
-# No path filter, unlike placement-ci.yml/placement-stage.yml: a release tag
+# No path filter, unlike placement-ci.yml/placement-stg.yml: a release tag
 # is a deliberate "ship what's on main right now" act, not a narrow per-PR
 # signal, and GitHub Actions' path-filter diff is computed against a
 # ref's prior state — which a newly-created tag doesn't meaningfully have.

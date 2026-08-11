@@ -12,7 +12,7 @@ import { checkEarnGrantVolumeAlert, grantMonthlyForAllWallets } from "@/lib/cred
  *  from the prior period (D1, use-or-lose) before adding the new period's
  *  allowance; the `pack` bucket (purchased packs, D2) is never touched here
  *  (see `grantMonthly`'s own docstring). Scheduled by
- *  `.github/workflows/billing-grant.yml`, same daily cadence as
+ *  `.github/workflows/billing-grant-stg.yml`, same daily cadence as
  *  billing-quantity.
  *
  *  **Anchor (README §7 item 7; Cadence fix, SPEC-2 §5.4):** every wallet —
@@ -36,7 +36,7 @@ export async function POST() {
     const result = await grantMonthlyForAllWallets();
     // Growth-loop farm-watch (v17 gap #296): the SAME daily poll also checks
     // today's earn_grant volume — no new cron/workflow, this one already
-    // runs once a day (billing-grant.yml). checkEarnGrantVolumeAlert never
+    // runs once a day (billing-grant-stg.yml). checkEarnGrantVolumeAlert never
     // throws on its own, but the failure is caught here too so a check bug
     // can never turn into a failed grant response.
     try {

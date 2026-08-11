@@ -25,7 +25,7 @@ name: placement-ci
 # TS-side surface that this service has a contract with, and narrowing it to
 # an enumerated file list is how the gap above got created the first time.
 #
-# Deploys live in their own workflows now: placement-stage.yml (push:main)
+# Deploys live in their own workflows now: placement-stg.yml (push:main)
 # and placement-prod.yml (a v*.*.* tag). This file only validates a PR's
 # tree — it never builds toward a real deploy.
 on:

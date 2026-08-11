@@ -16,7 +16,7 @@
 # Skips with a warning until the GitHub secret exists, fails loud on any non-200,
 # and warns when reconcile corrects drift, hits a failure, or finds an orphan org
 # — so a persistent problem is visible in the Actions tab.
-name: Billing quantity reconcile
+name: Billing quantity reconcile (stg)
 
 on:
   schedule:

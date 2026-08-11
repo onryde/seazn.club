@@ -446,7 +446,7 @@ async function grantMonthlyDelta(walletId: string, delta: number): Promise<numbe
  * One wallet's failure (a bad plan_key, a transient DB error) is logged and
  * skipped rather than aborting the whole sweep, matching
  * `reconcileGroupQuantities`'s per-group try/catch — `failed` is returned
- * so the caller (the cron route, then `billing-grant.yml`) can warn on a
+ * so the caller (the cron route, then `billing-grant-stg.yml`) can warn on a
  * persistent per-wallet grant failure instead of it going unnoticed.
  */
 export async function grantMonthlyForAllWallets(

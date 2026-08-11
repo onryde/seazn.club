@@ -2,12 +2,12 @@ name: Prod
 
 # Flyway migrate against the PRODUCTION database, THEN deploy the app to Fly.
 # Fires on a version tag (v1.2.3-style), never on a branch push — a merge to
-# main only ships staging (stage.yml); production ships when someone
-# deliberately cuts a release by pushing a tag. Mirrors stage.yml's shape
+# main only ships staging (stg.yml); production ships when someone
+# deliberately cuts a release by pushing a tag. Mirrors stg.yml's shape
 # (same steps, same reasoning for each), pointed at fly.toml and the PROD_*
 # secrets instead of fly.stg.toml and the STAGING_* ones.
 #
-# NO `needs:` — same reasoning as stage.yml: the gates live in ci.yml, which
+# NO `needs:` — same reasoning as stg.yml: the gates live in ci.yml, which
 # only runs on pull_request, and a tag is cut from a commit that already
 # merged through a gated PR. Trusted, not re-checked.
 #
@@ -37,7 +37,7 @@ name: Prod
 # Add both with `gh secret set` before pushing the first release tag. Until
 # PROD_DATABASE_URL exists the migrate step fails loudly; until
 # PROD_STRIPE_SECRET_KEY exists the Stripe sync step skips with a warning,
-# same as stage.yml does for STAGING_STRIPE_SECRET_KEY.
+# same as stg.yml does for STAGING_STRIPE_SECRET_KEY.
 #
 # fly.toml's NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY is also still the literal
 # placeholder "pk_live_REPLACE_ME" — replace it before the first real deploy,
@@ -67,7 +67,7 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
-      # See stage.yml's identical step for why --prod and why it's transitive
+      # See stg.yml's identical step for why --prod and why it's transitive
       # into @seazn/engine's own dependencies section.
       - run: pnpm install --frozen-lockfile --prod
 
@@ -112,7 +112,7 @@ jobs:
         run: echo "::warning::PROD_STRIPE_SECRET_KEY not set — Stripe prices not synced; checkout will 503 until 'npm run stripe:sync' runs against production."
 
       # The image is built HERE, on the runner, and pushed to fly's registry —
-      # `flyctl deploy` then only ships a digest it already has. See stage.yml's
+      # `flyctl deploy` then only ships a digest it already has. See stg.yml's
       # identical step for why --remote-only's Depot builder can't hold this
       # build (measured SIGKILL at the 3.83 GB Turbopack peak).
       - uses: superfly/flyctl-actions/setup-flyctl@master

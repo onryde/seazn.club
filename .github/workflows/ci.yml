@@ -1,6 +1,6 @@
 name: CI
 
-# PULL REQUESTS ONLY. Deploys live in their own workflows now (stage.yml on
+# PULL REQUESTS ONLY. Deploys live in their own workflows now (stg.yml on
 # push:main, prod.yml on a v*.*.* tag) so this file's only job is validating
 # a PR's tree before it merges — it never builds or ships anything.
 on:
@@ -732,7 +732,7 @@ jobs:
 
       # Must land before the app deploys/serves or the division builder reads
       # a stale sport_variants catalog (known gotcha) — same reasoning as
-      # stage.yml/prod.yml's identical step.
+      # stg.yml/prod.yml's identical step.
       - name: Sync sport catalog from the engine registry
         run: npm run sync:sports
 
@@ -740,7 +740,7 @@ jobs:
       # `stripe:sync` (in its "Live-Stripe integration tests" step) only
       # populates smoke-db's own database, a separate Postgres instance in a
       # separate job. Without this, checkout paths in the smoke suite below
-      # would 503 exactly the way stage.yml's comment describes for a real
+      # would 503 exactly the way stg.yml's comment describes for a real
       # deploy. Skips cleanly on fork PRs, where STRIPE_SECRET_KEY is withheld.
       - name: Sync Stripe products/prices
         if: env.STRIPE_SECRET_KEY != ''
