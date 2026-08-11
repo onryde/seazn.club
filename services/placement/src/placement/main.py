@@ -318,8 +318,9 @@ def resolve_log_level(raw: str | None) -> int:
 
 
 def serve() -> None:
-    logging.basicConfig(level=resolve_log_level(os.environ.get("PLACEMENT_LOG_LEVEL")))
-    configure_structlog(resolve_log_level(os.environ.get("PLACEMENT_LOG_LEVEL")))
+    level = resolve_log_level(os.environ.get("PLACEMENT_LOG_LEVEL"))
+    logging.basicConfig(level=level)
+    configure_structlog(level)
     settings = Settings.from_env()
     server, port = build_server(settings)
     if port == 0:

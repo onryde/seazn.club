@@ -38,6 +38,14 @@ def configure_structlog(level: int) -> None:
     ends in `JSONRenderer` rather than structlog's default human-readable
     console renderer: this is a deployed Fly.io service, and JSON lines are
     what a log aggregator wants.
+
+    Deliberately NOT `cache_logger_on_first_use=True`: structlog's own docs
+    warn that a cached logger is invisible to `structlog.testing.capture_logs()`
+    (it patches the logger FACTORY, which a cached logger never calls again),
+    so the first test to exercise `configure_structlog()` would make every
+    OTHER `capture_logs()`-based test in the same process start silently
+    seeing empty captures. A handful of log calls per RPC is nowhere near
+    CP-SAT's own cost, so there is nothing here worth that footgun.
     """
     structlog.configure(
         processors=[
@@ -49,5 +57,4 @@ def configure_structlog(level: int) -> None:
         ],
         wrapper_class=structlog.make_filtering_bound_logger(level),
         logger_factory=structlog.PrintLoggerFactory(file=sys.stdout),
-        cache_logger_on_first_use=True,
     )

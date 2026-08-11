@@ -321,12 +321,18 @@ def run_tier_chain(
 
         achieved = int(solver.Value(term))
 
+        # `elapsed_seconds_total`, not `elapsed_seconds`: this is time since the
+        # WHOLE CHAIN started (`started`, above), not this tier's own duration —
+        # a per-tier duration is recoverable by diffing consecutive events, but
+        # a misleadingly-named cumulative figure read as a per-tier one is
+        # exactly the kind of misreading DEBUG-level output invites in an
+        # incident, when nobody has time to check the field's own definition.
         log.debug(
             "tier_completed",
             tier=spec.name,
             status=last_barren_status,
             achieved=achieved,
-            elapsed_seconds=time.perf_counter() - started,
+            elapsed_seconds_total=time.perf_counter() - started,
         )
 
         if status != cp_model.OPTIMAL:
