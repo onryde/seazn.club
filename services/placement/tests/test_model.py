@@ -22,6 +22,7 @@ caller would send after this round.
 import os
 
 import pytest
+from ortools.sat.python import cp_model
 
 from _board_positional import to_positional
 from placement.model import MIN_MS, build_model, solve
@@ -782,3 +783,125 @@ def test_rejects_an_empty_grid():
     fixtures, num_courts, _grid_slots, step_minutes, constraints, existing, deps = _production_board()
     with pytest.raises(ValueError, match="grid_slots"):
         build_model(fixtures, num_courts, [], step_minutes, constraints, existing, deps)
+
+
+# --- per-court grids: each court's OWN tick set is enforced, not just the ---
+# --- union (task C2 — closes the gap the module docstring records) ---------
+#
+# Before this fix, `start[i]`'s domain was `full_domain`, the UNION of every
+# court's admissible starts (`admissible_starts` a few lines up in
+# `build_model`). Nothing tied a fixture's start to the specific court it was
+# placed on, so a fixture presence on court c could legally land on a tick c
+# never actually offered. `placement.schema._validate_court_slot_coverage`
+# used to catch this at the wire by REFUSING the whole request; C2 replaces
+# the refusal with the real fix, so a per-court blackout is placed correctly
+# instead of bouncing the caller back to its own greedy fallback.
+
+
+def test_a_fixture_cannot_be_forced_onto_a_court_at_a_tick_it_does_not_offer():
+    """Court 0 offers both T and T+40; court 1 offers ONLY T+40 — exactly the
+    module docstring's own measured repro ("with C0 offering {T, T+40} and C1
+    only {T+40}, a fixture was placed on C1 at T, OPTIMAL").
+
+    Forced via explicit constraints rather than left to the tier chain's own
+    search: with a single fixture and two otherwise-identical courts, nothing
+    in the T0-T3 objective prefers one legal (court, tick) pair over another
+    (court imbalance is identical whichever lone court is used), so a FREE
+    solve landing on the illegal tick would be a matter of search luck, not
+    proof that the model permits it. Pinning both the court and the start and
+    checking feasibility is the deterministic form of the same question: if
+    the model still allows this combination, `solver.Solve` reports it SAT
+    (or better) and `extract_assignments`-equivalent reads back exactly the
+    illegal placement; once the fix is in, the same request is INFEASIBLE.
+    """
+    t = 3_600_000  # a real epoch tick, never 0 (the module's own convention)
+    t_plus_40 = t + 40 * MIN_MS
+    grid_slots = [(0, t, 0), (0, t_plus_40, 0), (1, t_plus_40, 0)]
+    constraints = {"match_minutes": 30, "gap_minutes": 0, "rest_by_division": {}, "day_cap_by_division": {}}
+    model = build_model([([0], 0)], 2, grid_slots, 40, constraints, [], [])
+    fv = model.fixture_vars
+    model.Add(fv.presence_court[0][1] == 1)  # force the fixture onto court 1
+    model.Add(fv.start[0] == t)  # force it onto the tick court 1 does not offer
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+
+    detail = f"status={solver.StatusName(status)}"
+    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        detail += (
+            f" -- fixture 0 placed on court {solver.Value(fv.presence_court[0][1])} "
+            f"at start={solver.Value(fv.start[0])}, but court 1 only offers {t_plus_40}"
+        )
+    assert status == cp_model.INFEASIBLE, detail
+
+
+def test_a_declared_but_slotless_court_never_receives_a_fixture():
+    """The other shape `_validate_court_slot_coverage` used to refuse: a
+    declared court (in range for `num_courts`) that no slot offers at all.
+
+    C2 lifts that refusal too (`placement.schema` no longer rejects it — a
+    court blacked out for the whole horizon is a legitimate thing for an
+    organiser to configure) and moves the rule into the domain: forcing
+    `presence_court[i][c] == 0` for every fixture, on every such court,
+    directly -- `Domain.FromValues([])` is deliberately NOT used for this,
+    per the module docstring.
+
+    Two courts, only one of which (court 0) is ever mentioned by a slot.
+    Forcing the fixture onto court 1 must be INFEASIBLE; leaving it free must
+    still place it, on court 0.
+    """
+    t = 3_600_000
+    grid_slots = [(0, t, 0)]
+    constraints = {"match_minutes": 30, "gap_minutes": 0, "rest_by_division": {}, "day_cap_by_division": {}}
+
+    forced = build_model([([0], 0)], 2, grid_slots, 40, constraints, [], [])
+    forced.Add(forced.fixture_vars.presence_court[0][1] == 1)
+    solver = cp_model.CpSolver()
+    status = solver.Solve(forced)
+    assert status == cp_model.INFEASIBLE, (
+        f"court 1 has no slots at all, yet the fixture was forced onto it and the model "
+        f"allowed it: status={solver.StatusName(status)}"
+    )
+
+    free = build_model([([0], 0)], 2, grid_slots, 40, constraints, [], [])
+    outcome = solve(free, wall_seconds=5.0)
+    assert outcome.assignments == [(0, 0, t)], (
+        f"expected the fixture placed on the only court that offers slots (court 0 at {t}), "
+        f"got {outcome.assignments}"
+    )
+
+
+def test_per_court_domain_adds_constraints_only_when_courts_disagree():
+    """Structural proxy for the docstring's efficiency claim, checked by
+    constraint COUNT rather than by timing: timing is measured separately
+    (bench, N>=6, `_RULES.md` section 6b) because CP-SAT's search is
+    nondeterministic and a wall-clock assertion inside a unit test would be
+    exactly the load-flaky test this suite avoids elsewhere.
+
+    Same fixture, same day structure, same size of admissible-start union
+    either way — the only thing that differs is whether every court's OWN
+    tick set equals that shared union. `AddLinearExpressionInDomain` is
+    emitted only for a court whose set is a STRICT SUBSET of the union, so
+    the asymmetric board must produce MORE raw constraints than the
+    homogeneous one; a homogeneous board pays nothing extra at all.
+    """
+    t = 3_600_000
+    constraints = {"match_minutes": 30, "gap_minutes": 0, "rest_by_division": {}, "day_cap_by_division": {}}
+
+    # Homogeneous: both courts offer the identical two ticks.
+    homogeneous_slots = [(c, t + k * 40 * MIN_MS, 0) for c in (0, 1) for k in range(2)]
+    homogeneous = build_model([([0], 0)], 2, homogeneous_slots, 40, constraints, [], [])
+
+    # Asymmetric: court 1 offers only the SECOND tick -- a strict subset, and
+    # the union is still {t, t+40} exactly as above, so any constraint-count
+    # difference cannot be explained by a different admissible-starts size.
+    asymmetric_slots = [(0, t, 0), (0, t + 40 * MIN_MS, 0), (1, t + 40 * MIN_MS, 0)]
+    asymmetric = build_model([([0], 0)], 2, asymmetric_slots, 40, constraints, [], [])
+
+    homogeneous_count = len(homogeneous.Proto().constraints)
+    asymmetric_count = len(asymmetric.Proto().constraints)
+    assert asymmetric_count > homogeneous_count, (
+        f"a court offering a strict subset of the shared tick set should add per-court domain "
+        f"constraints the homogeneous board does not need: homogeneous={homogeneous_count} "
+        f"asymmetric={asymmetric_count}"
+    )

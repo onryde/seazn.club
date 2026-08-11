@@ -268,6 +268,37 @@ commands as part of its constraints block. A layering violation is an
 **Important** finding minimum; a domain module importing the wire is
 **Critical**.
 
-Known accepted deviation: none. If one is ever accepted, record it here
-with its reason — not in a commit message, where the next session will
-not find it.
+### Known deviations
+
+**1. `model.py` reads `os.environ` — OPEN, not accepted, found 2026-08-11.**
+
+§2.1's table says `model.py` must NEVER import `os.environ`. It does:
+
+    model.py:235  NUM_SEARCH_WORKERS      = int(os.environ.get("PLACEMENT_NUM_SEARCH_WORKERS", "8"))
+    model.py:253  SYMMETRY_LEVEL          = int(os.environ.get("PLACEMENT_SYMMETRY_LEVEL", "0"))
+    model.py:254  CP_MODEL_PROBING_LEVEL  = int(os.environ.get("PLACEMENT_PROBING_LEVEL", "0"))
+
+Introduced by `8eabc7f9` ("make the solver knobs real"), which was the right
+fix to a real problem — the knobs had been set in `fly.toml` while the code
+read hardcoded constants, so four production experiments measured nothing.
+The deviation is that the knobs landed in the DOMAIN rather than in
+`config.py`, which is the layer that owns the environment.
+
+It went unrecorded for two days and was found by C2's implementer while doing
+unrelated work, which is precisely the failure §7 exists to prevent: the check
+command in §2.1 (`grep -n "scheduler_pb2\|import grpc\|os.environ" model.py
+objective.py  # expect: no output`) has been failing that whole time, and
+every reviewer who ran it either did not run it or did not report it.
+
+**Not fixed here on purpose.** The fix is to move the three reads into
+`config.py` and inject the values, which touches `model.py`, `objective.py`
+and their call sites — outside C2's stated files, and `docs/superpowers/RULES.md`
+forbids silently absorbing scope. Recorded here rather than in a commit
+message, per the rule below. Queued as its own task.
+
+If it is ever decided that solver knobs legitimately belong in the domain,
+amend §2.1's table rather than leaving the table and the code disagreeing —
+a standard nobody can run the check against is not a standard.
+
+If any further deviation is accepted, record it here with its reason — not in
+a commit message, where the next session will not find it.

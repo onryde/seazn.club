@@ -349,9 +349,14 @@ export type BuildStatus =
    * two families, are catalogued below — written for the pre-placement-cutover
    * z3 tier walk this function used to run, and kept for the shape it still
    * rhymes with. `NotSearchedReason` (a few lines down) is the CURRENT and
-   * authoritative map: six members, one per exit `solveBuild` and
-   * `buildSchedule` actually have today, including two — `per_court_grid` and
-   * the R22 size gate's own `too_big` — this paragraph never named.
+   * authoritative map: five members, one per exit `solveBuild` and
+   * `buildSchedule` actually have today, including the R22 size gate's own
+   * `too_big`, which this paragraph never named. A sixth member,
+   * `per_court_grid`, existed here between the placement cutover and task
+   * C2 — the configured courts not all sharing a start-time grid was, for
+   * that window, a refusal rather than something the solver could express.
+   * It is gone now that `placement.model.build_model` enforces each court's
+   * own tick set directly; see that module's docstring, "per-court grids".
    *
    * NOTHING WAS EVER ASKED — no `check()` ran and `rlimitSpent` is 0:
    *
@@ -412,12 +417,20 @@ export type BuildStatus =
  *     run's own start.
  *   * `lattice_unusable` — the lattice exceeds `MAX_SLOTS`, or comes back
  *     empty, discovered where `solveBuild` builds its own copy of the grid.
- *   * `per_court_grid` — the configured courts do not all offer the same
- *     start times, so the board cannot be expressed as one shared grid.
  *   * `out_of_time` — the wall was already spent before the RPC would have
  *     gone out.
  *   * `no_verdict` — the service resolved with `UNKNOWN`: the chain proved
  *     nothing, so nothing here claims a better board exists.
+ *
+ * `per_court_grid` — the configured courts not all sharing one start-time
+ * grid — lived here between the placement cutover and task C2, gating a
+ * check (`everyCourtSharesGrid`) that refused the request before it ever
+ * reached placement. It is GONE, not merely undocumented:
+ * `placement.model.build_model` now enforces each court's own tick set
+ * directly (a per-fixture domain restriction, court by court), so a
+ * per-court blackout is placed correctly instead of being bounced back to
+ * greedy. A server response naming this reason is therefore either from a
+ * deploy one release behind this field, or a bug.
  *
  * Optional, and meaningful only when `status === "not_searched"` — absent on
  * every other status, and absent on a `not_searched` from a server one
@@ -427,7 +440,6 @@ export type NotSearchedReason =
   | "too_big"
   | "window_empty"
   | "lattice_unusable"
-  | "per_court_grid"
   | "out_of_time"
   | "no_verdict";
 
@@ -1092,30 +1104,6 @@ export function buildSchedule(input: BuildInput): Promise<BuildResult> {
  * its own, without bound.
  */
 /**
- * Obligation 5 (placement cutover): does every declared court offer the exact
- * same set of start times? If not, sending this grid to placement gets the
- * whole request refused (`schema.py`'s `_validate_court_slot_coverage`)
- * rather than mis-scheduled — measured 6/6 under the string contract, a
- * fixture placed on a court at a time it did not actually offer.
- * `Blackout.court?` producing an uneven grid is ordinary org data, not a
- * synthetic edge case, so this is checked before ever calling the service.
- */
-function everyCourtSharesGrid(grid: BuildGrid, courts: readonly string[]): boolean {
-  if (courts.length <= 1) return true;
-  let shared: Set<number> | undefined;
-  for (const court of courts) {
-    const indices = grid.byCourt.get(court) ?? [];
-    const starts = new Set(indices.map((i) => grid.slots[i]!.startAt));
-    if (shared === undefined) {
-      shared = starts;
-      continue;
-    }
-    if (starts.size !== shared.size || [...starts].some((s) => !shared!.has(s))) return false;
-  }
-  return true;
-}
-
-/**
  * Dense 0..n-1 over the org-local calendar day of every slot, matching
  * EXACTLY how the verifier buckets a day cap (`dayKeyInTz`, the
  * `max_fixtures_per_day` pass in `calendar.ts`) — any other derivation (a
@@ -1321,12 +1309,17 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // THIS WAS A REAL BUG, caught by a test, not a pre-emptive cleanup: with
   // `seedPins` included, a rest-chained greedy seed that lands off-grid on
   // ONE court (measured: `perEntrantMinRest: 45` stacks all three cards on
-  // C1) injects EXTRA slots onto that court alone, which `everyCourtSharesGrid`
-  // below then correctly reads as a per-court asymmetry and routes to greedy
-  // — even though the UNDERLYING grid (blackouts, session windows, window)
-  // is perfectly uniform and the real service would happily accept it. That
-  // silently defeated placement on exactly the boards a real solve helps most:
-  // rest-constrained multi-court ones.
+  // C1) injects EXTRA slots onto that court alone — a per-court asymmetry in
+  // the LATTICE, not merely in the seed — even though the UNDERLYING grid
+  // (blackouts, session windows, window) is perfectly uniform and the real
+  // service would happily accept it. Placement now enforces each court's own
+  // tick set directly (task C2) rather than refusing an asymmetric grid
+  // outright, so this would no longer misroute to greedy the way it once
+  // did — but it would still send placement a grid that asymmetric for no
+  // reason grounded in the org's own data, which is silently the wrong
+  // request. Excluding `seedPins` avoids manufacturing that asymmetry at
+  // all, on exactly the boards a real solve helps most: rest-constrained
+  // multi-court ones.
   const grid = restrictToConfiguredCourts(buildGrid({ config, existing }), config.courts, []);
   // There is no rescue for an over-cap lattice here: `buildGrid` never reads
   // the fixture list at all, so `overCap` is a function of the config and
@@ -1341,18 +1334,14 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   if (grid.overCap || grid.slots.length === 0)
     return greedy("not_searched", false, "lattice_unusable");
 
-  // Obligation 5 (placement cutover, see `everyCourtSharesGrid`): a per-court
-  // grid is refused by the service, not mis-scheduled, and this is reachable
-  // from ordinary org data (`Blackout.court?`), not synthetic. Checked here,
-  // before ever calling the service, rather than sent and learned from an
-  // `invalid_request` error — the two are behaviourally identical (both end
-  // at the greedy board) and checking locally costs nothing extra. This is a
-  // capability gap against z3, tracked as a Prompt 10 blocker: closing it
-  // properly (a per-fixture (court, start) domain, `court_allow`) is task
-  // C2's, not this one's — do not build a narrower fix here that C2 then has
-  // to widen.
-  if (!everyCourtSharesGrid(grid, config.courts))
-    return greedy("not_searched", false, "per_court_grid");
+  // Obligation 5 (placement cutover) used to live here: refuse a per-court
+  // grid before ever calling the service, because it could not be expressed
+  // and would otherwise come back mis-scheduled. Task C2 closed that gap in
+  // the service itself (`placement.model.build_model` now enforces each
+  // court's own tick set directly — see its docstring, "per-court grids"),
+  // so a per-court blackout (`Blackout.court?`, ordinary org data, not a
+  // synthetic edge case) is placed correctly instead of refused. Nothing
+  // replaces this check; there is nothing left for it to catch.
 
   // The seed, the lattice and the checks above are already behind us; a wall
   // that has already gone must not pay for a network round trip nobody will

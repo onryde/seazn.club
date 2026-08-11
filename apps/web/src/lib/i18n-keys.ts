@@ -870,7 +870,6 @@ export type DictionaryKey =
   | "board.result.notSearched.latticeUnusable"
   | "board.result.notSearched.noVerdict"
   | "board.result.notSearched.outOfTime"
-  | "board.result.notSearched.perCourtGrid"
   | "board.result.notSearched.tooBig"
   | "board.result.notSearched.windowEmpty"
   | "board.result.ok"

@@ -440,24 +440,27 @@ describe("a board the lattice cannot hold is never called optimal", () => {
   }, 120_000);
 });
 
-// --- per-court asymmetry (Obligation 5, gap C2) -----------------------------
+// --- per-court asymmetry (Obligation 5 closed by task C2) -------------------
 
-describe("a board split across mismatched court grids is refused, not mis-scheduled", () => {
+describe("a board split across mismatched court grids now reaches the solver", () => {
   /**
    * `Blackout.court?` scoped to ONE of several configured courts is ordinary
    * org data (a single-court closure for maintenance, a court double-booked
    * outside this system), not a synthetic edge case — reachable from the
    * ordinary settings UI. It leaves that court's set of offered start times a
-   * strict subset of its neighbours', so `everyCourtSharesGrid` refuses the
-   * board rather than send placement a lattice it cannot express per-court
-   * (`schema.py`'s `_validate_court_slot_coverage`).
+   * strict subset of its neighbours'.
    *
-   * Neither the over-cap gate nor the window check fires first here: the
-   * lattice is small and well within `MAX_SLOTS`, and the window comfortably
-   * contains the run's own start — this exit is reached on its own, not
-   * shadowed the way `lattice_unusable` is above.
+   * Until task C2 this used to be refused here (`everyCourtSharesGrid`,
+   * routing to `not_searched`/`per_court_grid` before `solveBuild` was ever
+   * called) because placement had no way to express a per-court grid.
+   * `placement.model.build_model` now enforces each court's own tick set
+   * directly (a per-fixture domain restriction, court by court — see that
+   * module's docstring, "per-court grids"), so the request reaches the
+   * solver like any other board. This test is the inverse of the one it
+   * replaces: it proves the solver is CALLED, not that the request is
+   * refused.
    */
-  it("reports not_searched with per_court_grid when one court is blacked out and its siblings are not", async () => {
+  it("calls placement instead of refusing when one court is blacked out and its siblings are not", async () => {
     const config: Cfg = {
       startAt: T0,
       matchMinutes: 30,
@@ -483,12 +486,29 @@ describe("a board split across mismatched court grids is refused, not mis-schedu
     expect(c1Starts.size).toBeGreaterThan(0);
     expect(c2Starts.size).toBeGreaterThan(c1Starts.size);
 
+    const solveBuildSpy = vi
+      .spyOn(await import("./placement-client.ts"), "solveBuild")
+      .mockResolvedValue(okOutcome([{ fixtureId: "a", court: "C1", startAtMs: T0 }]));
+
     const out = await buildSchedule({ fixtures, config });
-    expect(out.status).toBe("not_searched");
-    expect(out.notSearchedReason).toBe("per_court_grid");
-    expect(out.engine).toBe("greedy");
-    // The greedy floor still ships — this status is a refusal to OPTIMISE, not
-    // a refusal to schedule.
+
+    // THE REGRESSION THIS TEST GUARDS: the request reached the solver at
+    // all. Before C2, `everyCourtSharesGrid` refused this exact grid before
+    // ever calling `solveBuild` — the mock above would sit uncalled and
+    // `out.status`/`out.notSearchedReason` would be `"not_searched"` /
+    // `"per_court_grid"` instead of what is asserted below.
+    expect(solveBuildSpy).toHaveBeenCalledOnce();
+    expect(out.status).not.toBe("not_searched");
+    expect(out.notSearchedReason).toBeUndefined();
     expect(out.assignments).toHaveLength(1);
+
+    // And the grid `solveBuild` was actually asked to search reflects the
+    // real asymmetry: C1's blacked-out hour is genuinely missing from what
+    // was sent, not silently padded back to match C2.
+    const sentInput = solveBuildSpy.mock.calls[0]![0];
+    const sentC1 = sentInput.grid.slots.filter((s) => s.court === "C1").length;
+    const sentC2 = sentInput.grid.slots.filter((s) => s.court === "C2").length;
+    expect(sentC1).toBeLessThan(sentC2);
+    await resetZ3();
   }, 120_000);
 });
