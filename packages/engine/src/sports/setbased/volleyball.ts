@@ -36,11 +36,31 @@ export const volleyball = makeSetBasedModule({
     winBy: 2,
     cap: null,
     pointsMap: FIVB_POINTS,
+    // W4 (#407) — the FIVB scoresheet carries all three: team + technical
+    // timeouts, the substitution boxes (in/out numbers, six a set indoor) and
+    // the sanction ladder (warning / penalty / expulsion / disqualification).
+    records: { timeouts: true, sanctions: true, substitutions: true, expedite: false },
   },
   variants: {
     indoor: {},
     // Beach: pairs, best-of-3 to 21, deciding set to 15; simple 2-0 win points.
-    beach: { bestOf: 3, setTo: 21, finalSetTo: 15, pointsMap: { "*": [2, 0] } },
+    // S6/#416 (W5) regression fix — beach has NO substitutions (FIVB Beach
+    // Volleyball rules, §7: a 2-player pair has no bench to substitute from),
+    // but `records` used to be a whole-module constant read once at
+    // `makeSetBasedModule` call time, so beach silently inherited indoor's
+    // `substitutions: true` and `apply()` wrongly accepted `volleyball.sub`
+    // for a beach fixture. `records` now lives in cfg (SetBasedRecordFlags,
+    // setbased/kernel.ts) precisely so a variant CAN disagree; every field is
+    // restated (the kernel's nested-cfg-default convention — see the nested
+    // kernel's `set`/`game`/`tiebreak`), preserving `timeouts`/`sanctions`
+    // and flipping only `substitutions`.
+    beach: {
+      bestOf: 3,
+      setTo: 21,
+      finalSetTo: 15,
+      pointsMap: { "*": [2, 0] },
+      records: { timeouts: true, sanctions: true, substitutions: false, expedite: false },
+    },
   },
   positions,
   // S3/W4b (#426) ruling 2 — FIVB 15.6, the two conditions on a re-entry, and
@@ -83,10 +103,6 @@ export const volleyball = makeSetBasedModule({
     defaultKind: "team",
     team: { squadNumbers: true, captain: true },
   },
-  // W4 (#407) — the FIVB scoresheet carries all three: team + technical
-  // timeouts, the substitution boxes (in/out numbers, six a set indoor) and
-  // the sanction ladder (warning / penalty / expulsion / disqualification).
-  records: { timeouts: true, sanctions: true, substitutions: true },
   // Jul3/07 §3 — unlocked by the rally's optional `server`/`scorer`. The
   // FIVB point-by-point grid records the serving player's number, so `serves`
   // is a scoresheet fact; `scorer` credits the terminating action.

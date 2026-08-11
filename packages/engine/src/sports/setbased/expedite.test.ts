@@ -31,13 +31,24 @@ function envelopes(events: ModuleEvent[]): EventEnvelope[] {
   return events.map((event, i) => makeEnvelope(i, event));
 }
 
-function fold(mod: Mod, events: ModuleEvent[], raw: unknown = {}): SetBasedState {
+// `opts.strict` — S6/#416 (W5) review (cfg-replay.conformance.test.ts §3.3).
+// Default false (read-path shape, this file's long-standing convention).
+// The `records.expedite` gate (kernel.ts) is now cfg-derived, so it is
+// STRICT ONLY — a test asserting "this sport refuses this event/field" is a
+// write-path question and must opt in, or it silently asserts nothing.
+function fold(
+  mod: Mod,
+  events: ModuleEvent[],
+  raw: unknown = {},
+  opts: { strict?: boolean } = {},
+): SetBasedState {
   const cfg = mod.configSchema.parse(raw);
   return foldMatch(
     mod,
     cfg,
     defaultLineupPair(resolvePositions(mod, cfg)),
     envelopes([{ type: "core.start", payload: {} }, ...events]),
+    opts.strict === true ? { strictFromSeq: 0 } : undefined,
   );
 }
 
@@ -332,9 +343,12 @@ describe("SetBasedEv union disambiguation", () => {
 // ---------------------------------------------------------------------------
 describe("expedite is table tennis's alone", () => {
   it("volleyball and badminton refuse the event", () => {
+    // write-path (strict): the `records.expedite` refusal is cfg-derived, so
+    // it only fires on the write path — an already-recorded fixture must
+    // stay readable even if a config edit later flips the flag.
     for (const mod of [volleyball, badminton] as Mod[]) {
       expect(() =>
-        fold(mod, [{ type: `${mod.key}.expedite.start`, payload: {} }]),
+        fold(mod, [{ type: `${mod.key}.expedite.start`, payload: {} }], {}, { strict: true }),
       ).toThrowError(
         expect.objectContaining({
           code: "INVALID_EVENT",
@@ -355,7 +369,7 @@ describe("expedite is table tennis's alone", () => {
     // laws have no concept of").
     for (const mod of [volleyball, badminton] as Mod[]) {
       expect(() =>
-        fold(mod, [{ type: `${mod.key}.rally`, payload: { wonBy: "H", returns: 13 } }]),
+        fold(mod, [{ type: `${mod.key}.rally`, payload: { wonBy: "H", returns: 13 } }], {}, { strict: true }),
       ).toThrowError(
         expect.objectContaining({
           code: "INVALID_EVENT",

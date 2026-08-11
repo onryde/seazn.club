@@ -19,13 +19,27 @@ function envelopes(events: ModuleEvent[]): EventEnvelope[] {
   return events.map((event, i) => makeEnvelope(i, event));
 }
 
-function fold(mod: Mod, events: ModuleEvent[], raw: unknown = {}): SetBasedState {
+// `opts.strict` — S6/#416 (W5) review (cfg-replay.conformance.test.ts §3.3).
+// Default false (read-path shape, this file's long-standing convention):
+// most tests here fold ADDITIVE fields and want replay tolerance. The
+// `records` gate (kernel.ts) is now cfg-derived, so it is STRICT ONLY — a
+// test asserting "this sport refuses this event" is asking a write-path
+// question and must opt in, or it silently asserts nothing (the read path
+// never refuses a `records`-gated event, by design: an organiser's config
+// edit must never brick an already-recorded fixture).
+function fold(
+  mod: Mod,
+  events: ModuleEvent[],
+  raw: unknown = {},
+  opts: { strict?: boolean } = {},
+): SetBasedState {
   const cfg = mod.configSchema.parse(raw);
   return foldMatch(
     mod,
     cfg,
     defaultLineupPair(resolvePositions(mod, cfg)),
     envelopes([{ type: "core.start", payload: {} }, ...events]),
+    opts.strict === true ? { strictFromSeq: 0 } : undefined,
   );
 }
 
@@ -94,8 +108,10 @@ describe("set-based timeouts", () => {
   it("table tennis records a timeout; badminton refuses one (no timeouts in BWF play)", () => {
     expect(fold(tabletennis, [{ type: "tabletennis.timeout", payload: { by: "H" } }]).timeouts)
       .toEqual({ home: 1, away: 0 });
+    // write-path (strict): the `records.timeouts` refusal is cfg-derived, so
+    // it only fires on the write path (see `fold`'s own doc comment).
     expect(() =>
-      fold(badminton, [{ type: "badminton.timeout", payload: { by: "H" } }]),
+      fold(badminton, [{ type: "badminton.timeout", payload: { by: "H" } }], {}, { strict: true }),
     ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
   });
 
@@ -224,9 +240,13 @@ describe("volleyball substitutions", () => {
   });
 
   it("is refused by badminton and table tennis", () => {
+    // write-path (strict): see the "table tennis records a timeout" test
+    // above for why.
     for (const mod of [badminton, tabletennis] as Mod[]) {
-      expect(() => fold(mod, [{ type: `${mod.key}.sub`, payload: { by: "H" } }]), mod.key)
-        .toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
+      expect(
+        () => fold(mod, [{ type: `${mod.key}.sub`, payload: { by: "H" } }], {}, { strict: true }),
+        mod.key,
+      ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
     }
   });
 });

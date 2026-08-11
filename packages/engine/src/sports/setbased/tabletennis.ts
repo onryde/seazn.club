@@ -28,6 +28,13 @@ export const tabletennis = makeSetBasedModule({
     winBy: 2,
     cap: null,
     pointsMap: { "*": [2, 0] }, // league convention 2/0; configurable
+    // W4 (#407) — the ITTF match sheet carries one timeout per player per
+    // match and the umpire's card ladder (yellow warning → `warning`, red
+    // penalty → `penalty`, removal → `expulsion`/`disqualification`). No
+    // substitutions. W4a (#425) §5.3 — and the expedite system (ITTF Law
+    // 2.15), which is table tennis's alone. Same for every declared variant
+    // (no per-variant split here), so this lives only in `defaults`.
+    records: { timeouts: true, sanctions: true, substitutions: false, expedite: true },
   },
   variants: {
     bo5: {},
@@ -52,14 +59,10 @@ export const tabletennis = makeSetBasedModule({
   coarseEventType: "game.summary",
   rallyEntitlement: "scoring.rally_by_rally", // doc 10 / table-tennis.md §3
   entrantModel: { kinds: ["individual", "pair"], defaultKind: "individual" },
-  // W4 (#407) — the ITTF match sheet carries one timeout per player per match
-  // and the umpire's card ladder (yellow warning → `warning`, red penalty →
-  // `penalty`, removal → `expulsion`/`disqualification`). No substitutions.
-  // W4a (#425) §5.3 — and the expedite system (ITTF Law 2.15), which is table
-  // tennis's alone: `tabletennis.expedite.start` records that the umpire
-  // introduced it, and every later rally carrying `returns` + `serving` is
-  // judged against the receiver's thirteenth good return.
-  records: { timeouts: true, sanctions: true, expedite: true },
+  // `tabletennis.expedite.start` records that the umpire introduced the
+  // expedite system, and every later rally carrying `returns` + `serving` is
+  // judged against the receiver's thirteenth good return (see `records`
+  // above).
   playerStats: {
     metrics: [
       { key: "points", label: "Points", from: "tabletennis.rally", field: "scorer", agg: "count" },

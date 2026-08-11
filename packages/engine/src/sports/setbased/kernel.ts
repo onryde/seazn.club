@@ -30,8 +30,14 @@ import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
 import type { PlayerStatsModel } from "../../stats/stats.ts";
 import type {
+  FidelityBand,
   FidelityTier,
   ModuleEvent,
+  PadAction,
+  PadAttribution,
+  PadGate,
+  PadPanel,
+  PadSpec,
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
@@ -51,6 +57,27 @@ export const PointsPair = z.tuple([
 ]);
 export type PointsPair = z.infer<typeof PointsPair>;
 
+// S6/#416 (W5) — which scoresheet interruptions THIS FIXTURE records. Was a
+// preset-level (whole-module) constant (`SetBasedPreset.records`, now
+// removed) until the beach-volleyball regression: `records` gated `apply()`'s
+// dispatch and was read ONCE at module-construction time, so every variant of
+// a sport shared one answer and `beach` could never differ from `indoor` —
+// beach wrongly accepted `volleyball.sub`. Moving it into cfg (mirroring how
+// `bestOf`/`setTo`/etc already vary per variant) is the only fix that can
+// actually reach `apply()`, which sees only the resolved `cfg`, never a
+// variant NAME (`init(cfg, lineups)` is not told which preset produced it).
+// Every field is a plain required boolean (no per-field default): a variant
+// overriding `records` restates the whole object, matching this kernel's own
+// convention for every other nested cfg default (see the nested kernel's
+// `set`/`game`/`tiebreak`, all `.default()`-wrapped objects with required
+// inner leaves).
+export interface SetBasedRecordFlags {
+  timeouts: boolean;
+  sanctions: boolean;
+  substitutions: boolean;
+  expedite: boolean;
+}
+
 export interface SetBasedParams {
   bestOf: number;
   setTo: number;
@@ -58,6 +85,7 @@ export interface SetBasedParams {
   winBy: number;
   cap: number | null;
   pointsMap: Record<string, PointsPair>;
+  records: SetBasedRecordFlags;
 }
 
 // Builds a preset's config schema (defaults = its shipped/first variant).
@@ -72,6 +100,17 @@ function makeConfigSchema(defaults: SetBasedParams) {
       winBy: z.number().int().positive().default(defaults.winBy),
       cap: z.number().int().positive().nullable().default(defaults.cap),
       pointsMap: z.record(z.string().min(1), PointsPair).default(defaults.pointsMap),
+      // Inner leaves are plain required booleans (no per-field default) —
+      // see SetBasedRecordFlags's doc comment: an override restates the whole
+      // object, matching this kernel's `set`/`game`/`tiebreak` convention.
+      records: z
+        .object({
+          timeouts: z.boolean(),
+          sanctions: z.boolean(),
+          substitutions: z.boolean(),
+          expedite: z.boolean(),
+        })
+        .default(defaults.records),
     })
     .refine((cfg) => cfg.bestOf % 2 === 1, { message: "bestOf must be odd (a decider must exist)" })
     .refine((cfg) => cfg.cap === null || cfg.cap >= Math.max(cfg.setTo, cfg.finalSetTo), {
@@ -354,8 +393,10 @@ export function expectedDoublesServer(
 }
 
 /** ITTF Law 2.15.2 — the receiver wins the point on their thirteenth good
- *  return. Not configurable: it is the law, not a competition setting. */
-const EXPEDITE_RETURNS = 13;
+ *  return. Not configurable: it is the law, not a competition setting.
+ *  Exported for `padSpec` (S6/#416): the same plausibility-sentinel pattern
+ *  cricket uses for a schema-unbounded numeric field (`UNBOUNDED_BALLS_SENTINEL`). */
+export const EXPEDITE_RETURNS = 13;
 
 function opponent(side: Side): Side {
   return side === "home" ? "away" : "home";
@@ -539,17 +580,26 @@ function checkExpedite(
 function applyRally(
   state: SetBasedState,
   payload: SetBasedRally,
-  preset: { key: string; recordsExpedite: boolean },
+  preset: { key: string; recordsExpedite: boolean; strict: boolean },
 ): SetBasedState {
   if (state.phase !== "live") wrongPhase(`rally not allowed in phase "${state.phase}"`);
   // W4a review — `returns` rides on the SHARED rally payload, so without this
   // gate volleyball and badminton accept an ITTF-only field their laws have no
   // concept of and then discard it. `records` exists to refuse exactly that
-  // (see `SetBasedPreset.records`), and the expedite EVENT is already gated;
+  // (see `SetBasedRecordFlags`), and the expedite EVENT is already gated;
   // the field has to be too or the preset principle only half holds.
   // `serving` is deliberately NOT gated: which side served is a fact every
   // set-based scoresheet carries — only the return count is table tennis's.
-  if (payload.returns !== undefined && !preset.recordsExpedite) {
+  //
+  // S6/#416 (W5) review (cfg-replay.conformance.test.ts §3.3) — STRICT ONLY.
+  // `recordsExpedite` is now READ FROM CFG (`state.cfg.records.expedite`,
+  // the beach-volleyball fix), so — exactly like `NestedInterruptionRules`'s
+  // count/seconds and the period kernel's `periodSeconds` — a refusal built
+  // from it must never fire on REPLAY: cfg is read live and the whole stream
+  // refolds from `init` on every read, so an organiser's later config edit
+  // would otherwise brick an already-recorded rally that legally carried
+  // `returns` when it was written.
+  if (preset.strict && payload.returns !== undefined && !preset.recordsExpedite) {
     invalid(`"${preset.key}" has no expedite system, so a rally cannot carry \`returns\``);
   }
   const side = sideOf(state, payload.wonBy);
@@ -810,12 +860,14 @@ export interface SetBasedPreset {
   // `<key>.expedite.start` for them exactly as it refuses `badminton.timeout`
   // — and, because `returns` rides on the SHARED rally payload rather than a
   // sport-specific one, `applyRally` refuses that field for them too.
-  records?: {
-    timeouts?: boolean;
-    sanctions?: boolean;
-    substitutions?: boolean;
-    expedite?: boolean;
-  };
+  //
+  // S6/#416 (W5) — MOVED into `defaults.records` / a variant's own
+  // `records` override (see `SetBasedRecordFlags`). Was a sibling field here,
+  // read once at module-construction time — which is the beach-volleyball
+  // regression (beach could never differ from indoor). No field here any
+  // more; every preset now supplies `records` inside `defaults`, and a
+  // variant that needs a different answer (only `beach` does, today)
+  // restates the whole object in its own `variants[name].records`.
   playerStats?: PlayerStatsModel; // Jul3/07 §3 — unlocked by person attribution
   /**
    * S3/W4b (#426) owner ruling 2 — what this competition permits a lineup to
@@ -839,6 +891,239 @@ function makeMetrics(unit: { one: string; many: string }): MetricSpec[] {
     { key: "points_won", label: "Points won", direction: "desc", display: false },
     { key: "points_lost", label: "Points lost", direction: "asc", display: false },
   ];
+}
+
+// ---------------------------------------------------------------------------
+// S6/#416 (W5) — padSpec. Pure function of (preset, resolved cfg). One
+// builder shared by volleyball/badminton/tabletennis — the same "kernel owns
+// the logic, presets add data" split every other per-sport hook on this
+// factory already uses (fidelityTiers, discipline, arbitraryEvent…).
+//
+// `eventSchemas` is built separately, in `makeSetBasedModule` below, and is
+// DELIBERATELY the same 6 branches (Rally/Summary/Timeout/Sanction/Sub/
+// ExpediteStart) for all three sports, regardless of what THIS preset's
+// `records` says — because `eventSchema` itself (`SetBasedEv`, top of this
+// file) is ALSO the same shared 6-branch union for all three, by design
+// (golden.ts calls this the "KERNEL-UNION" class and already carries a
+// parallel exemption list, `UNREACHABLE_FIELDS`, for the fields that ride on
+// a branch a given sport can never reach — e.g. `badminton.timeout`'s
+// `technical`). `padSpecConformanceSuite`'s bijection check (a) is therefore
+// against the FULL union, not the sport's own recordable subset: narrowing
+// `eventSchemas` to "only what THIS preset records" would break bijection
+// for every sport on this kernel, every time, structurally — the fix would
+// have to narrow `eventSchema` itself, which is out of scope this session
+// (it feeds `schema-snapshot.ts` and `golden.ts`'s optional-field walk, and
+// nothing recorded ever needed the wider shape narrowed).
+//
+// The CONSEQUENCE for padSpec: a branch this preset's `records` says it
+// cannot record (e.g. `badminton.timeout`, `volleyball.expedite.start`,
+// `tabletennis.sub`) is registered in `eventSchemas` (bijection needs it) but
+// gets NO action, ever, for ANY cfg of that sport — permanently, not merely
+// for the cfg under test. This is NOT the cfg-mutual-exclusivity case
+// `checkActionCoverage`'s own doc comment describes (cricket's superOver vs
+// 2-innings, where EVERY branch is reachable from SOME legal cfg): here a
+// branch is unreachable from ALL of a sport's cfgs. `checkActionCoverage` is
+// therefore called (setbased/padspec.test.ts) only for volleyball, where
+// indoor/beach genuinely disagree on `substitutions` — the real
+// mutual-exclusivity case — and explicitly NOT for badminton/tabletennis,
+// which have none.
+// ---------------------------------------------------------------------------
+
+/** cfg-derived plausibility bound for a schema-unbounded score field
+ *  (`SetBasedSummary.home`/`.away` are `z.number().int().nonnegative()` with
+ *  no upper bound at all) — the same sentinel pattern cricket's padSpec uses
+ *  for `cricket.innings.summary.runs`. Capped sports (badminton) use the cap
+ *  itself; uncapped ones (volleyball, table tennis) get a margin past the
+ *  target generous enough for any plausible deuce ending. */
+function summaryScoreBound(cfg: SetBasedCfg): number {
+  return cfg.cap ?? Math.max(cfg.setTo, cfg.finalSetTo) + 20;
+}
+
+const RALLY_ATTRIBUTION: PadAttribution = [{ kind: "side", path: "wonBy" }];
+const RALLY_ATTRIBUTED_ATTRIBUTION: PadAttribution = [
+  { kind: "side", path: "wonBy" },
+  { kind: "person", path: "server" },
+  { kind: "person", path: "scorer" },
+];
+
+function setBasedPadSpec(preset: SetBasedPreset, cfg: SetBasedCfg): PadSpec {
+  const key = preset.key;
+  const rallyType = `${key}.rally`;
+  const summaryType = `${key}.${preset.coarseEventType}`;
+  const timeoutType = `${key}.timeout`;
+  const sanctionType = `${key}.sanction`;
+  const subType = `${key}.sub`;
+  const expediteType = `${key}.expedite.start`;
+  const scoreBound = summaryScoreBound(cfg);
+
+  const rallyAction: PadAction = {
+    type: rallyType,
+    labelKey: { key: `pad.${key}.action.rally`, label: "Rally" },
+    fields: [],
+    attribution: RALLY_ATTRIBUTION,
+  };
+  const rallyAttributedAction: PadAction = {
+    type: rallyType,
+    labelKey: { key: `pad.${key}.action.rallyAttributed`, label: "Rally (server / scorer)" },
+    fields: [],
+    attribution: RALLY_ATTRIBUTED_ATTRIBUTION,
+  };
+  const summaryAction: PadAction = {
+    type: summaryType,
+    labelKey: { key: `pad.${key}.action.setScore`, label: "Set score" },
+    fields: [
+      { kind: "number", path: "home", min: 0, max: scoreBound },
+      { kind: "number", path: "away", min: 0, max: scoreBound },
+      { kind: "toggle", path: "partial" },
+    ],
+    attribution: [],
+  };
+  const timeoutAction: PadAction = {
+    type: timeoutType,
+    labelKey: { key: `pad.${key}.action.timeout`, label: "Timeout" },
+    fields: [{ kind: "toggle", path: "technical" }],
+    attribution: [{ kind: "side", path: "by" }],
+  };
+  const sanctionAction: PadAction = {
+    type: sanctionType,
+    labelKey: { key: `pad.${key}.action.sanction`, label: "Sanction" },
+    fields: [{ kind: "enum", path: "level", values: SetBasedSanctionLevel.options }],
+    attribution: [
+      { kind: "side", path: "by" },
+      { kind: "person", path: "person" },
+    ],
+  };
+  const subAction: PadAction = {
+    type: subType,
+    labelKey: { key: `pad.${key}.action.sub`, label: "Substitution" },
+    fields: [],
+    attribution: [
+      { kind: "side", path: "by" },
+      { kind: "person", path: "off" },
+      { kind: "person", path: "on" },
+    ],
+  };
+  const expediteStartAction: PadAction = {
+    type: expediteType,
+    labelKey: { key: `pad.${key}.action.expediteStart`, label: "Start expedite" },
+    fields: [],
+    attribution: [],
+  };
+  // ITTF Law 2.15.2 rally variant: the receiver's good-return count, and which
+  // side is serving (`serving`, never `server` — see SetBasedRally's own doc
+  // comment on the trap of confusing the two).
+  const rallyExpediteAction: PadAction = {
+    type: rallyType,
+    labelKey: { key: `pad.${key}.action.rallyExpedite`, label: "Rally (expedite)" },
+    fields: [{ kind: "number", path: "returns", min: 0, max: EXPEDITE_RETURNS * 3 }],
+    attribution: [
+      { kind: "side", path: "wonBy" },
+      { kind: "side", path: "serving" },
+    ],
+  };
+
+  const panels: PadPanel[] = [
+    {
+      labelKey: { key: `pad.${key}.panel.rally`, label: "Rally" },
+      phase: "live",
+      layout: "primary",
+      actions: [rallyAction, rallyAttributedAction],
+    },
+    {
+      labelKey: { key: `pad.${key}.panel.setScore`, label: "Set score" },
+      phase: "live",
+      layout: "grid",
+      actions: [summaryAction],
+    },
+    // Cfg-only inclusion (mirrors cricket's DLS/super-over panels): a sport
+    // that does not record a given interruption simply never builds the
+    // panel for it — no gate needed, since `padSpec(cfg)` is already pure in
+    // cfg (module.ts's own note on `PadGate`).
+    ...(cfg.records.timeouts
+      ? [
+          {
+            labelKey: { key: `pad.${key}.panel.timeouts`, label: "Timeouts" },
+            phase: "live" as const,
+            layout: "drawer" as const,
+            actions: [timeoutAction],
+          },
+        ]
+      : []),
+    ...(cfg.records.sanctions
+      ? [
+          {
+            labelKey: { key: `pad.${key}.panel.sanctions`, label: "Sanctions" },
+            phase: "live" as const,
+            layout: "drawer" as const,
+            actions: [sanctionAction],
+          },
+        ]
+      : []),
+    // S6/#416 (W5) variant-reshaping proof: present for indoor, absent for
+    // beach (`cfg.records.substitutions`) — the beach-fix regression test's
+    // padSpec analogue.
+    ...(cfg.records.substitutions
+      ? [
+          {
+            labelKey: { key: `pad.${key}.panel.subs`, label: "Substitutions" },
+            phase: "live" as const,
+            layout: "drawer" as const,
+            actions: [subAction],
+          },
+        ]
+      : []),
+    ...(cfg.records.expedite
+      ? [
+          {
+            labelKey: { key: `pad.${key}.panel.expedite`, label: "Expedite" },
+            phase: "live" as const,
+            layout: "drawer" as const,
+            actions: [expediteStartAction],
+            // Runtime gate: hide once already in force (ITTF 2.15.4 runs it
+            // to the end of the match — a second declaration only errors).
+            gate: { op: "not", of: { op: "path-truthy", path: "state.expedite" } } satisfies PadGate,
+          },
+          {
+            labelKey: { key: `pad.${key}.panel.expediteRally`, label: "Expedite scoring" },
+            phase: "live" as const,
+            layout: "drawer" as const,
+            actions: [rallyExpediteAction],
+            // Reachable, not merely configured (mirrors cricket's super-over
+            // panel): the format allows expedite, but it only actually
+            // applies once the match has reached it.
+            gate: { op: "path-truthy", path: "state.expedite" } satisfies PadGate,
+          },
+        ]
+      : []),
+  ];
+
+  return {
+    panels,
+    // One band per REGISTERED type (all 6, per the module-level note above) —
+    // not merely the ones this cfg happens to build an action for. Modelled
+    // on cricket: the bare result alone (band 0) already reaches a decided
+    // match (a set-based match is decided by `bankSet` off summaries alone);
+    // administrative/incident records (timeout, sanction, sub, expedite —
+    // none of which touches the score) sit at band 1, the same band cricket
+    // gives its own admin events (toss, interruption, review, powerplay);
+    // rally-by-rally scoring is the maximum-granularity record for this
+    // kernel, band 3, matching `rallyEntitlement`'s own name
+    // ("scoring.rally_by_rally", the direct sibling of cricket's
+    // "scoring.ball_by_ball" at band 3). Band 2 is genuinely unoccupied for
+    // this kernel today — there is no player-line/box-score analogue — which
+    // is honest, not a gap: S2/#430 parked exactly this (per-event
+    // rally-length / 1st-vs-2nd-serve detail) as future T3-lane work, not
+    // this session's.
+    fidelity: {
+      [summaryType]: 0,
+      [timeoutType]: 1,
+      [sanctionType]: 1,
+      [subType]: 1,
+      [expediteType]: 1,
+      [rallyType]: 3,
+    } satisfies Record<string, FidelityBand>,
+    fidelityEntitlements: { 3: preset.rallyEntitlement },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -900,20 +1185,51 @@ export function makeSetBasedModule(
   // suffix is load-bearing shorthand for "there is no `.end`": expedite runs to
   // the end of the match (ITTF 2.15.4) and nothing ever stops it.
   const expediteType = `${preset.key}.expedite.start`;
-  const records = preset.records ?? {};
+  // S6/#416 (W5) — type string -> its own payload schema, by reference, the
+  // SAME 6 schema objects `SetBasedEv` unions (top of this file). ALWAYS all
+  // 6, regardless of this preset's `records` — see the module-level note
+  // above `setBasedPadSpec` for why a narrower, per-preset registry cannot
+  // satisfy `padSpecConformanceSuite`'s bijection check against the shared
+  // `eventSchema`.
+  const eventSchemas: Readonly<Record<string, z.ZodTypeAny>> = {
+    [rallyType]: SetBasedRally,
+    [summaryType]: SetBasedSummary,
+    [timeoutType]: SetBasedTimeout,
+    [sanctionType]: SetBasedSanction,
+    [subType]: SetBasedSub,
+    [expediteType]: SetBasedExpediteStart,
+  };
+  // S6/#416 (W5) — `records` moved from a preset-level (whole-module)
+  // constant into `SetBasedCfg.records` (above), because `apply()` and
+  // `arbitraryEvent` need a PER-FIXTURE answer (`state.cfg.records`, read
+  // where each is called below) — the beach-volleyball regression was
+  // exactly this: a module-level constant can never let `beach` and `indoor`
+  // disagree on `substitutions`. `declaredRecords` here is deliberately the
+  // STATIC declared-default answer, used only for the two things that
+  // describe the MODULE as a whole rather than one fixture: `fidelityTiers`
+  // (a plain array — `SportModule` has no per-cfg fidelityTiers hook) and
+  // `coarsen`'s pass-through classification (which only ever sees events a
+  // real fixture's `apply()` already accepted, so a superset costs it
+  // nothing — narrower-per-variant precision is not needed there).
+  const declaredRecords = preset.defaults.records;
   const coarsenParams = preset.defaults; // spec 04 §9.6 conformance runs at default cfg
   // One per module, so the init handshake it keys on cannot leak between the
   // three sports sharing this kernel (see `sports/squad-state.ts`).
   const squadAdopter = makeSquadAdopter<SetBasedState>();
 
-  // W4 — the interruption types this sport actually records. `coarsen` treats
-  // them as transparent, so they never split a rally set.
-  const extensionTypes = [
-    ...(records.timeouts === true ? [timeoutType] : []),
-    ...(records.sanctions === true ? [sanctionType] : []),
-    ...(records.substitutions === true ? [subType] : []),
-    ...(records.expedite === true ? [expediteType] : []),
-  ];
+  // W4 — the interruption types a stream from THIS MODULE may ever carry.
+  // `coarsen` treats them as transparent, so they never split a rally set.
+  // Shared with `arbitraryEvent`'s PER-FIXTURE computation below (same
+  // formula, different `records` input — declared vs `state.cfg.records`).
+  function extensionTypesFor(flags: SetBasedRecordFlags): string[] {
+    return [
+      ...(flags.timeouts ? [timeoutType] : []),
+      ...(flags.sanctions ? [sanctionType] : []),
+      ...(flags.substitutions ? [subType] : []),
+      ...(flags.expedite ? [expediteType] : []),
+    ];
+  }
+  const extensionTypes = extensionTypesFor(declaredRecords);
   const isExtensionType = (type: string): boolean => extensionTypes.includes(type);
 
   // W4 review item 7 — the sanction row reaches the shared discipline
@@ -926,7 +1242,7 @@ export function makeSetBasedModule(
   // not football's colours; the dossiers record how each code's cards map onto
   // it. What has to be uniform is the PROJECTION, so W5 renders one control.
   const discipline: DisciplineModel | undefined =
-    records.sanctions === true
+    declaredRecords.sanctions
       ? {
           colors: SetBasedSanctionLevel.options.map((key) => ({
             key,
@@ -992,6 +1308,8 @@ export function makeSetBasedModule(
     version: preset.version,
     configSchema,
     eventSchema: SetBasedEv,
+    eventSchemas,
+    padSpec: (padCfg) => setBasedPadSpec(preset, padCfg),
     positions: preset.positions,
     variants: preset.variants,
     ...(preset.entrantModel === undefined ? {} : { entrantModel: preset.entrantModel }),
@@ -1016,6 +1334,20 @@ export function makeSetBasedModule(
 
     apply(state, ev: EventEnvelope<SetBasedEv | CoreEv>, ctx): SetBasedState {
       const strict = isStrictFold(ctx);
+      // S6/#416 (W5) — PER-FIXTURE, from the resolved cfg this state was
+      // built from (never the declared/static `declaredRecords` above): this
+      // is what lets `beach` refuse `volleyball.sub` while `indoor` accepts
+      // it from the SAME shared module.
+      //
+      // review (cfg-replay.conformance.test.ts §3.3) — every refusal keyed
+      // off `records` below is gated `strict &&`, for the SAME reason as
+      // `applyRally`'s own `recordsExpedite` gate (see its doc comment): cfg
+      // is read live and every read refolds the whole stream from `init`, so
+      // an UNGATED refusal here would brick an already-recorded event the
+      // moment an organiser's config edit flips a `records` flag — found by
+      // that suite's generic mutation walk, which (correctly) does not know
+      // "beach never had subs to begin with" and mutates the flag anyway.
+      const records = state.cfg.records;
       switch (ev.type) {
         case "core.start":
           if (state.phase !== "pre") wrongPhase("already started");
@@ -1023,27 +1355,28 @@ export function makeSetBasedModule(
         case rallyType:
           return applyRally(state, parsePayload(SetBasedRally, ev.payload, ev.type), {
             key: preset.key,
-            recordsExpedite: records.expedite === true,
+            recordsExpedite: records.expedite,
+            strict,
           });
         case summaryType:
           return applySummary(state, parsePayload(SetBasedSummary, ev.payload, ev.type), strict);
         case timeoutType:
-          if (records.timeouts !== true) {
+          if (strict && !records.timeouts) {
             invalid(`"${preset.key}" does not record timeouts`);
           }
           return applyTimeout(state, parsePayload(SetBasedTimeout, ev.payload, ev.type));
         case sanctionType:
-          if (records.sanctions !== true) {
+          if (strict && !records.sanctions) {
             invalid(`"${preset.key}" does not record sanctions`);
           }
           return applySanction(state, parsePayload(SetBasedSanction, ev.payload, ev.type));
         case subType:
-          if (records.substitutions !== true) {
+          if (strict && !records.substitutions) {
             invalid(`"${preset.key}" does not record substitutions`);
           }
           return applySub(state, parsePayload(SetBasedSub, ev.payload, ev.type));
         case expediteType:
-          if (records.expedite !== true) {
+          if (strict && !records.expedite) {
             invalid(`"${preset.key}" has no expedite system`);
           }
           // Parsed for its own sake: the payload is empty and the strict schema
@@ -1180,17 +1513,24 @@ export function makeSetBasedModule(
       // W4 — the testkit's lineups are `${entrantId}-p{n}` (helpers.ts), so the
       // generator can name people the way a real pad would.
       const randomPerson = (entrantId: string) => `${entrantId}-p${1 + Math.floor(rng() * 3)}`;
+      // S6/#416 (W5) — PER-FIXTURE, from `state.cfg.records`, never the
+      // declared/static `extensionTypes` above: `beach` must never generate a
+      // `volleyball.sub` it would then reject on its own `apply()` call two
+      // lines below (`buildWalk` applies every event it generates
+      // immediately — an illegal generated event throws DURING generation,
+      // not during a later assertion).
+      const liveExtensionTypes = extensionTypesFor(state.cfg.records);
       // Occasional interruptions, so conformance actually walks the new
       // branches (and §9.6 proves coarsen stays transparent to them).
-      if (extensionTypes.length > 0 && rng() < 0.05) {
+      if (liveExtensionTypes.length > 0 && rng() < 0.05) {
         const by = randomEntrant();
         // Expedite is introduced ONCE per match (ITTF 2.15.4), so drop it from
         // the pool the moment it is in force — a second one is a rejected
         // event and the generator must only emit legal streams.
         const choices =
           state.expedite === true
-            ? extensionTypes.filter((type) => type !== expediteType)
-            : extensionTypes;
+            ? liveExtensionTypes.filter((type) => type !== expediteType)
+            : liveExtensionTypes;
         const type = choices[Math.floor(rng() * choices.length)];
         if (type === expediteType) return { type, payload: {} };
         if (type === timeoutType) return { type, payload: { by, technical: rng() < 0.3 } };
