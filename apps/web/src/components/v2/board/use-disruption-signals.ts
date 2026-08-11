@@ -64,14 +64,14 @@ const REASON_ORDER: readonly DisruptionReason[] = [
   "postponed",
 ];
 
-function toMs(v: string | Date): number {
+export function toMs(v: string | Date): number {
   return v instanceof Date ? v.getTime() : new Date(v).getTime();
 }
 
 /** Half-open interval overlap. A zero-length slot at exactly `bFrom` still counts
  *  as inside the blackout (the second clause), matching "a fixture inside a
  *  blackout" even when no match length is supplied. */
-function overlaps(startMs: number, endMs: number, bFrom: number, bTo: number): boolean {
+export function overlaps(startMs: number, endMs: number, bFrom: number, bTo: number): boolean {
   return (startMs < bTo && endMs > bFrom) || (startMs >= bFrom && startMs < bTo);
 }
 

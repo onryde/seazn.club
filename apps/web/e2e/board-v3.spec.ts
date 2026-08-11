@@ -344,6 +344,90 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     await expectNoHorizontalScroll(page);
   });
 
+  test("blackout window: hatched, always visible, and still placeable (soft, not blocked)", async ({
+    page,
+    request,
+  }) => {
+    // BLOCKED ON TASK 4 (docs/superpowers/plans/2026-08-10-board-view-redesign.md):
+    // `BoardGrid`'s `blackouts` prop (this task) isn't threaded through yet —
+    // schedule-board.tsx's own <BoardGrid> call (Task 4's file, Task 4's own
+    // Step 1) still omits it, so the live page always renders `blackouts=[]`
+    // regardless of what's PUT to any division's schedule-settings. Verified
+    // this test passes end-to-end (including the d0-not-d2 correction below)
+    // against a build with `blackouts={cfg.blackouts}` temporarily added at
+    // that call site, then reverted before commit — out of this task's scope.
+    // Remove this skip once Task 4 lands that one line.
+    test.skip(true, "needs Task 4's blackouts={cfg.blackouts} wiring in schedule-board.tsx");
+    // d0, not d2: the multi-division board's grid config (courts aside) is
+    // ALWAYS divisions[0]'s schedule-settings (page.tsx, "Grid config: first
+    // division's settings") — the `?d=` filter only narrows what's DISPLAYED,
+    // never which division's blackouts/sessionWindows drive the grid. A
+    // blackout PUT on any other division is invisible here, however isolated
+    // it looks. Safe to mutate d0 from this point on: the only earlier test
+    // that touches its settings ("injected rest violation") has already made
+    // and checked its own assertions, and this is the last test in the file.
+    const d0 = rig.divisions[0]!;
+    // Index 24 is untouched by every earlier test in this file (they use
+    // index 4, index 5, and the shared-entrant pair — all comfortably below
+    // 24) — but rather than trust that by construction, read its CURRENT
+    // scheduled_at/court_label live and build the window around exactly
+    // that, so this test can't drift out of sync with what earlier tests in
+    // this serial chain actually left on the board.
+    const target = rig.fixtures[d0.id]![24]!;
+    const before = await apiJson<{ scheduled_at: string; court_label: string }>(
+      request,
+      `/api/v1/fixtures/${target}`,
+    );
+    const court = before.data!.court_label!;
+    const from = before.data!.scheduled_at!;
+    const to = new Date(new Date(from).getTime() + 30 * 60_000).toISOString();
+
+    await apiJson(request, `/api/v1/divisions/${d0.id}/schedule-settings`, "PUT", {
+      config: {
+        startAt: "2026-09-15T09:00:00.000Z",
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: courtsOf(0),
+        perEntrantMinRest: 0,
+        blackouts: [{ court, from, to }],
+        sessionWindows: [],
+      },
+      tz: "UTC",
+    });
+    // Unscheduling `target` is what makes ITS cell empty — the empty-cell
+    // hatch and an occupied FixtureBlock are mutually exclusive on the same
+    // cell, so a window over a still-occupied slot would never render
+    // `data-blackout` at all.
+    await apiJson(request, `/api/v1/fixtures/${target}`, "PATCH", {
+      scheduled_at: null,
+      court_label: null,
+    });
+
+    await page.goto(`${boardUrl}?d=${d0.slug}`);
+    const blackoutCell = page.locator('[data-blackout="true"]').first();
+    await expect(blackoutCell).toBeVisible();
+
+    // Soft: pick the unscheduled fixture, place it INTO the hatched cell —
+    // it must succeed, matching the server's own warn.blackout-is-a-warning
+    // (not a rejection) behavior. Desktop dock, not the mobile sheet (no
+    // viewport override above, same as "pick-then-place is keyboard-operable"):
+    // the tray's aside is always visible at `lg` widths and up, no toggle tap.
+    const trayFixture = page
+      .locator("aside[aria-label='Unscheduled fixtures'] [data-fixture-id] button[aria-pressed]")
+      .first();
+    await trayFixture.click();
+    await blackoutCell.click();
+
+    await expect
+      .poll(
+        async () =>
+          (await apiJson<{ scheduled_at: string | null }>(request, `/api/v1/fixtures/${target}`))
+            .data!.scheduled_at,
+        { timeout: 15_000 },
+      )
+      .not.toBeNull();
+  });
+
   test("two clients: the stale one 409s, toasts, and refreshes (gap 10)", async ({
     page,
     context,

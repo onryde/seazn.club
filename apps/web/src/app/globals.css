@@ -362,6 +362,15 @@ body {
     @apply bg-purple-50/30;
   }
 
+  /* Blackout window on the schedule board grid (2026-08-10 board redesign):
+     a hatch, not a solid fill, so it reads as "off-limits" without fighting
+     a fixture card's own division-tint background for the same channel. The
+     gap stripe is transparent on purpose — a `hover:bg-purple-50` utility on
+     the same element shows THROUGH it, tinting the hatch on hover. */
+  .board-blackout {
+    background-image: repeating-linear-gradient(135deg, #f1f5f9 0 6px, transparent 6px 12px);
+  }
+
   /* ── v3/02 mobile primitives ── */
 
   /* Pattern 4: anything genuinely wide opts into its own scroll container
