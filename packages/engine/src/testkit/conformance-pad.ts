@@ -126,18 +126,41 @@ export function checkEventSchemasBijection(
 }
 
 // ---------------------------------------------------------------------------
-// (a) Coverage — every registered type reached by >=1 action, and no action
-// names a type outside the registry. This is the check the MUTATION PROOF
-// (deleting one action from a real module's spec) is expected to fail.
+// (a) Coverage — every registered type reached by >=1 action across the
+// checked spec(s), and no action names a type outside the registry. This is
+// the check the MUTATION PROOF (deleting one action from a real module's
+// spec) is expected to fail.
+//
+// Takes one spec OR a LIST of specs, on purpose, and is NOT wired into
+// `padSpecConformanceSuite`'s own automatic per-cfg "(a)" test below —
+// found while wiring cricket's real spec: `cricket.superOver` requires
+// `inningsPerSide === 1` and `cricket.followOn`/`.declare` require
+// `inningsPerSide === 2` (`CricketCfg`'s own `.refine()`s), so
+// `cricket.superover.ball` and `cricket.innings.declare` can NEVER both be
+// reachable from one legal cfg — "every branch reachable from some action"
+// is a property of the module across its variant space, not of any single
+// `padSpec(cfg)` call in isolation. A module's own test file unions the
+// specs from the variants it actually tests and calls this once; that is
+// what "the full tier hides nothing" (design doc) means in practice.
 // ---------------------------------------------------------------------------
 
-export function checkActionCoverage(spec: PadSpec, eventSchemas: Readonly<Record<string, z.ZodTypeAny>>): string[] {
+export function checkActionCoverage(
+  specs: PadSpec | readonly PadSpec[],
+  eventSchemas: Readonly<Record<string, z.ZodTypeAny>>,
+): string[] {
+  // Explicit annotation: `Array.isArray`'s built-in type predicate is
+  // `arg is any[]`, which otherwise leaks `any` into the inferred type of
+  // `specList` (and every field access below it) rather than narrowing to
+  // `readonly PadSpec[]`.
+  const specList: readonly PadSpec[] = Array.isArray(specs) ? specs : [specs];
   const problems: string[] = [];
   const actionTypes = new Set<string>();
-  for (const panel of spec.panels) for (const action of panel.actions) actionTypes.add(action.type);
+  for (const spec of specList) {
+    for (const panel of spec.panels) for (const action of panel.actions) actionTypes.add(action.type);
+  }
   for (const type of Object.keys(eventSchemas)) {
     if (!actionTypes.has(type)) {
-      problems.push(`eventSchemas["${type}"] is reachable from no action in padSpec`);
+      problems.push(`eventSchemas["${type}"] is reachable from no action across the checked padSpec(s)`);
     }
   }
   for (const type of actionTypes) {
@@ -457,10 +480,16 @@ export function padSpecConformanceSuite<Cfg, Ev, State>(
   const spec = padSpecFn(cfg);
 
   describe(suiteName, () => {
-    it("(a) every eventSchema union branch is registered and reachable from some action", () => {
+    // (a), cfg-independent half: the registry is a true bijection onto
+    // eventSchema's branches, and every registered type is a real dispatch
+    // case. Deliberately does NOT also assert action-coverage for THIS one
+    // cfg — see `checkActionCoverage`'s own comment for why that is a
+    // module-level property (some branches are mutually exclusive by format,
+    // cricket's superOver vs 2-innings cfgs being the discovered case) that
+    // the calling module's test file checks once, across its variants.
+    it("(a) eventSchemas is a bijection onto eventSchema's branches, and every registered type really dispatches", () => {
       const problems = [
         ...checkEventSchemasBijection(module.eventSchema, eventSchemas),
-        ...checkActionCoverage(spec, eventSchemas),
         ...checkRegisteredTypesDispatch(module, cfg, lineups, eventSchemas),
       ];
       expect(problems).toEqual([]);
