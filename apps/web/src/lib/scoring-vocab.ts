@@ -20,7 +20,7 @@ import { swatchName } from "@/lib/brand-palette";
 
 export type WicketKind =
   | "bowled" | "caught" | "lbw" | "runout" | "stumped"
-  | "hitwicket" | "retired" | "obstructed" | "timedout";
+  | "hitwicket" | "retired" | "obstructed" | "timedout" | "hitballtwice";
 export type ExtraKind = "wide" | "noball" | "bye" | "legbye" | "penalty";
 export type SportKey =
   | "badminton" | "boardgame" | "carrom" | "cricket" | "football" | "generic"
@@ -30,6 +30,12 @@ const WICKET_KEY: Record<WicketKind, MessageKey> = {
   bowled: "wicket.bowled", caught: "wicket.caught", lbw: "wicket.lbw",
   runout: "wicket.runout", stumped: "wicket.stumped", hitwicket: "wicket.hitwicket",
   retired: "wicket.retired", obstructed: "wicket.obstructed", timedout: "wicket.timedout",
+  // Reuses ENUM_VOCAB's existing "kind.hitballtwice" key rather than minting a
+  // duplicate — wicketLabel() previously checked ONLY this map, never falling
+  // through to KIND_KEY the way enumLabel("kind", …) does, so the picker
+  // rendered "Hitballtwice" (naive capitalize) though the correct translated
+  // string already existed and was reachable from every OTHER kind lookup.
+  hitballtwice: "kind.hitballtwice",
 };
 const EXTRA_KEY: Record<ExtraKind, MessageKey> = {
   wide: "extra.wide", noball: "extra.noball", bye: "extra.bye",

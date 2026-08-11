@@ -48,11 +48,39 @@ describe("cricket pad wicket/extra kind i18n", () => {
     expect(html).not.toContain("W: runout");
   });
 
+  it("labels hitballtwice correctly, not a naive capitalize (S7/#427 review)", () => {
+    // wicketLabel() checks ONLY WICKET_KEY, never falling through to KIND_KEY
+    // the way enumLabel("kind", …) does — so adding the option to the picker
+    // without also widening WICKET_KEY made it selectable but WRONG: it fell
+    // to title(k) = "Hitballtwice" in every locale, not the real translation.
+    // A literal expected string is required here — deriving "expected" from
+    // wicketLabel() itself (as the loop below does for existence) cannot catch
+    // wicketLabel() being wrong, since it would compare the function to itself.
+    const html = renderToStaticMarkup(
+      <DictProvider dict={uiEn as unknown as Dict} locale="en">
+        <BallForm
+          innings={innings}
+          batting={side("h", "Harbor CC")}
+          fielding={side("a", "Summit CC")}
+          bpo={6}
+          send={async () => true}
+          busy={false}
+        />
+      </DictProvider>,
+    );
+    expect(html).toContain("W: Hit the ball twice");
+    expect(html).not.toContain("W: Hitballtwice");
+  });
+
   it("offers every dismissal kind the engine declares (S7/#427)", () => {
     // Regression: the picker's own kind list had drifted from the engine's —
     // `hitballtwice` (Law 34) was absent, so a correctly-translated label
     // existed and could never be selected. Derived from CricketWicket itself,
     // not a hand-copied list, so a future engine addition reds this too.
+    // NOTE: this loop proves EXISTENCE (every kind renders as SOME option),
+    // not CORRECTNESS of the label text — it derives "expected" from
+    // wicketLabel() itself, so it cannot catch wicketLabel() returning the
+    // wrong string. The test above pins hitballtwice's literal text instead.
     const html = renderToStaticMarkup(
       <DictProvider dict={uiEn as unknown as Dict} locale="en">
         <BallForm
