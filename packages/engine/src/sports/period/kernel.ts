@@ -30,7 +30,6 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type {
-  FidelityBand,
   FidelityTier,
   ModuleEvent,
   PadAction,
