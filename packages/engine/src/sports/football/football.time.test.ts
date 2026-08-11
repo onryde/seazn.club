@@ -971,3 +971,293 @@ describe("FootballEv union disambiguation (§8)", () => {
     expect(firstBranch({ by: "H", person: "H-p1", minute: 35 })).toBe("FootballSinBinStart");
   });
 });
+
+// ---------------------------------------------------------------------------
+// S5/#431 — quarters instead of halves (mini-soccer). Q1 IS "H1" REUSED, not
+// renamed (`core.start` is unchanged); the Q2 -> Q3 boundary reuses marker
+// "HT" (the real half-time interval) and the Q4 -> done/ET/shootout boundary
+// reuses "FT". Only the Q1->Q2 and Q3->Q4 boundaries needed new markers,
+// "QT" and "3QT". Every `applyPeriod` arm additionally gates on cfg.halves,
+// not merely on state.phase, because the two modes share "H1" as their
+// opening phase.
+// ---------------------------------------------------------------------------
+
+const quartersCfg = (raw: Record<string, unknown> = {}): FootballCfg => cfgOf({ halves: 4, ...raw });
+
+describe("quarters instead of halves (S5/#431)", () => {
+  describe("cfg.halves accepts 2 and 4, and nothing else", () => {
+    it("parses halves: 4", () => {
+      expect(cfgOf({ halves: 4 }).halves).toBe(4);
+    });
+
+    it("still defaults to 2", () => {
+      expect(cfgOf({}).halves).toBe(2);
+    });
+
+    it("refuses any other value", () => {
+      expect(() => cfgOf({ halves: 3 })).toThrow();
+      expect(() => cfgOf({ halves: 1 })).toThrow();
+    });
+  });
+
+  describe("the four quarter transitions", () => {
+    it("Q1 -> Q2 on the new \"QT\" marker", () => {
+      const state = fold(quartersCfg(), stream(["core.start"], ["football.period", { phase: "QT" }]));
+      expect(state.phase).toBe("Q2");
+      expect(state.periods.map((p) => p.phase)).toEqual(["H1", "Q2"]);
+    });
+
+    it("Q2 -> Q3 on the REUSED \"HT\" marker", () => {
+      const state = fold(
+        quartersCfg(),
+        stream(["core.start"], ["football.period", { phase: "QT" }], ["football.period", { phase: "HT" }]),
+      );
+      expect(state.phase).toBe("Q3");
+      expect(state.periods.map((p) => p.phase)).toEqual(["H1", "Q2", "Q3"]);
+    });
+
+    it("Q3 -> Q4 on the new \"3QT\" marker", () => {
+      const state = fold(
+        quartersCfg(),
+        stream(
+          ["core.start"],
+          ["football.period", { phase: "QT" }],
+          ["football.period", { phase: "HT" }],
+          ["football.period", { phase: "3QT" }],
+        ),
+      );
+      expect(state.phase).toBe("Q4");
+      expect(state.periods.map((p) => p.phase)).toEqual(["H1", "Q2", "Q3", "Q4"]);
+    });
+
+    it("Q4 -> done on the REUSED \"FT\" marker — resolveFullTime is unchanged", () => {
+      const decided = fold(
+        quartersCfg(),
+        stream(
+          ["core.start"],
+          ["football.goal", { by: "H" }],
+          ["football.period", { phase: "QT" }],
+          ["football.period", { phase: "HT" }],
+          ["football.period", { phase: "3QT" }],
+          ["football.period", { phase: "FT" }],
+        ),
+      );
+      expect(decided.phase).toBe("done");
+      expect(decided.outcome).toMatchObject({ kind: "win", winner: "H" });
+    });
+
+    it("Q4 -> extra time on the REUSED \"FT\" marker when level and extraTime is enabled", () => {
+      const state = fold(
+        quartersCfg({ extraTime: { enabled: true, halfMinutes: 15 } }),
+        stream(
+          ["core.start"],
+          ["football.period", { phase: "QT" }],
+          ["football.period", { phase: "HT" }],
+          ["football.period", { phase: "3QT" }],
+          ["football.period", { phase: "FT" }],
+        ),
+      );
+      expect(state.phase).toBe("ET_H1");
+      expect(state.periods.map((p) => p.phase)).toEqual(["H1", "Q2", "Q3", "Q4", "ET_H1"]);
+    });
+  });
+
+  describe("wrong-marker-for-mode is refused loudly, in both directions", () => {
+    it("refuses the OLD \"HT\" marker at Q1's phase under halves:4 — the critical collision", () => {
+      // state.phase is "H1" for BOTH Q1 (quarters) and H1 (halves), so without
+      // the cfg.halves gate this would be silently accepted as if it were the
+      // Q1-end marker and produce a mislabeled period record with no error.
+      let caught: unknown;
+      try {
+        fold(quartersCfg(), stream(["core.start"], ["football.period", { phase: "HT" }]));
+        expect.unreachable("HT must be refused at Q1 under halves:4");
+      } catch (error) {
+        caught = error;
+      }
+      expect(EngineError.is(caught, "WRONG_PHASE")).toBe(true);
+    });
+
+    it("refuses the NEW \"QT\" marker under halves:2 (the mirror collision)", () => {
+      let caught: unknown;
+      try {
+        fold(cfgOf({}), stream(["core.start"], ["football.period", { phase: "QT" }]));
+        expect.unreachable("QT must be refused under halves:2");
+      } catch (error) {
+        caught = error;
+      }
+      expect(EngineError.is(caught, "WRONG_PHASE")).toBe(true);
+    });
+
+    it("refuses the NEW \"3QT\" marker under halves:2", () => {
+      let caught: unknown;
+      try {
+        fold(cfgOf({}), stream(["core.start"], ["football.period", { phase: "3QT" }]));
+        expect.unreachable("3QT must be refused under halves:2");
+      } catch (error) {
+        caught = error;
+      }
+      expect(EngineError.is(caught, "WRONG_PHASE")).toBe(true);
+    });
+
+    it("still refuses a second \"HT\" from Q3 under halves:4 — only Q2 may take it", () => {
+      let caught: unknown;
+      try {
+        fold(
+          quartersCfg(),
+          stream(
+            ["core.start"],
+            ["football.period", { phase: "QT" }],
+            ["football.period", { phase: "HT" }],
+            ["football.period", { phase: "HT" }], // now at Q3 — must be refused
+          ),
+        );
+        expect.unreachable("a second HT must be refused from Q3");
+      } catch (error) {
+        caught = error;
+      }
+      expect(EngineError.is(caught, "WRONG_PHASE")).toBe(true);
+    });
+
+    it("still refuses \"FT\" before Q4 under halves:4", () => {
+      let caught: unknown;
+      try {
+        fold(quartersCfg(), stream(["core.start"], ["football.period", { phase: "FT" }]));
+        expect.unreachable("FT must be refused before Q4");
+      } catch (error) {
+        caught = error;
+      }
+      expect(EngineError.is(caught, "WRONG_PHASE")).toBe(true);
+    });
+  });
+
+  describe("playPhases is quarters-aware", () => {
+    it("lists H1, Q2, Q3, Q4 instead of H1, H2 when halves is 4", () => {
+      expect(playPhases(quartersCfg())).toEqual(["pre", "H1", "Q2", "Q3", "Q4"]);
+    });
+
+    it("still appends ET and SHOOTOUT after the fourth quarter", () => {
+      expect(
+        playPhases(quartersCfg({ extraTime: { enabled: true, halfMinutes: 15 }, shootout: true })),
+      ).toEqual(["pre", "H1", "Q2", "Q3", "Q4", "ET_H1", "ET_H2", "SHOOTOUT"]);
+    });
+
+    it("does not disturb the halves:2 list", () => {
+      expect(playPhases(cfgOf({}))).toEqual(["pre", "H1", "H2"]);
+    });
+  });
+
+  describe("goal and card events are accepted through every quarter (isPlayPhase)", () => {
+    const toQ2 = stream(["core.start"], ["football.period", { phase: "QT" }]);
+    const toQ3 = stream(
+      ["core.start"],
+      ["football.period", { phase: "QT" }],
+      ["football.period", { phase: "HT" }],
+    );
+    const toQ4 = stream(
+      ["core.start"],
+      ["football.period", { phase: "QT" }],
+      ["football.period", { phase: "HT" }],
+      ["football.period", { phase: "3QT" }],
+    );
+
+    it.each([
+      ["Q2", toQ2],
+      ["Q3", toQ3],
+      ["Q4", toQ4],
+    ] as const)("accepts a goal and a card during %s", (label, events) => {
+      const reached = fold(quartersCfg(), events);
+      expect(reached.phase).toBe(label);
+      const withGoal = fold(quartersCfg(), [
+        ...events,
+        makeEnvelope(events.length, { type: "football.goal", payload: { by: "H" } }),
+      ]);
+      expect(withGoal.goals.home).toBe(1);
+      const withCard = fold(quartersCfg(), [
+        ...events,
+        makeEnvelope(events.length, { type: "football.card", payload: { by: "A", color: "yellow" } }),
+      ]);
+      expect(withCard.cards).toHaveLength(1);
+    });
+  });
+
+  describe("the sin-bin carry treats a quarter exactly like a half (phaseLengths / clockPhases)", () => {
+    it("carries the unserved remainder from Q3 into Q4, the same arithmetic as H1 into H2", () => {
+      // Mirrors "carries the unserved remainder into the next half" above
+      // exactly — 2600 + 600 (10 min) = 3200, past the nominal 2700s quarter
+      // (halfMinutes defaults to 45), so 500s carries into the next play
+      // period. Only the LABEL changes: Q4 instead of H2.
+      const cfg = quartersCfg({ sinBinMinutes: 10 });
+      const events = stream(
+        ["core.start"],
+        ["football.period", { phase: "QT" }],
+        ["football.period", { phase: "HT" }],
+        ["football.sinbin.start", { by: "H", person: "H-p1", at: at("Q3", 2600) }],
+      );
+      const state = fold(cfg, events);
+      expect(state.squads.home.sinBin?.[0]?.expiresAt).toEqual(at("Q4", 500));
+      expect(state.squads.home.sinBin).toHaveLength(1);
+
+      const closeQ3 = makeEnvelope(events.length, {
+        type: "football.period",
+        payload: { phase: "3QT" },
+      });
+
+      const before = fold(cfg, [
+        ...events,
+        closeQ3,
+        makeEnvelope(events.length + 1, { type: "football.goal", payload: { by: "A", at: at("Q4", 499) } }),
+      ]);
+      expect(before.squads.home.sinBin).toHaveLength(1);
+
+      const after = fold(cfg, [
+        ...events,
+        closeQ3,
+        makeEnvelope(events.length + 1, { type: "football.goal", payload: { by: "A", at: at("Q4", 500) } }),
+      ]);
+      expect(after.squads.home.sinBin).toEqual([]);
+      expect(after.squads.home.onPitch).toContain("H-p1");
+    });
+  });
+
+  describe("the generator (arbitraryEvent) reaches every quarter and both new markers", () => {
+    it("emits QT, HT, 3QT and FT across enough generated quarters-mode streams", () => {
+      const genCfg = quartersCfg({ sinBinMinutes: 10 });
+      const genLineups = defaultLineupPair(football.positions);
+      const seenMarkers = new Set<string>();
+      for (let seed = 1; seed <= 40; seed++) {
+        const events = buildStream(football, genCfg, genLineups, seed, 200);
+        for (const event of events) {
+          if (event.type === "football.period") {
+            seenMarkers.add((event.payload as { phase: string }).phase);
+          }
+        }
+      }
+      expect([...seenMarkers].sort()).toEqual(["3QT", "FT", "HT", "QT"]);
+    });
+  });
+
+  describe("halves:2 is untouched by the quarters machinery (regression)", () => {
+    it("folds a full match through H1/H2/ET_H1/ET_H2 exactly as before — no Q-phase, no new marker", () => {
+      const state = fold(
+        cfgOf({ extraTime: { enabled: true, halfMinutes: 15 } }),
+        stream(
+          ["core.start"],
+          ["football.goal", { by: "H" }],
+          ["football.period", { phase: "HT" }],
+          ["football.goal", { by: "A" }],
+          ["football.period", { phase: "FT" }], // 1-1, level -> extra time
+          ["football.period", { phase: "ET_HT" }],
+          ["football.period", { phase: "ET_FT" }], // still level -> draw
+        ),
+      );
+      expect(state.periods).toEqual([
+        { phase: "H1", home: 1, away: 0 },
+        { phase: "H2", home: 0, away: 1 },
+        { phase: "ET_H1", home: 0, away: 0 },
+        { phase: "ET_H2", home: 0, away: 0 },
+      ]);
+      expect(state.phase).toBe("done");
+      expect(state.outcome).toEqual({ kind: "draw" });
+    });
+  });
+});

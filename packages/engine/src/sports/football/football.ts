@@ -49,6 +49,13 @@ import { expectedKicker, shootoutDecision } from "../period/shootout.ts";
 // ---------------------------------------------------------------------------
 
 export const FootballCfg = z.object({
+  // S5/#431 — the length of ONE PLAY PERIOD: normally a half, but at
+  // `halves: 4` (mini-soccer quarters) this is the length of a QUARTER
+  // instead. One scalar names the concept regardless of how many periods
+  // divide the match; the name is a historical artifact of the shape this
+  // config started at, not a claim that only halves exist. See `halves`
+  // below for the period-count switch itself, and `phaseLengths` for where
+  // this is read.
   halfMinutes: z.number().int().positive().default(45),
   // W4a (#425) §3.2, as amended 2026-08-04 — the OVERRIDE the unserved-remainder
   // carry reads, and only for what the required scalars cannot express.
@@ -71,9 +78,14 @@ export const FootballCfg = z.object({
   // Optional with NO default — a defaulted key lands in the cfg serialised into
   // every frozen golden state string.
   periodSeconds: z.record(z.string().min(1), z.number().int().positive()).optional(),
-  // The state machine models exactly two halves (spec 04 §1.3); halves is
-  // config-as-data for forward compatibility but only 2 is valid today.
-  halves: z.literal(2).default(2),
+  // S5/#431 — the play-period SHAPE: 2 (spec 04 §1.3's two halves, the
+  // default) or 4 (mini-soccer quarters, FA U7-U10, the `mini-soccer`
+  // preset). Config-as-data, same as before this wave, now with a second
+  // valid value instead of only one. Q1 is `H1` REUSED, never renamed — see
+  // `PlayPhase`'s own comment — so `applyPeriod` reads this to decide which
+  // marker vocabulary and which destinations are legal from state.phase
+  // "H1", not to pick a different opening phase.
+  halves: z.union([z.literal(2), z.literal(4)]).default(2),
   extraTime: z
     .object({
       enabled: z.boolean(),
@@ -236,7 +248,15 @@ export const FootballSub = z.strictObject({
   at: GameTime.optional(),
 });
 export const FootballPeriod = z.strictObject({
-  phase: z.enum(["HT", "FT", "ET_HT", "ET_FT"]),
+  // S5/#431 — "QT" (quarter-time, Q1 -> Q2) and "3QT" (three-quarter-time,
+  // Q3 -> Q4) are the two markers `halves: 4` (mini-soccer) needs beyond the
+  // halves vocabulary: the Q2 -> Q3 boundary is the real half-time interval
+  // and reuses "HT"; the Q4 -> done/ET/shootout boundary is the real final
+  // whistle and reuses "FT". `applyPeriod` gates every arm on `cfg.halves`,
+  // not merely on state.phase, so sending a halves-mode marker from a
+  // quarters-mode fixture (or vice versa) is refused rather than silently
+  // reinterpreted — see `applyPeriod`'s own comment.
+  phase: z.enum(["HT", "FT", "ET_HT", "ET_FT", "QT", "3QT"]),
   // W4 (Law 7 §3, allowance for time lost) — minutes added to the period this
   // marker CLOSES. A match report writes "90+3"; a bare integer `minute`
   // cannot tell that apart from the 93rd minute of extra time.
@@ -361,7 +381,11 @@ export type FootballEv = z.infer<typeof FootballEv>;
 // ---------------------------------------------------------------------------
 
 type Side = "home" | "away";
-type PlayPhase = "H1" | "H2" | "ET_H1" | "ET_H2";
+// S5/#431 — "Q2" | "Q3" | "Q4" are mini-soccer's quarters (`cfg.halves ===
+// 4`). Quarter 1 is deliberately NOT "Q1": it reuses "H1", the same literal
+// halves mode opens on, so `core.start` (always `pushPeriod(state, "H1")`)
+// needs no change and no cfg branch of its own.
+type PlayPhase = "H1" | "H2" | "Q2" | "Q3" | "Q4" | "ET_H1" | "ET_H2";
 type Phase = "pre" | PlayPhase | "SHOOTOUT" | "done" | "final" | "abandoned";
 
 // W4 — a live temporary dismissal. Anonymous entries (coarse scoring) are
@@ -509,7 +533,13 @@ interface PenaltyRecord {
   offence?: PenaltyOffence;
 }
 
-const PLAY_PHASES: readonly Phase[] = ["H1", "H2", "ET_H1", "ET_H2"];
+// S5/#431 — a STATIC allowlist, not cfg-derived: it gates "currently in
+// play" for goal/card/sub/penalty/sin-bin events structurally, the same way
+// regardless of which mode a fixture runs under. A halves-mode fixture never
+// reaches "Q2"/"Q3"/"Q4" (applyPeriod refuses the markers that would produce
+// them under `cfg.halves === 2`), so widening this unconditionally costs
+// nothing and matches how ET_H1/ET_H2 were already handled before this wave.
+const PLAY_PHASES: readonly Phase[] = ["H1", "H2", "Q2", "Q3", "Q4", "ET_H1", "ET_H2"];
 
 function opponent(side: Side): Side {
   return side === "home" ? "away" : "home";
@@ -570,12 +600,15 @@ function isPlayPhase(phase: Phase): phase is PlayPhase {
  * Exhaustive by OBLIGATION, not by construction: the fold treats a period
  * outside this list as a bad payload field, so anything omitted here is an event
  * the scorer cannot record.
+ *
+ * S5/#431 — `cfg.halves === 4` swaps the two-item halves list for the
+ * four-item quarters list; everything after it (ET, SHOOTOUT) is unchanged,
+ * because those are gated on `cfg.extraTime`/`cfg.shootout`, not on halves.
  */
 export function playPhases(cfg: FootballCfg): string[] {
   return [
     "pre",
-    "H1",
-    "H2",
+    ...(cfg.halves === 4 ? ["H1", "Q2", "Q3", "Q4"] : ["H1", "H2"]),
     ...(cfg.extraTime.enabled ? ["ET_H1", "ET_H2"] : []),
     ...(cfg.shootout ? ["SHOOTOUT"] : []),
   ];
@@ -620,8 +653,13 @@ function footballPosition(state: FootballState): MatchPosition {
   });
 }
 
+// S5/#431 — quarters-aware, same shape as `playPhases`: `cfg.halves === 4`
+// swaps in the four-item quarters list.
 function clockPhases(cfg: FootballCfg): string[] {
-  return ["H1", "H2", ...(cfg.extraTime.enabled ? ["ET_H1", "ET_H2"] : [])];
+  return [
+    ...(cfg.halves === 4 ? ["H1", "Q2", "Q3", "Q4"] : ["H1", "H2"]),
+    ...(cfg.extraTime.enabled ? ["ET_H1", "ET_H2"] : []),
+  ];
 }
 
 /**
@@ -638,6 +676,12 @@ function clockPhases(cfg: FootballCfg): string[] {
  * the SAME value states nothing the scalar does not, so where the two disagree
  * the required scalar wins and the uniform map is IGNORED — never refused. See
  * the schema comment for why refusing would be the dangerous direction.
+ *
+ * S5/#431 — at `cfg.halves === 4` this fills all FOUR quarters from the same
+ * `halfMinutes` scalar (its doc-comment states the generalised meaning: the
+ * length of one play period, not literally "half"), instead of the two
+ * halves. `cfg.periodSeconds` overrides individual quarters exactly as it
+ * does individual halves — nothing else about the override changes.
  */
 function phaseLengths(cfg: FootballCfg): Record<string, number> {
   const overrides = cfg.periodSeconds;
@@ -651,7 +695,8 @@ function phaseLengths(cfg: FootballCfg): Record<string, number> {
       lengths[label] = uniform || override === undefined ? scalarSeconds : override;
     });
   };
-  fill(["H1", "H2"], cfg.halfMinutes * 60);
+  if (cfg.halves === 4) fill(["H1", "Q2", "Q3", "Q4"], cfg.halfMinutes * 60);
+  else fill(["H1", "H2"], cfg.halfMinutes * 60);
   if (cfg.extraTime.enabled) fill(["ET_H1", "ET_H2"], cfg.extraTime.halfMinutes * 60);
   return lengths;
 }
@@ -1302,6 +1347,42 @@ function applyPenalty(state: FootballState, payload: z.infer<typeof FootballPena
   return { ...state, penalties: [...(state.penalties ?? []), record] };
 }
 
+// S5/#431 — the marker that legally CLOSES `phase`, one entry per reachable
+// play phase. Quarters and halves diverge only in what they call the SAME
+// underlying moment: Q1 is "H1" reused (see `PlayPhase`'s own comment), so
+// both branches key off "H1", and only the emitted marker differs. Used by
+// `arbitraryEvent` below; kept as the exact inverse of `applyPeriod`'s own
+// gating so the generator can never emit a marker `applyPeriod` would then
+// refuse.
+function nextMarker(phase: PlayPhase, quarters: boolean): z.infer<typeof FootballPeriod>["phase"] {
+  if (quarters) {
+    switch (phase) {
+      case "H1":
+        return "QT";
+      case "Q2":
+        return "HT";
+      case "Q3":
+        return "3QT";
+      case "Q4":
+        return "FT";
+      case "ET_H1":
+        return "ET_HT";
+      default:
+        return "ET_FT";
+    }
+  }
+  switch (phase) {
+    case "H1":
+      return "HT";
+    case "H2":
+      return "FT";
+    case "ET_H1":
+      return "ET_HT";
+    default:
+      return "ET_FT";
+  }
+}
+
 function applyPeriod(state: FootballState, payload: z.infer<typeof FootballPeriod>): FootballState {
   const marker = payload.phase;
   // W4a — the whistle CLOSES this phase, so anything whose expiry fell inside
@@ -1309,12 +1390,60 @@ function applyPeriod(state: FootballState, payload: z.infer<typeof FootballPerio
   // full-time marker too, or a side reads a player short in the FINAL state.
   const close = (): FootballState =>
     sweepThroughPhase(stampAddedMinutes(state, payload.addedMinutes), state.phase);
+  // S5/#431 — quarters instead of halves (mini-soccer). Q1 IS "H1" reused,
+  // never renamed, so halves mode and quarters mode share "H1" as their
+  // opening state.phase. That is why EVERY arm below gates on cfg.halves and
+  // not merely on state.phase: without the gate, sending the OLD "HT" marker
+  // while state.phase === "H1" under cfg.halves === 4 would be silently
+  // accepted as though it were the new Q1-end marker — same source phase,
+  // wrong marker for the mode — and produce a mislabeled period record with
+  // no error. Every wrong-marker-for-mode combination instead raises the same
+  // WRONG_PHASE this switch already raises for every other illegal
+  // transition. See DOMAIN.md's "Quarters instead of halves" row.
+  const quarters = state.cfg.halves === 4;
   switch (marker) {
+    // Q1 -> Q2. Quarters-only: halves mode has no marker between kickoff and
+    // "HT".
+    case "QT":
+      if (!quarters || state.phase !== "H1") {
+        wrongPhase(`QT marker in phase "${state.phase}"`, { phase: state.phase, halves: state.cfg.halves });
+      }
+      return pushPeriod(close(), "Q2");
     case "HT":
-      if (state.phase !== "H1") wrongPhase(`HT marker in phase "${state.phase}"`);
+      // Quarters mode: Q2 -> Q3 — the SAME real half-time interval "HT"
+      // always named, reused rather than duplicated. Halves mode: H1 -> H2,
+      // unchanged from before this wave.
+      if (quarters) {
+        if (state.phase !== "Q2") {
+          wrongPhase(`HT marker in phase "${state.phase}"`, { phase: state.phase, halves: state.cfg.halves });
+        }
+        return pushPeriod(close(), "Q3");
+      }
+      if (state.phase !== "H1") {
+        wrongPhase(`HT marker in phase "${state.phase}"`, { phase: state.phase, halves: state.cfg.halves });
+      }
       return pushPeriod(close(), "H2");
+    // Q3 -> Q4. Quarters-only, symmetric with "QT" above.
+    case "3QT":
+      if (!quarters || state.phase !== "Q3") {
+        wrongPhase(`3QT marker in phase "${state.phase}"`, { phase: state.phase, halves: state.cfg.halves });
+      }
+      return pushPeriod(close(), "Q4");
     case "FT":
-      if (state.phase !== "H2") wrongPhase(`FT marker in phase "${state.phase}"`);
+      // Quarters mode: Q4 -> done/ET/shootout — the SAME final whistle "FT"
+      // always named, reused rather than duplicated. `resolveFullTime` is
+      // already phase-count-agnostic (it reads state.goals, never
+      // state.phase or cfg.halves), so it needs no change either way. Halves
+      // mode: H2 -> done/ET/shootout, unchanged from before this wave.
+      if (quarters) {
+        if (state.phase !== "Q4") {
+          wrongPhase(`FT marker in phase "${state.phase}"`, { phase: state.phase, halves: state.cfg.halves });
+        }
+        return resolveFullTime(close(), "FT");
+      }
+      if (state.phase !== "H2") {
+        wrongPhase(`FT marker in phase "${state.phase}"`, { phase: state.phase, halves: state.cfg.halves });
+      }
       return resolveFullTime(close(), "FT");
     case "ET_HT":
       if (state.phase !== "ET_H1") wrongPhase(`ET_HT marker in phase "${state.phase}"`);
@@ -1695,6 +1824,14 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
     // variant declared no size at all, so it inherited the eleven-slot catalog
     // and could not hold a legal lineup.
     "small-sided": { halfMinutes: 20, halves: 2, rollingSubs: true, teamSize: 7 },
+    // S5/#431 — FA Mini-Soccer, the U7-U10 age groups: FOUR 10-minute
+    // quarters, not `youth`'s 2×30 halves (FA U13+, unchanged and distinct —
+    // the two presets serve disjoint age groups and neither modifies the
+    // other). `small-sided` also plays halves (2×20) and is likewise
+    // unchanged: this is a fourth, additive option a competition may pick
+    // instead, not a replacement for either. Rolling substitutions, like
+    // every other grassroots/youth preset this module declares.
+    "mini-soccer": { halfMinutes: 10, halves: 4, rollingSubs: true, teamSize: 7 },
   },
 
   init(cfg, lineups: LineupPair): FootballState {
@@ -2259,9 +2396,11 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
         },
       };
     }
-    // Advance the clock.
-    const marker =
-      state.phase === "H1" ? "HT" : state.phase === "H2" ? "FT" : state.phase === "ET_H1" ? "ET_HT" : "ET_FT";
+    // Advance the clock. S5/#431 — `nextMarker` picks the quarters vocabulary
+    // ("QT"/"HT"/"3QT"/"FT") under cfg.halves === 4, the halves vocabulary
+    // otherwise; `state.phase` is narrowed to `PlayPhase` by the
+    // `isPlayPhase` guard above.
+    const marker = nextMarker(state.phase, state.cfg.halves === 4);
     // W4a T10 follow-up — Law 7 allowance for time lost, on SOME whistles. A
     // period closed dead on time carries none, and that absence is the shape
     // every pre-W4 marker has, so `stampAddedMinutes` needs both to be walked.

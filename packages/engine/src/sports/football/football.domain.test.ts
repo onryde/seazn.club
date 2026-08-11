@@ -121,9 +121,10 @@ describe("substitution rules per variant (Law 3)", () => {
     expect(state.squads.home.onPitch).toContain("H-b2");
   });
 
-  it("declares rolling substitutions on the youth and small-sided variants", () => {
+  it("declares rolling substitutions on the youth, small-sided and mini-soccer variants", () => {
     expect(football.variants.youth?.rollingSubs).toBe(true);
     expect(football.variants["small-sided"]?.rollingSubs).toBe(true);
+    expect(football.variants["mini-soccer"]?.rollingSubs).toBe(true);
     expect(football.variants["11-a-side"]?.rollingSubs).toBeUndefined();
   });
 });
