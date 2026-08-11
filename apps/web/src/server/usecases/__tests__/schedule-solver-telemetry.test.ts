@@ -625,11 +625,15 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
    * `existing` rows are not counted against day caps either, for the identical
    * reason (no identity to attribute them by).
    *
-   * Closing this needs `entrant_indices` (and a `division_index`, for the
-   * day-cap gap alongside it) added to `PinnedRow` on the proto, plus a
-   * `model.py` change to fold `existing` into `by_entrant` — a wire and
-   * solver-model change, out of scope here by the task's own constraints (no
-   * `.proto`, no Python). The assertions below are UNCHANGED from what z3 once
+   * Closing this needs `entrant_indices` added to `PinnedRow` on the proto,
+   * plus a `model.py` change to fold `existing` into `by_entrant` — a wire
+   * and solver-model change, out of scope here by the task's own constraints
+   * (no `.proto`, no Python). (The day-cap gap named above is a DIFFERENT
+   * field and closed separately, task C4: `PinnedRow.rule_group_indices`,
+   * not a `division_index` — this service never learns what a division is,
+   * and `max_fixtures_per_day` was already scoped to the full RuleGroup
+   * union, `constraints.ts:69-72`; `build.ts:1143` merely narrows it to
+   * division for now.) The assertions below are UNCHANGED from what z3 once
    * satisfied: this is a live tripwire, not a weakened test. If the wire
    * contract ever grows pin identity and this starts passing, THAT is the
    * signal to remove the skip.
