@@ -1058,6 +1058,30 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   already added to `_RULES.md` §6; full detail in the global memory
   `reference_rtk_masks_suite_failures.md`.
 
+- 2026-08-11 — S6/#416 — **PR #529's first CI run caught a real regression
+  local verification missed: "engine-only diff" does NOT mean `apps/web`'s
+  own tests still pass.** `apps/web/src/server/engine-db/__tests__/
+  config-snapshot.test.ts` broke — `generic.ts`'s new implicit-draw
+  inference (`declaredDraw = isDraw===true || winnerId===undefined`) treated
+  ANY payload missing `winnerId` as a draw, including a score-shaped payload
+  carrying no draw signal at all, silently swallowing the pre-existing
+  "win_loss mode requires winnerId or isDraw" validation that test pins.
+  `tsc`/lint/the full engine suite were all green and `git diff --stat` was
+  genuinely engine-only — none of that caught it, because `apps/web` calls
+  the engine's real fold logic at RUNTIME (`appendEvent`→`foldMatch`→
+  `apply()`), and this was a pure behavior change no type check sees. Fixed
+  in `a5795482`: requires the `isDraw` KEY to be present (even as `false`)
+  before inferring a draw — distinguishes "a Draw action fired with a
+  bivalent false toggle" (the real problem being solved) from "no draw
+  signal was sent at all" (the case that broke). Second CI run: 7/8 green,
+  the one remaining failure (`Playwright e2e — mobile/tablet, 7 widths`) is
+  a confirmed pre-existing, already-tracked `EntityCard` overflow bug (#528,
+  unrelated CI/Stage/Prod-split session), not this session's diff. Recorded
+  as a standing lesson for future engine-only sessions in this programme:
+  `reference_engine_only_diff_can_still_break_apps_web_tests` (global
+  memory) — either run `apps/web`'s relevant suites locally before opening
+  the PR, or budget time for exactly this fix-forward round-trip.
+
 - _(append below)_
 
 ## Open questions for the owner
