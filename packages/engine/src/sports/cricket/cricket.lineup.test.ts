@@ -122,7 +122,9 @@ describe("cricket.lineupPolicy — declared per variant, never a module constant
   });
 
   it("does NOT declare it for the variants ICC conditions do not cover", () => {
-    for (const key of ["hundred", "pairs-6-a-side"]) {
+    // #431 ruling 3 (2026-08-11) dropped `pairs-6-a-side`; `hundred` is the
+    // only surviving variant ICC conditions do not cover.
+    for (const key of ["hundred"]) {
       const policy = cricket.lineupPolicy?.(parse(cricket.variants[key]));
       expect(policy?.exemptions?.concussion).toBeUndefined();
       // Ruling 1's default: a squad that may not grow is the pre-wave squad.

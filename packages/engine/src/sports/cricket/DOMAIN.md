@@ -28,8 +28,15 @@ someone lifts it, so every deferral carries its reason.
 - ICC/ECB *Duckworth-Lewis-Stern Standard Edition* for the revision math
   already implemented in `dls.ts`.
 
-**Declared variants** (`cricket.variants`): `t20`, `odi`, `hundred`, `test`,
-`pairs-6-a-side`. They differ materially and the table says where.
+**Declared variants** (`cricket.variants`): `t20`, `odi`, `hundred`, `test`.
+They differ materially and the table says where.
+
+A fifth variant, `pairs-6-a-side`, was **dropped 2026-08-11** (#431 ruling 3):
+it only ever shrank the side to 6 and the innings to 60 balls, and the real
+pairs convention is a different scoring grammar, not an extension of this one
+— see "Pairs scoring" below and
+`docs/superpowers/specs/2026-08-06-scoringpad-v2-prompts/_INDEX.md`'s
+2026-08-11 decision log entry for the full reasoning.
 
 | variant | innings/side | balls/innings | balls/over | players | notes |
 |---|---|---|---|---|---|
@@ -37,7 +44,6 @@ someone lifts it, so every deferral carries its reason.
 | `odi` | 1 | 300 | 6 | 11 | 10-over quota, `minOversForResult` 20, two new balls in practice |
 | `hundred` | 1 | 100 | **5** | 11 | balls counted in fives; "overs" in this module means `ballsPerOver` sets, so 100 balls = 20 sets |
 | `test` | **2** | **null** (unlimited) | 6 | 11 | declarations, follow-on (lead 200), draw points, no free hit (red ball), no super over |
-| `pairs-6-a-side` | 1 | 60 | 6 | **6** | all-out at 5 wickets; the pairs convention itself is **deferred** (see below) |
 
 Two module-wide facts that shape every row:
 
@@ -78,7 +84,7 @@ coarse scoring must stay legal.
 | Bye / leg bye | all | — | `…extras.kind = "bye" / "legbye"` | modelled | legal delivery, not charged to the bowler |
 | Penalty runs to the **batting** side | all | — | `…extras.kind = "penalty"` | modelled | lands in the batting innings total and in `.fine.extras` |
 | Penalty runs to the **fielding** side | all | — | — | deferred | Law 41 adds them to the fielding side's own score, i.e. to a *different* innings that may not exist yet; it would change `aggregate()`, the innings-victory test and the NRR ledger. Needs a product decision on how a penalty bank scores for NRR before it can be modelled. |
-| Free hit armed and consumed | white-ball variants (`t20`, `odi`, `hundred`, `pairs-6-a-side`) | — | `Ev.CricketBall.freeHit` → `.fine.freeHitPending` | modelled | armed by a no ball, survives an intervening wide, consumed by the next legal ball; only run-out/obstruction may dismiss on it. Deliberately off for `test` (red-ball) |
+| Free hit armed and consumed | white-ball variants (`t20`, `odi`, `hundred`) | — | `Ev.CricketBall.freeHit` → `.fine.freeHitPending` | modelled | armed by a no ball, survives an intervening wide, consumed by the next legal ball; only run-out/obstruction may dismiss on it. Deliberately off for `test` (red-ball) |
 | Short run | all | person: `striker` | — | deferred | Law 18.5 deducts the run before it is entered, so the ledger's `runs.bat` is already the post-deduction figure. The umpire's signal is annotation, not a total — `core.note` carries it. |
 | Dead ball | all | — | — | deferred | A dead ball that does not count is simply not entered in the ledger; one that does count is entered as the delivery it was. Nothing to hold. |
 
@@ -122,7 +128,7 @@ coarse scoring must stay legal.
 | Declaration | `test` (`inningsPerSide === 2`) | entrant | `cricket.innings.declare` → `State.innings[].declared` | modelled | fold refuses it for one-innings variants; shown as `d` in the summary line |
 | Innings forfeited | `test` | entrant | `Ev.CricketClose.reason = "forfeited"` | **extended** | Law 15 — recorded as a close reason rather than a distinct event, because the totals a forfeited innings contributes are just zeros |
 | Follow-on | `test` | entrant | `cricket.followon` + `Cfg.followOn.{enabled,lead}` → `State.followOnEnforced` | modelled | fold checks the actual lead against the configured one and reorders the innings sequence F,S,S,F |
-| All-out threshold | all | entrant | derived: `min(Cfg.playersPerSide, lineup) − 1` | modelled | `pairs-6-a-side` gets 5 from `playersPerSide: 6` |
+| All-out threshold | all | entrant | derived: `min(Cfg.playersPerSide, lineup) − 1` | modelled | scales with `Cfg.playersPerSide`; the dropped `pairs-6-a-side` variant (#431 ruling 3) demonstrated this at `playersPerSide: 6` ⇒ 5 |
 | **New ball taken** | all (in practice `test`, `odi`) | — | `cricket.newball` → `State.innings[].newBallAt[]` | **extended** | records the legal-ball count at which each new ball was taken; refuses two at the same point. Empty innings keep the field unset. |
 | **Powerplay block** | white-ball variants | — | `cricket.powerplay` (`kind`: mandatory/batting/bowling, `phase`: start/end) → `State.innings[].powerplays[]` | **extended** | blocks are `{kind, fromBalls, toBalls}` in legal balls from the innings start; one open block at a time, an end must match the open block's kind |
 | Over-rate / time penalty | white-ball variants | entrant | — | deferred | in the current conditions this is either an in-over fielding restriction (a competition rule about the *next* delivery, not a scorable fact) or a points/penalty-run sanction. The penalty-run half needs the fielding-side penalty bank above; the fielding-restriction half needs a product decision on whether a scorer records it at all. |
@@ -154,7 +160,7 @@ coarse scoring must stay legal.
 | Net run rate ledger | all | entrant | `standingsDelta().metrics` (`runs_for`, `balls_faced_eff`, …) | modelled | integer ledger only; a bowled-out side is charged its full quota; forfeits contribute nothing |
 | Per-result points | all | entrant | `Cfg.points.{win,tie,noResult,loss,draw}` | modelled | `draw` is two-innings only |
 | Post-match scorecard lines | all | person | `cricket.player.line` (Tier 2) | modelled | sum-checked against the innings totals; exact against a fine innings, bounded against a coarse one |
-| Pairs scoring (6-a-side: fixed pairs, −5 per dismissal) | `pairs-6-a-side` | persons: the pair | — | deferred | the `pairs-6-a-side` variant currently only shrinks the side to 6 and the innings to 60 balls; the actual pairs convention (each pair bats a fixed number of overs, a dismissal costs 5 runs instead of ending the partnership) is a different scoring grammar, not an extension of this one. Needs a product decision on whether we support it before schema is spent on it. |
+| Pairs scoring (6-a-side: fixed pairs, −5 per dismissal) | none (`pairs-6-a-side` dropped, #431) | persons: the pair | — | deferred | **dropped, not just unbuilt** (#431 ruling 3, 2026-08-11): the `pairs-6-a-side` preset only ever shrank the side to 6 and the innings to 60 balls; the real pairs convention (each pair bats a fixed number of overs, a dismissal costs 5 runs instead of ending the partnership) is a different scoring grammar, not an extension of this one, so the preset was removed rather than left half-built. See `docs/superpowers/specs/2026-08-06-scoringpad-v2-prompts/_INDEX.md`'s 2026-08-11 decision log entry. |
 | Player leaderboards from the ledger | all | persons: all | `module.playerStats` | **extended** | `PlayerStatMetric.field`/`sumField` now resolve dotted payload paths (`src/stats/stats.ts`), so the model is declared straight off `cricket.ball`: runs (`runs.bat`) and balls faced by `striker`; balls bowled, runs conceded and wickets (`wicket.bowlerCredited`) by `bowler`; catches, stumpings and run outs by `wicket.fielder` plus `wicket.fielderAssist`. |
 
 ---
@@ -203,10 +209,14 @@ Recorded, not acted on.
    run outs / stumpings) — new for the product; retirement-aware batting
    averages (a retired-not-out innings is not an out); and per-innings review
    efficiency.
-8. **Deferred rows that need a product decision, not engineering**: penalty
-   runs to the fielding side (and with it over-rate penalty runs), the
-   `pairs-6-a-side` pairs convention, and concussion replacements (which need
-   a mutable-squad decision above the module).
+8. **Deferred rows that still need a product decision, not engineering**:
+   penalty runs to the fielding side (and with it over-rate penalty runs).
+   The pairs convention no longer belongs on this list — #431 ruling 3
+   (2026-08-11) decided it rather than leaving it open: the `pairs-6-a-side`
+   preset was dropped, and a real pairs scoring grammar is a different
+   module concern, not a config knob here. (Concussion replacements also came
+   off this list earlier: S3/W4b #426 shipped it — see "Concussion / COVID
+   replacement" above.)
 
 ## What was NOT changed, on purpose
 

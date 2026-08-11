@@ -25,7 +25,7 @@ const SPORT_DEFAULT: Record<string, number> = {
 };
 
 // Keyed by `${sport}:${variant}` (both lowercased). Variant keys match the
-// sport_variants table (e.g. cricket: t20, hundred, odi, test, pairs-6-a-side).
+// sport_variants table (e.g. cricket: t20, hundred, odi, test).
 const VARIANT_OVERRIDE: Record<string, number> = {
   // Board games: game clock, not a fixed slot.
   "boardgame:blitz": 10,
@@ -37,7 +37,6 @@ const VARIANT_OVERRIDE: Record<string, number> = {
   "cricket:hundred": 150,
   "cricket:odi": 420,
   "cricket:test": 480,
-  "cricket:pairs-6-a-side": 45,
   // Football by side size.
   "football:11-a-side": 90,
   "football:small-sided": 40,
