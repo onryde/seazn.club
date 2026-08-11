@@ -314,6 +314,7 @@
   "constraints.restMin.label": "Descanso mínimo",
   "constraints.restMin.hint": "Margen de respiro entre los partidos de un participante.",
   "constraints.restMin.unit": "min",
+  "constraints.field.saved": "Guardado.",
   "restFloor.note": "Los participantes descansarán al menos {minutes} min: lo fija {source}.",
   "restFloor.source.perEntrantMinRest": "el descanso mínimo por participante, en la pestaña Configuración",
   "restFloor.source.restMin": "el descanso mínimo, en la pestaña Restricciones",

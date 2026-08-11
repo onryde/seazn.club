@@ -103,18 +103,26 @@ const escapeHtml = (s: string) =>
 
 const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** The rest-minutes `<input>`, found by the one thing unique to it in either
- *  panel: it is the only control wired with `aria-describedby`. Parsed rather
- *  than matched against a literal id so the assertions pin the RELATIONSHIP —
- *  label→input, input→hint — and stay honest if either id is ever renamed. */
-const restInput = (html: string) => {
-  const tags = html.match(/<input\b[^>]*aria-describedby="[^"]*"[^>]*>/g) ?? [];
-  expect(tags, "expected exactly one input wired with aria-describedby").toHaveLength(1);
-  // `?? ""` only to satisfy noUncheckedIndexedAccess — the length assertion
-  // above is the real gate, and an empty tag fails every caller anyway.
-  const tag = tags[0] ?? "";
+/** The rest-minutes `<input>`, found by walking the RELATIONSHIP rather than
+ *  any property assumed unique to it: the `<label>` whose text is the
+ *  rest-minutes label message, its `for`, then the `<input>` carrying that
+ *  id. Parsed rather than matched against a literal id so the assertions
+ *  pin label→input, input→hint and stay honest if either id is ever
+ *  renamed — same intent as the original "only input wired with
+ *  aria-describedby" version, which broke the moment a SECOND field
+ *  (max-per-day, same restructure) legitimately gained one too; nothing
+ *  here assumes uniqueness of anything except the label's own text. */
+const restInput = (html: string, labelText: string) => {
+  const label = html.match(
+    new RegExp(`<label[^>]*\\bfor="([^"]+)"[^>]*>${reEsc(escapeHtml(labelText))}</label>`),
+  );
+  expect(label, `no <label for="…"> with text "${labelText}"`).toBeTruthy();
+  const id = label?.[1] ?? "";
+  const input = html.match(new RegExp(`<input\\b[^>]*\\bid="${reEsc(id)}"[^>]*>`));
+  expect(input, `no <input id="${id}">`).toBeTruthy();
+  const tag = input?.[0] ?? "";
   return {
-    id: tag.match(/\bid="([^"]+)"/)?.[1] ?? "",
+    id,
     describedBy: (tag.match(/\baria-describedby="([^"]+)"/)?.[1] ?? "").split(/\s+/).filter(Boolean),
   };
 };
@@ -185,9 +193,15 @@ describe("minimum rest — one shared tip across both tabs", () => {
         ).not.toMatch(/aria-expanded=/);
       }
 
-      // Association must still be real, not merely absent-by-restructure: the
-      // rest input carries an id and a label points at it.
-      const { id } = restInput(html);
+      // Association must still be real, not merely absent-by-restructure.
+      // `restInput` above already had to find a `<label for="…">` pointing
+      // at this exact id to return it at all, so these two lines cannot
+      // independently fail any more — kept anyway (a truthy `id` plus a
+      // literal re-match costs nothing) rather than deleted, since what DOES
+      // still fail on its own, above, is the no-nesting loop this test is
+      // named for.
+      const labelKey = name === "constraints" ? "constraints.restMin.label" : "boardset.rest";
+      const { id } = restInput(html, (enUi as Dict)[labelKey] as string);
       expect(id, `${name}: the rest input has no id to associate`).toBeTruthy();
       expect(html).toMatch(new RegExp(`<label[^>]*for="${reEsc(id)}"`));
     });
@@ -198,7 +212,8 @@ describe("minimum rest — one shared tip across both tabs", () => {
     // id that does not exist is silently empty, so resolve every reference.
     it(`${name}: the hint is re-attached via aria-describedby, and resolves`, () => {
       const html = render(enUi as Dict, "en");
-      const { describedBy } = restInput(html);
+      const labelKey = name === "constraints" ? "constraints.restMin.label" : "boardset.rest";
+      const { describedBy } = restInput(html, (enUi as Dict)[labelKey] as string);
       expect(describedBy.length, `${name}: nothing described`).toBeGreaterThan(0);
 
       for (const ref of describedBy) {

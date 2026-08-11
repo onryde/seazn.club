@@ -314,6 +314,7 @@
   "constraints.restMin.label": "Minimale rust",
   "constraints.restMin.hint": "Adempauze tussen de wedstrijden van één deelnemer.",
   "constraints.restMin.unit": "min",
+  "constraints.field.saved": "Opgeslagen.",
   "restFloor.note": "Deelnemers rusten minstens {minutes} min — ingesteld door {source}.",
   "restFloor.source.perEntrantMinRest": "de minimale rust per deelnemer, op het tabblad Instellingen",
   "restFloor.source.restMin": "de minimale rust, op het tabblad Beperkingen",
