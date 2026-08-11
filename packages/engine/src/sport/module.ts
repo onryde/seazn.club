@@ -227,18 +227,30 @@ export interface PadFieldToggle {
 export type PadField = PadFieldEnum | PadFieldNumber | PadFieldToggle;
 
 /**
- * Where person/side attribution lands in the built payload, and how many the
- * renderer's attribution picker must collect before the action can fire.
- * `persons`' arity is `paths.length` — the brief's `persons(n)` restated as
- * "n named destinations" rather than a bare count, because the payload
- * assembler needs to know WHERE each resolved id goes (cricket's wicket
- * action needs up to four: `out`, `fielder`, `fielderAssist`, `incoming`).
+ * One person/side destination the renderer's attribution picker must collect
+ * before an action can fire, and where the resolved id lands in the built
+ * payload.
  */
-export type PadAttribution =
-  | { kind: "none" }
+export type PadAttributionItem =
   | { kind: "side"; path: string }
-  | { kind: "person"; path: string; role?: string }
-  | { kind: "persons"; paths: readonly string[] };
+  | { kind: "person"; path: string; role?: string };
+
+/**
+ * A LIST of attribution requirements, not a single discriminated choice —
+ * revised from the brief's restated `none | side | person(role?) | persons(n)`
+ * vocabulary while wiring cricket's real actions: `cricket.review` needs a
+ * SIDE (`by`) and, independently, up to two OPTIONAL persons (`person`,
+ * `against`) on the very same action, which a one-of-four choice cannot
+ * express at all without either dropping a real field or splitting one
+ * action into several for no product reason. A list composes the same four
+ * cases as a special case of "zero or more items" — `none` is `[]`, `side`
+ * is one `{kind:"side"}` item, `person(role?)` is one `{kind:"person"}` item,
+ * `persons(n)` is n `{kind:"person"}` items at n distinct paths (cricket's
+ * wicket action needs up to four: `out`, `fielder`, `fielderAssist`,
+ * `incoming`) — while also reaching the side-plus-persons case none of the
+ * four could.
+ */
+export type PadAttribution = readonly PadAttributionItem[];
 
 /**
  * Assemble a payload from `(dottedPath, value)` pairs — the inverse of

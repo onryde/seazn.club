@@ -208,24 +208,26 @@ function fieldArbitrary(field: PadField): fc.Arbitrary<PadFieldValue> {
   }
 }
 
+function attributionItemArbitrary(
+  item: PadAttribution[number],
+  entrantIds: readonly [string, string],
+  persons: readonly string[],
+): fc.Arbitrary<readonly [string, unknown]> {
+  const pool = item.kind === "side" ? entrantIds : persons;
+  return fc.constantFrom(...pool).map((id) => [item.path, id] as const);
+}
+
+/** Every item independently resolved — `fc.tuple` over a LIST of
+ *  arbitraries, one per attribution item, so an action needing a side AND
+ *  two persons (`cricket.review`) gets all three, each at its own path. */
 function attributionArbitrary(
   attribution: PadAttribution,
   entrantIds: readonly [string, string],
   personPool: readonly string[],
 ): fc.Arbitrary<readonly (readonly [string, unknown])[]> {
   const persons = personPool.length > 0 ? personPool : ["p1"];
-  switch (attribution.kind) {
-    case "none":
-      return fc.constant([]);
-    case "side":
-      return fc.constantFrom(...entrantIds).map((id) => [[attribution.path, id]] as const);
-    case "person":
-      return fc.constantFrom(...persons).map((id) => [[attribution.path, id]] as const);
-    case "persons":
-      return fc
-        .tuple(...attribution.paths.map(() => fc.constantFrom(...persons)))
-        .map((ids) => attribution.paths.map((path, i) => [path, ids[i]] as const));
-  }
+  if (attribution.length === 0) return fc.constant([]);
+  return fc.tuple(...attribution.map((item) => attributionItemArbitrary(item, entrantIds, persons)));
 }
 
 function actionPayloadArbitrary(

@@ -63,7 +63,7 @@ function fakePadSpec(_cfg: FakeCfg): PadSpec {
             type: "fake.run",
             labelKey: { key: "pad.fake.action.run", label: "Run" },
             fields: [{ kind: "number", path: "runs", min: 0, max: 3 }],
-            attribution: { kind: "none" },
+            attribution: [],
           },
         ],
       },
@@ -76,7 +76,7 @@ function fakePadSpec(_cfg: FakeCfg): PadSpec {
             type: "fake.reset",
             labelKey: { key: "pad.fake.action.reset", label: "Reset" },
             fields: [],
-            attribution: { kind: "none" },
+            attribution: [],
           },
         ],
       },
@@ -189,7 +189,7 @@ describe("checkActionCoverage", () => {
               type: "fake.ghost",
               labelKey: { key: "pad.fake.action.ghost", label: "Ghost" },
               fields: [],
-              attribution: { kind: "none" },
+              attribution: [],
             },
           ],
         },
@@ -242,7 +242,7 @@ describe("checkActionPayloadsAccepted", () => {
               labelKey: { key: "pad.fake.action.run", label: "Run" },
               // schema caps runs at 3; declaring up to 9 must be catchable.
               fields: [{ kind: "number", path: "runs", min: 0, max: 9 }],
-              attribution: { kind: "none" },
+              attribution: [],
             },
           ],
         },
@@ -266,7 +266,7 @@ describe("checkActionPayloadsAccepted", () => {
               type: "fake.person",
               labelKey: { key: "pad.fake.action.person", label: "Score" },
               fields: [],
-              attribution: { kind: "person", path: "scorer" },
+              attribution: [{ kind: "person", path: "scorer" }],
             },
           ],
         },
@@ -288,7 +288,7 @@ describe("checkActionPayloadsAccepted", () => {
               type: "fake.person",
               labelKey: { key: "pad.fake.action.person", label: "Score" },
               fields: [],
-              attribution: { kind: "person", path: "wrongKey" }, // PersonEv is strict — rejects unrecognised keys, and `scorer` becomes missing/required
+              attribution: [{ kind: "person", path: "wrongKey" }], // PersonEv is strict — rejects unrecognised keys, and `scorer` becomes missing/required
             },
           ],
         },
@@ -297,6 +297,40 @@ describe("checkActionPayloadsAccepted", () => {
     expect(() =>
       checkActionPayloadsAccepted(wrongPath, { "fake.person": PersonEv }, entrantIds, personPool, 30),
     ).toThrow();
+  });
+
+  it("handles an action needing a SIDE and TWO persons together — the shape a single discriminated attribution.kind could not express (cricket.review: `by` + optional `person`/`against`)", () => {
+    const ReviewLikeEv = z.strictObject({
+      by: z.string().min(1),
+      caller: z.string().min(1),
+      against: z.string().min(1),
+    });
+    const spec: PadSpec = {
+      panels: [
+        {
+          labelKey: { key: "pad.fake.panel.review", label: "Review" },
+          phase: "live",
+          layout: "drawer",
+          actions: [
+            {
+              type: "fake.review",
+              labelKey: { key: "pad.fake.action.review", label: "Review" },
+              fields: [],
+              attribution: [
+                { kind: "side", path: "by" },
+                { kind: "person", path: "caller" },
+                { kind: "person", path: "against" },
+              ],
+            },
+          ],
+        },
+      ],
+      fidelity: { "fake.review": 1 },
+      fidelityEntitlements: {},
+    };
+    expect(() =>
+      checkActionPayloadsAccepted(spec, { "fake.review": ReviewLikeEv }, entrantIds, personPool, 40),
+    ).not.toThrow();
   });
 });
 
@@ -319,7 +353,7 @@ describe("checkLabelKeysUnique", () => {
               type: "fake.reset",
               labelKey: { key: "pad.fake.action.run", label: "Reset" }, // collides with the run action's key
               fields: [],
-              attribution: { kind: "none" },
+              attribution: [],
             },
           ],
         },
