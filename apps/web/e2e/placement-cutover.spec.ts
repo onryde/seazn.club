@@ -263,3 +263,161 @@ test("Auto-schedule reaches the OPTIMISER, not the greedy fallback wearing the s
   expect(after.every((f) => f.court_label !== null)).toBe(true);
   expect(new Set(after.map((f) => f.court_label)).size).toBe(2);
 });
+
+// --- task C2: a court-scoped blackout reaches the solver, not a refusal ----
+//
+// Before C2, `Blackout.court?` scoped to ONE of several configured courts
+// left those courts offering different start-time grids, which `build.ts`'s
+// `everyCourtSharesGrid` refused outright (`not_searched`/`per_court_grid`)
+// rather than send to placement — the optimiser was switched off for the
+// division, permanently, for as long as the blackout stood, on a board that
+// otherwise looks fine. `placement.model.build_model` now enforces each
+// court's own tick set directly, so this reaches the solver like any other
+// board (`build-rest-lattice.test.ts` proves that at the unit level, mocked).
+// This is the live-service proof: an organiser whose settings carry a
+// court-scoped blackout gets an OPTIMISED board back, not a quietly
+// downgraded one.
+//
+// THE BOARD, AND WHY THIS EXACT SHAPE. Two fixtures sharing entrant E1 (E1
+// plays both), a 40-minute per-entrant rest floor, two courts, and a
+// blackout removing C2's back half. Greedy tries courts in order and stacks
+// BOTH matches on C1 (E1's rest floor only constrains their START times, not
+// which court they land on), giving a 60-minute court imbalance; the real
+// solver spreads them across both courts instead, at the IDENTICAL makespan
+// and idle gap, so imbalance is the only tier that moves — exactly the
+// lexicographic shape `isStrictlyBetter` rewards (placed, then makespan,
+// then worst gap, then imbalance, in that order; a rebalanced board that
+// wins ONLY on a later tier still loses outright to a board that is worse on
+// an earlier one).
+//
+// REST IS 40 MINUTES, NOT A ROUNDER-LOOKING 35 OR 45, AND THAT IS LOAD-
+// BEARING. The lattice's step is `gcd(matchMinutes, gapMinutes)` = 10
+// minutes here. 40 is a multiple of it, so the tick E1's rest floor forces
+// (start + 30 + 40 = start + 70) is reachable on EVERY court and the
+// rebalanced board pays no makespan penalty for existing at all. Measured
+// directly against a live local placement service with rest=35 (not a
+// multiple of 10): the solver still finds the imbalance-0 rebalance, but it
+// lands 5 minutes later than greedy's tick-aligned stack, makespan comes out
+// WORSE by exactly that margin, and `isStrictlyBetter` correctly refuses it
+// — `engine` stays "greedy". That is not a bug in the fix; it is the
+// lexicographic rule working as designed. This board is chosen so the
+// comparison is decided by the capability under test, not by a lattice
+// rounding artifact.
+//
+// MEASURED, not assumed: 5/5 identical runs directly against a live local
+// placement service (no mocks) — `status: "ok"`, `engine: "optimized"`,
+// `courtImbalanceMinutes` 60 -> 0, assignments `a@C2+0min`, `b@C1+70min`
+// every time. A 2-fixture board is fully determined by its constraints, so
+// this is not the nondeterminism `_RULES.md` section 6b warns CP-SAT search
+// can exhibit on a larger, under-constrained one.
+const PER_COURT_START = new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString();
+const PER_COURT_START_MS = Date.parse(PER_COURT_START);
+const PER_COURT_MATCH_MIN = 30;
+const PER_COURT_GAP_MIN = 10;
+const PER_COURT_REST_MIN = 40; // a multiple of gcd(match, gap) = 10 -- see above.
+const PER_COURT_FIXTURE_COUNT = 2;
+
+test("a court-scoped blackout reaches the OPTIMISER instead of switching it off", async ({
+  page,
+  request,
+}) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Placement PerCourt ${TAG}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "PerCourt",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  const divisionId = div.data!.id;
+  const { ids: entrantIds } = await addEntrantsViaApi(
+    request,
+    divisionId,
+    [0, 1, 2].map((i) => `PC Ent ${i}${TAG}`),
+  );
+  const stage = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/divisions/${divisionId}/stages`,
+    "POST",
+    { seq: 1, kind: "league", name: "League" },
+  );
+  const stageId = stage.data!.id;
+
+  // a: E0 vs E1. b: E0 vs E2. Both share entrant 0 -- the rest floor above
+  // is what makes their relative start times fixed regardless of court.
+  const fixtureIds: string[] = [];
+  for (const [home, away] of [
+    [0, 1],
+    [0, 2],
+  ] as [number, number][]) {
+    const added = await apiJson<{ fixture_id: string }>(
+      request,
+      `/api/v1/stages/${stageId}/fixtures`,
+      "POST",
+      { home_entrant_id: entrantIds[home], away_entrant_id: entrantIds[away], round_no: 1 },
+    );
+    expect(added.status).toBe(201);
+    fixtureIds.push(added.data!.fixture_id);
+  }
+  expect(fixtureIds.length).toBe(PER_COURT_FIXTURE_COUNT);
+
+  const settings = await apiJson(
+    request,
+    `/api/v1/divisions/${divisionId}/schedule-settings`,
+    "PUT",
+    {
+      tz: "UTC",
+      config: {
+        startAt: PER_COURT_START,
+        matchMinutes: PER_COURT_MATCH_MIN,
+        gapMinutes: PER_COURT_GAP_MIN,
+        courts: ["C1", "C2"],
+        perEntrantMinRest: PER_COURT_REST_MIN,
+        // C2 alone loses its back half (90-180 minutes in); C1 is untouched.
+        // The two courts' offered start times now genuinely differ -- the
+        // exact shape that used to be refused before ever reaching placement.
+        blackouts: [
+          {
+            court: "C2",
+            from: new Date(PER_COURT_START_MS + 90 * 60_000).toISOString(),
+            to: new Date(PER_COURT_START_MS + 180 * 60_000).toISOString(),
+          },
+        ],
+        sessionWindows: [],
+      },
+    },
+  );
+  expect(settings.status).toBe(200);
+
+  const strip = await runAutoSchedule(page, divisionId);
+
+  // THE ASSERTION THIS TEST EXISTS FOR: the optimiser was not merely
+  // reached, it WON -- see the docblock above for why this board decides
+  // that outcome deterministically rather than by search luck. Exact string,
+  // not the `/^(optimized|greedy)$/` alternation the sibling test above
+  // uses: that file's TODO is precisely what this test closes for this
+  // shape. `toHaveAttribute` reads the live DOM attribute, not raw markup
+  // text, so this is immune to React's `"$undefined"` omitted-prop
+  // serialisation by construction -- there is no bare substring probe here
+  // to anchor with `="`.
+  await expect(strip).toHaveAttribute("data-engine", "optimized");
+  const status = await strip.getAttribute("data-status");
+  expect(SOLVED, `solver reported data-status="${status}"`).toContain(status);
+  await expect(strip).toHaveAttribute("data-tone", "plain");
+  await expect(page.getByTestId("schedule-result-lost")).toHaveCount(0);
+
+  const after = await Promise.all(fixtureIds.map((id) => getFixture(request, id)));
+  expect(after.filter((f) => f.scheduled_at !== null)).toHaveLength(PER_COURT_FIXTURE_COUNT);
+  expect(after.every((f) => f.court_label !== null)).toBe(true);
+  // Both configured courts used -- the rebalance this test exists to prove,
+  // stated directly rather than only through the imbalance metric.
+  expect(new Set(after.map((f) => f.court_label))).toEqual(new Set(["C1", "C2"]));
+});
