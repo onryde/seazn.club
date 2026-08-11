@@ -658,6 +658,11 @@ async function main() {
   // seq-tokened reschedule + stale 409, SZ refs + /r/[ref] on pro AND free.
   await schedRegV3Suite(admin, renamed.slug, org2.id);
 
+  // --- Board redesign (2026-08-10): legend duplicated below the grid, and
+  // blackout windows highlighted on the grid (own tiny rig, see the suite
+  // function below).
+  await boardRedesignSuite(admin, renamed.slug);
+
   // --- #452 scheduling CONSTRAINT surface: a durable `constraints.hard` rule
   // on a real bracket and a pool-targeted `restByGroup` on a `group` stage,
   // asserted on auto / apply / board report / drag. Keyless (no model), own Pro
@@ -10451,6 +10456,100 @@ async function schedRegV3Suite(
   });
   check("pay card method allowed on community once Connect is live (V310)", fCard.status === 200);
   await setConnect(freeVer.org_id, false);
+}
+
+// --- Board redesign (2026-08-10): legend duplicated below the grid, and
+// blackout windows highlighted on the grid. Own tiny 2-division rig,
+// additive only — isolated from schedRegV3Suite's much larger one so this
+// never risks any of that suite's assertions. Competition dates are pinned
+// explicitly (both here AND on the division's own schedule config) because
+// the board's initial `day` is `days[0]`, derived from competitionStart/
+// competitionEnd with no URL override — smoke has no browser, so it only
+// ever sees whatever day the SSR'd page opens on by default.
+async function boardRedesignSuite(admin: Session, orgSlug: string): Promise<void> {
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(admin, "/api/v1/competitions", "POST", {
+      starts_on: "2026-10-05",
+      ends_on: "2026-10-06",
+      name: `Board redesign ${tag}`,
+      visibility: "public",
+    }),
+  );
+
+  const divA = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Board Redesign A",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  await v1(admin, `/api/v1/divisions/${divA.id}/entrants`, "POST", [
+    { kind: "individual", display_name: "Redesign A P1", seed: 1 },
+    { kind: "individual", display_name: "Redesign A P2", seed: 2 },
+  ]);
+  const stageA = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/divisions/${divA.id}/stages`, "POST", {
+      seq: 1,
+      kind: "league",
+      name: "League",
+    }),
+  );
+  await v1(admin, `/api/v1/divisions/${divA.id}/schedule-settings`, "PUT", {
+    config: {
+      startAt: "2026-10-05T09:00:00.000Z",
+      matchMinutes: 30,
+      gapMinutes: 0,
+      courts: ["A", "B"],
+      perEntrantMinRest: 0,
+      blackouts: [{ court: "A", from: "2026-10-05T09:00:00.000Z", to: "2026-10-05T09:30:00.000Z" }],
+      sessionWindows: [],
+    },
+  });
+  const genA = v1data<{ fixtures: { id: string }[] }>(
+    await v1(admin, `/api/v1/stages/${stageA.id}/generate`, "POST"),
+  );
+  // Court B, same time — outside the court-A-scoped blackout — so a real
+  // FixtureBlock renders on the initial page load for the pin-icon check.
+  await v1(admin, `/api/v1/fixtures/${genA.fixtures[0]!.id}`, "PATCH", {
+    scheduled_at: "2026-10-05T09:00:00.000Z",
+    court_label: "B",
+  });
+
+  // Division B exists purely so the division-filter legend has 2+ divisions
+  // to render at all (BoardLegend returns null at divisions.length <= 1).
+  const divB = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Board Redesign B",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  await v1(admin, `/api/v1/divisions/${divB.id}/entrants`, "POST", [
+    { kind: "individual", display_name: "Redesign B P1", seed: 1 },
+    { kind: "individual", display_name: "Redesign B P2", seed: 2 },
+  ]);
+  await v1(admin, `/api/v1/divisions/${divB.id}/stages`, "POST", {
+    seq: 1,
+    kind: "league",
+    name: "League",
+  });
+
+  const board = await html(admin, `/o/${orgSlug}/c/${comp.slug}/schedule`);
+  check("board redesign: page renders (pro)", board.status === 200);
+  check(
+    "board redesign: blackout cell marked on the grid",
+    board.body.includes('data-blackout="true"'),
+  );
+  check(
+    "board redesign: legend renders twice (above the grid and below it)",
+    (board.body.match(/aria-label="Filter by division"/g) ?? []).length === 2,
+  );
+  check(
+    "board redesign: no raw pin emoji in the markup (real fixture is on screen)",
+    board.body.includes("Redesign A P1") && !board.body.includes("\u{1F4CC}"),
+  );
 }
 
 // v1 responses: { ok, data | error: {code, message, …}, requestId }.

@@ -185,8 +185,11 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
 
   test("legend filters to two divisions in two taps; the URL is shareable", async ({ page }) => {
     await page.goto(boardUrl);
-    await page.getByRole("button", { name: "U16 Boys", exact: true }).click();
-    await page.getByRole("button", { name: "U16 Girls", exact: true }).click();
+    // Legend now renders twice — once above the grid, once below it — both
+    // sharing one filter state (board redesign, 2026-08-10).
+    await expect(page.getByRole("group", { name: "Filter by division" })).toHaveCount(2);
+    await page.getByRole("button", { name: "U16 Boys", exact: true }).first().click();
+    await page.getByRole("button", { name: "U16 Girls", exact: true }).first().click();
     await expect(page).toHaveURL(/d=u16-boys(%2C|,)u16-girls/);
 
     // Only the two selected divisions' chips render on blocks.
@@ -202,6 +205,21 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
       .locator("[data-fixture-id] [data-division-chip]")
       .evaluateAll((els) => [...new Set(els.map((e) => e.getAttribute("data-division-chip")))]);
     expect(chipsAfter.sort()).toEqual(["U16B", "U16G"]);
+  });
+
+  test("Move panel's When field renders at a real width, not collapsed (regression)", async ({
+    page,
+  }) => {
+    await page.goto(boardUrl);
+    await page.locator("[data-fixture-id] button[aria-pressed]").first().click();
+    const dialog = page.getByRole("dialog", { name: /^Move / });
+    const dateInput = dialog.locator('input[type="date"]');
+    await expect(dateInput).toBeVisible();
+    const box = await dateInput.boundingBox();
+    // The bug (00631754, fixed by this redesign) collapsed this to a
+    // near-zero box — a real native date input is never this narrow.
+    expect(box?.width ?? 0).toBeGreaterThan(80);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   });
 
   test("injected rest violation → badge count → panel → jump-to-fixture", async ({
@@ -241,6 +259,19 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     const panel = page.getByRole("region", { name: "Schedule conflicts" });
     await expect(panel).toBeVisible();
     await expect(panel.getByText("rest", { exact: true }).first()).toBeVisible();
+    // The card itself must show ONE merged "rest" badge, not two (the
+    // original bug: two warn.rest entries — one per entrant — rendered as
+    // two identical, indistinguishable badges).
+    const card = page.locator(`[data-fixture-id="${fa}"]`);
+    await expect(card.getByText("rest", { exact: true })).toHaveCount(1);
+    // No raw pin/lock emoji anywhere on the board — real icons only. Absence
+    // of the emoji alone doesn't prove an icon replaced it (a silently empty
+    // button would pass that check too), so also assert the real icon is on
+    // screen — every unlocked, movable card carries one.
+    await expect(page.getByText("📌")).toHaveCount(0);
+    await expect(page.getByText("🔒")).toHaveCount(0);
+    await expect(page.locator("[data-fixture-id] svg.lucide-pin").first()).toBeVisible();
+
     await panel.getByRole("button", { name: "Jump to fixture →" }).first().click();
     await expect(panel).toBeHidden();
     // The offending block is highlighted and scrolled into view.
@@ -314,6 +345,82 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
       )
       .not.toBeNull();
     await expectNoHorizontalScroll(page);
+  });
+
+  test("blackout window: hatched, always visible, and still placeable (soft, not blocked)", async ({
+    page,
+    request,
+  }) => {
+    // d0, not d2: the multi-division board's grid config (courts aside) is
+    // ALWAYS divisions[0]'s schedule-settings (page.tsx, "Grid config: first
+    // division's settings") — the `?d=` filter only narrows what's DISPLAYED,
+    // never which division's blackouts/sessionWindows drive the grid. A
+    // blackout PUT on any other division is invisible here, however isolated
+    // it looks. Safe to mutate d0 from this point on: the only earlier test
+    // that touches its settings ("injected rest violation") has already made
+    // and checked its own assertions. The one test still after this one
+    // ("two clients...") re-PUTs its own settings verbatim before using it,
+    // so this test's mutation doesn't leak forward.
+    const d0 = rig.divisions[0]!;
+    // Index 24 is untouched by every earlier test in this file (they use
+    // index 4, index 5, and the shared-entrant pair — all comfortably below
+    // 24) — but rather than trust that by construction, read its CURRENT
+    // scheduled_at/court_label live and build the window around exactly
+    // that, so this test can't drift out of sync with what earlier tests in
+    // this serial chain actually left on the board.
+    const target = rig.fixtures[d0.id]![24]!;
+    const before = await apiJson<{ scheduled_at: string; court_label: string }>(
+      request,
+      `/api/v1/fixtures/${target}`,
+    );
+    const court = before.data!.court_label!;
+    const from = before.data!.scheduled_at!;
+    const to = new Date(new Date(from).getTime() + 30 * 60_000).toISOString();
+
+    await apiJson(request, `/api/v1/divisions/${d0.id}/schedule-settings`, "PUT", {
+      config: {
+        startAt: "2026-09-15T09:00:00.000Z",
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: courtsOf(0),
+        perEntrantMinRest: 0,
+        blackouts: [{ court, from, to }],
+        sessionWindows: [],
+      },
+      tz: "UTC",
+    });
+    // Unscheduling `target` is what makes ITS cell empty — the empty-cell
+    // hatch and an occupied FixtureBlock are mutually exclusive on the same
+    // cell, so a window over a still-occupied slot would never render
+    // `data-blackout` at all.
+    await apiJson(request, `/api/v1/fixtures/${target}`, "PATCH", {
+      scheduled_at: null,
+      court_label: null,
+    });
+
+    await page.goto(`${boardUrl}?d=${d0.slug}`);
+    const blackoutCell = page.locator('[data-blackout="true"]').first();
+    await expect(blackoutCell).toBeVisible();
+
+    // Soft: pick the unscheduled fixture, place it INTO the hatched cell —
+    // it must succeed, matching the server's own warn.blackout-is-a-warning
+    // (not a rejection) behavior. Desktop dock, not the mobile sheet (no
+    // viewport override above, same as "pick-then-place is keyboard-operable"):
+    // the tray's aside is always visible at `lg` widths and up, no toggle tap.
+    const trayFixture = page
+      .locator("aside[aria-label='Unscheduled fixtures'] [data-fixture-id] button[aria-pressed]")
+      .first();
+    await trayFixture.click();
+    await blackoutCell.click();
+
+    await expect
+      .poll(
+        async () =>
+          (await apiJson<{ scheduled_at: string | null }>(request, `/api/v1/fixtures/${target}`))
+            .data!.scheduled_at,
+        { timeout: 15_000 },
+      )
+      .not.toBeNull();
   });
 
   test("two clients: the stale one 409s, toasts, and refreshes (gap 10)", async ({

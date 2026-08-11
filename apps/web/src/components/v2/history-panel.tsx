@@ -252,7 +252,7 @@ export function HistoryPanel({
               after an eviction IS the plan's window width — no second read,
               and it cannot disagree with the list right below it. */}
           {evicted && (
-            <p className="rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
+            <p className="rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
               {msg("history.checkpoint.evicted", {
                 name: evicted,
                 count: String(checkpoints.filter((c) => (c.kind ?? "manual") === "manual").length),
@@ -269,7 +269,7 @@ export function HistoryPanel({
               is the history between them. A filled node is the live AI anchor
               (what Undo targets); hollow nodes are still restorable. */}
           {checkpoints.length === 0 ? (
-            <p className="text-sm text-slate-500">{msg("history.checkpoint.empty")}</p>
+            <p className="text-sm text-slate-600">{msg("history.checkpoint.empty")}</p>
           ) : (
             <div className="space-y-4">
               {CHECKPOINT_GROUPS.map(({ kind, headingKey, noteKey }) => {
@@ -278,21 +278,21 @@ export function HistoryPanel({
                 return (
                   <div key={kind}>
                     <div className="mb-2 flex items-baseline justify-between">
-                      <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-600">
                         {msg(headingKey)}
                       </span>
-                      <span className="text-[10.5px] text-slate-400">
+                      <span className="text-[10.5px] text-slate-600">
                         {kind === "ai"
                           ? msg(noteKey)
                           : msg(noteKey, { count: String(rows.length) })}
                       </span>
                     </div>
                     {rows.length === 0 ? (
-                      <p className="pl-[18px] text-xs italic text-slate-400">
+                      <p className="pl-[18px] text-xs italic text-slate-600">
                         {msg("history.checkpoint.empty")}
                       </p>
                     ) : (
-                      <ul className="relative m-0 list-none p-0 pl-[18px] before:absolute before:bottom-[9px] before:left-[4px] before:top-[9px] before:w-px before:bg-slate-200 dark:before:bg-slate-700">
+                      <ul className="relative m-0 list-none p-0 pl-[18px] before:absolute before:bottom-[9px] before:left-[4px] before:top-[9px] before:w-px before:bg-slate-200">
                         {rows.map((cp) => {
                           const live = cp.kind === "ai" && !cp.superseded;
                           return (
@@ -301,30 +301,30 @@ export function HistoryPanel({
                               className={`relative flex items-center gap-2 py-[5px] before:absolute before:left-[-18px] before:top-[11px] before:h-[9px] before:w-[9px] before:rounded-full before:border-[1.5px] before:content-[''] ${
                                 live
                                   ? "before:border-purple-600 before:bg-purple-600"
-                                  : "before:border-slate-300 before:bg-white dark:before:border-slate-600 dark:before:bg-slate-800"
+                                  : "before:border-slate-300 before:bg-white"
                               }`}
                             >
                               <span
                                 className={
                                   cp.superseded
-                                    ? "text-[12.5px] text-slate-400 line-through"
-                                    : "text-[12.5px] text-slate-700 dark:text-slate-200"
+                                    ? "text-[12.5px] text-slate-600 line-through"
+                                    : "text-[12.5px] text-slate-700"
                                 }
                               >
                                 {cp.label}
                               </span>
                               {live && (
-                                <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[9px] font-semibold text-purple-700 dark:bg-purple-950 dark:text-purple-300">
+                                <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[9px] font-semibold text-purple-700">
                                   {msg("history.checkpoint.latestAi")}
                                 </span>
                               )}
-                              <time className="ml-auto whitespace-nowrap text-[10.5px] text-slate-400">
+                              <time className="ml-auto whitespace-nowrap text-[10.5px] text-slate-600">
                                 {new Date(cp.created_at).toLocaleString()}
                               </time>
                               {canEdit && (
                                 <button
                                   type="button"
-                                  className={`text-[10.5px] hover:underline ${cp.superseded ? "text-slate-400" : "text-purple-600"}`}
+                                  className={`text-[10.5px] hover:underline ${cp.superseded ? "text-slate-600" : "text-purple-600"}`}
                                   disabled={busy}
                                   onClick={async () => {
                                     const ok = await confirmDialog({
@@ -351,7 +351,7 @@ export function HistoryPanel({
                               {canEdit && (cp.kind ?? "manual") === "manual" && (
                                 <button
                                   type="button"
-                                  className="text-[11px] text-slate-300 hover:text-rose-600"
+                                  className="text-[11px] text-slate-400 hover:text-rose-600"
                                   disabled={busy}
                                   aria-label={msg("history.checkpoint.delete")}
                                   title={msg("history.checkpoint.delete")}

@@ -9,9 +9,11 @@ import type { FeedLabelPair } from "@/lib/schedule-board";
 import { FixtureBlock } from "./fixture-block";
 import { timeLabel } from "@/lib/day-label";
 import { divisionInk, divisionTint } from "@/lib/division-hue";
-import { UNASSIGNED, type BoardConflict, type BoardFixture, type GhostBlock } from "./types";
+import { UNASSIGNED, type BoardConfig, type BoardConflict, type BoardFixture, type GhostBlock } from "./types";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
+import { overlaps, toMs } from "./use-disruption-signals";
+import { Plus } from "lucide-react";
 
 const MIN = 60_000;
 
@@ -35,6 +37,8 @@ export function BoardGrid({
   venueCap,
   highlightId,
   ghosts,
+  blackouts = [],
+  matchMinutes = slotMinutes,
 }: {
   day: string;
   slots: number[];
@@ -59,6 +63,20 @@ export function BoardGrid({
   /** When set, an AI proposal is on screen: the grid swaps its live fixtures for
    *  the proposed layout as read-only ghost blocks (design §3). */
   ghosts?: GhostBlock[] | null;
+  /** Blackout windows from the board's own config (v3/04 board redesign) —
+   *  highlighted on the grid, never disabled: the server treats a blackout as
+   *  a warning (`warn.blackout`), not a rejection, so the client must not
+   *  refuse what the server allows. */
+  blackouts?: BoardConfig["blackouts"];
+  /** A placed fixture's real duration — NOT `slotMinutes`, which is the
+   *  display lattice (`gcd(matchMinutes, gapMinutes)`, this repo's own
+   *  "signature scheduling defect": on a 30-min match / 10-min gap board
+   *  `slotMinutes` is 10, but a match placed at any slot still runs 30).
+   *  `inBlackout` needs the real span or it under-detects a blackout that
+   *  starts partway through a match's true duration. Defaults to
+   *  `slotMinutes` (today's — imperfect but no worse than before this prop
+   *  existed) for callers that don't pass it. */
+  matchMinutes?: number;
 }) {
   const msg = useMsg();
   const columns: (string | null)[] = courts.length > 0 ? courts : [null];
@@ -93,6 +111,16 @@ export function BoardGrid({
       ? ghosts.some((g) => inRow(g.at, t))
       : fixtures.some((f) => inRow(new Date(f.scheduled_at as string).getTime(), t));
   const isMajor = (t: number) => new Date(t).getMinutes() % 30 === 0 || occupied(t);
+  const inBlackout = (t: number, court: string | null) => {
+    for (const b of blackouts) {
+      if (b.court != null && b.court !== court) continue;
+      const bFrom = toMs(b.from);
+      const bTo = toMs(b.to);
+      if (Number.isNaN(bFrom) || Number.isNaN(bTo)) continue;
+      if (overlaps(t, t + matchMinutes * MIN, bFrom, bTo)) return b;
+    }
+    return null;
+  };
 
   return (
     // Bounded VERTICALLY as well as horizontally: a fine step is legitimately
@@ -103,13 +131,13 @@ export function BoardGrid({
       <table className="w-full border-collapse text-xs" aria-label={msg("board.grid.aria", { day })}>
         <thead>
           <tr>
-            <th className="sticky top-0 z-10 w-16 border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium text-slate-500">
+            <th className="app-display sticky top-0 z-10 w-16 border-b border-slate-200 bg-slate-50 px-2 py-2 text-left text-[10px] font-bold text-slate-400">
               {msg("board.grid.time")}
             </th>
             {columns.map((c) => (
               <th
                 key={c ?? UNASSIGNED}
-                className="sticky top-0 z-10 min-w-36 border-b border-slate-200 border-l bg-slate-50 px-2 py-2 text-left font-medium text-slate-600"
+                className="app-display sticky top-0 z-10 min-w-36 border-b-2 border-purple-200 border-l border-l-slate-200 bg-slate-50 px-2 py-2 text-left text-[11px] font-bold text-slate-800"
               >
                 {c ?? msg("board.grid.unassignedCol", { venue: venueCap.toLowerCase() })}
               </th>
@@ -136,6 +164,8 @@ export function BoardGrid({
                   ? ghosts!.filter((g) => sameCol(g.court) && inSlot(g.at))
                   : [];
                 const iso = new Date(t).toISOString();
+                const blackout =
+                  !showGhosts && canEdit && cell.length === 0 ? inBlackout(t, court) : null;
                 return (
                   <td
                     key={court ?? UNASSIGNED}
@@ -173,21 +203,46 @@ export function BoardGrid({
                     {!showGhosts && canEdit && cell.length === 0 && (
                       <button
                         type="button"
-                        onClick={() => onPlace(iso, court)}
+                        // Blacked-out slots are "always visible" for sighted
+                        // users regardless of pick state (they're map info,
+                        // not a picked-state hint) — a keyboard/AT user needs
+                        // the same discoverability, so this cell stays
+                        // reachable even with nothing picked. `aria-disabled`
+                        // (not native `disabled`) is what keeps it focusable
+                        // while still announcing "not actionable yet"; the
+                        // guard below is what keeps a stray Enter/Space from
+                        // placing nothing.
+                        onClick={() => {
+                          if (pickedId) onPlace(iso, court);
+                        }}
                         aria-label={
-                          court
-                            ? msg("board.grid.placeAriaCourt", { time: timeLabel(t), court })
-                            : msg("board.grid.placeAriaUnassigned", { time: timeLabel(t) })
+                          blackout
+                            ? blackout.court
+                              ? msg("board.grid.blackoutAriaCourt", { time: timeLabel(t), court: blackout.court })
+                              : msg("board.grid.blackoutAriaVenue", { time: timeLabel(t) })
+                            : court
+                              ? msg("board.grid.placeAriaCourt", { time: timeLabel(t), court })
+                              : msg("board.grid.placeAriaUnassigned", { time: timeLabel(t) })
                         }
-                        className={`h-full ${placeHeight} w-full rounded text-[10px] transition ${
-                          pickedId
-                            ? "border border-dashed border-purple-300 text-purple-600 hover:border-purple-500 hover:bg-purple-50 focus-visible:border-purple-500 focus-visible:bg-purple-50"
-                            : "text-transparent focus-visible:border focus-visible:border-dashed focus-visible:border-purple-300 focus-visible:text-purple-600"
+                        className={`h-full ${placeHeight} w-full rounded text-[8px] font-bold uppercase tracking-wide transition ${
+                          blackout
+                            ? "board-blackout text-slate-400 hover:bg-purple-50 hover:text-purple-600"
+                            : pickedId
+                              ? "grid place-items-center text-transparent hover:bg-purple-50 hover:text-purple-600 focus-visible:bg-purple-50 focus-visible:text-purple-600"
+                              : "text-transparent"
                         }`}
-                        tabIndex={pickedId ? 0 : -1}
-                        disabled={!pickedId}
+                        tabIndex={pickedId || blackout ? 0 : -1}
+                        disabled={!pickedId && !blackout}
+                        aria-disabled={!pickedId && blackout ? true : undefined}
+                        data-blackout={blackout ? "true" : undefined}
                       >
-                        {pickedId ? msg("board.grid.placeHere") : ""}
+                        {blackout ? (
+                          msg("board.conflict.warn.blackout")
+                        ) : pickedId ? (
+                          <Plus className="mx-auto h-3.5 w-3.5" strokeWidth={2.5} />
+                        ) : (
+                          ""
+                        )}
                       </button>
                     )}
                   </td>

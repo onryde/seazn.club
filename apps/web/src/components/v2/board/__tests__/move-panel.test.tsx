@@ -127,4 +127,17 @@ describe("MovePanel", () => {
     expect(html).toContain('value="05:00"');
     expect(html).not.toContain('value="09:00"');
   });
+
+  it("wraps the When field in an explicit-width container so it cannot collapse", () => {
+    // Regression for the bug shipped in 00631754 (quarter-hour datetime
+    // split field): every OTHER caller of DateTimeField(kind="datetime-local")
+    // wraps it in something with a definite width (a grid track, a plain
+    // div); this panel dropped it bare into a `flex flex-wrap` row instead,
+    // so the split field's percentage-sized date/time children resolved
+    // against an auto-sized flex item and collapsed to a near-zero box.
+    const html = renderToStaticMarkup(
+      <MovePanel {...baseProps} boardConfig={{ config: baseConfig, orgTz: "UTC" }} />,
+    );
+    expect(html).toContain('class="w-80 max-w-full"');
+  });
 });

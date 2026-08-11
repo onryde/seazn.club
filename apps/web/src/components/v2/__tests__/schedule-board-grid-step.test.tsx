@@ -165,7 +165,11 @@ const gridOf = (tree: ReactElement[]): ReactElement => {
 function renderedBoard(matchMinutes: number, gapMinutes: number) {
   const { settings } = boards(matchMinutes, gapMinutes);
   const props = propsOf(gridOf(renderIsland(ScheduleBoard, baseProps(settings)).tree()));
-  return { boardStep: props.slotMinutes as number, boardRows: props.slots as number[] };
+  return {
+    boardStep: props.slotMinutes as number,
+    boardRows: props.slots as number[],
+    boardMatchMinutes: props.matchMinutes as number,
+  };
 }
 
 /** The step the SOLVER actually stepped by — measured off the slots `buildGrid`
@@ -221,6 +225,22 @@ describe("the board segments the day on the solver's own lattice", () => {
         boardStep: latticeStep(matchMinutes, gapMinutes),
       });
     }
+  });
+
+  it("hands BoardGrid the match's real duration for matchMinutes, not the display step (2026-08-10 board redesign)", () => {
+    // BoardGrid's own blackout check needs the match's REAL span, not
+    // slotMinutes (the display lattice — see this file's own header comment
+    // on why the two diverge whenever gapMinutes > 0). schedule-board.tsx
+    // wires `matchMinutes={matchMinutes}` (the file's own NaN-guarded local,
+    // not the raw possibly-missing `cfg.matchMinutes`) into <BoardGrid> —
+    // every OTHER test of that wiring uses gapMinutes: 0, where slotMinutes
+    // and matchMinutes are numerically identical, so a reverted or typo'd
+    // prop would pass unnoticed everywhere else. This is the one test that
+    // can tell the two apart.
+    const { boardStep, boardMatchMinutes } = renderedBoard(30, 10);
+    expect(boardMatchMinutes).toBe(30);
+    expect(boardStep).toBe(10);
+    expect(boardMatchMinutes).not.toBe(boardStep);
   });
 
   it("keeps drawing a board when the stored config holds a malformed number", () => {
