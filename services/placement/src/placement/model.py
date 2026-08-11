@@ -188,15 +188,41 @@ bounded context; the solver never reasons about a zone. Computing that index
 is the caller's obligation and getting it wrong reintroduces the same bug one
 layer up, which is Prompt 06's problem and needs its own test there.
 
-A FIFTH is open and is a real permissiveness gap, listed here with the ones
-above rather than left to be rediscovered: **`existing` rows are not counted
-against day caps.** `on_day` is built for movable fixtures only, so a pinned
-row on a capped day does not consume that day's allowance and the solver may
-add another. It cannot be fixed by adding `day_index` to `PinnedRow` alone —
-caps are PER DIVISION and `PinnedRow` carries no division at all (round 6
-removed even its fixture identity) — so a pinned row cannot be attributed to
-any cap. Closing it needs a `division_index` on `PinnedRow`, which is a
-contract addition nothing has asked for yet.
+A FIFTH is CLOSED as of task C4, on the `rule_groups` path only: **`existing`
+rows now count against a rule group's day cap.** They used to not: `on_day`
+was built for movable fixtures only, so a pinned row on a capped day did not
+consume that day's allowance and the solver could add another cap's worth on
+top of it — measured on a real staging board: day cap 7, six matches pinned
+on one day, the solver placed seven more (thirteen total).
+
+The correction worth recording is in the CLOSING MECHANISM, because the
+earlier version of this note got that part wrong: it said closing this needed
+a `division_index` added to `PinnedRow`. It did not, and the contract
+deliberately did not add one. `PinnedRow.rule_group_indices` (also #21 — see
+`placement.schema`'s module docstring) already says which `RuleGroup`s a pin
+counts against, directly — no division needed, because `RuleGroup.
+max_fixtures_per_day` already generalises past division scope (a division is
+simply one group). Each pin is bucketed to the day its `start_at_ms` falls
+inside — the SAME disjoint `day_bounds` ranges section 9 below already
+validates — and the count is subtracted from that group's cap on that day,
+CLAMPED at 0 rather than let go negative. The clamp is this module making the
+identical call `apps/web/src/server/usecases/schedule.ts:798`
+(`assertNoNewBlocking`) already makes: refuse only what a change introduces
+or worsens, never the pre-existing state, so an already-over-cap board stays
+solvable instead of returning nothing at all — a negative bound here would
+make CP-SAT report the WHOLE model infeasible, because a sum of booleans can
+never be less than a negative number, and pins cannot be moved to repair it.
+
+A pin whose `start_at_ms` falls inside NO day's `[lo, hi]` counts against
+nothing, deliberately (see `_day_of_pin` below) — an organiser's manual
+placement is not required to land on a grid tick, and attributing it to the
+nearest day would be a guess this module has no basis for.
+
+This closure applies ONLY when `rule_groups` is non-empty. A caller still
+sending just `day_cap_by_division` gets the permissive behaviour above,
+unchanged (section 9's `else` branch) — the division path has no
+pin-to-group attribution to draw on, and retrofitting one would need the very
+`division_index` addition this note originally, and wrongly, asked for.
 """
 
 from __future__ import annotations
@@ -337,6 +363,29 @@ class ScheduleModel(cp_model.CpModel):
     fixture_vars: FixtureVars
 
 
+def _day_of_pin(start_ms: int, day_bounds: dict[int, tuple[int, int]]) -> int | None:
+    """Which day a PIN's start falls on, for the day-cap fold in section 9 —
+    or `None` if it falls on none.
+
+    `day_bounds` maps a day index to the `[lo, hi]` range of that day's
+    ADMISSIBLE STARTS — ticks the grid actually offers. A pin's start is an
+    organiser's MANUAL placement, not a grid tick, so nothing requires it to
+    land inside any admissible range at all: a pin between the last match of
+    one day and the next day's later start is a legitimate board, not a
+    defect. That is a DELIBERATE non-membership — the pin counts against no
+    rule group's cap on any day, exactly as if it did not exist for capping
+    purposes — never a fallthrough to day 0 or to the nearest day by
+    guesswork. The day-partition check above (`:591-601` at the time this was
+    written) guarantees the bounds are pairwise disjoint, so at most one day
+    can ever claim a given start: "which day" is unambiguous whenever it
+    exists at all.
+    """
+    for day_index, (lo, hi) in day_bounds.items():
+        if lo <= start_ms <= hi:
+            return day_index
+    return None
+
+
 def build_model(
     fixtures: list[tuple[list[int], int]],
     num_courts: int,
@@ -345,6 +394,8 @@ def build_model(
     constraints: dict,
     existing: list[tuple[int, int]],
     dependencies: list[tuple[int, int]],
+    rule_groups: list[tuple[list[int], int | None, int | None]] | None = None,
+    pinned_rule_group_indices: list[list[int]] | None = None,
 ) -> cp_model.CpModel:
     """Build the full constraint model. No objective is set — `solve()` owns
     that, so the tier chain (Prompt 03) can drive one model through several
@@ -360,9 +411,9 @@ def build_model(
             points, treated as an opaque legal-start set — no calendar or
             timezone math happens here. `day_index` is the CALLER's calendar
             day for that slot, resolved in the org's own zone; it is the only
-            thing the per-division day cap groups by. Slots sharing a
-            `start_at_ms` must agree on it, and each day's ticks must occupy a
-            stretch of the timeline no other day's fall inside.
+            thing the day cap groups by. Slots sharing a `start_at_ms` must
+            agree on it, and each day's ticks must occupy a stretch of the
+            timeline no other day's fall inside.
         step_minutes: the lattice's tick size. Accepted because it is part of
             the contract but unread here — see the module docstring. Nothing
             reads it: `grid_slots` already enumerates every admissible tick.
@@ -375,8 +426,24 @@ def build_model(
             variable-name label.
         dependencies: (before_index, after_index) — fixture POSITIONS, not
             ids. `after` may not start until `before` has finished and rested.
+        rule_groups: (fixture_indices, min_rest_minutes, max_fixtures_per_day)
+            per rule group — C1/C4 of the #21 contract revision (see
+            `placement.schema`'s module docstring). `fixture_indices` are the
+            group's own MOVABLE fixture positions; `min_rest_minutes` is
+            unread here (a separate task's job). `max_fixtures_per_day`, when
+            set, caps this group's placements on each day exactly as
+            `day_cap_by_division` used to cap a whole division — section 9
+            below PREFERS this over `day_cap_by_division` whenever it is
+            non-empty, and falls back to the division cap unchanged otherwise,
+            so a caller still on the previous contract shape is unaffected.
+        pinned_rule_group_indices: parallel to `existing` (same length, same
+            order) — `pinned_rule_group_indices[k]` is which rule groups
+            `existing[k]` counts against. See `_day_of_pin` for how a pin's
+            day is determined.
     """
     del step_minutes  # see the docstring: contractual, not load-bearing.
+    rule_groups = rule_groups or []
+    pinned_rule_group_indices = pinned_rule_group_indices or []
 
     rest_by_division: dict[int, int] = constraints.get("rest_by_division") or {}
     day_cap_by_division: dict[int, int] = constraints.get("day_cap_by_division") or {}
@@ -614,12 +681,64 @@ def build_model(
             model.Add(start[i] <= hi).OnlyEnforceIf(b)
             on_day[i][d] = b
         model.Add(sum(on_day[i].values()) == placed[i])
-    for division, cap in day_cap_by_division.items():
-        fx_idx = [i for i in range(n) if divisions[i] == division]
-        for d in day_ids:
-            lits = [on_day[i][d] for i in fx_idx]
-            if lits:
-                model.Add(sum(lits) <= int(cap))
+
+    if rule_groups:
+        # C4 — prefer rule_groups over day_cap_by_division once the caller
+        # sends both. The staged rollout has build.ts sending BOTH: the old
+        # division_rules shape (so a not-yet-upgraded service still applies
+        # caps) and the new rule_groups shape describing the identical caps
+        # more generally (a division is one group among pools/entrants/
+        # persons — module docstring, "#21"). Applying both would mean
+        # capping the same fixtures under two names at once, so
+        # day_cap_by_division is read only in the `else` branch below, when
+        # rule_groups is empty.
+        #
+        # Bucket every PIN to the day its start falls on, once, before
+        # walking groups — a pin's day does not depend on which group asks.
+        pinned_day_by_row = [_day_of_pin(start_ms, day_bounds) for _court, start_ms in existing]
+        pinned_on_day_by_group: dict[int, dict[int, int]] = {}
+        for k, group_indices in enumerate(pinned_rule_group_indices):
+            if k >= len(pinned_day_by_row):
+                continue
+            day = pinned_day_by_row[k]
+            if day is None:
+                continue  # off-lattice: counts against nothing (see _day_of_pin)
+            for group_index in group_indices:
+                by_day = pinned_on_day_by_group.setdefault(group_index, {})
+                by_day[day] = by_day.get(day, 0) + 1
+
+        for group_index, (fixture_indices, _min_rest_minutes, cap) in enumerate(rule_groups):
+            if cap is None:
+                continue  # this group carries no cap (e.g. rest-only)
+            fx_idx = [i for i in fixture_indices if 0 <= i < n]
+            pinned_by_day = pinned_on_day_by_group.get(group_index, {})
+            for d in day_ids:
+                lits = [on_day[i][d] for i in fx_idx]
+                if lits:
+                    # CLAMPED at 0, not `cap - pinned` directly — see the
+                    # module docstring's "FIFTH" note (task C4) for the full
+                    # reasoning: a negative bound would make the whole model
+                    # INFEASIBLE over pins the solver cannot move anyway,
+                    # exactly the failure `apps/web/src/server/usecases/
+                    # schedule.ts:798`'s `assertNoNewBlocking` already
+                    # refuses to introduce — an already-imperfect board stays
+                    # solvable instead of returning nothing at all.
+                    pinned = pinned_by_day.get(d, 0)
+                    model.Add(sum(lits) <= max(0, int(cap) - pinned))
+    else:
+        # No rule_groups — a caller still on the previous contract shape.
+        # Exactly today's behaviour: caps applied per division, pins not
+        # counted against them at all. This is the FIFTH gap the module
+        # docstring used to record as open; it is closed only on the
+        # rule_groups path above, deliberately, so a caller that has not been
+        # upgraded to send rule_groups keeps the same permissiveness it
+        # always had rather than being silently tightened underneath it.
+        for division, cap in day_cap_by_division.items():
+            fx_idx = [i for i in range(n) if divisions[i] == division]
+            for d in day_ids:
+                lits = [on_day[i][d] for i in fx_idx]
+                if lits:
+                    model.Add(sum(lits) <= int(cap))
 
     placed_sum = sum(placed)
     max_end = (max(admissible_starts) + dur_ms) if admissible_starts else dur_ms

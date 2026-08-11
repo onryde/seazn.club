@@ -637,6 +637,273 @@ def test_rejects_interleaved_day_indices():
         build_model(fixtures, num_courts, grid_slots, 60, constraints, [], [])
 
 
+# --- C4: a pinned row consumes its day's allowance (rule_groups) -----------
+#
+# `day_cap_by_division` capped movable fixtures only; a pinned row on a
+# capped day was not counted at all, so an organiser could pin a day full and
+# the solver would add another cap's worth on top of it -- measured on a real
+# staging board: day cap 7, six matches pinned on one day, the solver placed
+# seven more (thirteen total). `rule_groups` / `pinned_rule_group_indices`
+# (already parsed and validated by `placement.schema`, task #21) generalise the
+# cap past division scope and carry the pin-to-group attribution the old
+# shape had no field for. These are domain tests against `build_model`
+# directly, in plain Python, per `_RULES.md` section 6.
+
+_GROUP_ANCHOR = 1_800_000_000_000  # arbitrary positive ms epoch; only offsets from here matter
+
+
+def test_a_pinned_row_consumes_its_days_allowance():
+    """THE LOAD-BEARING TEST. A day capped at 3, with 2 pins already on it
+    counting against the same rule group, and 3 movable fixtures wanting the
+    same (only) day -- more than the `cap - pinned = 1` remaining.
+
+    Before this change (`rule_groups` unread by `build_model`): the cap
+    applies to movable fixtures alone, admitting up to the FULL cap of 3 on
+    top of the 2 pins -- 5 total on a day capped at 3. After: at most 1
+    movable fixture joins the 2 pins, for exactly 3 -- the cap, INCLUDING the
+    pins. An assertion over movable placements alone would not prove the pins
+    were ever counted; the number that matters is the one on the day.
+    """
+    num_courts = 2
+    step = 30 * MIN_MS
+    # 4 ticks x 2 courts = 8 (court, tick) cells, all day 0 -- plenty of court
+    # capacity so the DAY CAP is the only thing that can be binding here.
+    grid_slots = [(c, _GROUP_ANCHOR + k * step, 0) for c in (0, 1) for k in range(4)]
+    # 3 movable fixtures, disjoint entrants, so participant rest cannot bind.
+    fixtures = [([0, 1], 0), ([2, 3], 0), ([4, 5], 0)]
+    # 2 pins, different courts/ticks from each other (so they do not collide
+    # with one another), both counting against rule group 0.
+    existing = [(0, _GROUP_ANCHOR), (1, _GROUP_ANCHOR)]
+    pinned_rule_group_indices = [[0], [0]]
+    rule_groups = [([0, 1, 2], None, 3)]  # cap = 3, no rest rule
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 0,
+        "rest_by_division": {0: 0},
+        # Deliberately empty: this test isolates the rule_groups mechanism.
+        # "not applied twice" (division AND group at once) is a separate test.
+        "day_cap_by_division": {},
+    }
+
+    model = build_model(
+        fixtures,
+        num_courts,
+        grid_slots,
+        30,
+        constraints,
+        existing,
+        [],
+        rule_groups=rule_groups,
+        pinned_rule_group_indices=pinned_rule_group_indices,
+    )
+    outcome = solve(model, wall_seconds=5.0)
+    detail = f"status={outcome.status} assignments={sorted(outcome.assignments)}"
+
+    assert outcome.status in ("OPTIMAL", "FEASIBLE"), detail
+    assert len(outcome.assignments) == 1, (
+        f"expected exactly cap(3) - pinned(2) = 1 movable fixture admitted, got {detail}"
+    )
+    # The count that actually matters: pins INCLUDED. An assertion over
+    # movable placements alone would look identical whether or not the pins
+    # were ever read -- with day_cap_by_division also empty, an
+    # implementation that silently ignores rule_groups admits all 3 movable
+    # fixtures (no cap at all), which this line catches too: 2 pins + 3
+    # movable = 5 != 3.
+    total_on_day = len(existing) + len(outcome.assignments)
+    assert total_on_day == 3, f"day 0 carries {total_on_day} matches against a cap of 3: {detail}"
+
+
+def test_a_pin_off_lattice_counts_against_nothing():
+    """A pin's `start_at_ms` is an organiser's manual placement, not a grid
+    tick -- nothing requires it to land inside any day's admissible range at
+    all. `day_bounds` maps a day to [lo, hi] over ADMISSIBLE STARTS; a pin
+    outside every day's range must count against no group's cap, deliberately
+    -- not a fallthrough, and not attributed to the nearest day by guesswork.
+
+    Cap of 1, the group has exactly one movable fixture wanting the day, and
+    one pin sitting well before the day's earliest tick. If the pin wrongly
+    counted against day 0 the remaining allowance would be 0 and the fixture
+    could never be placed; correctly ignored, the full cap of 1 is available.
+    """
+    num_courts = 2
+    step = 30 * MIN_MS
+    grid_slots = [(c, _GROUP_ANCHOR + k * step, 0) for c in (0, 1) for k in range(2)]
+    fixtures = [([0, 1], 0)]
+    # Court 1 (not 0), 10 minutes before the day's earliest tick -- outside
+    # [lo, hi] and off the court the movable fixture will actually need.
+    existing = [(1, _GROUP_ANCHOR - 10 * MIN_MS)]
+    pinned_rule_group_indices = [[0]]
+    rule_groups = [([0], None, 1)]
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 0,
+        "rest_by_division": {0: 0},
+        "day_cap_by_division": {},
+    }
+
+    # Must not raise -- an off-lattice pin is a legitimate board, not a defect.
+    model = build_model(
+        fixtures,
+        num_courts,
+        grid_slots,
+        30,
+        constraints,
+        existing,
+        [],
+        rule_groups=rule_groups,
+        pinned_rule_group_indices=pinned_rule_group_indices,
+    )
+    outcome = solve(model, wall_seconds=5.0)
+
+    assert len(outcome.assignments) == 1, (
+        f"the off-lattice pin consumed the day's allowance when it should not have: "
+        f"status={outcome.status} assignments={outcome.assignments}"
+    )
+
+
+def test_pins_already_over_the_cap_clamp_instead_of_going_infeasible():
+    """The hard case: 2 pins already on a day capped at 1 -- the cap was
+    already violated before the solver ran anything. `max(0, cap - pinned)`
+    clamps to 0 rather than handing `model.Add` a NEGATIVE bound, which would
+    make the WHOLE model INFEASIBLE (a sum of booleans can never be <= a
+    negative number) and return no board at all.
+
+    Same call this repo already made in
+    `apps/web/src/server/usecases/schedule.ts:798` (`assertNoNewBlocking`):
+    refuse only what a change introduces or worsens, so an already-imperfect
+    board stays editable instead of trapping its owner. Pins are immovable by
+    definition -- the solver cannot repair the violation -- so refusing the
+    whole solve would give the organiser nothing to act on, just a service
+    that stopped answering.
+    """
+    num_courts = 2
+    step = 30 * MIN_MS
+    grid_slots = [(c, _GROUP_ANCHOR + k * step, 0) for c in (0, 1) for k in range(2)]
+    fixtures = [([0, 1], 0)]  # wants the only day this board has
+    existing = [(0, _GROUP_ANCHOR), (1, _GROUP_ANCHOR)]  # 2 pins, cap is 1
+    pinned_rule_group_indices = [[0], [0]]
+    rule_groups = [([0], None, 1)]  # cap = 1, already exceeded by the pins alone
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 0,
+        "rest_by_division": {0: 0},
+        "day_cap_by_division": {},
+    }
+
+    model = build_model(
+        fixtures,
+        num_courts,
+        grid_slots,
+        30,
+        constraints,
+        existing,
+        [],
+        rule_groups=rule_groups,
+        pinned_rule_group_indices=pinned_rule_group_indices,
+    )
+    outcome = solve(model, wall_seconds=5.0)
+
+    assert outcome.status != "INFEASIBLE", (
+        f"an already-over-cap pin set made the whole solve refuse, not just that day: "
+        f"status={outcome.status}"
+    )
+    assert outcome.status in ("OPTIMAL", "FEASIBLE"), outcome.status
+    # The pre-existing violation stands (2 pins on a cap of 1); the solver
+    # adds nothing further on top of it -- the movable fixture has nowhere
+    # else to go (this board has only one day) and is correctly left unplaced.
+    assert outcome.assignments == [], (
+        f"the clamp should leave no room for the movable fixture: {outcome.assignments}"
+    )
+
+
+def test_a_caller_without_rule_groups_gets_the_old_uncounted_pin_behaviour():
+    """A caller still on the previous contract shape (`day_cap_by_division`
+    only, `rule_groups` empty) must see EXACTLY today's behaviour, pins and
+    all: the cap binds on movable fixtures only, and a pin on the capped day
+    is not attributed to it -- the very permissiveness `rule_groups` exists to
+    close. `rule_groups=[]` / `pinned_rule_group_indices=[]` are passed
+    EXPLICITLY (not omitted) so a `build_model` that has not actually grown
+    the new parameters fails this test too, not just a behavioural one.
+
+    Division cap 2, one pin already on the day (uncounted, by design here), 3
+    movable fixtures wanting it: exactly 2 get admitted -- the full cap, same
+    as before this task, oblivious to the pin.
+    """
+    num_courts = 2
+    step = 30 * MIN_MS
+    grid_slots = [(c, _GROUP_ANCHOR + k * step, 0) for c in (0, 1) for k in range(4)]
+    fixtures = [([0, 1], 0), ([2, 3], 0), ([4, 5], 0)]
+    existing = [(0, _GROUP_ANCHOR)]  # a pin on the capped day, division path ignores it
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 0,
+        "rest_by_division": {0: 0},
+        "day_cap_by_division": {0: 2},
+    }
+
+    model = build_model(
+        fixtures,
+        num_courts,
+        grid_slots,
+        30,
+        constraints,
+        existing,
+        [],
+        rule_groups=[],
+        pinned_rule_group_indices=[],
+    )
+    outcome = solve(model, wall_seconds=5.0)
+
+    assert len(outcome.assignments) == 2, (
+        f"expected the OLD division-only cap (pin uncounted): status={outcome.status} "
+        f"assignments={outcome.assignments}"
+    )
+
+
+def test_rule_groups_and_day_cap_by_division_are_not_both_applied():
+    """The staged rollout sends BOTH shapes describing the same rule --
+    `build.ts` populates `rule_groups` for every cap alongside the existing
+    `division_rules`, so a previous service version still works. The new
+    service must prefer `rule_groups` and IGNORE `day_cap_by_division`
+    entirely once groups are present, not apply both under two names.
+
+    `day_cap_by_division` here is deliberately STRICTER (1) than the group's
+    own cap (5) for the identical fixtures. If the division loop ran too (an
+    "applied twice" bug), the two constraints would AND together and the
+    stricter one would win -- only 1 of 3 placed. Correct behaviour ignores
+    the division cap outright: all 3 fit comfortably under the group's cap.
+    """
+    num_courts = 2
+    step = 30 * MIN_MS
+    grid_slots = [(c, _GROUP_ANCHOR + k * step, 0) for c in (0, 1) for k in range(4)]
+    fixtures = [([0, 1], 0), ([2, 3], 0), ([4, 5], 0)]
+    rule_groups = [([0, 1, 2], None, 5)]  # generous group cap, no pins involved
+    constraints = {
+        "match_minutes": 30,
+        "gap_minutes": 0,
+        "rest_by_division": {0: 0},
+        "day_cap_by_division": {0: 1},  # must be ignored once rule_groups is present
+    }
+
+    model = build_model(
+        fixtures,
+        num_courts,
+        grid_slots,
+        30,
+        constraints,
+        [],
+        [],
+        rule_groups=rule_groups,
+        pinned_rule_group_indices=[],
+    )
+    outcome = solve(model, wall_seconds=5.0)
+
+    assert len(outcome.assignments) == 3, (
+        f"day_cap_by_division leaked through alongside rule_groups: status={outcome.status} "
+        f"assignments={outcome.assignments}"
+    )
+
+
 # --- degenerate constraint values must fail loudly, not solve quietly -------
 #
 # proto3 scalars are non-optional: an unset `max_fixtures_per_day` or

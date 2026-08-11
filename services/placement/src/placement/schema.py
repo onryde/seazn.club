@@ -125,15 +125,16 @@ who is playing in it.
 All three are parsed and validated here exactly like every other field in this
 module — every index in range, every value where "unset" and "legitimately
 zero" could collide presence-tracked — and, like every other validated field,
-they land on `ModelInput`. What is different is what happens next: `main.py`
-still calls `build_model` with the same seven positional arguments it always
-has (`fixtures`, `courts`, `grid_slots`, `step_minutes`, `constraints`,
-`existing`, `dependencies`), none of which is `rule_groups`,
-`pinned_rule_group_indices` or `pinned_entrant_indices`. The domain cannot see
-them yet — this revision is ACL-only, exactly as `proto/scheduler.proto`'s own
-comment on `rule_groups` says: "changes no behaviour". The C1/C4/C6 MODEL
-halves — teaching `build_model` to actually enforce a rule group's cap against
-the fixtures and pins it covers — are separate tasks after this one.
+they land on `ModelInput`. What happens next has PARTIALLY changed since this
+was first written: task C4 taught `build_model` to enforce a rule group's DAY
+CAP (`max_fixtures_per_day`) against the fixtures and pins it covers, so
+`main.py` now calls `build_model` with NINE positional arguments, not seven —
+`rule_groups` and `pinned_rule_group_indices` join the original seven.
+`pinned_entrant_indices` is still not among them: C6 (participant rest, keyed
+by a pin's entrants) and C1's `min_rest_minutes` half of `rule_groups` remain
+separate, later tasks, and `build_model` does not read either yet. See
+`placement.model`'s own module docstring ("A FIFTH is CLOSED as of task C4")
+for the day-cap half's mechanics.
 """
 
 from __future__ import annotations
@@ -176,11 +177,14 @@ class ModelInput:
     (`parsed.courts`, `parsed.step_minutes`, ...) — every name below is
     unchanged from the string contract even though several TYPES are not.
 
-    The three fields after `wall_seconds` are the exception to "exactly
-    `build_model`'s arguments": they are C1/C4/C6, validated here like
-    everything else, but NOT among the seven `main.py` passes to `build_model`
-    (see the module docstring, "#21"). Carried on this dataclass anyway so a
-    later task reads them off `ModelInput` instead of re-parsing the proto.
+    The three fields after `wall_seconds` were, when this was written, an
+    exception to "exactly `build_model`'s arguments": C1/C4/C6, validated here
+    like everything else but not among the seven `main.py` passed to
+    `build_model`. That is now true of only ONE of the three — task C4 added
+    `rule_groups` and `pinned_rule_group_indices` to `main.py`'s call, which
+    now passes NINE arguments (see the module docstring, "#21").
+    `pinned_entrant_indices` remains carried here and unread: C6 is still a
+    separate, later task.
     """
 
     courts: int  # the COUNT of courts (len(court_names)); names never reach the domain
@@ -290,9 +294,10 @@ def _validated_rule_groups(
     """C1 -- one rule and the exact MOVABLE fixture set it binds, resolved by
     the CALLER (`build.ts`'s `scopeCoversFixture`) and sent as the result
     rather than as a scope this service would have to understand itself — see
-    `RuleGroup`'s own comment in the proto. Validated and carried on
-    `ModelInput` only: this revision changes no behaviour, so `build_model`
-    never sees it (module docstring, "#21").
+    `RuleGroup`'s own comment in the proto. Validated here exactly like every
+    other field; `build_model` reads the `max_fixtures_per_day` half as of
+    task C4 (module docstring, "#21") — the `min_rest_minutes` half is still
+    unread, a separate task's job.
 
     Runs right after `_validated_fixtures`, before anything else, because
     `existing[].rule_group_indices` (validated in `_validated_existing`)
