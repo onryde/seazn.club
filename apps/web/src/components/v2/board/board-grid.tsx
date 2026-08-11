@@ -38,6 +38,7 @@ export function BoardGrid({
   highlightId,
   ghosts,
   blackouts = [],
+  matchMinutes = slotMinutes,
 }: {
   day: string;
   slots: number[];
@@ -67,6 +68,15 @@ export function BoardGrid({
    *  a warning (`warn.blackout`), not a rejection, so the client must not
    *  refuse what the server allows. */
   blackouts?: BoardConfig["blackouts"];
+  /** A placed fixture's real duration — NOT `slotMinutes`, which is the
+   *  display lattice (`gcd(matchMinutes, gapMinutes)`, this repo's own
+   *  "signature scheduling defect": on a 30-min match / 10-min gap board
+   *  `slotMinutes` is 10, but a match placed at any slot still runs 30).
+   *  `inBlackout` needs the real span or it under-detects a blackout that
+   *  starts partway through a match's true duration. Defaults to
+   *  `slotMinutes` (today's — imperfect but no worse than before this prop
+   *  existed) for callers that don't pass it. */
+  matchMinutes?: number;
 }) {
   const msg = useMsg();
   const columns: (string | null)[] = courts.length > 0 ? courts : [null];
@@ -107,7 +117,7 @@ export function BoardGrid({
       const bFrom = toMs(b.from);
       const bTo = toMs(b.to);
       if (Number.isNaN(bFrom) || Number.isNaN(bTo)) continue;
-      if (overlaps(t, t + slotMinutes * MIN, bFrom, bTo)) return b;
+      if (overlaps(t, t + matchMinutes * MIN, bFrom, bTo)) return b;
     }
     return null;
   };
@@ -193,7 +203,18 @@ export function BoardGrid({
                     {!showGhosts && canEdit && cell.length === 0 && (
                       <button
                         type="button"
-                        onClick={() => onPlace(iso, court)}
+                        // Blacked-out slots are "always visible" for sighted
+                        // users regardless of pick state (they're map info,
+                        // not a picked-state hint) — a keyboard/AT user needs
+                        // the same discoverability, so this cell stays
+                        // reachable even with nothing picked. `aria-disabled`
+                        // (not native `disabled`) is what keeps it focusable
+                        // while still announcing "not actionable yet"; the
+                        // guard below is what keeps a stray Enter/Space from
+                        // placing nothing.
+                        onClick={() => {
+                          if (pickedId) onPlace(iso, court);
+                        }}
                         aria-label={
                           blackout
                             ? blackout.court
@@ -210,8 +231,9 @@ export function BoardGrid({
                               ? "grid place-items-center text-transparent hover:bg-purple-50 hover:text-purple-600 focus-visible:bg-purple-50 focus-visible:text-purple-600"
                               : "text-transparent"
                         }`}
-                        tabIndex={pickedId ? 0 : -1}
-                        disabled={!pickedId}
+                        tabIndex={pickedId || blackout ? 0 : -1}
+                        disabled={!pickedId && !blackout}
+                        aria-disabled={!pickedId && blackout ? true : undefined}
                         data-blackout={blackout ? "true" : undefined}
                       >
                         {blackout ? (

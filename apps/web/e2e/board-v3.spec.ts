@@ -365,7 +365,9 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     // blackout PUT on any other division is invisible here, however isolated
     // it looks. Safe to mutate d0 from this point on: the only earlier test
     // that touches its settings ("injected rest violation") has already made
-    // and checked its own assertions, and this is the last test in the file.
+    // and checked its own assertions. The one test still after this one
+    // ("two clients...") re-PUTs its own settings verbatim before using it,
+    // so this test's mutation doesn't leak forward.
     const d0 = rig.divisions[0]!;
     // Index 24 is untouched by every earlier test in this file (they use
     // index 4, index 5, and the shared-entrant pair — all comfortably below

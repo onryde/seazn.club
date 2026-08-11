@@ -76,6 +76,46 @@ describe("BoardGrid blackout zones", () => {
     expect(html).not.toContain("disabled");
   });
 
+  it("keeps blackout cells keyboard-reachable even with NOTHING picked (a11y regression)", () => {
+    // Blackout is map info, always visible for sighted users regardless of
+    // pick state — a keyboard/AT user needs the same discoverability. The
+    // native `disabled` attribute would make the cell unfocusable outright;
+    // `aria-disabled` announces "not actionable yet" without hiding it.
+    const html = renderToStaticMarkup(
+      <BoardGrid
+        {...baseProps}
+        pickedId={null}
+        blackouts={[{ from: "2026-08-10T11:00:00.000Z", to: "2026-08-10T11:30:00.000Z" }]}
+      />,
+    );
+    const button = html.match(/<button[^>]*data-blackout="true"[^>]*>/)?.[0] ?? "";
+    expect(button).not.toBe("");
+    expect(button).not.toContain(" disabled");
+    expect(button).toContain('aria-disabled="true"');
+    expect(button).toContain('tabindex="0"');
+  });
+
+  it("catches a blackout mid-match on a gapped board, not just mid-slot (regression)", () => {
+    // `slotMinutes` is the DISPLAY lattice — gcd(matchMinutes, gapMinutes) —
+    // never a match's real duration. A 30-minute match with a 10-minute gap
+    // renders on a 10-minute slotMinutes grid, but a fixture PLACED at 11:00
+    // still runs the full 11:00-11:30, not just 11:00-11:10. A blackout
+    // starting 10 minutes into that real span (11:10-11:40) must still
+    // hatch the 11:00 row — checking only against slotMinutes would miss it
+    // (overlaps([11:00,11:10), [11:10,11:40)) is false; the match's real
+    // window, [11:00,11:30), does overlap it).
+    const html = renderToStaticMarkup(
+      <BoardGrid
+        {...baseProps}
+        slots={[T11]}
+        slotMinutes={10}
+        matchMinutes={30}
+        blackouts={[{ from: "2026-08-10T11:10:00.000Z", to: "2026-08-10T11:40:00.000Z" }]}
+      />,
+    );
+    expect(html).toContain("board-blackout");
+  });
+
   it("drops the old repeated 'Place here' text entirely", () => {
     const html = renderToStaticMarkup(<BoardGrid {...baseProps} pickedId="fx-1" />);
     expect(html).not.toContain("Place here");
