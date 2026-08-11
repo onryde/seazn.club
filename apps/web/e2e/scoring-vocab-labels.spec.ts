@@ -5,9 +5,11 @@ import { TAG, apiJson, activeOrg } from "./helpers";
 // of them could not reach a screen — the cricket pad's hard-coded WICKET_KINDS
 // was missing Law 34's `hitballtwice`, and `describeEvent` had no `.sanction`
 // branch, so a sanction's level fell through to the raw-payload dump and the
-// activity feed read `level: default`. Both fixed in e55e10b7; these two tests
-// are the browser-level proof, which no unit test can give: they drive the real
-// API, the real fold and the real fixture console.
+// activity feed read `level: default`. Fixed in e55e10b7 (tennis) and
+// e55e10b7 + 366ef5a7 (cricket — the first pass made the option selectable
+// but `wicketLabel` still rendered it unlocalized; caught in review). These
+// two tests are the browser-level proof, which no unit test can give: they
+// drive the real API, the real fold and the real fixture console.
 
 type Gen = { fixtures: { id: string; fixture_no: number }[] };
 
