@@ -62,6 +62,16 @@ on:
       - "packages/engine/src/scheduling/**"
       - "packages/engine/scripts/gen-proto.ts"
       - ".github/workflows/placement-service.yml"
+  # STAGING IS MANUAL ONLY, and that is the whole point of the split — a
+  # `push:` trigger for `placement-stg` would make it always the same revision
+  # as production and leave no window to validate anything in. See the
+  # `deploy-staging` job.
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Deploy the selected branch to placement-stg? Type "deploy".'
+        required: true
+        default: ""
 
 concurrency:
   group: placement-service-${{ github.ref }}
@@ -568,5 +578,107 @@ jobs:
         run: |
           flyctl status --app "${{ steps.flycfg.outputs.app }}" || true
           echo "::notice::DEPLOY.md step 5 sets 'fly scale count 10'. If the count above is not 10, the fan-out that makes hard_limit=1 useful is not in place."
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN }}
+
+  # ---------------------------------------------------------------------
+  # STAGING — manual only, and the manual-ness is the feature.
+  #
+  # Production deploys from `push: main` (the job above). If staging did the
+  # same, the two apps would always run the SAME revision and there would be no
+  # window in which to validate anything — which is the entire reason
+  # `placement-stg` exists (DEPLOY.md §4b, superseding the 2026-08-10
+  # shared-service decision).
+  #
+  # So the intended sequence for a contract revision is:
+  #
+  #   1. run this job against the FEATURE BRANCH, before the PR merges
+  #   2. exercise it on stg.seazn.club, confirming the per-solve log line
+  #      appears in `placement-stg` and NOT in `placement`
+  #   3. only then merge, letting the push-to-main job ship production
+  #
+  # Between 1 and 3 the two services run DIFFERENT contracts. That is the
+  # point, and it is why proto changes must be additive: proto3 makes an added
+  # field safe in both directions, a renumbered or repurposed one is not, and
+  # no workflow step can save you from that.
+  #
+  # WHAT THIS RUN DOES NOT DO: re-run the Python or live-gRPC suites. Those
+  # jobs are `pull_request`-gated and a dispatch skips them. The image is still
+  # BUILT here, so a broken Dockerfile fails before anything ships — and
+  # staging is where you are about to go and look at it anyway. Do not read a
+  # green run here as "the tests passed".
+  #
+  # `confirm` is a typed word rather than a boolean because this list sits next
+  # to nothing else in the Actions UI, and the failure mode of a mis-click is
+  # deploying an arbitrary branch over whatever staging was mid-test with.
+  deploy-staging:
+    name: Deploy to placement-stg (manual)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm == 'deploy'
+    # Its OWN group. A staging deploy must never queue behind, or cancel, a
+    # production rollout.
+    concurrency:
+      group: placement-stg-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # The app name is OVERRIDDEN, not read — and this is the one place in
+      # the repo where that is correct. `fly.toml` says `app = "placement"`
+      # because staging deploys the SAME config with `--app placement-stg`
+      # (deliberately: a forked TOML would drift and make staging a worse
+      # rehearsal for the thing it exists to rehearse).
+      #
+      # The assertion below is therefore the mirror image of the production
+      # job's: it fails if `fly.toml` has been renamed to something else,
+      # because that would mean either the production DEFAULT_HOST is broken or
+      # someone has forked the config after all. Either way this job's override
+      # would be resting on an assumption that no longer holds.
+      - name: Verify fly.toml still names the production app
+        run: |
+          app="$(sed -n 's/^[[:space:]]*app[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' services/placement/fly.toml | head -1)"
+          if [ "$app" != "placement" ]; then
+            echo "::error::fly.toml app is '$app', expected 'placement'. This job deploys that same config with --app placement-stg; if the file has been renamed or forked, that override is no longer the right thing to do."
+            exit 1
+          fi
+
+      - name: Authenticate Docker against the fly registry
+        run: flyctl auth docker
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+      # Pushed to placement-stg's OWN registry namespace. Each Fly app has its
+      # own; tagging into `registry.fly.io/placement` here would put a staging
+      # image in production's registry, one `flyctl deploy --image` away from
+      # being shipped to real organisers.
+      - name: Build and push the image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          push: true
+          tags: registry.fly.io/placement-stg:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy the pushed digest to placement-stg
+        run: |
+          flyctl deploy \
+            --app placement-stg \
+            --config services/placement/fly.toml \
+            --image "registry.fly.io/placement-stg:${{ github.sha }}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN }}
+
+      # The check that actually matters, and it cannot be automated from here:
+      # a missing or misspelled PLACEMENT_SERVICE_HOST on `seazn-club-stg`
+      # leaves staging calling PRODUCTION, which looks identical to success.
+      - name: What to verify by hand
+        if: always()
+        run: |
+          flyctl status --app placement-stg || true
+          echo "::notice::Deployed ${{ github.ref_name }} (${{ github.sha }}) to placement-stg."
+          echo "::notice::VERIFY BY LOG ATTRIBUTION, not by reading the env var: run one Auto-schedule on stg.seazn.club, then 'fly logs --app placement-stg' must show a 'solve request=' line and 'fly logs --app placement' must show NOTHING for it. A misspelled PLACEMENT_SERVICE_HOST on seazn-club-stg silently routes staging to production."
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_TOKEN }}
