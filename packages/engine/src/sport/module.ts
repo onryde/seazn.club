@@ -114,8 +114,11 @@ export interface ModuleEvent<Ev = unknown> {
  * `eventsAtOrBelowBand` in `testkit/conformance-pad.ts`.
  *
  * Both scales are the SAME closed 0–3 numbers (`FidelityTier.tier` above) —
- * never a second vocabulary. `git grep -a` for "quick"/"standard"/"full" as
- * tier names must find nothing new.
+ * never a second vocabulary. The three-word string vocabulary this replaces
+ * (quick / standard / full, superseded 2026-08-06 by S2/#430) must never
+ * reappear as a tier name anywhere in this package. Written without the
+ * quoting a `git grep` for it uses, deliberately: quoting the words here
+ * would itself be a new grep hit.
  */
 export const FIDELITY = { 0: "result", 1: "card", 2: "timeline", 3: "detail" } as const;
 export type FidelityBand = 0 | 1 | 2 | 3;

@@ -4,8 +4,12 @@ import { describe, expect, it } from "vitest";
 import { foldMatch, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import { shuffle } from "../../core/rng.ts";
 import type { LineupPair, StageCtx, StandingsDelta } from "../../core/types.ts";
+import { evalPadGate, type PadField, type PadSpec } from "../../sport/module.ts";
 import { buildStream, conformanceSuite, makeEnvelope } from "../../testkit/index.ts";
-import { cricket, type CricketBallEv, type CricketCfg, type CricketEv } from "./cricket.ts";
+// S6/#416 (W5) — deliberately NOT from the testkit barrel: conformance-pad.ts
+// touches node:fs (DOMAIN.md presence), mirroring golden.ts's own exclusion.
+import { checkActionCoverage, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
+import { cricket, padSpec, CRICKET_EVENT_SCHEMAS, type CricketBallEv, type CricketCfg, type CricketEv } from "./cricket.ts";
 import { dlsTarget, resources, resourcesFromBalls } from "./dls.ts";
 
 // W4a (#425) §3.3 — every fold below is PAD-SHAPED: it is building a stream
@@ -1002,4 +1006,194 @@ conformanceSuite(cricket, {
   label: "test",
   numRuns: 120,
   maxEvents: 60,
+});
+
+// ---------------------------------------------------------------------------
+// S6/#416 (W5) — padSpec conformance. Cricket is the reference/pilot module:
+// this is what proves the harness is real, not vacuous.
+// ---------------------------------------------------------------------------
+
+const TEST_CFG_RAW = {
+  inningsPerSide: 2 as const,
+  ballsPerInnings: null,
+  points: { win: 2, tie: 1, noResult: 1, loss: 0, draw: 1 },
+  followOn: { enabled: true, lead: 200 },
+  minOversForResult: 0,
+};
+
+// Randomises the cfg knobs padSpec's own bounds/inclusion logic actually
+// reads, so the never-throws/determinism property gets more than the four
+// named presets: over/ball-count bounds (`ballsPerOver`, `ballsPerInnings`),
+// the all-out wicket ceiling (`playersPerSide`), and the DLS panel's cfg-only
+// inclusion (`dls.enabled`). Combinations `configSchema` itself rejects
+// (e.g. `dls.enabled` with `ballsPerInnings: null`) are silently skipped by
+// `checkTotalDeterministicAndPureData` — not padSpec's problem, per its own
+// doc comment.
+const cricketCfgPerturbations = fc.record(
+  {
+    ballsPerOver: fc.integer({ min: 4, max: 8 }),
+    ballsPerInnings: fc.option(fc.integer({ min: 20, max: 300 }), { nil: null }),
+    playersPerSide: fc.integer({ min: 2, max: 11 }),
+    dls: fc.record({ enabled: fc.boolean(), edition: fc.constant("standard" as const) }),
+  },
+  { requiredKeys: [] },
+);
+
+padSpecConformanceSuite(cricket, {
+  cfg: {},
+  lineups,
+  label: "default",
+  numRuns: 150,
+  cfgPerturbations: cricketCfgPerturbations,
+});
+padSpecConformanceSuite(cricket, {
+  cfg: { superOver: true, superOverStillTied: "boundary_count" },
+  lineups,
+  label: "t20 knockout (superOver)",
+  numRuns: 80,
+});
+padSpecConformanceSuite(cricket, { cfg: TEST_CFG_RAW, lineups, label: "test", numRuns: 80 });
+padSpecConformanceSuite(cricket, {
+  cfg: { dls: { enabled: true, edition: "standard" } },
+  lineups,
+  label: "dls",
+  numRuns: 80,
+});
+
+// (a), the module-level half: `cricket.superOver` requires `inningsPerSide
+// === 1` and `cricket.followOn`/`.innings.declare` require `inningsPerSide
+// === 2` (CricketCfg's own `.refine()`s) — no single legal cfg reaches both,
+// so "every branch reachable from some action" is checked once, across the
+// union of the variants this file actually exercises above.
+describe("cricket padSpec — action coverage across the format space", () => {
+  it("every registered event type is reachable from some action, across variants", () => {
+    const specs = [
+      padSpec(cricket.configSchema.parse({})),
+      padSpec(cricket.configSchema.parse({ superOver: true })),
+      padSpec(cricket.configSchema.parse(TEST_CFG_RAW)),
+      padSpec(cricket.configSchema.parse({ dls: { enabled: true, edition: "standard" } })),
+    ];
+    expect(checkActionCoverage(specs, CRICKET_EVENT_SCHEMAS)).toEqual([]);
+  });
+
+  it("MUTATION SHAPE — coverage fails if any one of those four cfgs is dropped from the union (superOver, uniquely covering cricket.superover.ball)", () => {
+    const specsWithoutSuperOver = [
+      padSpec(cricket.configSchema.parse({})),
+      padSpec(cricket.configSchema.parse(TEST_CFG_RAW)),
+      padSpec(cricket.configSchema.parse({ dls: { enabled: true, edition: "standard" } })),
+    ];
+    const problems = checkActionCoverage(specsWithoutSuperOver, CRICKET_EVENT_SCHEMAS);
+    expect(problems.join(" ")).toMatch(/cricket\.superover\.ball/);
+  });
+});
+
+function findField(spec: PadSpec, type: string, path: string): PadField | undefined {
+  for (const panel of spec.panels) {
+    for (const action of panel.actions) {
+      if (action.type !== type) continue;
+      const field = action.fields.find((f) => f.path === path);
+      if (field) return field;
+    }
+  }
+  return undefined;
+}
+
+function actionTypesOf(spec: PadSpec): Set<string> {
+  return new Set(spec.panels.flatMap((panel) => panel.actions.map((action) => action.type)));
+}
+
+describe("cricket padSpec — variant reshaping: t20 vs test are demonstrably different", () => {
+  const t20Spec = padSpec(cricket.configSchema.parse(cricket.variants.t20));
+  const testSpec = padSpec(cricket.configSchema.parse(TEST_CFG_RAW));
+
+  it("test adds declare/follow-on/time-expiry-draw panels; t20 has none of them", () => {
+    const t20Types = actionTypesOf(t20Spec);
+    const testTypes = actionTypesOf(testSpec);
+    for (const twoInningsOnly of ["cricket.innings.declare", "cricket.followon", "cricket.match.close"]) {
+      expect(t20Types.has(twoInningsOnly), twoInningsOnly).toBe(false);
+      expect(testTypes.has(twoInningsOnly), twoInningsOnly).toBe(true);
+    }
+  });
+
+  it("bounds are cfg-derived, not a hardcoded preset number: legalBalls caps at t20's 120, test's unlimited sentinel differs", () => {
+    const t20LegalBalls = findField(t20Spec, "cricket.innings.summary", "legalBalls");
+    const testLegalBalls = findField(testSpec, "cricket.innings.summary", "legalBalls");
+    expect(t20LegalBalls?.kind).toBe("number");
+    expect(testLegalBalls?.kind).toBe("number");
+    if (t20LegalBalls?.kind === "number" && testLegalBalls?.kind === "number") {
+      expect(t20LegalBalls.max).toBe(120); // cfg.ballsPerInnings
+      expect(testLegalBalls.max).toBeGreaterThan(t20LegalBalls.max); // unlimited sentinel
+    }
+  });
+
+  it("the over-index bound tracks ballsPerInnings/ballsPerOver directly", () => {
+    const t20Over = findField(t20Spec, "cricket.ball", "over");
+    // 120 balls / 6 per over = 20 overs, 0-based last index 19.
+    if (t20Over?.kind === "number") expect(t20Over.max).toBe(19);
+  });
+
+  it("hundred honours its own 5-ball-set structure via ballsPerOver, not t20's 6", () => {
+    const hundredSpec = padSpec(cricket.configSchema.parse(cricket.variants.hundred));
+    const ballInOver = findField(hundredSpec, "cricket.ball", "ballInOver");
+    if (ballInOver?.kind === "number") expect(ballInOver.max).toBe(5); // cfg.ballsPerOver
+  });
+});
+
+describe("cricket padSpec — DLS panel gated on dls.enabled", () => {
+  it("is absent when dls.enabled is false (the default)", () => {
+    const spec = padSpec(cricket.configSchema.parse({}));
+    expect(spec.panels.some((panel) => panel.labelKey.key === "pad.cricket.panel.dls")).toBe(false);
+  });
+
+  it("is present when dls.enabled is true", () => {
+    const spec = padSpec(cricket.configSchema.parse({ dls: { enabled: true, edition: "standard" } }));
+    expect(spec.panels.some((panel) => panel.labelKey.key === "pad.cricket.panel.dls")).toBe(true);
+  });
+});
+
+describe("cricket padSpec — super over panel: cfg gates existence, a runtime gate governs reachability", () => {
+  it("is absent from the spec entirely when cfg.superOver is false", () => {
+    const spec = padSpec(cricket.configSchema.parse({}));
+    expect(spec.panels.some((panel) => panel.labelKey.key === "pad.cricket.panel.superOver")).toBe(false);
+  });
+
+  it("is present but its gate is a path-equals against the real cricket phase value, not a typo", () => {
+    const spec = padSpec(cricket.configSchema.parse({ superOver: true }));
+    const panel = spec.panels.find((p) => p.labelKey.key === "pad.cricket.panel.superOver");
+    expect(panel?.gate).toEqual({ op: "path-equals", path: "state.phase", value: "super_over" });
+  });
+
+  it("integration: the gate is false pre-match and false while merely live, against REAL cricket state", () => {
+    const cfg = cricket.configSchema.parse({ superOver: true });
+    const spec = padSpec(cfg);
+    const panel = spec.panels.find((p) => p.labelKey.key === "pad.cricket.panel.superOver");
+    const gate = panel?.gate;
+    expect(gate).toBeDefined();
+    const preState = cricket.init(cfg, lineups);
+    expect(evalPadGate(gate as NonNullable<typeof gate>, { state: preState, summary: cricket.summary(preState) })).toBe(
+      false,
+    );
+    const liveState = fold(cfg, stream(["core.start"]));
+    expect(
+      evalPadGate(gate as NonNullable<typeof gate>, { state: liveState, summary: cricket.summary(liveState) }),
+    ).toBe(false);
+  });
+
+  it("integration: the gate is true once the match actually ties into a super over — reachable, not merely configured", () => {
+    const cfg = cricket.configSchema.parse({ superOver: true });
+    const spec = padSpec(cfg);
+    const panel = spec.panels.find((p) => p.labelKey.key === "pad.cricket.panel.superOver");
+    const gate = panel?.gate;
+    expect(gate).toBeDefined();
+    const tiedEvents = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 150, wickets: 5, legalBalls: 120 }],
+      ["cricket.innings.summary", { runs: 150, wickets: 7, legalBalls: 120 }],
+    );
+    const tiedState = fold(cfg, tiedEvents);
+    expect(tiedState.phase).toBe("super_over"); // sanity: this really is a tie, not a fixture bug
+    expect(
+      evalPadGate(gate as NonNullable<typeof gate>, { state: tiedState, summary: cricket.summary(tiedState) }),
+    ).toBe(true);
+  });
 });

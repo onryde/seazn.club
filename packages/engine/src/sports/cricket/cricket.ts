@@ -24,7 +24,16 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import type { ModuleEvent, SportModule } from "../../sport/module.ts";
+import type {
+  ModuleEvent,
+  PadAction,
+  PadAttribution,
+  PadField,
+  PadGate,
+  PadPanel,
+  PadSpec,
+  SportModule,
+} from "../../sport/module.ts";
 import { resolvePayloadPath, type PlayerStatsModel } from "../../stats/stats.ts";
 import { makeSquadAdopter } from "../squad-state.ts";
 import { dlsPar, dlsTarget, resourcesFromBalls } from "./dls.ts";
@@ -301,6 +310,37 @@ export const CricketEv = z.union([
   CricketReview,
 ]);
 export type CricketEv = z.infer<typeof CricketEv>;
+
+// S6/#416 (W5) — event type -> its own payload schema, the SAME schema
+// OBJECT REFERENCES already used as CricketEv's union members and in
+// apply()'s dispatch switch below, now also keyed by type string in one
+// place. `eventSchema` carries no per-branch discriminant (the type string
+// lives only on the envelope), so without this registry there was no way to
+// enumerate "every branch, with its type string" short of parsing the
+// dispatch switch. `testkit/conformance-pad.ts` asserts this is a bijection
+// onto CricketEv's 14 branches, by reference and deduped: `cricket.ball` and
+// `cricket.superover.ball` deliberately share ONE schema object below (a
+// super-over delivery is literally the same shape as an ordinary one), so
+// this map has 15 keys over 14 distinct schemas — a raw key-count bijection
+// would be the wrong invariant here, and the conformance check is written
+// for exactly that.
+export const CRICKET_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
+  "cricket.toss": CricketToss,
+  "cricket.ball": CricketBall,
+  "cricket.superover.ball": CricketBall,
+  "cricket.innings.summary": CricketInningsSummary,
+  "cricket.innings.declare": CricketDeclare,
+  "cricket.innings.close": CricketClose,
+  "cricket.match.close": CricketMatchClose,
+  "cricket.interruption": CricketInterruption,
+  "cricket.revise": CricketRevise,
+  "cricket.followon": CricketFollowOn,
+  "cricket.player.line": CricketPlayerLine,
+  "cricket.retire": CricketRetire,
+  "cricket.newball": CricketNewBall,
+  "cricket.powerplay": CricketPowerplay,
+  "cricket.review": CricketReview,
+};
 
 // ---------------------------------------------------------------------------
 // State — spec §2.2 layered design: InningsState.{runs,wickets,legalBalls}
@@ -2112,11 +2152,383 @@ const CRICKET_PLAYER_STATS: PlayerStatsModel = {
   ],
 };
 
+// ---------------------------------------------------------------------------
+// S6/#416 (W5) — padSpec. Pure function of resolved cfg (base ⊕ variant
+// preset ⊕ org overrides, already resolved by the caller); every numeric
+// bound below reads cfg, never a hardcoded preset number. Cricket is the
+// REFERENCE module for this contract — the one sport with a real 4-band
+// fidelity ladder already (S2/#430) — so its tier semantics here model the
+// S6 redesign directly rather than approximating it.
+// ---------------------------------------------------------------------------
+
+// A big-but-finite stand-in for "no configured limit" (test cricket:
+// `ballsPerInnings: null`). Not a rules number — the fold enforces no such
+// cap — only a property-testing upper bound comfortably past any recorded
+// first-class innings, so `fields` can declare a finite `max`.
+const UNBOUNDED_BALLS_SENTINEL = 3000;
+const MAX_PLAUSIBLE_RUNS = 2000;
+
+function inningsBallsBound(cfg: CricketCfg): number {
+  return cfg.ballsPerInnings ?? UNBOUNDED_BALLS_SENTINEL;
+}
+
+// 0-based over index — the last legal over of an innings at this quota
+// (mirrors how `over` is folded: `Math.floor(legalBalls / ballsPerOver)`).
+function oversBound(cfg: CricketCfg): number {
+  return Math.max(0, Math.ceil(inningsBallsBound(cfg) / cfg.ballsPerOver) - 1);
+}
+
+const BALL_ATTRIBUTION: PadAttribution = [
+  { kind: "person", path: "striker" },
+  { kind: "person", path: "nonStriker" },
+  { kind: "person", path: "bowler" },
+];
+
+// Every dismissal name a scorebook records, on top of who was at the crease.
+const WICKET_ATTRIBUTION: PadAttribution = [
+  ...BALL_ATTRIBUTION,
+  { kind: "person", path: "wicket.out" },
+  { kind: "person", path: "wicket.fielder" },
+  { kind: "person", path: "wicket.fielderAssist" },
+  { kind: "person", path: "wicket.incoming" },
+];
+
+function ballBaseFields(cfg: CricketCfg): PadField[] {
+  return [
+    { kind: "number", path: "over", min: 0, max: oversBound(cfg) },
+    { kind: "number", path: "ballInOver", min: 1, max: cfg.ballsPerOver },
+    { kind: "number", path: "runs.bat", min: 0, max: 6 },
+  ];
+}
+
+export function padSpec(cfg: CricketCfg): PadSpec {
+  const base = ballBaseFields(cfg);
+
+  // --- Over rhythm --------------------------------------------------------
+  const ballAction: PadAction = {
+    type: "cricket.ball",
+    labelKey: { key: "pad.cricket.action.ball", label: "Ball" },
+    fields: [...base, { kind: "toggle", path: "freeHit" }],
+    attribution: BALL_ATTRIBUTION,
+  };
+
+  // --- Extras --------------------------------------------------------------
+  const extraAction: PadAction = {
+    type: "cricket.ball",
+    labelKey: { key: "pad.cricket.action.extra", label: "Extra" },
+    fields: [
+      ...base,
+      { kind: "enum", path: "runs.extras.kind", values: ["wide", "noball", "bye", "legbye", "penalty"] },
+      { kind: "number", path: "runs.extras.runs", min: 1, max: 6 },
+    ],
+    attribution: BALL_ATTRIBUTION,
+  };
+
+  // --- Dismissals, with fielder credit --------------------------------------
+  const wicketAction: PadAction = {
+    type: "cricket.ball",
+    labelKey: { key: "pad.cricket.action.wicket", label: "Wicket" },
+    fields: [
+      ...base,
+      {
+        kind: "enum",
+        path: "wicket.kind",
+        values: [
+          "bowled", "caught", "lbw", "runout", "stumped",
+          "hitwicket", "retired", "obstructed", "timedout", "hitballtwice",
+        ],
+      },
+      { kind: "toggle", path: "wicket.bowlerCredited" },
+    ],
+    attribution: WICKET_ATTRIBUTION,
+  };
+
+  // --- Reviews (DRS) --------------------------------------------------------
+  const reviewAction: PadAction = {
+    type: "cricket.review",
+    labelKey: { key: "pad.cricket.action.review", label: "Review" },
+    fields: [
+      { kind: "enum", path: "kind", values: ["player", "umpire"] },
+      { kind: "enum", path: "outcome", values: ["upheld", "struck_down", "umpires_call"] },
+    ],
+    // A side (who called it) AND, independently, up to two optional persons
+    // — exactly the shape a single `attribution.kind` choice could not
+    // express; see PadAttribution's own doc comment in sport/module.ts.
+    attribution: [
+      { kind: "side", path: "by" },
+      { kind: "person", path: "person" },
+      { kind: "person", path: "against" },
+    ],
+  };
+
+  // --- Super over -------------------------------------------------------
+  const superOverAction: PadAction = {
+    type: "cricket.superover.ball",
+    labelKey: { key: "pad.cricket.action.superOverBall", label: "Super over ball" },
+    fields: [...base, { kind: "toggle", path: "freeHit" }],
+    attribution: BALL_ATTRIBUTION,
+  };
+
+  // --- Pre-match --------------------------------------------------------
+  const tossAction: PadAction = {
+    type: "cricket.toss",
+    labelKey: { key: "pad.cricket.action.toss", label: "Toss" },
+    fields: [{ kind: "enum", path: "elected", values: ["bat", "bowl"] }],
+    attribution: [{ kind: "side", path: "wonBy" }],
+  };
+
+  // --- Innings admin ------------------------------------------------------
+  const inningsSummaryAction: PadAction = {
+    type: "cricket.innings.summary",
+    labelKey: { key: "pad.cricket.action.inningsSummary", label: "Innings total" },
+    fields: [
+      { kind: "number", path: "runs", min: 0, max: MAX_PLAUSIBLE_RUNS },
+      { kind: "number", path: "wickets", min: 0, max: Math.max(0, cfg.playersPerSide - 1) },
+      { kind: "number", path: "legalBalls", min: 0, max: inningsBallsBound(cfg) },
+      { kind: "toggle", path: "declared" },
+      { kind: "toggle", path: "partial" },
+    ],
+    attribution: [],
+  };
+
+  const inningsCloseAction: PadAction = {
+    type: "cricket.innings.close",
+    labelKey: { key: "pad.cricket.action.inningsClose", label: "Close innings" },
+    fields: [
+      {
+        kind: "enum",
+        path: "reason",
+        values: ["all_out", "overs_complete", "target_reached", "time", "weather", "forfeited", "other"],
+      },
+    ],
+    attribution: [],
+  };
+
+  const newBallAction: PadAction = {
+    type: "cricket.newball",
+    labelKey: { key: "pad.cricket.action.newBall", label: "New ball" },
+    fields: [],
+    attribution: [],
+  };
+
+  const powerplayAction: PadAction = {
+    type: "cricket.powerplay",
+    labelKey: { key: "pad.cricket.action.powerplay", label: "Powerplay" },
+    fields: [
+      { kind: "enum", path: "kind", values: ["mandatory", "batting", "bowling"] },
+      { kind: "enum", path: "phase", values: ["start", "end"] },
+    ],
+    attribution: [],
+  };
+
+  const interruptionAction: PadAction = {
+    type: "cricket.interruption",
+    labelKey: { key: "pad.cricket.action.interruption", label: "Interruption" },
+    fields: [
+      { kind: "enum", path: "kind", values: ["rain", "light", "other"] },
+      { kind: "number", path: "oversLostEstimate", min: 0, max: oversBound(cfg) + 1 },
+    ],
+    attribution: [],
+  };
+
+  const retireAction: PadAction = {
+    type: "cricket.retire",
+    labelKey: { key: "pad.cricket.action.retire", label: "Retire" },
+    fields: [{ kind: "enum", path: "reason", values: ["hurt", "out", "other"] }],
+    attribution: [
+      { kind: "person", path: "person" },
+      { kind: "person", path: "incoming" },
+    ],
+  };
+
+  const declareAction: PadAction = {
+    type: "cricket.innings.declare",
+    labelKey: { key: "pad.cricket.action.declare", label: "Declare" },
+    fields: [],
+    attribution: [],
+  };
+
+  const followOnAction: PadAction = {
+    type: "cricket.followon",
+    labelKey: { key: "pad.cricket.action.followOn", label: "Enforce follow-on" },
+    fields: [],
+    attribution: [],
+  };
+
+  const matchCloseAction: PadAction = {
+    type: "cricket.match.close",
+    labelKey: { key: "pad.cricket.action.matchClose", label: "Draw (time expired)" },
+    fields: [],
+    attribution: [],
+  };
+
+  // --- DLS -----------------------------------------------------------------
+  const reviseAction: PadAction = {
+    type: "cricket.revise",
+    labelKey: { key: "pad.cricket.action.revise", label: "Revise target" },
+    fields: [
+      { kind: "number", path: "oversPerSide", min: 1, max: oversBound(cfg) + 1 },
+      { kind: "number", path: "target", min: 1, max: MAX_PLAUSIBLE_RUNS },
+    ],
+    attribution: [],
+  };
+
+  // --- Post-match -----------------------------------------------------------
+  const playerLineAction: PadAction = {
+    type: "cricket.player.line",
+    labelKey: { key: "pad.cricket.action.playerLine", label: "Scorecard line" },
+    fields: [
+      { kind: "number", path: "innings", min: 1, max: Math.max(1, cfg.inningsPerSide * 2) },
+      { kind: "toggle", path: "batting.out" },
+      { kind: "number", path: "batting.runs", min: 0, max: MAX_PLAUSIBLE_RUNS },
+      { kind: "number", path: "batting.balls", min: 0, max: inningsBallsBound(cfg) },
+      { kind: "number", path: "bowling.legalBalls", min: 0, max: inningsBallsBound(cfg) },
+      { kind: "number", path: "bowling.runs", min: 0, max: MAX_PLAUSIBLE_RUNS },
+      { kind: "number", path: "bowling.wickets", min: 0, max: Math.max(0, cfg.playersPerSide - 1) },
+    ],
+    attribution: [{ kind: "person", path: "person" }],
+  };
+
+  // spec §2.3/§2.6 — declare/follow-on/time-expiry draw only exist for
+  // 2-innings cricket; a limited-overs padSpec simply never includes them,
+  // rather than including an action the fold would refuse on every cfg it
+  // renders for (`state.cfg.inningsPerSide !== 2` -> INVALID_EVENT). This is
+  // the cfg-only case the module-level note on `PadGate` describes: no gate
+  // needed, `padSpec(cfg)` just doesn't build the action.
+  const twoInnings = cfg.inningsPerSide === 2;
+  const followOnEnabled = twoInnings && cfg.followOn?.enabled === true;
+
+  const inningsActions: PadAction[] = [
+    inningsSummaryAction,
+    inningsCloseAction,
+    newBallAction,
+    powerplayAction,
+    interruptionAction,
+    retireAction,
+    ...(twoInnings ? [declareAction] : []),
+    ...(followOnEnabled ? [followOnAction] : []),
+    ...(twoInnings ? [matchCloseAction] : []),
+  ];
+
+  // DLS panel: cfg-only inclusion, same reasoning as above.
+  const dlsPanels: PadPanel[] = cfg.dls.enabled
+    ? [
+        {
+          labelKey: { key: "pad.cricket.panel.dls", label: "DLS" },
+          phase: "live",
+          layout: "drawer",
+          actions: [reviseAction],
+        },
+      ]
+    : [];
+
+  // Super over panel: cfg decides whether the FORMAT can ever reach one
+  // (`cfg.superOver`) — a knockout T20 declares it, a two-innings Test never
+  // does. Whether it is reachable RIGHT NOW is state, not cfg (a league game
+  // may finish level and never actually go to a super over), so the panel
+  // also carries a runtime gate: visible in the spec once the format allows
+  // it, shown by the renderer only once the match has actually reached one.
+  const superOverPanels: PadPanel[] = cfg.superOver
+    ? [
+        {
+          labelKey: { key: "pad.cricket.panel.superOver", label: "Super over" },
+          phase: "live",
+          layout: "drawer",
+          actions: [superOverAction],
+          gate: { op: "path-equals", path: "state.phase", value: "super_over" } satisfies PadGate,
+        },
+      ]
+    : [];
+
+  const panels: PadPanel[] = [
+    {
+      labelKey: { key: "pad.cricket.panel.pre", label: "Pre-match" },
+      phase: "pre",
+      layout: "primary",
+      actions: [tossAction],
+    },
+    {
+      labelKey: { key: "pad.cricket.panel.over", label: "Over" },
+      phase: "live",
+      layout: "primary",
+      actions: [ballAction],
+    },
+    {
+      labelKey: { key: "pad.cricket.panel.extras", label: "Extras" },
+      phase: "live",
+      layout: "grid",
+      actions: [extraAction],
+    },
+    {
+      labelKey: { key: "pad.cricket.panel.wicket", label: "Wicket" },
+      phase: "live",
+      layout: "grid",
+      actions: [wicketAction],
+    },
+    {
+      labelKey: { key: "pad.cricket.panel.reviews", label: "Reviews" },
+      phase: "live",
+      layout: "drawer",
+      actions: [reviewAction],
+    },
+    {
+      labelKey: { key: "pad.cricket.panel.innings", label: "Innings" },
+      phase: "live",
+      layout: "drawer",
+      actions: inningsActions,
+    },
+    ...dlsPanels,
+    ...superOverPanels,
+    {
+      labelKey: { key: "pad.cricket.panel.post", label: "Scorecard" },
+      phase: "post",
+      layout: "primary",
+      actions: [playerLineAction],
+    },
+  ];
+
+  return {
+    panels,
+    // S6 owner ruling (`_INDEX.md`, "OWNER RULING: redesign the fidelity
+    // model, in S6") — one band per event type, no repetition. Modelled on
+    // cricket's OWN existing (untouched) `fidelityTiers` array, with ONE
+    // correction: the old cumulative-list model placed
+    // `cricket.superover.ball` in BOTH tier 1's list and tier 3's list
+    // (`fidelityTiers` below, tier 1 and tier 3), which is exactly the
+    // non-nesting inconsistency S2/#430 found and the reason for this
+    // redesign — under `requiredFeatureForEvent`'s lowest-tier-wins reading,
+    // that duplication meant a free-tier scorer could already record
+    // ball-by-ball super-over deliveries. A super-over ball is the same
+    // shape and the same granularity as an ordinary ball, so it belongs at
+    // band 3 here, matching `cricket.ball`, not band 1.
+    fidelity: {
+      "cricket.innings.summary": 0,
+      "cricket.toss": 1,
+      "cricket.innings.declare": 1,
+      "cricket.innings.close": 1,
+      "cricket.match.close": 1,
+      "cricket.interruption": 1,
+      "cricket.revise": 1,
+      "cricket.followon": 1,
+      "cricket.newball": 1,
+      "cricket.powerplay": 1,
+      "cricket.review": 1,
+      "cricket.player.line": 2,
+      "cricket.ball": 3,
+      "cricket.superover.ball": 3,
+      "cricket.retire": 3,
+    },
+    fidelityEntitlements: { 2: "stats.player", 3: "scoring.ball_by_ball" },
+  };
+}
+
 export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   key: "cricket",
   version: "1.0.0",
   configSchema: CricketCfg,
   eventSchema: CricketEv,
+  eventSchemas: CRICKET_EVENT_SCHEMAS,
+  padSpec,
   positions,
   positionsFor,
   entrantModel: { kinds: ["team"], defaultKind: "team", team: { squadNumbers: true, captain: true } },
