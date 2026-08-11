@@ -175,9 +175,11 @@ nothing; this is the second job it does.
 fly scale count 2 --app placement-stg
 ```
 
-Two, not ten. `hard_limit = 1` means one solve per machine, and staging does
-not have ten concurrent organisers — but one is not enough either, since a
-second tester would get `SOLVER_BUSY` and a greedy board, and mistake it for a
+Two, not ten. `hard_limit = 2` means two solves per machine (raised from 1 on
+2026-08-11, in lockstep with `PLACEMENT_MAX_WORKERS` — see `fly.toml` §[3]),
+and staging does not have ten concurrent organisers — but one machine is not
+enough either, since a third tester would get `SOLVER_BUSY` and a greedy
+board, and mistake it for a
 regression in the thing they were testing.
 
 ### Deploying a contract change — the reason all of the above exists
@@ -231,10 +233,13 @@ fly scale count 10 --app placement
 ```
 
 This call **is** needed now (Task 12 — an earlier draft of this step said
-otherwise). `fly.toml`'s `[services.concurrency]` sets `hard_limit = 1`, so
-Fly Proxy treats a machine as full at ONE connection: the second concurrent
+otherwise). `fly.toml`'s `[services.concurrency]` sets `hard_limit = 2`, so
+Fly Proxy treats a machine as full at TWO connections: the third concurrent
 organiser's solve is routed to a different machine, autostarting it if it is
-suspended, rather than queuing behind the first. `fly scale count 10` is
+suspended, rather than queuing behind the first two. The service admits the
+same number (`PLACEMENT_MAX_WORKERS = 2`); if that pair ever disagrees, the
+proxy hands a machine work the servicer refuses and the caller silently gets
+a greedy board. `fly scale count 10` is
 what gives the proxy nine more machines to fan out to — without it there is
 still only one machine to route to no matter how the proxy load-balances.
 Ten matches the owner's stated concurrent-organiser target; it is not a
@@ -265,8 +270,8 @@ fly logs --app placement         # expect a bind on 50051, no tracebacks
 ```
 
 Expect most of the ten machines to report `suspended` shortly after deploy
-once traffic stops — with `hard_limit = 1`, only as many machines as there
-are concurrent solves ever need to be running at once. That is the
+once traffic stops — with `hard_limit = 2`, only as many machines as there
+are PAIRS of concurrent solves ever need to be running at once. That is the
 configuration working, not a fault.
 
 The health check is a TCP accept, not a gRPC `Health/Check`, on purpose —
