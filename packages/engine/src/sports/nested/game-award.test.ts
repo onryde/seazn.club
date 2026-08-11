@@ -196,6 +196,38 @@ describe("tennis.game.award — the game-penalty scoring path", () => {
     ).toBe("GAME_AWARD_DURING_TIEBREAK");
   });
 
+  // §3.3 review finding (cfg-replay.conformance.test.ts caught this in the
+  // full suite, not the scoped nested+tennis run). `state.points.kind` is
+  // CFG-DERIVED: whether a tie-break has been entered by the time the fold
+  // reaches this event depends on `rules.tiebreakAt`, read live out of
+  // `division.config`. A game award legal when it was WRITTEN (standard
+  // play) must stay readable forever after, even once an organiser's config
+  // edit makes the SAME event sequence enter a tie-break earlier on replay —
+  // a refusal computed from cfg must never fire on the read path (same rule
+  // `NestedInterruptionRules` and the period kernel's `periodSeconds` state).
+  it("keeps an already-recorded game award readable after tiebreakAt is LOWERED (non-strict replay)", () => {
+    // Two games played out (home then away) reaches 1-1 — nowhere near a
+    // tie-break under the DEFAULT tiebreakAt (6), so the award below is a
+    // legal write.
+    const setup = [start, ...playGame(H), ...playGame(A)];
+    const stream = envelopes([...setup, gameAward(H)]);
+    const original = tennis.configSchema.parse({});
+    const asRecorded = foldMatch(tennis, original, lineups, stream, { strictFromSeq: 0 });
+    expect(asRecorded.games).toEqual({ home: 2, away: 1 });
+
+    // The organiser lowers tiebreakAt to 1. REPLAYED FROM INIT (no strict
+    // options — the read path every score page and standings computation
+    // actually uses), games reach 1-1 and a tie-break starts BEFORE the
+    // recorded award is reached — the same event, now arriving mid-breaker
+    // under the edited cfg. This must not throw.
+    const lowered = tennis.configSchema.parse({ set: { gamesTo: 6, winBy: 2, tiebreakAt: 1, tiebreakTo: 7 } });
+    expect(() => foldMatch(tennis, lowered, lineups, stream)).not.toThrow();
+    const replayed = foldMatch(tennis, lowered, lineups, stream);
+    // Readable, and deterministic — not merely "did not crash".
+    expect(replayed.phase).toBe("live");
+    expect(replayed.outcome).toBeNull();
+  });
+
   it("refuses a game award before start, and once the match is decided", () => {
     expect(codeOf(() => fold(cfgFor(), [gameAward(H)]))).toBe("WRONG_PHASE");
     const decided = [start, summary(6, 0), summary(6, 0)];

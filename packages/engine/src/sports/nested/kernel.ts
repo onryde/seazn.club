@@ -978,7 +978,21 @@ function applyInterruption(
 // `bankSet` if the game decides the set), so this function adds nothing
 // beyond resolving the side and refusing the one state `winGame` was never
 // designed for.
-function applyGameAward(state: NestedState, payload: NestedGameAward): NestedState {
+//
+// `strict` is the §3.3 seam (review finding, cfg-replay.conformance.test.ts).
+// `state.points.kind` is CFG-DERIVED, not a payload fact: whether a tie-break
+// was entered by the time this event replays depends on `rules.tiebreakAt`,
+// read live out of `division.config` on every fold. An organiser lowering
+// `tiebreakAt` after the fact can make a stream that reaches this event in
+// "standard" play at write time reach it mid-tie-break on REPLAY — and a
+// refusal computed from cfg must never fire on replay (§3.3, same rule
+// `NestedInterruptionRules` and the period kernel's `periodSeconds` both
+// state): there is no event to void and no scorer action that recovers a
+// fixture that throws on every read. So the check gates ONLY the write path;
+// a non-strict replay always proceeds to `winGame`, exactly like
+// `applySetSummary`'s tie-break-score fallback below falls back to banking on
+// games alone rather than refusing.
+function applyGameAward(state: NestedState, payload: NestedGameAward, strict: boolean): NestedState {
   if (state.phase !== "live") wrongPhase(`game award not allowed in phase "${state.phase}"`);
   // The SAME condition `applyPoint` switches on to route a point to
   // `applyTbPoint` over `applyStandardPoint`. A tie-break (or match
@@ -986,10 +1000,10 @@ function applyGameAward(state: NestedState, payload: NestedGameAward): NestedSta
   // is held at 6-6 through it, so it falls out as game 13" — so there is no
   // separate "game" left to concede; the concession would have to be a SET
   // (or the match), a genuinely different, undesigned cascade this session
-  // does not build (DOMAIN.md). Refused loudly rather than silently
-  // corrupting `state.games` — `winGame` would bump it regardless, and could
-  // even re-enter a tie-break immediately under a low `tiebreakAt`.
-  if (state.points.kind !== "standard") {
+  // does not build (DOMAIN.md). Refused loudly on the write path, rather than
+  // silently corrupting `state.games` — `winGame` would bump it regardless,
+  // and could even re-enter a tie-break immediately under a low `tiebreakAt`.
+  if (strict && state.points.kind !== "standard") {
     const breaker = state.points.kind === "matchTiebreak" ? "a match tie-break" : "a tie-break";
     throw new EngineError(
       "GAME_AWARD_DURING_TIEBREAK",
@@ -1386,7 +1400,11 @@ export function makeNestedModule(
             isStrictFold(ctx),
           );
         case gameAwardType:
-          return applyGameAward(state, parsePayload(NestedGameAward, ev.payload, ev.type));
+          return applyGameAward(
+            state,
+            parsePayload(NestedGameAward, ev.payload, ev.type),
+            isStrictFold(ctx),
+          );
         case "core.forfeit":
           return applyForfeit(state, (ev.payload as { by: string }).by);
         case "core.abandon":
@@ -1580,7 +1598,21 @@ export function makeNestedModule(
       // restarts at every set boundary. It is non-decreasing within a set, so
       // every generated stream is monotone by construction and the kernel's
       // guard (§3.3) accepts all of them.
-      if (rng() < 0.03) {
+      // S5 (#431) review — game-award used to draw its OWN unconditional
+      // `rng()` on every "standard" call (nearly every call), which is a
+      // NET NEW draw whether or not the branch fires: `position.conformance
+      // .test.ts` walks five FIXED seeds (spec 03 §6's determinism
+      // requirement, not this event's own logic), and shifting every
+      // downstream draw for the rest of a generated match collapsed three of
+      // them into 3-4 event streams (a `tennis.set_summary` deciding a whole
+      // set is already ~86% likely the moment a fresh set's `roll` below
+      // lands >=0.14, and a shift can walk straight into that). Reusing
+      // interruption's OWN roll as an `else if` on the SAME draw — rather
+      // than adding a new one — means a call where neither fires consumes
+      // EXACTLY the draws it did before this event existed, so the fix is
+      // "don't add a draw", not a change to `applyGameAward`/`winGame`.
+      const breakRoll = rng();
+      if (breakRoll < 0.03) {
         const kinds = NestedInterruptionKind.options;
         const by = randomEntrant();
         return {
@@ -1594,15 +1626,12 @@ export function makeNestedModule(
           },
         };
       }
-      // S5 (#431) — occasional game-penalty awards, so conformance walks the
-      // new branch. Guarded on `points.kind === "standard"` — the SAME
-      // condition `applyGameAward` refuses on — because every generated
-      // emission must be valid for the state it is generated in: `buildStream`
-      // applies each event as it walks, so an invalid one throws during
-      // generation, not during assertion. Placed AFTER the sanction/
-      // interruption rolls above (never between them) so it does not shift
-      // which `rng()` draw either of those two consumes.
-      if (state.points.kind === "standard" && rng() < 0.03) {
+      // Guarded on `points.kind === "standard"` — the SAME condition
+      // `applyGameAward` refuses on — because every generated emission must
+      // be valid for the state it is generated in: `buildStream` applies
+      // each event as it walks, so an invalid one throws during generation,
+      // not during assertion.
+      if (breakRoll < 0.06 && state.points.kind === "standard") {
         return {
           type: gameAwardType,
           payload: {
