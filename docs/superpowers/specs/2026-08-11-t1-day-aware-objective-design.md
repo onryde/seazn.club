@@ -354,3 +354,10 @@ on the production board 37 x 7 = 259 per bound family.
 * Raising the production wall — measure first (§7).
 * De-duplicating `bench/`'s copy of the model.
 * Any proto change. `day_index` is already on the wire.
+
+## Addendum (2026-08-12)
+
+A third rung, `day_start`, was approved before implementation began — neither
+rung above can see a day whose whole block starts late. Design:
+`2026-08-12-t1-day-start-rung-design.md`. The rungs above are unchanged; the
+chain becomes `placed → days → day_span → day_start → idle_gap → imbalance`.
