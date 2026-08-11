@@ -34,6 +34,27 @@ movable side**:
   carrying both round and dependencies is redundant, not conflicting.
 - **Full pair set** (all r < r', not adjacent-only): the conditional start
   half does not chain through a round that has no fixture on that day.
+- **Round namespace = round-robin stage only.** Rounds are NOT comparable
+  across stages (2026-08-11 ruling — the symptom board mixes League and
+  Stepladder finals, each with its own 1-based round sequence).
+  `build.ts` attaches `round` **only to round-robin-generated fixtures**
+  (`RoundRobinFixture.roundNo`); bracket/stepladder fixtures send no round —
+  they are already ordered by `winner_to`/`loser_to` dependency edges. A
+  cross-stage pair therefore has a round-less side and is unconstrained by
+  construction. Guard: if a request ever carries round-bearing fixtures from
+  more than one round sequence in one division, build.ts must strip rounds
+  for that division rather than emit a false ordering (assert + test).
+
+### Precedent tension, accepted knowingly
+
+C4 ruled that immovable input must not be able to make a board INFEASIBLE
+(clamp instead). Pin–movable enforcement here can — a late-round pin on an
+early day can squeeze a division into an unsolvable window. Owner accepted
+the honest INFEASIBLE on 2026-08-12 (surfaced beats silent disorder); the
+escape hatch for deliberate disorder is pinning both sides. The 2026-08-11
+rejection of "round N entirely before N+1" stands — this design's day-level
+half still allows adjacent rounds to share a day and fill idle courts
+within it, which is what that rejection protected.
 
 ## Wire
 
@@ -88,6 +109,9 @@ bench regresses.
 - Solver: two-round division forced onto one day → order enforced; cross-day
   disorder (R2 on an earlier day than R1) rejected; pin–movable pair enforced;
   pin–pin disorder tolerated; round-less fixtures unconstrained.
+- Stage scoping: a league + stepladder board in one division emits rounds for
+  the round-robin fixtures only; a hand-built mixed-sequence request strips
+  rounds for that division (the guard fires).
 - Verifier: hand-built out-of-order board flagged; pin–pin disorder not
   flagged; same board green/red identically on solver and verifier sides.
 - Greedy: regression test that the greedy/calendar path emits ascending
