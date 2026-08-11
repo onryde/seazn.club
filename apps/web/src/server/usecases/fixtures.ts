@@ -130,9 +130,10 @@ export async function putLineup(
     await tx`delete from lineups where fixture_id = ${fixtureId} and entrant_id = ${entrantId}`;
     for (const [i, s] of input.slots.entries()) {
       await tx`
-        insert into lineups (fixture_id, entrant_id, person_id, slot, position_key, order_no, roles)
+        insert into lineups (fixture_id, entrant_id, person_id, slot, position_key, order_no, roles, role)
         values (${fixtureId}, ${entrantId}, ${s.person_id}, ${s.slot},
-                ${s.position_key ?? null}, ${s.order_no ?? i + 1}, ${tx.json(s.roles as never)})`;
+                ${s.position_key ?? null}, ${s.order_no ?? i + 1}, ${tx.json(s.roles as never)},
+                ${s.role ?? "player"})`;
     }
     return readLineup(tx, fixtureId, entrantId);
   });
@@ -156,7 +157,7 @@ async function readLineup(
   // Jul3/07 §5 (9 Sep ×4): shirt numbers ride the lineup read model so every
   // scorer picker can render "#7 — Name".
   const slots = await tx<Record<string, unknown>[]>`
-    select l.person_id, p.full_name, em.squad_number, l.slot, l.position_key, l.order_no, l.roles
+    select l.person_id, p.full_name, em.squad_number, l.slot, l.position_key, l.order_no, l.roles, l.role
     from lineups l
     join persons p on p.id = l.person_id
     left join entrant_members em on em.entrant_id = l.entrant_id and em.person_id = l.person_id

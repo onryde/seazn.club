@@ -601,6 +601,18 @@ export const LineupSlotInput = z.object({
   position_key: z.string().nullish(),
   order_no: z.number().int().min(1).nullish(),
   roles: z.array(z.string()).default([]),
+  // S4 (#428) review round 1, finding 1 — V357. Mirrors LineupSlot.role
+  // exactly. `.optional()`, NOT `.default()` — a `.default()` makes `role`
+  // a REQUIRED key on the inferred `PutLineup` TS type, which would break
+  // every existing caller that constructs a slots array without it
+  // (`putLineup` is called directly, bypassing this schema, by
+  // `usecases/__tests__/_seed.ts`-style test helpers and possibly future
+  // internal callers — the same "who parses vs. who just gets the TS type"
+  // seam `reference_usecase_vs_schema_seam` names elsewhere). The usecase
+  // (`fixtures.ts`) falls back to `"player"` at the SQL boundary instead,
+  // the same `?? default` idiom `position_key`/`order_no` already use on
+  // the line above.
+  role: z.enum(["player", "coach", "staff"]).optional(),
 });
 
 export const PutLineup = z.object({

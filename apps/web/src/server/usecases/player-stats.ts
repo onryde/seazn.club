@@ -10,6 +10,7 @@ import { HttpError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
+import { loadLineupPairsForDivision } from "@/server/engine-db/lineups";
 
 type Tx = postgres.TransactionSql;
 
@@ -73,7 +74,16 @@ export async function recomputePlayerStats(
     } as EventEnvelope;
     (byFixture.get(e.fixture_id) ?? byFixture.set(e.fixture_id, []).get(e.fixture_id)!).push(envelope);
   }
-  const perFixture = [...byFixture.values()].map((ledger) => aggregatePlayerStats(ledger, model));
+  // S4 (#428) review round 1, finding 1 — the person-role discriminator:
+  // a card/goal credited to a non-player (coach/staff, S3 ruling 3) must not
+  // earn a leaderboard row. ONE query for the whole division (matching the
+  // events query's own batching above), keyed per fixture — each fixture's
+  // OWN lineup, not the division's, since two fixtures for the same entrant
+  // can field different coaches/rosters.
+  const lineupsByFixture = await loadLineupPairsForDivision(tx, divisionId);
+  const perFixture = [...byFixture.entries()].map(([fixtureId, ledger]) =>
+    aggregatePlayerStats(ledger, model, lineupsByFixture.get(fixtureId)),
+  );
   // #404: a merged person's id still appears in every historical score event,
   // and this fold reads the person id out of the payload — so without a
   // relabel a refold rebuilds a snapshot row for the tombstone and the

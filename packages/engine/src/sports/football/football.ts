@@ -432,6 +432,20 @@ interface FootballSquad {
   // Absent until the first exempt replacement, so every frozen stream
   // serialises exactly as it did.
   exemptUsed?: Readonly<Record<string, number>>;
+  // S4 (#428) review round 1, finding 1 — squad members `initialFootballSquad`
+  // deliberately excludes from `onPitch`/`bench` (`playingSquad` is
+  // players-only, correctly, for ON-PITCH tracking): a coach or other team
+  // official. S3/#426 ruling 3 put them ON the team sheet specifically so
+  // they CAN be shown a card (`core/types.ts`'s `LineupSlot.role` doc
+  // comment), but `applyCard`'s "in the lineup" check reads only this
+  // struct, so before this field existed a card addressed to a non-player
+  // was unconditionally `INVALID_EVENT` — not merely miscounted in stats,
+  // unrecordable. STATIC: football's `lineupPolicy` sets
+  // `allowSquadGrowth: false`, so nobody — player or not — joins mid-fixture;
+  // this list is fixed at `init` and never touched by a substitution or
+  // lineup-change fold. Absent when empty, so a fixture with no non-player
+  // squad member serialises exactly as it did before this field existed.
+  nonPlayers?: readonly string[];
 }
 
 interface CardRecord {
@@ -956,7 +970,10 @@ function applyCard(state: FootballState, payload: z.infer<typeof FootballCard>):
       squad.offUsed.includes(person) ||
       // W4 — a player serving a temporary dismissal is off the pitch but very
       // much still cardable (a sin bin is frequently followed by a red).
-      (squad.sinBin ?? []).some((entry) => entry.person === person);
+      (squad.sinBin ?? []).some((entry) => entry.person === person) ||
+      // S4 (#428) — a coach/team official (S3 ruling 3) is on the team sheet
+      // and cardable, but never appears in any of the PLAYING lists above.
+      (squad.nonPlayers ?? []).includes(person);
     if (squad.sentOff.includes(person)) {
       invalid(`"${person}" was already sent off`, { person });
     }
@@ -1499,11 +1516,16 @@ function lineupPolicy(cfg: FootballCfg): LineupPolicy {
  *  the team sheet's `orderNo` — the order every frozen stream recorded. */
 function initialFootballSquad(side: SideSquad): FootballSquad {
   const byOrder = [...playingSquad(side)].sort((a, b) => a.orderNo - b.orderNo);
+  // S4 (#428) — the inverse of playingSquad: every team-sheet member who is
+  // NOT a player (role !== "player"). Static for the whole fixture — see the
+  // field's own doc comment on FootballSquad.
+  const nonPlayers = side.members.filter((m) => m.role !== "player").map((m) => m.personId);
   return {
     onPitch: byOrder.filter((m) => m.onField).map((m) => m.personId),
     bench: byOrder.filter((m) => !m.onField).map((m) => m.personId),
     offUsed: [],
     sentOff: [],
+    ...(nonPlayers.length > 0 ? { nonPlayers } : {}),
   };
 }
 

@@ -21,6 +21,7 @@ import { EVENTS } from "@/lib/analytics-events";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
+import { loadLineupPair } from "@/server/engine-db/lineups";
 import { slugify, uniqueSlug } from "./slugs";
 import { resultDraft, roundRecapDraft } from "@/server/news/draft-templates";
 
@@ -573,7 +574,15 @@ async function extractScorers(
           ...(e.voids_event_id !== null ? { voids: e.voids_event_id } : {}),
         }) as EventEnvelope,
     );
-    const rows = aggregatePlayerStats(ledger, model)
+    // S4 (#428) review round 1, finding 1 — same role discriminator as
+    // player-stats.ts: a non-player (coach/staff) must not appear in a
+    // scorers line either. Single fixture here, so the plain per-fixture
+    // loader (`recomputePlayerStats` batches for a whole division instead).
+    const lineups =
+      fx.home_entrant_id && fx.away_entrant_id
+        ? await loadLineupPair(tx, fx.fixture_id, fx.home_entrant_id, fx.away_entrant_id)
+        : undefined;
+    const rows = aggregatePlayerStats(ledger, model, lineups)
       .filter((r) => (r.stats[metric.key] ?? 0) > 0)
       .sort((a, b) => (b.stats[metric.key] ?? 0) - (a.stats[metric.key] ?? 0));
     if (rows.length === 0) return [];
