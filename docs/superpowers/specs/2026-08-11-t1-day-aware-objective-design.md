@@ -72,6 +72,58 @@ change.
 This is the single most likely way for this work to ship, pass its tests, and
 still not satisfy the person who filed the issue.
 
+### 1.3 Re-measured on a CLEARED board, 2026-08-11 20:01Z
+
+The §1.1 read was of an already-applied board. This one satisfies the guard
+(`scheduled = 0` before the run) and is the first clean measurement of the
+current stack — `placement-stg` on `e794309c`, i.e. C4 + C6 + #511 all live.
+Attribution confirmed: `solve request=build-37f3c-546332` in `placement-stg`,
+and the prod `placement` app's most recent solve is 09:15Z, eleven hours
+earlier.
+
+```
+Tue 11 Aug | 7 | 14:30-15:30     <- first day STILL starts late
+Wed 12 Aug | 7 | 10:30-15:30
+Thu 13 Aug | 7 | 10:30-13:30
+Fri 14 Aug | 7 | 10:30-12:30
+Sat 15 Aug | 7 | 10:30-13:30
+Sun 16 Aug | 2 | 10:30-10:30     <- last day ends early
+```
+
+Six days, every day within the cap of 7, front and back still shaved. The
+empty first morning **reproduced on a board with no pins at all**, which
+settles the attribution question in §1.1: this is the objective, not #511.
+
+**The solver line is the important part:**
+
+    status=FEASIBLE placed=37/37 tiers=1/2 granted=10.0s solver_elapsed_ms=10003
+
+**T1 consumed the entire wall and did not prove.** The board above is an
+UNPROVED T1 incumbent, not a proved optimum. `_RESUME.md` already recorded
+this ("T1 does not complete on a real board and it is not going to"); this
+run is the same result under the current stack.
+
+That inverts part of §7's cost argument, and it is the strongest single
+reason to do this work:
+
+* **Today, T1 buys nothing provable.** Ten seconds of wall, no proof.
+* **`days` is a tiny objective** — one Bool per calendar day, six of them
+  here, minimised. It should prove in well under a second, so the chain would
+  return a PROVED day count where it currently returns an unproved span.
+* `day_span` then inherits whatever wall is left and will likely not prove
+  either — but that is no worse than the status quo, and it is strictly
+  better to fail to prove the *second* rung than the *only* one.
+
+So "five rungs divide the wall further" (§7) is real but misleading. The
+correct framing is that the first rung becomes cheap enough to actually
+finish.
+
+**One caveat on this board specifically:** the window is now Aug 11–16, which
+is exactly six days, and 37 fixtures at a cap of 7 need exactly six. T1a has
+ZERO degrees of freedom here — it cannot do better or worse. On this board the
+day-count term is not merely inert (§2), it is degenerate. Any test of T1a
+needs a board with slack.
+
 ## 2. What the motivating board actually proves — read this before costing the work
 
 **The day-count term wins nothing on the board that motivated the issue.**
