@@ -638,6 +638,9 @@
           },
           "scored": {
             "type": "boolean"
+          },
+          "void": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -910,6 +913,9 @@
       ],
       "shootout.kicks[].side": [
         "string"
+      ],
+      "shootout.kicks[].void": [
+        "boolean"
       ],
       "suspensions": [
         "array"
