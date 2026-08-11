@@ -2,7 +2,7 @@ name: E2E
 
 # Playwright UI e2e suite, split out of the CI smoke job so PRs stay fast.
 # Runs automatically on pull requests; workflow_dispatch also lets you target
-# a specific PR number or run against staging.
+# a specific PR number.
 #
 # Split into three independent jobs — e2e-parallel / e2e-serial / e2e-mobile —
 # instead of one job chaining `playwright test --project=X && ... && ...`.
@@ -35,18 +35,18 @@ name: E2E
 # means the mobile job's org is now structurally isolated from parallel's and
 # serial's too, not just from its own seven widths.
 #
-# Both targets run against a PRODUCTION build, never `next dev`: `next dev`
+# All three jobs run against a PRODUCTION build, never `next dev`: `next dev`
 # pins its V8 heap to half the runner's RAM and restarts itself past ~80% use
 # (with transient 404s from Turbopack's on-demand compiles as it nears the
 # ceiling) — flaky under a full Playwright run. `next start` has neither the
 # watchdog nor per-request compiles, and is what production runs anyway. The
 # compiler cache is persisted between runs so the build only pays for changes.
 #
-# Because production builds never dev-expose `login_url`, all targets set
+# Because production builds never dev-expose `login_url`, every job sets
 # E2E_PROD_TARGET=1: the auth helpers mint login tokens straight in the DB
-# (the local Postgres service here, the staging DB for target=staging) and
-# skip the specs that assert dev link exposure. Runs leave TAG-prefixed e2e
-# users/orgs behind in whichever DB they targeted.
+# (the local Postgres service each job starts) and skip the specs that assert
+# dev link exposure. Runs leave TAG-prefixed e2e users/orgs behind in that
+# job's own throwaway DB.
 on:
   pull_request:
   workflow_dispatch:
@@ -55,12 +55,6 @@ on:
         description: "PR number to run the e2e suite against (empty = main)"
         required: false
         type: string
-      target:
-        description: "Where to run the suite"
-        required: false
-        default: local
-        type: choice
-        options: [local, staging]
 
 concurrency:
   group: e2e-${{ inputs.pr || github.ref }}
@@ -74,7 +68,6 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-parallel:
     name: Playwright e2e — parallel (Postgres container)
-    if: ${{ (inputs.target || 'local') == 'local' }}
     runs-on: ubuntu-latest
 
     services:
@@ -108,7 +101,7 @@ jobs:
       NEXT_TELEMETRY_DISABLED: "1"
       # Production build → no dev-exposed `login_url`, so the auth helpers mint
       # login tokens straight in the Postgres service above and skip the specs
-      # that assert dev link exposure. Same path the staging target uses.
+      # that assert dev link exposure.
       E2E_PROD_TARGET: "1"
       # Payments-hardening e2e (payments-hardening.spec.ts): signed synthetic
       # webhooks hit the REAL /api/webhooks/stripe route. constructEvent needs a
@@ -320,7 +313,6 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-serial:
     name: Playwright e2e — serial (Postgres container)
-    if: ${{ (inputs.target || 'local') == 'local' }}
     runs-on: ubuntu-latest
 
     services:
@@ -489,7 +481,6 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-mobile:
     name: Playwright e2e — mobile/tablet, 7 widths (Postgres container)
-    if: ${{ (inputs.target || 'local') == 'local' }}
     runs-on: ubuntu-latest
 
     services:
@@ -647,71 +638,3 @@ jobs:
         run: |
           docker logs placement-e2e || true
           docker rm -f placement-e2e >/dev/null 2>&1 || true
-
-  # Same suite against the deployed staging app. No Postgres/Redis services and
-  # no dev server: PLAYWRIGHT_BASE points at Fly, and the SQL setup helpers
-  # (plan flips, login-token minting) reach the staging DB through the same
-  # STAGING_DATABASE_URL secret the deploy job migrates with. Manual-only.
-  # Unaffected by the parallel/serial/mobile split above — still runs the
-  # unified `npm run test:e2e` script (parallel && serial && mobile-se +
-  # mobile-14 only, NOT the 5 extra widths), same as before this change: a
-  # deployed target is a single shared environment, not one this repo spins
-  # up fresh per job, so the && chain's failure mode here is unchanged.
-  e2e-staging:
-    name: Playwright e2e (staging)
-    if: ${{ inputs.target == 'staging' }}
-    runs-on: ubuntu-latest
-    concurrency:
-      group: e2e-staging
-      cancel-in-progress: false
-    env:
-      DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-      PLAYWRIGHT_BASE: https://stg.seazn.club
-      E2E_PROD_TARGET: "1"
-      NEXT_TELEMETRY_DISABLED: "1"
-
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.pr && format('refs/pull/{0}/head', inputs.pr) || github.ref }}
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 26
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-
-      # Staging auto-stops idle machines; a warm health check here keeps the
-      # Playwright webServer block in reuse mode (it must never boot a local
-      # dev server against the staging DB).
-      - name: Wake staging app
-        run: |
-          for i in $(seq 1 30); do
-            if curl -sf "$PLAYWRIGHT_BASE/api/health" >/dev/null; then
-              echo "staging up after ${i} attempts"; exit 0
-            fi
-            sleep 2
-          done
-          echo "staging did not become healthy"; exit 1
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-        working-directory: apps/web
-      - name: Run Playwright e2e against staging
-        run: npm run test:e2e
-        working-directory: apps/web
-
-      - name: Upload Playwright report (on failure)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report-staging
-          path: apps/web/playwright-report
-          retention-days: 7
