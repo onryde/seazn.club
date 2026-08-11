@@ -118,11 +118,34 @@ So "five rungs divide the wall further" (§7) is real but misleading. The
 correct framing is that the first rung becomes cheap enough to actually
 finish.
 
-**One caveat on this board specifically:** the window is now Aug 11–16, which
-is exactly six days, and 37 fixtures at a cap of 7 need exactly six. T1a has
-ZERO degrees of freedom here — it cannot do better or worse. On this board the
-day-count term is not merely inert (§2), it is degenerate. Any test of T1a
-needs a board with slack.
+**CORRECTION — an earlier revision of this section claimed the window was
+Aug 11–16 and that T1a therefore had zero degrees of freedom. That was wrong.**
+The saved settings are start **10/08/2026 10:30**, end **16/08/2026**, play
+hours 10:30–16:00, match 30, gap 0, three boards. So the window is **seven**
+days and six are needed — there is exactly one degree of freedom, and the
+board spends it by running **Tue–Sun and leaving Monday entirely empty**.
+
+Under `mk_hi - mk_lo` that is rational: Tue 14:30 → Sun ~11:00 is a shorter
+first-to-last interval than Mon 10:30 → Sat ~11:00. The term drops the
+earliest available day off the front and pays for it with Sunday.
+
+**One competing explanation is NOT yet ruled out, and it must be before this
+is cited as proof.** The run happened on Tue 11 Aug ~21:00 London. Monday is a
+past DAY and Tuesday is today, so if the grid excludes past days while keeping
+today, Monday was never offered and the solver chose nothing. Resolve it by
+setting the window to a wholly FUTURE range and re-running; until then, do not
+claim the objective dropped Monday.
+
+What survives either explanation: **within the first day it uses, matches are
+crammed into 14:30–15:30 against a window that opens at 10:30.** That is the
+front-shave, and it is not explicable by grid availability.
+
+**And it is what neither approved rung fixes** (§1.2). Summed per-day span is
+invariant to WHICH days are used — Mon–Sat and Tue–Sun score identically — and
+T1a returns 6 either way. So on this board the two-rung objective removes the
+perverse incentive without supplying a preference for the earliest slot: the
+choice becomes arbitrary rather than actively wrong. That is an improvement,
+and it is not what the issue reporter is asking for.
 
 ## 2. What the motivating board actually proves — read this before costing the work
 
