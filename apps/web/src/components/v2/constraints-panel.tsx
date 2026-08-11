@@ -481,6 +481,40 @@ export function ConstraintsPanel({
     );
   };
 
+  // A dirty draft is otherwise discarded silently on unmount: browser Back
+  // (or a trackpad swipe-back) is a `popstate` navigation with no mousedown
+  // on any element, so — unlike clicking another tab, where a native click's
+  // mousedown blurs the focused element first — no native blur fires before
+  // `{tab === "constraints" && ...}` (schedule/page.tsx) stops rendering this
+  // panel. That is a regression against the per-keystroke code this replaced,
+  // which would already have saved something close to the final value.
+  //
+  // `commitRestMinRef`/`commitMaxPerDayRef` are refreshed every render by the
+  // effect below rather than assigned in the render body — writing `.current`
+  // during render is a lint error here (see `constraintsRef` above: refs are
+  // for event handlers and effects, not render). A version captured once, or
+  // stale by even one render, would flush the WRONG value on unmount (an
+  // earlier keystroke, or a dirty check against an already-reverted draft),
+  // which is worse than flushing nothing.
+  const commitRestMinRef = useRef(commitRestMin);
+  const commitMaxPerDayRef = useRef(commitMaxPerDay);
+  useEffect(() => {
+    commitRestMinRef.current = commitRestMin;
+    commitMaxPerDayRef.current = commitMaxPerDay;
+  });
+  // Mount-only: fires its cleanup exactly once, when this panel unmounts.
+  // `commitRestMin`/`commitMaxPerDay` already no-op unless their field is
+  // dirty (requirement 4, above) — precisely the condition an unmount flush
+  // needs — so calling them unconditionally here reuses that guard instead
+  // of duplicating it; a clean field on unmount sends nothing, and a tab
+  // switch (blur already committed before unmount runs) is a no-op too.
+  useEffect(() => {
+    return () => {
+      commitRestMinRef.current();
+      commitMaxPerDayRef.current();
+    };
+  }, []);
+
   const updateBlackout = (index: number, patch: Partial<BlackoutDraft>) =>
     setBlackouts((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
 

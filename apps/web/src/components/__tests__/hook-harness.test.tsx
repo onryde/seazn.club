@@ -492,3 +492,79 @@ describe("_hook-harness render-phase updates (the 'derive from props' pattern)",
     expect(() => renderIsland(Island, {})).toThrow(/Too many re-renders/);
   });
 });
+
+describe("_hook-harness unmount (constraints-panel unmount-flush regression)", () => {
+  // The panel's own bug: a dirty draft was silently discarded when the tree
+  // unmounted without a native blur firing first (browser Back). There was no
+  // way to drive that at all without an `unmount()` on the island — nothing
+  // else in this harness ever tears the tree down.
+  it("runs a mount-only effect's cleanup when the island unmounts", () => {
+    let cleanups = 0;
+    function Island() {
+      useEffect(() => {
+        return () => {
+          cleanups += 1;
+        };
+      }, []);
+      return <button type="button">hi</button>;
+    }
+
+    const island = renderIsland(Island, {});
+    expect(cleanups).toBe(0);
+    island.unmount();
+    expect(cleanups).toBe(1);
+  });
+
+  it("does not run that cleanup on an ordinary rerender — only on unmount", () => {
+    // Negative control: deps `[]` must not be mistaken for "every render" by
+    // whatever `unmount` reuses internally. Without this, a flush effect
+    // modelled on this shape would fire on every prop change too — the same
+    // "fires on every tab switch" failure mode the constraints-panel fix has
+    // to avoid.
+    let cleanups = 0;
+    function Island({ tag }: { tag: string }) {
+      useEffect(() => {
+        return () => {
+          cleanups += 1;
+        };
+      }, []);
+      return <button type="button">{tag}</button>;
+    }
+
+    const island = renderIsland(Island, { tag: "a" });
+    island.rerender({ tag: "b" });
+    island.rerender({ tag: "c" });
+    expect(cleanups).toBe(0);
+
+    island.unmount();
+    expect(cleanups).toBe(1);
+  });
+
+  it("reads a ref refreshed every render by a no-deps effect, not the value captured at mount", () => {
+    // The exact shape the constraints-panel fix needs: a ref kept current by
+    // a no-deps `useEffect` (writing `.current` straight in the render body
+    // is a lint error in this repo — see `constraintsRef` in
+    // constraints-panel.tsx), read back from a MOUNT-ONLY cleanup. A ref
+    // captured once at mount would report "first" here instead of "second",
+    // exactly the stale-closure failure a flush-on-unmount fix must not have.
+    const seenOnUnmount: string[] = [];
+    function Island({ value }: { value: string }) {
+      const ref = useRef(value);
+      useEffect(() => {
+        ref.current = value;
+      });
+      useEffect(() => {
+        return () => {
+          seenOnUnmount.push(ref.current);
+        };
+      }, []);
+      return <button type="button">{value}</button>;
+    }
+
+    const island = renderIsland(Island, { value: "first" });
+    island.rerender({ value: "second" });
+    island.unmount();
+
+    expect(seenOnUnmount).toEqual(["second"]);
+  });
+});

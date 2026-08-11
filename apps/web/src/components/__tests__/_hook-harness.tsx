@@ -371,5 +371,17 @@ export function renderIsland<P>(
       props = nextProps;
       run();
     },
+    /** Tear the island down the way React would when a parent stops
+     *  rendering it (`{tab === "x" && <Island/>}` flipping false) — runs
+     *  every registered effect's cleanup once, in declaration order, and
+     *  nothing else (no further render). Without this, a mount-only cleanup
+     *  effect (`useEffect(() => () => {...}, [])`) — the shape a
+     *  flush-on-unmount fix needs — has no way to fire at all in this
+     *  harness. */
+    unmount: () => {
+      for (const effect of effects) {
+        effect?.cleanup?.();
+      }
+    },
   };
 }

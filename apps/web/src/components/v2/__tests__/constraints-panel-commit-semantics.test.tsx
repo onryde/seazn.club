@@ -321,3 +321,78 @@ describe("the draft re-seeds when the committed value changes (requirement 5)", 
     expect(propsOf(findRestMinInput(island.tree())).value).toBe("30");
   });
 });
+
+describe("unmount flushes a dirty draft (Critical: browser Back discards it otherwise)", () => {
+  // Browser Back (or a trackpad swipe-back) is a `popstate` navigation with
+  // no mousedown on any element, so — unlike clicking another tab, where a
+  // native click's mousedown blurs the focused element first — no native
+  // blur fires before `{tab === "constraints" && ...}` (schedule/page.tsx)
+  // stops rendering this panel. Without a flush on unmount, a dirty draft is
+  // discarded silently: the cap reverts with no error and nothing on screen
+  // distinguishing it from a successful save.
+  it("max-per-day: typing then unmounting without blur still saves the typed value", async () => {
+    const island = renderIsland(ConstraintsPanel, panelProps(baseConfig({})));
+    fireChange(findMaxPerDayInput(island.tree()), "4");
+    island.unmount();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(puts().length, `calls: ${api.calls.map((c) => c.options?.method ?? "GET").join(",")}`).toBe(1);
+    expect(storedHard()?.find((r) => r.type === "max_fixtures_per_day")?.count).toBe(4);
+  });
+
+  it("restMin: typing then unmounting without blur still saves the typed value", async () => {
+    const island = renderIsland(ConstraintsPanel, panelProps(baseConfig({})));
+    fireChange(findRestMinInput(island.tree()), "40");
+    island.unmount();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(puts().length, `calls: ${api.calls.map((c) => c.options?.method ?? "GET").join(",")}`).toBe(1);
+    expect(storedRestMin()).toBe(40);
+  });
+
+  it("max-per-day: the flush sends the LATEST typed value, not an earlier one from a stale ref", async () => {
+    // Types "8" then "12" before unmounting — the assertion that catches a
+    // ref captured once (at mount, or at the first keystroke) instead of
+    // refreshed every render: a stale ref would flush "8", or nothing.
+    const island = renderIsland(ConstraintsPanel, panelProps(baseConfig({})));
+    const input = () => findMaxPerDayInput(island.tree());
+    fireChange(input(), "8");
+    fireChange(input(), "12");
+    island.unmount();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(puts().length).toBe(1);
+    expect(storedHard()?.find((r) => r.type === "max_fixtures_per_day")?.count).toBe(12);
+  });
+
+  it("unmounting with nothing typed (both fields clean) sends nothing", async () => {
+    // A flush that fires unconditionally would write on every tab switch —
+    // this is the negative control for that failure mode.
+    const island = renderIsland(
+      ConstraintsPanel,
+      panelProps(
+        baseConfig({
+          restMin: 15,
+          hard: [{ type: "max_fixtures_per_day", count: 5, scope: { kind: "division", divisionId: "d1" } }],
+        }),
+      ),
+    );
+    island.unmount();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(puts().length, `calls: ${api.calls.map((c) => c.options?.method ?? "GET").join(",")}`).toBe(0);
+  });
+
+  it("a field already committed via blur does not save again on a later unmount", async () => {
+    // The "click another tab" case the code review found NOT affected
+    // (native blur already committed it, so the field is clean by the time
+    // unmount's cleanup runs) — pinned so the fix cannot regress it into a
+    // double save.
+    const island = renderIsland(ConstraintsPanel, panelProps(baseConfig({})));
+    const input = () => findMaxPerDayInput(island.tree());
+    fireChange(input(), "6");
+    fireBlur(input());
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(puts().length).toBe(1);
+
+    island.unmount();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(puts().length).toBe(1); // still just the one PUT from blur
+  });
+});
