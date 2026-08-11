@@ -18,7 +18,7 @@ import type {
 } from "../core/types.ts";
 import type { PositionCatalog } from "./catalog.ts";
 import type { DocSection } from "../exports/types.ts";
-import type { PlayerStatsModel } from "../stats/stats.ts";
+import { resolvePayloadPath, type PlayerStatsModel } from "../stats/stats.ts";
 import type { EntrantModel } from "./entrant-model.ts";
 
 // Jul3/06 §3 — what a print fragment gets to work with (display labels only;
@@ -75,6 +75,238 @@ export interface ModuleEvent<Ev = unknown> {
   payload: Ev | CoreEv;
 }
 
+// ---------------------------------------------------------------------------
+// S6/#416 (W5) — PadSpec: a pure, serialisable description of a sport's
+// scoring surface. One universal renderer (S10) walks any module's spec
+// without per-sport code; conformance (testkit/conformance-pad.ts) proves the
+// spec hides nothing that `eventSchema` accepts.
+//
+// EVERYTHING BELOW IS DATA — no functions anywhere in the PadSpec tree. That
+// is a deliberate, stronger reading of "PadSpec is data only, no React, no
+// display strings" than the design doc states explicitly: a function value
+// would (a) vanish silently under `JSON.stringify`, which is how this file's
+// own conformance suite proves `padSpec(cfg)` is byte-identical for a
+// repeated call, and (b) be exactly the un-serialisable closure the gate DSL
+// below exists to avoid. `PadAction` therefore carries no payload-building
+// callback: `buildPathObject` (below) is the ONE function — shared by the
+// engine's own property test and S10's renderer — that turns declared
+// fields + resolved attribution into a real event payload, so the two sides
+// can never build a differently-shaped object from the same declaration
+// (this repo's recurring placer/verifier fork, closed structurally).
+// ---------------------------------------------------------------------------
+
+/**
+ * The redesigned fidelity model (owner ruling, 2026-08-06 — see
+ * `docs/superpowers/specs/2026-08-06-scoringpad-v2-prompts/_INDEX.md`,
+ * search "OWNER RULING: redesign the fidelity model, in S6"). This is
+ * additive alongside `FidelityTier`/`fidelityTiers` above, NOT a replacement:
+ * the paywall (`apps/web/src/server/usecases/fidelity.ts`) and every other
+ * `apps/web` read site keep reading the sealed `tier: 0|1|2|3` union and the
+ * per-sport `fidelityTiers` array exactly as they do today — out of scope to
+ * touch, and untouched. What changes is PadSpec's OWN shape: instead of a
+ * cumulative `eventTypes` list per tier (which does not actually nest for
+ * cricket — `cricket.superover.ball` sits in both tier 1's and tier 3's list
+ * under the old model — and is a byte-identical duplicate of tier 2 into
+ * tier 3 for 7 of the other 8 modules), `PadSpec.fidelity` names ONE band per
+ * event type, no repetition. Nesting is then STRUCTURAL: "every event at or
+ * below band N" grows monotonically with N by construction, so it stops
+ * being a test that can fail and becomes a property that cannot — see
+ * `eventsAtOrBelowBand` in `testkit/conformance-pad.ts`.
+ *
+ * Both scales are the SAME closed 0–3 numbers (`FidelityTier.tier` above) —
+ * never a second vocabulary. `git grep -a` for "quick"/"standard"/"full" as
+ * tier names must find nothing new.
+ */
+export const FIDELITY = { 0: "result", 1: "card", 2: "timeline", 3: "detail" } as const;
+export type FidelityBand = 0 | 1 | 2 | 3;
+
+/**
+ * Stable dictionary lookup key + English fallback — the SAME `{key, label}`
+ * shape `PositionSegment` already established (`core/position.ts:62-74`),
+ * reused rather than reinvented: `key` is what a web dictionary resolves (S7
+ * translates exactly these — label keys are effectively API the moment they
+ * ship), `label` is the English fallback so an engine-side test, or any
+ * surface not yet wired to a dictionary, still has legible text. Unlike a
+ * position segment's `label`, this one is NOT optional: an action or panel
+ * has no self-naming "value" the way a clock reading "12:41" names itself.
+ */
+export interface PadLabel {
+  key: string;
+  label: string;
+}
+
+// ---------------------------------------------------------------------------
+// Gate predicates. S10 evaluates these IN THE BROWSER (spec: gate predicates
+// over folded state/summary — "the super-over panel appears only when
+// reachable"), so a predicate cannot be an arbitrary JS closure: it can
+// neither cross the engine/web boundary as data nor be compared for the
+// determinism property below. A tiny closed DSL plus ONE evaluator, shipped
+// from the engine, is the structural fix for this repo's recurring
+// placer/verifier fork — the engine's own conformance test and S10's
+// renderer import and call the exact same `evalPadGate`, so "should this
+// panel show right now" can never compute two different answers on the two
+// sides of the wire.
+//
+// A cfg-only condition (the DLS panel existing at all when `cfg.dls.enabled`)
+// needs NO gate: `padSpec(cfg)` is already a pure function of cfg, so the
+// module simply omits the panel from the array it returns. Gates exist only
+// for conditions that depend on how the match has actually folded so far —
+// genuinely unknowable at `padSpec(cfg)` construction time.
+// ---------------------------------------------------------------------------
+export type PadGate =
+  | { op: "always" }
+  | { op: "path-truthy"; path: string }
+  | { op: "path-equals"; path: string; value: string | number | boolean | null }
+  | { op: "and"; of: readonly PadGate[] }
+  | { op: "or"; of: readonly PadGate[] }
+  | { op: "not"; of: PadGate };
+
+export interface PadGateCtx {
+  readonly state: unknown;
+  readonly summary: unknown;
+}
+
+/**
+ * The one evaluator both sides call. `path` is rooted at `{state, summary}`
+ * (so `"state.phase"`, never a bare `"phase"`) and walked with
+ * `resolvePayloadPath` (`stats/stats.ts`) — the SAME safe dotted-path reader
+ * player-stat metrics already use, reused rather than duplicated: a path
+ * that does not resolve reads as `undefined` (falsy, and equal to nothing
+ * `path-equals` would sensibly compare against), never throws.
+ */
+export function evalPadGate(gate: PadGate, ctx: PadGateCtx): boolean {
+  const root: Record<string, unknown> = { state: ctx.state, summary: ctx.summary };
+  switch (gate.op) {
+    case "always":
+      return true;
+    case "path-truthy":
+      return Boolean(resolvePayloadPath(root, gate.path));
+    case "path-equals":
+      return resolvePayloadPath(root, gate.path) === gate.value;
+    case "and":
+      return gate.of.every((g) => evalPadGate(g, ctx));
+    case "or":
+      return gate.of.some((g) => evalPadGate(g, ctx));
+    case "not":
+      return !evalPadGate(gate.of, ctx);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Actions — each names exactly one `eventSchema` union branch, via the
+// per-module `eventSchemas` registry below (`SportModule.eventSchemas`).
+// "1:1" reads as "every action names one branch", not "every branch gets
+// exactly one action": several actions may legitimately target the same
+// branch (a bare runs field and a "wide" button both emit `cricket.ball`
+// with different populated sub-fields) — conformance criterion (a) only
+// requires that EVERY branch is reached by at least one action.
+// ---------------------------------------------------------------------------
+
+export type PadFieldValue = string | number | boolean;
+
+export interface PadFieldEnum {
+  kind: "enum";
+  /** Dotted path into the built payload (`buildPathObject`'s target). */
+  path: string;
+  /** Bounds — derived from cfg where the sport has one (never hardcoded from
+   *  a single preset: the classic case is a dismissal-kind list that differs
+   *  by variant). */
+  values: readonly string[];
+}
+export interface PadFieldNumber {
+  kind: "number";
+  path: string;
+  min: number;
+  max: number;
+  step?: number;
+}
+export interface PadFieldToggle {
+  kind: "toggle";
+  path: string;
+}
+export type PadField = PadFieldEnum | PadFieldNumber | PadFieldToggle;
+
+/**
+ * Where person/side attribution lands in the built payload, and how many the
+ * renderer's attribution picker must collect before the action can fire.
+ * `persons`' arity is `paths.length` — the brief's `persons(n)` restated as
+ * "n named destinations" rather than a bare count, because the payload
+ * assembler needs to know WHERE each resolved id goes (cricket's wicket
+ * action needs up to four: `out`, `fielder`, `fielderAssist`, `incoming`).
+ */
+export type PadAttribution =
+  | { kind: "none" }
+  | { kind: "side"; path: string }
+  | { kind: "person"; path: string; role?: string }
+  | { kind: "persons"; paths: readonly string[] };
+
+/**
+ * Assemble a payload from `(dottedPath, value)` pairs — the inverse of
+ * `resolvePayloadPath`, and deliberately as small: plain object nesting only,
+ * no array indexing. `undefined` values are OMITTED rather than written, so
+ * an unset optional field (a wicket with no named fielder) is genuinely
+ * absent from the built payload — required for the `z.strictObject` payload
+ * shapes this engine uses everywhere, which reject an explicit `undefined`
+ * on some builds and always reject an unrecognised key.
+ *
+ * Shared by the engine's own conformance property test (below) and, from
+ * S10 on, the renderer that turns collected form values into a real event
+ * payload — see the module-level note above.
+ */
+export function buildPathObject(entries: readonly (readonly [string, unknown])[]): Record<string, unknown> {
+  const root: Record<string, unknown> = {};
+  for (const [path, value] of entries) {
+    if (value === undefined) continue;
+    const segments = path.split(".");
+    let cursor = root;
+    for (let i = 0; i < segments.length - 1; i++) {
+      const key = segments[i] as string;
+      const existing = cursor[key];
+      if (typeof existing === "object" && existing !== null && !Array.isArray(existing)) {
+        cursor = existing as Record<string, unknown>;
+      } else {
+        const created: Record<string, unknown> = {};
+        cursor[key] = created;
+        cursor = created;
+      }
+    }
+    cursor[segments[segments.length - 1] as string] = value;
+  }
+  return root;
+}
+
+export interface PadAction {
+  /** Envelope type string — a key in `SportModule.eventSchemas`. */
+  type: string;
+  labelKey: PadLabel;
+  fields: readonly PadField[];
+  attribution: PadAttribution;
+}
+
+export type PadPanelLayout = "primary" | "grid" | "drawer" | "perSide";
+export type PadPhase = "pre" | "live" | "post";
+
+export interface PadPanel {
+  labelKey: PadLabel;
+  phase: PadPhase;
+  layout: PadPanelLayout;
+  actions: readonly PadAction[];
+  /** Absent = always shown once its phase is active. A cfg-only condition
+   *  needs no gate at all — see the module-level note above. */
+  gate?: PadGate;
+}
+
+export interface PadSpec {
+  panels: readonly PadPanel[];
+  /** One band per event type this module can emit — see `FIDELITY` above.
+   *  Keys are envelope type strings (the same universe as `eventSchemas`);
+   *  every value is on the SAME closed 0–3 scale as `FidelityTier.tier`. */
+  fidelity: Readonly<Record<string, FidelityBand>>;
+  /** Which bands need an entitlement beyond the free floor (`fidelity.ts`'s
+   *  `tier <= 1`). Bands 0 and 1 are never keyed here. */
+  fidelityEntitlements: Readonly<Partial<Record<FidelityBand, string>>>;
+}
+
 // spec 03 §3. Extends the kernel's FoldableModule (spec 03 §2) so every
 // SportModule folds through foldMatch unchanged.
 export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> {
@@ -82,6 +314,37 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   version: string; // semver; persisted on every division at creation
   configSchema: z.ZodType<Cfg>; // variant config (overs, setTo, halfMinutes…)
   eventSchema: z.ZodType<Ev>; // union of the sport's event payloads
+
+  // S6/#416 (W5) — event type -> its own zod payload schema, the SAME schema
+  // object already used as an `eventSchema` union member and in `apply()`'s
+  // hand-written dispatch switch, now also keyed by type string in one place.
+  // `eventSchema` carries no per-branch discriminant (the type string lives
+  // only on the envelope, `ModuleEvent.type`), so without this registry there
+  // was no way to enumerate "every branch, with its type string" short of
+  // parsing the dispatch switch itself. `testkit/conformance-pad.ts` walks
+  // `eventSchema`'s own `.options` and asserts this registry is a bijection
+  // onto them by REFERENCE (deduped — two type strings, like
+  // `cricket.ball`/`cricket.superover.ball`, may legitimately share one
+  // schema object), which is what makes PadSpec coverage a provable property
+  // instead of a hand-maintained claim.
+  //
+  // OPTIONAL. Only cricket declares it this session — the other ten modules'
+  // registries are separate, disjoint follow-up sessions, so this cannot be
+  // required yet without breaking every other module's object literal.
+  // `padSpecConformanceSuite` asserts at runtime that a module it is handed
+  // has actually declared it.
+  eventSchemas?: Readonly<Record<string, z.ZodTypeAny>>;
+
+  // S6/#416 (W5) — the pad's own contract: a pure function of resolved cfg
+  // (base ⊕ variant preset ⊕ org overrides — already resolved by the caller
+  // before this sees it). Must be TOTAL for every cfg `configSchema` accepts,
+  // not just the named presets (`registry.get(key, version)` has no
+  // fallback, so a division's pinned cfg is what renders, always), and
+  // DETERMINISTIC (same cfg in, byte-identical `PadSpec` out).
+  //
+  // OPTIONAL for the same reason as `eventSchemas` above.
+  padSpec?(cfg: Cfg): PadSpec;
+
   positions: PositionCatalog; // spec 02 §3
   // W4 (#407) — the catalog for a SPECIFIC resolved config, when the sport's
   // lineup rules move with the variant: football's small-sided codes field
