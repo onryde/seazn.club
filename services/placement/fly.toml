@@ -193,6 +193,38 @@
 #     worst case is 16 threads on 2 vCPU; the old default of 4 would have been
 #     4 x 8 = 32, a ratio nothing in this programme has measured.
 #
+# [5a] PERFORMANCE-1X SINCE 2026-08-11 — owner's call, and a HYPOTHESIS to be
+# measured, not a settled improvement.
+#
+# The reasoning for trying it: `shared-cpu-2x` is 2 BURSTABLE vCPUs with a
+# baseline quota, and a CP-SAT solve saturates CPU for the entire wall. That is
+# precisely the shape a burstable allocation throttles — the machine looks like
+# 2 vCPUs on paper and behaves like rather less once credits run out, which
+# would show up as proof time rather than as an error. One DEDICATED vCPU is
+# slower on paper and steady in practice.
+#
+# WHY IT MIGHT BE WORSE, stated so the measurement is honest. CP-SAT's parallel
+# portfolio genuinely uses cores, and this trades two (throttled) for one
+# (dedicated). With `PLACEMENT_NUM_SEARCH_WORKERS = 8` and `hard_limit = 2` the
+# worst case is 16 solver threads on ONE core, where the previous shape gave
+# them two. If proof depth drops rather than rises, that is the answer and this
+# reverts to `shared-cpu-2x` / `1gb` in one edit.
+#
+# `memory = "2gb"` is NOT a separate choice: Fly requires at least 2gb per
+# performance vCPU, so it moves with `size` or the deploy is refused.
+#
+# COST IS REAL HERE, unlike most settings in this file. A performance vCPU is
+# several times a shared one, and DEPLOY.md step 5 scales this app to TEN
+# machines. Nine of them sit suspended almost all the time, which is the whole
+# reason scale-to-zero was adopted — but check the first invoice rather than
+# trusting that sentence, exactly as [9](c) already says for suspended billing.
+#
+# HOW TO JUDGE IT, and it is not "does it feel faster". Watch `tiers_completed`
+# on the per-solve log line, on the SAME board, against the recorded baseline:
+# T0+T1 within budget under load is what this shape is supposed to guarantee,
+# and `placed` should be full either way. Change nothing else in the same
+# deploy — the concurrency pair moved separately for this reason.
+#
 # A solve refused by admission control is not an error to the organiser:
 # `SOLVER_BUSY` (`schema.py:473`) reaches `placement-client.ts`'s `toOutcome`
 # as `status:"ERROR"` plus `error.code === "SOLVER_BUSY"`, which
@@ -318,8 +350,8 @@ primary_region = "lhr"                # [1] matches apps/web
     grace_period = "10s"
 
 [[vm]]                                # [5] sized for PROOF TIME, not placement
-  size = "shared-cpu-2x"
-  memory = "1gb"
+  size = "performance-1x"             # [5a] DEDICATED vCPU — see the note
+  memory = "2gb"                      # [5a] performance vCPUs require >= 2gb
 
 [env]
   PLACEMENT_MAX_WORKERS = "2"         # [3] MUST be >= hard_limit above
