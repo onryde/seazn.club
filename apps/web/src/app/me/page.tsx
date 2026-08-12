@@ -86,8 +86,16 @@ export default async function MePage({
           {/* Same brand mark as the console gantry (nav.tsx) — the player
               home is the same product, not a text-only cousin. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo-wide-night.png" alt="Seazn Club" className="h-7 w-auto" />
-          <span className="text-sm text-cream/60">{t(ui, "me.eyebrow")}</span>
+          <img src="/logo-wide-night.png" alt="Seazn Club" className="h-7 w-auto shrink-0" />
+          {/* Unplanned fix (S9/#418): this row is a single non-wrapping flex
+              line, so at 320px the eyebrow and the display name pushed the
+              sign-out button 41px past the viewport and the whole page
+              scrolled sideways. Both are decorative here — the eyebrow
+              re-states the page you are on, and your own name on your own
+              page tells you nothing — so they step aside below `sm` and the
+              two real controls (console, sign out) keep their width. Nothing
+              changes at or above 640px. */}
+          <span className="hidden text-sm text-cream/60 sm:inline">{t(ui, "me.eyebrow")}</span>
           <div className="flex-1" />
           {activeOrg && (
             <Link
@@ -97,7 +105,7 @@ export default async function MePage({
               ← {t(ui, "me.console")}
             </Link>
           )}
-          <span className="text-xs text-cream/60">{user.display_name}</span>
+          <span className="hidden text-xs text-cream/60 sm:inline">{user.display_name}</span>
           <LogoutButton label={t(dict, "nav.signOut")} />
         </div>
       </header>
@@ -310,7 +318,11 @@ export default async function MePage({
           ) : (
             <ul className="space-y-3">
               {career.map((c) => (
-                <li key={c.sport_key} className="card space-y-2 p-4">
+                <li
+                  key={c.sport_key}
+                  data-testid={`career-sport-${c.sport_key}`}
+                  className="card space-y-2 p-4"
+                >
                   <p className="text-sm font-medium text-slate-800">{c.sport_label}</p>
                   <p className="text-xs text-slate-400">
                     {plural(ui, "career.divisions", c.divisions, locale)}

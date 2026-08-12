@@ -371,6 +371,35 @@ export async function claimProfileBySql(email: string): Promise<void> {
 }
 
 /**
+ * Attach an EXISTING roster person to a user account (S9/#418). Unlike
+ * `claimProfileBySql`, which mints a fresh empty person, this claims one that
+ * already carries entrant memberships and scored events — the only way to
+ * reach /me's Career section, which reads `player_stat_snapshots` joined on
+ * `persons.user_id`. A brand-new person has no snapshots, so the section it is
+ * meant to exercise would render its empty state and the test would assert
+ * nothing.
+ *
+ * Takes the user's ID (from `GET /api/users/me`), never a reconstructed
+ * email: `TAG` is evaluated per PROCESS, so `proEmail()` called from a spec
+ * worker does not name the account `auth.setup.ts` provisioned in its own
+ * worker. The first version of this helper resolved the user with a
+ * `(select id from users where email = …)` subquery, which returns NULL for a
+ * wrong address — so it set `user_id = NULL`, updated one row, reported
+ * success, and the spec then asserted against a /me page belonging to nobody.
+ * Both lookups below fail loudly instead.
+ */
+export async function linkPersonToUserBySql(personId: string, userId: string): Promise<void> {
+  await withDb(async (sql) => {
+    const [user] = await sql`select id from users where id = ${userId} and deleted_at is null`;
+    if (!user) throw new Error(`linkPersonToUserBySql: no live user ${userId}`);
+    const res = await sql`
+      update persons set user_id = ${userId}
+      where id = ${personId} and merged_into is null`;
+    if (res.count === 0) throw new Error(`linkPersonToUserBySql: no person ${personId}`);
+  });
+}
+
+/**
  * Seed N prior AI-generation ledger rows for a division (v4 Task 17 quota path).
  * Mirrors the exact shape schedule-ai.ts counts against the per-division run cap:
  * competition_events of type 'schedule.ai_generated' whose payload.division_id

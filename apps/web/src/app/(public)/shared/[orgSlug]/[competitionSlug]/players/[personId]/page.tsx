@@ -122,6 +122,7 @@ export default async function PlayerCardPage({ params }: Props) {
             {career.map((c) => (
               <div
                 key={c.sport_key}
+                data-testid={`career-sport-${c.sport_key}`}
                 className="rounded-xl border border-zinc-200/80 bg-surface p-3 shadow-sm"
               >
                 <p className="text-sm font-medium text-ink">{c.sport_label}</p>
