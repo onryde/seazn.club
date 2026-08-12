@@ -82,6 +82,54 @@ localized name/description, division/stage shape summary, entrant count)
 + "start blank". Detail sheet shows the full structure before commit.
 Full polish; 320/768/1280; gallery is a grid that collapses to one column.
 
+## Instantiation transaction (normative order)
+
+Single DB transaction wrapping existing usecases (never raw inserts):
+1. `createCompetition(name, orgId)` + stamp `template_key/@version`;
+2. per division in catalog order: `createDivision` (sportKey,
+   variantKey, cfgOverrides through the SAME validation path as manual
+   creation — a template failing validation is a catalog bug and MUST
+   fail the unit gate, not soft-fall-back);
+3. per stage: create with kind/size/points; `seeding` only when the
+   schema carries it (P7) — then TBD fixture generation runs via the
+   D4 pathway inside the same transaction;
+4. any failure → full rollback; API returns 422
+   `template.instantiation_failed` with `{divisionIndex, stageIndex,
+   cause}` so the catalog defect is locatable.
+
+Response 201: `{competitionId, divisions: [{id, stages: [{id,
+fixtureCount}]}], templateKey, templateVersion}`.
+
+## Error codes
+
+404 `template.unknown_key` · 409 `template.version_retired` (key kept,
+version pruned — response lists live versions) · 422
+`template.instantiation_failed` (above) · 403 non-admin.
+
+## Catalog governance
+
+`version` bumps on ANY content change; instantiation stamps both; old
+versions stay in git history only (catalog file holds current version
+per key — no runtime multi-version). A catalog PR must show the pinned
+shape-table regression diff (see Testing) — that diff IS the review
+artifact for template changes.
+
+## Example catalog entry (abridged, normative shape)
+
+```json
+{ "key": "slam128", "version": 1,
+  "i18n": {"nameKey": "templates.slam128.name",
+            "descriptionKey": "templates.slam128.desc"},
+  "divisions": [{
+    "i18nNameKey": "templates.slam128.div.main",
+    "sportKey": "tennis", "variantKey": "grand-slam",
+    "entrantKind": "individual", "entrantCount": 128,
+    "stages": [{ "i18nNameKey": "templates.stage.main_draw",
+      "kind": "knockout", "size": 128,
+      "scheduleDefaults": {"matchMinutes": 180, "gapMinutes": 30,
+        "suggestedCourtTags": ["grass","show-court"]}}]}]}
+```
+
 ## Testing (all four)
 
 - Unit: schema parse of every catalog entry; instantiation of every entry

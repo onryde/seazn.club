@@ -41,6 +41,52 @@ fairness opinion into one number).
   nothing, gates nothing. Also rendered for the joint competition plan
   result (aggregated per division + overall).
 
+## Metric formulas (normative — the lib implements exactly these)
+
+Notation: fixtures F with `start`, `end = start+matchMinutes`, `court`,
+`entrants {a,b}`, `roundNo?`; per entrant e, its ordered fixture list
+F_e; D = set of used days (org tz).
+
+1. **restSpread** — per entrant, gaps g_i = start_{i+1} − end_i over
+   F_e. Board's achievable mean rest ḡ* = (span_e − Σ durations) /
+   (|F_e|−1) per entrant. Penalty = normalized deviation below target:
+   `p_e = Σ max(0, (ḡ*_e − g_i) / ḡ*_e) / (|F_e|−1)`. Score =
+   `100 · (1 − mean_e(p_e))`, clamped [0,100]. Entrants with |F_e|<2
+   excluded. Offenders: bottom-3 entrants by p_e with their worst gap.
+2. **courtBalance** — per entrant with |F_e|≥C_min(=3): Shannon entropy
+   H_e of its court distribution ÷ H_max = log(min(|courts|,|F_e|)).
+   Score = `100 · mean_e(H_e/H_max)`. Offenders: entrants pinned to one
+   court despite ≥3 fixtures.
+3. **gapDispersion** — per court-day: idle = window_len − Σ busy; frag
+   f = idle_inside / (idle_inside + idle_edges) where idle_inside =
+   idle between matches, idle_edges = before first/after last. Score =
+   `100 · (1 − mean(f))` over court-days with ≥2 fixtures. Offenders:
+   worst-3 court-days with their largest internal hole.
+4. **homeAwayAlternation** — round-robin divisions only, else the
+   metric is ABSENT (not 0). Per entrant: r = longest same-side run,
+   a = alternation rate (side flips / (|F_e|−1)). Score =
+   `100 · mean_e(a) − 10 · max(0, max_e(r) − 3)`, clamped. Offenders:
+   entrants with r ≥ 4.
+5. **primeSlotFairness** — prime = last `PRIME_N=2` slots per court-day
+   (declared config). Expected share per entrant = |F_e| · P/|F| where
+   P = total prime fixtures. Deviation d_e = |actual_e − expected_e| /
+   max(expected_e, 1). Score = `100 · (1 − mean_e(min(d_e,1)))`.
+   Offenders: top-3 |d_e| (both hogging and starvation).
+
+Rounding: scores to integers, half-up, AFTER clamping. Determinism:
+ties in offender ordering break by entrant id lexicographic.
+
+## API shape
+
+`GET /api/v1/stages/{id}/schedule/health` → 200
+`{ stageId, computedAt, metrics: HealthMetric[5] }` where
+`HealthMetric = {key, score, explanation, offenders: Array<{kind:
+"entrant"|"court"|"courtDay", id, label, value}>}`; 404 unknown stage,
+403 non-member, 409 `schedule.not_applied` when no schedule exists.
+Joint variant: `GET /api/v1/competitions/{id}/schedule/health` returns
+per-division arrays + a combined block (same metric keys, computed over
+the union where meaningful: gapDispersion and primeSlot only).
+
 ## Testing (all four)
 
 - Unit: each metric on hand-built boards with KNOWN scores (perfect board

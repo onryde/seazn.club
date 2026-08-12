@@ -81,6 +81,56 @@ required-tags picker. Public fixture pages show venue/court names.
 Full polish; 320/768/1280 screenshots; wide tables scroll in their own
 container.
 
+## `usableWindows` algorithm (normative)
+
+For court c, date d (org-tz local), config g:
+
+1. base = `court_exceptions[c,d]` if present (closed ⇒ ∅; else its
+   range(s)) else `court_hours[c, weekday(d)]` ranges (may be multiple,
+   non-overlapping — validated at write).
+2. session = base ∩ g.sessionWindows (if declared, else base).
+3. minus = session − g.blackouts where blackout.court ∈ {null, c} and
+   blackout ∩ d ≠ ∅.
+4. Result: maximal disjoint ordered windows, minute precision, tz-fixed
+   at org tz — DST days use civil local times (a 23-hour day simply
+   yields shorter windows; no UTC arithmetic anywhere).
+   No calendars declared for c ⇒ step 1 base = the full day (status quo
+   ante — calendars strictly subtract).
+
+## API surface (P8)
+
+`/api/v1/orgs/{orgId}/venues` GET/POST · `/venues/{id}` PATCH/DELETE ·
+`/venues/{id}/courts` POST · `/courts/{id}` PATCH/DELETE (tags, sort,
+name) · `/courts/{id}/calendar` PUT (full weekly hours + exceptions
+replace — one write shape, no per-row PATCH surface). Deletion rules:
+court with any fixture reference → 409 `court.in_use` (soft-block;
+reassign first); venue with courts → 409 `venue.not_empty`. All routes
+org-member ACL; mutations require admin role (same role gate as
+schedule apply).
+
+## Migration order (P9 — each step independently verifiable)
+
+1. V-a: create tables + indexes (no readers).
+2. V-b (data): per org — distinct court strings from stored configs ∪
+   distinct `fixtures.court_label` → "Main venue" + courts; emit
+   dry-run report `{org, strings, courtsCreated}` BEFORE writing;
+   write mapping table in-migration (temp), rewrite stored configs'
+   `courts[]` and `fixtures.court_id`; leave `court_label` populated
+   (read-only legacy column until V-c).
+3. Code switch (same PR): zod `courts: z.array(CourtId)`, readers on
+   court_id, writers stop touching court_label.
+4. V-c (later PR, after a green soak): drop `court_label` + `venue`
+   text columns. Greenfield allows aggressive timing; the two-step
+   still ships the byte-equivalence regression between them.
+
+## Tag semantics
+
+Free-form lowercase slugs, org-scoped vocabulary (no global registry);
+`required_court_tags` matches by ⊇ (court must carry ALL required);
+empty required = every court. Tag rename = PATCH over courts carrying
+it (client-side bulk; no server cascade in v1). Suggested-tags from D1
+templates are hints rendered in the picker, never auto-created.
+
 ## Testing (all four)
 
 - Unit: `usableWindows` (hours ∩ session − blackout, exception override,

@@ -85,6 +85,53 @@ slot), tie flags requiring a pick, edit-in-place, confirm CTA; TBD
 fixtures render their localized labels everywhere fixtures appear (public
 pages included). Full polish bar; mobile 320/768/1280.
 
+## API contracts & error codes (normative)
+
+- `POST /api/v1/stages/{id}/seed-proposal` → 201
+  `{id, stageId, status:"draft", computed: {qualifiers: Array<{rank,
+  source: {stageId, group?, rank}, entrantId, destinationSlot}>,
+  ties: Array<{slots, entrantIds, reason}>, standingsHash}}`.
+  Errors: 409 `seeding.source_stage_incomplete`; 422
+  `seeding.rules_missing`; 409 `seeding.already_confirmed`.
+- `POST /api/v1/stages/{id}/seed-proposal/confirm` body
+  `{proposalId, edits?: Array<{destinationSlot, entrantId}>,
+  tiePicks?: Array<{slots, order: entrantId[]}>}` → 200 with the filled
+  fixture list. Errors: 409 `seeding.proposal_stale` (standingsHash
+  moved); 422 `seeding.slot_double_assigned`, `seeding.entrant_foreign`,
+  `seeding.tie_unresolved`; 409 `seeding.fixtures_already_filled`.
+- Scoring guard: appending to a fixture with a null entrant → 422
+  `fixture.slots_unfilled`.
+
+## Fill algorithm (order matters)
+
+1. Validate proposal freshness (standingsHash) → else stale.
+2. Apply edits + tiePicks over `computed` → final slot map.
+3. Validate: bijection destinationSlot↔entrant within the stage;
+   entrant ∈ division; no slot already filled.
+4. Single transaction: fill `home/away_entrant_id` on each fixture,
+   clear its `*_slot_label` params (label text derivable post-fill,
+   kept for history in the proposal row), mark proposal `confirmed`.
+5. Post-commit: re-run schedule validation (person clashes now real →
+   warnings surface, run not blocked); pino `stage_seeded`.
+
+## Label vocabulary (i18n patterns; params jsonb)
+
+`slot.winner_group {g}` · `slot.runner_up_group {g}` ·
+`slot.nth_group {n,g}` · `slot.best_nth {rank,nth}` ·
+`slot.rank_range {rank}` · `slot.winner_match {ext}` ·
+`slot.loser_match {ext}` (intra-bracket reuse). Renderers receive
+`{key, params}`, never prebuilt strings.
+
+## Edge inventory (each is a test)
+
+Group withdraws mid-stage (standings shrink → proposal recompute);
+bestNth across unequal group sizes (normalize by games-played rule —
+UEFA drop-lowest convention, declared in the rule, not inferred);
+seeded_map referencing a slot the stage doesn't have (422 at rule save,
+not at proposal time); two stages consuming one source (allowed —
+ranges must not overlap, validated at save); confirm racing a
+standings-changing correction (hash check wins).
+
 ## Testing (all four)
 
 - Unit: each `take` kind incl. bestNth cross-group cascade (UEFA

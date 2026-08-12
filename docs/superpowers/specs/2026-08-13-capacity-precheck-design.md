@@ -54,6 +54,45 @@ verdict chip, supply/demand bar, per-day mini-bars, suggestion rows with
 one-click apply where the knob is local (e.g. extend endAt). `/admin` not
 involved; full polish bar. Mobile 320/768/1280, no horizontal scroll.
 
+## Arithmetic (normative)
+
+Let m = matchMinutes, g = gapMinutes, slot = m + g.
+
+- **Supply**: per court c, per day d: usable windows W_{c,d} (config
+  sessionWindows − blackouts today; D5 court calendars later).
+  `supply_{c,d} = Σ_w ⌊(len(w) + g) / slot⌋` (the +g credits the last
+  match of a window needing no trailing gap). `slotSupply = Σ supply`.
+- **Demand**: `slotDemand = |fixtures|`. Per-day demand ceiling:
+  `capBound_d = Σ_div min(dayCap_div,d, remaining_div)` — day caps from
+  `hard[]`/rule groups bound how much demand CAN land on d.
+- **Rest lower bound** per entrant e with k_e fixtures and rest r:
+  `need_e = k_e·m + (k_e−1)·max(r, g)`; e's available horizon = span of
+  days e may play (weekday/earliest-latest hard rules applied) × daily
+  window length. Violated ⇒ impossible.
+- **Verdicts**: `impossible` iff any of: slotDemand > slotSupply;
+  ∃d prefix where cumulative demand under caps cannot fit cumulative
+  supply (Hall-style prefix check over ordered days); ∃e rest-bound
+  violated. `tight` iff not impossible and slotSupply <
+  TIGHT_RATIO(=1.15) · slotDemand or any entrant's slack < 1 slot.
+  Else `ok`.
+- **Suggestions**: candidate deltas = {+1 day (extend endAt), +1 court,
+  m′ = m−5 (floor 2×min sport duration guard — suggest only if m′
+  sane), g′ = max(0, g−5), raise the binding day cap by 1}. Each is
+  re-assessed; emit `{kind, amount, flipsVerdict}` sorted:
+  verdict-flippers first, then by smallest amount. Never emit a
+  suggestion that violates a hard rule (e.g. +1 day past a weekday-only
+  constraint).
+
+## Error/API shape
+
+Server refusal on auto/joint routes: 422
+`{code: "capacity.impossible", report: CapacityReport}`.
+`CapacityReport = {verdict, slotSupply, slotDemand, perDay:
+Array<{date, supply, demandCeiling}>, restBound: Array<{entrantId,
+need, available, violated}>, suggestions: Array<{kind, amount,
+flipsVerdict}>}`. The card consumes the identical type client-side
+(engine lib import — no fetch).
+
 ## Testing (all four types, per RULES.md)
 
 - Unit: arithmetic cases — supply/demand, rest bound (the case that catches

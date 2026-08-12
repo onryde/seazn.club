@@ -1,6 +1,6 @@
 # P2 — Schedule health: engine lib + route + panel (D3)
 
-Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
+Read first: `_RULES.md` → `_INDEX.md` → spec
 `../2026-08-13-schedule-health-design.md`. Worktree + fresh branch.
 
 ## Scope
@@ -52,6 +52,15 @@ rtk proxy npm run lint
 cd packages/engine && npx tsc --noEmit; echo EXIT=$?
 npm run openapi:gen && git status --porcelain
 ```
+
+## Execution & close
+
+**Scout (Sonnet High):** re-pin cites; locate the stage schedule page
+component. **Implementer (Sonnet MAX):** brief carries the spec's
+Metric formulas section VERBATIM — implement exactly those, no
+"improvements". **Reviewer (Sonnet MAX):** formula fidelity vs spec,
+absent-not-zero for bracket alternation, offender-order determinism;
+gap list only. Close per `_RULES.md` §5.
 
 ## Output cap
 

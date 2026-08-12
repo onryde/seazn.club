@@ -63,6 +63,43 @@ per-stream result table (status, error, link to fixture). Functional bar
 `content/help` page documenting the JSON shape with a per-sport example —
 English-only tree (standing rule: `content/help/**` is exempt from i18n).
 
+## Response & error codes (normative)
+
+Per-stream `status` ∈ `imported | skipped_duplicate | rejected`; call
+returns 200 when the CALL executed (mixed stream outcomes are data,
+not transport errors). Rejection `error.code` values:
+`import.fixture_started` · `import.fixture_unknown` ·
+`import.fold_rejected` (with `{eventIndex, engineCode}`) ·
+`import.not_decided` (`core.finalize` absent/stream doesn't decide) ·
+`import.entitlement` (with the missing FeatureKey) ·
+`import.slots_unfilled` (D4 TBD fixture). Call-level: 413
+`import.too_large` (cap constant in the response), 409
+`import.concurrent` (same import_id in flight), 403 non-admin.
+
+## Execution semantics (order per stream)
+
+1. Resolve fixture (id | ext_key) → guard unstarted.
+2. Dry-run: full fold in-process with the division's pinned module +
+   resolved cfg; must end decided.
+3. Transaction: append events 0..n via the production writer (chain,
+   `match_states`), then decided side effects exactly as live scoring
+   (outcome, standings, stats recompute, auto-draft news) — the twin
+   test (regression b) proves byte-equality of chain + state vs a
+   sequentially-scored control fixture.
+4. Record `(division_id, import_id, fixture_id)`; UNIQUE violation ⇒
+   `skipped_duplicate` (idempotent replay reads the row, appends
+   nothing, side effects not re-fired).
+Streams execute sequentially per call (bounded, predictable load);
+callers parallelize across calls only if needed — documented in help.
+
+## Import report (UI + API)
+
+Response doubles as the admin page's table:
+`{importId, results: [{fixture, status, eventsAppended, outcome?,
+error?}], totals: {imported, skipped, rejected}}` — the page renders it
+verbatim; no separate report store (re-run the call idempotently to see
+it again).
+
 ## Testing (all four)
 
 - Unit: dry-run gate (invalid mid-stream event → whole stream rejected,

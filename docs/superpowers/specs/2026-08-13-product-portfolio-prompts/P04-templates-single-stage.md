@@ -1,6 +1,6 @@
 # P4 — Format templates: catalog + instantiation + wizard (D1a, single-stage)
 
-Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
+Read first: `_RULES.md` → `_INDEX.md` → spec
 `../2026-08-13-format-templates-design.md`. Worktree + fresh branch.
 
 ## Scope
@@ -56,6 +56,16 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/p
 rtk proxy npm run lint
 npm run openapi:gen && git status --porcelain
 ```
+
+## Execution & close
+
+**Scout (Sonnet High):** re-pin create-usecase signatures, wizard
+components, CURRENT `stages_kind_check` values (the 9-vs-6 question —
+answer it with the live constraint). **Implementer (Sonnet MAX):**
+spec's Instantiation transaction order verbatim. **Reviewer (Sonnet
+MAX):** rollback completeness (induced failure leaves zero rows),
+templates cannot bypass validation, catalog kinds ⊆ live DB CHECK; gap
+list only. Close per `_RULES.md` §5.
 
 ## Output cap
 

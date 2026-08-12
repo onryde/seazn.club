@@ -52,6 +52,49 @@ a pino warn.
 - Digest is a DRAFT like all others — publish flow, public visibility,
   `shouldFirePostPublished` side effects unchanged.
 
+## Digest content rules (normative per section)
+
+Window: `[now−7d, now)` in org tz, computed from the button press.
+Sections render ONLY when their data exists (absent section ≠ empty
+section — no "no data" filler lines):
+
+1. **Standings movement**: per division with ≥1 decided fixture in
+   window — top 3 now, plus biggest climber `{entrant, from→to}`
+   (largest positive rank delta window-over-window; ties → most points
+   gained; still tied → skip the climber line).
+2. **Stat leaders**: top metric per sport family (top scorer / most
+   wickets / most points) with counts — only metrics
+   `divisionPlayerStats` already emits; never derived ad hoc.
+3. **Upcoming**: next 7 days' fixtures, grouped by day, capped at 10
+   lines + "and N more" tail key.
+4. **Claimed-player highlight**: at most one — the claimed person with
+   the best window performance line if any claimed person played.
+
+Draft body is assembled from the SAME parameterized key set as other
+drafts (`news.digest.*` namespace); title key
+`news.digest.title {orgName, weekOf}`.
+
+## Key namespace inventory (i18n ×4, flat)
+
+`news.enrich.performer_line {name, statLine}` ·
+`news.enrich.leader_move {name, metric, from, to}` ·
+`news.enrich.streak {entrant, kind, length}` ·
+`news.recap.leader {metric, name, value}` ·
+`news.recap.biggest {label}` · `news.digest.title/section.*` (+ per
+section body keys). The regression gate seeds from THIS list (spec
+Testing) — extending the list without the 4 dictionaries reds.
+
+## Failure matrix (fail-open, normative)
+
+| Source down | Result |
+|---|---|
+| match summary read fails | result draft plain, warn logged |
+| stats diff fails | recap keeps result lines, drops leader section |
+| standings snapshot absent | digest omits movement section |
+| ALL sources fail | drafts still created, `enriched:false` |
+A missing DRAFT (any path) is a defect; a missing SECTION is designed
+degradation.
+
 ## Testing (all four)
 
 - Unit: template rendering with full/partial/absent enrichment (absent =

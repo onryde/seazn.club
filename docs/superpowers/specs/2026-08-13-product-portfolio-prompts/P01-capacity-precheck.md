@@ -1,6 +1,6 @@
 # P1 — Capacity pre-check: engine lib + route guard + setup card (D2)
 
-Read first: `docs/superpowers/RULES.md` → `_INDEX.md` here → spec
+Read first: `_RULES.md` → `_INDEX.md` → spec
 `../2026-08-13-capacity-precheck-design.md`. Worktree + fresh branch.
 
 ## Scope
@@ -54,6 +54,16 @@ npm run openapi:gen && git status --porcelain   # must be empty
 ```
 
 Confirm `.testResults[].name` paths are the WORKTREE's, not main's.
+
+## Execution & close
+
+**Scout (Sonnet High):** re-pin every file/route/schema this prompt and
+spec cite; file:line table ≤25 lines. **Implementer (Sonnet MAX):**
+brief = this prompt + scout table + spec's Arithmetic section verbatim;
+TDD. **Reviewer (Sonnet MAX):** suggestions honesty (`flipsVerdict`
+proven by re-assessment, not asserted), 422 path tested API-level, lib
+purity (no DB/clock/solver imports); gap list only. Close per
+`_RULES.md` §5.
 
 ## Output cap
 

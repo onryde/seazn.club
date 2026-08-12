@@ -1,6 +1,6 @@
 # P3 — News enrichment + weekly digest (D7)
 
-Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
+Read first: `_RULES.md` → `_INDEX.md` → spec
 `../2026-08-13-news-enrichment-design.md`. Worktree + fresh branch.
 
 ## Scope
@@ -55,6 +55,16 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/p
 rtk proxy npm run lint
 npm run openapi:gen && git status --porcelain
 ```
+
+## Execution & close
+
+**Scout (Sonnet High):** re-pin draft call sites + post-S9 stats
+signatures; job-runner existence answer. **Implementer (Sonnet MAX):**
+spec's Digest content rules + Failure matrix verbatim in the brief.
+**Reviewer (Sonnet MAX):** absent-enrichment byte-identity real (byte
+compare), fail-open proven with a genuinely poisoned source (not a
+mock that cannot fail), i18n gate seeded from the key list; gap list
+only. Close per `_RULES.md` §5.
 
 ## Output cap
 
