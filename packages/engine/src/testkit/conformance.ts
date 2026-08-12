@@ -330,6 +330,131 @@ export function conformanceSuite<Cfg, Ev, State>(
         expect(playerStatsKeyCollisions(playerStats)).toEqual([]);
       });
 
+      // S8/#417 W6 review round 3 — playerStatsKeyCollisions (above) can only
+      // ever compare two DECLARATIONS (`folded.keys` vs `metrics[].key`); it
+      // never observes what `folded.fold` actually writes. That leaves two
+      // ways a model can defeat it without the checker ever seeing it:
+      //  1. UNDER-declare `keys` — write a column at runtime that is absent
+      //     from `keys`, exactly how a real accidental collision would
+      //     escape both this test AND playerStatsKeyCollisions (an
+      //     undeclared key is invisible to that checker, not caught by it).
+      //  2. OVER-declare `sharesMetricKeys` — name a key as an intentional
+      //     overlap the fold never actually writes, or that no `metrics[]`
+      //     entry actually owns — a stale entry that permanently silences a
+      //     genuine future collision on that key.
+      // Closed HERE, against the SAME generated streams/ctx the rest of this
+      // block already builds (never a second, parallel harness): real fold
+      // output only exists inside conformance, which is why this could not
+      // be closed inside stats.ts's static checker itself.
+      if (playerStats.folded) {
+        const folded = playerStats.folded;
+        const declaredFoldedKeys = new Set(folded.keys.map((k) => k.key));
+        const metricKeys = new Set(playerStats.metrics.map((m) => m.key));
+        const sharesMetricKeys = folded.sharesMetricKeys ?? [];
+
+        // Modules whose `folded.fold` is STRUCTURALLY unable to emit
+        // anything against this suite's generated `streamArb`/ctx — named
+        // and reasoned so a future silently-empty fold can never hide
+        // behind an unstated default (the exact vacuous-gate failure mode
+        // this repo has shipped more than once: a check that holds only
+        // because what it observes was never populated — see
+        // reference_declared_stat_model_can_be_inert). Confirmed
+        // empirically with a throwaway probe run over every real
+        // conformanceSuite call-site variant of every module that declares
+        // `folded` (80 seeds each): both modules below emitted zero keys on
+        // EVERY run of EVERY variant; every other module emitted on the
+        // large majority of runs of every variant.
+        const FOLD_MAY_EMIT_NOTHING = new Set<string>([
+          // cricket's coarse rescue only bumps a key when a
+          // `cricket.player.line` names a (person, innings, aspect) NOT
+          // already covered by fine `cricket.ball` data (see `folded`'s own
+          // comment above `CRICKET_PLAYER_STATS`, cricket.ts). This suite's
+          // `arbitraryEvent` generator only ever emits a player-line
+          // DERIVED FROM an already-recorded fine innings
+          // (`generatePlayerLine` requires `innings.fine !== null` and
+          // reads the person straight out of that fine ledger), so the
+          // coarse branch is structurally unreachable from a generated
+          // stream — `hasFineCoverage` is always true for the exact
+          // (person, innings) pair the generator can produce. Not a gap in
+          // cricket's declaration: `cricket.playerstats.test.ts`'s "a
+          // v1-era cricket.player.line-only stream produces the SAME stat
+          // keys the fine ball ledger would" hand-builds the coarse-only
+          // stream this property generator structurally cannot, and proves
+          // all six `sharesMetricKeys` entries really are emitted there.
+          // Reusing that setup here would be exactly the parallel harness
+          // this check must not invent.
+          "cricket",
+          // volleyball's default (and only conformance-tested) entrant kind
+          // is "team" (`entrantModel.defaultKind`). `setBasedMatchOutcomes-
+          // Fold`'s person-level credit (`matches`/`sets_won`/`sets_lost`)
+          // goes exclusively through `personsForEntrant`, which returns
+          // `[]` for every "team"-kind entrant BY DESIGN — the identical
+          // guard `resolveMetricPersons` applies everywhere else in this
+          // file (see `personsForEntrant`'s own doc comment, stats.ts). Not
+          // a bug to route around: badminton and table tennis, the
+          // kernel's other two presets, default to "individual" and are
+          // correctly NOT exempt.
+          "volleyball",
+        ]);
+        const foldMayEmitNothing = FOLD_MAY_EMIT_NOTHING.has(module.key);
+
+        it("playerStats: folded.fold never writes a key absent from folded.keys, and sharesMetricKeys stays honest", () => {
+          const emitted = new Set<string>();
+          fc.assert(
+            fc.property(streamArb, (events) => {
+              const active = resolveVoids([...events]);
+              const foldedOut = folded.fold(active, playerStatsCtx, lineups);
+              for (const row of foldedOut) {
+                for (const key of Object.keys(row.stats)) {
+                  emitted.add(key);
+                  // (a) emitted ⊆ declared — the check that makes
+                  // playerStatsKeyCollisions trustworthy: a key the fold
+                  // writes at runtime but that `folded.keys` never declares
+                  // is invisible to that checker, not caught by it.
+                  expect(
+                    declaredFoldedKeys.has(key),
+                    `${module.key}: folded.fold wrote key "${key}" that folded.keys does not declare`,
+                  ).toBe(true);
+                }
+              }
+            }),
+            { numRuns: statsRuns },
+          );
+
+          // Vacuity guard (see FOLD_MAY_EMIT_NOTHING above) — without this,
+          // a module whose fold emits nothing for every generated stream
+          // would make the assertion above, and both sharesMetricKeys
+          // assertions below, pass having proved nothing at all.
+          if (!foldMayEmitNothing) {
+            expect(
+              emitted.size,
+              `${module.key}: folded.fold emitted NO keys across ${statsRuns} generated streams — the emitted-keys-subset-of-declared check above is vacuous for this module`,
+            ).toBeGreaterThan(0);
+          }
+
+          // (b) sharesMetricKeys is honest: every entry must be BOTH (i)
+          // actually emitted by the fold on a real stream and (ii) actually
+          // owned by a metrics[] entry — an entry failing either is a stale
+          // declaration that permanently silences a real future collision
+          // on that key (see playerStatsKeyCollisions's own doc comment).
+          // (ii) is a static check that always runs; (i) is skipped only
+          // for the named exemptions above, whose own dedicated test file
+          // supplies the real proof this harness structurally cannot.
+          for (const key of sharesMetricKeys) {
+            expect(
+              metricKeys.has(key),
+              `${module.key}: sharesMetricKeys names "${key}" but no metrics[] entry owns that key`,
+            ).toBe(true);
+            if (!foldMayEmitNothing) {
+              expect(
+                emitted.has(key),
+                `${module.key}: sharesMetricKeys names "${key}" but folded.fold never emitted it across ${statsRuns} generated streams — a stale declaration silencing a real collision`,
+              ).toBe(true);
+            }
+          }
+        });
+      }
+
       it("playerStats: voiding a counted event never raises count-shaped totals; a fully-voided stream matches the empty-stream baseline", () => {
         // Restricted to count-shaped metric keys: agg:"count" metrics and
         // core.award both bump by a fixed +1 for a MATCHING, PRESENT event,
