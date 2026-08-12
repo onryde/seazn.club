@@ -16,7 +16,7 @@
 // supply these props — out of scope this pass (no routes).
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { EventEnvelope, LineupPair } from "@seazn/engine/core";
-import type { AnySportModule, FidelityBand, PadPhase, PadSpec } from "@seazn/engine/sport";
+import type { AnySportModule, FidelityBand, PadFieldValue, PadPhase, PadSpec } from "@seazn/engine/sport";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { scoringErrorText } from "@/lib/scoring-vocab";
 import type { MessageKey } from "@/lib/messages";
@@ -27,6 +27,7 @@ import { buildPadView, PAD_PHASES, summaryHeadline, type PadActionView } from ".
 import type { ActionValues } from "./action-form";
 import { Panel } from "./panel";
 import { FidelitySwitcher } from "./fidelity-switcher";
+import { AttributionPicker } from "./attribution-picker";
 
 const EMPTY_SPEC: PadSpec = { panels: [], fidelity: {}, fidelityEntitlements: {} };
 
@@ -51,8 +52,13 @@ export interface PadRendererProps {
   entitlements: Readonly<Record<string, boolean>>;
   initialEvents?: readonly EventEnvelope[];
   queueDbName?: string;
-  /** Typed seam for the attribution picker (a later pass) — forwarded to
-   *  every panel's `ActionForm`s unchanged. */
+  /** personId -> display name for the attribution picker's chips. Absent is
+   *  survivable: the picker labels an unnamed person generically rather than
+   *  blocking the action. */
+  personNames?: Readonly<Record<string, string>>;
+  /** OVERRIDE for the built-in attribution picker, not the only way to get
+   *  one — S11's skins may draw their own. Omitted ⇒ this component renders
+   *  `AttributionPicker` itself, fed the live folded state. */
   renderAttribution?: (
     action: PadActionView,
     values: ActionValues,
@@ -144,6 +150,23 @@ export function PadRenderer(props: PadRendererProps) {
   // change via the onStateChange effect above.
   const headline = summaryHeadline(pipeline.summary);
 
+  // Default attribution rendering — see the note at the render site below.
+  const renderAttribution = useMemo(
+    () =>
+      props.renderAttribution ??
+      ((action: PadActionView, values: ActionValues, setValue: (path: string, value: PadFieldValue | undefined) => void) => (
+        <AttributionPicker
+          action={action}
+          values={values}
+          setValue={setValue}
+          state={pipeline.state}
+          lineups={props.lineups}
+          personNames={props.personNames}
+        />
+      )),
+    [props.renderAttribution, props.lineups, props.personNames, pipeline.state],
+  );
+
   return (
     <div className="space-y-3">
       <header className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-[0_0_40px_-12px_rgba(16,185,129,0.25)]">
@@ -197,6 +220,14 @@ export function PadRenderer(props: PadRendererProps) {
         </p>
       )}
 
+      {/* The picker is the DEFAULT, not an opt-in. Shipping it behind a prop
+       *  every caller must remember to pass is how this programme's recurring
+       *  defect happens — a component that is written, tested and never
+       *  reached (S4's person-role discriminator, S8's declared-but-inert stat
+       *  models, S8's computed-but-unrenderable rows). `renderAttribution`
+       *  survives as an OVERRIDE for S11's skins, which may draw their own.
+       *  The default is handed the LIVE folded state, so the keeper comes
+       *  from `core.lineup.*` rather than the kickoff sheet. */}
       <FidelitySwitcher
         value={band}
         onChange={setBand}
@@ -213,7 +244,7 @@ export function PadRenderer(props: PadRendererProps) {
             panel={panel}
             onSubmit={handleSubmit}
             submittingType={submittingType}
-            renderAttribution={props.renderAttribution}
+            renderAttribution={renderAttribution}
           />
         ))
       )}

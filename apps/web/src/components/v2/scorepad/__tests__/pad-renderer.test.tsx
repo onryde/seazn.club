@@ -21,6 +21,7 @@ import type { PadActionView, PadPanelView } from "../view-model";
 import { ActionForm } from "../action-form";
 import { Panel } from "../panel";
 import { FidelitySwitcher } from "../fidelity-switcher";
+import { AttributionPicker } from "@/components/v2/scorepad/attribution-picker";
 import { PadRenderer } from "../pad-renderer";
 
 function find(tree: ReactElement[], pred: (el: ReactElement) => boolean): ReactElement {
@@ -700,5 +701,78 @@ describe("PadRenderer — score header (S10/#419 W8 fix 3)", () => {
     // Not merely absent — the rest of the header (phase nav, queue status)
     // must still render normally; this is a targeted degrade, not a crash.
     expect(island.text().length).toBeGreaterThan(0);
+  });
+});
+
+describe("PadRenderer — the attribution picker is the DEFAULT, not an opt-in", () => {
+  // The regression this pins: the picker shipped written, tested and wired to
+  // NOTHING — reachable only if a caller remembered to pass
+  // `renderAttribution`. That is this programme's recurring defect class (a
+  // person-role discriminator tested engine-side but unreachable from real
+  // code; stat models declared but inert; rows computed but unrenderable).
+  //
+  // Asserted on what PadRenderer HANDS DOWN, because the node-only harness
+  // renders one component one level deep: `Panel` is an element here, not a
+  // rendered subtree, so the picker cannot be found by walking. Calling the
+  // forwarded function is the real contract anyway — it is exactly what
+  // `ActionForm` does with it.
+  const attributedAction = {
+    type: "cricket.toss",
+    labelKey: { key: "pad.cricket.action.toss", label: "Toss" },
+    fields: [],
+    attribution: [{ kind: "side", path: "wonBy" }],
+  } as unknown as PadActionView;
+
+  function forwardedRenderer(extra: Record<string, unknown>) {
+    // `generic` with a started match: its Score panel is ungated, so a Panel
+    // is guaranteed to render here. WHICH module draws is irrelevant — the
+    // contract under test is what PadRenderer forwards to every Panel.
+    const generic = resolveModuleClient("generic", "1.0.0");
+    const cfg = {
+      resultMode: "score" as const,
+      allowDraws: false,
+      points: { w: 3, d: 1, l: 0 },
+      progressScore: false,
+    };
+    const island = renderIsland(PadRenderer, {
+      module: generic,
+      cfg,
+      fixtureId: "fx-attr",
+      lineups: defaultLineupPair(generic.positions),
+      identity: ME,
+      transport: fakeTransport({ appendResults: [] }),
+      band: 3 as const,
+      entitlements: {},
+      initialEvents: [
+        {
+          id: "e-1",
+          fixtureId: "fx-attr",
+          seq: 1,
+          type: "core.start",
+          payload: {},
+          recordedAt: "2026-08-12T00:00:00.000Z",
+          recordedBy: "user-1",
+        },
+      ],
+      ...extra,
+    });
+    const panels = findAll(island.tree(), isType(Panel));
+    expect(panels.length).toBeGreaterThan(0);
+    return propsOf(panels[0]!).renderAttribution as
+      | ((a: PadActionView, v: Record<string, unknown>, set: () => void) => ReactElement | null)
+      | undefined;
+  }
+
+  it("forwards a picker to every Panel when the caller passes no renderAttribution", () => {
+    const forwarded = forwardedRenderer({});
+    expect(typeof forwarded).toBe("function");
+    const drawn = forwarded!(attributedAction, {}, () => undefined);
+    expect(drawn?.type).toBe(AttributionPicker);
+  });
+
+  it("an explicit renderAttribution still WINS — S11's skins may draw their own", () => {
+    const marker = { type: "custom" } as unknown as ReactElement;
+    const forwarded = forwardedRenderer({ renderAttribution: () => marker });
+    expect(forwarded!(attributedAction, {}, () => undefined)).toBe(marker);
   });
 });
