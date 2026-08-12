@@ -112,8 +112,17 @@ export default async function PlayerCardPage({ params }: Props) {
           above the per-division breakdown below: the total a spectator
           scans first, with the division-by-division detail underneath for
           anyone who wants it. Same "nothing renders when empty" rule as
-          that section. */}
-      {career.length > 0 && (
+          that section.
+
+          Renders only when it AGGREGATES something — some sport in this
+          competition spanning more than one division. A player in a single
+          division is the common case, and there the rollup is a byte-for-byte
+          restatement of the Stats block below it: same label, same numbers,
+          twice on one page. Unlike /me, which always shows Career because
+          summing across clubs is the whole point of that view, this card is
+          already competition-scoped, so with one division there is nothing
+          left to sum. */}
+      {career.some((c) => c.divisions > 1) && (
         <section className="mt-6" data-testid="player-career">
           <h2 className="mb-2 font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted">
             {careerLabel}

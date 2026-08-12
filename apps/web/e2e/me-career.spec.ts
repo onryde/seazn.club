@@ -36,18 +36,22 @@ async function seedFootballGoals(
   opponentId: string,
   goals: number,
   as: "FW" | "GK" = "FW",
+  intoCompetitionId?: string,
 ): Promise<{ competitionId: string; divisionId: string }> {
-  const comp = await apiJson<{ id: string }>(page.request, "/api/v1/competitions", "POST", {
-    ends_on: "2030-12-31",
-    name,
-    visibility: "public",
-  });
-  const competitionId = comp.data!.id;
+  const competitionId =
+    intoCompetitionId ??
+    (
+      await apiJson<{ id: string }>(page.request, "/api/v1/competitions", "POST", {
+        ends_on: "2030-12-31",
+        name,
+        visibility: "public",
+      })
+    ).data!.id;
   const div = await apiJson<{ id: string }>(
     page.request,
     `/api/v1/competitions/${competitionId}/divisions`,
     "POST",
-    { name: "Prem", sport_key: "football", variant_key: "11-a-side" },
+    { name: name.slice(0, 40), sport_key: "football", variant_key: "11-a-side" },
   );
   const divisionId = div.data!.id;
 
@@ -160,6 +164,13 @@ test("career rollup: /me sums across competitions, the public card stays scoped 
   // the "kept goal in some matches, played out in others" case: it must land
   // on ONE football card carrying both sets of numbers, not two half cards.
   const a = await seedFootballGoals(page, `Career A ${TAG}`, playerId, rival.data!.id, 2);
+  // A SECOND division inside competition A. The public card only shows a
+  // rollup where it genuinely aggregates, and it makes the scope assertion
+  // sharper: A's card must total A's two divisions (2 + 1 = 3) and stop
+  // there, rather than either one division's figure or the career's 6.
+  const a2 = await seedFootballGoals(
+    page, `Career A2 ${TAG}`, playerId, rival.data!.id, 1, "FW", a.competitionId,
+  );
   const b = await seedFootballGoals(page, `Career B ${TAG}`, playerId, rival.data!.id, 3);
   const k = await seedFootballGoals(page, `Career K ${TAG}`, playerId, rival.data!.id, 1, "GK");
 
@@ -213,7 +224,7 @@ test("career rollup: /me sums across competitions, the public card stays scoped 
   });
   expect(rally.status, `badminton.rally rejected: ${JSON.stringify(rally.error)}`).toBeLessThan(300);
 
-  for (const d of [a.divisionId, b.divisionId, k.divisionId, badmintonDivisionId]) {
+  for (const d of [a.divisionId, a2.divisionId, b.divisionId, k.divisionId, badmintonDivisionId]) {
     await materializeSnapshots(page, d);
   }
 
@@ -224,8 +235,8 @@ test("career rollup: /me sums across competitions, the public card stays scoped 
   expect(career.status).toBe(200);
   const football = career.data!.sports.find((s) => s.sport_key === "football");
   expect(football, "no football career row").toBeDefined();
-  expect(football!.metrics.find((m) => m.key === "goals")?.value).toBe(5);
-  expect(football!.divisions).toBe(3);
+  expect(football!.metrics.find((m) => m.key === "goals")?.value).toBe(6);
+  expect(football!.divisions).toBe(4);
   // One card, both roles: the outfield goals above and the keeper's conceded
   // goal from the third division sit on the SAME football row.
   expect(football!.metrics.find((m) => m.key === "goals_conceded")?.value).toBe(1);
@@ -249,8 +260,13 @@ test("career rollup: /me sums across competitions, the public card stays scoped 
   await page.goto("/me");
   await expect(page.getByTestId("me-career")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("me-career-empty")).toHaveCount(0);
-  expect(await cardValues(page, "football")).toContain("5");
+  expect(await cardValues(page, "football")).toContain("6");
   await expect(page.getByTestId("career-sport-badminton")).toBeVisible();
+  // The card states matches ONCE, in its meta line — a folded `matches`
+  // metric tile would be a second, differently-counted number under the same
+  // word (the engine counts a fixture with any play, the meta counts a
+  // completed one), so badminton's is dropped from the tiles.
+  await expect(page.getByTestId("career-sport-badminton").locator("dt")).not.toHaveText([/^Matches$/i]);
 
   // ---- the public card: ONE competition only -----------------------------
   const orgs = await apiJson<{ id: string; slug: string }[]>(page.request, "/api/orgs");
@@ -263,11 +279,12 @@ test("career rollup: /me sums across competitions, the public card stays scoped 
 
   const publicCareer = page.getByTestId("player-career");
   await expect(publicCareer).toBeVisible({ timeout: 20_000 });
-  // The number is the assertion. Competition A alone scored 2; the cross-
-  // competition total is 5. A card that leaks scope reads 5 here.
+  // The number is the assertion. Competition A's two divisions total 3; the
+  // cross-competition career is 6. A card that leaks scope reads 6 here, and
+  // one that fails to aggregate within the competition reads 2 or 1.
   const publicFootball = await cardValues(page, "football");
-  expect(publicFootball).toContain("2");
-  expect(publicFootball).not.toContain("5");
+  expect(publicFootball).toContain("3");
+  expect(publicFootball).not.toContain("6");
   // …and a sport played only in ANOTHER competition has no card at all.
   await expect(page.getByTestId("career-sport-badminton")).toHaveCount(0);
 

@@ -190,10 +190,24 @@ export function groupCareerStatsBySport(
       const divisionIds = [...new Set(group.map((r) => r.division_id))];
       const matches = divisionIds.reduce((n, id) => n + (matchesByDivision.get(id) ?? 0), 0);
 
+      // A career card states its match count ONCE, in the meta line above the
+      // tiles — and that is the count derived from `fixtures`, which exists
+      // for all eleven sports. Three modules (carrom, and the setbased and
+      // nested kernels) ALSO declare a folded `matches` metric, counted a
+      // different way: the engine counts a fixture with any recorded play,
+      // the meta line counts a completed one. Both are defensible and they
+      // routinely disagree, which on screen read as "1 division · 1 variant ·
+      // 0 matches" directly above a tile saying "MATCHES 1" — the same word,
+      // two numbers, on one card. Dropping the tile rather than the meta
+      // keeps the count that every sport has. The per-division "My stats"
+      // block is untouched: it has no meta line, so its `matches` tile is
+      // that block's only match count and still means what it always did.
+      const metrics = labelFromModel(sportKey, model, stats, m).filter((x) => x.key !== "matches");
+
       return {
         sport_key: sportKey,
         sport_label: sportLabel(sportKey, m),
-        metrics: labelFromModel(sportKey, model, stats, m),
+        metrics,
         divisions: divisionIds.length,
         variants: new Set(group.map((r) => r.variant_key)).size,
         matches,

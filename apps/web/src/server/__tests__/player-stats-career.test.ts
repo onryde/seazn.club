@@ -78,6 +78,23 @@ describe("groupCareerStatsBySport", () => {
     expect(out[0]!.matches).toBe(10);
   });
 
+  // S9/#418 — a career card states its match count once, in the meta line
+  // (`matches`, derived from `fixtures`, which every sport has). Three
+  // modules ALSO declare a folded `matches` metric counted a different way:
+  // the engine counts a fixture with any recorded play, the meta counts a
+  // COMPLETED one, so the two routinely disagree. On screen that read as
+  // "1 division · 1 variant · 0 matches" directly above a tile saying
+  // "MATCHES 1" — one word, two numbers, one card. The tile is what gives
+  // way, because the meta count is the one that exists for all eleven sports.
+  it("drops a folded `matches` tile — the meta count is the card's only match number", () => {
+    const rows = [row({ sport_key: "badminton", division_id: "d1", stats: { matches: 1, points_won: 7 } })];
+    const out = groupCareerStatsBySport(rows, new Map([["d1", 0]]), en);
+    expect(out[0]!.matches).toBe(0);
+    expect(out[0]!.metrics.map((x) => x.key)).not.toContain("matches");
+    // …and only that key goes — the sport's real metrics are untouched.
+    expect(out[0]!.metrics.find((x) => x.key === "points_won")?.value).toBe(7);
+  });
+
   // Regression (c) — S9/#418: goalkeeper metrics (folded: goals_conceded,
   // clean_sheets) and outfield metrics (goals) for the SAME person in the
   // SAME sport, contributed by DIFFERENT divisions (a keeper season and an
