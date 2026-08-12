@@ -14,6 +14,7 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { publishDivisionUpdate } from "@/lib/realtime";
 import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED, REASON_CODE } from "@/lib/schedule-board";
 import { resolveVenueTz } from "@/lib/tz";
+import { log } from "@/server/logger";
 import { EngineError } from "@seazn/engine/core";
 import {
   boardMetrics,
@@ -24,6 +25,7 @@ import {
   deltaConflicts,
   isBlockingConflict,
   repairSchedule,
+  RepairVerificationError,
   RULE_BY_REASON,
   slotFixtures,
   validateAssignments,
@@ -36,6 +38,7 @@ import {
   type Conflict,
   type HardConstraint,
   type OrderDependency,
+  type RepairResult,
   type RuleFixture,
   type SchedulableFixture,
   type SlotConfig,
@@ -528,7 +531,18 @@ function peopleOf(f: FixtureLite, people: Map<string, string[]>): string[] {
  *  it keep their exact pre-C1 behaviour, and round-order enforcement is
  *  correctly inert wherever it is not threaded through (`competition-
  *  schedule-apply.ts`, `schedule-ai.ts`'s AI-plan path, `person-merge.ts` —
- *  deferred this session; see the task report). */
+ *  deferred this session; see the task report).
+ *
+ *  `stageId` (C1 fix-loop, Finding 2) is stamped UNCONDITIONALLY, the same
+ *  way `divisionId` is — `fixtures.stage_id` is `NOT NULL`, no gate needed.
+ *  It rides along regardless of whether `roundNo` itself is forwarded on
+ *  this call: `calendar.ts`'s round-order grouping key only reads it off
+ *  rows that already carry a `roundNo`, so a `stageId` on a round-less
+ *  Assignment is simply never consulted. `calendar.ts`'s own comment on the
+ *  grouping key explains WHY it is needed at all — `poolId` alone cannot
+ *  tell two round-robin-kind stages in one division apart when neither has
+ *  a pool (two `league` stages, say), which is exactly the shape
+ *  `roundRobinStageIds` itself already has to return a SET for. */
 export function toAssignment(
   f: FixtureLite,
   matchMinutes: number,
@@ -545,6 +559,7 @@ export function toAssignment(
     people: peopleOf(f, people),
     ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
     divisionId: f.division_id,
+    stageId: f.stage_id,
     ...(roundRobinStageIds?.has(f.stage_id) ? { roundNo: f.round_no } : {}),
     movable: !f.schedule_locked,
   };
@@ -1040,6 +1055,10 @@ export async function autoSchedule(
       ...(roundRobin.has(f.stage_id) ? { roundNo: f.round_no } : {}),
       ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
       divisionId: f.division_id,
+      // C1 fix-loop (Finding 2). Unconditional, same as `divisionId` — see
+      // `SchedulableFixture.stageId`'s own doc comment in `calendar.ts` for
+      // why `build.ts`'s contamination guard needs it.
+      stageId: f.stage_id,
       ...(f.home_entrant_id !== null ? { home: f.home_entrant_id } : {}),
       ...(f.away_entrant_id !== null ? { away: f.away_entrant_id } : {}),
       people: peopleOf(f, people),
@@ -1821,16 +1840,51 @@ async function reflowExisting(args: {
     };
   };
 
-  const repaired = await repairSchedule({
-    proposal,
-    existing: immovable,
-    config: args.config,
-    dependencies: args.dependencies,
-    // The same wall the tier solver is held to. `repairSchedule`'s own default
-    // is 20s, and a clean board is answered without loading the WASM at all, so
-    // this only binds the run that is actually searching.
-    budgetMs: autoSolverWallMs(),
-  });
+  let repaired: RepairResult;
+  try {
+    repaired = await repairSchedule({
+      proposal,
+      existing: immovable,
+      config: args.config,
+      dependencies: args.dependencies,
+      // The same wall the tier solver is held to. `repairSchedule`'s own default
+      // is 20s, and a clean board is answered without loading the WASM at all, so
+      // this only binds the run that is actually searching.
+      budgetMs: autoSolverWallMs(),
+    });
+  } catch (err) {
+    // `RepairVerificationError` (C1, 2026-08-12 round-order design fix-loop
+    // finding 1): z3's own constraint families do not include round order —
+    // out of scope by the design doc's own ruling, "the verifier now catches
+    // them" — so on an ordinary REFLOW (lock two cards, Auto-schedule; REFLOW
+    // is the DEFAULT mode) z3 can find a model where nothing needs to move
+    // while the REAL verifier still rejects `proposal` for a round-order
+    // breach z3 was never taught. Only ever thrown with `kind:
+    // "encoding_drift"` here — `repairSchedule` (unlike `repairAndVerify`,
+    // which this call site does NOT use) never throws
+    // `"verifier_rejected"` itself.
+    //
+    // Mirrors `build.ts`'s OWN handling of the placement solver's equivalent
+    // disagreement (`BuildStatus.verifier_rejected`: "the encoder and
+    // validateAssignments disagreed... the greedy seed is returned and the
+    // disagreement is logged") rather than inventing a new status or a
+    // synthesized conflict: `settle(proposal, ...)` re-runs the REAL
+    // `validateAssignments` over `full = [...proposal, ...args.pinned]` — a
+    // strict superset of what `RepairVerificationError.conflicts` (`pre`)
+    // already found dirty within `proposal` alone (adding rows to an
+    // `assignments` array can only add pairwise comparisons, never remove
+    // one already found) — so the organiser is handed the real,
+    // already-computed conflict through the ordinary conflict-reporting
+    // path, never a raw 500 from `http.ts`'s generic catch-all.
+    if (err instanceof RepairVerificationError) {
+      log.warn(
+        { kind: err.kind, conflicts: err.conflicts.map((c) => `${c.fixtureId}:${c.reason}`) },
+        "schedule: reflow repair encoding drift — verifier rejected the repaired board, falling back to the untouched proposal",
+      );
+      return settle(proposal, "verifier_rejected", "greedy", touched(), false);
+    }
+    throw err;
+  }
   switch (repaired.status) {
     case "clean":
       // `engine: "greedy"`, and NOT because nothing happened — `clean` is also
@@ -1934,6 +1988,16 @@ export async function applySchedule(
         // not only to the board it lands on. Same shape as `toAssignment`.
         ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
         divisionId: f.division_id,
+        // C1 fix-loop (Finding 2): unconditional, same as `divisionId` just
+        // above — `divisionFixtures` (below) is DIVISION-WIDE, so `all`, and
+        // therefore `proposed`/`currentSlots`/`untouched`, can carry more
+        // than one round-robin-kind stage's fixtures in ONE call. This is
+        // the actual WRITE gate (the comment above `roundRobin`'s own
+        // assignment explains why it has to be judged HERE), so it is the
+        // one place this omission would have mattered most: without it,
+        // `calendar.ts`'s grouping key falls back to `(divisionId, poolId)`
+        // and two unpooled round-robin stages compare as one sequence again.
+        stageId: f.stage_id,
         // C1 (2026-08-12 round-order design). Same shape as `toAssignment`
         // again — `f.round_no` is the fixture's own round, gated on stage
         // kind exactly as `toAssignment` gates it; `movable: true`
