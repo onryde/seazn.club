@@ -354,13 +354,17 @@ waves. Progress tracking lives in the memory file
 
 ## 14. Appendix — product follow-ups surfaced by this design (no issues filed)
 
-Captured per the standing no-new-issues rule; each needs an owner ruling
-and its own spec when picked up. Sequencing rationale ratified in-session:
-items 1–3 are LIFTED FROM bench code after bench v1 is green (building
-them first would mean building half the bench without its harness); items
-4–5 touch the same scheduler surfaces as release-2 and should follow it;
-items 6–7 are independent and could run any time, including during the
-wait window.
+**SUPERSEDED 2026-08-13**: all 7 items now have owner-approved designs
+and session prompts — see
+`2026-08-13-product-portfolio-prompts/_INDEX.md` (D1–D7, sessions
+P1–P11, build-gated). The list below stays as the origin record. One
+sequencing change ratified there: D2/D3 (capacity, health) are now
+specced as standalone engine libs built BEFORE the bench, with the bench
+consuming the same functions — the "lift from bench" direction below is
+reversed for those two.
+
+Original capture (2026-08-12): items 1–3 lift from bench code after
+bench v1; items 4–5 follow release-2; items 6–7 independent.
 
 1. **"Start from a famous format" templates** — convert pack skeletons
    (stages, points, tiebreakers, schedule settings; minus real persons)
