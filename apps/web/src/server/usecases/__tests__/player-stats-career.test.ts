@@ -24,7 +24,7 @@ import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
-import { createDivision } from "../divisions";
+import { createDivision, archiveDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createPerson } from "../persons";
 import { divisionPlayerStats } from "../player-stats";
@@ -136,6 +136,29 @@ async function insertFinalizedFixture(
   const [{ id }] = await sql<{ id: string }[]>`
     insert into fixtures (stage_id, division_id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status)
     values (${stageId}, ${divisionId}, ${roundCounter}, 1, ${homeEntrantId}, ${awayEntrantId}, 'finalized')
+    returning id`;
+  return id;
+}
+
+/** Same raw insert as insertFinalizedFixture, but left 'decided' — the
+ *  status a fixture reaches once the fold has an outcome but nobody has
+ *  explicitly advanced it to 'finalized' (fixtureStatusFromFold,
+ *  engine-db/append-event.ts). Exists to prove review round 2, finding 1:
+ *  countMatchesByDivision used to filter on `status = 'finalized'` alone in
+ *  all three call sites (player-stats.ts/me.ts/public-site/data.ts), so a
+ *  fixture stuck here counted zero matches despite recomputePlayerStats
+ *  (which puts NO status filter on its own score_events read) contributing
+ *  its stats to the snapshot anyway. */
+async function insertDecidedFixture(
+  stageId: string,
+  divisionId: string,
+  homeEntrantId: string,
+  awayEntrantId: string,
+): Promise<string> {
+  roundCounter += 1;
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into fixtures (stage_id, division_id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status)
+    values (${stageId}, ${divisionId}, ${roundCounter}, 1, ${homeEntrantId}, ${awayEntrantId}, 'decided')
     returning id`;
   return id;
 }
@@ -293,7 +316,7 @@ describe.skipIf(!HAS_DB)("personCareerStats (S9/#418)", () => {
     // against the on-pitch lineup (putLineup), same precondition
     // player-stats.test.ts's own seedDivision satisfies.
     await sql`update divisions set status = 'active' where id = ${fb.divisionId}`;
-    const fixtureId = await insertFinalizedFixtureButScoreable(fb.stageId, fb.divisionId, mine, theirs);
+    const fixtureId = await insertScheduledScoreableFixture(fb.stageId, fb.divisionId, mine, theirs);
     await putLineup(auth, fixtureId, mine, {
       slots: [{ person_id: scorer.id, slot: "starting" as const, position_key: null, order_no: 1, roles: [] }],
     });
@@ -329,14 +352,194 @@ describe.skipIf(!HAS_DB)("personCareerStats (S9/#418)", () => {
     const after = await divisionPlayerStats(auth, fb.divisionId, {});
     expect(after.rows.find((r) => r.person_id === scorer.id)?.stats.goals).toBe(2);
   });
+
+  // Review round 2, finding 1: countMatchesByDivision (now the ONE shared
+  // implementation behind personCareerStats/listMyCareerStats/getPublicPlayer
+  // — finding 2) used to filter `status = 'finalized'` alone. A fixture left
+  // 'decided' and never explicitly finalized still has a real outcome and a
+  // real snapshot (recomputePlayerStats puts NO status filter on its own
+  // score_events read — see player-stats.ts's sibling `decided` count at the
+  // top of divisionPlayerStats), so it must still count as a match. Proven
+  // once, through personCareerStats, because all three callers now share
+  // this exact code path — there is only one implementation left to break.
+  it("REVIEW ROUND 2, finding 1: a fixture left DECIDED (never explicitly finalized) still counts as a match", async () => {
+    const { auth } = await seedOrg();
+    const person = await createPerson(auth, {
+      full_name: "Decided Only",
+      consent: {},
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+    const opponent = await createPerson(auth, {
+      full_name: "Decided Opponent",
+      consent: {},
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+    const fb = await seedDivisionWithStage(auth, "football", "default", "Decided");
+    const mine = await makeEntrant(auth, fb.divisionId, "team", "Decided FC", [person.id]);
+    const theirs = await makeEntrant(auth, fb.divisionId, "team", "Decided Opp FC", [opponent.id]);
+    await insertDecidedFixture(fb.stageId, fb.divisionId, mine, theirs);
+    await insertSnapshot(fb.divisionId, person.id, "football", { goals: 1 });
+
+    const career = await personCareerStats(auth, person.id);
+    const fbCard = career.sports.find((s) => s.sport_key === "football");
+    expect(fbCard).toBeDefined();
+    expect(fbCard!.matches).toBe(1); // was 0 under a 'finalized'-only filter
+  });
+
+  // Review round 2, finding 3: the prior "keeper split" coverage
+  // (server/__tests__/player-stats-career.test.ts) was a PURE unit test on
+  // groupCareerStatsBySport with fabricated snapshot rows, on the stated
+  // premise that nothing in apps/web ever emits core.lineup.position so a
+  // real DB scenario wasn't reachable. That premise is FALSE: a STARTING
+  // lineup slot with position_key: "GK" is enough on its own —
+  // putLineup (usecases/fixtures.ts) writes position_key straight into the
+  // `lineups` table, loadLineupPair/loadLineupPairsForDivision
+  // (engine-db/lineups.ts) read it back onto LineupSlot.positionKey, and
+  // core/lineup.ts's initSquads/memberFromSlot seed SquadState from exactly
+  // that field for any 'starting' slot — no core.lineup.* event ever needs
+  // to fire. footballKeeperStatsFold (football.ts) resolves keeperOf(side)
+  // from that seeded state alone. This test drives that path for real: one
+  // person keeps goal in one division and plays outfield in another,
+  // through real lineups + real scored events + a real recompute, and
+  // proves the union lands on ONE football career card. The existing pure
+  // unit test stays as the cheap guard for the group/sum logic itself; this
+  // is the one that proves the DB criterion.
+  it("REVIEW ROUND 2, finding 3: a real keeper season and a real outfield season, same person, land on ONE football card", async () => {
+    const { auth } = await seedOrg();
+    const person = await createPerson(auth, {
+      full_name: "Two-Way Robin",
+      consent: {},
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+    const keeperOpponent = await createPerson(auth, {
+      full_name: "Keeper Opponent",
+      consent: {},
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+    const outfieldOpponent = await createPerson(auth, {
+      full_name: "Outfield Opponent",
+      consent: {},
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+
+    // --- Division A: person keeps goal, concedes exactly one goal ---
+    const gk = await seedDivisionWithStage(auth, "football", "default", "Keeper Season");
+    const gkMine = await makeEntrant(auth, gk.divisionId, "team", "Keeper FC", [person.id]);
+    const gkTheirs = await makeEntrant(auth, gk.divisionId, "team", "Keeper Opp FC", [keeperOpponent.id]);
+    // Entrants first, THEN active — createEntrants locks the roster once a
+    // division has started (same order the "issues NO recompute" test above
+    // already proves works).
+    await sql`update divisions set status = 'active' where id = ${gk.divisionId}`;
+    const gkFixtureId = await insertScheduledScoreableFixture(gk.stageId, gk.divisionId, gkMine, gkTheirs);
+    await putLineup(auth, gkFixtureId, gkMine, {
+      slots: [{ person_id: person.id, slot: "starting" as const, position_key: "GK", order_no: 1, roles: [] }],
+    });
+    await putLineup(auth, gkFixtureId, gkTheirs, {
+      slots: [
+        { person_id: keeperOpponent.id, slot: "starting" as const, position_key: null, order_no: 1, roles: [] },
+      ],
+    });
+    await scoreEvent(auth, gkFixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    // The away side (gkTheirs) scores on home (gkMine) — the fold's
+    // conceding side is the OPPONENT of `by`, so this concedes against
+    // Robin, the home GK (football.ts's footballKeeperStatsFold).
+    await scoreEvent(auth, gkFixtureId, {
+      expected_seq: 1,
+      type: "football.goal",
+      payload: { by: gkTheirs, scorer: keeperOpponent.id },
+    });
+    // Force the recompute + snapshot write — the only usecase that writes
+    // player_stat_snapshots; personCareerStats itself never recomputes.
+    const gkStats = await divisionPlayerStats(auth, gk.divisionId, {});
+    expect(gkStats.rows.find((r) => r.person_id === person.id)?.stats.goals_conceded).toBe(1);
+
+    // --- Division B: the SAME person, outfield, scores a goal ---
+    const of = await seedDivisionWithStage(auth, "football", "default", "Outfield Season");
+    const ofMine = await makeEntrant(auth, of.divisionId, "team", "Outfield FC", [person.id]);
+    const ofTheirs = await makeEntrant(auth, of.divisionId, "team", "Outfield Opp FC", [outfieldOpponent.id]);
+    await sql`update divisions set status = 'active' where id = ${of.divisionId}`;
+    const ofFixtureId = await insertScheduledScoreableFixture(of.stageId, of.divisionId, ofMine, ofTheirs);
+    await putLineup(auth, ofFixtureId, ofMine, {
+      slots: [{ person_id: person.id, slot: "starting" as const, position_key: null, order_no: 1, roles: [] }],
+    });
+    await putLineup(auth, ofFixtureId, ofTheirs, {
+      slots: [
+        { person_id: outfieldOpponent.id, slot: "starting" as const, position_key: null, order_no: 1, roles: [] },
+      ],
+    });
+    await scoreEvent(auth, ofFixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(auth, ofFixtureId, {
+      expected_seq: 1,
+      type: "football.goal",
+      payload: { by: ofMine, scorer: person.id },
+    });
+    const ofStats = await divisionPlayerStats(auth, of.divisionId, {});
+    expect(ofStats.rows.find((r) => r.person_id === person.id)?.stats.goals).toBe(1);
+
+    // --- The proof: ONE football card, both metric families present ---
+    const career = await personCareerStats(auth, person.id);
+    const footballCards = career.sports.filter((s) => s.sport_key === "football");
+    expect(footballCards).toHaveLength(1); // not two half-populated cards
+    const byKey = Object.fromEntries(footballCards[0]!.metrics.map((m) => [m.key, m.value]));
+    expect(byKey.goals_conceded).toBe(1); // from the DB-real keeper season
+    expect(byKey.goals).toBe(1); // from the DB-real outfield season
+    expect(footballCards[0]!.divisions).toBe(2);
+  });
+
+  // Review round 2, "decide and report": personCareerStats joined divisions
+  // with NO archived_at filter while listMyCareerStats/listMyPlayerStats
+  // (me.ts) both filter archived divisions out — an unexplained divergence
+  // between this route and its own cross-org twin. Decision: ALIGN — the
+  // dominant convention across this repo's own division reads (divisions.ts's
+  // own listing default, card-stats.ts, division-slots.ts, competitions.ts)
+  // is to hide archived divisions from an aggregate/listing read by default,
+  // and a "career total" silently going backwards the moment an unrelated
+  // org archives an old competition is exactly the silent-data-flicker shape
+  // that convention exists to prevent. usecases/player-stats.ts's OWN
+  // personStats (the per-division, non-summed sibling reader in this same
+  // file) is a SEPARATE, pre-existing function that also has no archived_at
+  // filter — deliberately left untouched this round: fixing it was not asked
+  // for and would change the behavior of an endpoint outside this review's
+  // stated scope.
+  it("REVIEW ROUND 2, archived-divisions decision: an archived division's snapshot is excluded from the career total", async () => {
+    const { auth } = await seedOrg();
+    const person = await createPerson(auth, {
+      full_name: "Archive Case",
+      consent: {},
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+    const fb = await seedDivisionWithStage(auth, "football", "default", "ToArchive");
+    await insertSnapshot(fb.divisionId, person.id, "football", { goals: 9 });
+
+    const before = await personCareerStats(auth, person.id);
+    expect(before.sports.find((s) => s.sport_key === "football")).toBeDefined();
+
+    await archiveDivision(auth, fb.divisionId);
+    const after = await personCareerStats(auth, person.id);
+    expect(after.sports.find((s) => s.sport_key === "football")).toBeUndefined();
+  });
 });
 
 /** Fixture in a status the real scoring path accepts (scoreEvent validates
  *  fixture/division state, not just existence) — 'scheduled' is what a
  *  freshly generated fixture starts as; this file skips generateStageFixtures
- *  entirely (raw-inserted fixtures throughout), so this helper exists only
- *  for the one test that needs a fixture BOTH raw-inserted AND scoreable. */
-async function insertFinalizedFixtureButScoreable(
+ *  entirely (raw-inserted fixtures throughout), so this helper exists for
+ *  tests that need a fixture BOTH raw-inserted AND scoreable. (Renamed from
+ *  insertFinalizedFixtureButScoreable, review round 2 finding 4 — the old
+ *  name claimed a 'finalized' status it never actually inserted.) */
+async function insertScheduledScoreableFixture(
   stageId: string,
   divisionId: string,
   homeEntrantId: string,

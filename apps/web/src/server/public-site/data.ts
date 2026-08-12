@@ -12,6 +12,11 @@ import { sql } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
 import { isoDateTime } from "@/lib/public-site";
 import { labelPlayerStats, groupCareerStatsBySport, type CareerSportStats } from "@/server/player-stats";
+// The DB-touching "matches" counter — NOT the pure module above (same name,
+// different file). Shared with personCareerStats/countMatchesByDivision
+// (usecases/player-stats.ts) and me.ts's listMyCareerStats, review round 2
+// finding 2.
+import { countMatchesByDivision } from "@/server/usecases/player-stats";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
@@ -548,12 +553,13 @@ export async function getPublicPlayer(
       // `d.competition_id = shell.competition.id`, so this rollup is
       // STRUCTURALLY scoped to this one competition — summing across
       // competitions (or orgs) here would leak a spectator a total the
-      // consent gate never agreed to show them. Matches count is its own
-      // small unauthenticated read (mirrors player-stats.ts's
-      // countMatchesByDivision / me.ts's countMyMatchesByDivision), scoped to
-      // exactly the division ids this competition's snapshots named.
+      // consent gate never agreed to show them. Matches count is the SAME
+      // shared countMatchesByDivision personCareerStats/listMyCareerStats
+      // use (review round 2 finding 2) — no tenant/user scoping needed here
+      // because the caller already restricts divisionIds to exactly the
+      // division ids this competition's own snapshots named.
       const divisionIds = [...new Set(snapshots.map((s) => s.division_id))];
-      const matchesByDivision = await countPublicMatchesByDivision(personId, divisionIds);
+      const matchesByDivision = await countMatchesByDivision(sql, { by: "person", personId }, divisionIds);
       // This page has no Dict/locale pair to compose its own pluralized copy
       // with (see statMsg's own comment above) — so, like every metric
       // label already in this payload, the "N divisions · N variants · N
@@ -588,27 +594,6 @@ export async function getPublicPlayer(
   if (!detail) return null;
 
   return { org: shell.org, competition: shell.competition, ...detail };
-}
-
-/** Finalized fixtures a person played, per division — the PUBLIC,
- *  unauthenticated twin of player-stats.ts's countMatchesByDivision and
- *  me.ts's countMyMatchesByDivision (same query shape, same `sql([])`
- *  guard); no tenant/user scoping needed here because the caller already
- *  restricts `divisionIds` to ones this competition's own consent-filtered
- *  snapshots named. */
-async function countPublicMatchesByDivision(
-  personId: string,
-  divisionIds: readonly string[],
-): Promise<Map<string, number>> {
-  if (divisionIds.length === 0) return new Map();
-  const rows = await sql<{ division_id: string; matches: number }[]>`
-    select f.division_id, count(distinct f.id)::int as matches
-    from fixtures f
-    join entrant_members em on em.person_id = ${personId}
-      and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-    where f.division_id in ${sql(divisionIds as string[])} and f.status = 'finalized'
-    group by f.division_id`;
-  return new Map(rows.map((r) => [r.division_id, r.matches]));
 }
 
 /**

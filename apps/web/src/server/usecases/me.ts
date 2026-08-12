@@ -18,6 +18,11 @@ import {
   type CareerSnapshotRow,
   type CareerSportStats,
 } from "@/server/player-stats";
+// The DB-touching "matches" counter — NOT the pure module above (same name,
+// different file: usecases/player-stats.ts vs server/player-stats.ts).
+// Shared with personCareerStats (usecases/player-stats.ts) and
+// public-site/data.ts's getPublicPlayer, review round 2 finding 2.
+import { countMatchesByDivision } from "./player-stats";
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
@@ -315,26 +320,6 @@ export async function listMyPlayerStats(userId: string): Promise<MyStatBlock[]> 
   });
 }
 
-/** Finalized fixtures played, per division, by ANY of this user's claimed
- *  persons (there is no single personId to scope by — see listMyCareerStats)
- *  — the /me counterpart to player-stats.ts's countMatchesByDivision,
- *  identical shape and identical `sql([])` guard, differing only in which
- *  join resolves "mine" (a `persons.user_id` match instead of a fixed id). */
-async function countMyMatchesByDivision(
-  userId: string,
-  divisionIds: readonly string[],
-): Promise<Map<string, number>> {
-  if (divisionIds.length === 0) return new Map();
-  const rows = await sql<{ division_id: string; matches: number }[]>`
-    select f.division_id, count(distinct f.id)::int as matches
-    from fixtures f
-    join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-    join persons p on p.id = em.person_id and p.user_id = ${userId} and p.merged_into is null
-    where f.division_id in ${sql(divisionIds as string[])} and f.status = 'finalized'
-    group by f.division_id`;
-  return new Map(rows.map((r) => [r.division_id, r.matches]));
-}
-
 /** S9/#418 — the /me Career section: every claimed person's snapshot rows,
  *  grouped and summed by sport ACROSS EVERY ORG/COMPETITION (private
  *  included) — deliberately unlike the org-scoped persons-stats route's
@@ -358,8 +343,9 @@ export async function listMyCareerStats(userId: string): Promise<CareerSportStat
     order by d.slug`;
   if (rows.length === 0) return [];
 
-  const matchesByDivision = await countMyMatchesByDivision(
-    userId,
+  const matchesByDivision = await countMatchesByDivision(
+    sql,
+    { by: "claimedPersons", userId },
     [...new Set(rows.map((r) => r.division_id))],
   );
   const locale = await resolveLocale().catch(() => DEFAULT_LOCALE);

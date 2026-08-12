@@ -379,27 +379,78 @@ export async function personStats(
   });
 }
 
-/** Finalized fixtures a person played, per division, restricted to
- *  `divisionIds` — a plain `fixtures`/`entrant_members` read, deliberately
- *  NOT the declared playerStats "matches" metric: only 3 of the 11 shipped
- *  modules (carrom, and the setbased/nested kernels) declare one at all, so
- *  a metric-based count would read zero for football/cricket/hockey/…
+/** Every fixture status this repo treats as "played, has a result" —
+ *  decided/finalized/forfeited. `fixtures.status`'s check constraint also
+ *  allows scheduled/in_play/abandoned/cancelled, none of which count
+ *  (`db/migration/v2-engine/tables/V214__fixtures.sql:21-22`). Same three
+ *  statuses as divisions.ts's own audit count, org-posts.ts's DECIDED set,
+ *  stages.ts's DECIDED set, withdrawal.ts's SETTLED set — each currently its
+ *  own local copy (unifying those is out of scope here; this constant only
+ *  closes the "matches" duplication below).
+ *
+ *  Review round 2, finding 1: this used to be a bare `status = 'finalized'`
+ *  literal, independently duplicated in THIS function, me.ts's
+ *  countMyMatchesByDivision, and public-site/data.ts's
+ *  countPublicMatchesByDivision. recomputePlayerStats above puts NO status
+ *  filter on its own score_events read, so a fixture left `decided` and
+ *  never explicitly finalized contributed its stats to the snapshot while
+ *  contributing ZERO to `matches` — on all three call sites at once. A
+ *  player's card could read "5 goals · 0 matches". */
+const COMPLETED_FIXTURE_STATUSES: readonly string[] = ["decided", "finalized", "forfeited"];
+
+/** Pooled `sql` or an open transaction — `postgres.TransactionSql` and `Sql`
+ *  share `ISql` (same fact as admin-fixture-config.ts's own `Queryable`).
+ *  `countMatchesByDivision` below is called both ways: inside `withTenant`
+ *  here (personCareerStats) and against the pooled `sql` proxy from
+ *  me.ts/public-site/data.ts, neither of which has a tenant tx open. */
+type Queryable = postgres.ISql;
+
+/** The one thing the three "matches" callers (org-scoped persons-stats,
+ *  cross-org /me, the public player card) genuinely differ on — who "mine"
+ *  resolves to. Everything else about the query (status set, grouping, the
+ *  `sql([])` guard) must be identical, which is the whole point of sharing
+ *  this function (review round 2, finding 2 — the same completed-status
+ *  defect was duplicated three times because the query itself was). */
+export type MatchesOwner = { by: "person"; personId: string } | { by: "claimedPersons"; userId: string };
+
+/** Completed fixtures a person — or, for a signed-in player, ANY of their
+ *  claimed persons (`MatchesOwner`'s "claimedPersons" branch: there is no
+ *  single personId to scope by there, a user can hold one claimed `persons`
+ *  row per org) — played, per division, restricted to `divisionIds`. The
+ *  single implementation behind personCareerStats below, me.ts's
+ *  listMyCareerStats, and public-site/data.ts's getPublicPlayer career
+ *  rollup. Deliberately NOT the declared playerStats "matches" metric: only
+ *  3 of the 11 shipped modules (carrom, and the setbased/nested kernels)
+ *  declare one at all, so a metric-based count would read zero for
+ *  football/cricket/hockey/…
+ *
  *  Guards the empty-array case itself (S8/#417 pattern, postgres.js's
  *  `sql([])` renders `(null)` and an empty `in ()` matches nothing, not
  *  everything) rather than trusting every caller to remember it. */
-async function countMatchesByDivision(
-  tx: Tx,
-  personId: string,
+export async function countMatchesByDivision(
+  db: Queryable,
+  owner: MatchesOwner,
   divisionIds: readonly string[],
 ): Promise<Map<string, number>> {
   if (divisionIds.length === 0) return new Map();
-  const rows = await tx<{ division_id: string; matches: number }[]>`
-    select f.division_id, count(distinct f.id)::int as matches
-    from fixtures f
-    join entrant_members em on em.person_id = ${personId}
-      and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-    where f.division_id in ${tx(divisionIds as string[])} and f.status = 'finalized'
-    group by f.division_id`;
+  const rows =
+    owner.by === "person"
+      ? await db<{ division_id: string; matches: number }[]>`
+          select f.division_id, count(distinct f.id)::int as matches
+          from fixtures f
+          join entrant_members em on em.person_id = ${owner.personId}
+            and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+          where f.division_id in ${db(divisionIds as string[])}
+            and f.status in ${db(COMPLETED_FIXTURE_STATUSES as string[])}
+          group by f.division_id`
+      : await db<{ division_id: string; matches: number }[]>`
+          select f.division_id, count(distinct f.id)::int as matches
+          from fixtures f
+          join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+          join persons p on p.id = em.person_id and p.user_id = ${owner.userId} and p.merged_into is null
+          where f.division_id in ${db(divisionIds as string[])}
+            and f.status in ${db(COMPLETED_FIXTURE_STATUSES as string[])}
+          group by f.division_id`;
   return new Map(rows.map((r) => [r.division_id, r.matches]));
 }
 
@@ -431,17 +482,29 @@ export async function personCareerStats(
       select 1 from persons where id = ${personId} and merged_into is null`;
     if (!person) throw new HttpError(404, "person not found");
 
+    // Review round 2, archived-divisions decision: `and d.archived_at is
+    // null` added here to align with listMyCareerStats/listMyPlayerStats
+    // (me.ts, both already filter) and the dominant convention across this
+    // repo's own division reads (divisions.ts's own listing default,
+    // card-stats.ts, division-slots.ts, competitions.ts all hide archived
+    // divisions from an aggregate/listing read by default) — a career total
+    // silently shrinking the moment an unrelated org archives an old
+    // competition is exactly the silent-data-flicker shape that convention
+    // exists to prevent. personStats above (the per-division, non-summed
+    // sibling reader in this same file) still has no archived_at filter —
+    // a separate, pre-existing function deliberately left untouched this
+    // round, not an oversight.
     const rows = await tx<CareerSnapshotRow[]>`
       select ps.division_id, ps.sport_key, d.variant_key, ps.stats
       from player_stat_snapshots ps
-      join divisions d on d.id = ps.division_id
+      join divisions d on d.id = ps.division_id and d.archived_at is null
       where ps.person_id = ${personId}
       order by d.slug`;
     if (rows.length === 0) return { sports: [] };
 
     const matchesByDivision = await countMatchesByDivision(
       tx,
-      personId,
+      { by: "person", personId },
       [...new Set(rows.map((r) => r.division_id))],
     );
     // The persons-stats route is already dynamic (auth'd, per-request), so
