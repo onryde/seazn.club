@@ -73,6 +73,10 @@ export interface SchedulableFixture {
   people?: readonly string[]; // person ids, for cross-division overlap (doc 06 §4.3)
   poolId?: string; // restByGroup / startWindows targeting (Jul3/04 §3)
   divisionId?: string;
+  /** C1 fix-loop (2026-08-12 round-order design, Finding 2). Which stage the
+   *  fixture belongs to — see `Assignment.stageId` below for why this exists
+   *  and what it disambiguates. */
+  stageId?: string;
   locked?: { court: string; startAt: number }; // pinned assignment — honoured as-is
 }
 
@@ -85,6 +89,21 @@ export interface Assignment {
   people: string[];
   poolId?: string; // restByGroup targeting when validating (Jul3/04 §3)
   divisionId?: string;
+  /** C1 fix-loop (2026-08-12 round-order design, Finding 2). Which stage the
+   *  fixture belongs to. The round-order pair scan below groups by
+   *  `(divisionId, stageId, poolId)`, not `(divisionId, poolId)` alone: a
+   *  division can carry MORE THAN ONE round-robin-kind stage (two `league`
+   *  stages, or a `league` alongside an unpooled `group`), and every one of
+   *  them restarts its own round-robin at round 1
+   *  (`roundrobin.ts`'s `generateRoundRobin`). Two such stages sharing a
+   *  division but neither one pooled both carry `poolId: undefined`, so
+   *  `(divisionId, poolId)` alone collapsed them into ONE sequence — the
+   *  stage-cardinality sibling of the pool bug `poolId` itself was added to
+   *  fix (see the comment on the grouping key). Omitted only when the
+   *  underlying fixture's stage is unknown to the caller; every caller that
+   *  sets `roundNo` at all should set this too, the same way it must already
+   *  set `poolId`/`divisionId`. */
+  stageId?: string;
   /** C1 (2026-08-12 round-order design). Round-robin-generated fixtures
    *  only — absent means unconstrained by round order, not round 0.
    *  `validateAssignments` reads this for its round-order pair scan;
@@ -680,6 +699,12 @@ export function slotFixtures(input: SlotInput): SlotResult {
       // the placer/verifier fork this module exists to prevent.
       ...(f.poolId !== undefined ? { poolId: f.poolId } : {}),
       ...(f.divisionId !== undefined ? { divisionId: f.divisionId } : {}),
+      // C1 fix-loop (2026-08-12 round-order design, Finding 2). Same
+      // reasoning as poolId/divisionId just above, carried through for the
+      // same reason: the round-order grouping key below reads `stageId` off
+      // the Assignment, not the SchedulableFixture, so a greedy-produced
+      // board that dropped it would re-verify as one sequence again.
+      ...(f.stageId !== undefined ? { stageId: f.stageId } : {}),
       // C1 (2026-08-12 round-order design). Same reasoning as poolId/
       // divisionId just above — `validateAssignments`' round-order pair scan
       // needs both off the Assignment, or a greedy-produced board loses the
@@ -1468,10 +1493,10 @@ export function validateAssignments(
   // matching how feed-order blames the dependent fixture rather than the
   // feeder.
   //
-  // "Same sequence" is (divisionId, poolId), NOT divisionId alone — found
-  // during implementation, not named in the spec's literal "same-division"
-  // text: a `kind: "group"` stage with N pools runs N INDEPENDENT
-  // round-robin sequences, each restarting at round 1
+  // "Same sequence" is (divisionId, stageId, poolId), NOT divisionId alone —
+  // found during implementation, not named in the spec's literal
+  // "same-division" text: a `kind: "group"` stage with N pools runs N
+  // INDEPENDENT round-robin sequences, each restarting at round 1
   // (`stages.ts`'s `generate()` calls `roundRobinGen` once per pool). Two
   // pools sharing one division but each on their own round 2 are not
   // comparable, the same way two stages are not — omitting `poolId` from the
@@ -1481,6 +1506,14 @@ export function validateAssignments(
   // very first end-to-end reflow scenario this design was checked against).
   // A division with no pools (`poolId` undefined on every row) collapses to
   // one group, unchanged from dividing by `divisionId` alone.
+  //
+  // `stageId` joined the key later (C1 fix-loop, Finding 2): a division can
+  // carry MORE than one round-robin-kind stage — two `league` stages, or a
+  // `league` beside an unpooled `group` — and none of them is required to
+  // have a pool. `poolId` alone cannot separate two such stages: both read
+  // `undefined`, so `(divisionId, poolId)` collapsed them into one sequence
+  // exactly the way bare `divisionId` once collapsed two pools into one.
+  // `stageId` is the dimension that was still missing.
   //
   // Scoped to `assignments` only, not `existing`: every caller that folds
   // this run's own pins into the board being verified does so INTO
@@ -1503,7 +1536,7 @@ export function validateAssignments(
     const bySequence = new Map<string, Assignment[]>();
     for (const a of assignments) {
       if (a.roundNo === undefined) continue;
-      const key = `${a.divisionId ?? ""}|${a.poolId ?? ""}`;
+      const key = `${a.divisionId ?? ""}|${a.stageId ?? ""}|${a.poolId ?? ""}`;
       (bySequence.get(key) ?? bySequence.set(key, []).get(key)!).push(a);
     }
     for (const group of bySequence.values()) {

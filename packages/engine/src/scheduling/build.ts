@@ -1666,18 +1666,27 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // `roundRobinGen` once per pool) — Pool A's round 2 and Pool B's round 2
   // are not comparable, the same way two stages' rounds are not. The wire
   // has no pool index at all (`Fixture` carries `division_index` only), so
-  // — unlike the TS verifier, which CAN scope by `(divisionId, poolId)`
-  // because `Assignment.poolId` exists (see `calendar.ts`'s own comment) —
-  // this engine cannot forward a pool-scoped round to the solver and must
-  // instead strip: a division whose round-bearing free fixtures span more
-  // than one distinct pool is contaminated the same way a dependency-edge
-  // hit is.
+  // — unlike the TS verifier, which CAN scope by `(divisionId, stageId,
+  // poolId)` because `Assignment.poolId`/`stageId` exist (see `calendar.ts`'s
+  // own comment) — this engine cannot forward a pool- or stage-scoped round
+  // to the solver and must instead strip: a division whose round-bearing
+  // free fixtures span more than one distinct (stage, pool) pair is
+  // contaminated the same way a dependency-edge hit is.
+  //
+  // C1 fix-loop (Finding 2): the key used to be `poolId` alone, which missed
+  // the sibling case — a division carrying TWO round-robin-kind stages
+  // (two `league` stages, or a `league` beside an unpooled `group`), NEITHER
+  // of which has a pool. Both then read `poolId: undefined`, one bucket, no
+  // trip — the exact shape `stages.ts`'s `stages.per_division.max` (capped
+  // 2/4/∞, no kind-uniqueness check) permits today. `stageId` joins the key
+  // for the same reason it joined `calendar.ts`'s: it is the one dimension
+  // that still separated two stages sharing no pool.
   const roundBearingPoolsByDivision = new Map<string, Set<string>>();
   for (const f of freeFixtures) {
     if (f.roundNo === undefined) continue;
     const division = f.divisionId ?? "";
     const pools = roundBearingPoolsByDivision.get(division) ?? new Set<string>();
-    pools.add(f.poolId ?? "");
+    pools.add(`${f.stageId ?? ""}|${f.poolId ?? ""}`);
     roundBearingPoolsByDivision.set(division, pools);
   }
   const multiPoolContaminated = new Set(
@@ -1686,7 +1695,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   if (multiPoolContaminated.size > 0) {
     log.warn(
       { divisions: [...multiPoolContaminated] },
-      "buildSchedule: round-bearing fixtures span more than one pool in the same division — stripping round for its division rather than compare two independent round-robin sequences",
+      "buildSchedule: round-bearing fixtures span more than one pool or round-robin stage in the same division — stripping round for its division rather than compare two independent round-robin sequences",
     );
   }
   const contaminatedDivisions = new Set([...dependencyContaminated, ...multiPoolContaminated]);

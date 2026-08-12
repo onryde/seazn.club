@@ -2225,4 +2225,56 @@ describe("buildSchedule — Placement path", () => {
     expect(byId.get("d1-poolA-r1")?.roundNo).toBeUndefined();
     expect(byId.get("d2-clean")?.roundNo).toBe(1);
   });
+
+  // C1 fix-loop (2026-08-12 round-order design, Finding 2): the
+  // stage-cardinality sibling of the multi-pool test above, and — before
+  // this fix — the one shape NEITHER contamination guard caught. A division
+  // can carry more than one round-robin-kind stage (two `league` stages, or
+  // a `league` beside an unpooled `group` — `stages.ts`'s
+  // `stages.per_division.max` caps count, not kind-uniqueness), and none of
+  // them needs a pool. Both fixtures below then read `poolId: undefined`,
+  // one bucket under the OLD `poolId`-only key, no trip — exactly the
+  // "clean non-pooled round-robin stages" shape the review that opened this
+  // fix-loop named. `stageId` differs, which is now enough on its own.
+  it("strips rounds for a division whose round-bearing fixtures span more than one round-robin STAGE, even with no pool on either side", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const fixtures = [
+      fx("stageA-r1", "E1", "E2", { roundNo: 1, divisionId: "D1", stageId: "A" }),
+      fx("stageA-r2", "E3", "E4", { roundNo: 2, divisionId: "D1", stageId: "A" }),
+      fx("stageB-r1", "E5", "E6", { roundNo: 1, divisionId: "D1", stageId: "B" }),
+    ];
+    await buildSchedule({ fixtures, config: cfg() });
+    expect(captured).toBeDefined();
+    const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
+    expect(byId.get("stageA-r1")?.roundNo).toBeUndefined();
+    expect(byId.get("stageA-r2")?.roundNo).toBeUndefined();
+    expect(byId.get("stageB-r1")?.roundNo).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[1]).toContain("span more than one pool");
+    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ divisions: ["D1"] });
+  });
+
+  it("does not strip a single-stage division when a DIFFERENT division has multiple round-robin stages", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const fixtures = [
+      fx("d1-stageA-r1", "E1", "E2", { roundNo: 1, divisionId: "D1", stageId: "A" }),
+      fx("d1-stageB-r1", "E3", "E4", { roundNo: 1, divisionId: "D1", stageId: "B" }),
+      fx("d2-clean", "E5", "E6", { roundNo: 1, divisionId: "D2", stageId: "A" }),
+    ];
+    await buildSchedule({ fixtures, config: cfg() });
+    expect(captured).toBeDefined();
+    const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
+    expect(byId.get("d1-stageA-r1")?.roundNo).toBeUndefined();
+    expect(byId.get("d2-clean")?.roundNo).toBe(1);
+  });
 });

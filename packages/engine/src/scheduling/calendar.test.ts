@@ -550,6 +550,51 @@ describe("validateAssignments — round order (C1, 2026-08-12 round-order design
     ]);
   });
 
+  it("scopes round order per stage WITHIN one division (C1 fix-loop, Finding 2: two round-robin-kind stages, NEITHER pooled, run independent sequences)", () => {
+    // The stage-cardinality sibling of the pool test above. A division can
+    // carry more than one round-robin-kind stage — two `league` stages, or
+    // a `league` beside an unpooled `group` (`stages.ts`'s
+    // `stages.per_division.max` caps COUNT, not kind-uniqueness) — and
+    // `roundrobin.ts`'s `generateRoundRobin` restarts at round 1 for each
+    // one independently, the same way it does per pool. Neither stage has
+    // a pool here, so BOTH rows read `poolId: undefined`: before `stageId`
+    // joined the grouping key this pair collapsed to `(d1, undefined)`, one
+    // sequence, and stage B's round 1 (day B, later) read as sitting after
+    // stage A's round 2 (day A, earlier) — day_2 <= day_1 is false, the
+    // exact false positive the pool test above proves for pools.
+    const a = [
+      row({
+        fixtureId: "stageA-r2", startAt: DAY_A_T0, roundNo: 2, movable: true,
+        divisionId: "d1", stageId: "A",
+      }),
+      row({
+        fixtureId: "stageB-r1", startAt: DAY_B_T0, roundNo: 1, movable: true,
+        divisionId: "d1", stageId: "B",
+      }),
+    ];
+    expect(validateAssignments(a, config).filter((c) => c.reason === "order")).toEqual([]);
+  });
+
+  it("still enforces round order WITHIN one stage that has no pool", () => {
+    // The converse of the test above: stage scoping must narrow the
+    // comparison, not disable it — two rows in the SAME (unpooled) stage
+    // are still compared exactly as before `stageId` joined the key.
+    const a = [
+      row({
+        fixtureId: "stageA-r2", startAt: DAY_A_T0, roundNo: 2, movable: true,
+        divisionId: "d1", stageId: "A",
+      }),
+      row({
+        fixtureId: "stageA-r1", startAt: DAY_B_T0, roundNo: 1, movable: true,
+        divisionId: "d1", stageId: "A",
+      }),
+    ];
+    const conflicts = validateAssignments(a, config);
+    expect(conflicts).toEqual([
+      expect.objectContaining({ fixtureId: "stageA-r2", reason: "order", direct: true }),
+    ]);
+  });
+
   it("is inert without an org timezone (absent tz skips the whole family)", () => {
     const a = [
       row({ fixtureId: "r2", startAt: DAY_A_T0, roundNo: 2, movable: true }),
