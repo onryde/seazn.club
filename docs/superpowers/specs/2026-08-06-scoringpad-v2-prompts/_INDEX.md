@@ -1683,6 +1683,87 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   match counts alone. Changing that is a product call, not a consistency
   cleanup. Recorded because the next reviewer will propose it again.
 
+- 2026-08-12 — S10/#419 — **scout re-pin, and it moves four of the prompt's
+  premises.** Measured on `main` @ `ae22e299`:
+  (a) **Server-side idempotency is a Redis cache, fail-open, 24h TTL — there is
+  NO `idempotency_key` column on `score_events` and no unique index.**
+  `scoring.ts:88-92` reads `cacheGet(idemKey(fixtureId, key))` and replays the
+  cached `ScoreOutcome`; `cache.ts:1-10` documents the whole module as
+  "fail-open … Redis is a latency optimisation, never a correctness
+  dependency"; `V216__score_events.sql` has `unique (fixture_id, seq)` and
+  nothing else. So the acceptance criterion "queued events replay in order,
+  none duplicated (idempotency proven)" **cannot rest on the server's
+  idempotency key**: with `REDIS_URL` unset (every local run, and the e2e
+  target) a replayed event is appended AGAIN.
+  (b) neither pad subscribes to Supabase realtime today —
+  `fixture-console.tsx` and `device-score-pad.tsx` are POST-then-`resync()`
+  only (`device-score-pad.tsx:99-160`, 3 in-memory retries + 800ms backoff).
+  The realtime precedent to copy is `public-site/live-score.tsx:72-85` +
+  `api/v1/public/fixtures/[id]/realtime-token/route.ts:18-44`, which already
+  carries the device-link bypass the prompt's gotcha names.
+  (c) **`apps/web` imports the engine NOWHERE on the client, and there is no
+  root `.` export to import** — `packages/engine/package.json` exposes subpaths
+  only (`./core`, `./sport`, `./sports/*`, `./stats`, …); `index.ts` does not
+  exist. `resolveModule` (`server/engine-db/registry.ts:1`) opens with
+  `import "server-only"`, so the browser fold needs its OWN client-safe
+  resolver — new code, not a reuse.
+  (d) the 409 body already carries what renegotiation needs:
+  `{ok:false, error:{code:"SEQ_CONFLICT", message, current_seq}}`
+  (`api-v1/http.ts:140-145`), and `listEvents` (`fixtures.ts:182-192`) returns
+  `seq, type, payload, recorded_at, recorded_by, voids_event_id,
+  device_link_id` — i.e. the ledger is inspectable per slot, with provenance.
+- 2026-08-12 — S10/#419 — **RULING: replay sends the ORIGINAL `expected_seq`,
+  never a renegotiated one, and renegotiation happens only AFTER the ledger
+  proves the event did not land.** The prompt calls blind renegotiation "the
+  correctness heart"; taken literally it is the DUPLICATE BUG, given (a) above.
+  The protocol that is correct without any ledger/API change:
+  1. Replay each pending event with the `expected_seq` and `idempotency_key`
+     it was first minted with. Both outcomes are safe: a Redis hit replays the
+     recorded `ScoreOutcome` with no second write; a miss hits the exact-match
+     seq check and returns **409, which is a refusal, not a write**.
+  2. On 409, read `GET /events?since_seq=<expected_seq - 1>` and inspect the
+     row AT `expected_seq`. `appendEvent` accepts only at exactly
+     `expected_seq`, so that one slot is a COMPLETE test of whether our event
+     landed — it cannot have landed anywhere else. Same `type` + deep-equal
+     `payload` + same `recorded_by`/`device_link_id` ⇒ it is ours, already
+     applied: drop it from the queue, do not resend.
+  3. Only when the slot holds a FOREIGN event does the client renegotiate
+     (`expected_seq := current_seq`) and resend — at which point the event
+     provably has not been written.
+  This makes dedupe rest on the hash-chained ledger (durable, no TTL) instead
+  of on a fail-open cache, which is also what `cache.ts` says its own
+  contract is. Recorded because a later session reading only the prompt would
+  re-introduce the blind renegotiation.
+  **Open question for the owner (not filed as an issue):** the durable fix one
+  layer down is `score_events.idempotency_key` + `unique (fixture_id,
+  idempotency_key)`, which would make the server idempotent regardless of
+  Redis. NOT taken this session — it is a ledger/append-API change, which the
+  design's own non-goals forbid and which is outside this session's stated
+  file set (`scorepad/` + dictionaries), so it needs an owner ruling first.
+- 2026-08-12 — S10/#419 — **the test topology is forced by the workspace, not
+  chosen.** `apps/web/vitest.config.ts:71` is `environment: "node"` with no
+  jsdom, no happy-dom and no `@testing-library` in `apps/web/package.json`, so
+  a DOM-rendered component test is not available without adding a permanent
+  dependency to every suite in the workspace. Consequence, and it shapes the
+  renderer's architecture: the PadSpec walk ships as a **pure view-model**
+  (`spec + folded state + tier + entitlements → panels/actions/fields, with
+  `evalPadGate` called from the engine, never re-implemented`), unit-tested
+  exhaustively over S6's conformance fixtures with no React at all; the React
+  layer on top stays thin and is driven, where it holds state, through the
+  repo's existing `components/__tests__/_hook-harness` (renders ONE function
+  component one level deep — so no `useId`, which that harness does not
+  supply). Real DOM behaviour — tab death, offline, queue drain — is proved in
+  a real browser via Playwright against a harness route, which is what the
+  prompt already requires.
+- 2026-08-12 — S10/#419 — **flag names chosen.** Product flag is `scorepad-v2`,
+  read through the repo's existing PostHog convention (`isServerFeatureEnabled`
+  `posthog-server.ts:65-79` server-side, `posthog.isFeatureEnabled` client-side,
+  as `ai-scheduling` does) — declared this session, wired to nothing, flipped in
+  S12. The browser-verification harness route is gated separately on a
+  **server-read, non-public** env var `SCOREPAD_V2_HARNESS=1` (read in the
+  server component, so it is NOT baked at build time the way a `NEXT_PUBLIC_*`
+  var is, and is therefore absent from every real deploy) — no dev-only page
+  precedent existed in `apps/web/src/app` to copy, so this is the new one.
 - _(append below)_
 
 ## Open questions for the owner
