@@ -1453,8 +1453,66 @@ Append one line per ruling: date, session, decision, reason. Never delete.
     folded keys so the blindness closes permanently; then message keys and
     en/es/fr/nl copy for every row.
 
+- 2026-08-12 — S8/#417 — **the four owner-ruled gaps: three landed, CI green
+  on the whole wave** (commits 5f482272, 6e49148a, 540c647c, c0e80ce7).
+  - **Shots and saves** ship as a shot WITH AN OUTCOME
+    (`scored|saved|missed|blocked`), never a bare save counter, so save
+    percentage has its shots-faced denominator. Coverage follows S2/#430's
+    invariant by a per-side checksum: logged `outcome:"scored"` shots must
+    reconcile against `goals_conceded` (always complete, it comes from the
+    existing goal event), and when they disagree `save_percentage` is ABSENT,
+    not zero. Honest documented limit: a side that conceded nothing has no
+    goal to reconcile against, so under-logged saves there cannot be detected
+    — inherent to any ledger-only signal. The period kernel gates the event
+    per preset (`shotTracking`), football takes it unconditionally.
+  - **Cricket's gate is now per innings.** `CricketBall.innings?` mirrors
+    `CricketPlayerLine.innings`'s existing recorded-not-derived precedent;
+    `apply()` deliberately never reads it, so a stale stamp can only
+    mis-scope a leaderboard number and can never brick a replay. Untagged
+    balls keep the old whole-stream behaviour exactly.
+  - **A new defect found by the CI red, not by review**: no `folded.keys` row
+    could ever reach a label — 44 rows aggregated, persisted and dropped on
+    the way to the screen, including every goalkeeper metric this session had
+    just added. The mirror of the defect S8 opened with (declared but never
+    computed; here computed but never displayable). `folded.keys` now carries
+    `{key, label}`, `labelPlayerStats` appends folded rows last so cricket's
+    deliberate overlap keeps the metric's label, and `declaredStatRows()`
+    reads folded keys so the gate is no longer blind to the class.
+  - Set-based `sets_won`/`sets_lost` now follow each preset's `unitLabel`
+    ("Games won" for badminton and table tennis, "Sets won" for volleyball
+    and tennis) — a real new cross-sport collision, pinned by name and by
+    both English forms.
+  - **Process note worth keeping**: local runs were green while CI was red
+    because the apps/web suite had been run FILTERED to the player-stats
+    specs, and vitest treats positionals as filename filters. Judge a wave
+    only on the unfiltered suite. Separately, an agent reported `failed: 0`
+    where my own rerun found 1 (`repair-scale`, a wall-clock budget test that
+    reds under load) — the wave-boundary rerun is why that was caught, and it
+    is also why a second agent's claim to have written two memory files was
+    checked and found false.
+  - Still open: the `sharesMetricKeys` runtime check (in flight) and the
+    e2e/smoke pass. S9 still owes the `/me` e2e when its page lands, and
+    should carry forward that `labelPlayerStats` drops zero-valued rows — so
+    a genuinely 0% `save_percentage` renders as no row, same as an absent
+    one. Correct for absent-vs-zero, lossy for a keeper who saved nothing.
+
 - _(append below)_
 
 ## Open questions for the owner
 
-- _(none — append as they arise; ask in-session, never file an issue)_
+- **Volleyball ships player stats that credit nobody in its default setup.**
+  Surfaced 2026-08-12 by the `folded` runtime check (S8b): volleyball's
+  `entrantModel.defaultKind` is `"team"`, and person-level credit for
+  `matches`/`sets_won`/`sets_lost` goes through `personsForEntrant`, which
+  returns `[]` for a team entrant BY DESIGN (the same guard the whole stats
+  file applies). So the rows are declared, computed and empty unless a
+  volleyball division uses individual/pair entrants. Badminton and table
+  tennis, on the same kernel, default to `"individual"` and are unaffected.
+  This is the declared-but-inert shape again — but by design this time, not
+  by mistake, which is why it is a question rather than a defect. Options:
+  accept it (volleyball player stats need a real team sheet, i.e. lineups,
+  which the folded path does not read for credit); route credit through
+  `lineups` for team entrants; or stop declaring the rows for volleyball.
+  Not actionable without a product call.
+
+- _(append as they arise; ask in-session, never file an issue)_
