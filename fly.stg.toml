@@ -7,6 +7,11 @@ primary_region = "lhr"
 [env]
   OAUTH_BASE_URL   = "https://stg.seazn.club"
   NEXT_PUBLIC_BASE_URL = "https://stg.seazn.club"
+  # Staging-only: debug-level pino output for the scheduler logging added in
+  # #536. This file is dedicated to seazn-club-stg (unlike
+  # services/placement/fly.toml, which is deliberately shared with prod), so
+  # setting it here does not touch production.
+  LOG_LEVEL = "debug"
   # Server-side Sentry reads the DSN at RUNTIME (NEXT_PUBLIC_* build args are
   # not in server process.env — see note above). A DSN is public, safe to commit.
   NEXT_PUBLIC_SENTRY_DSN = "https://3c300139a524e663ef1d8bef297ad486@o4511704992382976.ingest.de.sentry.io/4511704994676816"

@@ -169,6 +169,26 @@ fly logs --app placement        # the same run must add NOTHING here
 That per-solve log line is the one added after four production deploys measured
 nothing; this is the second job it does.
 
+### Debug-level logging, staging only
+
+`fly.toml`'s `[env]` block leaves `PLACEMENT_LOG_LEVEL` commented out
+deliberately: that file is shared between `placement` and `placement-stg`
+(§[1] above), so uncommenting it there would set DEBUG on production too. A
+`fly secrets set` on `placement-stg` alone is the same mechanism already used
+for its own secret and its own web-app host above — per-app, without forking
+the TOML:
+
+```bash
+fly secrets set PLACEMENT_LOG_LEVEL="DEBUG" --app placement-stg
+fly secrets list --app placement-stg | grep PLACEMENT_LOG_LEVEL
+fly secrets list --app placement     | grep PLACEMENT_LOG_LEVEL   # expect nothing
+```
+
+`resolve_log_level` treats an unknown name as INFO rather than refusing to
+boot (`main.py`'s own docstring: it changes only what the service PRINTS), so
+there is no risk of a typo here taking staging down — only of it silently
+staying at INFO, which the `grep` above catches.
+
 ### Scale
 
 ```bash
