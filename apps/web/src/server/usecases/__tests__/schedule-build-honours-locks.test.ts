@@ -35,6 +35,8 @@ import {
   type LockedScope,
 } from "../schedule";
 import { patchFixture } from "../fixtures";
+import { setDivisionLocks } from "../history";
+import { buildSchedulePack } from "../schedule-ai";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -66,6 +68,9 @@ async function seedOrg(): Promise<AuthCtx> {
     "scheduling.constraints",
     "scheduling.board",
     "scheduling.multi_division",
+    // Pro layer (Jul3/03 §7) — `setDivisionLocks` gates a non-empty
+    // `locked_scopes` behind this, used by the scope-lock tests below.
+    "schedule.versioning",
   ]) {
     await sql`
       insert into org_entitlement_overrides (org_id, feature_key, bool_value)
@@ -78,7 +83,10 @@ async function seedOrg(): Promise<AuthCtx> {
 /** A 4-entrant league on two courts — enough fixtures for a real placement
  *  problem, matching the fixture family `schedule-polish-current.test.ts` and
  *  `schedule-solver-telemetry.test.ts` already use for this usecase. */
-async function seedStage(auth: AuthCtx, entrants: number): Promise<{ stageId: string; created: number }> {
+async function seedStage(
+  auth: AuthCtx,
+  entrants: number,
+): Promise<{ stageId: string; divisionId: string; created: number }> {
   const competition = await createCompetition(auth, {
     ends_on: "2030-12-31",
     name: "Locks " + randomUUID().slice(0, 6),
@@ -121,7 +129,7 @@ async function seedStage(auth: AuthCtx, entrants: number): Promise<{ stageId: st
     tz: "UTC",
   });
   const generated = await generateStageFixtures(auth, stage.id);
-  return { stageId: stage.id, created: generated.created };
+  return { stageId: stage.id, divisionId: division.id, created: generated.created };
 }
 
 /**
@@ -140,6 +148,28 @@ async function parkAndLock(auth: AuthCtx, stageId: string, fixtureId: string): P
     source: "manual",
   });
   await patchFixture(auth, fixtureId, { schedule_locked: true });
+}
+
+/**
+ * Companion to `parkAndLock`: locks via the division's `locked_scopes` (a
+ * court scope), never touching the fixture's own `schedule_locked` — the
+ * arm `lockedFixtureIds` (and Task 2's AI-draft predicate, and the Task 1
+ * apply-time check) must honour from a scope alone. Parks the fixture on the
+ * scoped court first, same atypical slot as `parkAndLock`, so the lock has
+ * something to bite and "it stayed" cannot be a compacting solver's
+ * coincidence.
+ */
+async function parkAndScopeLock(
+  auth: AuthCtx,
+  stageId: string,
+  divisionId: string,
+  fixtureId: string,
+): Promise<void> {
+  await applySchedule(auth, stageId, {
+    assignments: [{ fixture_id: fixtureId, scheduled_at: at(600), court_label: "C2" }],
+    source: "manual",
+  });
+  await setDivisionLocks(auth, divisionId, { locked_scopes: [{ courts: ["C2"] }] });
 }
 
 describe.skipIf(!HAS_DB)("BUILD honours a lock (owner report, 2026-08-12)", () => {
@@ -252,6 +282,152 @@ describe.skipIf(!HAS_DB)("ignore_locks is the explicit escape hatch", () => {
     expect(moved.solver.locked_kept).toBe(0);
   }, 180_000);
 });
+
+describe.skipIf(!HAS_DB)(
+  "applySchedule rejects a move onto a locked fixture, but not a re-statement of its own placement (#pins-in-build Task 1)",
+  () => {
+    it("422s a proposal that moves a schedule_locked fixture to a different slot", async () => {
+      const auth = await seedOrg();
+      const { stageId, created } = await seedStage(auth, 4);
+
+      const first = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
+      expect(first.assignments).toHaveLength(created);
+      await applySchedule(auth, stageId, {
+        assignments: first.assignments.map((a) => ({
+          fixture_id: a.fixture_id,
+          scheduled_at: a.scheduled_at,
+          court_label: a.court_label,
+        })),
+        source: "auto",
+      });
+
+      const target = first.assignments[0]!;
+      await parkAndLock(auth, stageId, target.fixture_id);
+
+      // A concurrent lock toggle mid-solve: something (a stale AI plan, a
+      // race with the lock toggle) proposes moving the now-locked fixture to
+      // a different slot than `parkAndLock` put it at.
+      await expect(
+        applySchedule(auth, stageId, {
+          assignments: [{ fixture_id: target.fixture_id, scheduled_at: at(30), court_label: "C1" }],
+          source: "manual",
+        }),
+      ).rejects.toMatchObject({
+        status: 422,
+        message: `fixture ${target.fixture_id} is locked — unlock it before moving`,
+      });
+    }, 180_000);
+
+    it("succeeds when the assignment re-states the locked fixture's existing placement, even spelled with a different UTC offset (regression guard against a blanket reject)", async () => {
+      const auth = await seedOrg();
+      const { stageId, created } = await seedStage(auth, 4);
+
+      const first = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
+      expect(first.assignments).toHaveLength(created);
+      await applySchedule(auth, stageId, {
+        assignments: first.assignments.map((a) => ({
+          fixture_id: a.fixture_id,
+          scheduled_at: a.scheduled_at,
+          court_label: a.court_label,
+        })),
+        source: "auto",
+      });
+
+      const target = first.assignments[0]!;
+      await parkAndLock(auth, stageId, target.fixture_id);
+
+      // The SAME instant `parkAndLock` placed it at (`at(600)`), spelled with
+      // an explicit "+00:00" offset instead of "Z" — a naive string
+      // comparison (or a raw `Date` vs `string` mismatch, since `f.scheduled_at`
+      // comes back off the DB row as a `Date`) would misread this as a move;
+      // only an epoch-ms comparison passes it correctly. This is also the
+      // regression guard against the over-broad "reject every locked
+      // fixture" fix ruled out for Task 1: without it, the next person
+      // simplifies this into a blanket reject and a normal, correct
+      // auto-apply of a solve that legitimately left a pin where it was
+      // starts 422ing.
+      const sameInstantDifferentSpelling = at(600).replace("Z", "+00:00");
+      const result = await applySchedule(auth, stageId, {
+        assignments: [
+          { fixture_id: target.fixture_id, scheduled_at: sameInstantDifferentSpelling, court_label: "C2" },
+        ],
+        source: "manual",
+      });
+      expect(result.applied).toBe(1);
+    }, 180_000);
+  },
+);
+
+describe.skipIf(!HAS_DB)(
+  "a locked_scopes scope lock is honoured end-to-end in BUILD (gap review flagged)",
+  () => {
+    it("a court scope lock — no schedule_locked flag involved — keeps its fixture in place across a second Auto-schedule click", async () => {
+      const auth = await seedOrg();
+      const { stageId, divisionId, created } = await seedStage(auth, 4);
+
+      const first = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
+      expect(first.assignments).toHaveLength(created);
+      await applySchedule(auth, stageId, {
+        assignments: first.assignments.map((a) => ({
+          fixture_id: a.fixture_id,
+          scheduled_at: a.scheduled_at,
+          court_label: a.court_label,
+        })),
+        source: "auto",
+      });
+
+      const target = first.assignments[0]!;
+      await parkAndScopeLock(auth, stageId, divisionId, target.fixture_id);
+
+      // Same click the owner's report reproduced — `only_unlocked: false`,
+      // `mode: "build"` — but this time the lock comes ONLY from the
+      // division's `locked_scopes`; `target`'s own `schedule_locked` stays
+      // false throughout.
+      const second = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
+      const proposed = second.assignments.find((a) => a.fixture_id === target.fixture_id);
+      expect(proposed?.scheduled_at).toBe(at(600));
+      expect(proposed?.court_label).toBe("C2");
+    }, 180_000);
+  },
+);
+
+describe.skipIf(!HAS_DB)(
+  "a scope-locked fixture is fed to the AI draft with its locked anchor (#pins-in-build Task 2)",
+  () => {
+    it("buildSchedulePack's generate-mode draft keeps a court-scope-locked fixture at its parked slot", async () => {
+      const auth = await seedOrg();
+      const { stageId, divisionId, created } = await seedStage(auth, 4);
+
+      const first = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
+      expect(first.assignments).toHaveLength(created);
+      await applySchedule(auth, stageId, {
+        assignments: first.assignments.map((a) => ({
+          fixture_id: a.fixture_id,
+          scheduled_at: a.scheduled_at,
+          court_label: a.court_label,
+        })),
+        source: "auto",
+      });
+
+      const target = first.assignments[0]!;
+      await parkAndScopeLock(auth, stageId, divisionId, target.fixture_id);
+
+      const { pack } = await buildSchedulePack(auth, divisionId, {
+        now: Date.parse(T0),
+        mode: "generate",
+        instruction: "Schedule the remaining fixtures.",
+      });
+      const drafted = pack.draft.find((d) => d.fixture_id === target.fixture_id);
+      expect(drafted, `draft is missing fixture ${target.fixture_id}`).toBeDefined();
+      expect(drafted!.scheduled_at).not.toBeNull();
+      // Compared on the instant, not the rendered string: the pack renders
+      // in the ORG zone (`zonedIso`), which may not spell the same offset
+      // `at()` does even when it names the same instant.
+      expect(Date.parse(drafted!.scheduled_at as string)).toBe(Date.parse(at(600)));
+      expect(drafted!.court_label).toBe("C2");
+    }, 180_000);
+  },
+);
 
 describe("lockedFixtureIds (the unified lock predicate)", () => {
   const base: FixtureLite = {

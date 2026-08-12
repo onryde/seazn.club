@@ -1,7 +1,8 @@
-// Structured logging for server-side usecases — currently just
-// schedule-ai.ts's AI-plan entry point and its preview-release cleanup. Not
-// a public export (no barrel re-export), plain module-scope singleton like
-// the rest of this directory's cross-cutting utilities.
+// Structured logging for server-side usecases — schedule-ai.ts's AI-plan
+// entry point and its preview-release cleanup, plus schedule.ts's
+// locked-fixture apply rejection (#pins-in-build). Not a public export (no
+// barrel re-export), plain module-scope singleton like the rest of this
+// directory's cross-cutting utilities.
 //
 // Deliberately NOT `pino({ transport: {...} })`: a transport spawns a worker
 // thread that does a dynamic `require()` of the transport target, which

@@ -95,8 +95,10 @@ import { AiSchedulePlan, SINGLE_SYSTEM_PROMPT } from "./schedule-ai-prompt";
 import {
   MOVABLE_STATUS,
   divisionFixtures,
+  divisionLockState,
   feedDependencies,
   loadSettings,
+  lockedFixtureIds,
   peopleByEntrant,
   siblingAssignments,
   toAssignment,
@@ -961,6 +963,15 @@ export async function buildSchedulePack(
       const rankById = new Map(orderedMovable.map((f, i) => [f.id, String(i).padStart(6, "0")]));
       const realIdByRank = new Map(orderedMovable.map((f, i) => [String(i).padStart(6, "0"), f.id]));
 
+      // #pins-in-build Task 2: the canonical lock predicate, not a third
+      // hand-maintained copy of "is this fixture locked" — this branch used
+      // to test `f.schedule_locked` alone, so a division-scope-locked
+      // fixture (no `schedule_locked` of its own) entered the greedy draft
+      // fully movable despite the comment below promising otherwise.
+      // `ignoreLocks` is always false: the AI draft pack has no equivalent
+      // of `AutoScheduleRequest.ignore_locks` to thread through.
+      const { scopes: lockScopes } = await divisionLockState(tx, divisionId);
+      const lockedIds = lockedFixtureIds(movable, lockScopes, false);
       const schedulable: SchedulableFixture[] = movable.map((f) => ({
         // Domain-ranked stand-in for the UUID so the solver's tie-break is stable.
         id: rankById.get(f.id)!,
@@ -974,8 +985,8 @@ export async function buildSchedulePack(
         // hands the referee a board the referee will reject.
         people: participants[f.id] ?? [],
         // Pinned/scope-locked cards stay put — feed them to the solver as-is.
-        ...(f.schedule_locked && f.scheduled_at !== null && f.court_label !== null
-          ? { locked: { court: f.court_label, startAt: new Date(f.scheduled_at).getTime() } }
+        ...(lockedIds.has(f.id)
+          ? { locked: { court: f.court_label as string, startAt: new Date(f.scheduled_at as string | Date).getTime() } }
           : {}),
       }));
       const result = slotFixtures({

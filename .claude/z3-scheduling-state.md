@@ -136,7 +136,12 @@ Engine suite **2449/2448/0**, 1 pending, `success: true`. Baseline was 2442/2440
    held to the slot greedy itself gave it. Every `locked` fixture masks it, because
    `publishedSlotOf` prefers `locked` and `encodeBuild` pins that on its own account.
    That is why `schedule.ts:852`'s mutant survived: its cases run `only_unlocked: true`,
-   where `frozenIds ⊆ pinnedIds` **by construction** (same predicate, minus the flag).
+   where `frozenIds ⊆ pinnedIds` **by construction** (two hand-maintained
+   predicates that agreed on this case, minus the flag — **fixed by
+   `110d2eba`/#pins-in-build**: `pinnedIds` is no longer gated by
+   `only_unlocked` at all, and `frozenIds`/`frozen` is now built from that
+   same `lockedFixtureIds` call rather than a second predicate, so the two
+   are literally the same `Set`, not two that happen to agree).
    **The killing case is `only_unlocked: false`** — there `pinnedIds` is EMPTY and
    `frozen` is not. → web lane. And on that path POLISH freezes cards to greedy's own
    RE-PLACEMENT rather than to the published slot, which `publishedSlotOf`'s comment
