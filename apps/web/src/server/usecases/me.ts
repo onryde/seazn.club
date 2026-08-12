@@ -11,7 +11,13 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { publicStorageUrl } from "@/lib/supabase-storage";
 import { uploadPersonPhotoBytes } from "./persons";
-import { labelPlayerStats, type LabelledPlayerStat } from "@/server/player-stats";
+import {
+  labelPlayerStats,
+  groupCareerStatsBySport,
+  type LabelledPlayerStat,
+  type CareerSnapshotRow,
+  type CareerSportStats,
+} from "@/server/player-stats";
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
@@ -307,6 +313,58 @@ export async function listMyPlayerStats(userId: string): Promise<MyStatBlock[]> 
     if (metrics.length === 0) return [];
     return [{ ...row, competition_public: visibility === "public", metrics }];
   });
+}
+
+/** Finalized fixtures played, per division, by ANY of this user's claimed
+ *  persons (there is no single personId to scope by — see listMyCareerStats)
+ *  — the /me counterpart to player-stats.ts's countMatchesByDivision,
+ *  identical shape and identical `sql([])` guard, differing only in which
+ *  join resolves "mine" (a `persons.user_id` match instead of a fixed id). */
+async function countMyMatchesByDivision(
+  userId: string,
+  divisionIds: readonly string[],
+): Promise<Map<string, number>> {
+  if (divisionIds.length === 0) return new Map();
+  const rows = await sql<{ division_id: string; matches: number }[]>`
+    select f.division_id, count(distinct f.id)::int as matches
+    from fixtures f
+    join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+    join persons p on p.id = em.person_id and p.user_id = ${userId} and p.merged_into is null
+    where f.division_id in ${sql(divisionIds as string[])} and f.status = 'finalized'
+    group by f.division_id`;
+  return new Map(rows.map((r) => [r.division_id, r.matches]));
+}
+
+/** S9/#418 — the /me Career section: every claimed person's snapshot rows,
+ *  grouped and summed by sport ACROSS EVERY ORG/COMPETITION (private
+ *  included) — deliberately unlike the org-scoped persons-stats route's
+ *  `?group=sport` (personCareerStats, usecases/player-stats.ts): this is the
+ *  player's own view of their WHOLE career, so a cross-org total is correct
+ *  and intended here, not a leak. A user can hold several claimed `persons`
+ *  rows (one per org, `persons.user_id = userId`), so — unlike
+ *  personCareerStats, which sums ONE person's rows — this sums across every
+ *  person the user has claimed, same as listMyPlayerStats's own cross-org
+ *  join above.
+ *
+ *  Same no-recompute, locale-safe discipline as listMyPlayerStats: reads
+ *  player_stat_snapshots exactly as they stand, never calls
+ *  recomputePlayerStats. */
+export async function listMyCareerStats(userId: string): Promise<CareerSportStats[]> {
+  const rows = await sql<CareerSnapshotRow[]>`
+    select ps.division_id, ps.sport_key, d.variant_key, ps.stats
+    from player_stat_snapshots ps
+    join persons p on p.id = ps.person_id and p.user_id = ${userId} and p.merged_into is null
+    join divisions d on d.id = ps.division_id and d.archived_at is null
+    order by d.slug`;
+  if (rows.length === 0) return [];
+
+  const matchesByDivision = await countMyMatchesByDivision(
+    userId,
+    [...new Set(rows.map((r) => r.division_id))],
+  );
+  const locale = await resolveLocale().catch(() => DEFAULT_LOCALE);
+  const m = (k: Parameters<typeof msgFor>[1]) => msgFor(locale, k);
+  return groupCareerStatsBySport(rows, matchesByDivision, m);
 }
 
 /** True when the user's ONLY relationship to the platform is a claimed

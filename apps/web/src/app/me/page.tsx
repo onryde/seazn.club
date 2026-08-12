@@ -10,6 +10,7 @@ import { getActiveOrgId, getCurrentUser, getUserOrgs } from "@/lib/auth";
 import { routes } from "@/lib/routes";
 import {
   getMySuspensions,
+  listMyCareerStats,
   listMyFixtures,
   listMyPersons,
   listMyPlayerStats,
@@ -26,7 +27,7 @@ import { LogoutButton } from "@/components/logout-button";
 import { RunYourOwnCta } from "@/components/run-your-own-cta";
 import { Zoned, ViewerTzProvider } from "@/components/client-time";
 import { resolveLocale } from "@/lib/resolve-locale";
-import { getDictionary, t } from "@/lib/i18n";
+import { getDictionary, plural, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 
 export default async function MePage({
@@ -47,6 +48,7 @@ export default async function MePage({
     pendingOfficiatingClaims,
     persons,
     stats,
+    career,
     orgs,
     activeOrgId,
     mySuspensions,
@@ -60,6 +62,9 @@ export default async function MePage({
       listPendingOfficiatingClaims(user.email),
       listMyPersons(user.id),
       listMyPlayerStats(user.id),
+      // S9/#418 — the Career section below: cross-org per-sport rollup,
+      // same no-recompute snapshot read as listMyPlayerStats just above.
+      listMyCareerStats(user.id),
       // Dual-role seam: organisers who are also players get a door back.
       // Read-only resolve — resolveActiveOrg repairs the cookie, which a
       // Server Component render is not allowed to do.
@@ -285,6 +290,52 @@ export default async function MePage({
             </ul>
           </section>
         )}
+
+        {/* S9/#418 — the Career section: one card per sport, summed across
+            every division/competition/org the player has ever recorded
+            stats in. ALWAYS renders (unlike the per-division block below,
+            which disappears entirely when empty) — a career with zero
+            sports is itself a state worth showing, not a layout gap. */}
+        <section className="mb-8" data-testid="me-career">
+          <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
+            {t(ui, "me.career.title")}
+          </h2>
+          {career.length === 0 ? (
+            <p
+              className="card p-6 text-sm text-slate-500"
+              data-testid="me-career-empty"
+            >
+              {t(ui, "me.career.empty")}
+            </p>
+          ) : (
+            <ul className="space-y-3">
+              {career.map((c) => (
+                <li key={c.sport_key} className="card space-y-2 p-4">
+                  <p className="text-sm font-medium text-slate-800">{c.sport_label}</p>
+                  <p className="text-xs text-slate-400">
+                    {plural(ui, "career.divisions", c.divisions, locale)}
+                    {" · "}
+                    {plural(ui, "career.variants", c.variants, locale)}
+                    {" · "}
+                    {plural(ui, "career.matches", c.matches, locale)}
+                  </p>
+                  <dl className="flex flex-wrap gap-x-6 gap-y-2">
+                    {c.metrics.map((m) => (
+                      <div key={m.key} className="min-w-16">
+                        <dt className="text-[11px] uppercase tracking-wide text-slate-400">
+                          {m.label}
+                        </dt>
+                        <dd className="font-display text-2xl font-bold tabular-nums text-slate-900">
+                          {m.value}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
         {/* G6 — my stat blocks (PROMPT-65 self-view): every snapshot for my
             claimed persons, private competitions included; the public-profile

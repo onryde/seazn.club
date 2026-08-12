@@ -17,5 +17,5 @@ export {
   appendDivisionEvent,
   type CompleteResult,
 } from "./competition";
-export { resolveModule } from "./registry";
+export { resolveModule, resolveLatestModule } from "./registry";
 export type { FoldedFixture } from "./fold";

@@ -50578,7 +50578,7 @@
     },
     "/api/v1/persons/{id}/stats": {
       "get": {
-        "summary": "A player's card stats, keyed per division (Pro `stats.player`)",
+        "summary": "A player's card stats, keyed per division (Pro `stats.player`). `?group=sport` returns the S9/#418 career rollup instead: every sport this person has snapshot rows in, summed across divisions and labelled via the sport's latest registered module; any other (or absent) `group` value keeps the per-division shape unchanged",
         "tags": [
           "stats"
         ],
@@ -50600,6 +50600,17 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "sport"
+              ]
             }
           }
         ],

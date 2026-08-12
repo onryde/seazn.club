@@ -37,7 +37,7 @@ export default async function PlayerCardPage({ params }: Props) {
   const { orgSlug, competitionSlug, personId } = await params;
   const data = await getPublicPlayer(orgSlug, competitionSlug, personId);
   if (!data) notFound();
-  const { org, competition, player, memberships, stats } = data;
+  const { org, competition, player, memberships, stats, career, careerLabel } = data;
 
   return (
     <div>
@@ -105,6 +105,44 @@ export default async function PlayerCardPage({ params }: Props) {
           </ul>
         )}
       </section>
+
+      {/* S9/#418 — the per-sport career rollup, scoped to THIS competition
+          only (getPublicPlayer sums only the snapshot rows it already read
+          for this competition_id — see that function's own comment). Sits
+          above the per-division breakdown below: the total a spectator
+          scans first, with the division-by-division detail underneath for
+          anyone who wants it. Same "nothing renders when empty" rule as
+          that section. */}
+      {career.length > 0 && (
+        <section className="mt-6" data-testid="player-career">
+          <h2 className="mb-2 font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted">
+            {careerLabel}
+          </h2>
+          <div className="space-y-3">
+            {career.map((c) => (
+              <div
+                key={c.sport_key}
+                className="rounded-xl border border-zinc-200/80 bg-surface p-3 shadow-sm"
+              >
+                <p className="text-sm font-medium text-ink">{c.sport_label}</p>
+                <p className="text-xs text-ink-muted">{c.meta}</p>
+                <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-2">
+                  {c.metrics.map((m) => (
+                    <div key={m.key} className="min-w-16">
+                      <dt className="text-[11px] uppercase tracking-wide text-ink-muted">
+                        {m.label}
+                      </dt>
+                      <dd className="font-display text-2xl font-bold tabular-nums text-ink">
+                        {m.value}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* PROMPT-65: per-division totals — labels come from the sport module's
           declared playerStats model; nothing renders when there's nothing to

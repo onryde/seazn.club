@@ -11,10 +11,26 @@ import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
 import { isoDateTime } from "@/lib/public-site";
-import { resolveModule } from "@/server/engine-db";
-import { labelPlayerStats } from "@/server/player-stats";
-import { toLocale } from "@/lib/i18n-constants";
+import { labelPlayerStats, groupCareerStatsBySport, type CareerSportStats } from "@/server/player-stats";
+import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
+import type { MessageKey } from "@/lib/messages";
+
+/**
+ * `{count}`-pluralized org-default-locale copy — the `public-site/data.ts`
+ * twin of `lib/i18n-runtime.ts`'s `plural()`, built on `msgFor` instead of a
+ * `Dict`+`Locale` pair because this file deliberately never resolves the
+ * REQUEST locale (see `statMsg`'s own comment inside getPublicPlayer: reading
+ * cookies()/headers() here would opt this ISR route out of static
+ * rendering). Same authored-key convention as `plural()`
+ * (`"<key>.one"`/`"<key>.other"`, `{count}` always available to interpolate)
+ * — en/es/fr/nl are all simple two-category locales for `Intl.PluralRules`,
+ * so every key this calls must author both categories.
+ */
+function pluralStatMsg(locale: Locale, key: string, count: number): string {
+  const category = new Intl.PluralRules(locale).select(count);
+  return msgFor(locale, `${key}.${category}` as MessageKey, { count });
+}
 
 /** timestamptz → ISO string before rows cross into client components. */
 const normalizeFixture = <T extends { scheduled_at: unknown }>(f: T): T => ({
@@ -412,6 +428,16 @@ export interface PublicPlayerStats {
   metrics: { key: string; label: string; value: number }[];
 }
 
+/** S9/#418 — per-sport career rollup on the player card, scoped to THIS
+ *  competition only (see getPublicPlayer's own comment on why summing the
+ *  snapshot rows it already read cannot leak cross-competition). `meta` is
+ *  pre-rendered "N divisions · N variants · N matches" — this page has no
+ *  Dict/locale pair to format the raw counts with (see statMsg), so, like
+ *  every metric label here, the count line is baked server-side too. */
+export interface PublicCareerSport extends CareerSportStats {
+  meta: string;
+}
+
 /**
  * Player card. Two gates, in two places, deliberately:
  *  - consent lives in public_players_v (the view only contains persons who
@@ -431,6 +457,13 @@ export async function getPublicPlayer(
   player: PublicPlayer;
   memberships: { division_name: string; division_slug: string; entrant_name: string; squad_number: number | null; position: string | null }[];
   stats: PublicPlayerStats[];
+  /** S9/#418 — per-sport rollup across every division THIS competition
+   *  contributed (never cross-competition, never cross-org: see this
+   *  function's own comment on why). */
+  career: PublicCareerSport[];
+  /** Pre-rendered "Career" section heading — this page has no Dict/locale
+   *  pair (see statMsg), so, like `career[].meta`, the copy is baked here. */
+  careerLabel: string;
 } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(personId)) return null;
   const shell = await getPublicCompetition(orgSlug, compSlug);
@@ -452,8 +485,8 @@ export async function getPublicPlayer(
   // cookies()/headers() and would opt this ISR route (revalidate = 300) into
   // dynamic rendering. The org's default_locale is the documented
   // spectator-facing locale for exactly this reason.
-  const statMsg = (k: Parameters<typeof msgFor>[1]) =>
-    msgFor(toLocale(shell.org.default_locale), k);
+  const orgLocale = toLocale(shell.org.default_locale);
+  const statMsg = (k: Parameters<typeof msgFor>[1]) => msgFor(orgLocale, k);
 
   const detail = await unstable_cache(
     async () => {
@@ -483,11 +516,11 @@ export async function getPublicPlayer(
       const snapshots = await sql<
         {
           division_id: string; division_name: string; division_slug: string;
-          sport_key: string; module_version: string; stats: Record<string, number>;
+          sport_key: string; variant_key: string; module_version: string; stats: Record<string, number>;
         }[]
       >`
         select ps.division_id, d.name as division_name, d.slug as division_slug,
-               ps.sport_key, d.module_version, ps.stats
+               ps.sport_key, d.variant_key, d.module_version, ps.stats
         from player_stat_snapshots ps
         join public_divisions_v d on d.id = ps.division_id
         where ps.person_id = ${personId} and d.competition_id = ${shell.competition.id}
@@ -508,17 +541,74 @@ export async function getPublicPlayer(
           });
         }
       }
-      return { player, memberships, stats };
+
+      // S9/#418 — the per-sport career rollup, reusing the SAME snapshot rows
+      // the per-division `stats` list above just read (no second query for
+      // the rows themselves): `snapshots` is already filtered to
+      // `d.competition_id = shell.competition.id`, so this rollup is
+      // STRUCTURALLY scoped to this one competition — summing across
+      // competitions (or orgs) here would leak a spectator a total the
+      // consent gate never agreed to show them. Matches count is its own
+      // small unauthenticated read (mirrors player-stats.ts's
+      // countMatchesByDivision / me.ts's countMyMatchesByDivision), scoped to
+      // exactly the division ids this competition's snapshots named.
+      const divisionIds = [...new Set(snapshots.map((s) => s.division_id))];
+      const matchesByDivision = await countPublicMatchesByDivision(personId, divisionIds);
+      // This page has no Dict/locale pair to compose its own pluralized copy
+      // with (see statMsg's own comment above) — so, like every metric
+      // label already in this payload, the "N divisions · N variants · N
+      // matches" line is baked into fully-rendered text here rather than
+      // shipped as raw numbers for the page to format.
+      const career: PublicCareerSport[] = groupCareerStatsBySport(
+        snapshots,
+        matchesByDivision,
+        statMsg,
+      ).map((c) => ({
+        ...c,
+        meta: [
+          pluralStatMsg(orgLocale, "career.divisions", c.divisions),
+          pluralStatMsg(orgLocale, "career.variants", c.variants),
+          pluralStatMsg(orgLocale, "career.matches", c.matches),
+        ].join(" · "),
+      }));
+
+      return { player, memberships, stats, career, careerLabel: statMsg("player.career.title") };
     },
+    // v15 (S9/#418): added the `career` rollup to this cached payload. A live
+    // v14 entry would keep serving without it for a full REVALIDATE_SLOW
+    // window after deploy — same reason v13 → v14 retired its key instead of
+    // waiting (below).
+    //
     // v14: stat labels inside this payload are now localized copy, not the
     // engine's English. A live v13 entry would keep serving English for a full
     // REVALIDATE_SLOW window after deploy, so retire the key rather than wait.
-    ["pub-player-v14", shell.competition.id, personId],
+    ["pub-player-v15", shell.competition.id, personId],
     { tags: [competitionTag(shell.competition.id)], revalidate: REVALIDATE_SLOW },
   )();
   if (!detail) return null;
 
   return { org: shell.org, competition: shell.competition, ...detail };
+}
+
+/** Finalized fixtures a person played, per division — the PUBLIC,
+ *  unauthenticated twin of player-stats.ts's countMatchesByDivision and
+ *  me.ts's countMyMatchesByDivision (same query shape, same `sql([])`
+ *  guard); no tenant/user scoping needed here because the caller already
+ *  restricts `divisionIds` to ones this competition's own consent-filtered
+ *  snapshots named. */
+async function countPublicMatchesByDivision(
+  personId: string,
+  divisionIds: readonly string[],
+): Promise<Map<string, number>> {
+  if (divisionIds.length === 0) return new Map();
+  const rows = await sql<{ division_id: string; matches: number }[]>`
+    select f.division_id, count(distinct f.id)::int as matches
+    from fixtures f
+    join entrant_members em on em.person_id = ${personId}
+      and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+    where f.division_id in ${sql(divisionIds as string[])} and f.status = 'finalized'
+    group by f.division_id`;
+  return new Map(rows.map((r) => [r.division_id, r.matches]));
 }
 
 /**
