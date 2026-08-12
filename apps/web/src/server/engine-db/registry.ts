@@ -27,3 +27,13 @@ function bootRegistry(): typeof registry {
 export function resolveModule(sportKey: string, moduleVersion: string): AnySportModule {
   return bootRegistry().get(sportKey, moduleVersion);
 }
+
+// S9/#418 — the career rollup sums player_stat_snapshots ACROSS divisions
+// that can each pin a different module_version of the same sport, so there
+// is no single "the" version to resolve. `latest()` is the deliberate
+// per-#418 choice (see personCareerStats's own comment for what that means
+// when two divisions' models disagree on a key) — never used for a single
+// division's own read, which always resolves its own pinned version above.
+export function resolveLatestModule(sportKey: string): AnySportModule {
+  return bootRegistry().latest(sportKey);
+}

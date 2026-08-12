@@ -11,7 +11,18 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { publicStorageUrl } from "@/lib/supabase-storage";
 import { uploadPersonPhotoBytes } from "./persons";
-import { labelPlayerStats, type LabelledPlayerStat } from "@/server/player-stats";
+import {
+  labelPlayerStats,
+  groupCareerStatsBySport,
+  type LabelledPlayerStat,
+  type CareerSnapshotRow,
+  type CareerSportStats,
+} from "@/server/player-stats";
+// The DB-touching "matches" counter — NOT the pure module above (same name,
+// different file: usecases/player-stats.ts vs server/player-stats.ts).
+// Shared with personCareerStats (usecases/player-stats.ts) and
+// public-site/data.ts's getPublicPlayer, review round 2 finding 2.
+import { countMatchesByDivision } from "./player-stats";
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
@@ -307,6 +318,39 @@ export async function listMyPlayerStats(userId: string): Promise<MyStatBlock[]> 
     if (metrics.length === 0) return [];
     return [{ ...row, competition_public: visibility === "public", metrics }];
   });
+}
+
+/** S9/#418 — the /me Career section: every claimed person's snapshot rows,
+ *  grouped and summed by sport ACROSS EVERY ORG/COMPETITION (private
+ *  included) — deliberately unlike the org-scoped persons-stats route's
+ *  `?group=sport` (personCareerStats, usecases/player-stats.ts): this is the
+ *  player's own view of their WHOLE career, so a cross-org total is correct
+ *  and intended here, not a leak. A user can hold several claimed `persons`
+ *  rows (one per org, `persons.user_id = userId`), so — unlike
+ *  personCareerStats, which sums ONE person's rows — this sums across every
+ *  person the user has claimed, same as listMyPlayerStats's own cross-org
+ *  join above.
+ *
+ *  Same no-recompute, locale-safe discipline as listMyPlayerStats: reads
+ *  player_stat_snapshots exactly as they stand, never calls
+ *  recomputePlayerStats. */
+export async function listMyCareerStats(userId: string): Promise<CareerSportStats[]> {
+  const rows = await sql<CareerSnapshotRow[]>`
+    select ps.division_id, ps.sport_key, d.variant_key, ps.stats
+    from player_stat_snapshots ps
+    join persons p on p.id = ps.person_id and p.user_id = ${userId} and p.merged_into is null
+    join divisions d on d.id = ps.division_id and d.archived_at is null
+    order by d.slug`;
+  if (rows.length === 0) return [];
+
+  const matchesByDivision = await countMatchesByDivision(
+    sql,
+    { by: "claimedPersons", userId },
+    [...new Set(rows.map((r) => r.division_id))],
+  );
+  const locale = await resolveLocale().catch(() => DEFAULT_LOCALE);
+  const m = (k: Parameters<typeof msgFor>[1]) => msgFor(locale, k);
+  return groupCareerStatsBySport(rows, matchesByDivision, m);
 }
 
 /** True when the user's ONLY relationship to the platform is a claimed

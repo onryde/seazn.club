@@ -17,6 +17,10 @@ import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPairsForDivision } from "@/server/engine-db/lineups";
 import { entrantFoldCtx, loadEntrantMembersForDivision } from "@/server/engine-db/entrant-members";
 import { log } from "@/server/logger";
+import { groupCareerStatsBySport, type CareerSnapshotRow, type CareerSportStats } from "@/server/player-stats";
+import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
+import { resolveLocale } from "@/lib/resolve-locale";
+import { msgFor } from "@/lib/messages-i18n";
 
 type Tx = postgres.TransactionSql;
 
@@ -372,6 +376,145 @@ export async function personStats(
       ${divisionId ? tx`and ps.division_id = ${divisionId}` : tx``}
       order by d.name`;
     return { divisions: rows };
+  });
+}
+
+/** Every fixture status this repo treats as "played, has a result" —
+ *  decided/finalized/forfeited. `fixtures.status`'s check constraint also
+ *  allows scheduled/in_play/abandoned/cancelled, none of which count
+ *  (`db/migration/v2-engine/tables/V214__fixtures.sql:21-22`). Same three
+ *  statuses as divisions.ts's own audit count, org-posts.ts's DECIDED set,
+ *  stages.ts's DECIDED set, withdrawal.ts's SETTLED set — each currently its
+ *  own local copy (unifying those is out of scope here; this constant only
+ *  closes the "matches" duplication below).
+ *
+ *  Review round 2, finding 1: this used to be a bare `status = 'finalized'`
+ *  literal, independently duplicated in THIS function, me.ts's
+ *  countMyMatchesByDivision, and public-site/data.ts's
+ *  countPublicMatchesByDivision. recomputePlayerStats above puts NO status
+ *  filter on its own score_events read, so a fixture left `decided` and
+ *  never explicitly finalized contributed its stats to the snapshot while
+ *  contributing ZERO to `matches` — on all three call sites at once. A
+ *  player's card could read "5 goals · 0 matches". */
+const COMPLETED_FIXTURE_STATUSES: readonly string[] = ["decided", "finalized", "forfeited"];
+
+/** Pooled `sql` or an open transaction — `postgres.TransactionSql` and `Sql`
+ *  share `ISql` (same fact as admin-fixture-config.ts's own `Queryable`).
+ *  `countMatchesByDivision` below is called both ways: inside `withTenant`
+ *  here (personCareerStats) and against the pooled `sql` proxy from
+ *  me.ts/public-site/data.ts, neither of which has a tenant tx open. */
+type Queryable = postgres.ISql;
+
+/** The one thing the three "matches" callers (org-scoped persons-stats,
+ *  cross-org /me, the public player card) genuinely differ on — who "mine"
+ *  resolves to. Everything else about the query (status set, grouping, the
+ *  `sql([])` guard) must be identical, which is the whole point of sharing
+ *  this function (review round 2, finding 2 — the same completed-status
+ *  defect was duplicated three times because the query itself was). */
+export type MatchesOwner = { by: "person"; personId: string } | { by: "claimedPersons"; userId: string };
+
+/** Completed fixtures a person — or, for a signed-in player, ANY of their
+ *  claimed persons (`MatchesOwner`'s "claimedPersons" branch: there is no
+ *  single personId to scope by there, a user can hold one claimed `persons`
+ *  row per org) — played, per division, restricted to `divisionIds`. The
+ *  single implementation behind personCareerStats below, me.ts's
+ *  listMyCareerStats, and public-site/data.ts's getPublicPlayer career
+ *  rollup. Deliberately NOT the declared playerStats "matches" metric: only
+ *  3 of the 11 shipped modules (carrom, and the setbased/nested kernels)
+ *  declare one at all, so a metric-based count would read zero for
+ *  football/cricket/hockey/…
+ *
+ *  Guards the empty-array case itself (S8/#417 pattern, postgres.js's
+ *  `sql([])` renders `(null)` and an empty `in ()` matches nothing, not
+ *  everything) rather than trusting every caller to remember it. */
+export async function countMatchesByDivision(
+  db: Queryable,
+  owner: MatchesOwner,
+  divisionIds: readonly string[],
+): Promise<Map<string, number>> {
+  if (divisionIds.length === 0) return new Map();
+  const rows =
+    owner.by === "person"
+      ? await db<{ division_id: string; matches: number }[]>`
+          select f.division_id, count(distinct f.id)::int as matches
+          from fixtures f
+          join entrant_members em on em.person_id = ${owner.personId}
+            and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+          where f.division_id in ${db(divisionIds as string[])}
+            and f.status in ${db(COMPLETED_FIXTURE_STATUSES as string[])}
+          group by f.division_id`
+      : await db<{ division_id: string; matches: number }[]>`
+          select f.division_id, count(distinct f.id)::int as matches
+          from fixtures f
+          join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+          join persons p on p.id = em.person_id and p.user_id = ${owner.userId} and p.merged_into is null
+          where f.division_id in ${db(divisionIds as string[])}
+            and f.status in ${db(COMPLETED_FIXTURE_STATUSES as string[])}
+          group by f.division_id`;
+  return new Map(rows.map((r) => [r.division_id, r.matches]));
+}
+
+/** GET /persons/{id}/stats?group=sport — the S9/#418 career rollup: every
+ *  sport this person has snapshot rows in, within THIS org (org-scoped via
+ *  withTenant, unlike /me's cross-org listMyCareerStats — this route serves
+ *  the organiser's console, not the player's own cross-club view), summed
+ *  across every contributing division and labelled via the sport's LATEST
+ *  registered module (see groupCareerStatsBySport's own comment for what
+ *  that means when two divisions disagree on a key's meaning).
+ *
+ *  SNAPSHOT-ONLY, deliberately — this is the N-recompute trap personStats
+ *  above already carries (`for (const d of divisionIds) await
+ *  recomputePlayerStats`) at ONE division; a career rollup spans every
+ *  division a person has EVER played, in every sport, so paying that same
+ *  cost here would multiply an already-expensive read across a whole
+ *  history on every card view. Whatever the most recent read of a given
+ *  division already computed into player_stat_snapshots is what the career
+ *  total is built from — a stale division catches up the next time IT is
+ *  read (its own leaderboard, its own per-division card, or the public
+ *  card), exactly like every other disposable-cache read in this file. */
+export async function personCareerStats(
+  auth: AuthCtx,
+  personId: string,
+): Promise<{ sports: CareerSportStats[] }> {
+  await requireFeature(auth.orgId, "stats.player");
+  return withTenant(auth.orgId, async (tx) => {
+    const [person] = await tx`
+      select 1 from persons where id = ${personId} and merged_into is null`;
+    if (!person) throw new HttpError(404, "person not found");
+
+    // Review round 2, archived-divisions decision: `and d.archived_at is
+    // null` added here to align with listMyCareerStats/listMyPlayerStats
+    // (me.ts, both already filter) and the dominant convention across this
+    // repo's own division reads (divisions.ts's own listing default,
+    // card-stats.ts, division-slots.ts, competitions.ts all hide archived
+    // divisions from an aggregate/listing read by default) — a career total
+    // silently shrinking the moment an unrelated org archives an old
+    // competition is exactly the silent-data-flicker shape that convention
+    // exists to prevent. personStats above (the per-division, non-summed
+    // sibling reader in this same file) still has no archived_at filter —
+    // a separate, pre-existing function deliberately left untouched this
+    // round, not an oversight.
+    const rows = await tx<CareerSnapshotRow[]>`
+      select ps.division_id, ps.sport_key, d.variant_key, ps.stats
+      from player_stat_snapshots ps
+      join divisions d on d.id = ps.division_id and d.archived_at is null
+      where ps.person_id = ${personId}
+      order by d.slug`;
+    if (rows.length === 0) return { sports: [] };
+
+    const matchesByDivision = await countMatchesByDivision(
+      tx,
+      { by: "person", personId },
+      [...new Set(rows.map((r) => r.division_id))],
+    );
+    // The persons-stats route is already dynamic (auth'd, per-request), so
+    // resolving the request locale here costs no rendering mode — mirrors
+    // listMyPlayerStats's own discipline (me.ts). The catch is for callers
+    // outside a request scope (tests, jobs) where cookies() throws; English
+    // is the right answer there, not a crash.
+    const locale = await resolveLocale().catch(() => DEFAULT_LOCALE);
+    const m = (k: Parameters<typeof msgFor>[1]) => msgFor(locale, k);
+    return { sports: groupCareerStatsBySport(rows, matchesByDivision, m) };
   });
 }
 

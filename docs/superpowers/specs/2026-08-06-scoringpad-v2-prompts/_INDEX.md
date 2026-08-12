@@ -21,7 +21,7 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 | S6 | #416 | `S06-416-w5-padspec.md` | S2, S3, S5 | **DONE** — `PadSpec` contract + bidirectional conformance shipped for all 11 modules; fidelity model redesigned per the S2 ruling; 3 named variant-gating regressions fixed; e2e/smoke deferred to S12/S13 |
 | S7 | #427 | `S07-427-pad-vocabulary-i18n.md` | S3, S4, S6 | **DONE** — prompt's own "owed by sport" list was stale (S3/S4/S5 shipped most of it early); real gap was S6's 164-key `PadLabel` namespace never reaching apps/web, a missing per-field label slot, and 3 review-caught rendering bugs. Real e2e shipped, independently verified twice |
 | S8 | #417 | `S08-417-w6-player-stats.md` | S6 | **DONE, e2e+smoke discharged** — 3 prompt premises false (all 11 modules already declared `playerStats`, dot-paths already shipped, no kernel default existed to copy); the real defect was models declared against OPTIONAL person fields on entrant-attributed payloads, i.e. inert. Owner ruled to widen into `apps/web` so the entrant→person fallback is reachable. Goalkeeper stats shipped INCLUDING shots-on-goal/saves (owner amended the S2/#430 parking — table row above is stale on this point, kept for history per the decision log below). W6 review closed 6+3+1 gaps across three rounds. E2E (`apps/web/e2e/stats.spec.ts`) + smoke (`scripts/smoke.ts` `playerStatsSuite`) landed in the S8b follow-up session — real HTTP, real numbers, mutation-proved. S9 still owes its OWN e2e once the `/me` page exists; that is not this row |
-| S9 | #418 | `S09-418-w7-career-rollup.md` | S3, S8 | TODO |
+| S9 | #418 | `S09-418-w7-career-rollup.md` | S3, S8 | **DONE** — scope 1 (the `personsOf`/`cfg` plumbing) was ALREADY SHIPPED by S8/#417, so the prompt's central "Why" premise is false; the real work was the rollup, the route, the two surfaces and the e2e S8 owed forward. First session in the programme with a real user-facing surface, so all four test types landed here with no deferrals. Three defects found by RENDERING it that no unit test could see (see the decision log) |
 | S10 | #419 | `S10-419-w8-chassis-renderer.md` | S6 | TODO |
 | S11 | #420 | `S11-420-w9-skins.md` | S7, S10 | TODO |
 | S12 | #421 | `S12-421-w10-integration-flag.md` | S11 | TODO |
@@ -1541,6 +1541,147 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   unrelated, pre-existing local break on this Next version (upstream
   `InvariantError`), not this branch's problem, so dev was the sanctioned
   target per owner instruction.
+
+- 2026-08-12 — S9/#418 — **the prompt's central premise is FALSE: scope 1 was
+  already shipped by S8.** The "Why" section says `recomputePlayerStats` "does
+  not build the `personsOf` context S8's models require, so the new models
+  never see entrant members." Verified in the code before any work started, not
+  taken from a scout summary: `loadEntrantMembersForDivision` +
+  `entrantFoldCtx(home, away, members, cfg)` and a per-fixture
+  `resolveFixtureCfg(config_snapshot, division.config, stage.config)` all sit in
+  `player-stats.ts` on `main`. S8's own owner-ruled widening into `apps/web` put
+  them there. Same shape as S7's and S8's stale owed-lists — **a prompt written
+  before its dependency executed describes the world before that dependency
+  executed.** Re-verify scope 1 of every remaining prompt against `main` before
+  briefing anyone.
+- 2026-08-12 — S9/#418 — **the career surfaces are SNAPSHOT-ONLY, and that is a
+  deliberate divergence from the sibling endpoint one function above them.**
+  `personStats` loops `recomputePlayerStats` over every division a person
+  appears in before reading. A career spans every division in every sport a
+  person has ever played, so paying that cost per card view multiplies an
+  already-expensive read across a whole history. `personCareerStats` and
+  `listMyCareerStats` therefore read `player_stat_snapshots` exactly as they
+  stand; a stale division catches up the next time IT is read (its own
+  leaderboard, its per-division card, or the public card). Pinned by a
+  regression in each path that fails if a recompute is reintroduced.
+- 2026-08-12 — S9/#418 — **the `matches` count under-reported, in three copies,
+  and the duplication is why.** All three counters filtered `f.status =
+  'finalized'`, but `recomputePlayerStats` puts NO status filter on its
+  `score_events` read — so a `decided` fixture contributed stats while
+  contributing zero matches, and a card could read "5 goals · 0 matches". The
+  repo's own completed set is `('decided','finalized','forfeited')`
+  (`divisions.ts:373`, `americano.ts:96`, `org-posts.ts:488`), and this very
+  file's sibling query already used `'decided'`. Found independently by the
+  coordinator and the reviewer, which is the useful part: three byte-identical
+  helpers meant one wrong predicate was three wrong predicates. Now one
+  exported `countMatchesByDivision(db, owner, divisionIds)` with a single
+  `COMPLETED_FIXTURE_STATUSES`. The recurring placer/verifier fork, again.
+- 2026-08-12 — S9/#418 — **`resolveLatestModule` is the deliberate choice for a
+  career card, and it has a named cost.** Divisions in one sport can pin
+  different `module_version`s and a division never changes version once
+  created, so a whole-career card has no single "the" version to resolve. The
+  newest module's declarations win the label AND the derive formula for every
+  key. When two versions genuinely disagree about what a key MEANS, an older
+  division's numbers get labelled under the newer meaning. Accepted rather than
+  carrying N label sets on one card; recorded so it is not rediscovered as a
+  bug. `personCareerStats` was also aligned to filter `d.archived_at is null`,
+  matching `listMyCareerStats`/`listMyPlayerStats`; `personStats` still has no
+  such filter — a pre-existing gap, deliberately left, flagged not fixed.
+- 2026-08-12 — S9/#418 — **THREE defects that only a rendered page could show,
+  and the class is worth more than the fixes.** S8 closed with the mirror pair
+  "declared but never computed" / "computed but never displayable". S9 adds a
+  third: **displayed, but contradicting itself.**
+  (a) A career card stated its match count twice, differently — the meta line
+  counts COMPLETED fixtures (all eleven sports), while carrom and the
+  setbased/nested kernels also declare a folded `matches` metric counting a
+  fixture with ANY recorded play. Badminton rendered "1 division · 1 variant ·
+  0 matches" directly above a tile reading "MATCHES 1". Both numbers are
+  defensible; one word cannot mean both. The TILE gives way — the meta count is
+  the one every sport has. The per-division "My stats" block keeps its tile: it
+  has no meta line, so nothing there contradicts.
+  (b) On a public player card the rollup restated the Stats block below it
+  byte for byte whenever the player had one division in that competition —
+  same label, same numbers, twice. It now renders only where it aggregates
+  something (`career.some((c) => c.divisions > 1)`). `/me` always renders,
+  because summing across clubs is that view's entire purpose.
+  (c) `/me` overflowed **41px at 320px** — NOT from the new section: measured at
+  41px with Career empty, against 0px on `/dashboard`, isolating it to `/me`'s
+  own header being one non-wrapping flex row (logo + eyebrow + name + sign
+  out). The eyebrow and display name now step aside below `sm`; nothing moves
+  at 640px and up. Unplanned fix, inside this session's own file set.
+  None of the three is reachable by a unit test: each is a property of two
+  correct values sitting next to each other on a screen.
+- 2026-08-12 — S9/#418 — **"variant" is the product's own word — do not
+  "improve" it to "format".** The career meta line reads "N divisions · N
+  variants · N matches", and "variant" looked like jargon for a player-facing
+  card. It is not: `divset.variant`/`wizard.variant` are "Variant" in the
+  dictionaries, and `divset.format` is "Format" for a DIFFERENT concept (the
+  competition format — americano, league). Renaming would have collided two
+  distinct product nouns. Checked before changing; recorded so the next reader
+  does not re-propose it.
+- 2026-08-12 — S9/#418 — **an e2e helper that reported success while linking
+  nobody, and how it was caught.** `linkPersonToUserBySql` resolved its account
+  with `update persons set user_id = (select id from users where email = …)`.
+  `TAG` is evaluated per PROCESS, so `proEmail()` called from a spec worker
+  names an account `auth.setup.ts` (a different worker) never created — the
+  subquery returned NULL, the helper set `user_id = NULL`, updated one row, and
+  reported success. The spec then asserted against a `/me` belonging to nobody.
+  Caught only because the assertion downstream was specific enough to fail. It
+  now takes a user ID from `GET /api/users/me` and both lookups throw. Same
+  defect class as everything above: a write that cannot fail is not a write
+  that worked.
+- 2026-08-12 — S9/#418 — **the acceptance criteria are NUMBERS, not elements,
+  and that is what makes them falsifiable.** One person gets football goals in
+  two divisions of competition A (2 + 1), three more in competition B, a
+  goalkeeper appearance in a third competition, and a badminton point. `/me`
+  must read 6 goals; competition A's public card must read 3. A scope leak is
+  then a WRONG NUMBER, not a missing element — an "a career section exists"
+  assertion passes in both the correct and the broken state. Mutation-proved
+  both ways, restored from `cp` backups and diffed byte-identical: forcing
+  `listMyCareerStats` to return `[]` failed the `/me` assertion, and dropping
+  the competition predicate from `getPublicPlayer`'s snapshot read failed with
+  `Received ["6","6","1","1"]` against an expected `"3"` — exactly the leak the
+  criterion exists to catch. The keeper's `goals_conceded` lands on the SAME
+  football card as the outfield goals, which is the "one card, correct splits"
+  criterion proved on the surface rather than in a stat blob.
+- 2026-08-12 — S9/#418 — **the reviewer's premise check beat the implementer's
+  scope cut.** The implementer proved the keeper split with a pure unit test
+  over fabricated rows, reasoning that nothing in `apps/web` emits
+  `core.lineup.position`. The reviewer checked that premise and it is false: a
+  `putLineup` starting slot with `position_key: "GK"` alone reaches
+  `footballKeeperStatsFold` (`fixtures.ts:133-135` → `football.ts:1893-1921`),
+  no lineup EVENT required. A DB-backed proof landed, mutation-verified by
+  breaking `lineups.ts`'s `position_key` pass-through. Worth recording as
+  method: **a stated reason for a scope cut is a factual claim, and checking it
+  is cheap.**
+
+- 2026-08-12 — S9/#418 — **the fix for the duplicated public rollup was itself
+  wrong for a MIXED competition, and final review caught it.** Gating the whole
+  `<section>` on `career.some((c) => c.divisions > 1)` still mapped over every
+  sport inside it, so a competition with one multi-division sport plus one
+  single-division sport rendered the second sport's card as a verbatim
+  restatement of its own Stats row — exactly the defect the gate was added to
+  remove, reintroduced for the only case with more than one sport. The drop
+  belongs per SPORT, in `getPublicPlayer`, before the payload exists; the page
+  then reads `career.length > 0` and holds no rule. Consequence worth keeping:
+  **a visibility rule written at the render site is a rule about the PAGE, and
+  a page can hold several of the things the rule is about.**
+  Both pre-existing scoping tests had seeded ONE division per competition, so
+  under the new rule they would have asserted an empty payload and passed while
+  proving nothing — a vacuous green that only appeared because the rule
+  changed underneath them. Each now seeds two.
+- 2026-08-12 — S9/#418 — **a review finding REFUSED, with the reason recorded.**
+  Final review proposed dropping a career card whose metrics all resolve away
+  (every total zero, or a `sport_key` retired from the registry while its
+  snapshot rows survive), to match `labelPlayerStats`'s callers
+  (`me.ts`, `if (metrics.length === 0) return []`). Implemented, and it
+  immediately redded the unit test *"an unknown/retired sport_key degrades to
+  empty metrics, never throws — counts stay correct"* — which states the
+  opposite contract deliberately. Reverted. The two views answer different
+  questions: a per-division row with no numbers is noise, while a career card
+  is also the record that you PLAYED the sport, carried by its division and
+  match counts alone. Changing that is a product call, not a consistency
+  cleanup. Recorded because the next reviewer will propose it again.
 
 - _(append below)_
 

@@ -11,10 +11,31 @@ import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
 import { isoDateTime } from "@/lib/public-site";
-import { resolveModule } from "@/server/engine-db";
-import { labelPlayerStats } from "@/server/player-stats";
-import { toLocale } from "@/lib/i18n-constants";
+import { labelPlayerStats, groupCareerStatsBySport, type CareerSportStats } from "@/server/player-stats";
+// The DB-touching "matches" counter — NOT the pure module above (same name,
+// different file). Shared with personCareerStats/countMatchesByDivision
+// (usecases/player-stats.ts) and me.ts's listMyCareerStats, review round 2
+// finding 2.
+import { countMatchesByDivision } from "@/server/usecases/player-stats";
+import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
+import type { MessageKey } from "@/lib/messages";
+
+/**
+ * `{count}`-pluralized org-default-locale copy — the `public-site/data.ts`
+ * twin of `lib/i18n-runtime.ts`'s `plural()`, built on `msgFor` instead of a
+ * `Dict`+`Locale` pair because this file deliberately never resolves the
+ * REQUEST locale (see `statMsg`'s own comment inside getPublicPlayer: reading
+ * cookies()/headers() here would opt this ISR route out of static
+ * rendering). Same authored-key convention as `plural()`
+ * (`"<key>.one"`/`"<key>.other"`, `{count}` always available to interpolate)
+ * — en/es/fr/nl are all simple two-category locales for `Intl.PluralRules`,
+ * so every key this calls must author both categories.
+ */
+function pluralStatMsg(locale: Locale, key: string, count: number): string {
+  const category = new Intl.PluralRules(locale).select(count);
+  return msgFor(locale, `${key}.${category}` as MessageKey, { count });
+}
 
 /** timestamptz → ISO string before rows cross into client components. */
 const normalizeFixture = <T extends { scheduled_at: unknown }>(f: T): T => ({
@@ -412,6 +433,16 @@ export interface PublicPlayerStats {
   metrics: { key: string; label: string; value: number }[];
 }
 
+/** S9/#418 — per-sport career rollup on the player card, scoped to THIS
+ *  competition only (see getPublicPlayer's own comment on why summing the
+ *  snapshot rows it already read cannot leak cross-competition). `meta` is
+ *  pre-rendered "N divisions · N variants · N matches" — this page has no
+ *  Dict/locale pair to format the raw counts with (see statMsg), so, like
+ *  every metric label here, the count line is baked server-side too. */
+export interface PublicCareerSport extends CareerSportStats {
+  meta: string;
+}
+
 /**
  * Player card. Two gates, in two places, deliberately:
  *  - consent lives in public_players_v (the view only contains persons who
@@ -431,6 +462,13 @@ export async function getPublicPlayer(
   player: PublicPlayer;
   memberships: { division_name: string; division_slug: string; entrant_name: string; squad_number: number | null; position: string | null }[];
   stats: PublicPlayerStats[];
+  /** S9/#418 — per-sport rollup across every division THIS competition
+   *  contributed (never cross-competition, never cross-org: see this
+   *  function's own comment on why). */
+  career: PublicCareerSport[];
+  /** Pre-rendered "Career" section heading — this page has no Dict/locale
+   *  pair (see statMsg), so, like `career[].meta`, the copy is baked here. */
+  careerLabel: string;
 } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(personId)) return null;
   const shell = await getPublicCompetition(orgSlug, compSlug);
@@ -452,8 +490,8 @@ export async function getPublicPlayer(
   // cookies()/headers() and would opt this ISR route (revalidate = 300) into
   // dynamic rendering. The org's default_locale is the documented
   // spectator-facing locale for exactly this reason.
-  const statMsg = (k: Parameters<typeof msgFor>[1]) =>
-    msgFor(toLocale(shell.org.default_locale), k);
+  const orgLocale = toLocale(shell.org.default_locale);
+  const statMsg = (k: Parameters<typeof msgFor>[1]) => msgFor(orgLocale, k);
 
   const detail = await unstable_cache(
     async () => {
@@ -483,11 +521,11 @@ export async function getPublicPlayer(
       const snapshots = await sql<
         {
           division_id: string; division_name: string; division_slug: string;
-          sport_key: string; module_version: string; stats: Record<string, number>;
+          sport_key: string; variant_key: string; module_version: string; stats: Record<string, number>;
         }[]
       >`
         select ps.division_id, d.name as division_name, d.slug as division_slug,
-               ps.sport_key, d.module_version, ps.stats
+               ps.sport_key, d.variant_key, d.module_version, ps.stats
         from player_stat_snapshots ps
         join public_divisions_v d on d.id = ps.division_id
         where ps.person_id = ${personId} and d.competition_id = ${shell.competition.id}
@@ -508,12 +546,70 @@ export async function getPublicPlayer(
           });
         }
       }
-      return { player, memberships, stats };
+
+      // S9/#418 — the per-sport career rollup, reusing the SAME snapshot rows
+      // the per-division `stats` list above just read (no second query for
+      // the rows themselves): `snapshots` is already filtered to
+      // `d.competition_id = shell.competition.id`, so this rollup is
+      // STRUCTURALLY scoped to this one competition — summing across
+      // competitions (or orgs) here would leak a spectator a total the
+      // consent gate never agreed to show them. Matches count is the SAME
+      // shared countMatchesByDivision personCareerStats/listMyCareerStats
+      // use (review round 2 finding 2) — no tenant/user scoping needed here
+      // because the caller already restricts divisionIds to exactly the
+      // division ids this competition's own snapshots named.
+      // A competition-scoped rollup EARNS its place only where it aggregates
+      // something. With one division in a sport it restates that sport's own
+      // row in the `stats` list above, word for word — so those sports are
+      // dropped HERE rather than at the page, which is the only place that
+      // holds for a MIXED competition: gating the whole section on "some
+      // sport has >1 division" still rendered the single-division sports
+      // beside the one that tripped the gate, which is the duplication this
+      // rule exists to remove. Dropping them here also means a competition
+      // with nothing to aggregate never pays for the query below.
+      const divisionsPerSport = new Map<string, Set<string>>();
+      for (const s of snapshots) {
+        const seen = divisionsPerSport.get(s.sport_key) ?? new Set<string>();
+        seen.add(s.division_id);
+        divisionsPerSport.set(s.sport_key, seen);
+      }
+      const aggregating = snapshots.filter(
+        (s) => (divisionsPerSport.get(s.sport_key)?.size ?? 0) > 1,
+      );
+      if (aggregating.length === 0) {
+        return { player, memberships, stats, career: [], careerLabel: statMsg("player.career.title") };
+      }
+      const divisionIds = [...new Set(aggregating.map((s) => s.division_id))];
+      const matchesByDivision = await countMatchesByDivision(sql, { by: "person", personId }, divisionIds);
+      // This page has no Dict/locale pair to compose its own pluralized copy
+      // with (see statMsg's own comment above) — so, like every metric
+      // label already in this payload, the "N divisions · N variants · N
+      // matches" line is baked into fully-rendered text here rather than
+      // shipped as raw numbers for the page to format.
+      const career: PublicCareerSport[] = groupCareerStatsBySport(
+        aggregating,
+        matchesByDivision,
+        statMsg,
+      ).map((c) => ({
+        ...c,
+        meta: [
+          pluralStatMsg(orgLocale, "career.divisions", c.divisions),
+          pluralStatMsg(orgLocale, "career.variants", c.variants),
+          pluralStatMsg(orgLocale, "career.matches", c.matches),
+        ].join(" · "),
+      }));
+
+      return { player, memberships, stats, career, careerLabel: statMsg("player.career.title") };
     },
+    // v15 (S9/#418): added the `career` rollup to this cached payload. A live
+    // v14 entry would keep serving without it for a full REVALIDATE_SLOW
+    // window after deploy — same reason v13 → v14 retired its key instead of
+    // waiting (below).
+    //
     // v14: stat labels inside this payload are now localized copy, not the
     // engine's English. A live v13 entry would keep serving English for a full
     // REVALIDATE_SLOW window after deploy, so retire the key rather than wait.
-    ["pub-player-v14", shell.competition.id, personId],
+    ["pub-player-v15", shell.competition.id, personId],
     { tags: [competitionTag(shell.competition.id)], revalidate: REVALIDATE_SLOW },
   )();
   if (!detail) return null;
