@@ -143,12 +143,16 @@ EXPECTED_MESSAGE_FIELDS = {
     "Fixture": {
         "entrant_indices": (1, FieldDescriptor.TYPE_UINT32, True,  False),
         "division_index":  (2, FieldDescriptor.TYPE_UINT32, False, True),
+        # C1 (2026-08-12 round-ordering design).
+        "round":           (3, FieldDescriptor.TYPE_UINT32, False, True),
     },
     "PinnedRow": {
         "court_index":        (1, FieldDescriptor.TYPE_UINT32, False, True),
         "start_at_ms":        (2, FieldDescriptor.TYPE_INT64,  False, False),
         "rule_group_indices": (3, FieldDescriptor.TYPE_UINT32, True,  False),
         "entrant_indices":    (4, FieldDescriptor.TYPE_UINT32, True,  False),
+        # C1 (2026-08-12 round-ordering design).
+        "round":              (5, FieldDescriptor.TYPE_UINT32, False, True),
     },
     "RuleGroup": {
         "fixture_indices":      (1, FieldDescriptor.TYPE_UINT32, True,  False),
