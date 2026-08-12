@@ -1518,6 +1518,15 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
       people: f === undefined ? [] : [...(f.people ?? [])],
       ...(f?.poolId !== undefined ? { poolId: f.poolId } : {}),
       ...(f?.divisionId !== undefined ? { divisionId: f.divisionId } : {}),
+      // C1 (2026-08-12 round-order design). Same "carried through, not
+      // dropped" reasoning as poolId/divisionId — this helper builds BOTH
+      // `pinnedAssignments` (below) and `placedAssignments` (the solver's own
+      // output, further down), so `movable` cannot be a constant here:
+      // `pinnedFixtureIds` is the SAME set that decided whether `fixtureId`
+      // went to `fixtures` or `existing` on the wire in the first place, so
+      // asking it again here cannot disagree with that split.
+      ...(f?.roundNo !== undefined ? { roundNo: f.roundNo } : {}),
+      movable: !pinnedFixtureIds.has(fixtureId),
     };
   };
   const pinnedAssignments = [...pinById.entries()].map(([id, at]) => assignmentOf(id, at.court, at.startAt));
@@ -1624,12 +1633,58 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // `buildRuleGroups`'s own docstring for why each half is, or isn't, gated.
   const ruleGroupSet = buildRuleGroups(hard, freeFixtures, restByDivisionForWire, tz);
 
+  // C1 (2026-08-12 round-order design). `round` attaches to round-robin-
+  // generated fixtures ONLY (design doc) — brackets/stepladder are already
+  // ordered by `dependencies` (winner/loser feed edges) and never carry one.
+  // This engine has no "stage kind" concept (the caller resolves that; see
+  // `apps/web`'s `roundRobinStageIds`), so the one signal available HERE is
+  // structural: a genuine round-robin fixture never appears in a dependency
+  // edge (there is no "winner advances" relationship inside a round-robin
+  // stage). A round-bearing fixture that ALSO appears as a dependency
+  // endpoint is therefore contaminated input — mixed round sequences (or a
+  // caller bug) leaking a bracket-shaped fixture's round through — and this
+  // whole division's rounds are STRIPPED rather than risk a false ordering,
+  // per the design doc's "strip + assert" guard. Checked over the FULL
+  // `fixtures` list (free and pinned), not `freeFixtures` alone: a pinned
+  // bracket fixture carrying both a round and a feed edge is the identical
+  // contamination signal.
+  const dependencyEndpointIds = new Set(dependencies.flatMap((d) => [d.fixtureId, d.dependsOn]));
+  const contaminatedDivisions = new Set(
+    fixtures
+      .filter((f) => f.roundNo !== undefined && dependencyEndpointIds.has(f.id))
+      .map((f) => f.divisionId ?? ""),
+  );
+  if (contaminatedDivisions.size > 0) {
+    log.warn(
+      { divisions: [...contaminatedDivisions] },
+      "buildSchedule: round-bearing fixture also carries a feed dependency — stripping round for its division rather than emit a false order",
+    );
+  }
+  const roundBearingFor = (f: SchedulableFixture): number | undefined =>
+    f.roundNo !== undefined && !contaminatedDivisions.has(f.divisionId ?? "") ? f.roundNo : undefined;
+
+  // `PinnedRow` carries no division index on the wire (its own proto comment
+  // explains why), so the SOLVER cannot scope a pin-movable round pair by
+  // division the way it scopes movable-movable pairs (`Fixture.
+  // division_index`). A pin's round is therefore only forwarded when there
+  // is AT MOST ONE round-bearing division among THIS run's own movable
+  // fixtures — the one case this function can itself guarantee is
+  // unambiguous. A multi-round-robin-division call (the joint-apply shape)
+  // simply never attaches a pin's round; movable-movable pairs are
+  // unaffected, since those stay scoped by the wire's own division_index.
+  const roundBearingDivisions = new Set(
+    freeFixtures.flatMap((f) => (roundBearingFor(f) !== undefined ? [f.divisionId ?? ""] : [])),
+  );
+  const singleRoundRobinDivision =
+    roundBearingDivisions.size === 1 ? [...roundBearingDivisions][0] : undefined;
+
   const placementInput: SolveBuildInput = {
     courts: config.courts,
     fixtures: freeFixtures.map((f) => ({
       fixtureId: f.id,
       entrantIds: [f.home, f.away].filter((e): e is string => e !== undefined),
       divisionId: f.divisionId ?? "",
+      roundNo: roundBearingFor(f),
     })),
     grid: {
       slots: grid.slots.map((s) => ({
@@ -1661,6 +1716,19 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
       startAtMs: a.startAt,
       entrantIds: a.entrants,
       ruleGroupIndices: ruleGroupSet.indicesFor(a),
+      // C1 (2026-08-12 round-order design). See `singleRoundRobinDivision`'s
+      // own comment above for why a pin's round is only ever forwarded in
+      // the one-round-robin-division case: `PinnedRow` has nowhere on the
+      // wire to carry a division, so this is the only condition under which
+      // the model comparing this pin's round against every OTHER
+      // round-bearing movable fixture is still guaranteed correct.
+      roundNo:
+        a.roundNo !== undefined &&
+        singleRoundRobinDivision !== undefined &&
+        (a.divisionId ?? "") === singleRoundRobinDivision &&
+        !contaminatedDivisions.has(singleRoundRobinDivision)
+          ? a.roundNo
+          : undefined,
     })),
     // Filtered to pairs where BOTH ends are fixtures placement is actually being
     // asked to place: `fixtureIndexOf` throws `invalid_request` for an id
