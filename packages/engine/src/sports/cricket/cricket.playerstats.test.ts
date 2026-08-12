@@ -13,7 +13,12 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { EventEnvelope } from "../../core/events.ts";
-import { aggregatePlayerStats, playerStatsKeyCollisions, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
+import {
+  aggregatePlayerStats,
+  playerStatsKeyCollisions,
+  type PlayerStatsFoldCtx,
+  type PlayerStatsModel,
+} from "../../stats/stats.ts";
 import { makeEnvelope } from "../../testkit/index.ts";
 import { cricket, CricketPlayerLine, type CricketBallEv } from "./cricket.ts";
 
@@ -235,6 +240,54 @@ describe("cricket S8/#417: mixed stream — no double counting", () => {
 });
 
 // ---------------------------------------------------------------------------
+// S8/#417 W6 fix 3 — KNOWN LIMITATION, pinned rather than silently shipped.
+//
+// The fine/coarse gate above is scoped to the WHOLE STREAM, per (person,
+// aspect) — not per innings — because an innings boundary is not derivable
+// from what `cricket.ball` and `cricket.player.line` actually carry:
+// `CricketBall` has no innings field at all (only `over`/`ballInOver`,
+// reused per innings), and closing an innings can happen with NO explicit
+// `cricket.innings.close` event in the stream at all (the three auto-closes
+// — all out, overs complete, target reached — are deliberately unstamped,
+// derived from the running totals by `autoClose()`; see cricket.ts's own
+// `CricketClose` comment). Segmenting a flat ball list into innings without
+// that marker needs `coarsen()`'s own multi-signal heuristic (an over/ball
+// restart, or both crease batters going "unseen") or a full replay of
+// cricket's apply() state machine (toss, orders, DLS, follow-on, …) — both
+// far outside what a pure, side-effect-free `folded.fold` should attempt,
+// and the existing `folded` comment in cricket.ts already made this
+// trade-off deliberately. See cricket/DOMAIN.md's "Player leaderboards from
+// the ledger" row for the same limitation stated for a reader who never
+// opens cricket.ts.
+//
+// CONSEQUENCE, pinned below: a player with fine ball-by-ball data in ONE
+// innings and ONLY a coarse `cricket.player.line` for a LATER innings loses
+// that later innings entirely — `battedFine`/`bowledFine` is built from the
+// WHOLE stream, so the person already looks "covered" for that aspect
+// before the coarse line for the other innings is even considered.
+// ---------------------------------------------------------------------------
+
+describe("cricket S8/#417 W6 fix 3: KNOWN LIMITATION — the fine/coarse gate is whole-stream, not per-innings", () => {
+  it("a player with fine ball-by-ball data in innings 1 and ONLY a coarse line for innings 2 loses innings 2 entirely (documented under-count, not a regression)", () => {
+    const events = [
+      // Innings 1 — H-1 batted fine: 10 runs off 2 legal balls.
+      ball(1, { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 4 }),
+      ball(2, { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 6 }),
+      // Innings 2 — H-1 was scored ONLY at the coarse tier: 20 runs off 15
+      // balls, out. If the gate were per-innings, this would ADD to the
+      // innings-1 fine total (30 runs, 17 balls, 1 dismissal); it does not.
+      line(3, { innings: 2, person: "H-1", batting: { runs: 20, balls: 15, out: true } }),
+    ];
+    const t = table(aggregatePlayerStats(events, MODEL, undefined, CTX));
+    // Pinned: ONLY innings 1's fine figures survive. A per-innings-correct
+    // fold would read { runs: 30, balls_faced: 17, dismissals: 1 } instead —
+    // that is the counterfactual this test's title documents as NOT
+    // implemented, on purpose, for the reasons above.
+    expect(t["H-1"]).toEqual({ runs: 10, balls_faced: 2 });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Void events un-count everywhere, including the folded (coarse) path.
 // ---------------------------------------------------------------------------
 
@@ -284,15 +337,36 @@ describe("cricket S8/#417: determinism", () => {
 });
 
 // ---------------------------------------------------------------------------
-// playerStatsKeyCollisions — CRICKET_PLAYER_STATS declares `folded.keys` as
-// [] deliberately (see cricket.ts): every key `fold` writes already has an
-// owning `metrics[]` entry by design, so listing them here would just
-// relabel the intentional, gated merge as the accidental clash this checker
-// exists to catch.
+// playerStatsKeyCollisions — S8/#417 W6 fix 1. CRICKET_PLAYER_STATS declares
+// `folded.keys` HONESTLY (the six keys `fold` actually writes: `runs`,
+// `balls_faced`, `balls_bowled`, `runs_conceded`, `wickets`, `dismissals`)
+// and marks all six as `sharesMetricKeys` — a declared, intentional overlap
+// with `metrics[]` (the gated fine/coarse merge cricket.ts documents), not
+// an accidental clash. Before this fix `folded.keys` was hardcoded `[]` to
+// dodge the checker entirely, which meant nothing protected those six names
+// from a genuinely accidental future `metrics[]` addition either — the test
+// below is what proves the checker can still catch THAT.
 // ---------------------------------------------------------------------------
 
 describe("cricket S8/#417: playerStatsKeyCollisions", () => {
-  it("CRICKET_PLAYER_STATS is clean", () => {
+  it("CRICKET_PLAYER_STATS is clean — every folded/metric overlap is declared", () => {
     expect(playerStatsKeyCollisions(cricket.playerStats!)).toEqual([]);
+  });
+
+  it("an UNDECLARED collision — a future metrics[] key duplicating a folded key never listed in sharesMetricKeys — is still caught", () => {
+    // A local copy of cricket's real shape, not a mutation of the exported
+    // model: adds ONE new metric ("boundaries") whose key the fold ALSO
+    // starts writing (simulating the exact accident this fix protects
+    // against), without adding it to sharesMetricKeys.
+    const withAccidentalCollision: PlayerStatsModel = {
+      ...MODEL,
+      metrics: [...MODEL.metrics, { key: "boundaries", label: "Boundaries", from: "cricket.ball", agg: "count" }],
+      folded: {
+        ...MODEL.folded!,
+        keys: [...MODEL.folded!.keys, "boundaries"],
+        // sharesMetricKeys deliberately NOT extended — this is the accident.
+      },
+    };
+    expect(playerStatsKeyCollisions(withAccidentalCollision)).toEqual(["boundaries"]);
   });
 });

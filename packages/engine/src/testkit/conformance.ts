@@ -310,17 +310,22 @@ export function conformanceSuite<Cfg, Ev, State>(
       });
 
       // playerStatsKeyCollisions only ever catches an UNDECLARED clash
-      // between `folded.keys` and `metrics[].key`. Cricket's fold writes
-      // into `runs`/`balls_faced`/`balls_bowled`/`runs_conceded`/`wickets`/
-      // `dismissals` — keys its OWN `metrics[]` already own — while
-      // declaring `folded.keys: []` on purpose: a gated, tested coarse/fine
-      // merge (fine ball-by-ball data wins; the coarse `cricket.player.line`
-      // path only fills a (person, aspect) pair the fine stream never
-      // mentions), not an accidental clash. Asserting the checker's own
-      // output is still the right check for every module, cricket included
-      // — do NOT strengthen this into "every key a fold emits must appear
-      // in folded.keys", which would red cricket for a decision this
-      // programme already made on purpose.
+      // between `folded.keys` and `metrics[].key` (S8/#417 W6 fix 1).
+      // Cricket's fold writes into `runs`/`balls_faced`/`balls_bowled`/
+      // `runs_conceded`/`wickets`/`dismissals` — keys its OWN `metrics[]`
+      // already own — and declares BOTH `folded.keys` (honestly, all six)
+      // AND `folded.sharesMetricKeys` (the same six) to mark the overlap as
+      // intentional: a gated, tested coarse/fine merge (fine ball-by-ball
+      // data wins; the coarse `cricket.player.line` path only fills a
+      // (person, aspect) pair the fine stream never mentions), not an
+      // accidental clash. Asserting the checker's own output is still the
+      // right check for every module, cricket included — do NOT strengthen
+      // this into "every key a fold emits must appear in folded.keys with no
+      // exemption", which would red cricket for a decision this programme
+      // already made on purpose; see cricket.playerstats.test.ts's
+      // "playerStatsKeyCollisions" block for the test proving the checker
+      // still catches a genuinely UNDECLARED collision on cricket's own
+      // shape (a metric added without a matching `sharesMetricKeys` entry).
       it("playerStats: declared folded keys never collide with metric keys", () => {
         expect(playerStatsKeyCollisions(playerStats)).toEqual([]);
       });

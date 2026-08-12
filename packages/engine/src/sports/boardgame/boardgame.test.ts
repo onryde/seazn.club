@@ -334,6 +334,25 @@ describe("boardgame: folded win/draw/loss + white/black, resolved from entrant a
     ]);
   });
 
+  // S8/#417 W6 fix 5 — the "checkmate" fixture above never actually exercises
+  // `foldBoardgameStats`'s OWN `creditEach` guard for the team-kind side: "H"
+  // wins, so H's only attempted credit is "wins" — a plain METRIC guarded by
+  // `resolveMetricPersons`'s separate, unrelated check, not `creditEach`/
+  // `personsForEntrant` at all. A draw is what actually calls
+  // `creditEach(entrant, "draws")` for EVERY entrant, including a team-kind
+  // one — the only fixture that proves THIS fold's guard, not a different one
+  // that happens to produce the same-looking empty row for H.
+  it("a team entrant is credited nothing through the FOLDED path either — a draw calls creditEach on both sides, including the team one", () => {
+    const events = stream(["core.start"], ["boardgame.result", { winner: null, method: "agreement" }]);
+    const ctx = ctxFor([
+      { id: "H", kind: "team", persons: ["H-p1", "H-p2"] },
+      { id: "A", persons: ["A-p1"] },
+    ]);
+    expect(aggregatePlayerStats(events, boardgame.playerStats!, undefined, ctx)).toEqual([
+      { personId: "A-p1", stats: { draws: 1 } },
+    ]);
+  });
+
   it("white/black splits, derived from the pairing card's `white` entrant — not a new payload field", () => {
     const events = stream(
       ["core.start"],

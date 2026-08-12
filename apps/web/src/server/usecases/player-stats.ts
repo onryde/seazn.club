@@ -178,6 +178,17 @@ export async function recomputePlayerStats(
       acc.unattributed += r.diagnostics.unattributed;
       for (const id of r.diagnostics.unknownEntrants) acc.unknownEntrants.add(id);
       for (const id of r.diagnostics.teamEntrantsSkipped) acc.teamEntrantsSkipped.add(id);
+      // The `folded` path carries production stats for 8 of the 11 modules —
+      // W/D/L, sets/games won, keeper clean sheets — so a recompute that
+      // logged only the metric loop would be blind to most of what it just
+      // computed. Counted per FIXTURE (a boolean per fixture, summed) rather
+      // than per credit: "3 of 9 fixtures folded nothing" is the shape that
+      // tells you something is wrong, where a bare total does not.
+      acc.foldedFixtures += r.diagnostics.foldedRan ? 1 : 0;
+      acc.foldedRows += r.diagnostics.foldedRows;
+      acc.foldedCredits += r.diagnostics.foldedCredits;
+      acc.foldedEmptyFixtures += r.diagnostics.foldedEmpty ? 1 : 0;
+      acc.foldedOutOfScopeFixtures += r.diagnostics.foldedEntrantsOutOfScope ? 1 : 0;
       return acc;
     },
     {
@@ -186,6 +197,11 @@ export async function recomputePlayerStats(
       unattributed: 0,
       unknownEntrants: new Set<string>(),
       teamEntrantsSkipped: new Set<string>(),
+      foldedFixtures: 0,
+      foldedRows: 0,
+      foldedCredits: 0,
+      foldedEmptyFixtures: 0,
+      foldedOutOfScopeFixtures: 0,
     },
   );
   log.info(
@@ -200,9 +216,25 @@ export async function recomputePlayerStats(
       unattributed: diagnostics.unattributed,
       unknownEntrants: [...diagnostics.unknownEntrants],
       teamEntrantsSkipped: [...diagnostics.teamEntrantsSkipped],
+      foldedFixtures: diagnostics.foldedFixtures,
+      foldedRows: diagnostics.foldedRows,
+      foldedCredits: diagnostics.foldedCredits,
+      foldedEmptyFixtures: diagnostics.foldedEmptyFixtures,
     },
     "player-stats: recomputePlayerStats",
   );
+  if (diagnostics.foldedOutOfScopeFixtures > 0) {
+    // The replay-based folded models rebuild a synthetic TWO-entrant state,
+    // so they bail to [] when handed anything wider than one fixture's own
+    // pair — silently, producing an empty stat table indistinguishable from
+    // a fixture nobody scored. Nothing in the type system says "two", and
+    // the ctx is built a layer away from the fold that constrains it, so
+    // this is the one shape here that cannot be caught by inspection.
+    log.warn(
+      { divisionId, fixtures: diagnostics.foldedOutOfScopeFixtures },
+      "player-stats: ctx.entrants was not scoped to a single fixture — folded stat models produced nothing",
+    );
+  }
   if (diagnostics.unknownEntrants.size > 0 || diagnostics.teamEntrantsSkipped.size > 0) {
     // The caller's own entrant-membership data disagrees with the score
     // ledger it is folding — otherwise undiagnosable in production.

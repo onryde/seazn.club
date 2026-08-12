@@ -23,7 +23,7 @@ import type {
   PadSpec,
   SportModule,
 } from "../../sport/module.ts";
-import type { PlayerStatRow, PlayerStatsFoldCtx } from "../../stats/stats.ts";
+import { personsForEntrant, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // spec 04 §8 Cfg
 export const GenericCfg = z.object({
@@ -401,21 +401,18 @@ function foldGenericStats(events: readonly EventEnvelope[], ctx: PlayerStatsFold
     stats[key] = (stats[key] ?? 0) + by;
     rows.set(personId, stats);
   };
-  // Mandatory kind guard (PlayerStatsFoldCtx's own contract, restated here
-  // since this fold does its own entrant resolution rather than going
-  // through `resolveMetricPersons`): a "team" entrant credits nobody even
-  // when `personsOf` hands back a full roster — but the replay below still
-  // uses the entrant's real id, so a mixed team/individual fixture still
-  // resolves the correct winner and still credits the individual side.
+  // Mandatory kind guard (PlayerStatsFoldCtx's own contract, applied via the
+  // shared `personsForEntrant` helper, S8/#417 W6 fix 5, rather than a local
+  // re-derivation): a "team" entrant credits nobody even when `personsOf`
+  // hands back a full roster — but the replay below still uses the
+  // entrant's real id, so a mixed team/individual fixture still resolves
+  // the correct winner and still credits the individual side.
   const creditEach = (
     entrant: PlayerStatsFoldCtx["entrants"][number],
     key: string,
     by: number,
   ): void => {
-    if (entrant.kind === "team") return;
-    for (const personId of ctx.personsOf(entrant.id)) {
-      if (personId !== "") bump(personId, key, by);
-    }
+    for (const personId of personsForEntrant(ctx, entrant.id)) bump(personId, key, by);
   };
 
   // No parse/replay guarantee is ever assumed: `ctx.cfg` is `unknown` by

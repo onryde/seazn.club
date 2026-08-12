@@ -17,6 +17,7 @@ import {
 import { makeEnvelope } from "../../testkit/helpers.ts";
 import type { ModuleEvent } from "../../sport/module.ts";
 import type { EventEnvelope } from "../../core/events.ts";
+import type { LineupPair } from "../../core/types.ts";
 import { badminton } from "./badminton.ts";
 import { makeSetBasedModule, type SetBasedPreset } from "./kernel.ts";
 import { tabletennis } from "./tabletennis.ts";
@@ -322,5 +323,61 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
     // `sets_lost` still come from the kernel default, not lost alongside the
     // overridden metric.
     expect(mod.playerStats!.folded?.keys).toEqual(["matches", "sets_won", "sets_lost"]);
+  });
+
+  // S8/#417 W6 fix 4 — `mergePlayerStats`'s combined `fold` used to declare
+  // `(events, ctx) => [...]`, silently dropping the 3rd `lineups` argument
+  // `aggregatePlayerStats` always passes through. Dead today because no
+  // preset on this kernel declares its OWN `folded` — this preset does,
+  // purely to prove the merge forwards `lineups` rather than swallowing it.
+  it("mergePlayerStats forwards `lineups` to a preset-declared fold, not just the kernel default", () => {
+    let captured: LineupPair | undefined | "never called" = "never called";
+    const preset: SetBasedPreset = {
+      key: "lineupforwardtest",
+      version: "1.0.0",
+      defaults: {
+        bestOf: 3,
+        setTo: 3,
+        finalSetTo: 3,
+        winBy: 2,
+        cap: null,
+        pointsMap: { "*": [2, 0] },
+        records: { timeouts: false, sanctions: false, substitutions: false, expedite: false },
+      },
+      variants: {},
+      positions: { groups: [], lineup: { size: 1, benchMax: 1 } },
+      unitLabel: { one: "Set", many: "Sets" },
+      defaultTiebreakers: ["points"],
+      officialLabel: { scorer: "Umpire" },
+      coarseEventType: "set.summary",
+      rallyEntitlement: "scoring.rally_by_rally",
+      sanctionLevels: ["warning"],
+      playerStats: {
+        metrics: [],
+        folded: {
+          keys: ["preset_folded_k"],
+          fold: (_events, _ctx, lineups) => {
+            captured = lineups;
+            return [];
+          },
+        },
+      },
+    };
+    const mod = makeSetBasedModule(preset);
+    const lineup: LineupPair = {
+      home: { entrantId: "E1", slots: [{ personId: "p1", slot: "starting", orderNo: 1 }] },
+      away: { entrantId: "E2", slots: [{ personId: "p2", slot: "starting", orderNo: 1 }] },
+    };
+    const c = ctx(
+      [
+        { id: "E1", kind: "individual" },
+        { id: "E2", kind: "individual" },
+      ],
+      { E1: ["p1"], E2: ["p2"] },
+    );
+    // 4-arg call, matching the real production call shape once BOTH lineups
+    // and ctx are present, so the merged fold actually runs.
+    aggregatePlayerStats([], mod.playerStats!, lineup, c);
+    expect(captured).toEqual(lineup);
   });
 });

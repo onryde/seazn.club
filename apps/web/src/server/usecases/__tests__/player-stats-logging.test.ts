@@ -154,6 +154,41 @@ describe.skipIf(!HAS_DB)("S8/#417 recomputePlayerStats structured logging", () =
     warnSpy.mockRestore();
   });
 
+  it("logs the folded path's own diagnostics, not just the metric loop's", async () => {
+    // The `folded` path carries production stats for 8 of the 11 modules —
+    // badminton's matches/sets_won/sets_lost among them — so a recompute that
+    // reported only metric-loop counters would be blind to most of what it
+    // just computed. Without the folded fields in the payload this test fails
+    // on the first assertion: `foldedFixtures` is simply absent.
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await seedBadmintonSingles(auth);
+    await scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    const [fixture] = await sql<{ home_entrant_id: string }[]>`
+      select home_entrant_id from fixtures where id = ${fixtureId}`;
+    await scoreEvent(auth, fixtureId, {
+      expected_seq: 1,
+      type: "badminton.rally",
+      payload: { wonBy: fixture!.home_entrant_id },
+    });
+
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => undefined as never);
+    await withTenant(auth.orgId, (tx) => recomputePlayerStats(tx, divisionId));
+
+    const call = infoSpy.mock.calls.find(
+      (c) => typeof c[1] === "string" && c[1].includes("recomputePlayerStats"),
+    );
+    const fields = call![0] as Record<string, unknown>;
+    // One fixture, and its folded model RAN — the distinction that matters:
+    // "ran and produced nothing" and "never ran at all" are the same empty
+    // stat table from the outside, and only these counters tell them apart.
+    expect(fields.foldedFixtures).toBe(1);
+    expect(fields.foldedEmptyFixtures).toBe(0);
+    expect(typeof fields.foldedRows).toBe("number");
+    expect(fields.foldedRows as number).toBeGreaterThan(0);
+    expect(fields.foldedCredits as number).toBeGreaterThan(0);
+    infoSpy.mockRestore();
+  });
+
   it("warns when ctx.entrants disagrees with the ledger (an entrantField id the loader never returned)", async () => {
     const { auth } = await seedOrg();
     const { divisionId, fixtureId } = await seedBadmintonSingles(auth);

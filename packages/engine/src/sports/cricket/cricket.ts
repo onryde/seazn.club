@@ -2106,14 +2106,12 @@ const dismissedBy = (kind: string) => (p: Record<string, unknown>) =>
   resolvePayloadPath(p, "wicket.kind") === kind;
 
 // `CricketWicket.kind`'s own ten members (Laws 30-39, plus Law 34's
-// `hitballtwice`) — copied here rather than derived from the zod shape, the
-// same way the pad spec's `wicket.kind` enum values a few hundred lines down
-// already are, so both lists read the same way and neither needs the other
-// followed to be understood.
-const DISMISSAL_KINDS = [
-  "bowled", "caught", "lbw", "runout", "stumped",
-  "hitwicket", "retired", "obstructed", "timedout", "hitballtwice",
-] as const;
+// `hitballtwice`) — S8/#417 W6 fix 5: derived straight off the zod enum
+// (`ZodEnum.options`) rather than hand-copied, so a new dismissal mode added
+// to `CricketWicket` cannot be silently missed by the stat model's per-mode
+// split below the way a THIRD hand-copy (alongside the schema itself and the
+// pad spec's own `wicket.kind` enum values a few hundred lines down) could.
+const DISMISSAL_KINDS = CricketWicket.shape.kind.options;
 
 const CRICKET_PLAYER_STATS: PlayerStatsModel = {
   metrics: [
@@ -2220,18 +2218,27 @@ const CRICKET_PLAYER_STATS: PlayerStatsModel = {
   // fold produced, so even the gate failing open would have doubled a
   // correct figure, never patched a wrong one.
   //
-  // `keys` is deliberately EMPTY, not an oversight. Every key `fold` below
-  // writes — `runs`, `balls_faced`, `balls_bowled`, `runs_conceded`,
-  // `wickets`, `dismissals` — already has an owning `metrics[]` entry above,
-  // by design: the coarse contribution is meant to land in the SAME column
-  // the fine one does, gated so the two never both fire for one person's
-  // aspect. `playerStatsKeyCollisions` exists to catch an ACCIDENTAL name
-  // clash between two uncoordinated sources; declaring these six here would
-  // just relabel this file's intentional, tested merge as that same
-  // accident. Dismissal MODE is fine-only regardless — `cricket.player.line`
-  // has no mode field — so no `dismissals_<kind>` key is ever folded-derived.
+  // `keys` names every key `fold` below actually writes — `runs`,
+  // `balls_faced`, `balls_bowled`, `runs_conceded`, `wickets`, `dismissals`
+  // — and `sharesMetricKeys` (S8/#417 W6 fix 1) marks all six as a
+  // DECLARED, intentional overlap with `metrics[]` above: the coarse
+  // contribution is meant to land in the SAME column the fine one does,
+  // gated so the two never both fire for one person's aspect.
+  // `playerStatsKeyCollisions` exists to catch an ACCIDENTAL name clash
+  // between two uncoordinated sources — an earlier version of this file
+  // declared `keys: []` here to dodge that checker entirely, which also
+  // meant nothing protected these six names from a genuinely accidental
+  // FUTURE `metrics[]` addition, since the checker never saw the real keys
+  // at all. Declaring them honestly, with the overlap named explicitly,
+  // keeps the checker able to catch a seventh, uncoordinated collision
+  // while leaving this intentional six-way merge silent — see
+  // cricket.playerstats.test.ts's "playerStatsKeyCollisions" block for the
+  // test that proves the checker still fires on a genuine accident. Dismissal
+  // MODE is fine-only regardless — `cricket.player.line` has no mode field —
+  // so no `dismissals_<kind>` key is ever folded-derived or shared.
   folded: {
-    keys: [],
+    keys: ["runs", "balls_faced", "balls_bowled", "runs_conceded", "wickets", "dismissals"],
+    sharesMetricKeys: ["runs", "balls_faced", "balls_bowled", "runs_conceded", "wickets", "dismissals"],
     fold: (events, _ctx) => {
       const battedFine = new Set<string>();
       const bowledFine = new Set<string>();

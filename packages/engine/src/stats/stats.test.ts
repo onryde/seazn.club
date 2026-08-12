@@ -4,6 +4,7 @@ import fc from "fast-check";
 import {
   aggregatePlayerStats,
   aggregatePlayerStatsWithDiagnostics,
+  personsForEntrant,
   playerStatsKeyCollisions,
   resolvePayloadPath,
   sumPlayerStats,
@@ -432,6 +433,52 @@ describe("entrant fallback attribution (S8/#417)", () => {
   });
 });
 
+// S8/#417 W6 fix 5 — "a team entrant credits nobody" was byte-identical,
+// hand-copied logic in SIX places (this file's own `resolveMetricPersons`
+// plus five sport-local folds: setbased/nested's match/set replay,
+// boardgame/carrom/generic's own credit loops). `personsForEntrant` is the
+// ONE canonical implementation the five sport folds now call instead of
+// each re-deriving the guard — pinned here directly, independent of any one
+// sport's fold, so a future sixth call site has an obvious function to
+// reach for instead of copying the guard a seventh time.
+describe("personsForEntrant (S8/#417 W6 fix 5 — shared entrant-kind guard)", () => {
+  const ctx: PlayerStatsFoldCtx = {
+    entrants: [
+      { id: "E1", kind: "individual" },
+      { id: "E2", kind: "pair" },
+      { id: "E3", kind: "team" },
+    ],
+    personsOf: (id) =>
+      id === "E1" ? ["p9"] : id === "E2" ? ["p1", "p2"] : id === "E3" ? ["t1", "t2", "t3"] : ["stray", ""],
+  };
+
+  it("an individual entrant returns its one person", () => {
+    expect(personsForEntrant(ctx, "E1")).toEqual(["p9"]);
+  });
+
+  it("a pair entrant returns both persons", () => {
+    expect(personsForEntrant(ctx, "E2")).toEqual(["p1", "p2"]);
+  });
+
+  it("a team entrant returns NOTHING, even though personsOf hands back a full roster (the mandatory kind guard)", () => {
+    expect(personsForEntrant(ctx, "E3")).toEqual([]);
+  });
+
+  it("an entrant id absent from ctx.entrants returns nothing, even when personsOf answers for it anyway", () => {
+    expect(personsForEntrant(ctx, "E9")).toEqual([]);
+  });
+
+  it("filters out empty-string person ids from personsOf's answer", () => {
+    // "E4" is not in ctx.entrants, so this alone would already be [] — cover
+    // the filter directly against a KNOWN entrant instead.
+    const ctxWithBlank: PlayerStatsFoldCtx = {
+      entrants: [{ id: "E5", kind: "individual" }],
+      personsOf: () => ["p1", "", "p2"],
+    };
+    expect(personsForEntrant(ctxWithBlank, "E5")).toEqual(["p1", "p2"]);
+  });
+});
+
 describe("computed sum values via PlayerStatMetric.value (S8/#417)", () => {
   it("value() returning undefined contributes NOTHING (row absent); returning 0 records a real 0 (row present)", () => {
     const model: PlayerStatsModel = {
@@ -474,6 +521,52 @@ describe("computed sum values via PlayerStatMetric.value (S8/#417)", () => {
     };
     const rows = aggregatePlayerStats([env(1, "x.ball", { striker: "p1", runs: { bat: 4 } })], model);
     expect(rows).toEqual([{ personId: "p1", stats: { k: 99 } }]);
+  });
+
+  // S8/#417 W6 fix 6 — `typeof value === "number"` alone admits NaN and
+  // Infinity (`typeof NaN === "number"`), and `sumPlayerStats` adds blindly,
+  // so ONE zero-denominator ratio metric permanently poisons a division
+  // leaderboard once its NaN/Infinity total is summed with everyone else's.
+  // Fixture-choice discipline: p1 → NaN (0/0), p2 → Infinity (5/0), p3 → a
+  // real finite number (2) — old (unguarded) and new (guarded) behaviour
+  // disagree on p1/p2 (a row with k:NaN / k:Infinity vs no row at all) and
+  // agree on p3, so this cannot pass by accident.
+  it("value() returning NaN or Infinity contributes NOTHING — a zero-denominator ratio metric must not poison the row", () => {
+    const model: PlayerStatsModel = {
+      metrics: [
+        {
+          key: "k",
+          label: "K",
+          from: "x.ball",
+          field: "striker",
+          agg: "sum",
+          value: (p) => (p.attempts as number) / (p.made as number),
+        },
+      ],
+    };
+    const rows = aggregatePlayerStats(
+      [
+        env(1, "x.ball", { striker: "p1", attempts: 0, made: 0 }), // 0/0 = NaN
+        env(2, "x.ball", { striker: "p2", attempts: 5, made: 0 }), // 5/0 = Infinity
+        env(3, "x.ball", { striker: "p3", attempts: 4, made: 2 }), // 4/2 = 2, finite
+      ],
+      model,
+    );
+    expect(rows).toEqual([{ personId: "p3", stats: { k: 2 } }]);
+    expect(rows.find((r) => r.personId === "p1")).toBeUndefined();
+    expect(rows.find((r) => r.personId === "p2")).toBeUndefined();
+  });
+
+  it("a sumField walk landing on NaN or Infinity contributes nothing either — same guard, the plain-sum path", () => {
+    const rows = aggregatePlayerStats(
+      [
+        env(1, "x.ball", { striker: "p1", runs: { bat: NaN } }),
+        env(2, "x.ball", { striker: "p2", runs: { bat: Infinity } }),
+        env(3, "x.ball", { striker: "p3", runs: { bat: 4 } }),
+      ],
+      sumBy("striker", "runs.bat"),
+    );
+    expect(rows).toEqual([{ personId: "p3", stats: { k: 4 } }]);
   });
 });
 
@@ -644,6 +737,47 @@ describe("playerStatsKeyCollisions (S8/#417)", () => {
     // No `folded` declared at all — trivially clean, not a crash.
     expect(playerStatsKeyCollisions({ metrics: [] })).toEqual([]);
   });
+
+  // S8/#417 W6 fix 1 — before this, cricket dodged this checker entirely by
+  // declaring `folded.keys: []` even though its fold DOES write six keys
+  // that already belong to `metrics[]` — an intentional, tested overlap, but
+  // encoding it as an empty (dishonest) `keys` list meant NOTHING protected
+  // those six names from a future ACCIDENTAL collision, because the checker
+  // never saw the real keys at all. `sharesMetricKeys` is what lets a model
+  // declare its keys honestly AND mark specific overlaps as intentional —
+  // this pins the general mechanism, independent of cricket's own shape.
+  it("sharesMetricKeys suppresses a DECLARED overlap while an UNDECLARED one on the SAME model is still caught", () => {
+    const model: PlayerStatsModel = {
+      metrics: [
+        { key: "runs", label: "Runs", from: "x.ball", agg: "count" },
+        { key: "wickets", label: "Wickets", from: "x.ball", agg: "count" },
+      ],
+      folded: {
+        // Both "runs" and "wickets" collide with metrics[] — only "runs" is
+        // declared as an intentional, tested overlap.
+        keys: ["runs", "wickets"],
+        sharesMetricKeys: ["runs"],
+        fold: () => [],
+      },
+    };
+    expect(playerStatsKeyCollisions(model)).toEqual(["wickets"]);
+  });
+
+  it("sharesMetricKeys covering EVERY overlapping key leaves the model clean", () => {
+    const model: PlayerStatsModel = {
+      metrics: [{ key: "runs", label: "Runs", from: "x.ball", agg: "count" }],
+      folded: { keys: ["runs"], sharesMetricKeys: ["runs"], fold: () => [] },
+    };
+    expect(playerStatsKeyCollisions(model)).toEqual([]);
+  });
+
+  it("a sharesMetricKeys entry that names a key OUTSIDE folded.keys is simply irrelevant, not an error", () => {
+    const model: PlayerStatsModel = {
+      metrics: [{ key: "runs", label: "Runs", from: "x.ball", agg: "count" }],
+      folded: { keys: ["runs"], sharesMetricKeys: ["some_other_key"], fold: () => [] },
+    };
+    expect(playerStatsKeyCollisions(model)).toEqual(["runs"]);
+  });
 });
 
 describe("sumPlayerStats handles a folded-origin key like a metric key (S8/#417)", () => {
@@ -723,6 +857,13 @@ describe("aggregatePlayerStatsWithDiagnostics (S8/#417 diagnostics)", () => {
       unknownEntrants: ["E9"],
       teamEntrantsSkipped: ["E3"],
       rows: 4,
+      // this `model` declares no `folded` at all — every folded-path
+      // counter (S8/#417 W6 fix 2) stays at its "never ran" default.
+      foldedRan: false,
+      foldedRows: 0,
+      foldedCredits: 0,
+      foldedEmpty: false,
+      foldedEntrantsOutOfScope: false,
     });
   });
 
@@ -800,5 +941,117 @@ describe("aggregatePlayerStatsWithDiagnostics (S8/#417 diagnostics)", () => {
     // 3 raw events in; event 1 is voided (dropped) and event 2 IS the
     // core.void (drops itself, per resolveVoids) — only event 3 survives.
     expect(diagnostics.events).toBe(1);
+  });
+});
+
+// S8/#417 W6 fix 2 — the diagnostics above were blind to `folded`: 8 of 11
+// modules now carry stats through it, and it is the path most likely to drop
+// silently (a caller-built `ctx.entrants` that disagrees with the fixture,
+// an unreachable gate). These counters make that path observable instead of
+// invisible; the apps/web caller (player-stats.ts) already logs whatever
+// this file returns.
+describe("aggregatePlayerStatsWithDiagnostics: folded-path visibility (S8/#417 W6 fix 2)", () => {
+  const foldedModel = (rows: ReturnType<typeof aggregatePlayerStats>): PlayerStatsModel => ({
+    metrics: [],
+    folded: { keys: ["k"], fold: () => rows },
+  });
+
+  it("foldedRan is false, and every other folded counter is at its zero default, when the model has no folded at all", () => {
+    const { diagnostics } = aggregatePlayerStatsWithDiagnostics([], { metrics: [] }, undefined, {
+      entrants: [],
+      personsOf: () => [],
+    });
+    expect(diagnostics.foldedRan).toBe(false);
+    expect(diagnostics.foldedRows).toBe(0);
+    expect(diagnostics.foldedCredits).toBe(0);
+    expect(diagnostics.foldedEmpty).toBe(false);
+  });
+
+  it("foldedRan is false when the model HAS folded but neither ctx nor lineups was supplied (the pre-existing no-op gate)", () => {
+    const model = foldedModel([{ personId: "p1", stats: { k: 5 } }]);
+    const { diagnostics } = aggregatePlayerStatsWithDiagnostics([], model);
+    expect(diagnostics.foldedRan).toBe(false);
+    expect(diagnostics.foldedRows).toBe(0);
+    expect(diagnostics.foldedEmpty).toBe(false);
+  });
+
+  it("foldedRan is true and foldedRows/foldedCredits count what fold produced, when it actually runs and returns rows", () => {
+    // Two rows, three (person,key) entries total — foldedCredits counts
+    // CREDITS (per key per row), not rows, so this must read 3, not 2.
+    const model = foldedModel([
+      { personId: "p1", stats: { k: 2, m: 1 } },
+      { personId: "p2", stats: { k: 4 } },
+    ]);
+    const lineup: LineupPair = {
+      home: { entrantId: "H", slots: [{ personId: "p1", slot: "starting", orderNo: 1 }] },
+      away: { entrantId: "A", slots: [{ personId: "p2", slot: "starting", orderNo: 1 }] },
+    };
+    const { diagnostics } = aggregatePlayerStatsWithDiagnostics([], model, lineup);
+    expect(diagnostics.foldedRan).toBe(true);
+    expect(diagnostics.foldedRows).toBe(2);
+    expect(diagnostics.foldedCredits).toBe(3);
+    expect(diagnostics.foldedEmpty).toBe(false);
+  });
+
+  it("foldedEmpty is true only when folded RAN and produced zero rows — not the same state as never running at all", () => {
+    const model = foldedModel([]); // runs, but the fold itself returns nothing
+    const { diagnostics } = aggregatePlayerStatsWithDiagnostics([], model, undefined, {
+      entrants: [],
+      personsOf: () => [],
+    });
+    expect(diagnostics.foldedRan).toBe(true);
+    expect(diagnostics.foldedRows).toBe(0);
+    expect(diagnostics.foldedCredits).toBe(0);
+    expect(diagnostics.foldedEmpty).toBe(true);
+  });
+
+  // The live hazard: setbased/nested's own replay-based folded implementation
+  // bails to `[]` the instant `ctx.entrants.length !== 2` (see
+  // reference_playerstatsfoldctx_entrants_fixture_scope in agent memory) — a
+  // caller that built `ctx.entrants` from a whole division's roster gets an
+  // empty table indistinguishable, in the ROWS alone, from "nobody scored".
+  // `foldedEntrantsOutOfScope` is what makes that state visible.
+  it("foldedEntrantsOutOfScope is true when ctx is supplied with anything other than exactly 2 entrants, on a model that HAS folded", () => {
+    const model = foldedModel([]);
+    const tooMany = aggregatePlayerStatsWithDiagnostics([], model, undefined, {
+      entrants: [
+        { id: "E1", kind: "individual" },
+        { id: "E2", kind: "individual" },
+        { id: "E3", kind: "individual" },
+      ],
+      personsOf: () => [],
+    });
+    expect(tooMany.diagnostics.foldedEntrantsOutOfScope).toBe(true);
+
+    const exactlyTwo = aggregatePlayerStatsWithDiagnostics([], model, undefined, {
+      entrants: [
+        { id: "E1", kind: "individual" },
+        { id: "E2", kind: "individual" },
+      ],
+      personsOf: () => [],
+    });
+    expect(exactlyTwo.diagnostics.foldedEntrantsOutOfScope).toBe(false);
+  });
+
+  it("foldedEntrantsOutOfScope is false when ctx was never supplied at all (lineups-only call) — not the same as a caller-supplied wrong count", () => {
+    const model = foldedModel([]);
+    const lineup: LineupPair = {
+      home: { entrantId: "H", slots: [{ personId: "p1", slot: "starting", orderNo: 1 }] },
+      away: { entrantId: "A", slots: [{ personId: "p2", slot: "starting", orderNo: 1 }] },
+    };
+    const { diagnostics } = aggregatePlayerStatsWithDiagnostics([], model, lineup); // no ctx
+    expect(diagnostics.foldedEntrantsOutOfScope).toBe(false);
+  });
+
+  it("foldedEntrantsOutOfScope is false on a model with NO folded at all, regardless of ctx.entrants' shape", () => {
+    const { diagnostics } = aggregatePlayerStatsWithDiagnostics([], { metrics: [] }, undefined, {
+      entrants: [
+        { id: "E1", kind: "individual" },
+        { id: "E2", kind: "individual" },
+        { id: "E3", kind: "individual" },
+      ],
+      personsOf: () => [],
+    });
+    expect(diagnostics.foldedEntrantsOutOfScope).toBe(false);
   });
 });

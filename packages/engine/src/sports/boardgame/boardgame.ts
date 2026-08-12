@@ -29,7 +29,7 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
-import type { PlayerStatRow, PlayerStatsFoldCtx } from "../../stats/stats.ts";
+import { personsForEntrant, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — spec 04 §6.1
@@ -504,18 +504,14 @@ function foldBoardgameStats(
     rows.set(personId, stats);
   };
   // Credits every person the roster names for this entrant — UNLESS the
-  // entrant is "team"-kind (S8/#417's mandatory kind guard, restated here
-  // since this fold does its own entrant resolution rather than going
-  // through `resolveMetricPersons`): a team credits nobody even when
-  // `personsOf` hands back a full roster. Takes the whole entrant (not just
-  // an id) so callers can iterate `ctx.entrants` directly without
-  // pre-filtering, and a mixed team/individual fixture still credits its
-  // individual side correctly.
+  // entrant is "team"-kind (S8/#417's mandatory kind guard, applied via the
+  // shared `personsForEntrant` helper, W6 fix 5, rather than a local
+  // re-derivation): a team credits nobody even when `personsOf` hands back a
+  // full roster. Takes the whole entrant (not just an id) so callers can
+  // iterate `ctx.entrants` directly without pre-filtering, and a mixed
+  // team/individual fixture still credits its individual side correctly.
   const creditEach = (entrant: PlayerStatsFoldCtx["entrants"][number], key: string): void => {
-    if (entrant.kind === "team") return;
-    for (const personId of ctx.personsOf(entrant.id)) {
-      if (personId !== "") bump(personId, key);
-    }
+    for (const personId of personsForEntrant(ctx, entrant.id)) bump(personId, key);
   };
 
   for (const event of events) {

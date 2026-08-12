@@ -34,7 +34,7 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
-import type { PlayerStatRow, PlayerStatsFoldCtx } from "../../stats/stats.ts";
+import { personsForEntrant, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — carrom.md §1 (ICF Laws 52, 54, 56, 57)
@@ -731,21 +731,18 @@ function foldCarromStats(events: readonly EventEnvelope[], ctx: PlayerStatsFoldC
     stats[key] = (stats[key] ?? 0) + by;
     rows.set(personId, stats);
   };
-  // Mandatory kind guard (PlayerStatsFoldCtx's own contract, restated here
-  // since this fold does its own entrant resolution rather than going
-  // through `resolveMetricPersons`): a "team" entrant credits nobody even
-  // when `personsOf` hands back a full roster. Takes the whole entrant (not
-  // just an id) so a mixed team/individual fixture still credits its
-  // individual side correctly.
+  // Mandatory kind guard (PlayerStatsFoldCtx's own contract, applied via the
+  // shared `personsForEntrant` helper, S8/#417 W6 fix 5, rather than a local
+  // re-derivation): a "team" entrant credits nobody even when `personsOf`
+  // hands back a full roster. Takes the whole entrant (not just an id) so a
+  // mixed team/individual fixture still credits its individual side
+  // correctly.
   const creditEach = (
     entrant: PlayerStatsFoldCtx["entrants"][number],
     key: string,
     by: number,
   ): void => {
-    if (entrant.kind === "team") return;
-    for (const personId of ctx.personsOf(entrant.id)) {
-      if (personId !== "") bump(personId, key, by);
-    }
+    for (const personId of personsForEntrant(ctx, entrant.id)) bump(personId, key, by);
   };
 
   // "matches" — attendance. Gated on the ledger naming SOME entrant at all

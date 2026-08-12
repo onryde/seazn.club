@@ -132,6 +132,21 @@ export interface PlayerStatsModel {
    */
   folded?: {
     keys: readonly string[];
+    /**
+     * Subset of `keys` that INTENTIONALLY lands in the same stat column as
+     * an entry in `metrics[]` — a declared, tested overlap (S8/#417 W6 fix
+     * 1), e.g. cricket's coarse `cricket.player.line` rescue, gated so the
+     * fine metric and the coarse fold never both fire for one person's
+     * aspect. `playerStatsKeyCollisions` treats a `keys` entry that also
+     * appears in `metrics[].key` as a real, UNDECLARED clash unless it is
+     * also listed here — so a model must declare every key `fold` actually
+     * writes in `keys` (never dodge the checker with an empty list to hide
+     * an intentional overlap) and name the intentional ones here, which
+     * keeps the checker able to catch a genuinely accidental new collision.
+     * Absent ⇒ no overlap is declared intentional, byte-identical to before
+     * this field existed.
+     */
+    sharesMetricKeys?: readonly string[];
     fold: (
       events: readonly EventEnvelope[],
       ctx: PlayerStatsFoldCtx,
@@ -205,6 +220,25 @@ export interface PlayerStatsFoldCtx {
  * without a null check.
  */
 const EMPTY_FOLD_CTX: PlayerStatsFoldCtx = { entrants: [], personsOf: () => [] };
+
+/**
+ * The person ids ONE entrant credits, applying `PlayerStatsFoldCtx`'s
+ * mandatory kind guard (S8/#417 W6 fix 5) — an id absent from `ctx.entrants`,
+ * or present with kind `"team"`, credits nobody, even when `personsOf` hands
+ * back a full roster. This is the SAME rule `resolveMetricPersons` below
+ * enforces for the metric+field/entrant-fallback path; before this export
+ * existed, five sport-local `folded.fold` implementations that do their own
+ * entrant resolution (setbased/nested's match/set replay, boardgame's,
+ * carrom's and generic's own credit loops) each hand-copied it byte-
+ * identically — the placer/verifier fork shape this repo keeps hitting.
+ * Never throws; an unresolvable or non-"individual"/"pair" entrant is simply
+ * nobody, matching every other unresolved-attribution path in this file.
+ */
+export function personsForEntrant(ctx: PlayerStatsFoldCtx, entrantId: string): readonly string[] {
+  const entrant = ctx.entrants.find((e) => e.id === entrantId);
+  if (entrant === undefined || entrant.kind === "team") return [];
+  return ctx.personsOf(entrantId).filter((p) => p !== "");
+}
 
 function nonPlayerPersonIds(lineups: LineupPair): ReadonlySet<string> {
   const ids = new Set<string>();
@@ -353,6 +387,57 @@ export interface PlayerStatsDiagnostics {
   teamEntrantsSkipped: readonly string[];
   /** Rows returned — `rows.length` on the sibling return value. */
   rows: number;
+  /**
+   * S8/#417 W6 fix 2 — the counters above observe only the metric+field
+   * loop, yet most modules now carry stats through `model.folded` too (the
+   * escape hatch for attribution a metric+field walk cannot express —
+   * setbased/nested's match/set replay, a keeper's clean-sheet fold, …),
+   * which is the path most likely to drop silently: its own attribution is
+   * opaque from here, so unlike the loop above there is no per-credit
+   * breakdown, only whether it ran and what it produced in aggregate.
+   *
+   * `true` iff `model.folded !== undefined` AND the gate that runs it fired
+   * (`ctx !== undefined || lineups !== undefined`) — the SAME condition the
+   * fold loop itself uses. `false` whenever the model has no `folded` at
+   * all, or has one but neither `ctx` nor `lineups` was supplied (both
+   * omitted ⇒ folded stays a no-op, byte-identical to before it existed) —
+   * that is the ORDINARY inert case, not evidence of a problem.
+   */
+  foldedRan: boolean;
+  /** Rows `model.folded.fold` returned, before they merge into the metric
+   *  rows above. `0` whenever `foldedRan` is `false`. */
+  foldedRows: number;
+  /** Per-(person,key) stat entries `folded.fold`'s rows contributed to the
+   *  merge — the folded-path analogue of `fromPersonField` +
+   *  `fromEntrantFallback` above, at the same granularity `rows[].stats`
+   *  itself accumulates (one row with two keys counts 2, not 1). `0`
+   *  whenever `foldedRan` is `false` or `foldedRows` is `0`. */
+  foldedCredits: number;
+  /**
+   * `foldedRan` is `true` but `foldedRows` is `0` — the folded path
+   * actually executed and produced NOTHING, as distinct from never running
+   * at all. On its own this is often correct (an empty or fully-voided
+   * stream, a fold whose gate genuinely found nothing to credit this
+   * fixture) — cross-reference `foldedEntrantsOutOfScope` before reading it
+   * as a defect.
+   */
+  foldedEmpty: boolean;
+  /**
+   * `ctx` was supplied (not omitted) on a model that HAS `folded`, but
+   * `ctx.entrants.length !== 2` — the specific, silent hazard the
+   * replay-based match/set folds (setbased/nested's own default
+   * `playerStats.folded`) carry: they require `ctx.entrants` to be exactly
+   * ONE fixture's two-sided [home, away] pair and bail to `[]` for any
+   * other count, with no error (see `PlayerStatsFoldCtx.entrants`'s own
+   * docstring — "which entrants exist THIS fixture" is load-bearing, not
+   * loose phrasing). A caller that built `ctx.entrants` from a whole
+   * division's roster (>2) — the natural-looking but wrong wiring this
+   * field exists to catch — gets a table that looks exactly like a fixture
+   * nobody scored. `false` whenever `ctx` was never supplied at all (the
+   * ordinary lineups-only call every production caller makes today) or the
+   * model has no `folded` to hazard in the first place.
+   */
+  foldedEntrantsOutOfScope: boolean;
 }
 
 /**
@@ -436,7 +521,18 @@ export function aggregatePlayerStatsWithDiagnostics(
           metric.value !== undefined
             ? metric.value(payload)
             : resolvePayloadPath(payload, metric.sumField ?? "value");
-        if (typeof value === "number") for (const p of persons) bump(p, metric.key, value);
+        // `Number.isFinite` excludes NaN/±Infinity on top of the pre-existing
+        // `typeof` gate (S8/#417 W6 fix 6) — a zero-denominator ratio metric
+        // (e.g. `made / attempts`) must contribute NOTHING, not a value that
+        // poisons every running total it is ever added to (`sumPlayerStats`
+        // adds blindly). `typeof value === "number"` stays first: it is what
+        // narrows `value` from `number | undefined` to `number` for the
+        // `bump` call below, and it is what keeps `undefined` (never
+        // happened) distinguishable from a real, finite `0` (happened,
+        // scored zero) — `Number.isFinite` alone would lose that narrowing.
+        if (typeof value === "number" && Number.isFinite(value)) {
+          for (const p of persons) bump(p, metric.key, value);
+        }
       }
     }
     if (event.type === "core.award") {
@@ -465,11 +561,31 @@ export function aggregatePlayerStatsWithDiagnostics(
   // supplies `lineups` and no `ctx` at all; gating on `ctx` alone would leave
   // that fold permanently unreachable outside a test that manufactures one.
   // Both omitted still short-circuits here exactly as before this change.
+  //
+  // S8/#417 W6 fix 2 — the four `folded*` accumulators below are computed
+  // regardless of whether the gate fires, from the SAME condition the gate
+  // itself reads, so they can never drift from what actually ran.
+  let foldedRan = false;
+  let foldedRows = 0;
+  let foldedCredits = 0;
   if (model.folded !== undefined && (ctx !== undefined || lineups !== undefined)) {
-    for (const row of model.folded.fold(active, ctx ?? EMPTY_FOLD_CTX, lineups)) {
-      for (const [key, value] of Object.entries(row.stats)) bump(row.personId, key, value);
+    foldedRan = true;
+    const foldedOut = model.folded.fold(active, ctx ?? EMPTY_FOLD_CTX, lineups);
+    foldedRows = foldedOut.length;
+    for (const row of foldedOut) {
+      for (const [key, value] of Object.entries(row.stats)) {
+        bump(row.personId, key, value);
+        foldedCredits += 1;
+      }
     }
   }
+  const foldedEmpty = foldedRan && foldedRows === 0;
+  // The live hazard (see `foldedEntrantsOutOfScope`'s own docstring): only
+  // meaningful when a folded fold exists AND the caller actually supplied a
+  // `ctx` — an omitted `ctx` (the lineups-only production call shape) is the
+  // ordinary, documented no-op path, not a caller mistake to flag.
+  const foldedEntrantsOutOfScope =
+    model.folded !== undefined && ctx !== undefined && ctx.entrants.length !== 2;
 
   for (const [, stats] of rows) {
     for (const d of model.derived ?? []) {
@@ -490,6 +606,11 @@ export function aggregatePlayerStatsWithDiagnostics(
       unknownEntrants: [...unknownEntrants].sort(),
       teamEntrantsSkipped: [...teamEntrantsSkipped].sort(),
       rows: rowsOut.length,
+      foldedRan,
+      foldedRows,
+      foldedCredits,
+      foldedEmpty,
+      foldedEntrantsOutOfScope,
     },
   };
 }
@@ -516,12 +637,17 @@ export function aggregatePlayerStats(
  * fold itself: a data-derived throw inside a fold permanently bricks a
  * recorded fixture (this repo has hit that six times in one wave), so the
  * runtime merge always stays a plain addition regardless of a collision.
- * Empty result = clean model.
+ * A `folded.keys` entry also listed in `folded.sharesMetricKeys` (S8/#417 W6
+ * fix 1) is a DECLARED, intentional overlap and is excluded from the
+ * result; every other overlap is a real, undeclared clash — including one
+ * on a model that also happens to declare OTHER, unrelated intentional
+ * shares. Empty result = clean model.
  */
 export function playerStatsKeyCollisions(model: PlayerStatsModel): string[] {
   if (model.folded === undefined) return [];
   const metricKeys = new Set(model.metrics.map((m) => m.key));
-  return model.folded.keys.filter((k) => metricKeys.has(k));
+  const shared = new Set(model.folded.sharesMetricKeys ?? []);
+  return model.folded.keys.filter((k) => metricKeys.has(k) && !shared.has(k));
 }
 
 /** Sum per-fixture rows into a division table (addition is commutative — the

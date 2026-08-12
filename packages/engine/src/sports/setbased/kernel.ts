@@ -28,11 +28,12 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
-import type {
-  PlayerStatMetric,
-  PlayerStatRow,
-  PlayerStatsFoldCtx,
-  PlayerStatsModel,
+import {
+  personsForEntrant,
+  type PlayerStatMetric,
+  type PlayerStatRow,
+  type PlayerStatsFoldCtx,
+  type PlayerStatsModel,
 } from "../../stats/stats.ts";
 import type {
   FidelityBand,
@@ -1335,11 +1336,8 @@ function setBasedMatchOutcomesFold(
       if (ctx.entrants.length !== 2) return []; // this kernel is always 2-sided; nothing safe to pair
       const idX = ctx.entrants[0]!.id;
       const idY = ctx.entrants[1]!.id;
-      const personsFor = (entrantId: string): readonly string[] => {
-        const entrant = ctx.entrants.find((e) => e.id === entrantId);
-        if (entrant === undefined || entrant.kind === "team") return [];
-        return ctx.personsOf(entrantId).filter((p) => p !== "");
-      };
+      // S8/#417 W6 fix 5 — the shared kind guard, not a local re-derivation.
+      const personsFor = (entrantId: string): readonly string[] => personsForEntrant(ctx, entrantId);
 
       const cfgParsed = configSchema.safeParse(ctx.cfg);
       let state: SetBasedState | undefined = cfgParsed.success
@@ -1441,9 +1439,16 @@ function mergePlayerStats(
         ? kFolded
         : {
             keys: [...new Set([...kFolded.keys, ...pFolded.keys])],
-            fold: (events: readonly EventEnvelope[], ctx: PlayerStatsFoldCtx) => [
-              ...kFolded.fold(events, ctx),
-              ...pFolded.fold(events, ctx),
+            // S8/#417 W6 fix 4 — `lineups` forwarded to BOTH sides, not
+            // dropped: this used to be a 2-arg `(events, ctx) => [...]`,
+            // silently swallowing the 3rd argument `aggregatePlayerStats`
+            // always passes. Dead today (no preset on this kernel declares
+            // its own `folded`), but a future preset-declared fold needing
+            // `lineups` (a keeper fold, say) would otherwise lose it
+            // silently the moment it got merged with the kernel default.
+            fold: (events: readonly EventEnvelope[], ctx: PlayerStatsFoldCtx, lineups?: LineupPair) => [
+              ...kFolded.fold(events, ctx, lineups),
+              ...pFolded.fold(events, ctx, lineups),
             ],
           };
   return {
