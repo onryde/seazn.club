@@ -1764,6 +1764,59 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   server component, so it is NOT baked at build time the way a `NEXT_PUBLIC_*`
   var is, and is therefore absent from every real deploy) — no dev-only page
   precedent existed in `apps/web/src/app` to copy, so this is the new one.
+- 2026-08-12 — S10/#419 — **CORRECTION to the replay ruling above: the slot to
+  inspect is `expected_seq + 1`, not `expected_seq`.** `expected_seq` is the
+  LAST seq the client saw; `appendEvent` refuses unless `lastSeq ===
+  expectedSeq` and then writes the new row at `expectedSeq + 1`
+  (`server/engine-db/append-event.ts:189,215`). The ruling's mechanism is
+  unchanged and still complete — a write can only ever land at exactly one
+  seq, so one row is a total test — but the arithmetic as first recorded was
+  off by one, and an implementation following it literally would inspect the
+  PREVIOUS event and read every own-event replay as foreign, i.e. duplicate
+  exactly what the ruling exists to prevent. Found by the implementer against
+  the append path rather than by review; shipped as `targetSeqFor(expectedSeq)
+  = expectedSeq + 1` in `pipeline.ts`. Recorded rather than edited in place so
+  the earlier entry's shas keep matching.
+- 2026-08-12 — S10/#419 — **S7's reason for leaving `PadField.labelKey`
+  optional does not survive contact with the universal renderer, and the
+  screenshots are how it surfaced.** S7/#427 ruled: "an action always needs a
+  name — it is a button. A field frequently does not: cricket's `runs.bat` sits
+  inside a labelled 'Ball' action whose whole layout names it." That reasoning
+  assumes a hand-built SKIN (S11). The universal renderer has no such layout,
+  so on the real page cricket's `cricket.player.line` action draws **seven
+  inputs whose only accessible name is `Scorecard line #1 … #7`** — the action's
+  own label plus an ordinal — and no visible label at all. Confirmed in the
+  browser, not inferred: every `<input>` carried `aria-label="Scorecard line
+  #N"`, no `<label for>`, no placeholder. A scorer cannot tell runs from
+  wickets from overs. (What DOES work: the bounds are genuinely spec-derived
+  and differ per field — `1-2`, `0-2000`, `0-120`, `0-10` — so the cfg-derived
+  bound requirement is met.)
+  Fix belongs in the RENDERER, not the engine: humanise the field's own dotted
+  path as the last resort (`runs.bat` → "Runs (bat)"), visibly, with the
+  accessible name kept in sync. Declaring 100+ new engine label keys instead
+  would mint exactly the copy S7 deliberately refused to translate, in four
+  locales, for surfaces a skin may relabel anyway. Recorded so S11 does not
+  "fix" it a second time in each skin.
+- 2026-08-12 — S10/#419 — **harness route shipped as
+  `apps/web/src/app/score/harness/`, gated on a SERVER-read
+  `SCOREPAD_V2_HARNESS=1`.** Two modes on purpose: `?fixture=<uuid>` drives the
+  real API with the session cookie (the mode the offline/drain/tab-death e2e
+  must use), and with no `fixture` an in-page ledger stands in — real
+  IndexedDB, real queue, real fold, real renderer, no seeded division — so the
+  pad can be screenshotted and hand-driven. The second mode is explicitly NOT
+  evidence about the server contract and the file says so. Deleted at S13's
+  cutover at the latest; S12 owns the real entry points.
+  Screenshots taken at 1280 / 768 / 375 / 320 (cricket `t20` and football
+  `eleven`): no horizontal page scroll at any width, measured
+  (`scrollWidth === clientWidth === 320`, and no element overflowing with
+  `overflow-x: visible`), touch-sized targets, and the pad draws through the
+  app's own `btn btn-primary` design-system classes rather than inventing a
+  palette. Open design debt, deliberately NOT fixed blind this session:
+  `layout: "grid"` panels leave a half-width button in a full-width card
+  (Cards / Substitutions / Shots at 768 and 1280), and the pad has no score
+  header of its own — a scorer sees actions but not the state they are
+  scoring. Both are S11 skin-shaped questions; raised for the owner rather
+  than restyled unilaterally (restyles need sign-off).
 - _(append below)_
 
 ## Open questions for the owner
