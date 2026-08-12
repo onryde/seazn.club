@@ -578,7 +578,7 @@ describe("folded models (S8/#417)", () => {
     const model: PlayerStatsModel = {
       metrics: [],
       folded: {
-        keys: ["folded_k"],
+        keys: [{ key: "folded_k", label: "Folded k" }],
         fold: (events, ctx) => {
           const counts = new Map<string, number>();
           for (const e of events) {
@@ -614,7 +614,7 @@ describe("folded models (S8/#417)", () => {
       metrics: [{ key: "goals", label: "Goals", from: "x.goal", field: "scorer", agg: "count" }],
       derived: [{ key: "total", label: "Total", derive: (s) => (s.goals ?? 0) + (s.assists_folded ?? 0) }],
       folded: {
-        keys: ["assists_folded"],
+        keys: [{ key: "assists_folded", label: "Assists folded" }],
         // Deliberately TWO rows for the same person under the SAME key —
         // addition gives 2, a last-write-wins merge would give 1.
         fold: () => [
@@ -632,7 +632,7 @@ describe("folded models (S8/#417)", () => {
     const model: PlayerStatsModel = {
       metrics: [{ key: "goals", label: "Goals", from: "x.goal", field: "scorer", agg: "count" }],
       folded: {
-        keys: ["assists_folded"],
+        keys: [{ key: "assists_folded", label: "Assists folded" }],
         fold: () => [{ personId: "p1", stats: { assists_folded: 5 } }],
       },
     };
@@ -652,7 +652,7 @@ describe("folded models (S8/#417)", () => {
     const model: PlayerStatsModel = {
       metrics: [],
       folded: {
-        keys: ["k"],
+        keys: [{ key: "k", label: "K" }],
         fold: (_events, _ctx, lineups) => {
           captured = lineups;
           return [];
@@ -683,7 +683,7 @@ describe("folded models (S8/#417)", () => {
     const model: PlayerStatsModel = {
       metrics: [],
       folded: {
-        keys: ["assists_folded"],
+        keys: [{ key: "assists_folded", label: "Assists folded" }],
         fold: () => [
           { personId: "coach1", stats: { assists_folded: 3 } },
           { personId: "p7", stats: { assists_folded: 1 } },
@@ -724,13 +724,19 @@ describe("playerStatsKeyCollisions (S8/#417)", () => {
   it("flags a folded key that collides with a metric key, and stays clean otherwise", () => {
     const colliding: PlayerStatsModel = {
       metrics: [{ key: "goals", label: "Goals", from: "x.goal", agg: "count" }],
-      folded: { keys: ["goals", "assists_folded"], fold: () => [] },
+      folded: {
+        keys: [
+          { key: "goals", label: "Goals" },
+          { key: "assists_folded", label: "Assists folded" },
+        ],
+        fold: () => [],
+      },
     };
     expect(playerStatsKeyCollisions(colliding)).toEqual(["goals"]);
 
     const clean: PlayerStatsModel = {
       metrics: [{ key: "goals", label: "Goals", from: "x.goal", agg: "count" }],
-      folded: { keys: ["assists_folded"], fold: () => [] },
+      folded: { keys: [{ key: "assists_folded", label: "Assists folded" }], fold: () => [] },
     };
     expect(playerStatsKeyCollisions(clean)).toEqual([]);
 
@@ -755,7 +761,10 @@ describe("playerStatsKeyCollisions (S8/#417)", () => {
       folded: {
         // Both "runs" and "wickets" collide with metrics[] — only "runs" is
         // declared as an intentional, tested overlap.
-        keys: ["runs", "wickets"],
+        keys: [
+          { key: "runs", label: "Runs" },
+          { key: "wickets", label: "Wickets" },
+        ],
         sharesMetricKeys: ["runs"],
         fold: () => [],
       },
@@ -766,7 +775,7 @@ describe("playerStatsKeyCollisions (S8/#417)", () => {
   it("sharesMetricKeys covering EVERY overlapping key leaves the model clean", () => {
     const model: PlayerStatsModel = {
       metrics: [{ key: "runs", label: "Runs", from: "x.ball", agg: "count" }],
-      folded: { keys: ["runs"], sharesMetricKeys: ["runs"], fold: () => [] },
+      folded: { keys: [{ key: "runs", label: "Runs" }], sharesMetricKeys: ["runs"], fold: () => [] },
     };
     expect(playerStatsKeyCollisions(model)).toEqual([]);
   });
@@ -774,7 +783,7 @@ describe("playerStatsKeyCollisions (S8/#417)", () => {
   it("a sharesMetricKeys entry that names a key OUTSIDE folded.keys is simply irrelevant, not an error", () => {
     const model: PlayerStatsModel = {
       metrics: [{ key: "runs", label: "Runs", from: "x.ball", agg: "count" }],
-      folded: { keys: ["runs"], sharesMetricKeys: ["some_other_key"], fold: () => [] },
+      folded: { keys: [{ key: "runs", label: "Runs" }], sharesMetricKeys: ["some_other_key"], fold: () => [] },
     };
     expect(playerStatsKeyCollisions(model)).toEqual(["runs"]);
   });
@@ -785,7 +794,7 @@ describe("sumPlayerStats handles a folded-origin key like a metric key (S8/#417)
     const model: PlayerStatsModel = {
       metrics: [{ key: "goals", label: "Goals", from: "x.goal", agg: "count" }],
       derived: [{ key: "total", label: "Total", derive: (s) => (s.goals ?? 0) + (s.assists_folded ?? 0) }],
-      folded: { keys: ["assists_folded"], fold: () => [] }, // shape only — rows below mirror its output
+      folded: { keys: [{ key: "assists_folded", label: "Assists folded" }], fold: () => [] }, // shape only — rows below mirror its output
     };
     // Rows shaped as `aggregatePlayerStats` would hand back after merging a
     // folded contribution in — by the time `sumPlayerStats` sees them, a
@@ -953,7 +962,7 @@ describe("aggregatePlayerStatsWithDiagnostics (S8/#417 diagnostics)", () => {
 describe("aggregatePlayerStatsWithDiagnostics: folded-path visibility (S8/#417 W6 fix 2)", () => {
   const foldedModel = (rows: ReturnType<typeof aggregatePlayerStats>): PlayerStatsModel => ({
     metrics: [],
-    folded: { keys: ["k"], fold: () => rows },
+    folded: { keys: [{ key: "k", label: "K" }], fold: () => rows },
   });
 
   it("foldedRan is false, and every other folded counter is at its zero default, when the model has no folded at all", () => {

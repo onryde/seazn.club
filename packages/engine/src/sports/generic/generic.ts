@@ -662,7 +662,15 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
       },
       { key: "scores", label: "Scoring actions", from: "generic.score", field: "person", agg: "count" },
     ],
-    folded: { keys: ["wins", "draws", "losses", "points_for"], fold: foldGenericStats },
+    folded: {
+      keys: [
+        { key: "wins", label: "Wins" },
+        { key: "draws", label: "Draws" },
+        { key: "losses", label: "Losses" },
+        { key: "points_for", label: "Points for" },
+      ],
+      fold: foldGenericStats,
+    },
   },
 
   // spec 03 §6 — valid-event generator for the conformance kit.

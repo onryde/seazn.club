@@ -279,7 +279,12 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
     expect(metric?.fromEntrant).toBeUndefined();
     expect(metric?.entrantField).toBeUndefined();
     // the kernel default's FOLDED half is untouched by the merge
-    expect(mod.playerStats!.folded?.keys).toEqual(["matches", "sets_won", "sets_lost", "games_won"]);
+    expect(mod.playerStats!.folded?.keys).toEqual([
+      { key: "matches", label: "Matches" },
+      { key: "sets_won", label: "Sets won" },
+      { key: "sets_lost", label: "Sets lost" },
+      { key: "games_won", label: "Games won" },
+    ]);
   });
 
   // S8/#417 W6 fix 4 — `mergePlayerStats`'s combined `fold` used to declare
@@ -308,7 +313,7 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
       playerStats: {
         metrics: [],
         folded: {
-          keys: ["preset_folded_k"],
+          keys: [{ key: "preset_folded_k", label: "Preset folded k" }],
           fold: (_events, _ctx, lineups) => {
             captured = lineups;
             return [];

@@ -425,7 +425,7 @@ describe("cricket S8/#417: playerStatsKeyCollisions", () => {
       metrics: [...MODEL.metrics, { key: "boundaries", label: "Boundaries", from: "cricket.ball", agg: "count" }],
       folded: {
         ...MODEL.folded!,
-        keys: [...MODEL.folded!.keys, "boundaries"],
+        keys: [...MODEL.folded!.keys, { key: "boundaries", label: "Boundaries" }],
         // sharesMetricKeys deliberately NOT extended — this is the accident.
       },
     };

@@ -1331,7 +1331,18 @@ function setBasedMatchOutcomesFold(
   const rallyType = `${preset.key}.rally`;
   const summaryType = `${preset.key}.${preset.coarseEventType}`;
   return {
-    keys: ["matches", "sets_won", "sets_lost"],
+    // S8/#417 W6 review — `sets_won`/`sets_lost` borrow this preset's OWN
+    // `unitLabel` (the same one `makeMetrics` above uses for the standings
+    // columns of the very same fact), not a hardcoded "Sets": badminton and
+    // table tennis call this unit a "Game" everywhere else in their own
+    // product surface, so a player-profile row reading "Sets won" would
+    // silently disagree with their own standings table. `matches` needs no
+    // such split — a match is a match in every sport on this kernel.
+    keys: [
+      { key: "matches", label: "Matches" },
+      { key: "sets_won", label: `${preset.unitLabel.many} won` },
+      { key: "sets_lost", label: `${preset.unitLabel.many} lost` },
+    ],
     fold(events: readonly EventEnvelope[], ctx: PlayerStatsFoldCtx): PlayerStatRow[] {
       if (ctx.entrants.length !== 2) return []; // this kernel is always 2-sided; nothing safe to pair
       const idX = ctx.entrants[0]!.id;
@@ -1409,6 +1420,22 @@ function setBasedMatchOutcomesFold(
 }
 
 /**
+ * `folded.keys` union helper (S8/#417 W6 review) — dedupes a concatenated
+ * `{key,label}[]` by `.key`, FIRST occurrence wins. Extracted rather than a
+ * `[...new Set(...)]` one-liner because `Set` dedupes by value identity,
+ * which stopped working the moment `keys` elements became objects instead of
+ * plain strings (S8/#417 W6 changed `PlayerStatsModel.folded.keys`'s element
+ * type — see `stats.ts`).
+ */
+function dedupeFoldedKeys(
+  keys: readonly { key: string; label: string }[],
+): { key: string; label: string }[] {
+  const seen = new Map<string, string>();
+  for (const k of keys) if (!seen.has(k.key)) seen.set(k.key, k.label);
+  return [...seen].map(([key, label]) => ({ key, label }));
+}
+
+/**
  * Merges the kernel default with the preset's own declared model (S8/#417).
  * PRECEDENCE: a preset-declared metric key always beats a default of the
  * same key — a sport's hand-tuned metric must never be silently shadowed by
@@ -1438,7 +1465,11 @@ function mergePlayerStats(
       : pFolded === undefined
         ? kFolded
         : {
-            keys: [...new Set([...kFolded.keys, ...pFolded.keys])],
+            // S8/#417 W6 review — dedup by `.key`, kernel-default label wins
+            // a same-named clash (first occurrence), matching
+            // `labelPlayerStats`'s own first-declaration-wins precedence
+            // elsewhere in this merge.
+            keys: dedupeFoldedKeys([...kFolded.keys, ...pFolded.keys]),
             // S8/#417 W6 fix 4 — `lineups` forwarded to BOTH sides, not
             // dropped: this used to be a 2-arg `(events, ctx) => [...]`,
             // silently swallowing the 3rd argument `aggregatePlayerStats`

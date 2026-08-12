@@ -1594,7 +1594,18 @@ function nestedMatchOutcomesFold(
   const summaryType = `${preset.key}.set_summary`;
   const gameAwardType = `${preset.key}.game.award`;
   return {
-    keys: ["matches", "sets_won", "sets_lost", "games_won"],
+    // S8/#417 W6 review — matches this kernel's OWN standings-column labels
+    // for the same four facts (`makeNestedModule`'s `metrics` below): tennis
+    // is the only preset on this kernel today, so unlike the set-based
+    // kernel's twin of this fold there is no second sport's wording to keep
+    // separate, and these stay hardcoded rather than reading a `unitLabel`
+    // this kernel has no equivalent field for.
+    keys: [
+      { key: "matches", label: "Matches" },
+      { key: "sets_won", label: "Sets won" },
+      { key: "sets_lost", label: "Sets lost" },
+      { key: "games_won", label: "Games won" },
+    ],
     fold(events: readonly EventEnvelope[], ctx: PlayerStatsFoldCtx): PlayerStatRow[] {
       if (ctx.entrants.length !== 2) return []; // this kernel is always 2-sided; nothing safe to pair
       const idX = ctx.entrants[0]!.id;
@@ -1678,6 +1689,21 @@ function nestedMatchOutcomesFold(
 }
 
 /**
+ * `folded.keys` union helper (S8/#417 W6 review) — the nested-kernel twin of
+ * `setbased/kernel.ts`'s own `dedupeFoldedKeys`; see that one's doc comment
+ * for why a plain `[...new Set(...)]` stopped deduping once `keys` elements
+ * became objects. Duplicated rather than shared, matching this file's
+ * existing convention for `mergePlayerStats` immediately below.
+ */
+function dedupeFoldedKeys(
+  keys: readonly { key: string; label: string }[],
+): { key: string; label: string }[] {
+  const seen = new Map<string, string>();
+  for (const k of keys) if (!seen.has(k.key)) seen.set(k.key, k.label);
+  return [...seen].map(([key, label]) => ({ key, label }));
+}
+
+/**
  * Merges the kernel default with the preset's own declared model (S8/#417).
  * Identical precedence rule to `setbased/kernel.ts`'s own `mergePlayerStats`
  * — see its doc comment for the full rationale. Duplicated rather than
@@ -1699,7 +1725,9 @@ function mergePlayerStats(
       : pFolded === undefined
         ? kFolded
         : {
-            keys: [...new Set([...kFolded.keys, ...pFolded.keys])],
+            // S8/#417 W6 review — dedup by `.key`; see `setbased/kernel.ts`'s
+            // identical comment on its own `mergePlayerStats`.
+            keys: dedupeFoldedKeys([...kFolded.keys, ...pFolded.keys]),
             // S8/#417 W6 fix 4 — `lineups` forwarded to BOTH sides, not
             // dropped: this used to be a 2-arg `(events, ctx) => [...]`,
             // silently swallowing the 3rd argument `aggregatePlayerStats`

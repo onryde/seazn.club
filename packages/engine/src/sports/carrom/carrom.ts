@@ -1022,7 +1022,13 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
         fromEntrant: true,
       },
     ],
-    folded: { keys: ["matches", "wins"], fold: foldCarromStats },
+    folded: {
+      keys: [
+        { key: "matches", label: "Matches" },
+        { key: "wins", label: "Wins" },
+      ],
+      fold: foldCarromStats,
+    },
   },
 
   // W4 review item 7 — the umpire's Laws 51/55 row reaches the shared

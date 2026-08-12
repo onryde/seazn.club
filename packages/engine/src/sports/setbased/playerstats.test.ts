@@ -322,7 +322,11 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
     // preset declares no `folded` of its own, so `matches`/`sets_won`/
     // `sets_lost` still come from the kernel default, not lost alongside the
     // overridden metric.
-    expect(mod.playerStats!.folded?.keys).toEqual(["matches", "sets_won", "sets_lost"]);
+    expect(mod.playerStats!.folded?.keys).toEqual([
+      { key: "matches", label: "Matches" },
+      { key: "sets_won", label: "Sets won" },
+      { key: "sets_lost", label: "Sets lost" },
+    ]);
   });
 
   // S8/#417 W6 fix 4 — `mergePlayerStats`'s combined `fold` used to declare
@@ -355,7 +359,7 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
       playerStats: {
         metrics: [],
         folded: {
-          keys: ["preset_folded_k"],
+          keys: [{ key: "preset_folded_k", label: "Preset folded k" }],
           fold: (_events, _ctx, lineups) => {
             captured = lineups;
             return [];

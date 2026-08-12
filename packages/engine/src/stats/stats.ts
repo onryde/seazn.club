@@ -131,20 +131,37 @@ export interface PlayerStatsModel {
    * caller's behalf when the caller only supplied `lineups`.
    */
   folded?: {
-    keys: readonly string[];
     /**
-     * Subset of `keys` that INTENTIONALLY lands in the same stat column as
-     * an entry in `metrics[]` — a declared, tested overlap (S8/#417 W6 fix
-     * 1), e.g. cricket's coarse `cricket.player.line` rescue, gated so the
-     * fine metric and the coarse fold never both fire for one person's
-     * aspect. `playerStatsKeyCollisions` treats a `keys` entry that also
-     * appears in `metrics[].key` as a real, UNDECLARED clash unless it is
-     * also listed here — so a model must declare every key `fold` actually
-     * writes in `keys` (never dodge the checker with an empty list to hide
-     * an intentional overlap) and name the intentional ones here, which
-     * keeps the checker able to catch a genuinely accidental new collision.
-     * Absent ⇒ no overlap is declared intentional, byte-identical to before
-     * this field existed.
+     * Every key `fold` may write, EACH WITH ITS OWN DECLARED ENGLISH LABEL
+     * (S8/#417 W6 review) — the same `{key, label}` shape `PlayerStatMetric`/
+     * `PlayerStatDerive`/`PlayerAwardSpec` already use, so a folded row ships
+     * the same "every displayable row carries an engine label" guarantee the
+     * rest of this file rests on. Before this, a `folded`-only row (no
+     * `metrics[]`/`derived[]`/`awards[]` entry sharing its key — the
+     * football/hockey/icehockey goalkeeper metrics, the setbased/nested
+     * match/set outcomes, …) had no label ANYWHERE, engine or app, and
+     * degraded silently to nothing on screen. `apps/web`'s `labelPlayerStats`
+     * reads this label as its own fallback, exactly like it already falls
+     * back to a metric's/derived's/award's own `label`.
+     */
+    keys: readonly { key: string; label: string }[];
+    /**
+     * Subset of `keys[].key` that INTENTIONALLY lands in the same stat
+     * column as an entry in `metrics[]` — a declared, tested overlap
+     * (S8/#417 W6 fix 1), e.g. cricket's coarse `cricket.player.line`
+     * rescue, gated so the fine metric and the coarse fold never both fire
+     * for one person's aspect. `playerStatsKeyCollisions` treats a `keys`
+     * entry that also appears in `metrics[].key` as a real, UNDECLARED
+     * clash unless it is also listed here — so a model must declare every
+     * key `fold` actually writes in `keys` (never dodge the checker with an
+     * empty list to hide an intentional overlap) and name the intentional
+     * ones here, which keeps the checker able to catch a genuinely
+     * accidental new collision. Absent ⇒ no overlap is declared
+     * intentional, byte-identical to before this field existed. Stays a
+     * plain `string[]` (key names only) — the label of record for a shared
+     * key is always the `metrics[]` entry's own, per `labelPlayerStats`'s
+     * first-declaration-wins precedence, so a second label here would be
+     * dead data.
      */
     sharesMetricKeys?: readonly string[];
     fold: (
@@ -659,7 +676,7 @@ export function playerStatsKeyCollisions(model: PlayerStatsModel): string[] {
   if (model.folded === undefined) return [];
   const metricKeys = new Set(model.metrics.map((m) => m.key));
   const shared = new Set(model.folded.sharesMetricKeys ?? []);
-  return model.folded.keys.filter((k) => metricKeys.has(k) && !shared.has(k));
+  return model.folded.keys.map((k) => k.key).filter((k) => metricKeys.has(k) && !shared.has(k));
 }
 
 /** Sum per-fixture rows into a division table (addition is commutative — the

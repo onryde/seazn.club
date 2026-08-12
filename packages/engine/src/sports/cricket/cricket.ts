@@ -2304,7 +2304,21 @@ const CRICKET_PLAYER_STATS: PlayerStatsModel = {
   // MODE is fine-only regardless — `cricket.player.line` has no mode field —
   // so no `dismissals_<kind>` key is ever folded-derived or shared.
   folded: {
-    keys: ["runs", "balls_faced", "balls_bowled", "runs_conceded", "wickets", "dismissals"],
+    // S8/#417 W6 review — labels here are BYTE-IDENTICAL to the `metrics[]`
+    // entries of the same name above (never a second, drifting name for one
+    // concept): every one of these six is in `sharesMetricKeys` below, so
+    // `labelPlayerStats`'s first-declaration-wins precedence always renders
+    // the `metrics[]` copy and this label is never the one shown — declared
+    // anyway so the model satisfies "every folded key ships a label" on its
+    // own, without relying on a reader to know the overlap is total.
+    keys: [
+      { key: "runs", label: "Runs" },
+      { key: "balls_faced", label: "Balls faced" },
+      { key: "balls_bowled", label: "Balls bowled" },
+      { key: "runs_conceded", label: "Runs conceded" },
+      { key: "wickets", label: "Wickets" },
+      { key: "dismissals", label: "Dismissals" },
+    ],
     sharesMetricKeys: ["runs", "balls_faced", "balls_bowled", "runs_conceded", "wickets", "dismissals"],
     fold: (events, _ctx) => {
       const batted = newFineCoverage();

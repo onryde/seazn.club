@@ -2735,7 +2735,13 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
     // declared, fed by `football.shot` — see `footballKeeperStatsFold`'s own
     // W6 addition above.
     folded: {
-      keys: ["goals_conceded", "clean_sheets", "saves", "shots_faced", "save_percentage"],
+      keys: [
+        { key: "goals_conceded", label: "Goals conceded" },
+        { key: "clean_sheets", label: "Clean sheets" },
+        { key: "saves", label: "Saves" },
+        { key: "shots_faced", label: "Shots faced" },
+        { key: "save_percentage", label: "Save percentage" },
+      ],
       fold: footballKeeperStatsFold,
     },
   },

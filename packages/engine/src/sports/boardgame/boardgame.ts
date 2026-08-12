@@ -757,7 +757,18 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
         fromEntrant: true,
       },
     ],
-    folded: { keys: ["draws", "losses", "white", "black"], fold: foldBoardgameStats },
+    folded: {
+      // "Games as White"/"Games as Black" match this module's OWN standings
+      // `metrics` labels for the same two keys (above) — one word choice for
+      // one concept, not a second name invented for the player-facing row.
+      keys: [
+        { key: "draws", label: "Draws" },
+        { key: "losses", label: "Losses" },
+        { key: "white", label: "Games as White" },
+        { key: "black", label: "Games as Black" },
+      ],
+      fold: foldBoardgameStats,
+    },
   },
 
   // spec 03 §6 — deterministic generator: start, then a single result
