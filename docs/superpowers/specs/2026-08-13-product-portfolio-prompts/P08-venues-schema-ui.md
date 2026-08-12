@@ -9,7 +9,13 @@ Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
 1. Migrations (re-verify next free V numbers): `venues`, `courts`
    (+`tags text[]`), `court_hours`, `court_exceptions`,
    `fixtures.court_id uuid null fk`, division/stage
-   `required_court_tags text[]`. DDL per spec. NO consumer switches yet
+   `required_court_tags text[]`. DDL per spec. Indexes owed in the same
+   migrations: `venues(org_id)`, `courts(venue_id)`,
+   `fixtures(court_id)` (checker/double-booking scans), GIN on
+   `courts.tags` (containment filter), pks on
+   `court_hours`/`court_exceptions` as specced; unique
+   `(venue_id, name)` on courts. Load
+   `supabase-postgres-best-practices` first. NO consumer switches yet
    — `court_label` keeps working this session (P9 migrates + switches).
 2. CRUD API: venues + nested courts (+hours/exceptions payloads), key
    scopes, OpenAPI regen. RLS/ACL per org membership (follow existing

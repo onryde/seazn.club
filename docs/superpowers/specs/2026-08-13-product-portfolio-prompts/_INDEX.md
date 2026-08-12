@@ -91,6 +91,14 @@ All owner-ratified 2026-08-13 in the design session:
 - Worktree per session branch; `pnpm install --frozen-lockfile`.
 - **Scout re-pin before touching anything** — every file:line in the
   specs/prompts predates C1/S10+ landings by design.
+- **Schema work** (P4, P5, P8, P9, P11 create tables / update columns /
+  add DB indexes): load the `supabase-postgres-best-practices` skill
+  BEFORE writing any migration. Baseline owed regardless: every FK gets
+  an index; array/jsonb columns queried by containment get GIN (e.g.
+  `courts.tags` for `@>`); uniqueness lives in DDL (unique index), never
+  app-side checks; greenfield stance — correct schema over backwards
+  compatibility; re-verify the next free `V<n>` at execution, never
+  trust the prompt's number.
 
 ## Status log
 

@@ -18,7 +18,10 @@ Server/engine only — UI is P6.
 4. `stage_seed_proposals` table + compute on `completeStage` (qualifiers
    per rules from `getStandings`, bestNth cross-group cascade, tie
    flags, standings snapshot hash); `overrideStandings` marks drafts
-   stale + recomputes.
+   stale + recomputes. DDL owed with it: index on
+   `stage_seed_proposals(stage_id)`, partial unique on
+   `(stage_id) where status='draft'` (one live draft per stage);
+   load `supabase-postgres-best-practices` before authoring migrations.
 5. Routes: `POST /stages/{id}/seed-proposal`, `POST
    .../seed-proposal/confirm` (validates entrants ∈ division, each slot
    filled once; fills; re-runs schedule validation; pino `stage_seeded`).

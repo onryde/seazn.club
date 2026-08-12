@@ -23,7 +23,10 @@ done** (check its index) + owner green-light. Worktree + fresh branch.
 
 - new route + usecase `apps/web/src/server/usecases/event-import.ts`,
   `scoring.ts` (read-only reuse — extract a shared internal if needed,
-  behavior identical), migration for the idempotency table, admin page,
+  behavior identical), migration for the idempotency table (UNIQUE index
+  `(division_id, import_id, fixture_id)` in DDL — the idempotency
+  guarantee lives in the constraint, not app code; load
+  `supabase-postgres-best-practices` first), admin page,
   `schemas.ts`, `openapi.ts`, help page, 4 dictionaries
 
 ## Do NOT touch

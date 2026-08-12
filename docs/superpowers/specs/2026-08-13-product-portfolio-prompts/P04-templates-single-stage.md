@@ -14,7 +14,9 @@ Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
    usecase: competition → divisions (through EXISTING validation paths —
    templates can never bypass config validation) → stages; transactional
    rollback on any failure; stamps `template_key`+`template_version`
-   (migration adds the two columns). OpenAPI regen.
+   (migration adds the two columns to `competitions`; provenance-only,
+   no index owed; load `supabase-postgres-best-practices` before the
+   migration). OpenAPI regen.
 3. Wizard step 0: template gallery + detail sheet + "start blank";
    routes into entrant-add with placeholder counts. i18n ×4 — catalog
    JSON contains KEYS only, never English.
