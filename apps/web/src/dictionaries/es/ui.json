@@ -3524,5 +3524,18 @@
   "squadRole.coach": "Entrenador",
   "squadRole.staff": "Cuerpo técnico",
   "squadProvenance.named": "Inscrito en el acta",
-  "squadProvenance.added": "Añadido durante el partido"
+  "squadProvenance.added": "Añadido durante el partido",
+  "board.autoSubtitle": "Reconstruye el calendario. Las tarjetas bloqueadas no se mueven.",
+  "board.reflowSubtitle": "Corrige los choques moviendo lo mínimo posible.",
+  "board.autoConfirm.title": "¿Reconstruir el calendario?",
+  "board.autoConfirm.body.one": "1 partido está bloqueado y se mantendrá donde está.",
+  "board.autoConfirm.body.other": "{count} partidos están bloqueados y se mantendrán donde están.",
+  "board.autoConfirm.confirm": "Continuar",
+  "board.result.lockedKept.one": "1 partido bloqueado se mantuvo donde estaba.",
+  "board.result.lockedKept.other": "{count} partidos bloqueados se mantuvieron donde estaban.",
+  "board.result.overrideHint": "Puede que los partidos que bloqueaste sean el motivo de que no cupiera todo.",
+  "board.result.overrideButton": "Repetir permitiendo mover los partidos bloqueados",
+  "board.result.overrideConfirm.title": "¿Permitir que se muevan los partidos bloqueados?",
+  "board.result.overrideConfirm.body": "Esta nueva ejecución puede mover partidos que bloqueaste en su sitio: podrían acabar en otro horario o pista distintos.",
+  "board.result.overrideConfirm.confirm": "Repetir y permitir mover"
 }

@@ -89,6 +89,14 @@ export interface BoardActions {
   /**
    * Propose + apply for one stage.
    *
+   * `divisionId` (#pins-ui, owner ruling 2026-08-12) keys `seqRef` exactly as
+   * `togglePin`/`moveCard`/`shiftDay`/`swapCourts` already do via
+   * `f.division_id` — `autoRun` has no fixture/division object to read one off,
+   * only a bare `stageId`, so every caller threads it through explicitly. Get
+   * it wrong (a stage id, or a sibling division's id) and the apply below
+   * validates against the WRONG board's watermark — a stale-caught-early false
+   * negative at best, a real cross-division race left open at worst.
+   *
    * `mode` is OMITTED by the two original callers and that is the contract, not
    * an oversight: `AutoScheduleRequest` derives it from `only_unlocked` server
    * side (absent or true -> reflow, false -> build), and the derivation is pinned
@@ -99,8 +107,31 @@ export interface BoardActions {
    * express: it re-flows the unlocked cards exactly as REFLOW does, and asks the
    * tier solver to improve the board rather than the repair solver to make it
    * legal.
+   *
+   * `ignoreLocks` (#pins-ui, owner ruling 2026-08-12) is OMITTED by every caller
+   * except the infeasible escape hatch: it is the client half of the request
+   * schema's `ignore_locks`, the only thing that can make a run move a
+   * `schedule_locked` fixture. Defaulted to `false` and sent only when `true` —
+   * see the request body below for why an explicit `false` still omits the key.
+   *
+   * THE APPLY CARRIES `expected_seq` (#pins-ui). A lock toggled while THIS
+   * multi-second solve was running bumps the division watermark
+   * (`moveFixture`'s `update divisions set seq = …`), so a 409 here means
+   * exactly that race, not a generic failure. Per owner ruling the response is
+   * to silently re-solve ONCE against the fresh board and apply that result —
+   * never the stale proposal (the board changed, so it may no longer be legal)
+   * and never a visible error for a race the organiser did nothing to cause. A
+   * second 409 (the retry itself lost the same race again) is not retried a
+   * second time — it surfaces through `fail`'s ordinary SEQ_CONFLICT path,
+   * same as any other stale write on this board.
    */
-  autoRun: (stageId: string, onlyUnlocked: boolean, mode?: AutoScheduleMode) => Promise<void>;
+  autoRun: (
+    stageId: string,
+    divisionId: string,
+    onlyUnlocked: boolean,
+    mode?: AutoScheduleMode,
+    ignoreLocks?: boolean,
+  ) => Promise<void>;
   /**
    * Publish / start. Resolves to `null` when the action landed, and to the
    * gate's refusal when the server would not put this board in front of players
@@ -353,51 +384,115 @@ export function useBoardActions(
   );
 
   const autoRun = useCallback(
-    async (stageId: string, onlyUnlocked: boolean, mode?: AutoScheduleMode) => {
+    async (
+      stageId: string,
+      divisionId: string,
+      onlyUnlocked: boolean,
+      mode?: AutoScheduleMode,
+      ignoreLocks = false,
+    ) => {
       setError(null);
       setNotice(null);
       setLastRun(null);
       setBusy(true);
       try {
-        const out = await apiV1<{
+        type Proposal = {
           assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
           conflicts: BoardConflict[];
-          // OPTIONAL on purpose, even though Task 9 now populates both: a cached
-          // response, or a server one deploy behind, carries neither. Typing
-          // them as required here would render a strip full of zeros instead of
-          // no strip at all, which is the worse of the two failures.
           metrics?: ScheduleMetrics;
           solver?: ScheduleSolverInfo;
-        }>(`/api/v1/stages/${stageId}/schedule/auto`, {
-          method: "POST",
-          // Spread, not `mode: mode` — an explicit `undefined` serialises as a
-          // present key on some paths and the request schema's preprocess keys
-          // on `body.mode !== undefined`, so it would defeat the derivation the
-          // two original callers depend on.
-          json: { only_unlocked: onlyUnlocked, ...(mode !== undefined ? { mode } : {}) },
-        });
-        // Before the empty-proposal return, not after: an `infeasible` run can
-        // place nothing at all, and that is exactly the run whose report the
-        // organiser most needs.
-        if (out.metrics && out.solver) setLastRun({ metrics: out.metrics, solver: out.solver });
-        if (out.assignments.length === 0) {
-          setNotice(msg("board.action.nothingStage"));
-          return;
-        }
-        const applied = await apiV1<{ applied: number; conflicts: BoardConflict[] }>(
-          `/api/v1/stages/${stageId}/schedule/apply`,
-          {
+        };
+        // Closes over stageId/onlyUnlocked/mode/ignoreLocks — the #pins-ui
+        // retry below calls this a SECOND time to re-solve against the fresh
+        // board, and it must send the IDENTICAL request the original call did.
+        // In particular `ignoreLocks` must not leak into a retry that never set
+        // it: reusing this closure rather than re-deriving the body is what
+        // guarantees that, instead of relying on a second call site to agree.
+        const solve = () =>
+          apiV1<Proposal>(`/api/v1/stages/${stageId}/schedule/auto`, {
             method: "POST",
+            // Spread, not `mode: mode` / `ignore_locks: ignoreLocks` — an explicit
+            // `undefined`/`false` serialises as a present key on some paths, and
+            // the request schema keeps BOTH fields `.optional()` rather than
+            // defaulted so a caller who never heard of them parses identically to
+            // one that explicitly declined. `ignoreLocks` in particular must never
+            // appear as `false`: this is the ONLY thing that can move a
+            // `schedule_locked` fixture (owner ruling, 2026-08-12), and every
+            // caller but the infeasible escape hatch below relies on its absence.
             json: {
-              assignments: out.assignments.map((a) => ({
-                fixture_id: a.fixture_id,
-                scheduled_at: a.scheduled_at,
-                court_label: a.court_label,
-              })),
-              source: "auto",
+              only_unlocked: onlyUnlocked,
+              ...(mode !== undefined ? { mode } : {}),
+              ...(ignoreLocks ? { ignore_locks: true } : {}),
             },
-          },
-        );
+          });
+
+        const applyOnce = (assignments: Proposal["assignments"], expectedSeq: number | undefined) =>
+          apiV1<{ applied: number; conflicts: BoardConflict[] }>(
+            `/api/v1/stages/${stageId}/schedule/apply`,
+            {
+              method: "POST",
+              json: {
+                assignments: assignments.map((a) => ({
+                  fixture_id: a.fixture_id,
+                  scheduled_at: a.scheduled_at,
+                  court_label: a.court_label,
+                })),
+                source: "auto",
+                expected_seq: expectedSeq,
+              },
+            },
+          );
+
+        // Reports telemetry and returns the proposal, or `null` and the
+        // "nothing to schedule" notice for an empty one. BEFORE the
+        // empty-proposal check, not after: an `infeasible` run can place
+        // nothing at all, and that is exactly the run whose report the
+        // organiser most needs — capturing it only on a non-empty proposal
+        // would hide the strip on the one run that has to explain itself.
+        const propose = async (): Promise<Proposal | null> => {
+          const out = await solve();
+          if (out.metrics && out.solver) setLastRun({ metrics: out.metrics, solver: out.solver });
+          if (out.assignments.length === 0) {
+            setNotice(msg("board.action.nothingStage"));
+            return null;
+          }
+          return out;
+        };
+
+        const out = await propose();
+        if (!out) return;
+
+        let expectedSeq = seqRef.current[divisionId];
+        let applied: { applied: number; conflicts: BoardConflict[] };
+        try {
+          applied = await applyOnce(out.assignments, expectedSeq);
+        } catch (err) {
+          if (!(err instanceof ApiV1Error) || err.code !== "SEQ_CONFLICT") throw err;
+          // #pins-ui, owner ruling 2026-08-12: a lock toggled WHILE the solve
+          // above was running (`moveFixture` bumps the division watermark on
+          // every lock toggle) — the proposal just computed may now pin a
+          // fixture that's no longer pinned, or vice-versa, so re-applying IT
+          // would be wrong even with a corrected seq. Silently re-solve ONCE
+          // against the fresh board and apply THAT.
+          //
+          // `current_seq` rides on the 409 itself — server/api-v1/http.ts's
+          // SEQ_CONFLICT branch reads EngineError's `actualSeq` (schedule.ts's
+          // `assertFreshSeq`, which always sets it) off `err.data` and forwards
+          // it as `current_seq`, verified via http.test.ts's "SEQ_CONFLICT
+          // carries current_seq" spec. Waiting on `router.refresh()` to
+          // repopulate `seqRef` from fresh props instead would be async and
+          // racy — the fallback below is defensive only, for a malformed 409
+          // that should be unreachable from this throw site.
+          expectedSeq =
+            typeof err.extra.current_seq === "number" ? err.extra.current_seq : expectedSeq;
+          const retryOut = await propose();
+          if (!retryOut) return;
+          // A SECOND SEQ_CONFLICT here is NOT caught — it propagates to the
+          // outer catch and surfaces through `fail`'s ordinary path. Exactly
+          // one automatic retry, per owner ruling.
+          applied = await applyOnce(retryOut.assignments, expectedSeq);
+        }
+        seqRef.current[divisionId] = (expectedSeq ?? 0) + 1;
         setConflicts(applied.conflicts);
         setNotice(
           applied.conflicts.length > 0

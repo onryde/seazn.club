@@ -12,9 +12,10 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { gridStepMinutes } from "@seazn/engine/scheduling/grid-step";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { Tip } from "@/components/ui/tip";
+import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { apiV1 } from "@/lib/client-v1";
 import { track, EVENTS } from "@/lib/analytics";
-import { useMsg, useLocale } from "@/components/i18n/dict-provider";
+import { useMsg, useLocale, usePlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { dayKey, daySlots, type FeedLabelPair } from "@/lib/schedule-board";
 import type { Currency } from "@/lib/currency";
@@ -45,7 +46,7 @@ import {
   type Density,
   type GhostBlock,
 } from "./board/types";
-import { useBoardActions, type GateRefusal } from "./board/use-board-actions";
+import { useBoardActions, type AutoScheduleMode, type GateRefusal } from "./board/use-board-actions";
 
 export type { BoardConfig, BoardConflict, BoardDivision, BoardFixture, BoardStage } from "./board/types";
 
@@ -438,6 +439,7 @@ export function ScheduleBoard({
   ...props
 }: Props) {
   const msg = useMsg();
+  const plural = usePlural();
   const locale = useLocale();
   const router = useRouter();
   const pathname = usePathname();
@@ -562,6 +564,58 @@ export function ScheduleBoard({
 
   const scheduled = board.filter((f) => f.scheduled_at !== null);
   const unscheduled = board.filter((f) => f.scheduled_at === null && f.status === "scheduled");
+
+  // --------------------------------------------------- auto-schedule confirm
+  // (#pins-ui, owner ruling 2026-08-12). BUILD moves any card not explicitly
+  // protected, and a lock is the only thing an organiser has told it to
+  // protect — so BUILD alone gets a confirm step when the STAGE it is about to
+  // rebuild has a locked fixture. REFLOW and POLISH already honoured a lock
+  // before #pins-in-build and nothing about their behaviour changed, so a
+  // dialog on either would be pure friction over behaviour the organiser has
+  // already seen.
+  //
+  // Scoped per STAGE, not per division: `buildAiBrief`'s `pinned` count (line
+  // ~140) uses the SAME `f.schedule_locked` predicate but is division/whole-
+  // board scoped, which is the wrong number on a competition board — this
+  // run only ever touches ONE stage, so a count borrowed from a sibling
+  // division would report locks this click cannot even reach.
+  const stageLockedCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const f of board) {
+      if (f.schedule_locked) counts[f.stage_id] = (counts[f.stage_id] ?? 0) + 1;
+    }
+    return counts;
+  }, [board]);
+  const [pendingBuild, setPendingBuild] = useState<
+    { stageId: string; divisionId: string; locked: number } | null
+  >(null);
+  /** The params of whichever run last populated `actions.lastRun`, so the
+   *  infeasible escape hatch can repeat the SAME request with
+   *  `ignore_locks: true` rather than silently switching solver. Reading it is
+   *  always guarded behind `actions.lastRun` being non-null (the strip that
+   *  renders the override button is itself gated on that), and every board
+   *  write already clears `actions.lastRun` — so a pointer here that outlives
+   *  its run is simply never read. */
+  const [lastRunParams, setLastRunParams] = useState<{
+    stageId: string;
+    divisionId: string;
+    onlyUnlocked: boolean;
+    mode?: AutoScheduleMode;
+  } | null>(null);
+  const runAuto = useCallback(
+    (
+      stageId: string,
+      divisionId: string,
+      onlyUnlocked: boolean,
+      mode?: AutoScheduleMode,
+      ignoreLocks?: boolean,
+    ) => {
+      setLastRunParams({ stageId, divisionId, onlyUnlocked, mode });
+      return actions.autoRun(stageId, divisionId, onlyUnlocked, mode, ignoreLocks);
+    },
+    [actions],
+  );
+  const [overridePending, setOverridePending] = useState(false);
 
   // ------------------------------------------------------- AI proposal ghosts
   // The single division's current fixtures, enriched with the label bits a ghost
@@ -916,7 +970,14 @@ export function ScheduleBoard({
           qualification OF that line: the solver is anytime, so what it returned
           may be neither optimal nor complete, and this is where that is said. */}
       {actions.lastRun && (
-        <ScheduleResultStrip metrics={actions.lastRun.metrics} solver={actions.lastRun.solver} />
+        <ScheduleResultStrip
+          metrics={actions.lastRun.metrics}
+          solver={actions.lastRun.solver}
+          // The strip renders the override control only when the run it is
+          // reporting actually needs one (infeasible + locked_kept > 0); this
+          // callback only opens the confirm step, never sends the request.
+          onOverrideLocks={() => setOverridePending(true)}
+        />
       )}
 
       {/* Action bar */}
@@ -932,42 +993,70 @@ export function ScheduleBoard({
               // activates at >=640px with no counter-override past that
               // point, so the 28px height applied at every width from
               // tablet through desktop, not just tablet (#349).
-              <span key={s.id} className="inline-flex items-center gap-1">
+              // items-end, not items-center (#pins-ui): Auto-schedule and
+              // Re-flow each grow a caption underneath, so the pills are
+              // bottom-aligned rather than vertically centered against
+              // Polish's plain single-line one — the row's buttons keep one
+              // shared baseline instead of Polish looking vertically adrift
+              // beside two taller neighbors.
+              <span key={s.id} className="inline-flex items-end gap-1">
                 {/* #465: the two original actions carry a stable id like their
                     Polish sibling. Not tidiness — `board.autoSchedule` is
                     "Auto-schedule {name}" and INTERPOLATES the division name, so
                     the only text selector that can reach it is a regex that
                     stops meaning the same thing the day a division is renamed. */}
-                <button
-                  type="button"
-                  data-testid="schedule-auto"
-                  disabled={actions.busy}
-                  onClick={() => void actions.autoRun(s.id, false)}
-                  className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
-                >
-                  {msg("board.autoSchedule", { name: stages.length > 1 ? s.name : "" })}
-                </button>
-                <button
-                  type="button"
-                  data-testid="schedule-reflow"
-                  disabled={actions.busy}
-                  onClick={() => void actions.autoRun(s.id, true)}
-                  className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
-                  title={msg("board.reflowTitle")}
-                >
-                  {msg("board.reflow")}
-                </button>
+                <span className="flex flex-col items-start gap-0.5">
+                  <button
+                    type="button"
+                    data-testid="schedule-auto"
+                    disabled={actions.busy}
+                    onClick={() => {
+                      const locked = stageLockedCounts[s.id] ?? 0;
+                      // A confirm step only when THIS stage's rebuild would
+                      // touch a locked fixture — with zero locks the click
+                      // runs exactly as it always did (owner ruling).
+                      if (locked > 0) setPendingBuild({ stageId: s.id, divisionId: s.division_id, locked });
+                      else void runAuto(s.id, s.division_id, false);
+                    }}
+                    className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
+                  >
+                    {msg("board.autoSchedule", { name: stages.length > 1 ? s.name : "" })}
+                  </button>
+                  {/* Sublabel, not a hover title: the fact that a lock survives
+                      a rebuild has to be visible on touch, not discoverable
+                      only by hovering a desktop pointer over it. */}
+                  <span className="text-[10px] leading-tight text-slate-500">
+                    {msg("board.autoSubtitle")}
+                  </span>
+                </span>
+                <span className="flex flex-col items-start gap-0.5">
+                  <button
+                    type="button"
+                    data-testid="schedule-reflow"
+                    disabled={actions.busy}
+                    onClick={() => void runAuto(s.id, s.division_id, true)}
+                    className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+                    title={msg("board.reflowTitle")}
+                  >
+                    {msg("board.reflow")}
+                  </button>
+                  <span className="text-[10px] leading-tight text-slate-500">
+                    {msg("board.reflowSubtitle")}
+                  </span>
+                </span>
                 {/* POLISH — the tier solver over a board that is already legal.
                     Beside its siblings rather than behind a menu: it is the same
                     kind of action, and the three only differ by what they ask
                     the solver for. The mode is passed EXPLICITLY because
                     `only_unlocked` cannot express it — polish and re-flow both
-                    send `true` and run different solvers. */}
+                    send `true` and run different solvers. No confirm dialog and
+                    no sublabel (#pins-ui): POLISH already honoured a lock before
+                    this feature and nothing about it changed. */}
                 <button
                   type="button"
                   data-testid="schedule-polish"
                   disabled={actions.busy}
-                  onClick={() => void actions.autoRun(s.id, true, "polish")}
+                  onClick={() => void runAuto(s.id, s.division_id, true, "polish")}
                   className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
                   title={msg("board.polishTitle")}
                 >
@@ -1348,6 +1437,56 @@ export function ScheduleBoard({
         }}
         onDismiss={() => setGate(null)}
       />
+
+      {/* BUILD's pre-run confirm (#pins-ui, owner ruling 2026-08-12) — only
+          reachable via `pendingBuild`, which is only ever set when the clicked
+          stage has at least one locked fixture. Zero locks skips this
+          entirely and runs immediately, matching the ruling exactly. */}
+      <ConfirmDialog
+        open={pendingBuild !== null}
+        testId="schedule-rebuild"
+        title={msg("board.autoConfirm.title")}
+        confirmLabel={msg("board.autoConfirm.confirm")}
+        cancelLabel={msg("board.cancel")}
+        busy={actions.busy}
+        onConfirm={() => {
+          const p = pendingBuild;
+          setPendingBuild(null);
+          if (p) void runAuto(p.stageId, p.divisionId, false);
+        }}
+        onCancel={() => setPendingBuild(null)}
+      >
+        <p>{pendingBuild && plural("board.autoConfirm.body", pendingBuild.locked)}</p>
+      </ConfirmDialog>
+
+      {/* The infeasible escape hatch's own confirm step (#pins-ui) — the single
+          action in this whole feature that overrides an explicit organiser
+          instruction (a lock), so it gets a checkpoint of its own rather than
+          firing straight off the strip's inline link. Repeats the SAME stage/
+          mode the infeasible run itself asked for, plus `ignore_locks: true`. */}
+      <ConfirmDialog
+        open={overridePending}
+        testId="schedule-override-locks"
+        title={msg("board.result.overrideConfirm.title")}
+        confirmLabel={msg("board.result.overrideConfirm.confirm")}
+        cancelLabel={msg("board.cancel")}
+        busy={actions.busy}
+        onConfirm={() => {
+          setOverridePending(false);
+          if (lastRunParams) {
+            void runAuto(
+              lastRunParams.stageId,
+              lastRunParams.divisionId,
+              lastRunParams.onlyUnlocked,
+              lastRunParams.mode,
+              true,
+            );
+          }
+        }}
+        onCancel={() => setOverridePending(false)}
+      >
+        <p>{msg("board.result.overrideConfirm.body")}</p>
+      </ConfirmDialog>
 
       {/* The JOINT console (#350): every selected division planned in one run,
           applied in one transaction. Mounted only where `aiEntryPoint` says so,

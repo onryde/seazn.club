@@ -42,12 +42,22 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
 }));
 
-// `useLocale` THROWS outside a DictProvider and the harness has no provider
-// tree; `useMsg` already falls back to the real English catalog there, which is
-// the production path, so the copy stays the shipped copy.
+// `useLocale`/`usePlural` THROW outside a DictProvider and the harness has no
+// provider tree; `useMsg` already falls back to the real English catalog
+// there, which is the production path, so the copy stays the shipped copy.
+// `usePlural` (#pins-ui) mirrors that same fallback rather than a stub.
 vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/i18n/dict-provider")>();
-  return { ...actual, useLocale: () => "en" as const };
+  const { plural: pluralRuntime } = await import("@/lib/i18n-runtime");
+  const { messages } = await import("@/lib/messages");
+  return {
+    ...actual,
+    useLocale: () => "en" as const,
+    usePlural:
+      () =>
+      (key: string, count: number, vars?: Record<string, string | number>) =>
+        pluralRuntime(messages, key, count, "en", vars),
+  };
 });
 
 vi.mock("@/lib/analytics", async (importOriginal) => {

@@ -97,6 +97,7 @@ export function ScheduleResultStrip({
   metrics,
   solver,
   pinnedConflictCount,
+  onOverrideLocks,
 }: {
   metrics: ScheduleMetrics;
   solver: ScheduleSolverInfo;
@@ -105,6 +106,18 @@ export function ScheduleResultStrip({
    *  because a caller that knows better than the payload should be able to say
    *  so, and removing a prop is not this component's problem to solve. */
   pinnedConflictCount?: number;
+  /**
+   * The infeasible escape hatch (#pins-ui, owner ruling 2026-08-12): fired when
+   * the organiser asks to re-run this same stage with `ignore_locks: true` —
+   * the only thing that can move a `schedule_locked` fixture. OPTIONAL, and its
+   * absence is the gate: a caller that has no `autoRun` to repeat (this
+   * component also renders read-only inside `stages-panel.tsx`, off a plain
+   * saved report) simply gets no button rather than one wired to nothing. This
+   * component never calls the network itself — the click is a REQUEST, the
+   * confirm step and the actual re-run both live in the caller, matching how
+   * every other board mutation stays out of this file.
+   */
+  onOverrideLocks?: () => void;
 }) {
   const msg = useMsg();
   const plural = usePlural();
@@ -176,6 +189,32 @@ export function ScheduleResultStrip({
    * nothing was lost, so both stay silent rather than claiming zero.
    */
   const lost = solver.lost ?? 0;
+  /**
+   * How many of THIS stage's fixtures the run held fixed because they were
+   * locked (#pins-ui) — always present on a current server (`schedule.ts`
+   * sends a real number on every mode, never `undefined`), `?? 0` only for one
+   * a deploy behind.
+   *
+   * Suppressed on `status === "infeasible"`: `locked_kept` counts what the
+   * solve ANCHORED going in, not what survived in the output — on a board
+   * whose pins contradict each other the engine still places the rest of the
+   * locked set fine and drops only the contradictory ones (see
+   * `contradictory_pins`), so claiming all of them "were kept" would overstate
+   * exactly the run this component's infeasible copy already has to be careful
+   * about. The escape hatch below owns that narrative instead; this line only
+   * ever asserts "kept" when the run was not infeasible, where it is simply
+   * true.
+   */
+  const lockedKept = solver.locked_kept ?? 0;
+  const lockedNote =
+    lockedKept > 0 && solver.status !== "infeasible" ? plural("board.result.lockedKept", lockedKept) : null;
+  /**
+   * The one-click way through a board an organiser's own pins made infeasible.
+   * Gated on `onOverrideLocks` being wired at all — this component also
+   * renders read-only in `stages-panel.tsx`, which has no `autoRun` to repeat —
+   * so an absent prop means no button rather than one wired to nothing.
+   */
+  const showOverride = onOverrideLocks !== undefined && solver.status === "infeasible" && lockedKept > 0;
   // Amber is reserved for "there is something here you need to know about your
   // board". `verifier_rejected` deliberately does NOT qualify: it is an internal
   // fault the organiser cannot act on, their board is valid either way, and the
@@ -253,6 +292,31 @@ export function ScheduleResultStrip({
         {headline}
       </p>
       {secondary && <p className="mt-0.5 text-xs text-slate-600">{secondary}</p>}
+      {lockedNote && (
+        <p data-testid="schedule-result-locked-kept" className="mt-0.5 text-xs text-slate-600">
+          {lockedNote}
+        </p>
+      )}
+      {/* THE escape hatch. Never the dominant action on this card — no button
+          chrome, matching stages-panel.tsx's inline undo affordance: shape is
+          what demotes it here, not size or colour, so it cannot out-rank the
+          board's real primary actions no matter how the amber card is themed.
+          The click only REQUESTS the override; `onOverrideLocks` owns the
+          confirm step and the actual re-run, same as every other mutation on
+          this surface staying out of this file. */}
+      {showOverride && (
+        <p className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-amber-800">
+          <span>{msg("board.result.overrideHint")}</span>
+          <button
+            type="button"
+            data-testid="schedule-result-override-locks"
+            onClick={onOverrideLocks}
+            className="font-semibold text-amber-900 underline hover:no-underline"
+          >
+            {msg("board.result.overrideButton")}
+          </button>
+        </p>
+      )}
       {/* Above the metrics rather than below them: this is the only line that
           names a consequence outside the board — somebody was told a time that
           is no longer true — and it belongs beside the headline, not filed under

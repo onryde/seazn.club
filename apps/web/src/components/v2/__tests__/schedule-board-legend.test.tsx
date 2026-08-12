@@ -17,9 +17,20 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
 }));
 
+// `usePlural` (#pins-ui) THROWS outside a DictProvider like `useLocale`
+// already did — mirror `useMsg`'s real-catalog fallback rather than a stub.
 vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/i18n/dict-provider")>();
-  return { ...actual, useLocale: () => "en" as const };
+  const { plural: pluralRuntime } = await import("@/lib/i18n-runtime");
+  const { messages } = await import("@/lib/messages");
+  return {
+    ...actual,
+    useLocale: () => "en" as const,
+    usePlural:
+      () =>
+      (key: string, count: number, vars?: Record<string, string | number>) =>
+        pluralRuntime(messages, key, count, "en", vars),
+  };
 });
 
 vi.mock("@/lib/analytics", async (importOriginal) => {

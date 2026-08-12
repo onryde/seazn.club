@@ -3524,5 +3524,18 @@
   "squadRole.coach": "Entraîneur",
   "squadRole.staff": "Encadrement",
   "squadProvenance.named": "Inscrit sur la feuille de match",
-  "squadProvenance.added": "Ajouté en cours de match"
+  "squadProvenance.added": "Ajouté en cours de match",
+  "board.autoSubtitle": "Reconstruit le calendrier. Les cartes verrouillées ne bougent pas.",
+  "board.reflowSubtitle": "Corrige les conflits en déplaçant le moins possible.",
+  "board.autoConfirm.title": "Reconstruire le calendrier ?",
+  "board.autoConfirm.body.one": "1 match est verrouillé et restera où il est.",
+  "board.autoConfirm.body.other": "{count} matchs sont verrouillés et resteront où ils sont.",
+  "board.autoConfirm.confirm": "Continuer",
+  "board.result.lockedKept.one": "1 match verrouillé est resté où il était.",
+  "board.result.lockedKept.other": "{count} matchs verrouillés sont restés où ils étaient.",
+  "board.result.overrideHint": "Les matchs que vous avez verrouillés expliquent peut-être pourquoi tout n'a pas pu tenir.",
+  "board.result.overrideButton": "Relancer en autorisant le déplacement des matchs verrouillés",
+  "board.result.overrideConfirm.title": "Autoriser le déplacement des matchs verrouillés ?",
+  "board.result.overrideConfirm.body": "Cette nouvelle exécution peut déplacer des matchs que vous aviez verrouillés — ils peuvent se retrouver à une autre heure ou sur un autre terrain.",
+  "board.result.overrideConfirm.confirm": "Relancer et autoriser le déplacement"
 }

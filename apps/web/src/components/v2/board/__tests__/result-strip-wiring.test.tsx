@@ -19,9 +19,13 @@
 // "node"` here and there is no jsdom, so a stateful island cannot be clicked.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-/** Every call the hook made, plus the /schedule/auto body it gets back next. */
+/** Every call the hook made, the JSON body sent alongside it (same index), and
+ *  the /schedule/auto body it gets back next. `bodies` is what the #pins-ui
+ *  `ignore_locks` regression reads — the URL alone cannot prove which flag a
+ *  request carried. */
 const net = vi.hoisted(() => ({
   calls: [] as string[],
+  bodies: [] as unknown[],
   auto: {} as Record<string, unknown>,
 }));
 
@@ -29,8 +33,9 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
   return {
     ...actual,
-    apiV1: (url: string) => {
+    apiV1: (url: string, options?: { json?: unknown }) => {
       net.calls.push(url);
+      net.bodies.push(options?.json);
       if (url.endsWith("/schedule/auto")) return Promise.resolve(net.auto);
       if (url.endsWith("/schedule/apply")) return Promise.resolve({ applied: 1, conflicts: [] });
       return Promise.resolve({ conflicts: [] });
@@ -108,6 +113,7 @@ const drivePlaced = () => driveWith(PLACED_FIXTURES);
 describe("autoRun -> result strip wiring", () => {
   beforeEach(() => {
     net.calls = [];
+    net.bodies = [];
     net.auto = {};
   });
 
@@ -121,7 +127,7 @@ describe("autoRun -> result strip wiring", () => {
     const actions = driveHook();
     expect(actions().lastRun).toBeNull();
 
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
 
     expect(actions().lastRun).toEqual({ metrics: METRICS, solver: SOLVER });
   });
@@ -133,7 +139,7 @@ describe("autoRun -> result strip wiring", () => {
     net.auto = { assignments: [], conflicts: [], metrics: { ...METRICS, placed: 0 }, solver: SOLVER };
     const actions = driveHook();
 
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
 
     expect(net.calls.filter((c) => c.endsWith("/schedule/apply"))).toHaveLength(0);
     expect(actions().lastRun?.solver.status).toBe("infeasible");
@@ -147,7 +153,7 @@ describe("autoRun -> result strip wiring", () => {
     };
     const actions = driveHook();
 
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
 
     expect(actions().lastRun).toBeNull();
   });
@@ -160,7 +166,7 @@ describe("autoRun -> result strip wiring", () => {
       solver: SOLVER,
     };
     const actions = driveHook();
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
     expect(actions().lastRun).not.toBeNull();
 
     // The next run's response carries nothing. A stale strip would attribute the
@@ -169,7 +175,7 @@ describe("autoRun -> result strip wiring", () => {
       assignments: [{ fixture_id: "f1", scheduled_at: "2026-08-05T10:00:00.000Z", court_label: "1" }],
       conflicts: [],
     };
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
 
     expect(actions().lastRun).toBeNull();
   });
@@ -195,6 +201,7 @@ describe("autoRun -> result strip wiring", () => {
 describe("a board write clears the previous run's report", () => {
   beforeEach(() => {
     net.calls = [];
+    net.bodies = [];
     net.auto = {
       assignments: [{ fixture_id: "f1", scheduled_at: AT, court_label: "1" }],
       conflicts: [],
@@ -207,7 +214,7 @@ describe("a board write clears the previous run's report", () => {
 
   it("moveCard clears it", async () => {
     const actions = drivePlaced();
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
     expect(actions().lastRun).not.toBeNull();
     net.calls = [];
 
@@ -219,7 +226,7 @@ describe("a board write clears the previous run's report", () => {
 
   it("togglePin clears it", async () => {
     const actions = drivePlaced();
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
     expect(actions().lastRun).not.toBeNull();
     net.calls = [];
 
@@ -231,7 +238,7 @@ describe("a board write clears the previous run's report", () => {
 
   it("shiftDay clears it", async () => {
     const actions = drivePlaced();
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
     expect(actions().lastRun).not.toBeNull();
     net.calls = [];
 
@@ -243,7 +250,7 @@ describe("a board write clears the previous run's report", () => {
 
   it("swapCourts clears it", async () => {
     const actions = drivePlaced();
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
     expect(actions().lastRun).not.toBeNull();
     net.calls = [];
 
@@ -258,7 +265,7 @@ describe("a board write clears the previous run's report", () => {
    *  under the strip can change here too. */
   it("act clears it", async () => {
     const actions = drivePlaced();
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
     expect(actions().lastRun).not.toBeNull();
     net.calls = [];
 
@@ -266,5 +273,91 @@ describe("a board write clears the previous run's report", () => {
 
     expect(net.calls).toContain("/api/v1/divisions/d1/start");
     expect(actions().lastRun).toBeNull();
+  });
+});
+
+/**
+ * `ignore_locks` (#pins-ui) — the ONLY thing that can make a run move a
+ * `schedule_locked` fixture (owner ruling, 2026-08-12). The wire contract is
+ * `.optional()`, never `.default(false)` (schemas.ts): the key must be ABSENT
+ * on every ordinary call, not present-and-false, so a server reading `body
+ * .ignore_locks ?? false` cannot tell "the caller explicitly declined" from
+ * "an older client never heard of this field" — those have to stay the same
+ * request on the wire.
+ *
+ * Every button on the board goes through this ONE `autoRun`, so proving the
+ * fourth argument is the sole source of the flag here is proving it for the
+ * whole surface: nothing downstream can add a second path without a second
+ * `apiV1` call this file would also see.
+ */
+describe("ignore_locks — the escape hatch, and only the escape hatch", () => {
+  beforeEach(() => {
+    net.calls = [];
+    net.bodies = [];
+    net.auto = {
+      assignments: [{ fixture_id: "f1", scheduled_at: "2026-08-05T10:00:00.000Z", court_label: "1" }],
+      conflicts: [],
+    };
+  });
+
+  /** The JSON body of the last `/schedule/auto` call — never the whole
+   *  `net.bodies` array, which also carries the `/schedule/apply` body
+   *  `autoRun` sends right after (a different endpoint, a different shape). */
+  function lastAutoBody(): Record<string, unknown> | undefined {
+    let found: unknown;
+    let seen = false;
+    net.calls.forEach((c, i) => {
+      if (c.endsWith("/schedule/auto")) {
+        found = net.bodies[i];
+        seen = true;
+      }
+    });
+    if (!seen) throw new Error("no /schedule/auto call was recorded");
+    return found as Record<string, unknown> | undefined;
+  }
+
+  it("BUILD (the two-argument call every original caller makes) never sends it", async () => {
+    const actions = driveHook();
+    await actions().autoRun("s1", "d1", false);
+    expect(lastAutoBody()).not.toHaveProperty("ignore_locks");
+  });
+
+  it("REFLOW never sends it", async () => {
+    const actions = driveHook();
+    await actions().autoRun("s1", "d1", true);
+    expect(lastAutoBody()).not.toHaveProperty("ignore_locks");
+  });
+
+  it("POLISH never sends it", async () => {
+    const actions = driveHook();
+    await actions().autoRun("s1", "d1", true, "polish");
+    expect(lastAutoBody()).not.toHaveProperty("ignore_locks");
+  });
+
+  /** An explicit `false` must still OMIT the key — matching the `mode` spread
+   *  immediately above it in `autoRun`, and the schema's own `.optional()`
+   *  reasoning: a present `ignore_locks: false` is indistinguishable on the
+   *  wire from "true, but only sometimes", and the schema doc is explicit
+   *  that must never happen. */
+  it("an explicit ignoreLocks=false ALSO omits the key, never sends false", async () => {
+    const actions = driveHook();
+    await actions().autoRun("s1", "d1", false, undefined, false);
+    expect(lastAutoBody()).not.toHaveProperty("ignore_locks");
+  });
+
+  /** THE positive case — the one call shape allowed to carry it, and the only
+   *  one this suite lets through. */
+  it("ONLY the fourth argument turns it on", async () => {
+    const actions = driveHook();
+    await actions().autoRun("s1", "d1", false, undefined, true);
+    expect(lastAutoBody()).toMatchObject({ ignore_locks: true });
+  });
+
+  /** …and it survives alongside a real mode, since the override re-run must
+   *  repeat whichever solver the infeasible run itself asked for. */
+  it("combines with an explicit mode — reflow, ignoring locks", async () => {
+    const actions = driveHook();
+    await actions().autoRun("s1", "d1", true, "reflow", true);
+    expect(lastAutoBody()).toMatchObject({ only_unlocked: true, mode: "reflow", ignore_locks: true });
   });
 });

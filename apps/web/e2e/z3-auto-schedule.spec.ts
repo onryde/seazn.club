@@ -359,3 +359,106 @@ test("Improve times compacts the board without moving a locked card", async ({ p
   }
   expect(moved.length, "polish left every unlocked card exactly where it was").toBeGreaterThanOrEqual(1);
 });
+
+/**
+ * #pins-ui — the pre-run confirm gate on BUILD. Server-side, a lock is now
+ * honoured on every mode (#pins-in-build); this is the client half: the
+ * organiser has to be TOLD before a rebuild that their pins will hold, with a
+ * way to back out, rather than discovering it after the fact in the result
+ * strip. REFLOW and POLISH already honoured a lock before that change and get
+ * no dialog — only BUILD's behaviour is new enough here to need one.
+ */
+test.describe("Auto-schedule confirm gate (#pins-ui)", () => {
+  /** Build a full 6-fixture board over the API, then lock one already-placed
+   *  fixture — the click under test is a SECOND Auto-schedule, over a board
+   *  that already has a pin on it. */
+  async function seedLockedBoard(request: APIRequestContext, label: string) {
+    const { divisionId, stageId, fixtureIds } = await seedBoard(request, label);
+    const auto = await apiJson<{
+      assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+    }>(request, `/api/v1/stages/${stageId}/schedule/auto`, "POST", { only_unlocked: false });
+    expect(auto.status).toBe(200);
+    const applied = await apiJson<{ applied: number }>(
+      request,
+      `/api/v1/stages/${stageId}/schedule/apply`,
+      "POST",
+      { assignments: auto.data!.assignments, source: "auto" },
+    );
+    expect(applied.data!.applied).toBe(6);
+
+    const lockedId = fixtureIds[0]!;
+    expect(
+      (await apiJson(request, `/api/v1/fixtures/${lockedId}`, "PATCH", { schedule_locked: true }))
+        .status,
+    ).toBe(200);
+    const lockedBefore = await getFixture(request, lockedId);
+    expect(lockedBefore.scheduled_at).not.toBeNull();
+    return { divisionId, fixtureIds, lockedId, lockedBefore };
+  }
+
+  test("Cancel leaves the dialog gone and the board completely untouched", async ({
+    page,
+    request,
+  }) => {
+    const { divisionId, fixtureIds, lockedId } = await seedLockedBoard(request, "GateCancel");
+    const before = new Map<string, string>();
+    for (const id of fixtureIds) before.set(id, slotKey(await getFixture(request, id)));
+
+    await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
+    const autoButton = page.getByTestId("schedule-auto");
+    await expect(autoButton).toBeVisible({ timeout: 30_000 });
+
+    await autoButton.click();
+    const dialog = page.getByTestId("schedule-rebuild");
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    // The count in the dialog body names exactly the one locked fixture —
+    // wrong copy here would say "2 fixtures" on a board with one pin.
+    await expect(dialog).toContainText("1 fixture is locked");
+
+    await page.getByTestId("schedule-rebuild-cancel").click();
+    await expect(dialog).toBeHidden();
+    // No run fired at all: no strip, and nothing on the server moved.
+    await expect(page.getByTestId("schedule-result-strip")).toHaveCount(0);
+    for (const id of fixtureIds) {
+      expect(slotKey(await getFixture(request, id))).toBe(before.get(id));
+    }
+    expect((await getFixture(request, lockedId)).schedule_locked).toBe(true);
+  });
+
+  test("lock -> Auto-schedule -> dialog -> Continue -> the locked fixture is unmoved", async ({
+    page,
+    request,
+  }) => {
+    const { divisionId, lockedId, lockedBefore } = await seedLockedBoard(request, "GateContinue");
+
+    await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
+    const autoButton = page.getByTestId("schedule-auto");
+    await expect(autoButton).toBeVisible({ timeout: 30_000 });
+
+    // THE DIALOG — clicking Auto-schedule over a board with a locked fixture
+    // must NOT run immediately.
+    await autoButton.click();
+    const dialog = page.getByTestId("schedule-rebuild");
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    // Proof the click did not already fire the run: no strip yet, button still
+    // reads as the un-clicked state (re-enabled — it was never disabled).
+    await expect(page.getByTestId("schedule-result-strip")).toHaveCount(0);
+    await expect(autoButton).toBeEnabled();
+
+    await page.getByTestId("schedule-rebuild-confirm").click();
+
+    const strip = page.getByTestId("schedule-result-strip");
+    await expect(strip).toBeVisible({ timeout: 45_000 });
+    await expect(autoButton).toBeEnabled({ timeout: 45_000 });
+    const status = await strip.getAttribute("data-status");
+    expect(SOLVED, `solver reported data-status="${status}"`).toContain(status);
+    // The strip says at least one fixture was kept locked — the report half
+    // of #pins-ui, on the very run the dialog just gated.
+    await expect(page.getByTestId("schedule-result-locked-kept")).toBeVisible();
+
+    // …and the fixture itself kept its EXACT slot, time and court both.
+    const lockedAfter = await getFixture(request, lockedId);
+    expect(slotKey(lockedAfter)).toBe(slotKey(lockedBefore));
+    expect(lockedAfter.schedule_locked).toBe(true);
+  });
+});

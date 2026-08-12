@@ -41,10 +41,14 @@ const solver = (over: Partial<ScheduleSolverInfo> = {}): ScheduleSolverInfo => (
 // React escapes `'` to `&#x27;` in text nodes. Decode it back so the copy
 // assertions read as the copy; attribute delimiters are literal `"` either way,
 // so the `="` anchoring below is unaffected.
-const render = (m: ScheduleMetrics, s: ScheduleSolverInfo) =>
+//
+// `onOverrideLocks` is optional and defaults to undefined here too — every
+// EXISTING call below that omits it is itself a fixture for "the caller wired
+// no callback", the same case `stages-panel.tsx`'s read-only report is in.
+const render = (m: ScheduleMetrics, s: ScheduleSolverInfo, onOverrideLocks?: () => void) =>
   renderToStaticMarkup(
     <DictProvider dict={uiEn} locale="en">
-      <ScheduleResultStrip metrics={m} solver={s} />
+      <ScheduleResultStrip metrics={m} solver={s} onOverrideLocks={onOverrideLocks} />
     </DictProvider>,
   ).replace(/&#x27;/g, "'");
 
@@ -529,5 +533,112 @@ describe("ScheduleResultStrip — lost slots are not the same as unplaced cards"
   it("says nothing when the wire carries no lost count", () => {
     const html = render(metrics({ placed: 18, total: 22 }), solver());
     expect(html).not.toContain('data-testid="schedule-result-lost"');
+  });
+});
+
+/**
+ * `locked_kept` (#pins-ui, owner ruling 2026-08-12) — how many of this stage's
+ * fixtures the run held fixed because they were locked. Always present on a
+ * current server ("this server always sends a real number, never undefined" —
+ * schemas.ts), so 0 and absent are tested as the same case throughout.
+ */
+describe("ScheduleResultStrip — locked fixtures were kept (#pins-ui)", () => {
+  it("reports the count when the run was not infeasible", () => {
+    const html = render(metrics(), solver({ locked_kept: 3 }));
+    expect(html).toContain('data-testid="schedule-result-locked-kept"');
+    expect(html).toContain("3 locked fixtures were kept where they are.");
+  });
+
+  it("uses the singular sentence for exactly one", () => {
+    const html = render(metrics(), solver({ locked_kept: 1 }));
+    expect(html).toContain("1 locked fixture was kept where it is.");
+    expect(html).not.toContain("locked fixtures were kept");
+  });
+
+  it("says nothing when locked_kept is 0", () => {
+    const html = render(metrics(), solver({ locked_kept: 0 }));
+    expect(html).not.toContain('data-testid="schedule-result-locked-kept"');
+  });
+
+  it("says nothing when the wire carries no locked_kept at all", () => {
+    const html = render(metrics(), solver());
+    expect(html).not.toContain('data-testid="schedule-result-locked-kept"');
+  });
+
+  /**
+   * THE overclaim guard. `locked_kept` counts what the solve ANCHORED going
+   * in, not what survived: on a board whose pins contradict each other the
+   * engine places the rest of the locked set fine and drops only the
+   * contradictory ones (`contradictory_pins`), so "N locked fixtures were
+   * kept" would be true of only some of them. The escape hatch below owns the
+   * infeasible narrative instead — this line stays silent rather than
+   * overstate it.
+   */
+  it("is suppressed on an infeasible run even though locked_kept > 0", () => {
+    const html = render(
+      metrics({ placed: 20, total: 22 }),
+      solver({ status: "infeasible", locked_kept: 5 }),
+    );
+    expect(html).not.toContain('data-testid="schedule-result-locked-kept"');
+  });
+});
+
+/**
+ * The infeasible escape hatch (#pins-ui) — the one control on this strip that
+ * can move a fixture the organiser explicitly pinned, so every test here is
+ * either about it appearing exactly when it should, or about it staying gone.
+ */
+describe("ScheduleResultStrip — the infeasible escape hatch (#pins-ui)", () => {
+  it("offers the override when infeasible AND locked_kept > 0, with the callback wired", () => {
+    const html = render(
+      metrics({ placed: 20, total: 22 }),
+      solver({ status: "infeasible", locked_kept: 2 }),
+      () => {},
+    );
+    expect(html).toContain('data-testid="schedule-result-override-locks"');
+    expect(html).toContain("Fixtures you locked may be why this could not all fit.");
+    // Label makes the consequence unmistakable — never a generic "try again".
+    expect(html).toContain("Re-run and allow locked fixtures to move");
+  });
+
+  it("is absent when locked_kept is 0, even on an infeasible run", () => {
+    const html = render(
+      metrics({ placed: 20, total: 22 }),
+      solver({ status: "infeasible", locked_kept: 0 }),
+      () => {},
+    );
+    expect(html).not.toContain('data-testid="schedule-result-override-locks"');
+  });
+
+  it("is absent when the wire carries no locked_kept at all", () => {
+    const html = render(metrics({ placed: 20, total: 22 }), solver({ status: "infeasible" }), () => {});
+    expect(html).not.toContain('data-testid="schedule-result-override-locks"');
+  });
+
+  it("is absent on a non-infeasible run even with locked_kept > 0", () => {
+    const html = render(metrics(), solver({ status: "ok", locked_kept: 3 }), () => {});
+    expect(html).not.toContain('data-testid="schedule-result-override-locks"');
+  });
+
+  /** `stages-panel.tsx` renders this component read-only, off a saved report
+   *  with no `autoRun` to repeat — the missing callback is that caller, not a
+   *  mistake, and must not crash into "onClick is not a function". */
+  it("is absent when the caller wires no callback at all", () => {
+    const html = render(metrics({ placed: 20, total: 22 }), solver({ status: "infeasible", locked_kept: 2 }));
+    expect(html).not.toContain('data-testid="schedule-result-override-locks"');
+  });
+
+  /** Shape, not colour, is what demotes this control (frontend-design
+   *  direction, #pins-ui): it must never carry the `.btn` family any real
+   *  board action uses, or it stops reading as secondary regardless of tone. */
+  it("is never styled as a button — no .btn chrome class", () => {
+    const html = render(
+      metrics({ placed: 20, total: 22 }),
+      solver({ status: "infeasible", locked_kept: 2 }),
+      () => {},
+    );
+    const m = /data-testid="schedule-result-override-locks"[^>]*class="([^"]*)"/.exec(html);
+    expect(m).not.toBeNull();
+    expect(m![1]).not.toMatch(/\bbtn\b/);
   });
 });
