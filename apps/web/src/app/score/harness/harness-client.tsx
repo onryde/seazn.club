@@ -9,6 +9,16 @@ import { sessionTransport } from "@/components/v2/scorepad/transport";
 import type { PadTransport } from "@/components/v2/scorepad/transport";
 import type { AppendCallResult } from "@/components/v2/scorepad/pipeline";
 import type { LedgerSlotEvent } from "@/components/v2/scorepad/types";
+// S10/#419 W8 e2e pass — the attribution picker is a typed seam on
+// PadRenderer (`renderAttribution`), deliberately left unwired by the
+// chassis session (its own header: "a later pass"). Without it, an action
+// with a REQUIRED attribution item (generic.score's `by`) can still be
+// confirmed (view-model.ts's checkActionValidity only gates on `fields`,
+// never `attribution` — by design, see its own header), but the built
+// payload omits `by` entirely and the server 422s. Wiring the ALREADY
+// shipped, reviewed picker here — not editing it — is what lets the
+// harness submit a real attributed action end to end.
+import { AttributionPicker } from "@/components/v2/scorepad/attribution-picker";
 
 /**
  * S10/#419 — see `page.tsx` for why this route exists and when it is deleted.
@@ -28,10 +38,15 @@ import type { LedgerSlotEvent } from "@/components/v2/scorepad/types";
 
 const HARNESS_PERSON_IDS = ["h-1", "h-2", "h-3", "a-1", "a-2", "a-3"] as const;
 
-function harnessLineups(): LineupPair {
+/** `home`/`away` default to the synthetic ids (every pre-existing no-fixture
+ *  screenshot caller) but a `?fixture=` caller supplying the real
+ *  `home_entrant_id`/`away_entrant_id` gets those folded in instead — see
+ *  page.tsx's SearchParams comment for why that is load-bearing for a real
+ *  attributed submit rather than cosmetic. */
+function harnessLineups(home?: string | null, away?: string | null): LineupPair {
   return {
     home: {
-      entrantId: "harness-home",
+      entrantId: home ?? "harness-home",
       slots: [
         { personId: "h-1", slot: "starting", orderNo: 1, squadNumber: 1, positionKey: "GK" },
         { personId: "h-2", slot: "starting", orderNo: 2, squadNumber: 7 },
@@ -39,7 +54,7 @@ function harnessLineups(): LineupPair {
       ],
     },
     away: {
-      entrantId: "harness-away",
+      entrantId: away ?? "harness-away",
       slots: [
         { personId: "a-1", slot: "starting", orderNo: 1, squadNumber: 1, positionKey: "GK" },
         { personId: "a-2", slot: "starting", orderNo: 2, squadNumber: 9 },
@@ -101,6 +116,8 @@ export interface HarnessClientProps {
   fixtureId: string | null;
   band: FidelityBand;
   locked: boolean;
+  homeEntrantId: string | null;
+  awayEntrantId: string | null;
 }
 
 type Resolution =
@@ -131,6 +148,16 @@ export function HarnessClient(props: HarnessClientProps) {
     }
   }, [props.sportKey, props.variant]);
   const resolved = resolution.ok ? resolution : null;
+
+  // ONE stable lineups object per (home, away) pair — shared by PadRenderer's
+  // fold AND the attribution picker below, so both agree on the same entrant
+  // ids (two independent `harnessLineups()` calls would produce equal VALUES
+  // but different object identities, which is harmless here but pointless
+  // churn — see harnessLineups's own header for the real reason this exists).
+  const lineups = useMemo(
+    () => harnessLineups(props.homeEntrantId, props.awayEntrantId),
+    [props.homeEntrantId, props.awayEntrantId],
+  );
 
   const transport = useMemo(
     () => (props.fixtureId ? sessionTransport() : localTransport()),
@@ -167,12 +194,15 @@ export function HarnessClient(props: HarnessClientProps) {
         module={resolved.mod}
         cfg={resolved.cfg}
         fixtureId={props.fixtureId ?? "harness-fixture"}
-        lineups={harnessLineups()}
+        lineups={lineups}
         identity={{ recordedBy: null, deviceLinkId: null }}
         transport={transport}
         band={props.band}
         entitlements={entitlements}
         queueDbName={`scorepad-harness-${props.sportKey}`}
+        renderAttribution={(action, values, setValue) => (
+          <AttributionPicker action={action} values={values} setValue={setValue} lineups={lineups} />
+        )}
       />
       <p className="sr-only">{HARNESS_PERSON_IDS.join(" ")}</p>
     </main>

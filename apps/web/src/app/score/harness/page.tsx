@@ -25,6 +25,20 @@ interface SearchParams {
   fixture?: string;
   band?: string;
   locked?: string;
+  // S10/#419 W8 e2e pass — `?fixture=` drives the REAL API, but this
+  // component's own `lineups` were previously hardcoded synthetic entrant
+  // ids ("harness-home"/"harness-away") that never match a real fixture's
+  // real `home_entrant_id`/`away_entrant_id`. An action with a `side`
+  // attribution item (e.g. generic.score's `by`) folds fine against the
+  // synthetic ids client-side, but the SERVER's fold is seeded from the
+  // real fixture's real entrants (loadLineupPair, server/engine-db/
+  // lineups.ts) and 422s ("unknown entrant") on anything else. These two
+  // optional params let a `?fixture=` caller supply the real ids so a real
+  // attributed action can actually be submitted end to end. Absent (every
+  // pre-existing no-fixture screenshot use) falls back to the synthetic
+  // ids exactly as before — see harness-client.tsx's `harnessLineups`.
+  home?: string;
+  away?: string;
 }
 
 export default async function ScorepadHarnessPage(props: {
@@ -40,6 +54,8 @@ export default async function ScorepadHarnessPage(props: {
       fixtureId={params.fixture ?? null}
       band={band === 0 || band === 1 || band === 2 || band === 3 ? band : 3}
       locked={params.locked === "1"}
+      homeEntrantId={params.home ?? null}
+      awayEntrantId={params.away ?? null}
     />
   );
 }
