@@ -3643,5 +3643,16 @@
   "scorepad.fidelity.cancel": "Conserver le niveau actuel",
   "scorepad.action.confirm": "Confirmer",
   "scorepad.action.cancel": "Annuler",
-  "scorepad.field.choose": "Choisir…"
+  "scorepad.field.choose": "Choisir…",
+  "scorepad.attribution.side": "Côté",
+  "scorepad.attribution.person": "Personne",
+  "scorepad.attribution.home": "Domicile",
+  "scorepad.attribution.away": "Extérieur",
+  "scorepad.attribution.noRoster": "Aucun effectif disponible pour le moment.",
+  "scorepad.timeline.heading": "Activité",
+  "scorepad.timeline.empty": "Aucun événement enregistré pour le moment.",
+  "scorepad.timeline.void": "Annuler",
+  "scorepad.timeline.voided": "annulé",
+  "scorepad.timeline.unknownRecorder": "Marqueur",
+  "scorepad.timeline.devicePad": "Enregistré depuis un appareil lié"
 }

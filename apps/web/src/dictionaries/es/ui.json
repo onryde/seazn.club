@@ -3643,5 +3643,16 @@
   "scorepad.fidelity.cancel": "Mantener el nivel actual",
   "scorepad.action.confirm": "Confirmar",
   "scorepad.action.cancel": "Cancelar",
-  "scorepad.field.choose": "Elige…"
+  "scorepad.field.choose": "Elige…",
+  "scorepad.attribution.side": "Lado",
+  "scorepad.attribution.person": "Persona",
+  "scorepad.attribution.home": "Local",
+  "scorepad.attribution.away": "Visitante",
+  "scorepad.attribution.noRoster": "Todavía no hay una alineación disponible.",
+  "scorepad.timeline.heading": "Actividad",
+  "scorepad.timeline.empty": "Todavía no hay eventos registrados.",
+  "scorepad.timeline.void": "Deshacer",
+  "scorepad.timeline.voided": "deshecho",
+  "scorepad.timeline.unknownRecorder": "Anotador",
+  "scorepad.timeline.devicePad": "Registrado desde un dispositivo vinculado"
 }

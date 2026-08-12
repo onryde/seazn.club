@@ -3643,5 +3643,16 @@
   "scorepad.fidelity.cancel": "Keep current level",
   "scorepad.action.confirm": "Confirm",
   "scorepad.action.cancel": "Cancel",
-  "scorepad.field.choose": "Choose…"
+  "scorepad.field.choose": "Choose…",
+  "scorepad.attribution.side": "Side",
+  "scorepad.attribution.person": "Person",
+  "scorepad.attribution.home": "Home",
+  "scorepad.attribution.away": "Away",
+  "scorepad.attribution.noRoster": "No roster available yet.",
+  "scorepad.timeline.heading": "Activity",
+  "scorepad.timeline.empty": "No events recorded yet.",
+  "scorepad.timeline.void": "Undo",
+  "scorepad.timeline.voided": "undone",
+  "scorepad.timeline.unknownRecorder": "Scorer",
+  "scorepad.timeline.devicePad": "Recorded from a linked device"
 }

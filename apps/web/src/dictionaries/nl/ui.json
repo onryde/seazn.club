@@ -3643,5 +3643,16 @@
   "scorepad.fidelity.cancel": "Huidig niveau behouden",
   "scorepad.action.confirm": "Bevestigen",
   "scorepad.action.cancel": "Annuleren",
-  "scorepad.field.choose": "Kies…"
+  "scorepad.field.choose": "Kies…",
+  "scorepad.attribution.side": "Kant",
+  "scorepad.attribution.person": "Persoon",
+  "scorepad.attribution.home": "Thuis",
+  "scorepad.attribution.away": "Uit",
+  "scorepad.attribution.noRoster": "Nog geen opstelling beschikbaar.",
+  "scorepad.timeline.heading": "Activiteit",
+  "scorepad.timeline.empty": "Nog geen gebeurtenissen geregistreerd.",
+  "scorepad.timeline.void": "Ongedaan maken",
+  "scorepad.timeline.voided": "ongedaan gemaakt",
+  "scorepad.timeline.unknownRecorder": "Scorer",
+  "scorepad.timeline.devicePad": "Geregistreerd vanaf een gekoppeld apparaat"
 }
