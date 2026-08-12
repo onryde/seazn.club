@@ -42,7 +42,6 @@ import {
   type VerifyConfig,
 } from "@seazn/engine/scheduling";
 import { appendDivisionEvent } from "@/server/engine-db";
-import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   ScheduleConfig,
@@ -1787,41 +1786,6 @@ export async function applySchedule(
       throw new HttpError(422, "the division schedule is locked — unlock it to edit");
     }
     const byId = new Map(all.map((f) => [f.id, f]));
-    // #pins-in-build Task 1 (narrowed 2026-08-12, owner ruling after review):
-    // the apply-time twin of `pinnedIds` in `autoSchedule` — a lock toggled
-    // DURING a multi-second solve must still be honoured when the stale
-    // proposal comes back to be applied, not just when it was first computed
-    // (`assertFreshSeq` no-ops without an `expected_seq`, and neither
-    // auto-apply caller sends one). Reuses `lockedFixtureIds` rather than a
-    // fourth hand-written copy of "is this fixture locked" — by the time a
-    // fixture reaches this check it has already survived the `scopeLocked`
-    // throw above, so membership here can only come from `f.schedule_locked`.
-    //
-    // The threat this closes is narrower than "a locked fixture may never
-    // move here": it is a STALE SOLVER PROPOSAL overwriting a lock the
-    // organiser set after the solve started — `source: "auto"`/`"ai"` only.
-    // TWO exemptions, both deliberate organiser actions through THIS
-    // endpoint, never races, and NEITHER may be re-narrowed away again
-    // without re-reading this comment:
-    //   - `input.source === "manual"` — `moveFixture` (the single-card drag
-    //     path, below) never checks `schedule_locked` at all, and its own
-    //     comment documents the identical reasoning for scope locks
-    //     explicitly ("a targeted move is the escape hatch"). Blocking a
-    //     manual multi-card apply while the single-card drag stays open
-    //     would be incoherent and would break the board's manual
-    //     assignment-set path — this is that same escape hatch, just wider.
-    //   - `a.schedule_locked === false` on the assignment itself — an
-    //     explicit unlock-and-move in one call, which the write loop below
-    //     already supports (`schedule_locked = ${a.schedule_locked ??
-    //     f.schedule_locked}`). Rejecting it would make an explicit unlock
-    //     impossible through this endpoint.
-    // Neither exemption is a blanket bypass: both still hit the
-    // `scopeLocked` throw above like every other assignment, and every OTHER
-    // call (source "auto"/"ai", no explicit unlock) still gets the
-    // "unchanged" check below — a successful solve legitimately returns a
-    // locked fixture back at its own pinned placement, and that assignment
-    // must keep passing.
-    const lockedIds = lockedFixtureIds(all, lockState.scopes, false);
     for (const a of input.assignments) {
       const f = byId.get(a.fixture_id);
       if (!f || f.stage_id !== stageId) {
@@ -1832,23 +1796,6 @@ export async function applySchedule(
       }
       if (scopeLocked(f, lockState.scopes)) {
         throw new HttpError(422, `fixture ${a.fixture_id} is inside a locked scope`);
-      }
-      if (lockedIds.has(f.id) && input.source !== "manual" && a.schedule_locked !== false) {
-        // `f.scheduled_at`/`f.court_label` are guaranteed non-null here —
-        // `lockedFixtureIds` only admits a fixture with something to anchor
-        // to. Compare on epoch ms, never string equality: `f.scheduled_at`
-        // is a `string | Date` off the DB row and `a.scheduled_at` is an ISO
-        // string on the wire, so two spellings of the same instant (or a
-        // `Date` vs a string) would otherwise read as a move.
-        const unchanged =
-          ms(f.scheduled_at as string | Date) === ms(a.scheduled_at) && f.court_label === a.court_label;
-        if (!unchanged) {
-          log.warn(
-            { fixtureId: a.fixture_id, divisionId: stage.division_id },
-            "schedule: applySchedule rejected a move onto a locked fixture",
-          );
-          throw new HttpError(422, `fixture ${a.fixture_id} is locked — unlock it before moving`);
-        }
       }
     }
 
