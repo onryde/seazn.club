@@ -7,7 +7,8 @@ import { PadRenderer } from "@/components/v2/scorepad/pad-renderer";
 import { resolveModuleClient } from "@/components/v2/scorepad/module-client";
 import { sessionTransport } from "@/components/v2/scorepad/transport";
 import type { PadTransport } from "@/components/v2/scorepad/transport";
-import type { AppendCallResult, LedgerSlotEvent } from "@/components/v2/scorepad/types";
+import type { AppendCallResult } from "@/components/v2/scorepad/pipeline";
+import type { LedgerSlotEvent } from "@/components/v2/scorepad/types";
 
 /**
  * S10/#419 — see `page.tsx` for why this route exists and when it is deleted.
