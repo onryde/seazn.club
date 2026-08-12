@@ -1,6 +1,6 @@
 # P7 — Multi-stage templates (D1b)
 
-Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → specs
+Read first: `_RULES.md` → `_INDEX.md` → specs
 `../designs/2026-08-13-format-templates-design.md` +
 `../designs/2026-08-13-stage-progression-design.md`. Depends on P4 AND P5 merged
 (consumes `StageSeeding`). Worktree + fresh branch.
@@ -48,6 +48,16 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/p
 rtk proxy npm run lint
 npm run openapi:gen && git status --porcelain
 ```
+
+## Execution & close
+
+**Scout (Sonnet High):** re-pin P4's shipped schema + P5's
+`StageSeeding` export path. **Implementer (Sonnet MAX):** import, never
+redeclare, the seeding schema; euro24's best-thirds map is the
+hardest catalog entry — build it first. **Reviewer (Sonnet MAX):**
+single-vocabulary check (no seeding type fork), P4 entries byte-stable,
+TBD slot counts on instantiation; gap list only. Close per
+`_RULES.md` §5.
 
 ## Output cap
 

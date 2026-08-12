@@ -1,6 +1,6 @@
 # P8 — Venues & courts: schema + API + org UI (D5a)
 
-Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
+Read first: `_RULES.md` → `_INDEX.md` → spec
 `../designs/2026-08-13-venues-courts-design.md`. **Gate: release-2 C-chain done**
 (check its index) + owner green-light. Worktree + fresh branch.
 
@@ -59,6 +59,16 @@ rtk proxy npm run lint
 npm run openapi:gen && git status --porcelain
 node scripts/check-rls.ts   # or its npm alias — scout confirms invocation
 ```
+
+## Execution & close
+
+**Scout (Sonnet High):** re-pin org-settings page tree + the
+org-resource ACL pattern + `check-rls.ts` invocation. **Implementer
+(Sonnet MAX):** spec's API surface + deletion rules verbatim;
+calendar editor mobile-first (per-day list). **Reviewer (Sonnet MAX):**
+RLS error CODES (not bare 4xx), hours-overlap validation, 320px
+calendar editor screenshot present, `court.in_use`/`venue.not_empty`
+paths tested; gap list only. Close per `_RULES.md` §5.
 
 ## Output cap
 

@@ -1,6 +1,6 @@
 # P9 — Venues & courts: scheduler integration + stored-config migration (D5b)
 
-Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
+Read first: `_RULES.md` → `_INDEX.md` → spec
 `../designs/2026-08-13-venues-courts-design.md`. Depends on P8. Same external
 gate as P8. Worktree + fresh branch. **Riskiest session of the
 portfolio — the stored-config migration.**
@@ -60,6 +60,17 @@ rtk proxy npm run lint
 cd packages/engine && npx tsc --noEmit; echo EXIT=$?
 npm run openapi:gen && git status --porcelain
 ```
+
+## Execution & close
+
+**Scout (Sonnet High):** the `court_label` reader sweep is THE
+deliverable — every reader named or the migration ships blind; re-pin
+post-C-chain `schedule.ts`/`build.ts`. **Implementer (Sonnet MAX):**
+spec's Migration order verbatim: dry-run report BEFORE rewrite;
+byte-equivalence regression between V-b and the code switch.
+**Reviewer (Sonnet MAX):** no tolerant union left in zod, no reader
+missed (diff scout list vs touched files), both-ways gate run
+evidenced; gap list only. Close per `_RULES.md` §5.
 
 ## Output cap
 

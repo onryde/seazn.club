@@ -1,6 +1,6 @@
 # P10 — Venues & courts: calendars → lattice (D5c)
 
-Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
+Read first: `_RULES.md` → `_INDEX.md` → spec
 `../designs/2026-08-13-venues-courts-design.md`. Depends on P9. Same external
 gate. Worktree + fresh branch.
 
@@ -53,6 +53,17 @@ rtk proxy npm run lint
 cd packages/engine && npx tsc --noEmit; echo EXIT=$?
 npm run openapi:gen && git status --porcelain
 ```
+
+## Execution & close
+
+**Scout (Sonnet High):** re-pin lattice assembly + validate path;
+confirm D2/D3 merge state for the additive inputs. **Implementer
+(Sonnet MAX):** spec's `usableWindows` algorithm verbatim — civil
+local times, org tz, no UTC arithmetic. **Reviewer (Sonnet MAX):** ONE
+consumer set for `usableWindows` (grep for an inlined second copy —
+the placer/verifier fork), DST both directions tested, no-calendar
+byte-identity regression present; gap list only. Close per
+`_RULES.md` §5.
 
 ## Output cap
 

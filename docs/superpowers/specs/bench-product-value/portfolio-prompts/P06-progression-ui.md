@@ -1,6 +1,6 @@
 # P6 — Stage progression: proposal UI + confirm flow (D4b)
 
-Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
+Read first: `_RULES.md` → `_INDEX.md` → spec
 `../designs/2026-08-13-stage-progression-design.md`. Depends on P5 merged.
 Worktree + fresh branch.
 
@@ -54,6 +54,16 @@ npm run openapi:gen && git status --porcelain   # UI-only session: must stay emp
 
 E2E per the local recipe (fresh port, prod server, `E2E_PROD_TARGET`) —
 never enable `.github/workflows/e2e.yml`.
+
+## Execution & close
+
+**Scout (Sonnet High):** enumerate every fixture-rendering component
+(org + public) — the TBD-label surface list. **Implementer (Sonnet
+MAX):** run e2e in the MAIN thread (never a subagent — 600s watchdog);
+fresh browser context for any second-user flow. **Reviewer (Sonnet
+MAX):** `="` anchors on mixed filled/TBD assertions, UI-text grep
+across both e2e phases done, destructive-dialog path tested; gap list
+only. Close per `_RULES.md` §5.
 
 ## Output cap
 

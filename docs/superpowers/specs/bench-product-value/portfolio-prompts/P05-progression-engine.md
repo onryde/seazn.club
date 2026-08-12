@@ -1,6 +1,6 @@
 # P5 — Stage progression: seeding rules + TBD fixtures + fill engine (D4a)
 
-Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
+Read first: `_RULES.md` → `_INDEX.md` → spec
 `../designs/2026-08-13-stage-progression-design.md`. Worktree + fresh branch.
 Server/engine only — UI is P6.
 
@@ -64,6 +64,18 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/p
 rtk proxy npm run lint
 npm run openapi:gen && git status --porcelain
 ```
+
+## Execution & close
+
+**Scout (Sonnet High):** re-pin `stages.ts` anchors + enumerate EVERY
+nullable-entrant fixture reader (public pages, stats, exports, scoring
+guard) — that list is the implementer's blast-radius map.
+**Implementer (Sonnet MAX):** spec's Fill algorithm + API contracts
+verbatim; TDD; the non-destructive regression lands FIRST (red against
+a naive regen implementation). **Reviewer (Sonnet MAX):** byte-compare
+(not shape-compare) on the non-destructive guarantee, ONE fill pathway
+(grep for a second cross-stage fill fork), scoring-guard 422 code; gap
+list only. Close per `_RULES.md` §5.
 
 ## Output cap
 

@@ -1,6 +1,6 @@
 # P11 — Batch score-event import (D6)
 
-Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
+Read first: `_RULES.md` → `_INDEX.md` → spec
 `../designs/2026-08-13-batch-event-import-design.md`. **Gate: ScoringPad S13
 done** (check its index) + owner green-light. Worktree + fresh branch.
 
@@ -58,6 +58,16 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/p
 rtk proxy npm run lint
 npm run openapi:gen && git status --porcelain
 ```
+
+## Execution & close
+
+**Scout (Sonnet High):** re-pin post-S13 `scoreEvent` internals + the
+decided-fixture side-effect chain (outcome/standings/stats/news) — the
+import must inherit ALL of it. **Implementer (Sonnet MAX):** spec's
+Execution semantics verbatim; the twin-fixture regression lands first.
+**Reviewer (Sonnet MAX):** no reimplemented append (diff the write
+path against `scoreEvent`'s), idempotency at DDL level, side effects
+fired exactly once on replay; gap list only. Close per `_RULES.md` §5.
 
 ## Output cap
 
