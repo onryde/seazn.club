@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { LineupPair } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
 import { PadRenderer } from "@/components/v2/scorepad/pad-renderer";
@@ -103,10 +103,14 @@ export interface HarnessClientProps {
   locked: boolean;
 }
 
-export function HarnessClient(props: HarnessClientProps) {
-  const [error, setError] = useState<string | null>(null);
+type Resolution =
+  | { ok: true; mod: ReturnType<typeof resolveModuleClient>; cfg: unknown }
+  | { ok: false; message: string };
 
-  const resolved = useMemo(() => {
+export function HarnessClient(props: HarnessClientProps) {
+  // Resolution is a VALUE, never state set during render: a `setState` inside
+  // `useMemo` is a render-phase side effect (and an eslint error here).
+  const resolution = useMemo((): Resolution => {
     try {
       const mod = resolveModuleClient(props.sportKey, "1.0.0");
       // A bare `{}` is NOT a legal cfg for every module — generic's
@@ -119,14 +123,14 @@ export function HarnessClient(props: HarnessClientProps) {
         : [{}, ...Object.values(mod.variants)];
       for (const candidate of candidates) {
         const parsed = mod.configSchema.safeParse({ ...candidate });
-        if (parsed.success) return { mod, cfg: parsed.data };
+        if (parsed.success) return { ok: true, mod, cfg: parsed.data };
       }
-      return { mod, cfg: mod.configSchema.parse({ ...(candidates[0] ?? {}) }) };
+      return { ok: true, mod, cfg: mod.configSchema.parse({ ...(candidates[0] ?? {}) }) };
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      return null;
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
     }
   }, [props.sportKey, props.variant]);
+  const resolved = resolution.ok ? resolution : null;
 
   const transport = useMemo(
     () => (props.fixtureId ? sessionTransport() : localTransport()),
@@ -147,11 +151,11 @@ export function HarnessClient(props: HarnessClientProps) {
     return granted;
   }, [resolved, props.locked]);
 
-  if (error !== null || resolved === null) {
+  if (resolved === null) {
     return (
       <main className="p-6">
         <p data-testid="harness-error" className="text-sm text-red-700">
-          {error ?? "module unavailable"}
+          {resolution.ok ? "module unavailable" : resolution.message}
         </p>
       </main>
     );
