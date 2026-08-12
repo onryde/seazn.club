@@ -5,7 +5,7 @@
 // unscheduled section with an auto-schedule CTA, "Now playing" strip, inline
 // reschedule with undo, bye/void ghost rows, sticky round headers on mobile,
 // print via the DocModel timetable export. Scoring lives on the fixture page.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
@@ -54,6 +54,14 @@ interface FixtureRow {
 
 interface Props {
   divisionId: string;
+  /** The division's event-ledger head (`DivisionRow.seq`, gap 10) at render
+   *  time — this panel's `autoScheduleStage` (#pins-ui, owner ruling
+   *  2026-08-12) sends it as `expected_seq` on the apply, exactly as the
+   *  board's own optimistic-concurrency token does. Without it a lock toggled
+   *  while the solve was running was silently overwritten by the stale
+   *  proposal (`assertFreshSeq` no-ops on an absent token) — this panel never
+   *  held the division's watermark before, so it never had anything to send. */
+  divisionSeq: number;
   /** Competition id — the Admit tickets export is competition-scoped. */
   competitionId: string;
   orgSlug: string;
@@ -171,10 +179,19 @@ export function boardSlotOptionsFor(
   }
 }
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, canEdit, tz, orgTz, canExport }: Props) {
+export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, canEdit, tz, orgTz, canExport }: Props) {
   const msg = useMsg();
   const confirmDialog = useConfirm();
   const router = useRouter();
+  // Optimistic-concurrency token (v3/11 gap 10), mirroring use-board-actions
+  // .ts's `seqRef` for this panel's one division: the ref is what
+  // `autoScheduleStage` reads/bumps between writes, resynced from the prop on
+  // every server refresh so a write right after `router.refresh()` lands
+  // never races a value that predates it.
+  const divisionSeqRef = useRef(divisionSeq);
+  useEffect(() => {
+    divisionSeqRef.current = divisionSeq;
+  }, [divisionSeq]);
   const [error, setError] = useState<string | null>(null);
   const [paywallFeature, setPaywallFeature] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // stage id in flight
@@ -242,35 +259,77 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   }
 
   // "Auto-schedule remaining" (v3/04 §3 item 3) — the board's propose+apply
-  // pair for one stage, launched from the pinned unscheduled section.
+  // pair for one stage, launched from the pinned unscheduled section. A
+  // SECOND, independent implementation of the same propose+apply pair
+  // use-board-actions.ts's `autoRun` runs for the board — see that file for
+  // why the shape below (a `solve`/`applyOnce`/`propose` split, one silent
+  // retry on SEQ_CONFLICT) is not shared code: same defect, same owner
+  // ruling, two call sites the brief scoped separately.
   async function autoScheduleStage(stageId: string) {
     setError(null);
     setNotice(null);
     setLastRun(null);
     setBusy(stageId);
     try {
-      const out = await apiV1<{
+      type Proposal = {
         assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
-        // OPTIONAL even though Task 9 populates both: a cached response, or a
-        // server one deploy behind, carries neither, and a strip of zeros is a
-        // worse answer than no strip.
         metrics?: ScheduleMetrics;
         solver?: ScheduleSolverInfo;
-      }>(`/api/v1/stages/${stageId}/schedule/auto`, { method: "POST", json: { only_unlocked: true } });
-      // BEFORE the empty-proposal return, not after. This CTA fires from the
+      };
+      const solve = () =>
+        apiV1<Proposal>(`/api/v1/stages/${stageId}/schedule/auto`, {
+          method: "POST",
+          json: { only_unlocked: true },
+        });
+
+      const applyOnce = (assignments: Proposal["assignments"], expectedSeq: number | undefined) =>
+        apiV1<{ applied: number }>(`/api/v1/stages/${stageId}/schedule/apply`, {
+          method: "POST",
+          json: { assignments, source: "auto", expected_seq: expectedSeq },
+        });
+
+      // BEFORE the empty-proposal check, not after. This CTA fires from the
       // UNSCHEDULED section, so "the solver could place none of them" is the
-      // ordinary shape of a bad run here — and it is exactly the run whose report
-      // the organiser needs. Capturing after the return would hide the strip on
-      // the only board that has to explain itself.
-      if (out.metrics && out.solver) setLastRun({ metrics: out.metrics, solver: out.solver });
-      if (out.assignments.length === 0) {
-        setNotice(msg("schedule.notice.nothingToSchedule"));
-        return;
+      // ordinary shape of a bad run here — and it is exactly the run whose
+      // report the organiser needs. Capturing after the check would hide the
+      // strip on the only board that has to explain itself.
+      const propose = async (): Promise<Proposal | null> => {
+        const out = await solve();
+        // OPTIONAL even though Task 9 populates both: a cached response, or a
+        // server one deploy behind, carries neither, and a strip of zeros is
+        // a worse answer than no strip.
+        if (out.metrics && out.solver) setLastRun({ metrics: out.metrics, solver: out.solver });
+        if (out.assignments.length === 0) {
+          setNotice(msg("schedule.notice.nothingToSchedule"));
+          return null;
+        }
+        return out;
+      };
+
+      const out = await propose();
+      if (!out) return;
+
+      let expectedSeq = divisionSeqRef.current;
+      let applied: { applied: number };
+      try {
+        applied = await applyOnce(out.assignments, expectedSeq);
+      } catch (err) {
+        if (!(err instanceof ApiV1Error) || err.code !== "SEQ_CONFLICT") throw err;
+        // #pins-ui, owner ruling 2026-08-12 — same treatment as the board's
+        // autoRun: the lock toggled mid-solve, so silently re-solve ONCE
+        // against the fresh board and apply THAT, rather than force the stale
+        // (possibly now-illegal) proposal through or surface an error the
+        // organiser did nothing to cause. `current_seq` rides on the 409
+        // itself (server/api-v1/http.ts) — no need to wait on
+        // `router.refresh()` to repopulate this panel's props first.
+        expectedSeq = typeof err.extra.current_seq === "number" ? err.extra.current_seq : expectedSeq;
+        const retryOut = await propose();
+        if (!retryOut) return;
+        // A SECOND SEQ_CONFLICT here is NOT caught — it propagates to the
+        // outer catch and surfaces normally. Exactly one automatic retry.
+        applied = await applyOnce(retryOut.assignments, expectedSeq);
       }
-      const applied = await apiV1<{ applied: number }>(`/api/v1/stages/${stageId}/schedule/apply`, {
-        method: "POST",
-        json: { assignments: out.assignments, source: "auto" },
-      });
+      divisionSeqRef.current = (expectedSeq ?? 0) + 1;
       setNotice(msg("schedule.notice.placed", { n: applied.applied }));
       setUndoable(true);
       router.refresh();

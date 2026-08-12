@@ -72,6 +72,7 @@ const FIXTURE = {
 
 const baseProps = {
   divisionId: "d1",
+  divisionSeq: 5,
   competitionId: "c1",
   orgSlug: "org",
   compSlug: "comp",

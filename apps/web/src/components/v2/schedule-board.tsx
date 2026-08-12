@@ -586,9 +586,9 @@ export function ScheduleBoard({
     }
     return counts;
   }, [board]);
-  const [pendingBuild, setPendingBuild] = useState<{ stageId: string; locked: number } | null>(
-    null,
-  );
+  const [pendingBuild, setPendingBuild] = useState<
+    { stageId: string; divisionId: string; locked: number } | null
+  >(null);
   /** The params of whichever run last populated `actions.lastRun`, so the
    *  infeasible escape hatch can repeat the SAME request with
    *  `ignore_locks: true` rather than silently switching solver. Reading it is
@@ -598,13 +598,20 @@ export function ScheduleBoard({
    *  its run is simply never read. */
   const [lastRunParams, setLastRunParams] = useState<{
     stageId: string;
+    divisionId: string;
     onlyUnlocked: boolean;
     mode?: AutoScheduleMode;
   } | null>(null);
   const runAuto = useCallback(
-    (stageId: string, onlyUnlocked: boolean, mode?: AutoScheduleMode, ignoreLocks?: boolean) => {
-      setLastRunParams({ stageId, onlyUnlocked, mode });
-      return actions.autoRun(stageId, onlyUnlocked, mode, ignoreLocks);
+    (
+      stageId: string,
+      divisionId: string,
+      onlyUnlocked: boolean,
+      mode?: AutoScheduleMode,
+      ignoreLocks?: boolean,
+    ) => {
+      setLastRunParams({ stageId, divisionId, onlyUnlocked, mode });
+      return actions.autoRun(stageId, divisionId, onlyUnlocked, mode, ignoreLocks);
     },
     [actions],
   );
@@ -1008,8 +1015,8 @@ export function ScheduleBoard({
                       // A confirm step only when THIS stage's rebuild would
                       // touch a locked fixture — with zero locks the click
                       // runs exactly as it always did (owner ruling).
-                      if (locked > 0) setPendingBuild({ stageId: s.id, locked });
-                      else void runAuto(s.id, false);
+                      if (locked > 0) setPendingBuild({ stageId: s.id, divisionId: s.division_id, locked });
+                      else void runAuto(s.id, s.division_id, false);
                     }}
                     className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
                   >
@@ -1027,7 +1034,7 @@ export function ScheduleBoard({
                     type="button"
                     data-testid="schedule-reflow"
                     disabled={actions.busy}
-                    onClick={() => void runAuto(s.id, true)}
+                    onClick={() => void runAuto(s.id, s.division_id, true)}
                     className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
                     title={msg("board.reflowTitle")}
                   >
@@ -1049,7 +1056,7 @@ export function ScheduleBoard({
                   type="button"
                   data-testid="schedule-polish"
                   disabled={actions.busy}
-                  onClick={() => void runAuto(s.id, true, "polish")}
+                  onClick={() => void runAuto(s.id, s.division_id, true, "polish")}
                   className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
                   title={msg("board.polishTitle")}
                 >
@@ -1445,7 +1452,7 @@ export function ScheduleBoard({
         onConfirm={() => {
           const p = pendingBuild;
           setPendingBuild(null);
-          if (p) void runAuto(p.stageId, false);
+          if (p) void runAuto(p.stageId, p.divisionId, false);
         }}
         onCancel={() => setPendingBuild(null)}
       >
@@ -1467,7 +1474,13 @@ export function ScheduleBoard({
         onConfirm={() => {
           setOverridePending(false);
           if (lastRunParams) {
-            void runAuto(lastRunParams.stageId, lastRunParams.onlyUnlocked, lastRunParams.mode, true);
+            void runAuto(
+              lastRunParams.stageId,
+              lastRunParams.divisionId,
+              lastRunParams.onlyUnlocked,
+              lastRunParams.mode,
+              true,
+            );
           }
         }}
         onCancel={() => setOverridePending(false)}

@@ -127,7 +127,7 @@ describe("autoRun -> result strip wiring", () => {
     const actions = driveHook();
     expect(actions().lastRun).toBeNull();
 
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
 
     expect(actions().lastRun).toEqual({ metrics: METRICS, solver: SOLVER });
   });
@@ -139,7 +139,7 @@ describe("autoRun -> result strip wiring", () => {
     net.auto = { assignments: [], conflicts: [], metrics: { ...METRICS, placed: 0 }, solver: SOLVER };
     const actions = driveHook();
 
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
 
     expect(net.calls.filter((c) => c.endsWith("/schedule/apply"))).toHaveLength(0);
     expect(actions().lastRun?.solver.status).toBe("infeasible");
@@ -153,7 +153,7 @@ describe("autoRun -> result strip wiring", () => {
     };
     const actions = driveHook();
 
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
 
     expect(actions().lastRun).toBeNull();
   });
@@ -166,7 +166,7 @@ describe("autoRun -> result strip wiring", () => {
       solver: SOLVER,
     };
     const actions = driveHook();
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
     expect(actions().lastRun).not.toBeNull();
 
     // The next run's response carries nothing. A stale strip would attribute the
@@ -175,7 +175,7 @@ describe("autoRun -> result strip wiring", () => {
       assignments: [{ fixture_id: "f1", scheduled_at: "2026-08-05T10:00:00.000Z", court_label: "1" }],
       conflicts: [],
     };
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
 
     expect(actions().lastRun).toBeNull();
   });
@@ -214,7 +214,7 @@ describe("a board write clears the previous run's report", () => {
 
   it("moveCard clears it", async () => {
     const actions = drivePlaced();
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
     expect(actions().lastRun).not.toBeNull();
     net.calls = [];
 
@@ -226,7 +226,7 @@ describe("a board write clears the previous run's report", () => {
 
   it("togglePin clears it", async () => {
     const actions = drivePlaced();
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
     expect(actions().lastRun).not.toBeNull();
     net.calls = [];
 
@@ -238,7 +238,7 @@ describe("a board write clears the previous run's report", () => {
 
   it("shiftDay clears it", async () => {
     const actions = drivePlaced();
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
     expect(actions().lastRun).not.toBeNull();
     net.calls = [];
 
@@ -250,7 +250,7 @@ describe("a board write clears the previous run's report", () => {
 
   it("swapCourts clears it", async () => {
     const actions = drivePlaced();
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
     expect(actions().lastRun).not.toBeNull();
     net.calls = [];
 
@@ -265,7 +265,7 @@ describe("a board write clears the previous run's report", () => {
    *  under the strip can change here too. */
   it("act clears it", async () => {
     const actions = drivePlaced();
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
     expect(actions().lastRun).not.toBeNull();
     net.calls = [];
 
@@ -318,19 +318,19 @@ describe("ignore_locks — the escape hatch, and only the escape hatch", () => {
 
   it("BUILD (the two-argument call every original caller makes) never sends it", async () => {
     const actions = driveHook();
-    await actions().autoRun("s1", false);
+    await actions().autoRun("s1", "d1", false);
     expect(lastAutoBody()).not.toHaveProperty("ignore_locks");
   });
 
   it("REFLOW never sends it", async () => {
     const actions = driveHook();
-    await actions().autoRun("s1", true);
+    await actions().autoRun("s1", "d1", true);
     expect(lastAutoBody()).not.toHaveProperty("ignore_locks");
   });
 
   it("POLISH never sends it", async () => {
     const actions = driveHook();
-    await actions().autoRun("s1", true, "polish");
+    await actions().autoRun("s1", "d1", true, "polish");
     expect(lastAutoBody()).not.toHaveProperty("ignore_locks");
   });
 
@@ -341,7 +341,7 @@ describe("ignore_locks — the escape hatch, and only the escape hatch", () => {
    *  that must never happen. */
   it("an explicit ignoreLocks=false ALSO omits the key, never sends false", async () => {
     const actions = driveHook();
-    await actions().autoRun("s1", false, undefined, false);
+    await actions().autoRun("s1", "d1", false, undefined, false);
     expect(lastAutoBody()).not.toHaveProperty("ignore_locks");
   });
 
@@ -349,7 +349,7 @@ describe("ignore_locks — the escape hatch, and only the escape hatch", () => {
    *  one this suite lets through. */
   it("ONLY the fourth argument turns it on", async () => {
     const actions = driveHook();
-    await actions().autoRun("s1", false, undefined, true);
+    await actions().autoRun("s1", "d1", false, undefined, true);
     expect(lastAutoBody()).toMatchObject({ ignore_locks: true });
   });
 
@@ -357,7 +357,7 @@ describe("ignore_locks — the escape hatch, and only the escape hatch", () => {
    *  repeat whichever solver the infeasible run itself asked for. */
   it("combines with an explicit mode — reflow, ignoring locks", async () => {
     const actions = driveHook();
-    await actions().autoRun("s1", true, "reflow", true);
+    await actions().autoRun("s1", "d1", true, "reflow", true);
     expect(lastAutoBody()).toMatchObject({ only_unlocked: true, mode: "reflow", ignore_locks: true });
   });
 });
