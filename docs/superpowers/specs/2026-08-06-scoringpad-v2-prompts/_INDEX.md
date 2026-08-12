@@ -1393,6 +1393,66 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   as well and would have reported the wrong diagnosis for a bye-shaped ctx,
   contradicting both its own docstring and the operator-facing warn text.
 
+- 2026-08-12 — S8/#417 — **OWNER RULING: build the four remaining gaps in S8,
+  including goalkeeper saves — which AMENDS S2/#430's parking of that row.**
+  Asked explicitly before proceeding, because S2/#430 recorded shots/saves/
+  faceoffs as PARKED tier-3 work for a later wave and `icehockey/DOMAIN.md:60`
+  carries saves as deferred pending a shots-on-goal event; the owner overrode
+  that for this row. The other three were open by my own admission at PR time.
+  In scope now: (1) real shots-on-goal / saves as a NEW event type for football
+  and both hockey codes — which is exactly the tier-3 shape S2/#430 described,
+  so it lands as a per-event stream with its own fidelity band rather than as a
+  stat-model change; (2) cricket's fine/coarse gate scoped per INNINGS, which
+  needs an innings discriminator on `CricketBall`; (3) `sharesMetricKeys`
+  verified against what a fold ACTUALLY emits at runtime instead of trusting the
+  declaration — closing the self-declared escape hatch the round-2 reviewer
+  flagged as inherently unclosable by the checker alone; (4) the E2E and smoke
+  coverage this session had deferred to S9/S12/S13, discharged here.
+  Note on (4): S9 (#418) is what puts these stats on `/me`, so there is no
+  stats-rendering surface in a browser yet — the e2e drives the real API and
+  asserts through the surfaces that DO exist today, and S9 still owes the
+  `/me` e2e when its page lands. Note on (1): saves derive from a SHOT event
+  with an outcome, not a bare `save` counter, because save percentage needs the
+  shots-faced denominator — and the standing coverage invariant (S2/#430, match
+  granularity) means a rate is not emitted at all for a match whose shot
+  coverage is partial.
+
+- 2026-08-12 — S8/#417 — **CI on #538 caught a class my local gate could not:
+  a stat row can be computed, persisted, and structurally unrenderable.**
+  Two failures in `apps/web/src/lib/__tests__/player-stat-vocab.test.ts` (S7's
+  gate), both jobs. Why local was green: I ran the apps/web suite FILTERED to
+  the player-stats specs, and `npm test --workspace apps/web -- run <path>`
+  treats positionals as filename filters — the vocab spec never executed. The
+  documented trap, paid for again.
+  - **(A) 18 newly declared rows carry no message key and no copy in any of the
+    four locales** — `cricket.fours`, `cricket.sixes`, `cricket.dismissals` plus
+    its ten mode splits, `carrom.boards_won`, and `points_won` on all four
+    set-based sports. That is what reds CI, and it is ordinary i18n debt.
+  - **(B) the more interesting one: no `folded.keys` row can EVER render.**
+    `labelPlayerStats` (`apps/web/src/server/player-stats.ts:30-34`) builds its
+    display list from `metrics`/`derived`/`awards` only, so all 29 folded-only
+    keys are aggregated, merged, written to `player_stat_snapshots` — and then
+    dropped on the way to a label. None has a `PLAYER_STAT_KEY` entry either.
+    Among them are **this session's headline keeper metrics**: `goals_conceded`
+    and `clean_sheets` on football, hockey and icehockey; also every set-based
+    `matches`/`sets_won`/`sets_lost`, `tennis.games_won`, `carrom.matches`/
+    `wins`, boardgame's `draws`/`losses`/`white`/`black`, and generic's
+    `wins`/`draws`/`losses`/`points_for`.
+  - **The gate is blind to the whole class by construction**: its local
+    `StatsModule` type reads `metrics`/`derived`/`awards` and nothing else, so
+    folded rows sit outside every assertion it makes. A test that cannot see a
+    category cannot fail on it — the same shape as the declared-but-inert
+    models this session opened with, mirrored: there, a row was declared and
+    never computed; here, a row is computed and never displayable.
+  - Fix (task #13, sequenced AFTER the shots/saves and cricket passes, since
+    the shape change touches both their lanes): `folded.keys` gains a declared
+    English label so the "every displayable row ships an engine label"
+    invariant the vocab file rests on covers it; `labelPlayerStats` includes
+    folded rows deduped by key (cricket shares keys with its metrics
+    deliberately, so first declaration wins); `declaredStatRows()` extends to
+    folded keys so the blindness closes permanently; then message keys and
+    en/es/fr/nl copy for every row.
+
 - _(append below)_
 
 ## Open questions for the owner

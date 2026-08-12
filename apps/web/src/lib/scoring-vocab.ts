@@ -215,6 +215,23 @@ export const PLAYER_STAT_KEY: Record<string, MessageKey> = {
   "cricket.catches": "stat.cricket.catches",
   "cricket.stumpings": "stat.cricket.stumpings",
   "cricket.run_outs": "stat.cricket.run_outs",
+  "cricket.fours": "stat.cricket.fours",
+  "cricket.sixes": "stat.cricket.sixes",
+  // S8/#417 — the batter's dismissal splits. One row per `CricketWicket.kind`
+  // member, so this list is only complete while the enum is unchanged; the
+  // engine derives the metrics from `CricketWicket.shape.kind.options` and the
+  // vocab gate reds here the moment a new Law adds a mode.
+  "cricket.dismissals": "stat.cricket.dismissals",
+  "cricket.dismissals_bowled": "stat.cricket.dismissals_bowled",
+  "cricket.dismissals_caught": "stat.cricket.dismissals_caught",
+  "cricket.dismissals_lbw": "stat.cricket.dismissals_lbw",
+  "cricket.dismissals_runout": "stat.cricket.dismissals_runout",
+  "cricket.dismissals_stumped": "stat.cricket.dismissals_stumped",
+  "cricket.dismissals_hitwicket": "stat.cricket.dismissals_hitwicket",
+  "cricket.dismissals_retired": "stat.cricket.dismissals_retired",
+  "cricket.dismissals_obstructed": "stat.cricket.dismissals_obstructed",
+  "cricket.dismissals_timedout": "stat.cricket.dismissals_timedout",
+  "cricket.dismissals_hitballtwice": "stat.cricket.dismissals_hitballtwice",
 
   "boardgame.games": "stat.boardgame.games",
   "boardgame.wins": "stat.boardgame.wins",
@@ -222,6 +239,7 @@ export const PLAYER_STAT_KEY: Record<string, MessageKey> = {
   "carrom.breaks": "stat.carrom.breaks",
   "carrom.queens": "stat.carrom.queens",
   "carrom.penalties": "stat.carrom.penalties",
+  "carrom.boards_won": "stat.carrom.boards_won",
 
   "generic.points": "stat.generic.points",
   "generic.scores": "stat.generic.scores",
@@ -229,14 +247,21 @@ export const PLAYER_STAT_KEY: Record<string, MessageKey> = {
   "volleyball.points": "stat.volleyball.points",
   "volleyball.serves": "stat.volleyball.serves",
   "volleyball.sanctions": "stat.volleyball.sanctions",
+  // S8/#417 — `points_won` comes from the set-based/nested KERNEL default, so
+  // all four sports declare it with the same English. Keyed per sport anyway:
+  // the scheme's rule is one key per (sport, row), and a shared key here would
+  // have to be un-shared the first time one sport's word diverges.
+  "volleyball.points_won": "stat.volleyball.points_won",
 
   "badminton.points": "stat.badminton.points",
   "badminton.serves": "stat.badminton.serves",
   "badminton.sanctions": "stat.badminton.sanctions",
+  "badminton.points_won": "stat.badminton.points_won",
 
   "tabletennis.points": "stat.tabletennis.points",
   "tabletennis.serves": "stat.tabletennis.serves",
   "tabletennis.sanctions": "stat.tabletennis.sanctions",
+  "tabletennis.points_won": "stat.tabletennis.points_won",
 
   "tennis.points": "stat.tennis.points",
   "tennis.service_points": "stat.tennis.service_points",
@@ -244,6 +269,7 @@ export const PLAYER_STAT_KEY: Record<string, MessageKey> = {
   "tennis.double_faults": "stat.tennis.double_faults",
   "tennis.violations": "stat.tennis.violations",
   "tennis.medical_timeouts": "stat.tennis.medical_timeouts",
+  "tennis.points_won": "stat.tennis.points_won",
 
   "icehockey.goals": "stat.icehockey.goals",
   "icehockey.assists": "stat.icehockey.assists",
