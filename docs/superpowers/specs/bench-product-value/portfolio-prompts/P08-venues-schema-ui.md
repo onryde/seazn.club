@@ -1,7 +1,7 @@
 # P8 — Venues & courts: schema + API + org UI (D5a)
 
 Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
-`../2026-08-13-venues-courts-design.md`. **Gate: release-2 C-chain done**
+`../designs/2026-08-13-venues-courts-design.md`. **Gate: release-2 C-chain done**
 (check its index) + owner green-light. Worktree + fresh branch.
 
 ## Scope

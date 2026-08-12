@@ -1,7 +1,7 @@
 # P9 — Venues & courts: scheduler integration + stored-config migration (D5b)
 
 Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
-`../2026-08-13-venues-courts-design.md`. Depends on P8. Same external
+`../designs/2026-08-13-venues-courts-design.md`. Depends on P8. Same external
 gate as P8. Worktree + fresh branch. **Riskiest session of the
 portfolio — the stored-config migration.**
 

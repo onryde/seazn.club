@@ -2,7 +2,7 @@
 
 Read this **first**, then `_INDEX.md`, then your session's prompt. Prompts
 assume this file and do not repeat it. Spec of record:
-`../2026-08-12-scheduler-bench-design.md` — every semantic decision is
+`../designs/2026-08-12-scheduler-bench-design.md` — every semantic decision is
 made there (simulate-never-feed-verdicts, gates vs report-only,
 misalignment protocol §7, provenance discipline). Do not re-derive.
 

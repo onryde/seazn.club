@@ -1,7 +1,7 @@
 # P11 — Batch score-event import (D6)
 
 Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
-`../2026-08-13-batch-event-import-design.md`. **Gate: ScoringPad S13
+`../designs/2026-08-13-batch-event-import-design.md`. **Gate: ScoringPad S13
 done** (check its index) + owner green-light. Worktree + fresh branch.
 
 ## Scope

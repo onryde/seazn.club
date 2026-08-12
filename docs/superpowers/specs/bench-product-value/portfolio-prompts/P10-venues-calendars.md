@@ -1,7 +1,7 @@
 # P10 — Venues & courts: calendars → lattice (D5c)
 
 Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
-`../2026-08-13-venues-courts-design.md`. Depends on P9. Same external
+`../designs/2026-08-13-venues-courts-design.md`. Depends on P9. Same external
 gate. Worktree + fresh branch.
 
 ## Scope

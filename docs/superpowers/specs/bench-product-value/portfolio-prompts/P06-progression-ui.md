@@ -1,7 +1,7 @@
 # P6 — Stage progression: proposal UI + confirm flow (D4b)
 
 Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
-`../2026-08-13-stage-progression-design.md`. Depends on P5 merged.
+`../designs/2026-08-13-stage-progression-design.md`. Depends on P5 merged.
 Worktree + fresh branch.
 
 ## Scope

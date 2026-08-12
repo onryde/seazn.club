@@ -1,7 +1,7 @@
 # P3 — News enrichment + weekly digest (D7)
 
 Read first: `_RULES.md` → `_INDEX.md` → spec
-`../2026-08-13-news-enrichment-design.md`. Worktree + fresh branch.
+`../designs/2026-08-13-news-enrichment-design.md`. Worktree + fresh branch.
 
 ## Scope
 

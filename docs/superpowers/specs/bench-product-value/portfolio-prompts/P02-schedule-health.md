@@ -1,7 +1,7 @@
 # P2 — Schedule health: engine lib + route + panel (D3)
 
 Read first: `_RULES.md` → `_INDEX.md` → spec
-`../2026-08-13-schedule-health-design.md`. Worktree + fresh branch.
+`../designs/2026-08-13-schedule-health-design.md`. Worktree + fresh branch.
 
 ## Scope
 

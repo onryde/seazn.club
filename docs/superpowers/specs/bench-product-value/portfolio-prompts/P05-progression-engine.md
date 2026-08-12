@@ -1,7 +1,7 @@
 # P5 — Stage progression: seeding rules + TBD fixtures + fill engine (D4a)
 
 Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → spec
-`../2026-08-13-stage-progression-design.md`. Worktree + fresh branch.
+`../designs/2026-08-13-stage-progression-design.md`. Worktree + fresh branch.
 Server/engine only — UI is P6.
 
 ## Scope

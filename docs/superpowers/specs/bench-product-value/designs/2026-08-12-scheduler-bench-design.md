@@ -356,7 +356,7 @@ waves. Progress tracking lives in the memory file
 
 **SUPERSEDED 2026-08-13**: all 7 items now have owner-approved designs
 and session prompts — see
-`2026-08-13-product-portfolio-prompts/_INDEX.md` (D1–D7, sessions
+`../portfolio-prompts/_INDEX.md` (D1–D7, sessions
 P1–P11, build-gated). The list below stays as the origin record. One
 sequencing change ratified there: D2/D3 (capacity, health) are now
 specced as standalone engine libs built BEFORE the bench, with the bench

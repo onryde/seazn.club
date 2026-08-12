@@ -12,7 +12,7 @@ any code fixes; docs may land on main per repo convention.
 2. **Perf baseline**: consolidated report — per suite: seed/schedule/
    sim walls, events/s, solver status + wall, greedy-vs-optimized
    deltas, believability metrics, provenance %, nondeterminism %.
-   Committed under `docs/superpowers/specs/bench-baselines/<date>/`
+   Committed under `docs/superpowers/specs/bench-product-value/baselines/<date>/`
    as the reference numbers future runs are eyeballed against
    (informational — no timing gates, ever).
 3. **Browsability pass**: with `--keep`, walk the seeded orgs in the

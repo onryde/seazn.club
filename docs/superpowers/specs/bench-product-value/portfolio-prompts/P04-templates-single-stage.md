@@ -1,7 +1,7 @@
 # P4 — Format templates: catalog + instantiation + wizard (D1a, single-stage)
 
 Read first: `_RULES.md` → `_INDEX.md` → spec
-`../2026-08-13-format-templates-design.md`. Worktree + fresh branch.
+`../designs/2026-08-13-format-templates-design.md`. Worktree + fresh branch.
 
 ## Scope
 

@@ -1,8 +1,8 @@
 # P7 — Multi-stage templates (D1b)
 
 Read first: `docs/superpowers/RULES.md` → `_INDEX.md` → specs
-`../2026-08-13-format-templates-design.md` +
-`../2026-08-13-stage-progression-design.md`. Depends on P4 AND P5 merged
+`../designs/2026-08-13-format-templates-design.md` +
+`../designs/2026-08-13-stage-progression-design.md`. Depends on P4 AND P5 merged
 (consumes `StageSeeding`). Worktree + fresh branch.
 
 ## Scope

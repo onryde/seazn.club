@@ -5,24 +5,24 @@ then the session's prompt file. This file is the compaction anchor: every
 ruling, false premise, and status change gets written here **as it
 happens** (the scoringpad/release-2 pattern).
 
-Programme origin: bench spec §14 (`../2026-08-12-scheduler-bench-design.md`).
+Programme origin: bench spec §14 (`../designs/2026-08-12-scheduler-bench-design.md`).
 **Whole programme is creative-complete but BUILD-GATED: owner green-light
 required per session.** Two extra hard gates: P8–P10 wait for the
 release-2 C-chain (shared `schedule.ts`/`build.ts`); P11 waits for
 ScoringPad S13 (scoring-ingest cutover). The bench itself stays
 strict-wait (S13+C8) per its own spec — it is NOT a row here.
 
-Specs of record (all in `docs/superpowers/specs/`):
+Specs of record (all in `../designs/`):
 
 | D | Feature | Spec |
 |---|---|---|
-| D1 | Format templates | `2026-08-13-format-templates-design.md` |
-| D2 | Capacity pre-check | `2026-08-13-capacity-precheck-design.md` |
-| D3 | Schedule health | `2026-08-13-schedule-health-design.md` |
-| D4 | Stage progression + TBD fixtures | `2026-08-13-stage-progression-design.md` |
-| D5 | Venues & courts | `2026-08-13-venues-courts-design.md` |
-| D6 | Batch event import | `2026-08-13-batch-event-import-design.md` |
-| D7 | News enrichment + digest | `2026-08-13-news-enrichment-design.md` |
+| D1 | Format templates | `../designs/2026-08-13-format-templates-design.md` |
+| D2 | Capacity pre-check | `../designs/2026-08-13-capacity-precheck-design.md` |
+| D3 | Schedule health | `../designs/2026-08-13-schedule-health-design.md` |
+| D4 | Stage progression + TBD fixtures | `../designs/2026-08-13-stage-progression-design.md` |
+| D5 | Venues & courts | `../designs/2026-08-13-venues-courts-design.md` |
+| D6 | Batch event import | `../designs/2026-08-13-batch-event-import-design.md` |
+| D7 | News enrichment + digest | `../designs/2026-08-13-news-enrichment-design.md` |
 
 ## Order
 

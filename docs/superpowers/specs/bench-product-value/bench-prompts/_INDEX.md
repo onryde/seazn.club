@@ -4,8 +4,8 @@
 session's prompt. Compaction anchor: every ruling, false premise, and
 status change is appended here **as it happens**.
 
-Spec of record: `../2026-08-12-scheduler-bench-design.md` (§13 strict
-wait). Sibling programme: `../2026-08-13-product-portfolio-prompts/`
+Spec of record: `../designs/2026-08-12-scheduler-bench-design.md` (§13 strict
+wait). Sibling programme: `../portfolio-prompts/`
 (D1–D7) — shared pure libs (`capacity.ts`, `health.ts`,
 `court-windows.ts`) and the D6↔stage-0 fold-validate contract.
 
