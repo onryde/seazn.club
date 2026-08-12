@@ -22470,6 +22470,9 @@
                       "reflow",
                       "polish"
                     ]
+                  },
+                  "ignore_locks": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -22480,7 +22483,8 @@
               },
               "example": {
                 "only_unlocked": true,
-                "mode": "build"
+                "mode": "build",
+                "ignore_locks": true
               }
             }
           }
@@ -22702,6 +22706,11 @@
                               "items": {
                                 "type": "string"
                               }
+                            },
+                            "locked_kept": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
                             }
                           },
                           "required": [

@@ -454,19 +454,22 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
       rebuilt.assignments.find((a) => a.fixture_id === parked.id)?.scheduled_at,
     ).not.toBe(at(600));
 
-    // …and `only_unlocked: false` means a FULL pass: a pin is not a pin on this
-    // branch, which is the whole difference between the two flags. Locking the
-    // parked card and asking for a fresh board must still move it — a pin
-    // predicate that ignored `only_unlocked` would leave it at 19:00 and every
-    // other spec in this file would still pass.
+    // …and a LOCK now wins over `only_unlocked: false` too (owner ruling,
+    // 2026-08-12 — full regression coverage in
+    // schedule-build-honours-locks.test.ts). `only_unlocked` used to gate
+    // whether a lock was honoured at all, which meant the primary
+    // Auto-schedule button — it always posts `only_unlocked: false` to
+    // derive `mode: "build"` — silently ignored every pin. Locking the
+    // parked card and asking for a fresh board must now leave it exactly
+    // where it was, time AND court.
     await patchFixture(auth, parked.id, { schedule_locked: true });
     const full = await autoSchedule(auth, stageId, {
       only_unlocked: false,
       mode: "build",
     });
-    expect(
-      full.assignments.find((a) => a.fixture_id === parked.id)?.scheduled_at,
-    ).not.toBe(at(600));
+    const stillParked = full.assignments.find((a) => a.fixture_id === parked.id);
+    expect(stillParked?.scheduled_at).toBe(at(600));
+    expect(stillParked?.court_label).toBe("C1");
   }, 180_000);
 
   /** REFLOW is also the DEFAULT mode (an absent `only_unlocked` derives it), and

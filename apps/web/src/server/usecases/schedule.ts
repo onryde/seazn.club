@@ -935,23 +935,25 @@ export async function autoSchedule(
       settings.config.matchMinutes,
     );
 
-    // Re-flow unlocked (doc 12 §2): pinned cards are fixed obstacles;
-    // scope-locked fixtures (Jul3/03 §4 two-site safety) pin the same way.
-    // Hoisted out of the `schedulable` builder below because THREE things read
-    // it now — the `locked` anchor, REFLOW's incumbent board, and the set the
-    // repair solver may not move — and a second copy of this predicate is how
-    // the pin the solver honours and the pin the caller sees drift apart.
-    const pinnedIds = new Set(
-      movable
-        .filter(
-          (f) =>
-            body.only_unlocked &&
-            (f.schedule_locked || scopeLocked(f, scopes)) &&
-            f.scheduled_at !== null &&
-            f.court_label !== null,
-        )
-        .map((f) => f.id),
-    );
+    // Pinned cards are fixed obstacles on EVERY mode, BUILD included (owner
+    // ruling 2026-08-12, #pins-in-build) — scope-locked fixtures (Jul3/03 §4
+    // two-site safety) pin the same way. Hoisted out of the `schedulable`
+    // builder below because THREE things read it now — the `locked` anchor,
+    // REFLOW's incumbent board, and the set the repair solver may not move.
+    //
+    // `only_unlocked` used to gate this filter too, which was the bug: the
+    // primary Auto-schedule button always posts `only_unlocked: false` (to
+    // derive `mode: "build"` — see `AutoScheduleRequest` in schemas.ts), so
+    // the gate silently zeroed this set on every BUILD call and a locked
+    // fixture entered the solve fully movable. `only_unlocked` now steers
+    // ONLY `mode` derivation, nowhere else; a lock is honoured regardless of
+    // it, and `ignore_locks` is the one explicit way to suppress one.
+    //
+    // ONE predicate (`lockedFixtureIds`, below), reused as-is for POLISH's
+    // `frozen` set at the return statement — a second hand-maintained copy of
+    // "is this fixture locked" is exactly how the pin the solver honours and
+    // the pin the caller sees drifted apart in the first place.
+    const pinnedIds = lockedFixtureIds(movable, scopes, body.ignore_locks ?? false);
     const schedulable: SchedulableFixture[] = movable.map((f) => ({
       id: f.id,
       roundNo: f.round_no,
@@ -1023,7 +1025,10 @@ export async function autoSchedule(
       dependencies: feedDependencies(all),
       placedNow,
       pinnedNow,
-      frozen: frozenIds(movable, scopes),
+      // Literally `pinnedIds`, not a second computation of it — see the
+      // comment on `pinnedIds` above. POLISH's freeze set and the anchor the
+      // solver sees must never be able to name a different set of fixtures.
+      frozen: [...pinnedIds],
       total: schedulable.length,
     };
   });
@@ -1202,6 +1207,11 @@ export async function autoSchedule(
       ...(out.contradictoryPins !== undefined
         ? { contradictory_pins: [...out.contradictoryPins] }
         : {}),
+      // `plan.frozen` IS `pinnedIds` (see `lockedFixtureIds`) — its length is
+      // exactly the count of this stage's own fixtures held fixed by a lock
+      // this run, on every mode, always present so a client never needs a
+      // null check to render "N fixtures are locked and will be kept".
+      locked_kept: plan.frozen.length,
     },
   };
 }
@@ -1484,36 +1494,45 @@ export function withDefaultDaySpread<T extends SlotConfig & VerifyConfig>(
 }
 
 /**
- * POLISH's frozen set: every card this run may not move.
+ * Fixtures the caller may not move this run: `schedule_locked`, or caught by
+ * a `scopeLocked` scope lock, and currently placed (`scheduled_at` AND
+ * `court_label` both set — a lock with nothing to anchor to has nothing to
+ * pin). THE ONE PREDICATE, per ruling R5 for what a "frozen" card is: there
+ * is no per-fixture published flag, so "the cards an entrant has already
+ * been told about" is approximated by the cards the organiser pinned.
  *
- * LOCKS ONLY, per ruling R5 — there is no per-fixture published flag to freeze
- * on, so "the cards an entrant has already been told about" is approximated by
- * the cards the organiser pinned.
+ * SHARED, not duplicated. `pinnedIds` (the anchor the solver sees, every
+ * mode) and `frozen` (POLISH's freeze set) used to be two hand-maintained
+ * copies of this exact test — see the comment on `pinnedIds` above for how
+ * they had already diverged (#pins-in-build). They are now the SAME `Set`,
+ * built by one call to this function and reused, which also retires a
+ * standing KNOWN GAP this function used to carry: `buildSchedule` anchors a
+ * `frozen` id with no matching `locked` entry to greedy's own re-placement
+ * rather than to where the card actually sits (`build.ts` Task 6/7). Because
+ * `frozen` is now always a subset of `pinnedIds` by construction, every id it
+ * names has a `locked` anchor too — that gap can no longer arise from this
+ * call site.
  *
- * Locked and scope-locked cards already carry a `locked` anchor on their
- * `SchedulableFixture` when `only_unlocked` is set — which is how the polish
- * button calls it — so naming them here is belt-and-braces on that branch and
- * the only binding on the other one.
- *
- * KNOWN GAP, and it is the engine's, not this call's: `BuildInput` carries no
- * published-board field, so `buildSchedule` anchors a `frozen` id WITHOUT a
- * `locked` placement to greedy's own re-placement rather than to where the card
- * actually sits. Under `only_unlocked: false` that means POLISH freezes a slot
- * the organiser never saw. Flagged in `build.ts` for Task 6/7; until it lands,
- * POLISH is only a true freeze on the `only_unlocked: true` call.
+ * `ignoreLocks` (from `AutoScheduleRequest.ignore_locks`) is the one explicit
+ * way to suppress every lock for this run. `only_unlocked` has no say over
+ * this predicate at all — see `pinnedIds`.
  */
-function frozenIds(
+export function lockedFixtureIds(
   movable: readonly FixtureLite[],
   scopes: readonly LockedScope[],
-): string[] {
-  return movable
-    .filter(
-      (f) =>
-        (f.schedule_locked || scopeLocked(f, scopes)) &&
-        f.scheduled_at !== null &&
-        f.court_label !== null,
-    )
-    .map((f) => f.id);
+  ignoreLocks: boolean,
+): Set<string> {
+  if (ignoreLocks) return new Set();
+  return new Set(
+    movable
+      .filter(
+        (f) =>
+          (f.schedule_locked || scopeLocked(f, scopes)) &&
+          f.scheduled_at !== null &&
+          f.court_label !== null,
+      )
+      .map((f) => f.id),
+  );
 }
 
 /**
