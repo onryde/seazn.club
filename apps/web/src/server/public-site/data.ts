@@ -558,7 +558,28 @@ export async function getPublicPlayer(
       // use (review round 2 finding 2) — no tenant/user scoping needed here
       // because the caller already restricts divisionIds to exactly the
       // division ids this competition's own snapshots named.
-      const divisionIds = [...new Set(snapshots.map((s) => s.division_id))];
+      // A competition-scoped rollup EARNS its place only where it aggregates
+      // something. With one division in a sport it restates that sport's own
+      // row in the `stats` list above, word for word — so those sports are
+      // dropped HERE rather than at the page, which is the only place that
+      // holds for a MIXED competition: gating the whole section on "some
+      // sport has >1 division" still rendered the single-division sports
+      // beside the one that tripped the gate, which is the duplication this
+      // rule exists to remove. Dropping them here also means a competition
+      // with nothing to aggregate never pays for the query below.
+      const divisionsPerSport = new Map<string, Set<string>>();
+      for (const s of snapshots) {
+        const seen = divisionsPerSport.get(s.sport_key) ?? new Set<string>();
+        seen.add(s.division_id);
+        divisionsPerSport.set(s.sport_key, seen);
+      }
+      const aggregating = snapshots.filter(
+        (s) => (divisionsPerSport.get(s.sport_key)?.size ?? 0) > 1,
+      );
+      if (aggregating.length === 0) {
+        return { player, memberships, stats, career: [], careerLabel: statMsg("player.career.title") };
+      }
+      const divisionIds = [...new Set(aggregating.map((s) => s.division_id))];
       const matchesByDivision = await countMatchesByDivision(sql, { by: "person", personId }, divisionIds);
       // This page has no Dict/locale pair to compose its own pluralized copy
       // with (see statMsg's own comment above) — so, like every metric
@@ -566,7 +587,7 @@ export async function getPublicPlayer(
       // matches" line is baked into fully-rendered text here rather than
       // shipped as raw numbers for the page to format.
       const career: PublicCareerSport[] = groupCareerStatsBySport(
-        snapshots,
+        aggregating,
         matchesByDivision,
         statMsg,
       ).map((c) => ({

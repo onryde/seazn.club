@@ -213,5 +213,17 @@ export function groupCareerStatsBySport(
         matches,
       };
     })
+    // A sport whose metrics all resolve away — every total zero, or a
+    // `sport_key` no longer in the registry while its snapshot rows survive —
+    // deliberately KEEPS its card, showing divisions/variants/matches with no
+    // tiles. Final review proposed dropping it to match `labelPlayerStats`'s
+    // callers (`me.ts`, `if (metrics.length === 0) return []`). Not done: the
+    // unit test "an unknown/retired sport_key degrades to empty metrics,
+    // never throws — counts stay correct" states the opposite contract on
+    // purpose, and the two views are answering different questions. A
+    // per-division row with no numbers is noise; a career card is also a
+    // record that you PLAYED the sport, which the division and match counts
+    // carry on their own. Changing it is a product call, not a consistency
+    // cleanup, so it stays as specified.
     .sort((a, b) => a.sport_label.localeCompare(b.sport_label));
 }

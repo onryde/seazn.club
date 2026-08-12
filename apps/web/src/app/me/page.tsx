@@ -94,8 +94,14 @@ export default async function MePage({
               re-states the page you are on, and your own name on your own
               page tells you nothing — so they step aside below `sm` and the
               two real controls (console, sign out) keep their width. Nothing
-              changes at or above 640px. */}
-          <span className="hidden text-sm text-cream/60 sm:inline">{t(ui, "me.eyebrow")}</span>
+              changes at or above 640px.
+
+              `sr-only`, not `hidden`: both are still announced to a screen
+              reader at every width — it is the visual line that has no room,
+              not the information. */}
+          <span className="sr-only text-sm text-cream/60 sm:not-sr-only sm:inline">
+            {t(ui, "me.eyebrow")}
+          </span>
           <div className="flex-1" />
           {activeOrg && (
             <Link
@@ -105,7 +111,9 @@ export default async function MePage({
               ← {t(ui, "me.console")}
             </Link>
           )}
-          <span className="hidden text-xs text-cream/60 sm:inline">{user.display_name}</span>
+          <span className="sr-only text-xs text-cream/60 sm:not-sr-only sm:inline">
+            {user.display_name}
+          </span>
           <LogoutButton label={t(dict, "nav.signOut")} />
         </div>
       </header>

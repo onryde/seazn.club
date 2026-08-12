@@ -114,15 +114,14 @@ export default async function PlayerCardPage({ params }: Props) {
           anyone who wants it. Same "nothing renders when empty" rule as
           that section.
 
-          Renders only when it AGGREGATES something — some sport in this
-          competition spanning more than one division. A player in a single
-          division is the common case, and there the rollup is a byte-for-byte
-          restatement of the Stats block below it: same label, same numbers,
-          twice on one page. Unlike /me, which always shows Career because
-          summing across clubs is the whole point of that view, this card is
-          already competition-scoped, so with one division there is nothing
-          left to sum. */}
-      {career.some((c) => c.divisions > 1) && (
+          `career` arrives already reduced to the sports that AGGREGATE
+          something — see getPublicPlayer, which drops single-division sports
+          per sport rather than per page, so a mixed competition cannot show
+          one sport's real rollup beside another's restatement of the Stats
+          block below. Unlike /me, which always shows Career because summing
+          across clubs is the whole point of that view, this card is already
+          competition-scoped, so with one division there is nothing to sum. */}
+      {career.length > 0 && (
         <section className="mt-6" data-testid="player-career">
           <h2 className="mb-2 font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted">
             {careerLabel}
