@@ -114,7 +114,9 @@ REFUSAL does not.
 --- #21: rule_groups / PinnedRow.rule_group_indices / PinnedRow.entrant_indices --
 
 Three more fields this module owns: C1/C4/C6 of the contract revision that
-generalises `division_rules` past a division-only scope. `RuleGroup` is a rule
+generalised past `division_rules`' division-only scope -- that field (proto
+field 10) has since been retired outright; see `request_to_model_input`'s own
+docstring. `RuleGroup` is a rule
 and the exact MOVABLE fixture set it binds — the caller resolves any scope
 (competition, division, pool, entrant, person) via its own `scopeCoversFixture`
 and sends the RESULT, so this service still never learns what a division, pool,
@@ -144,9 +146,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import structlog
+from google.protobuf import unknown_fields
+
 from placement.generated import scheduler_pb2
 from placement.model import SolveOutcome
 from placement.objective import MIN_TIER_SECONDS
+
+log = structlog.get_logger(__name__)
 
 # `SolveOutcome.status` is CP-SAT's own vocabulary, passed through verbatim by
 # the domain. Anything not listed — MODEL_INVALID, or a future OR-Tools status
@@ -198,8 +205,8 @@ class ModelInput:
     wall_seconds: float
     # C1 -- one rule and the MOVABLE fixture indices it binds, plus its two
     # value fields (each `None` when unset -- presence-tracked the same way
-    # `DivisionRule`'s are). Validated, unread by `build_model` this round;
-    # see the module docstring, "#21".
+    # the retired `DivisionRule`'s were). Validated, unread by `build_model`
+    # this round; see the module docstring, "#21".
     rule_groups: list[tuple[list[int], int | None, int | None]]
     # (fixture_indices, min_rest_minutes, max_fixtures_per_day)
     # C4 -- parallel to `existing` (same length, same order; `existing[k]`'s
@@ -423,63 +430,19 @@ def _validated_dependencies(pairs, num_fixtures: int) -> list[tuple[int, int]]:
     return out
 
 
-def _validated_division_rules(rules, division_count: int) -> tuple[dict[int, int], dict[int, int]]:
-    """`division_rules`, split into the two dicts `build_model` expects.
-
-    Replaces `_rule_map` x2 (one call per old list). A `DivisionRule` entry
-    may carry a rest rule, a cap, or both — each is presence-checked
-    independently — but at most ONE entry may exist per division: two entries
-    naming the same `division_index` is the same "second rule for this
-    division, and one was silently chosen" defect the old per-list duplicate
-    check caught, now unified across both concerns instead of tracked twice.
-    """
-    rest_by_division: dict[int, int] = {}
-    day_cap_by_division: dict[int, int] = {}
-    seen: set[int] = set()
-    for i, rule in enumerate(rules):
-        _require_index_present(rule.HasField("division_index"), f"division_rules[{i}].division_index")
-        division_index = _require_index_range(
-            rule.division_index, division_count, f"division_rules[{i}].division_index"
-        )
-        if division_index in seen:
-            raise InvalidRequestError(
-                f"division_rules[{i}] is a second rule for division_index {division_index}. These "
-                "are repeated messages rather than a map, so a duplicate is legal on the wire and "
-                "the second one would silently win over the first."
-            )
-        seen.add(division_index)
-
-        if rule.HasField("min_rest_minutes"):
-            rest = rule.min_rest_minutes
-            if rest < 0:
-                raise InvalidRequestError(
-                    f"division_rules[{i}].min_rest_minutes must be >= 0, got {rest!r}. The "
-                    "participant-rest interval is match_minutes + rest wide, so a negative rest "
-                    "shrinks it below match_minutes and two of one entrant's matches can overlap."
-                )
-            rest_by_division[division_index] = rest
-
-        if rule.HasField("max_fixtures_per_day"):
-            cap = rule.max_fixtures_per_day
-            if cap <= 0:
-                raise InvalidRequestError(
-                    f"division_rules[{i}].max_fixtures_per_day must be > 0, got {cap!r}. A cap of "
-                    "0 forbids placing that division at all and the board comes back OPTIMAL with "
-                    "all of its fixtures dropped. To leave a division uncapped, do not set this "
-                    "field rather than sending 0."
-                )
-            day_cap_by_division[division_index] = cap
-
-    return rest_by_division, day_cap_by_division
-
-
-def _validated_constraints(
-    proto_constraints, rest_by_division: dict[int, int], day_cap_by_division: dict[int, int]
-) -> dict:
+def _validated_constraints(proto_constraints) -> dict:
     """The `build_model` constraints dict, validated.
 
     `match_minutes`/`gap_minutes` guards are unchanged from the string
     contract — this round is about identity, and neither field is id-shaped.
+
+    Used to also validate and fold in `rest_by_division`/`day_cap_by_division`
+    (derived from `division_rules`, proto field 10, via the now-deleted
+    `_validated_division_rules`). That field was retired 2026-08-12: the
+    `rule_groups` path (see `request_to_model_input`'s own docstring) was
+    already authoritative in production, so this dict carries only
+    `match_minutes`/`gap_minutes` now, and `placement.model.build_model` no
+    longer reads a `rest_by_division`/`day_cap_by_division` key at all.
     """
     if not proto_constraints.HasField("gap_minutes"):
         raise InvalidRequestError(
@@ -492,8 +455,6 @@ def _validated_constraints(
     constraints = {
         "match_minutes": proto_constraints.match_minutes,
         "gap_minutes": proto_constraints.gap_minutes,
-        "rest_by_division": rest_by_division,
-        "day_cap_by_division": day_cap_by_division,
     }
 
     if constraints["match_minutes"] <= 0:
@@ -512,6 +473,40 @@ def _validated_constraints(
     return constraints
 
 
+#: Observability for the `division_rules` (proto field 10) deploy window: a
+#: not-yet-upgraded `build.ts` deployed alongside a Placement version that has
+#: already reserved the field sends it anyway, and proto3 preserves it as a
+#: silent, uninterpreted unknown field rather than raising -- which is exactly
+#: what the wire-compat test protects, and exactly why nothing would otherwise
+#: tell an operator it is happening. Kept as a set literal rather than
+#: `{FIELD_NUMBER_DIVISION_RULES}` alone: any legacy field belongs here, not
+#: only the one retired most recently.
+_LEGACY_WIRE_FIELD_NUMBERS = frozenset({10})
+
+
+def _log_legacy_wire_fields(req) -> None:
+    """One structured log line per request that still carries a legacy field.
+
+    Lives here, not in `placement.main`: this module is documented as "the
+    ONLY place a proto message is read" (module docstring above), and reading
+    `UnknownFields()` is reading the proto message -- `main.py` deliberately
+    never imports `scheduler_pb2` at all (its own docstring: "constructs no
+    proto message of its own"). `google.protobuf.unknown_fields.
+    UnknownFieldSet(req)` is used rather than `req.UnknownFields()` because
+    the latter raises `NotImplementedError` under this repo's protobuf
+    build (the `upb` implementation) -- confirmed by hand, not assumed.
+
+    O(1)-ish per request (one pass over however many unknown fields exist,
+    normally zero) and logs field NUMBERS only, never field CONTENTS: a
+    reserved field's bytes are not this service's to read or repeat into a
+    log, only its presence is.
+    """
+    numbers = sorted({f.field_number for f in unknown_fields.UnknownFieldSet(req)})
+    legacy = [n for n in numbers if n in _LEGACY_WIRE_FIELD_NUMBERS]
+    if legacy:
+        log.info("legacy_wire_field_ignored", request_id=req.request_id, field_numbers=legacy)
+
+
 def request_to_model_input(req) -> ModelInput:
     """Translate a `SolveBuildRequest` into domain types, or reject it.
 
@@ -524,6 +519,11 @@ def request_to_model_input(req) -> ModelInput:
     `rule_groups` itself, because `existing[].rule_group_indices` (C4) resolves
     against `len(rule_groups)` in turn.
 
+    Unconditionally logs (`_log_legacy_wire_fields`) before any of that, win
+    or lose: a request that also gets rejected below for an unrelated reason
+    should still surface that it carried a legacy field, and observability
+    must not depend on the rest of validation succeeding.
+
     Args:
         req: a `scheduler_pb2.SolveBuildRequest`. Untyped in the signature so
             this module's *callers* need the proto import and its *consumers*
@@ -534,6 +534,8 @@ def request_to_model_input(req) -> ModelInput:
             enumerated in the module docstring, or on any index that is
             unset or out of range.
     """
+    _log_legacy_wire_fields(req)
+
     if len(req.fixtures) == 0:
         raise InvalidRequestError("fixtures must not be empty")
     if len(req.court_names) == 0:
@@ -574,10 +576,7 @@ def request_to_model_input(req) -> ModelInput:
         req.existing, num_courts, len(rule_groups), entrant_count
     )
     dependencies = _validated_dependencies(req.dependencies, len(fixtures))
-    rest_by_division, day_cap_by_division = _validated_division_rules(
-        req.division_rules, division_count
-    )
-    constraints = _validated_constraints(req.constraints, rest_by_division, day_cap_by_division)
+    constraints = _validated_constraints(req.constraints)
 
     if req.wall_seconds <= 0:
         raise InvalidRequestError(

@@ -189,11 +189,11 @@ def test_maps_invalid_request_to_error_response(test_server):
             id="match_minutes",
         ),
         pytest.param(
-            {
-                "division_rules": [
-                    scheduler_pb2.DivisionRule(division_index=0, max_fixtures_per_day=0)
-                ]
-            },
+            # `division_rules` (proto field 10, `DivisionRule`) is retired;
+            # `rule_groups` is the only wire path a day cap reaches the
+            # domain through now. `fixture_indices=[0]` names
+            # `_solvable_request`'s own lone fixture.
+            {"rule_groups": [scheduler_pb2.RuleGroup(fixture_indices=[0], max_fixtures_per_day=0)]},
             id="day_cap",
         ),
         pytest.param({"wall_seconds": 0.0}, id="wall_seconds"),
@@ -353,9 +353,10 @@ def test_production_board_solves_through_the_server(test_server):
     request against the production board shape returns OPTIMAL or FEASIBLE".
 
     Every other test here uses a one-fixture toy board, which never exercises
-    `existing`, `dependencies`, `rest_by_division` or `day_cap_by_division`
-    through the wire mapping at all — a dropped field in `schema.py` would
-    relax the board and go unnoticed. This drives the bench's own
+    `existing`, `dependencies` or a division-scoped rest/cap `rule_group`
+    (`_board_positional.rule_groups_for`) through the wire mapping at all — a
+    dropped field in `schema.py` would relax the board and go unnoticed. This
+    drives the bench's own
     `production_board()` (37 fixtures, 5 courts, ~2081 slots) end to end,
     converted to the positional wire shape by `_board_positional.to_proto_request`
     (`bench/` is out of scope for round 6 and still returns string identity).

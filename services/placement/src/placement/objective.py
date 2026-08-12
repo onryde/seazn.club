@@ -239,8 +239,8 @@ def run_tier_chain(
     started = time.perf_counter()
 
     # --- degenerate arguments that would otherwise produce a confidently
-    # --- WRONG answer. Same class as `build_model`'s `match_minutes` /
-    # --- `day_cap_by_division` guards; see that module's docstring.
+    # --- WRONG answer. Same class as `build_model`'s `match_minutes` guard;
+    # --- see that module's docstring.
     if float(wall_seconds) <= 0:
         raise ValueError(
             f"wall_seconds must be > 0, got {wall_seconds!r}. `SolveBuildRequest.wall_seconds` is a "

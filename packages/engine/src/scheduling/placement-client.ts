@@ -11,7 +11,6 @@ import type { ServiceError } from "@grpc/grpc-js";
 import { systemClock } from "../core/clock.ts";
 import type { Clock } from "../core/clock.ts";
 import type {
-  DivisionRule,
   SchedulerServiceClient as SchedulerServiceClientType,
   SolveBuildRequest,
   SolveBuildResponse,
@@ -123,8 +122,6 @@ export interface SolveBuildInput {
   constraints: {
     matchMinutes: number;
     gapMinutes: number;
-    restByDivision?: Record<string, number>;
-    dayCapByDivision?: Record<string, number>;
   };
   wallSeconds: number;
 }
@@ -242,30 +239,6 @@ function newClientFor(host: string): SchedulerServiceClientType {
 }
 
 /**
- * TS models the per-division rules as two Records keyed by division id; the
- * wire merges them into ONE repeated `DivisionRule`, keyed by
- * `division_index` instead of duplicated across two lists (half 1's
- * `DivisionRestRule` + `DivisionDayCapRule` -> `DivisionRule` merge). A
- * division keeps whichever half it actually has: `minRestMinutes` /
- * `maxFixturesPerDay` are each proto3-`optional`, so a division present in
- * only one Record sends a rule with the other field left UNSET, not a false
- * zero — 0 is itself a legitimate rest minutes value.
- */
-function toDivisionRules(
-  constraints: SolveBuildInput["constraints"],
-  divisionIndexOf: (divisionId: string) => number,
-): DivisionRule[] {
-  const rest = constraints.restByDivision ?? {};
-  const cap = constraints.dayCapByDivision ?? {};
-  const divisionIds = new Set([...Object.keys(rest), ...Object.keys(cap)]);
-  return [...divisionIds].map((divisionId) => ({
-    divisionIndex: divisionIndexOf(divisionId),
-    minRestMinutes: Object.hasOwn(rest, divisionId) ? rest[divisionId] : undefined,
-    maxFixturesPerDay: Object.hasOwn(cap, divisionId) ? cap[divisionId] : undefined,
-  }));
-}
-
-/**
  * Build a fully-populated request. Every field is set explicitly: the generated
  * encoder reads the message directly, so a `SolveBuildInput` cast at the call
  * seam would leave `requestId` undefined and the repeated fields non-iterable.
@@ -316,7 +289,6 @@ function toRequest(input: SolveBuildInput, requestId: string, indices: IndexSpac
       beforeIndex: indices.fixtureIndexOf(beforeFixtureId),
       afterIndex: indices.fixtureIndexOf(afterFixtureId),
     })),
-    divisionRules: toDivisionRules(input.constraints, indices.divisionIndexOf),
     // C1. `fixtureIndices` resolves through the SAME `fixtureIndexOf` a
     // dependency endpoint does just above — an id `input.ruleGroups` names
     // that is not in `input.fixtures` is refused the same way a dependency
@@ -466,9 +438,10 @@ interface IndexSpace {
   entrantCount: number;
   /**
    * Total for the same reason `entrantIndexOf` is — covers every division
-   * mentioned by a fixture OR by `constraints.restByDivision` /
-   * `dayCapByDivision`, so a rule for a division no fixture currently uses
-   * still gets a valid, in-range index.
+   * mentioned by a fixture. (Previously also covered a division named only
+   * by `constraints.restByDivision`/`dayCapByDivision` — those fields were
+   * retired alongside `division_rules`, proto field 10; a division reaches
+   * this index space only through a fixture now.)
    */
   divisionIndexOf: (divisionId: string) => number;
   divisionCount: number;
@@ -493,9 +466,8 @@ function totalLookup(byId: ReadonlyMap<string, number>, id: string): number {
  * {@link IndexSpace}. Ordering always comes from the input itself — `courts`/
  * `fixtures` array position for the declared lists, first-sighting order over
  * `fixtures` (then `existing[].entrantIds`, C6, for an entrant no MOVABLE
- * fixture names yet; then `constraints.restByDivision`/`dayCapByDivision`
- * keys, for a division no fixture references yet) for the inferred ones —
- * never a `Set`/`Map` assembled from some OTHER collection's iteration order,
+ * fixture names yet) for the inferred ones — never a `Set`/`Map` assembled
+ * from some OTHER collection's iteration order,
  * and never anything random: `packages/engine/src` bans `Math.random()` as
  * well as ambient time, and identity here comes entirely from the caller's
  * own arrays.
@@ -543,17 +515,6 @@ function buildIndexSpace(input: SolveBuildInput): IndexSpace {
       if (!entrantIndexById.has(entrantId)) entrantIndexById.set(entrantId, entrantIndexById.size);
     }
   }
-  // A division-only rule — rest or day cap set for a division no fixture in
-  // THIS solve uses yet — still needs a valid index: `DivisionRule
-  // .division_index` is range-checked against `division_count` exactly like
-  // any other index field, so it has to exist in this table too.
-  for (const divisionId of Object.keys(input.constraints.restByDivision ?? {})) {
-    if (!divisionIndexById.has(divisionId)) divisionIndexById.set(divisionId, divisionIndexById.size);
-  }
-  for (const divisionId of Object.keys(input.constraints.dayCapByDivision ?? {})) {
-    if (!divisionIndexById.has(divisionId)) divisionIndexById.set(divisionId, divisionIndexById.size);
-  }
-
   return {
     courtNames: [...input.courts],
     courtIndexOf: (court) => {
@@ -617,13 +578,15 @@ function deadlineError(deadlineMs: number, detail: string, cause?: unknown): Pla
 
 /**
  * Proto3 cannot tell "unset" from "legitimately zero" for a scalar: a zero is
- * dropped from the wire entirely. For these three fields a zero is not a
+ * dropped from the wire entirely. For these two fields a zero is not a
  * harmless default but a different board — a zero-length match stacks every
- * fixture on one tick, a zero day cap forbids a division outright, and a zero
- * wall stops the tier chain before it starts. Each comes back OPTIMAL. The
- * service's own ACL rejects all three; refusing here as well means the caller
- * gets the reason without a round trip, and gets it as `invalid_request` rather
- * than as a transport error it has to decode.
+ * fixture on one tick, and a zero wall stops the tier chain before it starts.
+ * Each comes back OPTIMAL. The service's own ACL rejects both; refusing here
+ * as well means the caller gets the reason without a round trip, and gets it
+ * as `invalid_request` rather than as a transport error it has to decode.
+ *
+ * (Previously a third field, `constraints.dayCapByDivision`, got the same
+ * treatment — retired alongside `division_rules`, proto field 10.)
  */
 function assertNoAmbiguousZeros(input: SolveBuildInput): void {
   if (input.constraints.matchMinutes <= 0) {
@@ -633,17 +596,6 @@ function assertNoAmbiguousZeros(input: SolveBuildInput): void {
         "A zero-length match makes every court and rest interval zero-width, so the board " +
         "comes back OPTIMAL with every fixture stacked on one tick.",
     );
-  }
-  for (const [divisionId, cap] of Object.entries(input.constraints.dayCapByDivision ?? {})) {
-    if (cap <= 0) {
-      throw new PlacementError(
-        "invalid_request",
-        `constraints.dayCapByDivision[${JSON.stringify(divisionId)}] must be > 0, got ${cap}. ` +
-          "A cap of 0 forbids placing that division at all and the board comes back OPTIMAL " +
-          "with all of its fixtures dropped. To leave a division uncapped, omit it rather " +
-          "than sending 0.",
-      );
-    }
   }
   if (input.wallSeconds <= 0) {
     throw new PlacementError(

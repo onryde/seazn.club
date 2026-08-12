@@ -147,9 +147,11 @@ than z3's, and TS re-runs its own verifier on the result:
     `Fixture` carries (entrant_indices, division_index) only.
   * build-encode.ts section 7's PARTICIPANT-REST half — CLOSED as of task C6,
     on the `rule_groups` path only. See "A SIXTH is CLOSED as of task C6"
-    below for the mechanics. A caller still sending only `rest_by_division` /
-    `day_cap_by_division` (`rule_groups` empty) keeps today's behaviour: a
-    pinned row blocks its own court but not a participant it shares.
+    below for the mechanics. A caller sending an empty `rule_groups` (there is
+    no other source any more — `division_rules`, proto field 10, and the
+    `rest_by_division`/`day_cap_by_division` dict keys it fed, are retired)
+    keeps today's behaviour: a pinned row blocks its own court but not a
+    participant it shares.
 
 A third — per-court grids — is CLOSED as of task C2, and is recorded here
 because the earlier state of this note got the capability question wrong
@@ -218,11 +220,13 @@ nothing, deliberately (see `_day_of_pin` below) — an organiser's manual
 placement is not required to land on a grid tick, and attributing it to the
 nearest day would be a guess this module has no basis for.
 
-This closure applies ONLY when `rule_groups` is non-empty. A caller still
-sending just `day_cap_by_division` gets the permissive behaviour above,
-unchanged (section 9's `else` branch) — the division path has no
-pin-to-group attribution to draw on, and retrofitting one would need the very
-`division_index` addition this note originally, and wrongly, asked for.
+This closure applies ONLY when `rule_groups` is non-empty. A caller sending
+an empty one gets the permissive behaviour above, unchanged. Section 9 used
+to fall back to a second, division-only day-cap path here (`day_cap_by_
+division`, fed by `division_rules`, proto field 10) with no pin-to-group
+attribution to draw on; both the fallback and the field feeding it are now
+retired, so an empty `rule_groups` simply caps nothing — see section 9's own
+comment.
 
 A SIXTH is CLOSED as of task C6, on the `rule_groups` path only: **a pinned
 row now joins its entrants' participant-rest groups.** `PinnedRow.
@@ -248,8 +252,8 @@ was built by walking `fixtures` (the movable rows) alone and a pin
 contributed nothing to it.
 
 Asymmetric interval widths between the two sides of one `AddNoOverlap` group
-are expected: a pin's own resolved rest and a movable fixture's own
-`rest_by_division` figure are independent numbers — the same asymmetry the
+are expected: a pin's own resolved rest and a movable fixture's own resolved
+rest (`rest_ms[i]` below) are independent numbers — the same asymmetry the
 model already accepts between two movable fixtures in different divisions.
 
 Be precise about what that actually enforces, because the obvious reading is
@@ -280,14 +284,22 @@ fixtures (rather than only to the pins that count against it) was left as a
 separate, later task, explicitly recorded here as not folding a max across
 the pair the way C6 closes the pin half. That later task is CLOSED below.
 
-A SEVENTH is CLOSED as of release 1 of retiring `division_rules`
-(`SolveBuildRequest.division_rules`, proto field 10 — see that field's own
-comment for the three-release retirement plan this is the first of; this
-module still never reads the proto or names a field number anywhere else):
-**a movable fixture's OWN rest now also folds in the rule groups that cover
-it**, not `rest_by_division` alone.
+A SEVENTH was CLOSED, then the field it was about was retired outright. This
+module still never reads the proto or names a field number anywhere else, so
+the field is named here only because the fix and the retirement are related:
+**a movable fixture's OWN rest folds in the rule groups that cover it.**
 
-Before this, a movable fixture's rest was exactly the `rest_ms` line above.
+The fold was first added ALONGSIDE `rest_by_division` (`SolveBuildRequest.
+division_rules`, proto field 10), as a MAX of the two — a movable fixture's
+rest was `rest_by_division` alone before that, exactly the `rest_ms` line
+above computed without the loop that now follows it. `division_rules` (and
+the `rest_by_division`/`day_cap_by_division` dict keys it fed) was retired in
+a later release once the `rule_groups` path was confirmed authoritative in
+production, collapsing what was planned as a longer migration into one PR —
+see `placement.schema`'s module docstring for the wire side of that. The fold
+below is what is left: `rest_ms` now starts at a bare 0 per fixture (no
+division floor to max against any more) and the loop is the only source.
+
 The verifier was already stricter: `calendar.ts`'s `hardRestMinutesFor`
 resolves a fixture's own typed rest as the MAX `min_rest_minutes` over every
 rule whose scope covers it (confirmed by reading it for this task rather
@@ -516,9 +528,10 @@ def build_model(
         step_minutes: the lattice's tick size. Accepted because it is part of
             the contract but unread here — see the module docstring. Nothing
             reads it: `grid_slots` already enumerates every admissible tick.
-        constraints: `match_minutes`, `gap_minutes`, `rest_by_division`,
-            `day_cap_by_division` — the latter two now `dict[int, int]`,
-            keyed by `division_index` rather than by division id string.
+        constraints: `match_minutes`, `gap_minutes` only. Used to also carry
+            `rest_by_division`/`day_cap_by_division` (`dict[int, int]`, keyed
+            by `division_index`), fed by `division_rules` (proto field 10) —
+            retired; see `placement.schema`'s module docstring.
         existing: (court_index, start_at_ms) immovable rows. No fixture
             identity at all — round 6 confirmed by tracing every read that
             the old `fixture_id` on a pinned row reached nothing but a debug
@@ -534,11 +547,9 @@ def build_model(
             CLOSED"), and again below via `pinned_rule_group_indices`, for a
             PIN's own rest (C6) — both resolve the same way, 0 if no covering
             group carries a rest rule. `max_fixtures_per_day`, when set, caps
-            this group's placements on each day exactly as
+            this group's placements on each day exactly as the retired
             `day_cap_by_division` used to cap a whole division — section 9
-            below PREFERS this over `day_cap_by_division` whenever it is
-            non-empty, and falls back to the division cap unchanged otherwise,
-            so a caller still on the previous contract shape is unaffected.
+            below is the only place that reads a day cap now.
         pinned_rule_group_indices: parallel to `existing` (same length, same
             order) — `pinned_rule_group_indices[k]` is which rule groups
             `existing[k]` counts against. See `_day_of_pin` for how a pin's
@@ -557,9 +568,6 @@ def build_model(
     pinned_rule_group_indices = pinned_rule_group_indices or []
     pinned_entrant_indices = pinned_entrant_indices or []
 
-    rest_by_division: dict[int, int] = constraints.get("rest_by_division") or {}
-    day_cap_by_division: dict[int, int] = constraints.get("day_cap_by_division") or {}
-
     # --- degenerate values that would otherwise produce a confidently WRONG
     # --- board reported as OPTIMAL. See "proto3 scalars are non-optional".
     match_minutes = int(constraints.get("match_minutes", 0))
@@ -569,14 +577,6 @@ def build_model(
             "every court and rest interval zero-width, so NoOverlap constrains nothing and "
             "the solver returns OPTIMAL with every fixture stacked on one tick."
         )
-    for division, cap in day_cap_by_division.items():
-        if int(cap) <= 0:
-            raise ValueError(
-                f"max_fixtures_per_day for division_index {division!r} must be > 0, got {cap!r}. "
-                "A cap of 0 forbids placing that division at all, and the solver reports "
-                "OPTIMAL having silently dropped every one of its fixtures. To leave a "
-                "division uncapped, omit it from day_cap_by_division rather than passing 0."
-            )
     # `gap_minutes` and rest of 0 are both LEGITIMATE (no turnaround required,
     # no minimum rest), which is why neither is guarded as `<= 0` the way
     # `match_minutes` is. Negative is the degenerate case, and it is worse than
@@ -591,15 +591,6 @@ def build_model(
             "intervals constrains nothing, and the solver returns OPTIMAL with two matches "
             "physically overlapping on one court (measured: 37 placed, 4 tiers, 1 overlap)."
         )
-    for division, rest in rest_by_division.items():
-        if int(rest) < 0:
-            raise ValueError(
-                f"min_rest_minutes for division_index {division!r} must be >= 0, got {rest!r}. The "
-                "participant-rest interval is match_minutes + rest wide, so a negative rest "
-                "shrinks it — at rest == -match_minutes the width is 0 and the solver returns "
-                "OPTIMAL with one entrant in two simultaneous matches (measured: 37 placed, "
-                "4 tiers, 1 collision). Rest of 0 is legitimate and is deliberately allowed."
-            )
     if not grid_slots:
         raise ValueError(
             "grid_slots must be non-empty. With no admissible ticks the start domain falls "
@@ -615,25 +606,23 @@ def build_model(
     dur_ms = match_minutes * MIN_MS
     gap_ms = gap_minutes * MIN_MS
 
-    divisions = [division_index for _entrants, division_index in fixtures]
-    # Per-fixture rest, resolved off the fixture's OWN division. The bench had
-    # one `hard_rest_min` for the whole board; this is that generalised, and
-    # reduces to it exactly when every division shares a value.
-    rest_ms = [int(rest_by_division.get(division, 0)) * MIN_MS for division in divisions]
-    # Release 1 of retiring `division_rules` (module docstring, "A SEVENTH is
-    # CLOSED") -- a movable fixture's OWN rest additionally folds in the rule
-    # groups that cover it: the MAX of the line above and the largest
-    # `min_rest_minutes` over every group whose `fixture_indices` contains
-    # this fixture's own position. Matches `calendar.ts`'s `hardRestMinutesFor`
-    # fold, rule for rule (confirmed by reading it for this task, not
-    # assumed) -- a placer and a verifier disagreeing about one fixture's own
-    # rest is the recurring defect this programme keeps producing, so this
-    # must not invent a second resolution.
+    # Per-fixture rest. Before `division_rules` (proto field 10) was retired,
+    # this started from a per-division floor (`rest_by_division.get(division,
+    # 0)`); `rule_groups` -- covering every scope, not only "division", see
+    # `placement.schema`'s module docstring, "#21" -- has been the only wire
+    # source since, so the fold below is not additive to anything any more:
+    # it IS the computation, starting from a bare 0 per fixture.
+    rest_ms = [0] * n
+    # A movable fixture's OWN rest is the MAX `min_rest_minutes` over every
+    # rule group whose `fixture_indices` contains this fixture's own
+    # position. Matches `calendar.ts`'s `hardRestMinutesFor` fold, rule for
+    # rule (confirmed by reading it for this task, not assumed) -- a placer
+    # and a verifier disagreeing about one fixture's own rest is the
+    # recurring defect this programme keeps producing, so this must not
+    # invent a second resolution.
     #
     # A no-op, byte for byte, when `rule_groups` is empty: the loop below
-    # never executes, so `rest_ms` is left exactly as the line above computed
-    # it -- no caller still on the previous contract shape can observe any
-    # difference, structural or numeric
+    # never executes, so `rest_ms` is left at zero for every fixture
     # (`test_rule_groups_empty_leaves_the_model_byte_identical`).
     #
     # `None` (this group carries no rest rule at all -- C1's presence-tracked,
@@ -749,12 +738,12 @@ def build_model(
 
     # C6 (task #21) — a pin joins the SAME entrant-keyed rest groups, via
     # `pinned_entrant_indices`. Gated on `rule_groups` being non-empty, the
-    # same fallback section 9's day cap uses: a pin's own rest has no OTHER
-    # source (unlike a movable fixture, `existing` carries no `division_index`
-    # to resolve `rest_by_division` against), so with no rule_groups there is
-    # nothing to resolve it from and this is a no-op — a caller still on the
-    # previous contract shape keeps its previous behaviour exactly (module
-    # docstring, "A SIXTH is CLOSED as of task C6"). One FIXED interval per
+    # same gate section 9's day cap uses: a pin's own rest has no OTHER
+    # source at all now (unlike a movable fixture's pre-retirement division
+    # floor, `existing` never carried a `division_index` to resolve one
+    # against), so with no rule_groups there is nothing to resolve it from
+    # and this is a no-op (module docstring, "A SIXTH is CLOSED as of task
+    # C6"). One FIXED interval per
     # pin, mirroring section 7's court-overlap half (`ivc_existing_{k}`)
     # exactly, just against a different grouping, because a pin has no
     # presence literal — it is on the board unconditionally.
@@ -882,15 +871,12 @@ def build_model(
         model.Add(sum(on_day[i].values()) == placed[i])
 
     if rule_groups:
-        # C4 — prefer rule_groups over day_cap_by_division once the caller
-        # sends both. The staged rollout has build.ts sending BOTH: the old
-        # division_rules shape (so a not-yet-upgraded service still applies
-        # caps) and the new rule_groups shape describing the identical caps
-        # more generally (a division is one group among pools/entrants/
-        # persons — module docstring, "#21"). Applying both would mean
-        # capping the same fixtures under two names at once, so
-        # day_cap_by_division is read only in the `else` branch below, when
-        # rule_groups is empty.
+        # C4 — every day cap now reaches the model through a `RuleGroup`
+        # (a division is one group among pools/entrants/persons — module
+        # docstring, "#21"). `division_rules` (proto field 10), the
+        # division-only predecessor this used to run ALONGSIDE (build.ts sent
+        # both, so a not-yet-upgraded service still applied caps), is
+        # retired; there is no second field left to prefer this over.
         #
         # Bucket every PIN to the day its start falls on, once, before
         # walking groups — a pin's day does not depend on which group asks.
@@ -924,20 +910,13 @@ def build_model(
                     # solvable instead of returning nothing at all.
                     pinned = pinned_by_day.get(d, 0)
                     model.Add(sum(lits) <= max(0, int(cap) - pinned))
-    else:
-        # No rule_groups — a caller still on the previous contract shape.
-        # Exactly today's behaviour: caps applied per division, pins not
-        # counted against them at all. This is the FIFTH gap the module
-        # docstring used to record as open; it is closed only on the
-        # rule_groups path above, deliberately, so a caller that has not been
-        # upgraded to send rule_groups keeps the same permissiveness it
-        # always had rather than being silently tightened underneath it.
-        for division, cap in day_cap_by_division.items():
-            fx_idx = [i for i in range(n) if divisions[i] == division]
-            for d in day_ids:
-                lits = [on_day[i][d] for i in fx_idx]
-                if lits:
-                    model.Add(sum(lits) <= int(cap))
+    # No `else`: an empty `rule_groups` caps nothing, full stop. The FIFTH gap
+    # the module docstring records as closed used to stay open on a second,
+    # division-only path here (`day_cap_by_division`, fed by `division_rules`,
+    # proto field 10) for a caller not yet sending `rule_groups` — that path
+    # and the field feeding it are both retired, so there is no fallback left
+    # to keep permissive; `rule_groups` is the only way a day cap reaches this
+    # model now.
 
     placed_sum = sum(placed)
     # The horizon `mk_lo`/`mk_hi` (and T2's gap vars) live on. It must cover

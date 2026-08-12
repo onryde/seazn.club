@@ -150,44 +150,14 @@ describe("solveBuild", () => {
     expect(deadline.toISOString()).toBe("2026-08-09T12:00:10.000Z");
   });
 
-  // The two per-division constraints are the only place the caller's shape and
-  // the wire's shape genuinely disagree: TS models them as two Records keyed
-  // by division id, the proto as ONE repeated `DivisionRule` keyed by
-  // `division_index` (half 1's `DivisionRestRule` + `DivisionDayCapRule`
-  // merge). Handing a Record straight to the generated encoder is not a type
-  // error the compiler can catch through the call seam, and it does not fail
-  // loudly either — it iterates a non-iterable or emits nothing, so the
-  // solver gets a board with every rest rule and day cap silently missing and
-  // proves it OPTIMAL. This test is the only thing that distinguishes the
-  // two, now including the division id -> index step.
-  it("maps per-division constraint records onto the proto's repeated division rules", async () => {
-    const mockClient = respondingClient();
-
-    await solveBuild(
-      {
-        ...INPUT,
-        constraints: {
-          matchMinutes: 30,
-          gapMinutes: 10,
-          restByDivision: { "div-a": 45 },
-          dayCapByDivision: { "div-b": 3 },
-        },
-      },
-      { secret: "s3cr3t" },
-      mockClient,
-    );
-
-    const [request] = mockClient.solveBuild.mock.calls[0]!;
-    // Neither fixture references either division (INPUT.fixtures is empty),
-    // so `divisionIndex` comes entirely from `constraints`: restByDivision's
-    // keys first ("div-a" -> 0), then dayCapByDivision's keys not already
-    // seen ("div-b" -> 1). Each rule carries only the half it actually has —
-    // no false zero for the field it does not.
-    expect(request.divisionRules).toEqual([
-      { divisionIndex: 0, minRestMinutes: 45, maxFixturesPerDay: undefined },
-      { divisionIndex: 1, minRestMinutes: undefined, maxFixturesPerDay: 3 },
-    ]);
-  });
+  // `constraints.restByDivision`/`dayCapByDivision` and the `divisionRules`
+  // wire field they fed (`division_rules`, proto field 10, half 1's
+  // `DivisionRestRule` + `DivisionDayCapRule` merge) are retired: the
+  // `rule_groups` path is authoritative in production, and the per-division
+  // shape mapped ONLY there. See "maps rule groups and pinned rule/entrant
+  // references onto the wire" below for the surviving equivalent — a
+  // `RuleGroup` resolves fixture ids the same way this test used to resolve
+  // division ids.
 
   // A client that never calls back is not a contrived mock — it is what a wedged
   // connection looks like from here. gRPC's own `deadline` CallOption cannot be
@@ -261,17 +231,17 @@ describe("solveBuild", () => {
   // proto3 drops a zero scalar from the wire, so for these fields "unset" and
   // "the caller meant zero" are the same bytes — and each one yields a board the
   // solver proves OPTIMAL while quietly meaning something else. The service's
-  // own ACL rejects all three; refusing here too means the caller learns why
+  // own ACL rejects both; refusing here too means the caller learns why
   // without spending a round trip, and learns it as `invalid_request`.
+  //
+  // A third case, a `dayCapByDivision` entry of 0, used to live here too:
+  // `constraints.dayCapByDivision` is retired along with `division_rules`
+  // (proto field 10), and there is no CLIENT-side ambiguous-zero guard for
+  // its `rule_groups` replacement (`RuleGroup.maxFixturesPerDay`) — only the
+  // service's own ACL (`placement.schema._validated_rule_groups`) rejects a
+  // zero cap there now.
   it.each([
     ["matchMinutes", { ...INPUT, constraints: { matchMinutes: 0, gapMinutes: 10 } }],
-    [
-      "dayCapByDivision entry",
-      {
-        ...INPUT,
-        constraints: { matchMinutes: 30, gapMinutes: 10, dayCapByDivision: { "div-b": 0 } },
-      },
-    ],
     ["wallSeconds", { ...INPUT, wallSeconds: 0 }],
   ])("refuses a request whose %s is an ambiguous zero", async (_label, badInput) => {
     const mockClient = respondingClient();
@@ -304,7 +274,7 @@ describe("solveBuild", () => {
           slots: [{ court: "Court 1", startAtMs: 1_700_000_000_000, dayIndex: 0 }],
           stepMinutes: 10,
         },
-        constraints: { matchMinutes: 30, gapMinutes: 10, restByDivision: { "div-a": 45 } },
+        constraints: { matchMinutes: 30, gapMinutes: 10 },
       },
       { secret: "s3cr3t", requestId: "req-42" },
       mockClient,
@@ -323,12 +293,12 @@ describe("solveBuild", () => {
     // an unset field: without explicit presence the encoder would drop every
     // one of them as a default, the service would see an absent field, and
     // (for `dayIndex` specifically) every slot would collapse into one
-    // day-cap bucket.
+    // day-cap bucket. `ruleGroups[].minRestMinutes: 0`'s own round trip is
+    // proto3-`optional` for the identical reason -- see "round-trips rule
+    // groups and pinned rule/entrant references through the real encoder"
+    // below, which covers it directly rather than duplicating it here.
     expect(decoded.slots).toEqual([{ courtIndex: 0, startAtMs: 1_700_000_000_000, dayIndex: 0 }]);
     expect(decoded.fixtures).toEqual([{ entrantIndices: [0, 1], divisionIndex: 0 }]);
-    expect(decoded.divisionRules).toEqual([
-      { divisionIndex: 0, minRestMinutes: 45, maxFixturesPerDay: undefined },
-    ]);
     expect(decoded.wallSeconds).toBe(8);
   });
 
@@ -440,7 +410,7 @@ describe("solveBuild", () => {
     },
     existing: [{ fixtureId: "pinned-1", court: "Court 2", startAtMs: 1_700_007_200_000 }],
     dependencies: [{ beforeFixtureId: "f1", afterFixtureId: "f2" }],
-    constraints: { matchMinutes: 30, gapMinutes: 10, restByDivision: { "div-a": 45 } },
+    constraints: { matchMinutes: 30, gapMinutes: 10 },
     wallSeconds: 8,
   };
 
@@ -470,9 +440,6 @@ describe("solveBuild", () => {
       { courtIndex: 1, startAtMs: 1_700_007_200_000, ruleGroupIndices: [], entrantIndices: [] },
     ]);
     expect(request.dependencies).toEqual([{ beforeIndex: 0, afterIndex: 1 }]);
-    expect(request.divisionRules).toEqual([
-      { divisionIndex: 0, minRestMinutes: 45, maxFixturesPerDay: undefined },
-    ]);
   });
 
   it("inverts assignment indices back to the original ids on the way out", async () => {
@@ -658,9 +625,10 @@ describe("solveBuild", () => {
 
   // --- C1/C4/C6: rule_groups, and PinnedRow's rule_group_indices/entrant_indices ---
 
-  // The main shape test: `ruleGroups` maps onto the wire like `divisionRules`
-  // does (id -> index through the SAME `fixtureIndexOf`/`entrantIndexOf`
-  // tables everything else uses), and a pinned row's `entrantIds` can name an
+  // The main shape test: `ruleGroups` maps onto the wire the same way every
+  // other collection here does (id -> index through the SAME `fixtureIndexOf`/
+  // `entrantIndexOf` tables everything else uses), and a pinned row's
+  // `entrantIds` can name an
   // entrant that appears NOWHERE in a movable fixture — the whole point of C6
   // (two pinned rows sharing an entrant are otherwise invisible to a rest
   // rule) requires exactly that to still resolve to a valid index.
@@ -738,9 +706,9 @@ describe("solveBuild", () => {
 
   // The real-encoder counterpart of "builds a request the generated encoder
   // can round-trip": `minRestMinutes: 0` specifically, because it is the
-  // proto3-`optional` case that a naive encoder drops as a default — the same
-  // trap `divisionRules`' own round-trip test exists to catch, now on the
-  // generalised field.
+  // proto3-`optional` case that a naive encoder drops as a default -- the
+  // same trap the OLD `division_rules` field's own round-trip test used to
+  // catch, now on this, its sole surviving equivalent.
   it("round-trips rule groups and pinned rule/entrant references through the real encoder", async () => {
     const mockClient = respondingClient();
 

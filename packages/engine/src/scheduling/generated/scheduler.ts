@@ -190,9 +190,10 @@ export interface PinnedRow {
  * fixture positions, which is the only thing it was ever doing -- it never
  * learns what a division, pool, entrant or person is.
  *
- * This subsumes `DivisionRule`: a division is one such group. `division_rules`
- * is kept for now and migrated separately, because THIS revision changes no
- * behaviour -- see `SolveBuildRequest.rule_groups`.
+ * This subsumed `DivisionRule`: a division was one such group. `division_rules`
+ * (proto field 10) carried that division-only predecessor and has since been
+ * retired -- reserved on `SolveBuildRequest`, not reused; see
+ * `SolveBuildRequest.rule_groups` below.
  */
 export interface RuleGroup {
   /**
@@ -231,33 +232,6 @@ export interface RuleGroup {
 export interface OrderPair {
   beforeIndex?: number | undefined;
   afterIndex?: number | undefined;
-}
-
-/**
- * Replaces `DivisionRestRule` + `DivisionDayCapRule`: ONE rule per division,
- * not two independent lists keyed by the same string. `min_rest_minutes` and
- * `max_fixtures_per_day` are each `optional` so a division can carry either,
- * both, or (by being absent from `division_rules` entirely) neither --
- * exactly the independence the two-list contract had, just keyed on one
- * index instead of duplicated across two lists.
- */
-export interface DivisionRule {
-  divisionIndex?:
-    | number
-    | undefined;
-  /**
-   * Presence, not `>= 0`: 0 is "no minimum rest", a legitimate rule, and
-   * distinct from no rule at all (division absent from `division_rules`, or
-   * present with this field unset).
-   */
-  minRestMinutes?:
-    | number
-    | undefined;
-  /**
-   * Presence, then `> 0` when set: 0 would forbid the division outright,
-   * which is never what "no cap" means. Absent = uncapped.
-   */
-  maxFixturesPerDay?: number | undefined;
 }
 
 export interface BuildConstraints {
@@ -341,22 +315,20 @@ export interface SolveBuildRequest {
   stepMinutes: number;
   existing: PinnedRow[];
   dependencies: OrderPair[];
-  divisionRules: DivisionRule[];
   constraints: BuildConstraints | undefined;
   wallSeconds: number;
   /**
-   * C1. Added ALONGSIDE `division_rules` rather than replacing it, and the
-   * staging split (DEPLOY.md section 4b) is why: a contract revision runs on
-   * `placement-stg` while production still runs the previous one, so for that
-   * window both services must tolerate the other's messages. Adding a field
-   * is safe in both directions under proto3; renumbering or repurposing one
-   * is not, and no runbook step saves you from that.
+   * C1. Originally added ALONGSIDE `division_rules` (proto field 10, now
+   * retired -- see the `reserved` statement above) rather than replacing it:
+   * a contract revision ran on `placement-stg` while production still ran
+   * the previous one, so for that window both services had to tolerate the
+   * other's messages. Adding a field is safe in both directions under
+   * proto3; renumbering or repurposing one is not.
    *
-   * So the migration is staged. This revision adds the field and changes NO
-   * behaviour -- the ACL parses and validates it, the domain never receives
-   * it, and the same request produces the same board. `division_rules`
-   * becomes redundant when the C1 model half lands, and field 10 is reserved
-   * rather than reused when it finally goes.
+   * That staged migration is complete. `division_rules` became redundant
+   * once the C1 model half landed and the rule_groups path was confirmed
+   * authoritative in production (2026-08-12), so it was retired outright
+   * rather than carrying a further release.
    */
   ruleGroups: RuleGroup[];
 }
@@ -919,110 +891,6 @@ export const OrderPair: MessageFns<OrderPair> = {
   },
 };
 
-function createBaseDivisionRule(): DivisionRule {
-  return { divisionIndex: undefined, minRestMinutes: undefined, maxFixturesPerDay: undefined };
-}
-
-export const DivisionRule: MessageFns<DivisionRule> = {
-  encode(message: DivisionRule, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.divisionIndex !== undefined) {
-      writer.uint32(8).uint32(message.divisionIndex);
-    }
-    if (message.minRestMinutes !== undefined) {
-      writer.uint32(16).int32(message.minRestMinutes);
-    }
-    if (message.maxFixturesPerDay !== undefined) {
-      writer.uint32(24).int32(message.maxFixturesPerDay);
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): DivisionRule {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseDivisionRule();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 8) {
-            break;
-          }
-
-          message.divisionIndex = reader.uint32();
-          continue;
-        }
-        case 2: {
-          if (tag !== 16) {
-            break;
-          }
-
-          message.minRestMinutes = reader.int32();
-          continue;
-        }
-        case 3: {
-          if (tag !== 24) {
-            break;
-          }
-
-          message.maxFixturesPerDay = reader.int32();
-          continue;
-        }
-      }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
-      }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
-
-  fromJSON(object: any): DivisionRule {
-    return {
-      divisionIndex: isSet(object.divisionIndex)
-        ? globalThis.Number(object.divisionIndex)
-        : isSet(object.division_index)
-        ? globalThis.Number(object.division_index)
-        : undefined,
-      minRestMinutes: isSet(object.minRestMinutes)
-        ? globalThis.Number(object.minRestMinutes)
-        : isSet(object.min_rest_minutes)
-        ? globalThis.Number(object.min_rest_minutes)
-        : undefined,
-      maxFixturesPerDay: isSet(object.maxFixturesPerDay)
-        ? globalThis.Number(object.maxFixturesPerDay)
-        : isSet(object.max_fixtures_per_day)
-        ? globalThis.Number(object.max_fixtures_per_day)
-        : undefined,
-    };
-  },
-
-  toJSON(message: DivisionRule): unknown {
-    const obj: any = {};
-    if (message.divisionIndex !== undefined) {
-      obj.divisionIndex = Math.round(message.divisionIndex);
-    }
-    if (message.minRestMinutes !== undefined) {
-      obj.minRestMinutes = Math.round(message.minRestMinutes);
-    }
-    if (message.maxFixturesPerDay !== undefined) {
-      obj.maxFixturesPerDay = Math.round(message.maxFixturesPerDay);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<DivisionRule>, I>>(base?: I): DivisionRule {
-    return DivisionRule.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<DivisionRule>, I>>(object: I): DivisionRule {
-    const message = createBaseDivisionRule();
-    message.divisionIndex = object.divisionIndex ?? undefined;
-    message.minRestMinutes = object.minRestMinutes ?? undefined;
-    message.maxFixturesPerDay = object.maxFixturesPerDay ?? undefined;
-    return message;
-  },
-};
-
 function createBaseBuildConstraints(): BuildConstraints {
   return { matchMinutes: 0, gapMinutes: undefined };
 }
@@ -1374,7 +1242,6 @@ function createBaseSolveBuildRequest(): SolveBuildRequest {
     stepMinutes: 0,
     existing: [],
     dependencies: [],
-    divisionRules: [],
     constraints: undefined,
     wallSeconds: 0,
     ruleGroups: [],
@@ -1409,9 +1276,6 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
     }
     for (const v of message.dependencies) {
       OrderPair.encode(v!, writer.uint32(74).fork()).join();
-    }
-    for (const v of message.divisionRules) {
-      DivisionRule.encode(v!, writer.uint32(82).fork()).join();
     }
     if (message.constraints !== undefined) {
       BuildConstraints.encode(message.constraints, writer.uint32(90).fork()).join();
@@ -1504,14 +1368,6 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
           message.dependencies.push(OrderPair.decode(reader, reader.uint32()));
           continue;
         }
-        case 10: {
-          if (tag !== 82) {
-            break;
-          }
-
-          message.divisionRules.push(DivisionRule.decode(reader, reader.uint32()));
-          continue;
-        }
         case 11: {
           if (tag !== 90) {
             break;
@@ -1582,11 +1438,6 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
       dependencies: globalThis.Array.isArray(object?.dependencies)
         ? object.dependencies.map((e: any) => OrderPair.fromJSON(e))
         : [],
-      divisionRules: globalThis.Array.isArray(object?.divisionRules)
-        ? object.divisionRules.map((e: any) => DivisionRule.fromJSON(e))
-        : globalThis.Array.isArray(object?.division_rules)
-        ? object.division_rules.map((e: any) => DivisionRule.fromJSON(e))
-        : [],
       constraints: isSet(object.constraints) ? BuildConstraints.fromJSON(object.constraints) : undefined,
       wallSeconds: isSet(object.wallSeconds)
         ? globalThis.Number(object.wallSeconds)
@@ -1630,9 +1481,6 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
     if (message.dependencies?.length) {
       obj.dependencies = message.dependencies.map((e) => OrderPair.toJSON(e));
     }
-    if (message.divisionRules?.length) {
-      obj.divisionRules = message.divisionRules.map((e) => DivisionRule.toJSON(e));
-    }
     if (message.constraints !== undefined) {
       obj.constraints = BuildConstraints.toJSON(message.constraints);
     }
@@ -1659,7 +1507,6 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
     message.stepMinutes = object.stepMinutes ?? 0;
     message.existing = object.existing?.map((e) => PinnedRow.fromPartial(e)) || [];
     message.dependencies = object.dependencies?.map((e) => OrderPair.fromPartial(e)) || [];
-    message.divisionRules = object.divisionRules?.map((e) => DivisionRule.fromPartial(e)) || [];
     message.constraints = (object.constraints !== undefined && object.constraints !== null)
       ? BuildConstraints.fromPartial(object.constraints)
       : undefined;

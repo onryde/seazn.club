@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from google.protobuf import descriptor_pb2
 from google.protobuf.descriptor import FieldDescriptor
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -112,7 +113,8 @@ EXPECTED_REQUEST_FIELDS = {
     "step_minutes":   (7,  FieldDescriptor.TYPE_INT32,   False, False),
     "existing":       (8,  FieldDescriptor.TYPE_MESSAGE, True,  False),
     "dependencies":   (9,  FieldDescriptor.TYPE_MESSAGE, True,  False),
-    "division_rules": (10, FieldDescriptor.TYPE_MESSAGE, True,  False),
+    # Field 10 (`division_rules`) is RESERVED, not a live field -- see
+    # `test_division_rules_field_and_name_are_reserved` below.
     "constraints":    (11, FieldDescriptor.TYPE_MESSAGE, False, True),
     "wall_seconds":   (12, FieldDescriptor.TYPE_DOUBLE,  False, False),
     "rule_groups":    (13, FieldDescriptor.TYPE_MESSAGE, True,  False),
@@ -162,11 +164,6 @@ EXPECTED_MESSAGE_FIELDS = {
         "before_index": (1, FieldDescriptor.TYPE_UINT32, False, True),
         "after_index":  (2, FieldDescriptor.TYPE_UINT32, False, True),
     },
-    "DivisionRule": {
-        "division_index":       (1, FieldDescriptor.TYPE_UINT32, False, True),
-        "min_rest_minutes":     (2, FieldDescriptor.TYPE_INT32,  False, True),
-        "max_fixtures_per_day": (3, FieldDescriptor.TYPE_INT32,  False, True),
-    },
     "BuildConstraints": {
         "match_minutes": (1, FieldDescriptor.TYPE_INT32, False, False),
         "gap_minutes":   (2, FieldDescriptor.TYPE_INT32, False, True),
@@ -212,6 +209,36 @@ def _assert_fields(descriptor, expected):
 def test_solve_build_request_contract():
     pb2 = importlib.import_module("placement.generated.scheduler_pb2")
     _assert_fields(pb2.SolveBuildRequest.DESCRIPTOR, EXPECTED_REQUEST_FIELDS)
+
+
+def test_division_rules_field_and_name_are_reserved():
+    """`division_rules` (proto field 10, the `DivisionRule`-typed predecessor
+    of `rule_groups`) was retired 2026-08-12 -- see the retirement design doc
+    and `placement.schema`'s module docstring. RESERVED, not just deleted:
+    reusing field 10 for something else would be a wire collision against any
+    peer still holding bytes encoded under the old meaning during a deploy
+    window, and reusing the NAME would silently un-reserve the number for a
+    generator that keys off name rather than number. Both are asserted, and
+    both must fail on a proto that only deletes the field without reserving
+    it -- deletion alone leaves the number and name free for the next field
+    added, which is exactly the renumbering `_RULES.md` calls "never safe
+    across the stg/prod deploy split".
+    """
+    pb2 = importlib.import_module("placement.generated.scheduler_pb2")
+    proto = descriptor_pb2.DescriptorProto()
+    pb2.SolveBuildRequest.DESCRIPTOR.CopyToProto(proto)
+
+    assert (10, 11) in [(rr.start, rr.end) for rr in proto.reserved_range], (
+        f"field 10 is not reserved on SolveBuildRequest: {list(proto.reserved_range)}"
+    )
+    assert "division_rules" in proto.reserved_name, (
+        f"the name 'division_rules' is not reserved on SolveBuildRequest: {list(proto.reserved_name)}"
+    )
+    # And the field is genuinely gone as a live field, not merely reserved
+    # ALONGSIDE a lingering declaration (which protoc would refuse to compile
+    # anyway, but the refusal happens before this test ever runs).
+    assert "division_rules" not in pb2.SolveBuildRequest.DESCRIPTOR.fields_by_name
+    assert not hasattr(pb2, "DivisionRule")
 
 
 def test_solve_build_response_contract():

@@ -66,7 +66,7 @@ import os
 import pytest
 import structlog
 
-from _board_positional import to_positional
+from _board_positional import rule_groups_for, to_positional
 from placement.model import MIN_MS, build_model, solve
 from placement.objective import (
     TIER_IMBALANCE,
@@ -143,12 +143,26 @@ T3_PROVED_IMBALANCE_MS = 2_400_000
 
 
 def _production_board():
+    """The bench's `production_board()`, converted to the positional shape,
+    PLUS the `rule_groups` its declared `rest_by_division`/`day_cap_by_
+    division` now have to reach `build_model` through: `division_rules`
+    (proto field 10), the wire path those dict keys used to be fed through,
+    is retired (`placement.schema`'s module docstring). Without this, every
+    caller below would silently solve an UNCAPPED, un-rested board — see
+    `test_model.py`'s own `_production_board`, which this mirrors exactly,
+    for the fuller reasoning and the regressions that shipped before this
+    file got the same fix.
+
+    Returns an 8-tuple: the 7 `build_model(*board)`-shaped elements
+    (`to_positional`'s own output) plus `rule_groups`.
+    """
     # bench/ reaches sys.path via `pythonpath` in pyproject.toml — see
     # test_model.py's note. Module name matches its siblings placement_bench.py /
     # placement_repair_bench.py.
     from placement_bench_boards import production_board
 
-    return to_positional(production_board())
+    raw_board = production_board()
+    return (*to_positional(raw_board), rule_groups_for(raw_board))
 
 
 @pytest.fixture(scope="module")
@@ -157,8 +171,11 @@ def board():
 
 
 def _model_for(board):
-    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = board
-    return build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps, rule_groups = board
+    return build_model(
+        fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps,
+        rule_groups=rule_groups,
+    )
 
 
 def _model_without_pins(board):
@@ -193,8 +210,11 @@ def _model_without_pins(board):
     uses the PINNED board — the proved optimum is what #511 changed, and that
     test is where the new value is asserted.
     """
-    fixtures, num_courts, grid_slots, step_minutes, constraints, _existing, deps = board
-    return build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, [], deps)
+    fixtures, num_courts, grid_slots, step_minutes, constraints, _existing, deps, rule_groups = board
+    return build_model(
+        fixtures, num_courts, grid_slots, step_minutes, constraints, [], deps,
+        rule_groups=rule_groups,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -285,7 +305,7 @@ def test_full_chain_places_exactly_what_t0_alone_places(board, chain):
 def test_reported_values_match_the_board_that_came_back(board, chain):
     """Every reported number is a property of the returned assignments, not of
     a board discarded three solves ago."""
-    fixtures, num_courts, _slots, _step, constraints, _existing, _deps = board
+    fixtures, num_courts, _slots, _step, constraints, _existing, _deps, _rule_groups = board
     dur_ms = constraints["match_minutes"] * MIN_MS
     reported = dict(chain.objective_values)
 
@@ -300,7 +320,7 @@ def test_reported_bounds_are_frozen_against_the_final_board(board, chain):
     honour them — that is the whole content of "frozen", and it is exactly
     what a blended score would not give you.
     """
-    fixtures, _num_courts, _slots, _step, constraints, _existing, _deps = board
+    fixtures, _num_courts, _slots, _step, constraints, _existing, _deps, _rule_groups = board
     dur_ms = constraints["match_minutes"] * MIN_MS
     entrants_of = [ents for ents, _div in fixtures]  # identity is position now
     reported = dict(chain.objective_values)
@@ -405,7 +425,7 @@ def test_a_tier_cut_short_is_adopted_but_not_counted(board):
     # A cut-short tier cannot have beaten the proved optimum; if it claims to,
     # the recorded value belongs to some other board than the one returned.
     reported = dict(outcome.objective_values)
-    fixtures, _num_courts, _slots, _step, constraints, _existing, _deps = board
+    fixtures, _num_courts, _slots, _step, constraints, _existing, _deps, _rule_groups = board
     dur_ms = constraints["match_minutes"] * MIN_MS
     assert reported[TIER_MAKESPAN] >= T1_PROVED_MAKESPAN_PIN_FREE_MS
     assert _makespan(outcome.assignments, dur_ms) <= reported[TIER_MAKESPAN]
@@ -426,7 +446,7 @@ def test_the_adopted_board_is_the_better_one(board):
     with the two spans EQUAL means T1 found nothing in its slice, which is the
     box; a red with the adopted span LARGER is the code.
     """
-    fixtures, _num_courts, _slots, _step, constraints, _existing, _deps = board
+    fixtures, _num_courts, _slots, _step, constraints, _existing, _deps, _rule_groups = board
     dur_ms = constraints["match_minutes"] * MIN_MS
 
     # Pin-free as of #511, both arms, for the reason `_model_without_pins`
@@ -539,7 +559,8 @@ def test_tier_directions_are_pinned_without_the_clock():
         imbalance_probe_board,
     )
 
-    board = to_positional(imbalance_probe_board())
+    _raw_probe_board = imbalance_probe_board()
+    board = (*to_positional(_raw_probe_board), rule_groups_for(_raw_probe_board))
     model = _model_for(board)
     outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=5.0)
     detail = (
@@ -579,7 +600,8 @@ def test_tier_completed_debug_event_fires_once_per_tier():
     """
     from placement_bench_boards import imbalance_probe_board
 
-    board = to_positional(imbalance_probe_board())
+    _raw_probe_board = imbalance_probe_board()
+    board = (*to_positional(_raw_probe_board), rule_groups_for(_raw_probe_board))
     model = _model_for(board)
 
     old_wrapper_class = structlog.get_config()["wrapper_class"]
