@@ -1833,6 +1833,40 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   named from the team sheet, so a post-kickoff keeper swap is not reflected in
   football's picker candidates until football adopts `SquadState`. Tested and
   documented in `attribution-picker.tsx`'s header.
+- 2026-08-12 — S10/#419 — **the attribution picker shipped REACHABLE ONLY IF A
+  CALLER REMEMBERED TO PASS IT, and the e2e is what exposed that.** The picker
+  pass reported (correctly) that `PadRenderer`'s existing `renderAttribution`
+  seam was sufficient and needed no renderer edit — but nothing ever passed
+  that seam, so the default pad drew no picker at all, and every action whose
+  zod schema requires attribution (cricket's toss `wonBy`) was unsubmittable.
+  It surfaced only when the e2e drove a REAL fixture and the server 422'd.
+  Fifth instance of this programme's signature defect: S4's person-role
+  discriminator (engine-tested, unreachable from real code), S8's stat models
+  (declared against optional fields, inert), S8's folded rows (computed,
+  persisted, unrenderable), S7's `hitballtwice` (correct copy, unreachable
+  picker), and now this. The pattern is always the same shape — a component or
+  value that is written, tested, and connected to nothing — and a test at the
+  unit level cannot see it by construction.
+  Fixed by making the picker the DEFAULT (`PadRenderer` renders it itself, fed
+  the LIVE folded state so the keeper comes from `core.lineup.*` rather than
+  the kickoff sheet); `renderAttribution` survives as an OVERRIDE for S11's
+  skins. Mutation-verified: removing the default reds the reachability test.
+  **Lesson for S11/S12, worth restating in their briefs:** a seam left for a
+  later pass must ship with a working default, or the later pass inherits an
+  inert component and nobody notices until something drives the real API.
+- 2026-08-12 — S10/#419 — **browser evidence, and what it cost to get.** The
+  e2e (`apps/web/e2e/scorepad-offline.spec.ts`) proves the three claims no
+  unit test can reach, against the real API through the harness: queued events
+  survive a real reload and drain **in order**; airplane-mode scoring
+  continues with visible queue depth and drains on reconnect; a 409 raised
+  mid-drain by an out-of-band append resyncs and completes with BOTH that
+  event and every queued one present **exactly once** — asserted against the
+  ledger as exact `{type, payload}` sequences, never as counts. Falsifiability
+  proved, not claimed: forcing `indexedDbQueueStore()` to return the
+  non-durable memory store fails the tab-death test at the pre-reload
+  durability poll (`Expected 3, Received 0`), restored from a `cp` backup and
+  byte-verified. Node has no `indexedDB`, so this is the only coverage
+  `queue-store.ts`'s open/cursor/transaction paths have anywhere.
 - _(append below)_
 
 ## Open questions for the owner
