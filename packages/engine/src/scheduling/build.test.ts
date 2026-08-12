@@ -2173,4 +2173,56 @@ describe("buildSchedule — Placement path", () => {
     expect(byId.get("d1-semi")?.roundNo).toBeUndefined();
     expect(byId.get("d2-clean")?.roundNo).toBe(1);
   });
+
+  // Found via schedule.test.ts's "8-team group+KO division" end-to-end case,
+  // not named in the brief: `kind: "group"` with N pools calls
+  // `roundRobinGen` once PER POOL, so pool A's round 2 and pool B's round 2
+  // are two unrelated "round 2"s. `Fixture` (the wire message) has no pool
+  // index at all — only `division_index` — so unlike the TS verifier (which
+  // scopes by `Assignment.poolId`, see calendar.test.ts's own pool-scoping
+  // tests), the solver-side wire cannot express "these two rounds are
+  // incomparable because they're different pools". Stripping the whole
+  // division's rounds is therefore the only safe answer here, the identical
+  // mechanism the dependency-edge contamination guard already uses.
+  it("strips rounds for a division whose round-bearing fixtures span more than one pool", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const fixtures = [
+      fx("poolA-r1", "E1", "E2", { roundNo: 1, divisionId: "D1", poolId: "A" }),
+      fx("poolA-r2", "E3", "E4", { roundNo: 2, divisionId: "D1", poolId: "A" }),
+      fx("poolB-r1", "E5", "E6", { roundNo: 1, divisionId: "D1", poolId: "B" }),
+    ];
+    await buildSchedule({ fixtures, config: cfg() });
+    expect(captured).toBeDefined();
+    const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
+    expect(byId.get("poolA-r1")?.roundNo).toBeUndefined();
+    expect(byId.get("poolA-r2")?.roundNo).toBeUndefined();
+    expect(byId.get("poolB-r1")?.roundNo).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[1]).toContain("span more than one pool");
+    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ divisions: ["D1"] });
+  });
+
+  it("does not strip a single-pool division when a DIFFERENT division has multiple pools", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const fixtures = [
+      fx("d1-poolA-r1", "E1", "E2", { roundNo: 1, divisionId: "D1", poolId: "A" }),
+      fx("d1-poolB-r1", "E3", "E4", { roundNo: 1, divisionId: "D1", poolId: "B" }),
+      fx("d2-clean", "E5", "E6", { roundNo: 1, divisionId: "D2" }),
+    ];
+    await buildSchedule({ fixtures, config: cfg() });
+    expect(captured).toBeDefined();
+    const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
+    expect(byId.get("d1-poolA-r1")?.roundNo).toBeUndefined();
+    expect(byId.get("d2-clean")?.roundNo).toBe(1);
+  });
 });

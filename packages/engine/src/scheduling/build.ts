@@ -1649,17 +1649,47 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // bracket fixture carrying both a round and a feed edge is the identical
   // contamination signal.
   const dependencyEndpointIds = new Set(dependencies.flatMap((d) => [d.fixtureId, d.dependsOn]));
-  const contaminatedDivisions = new Set(
+  const dependencyContaminated = new Set(
     fixtures
       .filter((f) => f.roundNo !== undefined && dependencyEndpointIds.has(f.id))
       .map((f) => f.divisionId ?? ""),
   );
-  if (contaminatedDivisions.size > 0) {
+  if (dependencyContaminated.size > 0) {
     log.warn(
-      { divisions: [...contaminatedDivisions] },
+      { divisions: [...dependencyContaminated] },
       "buildSchedule: round-bearing fixture also carries a feed dependency — stripping round for its division rather than emit a false order",
     );
   }
+  // SECOND contamination source, found during implementation: a `kind:
+  // "group"` stage with N pools runs N INDEPENDENT round-robin sequences,
+  // each restarting at round 1 (`stages.ts`'s `generate()` calls
+  // `roundRobinGen` once per pool) — Pool A's round 2 and Pool B's round 2
+  // are not comparable, the same way two stages' rounds are not. The wire
+  // has no pool index at all (`Fixture` carries `division_index` only), so
+  // — unlike the TS verifier, which CAN scope by `(divisionId, poolId)`
+  // because `Assignment.poolId` exists (see `calendar.ts`'s own comment) —
+  // this engine cannot forward a pool-scoped round to the solver and must
+  // instead strip: a division whose round-bearing free fixtures span more
+  // than one distinct pool is contaminated the same way a dependency-edge
+  // hit is.
+  const roundBearingPoolsByDivision = new Map<string, Set<string>>();
+  for (const f of freeFixtures) {
+    if (f.roundNo === undefined) continue;
+    const division = f.divisionId ?? "";
+    const pools = roundBearingPoolsByDivision.get(division) ?? new Set<string>();
+    pools.add(f.poolId ?? "");
+    roundBearingPoolsByDivision.set(division, pools);
+  }
+  const multiPoolContaminated = new Set(
+    [...roundBearingPoolsByDivision.entries()].filter(([, pools]) => pools.size > 1).map(([d]) => d),
+  );
+  if (multiPoolContaminated.size > 0) {
+    log.warn(
+      { divisions: [...multiPoolContaminated] },
+      "buildSchedule: round-bearing fixtures span more than one pool in the same division — stripping round for its division rather than compare two independent round-robin sequences",
+    );
+  }
+  const contaminatedDivisions = new Set([...dependencyContaminated, ...multiPoolContaminated]);
   const roundBearingFor = (f: SchedulableFixture): number | undefined =>
     f.roundNo !== undefined && !contaminatedDivisions.has(f.divisionId ?? "") ? f.roundNo : undefined;
 

@@ -1455,7 +1455,7 @@ export function validateAssignments(
     }
   }
 
-  // C1 (2026-08-12 round-order design). Same-division pairs with round_i <
+  // C1 (2026-08-12 round-order design). Same-SEQUENCE pairs with round_i <
   // round_j and at least one movable side: day_i <= day_j (unconditional)
   // and, when they land on the same day, start_i <= start_j (ties legal —
   // the pair set is all r < r', never r <= r'). Reported as `reason:
@@ -1468,6 +1468,20 @@ export function validateAssignments(
   // matching how feed-order blames the dependent fixture rather than the
   // feeder.
   //
+  // "Same sequence" is (divisionId, poolId), NOT divisionId alone — found
+  // during implementation, not named in the spec's literal "same-division"
+  // text: a `kind: "group"` stage with N pools runs N INDEPENDENT
+  // round-robin sequences, each restarting at round 1
+  // (`stages.ts`'s `generate()` calls `roundRobinGen` once per pool). Two
+  // pools sharing one division but each on their own round 2 are not
+  // comparable, the same way two stages are not — omitting `poolId` from the
+  // key compared Pool A's round 3 against Pool B's round 1 as if they were
+  // one sequence, on the ordinary, common shape of a pooled group stage
+  // (proven wrong by `schedule.test.ts`'s "8-team group+KO division", the
+  // very first end-to-end reflow scenario this design was checked against).
+  // A division with no pools (`poolId` undefined on every row) collapses to
+  // one group, unchanged from dividing by `divisionId` alone.
+  //
   // Scoped to `assignments` only, not `existing`: every caller that folds
   // this run's own pins into the board being verified does so INTO
   // `assignments` (see `apps/web`'s `settle`/`full` — "the pinned cards
@@ -1476,7 +1490,9 @@ export function validateAssignments(
   // cross-division/cross-stage context where a SECOND, independently
   // 1-based round-robin sequence could otherwise silently collide with this
   // one (design doc's stage-scoping ruling — `build.ts` owns the wire-side
-  // defensive guard for that case).
+  // defensive guard for that case, and for the pooled case, since the wire
+  // has no pool index at all — see `build.ts`'s own comment on the mixed-
+  // sequence guard).
   //
   // Absent `tz` skips the whole family, same convention `slotFixtures`'
   // typed-rule block already uses: a calendar day cannot be derived without
@@ -1484,13 +1500,13 @@ export function validateAssignments(
   // in UTC) is worse than reporting none. `dayKeyInTz` is the ONE shared
   // day-derivation helper both TS sides already import — no second copy.
   if (config.tz !== undefined) {
-    const byDivision = new Map<string, Assignment[]>();
+    const bySequence = new Map<string, Assignment[]>();
     for (const a of assignments) {
       if (a.roundNo === undefined) continue;
-      const key = a.divisionId ?? "";
-      (byDivision.get(key) ?? byDivision.set(key, []).get(key)!).push(a);
+      const key = `${a.divisionId ?? ""}|${a.poolId ?? ""}`;
+      (bySequence.get(key) ?? bySequence.set(key, []).get(key)!).push(a);
     }
-    for (const group of byDivision.values()) {
+    for (const group of bySequence.values()) {
       for (const a of group) {
         for (const b of group) {
           // `a.roundNo < b.roundNo` visits each unordered pair exactly once

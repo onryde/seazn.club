@@ -509,6 +509,47 @@ describe("validateAssignments — round order (C1, 2026-08-12 round-order design
     expect(validateAssignments(a, config).filter((c) => c.reason === "order")).toEqual([]);
   });
 
+  it("scopes round order per pool WITHIN one division (a pooled group stage runs one independent round-robin sequence per pool)", () => {
+    // Found via schedule.test.ts's "8-team group+KO division" end-to-end
+    // case: `kind: "group"` with N pools calls `roundRobinGen` once PER
+    // POOL, so pool A's round 2 and pool B's round 2 are two unrelated
+    // "round 2"s, the same way two divisions' rounds are unrelated. Without
+    // scoping by poolId this pair reads as pool B's round 1 (day B, later)
+    // sitting after pool A's round 2 (day A, earlier) -- day_2 <= day_1 is
+    // false, so it wrongly flags.
+    const a = [
+      row({
+        fixtureId: "poolA-r2", startAt: DAY_A_T0, roundNo: 2, movable: true,
+        divisionId: "d1", poolId: "A",
+      }),
+      row({
+        fixtureId: "poolB-r1", startAt: DAY_B_T0, roundNo: 1, movable: true,
+        divisionId: "d1", poolId: "B",
+      }),
+    ];
+    expect(validateAssignments(a, config).filter((c) => c.reason === "order")).toEqual([]);
+  });
+
+  it("still enforces round order WITHIN one pool of a multi-pool division", () => {
+    // The converse of the test above: pool scoping must narrow the
+    // comparison, not disable it — two rows in the SAME pool are still
+    // compared exactly as a single-pool division would be.
+    const a = [
+      row({
+        fixtureId: "poolA-r2", startAt: DAY_A_T0, roundNo: 2, movable: true,
+        divisionId: "d1", poolId: "A",
+      }),
+      row({
+        fixtureId: "poolA-r1", startAt: DAY_B_T0, roundNo: 1, movable: true,
+        divisionId: "d1", poolId: "A",
+      }),
+    ];
+    const conflicts = validateAssignments(a, config);
+    expect(conflicts).toEqual([
+      expect.objectContaining({ fixtureId: "poolA-r2", reason: "order", direct: true }),
+    ]);
+  });
+
   it("is inert without an org timezone (absent tz skips the whole family)", () => {
     const a = [
       row({ fixtureId: "r2", startAt: DAY_A_T0, roundNo: 2, movable: true }),
