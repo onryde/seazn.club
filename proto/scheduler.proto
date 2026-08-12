@@ -124,9 +124,10 @@ message PinnedRow {
 // fixture positions, which is the only thing it was ever doing -- it never
 // learns what a division, pool, entrant or person is.
 //
-// This subsumes `DivisionRule`: a division is one such group. `division_rules`
-// is kept for now and migrated separately, because THIS revision changes no
-// behaviour -- see `SolveBuildRequest.rule_groups`.
+// This subsumed `DivisionRule`: a division was one such group. `division_rules`
+// (proto field 10) carried that division-only predecessor and has since been
+// retired -- reserved on `SolveBuildRequest`, not reused; see
+// `SolveBuildRequest.rule_groups` below.
 message RuleGroup {
   // Each element 0 <= idx < len(`SolveBuildRequest.fixtures`). Range-checked
   // only, per the repeated-field rule above.
@@ -154,23 +155,6 @@ message RuleGroup {
 message OrderPair {
   optional uint32 before_index = 1;
   optional uint32 after_index = 2;
-}
-
-// Replaces `DivisionRestRule` + `DivisionDayCapRule`: ONE rule per division,
-// not two independent lists keyed by the same string. `min_rest_minutes` and
-// `max_fixtures_per_day` are each `optional` so a division can carry either,
-// both, or (by being absent from `division_rules` entirely) neither --
-// exactly the independence the two-list contract had, just keyed on one
-// index instead of duplicated across two lists.
-message DivisionRule {
-  optional uint32 division_index = 1;
-  // Presence, not `>= 0`: 0 is "no minimum rest", a legitimate rule, and
-  // distinct from no rule at all (division absent from `division_rules`, or
-  // present with this field unset).
-  optional int32 min_rest_minutes = 2;
-  // Presence, then `> 0` when set: 0 would forbid the division outright,
-  // which is never what "no cap" means. Absent = uncapped.
-  optional int32 max_fixtures_per_day = 3;
 }
 
 message BuildConstraints {
@@ -245,21 +229,27 @@ message SolveBuildRequest {
   int32 step_minutes = 7;
   repeated PinnedRow existing = 8;
   repeated OrderPair dependencies = 9;
-  repeated DivisionRule division_rules = 10;
+  // `DivisionRule division_rules` (division-scoped `min_rest_minutes` /
+  // `max_fixtures_per_day`) retired 2026-08-12: `rule_groups` below was
+  // already authoritative in production, and every division-scoped rest/cap
+  // rule this field could ever carry was already mirrored there, so removing
+  // it changed no behaviour. Reserve, never reuse -- renumbering is never
+  // safe across the stg/prod deploy split.
+  reserved 10;
+  reserved "division_rules";
   BuildConstraints constraints = 11;
   double wall_seconds = 12;
-  // C1. Added ALONGSIDE `division_rules` rather than replacing it, and the
-  // staging split (DEPLOY.md section 4b) is why: a contract revision runs on
-  // `placement-stg` while production still runs the previous one, so for that
-  // window both services must tolerate the other's messages. Adding a field
-  // is safe in both directions under proto3; renumbering or repurposing one
-  // is not, and no runbook step saves you from that.
+  // C1. Originally added ALONGSIDE `division_rules` (proto field 10, now
+  // retired -- see the `reserved` statement above) rather than replacing it:
+  // a contract revision ran on `placement-stg` while production still ran
+  // the previous one, so for that window both services had to tolerate the
+  // other's messages. Adding a field is safe in both directions under
+  // proto3; renumbering or repurposing one is not.
   //
-  // So the migration is staged. This revision adds the field and changes NO
-  // behaviour -- the ACL parses and validates it, the domain never receives
-  // it, and the same request produces the same board. `division_rules`
-  // becomes redundant when the C1 model half lands, and field 10 is reserved
-  // rather than reused when it finally goes.
+  // That staged migration is complete. `division_rules` became redundant
+  // once the C1 model half landed and the rule_groups path was confirmed
+  // authoritative in production (2026-08-12), so it was retired outright
+  // rather than carrying a further release.
   repeated RuleGroup rule_groups = 13;
 }
 

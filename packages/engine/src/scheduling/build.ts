@@ -1118,8 +1118,8 @@ export function buildSchedule(input: BuildInput): Promise<BuildResult> {
  * reopens the placer/verifier fork `hardRestMinutesFor`'s own docstring
  * warns about (#447). `tz` undefined returns a function that always answers
  * 0: the verifier skips day-cap counting entirely without a zone, and
- * `solveBuild` pairs this with omitting `dayCapByDivision` so a cap never
- * binds against a fabricated day.
+ * `buildRuleGroups` pairs this with leaving `max_fixtures_per_day` unset on
+ * every group it emits, so a cap never binds against a fabricated day.
  */
 function buildDayIndexOf(
   slots: readonly { startAt: number }[],
@@ -1129,37 +1129,6 @@ function buildDayIndexOf(
   const keys = [...new Set(slots.map((s) => dayKeyInTz(s.startAt, tz)))].sort();
   const indexByKey = new Map(keys.map((k, i) => [k, i]));
   return (startAt) => indexByKey.get(dayKeyInTz(startAt, tz))!;
-}
-
-/**
- * The DIVISION-scoped subset of `max_fixtures_per_day` rules, as the simple
- * per-division map the placement wire's `division_rules` field carries
- * (design doc: "per-division min_rest_minutes/max_fixtures_per_day"). A rule
- * scoped to the competition, a pool, an entrant or a person has no
- * representation on THIS field — it is dropped here, unconditionally, by
- * `.kind !== "division"` below.
- *
- * That used to be a real capability gap against z3 (which hard-encodes every
- * scope via `encodeBuild` §9); it no longer is, now that `buildRuleGroups`
- * (below) sends the full scope union over the wire's OTHER field,
- * `rule_groups` (#21 / C1). This function is UNCHANGED by that addition on
- * purpose — `division_rules` stays exactly as division-only as it always
- * was, and `rule_groups` is additive alongside it, not a replacement (see the
- * proto's own comment on `SolveBuildRequest.rule_groups`). The domain does
- * not read `rule_groups` yet, so `division_rules` is still the only field
- * that does anything.
- *
- * The smallest count wins when more than one rule targets the same division
- * — an "at most" bound, so every rule that applies has to hold at once.
- */
-function dayCapsByDivision(hard: readonly HardConstraint[]): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const h of hard) {
-    if (h.type !== "max_fixtures_per_day" || h.scope.kind !== "division") continue;
-    const prev = out[h.scope.divisionId];
-    out[h.scope.divisionId] = prev === undefined ? h.count : Math.min(prev, h.count);
-  }
-  return out;
 }
 
 /** The `ScopeRow` a MOVABLE fixture would carry once placed — the same
@@ -1184,8 +1153,11 @@ function scopeRowOf(f: SchedulableFixture): ScopeRow {
 /**
  * C1 (#21) — one `RuleGroup` per `min_rest_minutes`/`max_fixtures_per_day`
  * hard rule, covering EVERY scope (competition, division, pool, entrant,
- * person) rather than the division-only subset `dayCapsByDivision` above
- * sends. Membership is resolved through `scopeCoversFixture` — the SAME
+ * person). A division-scoped rule used to ALSO reach the wire through the
+ * now-retired `division_rules` field (proto field 10) via this function's
+ * own division-only predecessor, `dayCapsByDivision` — deleted alongside it,
+ * since this function was already deriving the identical set from the same
+ * `hard` array. Membership is resolved through `scopeCoversFixture` — the SAME
  * function `calendar.ts`'s own typed-rule pass and the verifier both call —
  * so this cannot fork from what a real board is checked against; deriving it
  * a second, independent way is exactly the recurring bug `_RULES.md`'s
@@ -1212,8 +1184,9 @@ function scopeRowOf(f: SchedulableFixture): ScopeRow {
  * would be pure wire weight.
  *
  * ONE GROUP PER RULE (or per division-rest entry), not merged by scope the
- * way `dayCapsByDivision` merges same-division caps down to their minimum
- * count: a `RuleGroup` has no identity of its own beyond its ARRAY POSITION
+ * way the retired `dayCapsByDivision` used to merge same-division caps down
+ * to their minimum count: a `RuleGroup` has no identity of its own beyond its
+ * ARRAY POSITION
  * (see `SolveBuildInput.ruleGroups`'s own doc comment in
  * `placement-client.ts`), and a pinned row references one by that position
  * via `indicesFor` below. Merging two rules into one group would need
@@ -1225,9 +1198,10 @@ function scopeRowOf(f: SchedulableFixture): ScopeRow {
  *
  * `minRestMinutes` is NOT gated on `tz`: it needs no calendar-day concept at
  * all. `maxFixturesPerDay` NOW IS (B5) — `tz === undefined` is exactly the
- * condition under which `dayCapByDivision` further down is omitted entirely,
- * because the verifier's own day-cap pass skips counting without a zone and
- * buckets every slot into dayIndex 0 (`buildDayIndexOf` above). This
+ * condition under which the verifier's own day-cap pass skips counting
+ * without a zone and buckets every slot into dayIndex 0 (`buildDayIndexOf`
+ * above), so a cap keyed by that collapsed index would bind against a
+ * fabricated day. This
  * paragraph used to read "this task changes no behaviour regardless (nothing
  * downstream reads this field)" — true while C1's MODEL half did not exist,
  * false since C4 taught the placement service to enforce
@@ -1251,7 +1225,8 @@ function buildRuleGroups(
    *  the call site, already merged with the Settings-tab floor. `undefined`
    *  and `{}` both mean "no division carries a resolved rest". */
   restByDivision: Record<string, number> | undefined,
-  /** The same value `dayCapByDivision`'s own gate reads (`verifyConfig.tz`) —
+  /** `verifyConfig.tz` — the same zone `buildDayIndexOf` reads to decide
+   *  whether the day-index lattice is real or collapsed to one bucket,
    *  passed through rather than re-derived so the two gates cannot drift
    *  apart. */
   tz: string | undefined,
@@ -1585,17 +1560,18 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // reopens the placer/verifier fork `hardRestMinutesFor`'s own docstring
   // warns about (#447). `tz` undefined means the verifier skips day-cap
   // counting entirely, so every slot gets the SAME index (0) and
-  // `dayCapByDivision` is omitted below rather than binding a cap against a
-  // fabricated day (#448 — `settings.tz` is DISPLAY, `settings.orgTz` is the
-  // governing clock, and the in-scope wrong one typechecks).
+  // `buildRuleGroups` (below) leaves `max_fixtures_per_day` unset on every
+  // group it emits rather than binding a cap against a fabricated day
+  // (#448 — `settings.tz` is DISPLAY, `settings.orgTz` is the governing
+  // clock, and the in-scope wrong one typechecks).
   const tz = verifyConfig.tz;
   const dayIndexOf = buildDayIndexOf(grid.slots, tz);
   const hard = effectiveHard(verifyConfig);
-  const dayCapByDivision = tz === undefined ? undefined : dayCapsByDivision(hard);
 
   /**
-   * `perEntrantMinRest` is a GLOBAL per-entrant rest, and the wire has no field
-   * for it — `constraints` carries `restByDivision` and nothing else rest-shaped.
+   * `perEntrantMinRest` is a GLOBAL per-entrant rest, and the wire has no
+   * dedicated field for it — a division-scoped rest reaches the wire only as
+   * a `RuleGroup` (see `buildRuleGroups`, `restByDivisionForWire` below).
    * So it has to be folded into the per-division map, or the solver never hears
    * about it at all.
    *
@@ -1622,15 +1598,12 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
    * Without that key a division-less board keeps the rule invisible, which is
    * the exact shape of the bug this fixes.
    *
-   * No proto change is needed: `DivisionRule.min_rest_minutes` already exists
-   * and `model.py:303,337` already enforces `rest_by_division`. The gap was
-   * purely this translation.
-   *
    * Resolved BEFORE `buildRuleGroups` (B5, #21) and fed into it: a rest that
    * lives only here — the common case, Settings-tab rest with no typed
    * `min_rest_minutes` hard rule at all — used to reach the wire solely on
-   * `constraints.restByDivision`, a field `ruleGroupIndices` cannot name, so a
-   * pin could never be attributed it. See `buildRuleGroups`'s own docstring.
+   * `constraints.restByDivision` (retired alongside `division_rules`, proto
+   * field 10), a field `ruleGroupIndices` cannot name, so a pin could never
+   * be attributed it. See `buildRuleGroups`'s own docstring.
    */
   const restFloor = config.perEntrantMinRest ?? 0;
   const restByDivisionForWire = ((): Record<string, number> | undefined => {
@@ -1647,8 +1620,8 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // C1/B5 (#21). Fed BOTH the resolved `restByDivisionForWire` (so a
   // Settings-level division rest becomes a rule group too, not only a typed
   // hard rule) and `tz` (so an emitted `max_fixtures_per_day` group honours
-  // the SAME gate `dayCapByDivision` just above does) — see `buildRuleGroups`'s
-  // own docstring for why each half is, or isn't, gated.
+  // the SAME gate the day-index lattice just above does) — see
+  // `buildRuleGroups`'s own docstring for why each half is, or isn't, gated.
   const ruleGroupSet = buildRuleGroups(hard, freeFixtures, restByDivisionForWire, tz);
 
   const placementInput: SolveBuildInput = {
@@ -1701,16 +1674,14 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
       .filter((d) => freeFixtureIds.has(d.fixtureId) && freeFixtureIds.has(d.dependsOn))
       .map((d) => ({ beforeFixtureId: d.dependsOn, afterFixtureId: d.fixtureId })),
     // C1 (#21). See `buildRuleGroups` — every `min_rest_minutes`/
-    // `max_fixtures_per_day` rule, every scope, sent alongside (never instead
-    // of) `division_rules` above.
+    // `max_fixtures_per_day` rule, every scope. The only wire representation
+    // of a division-scoped rest/cap rule now: `division_rules` (proto field
+    // 10) carried the division-only predecessor and was retired once this
+    // field became authoritative in production (2026-08-12).
     ruleGroups: ruleGroupSet.groups,
     constraints: {
       matchMinutes: config.matchMinutes,
       gapMinutes: config.gapMinutes,
-      ...(restByDivisionForWire !== undefined ? { restByDivision: restByDivisionForWire } : {}),
-      ...(dayCapByDivision !== undefined && Object.keys(dayCapByDivision).length > 0
-        ? { dayCapByDivision }
-        : {}),
     },
     wallSeconds: Math.max(1, Math.round((wallMs - elapsed()) / 1000)),
   };

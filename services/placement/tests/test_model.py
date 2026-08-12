@@ -26,7 +26,7 @@ import pytest
 import structlog
 from ortools.sat.python import cp_model
 
-from _board_positional import to_positional
+from _board_positional import rule_groups_for, to_positional
 from placement.model import DAY_MS, MIN_MS, build_model, solve
 
 #: The production budget from the design spec, and the wall the acceptance
@@ -47,13 +47,29 @@ def _load():
 
 
 def _production_board():
+    """The bench's `production_board()`, converted to the positional shape,
+    PLUS the `rule_groups` its declared `rest_by_division`/`day_cap_by_
+    division` now have to reach `build_model` through: `division_rules`
+    (proto field 10), the wire path those dict keys used to be fed through,
+    is retired (`placement.schema`'s module docstring). Without this, every
+    caller below would silently solve an UNCAPPED, un-rested board -- a
+    materially EASIER-to-place but HARDER-to-optimise problem (see
+    `test_absent_day_cap_rule_means_no_cap`'s own docstring: the day cap is
+    what pins fixtures across the lattice, and without it T1 does not finish
+    inside a budget that used to be generous), not the same production board
+    this file's tests are meant to be about.
+
+    Returns an 8-tuple: the 7 `build_model(*board)`-shaped elements
+    (`to_positional`'s own output) plus `rule_groups`.
+    """
     # Module name follows the file the prompt's Step 2b names
     # (bench/placement_bench_boards.py) and its siblings placement_bench.py /
     # placement_repair_bench.py. bench/ reaches sys.path via `pythonpath` in
     # pyproject.toml — it is a script directory, not an installed package.
     from placement_bench_boards import production_board
 
-    return to_positional(production_board())
+    board = production_board()
+    return (*to_positional(board), rule_groups_for(board))
 
 
 def test_production_board_meets_the_stated_acceptance_criterion():
@@ -81,8 +97,13 @@ def test_production_board_meets_the_stated_acceptance_criterion():
     average is reported in the failure message so a red can be triaged rather
     than guessed at; re-run alone before calling it a regression.
     """
-    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    model = build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps, rule_groups = (
+        _production_board()
+    )
+    model = build_model(
+        fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps,
+        rule_groups=rule_groups,
+    )
     load = _load()
     outcome = solve(model, wall_seconds=PRODUCTION_WALL_SECONDS)
     detail = (
@@ -121,8 +142,13 @@ def test_production_board_solves_under_budget():
     `test_the_court_turnaround_gap_is_binding`, on contended boards that do not
     depend on the wall at all.
     """
-    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    model = build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps, rule_groups = (
+        _production_board()
+    )
+    model = build_model(
+        fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps,
+        rule_groups=rule_groups,
+    )
     outcome = solve(model, wall_seconds=8.0)
     assert outcome.status in ("OPTIMAL", "FEASIBLE")
     assert 35 <= len(outcome.assignments) <= 37
@@ -136,8 +162,13 @@ def test_no_court_double_booking():
     # result. See the measured table in
     # `test_assignments_satisfy_every_stated_constraint`. The court-gap family
     # is guarded by `test_the_court_turnaround_gap_is_binding`, not here.
-    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    model = build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps, rule_groups = (
+        _production_board()
+    )
+    model = build_model(
+        fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps,
+        rule_groups=rule_groups,
+    )
     outcome = solve(model, wall_seconds=8.0)
     assert outcome.assignments, "nothing placed — the loop below would be vacuous"
     seen = {}
@@ -190,8 +221,20 @@ def test_assignments_satisfy_every_stated_constraint():
     place to take it from, provided the M1-M8 matrix is re-run to confirm the
     families it really does guard (M1, M3, M4, M5, M8) still die.
     """
-    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    model = build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
+    # `rule_groups` (from `_production_board()`, derived from the SAME
+    # declared `rest_by_division`/`day_cap_by_division` `constraints` below
+    # still carries, for computing the EXPECTED numbers this test checks the
+    # board against) is what actually binds the rest/cap families now:
+    # `division_rules` (proto field 10), the wire path that used to carry
+    # them, is retired -- see `_board_positional.rule_groups_for`'s own
+    # docstring, and `placement.schema`'s module docstring for the wire side.
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps, rule_groups = (
+        _production_board()
+    )
+    model = build_model(
+        fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps,
+        rule_groups=rule_groups,
+    )
     outcome = solve(model, wall_seconds=8.0)
     assert outcome.assignments, "nothing placed — the rest of this test would be vacuous"
     assert len(outcome.assignments) == len(fixtures), (
@@ -415,21 +458,32 @@ def test_participant_rest_is_binding():
 
     Kills both the "rest `AddNoOverlap` deleted" mutant and the "rest_ms
     zeroed" one, since either lets all seven seat.
+
+    The rest itself now reaches `build_model` via `rule_groups`
+    (`_board_positional.rule_groups_for`, one group covering every fixture in
+    `rest_contended_board`'s single division) rather than `constraints.
+    rest_by_division` directly: `division_rules` (proto field 10), the wire
+    path that dict was fed through, is retired. `to_positional`'s own output
+    still carries the DECLARED `rest_by_division` dict unchanged (used below
+    only to compute the EXPECTED gap, not to bind anything).
     """
     from placement.objective import TIER_PLACED, run_tier_chain
     from placement_bench_boards import REST_PROBE_CAPACITY, REST_PROBE_FIXTURES, rest_contended_board
 
-    board = to_positional(rest_contended_board())
+    raw_board = rest_contended_board()
+    board = to_positional(raw_board)
     fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = board
+    rule_groups = rule_groups_for(raw_board)
 
     assert REST_PROBE_CAPACITY < REST_PROBE_FIXTURES == len(fixtures)
     assert num_courts >= REST_PROBE_FIXTURES, "court exclusivity must not be able to bind"
     assert not existing and not deps and not constraints["day_cap_by_division"]
+    assert rule_groups, "the declared rest must have produced at least one rule group"
     shared = set.intersection(*(set(entrants) for entrants, _div in fixtures))
     assert len(shared) == 1, "every fixture must share exactly one entrant for rest to be the variable"
     (shared_entrant,) = shared
 
-    model = build_model(*board)
+    model = build_model(*board, rule_groups=rule_groups)
     outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=5.0, tiers=(TIER_PLACED,))
     detail = f"status={outcome.status} tiers={outcome.tiers_completed} board={sorted(outcome.assignments)}"
 
@@ -746,19 +800,22 @@ def _straddling_board(day_index_of):
     (two courts, two ticks, two fixtures) and entrants are disjoint, so the
     day cap is the only thing deciding how many are placed — a COUNT that T0
     proves in milliseconds, independent of the wall and of which tiers ran.
+
+    The cap reaches `build_model` via `rule_groups` (one group covering both
+    fixtures, `max_fixtures_per_day=1`) rather than `constraints.day_cap_by_
+    division`: `division_rules` (proto field 10), the wire path that dict was
+    fed through, is retired -- see `placement.schema`'s module docstring.
+    Returned as an 8-tuple; `build_model(*board)` passes `rule_groups`
+    positionally, matching `placement.main`'s own all-positional call.
     """
     num_courts = 2
     grid_slots = [
         (c, start, day_index_of(start)) for c in (0, 1) for start in (_STRADDLE_A, _STRADDLE_B)
     ]
     fixtures = [([0, 1], 0), ([2, 3], 0)]
-    constraints = {
-        "match_minutes": 30,
-        "gap_minutes": 0,
-        "rest_by_division": {0: 0},
-        "day_cap_by_division": {0: 1},
-    }
-    return fixtures, num_courts, grid_slots, 60, constraints, [], []
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
+    rule_groups = [([0, 1], None, 1)]  # both fixtures, no rest rule, cap 1
+    return fixtures, num_courts, grid_slots, 60, constraints, [], [], rule_groups
 
 
 def test_the_day_cap_groups_by_the_callers_day_index_not_by_utc():
@@ -1025,92 +1082,17 @@ def test_pins_already_over_the_cap_clamp_instead_of_going_infeasible():
     )
 
 
-def test_a_caller_without_rule_groups_gets_the_old_uncounted_pin_behaviour():
-    """A caller still on the previous contract shape (`day_cap_by_division`
-    only, `rule_groups` empty) must see EXACTLY today's behaviour, pins and
-    all: the cap binds on movable fixtures only, and a pin on the capped day
-    is not attributed to it -- the very permissiveness `rule_groups` exists to
-    close. `rule_groups=[]` / `pinned_rule_group_indices=[]` are passed
-    EXPLICITLY (not omitted) so a `build_model` that has not actually grown
-    the new parameters fails this test too, not just a behavioural one.
-
-    Division cap 2, one pin already on the day (uncounted, by design here), 3
-    movable fixtures wanting it: exactly 2 get admitted -- the full cap, same
-    as before this task, oblivious to the pin.
-    """
-    num_courts = 2
-    step = 30 * MIN_MS
-    grid_slots = [(c, _GROUP_ANCHOR + k * step, 0) for c in (0, 1) for k in range(4)]
-    fixtures = [([0, 1], 0), ([2, 3], 0), ([4, 5], 0)]
-    existing = [(0, _GROUP_ANCHOR)]  # a pin on the capped day, division path ignores it
-    constraints = {
-        "match_minutes": 30,
-        "gap_minutes": 0,
-        "rest_by_division": {0: 0},
-        "day_cap_by_division": {0: 2},
-    }
-
-    model = build_model(
-        fixtures,
-        num_courts,
-        grid_slots,
-        30,
-        constraints,
-        existing,
-        [],
-        rule_groups=[],
-        pinned_rule_group_indices=[],
-    )
-    outcome = solve(model, wall_seconds=5.0)
-
-    assert len(outcome.assignments) == 2, (
-        f"expected the OLD division-only cap (pin uncounted): status={outcome.status} "
-        f"assignments={outcome.assignments}"
-    )
-
-
-def test_rule_groups_and_day_cap_by_division_are_not_both_applied():
-    """The staged rollout sends BOTH shapes describing the same rule --
-    `build.ts` populates `rule_groups` for every cap alongside the existing
-    `division_rules`, so a previous service version still works. The new
-    service must prefer `rule_groups` and IGNORE `day_cap_by_division`
-    entirely once groups are present, not apply both under two names.
-
-    `day_cap_by_division` here is deliberately STRICTER (1) than the group's
-    own cap (5) for the identical fixtures. If the division loop ran too (an
-    "applied twice" bug), the two constraints would AND together and the
-    stricter one would win -- only 1 of 3 placed. Correct behaviour ignores
-    the division cap outright: all 3 fit comfortably under the group's cap.
-    """
-    num_courts = 2
-    step = 30 * MIN_MS
-    grid_slots = [(c, _GROUP_ANCHOR + k * step, 0) for c in (0, 1) for k in range(4)]
-    fixtures = [([0, 1], 0), ([2, 3], 0), ([4, 5], 0)]
-    rule_groups = [([0, 1, 2], None, 5)]  # generous group cap, no pins involved
-    constraints = {
-        "match_minutes": 30,
-        "gap_minutes": 0,
-        "rest_by_division": {0: 0},
-        "day_cap_by_division": {0: 1},  # must be ignored once rule_groups is present
-    }
-
-    model = build_model(
-        fixtures,
-        num_courts,
-        grid_slots,
-        30,
-        constraints,
-        [],
-        [],
-        rule_groups=rule_groups,
-        pinned_rule_group_indices=[],
-    )
-    outcome = solve(model, wall_seconds=5.0)
-
-    assert len(outcome.assignments) == 3, (
-        f"day_cap_by_division leaked through alongside rule_groups: status={outcome.status} "
-        f"assignments={outcome.assignments}"
-    )
+# `division_rules` (proto field 10) is retired, and with it `day_cap_by_
+# division` -- `constraints` carries only `match_minutes`/`gap_minutes` now
+# (`placement.schema`'s module docstring), so `build_model` has no second
+# day-cap source left to prefer `rule_groups` OVER. Two tests used to live
+# here: a caller with `rule_groups=[]` seeing the old division-only cap
+# apply obliviously to a pin, and `rule_groups` winning when BOTH shapes were
+# present. Neither scenario can occur any more -- an empty `rule_groups`
+# now caps nothing at all (see `model.py` section 9's own comment), which
+# is exactly what `test_a_caller_without_rule_groups_gets_the_old_uncounted_
+# pin_behaviour` became once `day_cap_by_division` stopped being a thing a
+# caller could send.
 
 
 # --- C6: a pinned row joins its entrants' participant-rest groups -----------
@@ -1225,16 +1207,17 @@ def test_two_pinned_rows_sharing_an_entrant_stay_independent_without_rule_groups
     )
 
 
-# --- release 1 of retiring `division_rules`: a movable fixture's OWN rest --
-# --- now also folds in rule_groups (module docstring, "A SEVENTH is CLOSED")
+# --- a movable fixture's OWN rest folds in rule_groups (module docstring,
+# --- "A SEVENTH is CLOSED") -- the ONLY source now that `division_rules`
+# --- (proto field 10) and the `rest_by_division` dict key it fed are retired
 #
-# Before this, a movable fixture's rest was `rest_by_division` alone --
 # `rule_groups[].min_rest_minutes` was already read for a PIN's own rest (C6,
-# above) and for a rule group's day cap (C4), never for a movable fixture's
-# own width. The verifier's `hardRestMinutesFor` (`calendar.ts`) was already
-# resolving a fixture's own typed rest as the MAX over every covering rule,
-# so the placer could ship a board the verifier then rejected -- the
-# recurring placer/verifier fork this programme keeps producing.
+# above) and for a rule group's day cap (C4), before it was also read for a
+# movable fixture's own width. The verifier's `hardRestMinutesFor`
+# (`calendar.ts`) was already resolving a fixture's own typed rest as the MAX
+# over every covering rule, so a placer that did not fold `rule_groups` in at
+# all could ship a board the verifier then rejected -- the recurring
+# placer/verifier fork this programme keeps producing.
 #
 # All boards below share one two-tick, two-court shape: fixtures 0 and 1
 # both cover entrant 0 (so participant rest is the only thing that can ever
@@ -1252,7 +1235,7 @@ def test_two_pinned_rows_sharing_an_entrant_stay_independent_without_rule_groups
 # reported in the task report rather than asserted here.
 
 
-def _rest_probe_board(rest_by_division_minutes, rule_groups, slack_minutes):
+def _rest_probe_board(rule_groups, slack_minutes):
     """Two fixtures sharing entrant 0, two ticks `match_minutes +
     slack_minutes` apart. Both fit iff `slack_minutes >= ` the resolved
     binding rest; otherwise only one does -- see each test's own docstring
@@ -1263,12 +1246,7 @@ def _rest_probe_board(rest_by_division_minutes, rule_groups, slack_minutes):
     num_courts = 2
     grid_slots = [(c, t, 0) for c in (0, 1) for t in (t0, t1)]
     fixtures = [([0], 0), ([0], 0)]
-    constraints = {
-        "match_minutes": 30,
-        "gap_minutes": 0,
-        "rest_by_division": {0: rest_by_division_minutes},
-        "day_cap_by_division": {},
-    }
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
     return build_model(
         fixtures, num_courts, grid_slots, 30, constraints, [], [], rule_groups=rule_groups
     )
@@ -1284,56 +1262,47 @@ def _rest_probe_capacity(model):
     return len(outcome.assignments), detail
 
 
-def test_a_covering_rule_groups_larger_rest_binds_over_the_division_value():
-    """THE LOAD-BEARING TEST for this task. A rule group's `min_rest_minutes`
-    (45) is LARGER than the division's (30), and covers both fixtures. With
-    30 minutes' slack between the two ticks:
+def test_a_covering_rule_groups_min_rest_minutes_binds():
+    """A rule group's `min_rest_minutes` (45) covering both fixtures, with 30
+    minutes' slack between the two ticks:
 
-        division alone: 30 <= 30 slack        -> BOTH fit, capacity 2
-        max(division, group) = 45 > 30 slack  -> only ONE fits, capacity 1
+        no rest at all: 0 <= 30 slack     -> BOTH fit, capacity 2
+        group's rest 45 > 30 slack        -> only ONE fits, capacity 1
 
-    Genuinely red without the change: reverting the production hunk leaves
-    `rest_ms` at the division value alone (30), and the solver proves 2, not
+    Genuinely red without the fold: with the loop over `rule_groups` deleted,
+    `rest_ms` stays at its bare-0 starting value and the solver proves 2, not
     1 (see task report for the actual failure text).
     """
-    model = _rest_probe_board(
-        rest_by_division_minutes=30,
-        rule_groups=[([0, 1], 45, None)],
-        slack_minutes=30,
-    )
+    model = _rest_probe_board(rule_groups=[([0, 1], 45, None)], slack_minutes=30)
     capacity, detail = _rest_probe_capacity(model)
     assert capacity == 1, (
-        f"expected the group's 45-minute rest (not the division's 30) to bind, giving capacity "
-        f"1: {detail}"
+        f"expected the group's 45-minute rest to bind, giving capacity 1: {detail}"
     )
 
 
-def test_a_covering_rule_groups_smaller_rest_does_not_override_the_division_value():
-    """The converse direction of the MAX claim: a rule group's
-    `min_rest_minutes` (15) SMALLER than the division's (30) must not
-    override it -- the division's 30 still binds. 20 minutes' slack this
-    time (deliberately between 15 and 30, not 30 as above) is what makes
-    this board discriminate a MAX fold from an OVERRIDE bug that replaces
-    the division value with the group's whenever a group covers the
-    fixture:
+def test_a_larger_covering_rule_groups_rest_is_not_overridden_by_a_smaller_one():
+    """The MAX claim, discriminated from a last-write-wins bug. TWO rule
+    groups cover the same fixtures -- 45 minutes' rest, then 15 -- and the
+    fold must keep the LARGER regardless of which was processed last. 20
+    minutes' slack (deliberately between 15 and 45) is what makes this board
+    discriminate a MAX fold from an assignment (`=`) that lets whichever
+    group is walked last win:
 
-        correctly max(30, 15) = 30 > 20 slack  -> only ONE fits, capacity 1
-        wrongly overridden to 15 <= 20 slack    -> BOTH fit, capacity 2
+        correctly max(45, 15) = 45 > 20 slack  -> only ONE fits, capacity 1
+        wrongly last-write-wins, 15 <= 20 slack -> BOTH fit, capacity 2
 
-    Reverting the WHOLE production hunk does not redden this particular
-    board -- with no group logic at all the division's 30 alone is already
-    the correct answer here (30 > 20 slack) -- so this test's red/green
-    proof is against the narrower OVERRIDE mutation instead (see task
-    report), not the full-hunk revert used above and below.
+    The 45-then-15 order is the discriminating one: a `rest_ms[i] = minutes`
+    assignment (dropping the `max()` this fold depends on -- see `model.py`
+    section 6's own comment, "MAX, not assignment") would leave the SMALLER,
+    later value in place and wrongly admit both fixtures.
     """
     model = _rest_probe_board(
-        rest_by_division_minutes=30,
-        rule_groups=[([0, 1], 15, None)],
+        rule_groups=[([0, 1], 45, None), ([0, 1], 15, None)],
         slack_minutes=20,
     )
     capacity, detail = _rest_probe_capacity(model)
     assert capacity == 1, (
-        f"expected the division's 30-minute rest (not the group's smaller 15) to bind, giving "
+        f"expected the larger 45-minute rest (not the later, smaller 15) to bind, giving "
         f"capacity 1: {detail}"
     )
 
@@ -1344,32 +1313,28 @@ def test_a_covering_rule_groups_none_rest_contributes_nothing():
     contribute nothing, distinct from contributing 0 -- and, more sharply,
     must not CRASH: `max(0, None)` raises `TypeError`, so a fold that omits
     the presence check does not silently misbehave here, it stops the solve
-    outright. Division alone (30) with 30 minutes' slack gives capacity 2
-    (both fit) whether the group is skipped correctly or the board simply
-    had no group at all -- the meaningful red/green proof for this one is
-    the crash, not a capacity difference (see task report).
+    outright. With no OTHER rest source any more, 30 minutes' slack gives
+    capacity 2 (both fit) whether the group is skipped correctly or the board
+    simply had no group at all -- the meaningful red/green proof for this one
+    is the crash, not a capacity difference (see task report).
     """
-    model = _rest_probe_board(
-        rest_by_division_minutes=30,
-        rule_groups=[([0, 1], None, None)],
-        slack_minutes=30,
-    )
+    model = _rest_probe_board(rule_groups=[([0, 1], None, None)], slack_minutes=30)
     capacity, detail = _rest_probe_capacity(model)
     assert capacity == 2, (
-        f"a covering group with no rest rule must leave the division's 30-minute rest as the "
-        f"only bound, giving capacity 2: {detail}"
+        f"a covering group with no rest rule must leave a fixture's rest at its 0 floor, "
+        f"giving capacity 2: {detail}"
     )
 
 
 def test_rule_groups_empty_leaves_the_model_byte_identical():
     """Backward compatibility -- proved at the `CpModel` level, not merely by
-    argument. The fold this task adds (module docstring, "A SEVENTH is
-    CLOSED") is a loop over `rule_groups`; with none, the loop body never
-    executes and `rest_ms` is left exactly as the untouched line above
-    computed it. Two calls on the SAME board, differing only in whether
-    `rule_groups` is passed explicitly as `[]` or omitted entirely (the
-    calling convention every other test in this file still uses), must
-    therefore be indistinguishable at the `CpModel` proto level.
+    argument. The fold (module docstring, "A SEVENTH is CLOSED") is a loop
+    over `rule_groups`; with none, the loop body never executes and
+    `rest_ms` is left at its bare-0 starting value. Two calls on the SAME
+    board, differing only in whether `rule_groups` is passed explicitly as
+    `[]` or omitted entirely (the calling convention every other test in
+    this file still uses), must therefore be indistinguishable at the
+    `CpModel` proto level.
 
     This does not, on its own, rule out a bug shared by BOTH call styles --
     that half is covered by the pre-existing suite instead: none of this
@@ -1391,12 +1356,7 @@ def test_rule_groups_empty_leaves_the_model_byte_identical():
     num_courts = 2
     grid_slots = [(c, t, 0) for c in (0, 1) for t in (t0, t1)]
     fixtures = [([0], 0), ([1], 0)]
-    constraints = {
-        "match_minutes": 30,
-        "gap_minutes": 0,
-        "rest_by_division": {0: 30},
-        "day_cap_by_division": {},
-    }
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
 
     omitted = build_model(fixtures, num_courts, grid_slots, 30, constraints, [], [])
     explicit_empty = build_model(
@@ -1415,34 +1375,25 @@ def test_rule_groups_empty_leaves_the_model_byte_identical():
 
 # --- degenerate constraint values must fail loudly, not solve quietly -------
 #
-# proto3 scalars are non-optional: an unset `max_fixtures_per_day` or
-# `match_minutes` arrives as 0, indistinguishable from a deliberate 0. Both
-# used to be accepted and produce a confidently WRONG board reported as
-# OPTIMAL — a whole division silently dropped, or every match given zero
-# length. Measured before the guards existed:
-#   day_cap {0: 0, 1: 1}  -> OPTIMAL, placed 18/37, zero division-0 fixtures
-#   match_minutes 0       -> OPTIMAL, 37 zero-length matches stacked
+# proto3 scalars are non-optional: an unset `match_minutes` arrives as 0,
+# indistinguishable from a deliberate 0, and used to be accepted and produce
+# a confidently WRONG board reported as OPTIMAL. Measured before the guard
+# existed: `match_minutes 0 -> OPTIMAL, 37 zero-length matches stacked`.
 # These are domain-layer guards. `placement.schema` (Prompt 04) still owes the
 # wire-boundary validation; this is defence in depth, not a replacement.
-
-
-def test_rejects_zero_day_cap():
-    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    constraints = {**constraints, "day_cap_by_division": {0: 0, 1: 1}}
-    with pytest.raises(ValueError, match="max_fixtures_per_day"):
-        build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
-
-
-def test_rejects_negative_day_cap():
-    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    constraints = {**constraints, "day_cap_by_division": {0: -1, 1: 1}}
-    with pytest.raises(ValueError, match="max_fixtures_per_day"):
-        build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
+#
+# A day-cap counterpart used to live here too (`day_cap_by_division {0: 0,
+# 1: 1} -> OPTIMAL, placed 18/37, zero division-0 fixtures`), guarding the
+# dict `division_rules` (proto field 10) fed. Both are retired: a day cap now
+# reaches this module only via `rule_groups[].max_fixtures_per_day`, already
+# guarded at the wire in `placement.schema._validated_rule_groups` -- there
+# is no domain-layer copy of that guard to test here (see model.py section 9
+# and `placement.schema`'s module docstring).
 
 
 def test_absent_day_cap_rule_means_no_cap():
-    """A division simply MISSING from the dict is uncapped — that is the
-    contract, and the guard above must not break it.
+    """No `rule_groups` (hence no day cap -- the only source left; see the
+    section comment above) is uncapped, on the production board.
 
     This asserted `status == "OPTIMAL"` while `solve()` was T0-only. It now
     drives the whole T0->T3 chain, and the UNCAPPED board does not finish it —
@@ -1458,7 +1409,9 @@ def test_absent_day_cap_rule_means_no_cap():
 
     So the status assertion is dropped and replaced by the two that are
     actually about this test's subject: every fixture placed, and T0 saying so
-    itself. Neither is vacuous — reinstate a 0 cap for division 0 and both fail.
+    itself. Neither is vacuous — pass a `rule_groups` day cap covering
+    division 0 and both fail (see `test_assignments_satisfy_every_stated_
+    constraint`, which does exactly that).
 
     The wall is 3 s rather than the production 8 s for the same reason: T0
     settles this question in 157 ms and T1 then burns every remaining second
@@ -1466,8 +1419,13 @@ def test_absent_day_cap_rule_means_no_cap():
     budget, and a suite that heats the box for six seconds per test makes the
     tests that DO ask about it flakier.
     """
-    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    constraints = {**constraints, "day_cap_by_division": {}}
+    # Deliberately NOT passing `rule_groups` (unlike every other
+    # `_production_board()` caller from here on): the point of this test is
+    # the UNCAPPED board, so the fixture's day cap is discarded rather than
+    # forwarded to `build_model`.
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps, _rule_groups = (
+        _production_board()
+    )
     model = build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
     outcome = solve(model, wall_seconds=3.0)
     assert outcome.tiers_completed >= 1, "T0 itself did not complete — the rest would be vacuous"
@@ -1476,14 +1434,18 @@ def test_absent_day_cap_rule_means_no_cap():
 
 
 def test_rejects_zero_match_minutes():
-    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps, _rule_groups = (
+        _production_board()
+    )
     constraints = {**constraints, "match_minutes": 0}
     with pytest.raises(ValueError, match="match_minutes"):
         build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
 
 
 def test_rejects_missing_match_minutes():
-    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps, _rule_groups = (
+        _production_board()
+    )
     constraints = {k: v for k, v in constraints.items() if k != "match_minutes"}
     with pytest.raises(ValueError, match="match_minutes"):
         build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
@@ -1495,20 +1457,27 @@ def test_rejects_missing_match_minutes():
 # that only becomes degenerate once the model adds it to `match_minutes`, and
 # that case is strictly worse than zero: zero fails to constrain, negative
 # CANCELS the match length and reopens a constraint family that was closed.
-# Both measured on the production board, both returning OPTIMAL with `error`
+# Measured on the production board, returning OPTIMAL with `error`
 # unset — the service's most dangerous shape, a confident wrong answer:
-#   gap_minutes      = -40  -> OPTIMAL, 37 placed, 4 tiers, 1 same-court MATCH overlap
-#   rest_by_division = -40  -> OPTIMAL, 37 placed, 4 tiers, 1 entrant in two matches at once
+#   gap_minutes = -40  -> OPTIMAL, 37 placed, 4 tiers, 1 same-court MATCH overlap
 # `-match_minutes` is used below because it is the exact value that zeroes the
 # interval width; any negative value is rejected, but this is the one that
 # demonstrably produces the wrong board.
+#
+# A `rest_by_division = -40` counterpart used to live here too, guarding the
+# dict `division_rules` fed. Retired along with that field: `rule_groups[].
+# min_rest_minutes` is the only rest source left, already guarded at the wire
+# in `placement.schema._validated_rule_groups` -- there is no domain-layer
+# copy of that guard to test here either.
 
 
 def test_rejects_negative_gap_minutes():
     """A negative turnaround zeroes the court interval and two matches land on
     one court simultaneously — the exact failure `match_minutes`' own guard
     text describes, through a field that had no guard at either layer."""
-    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps, _rule_groups = (
+        _production_board()
+    )
     constraints = {**constraints, "gap_minutes": -constraints["match_minutes"]}
     with pytest.raises(ValueError, match="gap_minutes"):
         build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
@@ -1517,31 +1486,13 @@ def test_rejects_negative_gap_minutes():
 def test_accepts_zero_gap_minutes():
     """Zero turnaround is legitimate (courts with no changeover), so the guard
     must reject negatives WITHOUT closing the contract's own zero case."""
-    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps, _rule_groups = (
+        _production_board()
+    )
     constraints = {**constraints, "gap_minutes": 0}
     model = build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
     # One decision var per fixture -- identity is position, so this is just a
     # count now rather than the old `fixture_ids == [...]` id-list check.
-    assert len(model.fixture_vars.placed) == len(fixtures)
-
-
-def test_rejects_negative_min_rest_minutes():
-    """A negative rest zeroes the participant-rest interval and one entrant is
-    placed in two simultaneous matches."""
-    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    constraints = {
-        **constraints,
-        "rest_by_division": {0: -constraints["match_minutes"], 1: 80},
-    }
-    with pytest.raises(ValueError, match="min_rest_minutes"):
-        build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
-
-
-def test_accepts_zero_min_rest_minutes():
-    """Rest of 0 means "no minimum rest" and is a legitimate request."""
-    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps = _production_board()
-    constraints = {**constraints, "rest_by_division": {0: 0, 1: 0}}
-    model = build_model(fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps)
     assert len(model.fixture_vars.placed) == len(fixtures)
 
 
@@ -1556,7 +1507,9 @@ def test_rejects_an_empty_grid():
     `test_objective.py` and any future direct caller holding the silent wrong
     board. A domain object must refuse to exist in an invalid state.
     """
-    fixtures, num_courts, _grid_slots, step_minutes, constraints, existing, deps = _production_board()
+    fixtures, num_courts, _grid_slots, step_minutes, constraints, existing, deps, _rule_groups = (
+        _production_board()
+    )
     with pytest.raises(ValueError, match="grid_slots"):
         build_model(fixtures, num_courts, [], step_minutes, constraints, existing, deps)
 

@@ -96,6 +96,46 @@ def to_positional(board):
     )
 
 
+def rule_groups_for(board) -> list[tuple[list[int], int | None, int | None]]:
+    """Derive positional `rule_groups` from a bench board's division-keyed
+    `rest_by_division`/`day_cap_by_division` -- the same translation a real
+    caller now performs (`build.ts`'s `buildRuleGroups`, C1/B5) in place of
+    `division_rules` (proto field 10, retired 2026-08-12; see the retirement
+    design doc). One group per division that carries a rest and/or a cap,
+    covering every MOVABLE fixture position in that division -- the same
+    scope `RuleGroup` generalised `DivisionRule` into (proto's own comment on
+    `RuleGroup`), applied here so a bench board keeps exercising the
+    constraint it always meant to, on the one path `placement.model.
+    build_model` reads it through now.
+
+    Returns `placement.model.build_model`'s own `rule_groups` shape --
+    `(fixture_indices, min_rest_minutes, max_fixtures_per_day)` -- so a
+    caller can pass this straight through as the `rule_groups=` keyword.
+    """
+    fixtures, courts, _grid_slots, _step_minutes, constraints, _existing, _dependencies = board
+    _court_index_of, division_index_of, _entrant_index_of, _fixture_index_of = _index_maps(
+        fixtures, courts
+    )
+
+    fixture_indices_by_division: dict[str, list[int]] = {}
+    for i, (_fid, _entrants, division) in enumerate(fixtures):
+        fixture_indices_by_division.setdefault(division, []).append(i)
+
+    rest_by_division = constraints["rest_by_division"]
+    day_cap_by_division = constraints["day_cap_by_division"]
+
+    groups: list[tuple[list[int], int | None, int | None]] = []
+    for division in division_index_of:
+        if division not in rest_by_division and division not in day_cap_by_division:
+            continue
+        groups.append((
+            fixture_indices_by_division.get(division, []),
+            rest_by_division.get(division),
+            day_cap_by_division.get(division),
+        ))
+    return groups
+
+
 def to_proto_request(board, *, request_id: str, wall_seconds: float) -> scheduler_pb2.SolveBuildRequest:
     """The same conversion, all the way onto the wire -- a real
     `SolveBuildRequest` built from a bench board, for `test_server.py`'s
@@ -132,22 +172,18 @@ def to_proto_request(board, *, request_id: str, wall_seconds: float) -> schedule
             )
             for before, after in dependencies
         ],
-        division_rules=[
-            scheduler_pb2.DivisionRule(
-                division_index=division_index_of[d],
-                **(
-                    {"min_rest_minutes": constraints["rest_by_division"][d]}
-                    if d in constraints["rest_by_division"]
-                    else {}
-                ),
-                **(
-                    {"max_fixtures_per_day": constraints["day_cap_by_division"][d]}
-                    if d in constraints["day_cap_by_division"]
-                    else {}
-                ),
+        # `division_rules` (proto field 10, `DivisionRule`-typed) is retired;
+        # `rule_groups` is the only wire representation left for a
+        # division-scoped rest/cap rule -- see `rule_groups_for`'s own
+        # docstring for why this mirrors, rather than drops, what the old
+        # field used to carry.
+        rule_groups=[
+            scheduler_pb2.RuleGroup(
+                fixture_indices=fixture_indices,
+                **({"min_rest_minutes": rest} if rest is not None else {}),
+                **({"max_fixtures_per_day": cap} if cap is not None else {}),
             )
-            for d in division_index_of
-            if d in constraints["rest_by_division"] or d in constraints["day_cap_by_division"]
+            for fixture_indices, rest, cap in rule_groups_for(board)
         ],
         constraints=scheduler_pb2.BuildConstraints(
             match_minutes=constraints["match_minutes"], gap_minutes=constraints["gap_minutes"]

@@ -21,6 +21,7 @@ module docstring for the full reasoning.
 """
 
 import pytest
+import structlog
 
 from placement.generated import scheduler_pb2
 from placement.model import SolveOutcome
@@ -129,20 +130,14 @@ def test_maps_every_field_through():
         existing=[scheduler_pb2.PinnedRow(court_index=0, start_at_ms=SLOT_MS)],
         # Both endpoints name MOVABLE fixtures (indices 0 and 1).
         dependencies=[scheduler_pb2.OrderPair(before_index=0, after_index=1)],
-        division_rules=[
-            scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=45, max_fixtures_per_day=3)
-        ],
     )
     parsed = request_to_model_input(req)
     assert parsed.fixtures == [([0, 1], 0), ([2, 3], 0)]
     assert parsed.grid_slots == [(0, SLOT_MS, 0)]
     assert parsed.step_minutes == 10
-    assert parsed.constraints == {
-        "match_minutes": 30,
-        "gap_minutes": 10,
-        "rest_by_division": {0: 45},
-        "day_cap_by_division": {0: 3},
-    }
+    # `division_rules` (proto field 10, `DivisionRule`) is retired:
+    # `_validated_constraints` carries only `match_minutes`/`gap_minutes` now.
+    assert parsed.constraints == {"match_minutes": 30, "gap_minutes": 10}
     assert parsed.existing == [(0, SLOT_MS)]
     assert parsed.dependencies == [(0, 1)]
 
@@ -165,37 +160,6 @@ def test_rejects_non_positive_match_minutes(match_minutes):
     )
     with pytest.raises(InvalidRequestError, match="match_minutes"):
         request_to_model_input(req)
-
-
-@pytest.mark.parametrize("cap", [0, -1])
-def test_rejects_non_positive_day_cap(cap):
-    """A cap of 0 forbids placing that division at all; the solve then reports
-    OPTIMAL having silently dropped every one of its fixtures. Uncapped is
-    expressed by leaving `max_fixtures_per_day` unset, never by sending 0."""
-    req = _valid_request(
-        division_rules=[scheduler_pb2.DivisionRule(division_index=0, max_fixtures_per_day=cap)]
-    )
-    with pytest.raises(InvalidRequestError, match="max_fixtures_per_day"):
-        request_to_model_input(req)
-
-
-def test_accepts_day_cap_rules_when_all_positive():
-    """The guard is per-rule; a board with several capped divisions must still
-    map, or the check has quietly become 'no caps allowed'."""
-    req = _valid_request(
-        entrant_count=4,
-        division_count=2,
-        fixtures=[
-            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0),
-            scheduler_pb2.Fixture(entrant_indices=[2, 3], division_index=1),
-        ],
-        division_rules=[
-            scheduler_pb2.DivisionRule(division_index=0, max_fixtures_per_day=3),
-            scheduler_pb2.DivisionRule(division_index=1, max_fixtures_per_day=1),
-        ],
-    )
-    parsed = request_to_model_input(req)
-    assert parsed.constraints["day_cap_by_division"] == {0: 3, 1: 1}
 
 
 @pytest.mark.parametrize("wall_seconds", [0.0, -1.0])
@@ -284,43 +248,13 @@ def test_rejects_negative_gap_minutes():
         request_to_model_input(req)
 
 
-def test_rejects_negative_min_rest_minutes():
-    """Same arithmetic on the participant-rest interval: at
-    `rest == -match_minutes` one entrant plays two simultaneous matches."""
-    req = _valid_request(
-        division_rules=[scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=-1)]
-    )
-    with pytest.raises(InvalidRequestError, match="min_rest_minutes"):
-        request_to_model_input(req)
-
-
-def test_zero_is_legitimate_rest_but_not_a_legitimate_day_cap():
-    """The two `DivisionRule` fields treat zero OPPOSITELY, on purpose, and the
-    asymmetry is the whole point of this test.
-
-    `min_rest_minutes = 0` means "this division needs no rest between a
-    player's matches" — a real thing to ask for, so it is accepted AND
-    recorded. `max_fixtures_per_day = 0` means "never place this division",
-    which no caller intends; it is the shape that comes back OPTIMAL with
-    every one of that division's fixtures silently dropped, so it is refused
-    and the caller is told to omit the field instead.
-
-    Asserting `rest_by_division[0] == 0` rather than merely "no raise" is
-    deliberate: accepted-and-recorded and accepted-then-dropped are the same
-    from the outside, and only the first is correct. `HasField` is what
-    separates them, so this pins the presence read at `schema.py:337` — the
-    guard that stops an explicit zero being indistinguishable from an unset
-    field."""
-    req = _valid_request(
-        division_rules=[scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=0)]
-    )
-    assert request_to_model_input(req).constraints["rest_by_division"] == {0: 0}
-
-    capped = _valid_request(
-        division_rules=[scheduler_pb2.DivisionRule(division_index=0, max_fixtures_per_day=0)]
-    )
-    with pytest.raises(InvalidRequestError, match="max_fixtures_per_day"):
-        request_to_model_input(capped)
+# `division_rules` (proto field 10, `DivisionRule`) is retired. The two tests
+# that used to live here -- a negative `min_rest_minutes` rejected, and zero
+# treated oppositely by `min_rest_minutes` (accepted) vs `max_fixtures_per_
+# day` (refused) -- are now proved on the `RuleGroup` restatement of the same
+# two fields instead: `test_rejects_negative_rule_group_min_rest_minutes` and
+# `test_zero_is_legitimate_rule_group_rest_but_not_a_legitimate_day_cap`,
+# both further down in the "#21 / C1: rule_groups" section.
 
 
 # --- referential integrity, now expressed as index range --------------------
@@ -552,77 +486,21 @@ def test_rejects_a_grid_slot_without_a_real_start(start_at_ms):
         request_to_model_input(req)
 
 
-@pytest.mark.parametrize(
-    "rule_kwargs",
-    [
-        pytest.param({"min_rest_minutes": 45}, id="rest"),
-        pytest.param({"max_fixtures_per_day": 1}, id="day-cap"),
-    ],
-)
-def test_rejects_a_rule_for_an_out_of_range_division(rule_kwargs):
-    """The positional restatement of "rule naming an undeclared division".
-
-    Note what this does NOT reproduce: the old check rejected a division_id
-    that no FIXTURE actually used, a data-dependent cross-reference. The new
-    one rejects a division_index outside the DECLARED bound
-    (`division_count`) — the brief's own words, "survives, now as a range
-    check". An in-range-but-unused division_index (e.g. `division_count=5`
-    but only divisions 0-1 ever appear on a fixture) is therefore no longer
-    rejected; it is simply inert, exactly like a division absent from
-    `division_rules` altogether. Recorded here rather than silently
-    narrowed, since it is a real (if small) capability difference from the
-    string contract, not an oversight.
-    """
-    req = _valid_request(
-        division_rules=[scheduler_pb2.DivisionRule(division_index=1, **rule_kwargs)]
-    )
-    with pytest.raises(InvalidRequestError, match="division_rules.*division_index"):
-        request_to_model_input(req)
-
-
-def test_rejects_duplicate_division_rules():
-    """These are repeated messages, not a proto `map`, so two rules for one
-    division are legal on the wire. Unlike the old two-list contract, a
-    duplicate is now checked ONCE per division_index rather than once per
-    list — a caller wanting both a rest rule and a cap for one division must
-    combine them into a single `DivisionRule` entry."""
-    req = _valid_request(
-        division_rules=[
-            scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=45),
-            scheduler_pb2.DivisionRule(division_index=0, max_fixtures_per_day=1),
-        ]
-    )
-    with pytest.raises(InvalidRequestError, match="division_rules"):
-        request_to_model_input(req)
-
-
-def test_a_single_rule_may_carry_both_rest_and_cap_for_one_division():
-    """The replacement for the two-list contract's independence: a division
-    may have a rest rule, a cap, or both — now expressed as which fields of
-    ONE `DivisionRule` entry are present, not which of two lists it appears
-    in."""
-    req = _valid_request(
-        division_rules=[
-            scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=45, max_fixtures_per_day=2)
-        ]
-    )
-    parsed = request_to_model_input(req)
-    assert parsed.constraints["rest_by_division"] == {0: 45}
-    assert parsed.constraints["day_cap_by_division"] == {0: 2}
-
-
-def test_a_rule_may_carry_only_rest_leaving_the_division_uncapped():
-    req = _valid_request(
-        division_rules=[scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=45)]
-    )
-    parsed = request_to_model_input(req)
-    assert parsed.constraints["rest_by_division"] == {0: 45}
-    assert parsed.constraints["day_cap_by_division"] == {}
+# `division_rules` (proto field 10, `DivisionRule`) is retired. Four tests
+# used to live here: a rule naming an out-of-range division rejected, a
+# duplicate rule for one division rejected, one entry carrying both rest and
+# cap, and an entry carrying only rest. All four are proved on the
+# `RuleGroup` restatement instead, further down: `RuleGroup` has no
+# division-index concept to be out-of-range or duplicated (it names fixture
+# POSITIONS, and several groups covering the same fixture is expected, not
+# an error -- see `test_a_rule_group_may_carry_both_rest_and_cap_for_one_
+# set_of_fixtures` and `test_accepts_a_rule_group_with_empty_fixture_
+# indices`).
 
 
 # --- #21 / C1: rule_groups -----------------------------------------------
 #
-# `RuleGroup` generalises `DivisionRule` past a division-only scope (module
+# `RuleGroup` generalised past `DivisionRule`'s division-only scope (module
 # docstring, "#21"): the CALLER resolves whatever scope it actually means
 # (competition, division, pool, entrant, person) into a fixture-index set and
 # sends the set, never the scope. So this service's own tests never see scope
@@ -906,7 +784,6 @@ def _maximal_request() -> scheduler_pb2.SolveBuildRequest:
             )
         ],
         dependencies=[scheduler_pb2.OrderPair(before_index=0, after_index=1)],
-        division_rules=[scheduler_pb2.DivisionRule(division_index=0, min_rest_minutes=45)],
         rule_groups=[scheduler_pb2.RuleGroup(fixture_indices=[0, 1], min_rest_minutes=15)],
         constraints=_constraints(),
         wall_seconds=8.0,
@@ -925,7 +802,6 @@ INDEX_FIELDS = {
     "PinnedRow.entrant_indices": lambda r: r.existing[0].entrant_indices.__setitem__(0, 999),
     "OrderPair.before_index": lambda r: setattr(r.dependencies[0], "before_index", 999),
     "OrderPair.after_index": lambda r: setattr(r.dependencies[0], "after_index", 999),
-    "DivisionRule.division_index": lambda r: setattr(r.division_rules[0], "division_index", 999),
     "RuleGroup.fixture_indices": lambda r: r.rule_groups[0].fixture_indices.__setitem__(0, 999),
 }
 
@@ -1036,7 +912,6 @@ PRESENCE_FIELDS = {
     "PinnedRow.court_index": lambda r: r.existing[0].ClearField("court_index"),
     "OrderPair.before_index": lambda r: r.dependencies[0].ClearField("before_index"),
     "OrderPair.after_index": lambda r: r.dependencies[0].ClearField("after_index"),
-    "DivisionRule.division_index": lambda r: r.division_rules[0].ClearField("division_index"),
 }
 
 #: The repeated index fields -- excluded from `PRESENCE_FIELDS` above because
@@ -1285,3 +1160,99 @@ def test_wall_exhausted_threshold_tracks_the_tier_loops_own_margin():
     boundary_ms = int((wall - MIN_TIER_SECONDS) * 1000)
     assert outcome_to_response(_outcome(elapsed_ms=boundary_ms - 1), wall).wall_exhausted is False
     assert outcome_to_response(_outcome(elapsed_ms=boundary_ms), wall).wall_exhausted is True
+
+
+# --- wire compatibility: field 10 is RESERVED, not merely deleted -----------
+#
+# `division_rules` (proto field 10, `DivisionRule`-typed) is reserved as of
+# this task -- the CURRENT stub cannot construct it or even name it. But
+# proto3 does not drop bytes it fails to recognise: it keeps them as an
+# opaque, uninterpreted entry in the message's `UnknownFieldSet` and
+# reserialises them unchanged. That is the entire mechanism the deploy-order
+# safety in the retirement design doc rests on -- "Placement first: the old
+# build.ts still sends field 10; the new Python has no such field, so proto3
+# parses it as an unknown field and ignores it" -- and it has to be proved
+# against bytes, not against the current stub, because the current stub
+# cannot be used to WRITE a field it no longer declares.
+
+
+def _request_bytes_with_legacy_division_rules_field(**overrides) -> bytes:
+    """A serialized `SolveBuildRequest` whose bytes contain field 10, built by
+    hand: a normal request from `_valid_request`, serialized, with one raw
+    length-delimited field-10 entry (tag `(10 << 3) | 2`, an EMPTY payload --
+    a legal empty `DivisionRule` had one still been declared) appended.
+    Appending after a complete, valid serialization is legal proto3 wire
+    format: an embedded message is simply the concatenation of its fields'
+    tag/value pairs in any order, repeats included.
+    """
+    data = _valid_request(**overrides).SerializeToString()
+    tag = (10 << 3) | 2  # field 10, wire type 2 (length-delimited)
+    return data + bytes([tag, 0])
+
+
+def test_a_request_carrying_the_retired_division_rules_field_still_parses_and_solves():
+    """The wire-compat guarantee, proved end to end: parse, translate, and
+    actually solve -- not merely "does not raise on `ParseFromString`", which
+    would pass even if `request_to_model_input` silently mistranslated the
+    stray bytes into some other field.
+    """
+    data = _request_bytes_with_legacy_division_rules_field()
+    req = scheduler_pb2.SolveBuildRequest()
+    req.ParseFromString(data)  # must NOT raise -- proto3 preserves unknown fields
+
+    parsed = request_to_model_input(req)  # must NOT raise
+    assert parsed.wall_seconds == 8.0
+    assert len(parsed.fixtures) == 1
+
+    from placement.model import build_model, solve
+
+    model = build_model(
+        parsed.fixtures,
+        parsed.courts,
+        parsed.grid_slots,
+        parsed.step_minutes,
+        parsed.constraints,
+        parsed.existing,
+        parsed.dependencies,
+    )
+    outcome = solve(model, wall_seconds=parsed.wall_seconds)
+    assert outcome.status == "OPTIMAL", outcome.status
+    assert len(outcome.assignments) == 1
+
+
+def test_legacy_wire_field_ignored_is_logged_for_a_request_carrying_field_10():
+    """`_log_legacy_wire_fields` (schema.py) is the one thing that makes the
+    deploy window in the test above OBSERVABLE rather than silent -- see the
+    ADDITIONAL OWNER REQUIREMENT this task folded in. `structlog.testing.
+    capture_logs()` reconfigures structlog to route through a capturing
+    processor for the duration of the `with` block regardless of the
+    process's own configured level/processors (`test_structlog_config.py`
+    proves the OTHER half of that independence), so this does not depend on
+    `configure_structlog` having been called first.
+    """
+    data = _request_bytes_with_legacy_division_rules_field(request_id="req-99")
+    req = scheduler_pb2.SolveBuildRequest()
+    req.ParseFromString(data)
+
+    with structlog.testing.capture_logs() as captured:
+        request_to_model_input(req)
+
+    events = [e for e in captured if e["event"] == "legacy_wire_field_ignored"]
+    assert len(events) == 1, captured
+    assert events[0]["request_id"] == "req-99"
+    assert events[0]["field_numbers"] == [10]
+
+
+def test_legacy_wire_field_ignored_is_not_logged_for_a_clean_request():
+    """The other half: a request that never carried a legacy field must not
+    log as if it had -- otherwise the event is noise, not a deploy-window
+    signal, on every ordinary request the service will ever see once the
+    migration window has passed.
+    """
+    req = _valid_request()
+
+    with structlog.testing.capture_logs() as captured:
+        request_to_model_input(req)
+
+    events = [e for e in captured if e["event"] == "legacy_wire_field_ignored"]
+    assert events == [], captured

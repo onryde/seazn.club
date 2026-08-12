@@ -1567,7 +1567,7 @@ describe("buildSchedule — Placement path", () => {
     expect([...values].sort((a, b) => a - b)).toEqual(values.map((_, i) => i));
   });
 
-  it("sends dayIndex 0 for every slot and omits dayCapByDivision when tz is undefined (obligation 1)", async () => {
+  it("sends dayIndex 0 for every slot and omits maxFixturesPerDay from every rule group when tz is undefined (obligation 1)", async () => {
     let captured: SolveBuildInput | undefined;
     vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
       captured = input;
@@ -1586,10 +1586,16 @@ describe("buildSchedule — Placement path", () => {
     expect(captured).toBeDefined();
     expect(captured!.grid.slots.length).toBeGreaterThan(0);
     expect(captured!.grid.slots.every((s) => s.dayIndex === 0)).toBe(true);
-    expect(captured!.constraints.dayCapByDivision).toBeUndefined();
+    // The rule group still ships (never dropped), just without the one field
+    // that would bind against a fabricated day -- `constraints.dayCapByDivision`
+    // (the OLDER, division-only field this obligation used to be checked
+    // against) is retired; `ruleGroups` is the only day-cap path left.
+    expect(captured!.ruleGroups).toEqual([
+      { fixtureIds: ["f1"], minRestMinutes: undefined, maxFixturesPerDay: undefined },
+    ]);
   });
 
-  it("derives dayCapByDivision from division-scoped max_fixtures_per_day hard rules", async () => {
+  it("derives a rule group's maxFixturesPerDay from a division-scoped max_fixtures_per_day hard rule", async () => {
     let captured: SolveBuildInput | undefined;
     vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
       captured = input;
@@ -1604,7 +1610,42 @@ describe("buildSchedule — Placement path", () => {
     await buildSchedule(
       minimalInput({ fixtures: [fx("f1", "E1", "E2", { divisionId: "D1" })], config }),
     );
-    expect(captured!.constraints.dayCapByDivision).toEqual({ D1: 2 });
+    // `constraints.dayCapByDivision` (the OLDER, division-only field this used
+    // to be checked against) is retired; `ruleGroups` is the only path left.
+    expect(captured!.ruleGroups).toEqual([
+      { fixtureIds: ["f1"], minRestMinutes: undefined, maxFixturesPerDay: 2 },
+    ]);
+  });
+
+  // The regression test for the retirement itself: `division_rules` (proto
+  // field 10) is gone, and so are `SolveBuildInput["constraints"].
+  // restByDivision`/`dayCapByDivision`, the two fields that used to feed it
+  // (`placement-client.ts`'s now-deleted `toDivisionRules`). This runs a
+  // board that WOULD have populated both under the old contract -- a
+  // division-scoped rest AND a division-scoped day cap, on the same fixture
+  // -- so a regression that resurrected either field (a stray `as any`
+  // spread, say) would be caught here even though the TYPE alone already
+  // makes the obvious mistake a compile error.
+  it("emits no divisionRules field and no constraints.restByDivision/dayCapByDivision", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const hard: HardConstraint[] = [
+      { type: "max_fixtures_per_day", count: 2, scope: { kind: "division", divisionId: "D1" } },
+    ];
+    const config = { ...cfg(), hard, restByDivision: { D1: 30 } };
+    await buildSchedule(
+      minimalInput({ fixtures: [fx("f1", "E1", "E2", { divisionId: "D1" })], config }),
+    );
+    expect(captured).toBeDefined();
+    expect(captured).not.toHaveProperty("divisionRules");
+    expect(Object.keys(captured!.constraints).sort()).toEqual(["gapMinutes", "matchMinutes"]);
+    // The board genuinely carried both a rest AND a cap for this division —
+    // otherwise the property-absence checks above could pass by having
+    // nothing to drop in the first place.
+    expect(captured!.ruleGroups!.length).toBeGreaterThan(0);
   });
 
   it("splits a locked fixture into an existing row and excludes it from fixtures (obligation 3)", async () => {
@@ -1729,11 +1770,15 @@ describe("buildSchedule — Placement path", () => {
     expect(captured!.ruleGroups!.some((g) => g.fixtureIds.length > 0 && g.fixtureIds.length < 3)).toBe(true);
   });
 
-  // The brief's explicit requirement: "Today dayCapsByDivision drops every
-  // scope that is not division — the new path must NOT." Same request, same
-  // rule, checked on BOTH wire fields at once so a regression on either one
-  // is visible.
-  it("sends a competition-scoped max_fixtures_per_day rule via ruleGroups even though dayCapByDivision (division-only) drops it", async () => {
+  // The brief's original requirement, from when `dayCapsByDivision` (build.ts)
+  // still fed the wire's OLD, division-only field alongside `ruleGroups`:
+  // "Today dayCapsByDivision drops every scope that is not division — the
+  // new path must NOT." That field and the function feeding it are retired
+  // (`dayCapsByDivision` generalised nothing `ruleGroups`' own typed-rule
+  // pass did not already derive from the same `hard` array), so this is now
+  // simply the proof that a competition-scoped rule reaches `ruleGroups` —
+  // a scope the OLD, division-only field could never have carried at all.
+  it("sends a competition-scoped max_fixtures_per_day rule via ruleGroups, covering every division", async () => {
     let captured: SolveBuildInput | undefined;
     vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
       captured = input;
@@ -1747,10 +1792,6 @@ describe("buildSchedule — Placement path", () => {
 
     await buildSchedule({ fixtures, config });
     expect(captured).toBeDefined();
-    // The OLD, division-only field (`dayCapsByDivision`, build.ts) — UNCHANGED:
-    // still empty for a competition-scoped rule.
-    expect(captured!.constraints.dayCapByDivision).toBeUndefined();
-    // The NEW field: the same rule, not dropped, covering both fixtures.
     expect(captured!.ruleGroups).toEqual([
       { fixtureIds: ["f1", "f2"], minRestMinutes: undefined, maxFixturesPerDay: 3 },
     ]);
@@ -1868,8 +1909,9 @@ describe("buildSchedule — Placement path", () => {
     expect(populated.dependencies).toEqual(without.dependencies);
     expect(populated.constraints.matchMinutes).toEqual(without.constraints.matchMinutes);
     expect(populated.constraints.gapMinutes).toEqual(without.constraints.gapMinutes);
-    expect(populated.constraints.restByDivision).toEqual(without.constraints.restByDivision);
-    expect(populated.constraints.dayCapByDivision).toEqual(without.constraints.dayCapByDivision);
+    // `constraints.restByDivision`/`dayCapByDivision` used to be compared here
+    // too; both are retired (`division_rules`, proto field 10) and no longer
+    // exist on `constraints` at all -- there is nothing left to compare.
     expect(populated.wallSeconds).toEqual(without.wallSeconds);
     // `existing` minus the one field that is SUPPOSED to differ.
     expect(populated.existing.map(({ ruleGroupIndices: _rgi, ...rest }) => rest)).toEqual(
@@ -1961,14 +2003,15 @@ describe("buildSchedule — Placement path", () => {
     expect(pinnedRow?.ruleGroupIndices).toEqual([0, 1]);
   });
 
-  // `dayCapByDivision` (the OLDER, division-only field) is gated on `tz` for
-  // exactly this reason (obligation 1, above): with no zone the verifier's own
-  // day-cap pass buckets every slot into ONE day, so a real cap would bind the
-  // whole board against a fabricated bucket. `buildRuleGroups`'s
-  // `maxFixturesPerDay` must honour the SAME gate, or the service (which reads
-  // `RuleGroup.max_fixtures_per_day` since C4) enforces a cap the verifier
-  // cannot see at all. `minRestMinutes` needs no such gate and must be
-  // unaffected either way.
+  // `dayCapByDivision` (the OLDER, division-only field, retired along with
+  // `division_rules`) used to be gated on `tz` for exactly this reason
+  // (obligation 1, above): with no zone the verifier's own day-cap pass
+  // buckets every slot into ONE day, so a real cap would bind the whole
+  // board against a fabricated bucket. `buildRuleGroups`'s `maxFixturesPerDay`
+  // must honour the SAME gate, or the service (which reads `RuleGroup.
+  // max_fixtures_per_day` since C4) enforces a cap the verifier cannot see
+  // at all. `minRestMinutes` needs no such gate and must be unaffected
+  // either way.
   it("omits maxFixturesPerDay from a rule group when tz is undefined, and includes it when tz is set", async () => {
     const run = async (tz: string | undefined): Promise<SolveBuildInput> => {
       let captured: SolveBuildInput | undefined;
