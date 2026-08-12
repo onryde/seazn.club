@@ -1518,6 +1518,17 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
       people: f === undefined ? [] : [...(f.people ?? [])],
       ...(f?.poolId !== undefined ? { poolId: f.poolId } : {}),
       ...(f?.divisionId !== undefined ? { divisionId: f.divisionId } : {}),
+      // C1 fix-loop round 2 (2026-08-12, Item A). Same "carried through, not
+      // dropped" reasoning as poolId/divisionId just above — omitted here,
+      // this helper's own OUTPUT (`incumbent`, below) is what
+      // `conflictsForBoard`/`validateAssignments` actually re-verify, so a
+      // division with 2+ round-robin-kind stages would have its solver-fed
+      // `roundNo` correctly stripped by `roundBearingFor` (the wire never
+      // sees it) while this SELF-CHECK still compared both stages' original
+      // roundNo values as one sequence — collapsing exactly the shape
+      // `roundBearingFor`'s own stripping exists to prevent, just one step
+      // later, on the encoder/verifier gate rather than the wire.
+      ...(f?.stageId !== undefined ? { stageId: f.stageId } : {}),
       // C1 (2026-08-12 round-order design). Same "carried through, not
       // dropped" reasoning as poolId/divisionId — this helper builds BOTH
       // `pinnedAssignments` (below) and `placedAssignments` (the solver's own
@@ -1706,16 +1717,31 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // explains why), so the SOLVER cannot scope a pin-movable round pair by
   // division the way it scopes movable-movable pairs (`Fixture.
   // division_index`). A pin's round is therefore only forwarded when there
-  // is AT MOST ONE round-bearing division among THIS run's own movable
+  // is AT MOST ONE round-bearing SEQUENCE among THIS run's own movable
   // fixtures — the one case this function can itself guarantee is
   // unambiguous. A multi-round-robin-division call (the joint-apply shape)
   // simply never attaches a pin's round; movable-movable pairs are
   // unaffected, since those stay scoped by the wire's own division_index.
-  const roundBearingDivisions = new Set(
-    freeFixtures.flatMap((f) => (roundBearingFor(f) !== undefined ? [f.divisionId ?? ""] : [])),
+  //
+  // C1 fix-loop round 2 (2026-08-12, Item B): "sequence" is (divisionId,
+  // stageId, poolId), NOT divisionId alone — the pin-path sibling of the
+  // multi-pool/multi-stage contamination guard just above. A division can
+  // carry a clean, all-movable round-robin stage AND a second, entirely
+  // PINNED round-robin stage (or pool) at once — `multiPoolContaminated`
+  // never sees the second one, because contamination there is scored over
+  // `freeFixtures` (movable only) and every fixture in the pinned stage is,
+  // by construction, not free. Checking divisionId alone let a pin from
+  // that second stage/pool have ITS round forwarded and compared against
+  // the first stage's movable rounds as if they were one sequence — the
+  // pin-path version of the bug `multiPoolContaminated`/`stageId` already
+  // fixed on the movable-movable path.
+  const roundBearingSequenceOf = (f: { divisionId?: string; stageId?: string; poolId?: string }): string =>
+    `${f.divisionId ?? ""}|${f.stageId ?? ""}|${f.poolId ?? ""}`;
+  const roundBearingSequences = new Set(
+    freeFixtures.flatMap((f) => (roundBearingFor(f) !== undefined ? [roundBearingSequenceOf(f)] : [])),
   );
-  const singleRoundRobinDivision =
-    roundBearingDivisions.size === 1 ? [...roundBearingDivisions][0] : undefined;
+  const singleRoundRobinSequence =
+    roundBearingSequences.size === 1 ? [...roundBearingSequences][0] : undefined;
 
   const placementInput: SolveBuildInput = {
     courts: config.courts,
@@ -1755,17 +1781,20 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
       startAtMs: a.startAt,
       entrantIds: a.entrants,
       ruleGroupIndices: ruleGroupSet.indicesFor(a),
-      // C1 (2026-08-12 round-order design). See `singleRoundRobinDivision`'s
+      // C1 (2026-08-12 round-order design). See `singleRoundRobinSequence`'s
       // own comment above for why a pin's round is only ever forwarded in
-      // the one-round-robin-division case: `PinnedRow` has nowhere on the
-      // wire to carry a division, so this is the only condition under which
-      // the model comparing this pin's round against every OTHER
-      // round-bearing movable fixture is still guaranteed correct.
+      // the one-round-robin-sequence case: `PinnedRow` has nowhere on the
+      // wire to carry a division (let alone a stage or pool), so this is the
+      // only condition under which the model comparing this pin's round
+      // against every OTHER round-bearing movable fixture is still
+      // guaranteed correct — the pin's OWN (division, stage, pool) must
+      // match the single clean sequence, not merely its division (C1
+      // fix-loop round 2, Item B).
       roundNo:
         a.roundNo !== undefined &&
-        singleRoundRobinDivision !== undefined &&
-        (a.divisionId ?? "") === singleRoundRobinDivision &&
-        !contaminatedDivisions.has(singleRoundRobinDivision)
+        singleRoundRobinSequence !== undefined &&
+        roundBearingSequenceOf(a) === singleRoundRobinSequence &&
+        !contaminatedDivisions.has(a.divisionId ?? "")
           ? a.roundNo
           : undefined,
     })),
