@@ -1655,6 +1655,34 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   method: **a stated reason for a scope cut is a factual claim, and checking it
   is cheap.**
 
+- 2026-08-12 — S9/#418 — **the fix for the duplicated public rollup was itself
+  wrong for a MIXED competition, and final review caught it.** Gating the whole
+  `<section>` on `career.some((c) => c.divisions > 1)` still mapped over every
+  sport inside it, so a competition with one multi-division sport plus one
+  single-division sport rendered the second sport's card as a verbatim
+  restatement of its own Stats row — exactly the defect the gate was added to
+  remove, reintroduced for the only case with more than one sport. The drop
+  belongs per SPORT, in `getPublicPlayer`, before the payload exists; the page
+  then reads `career.length > 0` and holds no rule. Consequence worth keeping:
+  **a visibility rule written at the render site is a rule about the PAGE, and
+  a page can hold several of the things the rule is about.**
+  Both pre-existing scoping tests had seeded ONE division per competition, so
+  under the new rule they would have asserted an empty payload and passed while
+  proving nothing — a vacuous green that only appeared because the rule
+  changed underneath them. Each now seeds two.
+- 2026-08-12 — S9/#418 — **a review finding REFUSED, with the reason recorded.**
+  Final review proposed dropping a career card whose metrics all resolve away
+  (every total zero, or a `sport_key` retired from the registry while its
+  snapshot rows survive), to match `labelPlayerStats`'s callers
+  (`me.ts`, `if (metrics.length === 0) return []`). Implemented, and it
+  immediately redded the unit test *"an unknown/retired sport_key degrades to
+  empty metrics, never throws — counts stay correct"* — which states the
+  opposite contract deliberately. Reverted. The two views answer different
+  questions: a per-division row with no numbers is noise, while a career card
+  is also the record that you PLAYED the sport, carried by its division and
+  match counts alone. Changing that is a product call, not a consistency
+  cleanup. Recorded because the next reviewer will propose it again.
+
 - _(append below)_
 
 ## Open questions for the owner
