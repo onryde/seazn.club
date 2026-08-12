@@ -1817,6 +1817,22 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   header of its own — a scorer sees actions but not the state they are
   scoring. Both are S11 skin-shaped questions; raised for the owner rather
   than restyled unilaterally (restyles need sign-off).
+- 2026-08-12 — S10/#419 — **football's `State.squads` is a PRIVATE
+  `FootballSquad`, not the kernel's `SquadState`, so the attribution picker's
+  live-squad tier lights up for every family kernel EXCEPT football.** Found
+  while wiring the picker, not while debugging it. The kernels (period,
+  setbased, nested) and cricket adopt the shared `SquadCarrier` shape, so
+  `personsAtPosition` reads live folded state there; football keeps the squad
+  field it already had before S3/#426 (which is exactly why S3 recorded
+  football as the one module that persists squads at `init`
+  unconditionally). Handled structurally rather than by sport name — the
+  picker shape-checks with `isSquadState` before trusting `state.squads` and
+  otherwise degrades to the team sheet, so a module that adopts the kernel
+  shape later starts working with no picker change. Consequence a reader
+  should not have to rediscover: football's keeper-after-a-mid-match-change is
+  named from the team sheet, so a post-kickoff keeper swap is not reflected in
+  football's picker candidates until football adopts `SquadState`. Tested and
+  documented in `attribution-picker.tsx`'s header.
 - _(append below)_
 
 ## Open questions for the owner
