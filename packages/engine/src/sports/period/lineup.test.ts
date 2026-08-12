@@ -317,6 +317,16 @@ describe("S8/#417 — goalkeeper stats read the FOLD of core.lineup.*, never a k
           off,
           on: { personId: on, positionKey: sport.keeperGroup, slot: "starting", orderNo: 90 },
         });
+      // S8/#417 W6 — shots on goal + save percentage.
+      const shotType = `${sport.key}.shot`;
+      const shot = (seq: number, by: string, extra?: Record<string, unknown>): EventEnvelope =>
+        ev(seq, shotType, { by, outcome: "saved", ...(extra ?? {}) });
+      // `voids` (the id of the event being cancelled) travels on the
+      // ENVELOPE, not the payload (`CoreVoid` is `z.strictObject({})`) — so
+      // this bypasses the local `ev` wrapper and calls `makeEnvelope` with
+      // its 3rd argument directly.
+      const voidEv = (seq: number, targetSeq: number): EventEnvelope =>
+        makeEnvelope(seq, { type: "core.void", payload: {} }, `e-${targetSeq}`);
 
       it("simple case: one keeper concedes twice, earns no clean sheet", () => {
         const rows = aggregatePlayerStats([start, goal(1, A), goal(2, A)], model, lineups);
@@ -427,8 +437,144 @@ describe("S8/#417 — goalkeeper stats read the FOLD of core.lineup.*, never a k
         expect(rows.find((r) => r.personId === scorer)?.stats.goals).toBe(1);
         expect(rows.find((r) => r.personId === scorer)?.stats.goals_conceded).toBeUndefined();
       });
+
+      // -----------------------------------------------------------------
+      // S8/#417 W6 — shots on goal, saves, save percentage. Same fold
+      // (`periodKeeperStatsFold`), same spell mechanism, same SPORTS loop —
+      // every test below runs for BOTH hockey and icehockey with no
+      // sport-specific branching, which is the proof that a mechanism
+      // gated for one did not silently alter the other.
+      // -----------------------------------------------------------------
+
+      it("a save credits the on-ice keeper and counts toward shots_faced", () => {
+        const rows = aggregatePlayerStats([start, shot(1, A, { outcome: "saved" })], model, lineups);
+        const row = rows.find((r) => r.personId === homeKeeper);
+        expect(row?.stats.saves).toBe(1);
+        expect(row?.stats.shots_faced).toBe(1);
+      });
+
+      it("missed/blocked shots touch neither saves nor shots_faced", () => {
+        const rows = aggregatePlayerStats(
+          [start, shot(1, A, { outcome: "missed" }), shot(2, A, { outcome: "blocked" })],
+          model,
+          lineups,
+        );
+        const row = rows.find((r) => r.personId === homeKeeper);
+        expect(row?.stats.saves).toBeUndefined();
+        expect(row?.stats.shots_faced).toBeUndefined();
+      });
+
+      it("HEADLINE: a mid-match keeper change splits saves across two different people", () => {
+        const rows = aggregatePlayerStats(
+          [
+            start,
+            shot(1, A, { outcome: "saved" }), // saved by the ORIGINAL keeper
+            subKeeper(2, homeKeeper, homeSub1),
+            shot(3, A, { outcome: "saved" }), // saved by the REPLACEMENT keeper
+          ],
+          model,
+          lineups,
+        );
+        expect(rows.find((r) => r.personId === homeKeeper)?.stats.saves).toBe(1);
+        expect(rows.find((r) => r.personId === homeSub1)?.stats.saves).toBe(1);
+      });
+
+      it("an explicit payload goalkeeper BEATS the spell-derived keeper when they disagree", () => {
+        // homeKeeper is who the spell fold would credit (never subbed off);
+        // the payload deliberately names homeSub1 instead — someone who
+        // never touched the pitch, so a fixture where the two AGREE could
+        // not tell the two resolution paths apart (fixture-choice-is-the-
+        // test).
+        const rows = aggregatePlayerStats(
+          [start, shot(1, A, { outcome: "saved", goalkeeper: homeSub1 })],
+          model,
+          lineups,
+        );
+        expect(rows.find((r) => r.personId === homeSub1)?.stats.saves).toBe(1);
+        expect(rows.find((r) => r.personId === homeKeeper)?.stats.saves).toBeUndefined();
+      });
+
+      it("a shot with outcome scored does not double-charge goals_conceded or shots_faced", () => {
+        const rows = aggregatePlayerStats(
+          [start, goal(1, A), shot(2, A, { outcome: "scored" })],
+          model,
+          lineups,
+        );
+        const row = rows.find((r) => r.personId === homeKeeper);
+        // ONE real goal + one outcome:"scored" shot describing the SAME
+        // event on the ice — both must count it exactly once, not twice.
+        expect(row?.stats.goals_conceded).toBe(1);
+        expect(row?.stats.shots_faced).toBe(1);
+      });
+
+      it("save percentage is correct on a fully-covered match", () => {
+        const rows = aggregatePlayerStats(
+          [
+            start,
+            shot(1, A, { outcome: "saved" }),
+            shot(2, A, { outcome: "missed" }),
+            shot(3, A, { outcome: "blocked" }),
+            goal(4, A), // conceded — shots_faced 1 -> 2
+            shot(5, A, { outcome: "scored" }), // matching coverage evidence
+          ],
+          model,
+          lineups,
+        );
+        const row = rows.find((r) => r.personId === homeKeeper);
+        expect(row?.stats.saves).toBe(1);
+        expect(row?.stats.shots_faced).toBe(2);
+        expect(row?.stats.save_percentage).toBe(50);
+      });
+
+      it("save percentage is absent entirely on a partially-covered match", () => {
+        const rows = aggregatePlayerStats(
+          [
+            start,
+            shot(1, A, { outcome: "saved" }),
+            goal(2, A), // conceded, but NEVER also logged as an outcome:"scored" shot
+          ],
+          model,
+          lineups,
+        );
+        const row = rows.find((r) => r.personId === homeKeeper);
+        expect(row?.stats.saves).toBe(1);
+        expect(row?.stats.shots_faced).toBe(2);
+        expect(row?.stats.save_percentage).toBeUndefined();
+      });
+
+      it("void un-counts a save (folded path) and a shot (metric path)", () => {
+        const events = [start, shot(1, A, { outcome: "saved", person: `${A}-p6` })];
+        const before = aggregatePlayerStats(events, model, lineups);
+        const after = aggregatePlayerStats([...events, voidEv(2, 1)], model, lineups);
+        expect(before.find((r) => r.personId === homeKeeper)?.stats.saves).toBe(1);
+        expect(after.find((r) => r.personId === homeKeeper)?.stats.saves).toBeUndefined();
+        expect(after.find((r) => r.personId === homeKeeper)?.stats.shots_faced).toBeUndefined();
+        // The shooter-side declarative `shots` metric un-counts too — a
+        // different code path (metric+field walk, not `folded`), reading
+        // the SAME void-resolved list `aggregatePlayerStatsWithDiagnostics`
+        // builds once for both.
+        expect(before.find((r) => r.personId === `${A}-p6`)?.stats.shots).toBe(1);
+        expect(after.find((r) => r.personId === `${A}-p6`)?.stats.shots).toBeUndefined();
+      });
     });
   }
+
+  // S8/#417 W6 — the event TYPE STRING is the whole isolation boundary
+  // between the two sports on this shared kernel: `icehockey.shot` is
+  // simply not `event.type === "hockey.shot"`, so folding it through
+  // hockey's OWN model credits nobody. Outside the SPORTS loop on purpose —
+  // this specifically needs TWO DIFFERENT modules reading ONE stream.
+  it("a change gated for one period-kernel sport does not leak into the other", () => {
+    const lineups = pair("GK", "DF", 11);
+    const start = ev(0, "core.start", {});
+    const wrongTypeShot = ev(1, "icehockey.shot", {
+      by: lineups.away.entrantId,
+      outcome: "saved",
+    });
+    const rows = aggregatePlayerStats([start, wrongTypeShot], hockey.playerStats!, lineups);
+    const keeper = lineups.home.slots[0]!.personId;
+    expect(rows.find((r) => r.personId === keeper)?.stats.saves).toBeUndefined();
+  });
 
   it("playerStatsKeyCollisions is empty for hockey and icehockey", () => {
     expect(playerStatsKeyCollisions(hockey.playerStats!)).toEqual([]);

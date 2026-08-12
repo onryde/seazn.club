@@ -18,6 +18,7 @@ import {
   FootballPenalty,
   FootballPeriod,
   FootballShootoutKick,
+  FootballShot,
   FootballSinBinEnd,
   FootballSinBinStart,
   FootballSub,
@@ -901,6 +902,7 @@ const BRANCH_NAMES = new Map<unknown, string>([
   [FootballPenalty, "FootballPenalty"],
   [FootballSinBinStart, "FootballSinBinStart"],
   [FootballSinBinEnd, "FootballSinBinEnd"],
+  [FootballShot, "FootballShot"],
 ]);
 const BRANCHES: [string, z.ZodType][] = FootballEv.options.map((schema) => [
   BRANCH_NAMES.get(schema) ?? "UNNAMED",
@@ -929,6 +931,13 @@ describe("FootballEv union disambiguation (§8)", () => {
     ["shootout kick", { by: "H", scored: true }, "FootballShootoutKick"],
     ["missed penalty", { by: "H", outcome: "saved" }, "FootballPenalty"],
     ["stamped sin bin start", { by: "H", person: "H-p1", minutes: 10, at: stamp }, "FootballSinBinStart"],
+    // S8/#417 W6 — "blocked" is the token that guarantees this reaches
+    // FootballShot and not FootballPenalty: PenaltyOutcome (saved/missed/
+    // post) has no "blocked" member, so FootballPenalty rejects this payload
+    // outright on the enum alone. See "pins the shapes that were ALREADY
+    // ambiguous" below for the two `outcome` tokens ("saved"/"missed") that
+    // are NOT disambiguated this way.
+    ["stamped shot", { by: "H", taker: "H-p1", outcome: "blocked", at: stamp }, "FootballShot"],
   ])("%s reaches its own branch, and every branch ahead of it REJECTS", (_, payload, expected) => {
     expect(firstBranch(payload)).toBe(expected);
     // The winner alone is only half the claim, and the weaker half: a
@@ -958,17 +967,29 @@ describe("FootballEv union disambiguation (§8)", () => {
     }
   });
 
-  it("pins the two shapes that were ALREADY ambiguous before this wave", () => {
-    // Neither is a regression and neither is a bug: the ENVELOPE's `type` is the
-    // real discriminator, and `apply` parses the selected branch explicitly
-    // (`parsePayload`). Recorded here so a future widening that changes either
-    // answer has to change this test deliberately.
+  it("pins the shapes that were ALREADY ambiguous before this wave", () => {
+    // None of these are a regression and none is a bug: the ENVELOPE's `type`
+    // is the real discriminator, and `apply` parses the selected branch
+    // explicitly (`parsePayload`). Recorded here so a future widening that
+    // changes any answer has to change this test deliberately.
     // A bare `{by}` is a legal anonymous goal AND a legal anonymous sin bin.
     expect(firstBranch({ by: "H" })).toBe("FootballGoal");
     // FootballSinBinEnd's shape is a strict subset of FootballSinBinStart's, so
     // the union never reaches the last branch. It has been unreachable since
     // the pair landed in W4.
     expect(firstBranch({ by: "H", person: "H-p1", minute: 35 })).toBe("FootballSinBinStart");
+    // S8/#417 W6 — a shot with outcome "saved"/"missed" is ALSO a legal,
+    // structurally valid FootballPenalty (both are `{by, taker?, goalkeeper?,
+    // outcome, at?}`-shaped, and PenaltyOutcome ⊇ {saved, missed}) — reaches
+    // FootballPenalty first, never FootballShot, when `taker`/`goalkeeper`
+    // are the only other keys present. Deliberate, considered and rejected as
+    // a schema problem: `apply()` dispatches on `ev.type`, never by trying
+    // the union, so this is invisible to every real fold — see `FootballShot`
+    // /`ShotOutcome`'s own doc comments for the full reasoning, and the
+    // "stamped shot" case above for the token ("blocked") that sidesteps it.
+    expect(firstBranch({ by: "H", taker: "H-p1", outcome: "saved", at: stamp })).toBe(
+      "FootballPenalty",
+    );
   });
 });
 

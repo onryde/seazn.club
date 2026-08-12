@@ -387,6 +387,51 @@ export const PeriodSetPiece = z.strictObject({
   at: GameTime.optional(),
 });
 
+// S8/#417 W6 — a shot with its own outcome: the shape that yields BOTH shots
+// on goal (S2/#430's parked row) and, crucially, the DENOMINATOR for save
+// percentage (the same row's "absent" complaint) — a bare save counter would
+// repeat the silent-0/no-denominator defect this programme has now hit four
+// times (`metricOf`, `SetPieceTally.outcome`, plus/minus, powerplay
+// conversion). A save IS a shot whose outcome is "saved".
+//
+// Deliberately its OWN enum, not `AttemptOutcome` (used just above by
+// `PeriodSetPiece`/football's `PenaltyOutcome`): "blocked" — stopped by an
+// outfield defender before it ever reached the keeper — is a real, distinct,
+// commonly-tracked outcome for an open-play shot in both hockey codes, and
+// `AttemptOutcome` has no such token (its four — scored/saved/missed/post —
+// were tuned for a penalty/set-piece ATTEMPT, where nobody but the keeper may
+// legally intervene). Widening the shared enum was considered and rejected:
+// `core/types.ts` is outside this session's owned files, and it would have
+// leaked "blocked" into `PenaltyOutcome`'s pad enum (`AttemptOutcome.exclude
+// (["scored"])`) as a choice no penalty can actually produce. "scored" is
+// kept (not the brief's illustrative "goal") for the same reason `PenaltyOutcome`
+// already reads that way — one vocabulary for "did the shot end the passage
+// in a goal" inside this file, not two.
+export const ShotOutcome = z.enum(["scored", "saved", "missed", "blocked"]);
+export type ShotOutcome = z.infer<typeof ShotOutcome>;
+
+// S8/#417 W6 — `hockey.shot` / `icehockey.shot`, gated per preset
+// (`PeriodPreset.shotTracking`, checked in `applyShot`) so a hypothetical
+// future period-kernel sport that should not accept shot detail does not,
+// mirroring `records.timeouts`-style capability flags elsewhere in this
+// engine. `by` is the SHOOTING side. `person`/`goalkeeper` follow this
+// kernel's own naming (matches `PeriodGoal`/`PeriodSetPiece`/
+// `PeriodShootoutAttempt`), both optional per this repo's person-attribution
+// convention. No `minute` — unlike every pre-`at`-era payload above, this
+// type never existed before `at` did, so there is no legacy display integer
+// to carry forward.
+export const PeriodShot = z.strictObject({
+  by: EntrantId,
+  person: PersonId.optional(),
+  // The keeper FACING it. EXPLICIT override — when present, wins over the
+  // spell-derived on-ice keeper `periodKeeperStatsFold` would otherwise
+  // credit, mirroring S8's own person-attribution resolution order
+  // (explicit field first, derived fact as fallback, never the other way).
+  goalkeeper: PersonId.optional(),
+  outcome: ShotOutcome,
+  at: GameTime.optional(),
+});
+
 // NOTE (union order): branches are told apart structurally and the first match
 // wins, so every new branch goes LAST — a set-piece payload is a structural
 // subset of a goal and must never be able to displace one. `apply` dispatches
@@ -399,6 +444,7 @@ export const PeriodEv = z.union([
   PeriodSuspensionEnd,
   PeriodShootoutAttempt,
   PeriodSetPiece,
+  PeriodShot,
 ]);
 export type PeriodEv = z.infer<typeof PeriodEv>;
 
@@ -465,6 +511,21 @@ export interface SetPieceTally {
   resolved: number;
 }
 
+// S8/#417 W6 — one recorded shot, State's raw log (mirrors `SetPieceTally`'s
+// sibling shape at `setPieces` below, and `PenaltyRecord`/`goalLog` on
+// football's own state). Score-neutral by construction — `applyShot` never
+// touches `goals`/`periods`, only this array — so it is absent from
+// `summary.detail` on any period-kernel sport that ever grows a `coarsen`
+// (none does today; see the note on `shots` inside `summary` below for why it
+// is nonetheless safe to surface there right now).
+export interface ShotRecord {
+  side: Side;
+  outcome: ShotOutcome;
+  person?: string;
+  goalkeeper?: string;
+  at?: GameTime;
+}
+
 export interface PeriodState {
   cfg: PeriodCfg;
   entrants: { home: string; away: string };
@@ -482,6 +543,10 @@ export interface PeriodState {
   /** W4 — set pieces awarded/converted per side per kind. Absent until one is
    *  recorded. */
   setPieces?: { home: Record<string, SetPieceTally>; away: Record<string, SetPieceTally> };
+  // S8/#417 W6 — every recorded shot, in play order. Absent until the first
+  // one, matching the `setPieces`/`goalLog` precedent so a pre-this-wave
+  // state serialises byte-identically.
+  shots?: ShotRecord[];
   /**
    * W4a (#425) §6 obligation 3 — the newest stamp this fold has applied, i.e.
    * AS OF WHEN everything above is true. Absent until the first stamped event,
@@ -522,6 +587,13 @@ function opponent(side: Side): Side {
  *  set pieces do not convert (FIH corners convert well under half the time). */
 function attemptOutcome(draw: number): AttemptOutcome {
   return draw < 0.3 ? "scored" : draw < 0.6 ? "saved" : draw < 0.8 ? "missed" : "post";
+}
+
+/** Generator helper: one rng draw → one `ShotOutcome` token, weighted toward
+ *  the outcomes that keep the golden coverage gate honest (all four tokens
+ *  need to appear at least once across the corpus — see `ShotOutcome`). */
+function shotOutcome(draw: number): ShotOutcome {
+  return draw < 0.25 ? "scored" : draw < 0.55 ? "saved" : draw < 0.8 ? "missed" : "blocked";
 }
 
 function invalid(message: string, data?: unknown): never {
@@ -1281,6 +1353,44 @@ function applySetPiece(
   };
 }
 
+// S8/#417 W6 — a shot with its own outcome; see `ShotOutcome`'s docstring for
+// why it is a new enum, and `PeriodShot`'s for the resolution order on
+// `goalkeeper`. The goal itself still arrives as the ordinary `<key>.goal`
+// event: an outcome-`"scored"` shot and the real goal both describe ONE event
+// on the pitch, and this function is the whole double-count guard — it never
+// calls `creditGoal` and never touches `state.goals`/`state.periods`, so
+// there is no code path here that could charge a score twice. State-only,
+// score-neutral, mirrors `applySetPiece`'s own shape.
+//
+// `enabled` is `PeriodPreset.shotTracking === true`, resolved by the caller:
+// this function is module-scope like every other `apply*` here, and `preset`
+// is not in reach outside `makePeriodModule`'s own closure (unlike
+// `setPieceKinds`, which lives in `state.cfg` and needs no such threading).
+// NOT gated on `strict` — `shotTracking` is compile-time sport capability,
+// never an editable division config, so there is no "recorded before an
+// organiser edit" case for replay to stay permissive against: the flag was
+// never true and then edited false for a sport that already has scored
+// fixtures, the way `setPieceKinds` genuinely can be.
+function applyShot(
+  state: PeriodState,
+  payload: z.infer<typeof PeriodShot>,
+  enabled: boolean,
+): PeriodState {
+  if (!enabled) invalid("this sport does not record shots");
+  if (!isPlayPhase(state)) {
+    wrongPhase(`shot not allowed in phase "${state.phase}"`, { phase: state.phase });
+  }
+  const side = sideOf(state, payload.by);
+  const record: ShotRecord = {
+    side,
+    outcome: payload.outcome,
+    ...(payload.person === undefined ? {} : { person: payload.person }),
+    ...(payload.goalkeeper === undefined ? {} : { goalkeeper: payload.goalkeeper }),
+    ...(payload.at === undefined ? {} : { at: payload.at }),
+  };
+  return { ...state, shots: [...(state.shots ?? []), record] };
+}
+
 function applyForfeit(state: PeriodState, by: string): PeriodState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
@@ -1389,28 +1499,73 @@ function winPoints(cfg: PeriodCfg, method: string | undefined): [number, number]
  * partial-coverage hazard a MINUTES-based rule would: a scorer who never
  * records elapsed time cannot leave this particular denominator
  * half-known, because nothing here is a function of minutes at all.
+ *
+ * S8/#417 W6 — `saves`, `shots_faced` and `save_percentage`, fed by
+ * `shotType` (`"hockey.shot"` / `"icehockey.shot"`, optional — a sport whose
+ * preset has `shotTracking` unset never emits it, and `undefined` here just
+ * means the branch below never matches anything). `shots_faced` is
+ * `saves + goals_conceded`, NOT a count of outcome-"scored" shot events — a
+ * goal is already fully known from `goalType` above, so `shots_faced` needs
+ * no redundant shot logged alongside every goal to be complete; only
+ * "saved" shots add anything new. A shot with outcome "scored" NEVER bumps
+ * `goals_conceded` or `shots_faced` here — that would double-charge the same
+ * real-world goal the `goalType` branch already counted, exactly the hazard
+ * this session's brief calls out by name; it is read for coverage evidence
+ * only (see below). "missed"/"blocked" shots never reached the keeper at
+ * all and touch nothing. The credited keeper is `PeriodShot.goalkeeper` when
+ * present, else the same spell-derived on-ice occupant `goals_conceded`
+ * already uses — explicit beats derived, mirroring S8's own resolution
+ * order.
+ *
+ * SAVE PERCENTAGE'S COVERAGE MECHANISM (owner ruling, S2/#430, restated for
+ * shots): a scorer may record some shots and not others, and a save
+ * percentage computed from a half-recorded shot stream is worse than none —
+ * so it is a **coverage checksum, evaluated per SIDE**: a side is trusted
+ * iff every goal it conceded (`goalType`, always complete — the match result
+ * depends on it) also has a matching outcome-"scored" shot logged against
+ * it (`shotType`). Per SIDE, not per person or per spell, because it is the
+ * scorer's own decision to track a side's shots comprehensively across the
+ * match, not a fact about one individual keeper's stretch in goal. This is
+ * the strongest signal answerable from inside the ledger alone — a scorer
+ * diligent enough to double-log every goal as a shot too is, by the same
+ * diligence, the one most likely to have logged every save — not an
+ * absolute guarantee: **known limitation** — a side that conceded NOTHING
+ * has no goal to check a shot log against and is trusted by default, so a
+ * shutout side's saves could in principle be under-logged with no way for
+ * this checksum to catch it. Accepted rather than solved: no signal inside
+ * a raw event ledger can distinguish "diligently tracked, genuinely zero
+ * missed saves" from "a few saves logged, several more never were" when
+ * there is no goal to cross-check against, and this repo prefers an honest,
+ * provable-from-data checksum over a heuristic that only LOOKS more
+ * complete. `shots_faced === 0` also omits the key — nothing to divide by,
+ * the same "absent, not a false zero" discipline every other silent-0 fix
+ * in this programme already follows.
  */
 export function periodKeeperStatsFold(
   goalType: string,
   keeperGroup: string,
+  shotType?: string,
 ): NonNullable<PlayerStatsModel["folded"]> {
   type SideKey = "home" | "away";
   const opponent = (side: SideKey): SideKey => (side === "home" ? "away" : "home");
 
   return {
-    keys: ["goals_conceded", "clean_sheets"],
+    keys: ["goals_conceded", "clean_sheets", "saves", "shots_faced", "save_percentage"],
     fold: (events, _ctx, lineups): PlayerStatRow[] => {
       if (lineups === undefined) return [];
 
-      // A sparse per-person stats object, NOT a fixed `{goals_conceded, clean_
-      // sheets}` shape — matching `stats.ts`'s own `bump`, a key is written
-      // only when it is actually incremented. A keeper who only ever earns a
-      // clean sheet must not also carry a `goals_conceded: 0` — that would be
-      // exactly the silent-0 defect (recorded zero vs. never-happened) this
-      // programme's `PlayerStatMetric.value` docstring calls out, just reached
-      // a different way.
+      // A sparse per-person stats object, NOT a fixed shape — matching
+      // `stats.ts`'s own `bump`, a key is written only when it is actually
+      // incremented. A keeper who only ever earns a clean sheet must not
+      // also carry a `goals_conceded: 0` — that would be exactly the
+      // silent-0 defect (recorded zero vs. never-happened) this programme's
+      // `PlayerStatMetric.value` docstring calls out, just reached a
+      // different way.
       const rows = new Map<string, Record<string, number>>();
-      const bump = (personId: string, key: "goals_conceded" | "clean_sheets"): void => {
+      const bump = (
+        personId: string,
+        key: "goals_conceded" | "clean_sheets" | "saves" | "shots_faced",
+      ): void => {
         const stats = rows.get(personId) ?? {};
         stats[key] = (stats[key] ?? 0) + 1;
         rows.set(personId, stats);
@@ -1449,6 +1604,14 @@ export function periodKeeperStatsFold(
         open[side] = p === undefined ? undefined : { personId: p, conceded: false };
       };
 
+      // S8/#417 W6 — the save-percentage coverage checksum's two counters,
+      // per side (see the exported function's own docstring). `keeperSide`
+      // remembers which side each person who touched saves/shots_faced was
+      // credited under, read back once after the loop.
+      const goalsConcededBySide: Record<SideKey, number> = { home: 0, away: 0 };
+      const goalShotsLoggedBySide: Record<SideKey, number> = { home: 0, away: 0 };
+      const keeperSide = new Map<string, SideKey>();
+
       for (const event of events) {
         if (isLineupEventType(event.type)) {
           const result = reduceLineupEvent(squads, event, REPLAY_LINEUP_POLICY);
@@ -1459,25 +1622,76 @@ export function periodKeeperStatsFold(
           }
           continue;
         }
-        if (event.type !== goalType) continue;
-        const payload = event.payload as Record<string, unknown>;
-        if (typeof payload.by !== "string") continue;
-        const by = sideOf(payload.by);
-        if (by === undefined) continue;
-        const credited = payload.kind === "og" ? opponent(by) : by;
-        const concedingSide = opponent(credited);
+        if (event.type === goalType) {
+          const payload = event.payload as Record<string, unknown>;
+          if (typeof payload.by !== "string") continue;
+          const by = sideOf(payload.by);
+          if (by === undefined) continue;
+          const credited = payload.kind === "og" ? opponent(by) : by;
+          const concedingSide = opponent(credited);
 
-        // The conceding side's clean sheet breaks regardless of `emptyNet` —
-        // the TEAM conceded even when nobody was between the posts.
-        const spell = open[concedingSide];
-        if (spell !== undefined) spell.conceded = true;
+          // The conceding side's clean sheet breaks regardless of `emptyNet`
+          // — the TEAM conceded even when nobody was between the posts.
+          const spell = open[concedingSide];
+          if (spell !== undefined) spell.conceded = true;
+          goalsConcededBySide[concedingSide] += 1;
 
-        if (payload.emptyNet === true) continue; // no keeper on the ice to charge
-        const keeper = keeperOf(concedingSide);
-        if (keeper !== undefined) bump(keeper, "goals_conceded");
+          if (payload.emptyNet === true) continue; // no keeper on the ice to charge
+          const keeper = keeperOf(concedingSide);
+          if (keeper !== undefined) {
+            bump(keeper, "goals_conceded");
+            // A goal IS an on-target shot faced — counted here, from the
+            // ALWAYS-complete goal ledger, never from a matching shot event.
+            bump(keeper, "shots_faced");
+            keeperSide.set(keeper, concedingSide);
+          }
+          continue;
+        }
+        if (shotType !== undefined && event.type === shotType) {
+          const payload = event.payload as Record<string, unknown>;
+          if (typeof payload.by !== "string") continue;
+          const shooterSide = sideOf(payload.by);
+          if (shooterSide === undefined) continue;
+          const facingSide = opponent(shooterSide);
+
+          if (payload.outcome === "scored") {
+            // Coverage evidence ONLY — see the exported function's own
+            // docstring. Never touches `goals_conceded`/`shots_faced`: that
+            // goal was already counted once, by the `goalType` branch above.
+            goalShotsLoggedBySide[facingSide] += 1;
+            continue;
+          }
+          if (payload.outcome !== "saved") continue; // missed/blocked never reach the keeper
+
+          const explicitKeeper =
+            typeof payload.goalkeeper === "string" ? payload.goalkeeper : undefined;
+          const keeper = explicitKeeper ?? keeperOf(facingSide);
+          if (keeper !== undefined) {
+            bump(keeper, "saves");
+            bump(keeper, "shots_faced");
+            keeperSide.set(keeper, facingSide);
+          }
+        }
       }
       closeSpell("home");
       closeSpell("away");
+
+      // S8/#417 W6 — save percentage, gated on the per-side coverage
+      // checksum computed above (see the exported function's own docstring
+      // for the full reasoning and its known limitation).
+      const covered: Record<SideKey, boolean> = {
+        home: goalsConcededBySide.home === goalShotsLoggedBySide.home,
+        away: goalsConcededBySide.away === goalShotsLoggedBySide.away,
+      };
+      for (const [personId, side] of keeperSide) {
+        if (!covered[side]) continue;
+        const stats = rows.get(personId);
+        const shotsFaced = stats?.shots_faced ?? 0;
+        if (stats === undefined || shotsFaced === 0) continue; // nothing to divide by
+        const saves = stats.saves ?? 0;
+        // One decimal place — a small, honest precision, not a false one.
+        stats.save_percentage = Math.round((saves / shotsFaced) * 1000) / 10;
+      }
 
       return [...rows.entries()].map(([personId, stats]) => ({ personId, stats }));
     },
@@ -1583,6 +1797,17 @@ export interface PeriodPreset {
   // has no `<key>.set_piece` event: it is absent from every fidelity tier, and
   // the default empty list makes the fold reject it.
   setPieceKinds?: string[];
+  // S8/#417 W6 — per-preset capability flag for `<key>.shot` (see
+  // `ShotOutcome`/`PeriodShot`/`applyShot`), the same shape
+  // `engine-preset-capability-flags` recommends: a COMPILE-TIME sport fact,
+  // not a competition cfg knob like `setPieceKinds` — omitted or `false` ⇒
+  // `applyShot` refuses every shot for this sport, unconditionally (not
+  // STRICT-only: there is no "recorded before an organiser edit" case for a
+  // preset flag to protect replay against). Both `hockey` and `icehockey`
+  // set this `true`; the flag exists so a hypothetical future period-kernel
+  // sport that should not offer shot detail is not silently handed the
+  // event just because it shares this kernel.
+  shotTracking?: boolean;
 }
 
 export function makePeriodModule(
@@ -1596,6 +1821,10 @@ export function makePeriodModule(
   const attemptType = `${preset.key}.shootout.attempt`;
   const setPieceType = `${preset.key}.set_piece`;
   const setPieceKinds = preset.setPieceKinds;
+  // S8/#417 W6 — gated on `preset.shotTracking`, never on a cfg list like
+  // `setPieceKinds`: see `PeriodPreset.shotTracking`'s own comment.
+  const shotType = `${preset.key}.shot`;
+  const shotTracking = preset.shotTracking === true;
   // One per module, built here so the init handshake it keys on cannot leak
   // between two sports sharing this kernel (see `sports/squad-state.ts`).
   const squadAdopter = makeSquadAdopter<PeriodState>();
@@ -1603,25 +1832,35 @@ export function makePeriodModule(
   // Set pieces are attributed-scoring detail (who took it, did it convert), so
   // they join tiers 2/3 only — a tier-0 scorer taps goals, not awards.
   const attributed = [goalType, advanceType, attemptType, suspStartType, suspEndType];
-  const attributedTypes = setPieceKinds === undefined ? attributed : [...attributed, setPieceType];
+  const tier2Types = setPieceKinds === undefined ? attributed : [...attributed, setPieceType];
+  // S8/#417 W6 — shots are band-3 ("detail") ONLY, per S2/#430's ruling
+  // (parked as "the T2 lane... not built here" until this session): tier 2
+  // stays exactly what it was, tier 3 additionally grows a shot-tracking
+  // sport's `<key>.shot`. Byte-identical to the old shared `attributedTypes`
+  // list when `shotTracking` is unset, which is what keeps this change
+  // additive for any future period-kernel sport that omits the flag.
+  const tier3Types = shotTracking ? [...tier2Types, shotType] : tier2Types;
   const fidelityTiers: FidelityTier[] = [
     { tier: 0, eventTypes: [goalType, advanceType, attemptType] },
     { tier: 1, eventTypes: [goalType, advanceType, attemptType] },
-    { tier: 2, eventTypes: attributedTypes, entitlement: preset.timelineEntitlement },
-    { tier: 3, eventTypes: attributedTypes, entitlement: preset.timelineEntitlement },
+    { tier: 2, eventTypes: tier2Types, entitlement: preset.timelineEntitlement },
+    { tier: 3, eventTypes: tier3Types, entitlement: preset.timelineEntitlement },
   ];
 
   // S6/#416 (W5) — event type -> its own payload schema, keyed by THIS
-  // module's own prefixed type strings but pointing at the SAME six shared
+  // module's own prefixed type strings but pointing at the SAME shared
   // schema objects both hockey and icehockey import from this file.
   // `PeriodEv` is one shared `z.union([PeriodGoal, PeriodAdvance,
   // PeriodSuspensionStart, PeriodSuspensionEnd, PeriodShootoutAttempt,
-  // PeriodSetPiece])` — the identical six object references for both sports
-  // — so `testkit/conformance-pad.ts`'s reference-bijection check needs each
-  // module's registry to point at those exact six objects, never a
+  // PeriodSetPiece, PeriodShot])` — the identical object references for both
+  // sports — so `testkit/conformance-pad.ts`'s reference-bijection check
+  // needs each module's registry to point at those exact objects, never a
   // freshly-built equivalent shape (a second `z.strictObject({...})` with the
   // same fields would fail the check by reference even though it "looks"
-  // identical).
+  // identical). `[shotType]` is registered UNCONDITIONALLY, same as
+  // `[setPieceType]` already is regardless of `setPieceKinds` — the
+  // capability refusal lives entirely in `applyShot`/`shotTracking`, not in
+  // whether the schema exists (mirrors the set-piece precedent exactly).
   const eventSchemas: Readonly<Record<string, z.ZodTypeAny>> = {
     [goalType]: PeriodGoal,
     [advanceType]: PeriodAdvance,
@@ -1629,6 +1868,7 @@ export function makePeriodModule(
     [suspEndType]: PeriodSuspensionEnd,
     [attemptType]: PeriodShootoutAttempt,
     [setPieceType]: PeriodSetPiece,
+    [shotType]: PeriodShot,
   };
 
   // S6/#416 (W5) — the pad's own contract, shared machinery for both period
@@ -1833,6 +2073,37 @@ export function makePeriodModule(
             },
           ];
 
+    // S8/#417 W6 — a shot with its own outcome, band 3 ("detail"). Gated on
+    // the PRESET flag, not a cfg list: unlike `setPieceKinds` (a division may
+    // legitimately narrow which kinds it records), whether this SPORT has
+    // shot detail at all is fixed at deploy time, so the panel's existence
+    // needs no per-cfg gate the way `setPiecePanels` needs `cfg.setPieceKinds
+    // .length === 0` — only `shotTracking` itself.
+    const shotAction: PadAction = {
+      type: shotType,
+      labelKey: { key: `pad.${preset.key}.action.shot`, label: "Shot" },
+      fields: [{ kind: "enum", path: "outcome", values: [...ShotOutcome.options] }],
+      attribution: [
+        { kind: "side", path: "by" },
+        { kind: "person", path: "person" },
+        {
+          kind: "person",
+          path: "goalkeeper",
+          labelKey: { key: `pad.${preset.key}.action.shot.field.goalkeeper`, label: "Goalkeeper" },
+        },
+      ],
+    };
+    const shotPanels: PadPanel[] = shotTracking
+      ? [
+          {
+            labelKey: { key: `pad.${preset.key}.panel.shot`, label: "Shots" },
+            phase: "live",
+            layout: "grid",
+            actions: [shotAction],
+          },
+        ]
+      : [];
+
     const panels: PadPanel[] = [
       {
         labelKey: { key: `pad.${preset.key}.panel.goal`, label: "Goal" },
@@ -1849,6 +2120,7 @@ export function makePeriodModule(
       ...disciplinePanels,
       ...shootoutPanels,
       ...setPiecePanels,
+      ...shotPanels,
     ];
 
     return {
@@ -1870,12 +2142,16 @@ export function makePeriodModule(
       //
       // Set piece (PC/stroke/penalty-shot AWARDED, not merely converted) is
       // band 2 ("timeline") — attributed detail beyond the bare goal,
-      // matching this file's own comment above `attributedTypes` ("Set
-      // pieces are attributed-scoring detail... so they join tiers 2/3
-      // only").
+      // matching this file's own comment above `tier2Types` ("Set pieces
+      // are attributed-scoring detail... so they join tiers 2/3 only").
       //
-      // Nothing is band 3 ("detail"): shot/save/faceoff-level detail is the
-      // T2 lane `_INDEX.md` parks for a later session, not built here.
+      // S8/#417 W6 — a shot (per-attempt outcome: scored/saved/missed/
+      // blocked) is band 3 ("detail"), the T2 lane `_INDEX.md` parked for a
+      // later session — this is that session. Gated on `shotTracking`, not
+      // unconditional, so a period-kernel sport without the flag declares no
+      // band-3 event at all (`fidelity` has no `[shotType]` key), matching
+      // how `setPieceType` is band-2 only when `cfg.setPieceKinds` is
+      // non-empty.
       fidelity: {
         [goalType]: 0,
         [advanceType]: 0,
@@ -1883,8 +2159,19 @@ export function makePeriodModule(
         [suspStartType]: 1,
         [suspEndType]: 1,
         [setPieceType]: 2,
+        ...(shotTracking ? { [shotType]: 3 } : {}),
       },
-      fidelityEntitlements: { 2: preset.timelineEntitlement },
+      fidelityEntitlements: {
+        2: preset.timelineEntitlement,
+        // Reuses the SAME entitlement as band 2, never a new FeatureKey:
+        // football's own (pre-existing) `fidelityTiers` already carries
+        // "scoring.match_timeline" on both tier 2 AND tier 3, so a shared
+        // key across the paid boundary is this repo's established shape,
+        // not a new one invented for this session — and inventing a second
+        // key would be a billing-plan decision this session is not scoped
+        // to make.
+        ...(shotTracking ? { 3: preset.timelineEntitlement } : {}),
+      },
     };
   };
 
@@ -2091,6 +2378,8 @@ export function makePeriodModule(
         return applyShootoutAttempt(state, parsePayload(PeriodShootoutAttempt, ev.payload, ev.type));
       case setPieceType:
         return applySetPiece(state, parsePayload(PeriodSetPiece, ev.payload, ev.type), strict);
+      case shotType:
+        return applyShot(state, parsePayload(PeriodShot, ev.payload, ev.type), shotTracking);
       case "core.forfeit":
         return applyForfeit(state, (ev.payload as { by: string }).by);
       case "core.abandon":
@@ -2254,6 +2543,14 @@ export function makePeriodModule(
           // match's summary is byte-identical to its pre-W4 shape.
           ...(state.goalLog === undefined ? {} : { goalLog: state.goalLog }),
           ...(state.setPieces === undefined ? {} : { setPieces: state.setPieces }),
+          // S8/#417 W6 — safe to surface unconditionally, unlike football's
+          // own penalties/cards: this kernel declares no `coarsen` at all, so
+          // §9.6 (summary(coarse) === summary(fine)) is opt-in and simply
+          // does not run for either period-kernel sport — see
+          // `testkit/conformance.ts`'s `if (module.coarsen)` guard. Mirrors
+          // `setPieces` immediately above, which is already in `detail` for
+          // the same reason.
+          ...(state.shots === undefined ? {} : { shots: state.shots }),
           ...(preset.key === "hockey" ? { escalate: escalationHints(state.cardLog) } : {}),
           ...(tally === null ? {} : { shootout: tally }),
           ...(state.replayFlagged ? { abandoned: true } : {}),
@@ -2466,6 +2763,25 @@ export function makePeriodModule(
             class: pick.classKey,
             at: stamp(state.phase),
             ...(pick.person === undefined ? {} : { person: pick.person }),
+          },
+        };
+      }
+      // S8/#417 W6 — a shot, gated on `shotTracking` exactly like `applyShot`
+      // itself: a preset without the flag must never see this generator emit
+      // an event its own fold would refuse (spec 03 §6).
+      if (roll < 0.3 && shotTracking) {
+        const side = randomSide();
+        return {
+          type: shotType,
+          payload: {
+            by: sideId(side),
+            at: stamp(state.phase),
+            // One draw, four tokens — same idiom as `attemptOutcome` above,
+            // and the reason a fresh corpus stream eventually witnesses all
+            // four for the golden coverage gate.
+            outcome: shotOutcome(rng()),
+            ...(rng() < 0.6 ? { person: `${sideId(side)}-p6` } : {}),
+            ...(rng() < 0.5 ? { goalkeeper: `${sideId(opponent(side))}-g1` } : {}),
           },
         };
       }

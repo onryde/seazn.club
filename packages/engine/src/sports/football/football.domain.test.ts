@@ -585,6 +585,11 @@ describe("event union disambiguation", () => {
     "football.penalty": { by: "H", taker: "H-p9", goalkeeper: "A-p1", outcome: "saved", minute: 27 },
     "football.sinbin.start": { by: "H", person: "H-p6", minutes: 10, reason: "dissent", minute: 21 },
     "football.sinbin.end": { by: "H", person: "H-p6", minute: 31 },
+    // S8/#417 W6 — "blocked" keeps this UNAMBIGUOUSLY a shot (see
+    // football.time.test.ts's "pins the shapes that were ALREADY ambiguous"
+    // for the "saved"/"missed" tokens this canonical payload deliberately
+    // avoids, so the round-trip test above stays a real, non-ambiguous proof).
+    "football.shot": { by: "H", taker: "H-p9", goalkeeper: "A-p1", outcome: "blocked" },
   };
 
   it("round-trips every branch's canonical payload through the union unchanged", () => {
@@ -688,6 +693,33 @@ describe("event union disambiguation", () => {
     expect(asBin.squads.home.sinBin).toEqual([{ minute: 12 }]);
   });
 
+  // S8/#417 W6 — see football.time.test.ts's "pins the shapes that were
+  // ALREADY ambiguous" for the union-level proof (`firstBranch`, structural).
+  // This is the SAME claim one level up: the real fold, not just the schema,
+  // never confuses the two even for the exact payload shape both accept.
+  it("makes the envelope type the discriminator for football.shot vs football.penalty", () => {
+    // { by, taker, goalkeeper, outcome: "saved" } satisfies BOTH FootballShot
+    // and FootballPenalty (PenaltyOutcome ⊇ {saved, missed}) — the union
+    // alone cannot tell them apart; `apply()` dispatches on the envelope's
+    // type string, and that is what actually decides.
+    const ambiguous = { by: "H", taker: "H-p9", goalkeeper: "A-p1", outcome: "saved" };
+    expect(football.eventSchema.safeParse(ambiguous).success).toBe(true);
+
+    const asShot = fold(cfgOf({}), [
+      makeEnvelope(0, { type: "core.start", payload: {} }),
+      makeEnvelope(1, { type: "football.shot", payload: ambiguous }),
+    ]);
+    expect(asShot.shots).toHaveLength(1);
+    expect(asShot.penalties).toBeUndefined();
+
+    const asPenalty = fold(cfgOf({}), [
+      makeEnvelope(0, { type: "core.start", payload: {} }),
+      makeEnvelope(1, { type: "football.penalty", payload: ambiguous }),
+    ]);
+    expect(asPenalty.penalties).toHaveLength(1);
+    expect(asPenalty.shots).toBeUndefined();
+  });
+
   it("folds every canonical payload through its own dispatch case", () => {
     const kick = cfgOf({ shootout: true });
     const opened = stream(["core.start"]);
@@ -700,6 +732,12 @@ describe("event union disambiguation", () => {
     expect(one(cfgOf({}), opened, "football.period").periods).toHaveLength(2);
     expect(one(cfgOf({}), opened, "football.penalty").penalties).toHaveLength(1);
     expect(one(cfgOf({}), opened, "football.sinbin.start").squads.home.sinBin).toHaveLength(1);
+    // S8/#417 W6 — dispatches through the real apply(), records State-only
+    // (never touches goals — see the dedicated describe block below for the
+    // full acceptance-criteria coverage).
+    const shotState = one(cfgOf({}), opened, "football.shot");
+    expect(shotState.shots).toHaveLength(1);
+    expect(shotState.goals).toEqual({ home: 0, away: 0 });
     expect(
       one(cfgOf({}), [...opened, makeEnvelope(1, { type: "football.sinbin.start", payload: { by: "H", person: "H-p6" } })], "football.sinbin.end")
         .squads.home.sinBin,
@@ -814,6 +852,13 @@ describe("goalkeeper stats: clean sheets, goals conceded (S8/#417)", () => {
       type: "core.lineup.substitution",
       payload: { side: H, off, on: { personId: on, positionKey: "GK", slot: "starting", orderNo: 90 } },
     });
+  // S8/#417 W6 — shots on goal + save percentage.
+  const shotEv = (seq: number, by: string, extra?: Record<string, unknown>): EventEnvelope =>
+    makeEnvelope(seq, { type: "football.shot", payload: { by, outcome: "saved", ...(extra ?? {}) } });
+  // `voids` (the id of the event being cancelled) travels on the ENVELOPE,
+  // not the payload — `makeEnvelope`'s optional 3rd argument.
+  const voidEv = (seq: number, targetSeq: number): EventEnvelope =>
+    makeEnvelope(seq, { type: "core.void", payload: {} }, `e-${targetSeq}`);
   const start = makeEnvelope(0, { type: "core.start", payload: {} });
 
   it("simple case: one keeper concedes twice, earns no clean sheet", () => {
@@ -914,6 +959,122 @@ describe("goalkeeper stats: clean sheets, goals conceded (S8/#417)", () => {
     const rows = aggregatePlayerStats([start, goalEv(1, H, { scorer: "solo-scorer" })], model); // no lineups
     expect(rows.find((r) => r.personId === "solo-scorer")?.stats.goals).toBe(1);
     expect(rows.find((r) => r.personId === "solo-scorer")?.stats.goals_conceded).toBeUndefined();
+  });
+
+  // -----------------------------------------------------------------------
+  // S8/#417 W6 — shots on goal, saves, save percentage (S2/#430's parked row,
+  // closed this session). Same fold (`footballKeeperStatsFold`), same spell
+  // mechanism as `goals_conceded`/`clean_sheets` above.
+  // -----------------------------------------------------------------------
+
+  it("a save credits the on-ice keeper and counts toward shots_faced", () => {
+    const rows = aggregatePlayerStats([start, shotEv(1, A, { outcome: "saved" })], model, lineups);
+    const row = rows.find((r) => r.personId === homeKeeper);
+    expect(row?.stats.saves).toBe(1);
+    expect(row?.stats.shots_faced).toBe(1);
+  });
+
+  it("missed/blocked shots touch neither saves nor shots_faced", () => {
+    const rows = aggregatePlayerStats(
+      [start, shotEv(1, A, { outcome: "missed" }), shotEv(2, A, { outcome: "blocked" })],
+      model,
+      lineups,
+    );
+    const row = rows.find((r) => r.personId === homeKeeper);
+    expect(row?.stats.saves).toBeUndefined();
+    expect(row?.stats.shots_faced).toBeUndefined();
+  });
+
+  it("HEADLINE: a mid-match keeper change splits saves across two different people", () => {
+    const rows = aggregatePlayerStats(
+      [
+        start,
+        shotEv(1, A, { outcome: "saved" }), // saved by the ORIGINAL keeper
+        subKeeperEv(2, homeKeeper, homeSub1),
+        shotEv(3, A, { outcome: "saved" }), // saved by the REPLACEMENT keeper
+      ],
+      model,
+      lineups,
+    );
+    expect(rows.find((r) => r.personId === homeKeeper)?.stats.saves).toBe(1);
+    expect(rows.find((r) => r.personId === homeSub1)?.stats.saves).toBe(1);
+  });
+
+  it("an explicit payload goalkeeper BEATS the spell-derived keeper when they disagree", () => {
+    // homeKeeper is who the spell fold would credit (never subbed off); the
+    // payload deliberately names homeSub1 instead — someone who never
+    // touched the pitch, so a fixture where the two AGREE could not tell the
+    // two resolution paths apart.
+    const rows = aggregatePlayerStats(
+      [start, shotEv(1, A, { outcome: "saved", goalkeeper: homeSub1 })],
+      model,
+      lineups,
+    );
+    expect(rows.find((r) => r.personId === homeSub1)?.stats.saves).toBe(1);
+    expect(rows.find((r) => r.personId === homeKeeper)?.stats.saves).toBeUndefined();
+  });
+
+  it("a shot with outcome scored does not double-charge goals_conceded or shots_faced", () => {
+    const rows = aggregatePlayerStats(
+      [start, goalEv(1, A), shotEv(2, A, { outcome: "scored" })],
+      model,
+      lineups,
+    );
+    const row = rows.find((r) => r.personId === homeKeeper);
+    // ONE real goal + one outcome:"scored" shot describing the SAME event on
+    // the pitch — both must count it exactly once, not twice.
+    expect(row?.stats.goals_conceded).toBe(1);
+    expect(row?.stats.shots_faced).toBe(1);
+  });
+
+  it("save percentage is correct on a fully-covered match", () => {
+    const rows = aggregatePlayerStats(
+      [
+        start,
+        shotEv(1, A, { outcome: "saved" }),
+        shotEv(2, A, { outcome: "missed" }),
+        shotEv(3, A, { outcome: "blocked" }),
+        goalEv(4, A), // conceded — shots_faced 1 -> 2
+        shotEv(5, A, { outcome: "scored" }), // matching coverage evidence
+      ],
+      model,
+      lineups,
+    );
+    const row = rows.find((r) => r.personId === homeKeeper);
+    expect(row?.stats.saves).toBe(1);
+    expect(row?.stats.shots_faced).toBe(2);
+    expect(row?.stats.save_percentage).toBe(50);
+  });
+
+  it("save percentage is absent entirely on a partially-covered match", () => {
+    const rows = aggregatePlayerStats(
+      [
+        start,
+        shotEv(1, A, { outcome: "saved" }),
+        goalEv(2, A), // conceded, but NEVER also logged as an outcome:"scored" shot
+      ],
+      model,
+      lineups,
+    );
+    const row = rows.find((r) => r.personId === homeKeeper);
+    expect(row?.stats.saves).toBe(1);
+    expect(row?.stats.shots_faced).toBe(2);
+    expect(row?.stats.save_percentage).toBeUndefined();
+  });
+
+  it("void un-counts a save (folded path) and a shot (metric path)", () => {
+    const events = [start, shotEv(1, A, { outcome: "saved", taker: "A-p6" })];
+    const before = aggregatePlayerStats(events, model, lineups);
+    const after = aggregatePlayerStats([...events, voidEv(2, 1)], model, lineups);
+    expect(before.find((r) => r.personId === homeKeeper)?.stats.saves).toBe(1);
+    expect(after.find((r) => r.personId === homeKeeper)?.stats.saves).toBeUndefined();
+    expect(after.find((r) => r.personId === homeKeeper)?.stats.shots_faced).toBeUndefined();
+    // The shooter-side declarative `shots` metric un-counts too — a
+    // different code path (metric+field walk, not `folded`), reading the
+    // SAME void-resolved list `aggregatePlayerStatsWithDiagnostics` builds
+    // once for both.
+    expect(before.find((r) => r.personId === "A-p6")?.stats.shots).toBe(1);
+    expect(after.find((r) => r.personId === "A-p6")?.stats.shots).toBeUndefined();
   });
 
   it("playerStatsKeyCollisions is empty for football", () => {
