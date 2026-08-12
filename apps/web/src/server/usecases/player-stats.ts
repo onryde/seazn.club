@@ -3,14 +3,20 @@ import "server-only";
 // recompute-on-read into player_stat_snapshots (disposable cache), division-
 // scoped leaderboards, per-person cards, consent-filtered public tables.
 import type postgres from "postgres";
-import { aggregatePlayerStats, sumPlayerStats, type PlayerStatRow } from "@seazn/engine/stats";
+import {
+  aggregatePlayerStatsWithDiagnostics,
+  sumPlayerStats,
+  type PlayerStatRow,
+} from "@seazn/engine/stats";
 import type { EventEnvelope } from "@seazn/engine/core";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { resolveModule } from "@/server/engine-db";
+import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPairsForDivision } from "@/server/engine-db/lineups";
+import { entrantFoldCtx, loadEntrantMembersForDivision } from "@/server/engine-db/entrant-members";
+import { log } from "@/server/logger";
 
 type Tx = postgres.TransactionSql;
 
@@ -46,8 +52,8 @@ export async function recomputePlayerStats(
   tx: Tx,
   divisionId: string,
 ): Promise<{ rows: PlayerStatRow[]; throughSeq: number; hasModel: boolean }> {
-  const [division] = await tx<{ sport_key: string; module_version: string }[]>`
-    select sport_key, module_version from divisions where id = ${divisionId}`;
+  const [division] = await tx<{ sport_key: string; module_version: string; config: unknown }[]>`
+    select sport_key, module_version, config from divisions where id = ${divisionId}`;
   if (!division) throw new HttpError(404, "division not found");
   const sportModule = resolveModule(division.sport_key, division.module_version);
   const model = sportModule.playerStats;
@@ -81,9 +87,55 @@ export async function recomputePlayerStats(
   // OWN lineup, not the division's, since two fixtures for the same entrant
   // can field different coaches/rosters.
   const lineupsByFixture = await loadLineupPairsForDivision(tx, divisionId);
-  const perFixture = [...byFixture.entries()].map(([fixtureId, ledger]) =>
-    aggregatePlayerStats(ledger, model, lineupsByFixture.get(fixtureId)),
+  // S8/#417 — the entrant→person fallback needs two more division-batched
+  // inputs, matching the lineup load's own batching shape: every entrant's
+  // roster (kind + members, for ctx.entrants/personsOf) and, per fixture,
+  // the cfg the WRITE path actually folded it under (V347's frozen
+  // config_snapshot, falling back to the live stage-scoped division config —
+  // same resolver `fold.ts`'s read path uses). `ctx.cfg` is load-bearing: the
+  // setbased/nested/boardgame/carrom/generic `folded` fold replays the
+  // module's own scoring cascade off it to derive sets_won/matches, and
+  // silently degrades to matches-only without it (stats.ts's
+  // PlayerStatsFoldCtx.cfg docstring is stale — it is read).
+  const entrantMembers = await loadEntrantMembersForDivision(tx, divisionId);
+  const fixtureInfoRows = await tx<
+    {
+      id: string;
+      stage_id: string;
+      config_snapshot: unknown;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+    }[]
+  >`
+    select id, stage_id, config_snapshot, home_entrant_id, away_entrant_id
+    from fixtures where division_id = ${divisionId}`;
+  const stageIds = [...new Set(fixtureInfoRows.map((r) => r.stage_id))];
+  const stageConfigById = new Map(
+    stageIds.length === 0
+      ? []
+      : (
+          await tx<{ id: string; config: Record<string, unknown> | null }[]>`
+            select id, config from stages where id in ${tx(stageIds)}`
+        ).map((r) => [r.id, r.config] as const),
   );
+  const fixtureInfoById = new Map(fixtureInfoRows.map((r) => [r.id, r]));
+
+  const perFixtureResults = [...byFixture.entries()].map(([fixtureId, ledger]) => {
+    const info = fixtureInfoById.get(fixtureId);
+    const cfg = resolveFixtureCfg(
+      info?.config_snapshot,
+      division.config,
+      info ? stageConfigById.get(info.stage_id) : undefined,
+    );
+    const ctx = entrantFoldCtx(
+      info?.home_entrant_id ?? null,
+      info?.away_entrant_id ?? null,
+      entrantMembers,
+      cfg,
+    );
+    return aggregatePlayerStatsWithDiagnostics(ledger, model, lineupsByFixture.get(fixtureId), ctx);
+  });
+  const perFixture = perFixtureResults.map((r) => r.rows);
   // #404: a merged person's id still appears in every historical score event,
   // and this fold reads the person id out of the payload — so without a
   // relabel a refold rebuilds a snapshot row for the tombstone and the
@@ -114,6 +166,65 @@ export async function recomputePlayerStats(
         set stats = excluded.stats, computed_through_seq = excluded.computed_through_seq,
             updated_at = now()`;
   }
+
+  // S8/#417 — structured logging (owner standing rule: all new code logs).
+  // A recompute pass, and what its entrant-fallback attribution actually
+  // did, would otherwise be invisible in production — merge every fixture's
+  // diagnostics into one division-level picture and log it.
+  const diagnostics = perFixtureResults.reduce(
+    (acc, r) => {
+      acc.fromPersonField += r.diagnostics.fromPersonField;
+      acc.fromEntrantFallback += r.diagnostics.fromEntrantFallback;
+      acc.unattributed += r.diagnostics.unattributed;
+      for (const id of r.diagnostics.unknownEntrants) acc.unknownEntrants.add(id);
+      for (const id of r.diagnostics.teamEntrantsSkipped) acc.teamEntrantsSkipped.add(id);
+      return acc;
+    },
+    {
+      fromPersonField: 0,
+      fromEntrantFallback: 0,
+      unattributed: 0,
+      unknownEntrants: new Set<string>(),
+      teamEntrantsSkipped: new Set<string>(),
+    },
+  );
+  log.info(
+    {
+      divisionId,
+      sportKey: division.sport_key,
+      fixtures: byFixture.size,
+      rows: rows.length,
+      throughSeq,
+      fromPersonField: diagnostics.fromPersonField,
+      fromEntrantFallback: diagnostics.fromEntrantFallback,
+      unattributed: diagnostics.unattributed,
+      unknownEntrants: [...diagnostics.unknownEntrants],
+      teamEntrantsSkipped: [...diagnostics.teamEntrantsSkipped],
+    },
+    "player-stats: recomputePlayerStats",
+  );
+  if (diagnostics.unknownEntrants.size > 0 || diagnostics.teamEntrantsSkipped.size > 0) {
+    // The caller's own entrant-membership data disagrees with the score
+    // ledger it is folding — otherwise undiagnosable in production.
+    log.warn(
+      {
+        divisionId,
+        unknownEntrants: [...diagnostics.unknownEntrants],
+        teamEntrantsSkipped: [...diagnostics.teamEntrantsSkipped],
+      },
+      "player-stats: entrant-fallback attribution disagreement between ctx.entrants and the score ledger",
+    );
+  }
+  if (entrantMembers.size === 0 && byFixture.size > 0) {
+    // Degradation case: fixtures were scored, but this division's entrant
+    // roster resolved to nothing at all — entrant-fallback attribution had
+    // no data to run against for the whole recompute, not just one fixture.
+    log.warn(
+      { divisionId, fixtures: byFixture.size },
+      "player-stats: no entrant roster data for this division — entrant-fallback attribution could not run",
+    );
+  }
+
   return { rows, throughSeq, hasModel: true };
 }
 

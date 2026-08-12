@@ -1303,6 +1303,66 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   cfg-derived throw inside a fold bricks recorded fixtures), so it fails QUIETLY
   and is exactly the shape this programme has been burned by; flagged to review.
 
+- 2026-08-12 — S8/#417 — **two-lens review of the engine diff (correctness lens +
+  silent-failure lens, run independently). Most of the diff verified clean with
+  evidence; six real gaps.** Clean, each confirmed by reading code rather than
+  trusting a test name: the keeper is replayed forward through `core.lineup.*` in
+  BOTH implementations (football's own and the shared period kernel) and never
+  read from a kickoff snapshot; the explicit-person path genuinely short-circuits
+  the entrant path (pinned by a deliberately conflicting fixture); zero `throw`
+  statements in any added fold; empty-net charges nobody, shoot-out attempts
+  never concede, and an own goal charges the keeper of the side the goal counts
+  AGAINST — each pinned by a test that would fail under the naive
+  `opponent(by)` reading; `core.void` un-counts structurally because one
+  `resolveVoids` result feeds both the metric loop and `folded.fold`; row order
+  is sorted by `personId` everywhere, so recompute-on-read cannot drift.
+  **The swallowed `try/catch` in the replay-based folds is NOT the coverage
+  violation it looked like** — `state` degrades monotonically to `undefined` and
+  every cfg-gated key is written in one atomic block gated on it, so a partial
+  cfg yields `matches` only (a key with no omittable denominator) and never a
+  half-filled row. It honours the S2/#430 invariant. Recorded because the shape
+  reads exactly like the defect this programme keeps finding, and the next
+  reviewer will flag it again otherwise.
+  Gaps found, all fixed in the follow-up pass: (1) cricket's
+  `playerStatsKeyCollisions` assertion is VACUOUS — with `folded.keys: []` the
+  checker filters an empty list and can never return non-empty, so the test
+  cannot fail; (2) the diagnostics counters observe only the metric loop while 8
+  of 11 modules now carry stats through `folded`, i.e. the feature built to
+  surface silent drops is blind to the path most likely to drop; (3) cricket's
+  fine/coarse gate is scoped per (person, aspect) over the WHOLE stream rather
+  than per innings, so a player scored ball-by-ball in innings 1 with a coarse
+  line in innings 2 silently loses innings 2 — under-count, not double-count;
+  (4) `mergePlayerStats` in both kernels declares its merged fold `(events, ctx)`
+  and silently drops the `lineups` third argument, which TS's bivariant
+  parameter check will not flag — dead today, and precisely the pattern this same
+  session shipped for the keeper folds; (5) "a team entrant credits nobody" is
+  duplicated SIX times (core + 5 sport folds), byte-identical today, the
+  placer/verifier fork shape this repo has hit 5+ times; (6) `value()`'s only
+  guard is `typeof === "number"`, which admits `NaN`/`Infinity`, and
+  `sumPlayerStats` adds blindly — the first ratio-shaped metric with a zero
+  denominator would permanently poison a division leaderboard.
+
+- 2026-08-12 — S8/#417 — **the entrant fallback is now REACHABLE from real data,
+  which was the owner's whole reason for widening the session.** New loader
+  `apps/web/src/server/engine-db/entrant-members.ts` builds a real
+  `PlayerStatsFoldCtx` from `entrant_members`; both call sites are wired —
+  `recomputePlayerStats` (batched division-wide) and `org-posts.ts`'s
+  `extractScorers` (single fixture) — because S4's review already established
+  that wiring one of the two and not the other is exactly how this class of bug
+  ships. `ctx.cfg` is resolved per fixture through the SAME
+  `resolveFixtureCfg(config_snapshot, division.config, stage.config)` the fold
+  path itself uses (V347 snapshot semantics), so the stat fold and the score
+  fold can never disagree about which config a fixture was played under.
+- 2026-08-12 — S8/#417 — **`ctx.entrants` must be exactly ONE fixture's
+  `[home, away]`, never the division's full roster — and passing the roster
+  fails SILENTLY.** The replay-based folded models (setbased, nested, carrom,
+  generic) reconstruct a synthetic two-entrant state to replay the module's own
+  cascade; handed a wider entrant list they bail to `[]` rather than throwing, so
+  a division-scoped ctx yields an empty stat table that looks exactly like a
+  fixture nobody scored. Found while wiring, not while debugging. Recorded here
+  because the ctx is built one layer away from the fold that constrains it, and
+  nothing in the type system says "two".
+
 - _(append below)_
 
 ## Open questions for the owner

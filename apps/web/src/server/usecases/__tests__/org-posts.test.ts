@@ -41,6 +41,12 @@ const FOOTBALL_CFG = builtinModules.find((m) => m.key === "football")!.configSch
 // aggregatePlayerStats's lineups argument actually filtered him.
 const ICEHOCKEY_CFG = builtinModules.find((m) => m.key === "icehockey")!.configSchema.parse({});
 const icehockeyPositions = builtinModules.find((m) => m.key === "icehockey")!.positions;
+// S8/#417 — badminton (setbased kernel) for the entrant-fallback wiring test
+// below: NOT in the sibling session's packages/engine edit list, so its
+// kernel-added `points_won` metric (entrantField "wonBy", fromEntrant true)
+// is a stable, already-shipped target.
+const badminton = builtinModules.find((m) => m.key === "badminton")!;
+const BADMINTON_CFG = badminton.configSchema.parse({});
 
 interface Ctx {
   auth: AuthCtx;
@@ -688,5 +694,74 @@ describe.skipIf(!HAS_DB)("org-posts auto-drafts", () => {
     expect(results[0]!.autoSource?.fixture_id).toBe(fx);
     expect(results[0]!.bodyMd).toContain("Pat Player");
     expect(results[0]!.bodyMd).not.toContain("Cara Coach");
+  });
+
+  // S8/#417 — the SECOND aggregatePlayerStats call site (extractScorers,
+  // org-posts.ts:585) must get the same ctx player-stats.ts's recompute now
+  // does. S4/#428's review finding was exactly this class of bug: wiring one
+  // call site and not the other. A v1-era entrant-only rally (wonBy, no
+  // scorer/server) must still produce a scorer line through THIS path.
+  it("S8/#417: an entrant-only rally (wonBy, no scorer) still names a scorer in the auto-drafted result post", async () => {
+    const ctx = await seedOrg();
+    await sql`
+      insert into sports (key, name, module_version, position_catalog)
+      values ('badminton', 'Badminton', ${badminton.version}, ${sql.json(badminton.positions as never)})
+      on conflict (key) do nothing`;
+    const suffix = randomUUID().slice(0, 8);
+    const [{ id: compId }] = await sql<{ id: string }[]>`
+      insert into competitions (org_id, name, slug, visibility, created_by)
+      values (${ctx.orgId}, 'Badminton Cup', ${"bad-cup-" + suffix}, 'public', ${ctx.userId})
+      returning id`;
+    const [{ id: divisionId }] = await sql<{ id: string }[]>`
+      insert into divisions (competition_id, org_id, name, slug, sport_key, variant_key,
+        config, module_version, auto_posts)
+      values (${compId}, ${ctx.orgId}, 'Singles', ${"bad-singles-" + suffix}, 'badminton', 'default',
+        ${sql.json(BADMINTON_CFG as never)}, ${badminton.version}, true)
+      returning id`;
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const [{ id: stageId }] = await sql<{ id: string }[]>`
+      insert into stages (division_id, org_id, seq, kind, name)
+      values (${divisionId}, ${ctx.orgId}, 1, 'league', 'League') returning id`;
+    const [{ id: entrantA }] = await sql<{ id: string }[]>`
+      insert into entrants (division_id, org_id, kind, display_name, seed)
+      values (${divisionId}, ${ctx.orgId}, 'individual', 'Alex', 1) returning id`;
+    const [{ id: entrantB }] = await sql<{ id: string }[]>`
+      insert into entrants (division_id, org_id, kind, display_name, seed)
+      values (${divisionId}, ${ctx.orgId}, 'individual', 'Bo', 2) returning id`;
+
+    const [{ id: alexId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name) values (${ctx.orgId}, 'Alex Player') returning id`;
+    const [{ id: boId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name) values (${ctx.orgId}, 'Bo Player') returning id`;
+    await sql`
+      insert into entrant_members (entrant_id, person_id, org_id)
+      values (${entrantA}, ${alexId}, ${ctx.orgId}), (${entrantB}, ${boId}, ${ctx.orgId})`;
+
+    const [{ id: fx }] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round,
+        home_entrant_id, away_entrant_id, status)
+      values (${stageId}, ${divisionId}, ${ctx.orgId}, 1, 1,
+        ${entrantA}, ${entrantB}, 'scheduled') returning id`;
+
+    await scoreEvent(ctx.auth, fx, { expected_seq: 0, type: "core.start", payload: {} });
+    // ONLY the entrant id — no scorer, no server. Before S8/#417's wiring at
+    // THIS call site, extractScorers folds this with no ctx and the rally
+    // credits nobody.
+    await scoreEvent(ctx.auth, fx, {
+      expected_seq: 1,
+      type: "badminton.rally",
+      payload: { wonBy: entrantA },
+    });
+    // Decides the fixture; the scoring decided seam drafts the result post
+    // as a side effect, which is what actually reaches extractScorers.
+    await scoreEvent(ctx.auth, fx, {
+      expected_seq: 2,
+      type: "core.forfeit",
+      payload: { by: entrantB, reason: "walkover" },
+    });
+
+    const results = (await listPosts(ctx.auth, ctx.orgId)).filter((p) => p.kind === "result");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.bodyMd).toContain("Alex Player");
   });
 });
