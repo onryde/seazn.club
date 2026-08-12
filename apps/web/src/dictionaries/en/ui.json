@@ -3643,5 +3643,5 @@
   "scorepad.fidelity.cancel": "Keep current level",
   "scorepad.action.confirm": "Confirm",
   "scorepad.action.cancel": "Cancel",
-  "scorepad.field.rangeHint": "{min}–{max}"
+  "scorepad.field.choose": "Choose…"
 }

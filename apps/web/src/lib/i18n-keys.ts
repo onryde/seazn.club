@@ -3640,7 +3640,7 @@ export type DictionaryKey =
   | "scorepad.fidelity.downgradeWarning"
   | "scorepad.fidelity.heading"
   | "scorepad.fidelity.locked"
-  | "scorepad.field.rangeHint"
+  | "scorepad.field.choose"
   | "scorepad.locked.reason"
   | "scorepad.phase.live"
   | "scorepad.phase.post"
