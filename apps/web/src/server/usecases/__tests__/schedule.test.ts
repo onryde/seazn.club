@@ -339,32 +339,53 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     const pinB = untouched[1]!;
     await patchFixture(auth, pinA.id, { schedule_locked: true });
     await patchFixture(auth, pinB.id, { schedule_locked: true });
-    // KNOWN, PRE-EXISTING FLAKE (task-1-report.md's own "Deviations" §2,
-    // predates this fix-loop): the repair solver is not taught round order
-    // (the design doc's own "out of scope" ruling — see Finding 1's fix a
-    // few files over, `reflowExisting`'s catch, for the sibling case where
-    // it disagrees loudly instead of quietly). Left free to rearrange every
-    // OTHER unlocked fixture around these two new pins, it can occasionally
-    // settle on a placement that is fine by every family it knows about
-    // (rest, court, person) but breaks H6 — a rule it cannot see. When that
-    // happens this apply below legitimately refuses it (the write gate
-    // doing exactly its job), and this assertion block is the one place in
-    // the suite that can observe it. Teaching the repair solver round order
-    // is explicitly out of scope for this fix-loop, same as it was for the
-    // original design.
     const reflow = await autoSchedule(auth, groups.id, { only_unlocked: true, mode: "reflow" });
     const pinnedOut = new Map(reflow.assignments.map((a) => [a.fixture_id, a]));
     expect(pinnedOut.get(pinA.id)?.scheduled_at).toBe(pinA.scheduled_at.toISOString());
     expect(pinnedOut.get(pinA.id)?.court_label).toBe(pinA.court_label);
     expect(pinnedOut.get(pinB.id)?.scheduled_at).toBe(pinB.scheduled_at.toISOString());
-    await applySchedule(auth, groups.id, {
-      assignments: reflow.assignments.map((a) => ({
-        fixture_id: a.fixture_id,
-        scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
-      })),
-      source: "auto",
-    });
+
+    // C1 fix-loop round 2 (2026-08-12, Item C) — z3 round-order blindness,
+    // closed by the C4 session (design doc's own "out of scope" ruling; see
+    // Finding 1's fix a few files over, `reflowExisting`'s
+    // `RepairVerificationError` catch, for the sibling case where the repair
+    // solver disagrees LOUDLY instead of quietly). The repair solver is free
+    // to rearrange every OTHER unlocked fixture around these two new pins,
+    // and it is not taught round order at all — so its own successful
+    // `"repaired"` branch (`status: "ok"`, `moved.length > 0`, no exception)
+    // can legitimately settle on a placement that is fine by every family it
+    // DOES know (rest, court, person) but breaks H6, a rule it cannot see.
+    // `reflow.solver.status` does not distinguish this from a genuinely
+    // clean repair — `settle()` stamps `"ok"` for the whole `"repaired"`
+    // branch regardless — but `reflow.conflicts` is `settle`'s own REAL
+    // `validateAssignments` call over the final board, so it always tells
+    // the truth. This is not a coin flip on WHETHER the board is legal; it
+    // is a coin flip on WHICH of the two outcomes the design actually
+    // specifies this run lands on, and both are asserted explicitly:
+    //   (a) round order intact — apply succeeds, exactly as before.
+    //   (b) round order broken by the repair solver's own blind spot — the
+    //       write gate (correctly) refuses it; asserted AS the expected
+    //       shape of that refusal, not skipped past.
+    const brokenOrder = reflow.conflicts.filter((c) => c.code === "warn.order" && c.blocking);
+    const applyReflow = () =>
+      applySchedule(auth, groups.id, {
+        assignments: reflow.assignments.map((a) => ({
+          fixture_id: a.fixture_id,
+          scheduled_at: a.scheduled_at,
+          court_label: a.court_label,
+        })),
+        source: "auto",
+      });
+    if (brokenOrder.length > 0) {
+      await expect(applyReflow()).rejects.toSatisfy((err: unknown) =>
+        EngineError.is(err, "SCHEDULE_CONFLICT"),
+      );
+      // Refused, so nothing changed — the division still carries whatever
+      // this test's earlier (successful) applies left it with, which is why
+      // the publish-gating assertions below hold unconditionally either way.
+    } else {
+      await applyReflow();
+    }
 
     // Publish-gating (PROMPT-17 item 7): while the division is in setup the
     // public schedule shows no timetable; publish lights it up.
@@ -373,7 +394,14 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     };
     expect(before.fixtures.every((f) => f.scheduled_at === null)).toBe(true);
 
-    const published = await publishSchedule(auth, division.id);
+    // `acknowledge_warnings: true` — this test's own earlier "drag into a
+    // rest violation → warned but ALLOWED" step deliberately leaves an
+    // outstanding warn-level conflict on the board (doc 12 §2:
+    // `assertPublishable` refuses ANY unacknowledged warning, blocking or
+    // not, which is a real and correct gate an organiser would confirm
+    // through — not something reflow always happens to clean up as a side
+    // effect of its own unrelated optimization).
+    const published = await publishSchedule(auth, division.id, { acknowledge_warnings: true });
     expect(published.status).toBe("scheduled");
     const after = (await publicSchedule(orgSlug, competition.slug, division.slug)) as {
       fixtures: { scheduled_at: string | null }[];
@@ -384,7 +412,10 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     await expect(decide(auth, board[4]!.id, 1, 0)).rejects.toSatisfy((err: unknown) =>
       EngineError.is(err, "WRONG_PHASE"),
     );
-    const startOut = await startDivision(auth, division.id);
+    // Same outstanding-warning gate as `publishSchedule` just above
+    // (`startDivision` re-runs `assertPublishable` itself before starting) —
+    // same reason, same acknowledgement.
+    const startOut = await startDivision(auth, division.id, { acknowledge_warnings: true });
     expect(startOut).toMatchObject({ status: "active", started: true, generated: 0 });
 
     // Score round 1.
