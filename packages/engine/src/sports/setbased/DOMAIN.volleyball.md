@@ -31,6 +31,7 @@ a row that says the sport does **not** have a fact is enforced by the preset's
 | FIVB match points 3:0 for a 3–0/3–1, 2:1 for a 3–2 | indoor | entrant | `Cfg.pointsMap`, `standingsDelta` | modelled | beach uses a flat 2:0. |
 | Serving player (the grid records the server's number) | all | person `server` | `Ev.Rally.server` → `State.persons[id].serves` | extended | optional `PersonId` on the rally; folds to a per-person serve tally. |
 | Player credited with the point (kill / block / ace) | all | person `scorer` | `Ev.Rally.scorer` → `State.persons[id].points` | extended | optional; a rally that names nobody folds exactly as before. |
+| Leaderboard credit from a stream naming only the entrant (`Ev.Rally.wonBy`), no `server`/`scorer` at all | all | entrant, via `PlayerStatsFoldCtx.personsOf` | `playerStats.metrics[points_won]` (`entrantField: "wonBy"`, `fromEntrant: true`) + `playerStats.folded` (`matches`, `sets_won`, `sets_lost`) | extended | S8/#417. An explicit person field still wins whenever one resolves; only when it names nobody does `wonBy`'s entrant get looked up through the caller-supplied roster (`ctx.personsOf`). Gated on the entrant's KIND, inside the engine: a `team` entrant (volleyball's real case) is refused by a kind guard rather than trusted to a caller's `personsOf` already answering `[]` — the `requires_detailed_scoring` posture stays the designed state for a team entrant, not a gap this closes. `matches`/`sets_won`/`sets_lost` are match/set OUTCOMES a metric+field walk over individual events cannot express, so they replay the same `applyRally`/`applySummary`/`bankSet` the live fold uses, off a synthetic two-entrant state — never a second, parallel implementation of the set predicate. |
 | Team timeout | all | entrant | `Ev.Timeout.by` → `State.timeouts.{home,away}`, `summary.detail.timeouts` | extended | new `volleyball.timeout` event; never touches the score. |
 | Technical timeout (automatic at 8 and 16) | indoor | entrant | `Ev.Timeout.technical` | extended | flag on the same event; beach has none. |
 | Substitution, with the in/out player numbers | indoor | persons `off` / `on` | `Ev.Sub.off`, `Ev.Sub.on` → `State.subs.log[]` | extended | new `volleyball.sub` event; both person fields optional. **Deliberately unscored**: the persons are recorded but feed no `playerStats` metric — coming on is not a performance, and the allowance it spends is a per-side count (`State.subs`), not a personal one. Pinned by setbased-audit tests. |
@@ -54,7 +55,7 @@ a row that says the sport does **not** have a fact is enforced by the preset's
 
 | Where in the match an event happened (the position axis) | all | — | `SportModule.position(state)` -> `set` + `points` segments, e.g. `Set 5 . 12-10` | extended | W4a T6b. A **read-side projection**, never a payload: a `MatchPosition` on every stamped event was considered this wave and rejected, because position is derivable from state the fold already computes and recording it would create a recorded value and a derived value of the same type that can silently disagree — the `DisciplineCard.entrantSide` shape. A wrong recorded value is in the hash-chained ledger forever; a wrong projection is one deploy away from fixed. Ordered segments rather than a display string, so W8 can drop a segment for a 375px scorebug, localise each `key` and order two positions in one match; `formatPosition` is the plain-text path. Nothing is materialised into state, so every frozen golden is byte-identical. ONE function reference shared with badminton and table tennis. The score comes from the set the number resolved to, which makes all four cases fall out of one expression: love-all before the first rally, the live score during a set, love-all again between sets, and the final score of the deciding set once the match is over. |
 
-**Row counts:** 15 modelled, 9 extended, 7 deferred (31 rows).
+**Row counts:** 15 modelled, 10 extended, 7 deferred (32 rows).
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## Downstream owed
@@ -81,7 +82,13 @@ Asserted against the table itself by `src/testkit/dossiers.test.ts`.
   summary carrying `persons` could never satisfy the §9.6 coarse ≡ fine
   invariant. They live in `State.persons` and in the `playerStats` fold.
 - **`playerStats` now exists** (`points`, `serves`, `sanctions`), so volleyball
-  leaderboards stop reporting `requires_detailed_scoring`. W6 can build stat
-  models on exactly these keys.
+  leaderboards stop reporting `requires_detailed_scoring`.
+- **S8/#417 (W6) shipped the entrant-fallback + folded row above**:
+  `points_won`, `matches`, `sets_won`, `sets_lost` are now a KERNEL default,
+  merged with the three metrics already listed here (preset-declared keys win
+  on any collision — none exist today, the two sets are disjoint by
+  construction). A stream that never named `server`/`scorer` at all — the
+  v1-era case — now still produces person rows, as long as a
+  `PlayerStatsFoldCtx` is supplied.
 - Beach-specific capability gating (no substitutions, no technical timeout) is
   unresolved — see the deferred row above.

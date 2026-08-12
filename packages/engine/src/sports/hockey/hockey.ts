@@ -7,7 +7,7 @@
 // competition demands a winner.
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { PlayerStatsModel } from "../../stats/stats.ts";
-import { makePeriodModule, type PeriodSuspensionReason } from "../period/kernel.ts";
+import { makePeriodModule, periodKeeperStatsFold, type PeriodSuspensionReason } from "../period/kernel.ts";
 import { HOCKEY_SUSPENSIONS, HOCKEY_YOUTH_SUSPENSIONS } from "../period/suspensions.ts";
 
 // S4 (#428) — FIH's own subset of the shared `PeriodSuspensionReason` union:
@@ -92,8 +92,30 @@ const playerStats: PlayerStatsModel = {
       key: "cards_served", label: "Suspensions served", from: "hockey.suspension.start",
       field: "servedBy", agg: "count",
     },
+    // S8/#417 W6 — the shooter's own tally from `hockey.shot`. `shots_faced`/
+    // `saves`/`save_percentage` are the KEEPER side of this same event and
+    // come from `periodKeeperStatsFold`'s `folded` escape hatch below (they
+    // need the on-ice spell fold, which a declarative field+agg walk cannot
+    // express); this shooter-side half is a plain metric because `person` is
+    // an explicit payload field with no spell resolution needed.
+    { key: "shots", label: "Shots", from: "hockey.shot", field: "person", agg: "count" },
+    {
+      key: "shots_on_target", label: "Shots on target", from: "hockey.shot", field: "person",
+      agg: "count", when: (p) => p.outcome === "scored" || p.outcome === "saved",
+    },
   ],
   awards: [{ key: "potm", label: "Player of the Match" }],
+  // S8/#417 — `goals_conceded`, `clean_sheets`. "GK" matches this file's own
+  // `positions` catalog above and the `keeperGroup` passed to
+  // `makePeriodModule` below; see `periodKeeperStatsFold`'s own docstring for
+  // the mechanism (reads the fold of `core.lineup.*`, never the kickoff
+  // sheet) and the documented clean-sheet rule.
+  // S8/#417 W6 — `saves`, `shots_faced`, `save_percentage` now ARE declared,
+  // fed by `hockey.shot` (the 3rd argument, gated by this preset's own
+  // `shotTracking: true` below). `so_saves` above is unaffected and still
+  // covers only the shoot-out's per-attempt keeper credit — a different
+  // event type this fold never matches, by construction.
+  folded: periodKeeperStatsFold("hockey.goal", "GK", "hockey.shot"),
 };
 
 export const hockey = makePeriodModule({
@@ -202,4 +224,9 @@ export const hockey = makePeriodModule({
   // W4 (#407) — FIH Rules 13/14: a penalty corner and a penalty stroke are
   // recorded when AWARDED; the goal kinds only ever show the converted ones.
   setPieceKinds: ["pc", "stroke"],
+  // S8/#417 W6 — shots on goal + save percentage (S2/#430's parked row,
+  // `icehockey/DOMAIN.md`'s "Shots on goal"/"Saves and save percentage"
+  // rows). See `PeriodPreset.shotTracking`'s own comment for why this is a
+  // preset flag and not a cfg knob.
+  shotTracking: true,
 });

@@ -20,8 +20,9 @@ import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { resolveModule } from "@/server/engine-db";
+import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPair } from "@/server/engine-db/lineups";
+import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db/entrant-members";
 import { slugify, uniqueSlug } from "./slugs";
 import { resultDraft, roundRecapDraft } from "@/server/news/draft-templates";
 
@@ -582,7 +583,32 @@ async function extractScorers(
       fx.home_entrant_id && fx.away_entrant_id
         ? await loadLineupPair(tx, fx.fixture_id, fx.home_entrant_id, fx.away_entrant_id)
         : undefined;
-    const rows = aggregatePlayerStats(ledger, model, lineups)
+    // S8/#417 — the SAME entrant→person fallback ctx player-stats.ts's
+    // recomputePlayerStats builds, at this SECOND aggregatePlayerStats call
+    // site (S4/#428's review finding: wiring one call site and not the other
+    // is exactly how this class of bug ships). Single fixture here, so a
+    // single-fixture cfg resolve — same three inputs `fold.ts`'s
+    // `foldFixture` reads (config_snapshot, division.config, stage.config) —
+    // rather than the division-batched query the division-wide recompute uses.
+    const [fixtureCfgRow] = await tx<{ config_snapshot: unknown }[]>`
+      select config_snapshot from fixtures where id = ${fx.fixture_id}`;
+    const [divisionCfgRow] = await tx<{ config: unknown }[]>`
+      select config from divisions where id = ${fx.division_id}`;
+    const [stageCfgRow] = await tx<{ config: Record<string, unknown> | null }[]>`
+      select config from stages where id = ${fx.stage_id}`;
+    const cfg = resolveFixtureCfg(
+      fixtureCfgRow?.config_snapshot,
+      divisionCfgRow?.config,
+      stageCfgRow?.config,
+    );
+    // S8/#417 W6 review round 2, fix 2 — the fixture-scoped loader, not
+    // loadEntrantMembersForDivision: this function is single-fixture (see
+    // this function's own doc comment above), so pulling the WHOLE
+    // division's roster for two entrants was O(division roster) work
+    // repeated on every fixture-decided write where O(1) is what is needed.
+    const entrantMembers = await loadEntrantMembersForFixture(tx, fx.home_entrant_id, fx.away_entrant_id);
+    const ctx = entrantFoldCtx(fx.home_entrant_id, fx.away_entrant_id, entrantMembers, cfg);
+    const rows = aggregatePlayerStats(ledger, model, lineups, ctx)
       .filter((r) => (r.stats[metric.key] ?? 0) > 0)
       .sort((a, b) => (b.stats[metric.key] ?? 0) - (a.stats[metric.key] ?? 0));
     if (rows.length === 0) return [];

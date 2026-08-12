@@ -14,7 +14,7 @@ import type { ModuleEvent } from "../../sport/module.ts";
 import { aggregatePlayerStats } from "../../stats/stats.ts";
 import { icehockey } from "../icehockey/icehockey.ts";
 import { hockey } from "../hockey/hockey.ts";
-import { expectedAdvance, type PeriodState } from "./kernel.ts";
+import { expectedAdvance, makePeriodModule, type PeriodState } from "./kernel.ts";
 import { shootoutDecision } from "./shootout.ts";
 
 // W4a (#425) §3.3 — every fold below is PAD-SHAPED: it is building a stream
@@ -707,6 +707,73 @@ describe("period kernel — the shoot-out winner's credited goal", () => {
     const running = foldIce(gwsEvents.slice(0, -4));
     expect(running.outcome).toBeNull();
     expect(icehockey.summary(running).headline).toBe("2 — 2 (GWS 0–1)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S8/#417 W6 — `shotTracking` is a per-preset capability flag (see
+// `PeriodPreset.shotTracking`'s own comment), not a cfg knob like
+// `setPieceKinds`. `hockey`/`icehockey` both opt in; this proves a
+// hypothetical sport on the SAME shared kernel that does NOT opt in gets no
+// shot event at all — the "sport that should not accept it does not" half
+// of the brief, which neither real preset can demonstrate on its own since
+// both enable it.
+// ---------------------------------------------------------------------------
+describe("S8/#417 W6 — shotTracking gates `<key>.shot` per preset", () => {
+  const minimalCatalog = {
+    groups: [{ key: "GK", name: "Goalkeeper", min: 1, max: 1 }],
+    roles: [],
+    lineup: { size: 1, benchMax: 0 },
+  };
+  const minimalDefaults = {
+    periods: { count: 2, minutes: 45 },
+    overtime: null,
+    shootout: null,
+    points: { win: 3, draw: 1, loss: 0 },
+    suspensions: null,
+    strength: { base: 1, min: 1 },
+    goalKinds: ["fg"],
+    assists: false,
+    awardScore: { goals: 3 },
+    abandonPolicy: "replay" as const,
+  };
+  // Deliberately omits `shotTracking` — the fact under test.
+  const noShotsModule = makePeriodModule({
+    key: "testsport",
+    version: "1.0.0",
+    defaults: minimalDefaults,
+    variants: {},
+    positions: minimalCatalog,
+    metrics: [],
+    defaultTiebreakers: ["points"],
+    officialLabel: { scorer: "Referee" },
+    shootoutLabel: "SO",
+    timelineEntitlement: "scoring.match_timeline",
+  });
+
+  it("refuses a shot outright when the preset has not opted in", () => {
+    const lineups = defaultLineupPair(noShotsModule.positions);
+    const cfg = noShotsModule.configSchema.parse({});
+    expect(() =>
+      foldMatch(noShotsModule, cfg, lineups, [
+        makeEnvelope(0, { type: "core.start", payload: {} }),
+        makeEnvelope(1, {
+          type: "testsport.shot",
+          payload: { by: lineups.home.entrantId, outcome: "saved" },
+        }),
+      ]),
+    ).toThrow(EngineError);
+  });
+
+  it("declares no band-3 fidelity or shot action when shotTracking is unset", () => {
+    const spec = noShotsModule.padSpec!(noShotsModule.configSchema.parse({}));
+    expect(spec.fidelity["testsport.shot"]).toBeUndefined();
+    expect(spec.panels.some((p) => p.actions.some((a) => a.type === "testsport.shot"))).toBe(false);
+  });
+
+  it("hockey and icehockey, by contrast, both opted in", () => {
+    expect(hockey.padSpec!(hockey.configSchema.parse({})).fidelity["hockey.shot"]).toBe(3);
+    expect(icehockey.padSpec!(icehockey.configSchema.parse({})).fidelity["icehockey.shot"]).toBe(3);
   });
 });
 

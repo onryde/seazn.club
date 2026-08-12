@@ -20,7 +20,7 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 | S5 | #431 | `S05-431-decisions-register.md` | S3, S4 | **DONE** — register closed, all 8 rulings accounted for; items 2 (tennis game-award) and 4 (football quarters) BUILT this session on owner instruction rather than re-homed, cricket `pairs-6-a-side` dropped with a DB prune fix |
 | S6 | #416 | `S06-416-w5-padspec.md` | S2, S3, S5 | **DONE** — `PadSpec` contract + bidirectional conformance shipped for all 11 modules; fidelity model redesigned per the S2 ruling; 3 named variant-gating regressions fixed; e2e/smoke deferred to S12/S13 |
 | S7 | #427 | `S07-427-pad-vocabulary-i18n.md` | S3, S4, S6 | **DONE** — prompt's own "owed by sport" list was stale (S3/S4/S5 shipped most of it early); real gap was S6's 164-key `PadLabel` namespace never reaching apps/web, a missing per-field label slot, and 3 review-caught rendering bugs. Real e2e shipped, independently verified twice |
-| S8 | #417 | `S08-417-w6-player-stats.md` | S6 | TODO |
+| S8 | #417 | `S08-417-w6-player-stats.md` | S6 | **DONE, e2e+smoke discharged** — 3 prompt premises false (all 11 modules already declared `playerStats`, dot-paths already shipped, no kernel default existed to copy); the real defect was models declared against OPTIONAL person fields on entrant-attributed payloads, i.e. inert. Owner ruled to widen into `apps/web` so the entrant→person fallback is reachable. Goalkeeper stats shipped INCLUDING shots-on-goal/saves (owner amended the S2/#430 parking — table row above is stale on this point, kept for history per the decision log below). W6 review closed 6+3+1 gaps across three rounds. E2E (`apps/web/e2e/stats.spec.ts`) + smoke (`scripts/smoke.ts` `playerStatsSuite`) landed in the S8b follow-up session — real HTTP, real numbers, mutation-proved. S9 still owes its OWN e2e once the `/me` page exists; that is not this row |
 | S9 | #418 | `S09-418-w7-career-rollup.md` | S3, S8 | TODO |
 | S10 | #419 | `S10-419-w8-chassis-renderer.md` | S6 | TODO |
 | S11 | #420 | `S11-420-w9-skins.md` | S7, S10 | TODO |
@@ -1194,8 +1194,371 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   payload` is `z.unknown()`, pads post raw payloads unvalidated client-side —
   a tripwire test was added instead of validation nothing calls.
 
+- 2026-08-12 — S8/#417 — **THREE of the prompt's premises are false, verified by
+  grep on `main` @ `989e0ba8` before any code was written.** Same shape as S7's
+  stale owed-list: W4 (#415) shipped much of W6's nominal scope opportunistically.
+  (a) "`playerStats` exists only for football, hockey and icehockey; cricket,
+  tennis, setbased, carrom, boardgame and generic show `requires_detailed_scoring`
+  instead" — **false, all 11 modules already declare `playerStats`**:
+  `football.ts:2361`, `hockey.ts:42`(→`:195`), `icehockey.ts:54`(→`:232`),
+  `cricket.ts:2105`(`CRICKET_PLAYER_STATS`, declared `:3024`), `tennis.ts:64`,
+  `setbased/badminton.ts:67`, `setbased/tabletennis.ts:74`,
+  `setbased/volleyball.ts:112`, `boardgame.ts:665`, `carrom.ts:908`,
+  `generic.ts:554`. The acceptance criterion "all 11 modules declare
+  `playerStats`" was already met on arrival.
+  (b) scope 1's "dot-path support in `field`/`sumField`" — **already shipped**:
+  `resolvePayloadPath` (`stats/stats.ts:28`) with its own docstring rules, and
+  `cricket/DOMAIN.md:164` already records the cricket model being declared
+  straight off `cricket.ball` via dotted paths.
+  (c) scope 2's "the period kernel is the precedent" for a kernel-built default
+  `playerStats` — **no kernel builds one**. All three factories only spread the
+  preset's model if present (`period/kernel.ts:2174`, `setbased/kernel.ts:1363`,
+  `nested/kernel.ts:1751`); each sport preset declares its own. There is no
+  precedent to copy — a kernel-level default is a NEW pattern here, not an
+  existing one.
+  What IS genuinely absent (grep returns zero hits repo-wide): `personsOf`,
+  `PlayerStatsFoldCtx`, `fromEntrant`, `folded`, `value?:(payload)=>number`,
+  any goalkeeper metric (clean sheet / goals conceded / non-shoot-out save), and
+  any `playerStats` block inside `testkit/conformance.ts`. That is the real S8.
+- 2026-08-12 — S8/#417 — **OWNER RULING: widen S8 into `apps/web` and wire
+  `personsOf` for real, overriding the prompt's own "no `apps/web` diff"
+  acceptance line.** The engine has no entrant→person membership anywhere:
+  `sport/entrant-model.ts` carries entrant KINDS only, and the member list lives
+  in apps/web's `entrant_members` table. So `PlayerStatsFoldCtx.personsOf` can
+  only be supplied by the caller, and an engine-only S8 would ship the entire
+  entrant→person fallback — the central deliverable of #417 and of the
+  prefer-person-fields ruling — as unreachable code. That is precisely the defect
+  class this programme has now paid for twice (S4/#428's person-role
+  discriminator shipped engine-only and a coach still earned a leaderboard row;
+  S6/#416's "engine-only diff" still broke `apps/web` at runtime). Asked before
+  widening per `_RULES.md` §1; answered "widen". Acceptance is therefore
+  amended: an `apps/web` diff IS expected, and the fallback must be proved by a
+  DB-backed regression driving a v1-era entrant-attributed stream through the
+  real usecase to person rows.
+
+- 2026-08-12 — S8/#417 — **`folded.fold(events, ctx)` cannot see the team sheet,
+  and that blocks the goalkeeper metrics until the signature grows.** Found while
+  briefing the keeper pass, not while debugging it. Clean sheets and goals
+  conceded must attribute to whoever was in goal AT THE TIME of each goal, which
+  S3/#426 made derivable for the first time — but the derivation needs the
+  STARTING keeper, and a starting keeper is a `LineupSlot` on the team sheet, not
+  an event. `aggregatePlayerStats` receives `lineups` and uses it only for the
+  S4 non-player exclusion; it does not forward it to `folded.fold`, whose
+  signature is `(events, ctx)`. So a keeper fold can see every `core.lineup.*`
+  CHANGE and none of the initial state. Resolution: `folded.fold` takes
+  `lineups` as a third argument, landed in `stats.ts` as its own step, ordered
+  AFTER the diagnostics pass because both edit that one file and this programme
+  does not run two agents at one file. Recorded because the shape is
+  instructive: the core API was specced from the metric path (payload in, person
+  out) and the first genuinely STATE-dependent statistic did not fit it.
+
+- 2026-08-12 — S8/#417 — **cricket's mixed-fidelity rule: fine wins, coarse fills
+  only a person+aspect the fine stream never mentions.** Cricket is the one sport
+  with a real four-band ladder (band 2 `cricket.player.line`, band 3
+  `cricket.ball`), so a stream can carry both and a naive mirror double-counts
+  every run. Shipped rule: `cricket.ball` always wins; the `folded` path fills
+  the SAME keys (`runs`, `balls_faced`, `balls_bowled`, `runs_conceded`,
+  `wickets`, `dismissals`) only for a (person, aspect) pair — batting or bowling
+  — with zero fine deliveries anywhere in the stream. A real v1-migration fixture
+  is fine-or-coarse for its whole length, which the gate handles exactly; and
+  `applyPlayerLine` already requires a line coexisting with a fine innings to
+  carry the same numbers the ball fold produced, so even a gate failing open
+  would double a CORRECT figure rather than patch in a wrong one. Dismissal MODE
+  stays fine-only — `cricket.player.line` has no mode field — so no
+  `dismissals_<kind>` key is ever folded-derived.
+- 2026-08-12 — S8/#417 — **`folded.keys` is declared EMPTY for cricket, and that
+  is a deliberate opt-out of the collision checker, not an oversight.** Every key
+  cricket's fold writes already has an owning `metrics[]` entry, by design — the
+  coarse contribution is meant to land in the same column as the fine one.
+  `playerStatsKeyCollisions` exists to catch an ACCIDENTAL clash between two
+  uncoordinated sources, so declaring the six would relabel an intentional,
+  gated, tested merge as exactly that accident. Recorded because the cost is
+  real and a later session should not "fix" it blindly: `keys` stops meaning
+  "what this fold may emit" for cricket, so nothing static describes that set.
+  The cleaner long-term shape is an explicit `sharesMetricKeys` flag so intent
+  is declared rather than encoded as an empty list; not built here because it is
+  a core-API change landing after four sport passes were already written
+  against the current shape.
+
+- 2026-08-12 — S8/#417 — **the kernel-default `playerStats` pattern, established
+  (it did not previously exist).** `makeSetBasedModule` and `makeNestedModule`
+  now build a default model — `points_won` as a metric (`field: "scorer"` +
+  `entrantField: "wonBy"`/`"by"` + `fromEntrant`), and `matches`/`sets_won`/
+  `sets_lost`(/`games_won`) as a `folded` hook — merged with the preset's own via
+  `mergePlayerStats`, **preset key wins on collision**. That covers volleyball,
+  badminton, tabletennis and tennis from two files, which is the whole point:
+  four sports cannot drift from each other if there is one declaration.
+- 2026-08-12 — S8/#417 — **the folded models REPLAY the kernel's own scoring
+  cascade rather than reimplementing it, and that makes `ctx.cfg` load-bearing.**
+  `folded.fold` runs the real `applyRally`/`applySummary`/`bankSet` (setbased) or
+  `applyStandardPoint`/`applyTbPoint`/`applySetSummary`/`applyGameAward` (nested)
+  over a synthetic throwaway two-entrant state, reading `bestOf`/`setTo` from
+  `ctx.cfg`. This is deliberately NOT a second implementation of the set/game
+  cascade — this repo's single most-repeated defect is a placer/verifier fork,
+  two code paths computing one number until they diverge. **Consequence the
+  wiring pass MUST honour: `ctx.cfg` is no longer "reserved for future use" as
+  `stats.ts`'s docstring calls it — a caller that omits the division's cfg
+  silently degrades these sports to `matches`-only.** That degradation is a
+  swallowed `try/catch` inside the fold (chosen over a throw, correctly — a
+  cfg-derived throw inside a fold bricks recorded fixtures), so it fails QUIETLY
+  and is exactly the shape this programme has been burned by; flagged to review.
+
+- 2026-08-12 — S8/#417 — **two-lens review of the engine diff (correctness lens +
+  silent-failure lens, run independently). Most of the diff verified clean with
+  evidence; six real gaps.** Clean, each confirmed by reading code rather than
+  trusting a test name: the keeper is replayed forward through `core.lineup.*` in
+  BOTH implementations (football's own and the shared period kernel) and never
+  read from a kickoff snapshot; the explicit-person path genuinely short-circuits
+  the entrant path (pinned by a deliberately conflicting fixture); zero `throw`
+  statements in any added fold; empty-net charges nobody, shoot-out attempts
+  never concede, and an own goal charges the keeper of the side the goal counts
+  AGAINST — each pinned by a test that would fail under the naive
+  `opponent(by)` reading; `core.void` un-counts structurally because one
+  `resolveVoids` result feeds both the metric loop and `folded.fold`; row order
+  is sorted by `personId` everywhere, so recompute-on-read cannot drift.
+  **The swallowed `try/catch` in the replay-based folds is NOT the coverage
+  violation it looked like** — `state` degrades monotonically to `undefined` and
+  every cfg-gated key is written in one atomic block gated on it, so a partial
+  cfg yields `matches` only (a key with no omittable denominator) and never a
+  half-filled row. It honours the S2/#430 invariant. Recorded because the shape
+  reads exactly like the defect this programme keeps finding, and the next
+  reviewer will flag it again otherwise.
+  Gaps found, all fixed in the follow-up pass: (1) cricket's
+  `playerStatsKeyCollisions` assertion is VACUOUS — with `folded.keys: []` the
+  checker filters an empty list and can never return non-empty, so the test
+  cannot fail; (2) the diagnostics counters observe only the metric loop while 8
+  of 11 modules now carry stats through `folded`, i.e. the feature built to
+  surface silent drops is blind to the path most likely to drop; (3) cricket's
+  fine/coarse gate is scoped per (person, aspect) over the WHOLE stream rather
+  than per innings, so a player scored ball-by-ball in innings 1 with a coarse
+  line in innings 2 silently loses innings 2 — under-count, not double-count;
+  (4) `mergePlayerStats` in both kernels declares its merged fold `(events, ctx)`
+  and silently drops the `lineups` third argument, which TS's bivariant
+  parameter check will not flag — dead today, and precisely the pattern this same
+  session shipped for the keeper folds; (5) "a team entrant credits nobody" is
+  duplicated SIX times (core + 5 sport folds), byte-identical today, the
+  placer/verifier fork shape this repo has hit 5+ times; (6) `value()`'s only
+  guard is `typeof === "number"`, which admits `NaN`/`Infinity`, and
+  `sumPlayerStats` adds blindly — the first ratio-shaped metric with a zero
+  denominator would permanently poison a division leaderboard.
+
+- 2026-08-12 — S8/#417 — **the entrant fallback is now REACHABLE from real data,
+  which was the owner's whole reason for widening the session.** New loader
+  `apps/web/src/server/engine-db/entrant-members.ts` builds a real
+  `PlayerStatsFoldCtx` from `entrant_members`; both call sites are wired —
+  `recomputePlayerStats` (batched division-wide) and `org-posts.ts`'s
+  `extractScorers` (single fixture) — because S4's review already established
+  that wiring one of the two and not the other is exactly how this class of bug
+  ships. `ctx.cfg` is resolved per fixture through the SAME
+  `resolveFixtureCfg(config_snapshot, division.config, stage.config)` the fold
+  path itself uses (V347 snapshot semantics), so the stat fold and the score
+  fold can never disagree about which config a fixture was played under.
+- 2026-08-12 — S8/#417 — **`ctx.entrants` must be exactly ONE fixture's
+  `[home, away]`, never the division's full roster — and passing the roster
+  fails SILENTLY.** The replay-based folded models (setbased, nested, carrom,
+  generic) reconstruct a synthetic two-entrant state to replay the module's own
+  cascade; handed a wider entrant list they bail to `[]` rather than throwing, so
+  a division-scoped ctx yields an empty stat table that looks exactly like a
+  fixture nobody scored. Found while wiring, not while debugging. Recorded here
+  because the ctx is built one layer away from the fold that constrains it, and
+  nothing in the type system says "two".
+
+- 2026-08-12 — S8/#417 — **round-2 review, aimed at the half round 1 never saw.**
+  The first two reviewers read the engine diff only; the `apps/web` wiring — the
+  part touching SQL, tenancy and production logging — had never been reviewed at
+  all, which is worth noticing as a process failure and not just a scheduling
+  one: the reviewers were dispatched while that pass was still in flight, so its
+  absence from their scope was invisible unless someone checked. Verified clean:
+  tenancy is safe (`entrants`/`entrant_members` both carry `org_id` under
+  `V227__v2_rls.sql`'s blanket `org_id = current_org_id()` policy, the same
+  unstated protection `loadLineupPairsForDivision` already relies on, so a
+  foreign `divisionId` returns zero rows rather than leaking); the `#404`
+  person-merge relabel still runs BEFORE `sumPlayerStats`; the per-fixture ctx
+  scope holds (`entrantFoldCtx` builds `entrants` from `[home, away]` only, and
+  the division-wide `personsOf` is consulted only after `ctx.entrants.find()`
+  has already matched); no log line carries PII; `personsForEntrant` is
+  byte-identical at all five replaced call sites; cricket's schema-derived
+  dismissal list matches the removed hand-written array exactly in membership
+  AND order; the conformance block genuinely runs for 11 of 11.
+  Three gaps, all fixed: (1) **a warning that fires on the happy path** — the
+  disagreement warn also triggered on `teamEntrantsSkipped`, which is the
+  engine's DESIGNED skip for a team-kind entrant and volleyball's routine state,
+  so every healthy recompute of a team-entrant division warned, burying the real
+  `unknownEntrants` signal; invisible until now because the logging test only
+  ever seeded badminton, an individual-kind sport. (2) `org-posts.ts`'s
+  single-fixture `extractScorers` called the DIVISION-wide roster loader for two
+  entrants on every match result, where `lineups.ts`'s scoped/batched pair was
+  the model to copy — and its scoped counterpart was already in use one line
+  above. (3) `foldedEntrantsOutOfScope` was `length !== 2`, so it fired below 2
+  as well and would have reported the wrong diagnosis for a bye-shaped ctx,
+  contradicting both its own docstring and the operator-facing warn text.
+
+- 2026-08-12 — S8/#417 — **OWNER RULING: build the four remaining gaps in S8,
+  including goalkeeper saves — which AMENDS S2/#430's parking of that row.**
+  Asked explicitly before proceeding, because S2/#430 recorded shots/saves/
+  faceoffs as PARKED tier-3 work for a later wave and `icehockey/DOMAIN.md:60`
+  carries saves as deferred pending a shots-on-goal event; the owner overrode
+  that for this row. The other three were open by my own admission at PR time.
+  In scope now: (1) real shots-on-goal / saves as a NEW event type for football
+  and both hockey codes — which is exactly the tier-3 shape S2/#430 described,
+  so it lands as a per-event stream with its own fidelity band rather than as a
+  stat-model change; (2) cricket's fine/coarse gate scoped per INNINGS, which
+  needs an innings discriminator on `CricketBall`; (3) `sharesMetricKeys`
+  verified against what a fold ACTUALLY emits at runtime instead of trusting the
+  declaration — closing the self-declared escape hatch the round-2 reviewer
+  flagged as inherently unclosable by the checker alone; (4) the E2E and smoke
+  coverage this session had deferred to S9/S12/S13, discharged here.
+  Note on (4): S9 (#418) is what puts these stats on `/me`, so there is no
+  stats-rendering surface in a browser yet — the e2e drives the real API and
+  asserts through the surfaces that DO exist today, and S9 still owes the
+  `/me` e2e when its page lands. Note on (1): saves derive from a SHOT event
+  with an outcome, not a bare `save` counter, because save percentage needs the
+  shots-faced denominator — and the standing coverage invariant (S2/#430, match
+  granularity) means a rate is not emitted at all for a match whose shot
+  coverage is partial.
+
+- 2026-08-12 — S8/#417 — **CI on #538 caught a class my local gate could not:
+  a stat row can be computed, persisted, and structurally unrenderable.**
+  Two failures in `apps/web/src/lib/__tests__/player-stat-vocab.test.ts` (S7's
+  gate), both jobs. Why local was green: I ran the apps/web suite FILTERED to
+  the player-stats specs, and `npm test --workspace apps/web -- run <path>`
+  treats positionals as filename filters — the vocab spec never executed. The
+  documented trap, paid for again.
+  - **(A) 18 newly declared rows carry no message key and no copy in any of the
+    four locales** — `cricket.fours`, `cricket.sixes`, `cricket.dismissals` plus
+    its ten mode splits, `carrom.boards_won`, and `points_won` on all four
+    set-based sports. That is what reds CI, and it is ordinary i18n debt.
+  - **(B) the more interesting one: no `folded.keys` row can EVER render.**
+    `labelPlayerStats` (`apps/web/src/server/player-stats.ts:30-34`) builds its
+    display list from `metrics`/`derived`/`awards` only, so all 29 folded-only
+    keys are aggregated, merged, written to `player_stat_snapshots` — and then
+    dropped on the way to a label. None has a `PLAYER_STAT_KEY` entry either.
+    Among them are **this session's headline keeper metrics**: `goals_conceded`
+    and `clean_sheets` on football, hockey and icehockey; also every set-based
+    `matches`/`sets_won`/`sets_lost`, `tennis.games_won`, `carrom.matches`/
+    `wins`, boardgame's `draws`/`losses`/`white`/`black`, and generic's
+    `wins`/`draws`/`losses`/`points_for`.
+  - **The gate is blind to the whole class by construction**: its local
+    `StatsModule` type reads `metrics`/`derived`/`awards` and nothing else, so
+    folded rows sit outside every assertion it makes. A test that cannot see a
+    category cannot fail on it — the same shape as the declared-but-inert
+    models this session opened with, mirrored: there, a row was declared and
+    never computed; here, a row is computed and never displayable.
+  - Fix (task #13, sequenced AFTER the shots/saves and cricket passes, since
+    the shape change touches both their lanes): `folded.keys` gains a declared
+    English label so the "every displayable row ships an engine label"
+    invariant the vocab file rests on covers it; `labelPlayerStats` includes
+    folded rows deduped by key (cricket shares keys with its metrics
+    deliberately, so first declaration wins); `declaredStatRows()` extends to
+    folded keys so the blindness closes permanently; then message keys and
+    en/es/fr/nl copy for every row.
+
+- 2026-08-12 — S8/#417 — **the four owner-ruled gaps: three landed, CI green
+  on the whole wave** (commits 5f482272, 6e49148a, 540c647c, c0e80ce7).
+  - **Shots and saves** ship as a shot WITH AN OUTCOME
+    (`scored|saved|missed|blocked`), never a bare save counter, so save
+    percentage has its shots-faced denominator. Coverage follows S2/#430's
+    invariant by a per-side checksum: logged `outcome:"scored"` shots must
+    reconcile against `goals_conceded` (always complete, it comes from the
+    existing goal event), and when they disagree `save_percentage` is ABSENT,
+    not zero. Honest documented limit: a side that conceded nothing has no
+    goal to reconcile against, so under-logged saves there cannot be detected
+    — inherent to any ledger-only signal. The period kernel gates the event
+    per preset (`shotTracking`), football takes it unconditionally.
+  - **Cricket's gate is now per innings.** `CricketBall.innings?` mirrors
+    `CricketPlayerLine.innings`'s existing recorded-not-derived precedent;
+    `apply()` deliberately never reads it, so a stale stamp can only
+    mis-scope a leaderboard number and can never brick a replay. Untagged
+    balls keep the old whole-stream behaviour exactly.
+  - **A new defect found by the CI red, not by review**: no `folded.keys` row
+    could ever reach a label — 44 rows aggregated, persisted and dropped on
+    the way to the screen, including every goalkeeper metric this session had
+    just added. The mirror of the defect S8 opened with (declared but never
+    computed; here computed but never displayable). `folded.keys` now carries
+    `{key, label}`, `labelPlayerStats` appends folded rows last so cricket's
+    deliberate overlap keeps the metric's label, and `declaredStatRows()`
+    reads folded keys so the gate is no longer blind to the class.
+  - Set-based `sets_won`/`sets_lost` now follow each preset's `unitLabel`
+    ("Games won" for badminton and table tennis, "Sets won" for volleyball
+    and tennis) — a real new cross-sport collision, pinned by name and by
+    both English forms.
+  - **Process note worth keeping**: local runs were green while CI was red
+    because the apps/web suite had been run FILTERED to the player-stats
+    specs, and vitest treats positionals as filename filters. Judge a wave
+    only on the unfiltered suite. Separately, an agent reported `failed: 0`
+    where my own rerun found 1 (`repair-scale`, a wall-clock budget test that
+    reds under load) — the wave-boundary rerun is why that was caught, and it
+    is also why a second agent's claim to have written two memory files was
+    checked and found false.
+  - Still open: the `sharesMetricKeys` runtime check (in flight) and the
+    e2e/smoke pass. S9 still owes the `/me` e2e when its page lands, and
+    should carry forward that `labelPlayerStats` drops zero-valued rows — so
+    a genuinely 0% `save_percentage` renders as no row, same as an absent
+    one. Correct for absent-vs-zero, lossy for a keeper who saved nothing.
+
+- 2026-08-12 — S8b (worktree `s8-w6-player-stats`, PR #538) — **the e2e/smoke
+  gap owed by the "four owner-ruled gaps" entry above, closed.** No
+  rendering page exists yet (S9/#418 builds `/me`), so both suites drive
+  `/api/v1` over real HTTP and assert real per-person numbers, per owner
+  instruction to not defer this further. Two cases, matching the two
+  attribution paths #417 exists for: (a) an explicit person field —
+  football, two team entrants with inline `members`, real lineups (the
+  engine's `applyGoal` 400s an explicit scorer absent from `state.squads`,
+  so both sides need one), `core.start` + `football.goal{by,scorer}`,
+  asserted against `GET .../stats/players` (`goals:1, points:1`) and — the
+  one real rendering surface that predates S9 — the division console's
+  existing `?tab=stats` `stats-board` (PROMPT-27). (b) the entrant
+  fallback — badminton (`bwf`), two `individual` entrants with inline
+  `members` and deliberately no lineup anywhere in this half (the
+  fallback is keyed on `entrant_members`, not on-pitch state — setting one
+  would have proved the wrong mechanism), `badminton.rally{wonBy}` alone
+  (no `scorer`/`server`, the exact v1-era shape), asserted `points_won:1`
+  on the roster person resolved off the fixture's own `home_entrant_id`
+  (never assumed from creation order).
+  Falsifiability, proved by mutation, not assumed: `recomputePlayerStats`
+  (`apps/web/src/server/usecases/player-stats.ts`) was temporarily forced to
+  `return { rows: [], throughSeq: 0, hasModel: true }` right after the
+  existing `model === undefined` early return — i.e. exactly "the fold
+  returned `[]`" — backed up with `cp`, never `git checkout` on
+  uncommitted work. Both new Playwright specs failed at the SAME line,
+  `expect(row).toBeDefined()` -> `Received: undefined`, then the file was
+  restored from the backup and `diff`-confirmed byte-identical, `git
+  status` clean. This is the assertion that would break in production too.
+  Files: `apps/web/e2e/stats.spec.ts` (extended, not a new file — the
+  requires-detailed-notice test already lived there), `scripts/smoke.ts`
+  (`playerStatsSuite`, called from `main()` right after `disciplineSuite`
+  on the same already-Pro `org2`). The smoke addition was verified two
+  ways without running the full 13k-line `main()`: `typecheck:scripts`
+  (the real project compiler, not bare `npx tsc`) on the whole file, and a
+  throwaway standalone script (never committed) running an exact copy of
+  the new function's body against the live server plus a freshly
+  Pro-flipped org — 11/11 passed. Real counts, all real HTTP against
+  `postgresql://...@127.0.0.1:54357/seazn_test`, confirmed by querying
+  that exact database directly for the TAG-stamped competition rows
+  afterward, not inferred from a green exit code alone. Verified with
+  `next dev` on port 3211 (`localhost`, not `127.0.0.1` — the session
+  cookie is `Secure`+host-scoped) — `next build` is a separate,
+  unrelated, pre-existing local break on this Next version (upstream
+  `InvariantError`), not this branch's problem, so dev was the sanctioned
+  target per owner instruction.
+
 - _(append below)_
 
 ## Open questions for the owner
 
-- _(none — append as they arise; ask in-session, never file an issue)_
+- **Volleyball ships player stats that credit nobody in its default setup.**
+  Surfaced 2026-08-12 by the `folded` runtime check (S8b): volleyball's
+  `entrantModel.defaultKind` is `"team"`, and person-level credit for
+  `matches`/`sets_won`/`sets_lost` goes through `personsForEntrant`, which
+  returns `[]` for a team entrant BY DESIGN (the same guard the whole stats
+  file applies). So the rows are declared, computed and empty unless a
+  volleyball division uses individual/pair entrants. Badminton and table
+  tennis, on the same kernel, default to `"individual"` and are unaffected.
+  This is the declared-but-inert shape again — but by design this time, not
+  by mistake, which is why it is a question rather than a defect. Options:
+  accept it (volleyball player stats need a real team sheet, i.e. lineups,
+  which the folded path does not read for credit); route credit through
+  `lineups` for team entrants; or stop declaring the rows for volleyball.
+  Not actionable without a product call.
+
+- _(append as they arise; ask in-session, never file an issue)_

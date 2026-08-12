@@ -210,6 +210,11 @@
           "freeHit": {
             "type": "boolean"
           },
+          "innings": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
           "nonStriker": {
             "minLength": 1,
             "type": "string"

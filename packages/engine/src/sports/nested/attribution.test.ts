@@ -252,9 +252,18 @@ describe("tennis playerStats", () => {
       ]),
       tennis.playerStats!,
     );
+    // S8/#417 — `points_won` is the kernel-default canonical metric (field:
+    // "scorer" + entrant fallback); every point here already names an
+    // explicit `scorer`, so it fires identically to "points" alongside it.
+    // No ctx was supplied, so matches/sets_won/sets_lost/games_won (the
+    // `folded` half) never appear — see playerstats.test.ts for that
+    // mechanism on its own.
     expect(rows).toEqual([
-      { personId: "A-p1", stats: { points: 1, violations: 1 } },
-      { personId: "H-p1", stats: { points: 2, service_points: 3, aces: 1, double_faults: 1 } },
+      { personId: "A-p1", stats: { points: 1, violations: 1, points_won: 1 } },
+      {
+        personId: "H-p1",
+        stats: { points: 2, service_points: 3, aces: 1, double_faults: 1, points_won: 2 },
+      },
     ]);
   });
 

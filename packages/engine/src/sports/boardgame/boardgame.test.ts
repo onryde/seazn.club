@@ -2,7 +2,11 @@
 import { describe, expect, it } from "vitest";
 import { foldMatch, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { LineupPair, StageCtx } from "../../core/types.ts";
-import { aggregatePlayerStats } from "../../stats/stats.ts";
+import {
+  aggregatePlayerStats,
+  playerStatsKeyCollisions,
+  type PlayerStatsFoldCtx,
+} from "../../stats/stats.ts";
 import { conformanceSuite, defaultLineupPair, makeEnvelope } from "../../testkit/index.ts";
 import { checkActionCoverage, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
 import {
@@ -250,6 +254,203 @@ describe("boardgame: game length and the winning player", () => {
   });
 
   it("folds person credit into a games/wins leaderboard", () => {
+    const events = stream(
+      ["core.start"],
+      ["boardgame.pairing", { homePerson: "H-p1", awayPerson: "A-p1" }],
+      ["boardgame.result", { winner: "H", method: "checkmate", winnerPerson: "H-p1" }],
+    );
+    expect(aggregatePlayerStats(events, boardgame.playerStats!)).toEqual([
+      { personId: "A-p1", stats: { games: 1 } },
+      { personId: "H-p1", stats: { games: 1, wins: 1 } },
+    ]);
+  });
+});
+
+// S8/#417 — folded win/draw/loss + white/black, resolved from entrant
+// attribution when the payload names no person. Mirrors
+// `../tennis/../nested/playerstats.test.ts`'s conventions (ctx helper shape,
+// void/determinism/collision checks) — this is the same kernel API, just
+// declared directly on the module instead of a shared kernel default.
+describe("boardgame: folded win/draw/loss + white/black, resolved from entrant attribution (S8/#417)", () => {
+  function ctxFor(
+    entrants: ReadonlyArray<{
+      id: string;
+      kind?: "team" | "individual" | "pair";
+      persons: readonly string[];
+    }>,
+  ): PlayerStatsFoldCtx {
+    return {
+      entrants: entrants.map((e) => ({ id: e.id, kind: e.kind ?? "individual" })),
+      personsOf: (entrantId) => entrants.find((e) => e.id === entrantId)?.persons ?? [],
+    };
+  }
+  const twoPlayers = ctxFor([
+    { id: "H", persons: ["H-p1"] },
+    { id: "A", persons: ["A-p1"] },
+  ]);
+
+  it("headline regression: entrant ids only (no person fields) + individual ctx resolve correct win/loss rows", () => {
+    const events = stream(["core.start"], ["boardgame.result", { winner: "H", method: "checkmate" }]);
+    expect(aggregatePlayerStats(events, boardgame.playerStats!, undefined, twoPlayers)).toEqual([
+      { personId: "A-p1", stats: { losses: 1 } },
+      { personId: "H-p1", stats: { wins: 1 } },
+    ]);
+  });
+
+  it("a draw (winnerPerson is unbuildable on a drawn game) credits both sides via the roster", () => {
+    const events = stream(["core.start"], ["boardgame.result", { winner: null, method: "agreement" }]);
+    expect(aggregatePlayerStats(events, boardgame.playerStats!, undefined, twoPlayers)).toEqual([
+      { personId: "A-p1", stats: { draws: 1 } },
+      { personId: "H-p1", stats: { draws: 1 } },
+    ]);
+  });
+
+  it("CONFLICTING attribution: an explicit winnerPerson wins over the `winner` entrant fallback, and the entrant's own roster person gets no row at all", () => {
+    const events = stream(
+      ["core.start"],
+      ["boardgame.result", { winner: "H", method: "checkmate", winnerPerson: "P1" }],
+    );
+    // ctx says H's roster person is P2 — disagreeing with the explicit P1.
+    const ctx = ctxFor([
+      { id: "H", persons: ["P2"] },
+      { id: "A", persons: ["A-p1"] },
+    ]);
+    const rows = aggregatePlayerStats(events, boardgame.playerStats!, undefined, ctx);
+    expect(rows).toEqual([
+      { personId: "A-p1", stats: { losses: 1 } },
+      { personId: "P1", stats: { wins: 1 } },
+    ]);
+    expect(rows.find((r) => r.personId === "P2")).toBeUndefined();
+  });
+
+  it("a team entrant credits no rows through the entrant path, even with a full roster", () => {
+    const events = stream(["core.start"], ["boardgame.result", { winner: "H", method: "checkmate" }]);
+    const ctx = ctxFor([
+      { id: "H", kind: "team", persons: ["H-p1", "H-p2"] },
+      { id: "A", persons: ["A-p1"] },
+    ]);
+    expect(aggregatePlayerStats(events, boardgame.playerStats!, undefined, ctx)).toEqual([
+      { personId: "A-p1", stats: { losses: 1 } },
+    ]);
+  });
+
+  // S8/#417 W6 fix 5 — the "checkmate" fixture above never actually exercises
+  // `foldBoardgameStats`'s OWN `creditEach` guard for the team-kind side: "H"
+  // wins, so H's only attempted credit is "wins" — a plain METRIC guarded by
+  // `resolveMetricPersons`'s separate, unrelated check, not `creditEach`/
+  // `personsForEntrant` at all. A draw is what actually calls
+  // `creditEach(entrant, "draws")` for EVERY entrant, including a team-kind
+  // one — the only fixture that proves THIS fold's guard, not a different one
+  // that happens to produce the same-looking empty row for H.
+  it("a team entrant is credited nothing through the FOLDED path either — a draw calls creditEach on both sides, including the team one", () => {
+    const events = stream(["core.start"], ["boardgame.result", { winner: null, method: "agreement" }]);
+    const ctx = ctxFor([
+      { id: "H", kind: "team", persons: ["H-p1", "H-p2"] },
+      { id: "A", persons: ["A-p1"] },
+    ]);
+    expect(aggregatePlayerStats(events, boardgame.playerStats!, undefined, ctx)).toEqual([
+      { personId: "A-p1", stats: { draws: 1 } },
+    ]);
+  });
+
+  it("white/black splits, derived from the pairing card's `white` entrant — not a new payload field", () => {
+    const events = stream(
+      ["core.start"],
+      ["boardgame.pairing", { white: "H" }],
+      ["boardgame.result", { winner: "H", method: "checkmate" }],
+    );
+    expect(aggregatePlayerStats(events, boardgame.playerStats!, undefined, twoPlayers)).toEqual([
+      { personId: "A-p1", stats: { black: 1, losses: 1 } },
+      { personId: "H-p1", stats: { white: 1, wins: 1 } },
+    ]);
+  });
+
+  it("the same person plays both colours across two separate fixtures", () => {
+    const ctx = ctxFor([
+      { id: "H", persons: ["shared-p1"] },
+      { id: "A", persons: ["A-p1"] },
+    ]);
+    const fixtureOne = aggregatePlayerStats(
+      stream(["core.start"], ["boardgame.pairing", { white: "H" }]),
+      boardgame.playerStats!,
+      undefined,
+      ctx,
+    );
+    const fixtureTwo = aggregatePlayerStats(
+      stream(["core.start"], ["boardgame.pairing", { white: "A" }]),
+      boardgame.playerStats!,
+      undefined,
+      ctx,
+    );
+    expect(fixtureOne).toEqual([
+      { personId: "A-p1", stats: { black: 1 } },
+      { personId: "shared-p1", stats: { white: 1 } },
+    ]);
+    expect(fixtureTwo).toEqual([
+      { personId: "A-p1", stats: { white: 1 } },
+      { personId: "shared-p1", stats: { black: 1 } },
+    ]);
+  });
+
+  it("a single forfeit behaves as an ordinary decisive result for wins/losses", () => {
+    const events = stream(["core.start"], ["boardgame.result", { winner: "H", method: "forfeit" }]);
+    expect(aggregatePlayerStats(events, boardgame.playerStats!, undefined, twoPlayers)).toEqual([
+      { personId: "A-p1", stats: { losses: 1 } },
+      { personId: "H-p1", stats: { wins: 1 } },
+    ]);
+  });
+
+  // Decision (owner asked for one, explicitly): a double forfeit is a
+  // no_result (chess.md §7) — nobody's win, draw or loss, so neither
+  // "wins", "draws" nor "losses" is written for anyone. It STILL counts as
+  // a game played: "games" is fed unconditionally by the pairing card (who
+  // sat down), independent of how the game ended, exactly like it already
+  // was before this wave — a pairing card records attendance, not outcome.
+  it("double forfeit: the pairing card still counts as a game played, but nobody earns a win, draw or loss", () => {
+    const events = stream(
+      ["core.start"],
+      ["boardgame.pairing", { homePerson: "H-p1", awayPerson: "A-p1" }],
+      ["boardgame.result", { winner: null, method: "double_forfeit" }],
+    );
+    const rows = aggregatePlayerStats(events, boardgame.playerStats!, undefined, twoPlayers);
+    expect(rows).toEqual([
+      { personId: "A-p1", stats: { games: 1 } },
+      { personId: "H-p1", stats: { games: 1 } },
+    ]);
+  });
+
+  it("a void over the result un-counts it in the folded path", () => {
+    const decisive = stream(["core.start"], ["boardgame.result", { winner: "H", method: "checkmate" }]);
+    // Prove the clean stream credits something FIRST — otherwise voiding it
+    // down to `[]` would be true whether or not voiding actually did anything.
+    const clean = aggregatePlayerStats(decisive, boardgame.playerStats!, undefined, twoPlayers);
+    expect(clean).toEqual([
+      { personId: "A-p1", stats: { losses: 1 } },
+      { personId: "H-p1", stats: { wins: 1 } },
+    ]);
+    const voided = [
+      ...decisive,
+      makeEnvelope(decisive.length, { type: "core.void", payload: {} }, decisive[1]!.id),
+    ];
+    expect(aggregatePlayerStats(voided, boardgame.playerStats!, undefined, twoPlayers)).toEqual([]);
+  });
+
+  it("is deterministic: the same stream + ctx folds twice to deeply equal rows", () => {
+    const events = stream(
+      ["core.start"],
+      ["boardgame.pairing", { white: "H" }],
+      ["boardgame.result", { winner: "H", method: "checkmate" }],
+    );
+    const once = aggregatePlayerStats(events, boardgame.playerStats!, undefined, twoPlayers);
+    const twice = aggregatePlayerStats(events, boardgame.playerStats!, undefined, twoPlayers);
+    expect(twice).toEqual(once);
+  });
+
+  it("declares no colliding keys between folded and metrics", () => {
+    expect(playerStatsKeyCollisions(boardgame.playerStats!)).toEqual([]);
+  });
+
+  it("ctx omitted stays inert: pre-existing metrics are byte-identical and no folded key ever appears", () => {
     const events = stream(
       ["core.start"],
       ["boardgame.pairing", { homePerson: "H-p1", awayPerson: "A-p1" }],

@@ -4,7 +4,7 @@
 // real module on the contract — proves PROMPT-03.
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
-import type { CoreEv, EventEnvelope } from "../../core/events.ts";
+import { foldMatch, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
   EntrantId,
@@ -23,6 +23,7 @@ import type {
   PadSpec,
   SportModule,
 } from "../../sport/module.ts";
+import { personsForEntrant, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // spec 04 §8 Cfg
 export const GenericCfg = z.object({
@@ -376,6 +377,104 @@ export function padSpec(cfg: GenericCfg): PadSpec {
   };
 }
 
+// ---------------------------------------------------------------------------
+// S8/#417 — playerStats.folded: win/draw/loss + points_for, resolved from the
+// entrant roster (`PlayerStatsFoldCtx`). `GenericResult` names no explicit
+// person at all (only `GenericScore.person`, which feeds the pre-existing
+// `points`/`scores` metrics below) — the terminal result is entrant-only by
+// design (DOMAIN.md: "the terminal result stays entrant-only") — so this is
+// the ONLY attribution source for these four keys, and it needs the SETTLED
+// fixture: which resultMode is live, whether a tally settled it, and the
+// S6/#416 "isDraw key must be PRESENT" trap (`applyResult`, above) are
+// already folded into `generic.apply()`. Re-deriving any of that here would
+// be a second implementation of the same rules that can silently disagree
+// with the first — reopening the exact S6 defect this fold must not regress
+// — so this replays the SAME apply() the write path folds through, via
+// `foldMatch`, over a SYNTHETIC two-entrant lineup (generic never reads
+// `slots`), instead of hand-rolling any of it.
+// ---------------------------------------------------------------------------
+
+function foldGenericStats(events: readonly EventEnvelope[], ctx: PlayerStatsFoldCtx): PlayerStatRow[] {
+  const rows = new Map<string, Record<string, number>>();
+  const bump = (personId: string, key: string, by: number): void => {
+    const stats = rows.get(personId) ?? {};
+    stats[key] = (stats[key] ?? 0) + by;
+    rows.set(personId, stats);
+  };
+  // Mandatory kind guard (PlayerStatsFoldCtx's own contract, applied via the
+  // shared `personsForEntrant` helper, S8/#417 W6 fix 5, rather than a local
+  // re-derivation): a "team" entrant credits nobody even when `personsOf`
+  // hands back a full roster — but the replay below still uses the
+  // entrant's real id, so a mixed team/individual fixture still resolves
+  // the correct winner and still credits the individual side.
+  const creditEach = (
+    entrant: PlayerStatsFoldCtx["entrants"][number],
+    key: string,
+    by: number,
+  ): void => {
+    for (const personId of personsForEntrant(ctx, entrant.id)) bump(personId, key, by);
+  };
+
+  // No parse/replay guarantee is ever assumed: `ctx.cfg` is `unknown` by
+  // design, and a replay can throw for reasons that have nothing to do with
+  // the result (an unsettled tally, a payload the S6 fix refuses, an
+  // out-of-order test fixture, …). Either way this must never throw OUT of
+  // the fold (house rule: a data-derived throw inside a fold permanently
+  // bricks a recorded fixture) — an unparseable cfg or a rejected replay
+  // just leaves every key this fold owns uncredited for that fixture: no
+  // signal in, no fabricated W/D/L for a match this couldn't settle (the
+  // same coverage discipline as a partially recorded result, S2/#430).
+  const cfgParsed = GenericCfg.safeParse(ctx.cfg);
+  const home = ctx.entrants[0];
+  const away = ctx.entrants[1];
+  if (cfgParsed.success && ctx.entrants.length === 2 && home !== undefined && away !== undefined) {
+    const lineups: LineupPair = {
+      home: { entrantId: home.id, slots: [] },
+      away: { entrantId: away.id, slots: [] },
+    };
+    try {
+      const state = foldMatch(generic, cfgParsed.data, lineups, events);
+      const outcome = state.outcome;
+      // Once the fixture IS decided, every side is credited explicitly —
+      // including a 0 for whoever did not win/draw — since `GenericResult`
+      // has no competing explicit-person field for any of these three keys
+      // to protect (unlike this wave's boardgame sibling), so there is no
+      // stray-row risk in writing the zero.
+      let wdl: { wHome: number; wAway: number; dEach: number; lHome: number; lAway: number } | null = null;
+      if (outcome !== null && (outcome.kind === "win" || outcome.kind === "award")) {
+        const winnerIsHome = outcome.winner === home.id;
+        wdl = winnerIsHome
+          ? { wHome: 1, wAway: 0, dEach: 0, lHome: 0, lAway: 1 }
+          : { wHome: 0, wAway: 1, dEach: 0, lHome: 1, lAway: 0 };
+      } else if (outcome !== null && (outcome.kind === "draw" || outcome.kind === "tie")) {
+        wdl = { wHome: 0, wAway: 0, dEach: 1, lHome: 0, lAway: 0 };
+      } else if (outcome !== null && outcome.kind === "no_result") {
+        // Generic's OWN standingsDelta already zero-fills w/d/l for
+        // no_result (`zeroMetrics()` above) — matching that here rather
+        // than leaving the fold silent for this one outcome kind.
+        wdl = { wHome: 0, wAway: 0, dEach: 0, lHome: 0, lAway: 0 };
+      }
+      // outcome === null (still live) — undetermined, no W/D/L credit yet.
+      if (wdl !== null) {
+        creditEach(home, "wins", wdl.wHome);
+        creditEach(away, "wins", wdl.wAway);
+        creditEach(home, "draws", wdl.dEach);
+        creditEach(away, "draws", wdl.dEach);
+        creditEach(home, "losses", wdl.lHome);
+        creditEach(away, "losses", wdl.lAway);
+      }
+      if (state.score !== null) {
+        creditEach(home, "points_for", state.score.home);
+        creditEach(away, "points_for", state.score.away);
+      }
+    } catch {
+      // Un-derivable this fixture — no rows from this branch.
+    }
+  }
+
+  return [...rows.entries()].map(([personId, stats]) => ({ personId, stats }));
+}
+
 export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
   key: "generic",
   version: "1.0.0",
@@ -551,6 +650,10 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
 
   // W4 — the only person credit the fallback offers: who performed a scoring
   // action. Anything richer means the sport deserves its own module.
+  // S8/#417 — `wins`/`draws`/`losses`/`points_for` join the terminal result
+  // (entrant-only, per the boundary above) to the roster (`PlayerStatsFoldCtx`)
+  // — see `foldGenericStats`. `points`/`scores` are untouched: they credit
+  // the ACTOR of a scoring action, a different fact from who won the match.
   playerStats: {
     metrics: [
       {
@@ -559,6 +662,15 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
       },
       { key: "scores", label: "Scoring actions", from: "generic.score", field: "person", agg: "count" },
     ],
+    folded: {
+      keys: [
+        { key: "wins", label: "Wins" },
+        { key: "draws", label: "Draws" },
+        { key: "losses", label: "Losses" },
+        { key: "points_for", label: "Points for" },
+      ],
+      fold: foldGenericStats,
+    },
   },
 
   // spec 03 §6 — valid-event generator for the conformance kit.

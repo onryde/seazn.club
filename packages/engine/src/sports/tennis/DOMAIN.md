@@ -41,6 +41,7 @@ ticks and the signature line.
 | Tie-break serve rotation (one point, then two each) | all | entrant side | `State.tbPointsPlayed`, `State.tbFirstServer` | modelled | ITF Rule 5b. |
 | **Which player** served the point | all | person `server` | `Ev.Point.server` → `State.persons[id].serves` | extended | optional `PersonId`. The chair's card has a server column; in doubles the side alone cannot say who served. |
 | **Which player** won the point | all | person `scorer` | `Ev.Point.scorer` → `State.persons[id].points` | extended | optional. `scorer` is the engine-wide name for the person credited with a point; `winner` is an EntrantId everywhere else (`MatchOutcome.winner`). `Ev.Point.meta.kind = "winner"` keeps the word where tennis really uses it — the *shot type*. |
+| Leaderboard credit from a stream naming only the entrant (`Ev.Point.by`), no `server`/`scorer` at all | all | entrant, via `PlayerStatsFoldCtx.personsOf` | `playerStats.metrics[points_won]` (`entrantField: "by"`, `fromEntrant: true`) + `playerStats.folded` (`matches`, `sets_won`, `sets_lost`, `games_won`) | extended | S8/#417, the nested-kernel twin of the same row in `DOMAIN.volleyball.md`/`.badminton.md`/`.tabletennis.md`. An explicit person field still wins whenever one resolves; only when it names nobody does `by`'s entrant get looked up through the caller-supplied roster, gated on the entrant's KIND inside the engine (tennis's own `entrantModel.kinds` never offers "team", but the guard is inherited from the shared engine boundary regardless). `matches`/`sets_won`/`sets_lost`/`games_won` are match/set/game OUTCOMES a metric+field walk over individual events cannot express, so they replay the same `applyStandardPoint`/`applyTbPoint`/`applySetSummary`/`applyGameAward` the live fold uses, off a synthetic two-entrant state — never a second, parallel implementation of the scoring cascade. |
 | Ace | all | person (the server) | `Ev.Point.meta.kind = "ace"` + `Ev.Point.server` → `State.persons[id].aces` | extended | the shot type was already modelled; W4 makes it attributable. |
 | Double fault | all | person (the server) | `Ev.Point.meta.kind = "double_fault"` + `Ev.Point.server` → `State.persons[id].doubleFaults` | extended | credited to the **server** even though the receiver wins the point — that is how the card scores it. |
 | Winner / unforced error | all | person `scorer` | `Ev.Point.meta.kind`, `Ev.Point.scorer` | modelled | the shot type already existed; attribution now rides with it. |
@@ -68,7 +69,7 @@ ticks and the signature line.
 
 | Where in the match an event happened (the position axis) | all | — | `SportModule.position(state)` -> `set` + `game` + `points` segments, e.g. `Set 2 . Game 4 . 30-15` | extended | W4a T6b. A **read-side projection**, never a payload: a `MatchPosition` on every stamped event was considered this wave and rejected, because position is derivable from state the fold already computes and recording it would create a recorded value and a derived value of the same type that can silently disagree — the `DisciplineCard.entrantSide` shape. A wrong recorded value is in the hash-chained ledger forever; a wrong projection is one deploy away from fixed. Ordered segments rather than a display string, so W8 can drop a segment for a 375px scorebug, localise each `key` and order two positions in one match; `formatPosition` is the plain-text path. Nothing is materialised into state, so every frozen golden is byte-identical. The tie-break needs no special case: `State.games` is held at 6-6 through it, so it falls out as game 13 of the set. A MATCH tie-break replaces the final set and has no games, so the game segment is omitted rather than reported as a phantom `Game 1`. The point score deliberately carries NO ordinal — points played is not derivable from `GamePoints` past deuce, so `comparePosition` is told to stop at the game rather than handed an invented rank it would sort by. Once a set banks the kernel resets `games` and `points`, so a decided match reads its games off the set that was actually played and drops the points segment. |
 
-**Row counts:** 24 modelled, 11 extended, 7 deferred (42 rows).
+**Row counts:** 24 modelled, 12 extended, 7 deferred (43 rows).
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## Downstream owed
@@ -99,11 +100,18 @@ Asserted against the table itself by `src/testkit/dossiers.test.ts`.
   hook — the set-based kernel deliberately cannot (see `DOMAIN.volleyball.md`).
 - **`playerStats` now exists** (`points`, `service_points`, `aces`,
   `double_faults`, `violations`, `medical_timeouts`), so tennis leaderboards
-  stop reporting `requires_detailed_scoring`. W6 can derive first-serve-free
-  serving stats from `aces` / `double_faults` over `service_points`.
-  `medical_timeouts` counts MEDICAL breaks only — a toilet break or a rain
-  delay is not a statistic about a player, and one shared key would make the
-  number mean nothing on a leaderboard.
+  stop reporting `requires_detailed_scoring`. A later wave can still derive
+  first-serve-free serving stats from `aces` / `double_faults` over
+  `service_points`. `medical_timeouts` counts MEDICAL breaks only — a toilet
+  break or a rain delay is not a statistic about a player, and one shared key
+  would make the number mean nothing on a leaderboard.
+- **S8/#417 (W6) shipped the entrant-fallback + folded row above**:
+  `points_won`, `matches`, `sets_won`, `sets_lost`, `games_won` are now a
+  KERNEL default, merged with the six metrics already listed here
+  (preset-declared keys win on any collision — none exist today, the two
+  sets are disjoint by construction). A stream that never named
+  `server`/`scorer` at all — the v1-era case — now still produces person
+  rows, as long as a `PlayerStatsFoldCtx` is supplied.
 - **New event type** `tennis.interruption` (W4a #425 §5.4), reachable at
   fidelity tiers 2 and 3 under the existing `scoring.rally_by_rally`
   entitlement. No new FeatureKey. There is deliberately **no end event**: a

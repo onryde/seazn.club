@@ -32,6 +32,7 @@ explicit rather than implicit.
 | Disciplines MS / WS / MD / WD / XD | all | entrant kind | `entrantModel.kinds` (`individual`, `pair`) | modelled | disciplines are entrant kind + eligibility, deliberately **not** module variants. |
 | Serving player | all | person `server` | `Ev.Rally.server` → `State.persons[id].serves` | extended | optional `PersonId` on the rally. The umpire's sheet tracks the server through the rotation; recording it makes the rotation reconstructable. |
 | Player credited with the point (the winning stroke) | all | person `scorer` | `Ev.Rally.scorer` → `State.persons[id].points` | extended | optional; a rally naming nobody folds exactly as before. |
+| Leaderboard credit from a stream naming only the entrant (`Ev.Rally.wonBy`), no `server`/`scorer` at all | all | entrant, via `PlayerStatsFoldCtx.personsOf` | `playerStats.metrics[points_won]` (`entrantField: "wonBy"`, `fromEntrant: true`) + `playerStats.folded` (`matches`, `sets_won`, `sets_lost`) | extended | S8/#417, shared with `DOMAIN.volleyball.md`/`.tabletennis.md` (one kernel). An explicit person field still wins whenever one resolves; only when it names nobody does `wonBy`'s entrant get looked up through the caller-supplied roster. `matches`/`sets_won`/`sets_lost` (badminton's own vocabulary calls these "games") are match/game OUTCOMES a metric+field walk over individual events cannot express, so they replay the same `applyRally`/`applySummary`/`bankSet` the live fold uses, off a synthetic two-entrant state. Badminton has no "team" entrant kind (`entrantModel.kinds` is `individual`/`pair` only), so the kind guard this row shares with volleyball's never actually fires here — it is inherited from the shared kernel, not exercised by this sport's own UI. |
 | Misconduct: yellow warning, red fault, black disqualification | all | entrant + optional person | `Ev.Sanction.level`, `.person`, `.reason` → `State.sanctions[]`, `discipline.extractCards` | extended | new `badminton.sanction` event. Card ladder → kernel enum: yellow = `warning`, red = `penalty`, black = `disqualification`; `expulsion` covers a referee's removal from the game. W4's review added optional free-text `reason` — the umpire's own words for the misconduct, which an accumulation rule keyed on the offence needs. It reaches `DisciplineCard.reason` only; the fold never reads it, so no recorded state moves. |
 | The specific offence behind a card (racket abuse, dissent, coaching…) | all | person | `Ev.Sanction.reason` (free text) | deferred | **New finding, S4 (#428)** — not named in the S04 prompt's own "Why" section, but has the identical shape to football/tennis/carrom's reason gap: severity (`SetBasedSanctionLevel`, the ladder step) is already closed, the WHY is free text. Deferred: lower documented urgency than IIHF's, and the severity axis alone already supports some accumulation rules. Read alongside the identical row in `DOMAIN.volleyball.md` and `DOMAIN.tabletennis.md`. |
 | The point a red card concedes | all | entrant | recorded as a `badminton.rally` for the opponent | modelled | the point goes in the score column, the card in the misconduct box — as on paper. |
@@ -51,7 +52,7 @@ explicit rather than implicit.
 
 | Where in the match an event happened (the position axis) | all | — | `SportModule.position(state)` -> `set` + `points` segments, e.g. `Set 3 . 21-19` | extended | W4a T6b. A **read-side projection**, never a payload: a `MatchPosition` on every stamped event was considered this wave and rejected, because position is derivable from state the fold already computes and recording it would create a recorded value and a derived value of the same type that can silently disagree — the `DisciplineCard.entrantSide` shape. A wrong recorded value is in the hash-chained ledger forever; a wrong projection is one deploy away from fixed. Ordered segments rather than a display string, so W8 can drop a segment for a 375px scorebug, localise each `key` and order two positions in one match; `formatPosition` is the plain-text path. Nothing is materialised into state, so every frozen golden is byte-identical. Badminton, table tennis and volleyball hold ONE function reference, asserted by identity. The set number is `unitNumber` over both the started count and the completed count, not `State.sets.length`: a set is opened lazily on its first rally, so `length` under-counts between games while `closed + 1` over-counts on a match abandoned mid-game. The score is ranked by `home + away`, which is exactly rallies played under rally scoring, so two positions inside one game order. |
 
-**Row counts:** 17 modelled, 4 extended, 8 deferred (29 rows).
+**Row counts:** 17 modelled, 5 extended, 8 deferred (30 rows).
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## Downstream owed
@@ -74,6 +75,11 @@ Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 - **`playerStats` now exists** (`points`, `serves`, `sanctions` labelled
   "Cards"), so badminton leaderboards stop reporting
   `requires_detailed_scoring`.
+- **S8/#417 (W6) shipped the entrant-fallback + folded row above**:
+  `points_won`, `matches`, `sets_won`, `sets_lost` are now a KERNEL default,
+  merged with the three metrics already listed here. A stream that never
+  named `server`/`scorer` at all — the v1-era case — now still produces
+  person rows, as long as a `PlayerStatsFoldCtx` is supplied.
 - Service court and receiver are recorded as **derivable**, not stored. If a
   later wave wants them on screen it should compute them from `server` plus the
   running score rather than adding fields that can disagree with the ledger.

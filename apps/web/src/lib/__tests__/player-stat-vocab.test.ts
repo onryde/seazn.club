@@ -42,6 +42,16 @@ interface StatsModule {
     metrics?: readonly { key: string; label: string }[];
     derived?: readonly { key: string; label: string }[];
     awards?: readonly { key: string; label: string }[];
+    // S8/#417 W6 review (Defect B) — `folded.keys` now carries its own
+    // declared `{key, label}` (stats.ts), the same shape metrics/derived/
+    // awards already use. Before this, `folded` sat outside every field this
+    // interface read at all, so a folded-only row (no metrics/derived/awards
+    // entry sharing its key — every football/hockey/icehockey goalkeeper
+    // metric, every setbased/nested match/set outcome, …) was structurally
+    // invisible to this whole gate: 44 rows shipped, aggregated, and
+    // snapshotted with no label anywhere, engine or app, and this file could
+    // not have caught it no matter how thorough its assertions were.
+    folded?: { keys: readonly { key: string; label: string }[] };
   };
 }
 
@@ -56,9 +66,16 @@ interface StatRow {
 /**
  * Every stat row `labelPlayerStats` can emit, read off the modules' own
  * declarations in the same order and with the same `_awards` suffixing the
- * production helper applies. Deduped per sport because a module may declare one
- * metric key twice with two credit paths (boardgame's `games` counts both
- * `homePerson` and `awayPerson`) — that is one displayed row, not two.
+ * production helper applies. Deduped per sport, FIRST declaration wins —
+ * matching `labelPlayerStats`'s own precedence exactly (never a plain
+ * overwrite): a module may declare one metric key twice with two credit
+ * paths (boardgame's `games` counts both `homePerson` and `awayPerson`, one
+ * displayed row not two), and separately `folded.keys` (S8/#417 W6 review,
+ * Defect B) may legitimately repeat a `metrics[]` key ON PURPOSE — cricket's
+ * six-way fine/coarse overlap, declared via `sharesMetricKeys` — where the
+ * metric's own label is the one that must render. `folded` is therefore
+ * folded in LAST, after metrics/derived/awards, never merged in declaration
+ * order.
  */
 function declaredStatRows(): StatRow[] {
   const out: StatRow[] = [];
@@ -70,8 +87,9 @@ function declaredStatRows(): StatRow[] {
       ...(ps.metrics ?? []).map((x) => [x.key, x.label] as const),
       ...(ps.derived ?? []).map((x) => [x.key, x.label] as const),
       ...(ps.awards ?? []).map((x) => [`${x.key}_awards`, x.label] as const),
+      ...(ps.folded?.keys ?? []).map((x) => [x.key, x.label] as const),
     ]) {
-      seen.set(row, label);
+      if (!seen.has(row)) seen.set(row, label);
     }
     for (const [row, engineLabel] of seen) out.push({ sport: m.key, version: m.version, row, engineLabel });
   }
@@ -120,10 +138,18 @@ describe("player-stat vocabulary derivation", () => {
   it("finds the cross-sport collisions that force per-sport keying", () => {
     // If this set ever empties, the per-sport scheme has lost its justification
     // and someone should be told — so pin it by name, derived side and all.
+    // S8/#417 W6 review (Defect B) — `sets_won`/`sets_lost` joined this set
+    // the moment `folded` rows entered `declaredStatRows()`: badminton and
+    // table tennis call this unit a "Game" (their own `unitLabel`,
+    // setbased/kernel.ts) everywhere else in their product surface, while
+    // volleyball and tennis call it a "Set" — the same real divergence that
+    // already justifies `so_attempts`/`so_goals`/`so_saves` below.
     expect([...collidingMetricKeys().keys()].sort()).toEqual(
-      ["points", "sanctions", "so_attempts", "so_goals", "so_saves"],
+      ["points", "sanctions", "sets_lost", "sets_won", "so_attempts", "so_goals", "so_saves"],
     );
     expect([...collidingMetricKeys().get("sanctions")!].sort()).toEqual(["Cards", "Sanctions"]);
+    expect([...collidingMetricKeys().get("sets_won")!].sort()).toEqual(["Games won", "Sets won"]);
+    expect([...collidingMetricKeys().get("sets_lost")!].sort()).toEqual(["Games lost", "Sets lost"]);
   });
 });
 

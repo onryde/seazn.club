@@ -32,6 +32,7 @@ limitation stated in the table rather than buried in the code.
 | Singles / doubles / mixed | all | entrant kind | `entrantModel.kinds` (`individual`, `pair`) | modelled | entrant kind, deliberately not a module variant. |
 | Serving player | all | person `server` | `Ev.Rally.server` → `State.persons[id].serves` | extended | optional `PersonId` on the rally; makes the two-point (five-point at 21) rotation reconstructable from the ledger. |
 | Player credited with the point | all | person `scorer` | `Ev.Rally.scorer` → `State.persons[id].points` | extended | optional; a rally naming nobody folds exactly as before. |
+| Leaderboard credit from a stream naming only the entrant (`Ev.Rally.wonBy`), no `server`/`scorer` at all | all | entrant, via `PlayerStatsFoldCtx.personsOf` | `playerStats.metrics[points_won]` (`entrantField: "wonBy"`, `fromEntrant: true`) + `playerStats.folded` (`matches`, `sets_won`, `sets_lost`) | extended | S8/#417, shared with `DOMAIN.volleyball.md`/`.badminton.md` (one kernel). An explicit person field still wins whenever one resolves; only when it names nobody does `wonBy`'s entrant get looked up through the caller-supplied roster. `matches`/`sets_won`/`sets_lost` (table tennis's own vocabulary calls these "games") are match/game OUTCOMES a metric+field walk over individual events cannot express, so they replay the same `applyRally`/`applySummary`/`bankSet` the live fold uses, off a synthetic two-entrant state. Table tennis has no "team" entrant kind (`entrantModel.kinds` is `individual`/`pair` only), so the kind guard this row shares with volleyball's never actually fires here — inherited from the shared kernel, not exercised by this sport's own UI. |
 | Timeout (one per player or pair, per match) | all | entrant | `Ev.Timeout.by` → `State.timeouts.{home,away}`, `summary.detail.timeouts` | extended | new `tabletennis.timeout` event; the sheet's "T" mark. Never touches the score. |
 | Warning and penalty cards (yellow, red) | all | entrant + optional person | `Ev.Sanction.level`, `.person`, `.reason` → `State.sanctions[]`, `discipline.extractCards` | extended | new `tabletennis.sanction` event. Yellow warning = `warning`, red penalty = `penalty`; `expulsion` / `disqualification` cover removal by the referee. W4's review added optional free-text `reason` — the umpire's own words for the offence, which an accumulation rule keyed on it needs. It reaches `DisciplineCard.reason` only; the fold never reads it, so no recorded state moves. |
 | The specific offence behind a card (racket abuse, unsporting behaviour, coaching…) | all | person | `Ev.Sanction.reason` (free text) | deferred | **New finding, S4 (#428)** — not named in the S04 prompt's own "Why" section, but has the identical shape to football/tennis/carrom's reason gap: severity (`SetBasedSanctionLevel`, the ladder step) is already closed, the WHY is free text. Deferred: lower documented urgency than IIHF's, and the severity axis alone already supports some accumulation rules. Read alongside the identical row in `DOMAIN.volleyball.md` and `DOMAIN.badminton.md`. |
@@ -57,7 +58,7 @@ limitation stated in the table rather than buried in the code.
 
 | Where in the match an event happened (the position axis) | all | — | `SportModule.position(state)` -> `set` + `points` segments, e.g. `Set 5 . 9-7` | extended | W4a T6b. A **read-side projection**, never a payload: a `MatchPosition` on every stamped event was considered this wave and rejected, because position is derivable from state the fold already computes and recording it would create a recorded value and a derived value of the same type that can silently disagree — the `DisciplineCard.entrantSide` shape. A wrong recorded value is in the hash-chained ledger forever; a wrong projection is one deploy away from fixed. Ordered segments rather than a display string, so W8 can drop a segment for a 375px scorebug, localise each `key` and order two positions in one match; `formatPosition` is the plain-text path. Nothing is materialised into state, so every frozen golden is byte-identical. ONE function reference shared with badminton and volleyball. Expedite is deliberately NOT a position segment: it is match-scoped once introduced (Law 2.15.4) and so says nothing about where in the match anything happened — `State.expedite` remains the place to read it. |
 
-**Row counts:** 16 modelled, 10 extended, 8 deferred (34 rows).
+**Row counts:** 16 modelled, 11 extended, 8 deferred (35 rows).
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## Downstream owed
@@ -80,6 +81,11 @@ Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 - **`playerStats` now exists** (`points`, `serves`, `sanctions` labelled
   "Cards"), so table tennis leaderboards stop reporting
   `requires_detailed_scoring`.
+- **S8/#417 (W6) shipped the entrant-fallback + folded row above**:
+  `points_won`, `matches`, `sets_won`, `sets_lost` are now a KERNEL default,
+  merged with the three metrics already listed here. A stream that never
+  named `server`/`scorer` at all — the v1-era case — now still produces
+  person rows, as long as a `PlayerStatsFoldCtx` is supplied.
 - **Expedite (W4a #425 §5.3 — was the one substantive unmet fact, now shipped).**
   A pad owes four things:
   1. the **ten-minute game clock** and the "unless both have reached 9" guard

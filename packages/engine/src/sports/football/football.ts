@@ -21,7 +21,9 @@ import { periodClockPosition, type MatchPosition } from "../../core/position.ts"
 import {
   REPLAY_LINEUP_POLICY,
   initSquads,
+  isLineupEventType,
   onFieldPersons,
+  personsAtPosition,
   playingSquad,
   reduceLineupEvent,
   type LineupPolicy,
@@ -53,6 +55,7 @@ import type {
   TiebreakerKey,
 } from "../../sport/module.ts";
 import { expectedKicker, shootoutDecision } from "../period/shootout.ts";
+import type { PlayerStatRow, PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — spec 04 §1.1
@@ -374,6 +377,43 @@ export const FootballSinBinEnd = z.strictObject({
   at: GameTime.optional(), // W4a §5.2 — the return's own stamp
 });
 
+// S8/#417 W6 — a shot with its own outcome: the shape that yields BOTH shots
+// on goal (S2/#430's parked row) and, crucially, the DENOMINATOR for save
+// percentage (the same row's "absent" complaint) — a bare save counter would
+// repeat the silent-0/no-denominator defect this programme has now hit four
+// times (`metricOf`, `PeriodSetPiece.outcome`, plus/minus, powerplay
+// conversion). A save IS a shot whose outcome is "saved".
+//
+// Its own enum, not `PenaltyOutcome`/`AttemptOutcome` (both used just above):
+// "blocked" — stopped by an outfield defender before it ever reached the
+// keeper — is a real, common open-play outcome neither of those carries
+// (tuned for a penalty/set-piece ATTEMPT, where by Law only the keeper may
+// intervene). Widening the shared `AttemptOutcome` (`core/types.ts`) was
+// considered and rejected: that file is outside this session's owned files,
+// and it would have leaked "blocked" into `PenaltyOutcome`'s own pad enum as
+// a choice no penalty kick can Law-fully produce. "scored" is kept (not the
+// brief's illustrative "goal") for the same reason `PenaltyOutcome` already
+// reads that way — one vocabulary for "did the attempt end in a goal" in
+// this file, not two.
+export const ShotOutcome = z.enum(["scored", "saved", "missed", "blocked"]);
+export type ShotOutcome = z.infer<typeof ShotOutcome>;
+
+// S8/#417 W6 — `by` is the SHOOTING side, `taker` the shooter (matches
+// `FootballPenalty.taker`'s own naming for the same "who took this attempt on
+// goal" role), `goalkeeper` the DEFENDING side's keeper — EXPLICIT override,
+// wins over the spell-derived on-ice keeper `footballKeeperStatsFold` would
+// otherwise credit when both are known, mirroring S8's own person-
+// attribution resolution order. No `minute`: unlike every payload above,
+// this type never existed before `at` did, so there is no legacy display
+// integer to carry.
+export const FootballShot = z.strictObject({
+  by: EntrantId,
+  taker: PersonId.optional(),
+  goalkeeper: PersonId.optional(),
+  outcome: ShotOutcome,
+  at: GameTime.optional(),
+});
+
 export const FootballEv = z.union([
   FootballGoal,
   FootballCard,
@@ -383,6 +423,7 @@ export const FootballEv = z.union([
   FootballPenalty,
   FootballSinBinStart,
   FootballSinBinEnd,
+  FootballShot,
 ]);
 export type FootballEv = z.infer<typeof FootballEv>;
 
@@ -401,6 +442,7 @@ export const FOOTBALL_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
   "football.penalty": FootballPenalty,
   "football.sinbin.start": FootballSinBinStart,
   "football.sinbin.end": FootballSinBinEnd,
+  "football.shot": FootballShot,
 };
 
 // ---------------------------------------------------------------------------
@@ -534,6 +576,13 @@ export interface FootballState {
   // the first one is recorded: `init` must keep serialising exactly as it did
   // before W4 or every frozen golden stream reds.
   penalties?: PenaltyRecord[];
+  // S8/#417 W6 — every recorded shot, in play order. Absent until the first
+  // one, matching the `penalties`/`goalLog` precedent so a pre-this-wave
+  // state serialises byte-identically. Score-neutral by construction —
+  // `applyShot` never touches `goals`/`periods` — and therefore, like
+  // `penalties`, deliberately EXCLUDED from `summary.detail`: `coarsen`
+  // drops it (no score effect), and §9.6 requires the two to match.
+  shots?: ShotRecord[];
   /**
    * W4a (#425) §6 obligation 3 — AS OF WHEN everything above is true. Absent
    * until the first stamped event, matching the `penalties` / `sinBin`
@@ -558,6 +607,16 @@ interface PenaltyRecord {
   at?: GameTime; // W4a §5.2 — the stamp, when the pad recorded one
   // S4 (#428) — the Law 12 offence that conceded the kick, when recorded.
   offence?: PenaltyOffence;
+}
+
+// S8/#417 W6 — one recorded shot, State's raw log (mirrors `PenaltyRecord`
+// immediately above).
+interface ShotRecord {
+  side: Side;
+  outcome: ShotOutcome;
+  taker?: string;
+  goalkeeper?: string;
+  at?: GameTime;
 }
 
 // S5/#431 — a STATIC allowlist, not cfg-derived: it gates "currently in
@@ -1374,6 +1433,45 @@ function applyPenalty(state: FootballState, payload: z.infer<typeof FootballPena
   return { ...state, penalties: [...(state.penalties ?? []), record] };
 }
 
+// S8/#417 W6 — a shot with its own outcome; see `ShotOutcome`'s docstring for
+// why it is a new enum. The goal itself still arrives as the ordinary
+// `football.goal` event: an outcome-"scored" shot and the real goal both
+// describe ONE event on the pitch, and this function is the whole
+// double-count guard — it never calls `creditGoal` and never touches
+// `state.goals`/`state.periods`, so there is no path here that could charge
+// a score twice. State-only, score-neutral, mirrors `applyPenalty`'s own
+// on-pitch validation shape (this file's convention, unlike the looser
+// period kernel — see `applyShot` in `period/kernel.ts` for that file's own
+// convention and why the two differ).
+function applyShot(state: FootballState, payload: z.infer<typeof FootballShot>): FootballState {
+  if (!isPlayPhase(state.phase)) {
+    wrongPhase(`shot not allowed in phase "${state.phase}"`, { phase: state.phase });
+  }
+  const side = sideOf(state, payload.by);
+  if (payload.taker !== undefined && !state.squads[side].onPitch.includes(payload.taker)) {
+    invalid(`taker "${payload.taker}" is not on the pitch for "${payload.by}"`, {
+      taker: payload.taker,
+    });
+  }
+  // The goalkeeper facing the shot belongs to the DEFENDING side.
+  if (
+    payload.goalkeeper !== undefined &&
+    !state.squads[opponent(side)].onPitch.includes(payload.goalkeeper)
+  ) {
+    invalid(`goalkeeper "${payload.goalkeeper}" is not on the pitch for the defending side`, {
+      goalkeeper: payload.goalkeeper,
+    });
+  }
+  const record: ShotRecord = {
+    side,
+    outcome: payload.outcome,
+    ...(payload.taker === undefined ? {} : { taker: payload.taker }),
+    ...(payload.goalkeeper === undefined ? {} : { goalkeeper: payload.goalkeeper }),
+    ...(payload.at === undefined ? {} : { at: payload.at }),
+  };
+  return { ...state, shots: [...(state.shots ?? []), record] };
+}
+
 // S5/#431 — the marker that legally CLOSES `phase`, one entry per reachable
 // play phase. Quarters and halves diverge only in what they call the SAME
 // underlying moment: Q1 is "H1" reused (see `PlayPhase`'s own comment), so
@@ -1735,6 +1833,202 @@ function mergeFromKernel(prev: FootballSquad, side: SideSquad, rolling: boolean)
 }
 
 /**
+ * S8/#417 — `goals_conceded` and `clean_sheets`, the `playerStats.folded`
+ * escape hatch (see DOMAIN.md's "Goalkeeper stats" row). Mirrors
+ * `periodKeeperStatsFold` (`sports/period/kernel.ts`, shared by both hockey
+ * codes) but hand-written for football's own payload shape: `ownGoal` is a
+ * boolean flag here, not a `kind` string, and football has no `emptyNet`
+ * concept at all — the Laws of the Game do not let a side play out with an
+ * empty net the way ice hockey pulls a goaltender, so there is no analogous
+ * skip to make.
+ *
+ * READS THE FOLD of `core.lineup.*`, never the kickoff team sheet, under
+ * `REPLAY_LINEUP_POLICY` (a read-side reconstruction with no `cfg` to
+ * consult, and every knob at its most permissive is what a replay always
+ * uses — see the file header). `goals_conceded` is charged to the
+ * CONCEDING side's current `personsAtPosition(side, "GK")` occupant, worked
+ * out from the CREDITED side (mirroring `applyGoal`'s own
+ * `payload.ownGoal === true ? opponent(by) : by`) rather than from `by`
+ * directly — the two disagree exactly on an own goal, where the side whose
+ * player struck it is the side that concedes.
+ *
+ * CLEAN SHEET RULE (a documented judgement call, S8/#417 — no Law settles
+ * this): a goalkeeper SPELL is the continuous stretch one person occupies
+ * "GK" for their side, opened at kickoff (or wherever the fold first finds
+ * an occupant) and closed by the next lineup change that installs a
+ * DIFFERENT occupant, or by full time. A spell earns ONE clean sheet iff
+ * its side conceded nothing during it — so a keeper brought on for the
+ * second half with the score still 0-0 earns their own clean sheet
+ * independently of whoever started, and a shutout split across two keepers
+ * credits BOTH. Reads only recorded lineup events and goal credits, so it
+ * carries none of the S2/#430 partial-coverage hazard a minutes-based rule
+ * would.
+ *
+ * CARRIED LIMITATION (same shape as the row above this one in DOMAIN.md): a
+ * keeper sent off (`football.card`) and replaced by an outfield player with
+ * no recorded `core.lineup.position` stays the named "GK" here — sending a
+ * player off is football-private state (`FootballSquad.sentOff`), invisible
+ * to `core/lineup.ts`'s `SquadState`, exactly the gap the row above
+ * documents for a fixture that mixes `football.sub` with `core.lineup.*`.
+ *
+ * S8/#417 W6 — `saves`, `shots_faced` and `save_percentage`, fed by
+ * `football.shot`. Mirrors `periodKeeperStatsFold`'s own W6 addition
+ * exactly (see that function's docstring for the full reasoning, repeated
+ * only in outline here): `shots_faced` is `saves + goals_conceded`, never a
+ * count of outcome-"scored" shot events — a goal is already fully known
+ * from `football.goal`, so `shots_faced` needs no redundant shot logged
+ * alongside every goal. A shot with outcome "scored" NEVER bumps
+ * `goals_conceded`/`shots_faced` here (that would double-charge the same
+ * real-world goal `football.goal` already counted) — it is read for
+ * coverage evidence only. The credited keeper is `FootballShot.goalkeeper`
+ * when present, else the same spell-derived on-ice occupant `goals_conceded`
+ * already uses.
+ *
+ * SAVE PERCENTAGE is gated on the SAME per-side coverage checksum
+ * `periodKeeperStatsFold` uses: a side is trusted iff every goal it
+ * conceded also has a matching outcome-"scored" shot logged against it.
+ * Known limitation carried identically: a side that conceded nothing has no
+ * goal to check a shot log against and is trusted by default.
+ */
+function footballKeeperStatsFold(
+  events: readonly EventEnvelope[],
+  _ctx: PlayerStatsFoldCtx,
+  lineups: LineupPair | undefined,
+): PlayerStatRow[] {
+  if (lineups === undefined) return [];
+
+  // A sparse per-person stats object, NOT a fixed shape — matching
+  // `stats.ts`'s own `bump`, a key is written only when it is actually
+  // incremented. A keeper who only ever earns a clean sheet must not also
+  // carry a `goals_conceded: 0` — that would be exactly the silent-0 defect
+  // (recorded zero vs. never-happened) this programme's
+  // `PlayerStatMetric.value` docstring calls out, just reached a different way.
+  const rows = new Map<string, Record<string, number>>();
+  const bump = (
+    personId: string,
+    key: "goals_conceded" | "clean_sheets" | "saves" | "shots_faced",
+  ): void => {
+    const stats = rows.get(personId) ?? {};
+    stats[key] = (stats[key] ?? 0) + 1;
+    rows.set(personId, stats);
+  };
+
+  const entrants = { home: lineups.home.entrantId, away: lineups.away.entrantId };
+  const sideOf = (entrantId: string): Side | undefined =>
+    entrantId === entrants.home ? "home" : entrantId === entrants.away ? "away" : undefined;
+
+  let squads: KernelSquads = initSquads(lineups);
+  const keeperOf = (side: Side): string | undefined => personsAtPosition(squads[side], "GK")[0];
+
+  interface Spell {
+    personId: string;
+    conceded: boolean;
+  }
+  const open: Record<Side, Spell | undefined> = {
+    home: (() => {
+      const p = keeperOf("home");
+      return p === undefined ? undefined : { personId: p, conceded: false };
+    })(),
+    away: (() => {
+      const p = keeperOf("away");
+      return p === undefined ? undefined : { personId: p, conceded: false };
+    })(),
+  };
+  const closeSpell = (side: Side): void => {
+    const spell = open[side];
+    if (spell !== undefined && !spell.conceded) bump(spell.personId, "clean_sheets");
+  };
+  const refreshSpell = (side: Side): void => {
+    const p = keeperOf(side);
+    if (open[side]?.personId === p) return; // same occupant — spell continues
+    closeSpell(side);
+    open[side] = p === undefined ? undefined : { personId: p, conceded: false };
+  };
+
+  // S8/#417 W6 — the save-percentage coverage checksum's two counters, per
+  // side (see this function's own docstring). `keeperSide` remembers which
+  // side each person who touched saves/shots_faced was credited under.
+  const goalsConcededBySide: Record<Side, number> = { home: 0, away: 0 };
+  const goalShotsLoggedBySide: Record<Side, number> = { home: 0, away: 0 };
+  const keeperSide = new Map<string, Side>();
+
+  for (const event of events) {
+    if (isLineupEventType(event.type)) {
+      const result = reduceLineupEvent(squads, event, REPLAY_LINEUP_POLICY);
+      if (result.ok) {
+        squads = result.squads;
+        refreshSpell("home");
+        refreshSpell("away");
+      }
+      continue;
+    }
+    if (event.type === "football.goal") {
+      const payload = event.payload as Record<string, unknown>;
+      if (typeof payload.by !== "string") continue;
+      const by = sideOf(payload.by);
+      if (by === undefined) continue;
+      const credited = payload.ownGoal === true ? opponent(by) : by;
+      const concedingSide = opponent(credited);
+
+      const spell = open[concedingSide];
+      if (spell !== undefined) spell.conceded = true;
+      goalsConcededBySide[concedingSide] += 1;
+
+      const keeper = keeperOf(concedingSide);
+      if (keeper !== undefined) {
+        bump(keeper, "goals_conceded");
+        bump(keeper, "shots_faced"); // a goal IS an on-target shot faced
+        keeperSide.set(keeper, concedingSide);
+      }
+      continue;
+    }
+    if (event.type === "football.shot") {
+      const payload = event.payload as Record<string, unknown>;
+      if (typeof payload.by !== "string") continue;
+      const shooterSide = sideOf(payload.by);
+      if (shooterSide === undefined) continue;
+      const facingSide = opponent(shooterSide);
+
+      if (payload.outcome === "scored") {
+        // Coverage evidence ONLY — see this function's own docstring. Never
+        // touches `goals_conceded`/`shots_faced`: that goal was already
+        // counted once, by the `football.goal` branch above.
+        goalShotsLoggedBySide[facingSide] += 1;
+        continue;
+      }
+      if (payload.outcome !== "saved") continue; // missed/blocked never reach the keeper
+
+      const explicitKeeper = typeof payload.goalkeeper === "string" ? payload.goalkeeper : undefined;
+      const keeper = explicitKeeper ?? keeperOf(facingSide);
+      if (keeper !== undefined) {
+        bump(keeper, "saves");
+        bump(keeper, "shots_faced");
+        keeperSide.set(keeper, facingSide);
+      }
+    }
+  }
+  closeSpell("home");
+  closeSpell("away");
+
+  // S8/#417 W6 — save percentage, gated on the per-side coverage checksum
+  // computed above (see this function's own docstring).
+  const covered: Record<Side, boolean> = {
+    home: goalsConcededBySide.home === goalShotsLoggedBySide.home,
+    away: goalsConcededBySide.away === goalShotsLoggedBySide.away,
+  };
+  for (const [personId, side] of keeperSide) {
+    if (!covered[side]) continue;
+    const stats = rows.get(personId);
+    const shotsFaced = stats?.shots_faced ?? 0;
+    if (stats === undefined || shotsFaced === 0) continue; // nothing to divide by
+    const saves = stats.saves ?? 0;
+    stats.save_percentage = Math.round((saves / shotsFaced) * 1000) / 10; // one decimal
+  }
+
+  return [...rows.entries()].map(([personId, stats]) => ({ personId, stats }));
+}
+
+/**
  * Football's squad, expressed in the kernel's vocabulary, so that a legacy
  * `football.sub` is judged by the SAME reducer a `core.lineup.substitution` is.
  *
@@ -1816,6 +2110,8 @@ function applyEvent(
       return applySinBinStart(state, parsePayload(FootballSinBinStart, ev.payload, ev.type));
     case "football.sinbin.end":
       return applySinBinEnd(state, parsePayload(FootballSinBinEnd, ev.payload, ev.type));
+    case "football.shot":
+      return applyShot(state, parsePayload(FootballShot, ev.payload, ev.type));
     case "core.forfeit":
       return applyForfeit(state, (ev.payload as { by: string }).by);
     case "core.abandon":
@@ -1980,6 +2276,14 @@ export function padSpec(cfg: FootballCfg): PadSpec {
     attribution: [BY_SIDE, { kind: "person", path: "person" }],
   };
 
+  // --- Shots (S8/#417 W6) -----------------------------------------------
+  const shotAction: PadAction = {
+    type: "football.shot",
+    labelKey: { key: "pad.football.action.shot", label: "Shot" },
+    fields: [{ kind: "enum", path: "outcome", values: ShotOutcome.options }, ...stamp],
+    attribution: [BY_SIDE, { kind: "person", path: "taker" }, { kind: "person", path: "goalkeeper" }],
+  };
+
   // Shoot-out panel: cfg decides whether the FORMAT can ever reach one
   // (`cfg.shootout`) — a league fixture never declares it, so the panel is
   // simply absent, the cfg-only inclusion case the module-level note on
@@ -2042,6 +2346,12 @@ export function padSpec(cfg: FootballCfg): PadSpec {
       actions: [sinBinStartAction, sinBinEndAction],
     },
     ...shootoutPanels,
+    {
+      labelKey: { key: "pad.football.panel.shots", label: "Shots" },
+      phase: "live",
+      layout: "grid",
+      actions: [shotAction],
+    },
   ];
 
   return {
@@ -2055,9 +2365,12 @@ export function padSpec(cfg: FootballCfg): PadSpec {
     // admin/context event group between them (no toss/interruption/powerplay
     // equivalent exists for football today) — a different reason from
     // carrom's stop-at-1, but the same shape, a module using only the bands
-    // it needs. Band 3 is likewise unused: S2/#430 found football's tier 3 is
-    // an unfilled duplicate of tier 2, and splitting it into real detail-level
-    // content is a separately-scoped future session, not this one.
+    // it needs.
+    //
+    // S8/#417 W6 — band 3 ("detail") is NO LONGER unused: S2/#430 found
+    // football's tier 3 was an unfilled duplicate of tier 2 and parked real
+    // detail-level content for a later session — this is that session.
+    // `football.shot` is the one band-3 event.
     fidelity: {
       "football.goal": 0,
       "football.period": 0,
@@ -2067,12 +2380,14 @@ export function padSpec(cfg: FootballCfg): PadSpec {
       "football.penalty": 2,
       "football.sinbin.start": 2,
       "football.sinbin.end": 2,
+      "football.shot": 3,
     },
-    // Matches the OLD ladder's own paid boundary exactly: `fidelityTiers`'
-    // tier 2 AND tier 3 both carry `entitlement: "scoring.match_timeline"`
-    // and nothing below does — see the note above for why that array itself
-    // is left untouched this session.
-    fidelityEntitlements: { 2: "scoring.match_timeline" },
+    // Band 2 unchanged. Band 3 REUSES the same entitlement — matches the OLD
+    // ladder's own paid boundary (`fidelityTiers` below still carries
+    // "scoring.match_timeline" on both tier 2 AND tier 3) rather than
+    // inventing a second FeatureKey/billing-plan row this session is not
+    // scoped to create.
+    fidelityEntitlements: { 2: "scoring.match_timeline", 3: "scoring.match_timeline" },
   };
 }
 
@@ -2351,6 +2666,8 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
         "football.penalty",
         "football.sinbin.start",
         "football.sinbin.end",
+        // S8/#417 W6 — band-3-only, per padSpec's `fidelity` map above.
+        "football.shot",
       ],
       entitlement: "scoring.match_timeline",
     },
@@ -2395,11 +2712,38 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
         key: "sin_bins", label: "Sin bins", from: "football.sinbin.start", field: "person",
         agg: "count",
       },
+      // S8/#417 W6 — the shooter's own tally from `football.shot`.
+      // `shots_faced`/`saves`/`save_percentage` are the keeper side of this
+      // same event and come from `footballKeeperStatsFold`'s `folded` escape
+      // hatch below (they need the on-ice spell fold); this shooter-side
+      // half is a plain metric because `taker` is an explicit payload field
+      // with no spell resolution needed.
+      { key: "shots", label: "Shots", from: "football.shot", field: "taker", agg: "count" },
+      {
+        key: "shots_on_target", label: "Shots on target", from: "football.shot", field: "taker",
+        agg: "count", when: (p) => p.outcome === "scored" || p.outcome === "saved",
+      },
     ],
     derived: [
       { key: "points", label: "Points", derive: (s) => (s.goals ?? 0) + (s.assists ?? 0) },
     ],
     awards: [{ key: "motm", label: "Man of the Match" }],
+    // S8/#417 — `goals_conceded`, `clean_sheets`. See `footballKeeperStatsFold`
+    // above for the mechanism (reads the fold of `core.lineup.*`, never the
+    // kickoff sheet) and the documented clean-sheet rule.
+    // S8/#417 W6 — `saves`, `shots_faced`, `save_percentage` now ARE
+    // declared, fed by `football.shot` — see `footballKeeperStatsFold`'s own
+    // W6 addition above.
+    folded: {
+      keys: [
+        { key: "goals_conceded", label: "Goals conceded" },
+        { key: "clean_sheets", label: "Clean sheets" },
+        { key: "saves", label: "Saves" },
+        { key: "shots_faced", label: "Shots faced" },
+        { key: "save_percentage", label: "Save percentage" },
+      ],
+      fold: footballKeeperStatsFold,
+    },
   },
 
   // SPEC-1 — read-only card projection over the ledger (voids un-count, spec
@@ -2627,6 +2971,29 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
       }
       // No bench (conformance lineups) — fall through to a goal instead.
     }
+    if (roll < 0.25) {
+      // S8/#417 W6 — a shot. Taker/goalkeeper mirror the penalty branch
+      // above (taker from the shooting side's pitch, goalkeeper the
+      // defending side's first player), which is already legal for
+      // `applyShot`'s own on-pitch validation.
+      const side = randomSide();
+      const squad = state.squads[side];
+      const taker =
+        rng() < 0.6 ? squad.onPitch[Math.floor(rng() * squad.onPitch.length)] : undefined;
+      const goalkeeper = rng() < 0.5 ? state.squads[opponent(side)].onPitch[0] : undefined;
+      const outcomes = ShotOutcome.options;
+      const outcome = outcomes[Math.floor(rng() * outcomes.length)] ?? "saved";
+      return {
+        type: "football.shot",
+        payload: {
+          by: sideId(side),
+          ...(taker === undefined ? {} : { taker }),
+          ...(goalkeeper === undefined ? {} : { goalkeeper }),
+          outcome,
+          at: stamp(state.phase),
+        },
+      };
+    }
     if (roll < 0.72) {
       const side = randomSide();
       const ownGoal = rng() < 0.05;
@@ -2723,6 +3090,7 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
         case "football.penalty":
         case "football.sinbin.start":
         case "football.sinbin.end":
+        case "football.shot": // S8/#417 W6 — never moves state.goals, same arm
           break; // no score effect — dropped at coarse fidelity
         default:
           out.push({ type: event.type, payload: event.payload });

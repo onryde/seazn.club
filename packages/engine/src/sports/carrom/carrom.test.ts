@@ -5,7 +5,11 @@ import { describe, expect, it } from "vitest";
 import { EngineError } from "../../core/errors.ts";
 import { foldMatch, type EventEnvelope } from "../../core/events.ts";
 import type { LineupPair, StageCtx } from "../../core/types.ts";
-import { aggregatePlayerStats } from "../../stats/stats.ts";
+import {
+  aggregatePlayerStats,
+  playerStatsKeyCollisions,
+  type PlayerStatsFoldCtx,
+} from "../../stats/stats.ts";
 import { conformanceSuite, defaultLineupPair, makeEnvelope } from "../../testkit/index.ts";
 import { checkActionCoverage, padItemLabelKey, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
 import {
@@ -375,6 +379,215 @@ describe("carrom: who struck (Laws 49, 51, 53)", () => {
         "carrom.board.summary",
         { winner: "A", opponentCoinsLeft: 4, queenTo: null, breaker: "A-p1" },
       ],
+      ["carrom.game.adjust", { entrantId: "A", delta: 1, reason: "foul", person: "H-p1" }],
+    );
+    expect(aggregatePlayerStats(events, carrom.playerStats!)).toEqual([
+      { personId: "A-p1", stats: { breaks: 1 } },
+      { personId: "H-p1", stats: { breaks: 1, queens: 1, penalties: 1 } },
+    ]);
+  });
+});
+
+// S8/#417 — boards_won (per-board winner, plain entrant fallback) and the
+// folded matches/wins (per-match attendance + outcome, resolved from a full
+// board/game/adjustment replay). See carrom.ts's `foldCarromStats` for the
+// mechanism.
+describe("carrom: boards_won + folded matches/wins, resolved from entrant attribution (S8/#417)", () => {
+  function ctxFor(
+    entrants: ReadonlyArray<{
+      id: string;
+      kind?: "team" | "individual" | "pair";
+      persons: readonly string[];
+    }>,
+    config?: unknown,
+  ): PlayerStatsFoldCtx {
+    return {
+      entrants: entrants.map((e) => ({ id: e.id, kind: e.kind ?? "individual" })),
+      personsOf: (entrantId) => entrants.find((e) => e.id === entrantId)?.persons ?? [],
+      ...(config === undefined ? {} : { cfg: config }),
+    };
+  }
+  const twoPlayers = ctxFor([
+    { id: "H", persons: ["H-p1"] },
+    { id: "A", persons: ["A-p1"] },
+  ]);
+  // A single board clinches both the game AND the match — keeps every fixture
+  // below short while still exercising the real decideGame/bankGame cascade
+  // (via foldMatch), never a shortcut around it. queenCapAt must not exceed
+  // gameTo (Cfg's own refine), so it has to come down with it.
+  const quickCfg = carrom.configSchema.parse({ gameTo: 5, queenCapAt: 5, bestOf: 1 });
+
+  it("headline regression: entrant ids only (no person fields) + individual ctx resolve correct boards_won rows", () => {
+    const events = stream(
+      ["core.start"],
+      ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 3, queenTo: null }],
+    );
+    // `matches` fires too — it only needs a ctx, not a cfg (unlike `wins`) —
+    // so the ledger naming H at all is enough to credit BOTH sides' attendance.
+    expect(aggregatePlayerStats(events, carrom.playerStats!, undefined, twoPlayers)).toEqual([
+      { personId: "A-p1", stats: { matches: 1 } },
+      { personId: "H-p1", stats: { boards_won: 1, matches: 1 } },
+    ]);
+  });
+
+  it("a PAIR entrant credits BOTH partners with boards_won", () => {
+    const events = stream(
+      ["core.start"],
+      ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 3, queenTo: null }],
+    );
+    const ctx = ctxFor([
+      { id: "H", kind: "pair", persons: ["H-p1", "H-p2"] },
+      { id: "A", kind: "pair", persons: ["A-p1", "A-p2"] },
+    ]);
+    expect(aggregatePlayerStats(events, carrom.playerStats!, undefined, ctx)).toEqual([
+      { personId: "A-p1", stats: { matches: 1 } },
+      { personId: "A-p2", stats: { matches: 1 } },
+      { personId: "H-p1", stats: { boards_won: 1, matches: 1 } },
+      { personId: "H-p2", stats: { boards_won: 1, matches: 1 } },
+    ]);
+  });
+
+  it("a team entrant credits no boards_won, even with a full roster (its opponent's own boards_won is unaffected)", () => {
+    const events = stream(
+      ["core.start"],
+      ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 3, queenTo: null }],
+    );
+    const ctx = ctxFor([
+      { id: "H", kind: "team", persons: ["H-p1", "H-p2"] },
+      { id: "A", persons: ["A-p1"] },
+    ]);
+    const rows = aggregatePlayerStats(events, carrom.playerStats!, undefined, ctx);
+    expect(rows.find((r) => r.personId === "H-p1" || r.personId === "H-p2")).toBeUndefined();
+    expect(rows.find((r) => r.personId === "A-p1")?.stats.boards_won).toBeUndefined();
+  });
+
+  it("a decisive match credits the winner's roster wins:1, and the loser's roster wins:0 (explicit, not omitted)", () => {
+    const ctx = ctxFor(
+      [
+        { id: "H", persons: ["H-p1"] },
+        { id: "A", persons: ["A-p1"] },
+      ],
+      quickCfg,
+    );
+    const events = stream(
+      ["core.start"],
+      ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 5, queenTo: null }],
+    );
+    expect(aggregatePlayerStats(events, carrom.playerStats!, undefined, ctx)).toEqual([
+      { personId: "A-p1", stats: { matches: 1, wins: 0 } },
+      { personId: "H-p1", stats: { boards_won: 1, matches: 1, wins: 1 } },
+    ]);
+  });
+
+  it("a whitewash — the loser never individually named in any payload — still credits the loser's roster via ctx.entrants", () => {
+    // A never appears anywhere in this payload (not `winner`, not `queenTo`):
+    // the only evidence the match happened at all is H's board win.
+    const ctx = ctxFor(
+      [
+        { id: "H", persons: ["H-p1"] },
+        { id: "A", persons: ["A-p1"] },
+      ],
+      quickCfg,
+    );
+    const events = stream(
+      ["core.start"],
+      ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 5, queenTo: null }],
+    );
+    const rows = aggregatePlayerStats(events, carrom.playerStats!, undefined, ctx);
+    expect(rows.find((r) => r.personId === "A-p1")?.stats).toEqual({ matches: 1, wins: 0 });
+  });
+
+  it("a drawn game (tieBoard: draw) credits wins:0 to both sides — never a fabricated winner", () => {
+    const drawCfg = carrom.configSchema.parse({ gameTo: 100, maxBoards: 1, bestOf: 1, tieBoard: "draw" });
+    const ctx = ctxFor(
+      [
+        { id: "H", persons: ["H-p1"] },
+        { id: "A", persons: ["A-p1"] },
+      ],
+      drawCfg,
+    );
+    // opponentCoinsLeft: 0 keeps the score 0-0, so `maxBoards` is reached with
+    // no leader and `tieBoard: "draw"` closes the game (and hence the match,
+    // bestOf: 1) as a draw rather than an extra sudden-death board.
+    const events = stream(
+      ["core.start"],
+      ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 0, queenTo: null }],
+    );
+    const rows = aggregatePlayerStats(events, carrom.playerStats!, undefined, ctx);
+    expect(rows.find((r) => r.personId === "H-p1")?.stats.wins).toBe(0);
+    expect(rows.find((r) => r.personId === "A-p1")?.stats.wins).toBe(0);
+  });
+
+  it("a team entrant is credited no matches or wins either, in a mixed team/individual fixture", () => {
+    const ctx = ctxFor(
+      [
+        { id: "H", kind: "team", persons: ["H-p1", "H-p2"] },
+        { id: "A", persons: ["A-p1"] },
+      ],
+      quickCfg,
+    );
+    const events = stream(
+      ["core.start"],
+      ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 5, queenTo: null }],
+    );
+    const rows = aggregatePlayerStats(events, carrom.playerStats!, undefined, ctx);
+    expect(rows.find((r) => r.personId === "H-p1" || r.personId === "H-p2")).toBeUndefined();
+    expect(rows.find((r) => r.personId === "A-p1")?.stats).toEqual({ matches: 1, wins: 0 });
+  });
+
+  it("a void over the decisive board un-counts matches, wins and boards_won", () => {
+    const ctx = ctxFor(
+      [
+        { id: "H", persons: ["H-p1"] },
+        { id: "A", persons: ["A-p1"] },
+      ],
+      quickCfg,
+    );
+    const decisive = stream(
+      ["core.start"],
+      ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 5, queenTo: null }],
+    );
+    const clean = aggregatePlayerStats(decisive, carrom.playerStats!, undefined, ctx);
+    expect(clean).toEqual([
+      { personId: "A-p1", stats: { matches: 1, wins: 0 } },
+      { personId: "H-p1", stats: { boards_won: 1, matches: 1, wins: 1 } },
+    ]);
+    const voided = [
+      ...decisive,
+      makeEnvelope(decisive.length, { type: "core.void", payload: {} }, decisive[1]!.id),
+    ];
+    expect(aggregatePlayerStats(voided, carrom.playerStats!, undefined, ctx)).toEqual([]);
+  });
+
+  it("is deterministic: the same stream + ctx folds twice to deeply equal rows", () => {
+    const ctx = ctxFor(
+      [
+        { id: "H", persons: ["H-p1"] },
+        { id: "A", persons: ["A-p1"] },
+      ],
+      quickCfg,
+    );
+    const events = stream(
+      ["core.start"],
+      ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 5, queenTo: null }],
+    );
+    const once = aggregatePlayerStats(events, carrom.playerStats!, undefined, ctx);
+    const twice = aggregatePlayerStats(events, carrom.playerStats!, undefined, ctx);
+    expect(twice).toEqual(once);
+  });
+
+  it("declares no colliding keys between folded and metrics", () => {
+    expect(playerStatsKeyCollisions(carrom.playerStats!)).toEqual([]);
+  });
+
+  it("ctx omitted stays inert: pre-existing metrics are byte-identical and no new key ever appears", () => {
+    const events = stream(
+      ["core.start"],
+      [
+        "carrom.board.summary",
+        { winner: "H", opponentCoinsLeft: 5, queenTo: "H", breaker: "H-p1", queenBy: "H-p1" },
+      ],
+      ["carrom.board.summary", { winner: "A", opponentCoinsLeft: 4, queenTo: null, breaker: "A-p1" }],
       ["carrom.game.adjust", { entrantId: "A", delta: 1, reason: "foul", person: "H-p1" }],
     );
     expect(aggregatePlayerStats(events, carrom.playerStats!)).toEqual([

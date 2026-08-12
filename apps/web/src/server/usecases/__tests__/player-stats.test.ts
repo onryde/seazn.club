@@ -5,6 +5,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { football } from "@seazn/engine/sports/football";
 import { generic } from "@seazn/engine/sports/generic";
+import { builtinModules } from "@seazn/engine/sports";
+import type { AnySportModule } from "@seazn/engine/sport";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -17,6 +19,15 @@ import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { getLineup, putLineup } from "../fixtures";
 import { divisionPlayerStats, personStats, publicDivisionStats } from "../player-stats";
+
+// S8/#417 — badminton (individual/pair entrants) and volleyball (team
+// entrants) are both on the setbased kernel, which is NOT in the sibling
+// session's packages/engine edit list (football/period/hockey/icehockey
+// are), so these two are a stable target: already-shipped kernel defaults
+// (`points_won`, the `matches`/`sets_won`/`sets_lost` folded fold) apply to
+// every preset on that kernel unconditionally.
+const badminton = builtinModules.find((m) => m.key === "badminton")!;
+const volleyball = builtinModules.find((m) => m.key === "volleyball")!;
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -382,5 +393,278 @@ describe.skipIf(!HAS_DB)("player statistics (Jul3/07)", () => {
     await expect(divisionPlayerStats(freeAuth, freeDiv.id, {})).rejects.toMatchObject({
       featureKey: "stats.player",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S8/#417 — entrant→person stat attribution wired into recomputePlayerStats
+// for real, through the real usecase (divisionPlayerStats), against a real
+// database. The engine's PlayerStatsFoldCtx/aggregatePlayerStatsWithDiagnostics
+// (packages/engine/src/stats/stats.ts) already ships this fold; what these
+// tests prove is that THIS APP feeds it real entrant-membership data and a
+// real resolved cfg — the exact wiring gap S4/#428 and S6/#416 each shipped
+// unreachable once already (see docs/superpowers/RULES.md's programme notes).
+// ---------------------------------------------------------------------------
+
+async function seedSetBasedCatalog(mod: AnySportModule): Promise<void> {
+  await sql`
+    insert into sports (key, name, module_version, position_catalog)
+    values (${mod.key}, ${mod.key}, ${mod.version}, ${sql.json(mod.positions as never)})
+    on conflict (key) do nothing`;
+  await sql`
+    insert into sport_variants (sport_key, key, name, config, is_system)
+    values (${mod.key}, 'default', 'Default', ${sql.json({})}, true)
+    on conflict do nothing`;
+}
+
+interface SetBasedEntrantSpec {
+  kind: "individual" | "pair" | "team";
+  name: string;
+  personIds: string[];
+}
+
+async function seedSetBasedDivision(
+  auth: AuthCtx,
+  mod: AnySportModule,
+  entrantSpecs: SetBasedEntrantSpec[],
+  config: Record<string, unknown> = {},
+) {
+  await seedSetBasedCatalog(mod);
+  const comp = await createCompetition(auth, {
+    ends_on: "2030-12-31",
+    name: `${mod.key} Cup`,
+    visibility: "public",
+    branding: {},
+  });
+  const division = await createDivision(auth, comp.id, {
+    name: "Open",
+    slug: "open",
+    sport_key: mod.key,
+    variant_key: "default",
+    config,
+    eligibility: [],
+  });
+  const entrants = await createEntrants(
+    auth,
+    division.id,
+    entrantSpecs.map((spec, i) => ({
+      kind: spec.kind,
+      display_name: spec.name,
+      seed: i + 1,
+      members: spec.personIds.map((person_id) => ({
+        person_id,
+        squad_number: null,
+        is_captain: false,
+        roles: [],
+        default_position_key: null,
+      })),
+    })),
+  );
+  const [stage] = await createStages(auth, division.id, {
+    seq: 1,
+    kind: "league",
+    name: "League",
+    config: {},
+  });
+  const { fixtures } = await generateStageFixtures(auth, stage!.id);
+  await startDivision(auth, division.id);
+  return { division, entrants, fixture: fixtures[0]! };
+}
+
+describe.skipIf(!HAS_DB)("S8/#417 entrant→person stat attribution", () => {
+  it("THE HEADLINE: a v1-era rally naming only the entrant (wonBy, no scorer/server) still produces a per-person row for an individual entrant", async () => {
+    const { auth } = await seedOrg();
+    const alex = await createPerson(auth, {
+      full_name: "Alex Player",
+      consent: { public_name: true },
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+    const bo = await createPerson(auth, {
+      full_name: "Bo Player",
+      consent: { public_name: true },
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+    const { division, entrants, fixture } = await seedSetBasedDivision(auth, badminton, [
+      { kind: "individual", name: "Alex", personIds: [alex.id] },
+      { kind: "individual", name: "Bo", personIds: [bo.id] },
+    ]);
+
+    await scoreEvent(auth, fixture.id, { expected_seq: 0, type: "core.start", payload: {} });
+    // ONLY the entrant id — no scorer, no server. Before S8/#417's wiring this
+    // fixture recomputes to ZERO player rows (requires_detailed_scoring).
+    await scoreEvent(auth, fixture.id, {
+      expected_seq: 1,
+      type: "badminton.rally",
+      payload: { wonBy: fixture.home_entrant_id! },
+    });
+
+    const table = await divisionPlayerStats(auth, division.id, {});
+    const homePersonId = fixture.home_entrant_id === entrants[0]!.id ? alex.id : bo.id;
+    const row = table.rows.find((r) => r.person_id === homePersonId);
+    expect(row).toBeDefined();
+    expect(row!.stats.points_won).toBe(1);
+    expect(table.requires_detailed_scoring).toBe(false);
+  });
+
+  it("a pair entrant's wonBy-only rally credits BOTH partners", async () => {
+    const { auth } = await seedOrg();
+    const mkPerson = (name: string) =>
+      createPerson(auth, { full_name: name, consent: { public_name: true }, dob: null, gender: null, external_ref: null });
+    const [p1, p2, q1, q2] = await Promise.all([
+      mkPerson("P One"),
+      mkPerson("P Two"),
+      mkPerson("Q One"),
+      mkPerson("Q Two"),
+    ]);
+    const { division, entrants, fixture } = await seedSetBasedDivision(auth, badminton, [
+      { kind: "pair", name: "Pair P", personIds: [p1!.id, p2!.id] },
+      { kind: "pair", name: "Pair Q", personIds: [q1!.id, q2!.id] },
+    ]);
+
+    await scoreEvent(auth, fixture.id, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(auth, fixture.id, {
+      expected_seq: 1,
+      type: "badminton.rally",
+      payload: { wonBy: fixture.home_entrant_id! },
+    });
+
+    const table = await divisionPlayerStats(auth, division.id, {});
+    const homePair = fixture.home_entrant_id === entrants[0]!.id ? [p1!, p2!] : [q1!, q2!];
+    for (const p of homePair) {
+      expect(table.rows.find((r) => r.person_id === p.id)?.stats.points_won, p.full_name).toBe(1);
+    }
+  });
+
+  it("a team-entrant sport (volleyball) still produces no person rows from the entrant-fallback path — the designed no-stats state", async () => {
+    const { auth } = await seedOrg();
+    const mkPerson = (name: string) =>
+      createPerson(auth, { full_name: name, consent: { public_name: true }, dob: null, gender: null, external_ref: null });
+    const [home1, away1] = await Promise.all([mkPerson("Home Player"), mkPerson("Away Player")]);
+    // Real rosters (not empty) — a person genuinely on the entrant's squad,
+    // so this test is falsifiable: were the kind guard not enforced by this
+    // app's own ctx wiring, these two would show up with points_won:1.
+    const { division, fixture } = await seedSetBasedDivision(auth, volleyball, [
+      { kind: "team", name: "Reds", personIds: [home1!.id] },
+      { kind: "team", name: "Blues", personIds: [away1!.id] },
+    ]);
+
+    await scoreEvent(auth, fixture.id, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(auth, fixture.id, {
+      expected_seq: 1,
+      type: "volleyball.rally",
+      payload: { wonBy: fixture.home_entrant_id! },
+    });
+
+    const table = await divisionPlayerStats(auth, division.id, {});
+    expect(table.rows).toEqual([]);
+  });
+
+  it("conflicting attribution: an explicit scorer wins over a DIFFERENT person the entrant's own roster names; the roster person gets no row", async () => {
+    const { auth } = await seedOrg();
+    const alex = await createPerson(auth, {
+      full_name: "Alex Roster",
+      consent: { public_name: true },
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+    const bo = await createPerson(auth, {
+      full_name: "Bo Roster",
+      consent: { public_name: true },
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+    // Casey is NOT on either entrant's roster — the explicit `scorer` field
+    // does not check squad membership, only the entrant fallback does.
+    const casey = await createPerson(auth, {
+      full_name: "Casey Explicit",
+      consent: { public_name: true },
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+    const { division, entrants, fixture } = await seedSetBasedDivision(auth, badminton, [
+      { kind: "individual", name: "Alex", personIds: [alex.id] },
+      { kind: "individual", name: "Bo", personIds: [bo.id] },
+    ]);
+
+    await scoreEvent(auth, fixture.id, { expected_seq: 0, type: "core.start", payload: {} });
+    // wonBy names the home entrant (whose roster is alex-or-bo); scorer
+    // explicitly names casey instead. The explicit field must win outright.
+    await scoreEvent(auth, fixture.id, {
+      expected_seq: 1,
+      type: "badminton.rally",
+      payload: { wonBy: fixture.home_entrant_id!, scorer: casey.id },
+    });
+
+    const table = await divisionPlayerStats(auth, division.id, {});
+    const homeRosterPersonId = fixture.home_entrant_id === entrants[0]!.id ? alex.id : bo.id;
+    expect(table.rows.find((r) => r.person_id === casey.id)?.stats.points_won).toBe(1);
+    expect(table.rows.find((r) => r.person_id === casey.id)?.stats.points).toBe(1);
+    // The roster person gets no SCORING credit at all from this event — not
+    // "no row": the kernel's own folded fold separately credits `matches` to
+    // both entrants' rosters the moment either plays a rally, regardless of
+    // who scored it (see setBasedMatchOutcomesFold), so the roster person's
+    // row can legitimately exist with `matches:1`. What must be zero is the
+    // metric actually in dispute — the explicit `scorer` field must have
+    // stopped the entrant fallback from ALSO crediting the roster person.
+    const rosterRow = table.rows.find((r) => r.person_id === homeRosterPersonId);
+    expect(rosterRow?.stats.points_won ?? 0).toBe(0);
+    expect(rosterRow?.stats.points ?? 0).toBe(0);
+  });
+
+  it("ctx.cfg is threaded through: a completed set yields sets_won/matches, not matches-only — the silent-degradation regression", async () => {
+    const { auth } = await seedOrg();
+    const alex = await createPerson(auth, {
+      full_name: "Alex Sets",
+      consent: { public_name: true },
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+    const bo = await createPerson(auth, {
+      full_name: "Bo Sets",
+      consent: { public_name: true },
+      dob: null,
+      gender: null,
+      external_ref: null,
+    });
+    // bestOf must be odd (kernel invariant); a tiny setTo keeps the test fast
+    // — 3 straight rallies close the one and only (deciding) set.
+    const { division, entrants, fixture } = await seedSetBasedDivision(
+      auth,
+      badminton,
+      [
+        { kind: "individual", name: "Alex", personIds: [alex.id] },
+        { kind: "individual", name: "Bo", personIds: [bo.id] },
+      ],
+      { bestOf: 1, setTo: 3, finalSetTo: 3, winBy: 2 },
+    );
+
+    await scoreEvent(auth, fixture.id, { expected_seq: 0, type: "core.start", payload: {} });
+    for (let seq = 1; seq <= 3; seq += 1) {
+      await scoreEvent(auth, fixture.id, {
+        expected_seq: seq,
+        type: "badminton.rally",
+        payload: { wonBy: fixture.home_entrant_id! },
+      });
+    }
+
+    const table = await divisionPlayerStats(auth, division.id, {});
+    const homePersonId = fixture.home_entrant_id === entrants[0]!.id ? alex.id : bo.id;
+    const row = table.rows.find((r) => r.person_id === homePersonId)!;
+    expect(row).toBeDefined();
+    expect(row.stats.matches).toBe(1);
+    // THE assertion that only passes when ctx.cfg reached the engine's
+    // folded fold (setBasedMatchOutcomesFold replays applyRally/bankSet
+    // against it) — omitted or unparseable cfg silently degrades to
+    // matches-only, per stats.ts's own docstring on PlayerStatsFoldCtx.cfg.
+    expect(row.stats.sets_won).toBe(1);
+    expect(row.stats.sets_lost ?? 0).toBe(0);
   });
 });

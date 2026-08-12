@@ -299,7 +299,18 @@ if (corpusWriteRefusal !== null) {
             `corpus: EXTEND_GOLDEN=1 npx vitest run src/testkit/golden.test.ts — or add an ` +
             `UNREACHABLE_STATE_PATHS entry stating WHY no stream can record them.`,
         ).toEqual([]);
-      });
+        // 20s, not the 5s default. This is a seeded SWEEP of the module's own
+        // generator, so its cost scales with how much stream a module can
+        // produce, and cricket is far and away the most expensive: measured on
+        // an idle machine it takes ~3.6s against the 5s default, where the next
+        // slowest (football) takes ~1.1s. At 72% of budget it does not fail on
+        // its own — it fails whenever anything else is running, which is every
+        // full-suite run and every busy CI runner, and it fails as a TIMEOUT
+        // whose message `rtk` redacts to `STACK_TRACE_ERROR`. That reads as the
+        // coverage assertion below having found a real corpus gap, which is the
+        // single most expensive way this file could mislead someone. Nothing
+        // here asserts speed; the timeout is not the property under test.
+      }, 20_000);
 
       it("allow-lists no state path the corpus records, nor one nothing reaches", () => {
         expect(

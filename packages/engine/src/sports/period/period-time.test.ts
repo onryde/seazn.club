@@ -36,6 +36,7 @@ import {
   PeriodGoal,
   PeriodSetPiece,
   PeriodShootoutAttempt,
+  PeriodShot,
   PeriodSuspensionEnd,
   PeriodSuspensionStart,
   type PeriodCfg,
@@ -750,6 +751,7 @@ describe("PeriodEv disambiguation — a widened branch must not swallow a siblin
     [PeriodSuspensionEnd, "PeriodSuspensionEnd"],
     [PeriodShootoutAttempt, "PeriodShootoutAttempt"],
     [PeriodSetPiece, "PeriodSetPiece"],
+    [PeriodShot, "PeriodShot"],
   ]);
   const BRANCHES: [string, z.ZodType][] = PeriodEv.options.map((schema) => {
     const name = BRANCH_NAMES.get(schema as z.ZodType);
@@ -802,6 +804,12 @@ describe("PeriodEv disambiguation — a widened branch must not swallow a siblin
     // a goal, and a minimal one is a structural subset of one, so the goal
     // branch takes it. Adding `at` to PeriodGoal must not change that either.
     ["minimal set piece", { by: IH, kind: "ps", at: at("P1", 300) }, "PeriodGoal"],
+    // S8/#417 W6 — PeriodShot is LAST and has no `kind`/`scored`/`to`/`class`
+    // key any earlier branch requires, so unlike football's FootballShot/
+    // FootballPenalty pair, no sibling here overlaps it at all: every earlier
+    // strictObject rejects it outright (each requires a key this payload
+    // lacks), so this is an unambiguous win, not merely an unswallowed one.
+    ["stamped shot", { by: IH, person: `${IH}-p6`, outcome: "saved", at: at("P1", 300) }, "PeriodShot"],
   ];
 
   it.each(shapes)("%s wins on the branch it is supposed to win on", (_, payload, branch) => {
@@ -819,6 +827,7 @@ describe("PeriodEv disambiguation — a widened branch must not swallow a siblin
     expect(
       PeriodShootoutAttempt.safeParse({ by: IH, scored: true, at: at("SHOOTOUT", 10) }).success,
     ).toBe(true);
+    expect(PeriodShot.safeParse({ by: IH, outcome: "saved", at: at("P1", 10) }).success).toBe(true);
   });
 
   it("a shoot-out attempt carries `at`, so asOf does not freeze across the shoot-out", () => {

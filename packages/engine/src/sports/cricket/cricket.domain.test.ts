@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest";
 import { foldMatch, type EventEnvelope } from "../../core/events.ts";
 import type { LineupPair } from "../../core/types.ts";
-import { aggregatePlayerStats } from "../../stats/stats.ts";
+import { aggregatePlayerStats, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 import { buildStream, makeEnvelope } from "../../testkit/index.ts";
 import { CricketEv, cricket, type CricketBallEv, type CricketCfg } from "./cricket.ts";
 
@@ -750,12 +750,15 @@ describe("cricket W4: playerStats leaderboards off the ball ledger", () => {
   it("batting: runs come off `runs.bat`; a wide and a no-ball are not balls faced", () => {
     const t = table();
     // H-1 faced 5 deliveries, one of them a wide: 4 + 0 (bye) + 2 + 0 = 6 off
-    // the bat from four legal balls.
-    expect(t["H-1"]).toEqual({ runs: 6, balls_faced: 4 });
+    // the bat from four legal balls. He is also this fixture's caught
+    // dismissal, so his row carries the S8/#417 dismissal-mode split too.
+    expect(t["H-1"]).toEqual({ runs: 6, balls_faced: 4, dismissals: 1, dismissals_caught: 1 });
     // H-4 scored 2 off a no-ball, which is not a ball faced; the next legal
     // delivery is.
     expect(t["H-4"]).toEqual({ runs: 2, balls_faced: 1 });
-    expect(t["H-3"]).toEqual({ runs: 0, balls_faced: 1 });
+    // H-3's only delivery is this fixture's run out — an unbowled dismissal
+    // mode still attributes to the dismissed batter (S8/#417).
+    expect(t["H-3"]).toEqual({ runs: 0, balls_faced: 1, dismissals: 1, dismissals_runout: 1 });
   });
 
   it("bowling: legal balls, runs conceded (bat + wides/no-balls, never byes) and wickets", () => {
@@ -847,5 +850,25 @@ describe("person-bearing events that are unscored on purpose", () => {
     }
     // Guards the guard: the set is really populated, so `has` can fail.
     expect(sources.has("cricket.ball")).toBe(true);
+  });
+
+  // S8/#417 added a SECOND attribution path (`folded`, reading
+  // `cricket.player.line`) alongside the metric loop checked above. That
+  // path reads whatever event types its own `fold` function chooses to
+  // switch on — the `unscored` guard above cannot see inside it, so this is
+  // a second, independent check that `cricket.retire`/`cricket.review` earn
+  // no credit through that door either.
+  it("the folded (coarse) path reads no credit from cricket.retire or cricket.review", () => {
+    const ctx: PlayerStatsFoldCtx = { entrants: [], personsOf: () => [] };
+    const events = [
+      makeEnvelope(0, { type: "core.start", payload: {} }),
+      makeEnvelope(1, { type: "cricket.retire", payload: { person: "H-1", reason: "out" } }),
+      makeEnvelope(2, {
+        type: "cricket.review",
+        payload: { by: "H", kind: "player", outcome: "upheld", against: "H-1" },
+      }),
+    ];
+    const rows = aggregatePlayerStats(events, cricket.playerStats!, undefined, ctx);
+    expect(rows).toEqual([]);
   });
 });

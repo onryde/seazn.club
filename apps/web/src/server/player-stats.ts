@@ -31,6 +31,17 @@ export function labelPlayerStats(
       ...(model?.metrics ?? []).map((x) => ({ key: x.key, label: x.label })),
       ...(model?.derived ?? []).map((d) => ({ key: d.key, label: d.label })),
       ...(model?.awards ?? []).map((a) => ({ key: `${a.key}_awards`, label: a.label })),
+      // S8/#417 W6 review (Defect B) — `folded` is the escape hatch for
+      // attribution a metric+field walk cannot express at all (football's
+      // goalkeeper stats, setbased/nested's match/set outcomes, …), and its
+      // rows were aggregated, merged and snapshotted exactly like every
+      // other stat, but never reached this display list — so a folded-only
+      // key had NO row here regardless of a real, nonzero value sitting in
+      // `stats`. Appended LAST: a key `metrics`/`derived`/`awards` already
+      // declares (cricket's six-way fine/coarse overlap, `sharesMetricKeys`
+      // in stats.ts) keeps that entry's own label via the first-wins filter
+      // below, never a second, later-declared name for the same column.
+      ...(model?.folded?.keys ?? []).map((x) => ({ key: x.key, label: x.label })),
     ];
     // `metrics` is an AGGREGATION spec, not a display list: a module may declare
     // one key several times to credit it from several payload fields, and

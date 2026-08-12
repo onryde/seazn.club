@@ -579,6 +579,56 @@
           "by"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "additionalProperties": false,
+            "properties": {
+              "elapsed": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "period": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "elapsed",
+              "period"
+            ],
+            "type": "object"
+          },
+          "by": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "goalkeeper": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "blocked",
+              "missed",
+              "saved",
+              "scored"
+            ],
+            "type": "string"
+          },
+          "taker": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "by",
+          "outcome"
+        ],
+        "type": "object"
       }
     ]
   },
@@ -719,6 +769,33 @@
         "boolean"
       ],
       "shootout.kicks[].side": [
+        "string"
+      ],
+      "shots": [
+        "array"
+      ],
+      "shots[]": [
+        "object"
+      ],
+      "shots[].at": [
+        "object"
+      ],
+      "shots[].at.elapsed": [
+        "number"
+      ],
+      "shots[].at.period": [
+        "string"
+      ],
+      "shots[].goalkeeper": [
+        "string"
+      ],
+      "shots[].outcome": [
+        "string"
+      ],
+      "shots[].side": [
+        "string"
+      ],
+      "shots[].taker": [
         "string"
       ],
       "squads": [

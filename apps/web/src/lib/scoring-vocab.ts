@@ -103,6 +103,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "football.penalty": "event.football.penalty",
   "football.period": "event.football.period",
   "football.shootout.kick": "event.football.shootout.kick",
+  "football.shot": "event.football.shot",
   "football.sinbin.start": "event.football.sinbin.start",
   "football.sinbin.end": "event.football.sinbin.end",
   "football.sub": "event.football.sub",
@@ -114,6 +115,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "hockey.period.advance": "event.hockey.period.advance",
   "hockey.set_piece": "event.hockey.set_piece",
   "hockey.shootout.attempt": "event.hockey.shootout.attempt",
+  "hockey.shot": "event.hockey.shot",
   "hockey.suspension.start": "event.hockey.suspension.start",
   "hockey.suspension.end": "event.hockey.suspension.end",
 
@@ -121,6 +123,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "icehockey.period.advance": "event.icehockey.period.advance",
   "icehockey.set_piece": "event.icehockey.set_piece",
   "icehockey.shootout.attempt": "event.icehockey.shootout.attempt",
+  "icehockey.shot": "event.icehockey.shot",
   "icehockey.suspension.start": "event.icehockey.suspension.start",
   "icehockey.suspension.end": "event.icehockey.suspension.end",
 
@@ -206,6 +209,17 @@ export const PLAYER_STAT_KEY: Record<string, MessageKey> = {
   "football.sin_bins": "stat.football.sin_bins",
   "football.points": "stat.football.points",
   "football.motm_awards": AWARD_KEY.motm,
+  // S8/#417 W6 — the goalkeeper metrics (`playerStats.folded`, football.ts)
+  // plus the shooter's own `shots`/`shots_on_target` (plain metrics, same
+  // wave). Identical English across football/hockey/icehockey below — one
+  // shared goalkeeping/shooting vocabulary, not three names for one concept.
+  "football.goals_conceded": "stat.football.goals_conceded",
+  "football.clean_sheets": "stat.football.clean_sheets",
+  "football.saves": "stat.football.saves",
+  "football.shots_faced": "stat.football.shots_faced",
+  "football.save_percentage": "stat.football.save_percentage",
+  "football.shots": "stat.football.shots",
+  "football.shots_on_target": "stat.football.shots_on_target",
 
   "cricket.runs": "stat.cricket.runs",
   "cricket.balls_faced": "stat.cricket.balls_faced",
@@ -215,28 +229,96 @@ export const PLAYER_STAT_KEY: Record<string, MessageKey> = {
   "cricket.catches": "stat.cricket.catches",
   "cricket.stumpings": "stat.cricket.stumpings",
   "cricket.run_outs": "stat.cricket.run_outs",
+  "cricket.fours": "stat.cricket.fours",
+  "cricket.sixes": "stat.cricket.sixes",
+  // S8/#417 — the batter's dismissal splits. One row per `CricketWicket.kind`
+  // member, so this list is only complete while the enum is unchanged; the
+  // engine derives the metrics from `CricketWicket.shape.kind.options` and the
+  // vocab gate reds here the moment a new Law adds a mode.
+  "cricket.dismissals": "stat.cricket.dismissals",
+  "cricket.dismissals_bowled": "stat.cricket.dismissals_bowled",
+  "cricket.dismissals_caught": "stat.cricket.dismissals_caught",
+  "cricket.dismissals_lbw": "stat.cricket.dismissals_lbw",
+  "cricket.dismissals_runout": "stat.cricket.dismissals_runout",
+  "cricket.dismissals_stumped": "stat.cricket.dismissals_stumped",
+  "cricket.dismissals_hitwicket": "stat.cricket.dismissals_hitwicket",
+  "cricket.dismissals_retired": "stat.cricket.dismissals_retired",
+  "cricket.dismissals_obstructed": "stat.cricket.dismissals_obstructed",
+  "cricket.dismissals_timedout": "stat.cricket.dismissals_timedout",
+  "cricket.dismissals_hitballtwice": "stat.cricket.dismissals_hitballtwice",
 
   "boardgame.games": "stat.boardgame.games",
   "boardgame.wins": "stat.boardgame.wins",
+  // S8/#417 W6 — `playerStats.folded` (boardgame.ts): draws/losses cannot be
+  // a plain metric+field walk (no single entrant field names a draw, and a
+  // decisive result's LOSER has none of its own), white/black are the
+  // pairing card's colour split.
+  "boardgame.draws": "stat.boardgame.draws",
+  "boardgame.losses": "stat.boardgame.losses",
+  "boardgame.white": "stat.boardgame.white",
+  "boardgame.black": "stat.boardgame.black",
 
   "carrom.breaks": "stat.carrom.breaks",
   "carrom.queens": "stat.carrom.queens",
   "carrom.penalties": "stat.carrom.penalties",
+  "carrom.boards_won": "stat.carrom.boards_won",
+  // S8/#417 W6 — `playerStats.folded` (carrom.ts): the match-level outcome a
+  // metric+field walk cannot express (no payload ever names "who won the
+  // match", only who won each board).
+  "carrom.matches": "stat.carrom.matches",
+  "carrom.wins": "stat.carrom.wins",
 
   "generic.points": "stat.generic.points",
   "generic.scores": "stat.generic.scores",
+  // S8/#417 W6 — `playerStats.folded` (generic.ts): the terminal result is
+  // entrant-only by design, so win/draw/loss/points-for reach a person only
+  // through the caller-supplied roster.
+  "generic.wins": "stat.generic.wins",
+  "generic.draws": "stat.generic.draws",
+  "generic.losses": "stat.generic.losses",
+  "generic.points_for": "stat.generic.points_for",
 
   "volleyball.points": "stat.volleyball.points",
   "volleyball.serves": "stat.volleyball.serves",
   "volleyball.sanctions": "stat.volleyball.sanctions",
+  // S8/#417 — `points_won` comes from the set-based/nested KERNEL default, so
+  // all four sports declare it with the same English. Keyed per sport anyway:
+  // the scheme's rule is one key per (sport, row), and a shared key here would
+  // have to be un-shared the first time one sport's word diverges.
+  "volleyball.points_won": "stat.volleyball.points_won",
+  // S8/#417 W6 — the setbased-kernel default `playerStats.folded`: match/set
+  // OUTCOMES a metric+field walk over individual rallies cannot express.
+  // `sets_won`/`sets_lost` keep volleyball's own "Sets" wording (its
+  // `unitLabel`, setbased/kernel.ts) — matches this sport's OWN standings
+  // column for the same fact, one word choice, not two.
+  "volleyball.matches": "stat.volleyball.matches",
+  "volleyball.sets_won": "stat.volleyball.sets_won",
+  "volleyball.sets_lost": "stat.volleyball.sets_lost",
 
   "badminton.points": "stat.badminton.points",
   "badminton.serves": "stat.badminton.serves",
   "badminton.sanctions": "stat.badminton.sanctions",
+  "badminton.points_won": "stat.badminton.points_won",
+  // S8/#417 W6 — same kernel default as volleyball's above, but badminton's
+  // OWN `unitLabel` calls this unit a "Game" everywhere else in its product
+  // surface (its own standings column, `setbased/badminton.ts`), so this
+  // reads "Games won"/"Games lost" here — deliberately DIFFERENT English
+  // from volleyball's "Sets won"/"Sets lost" for the identical row key,
+  // which is exactly the collision `collidingMetricKeys()` (player-stat-
+  // vocab.test.ts) exists to force apart.
+  "badminton.matches": "stat.badminton.matches",
+  "badminton.sets_won": "stat.badminton.sets_won",
+  "badminton.sets_lost": "stat.badminton.sets_lost",
 
   "tabletennis.points": "stat.tabletennis.points",
   "tabletennis.serves": "stat.tabletennis.serves",
   "tabletennis.sanctions": "stat.tabletennis.sanctions",
+  "tabletennis.points_won": "stat.tabletennis.points_won",
+  // S8/#417 W6 — table tennis also calls its unit a "Game" (its own
+  // `unitLabel`), same reasoning as badminton immediately above.
+  "tabletennis.matches": "stat.tabletennis.matches",
+  "tabletennis.sets_won": "stat.tabletennis.sets_won",
+  "tabletennis.sets_lost": "stat.tabletennis.sets_lost",
 
   "tennis.points": "stat.tennis.points",
   "tennis.service_points": "stat.tennis.service_points",
@@ -244,6 +326,16 @@ export const PLAYER_STAT_KEY: Record<string, MessageKey> = {
   "tennis.double_faults": "stat.tennis.double_faults",
   "tennis.violations": "stat.tennis.violations",
   "tennis.medical_timeouts": "stat.tennis.medical_timeouts",
+  "tennis.points_won": "stat.tennis.points_won",
+  // S8/#417 W6 — the nested-kernel twin of the setbased rows above.
+  // `sets_won`/`sets_lost` read "Sets won"/"Sets lost" (tennis genuinely
+  // plays in sets, matching volleyball's wording); `games_won` is the
+  // kernel-specific addition — tennis alone has a game layer between points
+  // and sets.
+  "tennis.matches": "stat.tennis.matches",
+  "tennis.sets_won": "stat.tennis.sets_won",
+  "tennis.sets_lost": "stat.tennis.sets_lost",
+  "tennis.games_won": "stat.tennis.games_won",
 
   "icehockey.goals": "stat.icehockey.goals",
   "icehockey.assists": "stat.icehockey.assists",
@@ -265,6 +357,16 @@ export const PLAYER_STAT_KEY: Record<string, MessageKey> = {
   "icehockey.points": "stat.icehockey.points",
   "icehockey.pim": "stat.icehockey.pim",
   "icehockey.mvp_awards": AWARD_KEY.mvp,
+  // S8/#417 W6 — `playerStats.folded` (`periodKeeperStatsFold`, shared with
+  // hockey below) plus the shooter's own `shots`/`shots_on_target`. Same
+  // English as football's/hockey's own block — see football's comment above.
+  "icehockey.goals_conceded": "stat.icehockey.goals_conceded",
+  "icehockey.clean_sheets": "stat.icehockey.clean_sheets",
+  "icehockey.saves": "stat.icehockey.saves",
+  "icehockey.shots_faced": "stat.icehockey.shots_faced",
+  "icehockey.save_percentage": "stat.icehockey.save_percentage",
+  "icehockey.shots": "stat.icehockey.shots",
+  "icehockey.shots_on_target": "stat.icehockey.shots_on_target",
 
   "hockey.goals": "stat.hockey.goals",
   "hockey.green_cards": "stat.hockey.green_cards",
@@ -280,6 +382,15 @@ export const PLAYER_STAT_KEY: Record<string, MessageKey> = {
   "hockey.so_saves": "stat.hockey.so_saves",
   "hockey.cards_served": "stat.hockey.cards_served",
   "hockey.potm_awards": AWARD_KEY.potm,
+  // S8/#417 W6 — `playerStats.folded` (`periodKeeperStatsFold`, shared with
+  // icehockey above) plus the shooter's own `shots`/`shots_on_target`.
+  "hockey.goals_conceded": "stat.hockey.goals_conceded",
+  "hockey.clean_sheets": "stat.hockey.clean_sheets",
+  "hockey.saves": "stat.hockey.saves",
+  "hockey.shots_faced": "stat.hockey.shots_faced",
+  "hockey.save_percentage": "stat.hockey.save_percentage",
+  "hockey.shots": "stat.hockey.shots",
+  "hockey.shots_on_target": "stat.hockey.shots_on_target",
 };
 
 const CARD_COLOR_KEY: Record<string, MessageKey> = {
@@ -362,10 +473,15 @@ const PHASE_KEY: Record<string, MessageKey> = {
   QT: "matchPhase.QT", "3QT": "matchPhase.3QT",
 };
 // Penalty / shoot-out outcomes and cricket's review outcomes share the field.
+// S8/#417 W6 — `blocked` is `ShotOutcome`'s (football.ts / period/kernel.ts)
+// one genuinely new member: `scored`/`saved`/`missed` already had copy via
+// the pre-existing penalty/shoot-out vocabulary below, reused rather than
+// re-keyed for this new field's own values.
 const OUTCOME_KEY: Record<string, MessageKey> = {
   scored: "outcome.scored", missed: "outcome.missed", saved: "outcome.saved",
   post: "outcome.post", upheld: "outcome.upheld",
   struck_down: "outcome.struck_down", umpires_call: "outcome.umpires_call",
+  blocked: "outcome.blocked",
 };
 // `kind` beyond the dismissal and extra vocabularies already mapped above:
 // tennis point kinds and interruption kinds, cricket breaks and powerplays.
@@ -579,6 +695,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.football.action.penalty",
   "pad.football.action.period",
   "pad.football.action.shootoutKick",
+  "pad.football.action.shot",
   "pad.football.action.sinbinEnd",
   "pad.football.action.sinbinStart",
   "pad.football.action.sub",
@@ -587,6 +704,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.football.panel.penalties",
   "pad.football.panel.period",
   "pad.football.panel.shootout",
+  "pad.football.panel.shots",
   "pad.football.panel.sinbin",
   "pad.football.panel.subs",
 
@@ -608,6 +726,8 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.hockey.action.setPiece",
   "pad.hockey.action.shootoutAttempt",
   "pad.hockey.action.shootoutAttempt.field.goalkeeper",
+  "pad.hockey.action.shot",
+  "pad.hockey.action.shot.field.goalkeeper",
   "pad.hockey.action.suspensionEnd",
   "pad.hockey.action.suspensionStart",
   "pad.hockey.action.suspensionStart.field.minutes",
@@ -617,6 +737,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.hockey.panel.period",
   "pad.hockey.panel.setPiece",
   "pad.hockey.panel.shootout",
+  "pad.hockey.panel.shot",
 
   "pad.icehockey.action.advance",
   "pad.icehockey.action.goal",
@@ -624,6 +745,8 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.icehockey.action.setPiece",
   "pad.icehockey.action.shootoutAttempt",
   "pad.icehockey.action.shootoutAttempt.field.goalkeeper",
+  "pad.icehockey.action.shot",
+  "pad.icehockey.action.shot.field.goalkeeper",
   "pad.icehockey.action.suspensionEnd",
   "pad.icehockey.action.suspensionStart",
   "pad.icehockey.action.suspensionStart.field.minutes",
@@ -633,6 +756,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.icehockey.panel.period",
   "pad.icehockey.panel.setPiece",
   "pad.icehockey.panel.shootout",
+  "pad.icehockey.panel.shot",
 
   "pad.tabletennis.action.expediteStart",
   "pad.tabletennis.action.rally",

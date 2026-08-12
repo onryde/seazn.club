@@ -321,10 +321,16 @@ describe("set-based playerStats", () => {
       { type: "volleyball.sanction", payload: { by: "A", level: "warning", person: "A-p2" } },
     ]);
     const rows = aggregatePlayerStats(events, volleyball.playerStats!);
+    // S8/#417 — `points_won` is the kernel-default canonical metric (field:
+    // "scorer" + entrant fallback); every rally here already names an
+    // explicit `scorer`, so it fires identically to "points" alongside it.
+    // No ctx was supplied, so the entrant-fallback half never runs and
+    // matches/sets_won/sets_lost (the `folded` half) never appear — see
+    // playerstats.test.ts for that mechanism on its own.
     expect(rows).toEqual([
-      { personId: "A-p2", stats: { points: 1, sanctions: 1 } },
+      { personId: "A-p2", stats: { points: 1, sanctions: 1, points_won: 1 } },
       { personId: "H-p1", stats: { serves: 3 } },
-      { personId: "H-p4", stats: { points: 2 } },
+      { personId: "H-p4", stats: { points: 2, points_won: 2 } },
     ]);
   });
 
