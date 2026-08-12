@@ -3646,6 +3646,7 @@ export type DictionaryKey =
   | "scorepad.fidelity.heading"
   | "scorepad.fidelity.locked"
   | "scorepad.field.choose"
+  | "scorepad.header.score"
   | "scorepad.locked.reason"
   | "scorepad.phase.live"
   | "scorepad.phase.post"

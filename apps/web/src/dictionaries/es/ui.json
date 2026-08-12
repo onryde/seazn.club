@@ -3654,5 +3654,6 @@
   "scorepad.timeline.void": "Deshacer",
   "scorepad.timeline.voided": "deshecho",
   "scorepad.timeline.unknownRecorder": "Anotador",
-  "scorepad.timeline.devicePad": "Registrado desde un dispositivo vinculado"
+  "scorepad.timeline.devicePad": "Registrado desde un dispositivo vinculado",
+  "scorepad.header.score": "Marcador"
 }

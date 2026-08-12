@@ -3654,5 +3654,6 @@
   "scorepad.timeline.void": "Annuler",
   "scorepad.timeline.voided": "annulé",
   "scorepad.timeline.unknownRecorder": "Marqueur",
-  "scorepad.timeline.devicePad": "Enregistré depuis un appareil lié"
+  "scorepad.timeline.devicePad": "Enregistré depuis un appareil lié",
+  "scorepad.header.score": "Score"
 }

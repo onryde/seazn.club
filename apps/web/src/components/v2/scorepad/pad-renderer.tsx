@@ -23,7 +23,7 @@ import type { MessageKey } from "@/lib/messages";
 import type { PadTransport } from "./transport";
 import type { OwnIdentity } from "./types";
 import { usePadPipeline } from "./use-pad-pipeline";
-import { buildPadView, PAD_PHASES, type PadActionView } from "./view-model";
+import { buildPadView, PAD_PHASES, summaryHeadline, type PadActionView } from "./view-model";
 import type { ActionValues } from "./action-form";
 import { Panel } from "./panel";
 import { FidelitySwitcher } from "./fidelity-switcher";
@@ -134,10 +134,27 @@ export function PadRenderer(props: PadRendererProps) {
         ? msg("scorepad.queue.pending", { count: pipeline.queueDepth })
         : msg("scorepad.queue.synced");
   const queueAttention = pipeline.offline || pipeline.queueDepth > 0;
+  // S10/#419 W8 fix 3 — the fold's own headline, read defensively
+  // (summaryHeadline degrades to null for anything that isn't a genuine
+  // `{headline: string}`). Recomputed every render straight off
+  // `pipeline.summary` (no memo of its own needed — it's a cheap read, and
+  // `pipeline.summary` already changes identity on every fold advance), so
+  // this stays in lockstep with the fold without a caller ever wiring
+  // anything: PadRenderer already re-renders on every `pipeline.summary`
+  // change via the onStateChange effect above.
+  const headline = summaryHeadline(pipeline.summary);
 
   return (
     <div className="space-y-3">
       <header className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-[0_0_40px_-12px_rgba(16,185,129,0.25)]">
+        {headline && (
+          <div data-role="score-headline" className="border-b border-slate-800/70 px-3 pt-2.5 pb-2 text-center">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+              {msg("scorepad.header.score")}
+            </p>
+            <p className="truncate text-xl font-bold tabular-nums tracking-tight text-white sm:text-2xl">{headline}</p>
+          </div>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
           <nav className="flex gap-1">
             {PAD_PHASES.filter((p) => view.phases.includes(p)).map((p) => (

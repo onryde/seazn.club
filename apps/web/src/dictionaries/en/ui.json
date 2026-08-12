@@ -3654,5 +3654,6 @@
   "scorepad.timeline.void": "Undo",
   "scorepad.timeline.voided": "undone",
   "scorepad.timeline.unknownRecorder": "Scorer",
-  "scorepad.timeline.devicePad": "Recorded from a linked device"
+  "scorepad.timeline.devicePad": "Recorded from a linked device",
+  "scorepad.header.score": "Score"
 }

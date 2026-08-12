@@ -12,6 +12,7 @@ import type { ReactElement } from "react";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { defaultLineupPair } from "@seazn/engine/testkit";
 import { cricket } from "@seazn/engine/sports/cricket";
+import type { AnySportModule } from "@seazn/engine/sport";
 import { resolveModuleClient } from "../module-client";
 import type { AppendCallResult } from "../pipeline";
 import type { FixtureStateResult, PadTransport } from "../transport";
@@ -367,6 +368,52 @@ describe("Panel — layout-driven container; locked actions render a reason, nev
   });
 });
 
+describe("Panel — single-action grid panel fills its row at md+ (S10/#419 W8 fix 2)", () => {
+  // Mirrors football's real Cards/Substitutions/Shots panels: `layout:
+  // "grid"` with exactly one action — the reported defect (a half-width
+  // button, empty sibling cell, at 768/1280).
+  function gridPanel(actionCount: 1 | 2): PadPanelView {
+    const actions: PadActionView[] = Array.from({ length: actionCount }, (_, i) => ({
+      type: `football.card.${i}`,
+      labelKey: { key: "pad.football.action.card", label: `Card ${i}` },
+      fields: [],
+      attribution: [],
+      availability: AVAILABLE,
+    }));
+    return { labelKey: { key: "pad.football.panel.cards", label: "Cards" }, phase: "live", layout: "grid", actions };
+  }
+
+  function actionsContainer(tree: ReactElement[]): ReactElement {
+    return find(tree, (el) => propsOf(el)["data-role"] === "panel-actions");
+  }
+
+  it("a single-action grid panel adds md:grid-cols-1 — fills its row at tablet/desktop", () => {
+    const island = renderIsland(Panel, { panel: gridPanel(1), onSubmit: () => {} });
+    const className = propsOf(actionsContainer(island.tree())).className as string;
+    // Unchanged below md (768px) — 375/320 already read correctly as a
+    // dense 2-up tap grid (task ruling: do not regress the primary surface
+    // to fix desktop).
+    expect(className).toContain("grid-cols-2");
+    // The fix: at md+ the lone action collapses to ONE column, so it fills
+    // the row instead of sitting in column 1 with an empty sibling cell.
+    expect(className).toContain("md:grid-cols-1");
+  });
+
+  it("a MULTI-action grid panel is untouched — a real sibling already fills the second column", () => {
+    const island = renderIsland(Panel, { panel: gridPanel(2), onSubmit: () => {} });
+    const className = propsOf(actionsContainer(island.tree())).className as string;
+    expect(className).toContain("grid-cols-2");
+    expect(className).not.toContain("md:grid-cols-1");
+  });
+
+  it("a single-action PRIMARY (non-grid) panel is untouched — the fix is grid-specific", () => {
+    const panel: PadPanelView = { ...gridPanel(1), layout: "primary" };
+    const island = renderIsland(Panel, { panel, onSubmit: () => {} });
+    const className = propsOf(actionsContainer(island.tree())).className as string;
+    expect(className).toBe("flex flex-col gap-2");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // PadRenderer — the composed surface. Only ONE level of the tree is invoked
 // by `renderIsland` (PadRenderer itself); `Panel` and `FidelitySwitcher` are
@@ -579,5 +626,79 @@ describe("PadRenderer — timeline seam (a later pass fills it in; this pass onl
       timelineSlot: marker,
     });
     expect(island.text()).toContain(marker);
+  });
+});
+
+describe("PadRenderer — score header (S10/#419 W8 fix 3)", () => {
+  it("renders the fold's own headline and updates it as the fold advances", async () => {
+    const generic = resolveModuleClient("generic", "1.0.0");
+    const cfg = { resultMode: "score" as const, allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false };
+    const lineups = defaultLineupPair(generic.positions);
+    const transport = fakeTransport({ appendResults: [success(2)] });
+    const island = renderIsland(PadRenderer, {
+      module: generic,
+      cfg,
+      fixtureId: "fx-1",
+      lineups,
+      identity: ME,
+      transport,
+      band: 3 as const,
+      entitlements: {},
+      initialEvents: [
+        {
+          id: "e-1",
+          fixtureId: "fx-1",
+          seq: 1,
+          type: "core.start",
+          payload: {},
+          recordedAt: "2026-08-12T00:00:00.000Z",
+          recordedBy: "user-1",
+        },
+      ],
+    });
+    await tick(); // let the mount-time resume/drain effect settle first
+
+    const findHeadline = () => find(island.tree(), (el) => propsOf(el)["data-role"] === "score-headline");
+    const headlineBefore = textOf(findHeadline());
+    expect(headlineBefore.length).toBeGreaterThan(0); // generic's summary() always sets one, even pre-result ("—")
+
+    const scorePanel = panelByKey(island.tree(), "pad.generic.panel.score");
+    await (propsOf(scorePanel).onSubmit as (t: string, p: unknown) => Promise<void>)("generic.result", {
+      p1Score: 5,
+      p2Score: 3,
+    });
+    await tick();
+    await tick();
+
+    const headlineAfter = textOf(findHeadline());
+    expect(headlineAfter, "the header must reflect the NEW fold, not the stale one").not.toBe(headlineBefore);
+    expect(headlineAfter).toContain("5");
+    expect(headlineAfter).toContain("3");
+  });
+
+  it("renders nothing — no empty shell — when the module's own summary carries no usable headline", () => {
+    const generic = resolveModuleClient("generic", "1.0.0");
+    // A deliberately non-conforming test double: the REAL fold/init/padSpec
+    // (so the rest of the pad renders normally), but a summary() that omits
+    // `headline` — the shape `summaryHeadline` (view-model.ts) exists to
+    // degrade gracefully against, since `pipeline.summary` reaches this
+    // component typed `unknown`.
+    const headlineless = { ...generic, summary: () => ({ perSide: [] }) } as unknown as AnySportModule;
+    const lineups = defaultLineupPair(generic.positions);
+    const island = renderIsland(PadRenderer, {
+      module: headlineless,
+      cfg: { resultMode: "score" as const, allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      fixtureId: "fx-1",
+      lineups,
+      identity: ME,
+      transport: fakeTransport({ appendResults: [] }),
+      band: 3 as const,
+      entitlements: {},
+    });
+    const tree = island.tree();
+    expect(findAll(tree, (el) => propsOf(el)["data-role"] === "score-headline").length).toBe(0);
+    // Not merely absent — the rest of the header (phase nav, queue status)
+    // must still render normally; this is a targeted degrade, not a crash.
+    expect(island.text().length).toBeGreaterThan(0);
   });
 });

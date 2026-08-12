@@ -3654,5 +3654,6 @@
   "scorepad.timeline.void": "Ongedaan maken",
   "scorepad.timeline.voided": "ongedaan gemaakt",
   "scorepad.timeline.unknownRecorder": "Scorer",
-  "scorepad.timeline.devicePad": "Geregistreerd vanaf een gekoppeld apparaat"
+  "scorepad.timeline.devicePad": "Geregistreerd vanaf een gekoppeld apparaat",
+  "scorepad.header.score": "Score"
 }

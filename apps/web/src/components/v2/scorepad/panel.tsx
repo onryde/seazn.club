@@ -37,6 +37,23 @@ const ACTIONS_CLASS: Record<PadPanelView["layout"], string> = {
   perSide: "grid grid-cols-2 gap-2",
 };
 
+/**
+ * S10/#419 W8 fix 2 — a `grid` panel with exactly ONE action (football's
+ * real Cards/Substitutions/Shots panels, each a single button) used to sit
+ * in column 1 of a 2-col grid with an empty sibling cell beside it: correct
+ * density at 375/320 (task ruling: already reads right there, untouched
+ * below), but a plainly broken half-width button in an otherwise-empty card
+ * at 768/1280, where there is no sibling to fill the row. `md:grid-cols-1`
+ * collapses the grid to one column from md (768px) up, so the lone action
+ * spans its whole row instead. A panel with two or more grid actions is
+ * unaffected either way — it has real siblings to fill every column, at
+ * every width, so nothing here changes for it. */
+function actionsClassName(panel: PadPanelView): string {
+  const base = ACTIONS_CLASS[panel.layout];
+  if (panel.layout === "grid" && panel.actions.length === 1) return `${base} md:grid-cols-1`;
+  return base;
+}
+
 function renderLockedTile(action: PadActionView, reason: ChassisLabel, msg: MsgFn): ReactNode {
   const label = padLabel(action.labelKey.key, msg, action.labelKey.label);
   return (
@@ -68,7 +85,7 @@ export interface PanelProps {
 function renderActions(props: PanelProps, msg: MsgFn): ReactNode {
   const { panel, onSubmit, submittingType, renderAttribution } = props;
   return (
-    <div className={ACTIONS_CLASS[panel.layout]}>
+    <div data-role="panel-actions" className={actionsClassName(panel)}>
       {panel.actions.map((action) =>
         action.availability.kind === "locked" ? (
           renderLockedTile(action, action.availability.reason, msg)
