@@ -985,11 +985,38 @@ export const AutoScheduleRequest = z.preprocess(
   },
   z.object({
     /** true (default) = re-flow unlocked fixtures only, locked ones are fixed
-     *  obstacles ("re-flow remaining", doc 12 §2); false = fresh full pass. */
+     *  obstacles ("re-flow remaining", doc 12 §2); false = fresh full pass.
+     *
+     *  Steers `mode` derivation ONLY (above). It used to also gate whether a
+     *  `schedule_locked` fixture was honoured, which was a bug
+     *  (#pins-in-build): the primary Auto-schedule button always posts
+     *  `false` here (to derive `mode: "build"`), so that gate silently
+     *  dropped every lock on the one mode organisers reach for by default. A
+     *  lock is honoured on every mode now, unconditionally; `ignore_locks`
+     *  below is the only way to turn that off. */
     only_unlocked: z.boolean().default(true),
     /** Which solver this run is asking for. Absent is derived from
      *  `only_unlocked` by the preprocess above. */
     mode: z.enum(["build", "reflow", "polish"]),
+    /** The explicit escape hatch (owner ruling, 2026-08-12): the ONLY thing
+     *  that can make this run move a `schedule_locked` (or scope-locked)
+     *  fixture. Every mode honours a lock by default — a lock must be
+     *  ignored on purpose; there is no silent path to it. Meant for a
+     *  caller who has just been told BUILD is infeasible because of its own
+     *  pins and wants one explicit re-run that treats the whole board as
+     *  movable.
+     *
+     *  `.optional()`, not `.default(false)`: `z.infer` of a `.default()`'d
+     *  field is non-optional (the default only shapes what `.parse()`
+     *  accepts as INPUT, via `z.input<>`), and `autoSchedule(auth, stageId,
+     *  body: AutoScheduleRequest)` is called directly — bypassing this
+     *  schema entirely — by dozens of usecase tests with a hand-built object
+     *  literal that predates this field. A `.default()` here would make
+     *  every one of them fail typechecking for a field they have no reason
+     *  to know about. `.optional()` keeps those literals valid; the usecase
+     *  applies the same `false` fallback where it reads the field instead
+     *  (`body.ignore_locks ?? false`). */
+    ignore_locks: z.boolean().optional(),
   }),
 );
 export type AutoScheduleRequest = z.infer<typeof AutoScheduleRequest>;
@@ -1161,6 +1188,27 @@ export const ScheduleSolverInfo = z.object({
    *  wrong whenever an unplaced card is not a pinned one. Never synthesised
    *  here — it is forwarded only when the engine supplied it. */
   contradictory_pins: z.array(z.string()).optional(),
+  /** How many of THIS stage's own fixtures were held fixed because they were
+   *  locked (`schedule_locked`, or caught by a division scope lock) — the set
+   *  `autoSchedule` anchored into the solve rather than left movable. A
+   *  companion signal to `contradictory_pins`: that field fires only when two
+   *  locked placements directly contradict each other, but a lock can also
+   *  make a board `infeasible` by leaving no room for the rest — `locked_kept
+   *  > 0` alongside `status: "infeasible"` is enough for a client to suggest
+   *  the `ignore_locks` escape hatch even when `contradictory_pins` is absent.
+   *
+   *  0 whenever nothing in this stage is locked, or the caller asked to
+   *  `ignore_locks` — this server always sends a real number, never `undefined`.
+   *
+   *  Optional on the wire only, matching `lost`/`seeded`/`contradictory_pins`
+   *  right above: a reader on an older client build, or a cached/replayed
+   *  response from a server one deploy behind, must still parse.
+   *
+   *  Counts PLACEMENTS, not the division's lock flag: a locked fixture with
+   *  no `scheduled_at`/`court_label` yet has nothing to anchor to and is not
+   *  counted (the same rule the anchor itself uses — see `lockedFixtureIds`
+   *  in `schedule.ts`). */
+  locked_kept: z.number().int().optional(),
 });
 export type ScheduleSolverInfo = z.infer<typeof ScheduleSolverInfo>;
 
