@@ -100,6 +100,7 @@ import {
   loadSettings,
   lockedFixtureIds,
   peopleByEntrant,
+  roundRobinStageIds,
   siblingAssignments,
   toAssignment,
   toSlotConfig,
@@ -979,12 +980,30 @@ export async function buildSchedulePack(
 
       // `lockedIds` computed once, above every mode branch — see the comment
       // at its declaration.
+      //
+      // C1 follow-up (2026-08-12, task 2 item 1). `roundNo` used to ride
+      // along unconditionally here — `fixtures.round_no` is one shared
+      // column populated for EVERY stage kind (bracket rounds, swiss
+      // rounds, stepladder legs all reuse it for display; see `stages.ts`'s
+      // `roundTitle`), so a non-round-robin stage's own display-numbering
+      // round_no was forwarded to the placer/verifier as if it meant
+      // round-robin order — the design doc's own motivating symptom, still
+      // reachable from the AI-plan path even after `toAssignment`'s own
+      // callers were gated in task 1. Gated the same way `toAssignment` and
+      // `autoSchedule`'s own `schedulable` builder are (`schedule.ts`, the
+      // reference implementation for this wiring): `roundRobin.has(f.stage_id)`.
+      const roundRobin = await roundRobinStageIds(tx, divisionId);
       const schedulable: SchedulableFixture[] = movable.map((f) => ({
         // Domain-ranked stand-in for the UUID so the solver's tie-break is stable.
         id: rankById.get(f.id)!,
-        roundNo: f.round_no,
+        ...(roundRobin.has(f.stage_id) ? { roundNo: f.round_no } : {}),
         ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
         divisionId: f.division_id,
+        // stageId unconditional, same as divisionId — `fixtures.stage_id` is
+        // NOT NULL. Needed for `validateAssignments`' round-order grouping
+        // key (`divisionId`, `stageId`, `poolId`) wherever this board is
+        // re-verified after the placer runs.
+        stageId: f.stage_id,
         ...(f.home_entrant_id !== null ? { home: f.home_entrant_id } : {}),
         ...(f.away_entrant_id !== null ? { away: f.away_entrant_id } : {}),
         // #396: participants, not named entrants — a TBD slot carries whoever

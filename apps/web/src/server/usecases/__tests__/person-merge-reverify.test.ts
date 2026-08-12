@@ -180,6 +180,96 @@ describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => 
     expect(res.revealed).toEqual([]);
   });
 
+  // C1 follow-up (2026-08-12, task 2 item 1): `reverifyBoards`'s own
+  // `toAssignment` call used to run with no `roundRobinStageIds` 4th
+  // argument, so `roundNo` NEVER reached the `Assignment`s it validates —
+  // round order was structurally invisible to this report regardless of
+  // what the board actually looked like. Unlike the person-overlap tests
+  // above, the merge itself is incidental here: round order is a property
+  // of a fixture's TIME and ROUND alone, entirely independent of which
+  // entrant plays in it, so merging two persons cannot CREATE a round-order
+  // violation — it can only reveal one that was already on a board the
+  // survivor happens to appear on, exactly the "reported, never enforced"
+  // framing `reverifyBoards`'s own doc comment already carries for every
+  // other family.
+  it("reveals a pre-existing round-order violation on a published board the survivor appears on", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Reverify Order Cup " + rnd(),
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open " + rnd(),
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    await createEntrants(
+      auth,
+      division.id,
+      ["A", "B", "C", "D"].map((name, i) => ({
+        kind: "individual" as const,
+        display_name: name,
+        seed: i + 1,
+        members: [],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "league",
+      name: "L",
+      config: {},
+    });
+    await generateStageFixtures(auth, stage!.id);
+
+    const rows = await sql<(BoardRow & { round_no: number })[]>`
+      select id, home_entrant_id, away_entrant_id, round_no from fixtures
+      where division_id = ${division.id} order by round_no, seq_in_round, id`;
+    const round1 = rows.find((r) => r.round_no === 1)!;
+    const round2 = rows.find((r) => r.round_no === 2)!;
+    expect(round1, "no round 1 fixture in the generated league").toBeTruthy();
+    expect(round2, "no round 2 fixture in the generated league").toBeTruthy();
+
+    // Written straight to the table, not through `applySchedule` or
+    // `moveFixture`: the round-order-aware write gate would refuse to
+    // CREATE this board in the first place (same technique
+    // schedule-reflow-verifier-widening.test.ts's own court-clash test
+    // uses, for the identical reason — refusing to create a disordered
+    // board is not the same as never having to read one). Round 2 starts
+    // an hour before round 1: round order requires round 1 <= round 2, so
+    // this is a direct, unambiguous H6 breach, on two DIFFERENT courts so
+    // no incidental court clash rides along.
+    await sql`update fixtures set scheduled_at = ${T0}, court_label = 'Court 1' where id = ${round1.id}`;
+    await sql`
+      update fixtures set scheduled_at = ${new Date(T0.getTime() - 60 * MS_PER_MIN)}, court_label = 'Court 2'
+      where id = ${round2.id}`;
+    await publishSchedule(auth, division.id);
+
+    // The survivor only needs to APPEAR on this board — `reverifyBoards`
+    // reports the board's WHOLE conflict set, not merely conflicts naming
+    // the merged person, so joining an entrant not otherwise involved in
+    // the violating pair is deliberate: it proves the round-order
+    // conflict surfaces because the report re-verifies the board's
+    // fixtures with `roundNo` correctly attached, not because it happens
+    // to name the survivor.
+    const bystander = rows.find((r) => r.id !== round1.id && r.id !== round2.id)!;
+    const survivor = await person(auth.orgId, "Uma Round");
+    const absorbed = await person(auth.orgId, "Uma Round");
+    await joinEntrant(bystander.home_entrant_id, survivor);
+    await joinEntrant(bystander.home_entrant_id, absorbed);
+
+    const res = await mergePersons(auth, survivor, absorbed, { confirmedBy: auth.userId! });
+
+    const board = res.revealed.find((r) => r.division_id === division.id);
+    expect(board, "the published board was not re-verified").toBeTruthy();
+    const order = board!.conflicts.filter((c) => c.reason === "order");
+    expect(order.length, "no round-order conflict reported — roundNo did not reach validateAssignments").toBeGreaterThan(0);
+    expect(order.some((c) => c.fixtureId === round2.id)).toBe(true);
+  });
+
   it("commits the merge even when re-verifying the board throws", async () => {
     const { auth } = await seedOrg("pro");
     const { divisionId, first, second } = await seedBoard(auth, { minutesApart: 0, publish: true });

@@ -119,6 +119,7 @@ import {
   feedDependencies,
   loadSettings,
   peopleByEntrant,
+  roundRobinStageIds,
   scopeLocked,
   siblingAssignments,
   toAssignment,
@@ -443,6 +444,23 @@ export async function applyCompetitionSchedule(
     // decoration. Never the UUID — that is reserved for lock acquisition.
     const order = [...loaded].sort((a, b) => cmp(a.name, b.name) || cmp(a.slug, b.slug));
 
+    // C1 follow-up (2026-08-12, task 2 item 1). ONE call PER DIVISION, not one
+    // call over the whole run: `roundRobinStageIds` answers "which stages of
+    // THIS division are round-robin-generated", and a joint apply spans
+    // multiple, independent divisions — passing a single division id here
+    // would silently answer the question for one division and apply that
+    // answer to every other one in the run, which is exactly the
+    // "compared as one sequence" defect C1's own design exists to prevent,
+    // just at the DIVISION granularity instead of the stage/pool one.
+    // Resolved once, up front, and looked up per fixture below (mirrors
+    // `applySchedule`'s single-division `roundRobin` binding — see
+    // `schedule.ts`, the reference implementation for this wiring).
+    const roundRobinByDivision = new Map<string, ReadonlySet<string>>(
+      await Promise.all(
+        order.map(async (d) => [d.id, await roundRobinStageIds(tx, d.id)] as const),
+      ),
+    );
+
     // ---- the merged board -------------------------------------------------
     const people = await peopleByEntrant(
       tx,
@@ -476,6 +494,16 @@ export async function applyCompetitionSchedule(
           // half was ever stamped, so a pool-targeted rule bound in the placer
           // and evaporated here.
           ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
+          // C1 follow-up (task 2 item 1). stageId unconditional, same as
+          // divisionId — `fixtures.stage_id` is NOT NULL. roundNo gated on
+          // `roundRobinByDivision`, same reasoning as `toAssignment`'s own
+          // gate: `fixtures.round_no` is one shared column populated for
+          // every stage kind, and forwarding it for a non-round-robin stage
+          // would compare two independent round sequences as if they were
+          // one — same defect this whole field exists to prevent, one level
+          // up.
+          stageId: f.stage_id,
+          ...(roundRobinByDivision.get(d.id)?.has(f.stage_id) ? { roundNo: f.round_no } : {}),
         };
       }),
     );
@@ -485,7 +513,7 @@ export async function applyCompetitionSchedule(
     const untouched: Assignment[] = order.flatMap((d) =>
       d.fixtures
         .filter((f) => !seenFixture.has(f.id) && f.scheduled_at !== null && f.court_label !== null)
-        .map((f) => toAssignment(f, d.settings.config.matchMinutes, people)),
+        .map((f) => toAssignment(f, d.settings.config.matchMinutes, people, roundRobinByDivision.get(d.id))),
     );
     // Divisions of this competition that are NOT in the run. One call: passing
     // every run division as `excludeDivisionIds` leaves exactly the outsiders,
@@ -522,8 +550,10 @@ export async function applyCompetitionSchedule(
         // `division_id` (#446), so this pass does NOT re-write it from `d.id`.
         // The two agree — `d.byId` only holds that division's fixtures — and
         // one field with one source is the whole point of the fix this file
-        // is part of.
-        .map((f) => toAssignment(f, d.settings.config.matchMinutes, people)),
+        // is part of. Same reasoning extends to `roundRobinByDivision.get(d.id)`
+        // (task 2 item 1): the fixture's own `stage_id` decides whether its
+        // round is round-robin-generated, never `d.id` alone.
+        .map((f) => toAssignment(f, d.settings.config.matchMinutes, people, roundRobinByDivision.get(d.id))),
     );
 
     // ---- one pass per division, over the merged board ---------------------

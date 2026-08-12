@@ -1159,4 +1159,68 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     ).rejects.toMatchObject({ code: "SEQ_CONFLICT" });
     expect(sched.afterWrite).toEqual([]);
   }, 60_000);
+
+  // C1 follow-up (2026-08-12, task 2 item 1). `roundRobinStageIds` is now
+  // resolved ONCE PER DIVISION (`roundRobinByDivision`), not once for the
+  // whole run — a single call over one division id would silently answer
+  // "is this stage round-robin" for every OTHER division in the run too,
+  // which is exactly the "compared as one sequence" defect C1 exists to
+  // prevent, just at the DIVISION granularity. Both Alpha and Bravo are
+  // `kind: "league"` (round-robin), so every Assignment `validateAssignments`
+  // sees should carry a `roundNo` matching its OWN fixture's `round_no` and a
+  // `stageId` matching its OWN division's league stage — never the OTHER
+  // division's.
+  //
+  // Round order itself stays STRUCTURALLY INERT on this path regardless
+  // (`verifyConfigFor` only sets `tz` when its optional `rules` argument is
+  // passed, and the joint apply's own calls never pass one — ruling #399,
+  // "apply-time blocking is W4", predates and is out of scope for this
+  // follow-up) — so this test is deliberately a DATA-level proof (the
+  // Assignment objects carry the right fields) rather than a
+  // conflict-level one (a violation would actually be flagged), which
+  // would be a false claim about behaviour this path does not have.
+  it("threads roundNo/stageId per division, not once for the whole run", async () => {
+    const { alpha, bravo } = await clean();
+    const [alphaStageRow] = await sql<{ stage_id: string }[]>`
+      select stage_id from fixtures where id = ${alpha.assignments[0]!.fixture_id}`;
+    const [bravoStageRow] = await sql<{ stage_id: string }[]>`
+      select stage_id from fixtures where id = ${bravo.assignments[0]!.fixture_id}`;
+    const roundByFixture = new Map<string, number>();
+    for (const row of await sql<{ id: string; round_no: number }[]>`
+      select id, round_no from fixtures where division_id in ${sql([board.alpha.id, board.bravo.id])}`) {
+      roundByFixture.set(row.id, row.round_no);
+    }
+
+    const engineModule = await import("@seazn/engine/scheduling");
+    const spy = vi.spyOn(engineModule, "validateAssignments");
+    let seen: { fixtureId: string; roundNo?: number; stageId?: string; divisionId?: string }[];
+    try {
+      await applyCompetitionSchedule(auth, board.competitionId, {
+        divisions: [alpha, bravo],
+        source: "ai",
+        ai: AI,
+      });
+      seen = spy.mock.calls.flatMap((call) => call[0]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(seen.length).toBeGreaterThan(0);
+
+    const alphaSeen = seen.filter((a) => a.divisionId === board.alpha.id);
+    const bravoSeen = seen.filter((a) => a.divisionId === board.bravo.id);
+    expect(alphaSeen.length, "no Alpha assignment was ever validated").toBeGreaterThan(0);
+    expect(bravoSeen.length, "no Bravo assignment was ever validated").toBeGreaterThan(0);
+    for (const a of alphaSeen) {
+      expect(a.stageId, `Alpha fixture ${a.fixtureId} carries the wrong stageId`).toBe(alphaStageRow!.stage_id);
+      expect(a.roundNo, `Alpha fixture ${a.fixtureId} lost its roundNo`).toBe(roundByFixture.get(a.fixtureId));
+    }
+    for (const a of bravoSeen) {
+      expect(a.stageId, `Bravo fixture ${a.fixtureId} carries the wrong stageId`).toBe(bravoStageRow!.stage_id);
+      expect(a.roundNo, `Bravo fixture ${a.fixtureId} lost its roundNo`).toBe(roundByFixture.get(a.fixtureId));
+    }
+    // The two stages are genuinely different — otherwise every assertion
+    // above would pass vacuously even with `roundRobinByDivision` collapsed
+    // to a single shared set.
+    expect(alphaStageRow!.stage_id).not.toBe(bravoStageRow!.stage_id);
+  }, 60_000);
 });

@@ -20,6 +20,7 @@ import {
   feedDependencies,
   loadSettings,
   peopleByEntrant,
+  roundRobinStageIds,
   siblingAssignments,
   toAssignment,
   toVerifyConfig,
@@ -308,9 +309,20 @@ async function reverifyBoards(auth: AuthCtx, survivorId: string): Promise<Reveal
         ...new Set(all.flatMap((f) => [f.home_entrant_id, f.away_entrant_id])),
       ].filter((e): e is string => e !== null);
       const people = await peopleByEntrant(tx, entrantIds);
+      // C1 follow-up (2026-08-12, task 2 item 1). This board's `toAssignment`
+      // call feeds `assignments` (below) — the CHECKED side of
+      // `validateAssignments`, not `existing` — and `toVerifyConfig` (below)
+      // always carries `tz` (`settings.orgTz`, unconditional), so round order
+      // is a genuinely observable rule here, not a structurally inert one:
+      // a merge that reveals two round-robin fixtures now sharing a person
+      // across rounds is exactly the kind of thing `reverifyBoards` exists to
+      // surface (see its own doc comment — "reported, never enforced").
+      // Wired the same way `autoSchedule`/`applySchedule` were (`schedule.ts`,
+      // the reference implementation).
+      const roundRobin = await roundRobinStageIds(tx, board.id);
       const assignments = all
         .filter((f) => f.scheduled_at !== null && f.court_label !== null)
-        .map((f) => toAssignment(f, settings.config.matchMinutes, people));
+        .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
       if (assignments.length === 0) continue;
       // Both halves, and both are load-bearing (#462). The assignments put the
       // sibling divisions' cards on the board so a court clash is seen; the
