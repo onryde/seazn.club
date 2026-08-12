@@ -38,9 +38,28 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import { foldClient } from "./module-client";
 import { indexedDbQueueStore } from "./queue-store";
 import { depth, enqueue, peekInOrder } from "./queue";
-import { reconcile, sendOne } from "./pipeline";
-import type { OwnIdentity, PendingEvent } from "./types";
-import type { PadTransport } from "./transport";
+import { deepEqual, reconcile, sendOne } from "./pipeline";
+import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "./types";
+import type { PadAuthMode, PadTransport } from "./transport";
+import { useFixtureStream, type RealtimeConnector } from "./use-fixture-stream";
+
+// Review finding 2: submit() minted a fresh idempotency key/expected_seq on
+// EVERY call with no guard at all, so a courtside double-tap (or two bound
+// handlers firing for one physical press) enqueued two genuinely distinct
+// score events. A courtside double-tap lands well under a second; two
+// GENUINELY separate identical actions (e.g. two dot balls in a row) are
+// realistically seconds apart in live play, not milliseconds — 600ms
+// comfortably separates the two without risking dropping a scorer's fast
+// but deliberate second entry.
+export const DOUBLE_SUBMIT_WINDOW_MS = 600;
+
+// A stable module-level fallback, not `params.auth ?? { kind: "session" }`
+// inline at call time — the latter would allocate a NEW object every render
+// whenever a caller omits `auth`, and useFixtureStream's own effect depends
+// on `auth` by identity, so a fresh object each render would tear down and
+// resubscribe (a new token fetch, a new realtime handshake) on every render
+// instead of once per mount.
+const SESSION_AUTH: PadAuthMode = { kind: "session" };
 
 export interface UsePadPipelineParams {
   fixtureId: string;
@@ -57,6 +76,21 @@ export interface UsePadPipelineParams {
    *  in-memory store when `indexedDB` is undefined (queue-store.ts) — this
    *  hook does not re-implement that fallback. */
   queueDbName?: string;
+  // Review finding 3: use-fixture-stream.ts existed but was never wired to
+  // this hook, so "polling does not stampede an in-flight drain" and "a
+  // realtime signal reaches the fold" were both unprovable. `auth` is
+  // needed here (in ADDITION to `transport`, which already bakes its own
+  // auth into request headers) because useFixtureStream's realtime-token
+  // door is a SEPARATE authed endpoint it calls directly — see transport.ts
+  // for why appendEvent/listEventsSince don't need this raw value at all.
+  // Optional and defaults to session auth so no existing caller breaks.
+  auth?: PadAuthMode;
+  /** Test-only overrides, forwarded verbatim to useFixtureStream. Omit in
+   *  production to get its own real defaults (the global `fetch`, the real
+   *  Supabase connector). */
+  streamFetchFn?: typeof fetch;
+  streamConnector?: RealtimeConnector;
+  streamPollMs?: number;
 }
 
 export interface RejectionInfo {
@@ -111,12 +145,35 @@ function toEnvelopeFields(type: string, payload: unknown): { payload: unknown; v
   return { payload };
 }
 
-function pendingToEnvelope(fixtureId: string, identity: OwnIdentity, pending: PendingEvent): EventEnvelope {
+/** Exported for direct testing (review finding 4) — mirrors pipeline.ts's
+ *  own precedent of exporting its pure decision helpers rather than only
+ *  exercising them indirectly.
+ *
+ *  `confirmedSeq`, when given, WINS over `pending.expectedSeq + 1`. Review
+ *  finding 4: runDrain captures its `next` pending event BEFORE calling
+ *  sendOne; if sendOne renegotiates (a 409 whose ledger slot proves
+ *  foreign) and the resend succeeds, the server's real assigned seq is
+ *  `renegotiatedExpectedSeq + 1` — unrelated to this event's ORIGINAL
+ *  `expectedSeq`. The caller passes `outcome.result.seq` (the server's own
+ *  AppendSuccess.seq) on the "acked" branch so this is correct regardless
+ *  of how many renegotiations happened; the "already-applied" branch never
+ *  renegotiates within its own call (pipeline.ts's resolveConflict decides
+ *  it BEFORE any resend), so `pending.expectedSeq + 1` already is the
+ *  confirmed value there and needs no override. */
+export function pendingToEnvelope(
+  fixtureId: string,
+  identity: OwnIdentity,
+  pending: PendingEvent,
+  confirmedSeq?: number,
+): EventEnvelope {
   const { payload, voids } = toEnvelopeFields(pending.type, pending.payload);
   return {
     id: pending.idempotencyKey,
     fixtureId,
-    seq: pending.expectedSeq + 1, // append-event.ts: the accepted row lands at expected_seq + 1
+    // append-event.ts: the accepted row lands at expected_seq + 1 — the best
+    // guess pre-ack, and still correct post-ack UNLESS a renegotiation
+    // moved the seq that actually landed (see confirmedSeq above).
+    seq: confirmedSeq ?? pending.expectedSeq + 1,
     type: pending.type,
     payload,
     recordedAt: pending.createdAt,
@@ -177,6 +234,19 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // resolve BEFORE its own event was actually sent, showing a stale fold.
   const drainInFlight = useRef<Promise<void> | null>(null);
 
+  // Review finding 2's double-submit guard. Two separate mechanisms, both
+  // keyed on (type, payload) via pipeline.ts's own deepEqual (structural,
+  // not reference — a fresh object literal per render must still compare
+  // equal): `submitInFlight` catches two calls landing in the SAME tick
+  // (two bound handlers firing for one press, or a synchronous double
+  // invocation) before either has had a chance to update `lastAccepted`;
+  // `lastAccepted` catches a repeat that arrives AFTER the first fully
+  // resolved, within DOUBLE_SUBMIT_WINDOW_MS. Neither fires for two
+  // DIFFERENT actions, and the window is short enough that two genuinely
+  // separate identical actions (two dot balls in a row) both still land.
+  const submitInFlight = useRef<{ type: string; payload: unknown } | null>(null);
+  const lastAccepted = useRef<{ type: string; payload: unknown; at: number } | null>(null);
+
   const foldedState = useMemo(() => {
     if (serverOverride !== undefined) return serverOverride;
     const events = [...ledgerEvents, ...pendingEnvelopes.values()];
@@ -212,6 +282,35 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     [transport, fixtureId, sportModule, cfg, lineups],
   );
 
+  // Review finding 3: wires use-fixture-stream.ts in. `LedgerSlotEvent[]` is
+  // deliberately narrow (see the SCOPE BOUNDARY comment at the top of this
+  // file) and cannot be folded directly, so an inbound signal — realtime or
+  // polling, `onEvents` does not distinguish — is treated as "go verify the
+  // true state" rather than data to fold ourselves: it reuses the SAME
+  // reconcileAfterAck a normal ack already uses, over the ledger events this
+  // hook currently knows about (it has no better local list to offer). An
+  // empty batch (every tick reports one, per use-fixture-stream.ts's own
+  // `fetchOnce`) is a no-op, not a wasted fetchState round trip.
+  const onStreamEvents = useCallback(
+    (events: LedgerSlotEvent[]) => {
+      if (events.length === 0) return;
+      void reconcileAfterAck(ledgerEventsRef.current);
+    },
+    [reconcileAfterAck],
+  );
+  const skipPollWhileDraining = useCallback(() => drainInFlight.current !== null, []);
+  useFixtureStream({
+    fixtureId,
+    auth: params.auth ?? SESSION_AUTH,
+    sinceSeq: ledgerEvents.length,
+    listEventsSince: transport.listEventsSince,
+    onEvents: onStreamEvents,
+    skipPollWhile: skipPollWhileDraining,
+    fetchFn: params.streamFetchFn,
+    connector: params.streamConnector,
+    pollMs: params.streamPollMs,
+  });
+
   const runDrain = useCallback(async () => {
     // Piggyback on an already-running drain rather than no-op'ing: whatever
     // it is currently draining necessarily includes anything queued before
@@ -235,7 +334,15 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           const remaining = new Map(pendingEnvelopesRef.current);
           remaining.delete(next.idempotencyKey);
           commitPendingEnvelopes(remaining);
-          const withAck = [...ledgerEventsRef.current, pendingToEnvelope(fixtureId, identity, next)];
+          // review finding 4: "acked" may have followed a mid-flight 409
+          // renegotiation (sendOne resent with a NEW expected_seq) — the
+          // server's own AppendSuccess.seq is the only value guaranteed
+          // correct either way. "already-applied" never renegotiates within
+          // its own call (resolveConflict decides that BEFORE any resend),
+          // so pendingToEnvelope's own expectedSeq+1 default is already
+          // right there and needs no override.
+          const confirmedSeq = outcome.kind === "acked" ? outcome.result.seq : undefined;
+          const withAck = [...ledgerEventsRef.current, pendingToEnvelope(fixtureId, identity, next, confirmedSeq)];
           commitLedgerEvents(withAck);
           void reconcileAfterAck(withAck);
         } else if (outcome.kind === "rejected") {
@@ -301,31 +408,51 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
 
   const submit = useCallback(
     async (type: string, payload: unknown) => {
-      // Synchronous section — no `await` above this point. `expectedSeq`
-      // assumes every event ahead (confirmed + already queued) lands, per
-      // the append/replay protocol's own documented assumption
-      // (pipeline.ts's drainQueue); a rare double-submit race that
-      // mis-assigns a slot self-heals via the SAME 409-renegotiation path
-      // the protocol already has, so this reads refs rather than awaiting
-      // the store.
-      const nextExpectedSeq = ledgerEventsRef.current.length + pendingEnvelopesRef.current.size;
-      const pending: PendingEvent = {
-        localId: newId(),
-        idempotencyKey: newId(),
-        type,
-        payload,
-        expectedSeq: nextExpectedSeq,
-        createdAt: new Date().toISOString(),
-        attempts: 0,
-      };
-      const withPending = new Map(pendingEnvelopesRef.current);
-      withPending.set(pending.idempotencyKey, pendingToEnvelope(fixtureId, identity, pending));
-      commitPendingEnvelopes(withPending); // optimistic fold shows immediately
-      setLastRejection(null);
-      // Everything below is async.
-      await enqueue(store, pending);
-      await refreshDepth();
-      await runDrain();
+      // Synchronous section — no `await` above this point (see below for
+      // why that matters to the in-flight guard too). `expectedSeq` assumes
+      // every event ahead (confirmed + already queued) lands, per the
+      // append/replay protocol's own documented assumption (pipeline.ts's
+      // drainQueue); a rare double-submit race that mis-assigns a slot
+      // self-heals via the SAME 409-renegotiation path the protocol already
+      // has, so this reads refs rather than awaiting the store.
+      const isSameAction = (o: { type: string; payload: unknown } | null): boolean =>
+        o !== null && o.type === type && deepEqual(o.payload, payload);
+      if (isSameAction(submitInFlight.current)) {
+        return; // identical action already mid-flight this same tick — no-op
+      }
+      const now = Date.now();
+      const last = lastAccepted.current;
+      // `last !== null` first, so it narrows `last` for BOTH the isSameAction
+      // call and the `.at` read that follows — `isSameAction`'s own null
+      // check is a plain boolean return, not a type predicate, so it cannot
+      // narrow `last` for TypeScript on its own.
+      if (last !== null && isSameAction(last) && now - last.at < DOUBLE_SUBMIT_WINDOW_MS) {
+        return; // identical action accepted too recently — likely one physical tap read twice
+      }
+      submitInFlight.current = { type, payload };
+      lastAccepted.current = { type, payload, at: now };
+      try {
+        const nextExpectedSeq = ledgerEventsRef.current.length + pendingEnvelopesRef.current.size;
+        const pending: PendingEvent = {
+          localId: newId(),
+          idempotencyKey: newId(),
+          type,
+          payload,
+          expectedSeq: nextExpectedSeq,
+          createdAt: new Date().toISOString(),
+          attempts: 0,
+        };
+        const withPending = new Map(pendingEnvelopesRef.current);
+        withPending.set(pending.idempotencyKey, pendingToEnvelope(fixtureId, identity, pending));
+        commitPendingEnvelopes(withPending); // optimistic fold shows immediately
+        setLastRejection(null);
+        // Everything below is async.
+        await enqueue(store, pending);
+        await refreshDepth();
+        await runDrain();
+      } finally {
+        submitInFlight.current = null;
+      }
     },
     [store, fixtureId, identity, commitPendingEnvelopes, refreshDepth, runDrain],
   );

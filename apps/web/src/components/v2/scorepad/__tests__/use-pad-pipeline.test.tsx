@@ -5,14 +5,21 @@
 // "node"`), via a tiny Probe component that reports the hook's live result
 // object on every render — the established idiom for testing a standalone
 // hook this way (see marketing/__tests__/use-start-on-view.test.tsx).
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultLineupPair } from "@seazn/engine/testkit";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { foldClient, resolveModuleClient } from "../module-client";
 import type { AppendCallResult, AppendEventBody } from "../pipeline";
-import type { LedgerSlotEvent, OwnIdentity } from "../types";
+import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "../types";
 import type { FixtureStateResult, PadTransport } from "../transport";
-import { usePadPipeline, type UsePadPipelineParams, type UsePadPipelineResult } from "../use-pad-pipeline";
+import type { RealtimeConnector } from "../use-fixture-stream";
+import {
+  DOUBLE_SUBMIT_WINDOW_MS,
+  pendingToEnvelope,
+  usePadPipeline,
+  type UsePadPipelineParams,
+  type UsePadPipelineResult,
+} from "../use-pad-pipeline";
 
 const ME: OwnIdentity = { recordedBy: "user-1", deviceLinkId: null };
 
@@ -65,6 +72,40 @@ const success = (seq: number): AppendCallResult => ({
   data: { seq, state_summary: { seq }, outcome: null, status: "in_play" },
 });
 
+function fakeResponse(status: number, body: unknown): Response {
+  return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
+}
+
+/** review finding 3's default test double for the live-stream wiring: the
+ *  token door resolves fast, and the connector confirms SYNCHRONOUSLY
+ *  inside `.connect()` (before useFixtureStream's own safety-net
+ *  `startPolling()` call runs) — so by default, mounting the pipeline in
+ *  any test that doesn't care about streaming NEVER arms a real
+ *  `setInterval` at all (matching use-fixture-stream.test.ts's own "a
+ *  confirmed subscribe means NO polling timer starts" case). Tests that DO
+ *  care about the stream override `streamConnector` with `neverConfirmConnector`. */
+const defaultStreamFetchFn = (async () => fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } })) as unknown as typeof fetch;
+
+function autoConfirmConnector(): RealtimeConnector {
+  return {
+    connect(params) {
+      params.onStatus(true);
+      return { unsubscribe() {} };
+    },
+  };
+}
+
+/** Falls back to polling every time — `onStatus` is never called, so
+ *  `realtimeConfirmed` never flips true and the safety-net `startPolling()`
+ *  inside `attemptRealtime` is the one that sticks. */
+function neverConfirmConnector(): RealtimeConnector {
+  return {
+    connect() {
+      return { unsubscribe() {} };
+    },
+  };
+}
+
 function baseParams(overrides: Partial<UsePadPipelineParams> = {}): UsePadPipelineParams {
   const generic = resolveModuleClient("generic", "1.0.0");
   return {
@@ -74,6 +115,9 @@ function baseParams(overrides: Partial<UsePadPipelineParams> = {}): UsePadPipeli
     lineups: defaultLineupPair(generic.positions),
     identity: ME,
     transport: fakeTransport({ appendResults: [] }).transport,
+    auth: { kind: "session" },
+    streamFetchFn: defaultStreamFetchFn,
+    streamConnector: autoConfirmConnector(),
     ...overrides,
   };
 }
@@ -389,6 +433,221 @@ describe("usePadPipeline — core.void envelope translation", () => {
     // all — it reverts to unset, not a zeroed object (same optionality as
     // the pre-score state).
     expect((pad.current.state as { running: unknown }).running).toBeUndefined();
+  });
+});
+
+describe("usePadPipeline — double-submit guard (review finding 2)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("an in-flight guard drops a SYNCHRONOUS second submit of the identical (type, payload)", async () => {
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(1), success(2)] });
+    const pad = mountPipeline(baseParams({ transport }));
+
+    const p1 = pad.current.submit("generic.score", { by: "H", points: 1 });
+    const p2 = pad.current.submit("generic.score", { by: "H", points: 1 }); // same tick, same action
+    await Promise.all([p1, p2]);
+
+    expect(appendCalls).toHaveLength(1); // the second call never reached the transport
+    expect(pad.current.queueDepth).toBe(0);
+  });
+
+  it("a repeat of the identical (type, payload) within the window, AFTER the first fully resolves, is also suppressed", async () => {
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(1), success(2)] });
+    const pad = mountPipeline(baseParams({ transport }));
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    expect(appendCalls).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(DOUBLE_SUBMIT_WINDOW_MS - 100); // still inside the window
+    await pad.current.submit("generic.score", { by: "H", points: 1 }); // same action, too soon
+
+    expect(appendCalls).toHaveLength(1); // still just one
+  });
+
+  it("two DELIBERATELY identical actions separated by MORE than the window both record — a scorer entering two dot balls in a row must not lose the second", async () => {
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(1), success(2)] });
+    const pad = mountPipeline(baseParams({ transport }));
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    await vi.advanceTimersByTimeAsync(DOUBLE_SUBMIT_WINDOW_MS + 100);
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+
+    expect(appendCalls).toHaveLength(2); // BOTH recorded
+    expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({ home: 2, away: 0 });
+  });
+
+  it("two DIFFERENT actions submitted back to back are never suppressed by the guard", async () => {
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(1), success(2)] });
+    const pad = mountPipeline(baseParams({ transport }));
+
+    const p1 = pad.current.submit("generic.score", { by: "H", points: 1 });
+    const p2 = pad.current.submit("generic.score", { by: "A", points: 1 }); // different payload
+    await Promise.all([p1, p2]);
+
+    expect(appendCalls).toHaveLength(2);
+  });
+});
+
+describe("usePadPipeline — live stream wiring (review finding 3)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a drain in flight suppresses a due poll tick — no listEventsSince call while sendOne is still awaiting", async () => {
+    const gate = deferred<AppendCallResult>();
+    const listEventsSince = vi.fn(async (): Promise<LedgerSlotEvent[]> => []);
+    const transport: PadTransport = {
+      async appendEvent() {
+        return gate.promise;
+      },
+      listEventsSince,
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(
+      baseParams({ transport, streamConnector: neverConfirmConnector(), streamPollMs: 1_000 }),
+    );
+
+    const submitPromise = pad.current.submit("generic.score", { by: "H", points: 1 }); // drain starts, gated
+    await vi.advanceTimersByTimeAsync(0); // let attemptRealtime settle into polling mode
+
+    await vi.advanceTimersByTimeAsync(1_000); // a poll tick is due WHILE the drain is still in flight
+    expect(listEventsSince).not.toHaveBeenCalled(); // suppressed by skipPollWhile
+
+    gate.resolve(success(1));
+    await submitPromise;
+
+    await vi.advanceTimersByTimeAsync(1_000); // drain finished — the NEXT tick may fetch
+    expect(listEventsSince).toHaveBeenCalled();
+  });
+
+  it("an inbound stream event moves the folded state to the server's own fold", async () => {
+    const mod = resolveModuleClient("generic", "1.0.0");
+    const cfg = { resultMode: "win_loss", allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false };
+    const lineups = defaultLineupPair(mod.positions);
+    // A REAL fold over an event a CONCURRENT scorer recorded — this hook's
+    // own ledger has never heard of it (matches the SCOPE BOUNDARY comment
+    // at the top of this file: adopt the server's fold as-is on divergence).
+    const remoteState = foldClient(mod, cfg, lineups, [
+      {
+        id: "concurrent-1",
+        fixtureId: "fx-1",
+        seq: 1,
+        type: "generic.score",
+        payload: { by: "A", points: 7 },
+        recordedAt: "2026-08-12T00:00:00.000Z",
+        recordedBy: "user-2",
+      },
+    ]);
+    const listEventsSince = vi.fn(
+      async (): Promise<LedgerSlotEvent[]> => [
+        { seq: 1, type: "generic.score", payload: { by: "A", points: 7 }, recorded_by: "user-2", device_link_id: null },
+      ],
+    );
+    const transport: PadTransport = {
+      async appendEvent() {
+        throw new Error("not used by this test");
+      },
+      listEventsSince,
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 1, state: remoteState, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(
+      baseParams({ module: mod, cfg, lineups, transport, streamConnector: neverConfirmConnector(), streamPollMs: 1_000 }),
+    );
+    expect((pad.current.state as { running: unknown }).running).toBeUndefined(); // nothing known locally yet
+
+    await vi.advanceTimersByTimeAsync(0); // settle into polling
+    await vi.advanceTimersByTimeAsync(1_000); // first poll tick reports the remote event
+    await vi.advanceTimersByTimeAsync(0); // let reconcileAfterAck's own fetchState resolve
+
+    expect(pad.current.state).toEqual(remoteState);
+  });
+});
+
+describe("pendingToEnvelope — confirmed seq override (review finding 4)", () => {
+  const pending: PendingEvent = {
+    localId: "local-a",
+    idempotencyKey: "a",
+    type: "core.note",
+    payload: { text: "hi" },
+    expectedSeq: 0,
+    createdAt: "2026-08-12T00:00:00.000Z",
+    attempts: 0,
+  };
+
+  it("defaults to expectedSeq + 1 with no override — the pre-ack optimistic guess", () => {
+    expect(pendingToEnvelope("fx-1", ME, pending).seq).toBe(1);
+  });
+
+  it("MUTATION TARGET: uses the CONFIRMED seq when given one, never expectedSeq + 1 — the renegotiated-resend case", () => {
+    // runDrain captures `next` (this `pending`) BEFORE calling sendOne — if
+    // sendOne renegotiates (a 409 whose ledger slot is foreign) and the
+    // resend succeeds, the server's ACTUAL assigned seq is whatever the
+    // renegotiated expected_seq + 1 was, which has nothing to do with this
+    // pending event's ORIGINAL expectedSeq (0 here). Passing the confirmed
+    // seq explicitly is the only way to get it right regardless of how many
+    // renegotiations happened.
+    expect(pendingToEnvelope("fx-1", ME, pending, 99).seq).toBe(99);
+  });
+});
+
+describe("usePadPipeline — 409 renegotiation through submit() (review finding 4)", () => {
+  it("a foreign ledger slot renegotiates and resends exactly once, completing the drain — NO coverage of this path existed before", async () => {
+    const appendCalls: AppendEventBody[] = [];
+    let appendCallCount = 0;
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        appendCallCount += 1;
+        if (appendCallCount === 1) {
+          return { kind: "conflict", currentSeq: 5, message: "seq conflict" };
+        }
+        return success(6);
+      },
+      async listEventsSince(): Promise<LedgerSlotEvent[]> {
+        // The slot at expectedSeq(0)+1 = 1 holds a FOREIGN event — proves
+        // renegotiate, not already-applied (pipeline.test.ts's own
+        // "409 whose slot holds a FOREIGN event" case, driven here through
+        // the HOOK instead of sendOne directly).
+        return [
+          { seq: 1, type: "generic.score", payload: { by: "A", points: 9 }, recorded_by: "user-2", device_link_id: null },
+        ];
+      },
+      async getLastSeq() {
+        throw new Error("not used: the conflict body already carries current_seq");
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 6, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport }));
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+
+    expect(appendCalls).toHaveLength(2); // original + exactly one resend
+    expect(appendCalls[0]?.expected_seq).toBe(0); // original, never recomputed before sending
+    expect(appendCalls[1]?.expected_seq).toBe(5); // renegotiated to the 409 body's current_seq
+    expect(appendCalls[1]?.idempotency_key).toBe(appendCalls[0]?.idempotency_key); // same key, never regenerated
+    expect(pad.current.queueDepth).toBe(0); // resolved, not stuck
+    expect(pad.current.offline).toBe(false);
+    expect(pad.current.lastRejection).toBeNull();
   });
 });
 

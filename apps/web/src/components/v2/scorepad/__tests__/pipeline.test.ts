@@ -117,6 +117,63 @@ describe("resolveConflict — pure 409 ledger-slot decision", () => {
   });
 });
 
+describe("resolveConflict — undefined-vs-null identity normalisation (review finding 1)", () => {
+  // transport.ts's listEventsSince casts the ledger JSON with no runtime
+  // validation prior to this fix, so an OMITTED key comes back `undefined`
+  // at runtime despite LedgerSlotEvent's own type saying `string | null`.
+  // A strict `===` against our own `null` would then read an ALREADY-
+  // APPLIED own event as FOREIGN, renegotiate, and resend a real duplicate
+  // — the exact failure the append/replay protocol exists to prevent.
+  const asSlot = (o: object): LedgerSlotEvent => o as LedgerSlotEvent;
+
+  it("recorded_by: slot OMITS the key (undefined) but identity holds null → still ours", () => {
+    const slot = asSlot({ seq: 11, type: "core.note", payload: { text: "a" }, device_link_id: null });
+    const identity: OwnIdentity = { recordedBy: null, deviceLinkId: null };
+    expect(resolveConflict(event("a"), slot, identity, 41)).toEqual({ kind: "already-applied" });
+  });
+
+  it("recorded_by: identity holds undefined (forced, defends BOTH sides) but slot holds null → still ours", () => {
+    const slot: LedgerSlotEvent = {
+      seq: 11,
+      type: "core.note",
+      payload: { text: "a" },
+      recorded_by: null,
+      device_link_id: null,
+    };
+    const identity = { recordedBy: undefined, deviceLinkId: null } as unknown as OwnIdentity;
+    expect(resolveConflict(event("a"), slot, identity, 41)).toEqual({ kind: "already-applied" });
+  });
+
+  it("device_link_id: slot OMITS the key (undefined) but identity holds null → still ours", () => {
+    const slot = asSlot({ seq: 11, type: "core.note", payload: { text: "a" }, recorded_by: "user-1" });
+    const identity: OwnIdentity = { recordedBy: "user-1", deviceLinkId: null };
+    expect(resolveConflict(event("a"), slot, identity, 41)).toEqual({ kind: "already-applied" });
+  });
+
+  it("device_link_id: identity holds undefined (forced, defends BOTH sides) but slot holds null → still ours", () => {
+    const slot: LedgerSlotEvent = {
+      seq: 11,
+      type: "core.note",
+      payload: { text: "a" },
+      recorded_by: "user-1",
+      device_link_id: null,
+    };
+    const identity = { recordedBy: "user-1", deviceLinkId: undefined } as unknown as OwnIdentity;
+    expect(resolveConflict(event("a"), slot, identity, 41)).toEqual({ kind: "already-applied" });
+  });
+
+  it("normalisation does NOT paper over a genuinely FOREIGN row — mirror-image guard", () => {
+    const slot: LedgerSlotEvent = {
+      seq: 11,
+      type: "core.note",
+      payload: { text: "a" },
+      recorded_by: "user-2", // genuinely different, not merely absent
+      device_link_id: null,
+    };
+    expect(resolveConflict(event("a"), slot, ME, 41)).toEqual({ kind: "renegotiate", expectedSeq: 41 });
+  });
+});
+
 describe("deepEqual", () => {
   it("primitives, including NaN and signed zero via Object.is semantics", () => {
     expect(deepEqual(1, 1)).toBe(true);

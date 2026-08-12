@@ -20,8 +20,37 @@
 // use-pad-pipeline.ts's reconciliation step ("optimistic state against the
 // server `state`") needs the real thing, which only `GET .../state` carries.
 // Additive: pipeline.ts and its already-shipped tests need no changes.
+import { z } from "zod";
 import type { AppendCallResult, AppendEventBody, ScoringTransport } from "./pipeline";
 import type { AppendSuccess, LedgerSlotEvent } from "./types";
+
+// Review finding 1: listEventsSince previously cast the ledger JSON straight
+// to LedgerSlotEvent[] with no runtime validation, so an OMITTED
+// recorded_by/device_link_id key came back `undefined` at runtime despite
+// the type saying `string | null` — a strict `===` in pipeline.ts's
+// resolveConflict would then read an already-applied own event as FOREIGN
+// and resend a real duplicate. `.nullish()` accepts either an absent key OR
+// an explicit `null` and the `.transform` collapses both to a real `null`,
+// so this boundary hands resolveConflict exactly the type it already
+// declares, and any OTHER shape change (a renamed/mistyped field) surfaces
+// as a thrown parse error here instead of a silent mis-compare downstream.
+// Deliberately narrower than the server's real EventOut (extra columns like
+// `id`/`recorded_at`/`voids_event_id` are validated-then-dropped) — matching
+// LedgerSlotEvent's own documented scope (types.ts).
+const ledgerSlotEventSchema = z.object({
+  seq: z.number(),
+  type: z.string(),
+  payload: z.unknown(),
+  recorded_by: z
+    .string()
+    .nullish()
+    .transform((v) => v ?? null),
+  device_link_id: z
+    .string()
+    .nullish()
+    .transform((v) => v ?? null),
+});
+const ledgerSlotEventsSchema = z.array(ledgerSlotEventSchema);
 
 /** Session vs device-link — the one fact that changes the outgoing request. */
 export type PadAuthMode = { kind: "session" } | { kind: "device_link"; token: string };
@@ -124,7 +153,8 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
 
     async listEventsSince(fixtureId: string, sinceSeq: number): Promise<LedgerSlotEvent[]> {
       const res = await doFetch(`/api/v1/fixtures/${fixtureId}/events?since_seq=${sinceSeq}`, { headers });
-      return readV1Envelope<LedgerSlotEvent[]>(res);
+      const data = await readV1Envelope<unknown>(res);
+      return ledgerSlotEventsSchema.parse(data);
     },
 
     async getLastSeq(fixtureId: string): Promise<number> {

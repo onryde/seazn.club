@@ -52,6 +52,21 @@ export function deepEqual(a: unknown, b: unknown): boolean {
   );
 }
 
+/** `undefined` and `null` mean the same thing for these two identity fields
+ *  ("nobody"/"not applicable") but are NOT `===`. `slot` is cast from ledger
+ *  JSON — transport.ts validates it with zod at the wire boundary, but this
+ *  is a pure function tested (and callable) independently of that boundary,
+ *  so it normalises defensively on BOTH sides rather than trusting the
+ *  caller already did. Review finding 1: an omitted key reading as
+ *  `undefined` while our own identity holds `null` must NOT make an
+ *  already-applied own event look foreign (renegotiate + resend a real
+ *  duplicate) — the mirror-image risk is normalising so hard that a
+ *  genuinely different value also reads as a match, which is why this stays
+ *  a value-equality helper, not a "treat any falsy as absent" one. */
+function sameIdentityField(a: string | null | undefined, b: string | null | undefined): boolean {
+  return (a ?? null) === (b ?? null);
+}
+
 /**
  * The pure 409 verdict. `slot` is the ledger row at exactly the seq OUR
  * event would have landed at (null = unreadable OR absent — the fetch
@@ -77,8 +92,8 @@ export function resolveConflict(
   const isOurs =
     slot.type === event.type &&
     deepEqual(slot.payload, event.payload) &&
-    slot.recorded_by === identity.recordedBy &&
-    slot.device_link_id === identity.deviceLinkId;
+    sameIdentityField(slot.recorded_by, identity.recordedBy) &&
+    sameIdentityField(slot.device_link_id, identity.deviceLinkId);
   if (isOurs) return { kind: "already-applied" };
   if (currentSeq === null) return { kind: "indeterminate" };
   return { kind: "renegotiate", expectedSeq: currentSeq };

@@ -69,7 +69,23 @@ function openDb(dbName: string): Promise<IDBDatabase> {
         store.createIndex(SEQ_INDEX, "_seqNo", { unique: false });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    // Review finding 5: without these two handlers, a future schema bump
+    // (a later tab/deploy calling `indexedDB.open(dbName, N+1)`) blocks
+    // indefinitely — an open connection here never yields, and that other
+    // tab's own `onblocked` never clears while this one stays open.
+    // `onversionchange` fires on THIS already-open connection when some
+    // OTHER context requests the bump — closing it lets that upgrade
+    // proceed. `onblocked` is the mirror case (THIS open being the one
+    // stuck behind a stale connection); there is nothing to recover here
+    // beyond surfacing it, since a store held open elsewhere is outside
+    // this file's control.
+    req.onblocked = () => {
+      console.warn(`indexedDB.open(${dbName}) blocked by another connection on an older version`);
+    };
+    req.onsuccess = () => {
+      req.result.onversionchange = () => req.result.close();
+      resolve(req.result);
+    };
     req.onerror = () => reject(req.error ?? new Error(`indexedDB.open(${dbName}) failed`));
   });
 }

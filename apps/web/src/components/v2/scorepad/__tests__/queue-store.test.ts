@@ -103,6 +103,99 @@ describe("indexedDbQueueStore SSR/Node fallback", () => {
   });
 });
 
+// review finding 5: openDb() wired NO db.onversionchange / req.onblocked
+// handler, so a future schema bump (a later tab calling `indexedDB.open(db,
+// N+1)`) would leave THIS tab's connection open forever, blocking that
+// tab's upgrade indefinitely. Node has no real `indexedDB` (confirmed
+// throughout this file), so proving the wiring needs a global to open
+// against — NOT the banned `fake-indexeddb` package (the S10 brief forbids
+// adding it) and NOT the `describe.skipIf` block above (that one is real
+// IndexedDB persistence, deliberately left for a browser pass). This is a
+// hand-rolled ~40-line stub, scoped to exactly what openDb() touches
+// (open/onupgradeneeded/onsuccess/onblocked, objectStoreNames.contains,
+// createObjectStore→createIndex, db.onversionchange/close) — enough to
+// prove the two handlers are ATTACHED, never a general IDB emulation.
+describe("indexedDbQueueStore — onversionchange/onblocked wiring (review finding 5)", () => {
+  type Listener = (() => void) | null;
+
+  class FakeDb {
+    onversionchange: Listener = null;
+    closeCalls = 0;
+    objectStoreNames = { contains: () => false };
+    createObjectStore() {
+      return { createIndex() {} };
+    }
+    close() {
+      this.closeCalls += 1;
+    }
+  }
+
+  class FakeOpenRequest {
+    onupgradeneeded: Listener = null;
+    onsuccess: Listener = null;
+    onerror: Listener = null;
+    onblocked: Listener = null;
+    error: unknown = null;
+    constructor(public result: FakeDb) {}
+  }
+
+  /** Installs a minimal `indexedDB` global whose `.open()` returns a
+   *  request that fires `onupgradeneeded` then `onsuccess` on a later
+   *  microtask (never synchronously — openDb() attaches its handlers
+   *  AFTER calling `.open()`, in the same synchronous tick, so firing
+   *  eagerly would call handlers that are not assigned yet). Always
+   *  restore in a `finally` — this global does not exist in Node by
+   *  default, and every OTHER test in this file depends on that. */
+  function installFakeIndexedDB() {
+    const db = new FakeDb();
+    const req = new FakeOpenRequest(db);
+    const opens: { name: string; version: number | undefined }[] = [];
+    const fakeFactory = {
+      open(name: string, version?: number) {
+        opens.push({ name, version });
+        queueMicrotask(() => {
+          req.onupgradeneeded?.();
+          req.onsuccess?.();
+        });
+        return req as unknown as IDBOpenDBRequest;
+      },
+    };
+    Object.defineProperty(globalThis, "indexedDB", { value: fakeFactory, configurable: true });
+    return { db, req, opens };
+  }
+
+  function uninstallFakeIndexedDB() {
+    Object.defineProperty(globalThis, "indexedDB", { value: undefined, configurable: true });
+  }
+
+  const settle = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  it("req.onblocked is a real handler, not left null", async () => {
+    const { req } = installFakeIndexedDB();
+    try {
+      indexedDbQueueStore("scorepad-onblocked-check"); // openDb() runs synchronously inside this call
+      expect(typeof req.onblocked).toBe("function");
+      expect(() => req.onblocked?.()).not.toThrow(); // firing it must not crash the open
+    } finally {
+      uninstallFakeIndexedDB();
+    }
+  });
+
+  it("a successfully opened db closes itself on db.onversionchange, so it never blocks a later tab's upgrade", async () => {
+    const { db } = installFakeIndexedDB();
+    try {
+      indexedDbQueueStore("scorepad-onversionchange-check");
+      await settle(); // let the queued onupgradeneeded/onsuccess fire
+      expect(typeof db.onversionchange).toBe("function");
+      expect(db.closeCalls).toBe(0);
+      db.onversionchange?.(); // simulates another tab requesting a version bump
+      expect(db.closeCalls).toBe(1);
+    } finally {
+      uninstallFakeIndexedDB();
+    }
+  });
+});
+
 // Real IndexedDB-only mechanics: skipped here because Node has no
 // `indexedDB` implementation and this repo may not add fake-indexeddb as a
 // new dependency (S10 brief). A later pass in this worktree, once a
