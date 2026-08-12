@@ -85,6 +85,20 @@ export interface Assignment {
   people: string[];
   poolId?: string; // restByGroup targeting when validating (Jul3/04 §3)
   divisionId?: string;
+  /** C1 (2026-08-12 round-order design). Round-robin-generated fixtures
+   *  only — absent means unconstrained by round order, not round 0.
+   *  `validateAssignments` reads this for its round-order pair scan;
+   *  `slotFixtures`' own `commit` carries it through from
+   *  `SchedulableFixture.roundNo` (:70) so a greedy-produced board can be
+   *  re-verified without losing the fact, same reasoning as `poolId`/
+   *  `divisionId` just above (#446). */
+  roundNo?: number;
+  /** C1. Whether THIS run may move the fixture. Defaults to `true` when
+   *  absent — every pre-C1 caller that never sets it keeps its previous
+   *  behaviour exactly (inert regardless, since none of them set `roundNo`
+   *  either). A pin/locked card is `false`; pin-pin round-order pairs are
+   *  exempt (design doc), pin-movable pairs are enforced. */
+  movable?: boolean;
 }
 
 /** The rest an entrant owes between two matches, in minutes — the strictest of
@@ -666,6 +680,16 @@ export function slotFixtures(input: SlotInput): SlotResult {
       // the placer/verifier fork this module exists to prevent.
       ...(f.poolId !== undefined ? { poolId: f.poolId } : {}),
       ...(f.divisionId !== undefined ? { divisionId: f.divisionId } : {}),
+      // C1 (2026-08-12 round-order design). Same reasoning as poolId/
+      // divisionId just above — `validateAssignments`' round-order pair scan
+      // needs both off the Assignment, or a greedy-produced board loses the
+      // fact the instant it is re-verified. `movable` is `f.locked ===
+      // undefined`: this exact `commit` closure runs for BOTH "1) Locked
+      // fixtures" and "2) Greedy placement" below, so `f.locked` is the one
+      // signal in scope that already answers "did THIS run choose where
+      // this sits".
+      ...(f.roundNo !== undefined ? { roundNo: f.roundNo } : {}),
+      movable: f.locked === undefined,
     };
     bookings.push(assignment);
     placed.push(assignment);
@@ -1428,6 +1452,75 @@ export function validateAssignments(
         direct: dep.direct === true,
         shortfallMinutes: Math.max(0, Math.round(restMinutes - gapMin)),
       });
+    }
+  }
+
+  // C1 (2026-08-12 round-order design). Same-division pairs with round_i <
+  // round_j and at least one movable side: day_i <= day_j (unconditional)
+  // and, when they land on the same day, start_i <= start_j (ties legal —
+  // the pair set is all r < r', never r <= r'). Reported as `reason:
+  // "order", direct: true` — the SAME family feed-order violations use
+  // (RULE_BY_REASON maps it to H6, and the AI prompt's own H6 text already
+  // says "Rounds generally flow in order; never schedule a final before its
+  // semifinals finish" — round order is that same statement, just derived
+  // from a round NUMBER instead of a winner/loser edge). Blamed on the LATER
+  // round (`b`, the side with a "must not start before" obligation),
+  // matching how feed-order blames the dependent fixture rather than the
+  // feeder.
+  //
+  // Scoped to `assignments` only, not `existing`: every caller that folds
+  // this run's own pins into the board being verified does so INTO
+  // `assignments` (see `apps/web`'s `settle`/`full` — "the pinned cards
+  // rejoin the proposal here"), so a pin-movable pair for THIS run's
+  // division is already covered without reaching into `existing`, which is
+  // cross-division/cross-stage context where a SECOND, independently
+  // 1-based round-robin sequence could otherwise silently collide with this
+  // one (design doc's stage-scoping ruling — `build.ts` owns the wire-side
+  // defensive guard for that case).
+  //
+  // Absent `tz` skips the whole family, same convention `slotFixtures`'
+  // typed-rule block already uses: a calendar day cannot be derived without
+  // one, and reporting a violation the organiser never expressed (bucketed
+  // in UTC) is worse than reporting none. `dayKeyInTz` is the ONE shared
+  // day-derivation helper both TS sides already import — no second copy.
+  if (config.tz !== undefined) {
+    const byDivision = new Map<string, Assignment[]>();
+    for (const a of assignments) {
+      if (a.roundNo === undefined) continue;
+      const key = a.divisionId ?? "";
+      (byDivision.get(key) ?? byDivision.set(key, []).get(key)!).push(a);
+    }
+    for (const group of byDivision.values()) {
+      for (const a of group) {
+        for (const b of group) {
+          // `a.roundNo < b.roundNo` visits each unordered pair exactly once
+          // (a = the earlier round) and skips ties in the same line — a
+          // round never compared against itself or an equal round.
+          if (a.roundNo === undefined || b.roundNo === undefined) continue;
+          if (a.roundNo >= b.roundNo) continue;
+          // Pin-pin exempt: neither side can move, so constraining them
+          // would turn caller data into a refused edit for no one's
+          // benefit. `movable` defaults to true when absent.
+          if (a.movable === false && b.movable === false) continue;
+          const dayA = dayKeyInTz(a.startAt, config.tz);
+          const dayB = dayKeyInTz(b.startAt, config.tz);
+          if (dayA > dayB) {
+            conflicts.push({
+              fixtureId: b.fixtureId,
+              reason: "order",
+              detail: `round ${b.roundNo} (day ${dayB}) starts before round ${a.roundNo} (day ${dayA})`,
+              direct: true,
+            });
+          } else if (dayA === dayB && a.startAt > b.startAt) {
+            conflicts.push({
+              fixtureId: b.fixtureId,
+              reason: "order",
+              detail: `round ${b.roundNo} starts before round ${a.roundNo} on the same day (${dayA})`,
+              direct: true,
+            });
+          }
+        }
+      }
     }
   }
   return conflicts.map(withRule);
