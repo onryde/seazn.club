@@ -17,6 +17,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { sql } from "@/lib/db";
+import { personsForEntrant } from "@seazn/engine/stats";
 import {
   entrantFoldCtx,
   loadEntrantMembersForDivision,
@@ -214,5 +215,67 @@ describe.skipIf(!HAS_DB)("loadEntrantMembersForFixture vs loadEntrantMembersForD
     const tx = sql as unknown as Tx;
     const scoped = await loadEntrantMembersForFixture(tx, null, null);
     expect(scoped.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S9/#418 — the `personsOf` credit rule, as a REGRESSION for the career
+// rollup: personCareerStats/listMyCareerStats sum whatever rows already sit
+// in player_stat_snapshots, and those rows exist only because
+// `personsForEntrant` (packages/engine/src/stats/stats.ts, the shared export
+// every `folded.fold` implementation credits through) already enforces
+// "individual/pair credit their member(s), team credits nobody" at WRITE
+// time. This is not new behaviour — S8/#417 shipped it — but the career
+// summation's own correctness structurally depends on it never regressing
+// (a team-kind entrant that started crediting a phantom row would silently
+// inflate every career total built on top of it), so it earns its own
+// pinned assertion here rather than being trusted by inference from
+// elsewhere. Built through entrantFoldCtx (this file's own constructor),
+// matching how recomputePlayerStats actually wires the two together.
+// ---------------------------------------------------------------------------
+describe("personsForEntrant — the credit rule career rollup depends on", () => {
+  it("an individual entrant credits its one member", () => {
+    const members = new Map<string, EntrantMembership>([
+      ["ind-1", { kind: "individual", personIds: ["p-solo"] }],
+    ]);
+    const ctx = entrantFoldCtx("ind-1", null, members, undefined);
+    expect(personsForEntrant(ctx, "ind-1")).toEqual(["p-solo"]);
+  });
+
+  it("a pair entrant credits BOTH members", () => {
+    const members = new Map<string, EntrantMembership>([
+      ["pair-1", { kind: "pair", personIds: ["p-one", "p-two"] }],
+    ]);
+    const ctx = entrantFoldCtx("pair-1", null, members, undefined);
+    expect(personsForEntrant(ctx, "pair-1")).toEqual(["p-one", "p-two"]);
+  });
+
+  // THE regression: a team-kind entrant's roster is real, non-empty data —
+  // personsOf(entrantId) would happily return it — but personsForEntrant
+  // must still credit NOBODY. Without this guard a career rollup would sum
+  // a phantom row for every member of every team-kind entrant a person ever
+  // sat on, in every sport, everywhere in the product.
+  it("a team entrant credits NOBODY, even though its roster is real and non-empty", () => {
+    const members = new Map<string, EntrantMembership>([
+      ["team-1", { kind: "team", personIds: ["p-alice", "p-bob", "p-cara"] }],
+    ]);
+    const ctx = entrantFoldCtx("team-1", null, members, undefined);
+    expect(personsForEntrant(ctx, "team-1")).toEqual([]);
+  });
+
+  it("an entrant id absent from ctx.entrants credits nobody (never throws)", () => {
+    const members = new Map<string, EntrantMembership>([
+      ["known-1", { kind: "individual", personIds: ["p-known"] }],
+    ]);
+    const ctx = entrantFoldCtx("known-1", null, members, undefined);
+    expect(personsForEntrant(ctx, "ghost-entrant")).toEqual([]);
+  });
+
+  it("an empty-string person id is filtered out of an otherwise real roster", () => {
+    const members = new Map<string, EntrantMembership>([
+      ["pair-2", { kind: "pair", personIds: ["p-real", ""] }],
+    ]);
+    const ctx = entrantFoldCtx("pair-2", null, members, undefined);
+    expect(personsForEntrant(ctx, "pair-2")).toEqual(["p-real"]);
   });
 });
