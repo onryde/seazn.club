@@ -1,8 +1,11 @@
 # Scheduler benchmark & smoke programme — design of record
 
-Date: 2026-08-12. Status: **approved by owner in session** (roster, depth,
-architecture, misalignment protocol all signed off). Next step: implementation
-plan via writing-plans.
+Date: 2026-08-12. Status: **approved, EXECUTION BLOCKED — strict wait**
+(owner ruling 2026-08-12): implementation starts only after BOTH
+ScoringPad v2 (through S13 cutover) AND release-2 (C0–C8) are complete.
+See §13 for the start trigger and what the wait buys. Next step when
+unblocked: scout re-pin of every citation in this spec, then
+implementation plan via writing-plans.
 
 ## 1. Purpose
 
@@ -172,10 +175,13 @@ tautology):
 
 Report-only believability metrics: gap dispersion, court utilisation
 balance, home/away alternation, prime-slot fairness, greedy-vs-optimized
-quality delta, similarity-to-historical-timetable %, and **round-order
-violations** — report-only today, flips to a gate when release-2 C1
-(lexicographic round order) ships. Nondeterminism probe: schedule twice,
-diff, report % (never red).
+quality delta, similarity-to-historical-timetable %. **Round-order
+violations are a GATE from day one** — the strict-wait ruling (§13) means
+release-2 C1 (lexicographic round order) has shipped before the bench
+runs; likewise conflict assertions target C3's structured details
+(`{kind, ids…}`), never the deprecated legacy `detail` string, and the
+repair suite tests the post-C4/C5 CP-SAT path (`none|optimized|llm`).
+Nondeterminism probe: schedule twice, diff, report % (never red).
 
 ## 7. Misalignment protocol (owner-ratified)
 
@@ -216,7 +222,10 @@ End-state gates per division: engine-derived champion == history;
 `divisionPlayerStats` leaderboards == real top scorer / most wickets / most
 points (name AND count); `personStats` for ~5 stars per suite == real
 aggregates; discipline carry — the real suspended player is ineligible for
-exactly the right fixture and absent from its lineup.
+exactly the right fixture and absent from its lineup. Because the bench
+starts post-S8/S9 (§13), the stat oracles assert against the rebuilt
+player-stats and career-rollup pipelines from day one — a player appearing
+in two suites (if any) gets a cross-division career-rollup oracle too.
 
 Special mechanics each proven on a real instance: super over (1), DLS
 revise (1), shootouts (2, 8), OT+GWS (9), 10-pt final-set tiebreak (3),
@@ -304,14 +313,72 @@ knob (1), draws + half points (4).
    — verify which plan key carries each; provisioning via `setPlan` SQL
    precedent. UI timeline rendering of tier-3 streams is explicitly not
    gated.
+9. **Staleness by design**: every file:line, schema shape and enum cited
+   here predates the strict-wait window (§13) — S8–S13 and C0–C8 all land
+   on these surfaces before implementation begins. A scout re-pin of every
+   citation is the FIRST task of the implementation plan, not optional
+   hygiene (same rule the scoringpad index enforces).
 
 ## 12. Non-goals
 
 - No CI wiring, no scheduled runs.
-- No z3 benching (retirement in flight).
+- No z3 benching (fully deleted by C8 before the bench starts).
 - No synthetic volume suite (suite 1 at 55 ball-by-ball matches is the
   volume monster; revisit only if a real need appears).
 - No smoke.ts refactor or shared-lib extraction.
 - No UI work; browsing seeded data uses existing product surfaces.
 - No fidelity-ladder extensions — fidelity stays 0–3, closed (#430); the
   bench consumes declared tiers only.
+
+## 13. Prerequisites & start trigger (owner ruling 2026-08-12: STRICT WAIT)
+
+Implementation does not begin — including pack authoring — until BOTH:
+
+1. **ScoringPad v2 complete through S13** (cutover; S8/S9 rebuild the
+   stats pipelines this spec's oracles assert against).
+2. **Release-2 complete through C8** (C0 division_rules retirement, C1
+   round order, C3 structured conflict details, C4/C5 CP-SAT repair, C7
+   public contract rewrite, C8 z3 deletion — all touch surfaces this spec
+   gates on).
+
+What the wait buys: every churn-adjacent assertion (conflict shape, engine
+enum, repair path, round order, stats) is written ONCE against the final
+surfaces; round-order is a gate from day one; the bench lands as the
+regression net for both freshly-completed programmes.
+
+Start sequence when both indexes show done: (a) scout re-pin of every
+citation here (risk 9); (b) writing-plans implementation plan; (c) pack
+authoring (the long pole — internet research per suite); (d) runner
+waves. Progress tracking lives in the memory file
+`project_scheduler_bench_programme` and this spec's status line.
+
+## 14. Appendix — product follow-ups surfaced by this design (no issues filed)
+
+Captured per the standing no-new-issues rule; each needs an owner ruling
+and its own spec when picked up. Sequencing rationale ratified in-session:
+items 1–3 are LIFTED FROM bench code after bench v1 is green (building
+them first would mean building half the bench without its harness); items
+4–5 touch the same scheduler surfaces as release-2 and should follow it;
+items 6–7 are independent and could run any time, including during the
+wait window.
+
+1. **"Start from a famous format" templates** — convert pack skeletons
+   (stages, points, tiebreakers, schedule settings; minus real persons)
+   into user-pickable templates via the existing #364 template mechanism.
+   Biggest onboarding win; low lift once packs exist.
+2. **Capacity pre-check + human INFEASIBLE explainer** — the bench
+   checker's arithmetic as an instant pre-solve "20 matches × 60min don't
+   fit 2 courts × 3 days — add a day, a court, or shorten slots" answer.
+3. **Schedule health score** — believability metrics (gap dispersion,
+   court balance, alternation, prime-slot fairness) as a post-schedule
+   card. Same code as the bench checker.
+4. **Stage progression automation** — group winners auto-flow to knockout
+   slots per seeding rules; today's manual pain is exactly the
+   bench-as-organizer fallback.
+5. **Courts/venues as first-class entities** — courts are config strings
+   and `tournaments.venue` is free text (V109); no availability
+   calendars, per-court blackouts, capacity. Core multi-court-club need.
+6. **Batch score-event import** — dual-use: bench throughput AND clubs
+   migrating historical seasons from spreadsheets.
+7. **Auto-news enrichment** — inject round top-scorer/leaderboard movement
+   from `divisionPlayerStats` into `resultDraft`/`roundRecapDraft` drafts.
