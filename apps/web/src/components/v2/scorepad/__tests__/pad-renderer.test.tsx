@@ -13,7 +13,7 @@ import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hoo
 import { defaultLineupPair } from "@seazn/engine/testkit";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { resolveModuleClient } from "../module-client";
-import type { AppendCallResult, AppendEventBody, ScoringTransport } from "../pipeline";
+import type { AppendCallResult } from "../pipeline";
 import type { FixtureStateResult, PadTransport } from "../transport";
 import type { LedgerSlotEvent, OwnIdentity } from "../types";
 import type { PadActionView, PadPanelView } from "../view-model";
@@ -47,7 +47,6 @@ describe("ActionForm — zero-field action submits on a single tap", () => {
     const island = renderIsland(ActionForm, { action, onSubmit: (p: unknown) => (submitted = p) });
     const button = find(island.tree(), isType("button"));
     expect(textOf(button)).toContain("New ball");
-    propsOf(button).onClick as () => void;
     (propsOf(button).onClick as () => void)();
     expect(submitted).toEqual({});
   });
@@ -194,17 +193,17 @@ describe("ActionForm — attribution seam (the picker itself is a later pass)", 
 
 describe("Panel — layout-driven container; locked actions render a reason, never a working form", () => {
   it("a locked action renders its reason text and no interactive submit control", () => {
-    const panelView = {
+    const panelView: PadPanelView = {
       labelKey: { key: "pad.cricket.panel.post", label: "Scorecard" },
-      phase: "post" as const,
-      layout: "primary" as const,
+      phase: "post",
+      layout: "primary",
       actions: [
         {
           type: "cricket.player.line",
           labelKey: { key: "pad.cricket.action.playerLine", label: "Scorecard line" },
           fields: [],
           attribution: [],
-          availability: { kind: "locked" as const, reason: { key: "scorepad.locked.reason", label: "Upgrade your plan to unlock this action." } },
+          availability: { kind: "locked", reason: { key: "scorepad.locked.reason", label: "Upgrade your plan to unlock this action." } },
         },
       ],
     };
@@ -274,7 +273,7 @@ function fakeTransport(opts: {
 }): PadTransport {
   let cursor = 0;
   return {
-    async appendEvent(_fixtureId: string, _body: AppendEventBody) {
+    async appendEvent() {
       const next = opts.appendResults[cursor];
       cursor += 1;
       if (!next) throw new Error("fakeTransport: no scripted appendEvent response left");

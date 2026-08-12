@@ -25,7 +25,6 @@ import {
   type PadFieldValue,
   type PadGate,
   type PadLabel,
-  type PadPanel,
   type PadPanelLayout,
   type PadPhase,
   type PadSpec,

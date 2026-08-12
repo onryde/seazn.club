@@ -67,7 +67,6 @@ describe("buildPadView — gate evaluation is delegated to the engine's evalPadG
   });
 
   it("shows the gated panel once a real score event has folded (state.running is set)", () => {
-    const H = lineups.home.entrantId;
     const events = [
       makeEnvelope(0, { type: "core.start", payload: {} }),
       makeEnvelope(1, { type: "generic.score", payload: { by: "H", points: 3 } }),
