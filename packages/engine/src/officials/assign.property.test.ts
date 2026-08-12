@@ -149,7 +149,11 @@ describe("assignOfficials properties (PROMPT-22)", () => {
       ),
       { numRuns: 150 },
     );
-  });
+    // 20s, not the 5s default — 150 fast-check runs cost ~2.1s on an idle
+    // machine, and a property test at 43% of its budget fails only when
+    // something else is running, i.e. in exactly the full-suite runs that
+    // are supposed to be the gate. Speed is not the property under test.
+  }, 20_000);
 
   it("all-locked re-run makes zero moves (idempotence, mirrors PROMPT-17 §3)", () => {
     fc.assert(
@@ -191,7 +195,8 @@ describe("assignOfficials properties (PROMPT-22)", () => {
       ),
       { numRuns: 150 },
     );
-  });
+    // Same reasoning as the property above (~2.1s of a 5s default).
+  }, 20_000);
 
   it("determinism: same inputs ⇒ identical result", () => {
     fc.assert(
