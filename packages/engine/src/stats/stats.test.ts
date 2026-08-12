@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import {
   aggregatePlayerStats,
+  aggregatePlayerStatsWithDiagnostics,
   playerStatsKeyCollisions,
   resolvePayloadPath,
   sumPlayerStats,
@@ -631,5 +632,144 @@ describe("sumPlayerStats handles a folded-origin key like a metric key (S8/#417)
     const fixture2 = [{ personId: "p1", stats: { goals: 3, assists_folded: 1, total: 4 } }];
     const summed = sumPlayerStats([fixture1, fixture2], model);
     expect(summed).toEqual([{ personId: "p1", stats: { goals: 4, assists_folded: 3, total: 7 } }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S8/#417 diagnostics — the fold reports what it silently dropped, as DATA,
+// for the apps/web caller to log (this file stays outside the engine's
+// logging carve-out; see PlayerStatsDiagnostics's own docstring in
+// stats.ts). Every counter is per-CREDIT: a metric crediting two persons in
+// one event (a pair entrant, ice hockey's two assists) moves a counter by
+// 2, not 1 — pinned explicitly below.
+// ---------------------------------------------------------------------------
+describe("aggregatePlayerStatsWithDiagnostics (S8/#417 diagnostics)", () => {
+  // ONE metric that can resolve either via the explicit `scorer` field or
+  // the `wonBy` entrant fallback, so a single stream exercises both credit
+  // sources plus every "matched but resolved nobody" shape at once.
+  const model: PlayerStatsModel = {
+    metrics: [
+      {
+        key: "k",
+        label: "K",
+        from: "x.rally",
+        agg: "count",
+        field: "scorer",
+        entrantField: "wonBy",
+        fromEntrant: true,
+      },
+    ],
+  };
+  const ctx: PlayerStatsFoldCtx = {
+    entrants: [
+      { id: "E1", kind: "individual" },
+      { id: "E2", kind: "pair" },
+      { id: "E3", kind: "team" },
+    ],
+    personsOf: (id) =>
+      id === "E1" ? ["p9"] : id === "E2" ? ["p1", "p2"] : id === "E3" ? ["t1", "t2"] : [],
+  };
+  const mixedEvents: EventEnvelope[] = [
+    env(1, "x.rally", { wonBy: "E1", scorer: "p7" }), // explicit field wins → p7 (1 credit)
+    env(2, "x.rally", { wonBy: "E1" }), // entrant fallback, individual → p9 (1 credit)
+    env(3, "x.rally", { wonBy: "E2" }), // entrant fallback, pair → p1, p2 (2 credits)
+    env(4, "x.rally", { wonBy: "E3" }), // KNOWN entrant, kind team → nobody (kind guard)
+    env(5, "x.rally", { wonBy: "E9" }), // UNKNOWN entrant id → nobody
+    env(6, "x.rally", {}), // no scorer, no wonBy at all → nobody
+  ];
+
+  it("exact counters on a mixed stream: explicit-field credits, entrant-fallback credits, and matched-but-unattributed pairs", () => {
+    const { rows, diagnostics } = aggregatePlayerStatsWithDiagnostics(mixedEvents, model, undefined, ctx);
+    expect(rows).toEqual([
+      { personId: "p1", stats: { k: 1 } },
+      { personId: "p2", stats: { k: 1 } },
+      { personId: "p7", stats: { k: 1 } },
+      { personId: "p9", stats: { k: 1 } },
+    ]);
+    expect(diagnostics).toEqual({
+      events: 6,
+      fromPersonField: 1, // event 1 only
+      fromEntrantFallback: 3, // event 2 (1 person) + event 3 (2 persons)
+      unattributed: 3, // events 4, 5, 6
+      unknownEntrants: ["E9"],
+      teamEntrantsSkipped: ["E3"],
+      rows: 4,
+    });
+  });
+
+  it("unknownEntrants and teamEntrantsSkipped are sorted and deduped", () => {
+    const dupModel: PlayerStatsModel = {
+      metrics: [
+        { key: "k", label: "K", from: "x.rally", agg: "count", entrantField: "wonBy", fromEntrant: true },
+      ],
+    };
+    const dupCtx: PlayerStatsFoldCtx = {
+      entrants: [{ id: "ETeam", kind: "team" }],
+      // Fat roster on the team entrant — the kind guard, not an empty
+      // personsOf, must be what suppresses it (same discipline as the
+      // pre-existing "team entrant credits NOBODY" test above).
+      personsOf: (id) => (id === "ETeam" ? ["z1", "z2"] : []),
+    };
+    const events = [
+      env(1, "x.rally", { wonBy: "EUnknownB" }),
+      env(2, "x.rally", { wonBy: "EUnknownA" }),
+      env(3, "x.rally", { wonBy: "EUnknownB" }), // duplicate unknown id
+      env(4, "x.rally", { wonBy: "ETeam" }),
+      env(5, "x.rally", { wonBy: "ETeam" }), // duplicate team id
+    ];
+    const { diagnostics } = aggregatePlayerStatsWithDiagnostics(events, dupModel, undefined, dupCtx);
+    expect(diagnostics.unknownEntrants).toEqual(["EUnknownA", "EUnknownB"]); // sorted (A before B seen), deduped 3→2
+    expect(diagnostics.teamEntrantsSkipped).toEqual(["ETeam"]); // deduped 2→1
+    expect(diagnostics.unattributed).toBe(5);
+  });
+
+  it("aggregatePlayerStats returns EXACTLY aggregatePlayerStatsWithDiagnostics(...).rows — same inputs, deep equality", () => {
+    const rows = aggregatePlayerStats(mixedEvents, model, undefined, ctx);
+    const { rows: rowsFromDiagnostics } = aggregatePlayerStatsWithDiagnostics(mixedEvents, model, undefined, ctx);
+    expect(rows).toEqual(rowsFromDiagnostics);
+  });
+
+  it("diagnostics are deterministic: two runs over the same input give deeply-equal diagnostics", () => {
+    const first = aggregatePlayerStatsWithDiagnostics(mixedEvents, model, undefined, ctx).diagnostics;
+    const second = aggregatePlayerStatsWithDiagnostics(mixedEvents, model, undefined, ctx).diagnostics;
+    expect(second).toEqual(first);
+  });
+
+  it("a person excluded by the lineups non-player filter still counts as a resolved credit — attribution succeeded, only the ROW is filtered (documented decision)", () => {
+    // A minimal, self-contained model/lineup rather than football's real
+    // MODEL — this test's point is the credit-vs-row distinction, not any
+    // one sport's metric shape.
+    const cardModel: PlayerStatsModel = {
+      metrics: [{ key: "cards", label: "Cards", from: "x.card", agg: "count" }], // default field "person"
+    };
+    const lineup: LineupPair = {
+      home: {
+        entrantId: "H",
+        slots: [{ personId: "coach1", slot: "bench", orderNo: 90, role: "coach" }],
+      },
+      away: { entrantId: "A", slots: [{ personId: "a1", slot: "starting", orderNo: 1 }] },
+    };
+    const { rows, diagnostics } = aggregatePlayerStatsWithDiagnostics(
+      [env(1, "x.card", { person: "coach1" })],
+      cardModel,
+      lineup,
+    );
+    expect(rows).toEqual([]); // unchanged existing behaviour — a coach earns no row
+    expect(diagnostics.fromPersonField).toBe(1); // attribution DID succeed
+    expect(diagnostics.unattributed).toBe(0); // NOT unattributed — a person WAS found
+    expect(diagnostics.rows).toBe(0);
+  });
+
+  it("`events` counts the POST-resolveVoids list — a voided event and its own core.void both vanish from the count", () => {
+    const tinyModel: PlayerStatsModel = {
+      metrics: [{ key: "k", label: "K", from: "x.ball", agg: "count" }],
+    };
+    const { diagnostics } = aggregatePlayerStatsWithDiagnostics(
+      [env(1, "x.ball", { person: "p1" }), env(2, "core.void", {}, "e1"), env(3, "x.ball", { person: "p2" })],
+      tinyModel,
+    );
+    // 3 raw events in; event 1 is voided (dropped) and event 2 IS the
+    // core.void (drops itself, per resolveVoids) — only event 3 survives.
+    expect(diagnostics.events).toBe(1);
   });
 });

@@ -8,6 +8,13 @@
 // whose payload names only an EntrantId (setbased `wonBy`, nested `by`),
 // and a whole-model `folded` escape hatch for attribution a metric+field
 // walk cannot express at all. See each new type's own docstring.
+//
+// The same session also added a diagnostics return value —
+// `aggregatePlayerStatsWithDiagnostics` — so this pure fold can report what
+// it silently dropped as DATA, for the apps/web caller to log. This file
+// stays outside the engine's logging carve-out (only
+// `packages/engine/src/scheduling/**` may log), so the counters are the
+// closest this fold may come to logging itself. See `PlayerStatsDiagnostics`.
 import { resolveVoids, type EventEnvelope } from "../core/events.ts";
 import type { LineupPair } from "../core/types.ts";
 
@@ -183,6 +190,27 @@ function nonPlayerPersonIds(lineups: LineupPair): ReadonlySet<string> {
 }
 
 /**
+ * What `resolveMetricPersons` learned about ONE (event, metric) pair,
+ * beyond the plain person list — enough for the fold's diagnostics pass
+ * (S8/#417, see `PlayerStatsDiagnostics`) to update its counters without a
+ * second, parallel re-derivation of this same decision tree. `source` is
+ * "none" whenever `persons` is empty, regardless of which branch produced
+ * the empty result — the two id fields below are the only way to tell
+ * those empty branches apart, and each is set on exactly the one branch it
+ * diagnoses.
+ */
+interface MetricPersonsResolution {
+  persons: readonly string[];
+  source: "field" | "entrant" | "none";
+  /** Set when `entrantField` resolved to an id `ctx.entrants` does not
+   *  contain — a caller-side `entrants`/`personsOf` disagreement. */
+  unknownEntrantId?: string;
+  /** Set when `entrantField` resolved to a KNOWN entrant whose kind is
+   *  "team" — the mandatory kind guard below fired. */
+  teamEntrantId?: string;
+}
+
+/**
  * Resolve the persons a metric credits for one event, in the mandated
  * order (owner ruling, S8/#417): an explicit person field always wins and
  * STOPS the search — the entrant fallback is a v1-era-payload rescue, not
@@ -198,12 +226,16 @@ function nonPlayerPersonIds(lineups: LineupPair): ReadonlySet<string> {
  * caller's `personsOf` to already return `[]` for a team: one caller that
  * gets that wrong would otherwise credit an entire squad for a single
  * event, and that failure mode is worse than a redundant check.
+ *
+ * Returns a `MetricPersonsResolution` rather than a bare list (S8/#417
+ * diagnostics) — `persons` is byte-identical to what this function has
+ * always returned; the extra fields are purely observational.
  */
 function resolveMetricPersons(
   payload: Record<string, unknown>,
   metric: PlayerStatMetric,
   ctx: PlayerStatsFoldCtx | undefined,
-): readonly string[] {
+): MetricPersonsResolution {
   const explicit = resolvePayloadPath(payload, metric.field ?? "person");
   // Same array-or-single-or-none normalisation the explicit path has always
   // used (ice hockey's two assists credit every listed person once).
@@ -212,21 +244,96 @@ function resolveMetricPersons(
     : typeof explicit === "string" && explicit !== ""
       ? [explicit]
       : [];
-  if (persons.length > 0) return persons; // explicit field wins — never fall through
+  if (persons.length > 0) return { persons, source: "field" }; // explicit field wins — never fall through
 
-  if (ctx === undefined || metric.fromEntrant !== true || metric.entrantField === undefined) return [];
+  if (ctx === undefined || metric.fromEntrant !== true || metric.entrantField === undefined) {
+    return { persons: [], source: "none" };
+  }
   const entrantId = resolvePayloadPath(payload, metric.entrantField);
-  if (typeof entrantId !== "string" || entrantId === "") return [];
+  if (typeof entrantId !== "string" || entrantId === "") return { persons: [], source: "none" };
   const entrant = ctx.entrants.find((e) => e.id === entrantId);
-  if (entrant === undefined || entrant.kind === "team") return []; // mandatory kind guard
-  return ctx.personsOf(entrantId).filter((p) => p !== "");
+  if (entrant === undefined) return { persons: [], source: "none", unknownEntrantId: entrantId };
+  if (entrant.kind === "team") return { persons: [], source: "none", teamEntrantId: entrantId }; // mandatory kind guard
+  const fallback = ctx.personsOf(entrantId).filter((p) => p !== "");
+  return fallback.length > 0 ? { persons: fallback, source: "entrant" } : { persons: [], source: "none" };
+}
+
+/**
+ * Everything `aggregatePlayerStatsWithDiagnostics` learned about its own
+ * attribution while it folded — not state, not I/O, a second return value
+ * (S8/#417). This file is pure and stays outside the engine's logging
+ * carve-out (`packages/engine/src/scheduling/**` is the only package
+ * directory allowed to log) precisely because replay determinism and the
+ * `src/core/**` 100%-lines coverage gate depend on it, so it cannot log
+ * itself — this is what lets the apps/web CALLER turn these numbers into a
+ * log line instead.
+ *
+ * What made this necessary: S8 gave the fold two silent-drop paths that
+ * `PlayerStatRow[]` alone cannot show. An event can match a metric's
+ * `from`/`when` and resolve NO person at all — `unattributed` below. And a
+ * caller's own `ctx.entrants` can disagree with what its `personsOf` would
+ * have answered — `unknownEntrants` below. A dropped credit and a credit
+ * that was never attempted are indistinguishable in the output rows alone;
+ * this is the data that tells them apart.
+ *
+ * Counters are per-CREDIT, not per-event: one event crediting two persons
+ * on one metric (ice hockey's two assists, a pair entrant's both members)
+ * moves a counter by 2, matching how `rows[].stats` itself accumulates.
+ *
+ * `fromPersonField` and `fromEntrantFallback` count the moment
+ * `resolveMetricPersons` NAMES a person — before the `lineups` non-player
+ * filter and before an `agg:"sum"` metric's value is computed. A coach's
+ * card is a resolved credit that never becomes a row (`bump`'s `excluded`
+ * check drops it silently, same as before this type existed); a `value()`
+ * returning `undefined` is a resolved credit that contributes no number
+ * (see `PlayerStatMetric.value`'s docstring — that is deliberate elsewhere
+ * too). Both are counted here on purpose: these two counters answer "did
+ * attribution find someone", not "did a stat point land" — `rows` and the
+ * sibling `PlayerStatRow[]` already answer the second question, and
+ * conflating the two would make a perfectly ordinary lineup exclusion look
+ * like the S8 defect this type exists to surface.
+ */
+export interface PlayerStatsDiagnostics {
+  /** Events considered, after `resolveVoids` — a voided event and the
+   *  `core.void` that voided it are both already gone by this count. */
+  events: number;
+  /** Metric credits resolved from an explicit person field. Includes a
+   *  credit later dropped by the `lineups` non-player filter, or by an
+   *  `agg:"sum"` metric whose value came back `undefined` — see this
+   *  type's own docstring for why those still count here. */
+  fromPersonField: number;
+  /** Metric credits resolved via `personsOf(entrantId)` — the v1-era-
+   *  payload rescue path. Same inclusion rule as `fromPersonField`. */
+  fromEntrantFallback: number;
+  /** `(event, metric)` pairs that matched `from`/`when` but resolved to NO
+   *  person: an empty explicit field AND — no `fromEntrant` fallback
+   *  declared, no `ctx` supplied, an entrant id that did not resolve, an
+   *  unknown entrant, a team entrant, or a known individual/pair entrant
+   *  whose `personsOf` came back empty. Before S8/#417 every metric+event
+   *  match credited someone or did not match at all; this is the new
+   *  silent-drop state that session made possible. */
+  unattributed: number;
+  /** Entrant ids a `fromEntrant` metric's `entrantField` named that are
+   *  absent from `ctx.entrants` — sorted, deduped. Non-empty means the
+   *  caller's own `ctx.entrants` disagrees with the payloads it is
+   *  folding — the exact thinner-stats failure mode this type exists to
+   *  surface. */
+  unknownEntrants: readonly string[];
+  /** Entrant ids a `fromEntrant` metric's `entrantField` named that ARE
+   *  declared in `ctx.entrants`, with kind `"team"` — sorted, deduped.
+   *  The engine-side kind guard in `resolveMetricPersons` is why these
+   *  credit nobody regardless of what `personsOf` would have answered. */
+  teamEntrantsSkipped: readonly string[];
+  /** Rows returned — `rows.length` on the sibling return value. */
+  rows: number;
 }
 
 /**
  * Fold one fixture's event ledger into per-person stat contributions
- * (Jul3/07 §3). `core.void` drops the voided event entirely — a voided goal
- * takes its assist with it (§8). Deterministic: rows come back sorted by
- * personId.
+ * (Jul3/07 §3), plus the `PlayerStatsDiagnostics` described above.
+ * `core.void` drops the voided event entirely — a voided goal takes its
+ * assist with it (§8). Deterministic: rows come back sorted by personId,
+ * and so does every diagnostics field.
  *
  * `lineups` (S4/#428) is the role-discriminator boundary: a coach or team
  * official can be shown a card (S3 ruling 3 keeps him IN the squad so that is
@@ -240,13 +347,20 @@ function resolveMetricPersons(
  * omitted, `PlayerStatMetric.fromEntrant`/`entrantField` and
  * `PlayerStatsModel.folded` are both complete no-ops and behaviour is
  * byte-identical to before either field existed.
+ *
+ * `aggregatePlayerStats` below is a thin wrapper over this function's
+ * `.rows` — change the fold HERE only. Two loops computing the same rows
+ * is exactly the placer/verifier fork this repo has shipped repeatedly
+ * (three times in one session, twice more since); this file has one fold,
+ * and the diagnostics pass is inline in it rather than a second walk over
+ * `active` so the two can never drift apart.
  */
-export function aggregatePlayerStats(
+export function aggregatePlayerStatsWithDiagnostics(
   events: readonly EventEnvelope[],
   model: PlayerStatsModel,
   lineups?: LineupPair,
   ctx?: PlayerStatsFoldCtx,
-): PlayerStatRow[] {
+): { rows: PlayerStatRow[]; diagnostics: PlayerStatsDiagnostics } {
   const active = resolveVoids([...events]);
   const rows = new Map<string, Record<string, number>>();
   const excluded = lineups === undefined ? undefined : nonPlayerPersonIds(lineups);
@@ -257,13 +371,32 @@ export function aggregatePlayerStats(
     rows.set(personId, stats);
   };
 
+  // S8/#417 diagnostics accumulators — see `PlayerStatsDiagnostics` for
+  // what each counts and why "unattributed" is not the same question as
+  // "excluded". `unknownEntrants`/`teamEntrantsSkipped` are Sets because
+  // the same entrant id routinely repeats across a fixture's events and
+  // the output must be deduped.
+  let fromPersonField = 0;
+  let fromEntrantFallback = 0;
+  let unattributed = 0;
+  const unknownEntrants = new Set<string>();
+  const teamEntrantsSkipped = new Set<string>();
+
   for (const event of active) {
     const payload = event.payload as Record<string, unknown>;
     for (const metric of model.metrics) {
       if (event.type !== metric.from) continue;
       if (metric.when !== undefined && !metric.when(payload)) continue;
-      const persons = resolveMetricPersons(payload, metric, ctx);
-      if (persons.length === 0) continue;
+      const resolution = resolveMetricPersons(payload, metric, ctx);
+      const persons = resolution.persons;
+      if (resolution.source === "field") fromPersonField += persons.length;
+      else if (resolution.source === "entrant") fromEntrantFallback += persons.length;
+      if (resolution.unknownEntrantId !== undefined) unknownEntrants.add(resolution.unknownEntrantId);
+      if (resolution.teamEntrantId !== undefined) teamEntrantsSkipped.add(resolution.teamEntrantId);
+      if (persons.length === 0) {
+        unattributed += 1; // matched from/when, resolved nobody — S8's new silent-drop state
+        continue;
+      }
       if (metric.agg === "count") {
         for (const p of persons) bump(p, metric.key, 1);
       } else {
@@ -295,6 +428,10 @@ export function aggregatePlayerStats(
   // void-resolved list so a voided event un-counts identically in both
   // paths, and merges into the metric rows through the same `bump` — which
   // is also how the `lineups` exclusion ends up applying uniformly to both.
+  // Its own attribution is opaque from here — `fold` may resolve persons
+  // however it likes — so it contributes to none of the counters above;
+  // only the metric+field/entrant loop can see enough to say WHY a pair
+  // resolved nobody.
   if (model.folded !== undefined && ctx !== undefined) {
     for (const row of model.folded.fold(active, ctx)) {
       for (const [key, value] of Object.entries(row.stats)) bump(row.personId, key, value);
@@ -306,9 +443,38 @@ export function aggregatePlayerStats(
       stats[d.key] = d.derive(stats);
     }
   }
-  return [...rows.entries()]
+  const rowsOut = [...rows.entries()]
     .map(([personId, stats]) => ({ personId, stats }))
     .sort((a, b) => a.personId.localeCompare(b.personId));
+
+  return {
+    rows: rowsOut,
+    diagnostics: {
+      events: active.length,
+      fromPersonField,
+      fromEntrantFallback,
+      unattributed,
+      unknownEntrants: [...unknownEntrants].sort(),
+      teamEntrantsSkipped: [...teamEntrantsSkipped].sort(),
+      rows: rowsOut.length,
+    },
+  };
+}
+
+/**
+ * `aggregatePlayerStatsWithDiagnostics(...).rows` alone, for every existing
+ * caller that does not want the second return value — see that function
+ * for the actual fold. Kept byte-identical in signature and return type
+ * (S8/#417): this is a one-line wrapper, not a second implementation, so
+ * it can never drift from what the diagnostics-returning fold computes.
+ */
+export function aggregatePlayerStats(
+  events: readonly EventEnvelope[],
+  model: PlayerStatsModel,
+  lineups?: LineupPair,
+  ctx?: PlayerStatsFoldCtx,
+): PlayerStatRow[] {
+  return aggregatePlayerStatsWithDiagnostics(events, model, lineups, ctx).rows;
 }
 
 /**

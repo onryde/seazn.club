@@ -1194,6 +1194,64 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   payload` is `z.unknown()`, pads post raw payloads unvalidated client-side —
   a tripwire test was added instead of validation nothing calls.
 
+- 2026-08-12 — S8/#417 — **THREE of the prompt's premises are false, verified by
+  grep on `main` @ `989e0ba8` before any code was written.** Same shape as S7's
+  stale owed-list: W4 (#415) shipped much of W6's nominal scope opportunistically.
+  (a) "`playerStats` exists only for football, hockey and icehockey; cricket,
+  tennis, setbased, carrom, boardgame and generic show `requires_detailed_scoring`
+  instead" — **false, all 11 modules already declare `playerStats`**:
+  `football.ts:2361`, `hockey.ts:42`(→`:195`), `icehockey.ts:54`(→`:232`),
+  `cricket.ts:2105`(`CRICKET_PLAYER_STATS`, declared `:3024`), `tennis.ts:64`,
+  `setbased/badminton.ts:67`, `setbased/tabletennis.ts:74`,
+  `setbased/volleyball.ts:112`, `boardgame.ts:665`, `carrom.ts:908`,
+  `generic.ts:554`. The acceptance criterion "all 11 modules declare
+  `playerStats`" was already met on arrival.
+  (b) scope 1's "dot-path support in `field`/`sumField`" — **already shipped**:
+  `resolvePayloadPath` (`stats/stats.ts:28`) with its own docstring rules, and
+  `cricket/DOMAIN.md:164` already records the cricket model being declared
+  straight off `cricket.ball` via dotted paths.
+  (c) scope 2's "the period kernel is the precedent" for a kernel-built default
+  `playerStats` — **no kernel builds one**. All three factories only spread the
+  preset's model if present (`period/kernel.ts:2174`, `setbased/kernel.ts:1363`,
+  `nested/kernel.ts:1751`); each sport preset declares its own. There is no
+  precedent to copy — a kernel-level default is a NEW pattern here, not an
+  existing one.
+  What IS genuinely absent (grep returns zero hits repo-wide): `personsOf`,
+  `PlayerStatsFoldCtx`, `fromEntrant`, `folded`, `value?:(payload)=>number`,
+  any goalkeeper metric (clean sheet / goals conceded / non-shoot-out save), and
+  any `playerStats` block inside `testkit/conformance.ts`. That is the real S8.
+- 2026-08-12 — S8/#417 — **OWNER RULING: widen S8 into `apps/web` and wire
+  `personsOf` for real, overriding the prompt's own "no `apps/web` diff"
+  acceptance line.** The engine has no entrant→person membership anywhere:
+  `sport/entrant-model.ts` carries entrant KINDS only, and the member list lives
+  in apps/web's `entrant_members` table. So `PlayerStatsFoldCtx.personsOf` can
+  only be supplied by the caller, and an engine-only S8 would ship the entire
+  entrant→person fallback — the central deliverable of #417 and of the
+  prefer-person-fields ruling — as unreachable code. That is precisely the defect
+  class this programme has now paid for twice (S4/#428's person-role
+  discriminator shipped engine-only and a coach still earned a leaderboard row;
+  S6/#416's "engine-only diff" still broke `apps/web` at runtime). Asked before
+  widening per `_RULES.md` §1; answered "widen". Acceptance is therefore
+  amended: an `apps/web` diff IS expected, and the fallback must be proved by a
+  DB-backed regression driving a v1-era entrant-attributed stream through the
+  real usecase to person rows.
+
+- 2026-08-12 — S8/#417 — **`folded.fold(events, ctx)` cannot see the team sheet,
+  and that blocks the goalkeeper metrics until the signature grows.** Found while
+  briefing the keeper pass, not while debugging it. Clean sheets and goals
+  conceded must attribute to whoever was in goal AT THE TIME of each goal, which
+  S3/#426 made derivable for the first time — but the derivation needs the
+  STARTING keeper, and a starting keeper is a `LineupSlot` on the team sheet, not
+  an event. `aggregatePlayerStats` receives `lineups` and uses it only for the
+  S4 non-player exclusion; it does not forward it to `folded.fold`, whose
+  signature is `(events, ctx)`. So a keeper fold can see every `core.lineup.*`
+  CHANGE and none of the initial state. Resolution: `folded.fold` takes
+  `lineups` as a third argument, landed in `stats.ts` as its own step, ordered
+  AFTER the diagnostics pass because both edit that one file and this programme
+  does not run two agents at one file. Recorded because the shape is
+  instructive: the core API was specced from the metric path (payload in, person
+  out) and the first genuinely STATE-dependent statistic did not fit it.
+
 - _(append below)_
 
 ## Open questions for the owner
