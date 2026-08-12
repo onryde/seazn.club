@@ -191,6 +191,122 @@ describe("ActionForm — attribution seam (the picker itself is a later pass)", 
   });
 });
 
+/** The visible caption span action-form.tsx's `renderField` renders for
+ *  EVERY field kind (enum/number/toggle) once expanded — `className="label"`
+ *  (plus toggle's own `!mb-0` modifier). Finding it by class rather than by
+ *  `textOf(the whole <label>)` matters for the enum case specifically: the
+ *  enclosing `<label>` also wraps a `<select>` whose own `<option>` text
+ *  would otherwise pollute a whole-subtree text read. */
+function captionText(tree: ReactElement[]): string {
+  return textOf(
+    find(
+      tree,
+      (el) => isType("span")(el) && typeof propsOf(el).className === "string" && (propsOf(el).className as string).includes("label"),
+    ),
+  );
+}
+
+describe("ActionForm — field captions (S10/#419 W8 fix 1): every field renders a REAL visible label", () => {
+  it("a field WITH a labelKey renders the dictionary copy, not a derived one", () => {
+    const action: PadActionView = {
+      type: "cricket.ball",
+      labelKey: { key: "pad.cricket.action.ball", label: "Ball" },
+      fields: [
+        { kind: "number", path: "runs.bat", min: 0, max: 6, labelKey: { key: "pad.x", label: "Runs off the bat" } },
+      ],
+      attribution: [],
+      availability: AVAILABLE,
+    };
+    const island = renderIsland(ActionForm, { action, onSubmit: () => {} });
+    (propsOf(find(island.tree(), isType("button"))).onClick as () => void)();
+    const tree = island.tree();
+    expect(captionText(tree)).toBe("Runs off the bat");
+    const input = find(tree, isType("input"));
+    const accessibleName = (propsOf(input)["aria-label"] as string | undefined) ?? captionText(tree);
+    expect(accessibleName).toBe("Runs off the bat");
+  });
+
+  it("a NUMBER field with NO labelKey renders a label DERIVED from its path — visible, tied to the control", () => {
+    const action: PadActionView = {
+      type: "cricket.player.line",
+      labelKey: { key: "pad.cricket.action.playerLine", label: "Scorecard line" },
+      fields: [{ kind: "number", path: "bowling.legalBalls", min: 0, max: 300 }],
+      attribution: [],
+      availability: AVAILABLE,
+    };
+    const island = renderIsland(ActionForm, { action, onSubmit: () => {} });
+    (propsOf(find(island.tree(), isType("button"))).onClick as () => void)();
+    const tree = island.tree();
+    expect(captionText(tree)).toBe("Bowling legal balls");
+    const input = find(tree, isType("input"));
+    // The accessible name (an explicit aria-label if present, else the
+    // enclosing <label>'s own text) must be the SAME text a sighted scorer
+    // reads — never a second, different string.
+    const accessibleName = (propsOf(input)["aria-label"] as string | undefined) ?? captionText(tree);
+    expect(accessibleName).toBe("Bowling legal balls");
+  });
+
+  it("a TOGGLE field with NO labelKey renders a label DERIVED from its path", () => {
+    const action: PadActionView = {
+      type: "cricket.player.line",
+      labelKey: { key: "pad.cricket.action.playerLine", label: "Scorecard line" },
+      fields: [{ kind: "toggle", path: "batting.out" }],
+      attribution: [],
+      availability: AVAILABLE,
+    };
+    const island = renderIsland(ActionForm, { action, onSubmit: () => {} });
+    (propsOf(find(island.tree(), isType("button"))).onClick as () => void)();
+    const tree = island.tree();
+    expect(captionText(tree)).toBe("Batting out");
+  });
+
+  it("an ENUM field with NO labelKey renders a label DERIVED from its path (not polluted by its own options)", () => {
+    const action: PadActionView = {
+      type: "cricket.ball",
+      labelKey: { key: "pad.cricket.action.wicket", label: "Wicket" },
+      fields: [{ kind: "enum", path: "wicket.kind", values: ["bowled", "caught", "lbw"] }],
+      attribution: [],
+      availability: AVAILABLE,
+    };
+    const island = renderIsland(ActionForm, { action, onSubmit: () => {} });
+    (propsOf(find(island.tree(), isType("button"))).onClick as () => void)();
+    const tree = island.tree();
+    expect(captionText(tree)).toBe("Wicket kind");
+  });
+});
+
+describe("ActionForm — cricket.player.line: the reported defect (seven fields all named 'Scorecard line #n')", () => {
+  it("no control is named with a bare ordinal any more; all seven get their own distinct visible caption", () => {
+    const cricketCfg = cricket.configSchema.parse({});
+    const spec = cricket.padSpec!(cricketCfg);
+    const rawAction = spec.panels.flatMap((p) => p.actions).find((a) => a.type === "cricket.player.line");
+    expect(rawAction, "cricket.player.line must exist in the default cfg's spec").toBeDefined();
+    const action: PadActionView = { ...rawAction!, availability: AVAILABLE };
+    expect(action.fields.length, "pins the reported shape — 7 unlabelled fields").toBe(7);
+    expect(action.fields.every((f) => f.labelKey === undefined)).toBe(true);
+
+    const island = renderIsland(ActionForm, { action, onSubmit: () => {} });
+    (propsOf(find(island.tree(), isType("button"))).onClick as () => void)();
+    const tree = island.tree();
+
+    const controls = findAll(tree, (el) => isType("input")(el) || isType("select")(el));
+    expect(controls.length).toBe(7);
+    const ariaLabels = controls.map((c) => propsOf(c)["aria-label"]).filter((v): v is string => typeof v === "string");
+    expect(ariaLabels.join(" | "), "no control should still need a raw-ordinal aria-label").not.toMatch(/#\d/);
+
+    const captionSpans = findAll(
+      tree,
+      (el) => isType("span")(el) && typeof propsOf(el).className === "string" && (propsOf(el).className as string).includes("label"),
+    );
+    const captions = captionSpans.map((s) => textOf(s));
+    expect(captions.length, "every one of the 7 fields must render its OWN visible caption").toBe(7);
+    expect(new Set(captions).size, "captions must be genuinely distinct, not one name repeated").toBe(7);
+    expect(captions).toContain("Innings");
+    expect(captions).toContain("Bowling wickets");
+    expect(captions).toContain("Batting out");
+  });
+});
+
 describe("Panel — layout-driven container; locked actions render a reason, never a working form", () => {
   it("a locked action renders its reason text and no interactive submit control", () => {
     const panelView: PadPanelView = {

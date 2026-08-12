@@ -18,7 +18,7 @@ import { useState, type ReactNode } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { enumLabel, padLabel } from "@/lib/scoring-vocab";
 import type { PadField, PadFieldValue } from "@seazn/engine/sport";
-import { buildActionPayload, checkActionValidity, type PadActionView } from "./view-model";
+import { buildActionPayload, checkActionValidity, deriveFieldPathLabel, type PadActionView } from "./view-model";
 
 export type ActionValues = Record<string, PadFieldValue | undefined>;
 
@@ -53,17 +53,26 @@ function renderField(
   value: PadFieldValue | undefined,
   onChange: (value: PadFieldValue | undefined) => void,
   msg: MsgFn,
-  /** Already-resolved (localized) text for the owning action — the fallback
-   *  accessible name for a field with no `labelKey` of its own (legal by
-   *  design, see `PadFieldEnum`'s doc comment in sport/module.ts: several
-   *  fields are meant to be inferred from the action's own name/layout, not
-   *  independently captioned). Composing already-localized copy plus a
-   *  1-based index is not new hardcoded English. */
-  fallbackName: string,
-  index: number,
 ): ReactNode {
-  const caption = field.labelKey ? padLabel(field.labelKey.key, msg, field.labelKey.label) : null;
-  const ariaLabel = caption ?? `${fallbackName} #${index + 1}`;
+  // A declared `labelKey` always wins (S7/#427's dictionary copy). Absent
+  // one, S10/#419 W8 fix 1 derives a REAL, VISIBLE caption from the field's
+  // own dotted `path` (`deriveFieldPathLabel`, view-model.ts) — never the
+  // `${action} #${n}` ordinal this replaces (the reported defect: cricket's
+  // seven-field player-line action had no visible label at all, only an
+  // invisible "Scorecard line #1".."#7" aria-label). `deriveFieldPathLabel`
+  // is generated from an engine-supplied path string, not authored copy, so
+  // it is deliberately never routed through msg()/a dictionary key — see its
+  // own header in view-model.ts for why that is correct rather than a gap
+  // `i18n:check` should catch (that gate only walks `src/dictionaries/**`
+  // and never sees this string at all).
+  //
+  // `caption` is therefore always non-empty, so every field kind below gets
+  // a real visible `<span>` wrapped by the same `<label>` that also wraps
+  // its control — implicit label association, the same mechanism a
+  // `labelKey`-bearing field already relied on, so no `aria-label` override
+  // is needed (or rendered) for either case any more: the accessible name
+  // and the visible text are now structurally the SAME string.
+  const caption = field.labelKey ? padLabel(field.labelKey.key, msg, field.labelKey.label) : deriveFieldPathLabel(field.path);
 
   if (field.kind === "enum") {
     const bareField = field.path.split(".").pop()!;
@@ -72,7 +81,6 @@ function renderField(
         {caption && <span className="label">{caption}</span>}
         <select
           className="select"
-          aria-label={caption ? undefined : ariaLabel}
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value)}
         >
@@ -97,7 +105,6 @@ function renderField(
         <input
           type="number"
           className="input"
-          aria-label={caption ? undefined : ariaLabel}
           min={field.min}
           max={field.max}
           step={step}
@@ -122,12 +129,7 @@ function renderField(
   // toggle
   return (
     <label key={field.path} className="flex items-center gap-2">
-      <input
-        type="checkbox"
-        aria-label={caption ? undefined : ariaLabel}
-        checked={value === true}
-        onChange={(e) => onChange(e.target.checked)}
-      />
+      <input type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} />
       {caption && <span className="label !mb-0">{caption}</span>}
     </label>
   );
@@ -195,9 +197,7 @@ export function ActionForm({ action, onSubmit, submitting = false, renderAttribu
   return (
     <div className="card space-y-3 border-2 border-accent-line p-3">
       <p className="label !mb-0">{label}</p>
-      {action.fields.map((field, i) =>
-        renderField(field, values[field.path], (v) => setValue(field.path, v), msg, label, i),
-      )}
+      {action.fields.map((field) => renderField(field, values[field.path], (v) => setValue(field.path, v), msg))}
       {renderAttribution?.(action, values, setValue)}
       {!validity.ok && <p className="text-xs text-amber-700">{msg(validity.reason.key)}</p>}
       <div className="flex gap-2">
