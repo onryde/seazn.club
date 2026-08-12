@@ -131,6 +131,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import structlog
 from ortools.sat.python import cp_model
 
 from placement.model import (
@@ -140,6 +141,8 @@ from placement.model import (
     SolverKnobs,
     extract_assignments,
 )
+
+log = structlog.get_logger(__name__)
 
 # --- the protocol constant --------------------------------------------------
 #
@@ -317,6 +320,20 @@ def run_tier_chain(
             break
 
         achieved = int(solver.Value(term))
+
+        # `elapsed_seconds_total`, not `elapsed_seconds`: this is time since the
+        # WHOLE CHAIN started (`started`, above), not this tier's own duration —
+        # a per-tier duration is recoverable by diffing consecutive events, but
+        # a misleadingly-named cumulative figure read as a per-tier one is
+        # exactly the kind of misreading DEBUG-level output invites in an
+        # incident, when nobody has time to check the field's own definition.
+        log.debug(
+            "tier_completed",
+            tier=spec.name,
+            status=last_barren_status,
+            achieved=achieved,
+            elapsed_seconds_total=time.perf_counter() - started,
+        )
 
         if status != cp_model.OPTIMAL:
             # Cut short by the clock. ADOPT the board anyway; the tier is not

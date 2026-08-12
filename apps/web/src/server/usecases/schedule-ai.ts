@@ -19,6 +19,7 @@ import {
   type AiTurn,
 } from "@/server/ai/provider";
 import { withTenant } from "@/lib/db";
+import { log } from "@/server/logger";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
 import { balance, spendCredit, walletIdFor } from "@/lib/credits";
@@ -2471,6 +2472,7 @@ export async function aiPlanForDivision(
   divisionId: string,
   input: AiPlanRequest,
 ): Promise<AiPlanResponse> {
+  log.info({ orgId: auth.orgId, divisionId }, "schedule-ai: aiPlanForDivision start");
   // W5 (#400) Task 2b/H3. The confirmation is claimed early — before the pack,
   // the quote and the reserve — because an atomic single-use claim is the only
   // thing that makes a double-submitted confirm buy ONE run under READ
@@ -2487,6 +2489,14 @@ export async function aiPlanForDivision(
   try {
     return await planForDivision(auth, divisionId, input, claim);
   } catch (err) {
+    // Curated fields, not the raw `err` — same reasoning as
+    // `placement-client.ts`'s log sites: this catches everything
+    // `planForDivision` can throw (see the JSDoc above), and nothing should
+    // have to reason about what an arbitrary caught object might carry.
+    log.warn(
+      { message: err instanceof Error ? err.message : String(err), orgId: auth.orgId, divisionId },
+      "schedule-ai: aiPlanForDivision failed",
+    );
     if (claim.previewId !== null && !claim.creditConsumed) {
       await releasePreviewQuietly(claim.previewId, auth.orgId);
     }
@@ -2514,7 +2524,10 @@ export async function releasePreviewQuietly(previewId: string, orgId: string): P
   try {
     await releasePreview(previewId, orgId);
   } catch (err) {
-    console.error(`[schedule-ai] could not release preview ${previewId} after a failed run`, err);
+    log.warn(
+      { message: err instanceof Error ? err.message : String(err), previewId, orgId },
+      "schedule-ai: could not release preview after a failed run",
+    );
   }
 }
 

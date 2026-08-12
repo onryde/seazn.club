@@ -39,10 +39,10 @@ with two arguments, and a defaulted argument nobody passes is precisely how
 
 from __future__ import annotations
 
-import logging
 import time
 
 import pytest
+import structlog
 
 import placement.objective
 from placement.config import Settings
@@ -271,7 +271,7 @@ def test_the_service_carries_its_env_knobs_all_the_way_into_the_search(clean_env
     assert len(response.assignments) == 1
 
 
-def test_a_solve_logs_one_line_saying_what_it_did(caplog, monkeypatch):
+def test_a_solve_logs_one_line_saying_what_it_did():
     """The absence of this line cost four production deploys.
 
     The service logged only refusals, so the only visible timing was TS-side
@@ -279,10 +279,18 @@ def test_a_solve_logs_one_line_saying_what_it_did(caplog, monkeypatch):
     and cannot separate "the solver used its whole budget" from "the solver
     finished in 3s and something else took the rest".
 
-    Asserted on the FIELDS, not the prose: `granted` is the wall after clamping
-    (so a clamp is visible rather than inferred), `solver_elapsed_ms` is the
-    solver's own time, and the three knobs are echoed because a knob you cannot
-    see is a knob you cannot trust.
+    Asserted on the FIELDS, not the prose: `granted_wall_seconds` is the wall
+    after clamping (so a clamp is visible rather than inferred),
+    `solver_elapsed_ms` is the solver's own time, and the three knobs are
+    echoed because a knob you cannot see is a knob you cannot trust.
+
+    `structlog.testing.capture_logs()`, not `caplog`: `main.py` now logs this
+    through structlog, configured standalone (see `placement._logging`) rather
+    than routed through stdlib `logging`, so the structured fields never reach
+    `record.getMessage()` and a substring match against a rendered line no
+    longer sees anything. `capture_logs()` yields the events as plain dicts —
+    one per call, each carrying `event` plus every kwarg passed — so the
+    fields below are asserted as dict keys instead of substrings of a line.
     """
     from placement.main import SchedulerServicer  # noqa: PLC0415
 
@@ -294,24 +302,27 @@ def test_a_solve_logs_one_line_saying_what_it_did(caplog, monkeypatch):
     )
     servicer = SchedulerServicer(settings)
 
-    with caplog.at_level(logging.INFO):
+    with structlog.testing.capture_logs() as captured:
         servicer._solve_build(_solvable_request())
 
-    lines = [r.getMessage() for r in caplog.records if "solve request=" in r.getMessage()]
-    assert len(lines) == 1, f"expected exactly one per-solve line, got {lines}"
-    line = lines[0]
+    events = [entry for entry in captured if entry["event"] == "solve_completed"]
+    assert len(events) == 1, f"expected exactly one per-solve event, got {captured}"
+    entry = events[0]
     for field in (
-        "status=",
-        "placed=",
-        "tiers=",
-        "granted=",
-        "solver_elapsed_ms=",
-        "workers=",
-        "symmetry=",
-        "probing=",
+        "status",
+        "placed",
+        "fixtures",
+        "tiers_completed",
+        "tiers_total",
+        "granted_wall_seconds",
+        "solver_elapsed_ms",
+        "workers",
+        "symmetry",
+        "probing",
     ):
-        assert field in line, f"{field!r} missing from the per-solve line: {line}"
+        assert field in entry, f"{field!r} missing from the solve_completed event: {entry}"
     # The values, not just the keys: `Settings` above overrides nothing, so the
-    # line must echo the shipped defaults. A line that printed `workers=0` for
+    # event must echo the shipped defaults. An event that carried workers=0 for
     # every solve would satisfy the loop and tell an operator nothing.
-    assert "workers=8 symmetry=0 probing=0" in line
+    assert (entry["workers"], entry["symmetry"], entry["probing"]) == (8, 0, 0)
+    assert entry["request_id"] == "knobs-1"

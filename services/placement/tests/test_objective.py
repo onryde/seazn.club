@@ -60,9 +60,11 @@ itself is untouched by round 6 — it never keys on identity at all, only on
 `FixtureVars`'s decision variables.
 """
 
+import logging
 import os
 
 import pytest
+import structlog
 
 from _board_positional import to_positional
 from placement.model import MIN_MS, build_model, solve
@@ -560,6 +562,41 @@ def test_tier_directions_are_pinned_without_the_clock():
     # Python rather than read back off the model's own term.
     dur_ms = board[4]["match_minutes"] * MIN_MS
     assert _court_imbalance(outcome.assignments, board[1], dur_ms) == PROBE_OPTIMAL_IMBALANCE_MS, detail
+
+
+def test_tier_completed_debug_event_fires_once_per_tier():
+    """`run_tier_chain` had no logging at all before this — the only visibility
+    into a WITHIN-CHAIN timing breakdown was `main.py`'s one-line-per-solve
+    summary, which reports the WHOLE solve's elapsed time and cannot separate
+    "T1 took the whole budget" from "T3 did". DEBUG, not INFO, for the same
+    reason as `model.py`'s `model_built` event: this fires inside the hot tier
+    loop and `PLACEMENT_LOG_LEVEL` defaults to INFO in production.
+
+    Uses `imbalance_probe_board()` (proves all four tiers in ~20ms) rather than
+    the module-scoped `chain`/`board` fixtures — those back a real multi-second
+    four-solve walk on the production board, and this test only needs to know
+    an event fires per tier, not what the production numbers are.
+    """
+    from placement_bench_boards import imbalance_probe_board
+
+    board = to_positional(imbalance_probe_board())
+    model = _model_for(board)
+
+    old_wrapper_class = structlog.get_config()["wrapper_class"]
+    structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG))
+    try:
+        with structlog.testing.capture_logs() as captured:
+            outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=5.0)
+    finally:
+        structlog.configure(wrapper_class=old_wrapper_class)
+
+    events = [entry for entry in captured if entry["event"] == "tier_completed"]
+    assert len(events) == outcome.tiers_completed == 4, captured
+    assert [e["tier"] for e in events] == [TIER_PLACED, TIER_MAKESPAN, TIER_IDLE_GAP, TIER_IMBALANCE]
+    for entry in events:
+        assert entry["status"] in ("OPTIMAL", "FEASIBLE")
+        assert isinstance(entry["achieved"], int)
+        assert entry["elapsed_seconds_total"] >= 0
 
 
 # --- degenerate arguments must fail loudly, not solve quietly ---------------

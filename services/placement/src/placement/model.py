@@ -325,7 +325,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
+import structlog
 from ortools.sat.python import cp_model
+
+log = structlog.get_logger(__name__)
 
 MIN_MS = 60_000
 DAY_MS = 86_400_000
@@ -1085,6 +1088,14 @@ def build_model(
         makespan=makespan,
         worst_gap=worst_gap,
         imbalance=imbalance,
+    )
+    log.debug(
+        "model_built",
+        fixtures=n,
+        courts=num_courts,
+        existing=len(existing),
+        dependencies=len(dependencies),
+        rule_groups=len(rule_groups),
     )
     return model
 
