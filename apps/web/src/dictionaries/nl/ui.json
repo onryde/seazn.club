@@ -3524,5 +3524,18 @@
   "squadRole.coach": "Coach",
   "squadRole.staff": "Teamstaf",
   "squadProvenance.named": "Op het wedstrijdformulier",
-  "squadProvenance.added": "Tijdens de wedstrijd toegevoegd"
+  "squadProvenance.added": "Tijdens de wedstrijd toegevoegd",
+  "board.autoSubtitle": "Bouwt het schema opnieuw op. Vergrendelde kaarten blijven staan.",
+  "board.reflowSubtitle": "Lost botsingen op en verplaatst zo min mogelijk.",
+  "board.autoConfirm.title": "Schema opnieuw opbouwen?",
+  "board.autoConfirm.body.one": "1 wedstrijd is vergrendeld en blijft staan waar hij staat.",
+  "board.autoConfirm.body.other": "{count} wedstrijden zijn vergrendeld en blijven staan waar ze staan.",
+  "board.autoConfirm.confirm": "Doorgaan",
+  "board.result.lockedKept.one": "1 vergrendelde wedstrijd bleef staan waar hij stond.",
+  "board.result.lockedKept.other": "{count} vergrendelde wedstrijden bleven staan waar ze stonden.",
+  "board.result.overrideHint": "Wedstrijden die je hebt vergrendeld kunnen de reden zijn dat niet alles paste.",
+  "board.result.overrideButton": "Opnieuw uitvoeren en vergrendelde wedstrijden laten verplaatsen",
+  "board.result.overrideConfirm.title": "Vergrendelde wedstrijden laten verplaatsen?",
+  "board.result.overrideConfirm.body": "Deze nieuwe uitvoering kan wedstrijden verplaatsen die je had vergrendeld — ze kunnen op een ander tijdstip of andere baan terechtkomen.",
+  "board.result.overrideConfirm.confirm": "Opnieuw uitvoeren en verplaatsen toestaan"
 }

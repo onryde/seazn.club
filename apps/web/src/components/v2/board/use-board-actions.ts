@@ -99,8 +99,19 @@ export interface BoardActions {
    * express: it re-flows the unlocked cards exactly as REFLOW does, and asks the
    * tier solver to improve the board rather than the repair solver to make it
    * legal.
+   *
+   * `ignoreLocks` (#pins-ui, owner ruling 2026-08-12) is OMITTED by every caller
+   * except the infeasible escape hatch: it is the client half of the request
+   * schema's `ignore_locks`, the only thing that can make a run move a
+   * `schedule_locked` fixture. Defaulted to `false` and sent only when `true` —
+   * see the request body below for why an explicit `false` still omits the key.
    */
-  autoRun: (stageId: string, onlyUnlocked: boolean, mode?: AutoScheduleMode) => Promise<void>;
+  autoRun: (
+    stageId: string,
+    onlyUnlocked: boolean,
+    mode?: AutoScheduleMode,
+    ignoreLocks?: boolean,
+  ) => Promise<void>;
   /**
    * Publish / start. Resolves to `null` when the action landed, and to the
    * gate's refusal when the server would not put this board in front of players
@@ -353,7 +364,7 @@ export function useBoardActions(
   );
 
   const autoRun = useCallback(
-    async (stageId: string, onlyUnlocked: boolean, mode?: AutoScheduleMode) => {
+    async (stageId: string, onlyUnlocked: boolean, mode?: AutoScheduleMode, ignoreLocks = false) => {
       setError(null);
       setNotice(null);
       setLastRun(null);
@@ -370,11 +381,19 @@ export function useBoardActions(
           solver?: ScheduleSolverInfo;
         }>(`/api/v1/stages/${stageId}/schedule/auto`, {
           method: "POST",
-          // Spread, not `mode: mode` — an explicit `undefined` serialises as a
-          // present key on some paths and the request schema's preprocess keys
-          // on `body.mode !== undefined`, so it would defeat the derivation the
-          // two original callers depend on.
-          json: { only_unlocked: onlyUnlocked, ...(mode !== undefined ? { mode } : {}) },
+          // Spread, not `mode: mode` / `ignore_locks: ignoreLocks` — an explicit
+          // `undefined`/`false` serialises as a present key on some paths, and
+          // the request schema keeps BOTH fields `.optional()` rather than
+          // defaulted so a caller who never heard of them parses identically to
+          // one that explicitly declined. `ignoreLocks` in particular must never
+          // appear as `false`: this is the ONLY thing that can move a
+          // `schedule_locked` fixture (owner ruling, 2026-08-12), and every
+          // caller but the infeasible escape hatch below relies on its absence.
+          json: {
+            only_unlocked: onlyUnlocked,
+            ...(mode !== undefined ? { mode } : {}),
+            ...(ignoreLocks ? { ignore_locks: true } : {}),
+          },
         });
         // Before the empty-proposal return, not after: an `infeasible` run can
         // place nothing at all, and that is exactly the run whose report the
