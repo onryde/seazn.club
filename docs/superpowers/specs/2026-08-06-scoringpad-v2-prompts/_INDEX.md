@@ -20,7 +20,7 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 | S5 | #431 | `S05-431-decisions-register.md` | S3, S4 | **DONE** — register closed, all 8 rulings accounted for; items 2 (tennis game-award) and 4 (football quarters) BUILT this session on owner instruction rather than re-homed, cricket `pairs-6-a-side` dropped with a DB prune fix |
 | S6 | #416 | `S06-416-w5-padspec.md` | S2, S3, S5 | **DONE** — `PadSpec` contract + bidirectional conformance shipped for all 11 modules; fidelity model redesigned per the S2 ruling; 3 named variant-gating regressions fixed; e2e/smoke deferred to S12/S13 |
 | S7 | #427 | `S07-427-pad-vocabulary-i18n.md` | S3, S4, S6 | **DONE** — prompt's own "owed by sport" list was stale (S3/S4/S5 shipped most of it early); real gap was S6's 164-key `PadLabel` namespace never reaching apps/web, a missing per-field label slot, and 3 review-caught rendering bugs. Real e2e shipped, independently verified twice |
-| S8 | #417 | `S08-417-w6-player-stats.md` | S6 | **DONE** — 3 prompt premises false (all 11 modules already declared `playerStats`, dot-paths already shipped, no kernel default existed to copy); the real defect was models declared against OPTIONAL person fields on entrant-attributed payloads, i.e. inert. Owner ruled to widen into `apps/web` so the entrant→person fallback is reachable. Goalkeeper stats shipped (clean sheets, goals conceded; saves stay deferred — no sport records a save event). E2E + smoke deferred to S9/S12/S13 |
+| S8 | #417 | `S08-417-w6-player-stats.md` | S6 | **DONE, e2e+smoke discharged** — 3 prompt premises false (all 11 modules already declared `playerStats`, dot-paths already shipped, no kernel default existed to copy); the real defect was models declared against OPTIONAL person fields on entrant-attributed payloads, i.e. inert. Owner ruled to widen into `apps/web` so the entrant→person fallback is reachable. Goalkeeper stats shipped INCLUDING shots-on-goal/saves (owner amended the S2/#430 parking — table row above is stale on this point, kept for history per the decision log below). W6 review closed 6+3+1 gaps across three rounds. E2E (`apps/web/e2e/stats.spec.ts`) + smoke (`scripts/smoke.ts` `playerStatsSuite`) landed in the S8b follow-up session — real HTTP, real numbers, mutation-proved. S9 still owes its OWN e2e once the `/me` page exists; that is not this row |
 | S9 | #418 | `S09-418-w7-career-rollup.md` | S3, S8 | TODO |
 | S10 | #419 | `S10-419-w8-chassis-renderer.md` | S6 | TODO |
 | S11 | #420 | `S11-420-w9-skins.md` | S7, S10 | TODO |
@@ -1495,6 +1495,52 @@ Append one line per ruling: date, session, decision, reason. Never delete.
     should carry forward that `labelPlayerStats` drops zero-valued rows — so
     a genuinely 0% `save_percentage` renders as no row, same as an absent
     one. Correct for absent-vs-zero, lossy for a keeper who saved nothing.
+
+- 2026-08-12 — S8b (worktree `s8-w6-player-stats`, PR #538) — **the e2e/smoke
+  gap owed by the "four owner-ruled gaps" entry above, closed.** No
+  rendering page exists yet (S9/#418 builds `/me`), so both suites drive
+  `/api/v1` over real HTTP and assert real per-person numbers, per owner
+  instruction to not defer this further. Two cases, matching the two
+  attribution paths #417 exists for: (a) an explicit person field —
+  football, two team entrants with inline `members`, real lineups (the
+  engine's `applyGoal` 400s an explicit scorer absent from `state.squads`,
+  so both sides need one), `core.start` + `football.goal{by,scorer}`,
+  asserted against `GET .../stats/players` (`goals:1, points:1`) and — the
+  one real rendering surface that predates S9 — the division console's
+  existing `?tab=stats` `stats-board` (PROMPT-27). (b) the entrant
+  fallback — badminton (`bwf`), two `individual` entrants with inline
+  `members` and deliberately no lineup anywhere in this half (the
+  fallback is keyed on `entrant_members`, not on-pitch state — setting one
+  would have proved the wrong mechanism), `badminton.rally{wonBy}` alone
+  (no `scorer`/`server`, the exact v1-era shape), asserted `points_won:1`
+  on the roster person resolved off the fixture's own `home_entrant_id`
+  (never assumed from creation order).
+  Falsifiability, proved by mutation, not assumed: `recomputePlayerStats`
+  (`apps/web/src/server/usecases/player-stats.ts`) was temporarily forced to
+  `return { rows: [], throughSeq: 0, hasModel: true }` right after the
+  existing `model === undefined` early return — i.e. exactly "the fold
+  returned `[]`" — backed up with `cp`, never `git checkout` on
+  uncommitted work. Both new Playwright specs failed at the SAME line,
+  `expect(row).toBeDefined()` -> `Received: undefined`, then the file was
+  restored from the backup and `diff`-confirmed byte-identical, `git
+  status` clean. This is the assertion that would break in production too.
+  Files: `apps/web/e2e/stats.spec.ts` (extended, not a new file — the
+  requires-detailed-notice test already lived there), `scripts/smoke.ts`
+  (`playerStatsSuite`, called from `main()` right after `disciplineSuite`
+  on the same already-Pro `org2`). The smoke addition was verified two
+  ways without running the full 13k-line `main()`: `typecheck:scripts`
+  (the real project compiler, not bare `npx tsc`) on the whole file, and a
+  throwaway standalone script (never committed) running an exact copy of
+  the new function's body against the live server plus a freshly
+  Pro-flipped org — 11/11 passed. Real counts, all real HTTP against
+  `postgresql://...@127.0.0.1:54357/seazn_test`, confirmed by querying
+  that exact database directly for the TAG-stamped competition rows
+  afterward, not inferred from a green exit code alone. Verified with
+  `next dev` on port 3211 (`localhost`, not `127.0.0.1` — the session
+  cookie is `Secure`+host-scoped) — `next build` is a separate,
+  unrelated, pre-existing local break on this Next version (upstream
+  `InvariantError`), not this branch's problem, so dev was the sanctioned
+  target per owner instruction.
 
 - _(append below)_
 
