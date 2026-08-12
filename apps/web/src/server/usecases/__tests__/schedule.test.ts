@@ -528,9 +528,27 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     // `scheduling.board` branches are exercised — the pin on `moveFixture` and
     // `source: "manual"` on `applySchedule` — and each is read back, so a call
     // that returned quietly without writing cannot pass.
+    //
+    // C1 (task 3): moved EARLIER than the auto-scheduled board (`at(-60)`),
+    // not later (the original `at(600)`). `fixtures[0]` is round 1
+    // (`generateStageFixtures` orders `round_no, seq_in_round`), and the
+    // auto-scheduled board above is round-order-correct by construction —
+    // pushing round 1 to `at(600)`, ten hours past every later round, was a
+    // genuine round-order violation this test was unknowingly creating.
+    // `applySchedule`'s delta gate has no way to see it (a single-fixture
+    // manual move puts only that ONE fixture in `assignments`; its own
+    // round-robin siblings sit in `existing`, and the round-order pair scan
+    // is scoped to `assignments` alone — the same shape as the escalated
+    // `moveFixture` gap, out of this task's scope to fix), so the move went
+    // through uncaught; `startDivision`'s own gate (`validateScheduleIn`,
+    // task 3 / G1) is ABSOLUTE, not delta, and correctly refused the
+    // resulting board. This test is about proving manual board editing isn't
+    // blocked by the entitlement gate, not about round order, so the fix is
+    // a legal target time — round 1 moving EARLIER can never breach
+    // round order — not a change to any gate.
     await patchFixture(auth, fixtures[0]!.id, { schedule_locked: true });
     await applySchedule(auth, stage.id, {
-      assignments: [{ fixture_id: fixtures[0]!.id, scheduled_at: at(600), court_label: "C1" }],
+      assignments: [{ fixture_id: fixtures[0]!.id, scheduled_at: at(-60), court_label: "C1" }],
       source: "manual",
     });
     const [pinned] = await sql<{ schedule_locked: boolean; court_label: string | null }[]>`

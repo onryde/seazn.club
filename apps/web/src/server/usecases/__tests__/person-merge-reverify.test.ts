@@ -233,20 +233,37 @@ describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => 
     expect(round1, "no round 1 fixture in the generated league").toBeTruthy();
     expect(round2, "no round 2 fixture in the generated league").toBeTruthy();
 
-    // Written straight to the table, not through `applySchedule` or
-    // `moveFixture`: the round-order-aware write gate would refuse to
-    // CREATE this board in the first place (same technique
-    // schedule-reflow-verifier-widening.test.ts's own court-clash test
-    // uses, for the identical reason — refusing to create a disordered
-    // board is not the same as never having to read one). Round 2 starts
-    // an hour before round 1: round order requires round 1 <= round 2, so
-    // this is a direct, unambiguous H6 breach, on two DIFFERENT courts so
-    // no incidental court clash rides along.
+    // Scheduled IN ORDER and published while legal. Task 3 (G1) wired
+    // `roundRobinStageIds` into `validateScheduleIn`, so `publishSchedule`'s
+    // own gate now sees round order too — the disordered board this test
+    // used to smuggle straight past a blind gate would now be REFUSED at
+    // this very call (`schedule-publish-gate.test.ts` pins that half: a
+    // round-robin board with an out-of-order round is refused at publish).
+    // So: publish while legal, then corrupt the board AFTER — standing in
+    // for whatever might do that to a live board later (a direct edit, an
+    // incident), the same "was legal when published, wrong now" shape
+    // `seedBoard`'s person-overlap scenario above already relies on, just
+    // reached with a straight SQL edit instead of a merge, since merging
+    // people cannot change a fixture's time or round (only reveal what
+    // time/round already made true — see this test's own header comment).
     await sql`update fixtures set scheduled_at = ${T0}, court_label = 'Court 1' where id = ${round1.id}`;
     await sql`
-      update fixtures set scheduled_at = ${new Date(T0.getTime() - 60 * MS_PER_MIN)}, court_label = 'Court 2'
+      update fixtures set scheduled_at = ${new Date(T0.getTime() + 60 * MS_PER_MIN)}, court_label = 'Court 2'
       where id = ${round2.id}`;
     await publishSchedule(auth, division.id);
+
+    // NOW corrupt it — straight to the table, not through `applySchedule` or
+    // `moveFixture`: the round-order-aware write gate (this same fix) would
+    // refuse either path (same technique
+    // schedule-reflow-verifier-widening.test.ts's own court-clash test
+    // uses, for the identical reason). Round 2 now starts an hour before
+    // round 1: round order requires round 1 <= round 2, so this is a
+    // direct, unambiguous H6 breach, on two DIFFERENT courts (court_label
+    // is untouched by this second write) so no incidental court clash
+    // rides along.
+    await sql`
+      update fixtures set scheduled_at = ${new Date(T0.getTime() - 60 * MS_PER_MIN)}
+      where id = ${round2.id}`;
 
     // The survivor only needs to APPEAR on this board — `reverifyBoards`
     // reports the board's WHOLE conflict set, not merely conflicts naming

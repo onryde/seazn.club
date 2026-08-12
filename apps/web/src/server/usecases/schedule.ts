@@ -2410,9 +2410,21 @@ async function validateScheduleIn(
     ...new Set(all.flatMap((f) => [f.home_entrant_id, f.away_entrant_id])),
   ].filter((e): e is string => e !== null);
   const people = await peopleByEntrant(tx, entrantIds);
+  // C1 follow-up (2026-08-12, task 3 / G1). This function backs BOTH
+  // `validateSchedule` (the board's live conflict report) and, through
+  // `assertPublishable`, `publishSchedule`/`startDivision` — the write gate.
+  // Its own `toAssignment` call used to run with no `roundRobinStageIds` 4th
+  // argument, so `roundNo` never reached the `Assignment`s handed to
+  // `validateAssignments` below: round order was structurally invisible to
+  // both the panel's badges and the publish/start gate, regardless of what
+  // the board actually looked like — a round-robin division could publish or
+  // start with a genuine round-order violation and nothing would show it.
+  // Wired the same way `autoSchedule`/`applySchedule`/`reverifyBoards`
+  // already are (`schedule.ts`'s own reference wiring; `person-merge.ts`).
+  const roundRobin = await roundRobinStageIds(tx, divisionId);
   const assignments = all
     .filter((f) => f.scheduled_at !== null && f.court_label !== null)
-    .map((f) => toAssignment(f, settings.config.matchMinutes, people));
+    .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
   const siblings = await siblingAssignments(
     tx,
     divisionId,
