@@ -98,6 +98,7 @@ import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { requireFeature } from "@/lib/entitlements";
 import { HttpError } from "@/lib/errors";
+import { log } from "@/server/logger";
 import { EngineError } from "@seazn/engine/core";
 import { appendDivisionEvent } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -118,6 +119,7 @@ import {
   divisionLockState,
   feedDependencies,
   loadSettings,
+  lockedFixtureIds,
   peopleByEntrant,
   scopeLocked,
   siblingAssignments,
@@ -416,6 +418,26 @@ export async function applyCompetitionSchedule(
     // but here the ids come off the wire, so an unknown one is a request defect
     // and must be a 4xx.
     for (const d of loaded) {
+      // #pins-in-build Task 3: the SAME apply-time lock guard as the
+      // per-stage `applySchedule` (schedule.ts), and deliberately WITHOUT
+      // either of its two exemptions — neither one's trigger can occur on
+      // this endpoint:
+      //   - the `source: "manual"` exemption does not apply because this
+      //     endpoint's `source` is `z.literal("ai")` — the wire schema
+      //     (`ApplyCompetitionScheduleRequest`) and this file's own
+      //     `CompetitionApplyInput` both make a manual joint apply
+      //     inexpressible ("a hand edit is one division by construction");
+      //   - the explicit-unlock exemption does not apply because the
+      //     per-assignment schema is `.strict()` with only `fixture_id`,
+      //     `scheduled_at`, `court_label` — there is no `schedule_locked` to
+      //     read here, deliberately (see the schema's own comment on why
+      //     pinning is not accepted on this endpoint).
+      // Every call through this endpoint is therefore exactly the "stale
+      // solver proposal" case the guard exists to close. Keeps the
+      // "unchanged placement is a no-op" exception, same reasoning as
+      // schedule.ts: a successful joint plan legitimately returns a locked
+      // fixture back at its own placement.
+      const lockedIds = lockedFixtureIds(d.fixtures, d.scopes, false);
       for (const a of d.input.assignments) {
         const f = d.byId.get(a.fixture_id);
         if (!f) {
@@ -433,6 +455,17 @@ export async function applyCompetitionSchedule(
         }
         if (scopeLocked(f, d.scopes)) {
           throw new HttpError(422, `fixture ${a.fixture_id} is inside a locked scope`);
+        }
+        if (lockedIds.has(f.id)) {
+          const unchanged =
+            ms(f.scheduled_at as string | Date) === ms(a.scheduled_at) && f.court_label === a.court_label;
+          if (!unchanged) {
+            log.warn(
+              { fixtureId: a.fixture_id, divisionId: d.id },
+              "competition-schedule-apply: rejected a move onto a locked fixture",
+            );
+            throw new HttpError(422, `fixture ${a.fixture_id} is locked — unlock it before moving`);
+          }
         }
       }
     }

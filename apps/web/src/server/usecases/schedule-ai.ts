@@ -617,6 +617,20 @@ export async function buildSchedulePack(
       throw new HttpError(422, "AI_PLAN_TOO_LARGE", "AI_PLAN_TOO_LARGE");
     }
     const movableSet = new Set(movable.map((f) => f.id));
+    // #pins-in-build Task 2/4: the canonical lock predicate, not a third (and
+    // fourth) hand-maintained copy of "is this fixture locked". Both
+    // `packMovable`'s `pinned` field below (feeds `structuralCheck`'s pinned
+    // Map and `toEngineAssignments`'s pinnedIds — what the AI plan's own
+    // structural/diff guards refuse to let move) and the "generate" draft's
+    // `locked` anchor further down used to test `f.schedule_locked` alone, so
+    // a division-scope-locked fixture (no `schedule_locked` of its own)
+    // was invisible to both. Computed ONCE here, ahead of every mode branch,
+    // and reused by both call sites so they cannot drift onto two different
+    // ideas of "locked" again. `ignoreLocks` is always false: the AI draft
+    // pack has no equivalent of `AutoScheduleRequest.ignore_locks` to thread
+    // through.
+    const { scopes: lockScopes } = await divisionLockState(tx, divisionId);
+    const lockedIds = lockedFixtureIds(movable, lockScopes, false);
 
     // People map (entrant → person ids) for the engine draft and the pack's
     // shared-player list.
@@ -963,15 +977,8 @@ export async function buildSchedulePack(
       const rankById = new Map(orderedMovable.map((f, i) => [f.id, String(i).padStart(6, "0")]));
       const realIdByRank = new Map(orderedMovable.map((f, i) => [String(i).padStart(6, "0"), f.id]));
 
-      // #pins-in-build Task 2: the canonical lock predicate, not a third
-      // hand-maintained copy of "is this fixture locked" — this branch used
-      // to test `f.schedule_locked` alone, so a division-scope-locked
-      // fixture (no `schedule_locked` of its own) entered the greedy draft
-      // fully movable despite the comment below promising otherwise.
-      // `ignoreLocks` is always false: the AI draft pack has no equivalent
-      // of `AutoScheduleRequest.ignore_locks` to thread through.
-      const { scopes: lockScopes } = await divisionLockState(tx, divisionId);
-      const lockedIds = lockedFixtureIds(movable, lockScopes, false);
+      // `lockedIds` computed once, above every mode branch — see the comment
+      // at its declaration.
       const schedulable: SchedulableFixture[] = movable.map((f) => ({
         // Domain-ranked stand-in for the UUID so the solver's tie-break is stable.
         id: rankById.get(f.id)!,
@@ -1079,7 +1086,7 @@ export async function buildSchedulePack(
               : null,
           court: f.court_label,
         },
-        pinned: f.schedule_locked,
+        pinned: lockedIds.has(f.id),
       }))
       // Same comparator as `participantView` above — see `byBoardOrder`.
       .sort(byBoardOrder);
@@ -1534,8 +1541,9 @@ export function structuralCheck(plan: AiSchedulePlan, movableIds: Set<string>, p
     if (!movableIds.has(u.fixture_id)) return `unschedulable references non-movable fixture ${u.fixture_id}`;
     if (seen.has(u.fixture_id)) return `fixture ${u.fixture_id} appears more than once`;
     seen.add(u.fixture_id);
-    // A pinned (schedule-locked) fixture may never be dropped: marking it
-    // unschedulable silently loses a locked slot, so reject before verification.
+    // A pinned (schedule-locked OR scope-locked, #pins-in-build Task 4) fixture
+    // may never be dropped: marking it unschedulable silently loses a locked
+    // slot, so reject before verification.
     if (pinned.has(u.fixture_id)) return `pinned fixture ${u.fixture_id} cannot be marked unschedulable`;
   }
   for (const id of movableIds) {

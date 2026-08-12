@@ -25,6 +25,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
+import { patchFixture } from "../fixtures";
 import { schedulingAiModel } from "../schedule-ai";
 import {
   COMPETITION_MOVABLE_CAP,
@@ -1158,5 +1159,74 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
       }),
     ).rejects.toMatchObject({ code: "SEQ_CONFLICT" });
     expect(sched.afterWrite).toEqual([]);
+  }, 60_000);
+
+  // #pins-in-build Task 3: the SAME apply-time lock guard as the per-stage
+  // `applySchedule`, WITHOUT its two exemptions — every call through this
+  // endpoint is `source: "ai"` by construction (`z.literal("ai")` on the
+  // wire) and assignments cannot carry `schedule_locked` (`.strict()`
+  // schema, deliberately) — so neither exemption's trigger is expressible
+  // here, and there is no way to write a test for either as a result.
+  it("rejects a joint apply that moves a locked fixture onto a different slot (#pins-in-build Task 3)", async () => {
+    const { alpha, bravo } = await clean();
+    await applyCompetitionSchedule(auth, board.competitionId, {
+      divisions: [alpha, bravo],
+      source: "ai",
+      ai: AI,
+    });
+
+    const target = board.alpha.fixtureIds[0]!;
+    await patchFixture(auth, target, { schedule_locked: true });
+
+    const seq = await divisionSeq(board.alpha.id);
+    await expect(
+      applyCompetitionSchedule(auth, board.competitionId, {
+        divisions: [
+          {
+            division_id: board.alpha.id,
+            expected_seq: seq,
+            assignments: [{ fixture_id: target, scheduled_at: at(9999), court_label: "Court 2" }],
+          },
+        ],
+        source: "ai",
+        ai: AI,
+      }),
+    ).rejects.toMatchObject({
+      status: 422,
+      message: `fixture ${target} is locked — unlock it before moving`,
+    });
+  }, 60_000);
+
+  it("allows a joint apply that re-states a locked fixture's existing placement (unchanged exception)", async () => {
+    const { alpha, bravo } = await clean();
+    await applyCompetitionSchedule(auth, board.competitionId, {
+      divisions: [alpha, bravo],
+      source: "ai",
+      ai: AI,
+    });
+
+    const target = board.alpha.fixtureIds[0]!;
+    const targetAssignment = alpha.assignments.find((a) => a.fixture_id === target)!;
+    await patchFixture(auth, target, { schedule_locked: true });
+
+    const seq = await divisionSeq(board.alpha.id);
+    const out = await applyCompetitionSchedule(auth, board.competitionId, {
+      divisions: [
+        {
+          division_id: board.alpha.id,
+          expected_seq: seq,
+          assignments: [
+            {
+              fixture_id: target,
+              scheduled_at: targetAssignment.scheduled_at,
+              court_label: targetAssignment.court_label,
+            },
+          ],
+        },
+      ],
+      source: "ai",
+      ai: AI,
+    });
+    expect(out.applied).toBe(1);
   }, 60_000);
 });

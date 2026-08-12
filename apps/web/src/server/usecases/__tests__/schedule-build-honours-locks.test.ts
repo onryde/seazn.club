@@ -284,9 +284,9 @@ describe.skipIf(!HAS_DB)("ignore_locks is the explicit escape hatch", () => {
 });
 
 describe.skipIf(!HAS_DB)(
-  "applySchedule rejects a move onto a locked fixture, but not a re-statement of its own placement (#pins-in-build Task 1)",
+  "applySchedule rejects a STALE AUTO move onto a locked fixture, but exempts manual edits, explicit unlocks, and re-statements (#pins-in-build Task 1, narrowed 2026-08-12)",
   () => {
-    it("422s a proposal that moves a schedule_locked fixture to a different slot", async () => {
+    it("422s an AUTO/AI proposal that moves a schedule_locked fixture to a different slot", async () => {
       const auth = await seedOrg();
       const { stageId, created } = await seedStage(auth, 4);
 
@@ -304,13 +304,14 @@ describe.skipIf(!HAS_DB)(
       const target = first.assignments[0]!;
       await parkAndLock(auth, stageId, target.fixture_id);
 
-      // A concurrent lock toggle mid-solve: something (a stale AI plan, a
-      // race with the lock toggle) proposes moving the now-locked fixture to
-      // a different slot than `parkAndLock` put it at.
+      // The threat this guard actually closes: a SOLVER-computed board,
+      // proposed against lock state read at solve start, overwriting a lock
+      // the organiser toggled during the multi-second solve. That is
+      // `source: "auto"` (or "ai") only — see the two exemption tests below.
       await expect(
         applySchedule(auth, stageId, {
           assignments: [{ fixture_id: target.fixture_id, scheduled_at: at(30), court_label: "C1" }],
-          source: "manual",
+          source: "auto",
         }),
       ).rejects.toMatchObject({
         status: 422,
@@ -318,7 +319,7 @@ describe.skipIf(!HAS_DB)(
       });
     }, 180_000);
 
-    it("succeeds when the assignment re-states the locked fixture's existing placement, even spelled with a different UTC offset (regression guard against a blanket reject)", async () => {
+    it("succeeds when an AUTO/AI assignment re-states the locked fixture's existing placement, even spelled with a different UTC offset (regression guard against a blanket reject)", async () => {
       const auth = await seedOrg();
       const { stageId, created } = await seedStage(auth, 4);
 
@@ -336,24 +337,98 @@ describe.skipIf(!HAS_DB)(
       const target = first.assignments[0]!;
       await parkAndLock(auth, stageId, target.fixture_id);
 
-      // The SAME instant `parkAndLock` placed it at (`at(600)`), spelled with
-      // an explicit "+00:00" offset instead of "Z" — a naive string
-      // comparison (or a raw `Date` vs `string` mismatch, since `f.scheduled_at`
-      // comes back off the DB row as a `Date`) would misread this as a move;
-      // only an epoch-ms comparison passes it correctly. This is also the
-      // regression guard against the over-broad "reject every locked
-      // fixture" fix ruled out for Task 1: without it, the next person
-      // simplifies this into a blanket reject and a normal, correct
-      // auto-apply of a solve that legitimately left a pin where it was
-      // starts 422ing.
+      // `source: "auto"`, NOT "manual" — isolates the "unchanged" exception
+      // from the manual exemption below, so this cannot pass for the wrong
+      // reason. Same instant `parkAndLock` placed it at (`at(600)`), spelled
+      // with an explicit "+00:00" offset instead of "Z" — a naive string
+      // comparison (or a raw `Date` vs `string` mismatch, since
+      // `f.scheduled_at` comes back off the DB row as a `Date`) would
+      // misread this as a move; only an epoch-ms comparison passes it
+      // correctly. This is also the regression guard against the over-broad
+      // "reject every locked fixture" fix ruled out for Task 1: without it,
+      // the next person simplifies this into a blanket reject and a normal,
+      // correct auto-apply of a solve that legitimately left a pin where it
+      // was starts 422ing.
       const sameInstantDifferentSpelling = at(600).replace("Z", "+00:00");
       const result = await applySchedule(auth, stageId, {
         assignments: [
           { fixture_id: target.fixture_id, scheduled_at: sameInstantDifferentSpelling, court_label: "C2" },
         ],
-        source: "manual",
+        source: "auto",
       });
       expect(result.applied).toBe(1);
+    }, 180_000);
+
+    it("MANUAL exemption: a manual multi-card apply MAY move a locked fixture, same escape hatch as moveFixture's drag path", async () => {
+      const auth = await seedOrg();
+      const { stageId, created } = await seedStage(auth, 4);
+
+      const first = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
+      expect(first.assignments).toHaveLength(created);
+      await applySchedule(auth, stageId, {
+        assignments: first.assignments.map((a) => ({
+          fixture_id: a.fixture_id,
+          scheduled_at: a.scheduled_at,
+          court_label: a.court_label,
+        })),
+        source: "auto",
+      });
+
+      const target = first.assignments[0]!;
+      await parkAndLock(auth, stageId, target.fixture_id);
+
+      // An organiser dragging this exact card (moveFixture, the single-move
+      // path) has never been blocked by its own lock — the board's manual
+      // assignment-set path must behave the same way, or the two editing
+      // surfaces disagree about whether a lock stops a deliberate placement.
+      const moved = await applySchedule(auth, stageId, {
+        assignments: [{ fixture_id: target.fixture_id, scheduled_at: at(30), court_label: "C1" }],
+        source: "manual",
+      });
+      expect(moved.applied).toBe(1);
+      const [row] = await sql<{ scheduled_at: Date; court_label: string | null }[]>`
+        select scheduled_at, court_label from fixtures where id = ${target.fixture_id}`;
+      expect(row!.scheduled_at.toISOString()).toBe(at(30));
+      expect(row!.court_label).toBe("C1");
+    }, 180_000);
+
+    it("EXPLICIT-UNLOCK exemption: an AUTO/AI assignment carrying schedule_locked:false may move the fixture in the same call", async () => {
+      const auth = await seedOrg();
+      const { stageId, created } = await seedStage(auth, 4);
+
+      const first = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
+      expect(first.assignments).toHaveLength(created);
+      await applySchedule(auth, stageId, {
+        assignments: first.assignments.map((a) => ({
+          fixture_id: a.fixture_id,
+          scheduled_at: a.scheduled_at,
+          court_label: a.court_label,
+        })),
+        source: "auto",
+      });
+
+      const target = first.assignments[0]!;
+      await parkAndLock(auth, stageId, target.fixture_id);
+
+      // `source: "auto"` (not "manual") isolates this from the manual
+      // exemption above — this succeeds ONLY because of the explicit
+      // schedule_locked:false, proving that arm independently. The write
+      // path already supports unlock-and-move in one call
+      // (`schedule_locked = a.schedule_locked ?? f.schedule_locked`);
+      // rejecting it here would make an explicit unlock impossible through
+      // this endpoint.
+      const moved = await applySchedule(auth, stageId, {
+        assignments: [
+          { fixture_id: target.fixture_id, scheduled_at: at(30), court_label: "C1", schedule_locked: false },
+        ],
+        source: "auto",
+      });
+      expect(moved.applied).toBe(1);
+      const [row] = await sql<{ scheduled_at: Date; court_label: string | null; schedule_locked: boolean }[]>`
+        select scheduled_at, court_label, schedule_locked from fixtures where id = ${target.fixture_id}`;
+      expect(row!.scheduled_at.toISOString()).toBe(at(30));
+      expect(row!.court_label).toBe("C1");
+      expect(row!.schedule_locked).toBe(false);
     }, 180_000);
   },
 );
@@ -392,9 +467,9 @@ describe.skipIf(!HAS_DB)(
 );
 
 describe.skipIf(!HAS_DB)(
-  "a scope-locked fixture is fed to the AI draft with its locked anchor (#pins-in-build Task 2)",
+  "a scope-locked fixture is fed to the AI draft with its locked anchor AND marked pinned (#pins-in-build Task 2 + Task 4)",
   () => {
-    it("buildSchedulePack's generate-mode draft keeps a court-scope-locked fixture at its parked slot", async () => {
+    it("buildSchedulePack's generate-mode draft keeps a court-scope-locked fixture at its parked slot, and PackFixture.pinned is true for it", async () => {
       const auth = await seedOrg();
       const { stageId, divisionId, created } = await seedStage(auth, 4);
 
@@ -425,6 +500,16 @@ describe.skipIf(!HAS_DB)(
       // `at()` does even when it names the same instant.
       expect(Date.parse(drafted!.scheduled_at as string)).toBe(Date.parse(at(600)));
       expect(drafted!.court_label).toBe("C2");
+
+      // Task 4: `PackFixture.pinned` (feeds `structuralCheck` and
+      // `toEngineAssignments`'s `pinnedIds`) used to be `f.schedule_locked`
+      // alone — a scope-locked-only fixture read as NOT pinned there even
+      // though the draft anchor above already held it. Not `.toBe(true)` by
+      // accident: `target.fixture_id` is asserted absent from `schedule_locked`
+      // via `parkAndScopeLock`, which never touches the fixture's own flag.
+      const pinnedFixture = pack.fixtures.movable.find((f) => f.id === target.fixture_id);
+      expect(pinnedFixture, `movable is missing fixture ${target.fixture_id}`).toBeDefined();
+      expect(pinnedFixture!.pinned).toBe(true);
     }, 180_000);
   },
 );
