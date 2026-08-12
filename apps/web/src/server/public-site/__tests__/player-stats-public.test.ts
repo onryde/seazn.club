@@ -131,3 +131,85 @@ describe.skipIf(!HAS_DB)("getPublicPlayer stats (PROMPT-65)", () => {
     expect(data!.stats).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// S9/#418 — the per-sport career rollup on the public player card, and its
+// mandatory scoping regression: getPublicPlayer sums the snapshot rows it
+// ALREADY read for stats[] (WHERE d.competition_id = this competition), so
+// this proves the aggregation on top of that read carries the scoping
+// through — never re-broadens it. A cross-ORG leak is structurally
+// impossible for one person (persons.org_id is a hard FK, one org per
+// person row, per this programme's own pinned analysis), so the meaningful
+// regression is cross-COMPETITION, same org: this person plays football in
+// TWO competitions of the SAME org, and competition B's obviously-distinct
+// numbers must never appear on competition A's card.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("getPublicPlayer career rollup (S9/#418)", () => {
+  it("sums metrics/divisions for THIS competition only", async () => {
+    const { orgSlug, compSlug, division, person } = await seed();
+    await sql`
+      insert into player_stat_snapshots (division_id, person_id, sport_key, stats, computed_through_seq)
+      values (${division.id}, ${person.id}, 'football', ${sql.json({ goals: 2, assists: 1 })}, 10)`;
+
+    const data = await getPublicPlayer(orgSlug, compSlug, person.id);
+    expect(data).not.toBeNull();
+    expect(data!.career).toHaveLength(1);
+    const football = data!.career[0]!;
+    expect(football.sport_key).toBe("football");
+    expect(football.divisions).toBe(1);
+    expect(football.meta.length).toBeGreaterThan(0); // baked "N divisions · N variants · N matches" copy
+    expect(data!.careerLabel.length).toBeGreaterThan(0);
+    const byKey = Object.fromEntries(football.metrics.map((m) => [m.key, m.value]));
+    expect(byKey.goals).toBe(2);
+    expect(byKey.assists).toBe(1);
+  });
+
+  it("REGRESSION: a SECOND competition's snapshot in the SAME org never bleeds into this card's rollup", async () => {
+    const { auth, orgId, orgSlug, compSlug, division, person } = await seed();
+    await sql`
+      insert into player_stat_snapshots (division_id, person_id, sport_key, stats, computed_through_seq)
+      values (${division.id}, ${person.id}, 'football', ${sql.json({ goals: 2, assists: 1 })}, 10)`;
+
+    // A second competition, SAME org, SAME person rostered — obviously-wrong-
+    // if-leaked numbers (100s) so a leak is unmistakable in the assertion.
+    const compB = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Ps Cup B " + randomUUID().slice(0, 6),
+      visibility: "public",
+      branding: {},
+    });
+    const divisionB = await createDivision(auth, compB.id, {
+      name: "Open B",
+      slug: "open-b",
+      sport_key: "football",
+      variant_key: "std",
+      config: FOOTBALL_CONFIG,
+      eligibility: [],
+    });
+    await createEntrants(auth, divisionB.id, [
+      {
+        kind: "team",
+        display_name: "Brazil",
+        members: [{ person_id: person.id, squad_number: 10, is_captain: false, roles: [] }],
+      } as never,
+    ]);
+    await sql`
+      insert into player_stat_snapshots (division_id, person_id, sport_key, stats, computed_through_seq)
+      values (${divisionB.id}, ${person.id}, 'football', ${sql.json({ goals: 100, assists: 100 })}, 10)`;
+    void orgId;
+
+    const dataA = await getPublicPlayer(orgSlug, compSlug, person.id);
+    expect(dataA!.career).toHaveLength(1);
+    expect(dataA!.career[0]!.divisions).toBe(1); // NOT 2
+    const byKeyA = Object.fromEntries(dataA!.career[0]!.metrics.map((m) => [m.key, m.value]));
+    expect(byKeyA.goals).toBe(2); // NOT 102 — competition B's numbers must not bleed in
+
+    // Sanity: competition B's OWN card genuinely has its own (large) total —
+    // proves the isolation above is real scoping, not just a coincidence of
+    // competition B's data never having been written.
+    const [orgRow] = await sql<{ slug: string }[]>`select slug from organizations where id = ${auth.orgId}`;
+    const dataB = await getPublicPlayer(orgRow!.slug, compB.slug, person.id);
+    const byKeyB = Object.fromEntries(dataB!.career[0]!.metrics.map((m) => [m.key, m.value]));
+    expect(byKeyB.goals).toBe(100);
+  });
+});
