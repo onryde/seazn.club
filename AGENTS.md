@@ -116,7 +116,8 @@ before diagnosing a real bug:
 
 Some areas carry rulings that are NOT derivable from the code and that
 a fresh session will otherwise re-derive wrongly. If your task touches
-one, read its index first.
+one, read its index first. Cross-programme sequencing and gates:
+`docs/superpowers/specs/_MASTER.md`.
 
 - **Scoring / sport modules / the scoring pad / fidelity tiers** →
   `docs/superpowers/specs/2026-08-06-scoringpad-v2-prompts/_INDEX.md`
