@@ -535,7 +535,7 @@ describe("folded models (S8/#417)", () => {
     expect(rows).toEqual([{ personId: "p1", stats: { goals: 1, assists_folded: 2, total: 3 } }]);
   });
 
-  it("folded is a no-op when ctx is omitted, even when the model declares it (runs only when ctx is supplied)", () => {
+  it("folded is a no-op when BOTH ctx and lineups are omitted, even when the model declares it", () => {
     const model: PlayerStatsModel = {
       metrics: [{ key: "goals", label: "Goals", from: "x.goal", field: "scorer", agg: "count" }],
       folded: {
@@ -545,6 +545,35 @@ describe("folded models (S8/#417)", () => {
     };
     const rows = aggregatePlayerStats([env(1, "x.goal", { scorer: "p1" })], model);
     expect(rows).toEqual([{ personId: "p1", stats: { goals: 1 } }]);
+  });
+
+  // S8/#417 (CHANGE 1) — a keeper fold cannot work off ctx alone: clean sheets
+  // and goals conceded need the LINEUPS argument, which `folded.fold` never
+  // received before this session. Both apps/web callers
+  // (`player-stats.ts`/`org-posts.ts`) pass `lineups` and NEVER `ctx` — so the
+  // gate this proves is not "ctx or lineups", it is specifically that
+  // `lineups` ALONE, with no `ctx` at all, is enough to reach `fold` — the
+  // exact 3-argument call shape production uses today.
+  it("lineups reaches folded.fold on its own — the real apps/web call shape, with no ctx at all", () => {
+    let captured: LineupPair | undefined | "never called" = "never called";
+    const model: PlayerStatsModel = {
+      metrics: [],
+      folded: {
+        keys: ["k"],
+        fold: (_events, _ctx, lineups) => {
+          captured = lineups;
+          return [];
+        },
+      },
+    };
+    const lineup: LineupPair = {
+      home: { entrantId: "H", slots: [{ personId: "p1", slot: "starting", orderNo: 1 }] },
+      away: { entrantId: "A", slots: [{ personId: "a1", slot: "starting", orderNo: 1 }] },
+    };
+    // Exactly 3 positional args — events, model, lineups — no ctx, matching
+    // `aggregatePlayerStats(ledger, model, lineupsByFixture.get(fixtureId))`.
+    aggregatePlayerStats([], model, lineup);
+    expect(captured).toEqual(lineup);
   });
 
   it("folded rows are excluded for a non-player exactly like metric rows (S4/#428 discipline extended)", () => {

@@ -28,7 +28,12 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
-import type { PlayerStatsModel } from "../../stats/stats.ts";
+import type {
+  PlayerStatMetric,
+  PlayerStatRow,
+  PlayerStatsFoldCtx,
+  PlayerStatsModel,
+} from "../../stats/stats.ts";
 import type {
   FidelityBand,
   FidelityTier,
@@ -1219,6 +1224,236 @@ function setBasedPosition(state: SetBasedState): MatchPosition {
 }
 
 
+// ---------------------------------------------------------------------------
+// S8/#417 — kernel-level default playerStats. Every metric a preset declares
+// today names an OPTIONAL person field (`scorer`, `server`); a v1-era stream
+// that only ever names the REQUIRED `wonBy` entrant folds those to zero
+// credit (the "requires_detailed_scoring" posture DOMAIN.<sport>.md already
+// documents). This default is what closes that gap, unconditionally, for
+// every sport on this kernel — see `mergePlayerStats` for how it coexists
+// with each preset's own declared metrics.
+// ---------------------------------------------------------------------------
+
+/**
+ * `points_won` — the canonical entrant-fallback metric (owner ruling,
+ * S8/#417): an explicit `scorer` still wins whenever one resolves (giving
+ * this key the SAME numbers a preset's own scorer-keyed metric already
+ * reports, e.g. volleyball's `points`), and `wonBy` rescues a stream that
+ * never named one at all. The duplication against a preset's own metric on a
+ * fully-attributed stream is intentional, not an oversight: `points_won` is
+ * the one key that ALSO answers for a v1-era stream, which a preset's own
+ * metric (no `fromEntrant`) structurally never will.
+ */
+function setBasedPointsWonMetric(rallyType: string): PlayerStatMetric {
+  return {
+    key: "points_won",
+    label: "Points won",
+    from: rallyType,
+    field: "scorer",
+    entrantField: "wonBy",
+    fromEntrant: true,
+    agg: "count",
+  };
+}
+
+/**
+ * A throwaway two-sided state, seeded directly into "live" — never returned,
+ * never adopted by a real fixture, alive only for the length of one
+ * `folded.fold` call below. `idX`/`idY` are POSITIONS, not "home"/"away" in
+ * any real sense: `folded.fold` never sees the real `SetBasedState`, only the
+ * raw ledger + `ctx`, and `ctx.entrants` (docstring: "which entrants exist
+ * THIS fixture") is unordered — there is no true home/away to recover here,
+ * only two ids to keep the real `applyRally`/`applySummary`/`bankSet`
+ * cascade's home/away bookkeeping happy. Every credit `setBasedMatchOutcomesFold`
+ * reads back is keyed by ENTRANT ID, never by the "home"/"away" label, so the
+ * arbitrary assignment cannot misattribute anything.
+ */
+function setBasedReplayState(cfg: SetBasedCfg, idX: string, idY: string): SetBasedState {
+  return {
+    cfg,
+    entrants: { home: idX, away: idY },
+    phase: "live",
+    sets: [],
+    setsWon: { home: 0, away: 0 },
+    outcome: null,
+    replayFlagged: false,
+  };
+}
+
+/**
+ * `folded.fold` for match/set-level outcomes (`matches`, `sets_won`,
+ * `sets_lost`) — a metric+field walk fires once per qualifying EVENT and
+ * cannot express "how many sets did this entrant end up winning", which is
+ * exactly why `PlayerStatsModel.folded` exists (see its own docstring).
+ *
+ * REPLAYS the real `applyRally`/`applySummary`/`bankSet` — never a parallel
+ * reimplementation of the set predicate, which this engine has watched
+ * silently drift from the real fold before. A raw rally stream carries no
+ * explicit "set closed" marker (unlike a coarse summary), so detecting a set
+ * boundary from `wonBy` alone needs the same `setTo`/`finalSetTo`/`winBy`/
+ * `cap` the real fold checks against — which lives in `ctx.cfg`, the field
+ * `stats.ts` itself declares "reserved for a future metric that needs
+ * division config" and never reads. This is that metric.
+ *
+ * NEVER THROWS (house rule: no throw on a cfg- or data-derived condition
+ * inside a fold — this engine has bricked a recorded fixture that way
+ * before). `ctx.cfg` absent or failing to parse against THIS preset's own
+ * `configSchema`, or the replay itself raising for any reason (a stray event
+ * a synthetic two-entrant state cannot express, e.g. a rally after the
+ * synthetic match is already "done"), degrades to `matches`-only for the
+ * rest of the ledger rather than throwing — a refusal is a returned value,
+ * not an exception, the same rule `checkExpedite`/`applyInterruption` follow
+ * elsewhere in this file.
+ *
+ * `matches` needs no cfg at all: it is credited the moment EITHER entrant's
+ * event TYPE (a rally or a set summary) appears anywhere in the ledger —
+ * both sides of a fixture that was scored at all "played" it, independent of
+ * whether either one specifically won a point (see the shutout note below).
+ *
+ * Positional summaries (`{home, away}`, no entrant id) cannot bank a set
+ * here: attributing one needs a true home/away label this function never has
+ * (see `setBasedReplayState`'s own doc comment). A real, narrow gap:
+ * `coarsen()` itself never emits that shape (only `arbitraryEvent`'s direct
+ * coarse path does), and the loss is only ever of the set/match tally, never
+ * of `points_won`, which credits every rally regardless of summary shape.
+ *
+ * The SHUT-OUT case — an entrant that never wins a single rally in the whole
+ * ledger — is why `idX`/`idY` come from `ctx.entrants` rather than from ids
+ * OBSERVED in the stream: a rally-only ledger where one side is blanked
+ * every set never names that entrant anywhere at all, so without
+ * `ctx.entrants` there would be no opponent to credit `sets_lost` to.
+ */
+function setBasedMatchOutcomesFold(
+  preset: SetBasedPreset,
+  configSchema: ReturnType<typeof makeConfigSchema>,
+): NonNullable<PlayerStatsModel["folded"]> {
+  const rallyType = `${preset.key}.rally`;
+  const summaryType = `${preset.key}.${preset.coarseEventType}`;
+  return {
+    keys: ["matches", "sets_won", "sets_lost"],
+    fold(events: readonly EventEnvelope[], ctx: PlayerStatsFoldCtx): PlayerStatRow[] {
+      if (ctx.entrants.length !== 2) return []; // this kernel is always 2-sided; nothing safe to pair
+      const idX = ctx.entrants[0]!.id;
+      const idY = ctx.entrants[1]!.id;
+      const personsFor = (entrantId: string): readonly string[] => {
+        const entrant = ctx.entrants.find((e) => e.id === entrantId);
+        if (entrant === undefined || entrant.kind === "team") return [];
+        return ctx.personsOf(entrantId).filter((p) => p !== "");
+      };
+
+      const cfgParsed = configSchema.safeParse(ctx.cfg);
+      let state: SetBasedState | undefined = cfgParsed.success
+        ? setBasedReplayState(cfgParsed.data, idX, idY)
+        : undefined;
+      let played = false;
+
+      for (const event of events) {
+        if (event.type === rallyType) {
+          played = true;
+          if (state === undefined) continue;
+          const wonBy = (event.payload as Record<string, unknown>).wonBy;
+          if (typeof wonBy !== "string" || (wonBy !== idX && wonBy !== idY)) continue;
+          try {
+            state = applyRally(
+              state,
+              { wonBy },
+              { key: preset.key, recordsExpedite: false, strict: false },
+            );
+          } catch {
+            state = undefined;
+          }
+          continue;
+        }
+        if (event.type === summaryType) {
+          played = true;
+          if (state === undefined) continue;
+          const payload = event.payload as Record<string, unknown>;
+          const by = payload.by;
+          // Positional shape (no `by`), or an id this fixture never
+          // declared — cannot attribute a set boundary without a side label.
+          if (typeof by !== "string" || (by !== idX && by !== idY)) continue;
+          if (typeof payload.forBy !== "number" || typeof payload.forOpp !== "number") continue;
+          try {
+            state = applySummary(state, payload as SetBasedSummary, false);
+          } catch {
+            state = undefined;
+          }
+        }
+      }
+
+      const rows = new Map<string, Record<string, number>>();
+      const bump = (personId: string, key: string, by: number) => {
+        const stats = rows.get(personId) ?? {};
+        stats[key] = (stats[key] ?? 0) + by;
+        rows.set(personId, stats);
+      };
+
+      if (played) {
+        for (const p of personsFor(idX)) bump(p, "matches", 1);
+        for (const p of personsFor(idY)) bump(p, "matches", 1);
+      }
+      if (state !== undefined) {
+        for (const p of personsFor(idX)) {
+          bump(p, "sets_won", state.setsWon.home);
+          bump(p, "sets_lost", state.setsWon.away);
+        }
+        for (const p of personsFor(idY)) {
+          bump(p, "sets_won", state.setsWon.away);
+          bump(p, "sets_lost", state.setsWon.home);
+        }
+      }
+
+      return [...rows.entries()]
+        .map(([personId, stats]) => ({ personId, stats }))
+        .sort((a, b) => a.personId.localeCompare(b.personId));
+    },
+  };
+}
+
+/**
+ * Merges the kernel default with the preset's own declared model (S8/#417).
+ * PRECEDENCE: a preset-declared metric key always beats a default of the
+ * same key — a sport's hand-tuned metric must never be silently shadowed by
+ * a generic fallback added after it. Today the two are disjoint by
+ * construction (every metric the four presets on this kernel declare is
+ * "points"/"serves"/"sanctions"[/…], never "points_won"/"matches"/
+ * "sets_won"/"sets_lost"), so in practice this drops nothing — the rule
+ * exists so a FUTURE preset cannot lose one of its own metrics to a default
+ * it never asked for. `folded.fold` results are concatenated, never
+ * clobbered: `aggregatePlayerStats` merges a folded row's stats into the
+ * running per-person total by ADDITION, so two rows for one personId from
+ * two different `fold` calls sum correctly rather than either one
+ * overwriting the other. `folded.keys` is the union of both declarations.
+ */
+function mergePlayerStats(
+  kernelDefault: PlayerStatsModel,
+  preset: PlayerStatsModel | undefined,
+): PlayerStatsModel {
+  if (preset === undefined) return kernelDefault;
+  const presetKeys = new Set(preset.metrics.map((m) => m.key));
+  const metrics = [...kernelDefault.metrics.filter((m) => !presetKeys.has(m.key)), ...preset.metrics];
+  const kFolded = kernelDefault.folded;
+  const pFolded = preset.folded;
+  const folded =
+    kFolded === undefined
+      ? pFolded
+      : pFolded === undefined
+        ? kFolded
+        : {
+            keys: [...new Set([...kFolded.keys, ...pFolded.keys])],
+            fold: (events: readonly EventEnvelope[], ctx: PlayerStatsFoldCtx) => [
+              ...kFolded.fold(events, ctx),
+              ...pFolded.fold(events, ctx),
+            ],
+          };
+  return {
+    metrics,
+    ...(preset.derived === undefined ? {} : { derived: preset.derived }),
+    ...(preset.awards === undefined ? {} : { awards: preset.awards }),
+    ...(folded === undefined ? {} : { folded }),
+  };
+}
+
 export function makeSetBasedModule(
   preset: SetBasedPreset,
 ): SportModule<SetBasedCfg, SetBasedEv, SetBasedState> {
@@ -1360,7 +1595,16 @@ export function makeSetBasedModule(
     positions: preset.positions,
     variants: preset.variants,
     ...(preset.entrantModel === undefined ? {} : { entrantModel: preset.entrantModel }),
-    ...(preset.playerStats === undefined ? {} : { playerStats: preset.playerStats }),
+    // S8/#417 — always populated: the kernel default (`points_won` +
+    // matches/sets_won/sets_lost) merges with whatever this preset declares,
+    // never merely spread when present. See `mergePlayerStats`.
+    playerStats: mergePlayerStats(
+      {
+        metrics: [setBasedPointsWonMetric(rallyType)],
+        folded: setBasedMatchOutcomesFold(preset, configSchema),
+      },
+      preset.playerStats,
+    ),
     ...(discipline === undefined ? {} : { discipline }),
 
     // S3/W4b (#426) — the two halves of adopting `core/lineup.ts`.

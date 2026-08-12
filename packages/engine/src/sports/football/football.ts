@@ -21,7 +21,9 @@ import { periodClockPosition, type MatchPosition } from "../../core/position.ts"
 import {
   REPLAY_LINEUP_POLICY,
   initSquads,
+  isLineupEventType,
   onFieldPersons,
+  personsAtPosition,
   playingSquad,
   reduceLineupEvent,
   type LineupPolicy,
@@ -53,6 +55,7 @@ import type {
   TiebreakerKey,
 } from "../../sport/module.ts";
 import { expectedKicker, shootoutDecision } from "../period/shootout.ts";
+import type { PlayerStatRow, PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — spec 04 §1.1
@@ -1735,6 +1738,127 @@ function mergeFromKernel(prev: FootballSquad, side: SideSquad, rolling: boolean)
 }
 
 /**
+ * S8/#417 — `goals_conceded` and `clean_sheets`, the `playerStats.folded`
+ * escape hatch (see DOMAIN.md's "Goalkeeper stats" row). Mirrors
+ * `periodKeeperStatsFold` (`sports/period/kernel.ts`, shared by both hockey
+ * codes) but hand-written for football's own payload shape: `ownGoal` is a
+ * boolean flag here, not a `kind` string, and football has no `emptyNet`
+ * concept at all — the Laws of the Game do not let a side play out with an
+ * empty net the way ice hockey pulls a goaltender, so there is no analogous
+ * skip to make.
+ *
+ * READS THE FOLD of `core.lineup.*`, never the kickoff team sheet, under
+ * `REPLAY_LINEUP_POLICY` (a read-side reconstruction with no `cfg` to
+ * consult, and every knob at its most permissive is what a replay always
+ * uses — see the file header). `goals_conceded` is charged to the
+ * CONCEDING side's current `personsAtPosition(side, "GK")` occupant, worked
+ * out from the CREDITED side (mirroring `applyGoal`'s own
+ * `payload.ownGoal === true ? opponent(by) : by`) rather than from `by`
+ * directly — the two disagree exactly on an own goal, where the side whose
+ * player struck it is the side that concedes.
+ *
+ * CLEAN SHEET RULE (a documented judgement call, S8/#417 — no Law settles
+ * this): a goalkeeper SPELL is the continuous stretch one person occupies
+ * "GK" for their side, opened at kickoff (or wherever the fold first finds
+ * an occupant) and closed by the next lineup change that installs a
+ * DIFFERENT occupant, or by full time. A spell earns ONE clean sheet iff
+ * its side conceded nothing during it — so a keeper brought on for the
+ * second half with the score still 0-0 earns their own clean sheet
+ * independently of whoever started, and a shutout split across two keepers
+ * credits BOTH. Reads only recorded lineup events and goal credits, so it
+ * carries none of the S2/#430 partial-coverage hazard a minutes-based rule
+ * would.
+ *
+ * CARRIED LIMITATION (same shape as the row above this one in DOMAIN.md): a
+ * keeper sent off (`football.card`) and replaced by an outfield player with
+ * no recorded `core.lineup.position` stays the named "GK" here — sending a
+ * player off is football-private state (`FootballSquad.sentOff`), invisible
+ * to `core/lineup.ts`'s `SquadState`, exactly the gap the row above
+ * documents for a fixture that mixes `football.sub` with `core.lineup.*`.
+ */
+function footballKeeperStatsFold(
+  events: readonly EventEnvelope[],
+  _ctx: PlayerStatsFoldCtx,
+  lineups: LineupPair | undefined,
+): PlayerStatRow[] {
+  if (lineups === undefined) return [];
+
+  // A sparse per-person stats object, NOT a fixed `{goals_conceded, clean_
+  // sheets}` shape — matching `stats.ts`'s own `bump`, a key is written only
+  // when it is actually incremented. A keeper who only ever earns a clean
+  // sheet must not also carry a `goals_conceded: 0` — that would be exactly
+  // the silent-0 defect (recorded zero vs. never-happened) this programme's
+  // `PlayerStatMetric.value` docstring calls out, just reached a different way.
+  const rows = new Map<string, Record<string, number>>();
+  const bump = (personId: string, key: "goals_conceded" | "clean_sheets"): void => {
+    const stats = rows.get(personId) ?? {};
+    stats[key] = (stats[key] ?? 0) + 1;
+    rows.set(personId, stats);
+  };
+
+  const entrants = { home: lineups.home.entrantId, away: lineups.away.entrantId };
+  const sideOf = (entrantId: string): Side | undefined =>
+    entrantId === entrants.home ? "home" : entrantId === entrants.away ? "away" : undefined;
+
+  let squads: KernelSquads = initSquads(lineups);
+  const keeperOf = (side: Side): string | undefined => personsAtPosition(squads[side], "GK")[0];
+
+  interface Spell {
+    personId: string;
+    conceded: boolean;
+  }
+  const open: Record<Side, Spell | undefined> = {
+    home: (() => {
+      const p = keeperOf("home");
+      return p === undefined ? undefined : { personId: p, conceded: false };
+    })(),
+    away: (() => {
+      const p = keeperOf("away");
+      return p === undefined ? undefined : { personId: p, conceded: false };
+    })(),
+  };
+  const closeSpell = (side: Side): void => {
+    const spell = open[side];
+    if (spell !== undefined && !spell.conceded) bump(spell.personId, "clean_sheets");
+  };
+  const refreshSpell = (side: Side): void => {
+    const p = keeperOf(side);
+    if (open[side]?.personId === p) return; // same occupant — spell continues
+    closeSpell(side);
+    open[side] = p === undefined ? undefined : { personId: p, conceded: false };
+  };
+
+  for (const event of events) {
+    if (isLineupEventType(event.type)) {
+      const result = reduceLineupEvent(squads, event, REPLAY_LINEUP_POLICY);
+      if (result.ok) {
+        squads = result.squads;
+        refreshSpell("home");
+        refreshSpell("away");
+      }
+      continue;
+    }
+    if (event.type !== "football.goal") continue;
+    const payload = event.payload as Record<string, unknown>;
+    if (typeof payload.by !== "string") continue;
+    const by = sideOf(payload.by);
+    if (by === undefined) continue;
+    const credited = payload.ownGoal === true ? opponent(by) : by;
+    const concedingSide = opponent(credited);
+
+    const spell = open[concedingSide];
+    if (spell !== undefined) spell.conceded = true;
+
+    const keeper = keeperOf(concedingSide);
+    if (keeper !== undefined) bump(keeper, "goals_conceded");
+  }
+  closeSpell("home");
+  closeSpell("away");
+
+  return [...rows.entries()].map(([personId, stats]) => ({ personId, stats }));
+}
+
+/**
  * Football's squad, expressed in the kernel's vocabulary, so that a legacy
  * `football.sub` is judged by the SAME reducer a `core.lineup.substitution` is.
  *
@@ -2400,6 +2524,11 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
       { key: "points", label: "Points", derive: (s) => (s.goals ?? 0) + (s.assists ?? 0) },
     ],
     awards: [{ key: "motm", label: "Man of the Match" }],
+    // S8/#417 — `goals_conceded`, `clean_sheets`. See `footballKeeperStatsFold`
+    // above for the mechanism (reads the fold of `core.lineup.*`, never the
+    // kickoff sheet) and the documented clean-sheet rule. `saves` is NOT
+    // declared: no save-shaped event exists in `FootballEv` — see DOMAIN.md.
+    folded: { keys: ["goals_conceded", "clean_sheets"], fold: footballKeeperStatsFold },
   },
 
   // SPEC-1 — read-only card projection over the ledger (voids un-count, spec

@@ -48,6 +48,8 @@ Schema-path prefixes: `Ev.` = event payload branch, `Cfg.` = config,
 | Strike-by-strike play (each strike, coins pocketed, fouls per strike) | all | person: `striker` | `Ev.CarromStrike` (typed; `apply()` rejects it) | deferred | reserved Pro fidelity, entitlement `scoring.strike_by_strike` (carrom.md §6). The fine tier is its own prompt and would add tiers 2/3 |
 | Doubles: which partner performed an individual act | all | person | the `breaker` / `queenBy` / `person` fields above | extended | the entrant is the pair; the acts the laws name a player for now name one |
 | A board's **points** split between two partners in doubles | all | person | — | deferred | Law 53a books a board to the **side** that cleared its coins; an ICF scoresheet has no per-player point column, so any split would be invented |
+| Per-person board win, resolved from the `winner` entrant when the payload names no person | all | person | `playerStats.metrics` (`boards_won`) | extended | S8/#417. Distinct from the STANDINGS `metrics.boards_won` ledger key two rows below (entrant-level, `sideLedger`) — this is the per-PERSON projection of the same fact, via the roster (`PlayerStatsFoldCtx`). No explicit person field is possible here (only `breaker`/`queenBy` name individual acts, not "who won the board"), and a `pair` entrant credits *both* partners identically — the same side-level scoring Law 53a already gives the row above |
+| Per-person match attendance and match win, resolved from a full board/game/adjustment replay | all | person | `playerStats.folded` (`matches`, `wins`) | extended | S8/#417. No payload ever names "who won the MATCH", only who won each board — the best-of-`bestOf` cascade (Laws 56-57) is replayed via `foldMatch` (the same `apply()` the write path folds through) over the roster's two entrants, rather than a second, hand-rolled implementation of `decideGame`/`bankGame` that could silently disagree with it |
 | Walkover / no-show | all | entrant | `core.forfeit` → `outcome.award` | modelled | completed games stand in the ledger |
 | Abandonment | all | entrant | `core.abandon` → `outcome.no_result` | modelled | completed games recorded, shared points |
 | Match (standings) points | all | entrant | `Cfg.points.{win,draw,loss}` | modelled | |
@@ -58,7 +60,7 @@ Schema-path prefixes: `Ev.` = event payload branch, `Cfg.` = config,
 
 | Where in the match an event happened (the position axis) | all | — | `SportModule.position(state)` -> `game` + `board` segments, e.g. `Game 2 . Board 3` | extended | W4a T6b. A **read-side projection**, never a payload: a `MatchPosition` on every stamped event was considered this wave and rejected, because position is derivable from state the fold already computes and recording it would create a recorded value and a derived value of the same type that can silently disagree — the `DisciplineCard.entrantSide` shape. A wrong recorded value is in the hash-chained ledger forever; a wrong projection is one deploy away from fixed. Ordered segments rather than a display string, so W8 can drop a segment for a 375px scorebug, localise each `key` and order two positions in one match; `formatPosition` is the plain-text path. Nothing is materialised into state, so every frozen golden is byte-identical. `bankGame` opens the next game only while the match is still open, so `State.games.length` is exactly games STARTED and never a phantom. The BOARD's liveness is the GAME's, not the match's: gating it on the match sent the board backwards on a fixture abandoned mid-board, since the board was in progress and stays the last place anything happened. |
 
-**Row counts:** 17 modelled, 6 extended, 7 deferred (30 rows).
+**Row counts:** 17 modelled, 8 extended, 7 deferred (32 rows).
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## The discipline projection, and how it resolves the offending side
@@ -114,14 +116,25 @@ Recorded, not acted on:
    adjustment form should offer *which player*. In doubles that is a
    two-name picker per side; in singles it can default to the single player and
    stay invisible.
-3. **`carrom.playerStats` now exists** (`breaks`, `queens`, `penalties`).
-   Leaderboards that said *requires detailed scoring* can render once boards
-   are being recorded with players. Note `queens` counts *pocketed and covered*,
-   not *scored* — the cap (Law 54) can leave a covered queen worth nothing, and
+3. **`carrom.playerStats` now exists** (`breaks`, `queens`, `penalties`, plus
+   S8/#417's `boards_won`/`matches`/`wins`). Leaderboards that said *requires
+   detailed scoring* can render once boards are being recorded with players
+   — or, since S8/#417, purely from entrant ids and a roster, with no
+   per-board person fields at all. Note `queens` (unchanged by S8/#417,
+   deliberately no entrant fallback added) counts *pocketed and covered*, not
+   *scored* — the cap (Law 54) can leave a covered queen worth nothing, and
    the stat model has no access to folded state to filter on it.
 4. **`summary.detail.penalties`** is a new array in the summary payload. It is
    only present when an adjustment named a player, so nothing existing renders
    differently, but a UI that enumerates `detail` keys should expect it.
-5. **Strike-by-strike (tier 2/3) is still owed** and is the natural home for a
+5. **S8/#417 — `matches`/`wins` replay the match, not just a board.**
+   `foldCarromStats` (`carrom.ts`) reuses `foldMatch`/`apply()` over a
+   synthetic two-entrant lineup rather than re-deriving `decideGame`/
+   `bankGame`'s arithmetic a second time; an unparseable `ctx.cfg` or a
+   stream the replay itself refuses just leaves `wins` uncredited for that
+   fixture (never a fabricated winner). No golden or schema-snapshot
+   movement: `playerStats` is a read-side projection, never recorded in a
+   corpus.
+6. **Strike-by-strike (tier 2/3) is still owed** and is the natural home for a
    foul taxonomy, per-strike coin counts and a real doubles turn order. Whoever
    picks it up should reuse `CarromStrike`, which is already typed.

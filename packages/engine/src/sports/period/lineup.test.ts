@@ -23,6 +23,7 @@ import { memberOf, personsAtPosition } from "../../core/lineup.ts";
 import type { Lineup, LineupPair, LineupSlot } from "../../core/types.ts";
 import { resolvePositions, validateLineup } from "../../sport/catalog.ts";
 import { makeEnvelope } from "../../testkit/helpers.ts";
+import { aggregatePlayerStats, playerStatsKeyCollisions } from "../../stats/stats.ts";
 import { hockey } from "../hockey/hockey.ts";
 import { icehockey } from "../icehockey/icehockey.ts";
 import type { PeriodCfg, PeriodState } from "./kernel.ts";
@@ -266,5 +267,171 @@ describe("both period codes reject nothing a lineup event can be recorded with",
     expect(() => foldMatch(hockey, cfg, lineups, events)).not.toThrow();
     // …and IS refused on the write path.
     expect(() => foldMatch(hockey, cfg, lineups, events, STRICT_ALL)).toThrow(EngineError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S8/#417 — goalkeeper stats (`goals_conceded`, `clean_sheets`), fed by the
+// SAME `core/lineup.ts` fold this file already pins for squad identity.
+// `periodKeeperStatsFold` (`kernel.ts`) is the ONE implementation both codes
+// share, so every scenario below runs against both `hockey` and `icehockey`
+// — a change gated for one must not silently alter the other.
+// ---------------------------------------------------------------------------
+describe("S8/#417 — goalkeeper stats read the FOLD of core.lineup.*, never a kickoff snapshot", () => {
+  interface KeeperSport {
+    key: "hockey" | "icehockey";
+    // `typeof hockey` and `typeof icehockey` are the SAME structural type
+    // (both `makePeriodModule(...)`'s return), so a union of the two is a
+    // lint error (`no-duplicate-type-constituents`) — one name covers both
+    // runtime values.
+    module: typeof hockey;
+    keeperGroup: string;
+    outfield: string;
+    size: number;
+  }
+  const SPORTS: KeeperSport[] = [
+    { key: "hockey", module: hockey, keeperGroup: "GK", outfield: "DF", size: 11 },
+    { key: "icehockey", module: icehockey, keeperGroup: "G", outfield: "D", size: 6 },
+  ];
+
+  for (const sport of SPORTS) {
+    describe(sport.key, () => {
+      // `pair` (above) always assigns slot 1 the `keeper` group key — every
+      // OTHER test in this file avoids that slot for scorer/assist ids for
+      // exactly this reason; these tests deliberately use it.
+      const lineups = pair(sport.keeperGroup, sport.outfield, sport.size);
+      const model = sport.module.playerStats!;
+      const goalType = `${sport.key}.goal`;
+      const H = lineups.home.entrantId; // "H"
+      const A = lineups.away.entrantId; // "A"
+      const homeKeeper = lineups.home.slots[0]!.personId; // "H-p1"
+      const awayKeeper = lineups.away.slots[0]!.personId; // "A-p1"
+      const homeSub1 = "H-b1"; // first home bench player
+
+      const start = ev(0, "core.start", {});
+      const goal = (seq: number, by: string, extra?: Record<string, unknown>): EventEnvelope =>
+        ev(seq, goalType, { by, ...(extra ?? {}) });
+      const subKeeper = (seq: number, off: string, on: string): EventEnvelope =>
+        ev(seq, "core.lineup.substitution", {
+          side: H,
+          off,
+          on: { personId: on, positionKey: sport.keeperGroup, slot: "starting", orderNo: 90 },
+        });
+
+      it("simple case: one keeper concedes twice, earns no clean sheet", () => {
+        const rows = aggregatePlayerStats([start, goal(1, A), goal(2, A)], model, lineups);
+        const row = rows.find((r) => r.personId === homeKeeper);
+        expect(row?.stats.goals_conceded).toBe(2);
+        expect(row?.stats.clean_sheets).toBeUndefined();
+      });
+
+      it("simple clean sheet: a keeper who concedes nothing earns one", () => {
+        const rows = aggregatePlayerStats([start, goal(1, H)], model, lineups); // away concedes
+        const row = rows.find((r) => r.personId === homeKeeper);
+        expect(row?.stats.clean_sheets).toBe(1);
+        expect(row?.stats.goals_conceded).toBeUndefined();
+      });
+
+      it("HEADLINE: a mid-match keeper change splits goals_conceded across two different people", () => {
+        const rows = aggregatePlayerStats(
+          [
+            start,
+            goal(1, A), // conceded by the ORIGINAL keeper
+            subKeeper(2, homeKeeper, homeSub1),
+            goal(3, A), // conceded by the REPLACEMENT keeper
+          ],
+          model,
+          lineups,
+        );
+        expect(rows.find((r) => r.personId === homeKeeper)?.stats.goals_conceded).toBe(1);
+        expect(rows.find((r) => r.personId === homeSub1)?.stats.goals_conceded).toBe(1);
+        // Neither earns a clean sheet — each conceded during their own spell.
+        expect(rows.find((r) => r.personId === homeKeeper)?.stats.clean_sheets).toBeUndefined();
+        expect(rows.find((r) => r.personId === homeSub1)?.stats.clean_sheets).toBeUndefined();
+      });
+
+      it("a keeper subbed ON at 0-0 who then concedes gets it; the one who came off does not", () => {
+        const rows = aggregatePlayerStats(
+          [start, subKeeper(1, homeKeeper, homeSub1), goal(2, A)],
+          model,
+          lineups,
+        );
+        expect(rows.find((r) => r.personId === homeSub1)?.stats.goals_conceded).toBe(1);
+        // The outgoing keeper legitimately earns a clean sheet for his own
+        // brief, unbroken spell — the claim under test is that he is never
+        // charged the concession that happened after he left.
+        expect(rows.find((r) => r.personId === homeKeeper)?.stats.goals_conceded).toBeUndefined();
+      });
+
+      it("clean sheet split: two keepers, zero goals conceded throughout, BOTH earn one", () => {
+        const rows = aggregatePlayerStats([start, subKeeper(1, homeKeeper, homeSub1)], model, lineups);
+        expect(rows.find((r) => r.personId === homeKeeper)?.stats.clean_sheets).toBe(1);
+        expect(rows.find((r) => r.personId === homeSub1)?.stats.clean_sheets).toBe(1);
+      });
+
+      it("an empty-net goal charges no keeper, but still breaks the clean sheet", () => {
+        const rows = aggregatePlayerStats([start, goal(1, A, { emptyNet: true })], model, lineups);
+        expect(rows.find((r) => r.personId === homeKeeper)?.stats.goals_conceded).toBeUndefined();
+        expect(rows.find((r) => r.personId === homeKeeper)?.stats.clean_sheets).toBeUndefined();
+      });
+
+      it("shoot-out attempts never move goals_conceded, even though the payload names a goalkeeper", () => {
+        const rows = aggregatePlayerStats(
+          [
+            start,
+            ev(1, `${sport.key}.shootout.attempt`, {
+              by: A,
+              person: `${A}-p2`,
+              goalkeeper: homeKeeper,
+              scored: true,
+            }),
+          ],
+          model,
+          lineups,
+        );
+        expect(rows.find((r) => r.personId === homeKeeper)?.stats.goals_conceded).toBeUndefined();
+      });
+
+      it("an own goal is charged to the CREDITED side's opponent's keeper, not the naive opponent(by)", () => {
+        // by = A (away's player put it into their own net) => credited = H
+        // (home benefits) => conceding side = opponent(credited) = A, so it
+        // is AWAY's OWN keeper who concedes — the naive `opponent(by)`
+        // formula (opponent(A) = H) would wrongly charge HOME's keeper.
+        const rows = aggregatePlayerStats([start, goal(1, A, { kind: "og" })], model, lineups);
+        expect(rows.find((r) => r.personId === awayKeeper)?.stats.goals_conceded).toBe(1);
+        expect(rows.find((r) => r.personId === homeKeeper)?.stats.goals_conceded).toBeUndefined();
+      });
+
+      it("determinism: folding the same stream twice produces deeply equal rows", () => {
+        const events = [
+          start,
+          goal(1, A, { person: `${A}-p2` }),
+          subKeeper(2, homeKeeper, homeSub1),
+          goal(3, A, { person: `${A}-p2` }),
+        ];
+        expect(aggregatePlayerStats(events, model, lineups)).toEqual(
+          aggregatePlayerStats(events, model, lineups),
+        );
+      });
+
+      it("coexists with metric-based stats in one fold — a scorer's own goals metric is untouched", () => {
+        const scorer = `${A}-p2`;
+        const rows = aggregatePlayerStats([start, goal(1, A, { person: scorer })], model, lineups);
+        expect(rows.find((r) => r.personId === scorer)?.stats.goals).toBe(1);
+        expect(rows.find((r) => r.personId === homeKeeper)?.stats.goals_conceded).toBe(1);
+      });
+
+      it("ctx/lineups both omitted leaves the folded path inert — existing metrics unaffected", () => {
+        const scorer = "solo-scorer";
+        const rows = aggregatePlayerStats([start, goal(1, "H", { person: scorer })], model); // no lineups
+        expect(rows.find((r) => r.personId === scorer)?.stats.goals).toBe(1);
+        expect(rows.find((r) => r.personId === scorer)?.stats.goals_conceded).toBeUndefined();
+      });
+    });
+  }
+
+  it("playerStatsKeyCollisions is empty for hockey and icehockey", () => {
+    expect(playerStatsKeyCollisions(hockey.playerStats!)).toEqual([]);
+    expect(playerStatsKeyCollisions(icehockey.playerStats!)).toEqual([]);
   });
 });

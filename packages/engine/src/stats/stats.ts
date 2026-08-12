@@ -110,7 +110,8 @@ export interface PlayerStatsModel {
   /**
    * An escape hatch for attribution a metric+field walk cannot express
    * (S8/#417) — runs over the SAME void-resolved event list as the metric
-   * loop, only when a `PlayerStatsFoldCtx` is supplied, and its rows merge
+   * loop, only when `ctx` OR `lineups` is supplied (both omitted ⇒ inert,
+   * exactly as before this field could read either), and its rows merge
    * into the metric rows by per-key addition (same discipline as
    * `sumPlayerStats`). `keys` is a static declaration of what `fold` may
    * produce, checked for collisions against `metrics[].key` by
@@ -118,10 +119,24 @@ export interface PlayerStatsModel {
    * collision (a data-derived throw inside a fold permanently bricks a
    * recorded fixture), so that checker is the only place a collision is
    * ever surfaced.
+   *
+   * `lineups` (S8/#417, second addition) is the team sheet `aggregatePlayerStats`
+   * already threaded through for the non-player exclusion but never forwarded
+   * any further — added for attribution a `ctx`-only fold cannot express
+   * either: a goalkeeper's identity is a `LineupSlot` plus the fold of
+   * `core.lineup.*` events, not a payload field. `ctx` stays a REQUIRED,
+   * non-nullable parameter here (never `| undefined`) so an existing fold
+   * that reads `ctx.entrants` with no null check keeps typechecking unchanged;
+   * the caller below substitutes a real, empty `PlayerStatsFoldCtx` on the
+   * caller's behalf when the caller only supplied `lineups`.
    */
   folded?: {
     keys: readonly string[];
-    fold: (events: readonly EventEnvelope[], ctx: PlayerStatsFoldCtx) => PlayerStatRow[];
+    fold: (
+      events: readonly EventEnvelope[],
+      ctx: PlayerStatsFoldCtx,
+      lineups?: LineupPair,
+    ) => PlayerStatRow[];
   };
 }
 
@@ -179,6 +194,18 @@ export interface PlayerStatsFoldCtx {
  * fixture, say) still counts exactly as it always has; only an EXPLICIT
  * non-player role ever excludes.
  */
+/**
+ * S8/#417 (CHANGE 1) — a real, empty `PlayerStatsFoldCtx` for the call site
+ * below to hand a `folded.fold` when the caller supplied `lineups` but no
+ * `ctx` at all — every caller in production today (`aggregatePlayerStats
+ * (ledger, model, lineupsByFixture.get(fixtureId))` has no 4th argument).
+ * Keeps `fold`'s own `ctx` parameter non-nullable (see `PlayerStatsModel.
+ * folded`'s docstring) rather than pushing an `| undefined` onto every
+ * existing fold implementation that already dereferences `ctx.entrants`
+ * without a null check.
+ */
+const EMPTY_FOLD_CTX: PlayerStatsFoldCtx = { entrants: [], personsOf: () => [] };
+
 function nonPlayerPersonIds(lineups: LineupPair): ReadonlySet<string> {
   const ids = new Set<string>();
   for (const side of [lineups.home, lineups.away]) {
@@ -432,8 +459,14 @@ export function aggregatePlayerStatsWithDiagnostics(
   // however it likes — so it contributes to none of the counters above;
   // only the metric+field/entrant loop can see enough to say WHY a pair
   // resolved nobody.
-  if (model.folded !== undefined && ctx !== undefined) {
-    for (const row of model.folded.fold(active, ctx)) {
+  //
+  // Gated on EITHER `ctx` or `lineups` (previously `ctx` alone) — a keeper
+  // fold needs only `lineups`, never `ctx`, and every production caller today
+  // supplies `lineups` and no `ctx` at all; gating on `ctx` alone would leave
+  // that fold permanently unreachable outside a test that manufactures one.
+  // Both omitted still short-circuits here exactly as before this change.
+  if (model.folded !== undefined && (ctx !== undefined || lineups !== undefined)) {
+    for (const row of model.folded.fold(active, ctx ?? EMPTY_FOLD_CTX, lineups)) {
       for (const [key, value] of Object.entries(row.stats)) bump(row.personId, key, value);
     }
   }

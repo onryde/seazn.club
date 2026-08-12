@@ -7,7 +7,7 @@
 // competition demands a winner.
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { PlayerStatsModel } from "../../stats/stats.ts";
-import { makePeriodModule, type PeriodSuspensionReason } from "../period/kernel.ts";
+import { makePeriodModule, periodKeeperStatsFold, type PeriodSuspensionReason } from "../period/kernel.ts";
 import { HOCKEY_SUSPENSIONS, HOCKEY_YOUTH_SUSPENSIONS } from "../period/suspensions.ts";
 
 // S4 (#428) — FIH's own subset of the shared `PeriodSuspensionReason` union:
@@ -94,6 +94,15 @@ const playerStats: PlayerStatsModel = {
     },
   ],
   awards: [{ key: "potm", label: "Player of the Match" }],
+  // S8/#417 — `goals_conceded`, `clean_sheets`. "GK" matches this file's own
+  // `positions` catalog above and the `keeperGroup` passed to
+  // `makePeriodModule` below; see `periodKeeperStatsFold`'s own docstring for
+  // the mechanism (reads the fold of `core.lineup.*`, never the kickoff
+  // sheet) and the documented clean-sheet rule. `saves` is NOT declared here:
+  // no save-shaped event exists on this kernel, and `so_saves` above already
+  // covers the one place a defending keeper is named per-attempt (the
+  // shoot-out) — see hockey/DOMAIN.md.
+  folded: periodKeeperStatsFold("hockey.goal", "GK"),
 };
 
 export const hockey = makePeriodModule({

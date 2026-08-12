@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import { foldMatch, type EventEnvelope } from "../../core/events.ts";
 import type { LineupPair, StageCtx } from "../../core/types.ts";
 import { evalPadGate } from "../../sport/module.ts";
-import { aggregatePlayerStats } from "../../stats/stats.ts";
+import {
+  aggregatePlayerStats,
+  playerStatsKeyCollisions,
+  type PlayerStatsFoldCtx,
+} from "../../stats/stats.ts";
 import { conformanceSuite, makeEnvelope } from "../../testkit/index.ts";
 import { checkActionCoverage, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
 import { generic, GENERIC_EVENT_SCHEMAS, padSpec, type GenericCfg } from "./generic.ts";
@@ -222,6 +226,133 @@ describe("generic — running tally (W4)", () => {
     expect(aggregatePlayerStats(events, generic.playerStats!)).toEqual([
       { personId: "a1", stats: { points: 1, scores: 1 } },
       { personId: "h1", stats: { points: 5, scores: 2 } },
+    ]);
+  });
+});
+
+// S8/#417 — folded win/draw/loss + points_for, resolved from the entrant
+// roster when the terminal result/tally names no person. See generic.ts's
+// `foldGenericStats` for the mechanism (reuses generic's own `apply()` via
+// `foldMatch`, over a synthetic two-entrant lineup, rather than re-deriving
+// resultMode/isDraw/tally-settlement rules a second time).
+describe("generic: folded win/draw/loss + points_for, resolved from entrant attribution (S8/#417)", () => {
+  function ctxFor(
+    entrants: ReadonlyArray<{
+      id: string;
+      kind?: "team" | "individual" | "pair";
+      persons: readonly string[];
+    }>,
+    config?: unknown,
+  ): PlayerStatsFoldCtx {
+    return {
+      entrants: entrants.map((e) => ({ id: e.id, kind: e.kind ?? "individual" })),
+      personsOf: (entrantId) => entrants.find((e) => e.id === entrantId)?.persons ?? [],
+      ...(config === undefined ? {} : { cfg: config }),
+    };
+  }
+  const twoPlayers = (config?: unknown) =>
+    ctxFor(
+      [
+        { id: "H", persons: ["H-p1"] },
+        { id: "A", persons: ["A-p1"] },
+      ],
+      config,
+    );
+
+  it("headline regression: entrant ids only (no person fields) + individual ctx resolve correct win/loss rows (win_loss mode)", () => {
+    const events = stream(["generic.result", { winnerId: "H" }]);
+    const rows = aggregatePlayerStats(events, generic.playerStats!, undefined, twoPlayers(winLossCfg));
+    expect(rows).toEqual([
+      { personId: "A-p1", stats: { wins: 0, draws: 0, losses: 1 } },
+      { personId: "H-p1", stats: { wins: 1, draws: 0, losses: 0 } },
+    ]);
+  });
+
+  it("score mode: p1Score/p2Score resolve wins/losses AND points_for through the same replay", () => {
+    const events = stream(["generic.result", { p1Score: 3, p2Score: 1 }]);
+    const rows = aggregatePlayerStats(events, generic.playerStats!, undefined, twoPlayers(scoreCfg));
+    expect(rows).toEqual([
+      { personId: "A-p1", stats: { wins: 0, draws: 0, losses: 1, points_for: 1 } },
+      { personId: "H-p1", stats: { wins: 1, draws: 0, losses: 0, points_for: 3 } },
+    ]);
+  });
+
+  it("a declared draw credits both sides via the roster", () => {
+    const drawCfg = { ...winLossCfg, allowDraws: true };
+    const events = stream(["generic.result", { isDraw: true }]);
+    const rows = aggregatePlayerStats(events, generic.playerStats!, undefined, twoPlayers(drawCfg));
+    expect(rows).toEqual([
+      { personId: "A-p1", stats: { wins: 0, draws: 1, losses: 0 } },
+      { personId: "H-p1", stats: { wins: 0, draws: 1, losses: 0 } },
+    ]);
+  });
+
+  // The S6/#416 trap this module already fixed once (see `applyResult`'s own
+  // comment, above): a payload with NO result signal at all must NOT read as
+  // an implicit draw. Reusing `apply()` via `foldMatch` means this fold
+  // cannot regress that fix without also breaking the write path.
+  it("a declared draw and a payload with NO result signal produce DIFFERENT outcomes (S6/#416)", () => {
+    const drawCfg = { ...winLossCfg, allowDraws: true };
+    const ctx = twoPlayers(drawCfg);
+    const declared = aggregatePlayerStats(stream(["generic.result", { isDraw: true }]), generic.playerStats!, undefined, ctx);
+    expect(declared).toEqual([
+      { personId: "A-p1", stats: { wins: 0, draws: 1, losses: 0 } },
+      { personId: "H-p1", stats: { wins: 0, draws: 1, losses: 0 } },
+    ]);
+    // `apply()` rejects this ("win_loss mode requires winnerId or isDraw") —
+    // the fold must swallow that throw (house rule) and credit NOTHING,
+    // never fall back to treating the absent signal as a draw.
+    const noSignal = aggregatePlayerStats(stream(["generic.result", {}]), generic.playerStats!, undefined, ctx);
+    expect(noSignal).toEqual([]);
+  });
+
+  it("a team entrant credits no rows through the entrant path, but its individual opponent is still credited correctly", () => {
+    const ctx = ctxFor(
+      [
+        { id: "H", kind: "team", persons: ["H-p1", "H-p2"] },
+        { id: "A", persons: ["A-p1"] },
+      ],
+      winLossCfg,
+    );
+    const events = stream(["generic.result", { winnerId: "H" }]);
+    const rows = aggregatePlayerStats(events, generic.playerStats!, undefined, ctx);
+    expect(rows).toEqual([{ personId: "A-p1", stats: { wins: 0, draws: 0, losses: 1 } }]);
+  });
+
+  it("a void over the result un-counts it in the folded path", () => {
+    const decisive = stream(["generic.result", { winnerId: "H" }]);
+    const ctx = twoPlayers(winLossCfg);
+    const clean = aggregatePlayerStats(decisive, generic.playerStats!, undefined, ctx);
+    expect(clean).toEqual([
+      { personId: "A-p1", stats: { wins: 0, draws: 0, losses: 1 } },
+      { personId: "H-p1", stats: { wins: 1, draws: 0, losses: 0 } },
+    ]);
+    const voided = [
+      ...decisive,
+      makeEnvelope(decisive.length, { type: "core.void", payload: {} }, decisive[0]!.id),
+    ];
+    expect(aggregatePlayerStats(voided, generic.playerStats!, undefined, ctx)).toEqual([]);
+  });
+
+  it("is deterministic: the same stream + ctx folds twice to deeply equal rows", () => {
+    const ctx = twoPlayers(scoreCfg);
+    const events = stream(["generic.result", { p1Score: 3, p2Score: 1 }]);
+    const once = aggregatePlayerStats(events, generic.playerStats!, undefined, ctx);
+    const twice = aggregatePlayerStats(events, generic.playerStats!, undefined, ctx);
+    expect(twice).toEqual(once);
+  });
+
+  it("declares no colliding keys between folded and metrics", () => {
+    expect(playerStatsKeyCollisions(generic.playerStats!)).toEqual([]);
+  });
+
+  it("ctx omitted stays inert: pre-existing metrics are byte-identical and no folded key ever appears", () => {
+    const events = stream(
+      ["generic.score", { by: "H", points: 2, person: "h1" }],
+      ["generic.result", { winnerId: "H" }],
+    );
+    expect(aggregatePlayerStats(events, generic.playerStats!)).toEqual([
+      { personId: "h1", stats: { points: 2, scores: 1 } },
     ]);
   });
 });

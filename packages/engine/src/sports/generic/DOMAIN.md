@@ -43,6 +43,7 @@ lack of time.
 | Final result: who won | `win_loss` | entrant | `Ev.GenericResult.winnerId` | modelled | v1 parity |
 | Final result: a draw | both (needs `Cfg.allowDraws`) | entrant | `Ev.GenericResult.isDraw`, or level scores | modelled | refused when draws are off |
 | Final result: two scores | `score` | entrant | `Ev.GenericResult.{p1Score,p2Score}` | modelled | winner derived; contradictions between `winnerId`, `isDraw` and the scores are refused |
+| Per-person win/draw/loss and points-for, projected from the entrant-level result via the CALLER's roster | all | person | `playerStats.folded` (`wins`, `draws`, `losses`, `points_for`) | extended | S8/#417. NOT a new payload field — generic's schema still names no person on the result (see *the boundary*, below). A caller-supplied roster (`PlayerStatsFoldCtx`) is what turns "entrant H won" into "person h1 won"; an unparseable or absent roster leaves the projection off entirely, same as every other silent-gap row in this table |
 | A running score during play | all | entrant | `Ev.GenericScore.{by,points}` → `State.running` → `summary.headline` | extended | one scoring action per event; the tally renders live and disappears behind the result once decided |
 | Correcting a mis-pressed tally | all | entrant | `Ev.GenericScore.points` (negative) | extended | non-zero integers; a correction that would take a side below zero is refused |
 | Who performed a scoring action | all | person: `person` | `Ev.GenericScore.person` → `playerStats` (`points`, `scores`) | extended | **deliberate**: an actor exists for a scoring action in nearly every sport, and it is the one person fact that needs no sport-specific structure. See [the boundary](#the-boundary) |
@@ -62,7 +63,7 @@ lack of time.
 | Per-person non-scoring stats (saves, rebounds, fouls won) | all | person | — | deferred | **boundary.** Every such metric is sport vocabulary; `points` + `scores` is the sport-neutral maximum |
 | Sport-specific validity rules (a legal score, a maximum, a target) | all | entrant | — | deferred | **boundary.** The fallback cannot know them; the only invariants it enforces are internal consistency and a non-negative tally |
 
-**Row counts:** 9 modelled, 4 extended, 8 deferred (21 rows).
+**Row counts:** 9 modelled, 5 extended, 8 deferred (22 rows).
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## The boundary
@@ -96,6 +97,14 @@ promise the fold cannot keep. The terminal result stays entrant-only: a result
 is a fixture-level fact, and crediting "the winner" to a person is exactly the
 kind of half-truth a fallback should not invent.
 
+This ruling still holds after S8/#417's `playerStats.folded` (mapping table,
+above): `wins`/`draws`/`losses`/`points_for` are a person-level VIEW built
+from a CALLER-supplied roster, not a new payload field and not an assertion
+generic's own schema makes or could verify. Nothing was invented — the entrant
+IS still who won, exactly as before; a roster is only ever consulted to answer
+"who is on that entrant", the same question `Ev.GenericScore.person` already
+answers explicitly for a scoring action.
+
 ## Downstream owed
 
 Recorded, not acted on:
@@ -105,9 +114,11 @@ Recorded, not acted on:
    side, an undo (a negative correction, or `core.void`), and an optional
    player picker. This is the one screen that makes an unmodelled sport
    scoreable live.
-2. **`generic.playerStats` now exists** (`points` summed, `scores` counted).
-   Any surface that said *requires detailed scoring* for generic divisions can
-   render once actions carry a person.
+2. **`generic.playerStats` now exists** (`points` summed, `scores` counted,
+   plus S8/#417's `wins`/`draws`/`losses`/`points_for` below). Any surface
+   that said *requires detailed scoring* for generic divisions can render
+   once actions carry a person — or, since S8/#417, from the terminal result
+   alone plus a roster, with no per-action person fields at all.
 3. **`summary.headline` is now non-trivial before a result.** It used to be
    `— — —` until the terminal card landed; with a tally it reads `3 — 1`. A
    decided fixture still always renders its result (or `W/O` / `N/R`), never
@@ -118,3 +129,13 @@ Recorded, not acted on:
 5. **A tally-settled result (`generic.result {}` in score mode)** is a new,
    legal payload shape. Any client that validated "score mode requires both
    scores" client-side should relax that when a tally exists.
+6. **S8/#417 — `foldGenericStats` (`generic.ts`) replays `apply()` itself**
+   (via `foldMatch`, over a synthetic two-entrant lineup) rather than
+   re-deriving `resultMode`/`isDraw`/tally-settlement a second time —
+   including the S6/#416 "isDraw key must be PRESENT" trap fixed in
+   `applyResult` above, which a second implementation could otherwise
+   silently reopen. An unparseable `ctx.cfg` or a stream `apply()` itself
+   refuses just leaves `wins`/`draws`/`losses`/`points_for` uncredited for
+   that fixture — never a fabricated result. No golden or schema-snapshot
+   movement: `playerStats` is a read-side projection, never recorded in a
+   corpus.

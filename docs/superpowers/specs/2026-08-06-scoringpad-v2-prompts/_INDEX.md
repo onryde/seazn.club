@@ -1252,6 +1252,57 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   instructive: the core API was specced from the metric path (payload in, person
   out) and the first genuinely STATE-dependent statistic did not fit it.
 
+- 2026-08-12 — S8/#417 — **cricket's mixed-fidelity rule: fine wins, coarse fills
+  only a person+aspect the fine stream never mentions.** Cricket is the one sport
+  with a real four-band ladder (band 2 `cricket.player.line`, band 3
+  `cricket.ball`), so a stream can carry both and a naive mirror double-counts
+  every run. Shipped rule: `cricket.ball` always wins; the `folded` path fills
+  the SAME keys (`runs`, `balls_faced`, `balls_bowled`, `runs_conceded`,
+  `wickets`, `dismissals`) only for a (person, aspect) pair — batting or bowling
+  — with zero fine deliveries anywhere in the stream. A real v1-migration fixture
+  is fine-or-coarse for its whole length, which the gate handles exactly; and
+  `applyPlayerLine` already requires a line coexisting with a fine innings to
+  carry the same numbers the ball fold produced, so even a gate failing open
+  would double a CORRECT figure rather than patch in a wrong one. Dismissal MODE
+  stays fine-only — `cricket.player.line` has no mode field — so no
+  `dismissals_<kind>` key is ever folded-derived.
+- 2026-08-12 — S8/#417 — **`folded.keys` is declared EMPTY for cricket, and that
+  is a deliberate opt-out of the collision checker, not an oversight.** Every key
+  cricket's fold writes already has an owning `metrics[]` entry, by design — the
+  coarse contribution is meant to land in the same column as the fine one.
+  `playerStatsKeyCollisions` exists to catch an ACCIDENTAL clash between two
+  uncoordinated sources, so declaring the six would relabel an intentional,
+  gated, tested merge as exactly that accident. Recorded because the cost is
+  real and a later session should not "fix" it blindly: `keys` stops meaning
+  "what this fold may emit" for cricket, so nothing static describes that set.
+  The cleaner long-term shape is an explicit `sharesMetricKeys` flag so intent
+  is declared rather than encoded as an empty list; not built here because it is
+  a core-API change landing after four sport passes were already written
+  against the current shape.
+
+- 2026-08-12 — S8/#417 — **the kernel-default `playerStats` pattern, established
+  (it did not previously exist).** `makeSetBasedModule` and `makeNestedModule`
+  now build a default model — `points_won` as a metric (`field: "scorer"` +
+  `entrantField: "wonBy"`/`"by"` + `fromEntrant`), and `matches`/`sets_won`/
+  `sets_lost`(/`games_won`) as a `folded` hook — merged with the preset's own via
+  `mergePlayerStats`, **preset key wins on collision**. That covers volleyball,
+  badminton, tabletennis and tennis from two files, which is the whole point:
+  four sports cannot drift from each other if there is one declaration.
+- 2026-08-12 — S8/#417 — **the folded models REPLAY the kernel's own scoring
+  cascade rather than reimplementing it, and that makes `ctx.cfg` load-bearing.**
+  `folded.fold` runs the real `applyRally`/`applySummary`/`bankSet` (setbased) or
+  `applyStandardPoint`/`applyTbPoint`/`applySetSummary`/`applyGameAward` (nested)
+  over a synthetic throwaway two-entrant state, reading `bestOf`/`setTo` from
+  `ctx.cfg`. This is deliberately NOT a second implementation of the set/game
+  cascade — this repo's single most-repeated defect is a placer/verifier fork,
+  two code paths computing one number until they diverge. **Consequence the
+  wiring pass MUST honour: `ctx.cfg` is no longer "reserved for future use" as
+  `stats.ts`'s docstring calls it — a caller that omits the division's cfg
+  silently degrades these sports to `matches`-only.** That degradation is a
+  swallowed `try/catch` inside the fold (chosen over a throw, correctly — a
+  cfg-derived throw inside a fold bricks recorded fixtures), so it fails QUIETLY
+  and is exactly the shape this programme has been burned by; flagged to review.
+
 - _(append below)_
 
 ## Open questions for the owner

@@ -7,7 +7,13 @@
 // `scoring.strike_by_strike`), see CarromStrike below.
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
-import { isStrictFold, resolveVoids, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import {
+  foldMatch,
+  isStrictFold,
+  resolveVoids,
+  type CoreEv,
+  type EventEnvelope,
+} from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import { currentUnit, unitNumber, unitSegment, type MatchPosition } from "../../core/position.ts";
 import {
@@ -28,6 +34,7 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
+import type { PlayerStatRow, PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — carrom.md §1 (ICF Laws 52, 54, 56, 57)
@@ -704,6 +711,96 @@ export function padSpec(cfg: CarromCfg): PadSpec {
 }
 
 // ---------------------------------------------------------------------------
+// S8/#417 — playerStats.folded: "matches" (attendance) and "wins" (the match
+// outcome), resolved from the entrant roster (`PlayerStatsFoldCtx`). Neither
+// can be a plain `metrics[]` entry: no payload ever names "who won the
+// match" — only who won each BOARD — so the match winner is a cascade over
+// every board, game and umpire adjustment (Laws 51/55-57), the exact
+// decideGame/bankGame arithmetic above. Rather than a second, hand-rolled
+// implementation of that cascade (this codebase's recurring placer-vs-
+// verifier defect — two systems answering the same question that can
+// silently disagree), this replays the SAME apply() the write path folds
+// through, via `foldMatch`, over a SYNTHETIC two-entrant lineup (`init`/
+// `apply` never read `slots`).
+// ---------------------------------------------------------------------------
+
+function foldCarromStats(events: readonly EventEnvelope[], ctx: PlayerStatsFoldCtx): PlayerStatRow[] {
+  const rows = new Map<string, Record<string, number>>();
+  const bump = (personId: string, key: string, by: number): void => {
+    const stats = rows.get(personId) ?? {};
+    stats[key] = (stats[key] ?? 0) + by;
+    rows.set(personId, stats);
+  };
+  // Mandatory kind guard (PlayerStatsFoldCtx's own contract, restated here
+  // since this fold does its own entrant resolution rather than going
+  // through `resolveMetricPersons`): a "team" entrant credits nobody even
+  // when `personsOf` hands back a full roster. Takes the whole entrant (not
+  // just an id) so a mixed team/individual fixture still credits its
+  // individual side correctly.
+  const creditEach = (
+    entrant: PlayerStatsFoldCtx["entrants"][number],
+    key: string,
+    by: number,
+  ): void => {
+    if (entrant.kind === "team") return;
+    for (const personId of ctx.personsOf(entrant.id)) {
+      if (personId !== "") bump(personId, key, by);
+    }
+  };
+
+  // "matches" — attendance. Gated on the ledger naming SOME entrant at all
+  // (the same entrant-id scan `discipline.extractCards` already uses, so an
+  // empty/pre-match stream credits nobody) — but once gated open, BOTH
+  // `ctx.entrants` are credited, not just whichever one a payload happens to
+  // name: a whitewash where the loser never wins a board, never covers a
+  // queen and never draws a penalty would otherwise leave the loser's own
+  // roster with no "matches" row at all, despite unambiguously having played.
+  if (entrantIdsIn(events).length > 0) {
+    for (const entrant of ctx.entrants) creditEach(entrant, "matches", 1);
+  }
+
+  // `ctx.cfg` carries no parse guarantee (it is `unknown` by design), and a
+  // replay can throw for reasons that have nothing to do with "who won" (an
+  // out-of-order or partial stream, a stream `apply()` itself would refuse).
+  // Either way this must never throw OUT of the fold (house rule: a
+  // data-derived throw inside a fold permanently bricks a recorded
+  // fixture), so an unparseable cfg or a rejected replay just leaves "wins"
+  // uncredited for this fixture — no signal in, no fabricated number out
+  // (the same coverage discipline as a partially recorded result, S2/#430).
+  // Once the match genuinely IS decided, BOTH sides are credited explicitly
+  // — including a "wins: 0" for whoever did not win — unlike this fixture's
+  // boardgame sibling, carrom's "wins" has no competing explicit-person
+  // field to protect (no payload ever names "who won the match"), so there
+  // is no stray-row risk in writing the zero.
+  const cfgParsed = CarromCfg.safeParse(ctx.cfg);
+  const home = ctx.entrants[0];
+  const away = ctx.entrants[1];
+  if (cfgParsed.success && ctx.entrants.length === 2 && home !== undefined && away !== undefined) {
+    const lineups: LineupPair = {
+      home: { entrantId: home.id, slots: [] },
+      away: { entrantId: away.id, slots: [] },
+    };
+    try {
+      const state = foldMatch(carrom, cfgParsed.data, lineups, events);
+      const outcome = state.outcome;
+      if (outcome !== null && (outcome.kind === "win" || outcome.kind === "award")) {
+        const winnerIsHome = outcome.winner === home.id;
+        creditEach(home, "wins", winnerIsHome ? 1 : 0);
+        creditEach(away, "wins", winnerIsHome ? 0 : 1);
+      } else if (outcome !== null && (outcome.kind === "draw" || outcome.kind === "no_result")) {
+        creditEach(home, "wins", 0);
+        creditEach(away, "wins", 0);
+      }
+      // outcome === null (still live) — undetermined, no "wins" credit yet.
+    } catch {
+      // Un-derivable this fixture — "matches" above already stands.
+    }
+  }
+
+  return [...rows.entries()].map(([personId, stats]) => ({ personId, stats }));
+}
+
+// ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
 
@@ -904,13 +1001,31 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
 
   // W4 — person credit off the board summary and the umpire adjustment. Board
   // points stay a SIDE fact (Law 53a books them to the side that cleared), so
-  // there is no per-player points metric — see DOMAIN.md.
+  // there is no per-player points metric — see DOMAIN.md. `breaks`/`queens`
+  // stay explicit-only (S8/#417 deliberately did NOT add an entrant
+  // fallback to either): `queens` already means "pocketed and covered per
+  // the payload", not "scored" (the cap can still zero it — DOMAIN.md), and
+  // widening it to fall back to `queenTo` would silently change what the
+  // number means whenever `queenBy` is missing. `boards_won` is the new,
+  // genuinely entrant-only stat (Law 53a's board-winner side has no
+  // per-player act of its own to name — `breaker`/`queenBy` are different
+  // people's acts) — no `field` is declared because there is no possible
+  // explicit person for "who won the board", only the `winner` entrant.
   playerStats: {
     metrics: [
       { key: "breaks", label: "Breaks", from: "carrom.board.summary", field: "breaker", agg: "count" },
       { key: "queens", label: "Queens", from: "carrom.board.summary", field: "queenBy", agg: "count" },
       { key: "penalties", label: "Penalties", from: "carrom.game.adjust", field: "person", agg: "count" },
+      {
+        key: "boards_won",
+        label: "Boards won",
+        from: "carrom.board.summary",
+        agg: "count",
+        entrantField: "winner",
+        fromEntrant: true,
+      },
     ],
+    folded: { keys: ["matches", "wins"], fold: foldCarromStats },
   },
 
   // W4 review item 7 — the umpire's Laws 51/55 row reaches the shared

@@ -42,7 +42,9 @@ Schema-path prefixes: `Ev.` = an event payload branch, `Cfg.` = config,
 | Move number the game finished on (Art. 8.1) | all | entrant | `Ev.BoardgameResult.moves` → `State.moves` → `summary.detail.moves` | extended | the game *length*, which is what a scoresheet's last written move number gives you. **This is also boardgame's answer to W4a T6b's cross-sport position axis, and the reason the module declares no `SportModule.position`.** Boardgame's position IS the move index, it has no phases, and its single terminal event means there is nothing to project at a mid-match prefix: `State.moves` is absent until the result card arrives. Declaring a position anyway — "Move 1" — would be the fabricated second source of truth the axis exists to refuse, so `matchPositionOf` returns `null` and the caller orders and labels by `seq`. Per-ply positions would need the per-ply ledger the row below rules out as wrong fidelity |
 | The moves themselves (algebraic movetext / PGN) | all | person | — | deferred | **wrong fidelity for our scoring tiers.** A per-ply ledger turns the engine into a chess implementation (legality, FEN, per-ply clocks) and no declared tier asks for it. PGN stays a document attached via `core.note` until there is a product decision on blob storage in the ledger |
 | The player who won the board | all | person: `winnerPerson` | `Ev.BoardgameResult.winnerPerson` → `State.winnerPerson` | extended | refused on a drawn game — a draw credits *both* players |
-| Per-person ½ point for a drawn board | all | person | — | deferred | needs a pairing↔result join that `aggregatePlayerStats` (one event type → one person field) cannot express; see *Downstream owed* |
+| Per-person win / draw / loss, resolved from the `winner` entrant when the payload names no person | all | person | `playerStats.metrics` (`wins`, entrant fallback) + `playerStats.folded` (`draws`, `losses`) | extended | S8/#417. An explicit `winnerPerson` still outranks the roster (`PlayerStatsFoldCtx`); a double forfeit (`method: "double_forfeit"`) credits none of the three — chess.md §7's no-result, not a fabricated draw or loss for either player |
+| Per-person white/black colour split | all | person | `playerStats.folded` (`white`, `black`) ← `Ev.BoardgamePairing.white` | extended | S8/#417. Derived the same way `State.colorOfHome` is (the pairing card's `white` entrant, resolved through the roster) — not a second payload field |
+| Per-person ½ point for a drawn board | all | person | — | deferred | the win/draw/loss JOIN now exists (`playerStats.folded`, row above) — what remains missing is specifically a literal ½-point-per-person total, a `derived` stat (`PlayerStatDerive`) nobody has asked for yet, not a missing join anymore |
 | Time control: base + increment | all | — (config) | `Cfg.clock.{base,increment}` | modelled | metadata, no scoring effect. `increment` is optional (W4a), so sudden death is expressible without a zero that reads as a deliberate Fischer setting |
 | Time delay (Bronstein / simple delay), independently of increment | all | — (config) | `Cfg.clock.delay` | extended | W4a §5.5. **Increment and delay are different clocks:** increment ADDS to the clock after the move and unused time is BANKED; delay WITHHOLDS the clock for `delay` before it starts running and banks nothing. Independent knobs — a control may carry both, either or neither. Still metadata, still no fold effect; what it buys is a pad that counts down correctly for a delay control instead of treating it as Fischer |
 | Multi-period control (e.g. 90′/40 moves + 30′ + 30″, FIDE classical) | classical | — | — | deferred | a control that *changes* mid-game needs move-count triggers and a second base; the single `{base, increment, delay}` triple covers rapid, blitz and every club classical control this product has seen |
@@ -56,7 +58,7 @@ Schema-path prefixes: `Ev.` = an event payload branch, `Cfg.` = config,
 | Player rating; rated vs unrated event | all | person | — | deferred | a person/entrant record fact, not a match-ledger fact |
 | Abandonment (venue lost, round replayed) | all | entrant | `core.abandon` → `State.replayFlagged` | modelled | leaves the game undecided and flags it |
 
-**Row counts:** 12 modelled, 10 extended, 8 deferred (30 rows).
+**Row counts:** 12 modelled, 12 extended, 8 deferred (32 rows).
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## Why the pairing card is not `by` + `person`
@@ -112,14 +114,15 @@ Recorded, not acted on:
    "home = White" must read `State.colorOfHome` / `summary.detail.colorOfHome`.
    The Swiss pairing engine already consumes the `white`/`black` metrics, which
    now reflect the real colour rather than a fixed assumption.
-4. **`boardgame.playerStats` now exists** (`games`, `wins`). Leaderboards that
-   said *requires detailed scoring* for this sport can render as soon as
-   pairing cards are being recorded.
-5. **Per-player chess points (1 / ½ / 0) are a W6 stats-model item.** They need
-   a join from the pairing card (who sat) to the result (who won), which the
-   current flat `{from: eventType, field: personField}` metric shape cannot do.
-   Either the stats model grows a join, or the pad writes `winnerPerson` on
-   every decisive board and draws stay entrant-level.
+4. **`boardgame.playerStats` now exists** (`games`, `wins`, plus S8/#417's
+   `draws`/`losses`/`white`/`black` below). Leaderboards that said *requires
+   detailed scoring* for this sport can render as soon as pairing cards are
+   being recorded.
+5. **Per-player chess points (1 / ½ / 0) are still owed, but the JOIN they
+   needed shipped in S8/#417** (`playerStats.folded` — see the mapping table
+   row). What is left is purely a `derived` stat (`points = wins*2 + draws`,
+   in half-points) reading the now-real `wins`/`draws` counts — no new
+   attribution mechanism, just a formula nobody has asked for yet.
 6. **PGN storage** remains an open product decision (see the deferred row) —
    worth revisiting only if chess organisers ask for game download.
 7. **`Cfg.clock.delay`, and `increment` now optional** (W4a §5.5). Any surface
@@ -134,3 +137,13 @@ Recorded, not acted on:
    decision rather than an oversight. No smoke coverage is owed either — this
    change is cfg metadata with no fold effect, so `scripts/smoke.ts` has
    nothing to assert.
+9. **S8/#417 — entrant-attribution playerStats.** `wins` gained an entrant
+   fallback (`fromEntrant`/`entrantField` on the existing metric, so an
+   explicit `winnerPerson` still outranks it); `draws`, `losses`, `white` and
+   `black` are new, resolved through `playerStats.folded` — a v1-era stream
+   that names only the winning/paired ENTRANT (no person fields at all) now
+   still produces correct person rows via `PlayerStatsFoldCtx`. A double
+   forfeit credits none of `wins`/`draws`/`losses` (chess.md §7's no-result),
+   but `games` (fed by the pairing card, independent of the result) still
+   counts it as played. No golden or schema-snapshot movement: `playerStats`
+   is a read-side projection, never recorded in a corpus.

@@ -29,6 +29,7 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
+import type { PlayerStatRow, PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — spec 04 §6.1
@@ -477,6 +478,82 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
 }
 
 // ---------------------------------------------------------------------------
+// S8/#417 — playerStats.folded: draws / losses / white / black, resolved from
+// the entrant roster (`PlayerStatsFoldCtx`) when a payload names no person.
+// "wins" and "games" stay plain `playerStats.metrics` entries (below) — only
+// "wins" gained `fromEntrant`/`entrantField`, so an explicit `winnerPerson`
+// still outranks the roster exactly like `resolveMetricPersons` mandates.
+//
+// This fold deliberately never writes an explicit 0 for the side a fact does
+// NOT apply to (unlike some sibling sports' folded stats): "wins" lives on
+// the plain metric so its explicit `winnerPerson` can keep outranking the
+// roster fallback per S8/#417's resolution order. If this fold ALSO wrote
+// `losses:0`/`draws:0` for the WINNER's entrant, a `winnerPerson` naming
+// someone other than that entrant's own roster person would still leave the
+// roster person with a stray row — exactly the case the acceptance suite
+// pins ("the entrant's own roster person gets no row at all"). Only ever
+// crediting the side a fact concretely applies to avoids that.
+function foldBoardgameStats(
+  events: readonly EventEnvelope[],
+  ctx: PlayerStatsFoldCtx,
+): PlayerStatRow[] {
+  const rows = new Map<string, Record<string, number>>();
+  const bump = (personId: string, key: string): void => {
+    const stats = rows.get(personId) ?? {};
+    stats[key] = (stats[key] ?? 0) + 1;
+    rows.set(personId, stats);
+  };
+  // Credits every person the roster names for this entrant — UNLESS the
+  // entrant is "team"-kind (S8/#417's mandatory kind guard, restated here
+  // since this fold does its own entrant resolution rather than going
+  // through `resolveMetricPersons`): a team credits nobody even when
+  // `personsOf` hands back a full roster. Takes the whole entrant (not just
+  // an id) so callers can iterate `ctx.entrants` directly without
+  // pre-filtering, and a mixed team/individual fixture still credits its
+  // individual side correctly.
+  const creditEach = (entrant: PlayerStatsFoldCtx["entrants"][number], key: string): void => {
+    if (entrant.kind === "team") return;
+    for (const personId of ctx.personsOf(entrant.id)) {
+      if (personId !== "") bump(personId, key);
+    }
+  };
+
+  for (const event of events) {
+    if (event.type === "boardgame.pairing") {
+      const parsed = BoardgamePairing.safeParse(event.payload);
+      if (!parsed.success || parsed.data.white === undefined) continue;
+      const whiteId = parsed.data.white;
+      for (const entrant of ctx.entrants) {
+        creditEach(entrant, entrant.id === whiteId ? "white" : "black");
+      }
+      continue;
+    }
+    if (event.type !== "boardgame.result") continue;
+    const parsed = BoardgameResult.safeParse(event.payload);
+    if (!parsed.success) continue;
+    const { winner, method } = parsed.data;
+    if (winner === undefined || winner === null) {
+      // Double forfeit is a no_result (chess.md §7) — nobody's game, draw or
+      // loss; "games" (the plain pairing-card metric) is unaffected either
+      // way, since attendance is recorded independently of how the game
+      // ended. Any OTHER null-winner method is an ordinary draw: every
+      // entrant's roster earns it.
+      if (method === "double_forfeit") continue;
+      for (const entrant of ctx.entrants) creditEach(entrant, "draws");
+      continue;
+    }
+    // Decisive: the winner's persons already earn "wins" through the plain
+    // metric below (same `winner` field, entrant fallback) — this only owes
+    // the OTHER side(s) their "losses".
+    for (const entrant of ctx.entrants) {
+      if (entrant.id !== winner) creditEach(entrant, "losses");
+    }
+  }
+
+  return [...rows.entries()].map(([personId, stats]) => ({ personId, stats }));
+}
+
+// ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
 
@@ -660,14 +737,31 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
 
   // W4 — person credit. `games` fires once per named player on the pairing
   // card (the two fields never name the same person), `wins` off the result.
-  // Per-person half points for a draw need a pairing↔result join that
-  // aggregatePlayerStats cannot express — see DOMAIN.md "downstream owed".
+  // S8/#417 — `wins` gained the entrant fallback (`fromEntrant`/`entrantField`):
+  // an explicit `winnerPerson` still wins when present (unchanged), and a
+  // v1-era stream that names only the winning ENTRANT now still credits a
+  // person via the roster (`PlayerStatsFoldCtx`). `draws`/`losses`/`white`/
+  // `black` cannot be expressed as a flat metric+field walk at all — a draw
+  // has no single "entrant" to key off, and a decisive result's LOSER has no
+  // field of its own — so those four live in `folded` (`foldBoardgameStats`,
+  // above). Per-person half points (1/½/0, as opposed to a plain win/draw/
+  // loss count) remain a `derived` stat nobody has asked for yet — see
+  // DOMAIN.md "downstream owed".
   playerStats: {
     metrics: [
       { key: "games", label: "Games", from: "boardgame.pairing", field: "homePerson", agg: "count" },
       { key: "games", label: "Games", from: "boardgame.pairing", field: "awayPerson", agg: "count" },
-      { key: "wins", label: "Wins", from: "boardgame.result", field: "winnerPerson", agg: "count" },
+      {
+        key: "wins",
+        label: "Wins",
+        from: "boardgame.result",
+        field: "winnerPerson",
+        agg: "count",
+        entrantField: "winner",
+        fromEntrant: true,
+      },
     ],
+    folded: { keys: ["draws", "losses", "white", "black"], fold: foldBoardgameStats },
   },
 
   // spec 03 §6 — deterministic generator: start, then a single result

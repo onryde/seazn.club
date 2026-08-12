@@ -46,7 +46,12 @@ import type {
   TiebreakerKey,
 } from "../../sport/module.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
-import type { PlayerStatsModel } from "../../stats/stats.ts";
+import type {
+  PlayerStatMetric,
+  PlayerStatRow,
+  PlayerStatsFoldCtx,
+  PlayerStatsModel,
+} from "../../stats/stats.ts";
 import { expectedPairServerOf, makeSquadAdopter } from "../squad-state.ts";
 import type { LineupPolicy, SquadState } from "../../core/lineup.ts";
 
@@ -1480,6 +1485,236 @@ function nestedPadSpec(preset: NestedPreset, cfg: NestedCfg): PadSpec {
   };
 }
 
+// ---------------------------------------------------------------------------
+// S8/#417 — kernel-level default playerStats. The nested-kernel twin of
+// `setbased/kernel.ts`'s own block of the same name — every metric this
+// preset declares today names an OPTIONAL person field (`scorer`, `server`),
+// so a v1-era stream that only ever names the REQUIRED `by` entrant folds to
+// zero credit. This default closes that gap, unconditionally.
+// ---------------------------------------------------------------------------
+
+/**
+ * `points_won` — the canonical entrant-fallback metric (owner ruling,
+ * S8/#417), the nested-kernel twin of `setbased/kernel.ts`'s own
+ * `setBasedPointsWonMetric`: an explicit `scorer` still wins whenever one
+ * resolves (giving this key the SAME numbers tennis's own `points` already
+ * reports), and `by` rescues a stream that never named one at all.
+ */
+function nestedPointsWonMetric(pointType: string): PlayerStatMetric {
+  return {
+    key: "points_won",
+    label: "Points won",
+    from: pointType,
+    field: "scorer",
+    entrantField: "by",
+    fromEntrant: true,
+    agg: "count",
+  };
+}
+
+/**
+ * A throwaway two-sided state, seeded directly into "live" — never returned,
+ * never adopted by a real fixture, alive only for the length of one
+ * `folded.fold` call below. Same non-home/away-labelled `idX`/`idY` contract
+ * as `setbased/kernel.ts`'s own `setBasedReplayState` — see its doc comment.
+ */
+function nestedReplayState(cfg: NestedCfg, idX: string, idY: string): NestedState {
+  return {
+    cfg,
+    entrants: { home: idX, away: idY },
+    phase: "live",
+    sets: [],
+    games: { home: 0, away: 0 },
+    points: FRESH_GAME,
+    setsWon: { home: 0, away: 0 },
+    serving: "home",
+    tbPointsPlayed: 0,
+    tbFirstServer: null,
+    pointsWon: { home: 0, away: 0 },
+    outcome: null,
+    replayFlagged: false,
+  };
+}
+
+/**
+ * The same three-way dispatch `applyPoint` makes on `state.points.kind` —
+ * duplicated rather than reused because `applyPoint` also folds person
+ * credit (`creditPersons`) off the real payload, which this replay has no
+ * use for and no payload to feed it (only a `by`-derived `side` is known
+ * here, not a whole `NestedPoint`). `applyStandardPoint`/`applyTbPoint`
+ * themselves are called UNMODIFIED — this is a dispatcher, not a
+ * reimplementation of what they do.
+ */
+function applyPointForReplay(state: NestedState, side: Side): NestedState {
+  switch (state.points.kind) {
+    case "standard":
+      return applyStandardPoint(state, side);
+    case "tiebreak":
+      return applyTbPoint(state, side, false);
+    case "matchTiebreak":
+      return applyTbPoint(state, side, true);
+  }
+}
+
+/**
+ * Games won so far, closed sets plus the set in progress — VERBATIM the
+ * formula `sideMetrics`'s own `gamesOf` uses inside `makeNestedModule`
+ * (below), duplicated because that one is a closure over `opponent`, not a
+ * standalone export. Keep the two in sync if either changes.
+ */
+function nestedGamesOf(state: NestedState, side: Side): number {
+  return (
+    state.sets.reduce((sum, set) => sum + (set.mtb === true ? 0 : set[side]), 0) + state.games[side]
+  );
+}
+
+/**
+ * `folded.fold` for match/set/game-level outcomes (`matches`, `sets_won`,
+ * `sets_lost`, `games_won`) — the nested-kernel twin of
+ * `setbased/kernel.ts`'s own `setBasedMatchOutcomesFold`; read that
+ * function's doc comment for the full rationale (replay-not-reimplement,
+ * never-throws, the shutout case, why `ctx.cfg` is read here at all). The
+ * one kernel-specific addition is `games_won`, since this kernel alone has a
+ * game layer between points and sets.
+ *
+ * Positional set summaries here need no special case, unlike the set-based
+ * kernel's: `NestedSetSummary` has only ONE shape (`{home, away, tb?}`,
+ * always positional) — there is no entrant-keyed alternative to prefer, so
+ * every well-formed summary in the ledger is evidence both sides "played",
+ * and it is always fed to the replay (which needs no entrant id to bank a
+ * games score, only two numbers to compare against `idX`'s/`idY`'s already-
+ * known positions).
+ */
+function nestedMatchOutcomesFold(
+  preset: NestedPreset,
+  configSchema: ReturnType<typeof makeNestedConfigSchema>,
+): NonNullable<PlayerStatsModel["folded"]> {
+  const pointType = `${preset.key}.point`;
+  const summaryType = `${preset.key}.set_summary`;
+  const gameAwardType = `${preset.key}.game.award`;
+  return {
+    keys: ["matches", "sets_won", "sets_lost", "games_won"],
+    fold(events: readonly EventEnvelope[], ctx: PlayerStatsFoldCtx): PlayerStatRow[] {
+      if (ctx.entrants.length !== 2) return []; // this kernel is always 2-sided; nothing safe to pair
+      const idX = ctx.entrants[0]!.id;
+      const idY = ctx.entrants[1]!.id;
+      const personsFor = (entrantId: string): readonly string[] => {
+        const entrant = ctx.entrants.find((e) => e.id === entrantId);
+        if (entrant === undefined || entrant.kind === "team") return [];
+        return ctx.personsOf(entrantId).filter((p) => p !== "");
+      };
+
+      const cfgParsed = configSchema.safeParse(ctx.cfg);
+      let state: NestedState | undefined = cfgParsed.success
+        ? nestedReplayState(cfgParsed.data, idX, idY)
+        : undefined;
+      let played = false;
+
+      for (const event of events) {
+        if (event.type === pointType) {
+          played = true;
+          if (state === undefined) continue;
+          const by = (event.payload as Record<string, unknown>).by;
+          if (typeof by !== "string" || (by !== idX && by !== idY)) continue;
+          try {
+            state = applyPointForReplay(state, by === idX ? "home" : "away");
+          } catch {
+            state = undefined;
+          }
+          continue;
+        }
+        if (event.type === summaryType) {
+          played = true; // no entrant id on this shape — see the doc comment above
+          if (state === undefined) continue;
+          const payload = event.payload as Record<string, unknown>;
+          if (typeof payload.home !== "number" || typeof payload.away !== "number") continue;
+          try {
+            state = applySetSummary(state, payload as NestedSetSummary, false);
+          } catch {
+            state = undefined;
+          }
+          continue;
+        }
+        if (event.type === gameAwardType) {
+          played = true;
+          if (state === undefined) continue;
+          const winner = (event.payload as Record<string, unknown>).winner;
+          if (typeof winner !== "string" || (winner !== idX && winner !== idY)) continue;
+          try {
+            state = applyGameAward(state, { winner }, false);
+          } catch {
+            state = undefined;
+          }
+        }
+      }
+
+      const rows = new Map<string, Record<string, number>>();
+      const bump = (personId: string, key: string, by: number) => {
+        const stats = rows.get(personId) ?? {};
+        stats[key] = (stats[key] ?? 0) + by;
+        rows.set(personId, stats);
+      };
+
+      if (played) {
+        for (const p of personsFor(idX)) bump(p, "matches", 1);
+        for (const p of personsFor(idY)) bump(p, "matches", 1);
+      }
+      if (state !== undefined) {
+        for (const p of personsFor(idX)) {
+          bump(p, "sets_won", state.setsWon.home);
+          bump(p, "sets_lost", state.setsWon.away);
+          bump(p, "games_won", nestedGamesOf(state, "home"));
+        }
+        for (const p of personsFor(idY)) {
+          bump(p, "sets_won", state.setsWon.away);
+          bump(p, "sets_lost", state.setsWon.home);
+          bump(p, "games_won", nestedGamesOf(state, "away"));
+        }
+      }
+
+      return [...rows.entries()]
+        .map(([personId, stats]) => ({ personId, stats }))
+        .sort((a, b) => a.personId.localeCompare(b.personId));
+    },
+  };
+}
+
+/**
+ * Merges the kernel default with the preset's own declared model (S8/#417).
+ * Identical precedence rule to `setbased/kernel.ts`'s own `mergePlayerStats`
+ * — see its doc comment for the full rationale. Duplicated rather than
+ * shared: the two kernel files own no common module between them, and this
+ * function is small and self-contained.
+ */
+function mergePlayerStats(
+  kernelDefault: PlayerStatsModel,
+  preset: PlayerStatsModel | undefined,
+): PlayerStatsModel {
+  if (preset === undefined) return kernelDefault;
+  const presetKeys = new Set(preset.metrics.map((m) => m.key));
+  const metrics = [...kernelDefault.metrics.filter((m) => !presetKeys.has(m.key)), ...preset.metrics];
+  const kFolded = kernelDefault.folded;
+  const pFolded = preset.folded;
+  const folded =
+    kFolded === undefined
+      ? pFolded
+      : pFolded === undefined
+        ? kFolded
+        : {
+            keys: [...new Set([...kFolded.keys, ...pFolded.keys])],
+            fold: (events: readonly EventEnvelope[], ctx: PlayerStatsFoldCtx) => [
+              ...kFolded.fold(events, ctx),
+              ...pFolded.fold(events, ctx),
+            ],
+          };
+  return {
+    metrics,
+    ...(preset.derived === undefined ? {} : { derived: preset.derived }),
+    ...(preset.awards === undefined ? {} : { awards: preset.awards }),
+    ...(folded === undefined ? {} : { folded }),
+  };
+}
+
 export function makeNestedModule(
   preset: NestedPreset,
 ): SportModule<NestedCfg, NestedEv, NestedState> {
@@ -1748,7 +1983,16 @@ export function makeNestedModule(
     fidelityTiers,
     officialLabel: preset.officialLabel,
     ...(preset.entrantModel === undefined ? {} : { entrantModel: preset.entrantModel }),
-    ...(preset.playerStats === undefined ? {} : { playerStats: preset.playerStats }),
+    // S8/#417 — always populated: the kernel default (`points_won` +
+    // matches/sets_won/sets_lost/games_won) merges with whatever this preset
+    // declares, never merely spread when present. See `mergePlayerStats`.
+    playerStats: mergePlayerStats(
+      {
+        metrics: [nestedPointsWonMetric(pointType)],
+        folded: nestedMatchOutcomesFold(preset, configSchema),
+      },
+      preset.playerStats,
+    ),
     discipline,
 
     // spec 03 §6 — deterministic generator. Summary-dominant so matches decide

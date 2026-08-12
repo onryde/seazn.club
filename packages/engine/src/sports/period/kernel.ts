@@ -40,7 +40,7 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
-import type { PlayerStatsModel } from "../../stats/stats.ts";
+import type { PlayerStatRow, PlayerStatsModel } from "../../stats/stats.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
 import {
   escalationHints,
@@ -59,7 +59,15 @@ import {
   type ShootoutKick,
 } from "./shootout.ts";
 import { makeSquadAdopter } from "../squad-state.ts";
-import type { LineupPolicy, SquadState } from "../../core/lineup.ts";
+import {
+  initSquads,
+  isLineupEventType,
+  personsAtPosition,
+  reduceLineupEvent,
+  REPLAY_LINEUP_POLICY,
+  type LineupPolicy,
+  type SquadState,
+} from "../../core/lineup.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — v6/00 §3
@@ -1322,6 +1330,158 @@ function winPoints(cfg: PeriodCfg, method: string | undefined): [number, number]
     return [cfg.points.otWin ?? cfg.points.win, cfg.points.otLoss ?? cfg.points.loss];
   }
   return [cfg.points.win, cfg.points.loss];
+}
+
+// ---------------------------------------------------------------------------
+// Player-stats folded escape hatch — goalkeeper metrics (S8/#417)
+// ---------------------------------------------------------------------------
+
+/**
+ * `goals_conceded` and `clean_sheets`, shared by both period-kernel sports —
+ * see each of `hockey/DOMAIN.md` and `icehockey/DOMAIN.md`'s "Goalkeeper
+ * stats" row. Parameterised on the sport's own goal event type
+ * (`"hockey.goal"` / `"icehockey.goal"`) and `PeriodPreset.keeperGroup`
+ * ("GK" FIH, "G" IIHF); everything else about the mechanism is identical
+ * for both codes, so it lives here once rather than being copied into
+ * `hockey.ts` and `icehockey.ts` separately — "a change gated for one must
+ * not silently alter the other" is easiest to keep true when there is only
+ * one implementation to keep true of.
+ *
+ * READS THE FOLD OF `core.lineup.*` EVENTS, never the kickoff team sheet —
+ * a mid-match keeper change (a substitution, a `core.lineup.position`
+ * change of gloves, a pulled/returning goalie) must split both metrics
+ * between the two people who actually held the position. Reconstructs
+ * squads itself, from `initSquads(lineups)` forward, under
+ * `REPLAY_LINEUP_POLICY` (every knob at its most permissive) — this is a
+ * read-side replay with no `cfg` to consult even if it wanted one, and a
+ * refused/malformed lineup event is simply a no-op here, exactly as
+ * `reduceLineupEvent` documents for any other replay reader.
+ *
+ * `goals_conceded` is charged to the CONCEDING side's current keeper,
+ * worked out from the CREDITED side (`opponent(credited)`), never from
+ * `by` directly — an own goal (`kind: "og"`) is credited to `opponent(by)`,
+ * so the two disagree exactly there, and it is `by`'s own keeper who
+ * actually concedes it. `emptyNet` goals charge nobody (no keeper is on
+ * the ice to blame) but still break the conceding side's clean sheet,
+ * because the TEAM conceded regardless of whether anyone is nameable for
+ * it.
+ *
+ * A shoot-out is invisible to this fold BY CONSTRUCTION, not by a special
+ * case: `*.shootout.attempt` is a different event type than `goalType` and
+ * is simply never matched — the same reason the GWS +1 (`officialScore`)
+ * never reaches `goals_conceded` either. IIHF Rule 87 / NHL 84.4 and the
+ * FIH App 12 shoot-out both produce no player goal and no goal against,
+ * only the deciding kick.
+ *
+ * CLEAN SHEET RULE (a documented judgement call, S8/#417 — no rulebook
+ * settles this): a goalkeeper SPELL is the continuous stretch one person
+ * occupies `keeperGroup` for their side — opened at kickoff (or wherever
+ * the fold first finds an occupant) and closed by the next lineup change
+ * that installs a DIFFERENT occupant (or none), or by the end of the
+ * recorded stream. A spell earns ONE clean sheet iff no goal was credited
+ * against that side at any point during it. A mid-match change therefore
+ * SPLITS a shutout: if keeper A concedes nothing before being substituted
+ * for keeper B, who also concedes nothing for the rest of the match, BOTH
+ * earn a clean sheet — the team kept a clean sheet during each of their
+ * watches, the same intuition "clean sheet" already carries per-appearance
+ * rather than per-fixture in most scorebooks. This reads only recorded
+ * lineup events and goal credits, so it carries none of the S2/#430
+ * partial-coverage hazard a MINUTES-based rule would: a scorer who never
+ * records elapsed time cannot leave this particular denominator
+ * half-known, because nothing here is a function of minutes at all.
+ */
+export function periodKeeperStatsFold(
+  goalType: string,
+  keeperGroup: string,
+): NonNullable<PlayerStatsModel["folded"]> {
+  type SideKey = "home" | "away";
+  const opponent = (side: SideKey): SideKey => (side === "home" ? "away" : "home");
+
+  return {
+    keys: ["goals_conceded", "clean_sheets"],
+    fold: (events, _ctx, lineups): PlayerStatRow[] => {
+      if (lineups === undefined) return [];
+
+      // A sparse per-person stats object, NOT a fixed `{goals_conceded, clean_
+      // sheets}` shape — matching `stats.ts`'s own `bump`, a key is written
+      // only when it is actually incremented. A keeper who only ever earns a
+      // clean sheet must not also carry a `goals_conceded: 0` — that would be
+      // exactly the silent-0 defect (recorded zero vs. never-happened) this
+      // programme's `PlayerStatMetric.value` docstring calls out, just reached
+      // a different way.
+      const rows = new Map<string, Record<string, number>>();
+      const bump = (personId: string, key: "goals_conceded" | "clean_sheets"): void => {
+        const stats = rows.get(personId) ?? {};
+        stats[key] = (stats[key] ?? 0) + 1;
+        rows.set(personId, stats);
+      };
+
+      const entrants = { home: lineups.home.entrantId, away: lineups.away.entrantId };
+      const sideOf = (entrantId: string): SideKey | undefined =>
+        entrantId === entrants.home ? "home" : entrantId === entrants.away ? "away" : undefined;
+
+      let squads: SquadState = initSquads(lineups);
+      const keeperOf = (side: SideKey): string | undefined =>
+        personsAtPosition(squads[side], keeperGroup)[0];
+
+      interface Spell {
+        personId: string;
+        conceded: boolean;
+      }
+      const open: Record<SideKey, Spell | undefined> = {
+        home: (() => {
+          const p = keeperOf("home");
+          return p === undefined ? undefined : { personId: p, conceded: false };
+        })(),
+        away: (() => {
+          const p = keeperOf("away");
+          return p === undefined ? undefined : { personId: p, conceded: false };
+        })(),
+      };
+      const closeSpell = (side: SideKey): void => {
+        const spell = open[side];
+        if (spell !== undefined && !spell.conceded) bump(spell.personId, "clean_sheets");
+      };
+      const refreshSpell = (side: SideKey): void => {
+        const p = keeperOf(side);
+        if (open[side]?.personId === p) return; // same occupant — spell continues
+        closeSpell(side);
+        open[side] = p === undefined ? undefined : { personId: p, conceded: false };
+      };
+
+      for (const event of events) {
+        if (isLineupEventType(event.type)) {
+          const result = reduceLineupEvent(squads, event, REPLAY_LINEUP_POLICY);
+          if (result.ok) {
+            squads = result.squads;
+            refreshSpell("home");
+            refreshSpell("away");
+          }
+          continue;
+        }
+        if (event.type !== goalType) continue;
+        const payload = event.payload as Record<string, unknown>;
+        if (typeof payload.by !== "string") continue;
+        const by = sideOf(payload.by);
+        if (by === undefined) continue;
+        const credited = payload.kind === "og" ? opponent(by) : by;
+        const concedingSide = opponent(credited);
+
+        // The conceding side's clean sheet breaks regardless of `emptyNet` —
+        // the TEAM conceded even when nobody was between the posts.
+        const spell = open[concedingSide];
+        if (spell !== undefined) spell.conceded = true;
+
+        if (payload.emptyNet === true) continue; // no keeper on the ice to charge
+        const keeper = keeperOf(concedingSide);
+        if (keeper !== undefined) bump(keeper, "goals_conceded");
+      }
+      closeSpell("home");
+      closeSpell("away");
+
+      return [...rows.entries()].map(([personId, stats]) => ({ personId, stats }));
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

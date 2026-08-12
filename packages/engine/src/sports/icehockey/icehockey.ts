@@ -5,7 +5,7 @@
 // Event Code §219 points (3 · 2 · 1 · 0) and the §220 H2H-first tie-break.
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { PlayerStatsModel } from "../../stats/stats.ts";
-import { makePeriodModule, type PeriodSuspensionReason } from "../period/kernel.ts";
+import { makePeriodModule, periodKeeperStatsFold, type PeriodSuspensionReason } from "../period/kernel.ts";
 import { ICEHOCKEY_RECREATIONAL_SUSPENSIONS, ICEHOCKEY_SUSPENSIONS } from "../period/suspensions.ts";
 
 // S4 (#428) — IIHF's own subset of the shared `PeriodSuspensionReason` union:
@@ -134,6 +134,17 @@ const playerStats: PlayerStatsModel = {
     },
   ],
   awards: [{ key: "mvp", label: "MVP" }],
+  // S8/#417 — `goals_conceded`, `clean_sheets`. "G" matches this file's own
+  // `positions` catalog above and the `keeperGroup` passed to
+  // `makePeriodModule` below; see `periodKeeperStatsFold`'s own docstring for
+  // the mechanism (reads the fold of `core.lineup.*`, never the kickoff
+  // sheet) and the documented clean-sheet rule. `saves` is NOT declared here
+  // — see icehockey/DOMAIN.md's "Saves and save percentage" row, still
+  // deferred: it needs shots-on-goal data this engine does not record, which
+  // is a different input than goals conceded and not something this fold can
+  // derive. `so_saves` above already covers the one place a defending
+  // keeper is named per-attempt (the shoot-out).
+  folded: periodKeeperStatsFold("icehockey.goal", "G"),
 };
 
 export const icehockey = makePeriodModule({
