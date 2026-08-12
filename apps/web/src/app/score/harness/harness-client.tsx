@@ -109,8 +109,19 @@ export function HarnessClient(props: HarnessClientProps) {
   const resolved = useMemo(() => {
     try {
       const mod = resolveModuleClient(props.sportKey, "1.0.0");
-      const preset = props.variant ? (mod.variants[props.variant] ?? {}) : {};
-      return { mod, cfg: mod.configSchema.parse({ ...preset }) };
+      // A bare `{}` is NOT a legal cfg for every module — generic's
+      // `resultMode`/`allowDraws` are required with no default — so fall back
+      // to the module's own first named preset rather than reporting a config
+      // error the pad had nothing to do with. A real caller always arrives
+      // with the division's resolved cfg; only this harness has to invent one.
+      const candidates = props.variant
+        ? [mod.variants[props.variant] ?? {}]
+        : [{}, ...Object.values(mod.variants)];
+      for (const candidate of candidates) {
+        const parsed = mod.configSchema.safeParse({ ...candidate });
+        if (parsed.success) return { mod, cfg: parsed.data };
+      }
+      return { mod, cfg: mod.configSchema.parse({ ...(candidates[0] ?? {}) }) };
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       return null;
