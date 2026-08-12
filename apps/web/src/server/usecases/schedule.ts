@@ -435,6 +435,31 @@ export async function divisionLockState(
   return { frozen: row?.schedule_locked ?? false, scopes: row?.locked_scopes ?? [] };
 }
 
+/**
+ * Which of a division's stages are round-robin-generated — `kind in
+ * ('league', 'group')`, `stages.ts`'s own `generate()` switch (everything
+ * else — knockout/page_playoff/double_elim/stepladder, plus swiss/americano/
+ * ladder generated outside that switch entirely — is bracket- or
+ * round-sequence-shaped some OTHER way).
+ *
+ * C1 (2026-08-12 round-order design): round attaches to round-robin-
+ * generated fixtures ONLY. `fixtures.round_no` is one shared column
+ * populated for EVERY stage kind (a bracket's own round, a swiss round, a
+ * stepladder leg — see `stages.ts`'s `roundTitle`, which labels all of
+ * them), so which stages may forward it as a scheduling ORDERING input is
+ * not derivable from a `FixtureLite` row alone; this is the one query that
+ * resolves it, so `toAssignment` and the schedulable builder can both ask
+ * it the SAME question rather than guessing from the row itself. Without
+ * this gate, a division that mixes a league stage with a stepladder — the
+ * design doc's own motivating symptom — would compare the two stages'
+ * independent 1-based round sequences as if they were one.
+ */
+export async function roundRobinStageIds(tx: Tx, divisionId: string): Promise<Set<string>> {
+  const rows = await tx<{ id: string }[]>`
+    select id from stages where division_id = ${divisionId} and kind in ('league', 'group')`;
+  return new Set(rows.map((r) => r.id));
+}
+
 const FIXTURE_LITE_COLS = [
   "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "ext_key",
   "home_entrant_id", "away_entrant_id",
@@ -481,8 +506,35 @@ function peopleOf(f: FixtureLite, people: Map<string, string[]>): string[] {
  *  Optionality follows the `SchedulableFixture` builder exactly: `division_id`
  *  is NOT NULL so it is always stamped; `pool_id` is nullable and the key is
  *  omitted rather than set to `undefined`, because `Assignment.poolId` is an
- *  optional string and the verifier tests it with `!== undefined`. */
-export function toAssignment(f: FixtureLite, matchMinutes: number, people: Map<string, string[]>): Assignment {
+ *  optional string and the verifier tests it with `!== undefined`.
+ *
+ *  `movable` (C1, 2026-08-12 round-order design) is `!f.schedule_locked` —
+ *  the established "pinned" predicate this codebase already uses
+ *  (`clearableFixtures`'s own `locked: f.schedule_locked`, the COURT-REMOVAL
+ *  GUARD above). Always stamped, unconditionally: `Assignment.movable`
+ *  defaults to `true` when absent, so this is a safe no-op for the
+ *  round-order pair scan on its own, and it matches `divisionId`'s own
+ *  always-present convention (`schedule_locked` is NOT NULL, same as
+ *  `division_id`).
+ *
+ *  `roundNo` is gated on `roundRobinStageIds`, an OPTIONAL 4th parameter —
+ *  not read unconditionally off `f.round_no` the way `movable` reads off
+ *  `f.schedule_locked`, because `fixtures.round_no` is one shared column
+ *  populated for EVERY stage kind (bracket rounds, swiss rounds, stepladder
+ *  legs all reuse it for display), and forwarding it for a non-round-robin
+ *  stage would compare two independent round sequences as if they were one
+ *  — the design doc's own motivating symptom. Omitted (not `undefined`)
+ *  when the parameter itself is omitted: existing callers that do not pass
+ *  it keep their exact pre-C1 behaviour, and round-order enforcement is
+ *  correctly inert wherever it is not threaded through (`competition-
+ *  schedule-apply.ts`, `schedule-ai.ts`'s AI-plan path, `person-merge.ts` —
+ *  deferred this session; see the task report). */
+export function toAssignment(
+  f: FixtureLite,
+  matchMinutes: number,
+  people: Map<string, string[]>,
+  roundRobinStageIds?: ReadonlySet<string>,
+): Assignment {
   const start = ms(f.scheduled_at as string | Date);
   return {
     fixtureId: f.id,
@@ -493,6 +545,8 @@ export function toAssignment(f: FixtureLite, matchMinutes: number, people: Map<s
     people: peopleOf(f, people),
     ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
     divisionId: f.division_id,
+    ...(roundRobinStageIds?.has(f.stage_id) ? { roundNo: f.round_no } : {}),
+    movable: !f.schedule_locked,
   };
 }
 
@@ -926,6 +980,13 @@ export async function autoSchedule(
     const settings = await loadSettings(tx, stage.division_id);
     const all = await divisionFixtures(tx, stage.division_id);
     const { scopes } = await divisionLockState(tx, stage.division_id);
+    // C1 (2026-08-12 round-order design). Resolved once, reused for both the
+    // `schedulable` builder below and every `toAssignment` call in this
+    // function — `obstacles` spans OTHER stages in this same division, so
+    // without this a stepladder's own round_no (display numbering, not a
+    // round-robin sequence) would ride along and get compared against this
+    // stage's round-robin rounds as if they were one sequence.
+    const roundRobin = await roundRobinStageIds(tx, stage.division_id);
     const entrantIds = [
       ...new Set(all.flatMap((f) => [f.home_entrant_id, f.away_entrant_id])),
     ].filter((e): e is string => e !== null);
@@ -938,7 +999,7 @@ export async function autoSchedule(
     const obstacles = all
       .filter((f) => !movable.includes(f))
       .filter((f) => f.scheduled_at !== null && f.court_label !== null)
-      .map((f) => toAssignment(f, settings.config.matchMinutes, people));
+      .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
     const siblings = await siblingAssignments(
       tx,
       stage.division_id,
@@ -967,7 +1028,16 @@ export async function autoSchedule(
     const pinnedIds = lockedFixtureIds(movable, scopes, body.ignore_locks ?? false);
     const schedulable: SchedulableFixture[] = movable.map((f) => ({
       id: f.id,
-      roundNo: f.round_no,
+      // C1 (2026-08-12 round-order design). `roundNo` used to be stamped
+      // unconditionally — harmless while it was only a soft placement-order
+      // hint for `slotFixtures`' own comparator, but `movable` is always
+      // stage-scoped to ONE stage here (see the `movable` filter above), so
+      // a bare stage-kind check is enough: gated the same way `toAssignment`
+      // is, for the same reason (round is now a HARD constraint elsewhere,
+      // not merely an ordering hint, so a bracket/stepladder stage's own
+      // display-numbering round_no must not ride along as if it meant
+      // round-robin order).
+      ...(roundRobin.has(f.stage_id) ? { roundNo: f.round_no } : {}),
       ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
       divisionId: f.division_id,
       ...(f.home_entrant_id !== null ? { home: f.home_entrant_id } : {}),
@@ -991,10 +1061,10 @@ export async function autoSchedule(
     // than from nothing, so it is split by whether this run may move the card.
     const placedNow = movable
       .filter((f) => !pinnedIds.has(f.id) && f.scheduled_at !== null && f.court_label !== null)
-      .map((f) => toAssignment(f, settings.config.matchMinutes, people));
+      .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
     const pinnedNow = movable
       .filter((f) => pinnedIds.has(f.id))
-      .map((f) => toAssignment(f, settings.config.matchMinutes, people));
+      .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
 
     const declaredConfig = toVerifyConfig(settings, all, roundToMinute(Date.now()), siblings.ruleFixtures);
     const windowedConfig = boundSolverWindow(
@@ -1825,6 +1895,11 @@ export async function applySchedule(
     if (lockState.frozen) {
       throw new HttpError(422, "the division schedule is locked — unlock it to edit");
     }
+    // C1 (2026-08-12 round-order design). This IS the write gate — the one
+    // place a disordered board actually gets refused rather than merely
+    // proposed — so round order has to be judged here, not only on the
+    // auto-schedule preview. See `toAssignment`'s own doc comment.
+    const roundRobin = await roundRobinStageIds(tx, stage.division_id);
     const byId = new Map(all.map((f) => [f.id, f]));
     for (const a of input.assignments) {
       const f = byId.get(a.fixture_id);
@@ -1859,12 +1934,21 @@ export async function applySchedule(
         // not only to the board it lands on. Same shape as `toAssignment`.
         ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
         divisionId: f.division_id,
+        // C1 (2026-08-12 round-order design). Same shape as `toAssignment`
+        // again — `f.round_no` is the fixture's own round, gated on stage
+        // kind exactly as `toAssignment` gates it; `movable: true`
+        // unconditionally, because every row here is a position THIS apply
+        // is actively choosing, whatever lock state it ends up carrying
+        // (`a.schedule_locked` below is the state AFTER this write, not a
+        // fact about whether this apply itself may act on it).
+        ...(roundRobin.has(f.stage_id) ? { roundNo: f.round_no } : {}),
+        movable: true,
       };
     });
     const listed = new Set(input.assignments.map((a) => a.fixture_id));
     const untouched = all
       .filter((f) => !listed.has(f.id) && f.scheduled_at !== null && f.court_label !== null)
-      .map((f) => toAssignment(f, settings.config.matchMinutes, people));
+      .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
     const siblings = await siblingAssignments(
       tx,
       stage.division_id,
@@ -1886,7 +1970,7 @@ export async function applySchedule(
     const currentSlots = input.assignments
       .map((a) => byId.get(a.fixture_id) as FixtureLite)
       .filter((f) => f.scheduled_at !== null && f.court_label !== null)
-      .map((f) => toAssignment(f, settings.config.matchMinutes, people));
+      .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
     const baseline = validateAssignments(currentSlots, slotConfig, board, deps);
     const found = validateAssignments(proposed, slotConfig, board, deps);
     assertNoNewBlocking(baseline, found);

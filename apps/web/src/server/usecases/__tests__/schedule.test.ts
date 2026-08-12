@@ -25,6 +25,7 @@ import {
   publishSchedule,
   startDivision,
   toSlotConfig,
+  roundRobinStageIds,
 } from "../schedule";
 import { draftsToBlackouts } from "@/components/v2/constraints-panel";
 import { zonedDateTimeInput } from "@/lib/zoned-datetime";
@@ -309,9 +310,25 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     for (const f of round1) await decide(auth, f.id, 2, 0);
 
     // Rain! Reschedule the remaining fixtures only; decided ones are immutable.
+    //
+    // Ordered by (pool_id, round_no), not (scheduled_at, id): C1 (2026-08-12
+    // round-order design) makes same-day ties between two DIFFERENT rounds
+    // legal by design (round_i <= round_j admits equality — "R1 and R2
+    // simultaneously on two courts is fine"), which a pooled group stage hits
+    // constantly since each pool plays its own round on its own court at the
+    // same instant. `scheduled_at, id` then tiebreaks same-instant fixtures
+    // by a random UUID, which can — and, once observed, does — place a
+    // LATER round of one pool before an EARLIER round of that SAME pool.
+    // Squeezed one court at a time in THAT order, the round-order pair scan
+    // (correctly) catches the resulting within-pool inversion. Grouping by
+    // pool first keeps each pool's own fixtures round-ascending regardless
+    // of which court or instant they originally landed on; cross-pool
+    // interleaving in the flattened sequence is fine either way, since pools
+    // are never compared against each other (see calendar.ts's own
+    // pool-scoping comment).
     const remaining = await sql<{ id: string }[]>`
       select id from fixtures where stage_id = ${groups.id} and status = 'scheduled'
-      order by scheduled_at, id`;
+      order by pool_id, round_no, scheduled_at, id`;
     expect(remaining.length).toBeGreaterThan(0);
     const rain = await applySchedule(auth, groups.id, {
       assignments: remaining.map((f, i) => ({
@@ -548,6 +565,63 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     const [row] = await sql<{ schedule_source: string }[]>`
       select schedule_source from fixtures where id = ${target.id}`;
     expect(row!.schedule_source).toBe("ai");
+  });
+});
+
+// C1 (2026-08-12 round-order design). `roundRobinStageIds` is the one query
+// that resolves "which stages may forward a round onto the wire" — the
+// 8-team group+KO test above exercises it end to end (a real solve, a real
+// reflow) but never proves the PREDICATE itself in isolation: that a
+// knockout stage is excluded even though `fixtures.round_no` is populated
+// for it too (bracket rounds, display numbering only).
+describe.skipIf(!HAS_DB)("roundRobinStageIds (C1, 2026-08-12 round-order design)", () => {
+  it("includes league and group stages, excludes knockout", async () => {
+    const { auth } = await seedOfficialsOrg("pro");
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "RR stage kinds " + randomUUID().slice(0, 6),
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+      eligibility: [],
+    });
+    const [league, group, knockout] = await createStages(auth, division.id, [
+      { seq: 1, kind: "league", name: "League", config: {} },
+      { seq: 2, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
+      { seq: 3, kind: "knockout", name: "KO", config: {} },
+    ]);
+
+    const ids = await withTenant(auth.orgId, (tx) => roundRobinStageIds(tx, division.id));
+    expect(ids.has(league!.id)).toBe(true);
+    expect(ids.has(group!.id)).toBe(true);
+    expect(ids.has(knockout!.id)).toBe(false);
+    expect(ids.size).toBe(2);
+  });
+
+  it("returns an empty set for a division with no round-robin stages", async () => {
+    const { auth } = await seedOfficialsOrg("pro");
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "RR stage kinds none " + randomUUID().slice(0, 6),
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+      eligibility: [],
+    });
+    await createStages(auth, division.id, [{ seq: 1, kind: "knockout", name: "KO", config: {} }]);
+
+    const ids = await withTenant(auth.orgId, (tx) => roundRobinStageIds(tx, division.id));
+    expect(ids.size).toBe(0);
   });
 });
 
