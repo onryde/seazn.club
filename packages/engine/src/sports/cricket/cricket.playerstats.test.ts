@@ -39,6 +39,11 @@ interface BallSpec {
   boundary?: 4 | 6;
   wicket?: Wicket;
   extras?: NonNullable<CricketBallEv["runs"]["extras"]>;
+  // S8/#417 W6b — omitted by every EXISTING call site in this file, which is
+  // exactly what keeps the whole pre-W6b suite exercising the LEGACY
+  // (whole-stream) fallback path unchanged; only tests that explicitly pass
+  // it exercise the new per-innings path.
+  innings?: number;
 }
 
 const ball = (seq: number, spec: BallSpec): EventEnvelope =>
@@ -56,6 +61,7 @@ const ball = (seq: number, spec: BallSpec): EventEnvelope =>
       },
       ...(spec.wicket === undefined ? {} : { wicket: spec.wicket }),
       ...(spec.boundary === undefined ? {} : { boundary: spec.boundary }),
+      ...(spec.innings === undefined ? {} : { innings: spec.innings }),
     } satisfies CricketBallEv,
   });
 
@@ -240,49 +246,91 @@ describe("cricket S8/#417: mixed stream — no double counting", () => {
 });
 
 // ---------------------------------------------------------------------------
-// S8/#417 W6 fix 3 — KNOWN LIMITATION, pinned rather than silently shipped.
-//
-// The fine/coarse gate above is scoped to the WHOLE STREAM, per (person,
-// aspect) — not per innings — because an innings boundary is not derivable
-// from what `cricket.ball` and `cricket.player.line` actually carry:
-// `CricketBall` has no innings field at all (only `over`/`ballInOver`,
-// reused per innings), and closing an innings can happen with NO explicit
-// `cricket.innings.close` event in the stream at all (the three auto-closes
-// — all out, overs complete, target reached — are deliberately unstamped,
-// derived from the running totals by `autoClose()`; see cricket.ts's own
-// `CricketClose` comment). Segmenting a flat ball list into innings without
-// that marker needs `coarsen()`'s own multi-signal heuristic (an over/ball
-// restart, or both crease batters going "unseen") or a full replay of
-// cricket's apply() state machine (toss, orders, DLS, follow-on, …) — both
-// far outside what a pure, side-effect-free `folded.fold` should attempt,
-// and the existing `folded` comment in cricket.ts already made this
-// trade-off deliberately. See cricket/DOMAIN.md's "Player leaderboards from
-// the ledger" row for the same limitation stated for a reader who never
-// opens cricket.ts.
-//
-// CONSEQUENCE, pinned below: a player with fine ball-by-ball data in ONE
-// innings and ONLY a coarse `cricket.player.line` for a LATER innings loses
-// that later innings entirely — `battedFine`/`bowledFine` is built from the
-// WHOLE stream, so the person already looks "covered" for that aspect
-// before the coarse line for the other innings is even considered.
+// S8/#417 W6b — per-innings scoping. The W6 fix 3 gate (now the LEGACY
+// fallback in the next block) blocked a person's coarse credit for the
+// WHOLE stream the moment ANY fine ball named them, in ANY innings — a real
+// under-count: a player scored fine in innings 1 and only coarse for
+// innings 2 lost innings 2 entirely, even though the two innings' figures
+// never overlap. `CricketBall.innings` (optional, added this session) lets
+// the gate ask "fine IN THIS INNINGS", not "fine ANYWHERE", whenever a
+// producer supplies it. See cricket.ts's `folded` comment for the full
+// design and cricket/DOMAIN.md's "Player leaderboards from the ledger" row
+// for the same fix stated for a reader who never opens cricket.ts.
 // ---------------------------------------------------------------------------
 
-describe("cricket S8/#417 W6 fix 3: KNOWN LIMITATION — the fine/coarse gate is whole-stream, not per-innings", () => {
-  it("a player with fine ball-by-ball data in innings 1 and ONLY a coarse line for innings 2 loses innings 2 entirely (documented under-count, not a regression)", () => {
+describe("cricket S8/#417 W6b: the fine/coarse gate is scoped per innings", () => {
+  it("a player with fine ball-by-ball data in innings 1 and ONLY a coarse line for innings 2 gets BOTH innings counted, once each", () => {
     const events = [
-      // Innings 1 — H-1 batted fine: 10 runs off 2 legal balls.
-      ball(1, { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 4 }),
-      ball(2, { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 6 }),
+      // Innings 1 — H-1 batted fine: 10 runs off 2 legal balls, tagged.
+      ball(1, { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 4, innings: 1 }),
+      ball(2, { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 6, innings: 1 }),
       // Innings 2 — H-1 was scored ONLY at the coarse tier: 20 runs off 15
-      // balls, out. If the gate were per-innings, this would ADD to the
-      // innings-1 fine total (30 runs, 17 balls, 1 dismissal); it does not.
+      // balls, out. The gate now recognises innings 1's fine coverage does
+      // NOT extend to innings 2, so this line ADDS rather than being lost —
+      // the exact counterfactual the old KNOWN LIMITATION test documented
+      // as unimplemented.
       line(3, { innings: 2, person: "H-1", batting: { runs: 20, balls: 15, out: true } }),
     ];
     const t = table(aggregatePlayerStats(events, MODEL, undefined, CTX));
-    // Pinned: ONLY innings 1's fine figures survive. A per-innings-correct
-    // fold would read { runs: 30, balls_faced: 17, dismissals: 1 } instead —
-    // that is the counterfactual this test's title documents as NOT
-    // implemented, on purpose, for the reasons above.
+    expect(t["H-1"]).toEqual({ runs: 30, balls_faced: 17, dismissals: 1 });
+  });
+
+  it("same innings, both fine and coarse present — fine still wins, no double count (unchanged by W6b)", () => {
+    const events = [
+      ball(1, { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 4, innings: 1 }),
+      ball(2, { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 2, innings: 1 }),
+      // A confirmation line for the SAME innings the fine balls belong to —
+      // must still be ignored, exactly as the whole-stream gate always
+      // ignored it, now via a per-innings match rather than a whole-stream
+      // one (`hasFineCoverage`'s `byInnings` branch, not its `whole` one).
+      line(3, { innings: 1, person: "H-1", batting: { runs: 6, balls: 2, out: false } }),
+    ];
+    const t = table(aggregatePlayerStats(events, MODEL, undefined, CTX));
+    expect(t["H-1"]?.runs).toBe(6);
+    expect(t["H-1"]?.balls_faced).toBe(2);
+  });
+
+  it("a voided fine ball un-counts from ITS OWN innings only, letting a coarse line for that innings through even though the person has other real fine data elsewhere", () => {
+    const events0 = [ball(1, { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 4, innings: 1 })];
+    const events = [
+      ...events0,
+      makeEnvelope(2, { type: "core.void", payload: {} }, events0[0]!.id),
+      // A real, un-voided fine ball for the SAME person in a DIFFERENT innings.
+      ball(3, { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 1, innings: 2 }),
+      // The coarse line is for innings 1, whose only fine ball was voided —
+      // under the pre-W6b whole-stream gate this would still be blocked by
+      // the surviving innings-2 fine ball; per-innings scoping is what lets
+      // it through.
+      line(4, { innings: 1, person: "H-1", batting: { runs: 20, balls: 15, out: true } }),
+    ];
+    const t = table(aggregatePlayerStats(events, MODEL, undefined, CTX));
+    // Innings 1: no surviving fine data ⇒ the coarse line counts (runs 20,
+    // balls 15, dismissals 1). Innings 2: one real fine ball ⇒ its own
+    // numbers (runs 1, balls_faced 1), no line to compete with.
+    expect(t["H-1"]).toEqual({ runs: 21, balls_faced: 16, dismissals: 1 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Legacy fallback — S8/#417 W6 fix 3's original whole-stream gate, still
+// exact for any stream (or any single ball) recorded before `innings`
+// existed. THE RULE: a fine ball with no `innings` discriminator blocks
+// EVERY innings for that person/aspect, never just its own — the
+// conservative choice that keeps a v1-era or any not-yet-upgraded stream's
+// numbers byte-identical to what W6 shipped. This is the SAME stream the
+// old "KNOWN LIMITATION" test pinned, with the SAME expected numbers: it is
+// not a limitation any more for a tagged producer, but it remains the
+// correct, deliberate behaviour for an untagged one.
+// ---------------------------------------------------------------------------
+
+describe("cricket S8/#417 W6b: legacy fallback — balls with no innings discriminator", () => {
+  it("a player with fine ball-by-ball data in innings 1 (no innings tag) and ONLY a coarse line for innings 2 still loses innings 2 — the pre-W6b behaviour, unchanged", () => {
+    const events = [
+      ball(1, { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 4 }),
+      ball(2, { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 6 }),
+      line(3, { innings: 2, person: "H-1", batting: { runs: 20, balls: 15, out: true } }),
+    ];
+    const t = table(aggregatePlayerStats(events, MODEL, undefined, CTX));
     expect(t["H-1"]).toEqual({ runs: 10, balls_faced: 2 });
   });
 });
@@ -328,6 +376,20 @@ describe("cricket S8/#417: determinism", () => {
         wicket: { kind: "caught", out: "H-3", fielder: "A-5", bowlerCredited: true },
       }),
       line(3, { innings: 1, person: "H-9", batting: { runs: 12, balls: 9, out: true } }),
+    ];
+    const first = aggregatePlayerStats(events, MODEL, undefined, CTX);
+    const second = aggregatePlayerStats(events, MODEL, undefined, CTX);
+    expect(second).toEqual(first);
+    expect(second.map((r) => r.personId)).toEqual(first.map((r) => r.personId));
+  });
+
+  // S8/#417 W6b — the same determinism property, but through the new
+  // per-innings `FineCoverage` Map/Set bookkeeping, not just the pre-existing
+  // whole-stream Set.
+  it("folding the same per-innings-tagged stream twice yields deeply equal rows", () => {
+    const events = [
+      ball(1, { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 4, innings: 1 }),
+      line(2, { innings: 2, person: "H-1", batting: { runs: 8, balls: 6, out: false } }),
     ];
     const first = aggregatePlayerStats(events, MODEL, undefined, CTX);
     const second = aggregatePlayerStats(events, MODEL, undefined, CTX);

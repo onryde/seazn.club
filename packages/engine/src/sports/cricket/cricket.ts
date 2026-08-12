@@ -186,6 +186,39 @@ export const CricketBall = z.strictObject({
   wicket: CricketWicket.optional(),
   boundary: z.union([z.literal(4), z.literal(6)]).optional(),
   freeHit: z.boolean().optional(),
+  // S8/#417 W6b — 1-based innings number, the SAME convention
+  // `CricketPlayerLine.innings` below already uses: an index into
+  // `state.innings`, never `state.superOver.innings` (a super-over
+  // delivery has no legitimate value here, and needs none —
+  // `cricket.superover.ball` is already excluded from every playerStats
+  // consumer, per the comment above `CRICKET_PLAYER_STATS`).
+  //
+  // RECORDED, not derived — which looks at odds with the position-axis row
+  // in DOMAIN.md ("Where in the match an event happened"), which
+  // deliberately rejected stamping a derived value for exactly the
+  // "recorded and derived can silently disagree" reason. That rejection is
+  // about `apply()`'s OWN state, which already tracks the open innings
+  // itself, so a stamped copy there would be pure, provably redundant
+  // duplication. `CRICKET_PLAYER_STATS.folded.fold` is a different consumer
+  // bound by a different signature — `(events, ctx) => PlayerStatRow[]`, no
+  // `State` parameter at all — so segmenting a flat ball list into innings
+  // with no marker needs `coarsen()`'s own multi-signal heuristic or a full
+  // apply() replay, both rejected there as disproportionate for a pure stat
+  // fold (see `folded`'s own comment). `CricketPlayerLine.innings` already
+  // carries the identical pattern for this exact fold; this completes that
+  // precedent rather than setting a new one.
+  //
+  // `apply()` deliberately never reads this field. Validating it against the
+  // real open innings (the way `applyPlayerLine` checks its own `innings`
+  // against the closed-innings ledger) would need the same `strictFold`-only
+  // gating every OTHER state-derived ball check above uses: a void or edit
+  // upstream that shifts an auto-close boundary must never turn an
+  // already-recorded, previously-valid ball into a throw with no event to
+  // void (see `applyDelivery`'s comments). Left unvalidated, the worst a
+  // stale stamp can do is mis-scope a best-effort leaderboard number in a
+  // rare replay-shifted edge case — it can never touch score, result or
+  // DLS, none of which read it.
+  innings: z.number().int().positive().optional(),
 });
 export type CricketBallEv = z.infer<typeof CricketBall>;
 
@@ -269,7 +302,9 @@ export const CricketReview = z.strictObject({
 // against the innings totals.
 export const CricketPlayerLine = z
   .strictObject({
-    innings: z.number().int().positive(), // 1-based innings number
+    // 1-based innings number. `CricketBall.innings` (S8/#417 W6b) mirrors
+    // this exact convention for the same reason — see its own comment.
+    innings: z.number().int().positive(),
     person: PersonId,
     batting: z
       .strictObject({
@@ -2113,6 +2148,36 @@ const dismissedBy = (kind: string) => (p: Record<string, unknown>) =>
 // pad spec's own `wicket.kind` enum values a few hundred lines down) could.
 const DISMISSAL_KINDS = CricketWicket.shape.kind.options;
 
+// S8/#417 W6b — per-innings scoping for the fine/coarse gate `folded` below
+// implements. Two kinds of fine coverage, unioned:
+//   - WHOLE: a fine ball with NO `innings` discriminator (every ball
+//     recorded before `CricketBall.innings` existed, or any future producer
+//     that still omits it) covers the person for EVERY innings — the
+//     original whole-stream gate, kept exactly as the fallback for untagged
+//     data, and the conservative choice whenever a stream mixes tagged and
+//     untagged fine balls for the same person: never invent a coarse credit
+//     the old gate would not have allowed.
+//   - BY INNINGS: a fine ball that DOES carry `innings` covers the person
+//     for that one innings only, which is what lets a coarse line for a
+//     DIFFERENT innings through.
+interface FineCoverage {
+  whole: Set<string>;
+  byInnings: Map<string, Set<number>>;
+}
+const newFineCoverage = (): FineCoverage => ({ whole: new Set(), byInnings: new Map() });
+const markFine = (coverage: FineCoverage, person: string, innings: unknown): void => {
+  if (typeof innings !== "number") {
+    coverage.whole.add(person);
+    return;
+  }
+  const set = coverage.byInnings.get(person) ?? new Set<number>();
+  set.add(innings);
+  coverage.byInnings.set(person, set);
+};
+const hasFineCoverage = (coverage: FineCoverage, person: string, innings: unknown): boolean =>
+  coverage.whole.has(person) ||
+  (typeof innings === "number" && (coverage.byInnings.get(person)?.has(innings) ?? false));
+
 const CRICKET_PLAYER_STATS: PlayerStatsModel = {
   metrics: [
     // Batting.
@@ -2202,21 +2267,23 @@ const CRICKET_PLAYER_STATS: PlayerStatsModel = {
   // `folded` exists for.
   //
   // THE RULE: ball-by-ball data wins wherever it exists; the coarse line
-  // fills in only where it is absent. Gated per PERSON, per ASPECT (batting /
-  // bowling) — not per innings — because an innings boundary is only
-  // derivable from a flat `cricket.ball` list via the multi-signal heuristic
-  // `coarsen()` already uses below (an over/ball restart, or both crease
-  // batters going "unseen"), which this fold does not reproduce. The
-  // trade-off is conservative by construction: a person with ANY fine
-  // delivery in an aspect this fixture never has that aspect's coarse line
-  // double-added, even one from a different innings; the only thing this
-  // gate cannot do is credit a second, genuinely coarse-only innings for
-  // someone who was ALSO scored fine elsewhere in the same match. A real
-  // v1-migration stream is fine-or-coarse for the WHOLE fixture, which this
-  // gate handles exactly — and `applyPlayerLine` already requires a line
-  // that coexists with a fine innings to carry the exact numbers the ball
-  // fold produced, so even the gate failing open would have doubled a
-  // correct figure, never patched a wrong one.
+  // fills in only where it is absent. S8/#417 W6b — gated per PERSON, per
+  // ASPECT (batting/bowling), per INNINGS whenever a producer stamps
+  // `CricketBall.innings`: an innings boundary is not derivable from a flat
+  // `cricket.ball` list by itself (over/ballInOver restart every innings),
+  // so before W6b this fold could only ask "fine ANYWHERE" — correct for a
+  // v1-migration stream (fine-or-coarse for the WHOLE fixture, which needs
+  // no innings distinction at all) but a real under-count for a stream that
+  // is fine in one innings and coarse-only in another. `CricketBall.innings`
+  // (optional; see its own comment) closes that gap for any producer that
+  // supplies it. A fine ball with NO `innings` field — every ball recorded
+  // before W6b, or a future producer that still omits it — still blocks
+  // EVERY innings for that person/aspect, unchanged from before: the
+  // conservative fallback, and the reason no previously-recorded fixture's
+  // numbers move. `applyPlayerLine` already requires a line that coexists
+  // with a fine innings to carry the exact numbers the ball fold produced,
+  // so even the gate failing open would have doubled a correct figure,
+  // never patched a wrong one.
   //
   // `keys` names every key `fold` below actually writes — `runs`,
   // `balls_faced`, `balls_bowled`, `runs_conceded`, `wickets`, `dismissals`
@@ -2240,16 +2307,17 @@ const CRICKET_PLAYER_STATS: PlayerStatsModel = {
     keys: ["runs", "balls_faced", "balls_bowled", "runs_conceded", "wickets", "dismissals"],
     sharesMetricKeys: ["runs", "balls_faced", "balls_bowled", "runs_conceded", "wickets", "dismissals"],
     fold: (events, _ctx) => {
-      const battedFine = new Set<string>();
-      const bowledFine = new Set<string>();
+      const batted = newFineCoverage();
+      const bowled = newFineCoverage();
       for (const event of events) {
         // Superover excluded, the same convention every metric above follows.
         if (event.type !== "cricket.ball") continue;
         const p = event.payload as Record<string, unknown>;
+        const innings = resolvePayloadPath(p, "innings");
         const striker = resolvePayloadPath(p, "striker");
-        if (typeof striker === "string" && striker !== "") battedFine.add(striker);
+        if (typeof striker === "string" && striker !== "") markFine(batted, striker, innings);
         const bowler = resolvePayloadPath(p, "bowler");
-        if (typeof bowler === "string" && bowler !== "") bowledFine.add(bowler);
+        if (typeof bowler === "string" && bowler !== "") markFine(bowled, bowler, innings);
       }
 
       const rows = new Map<string, Record<string, number>>();
@@ -2263,15 +2331,16 @@ const CRICKET_PLAYER_STATS: PlayerStatsModel = {
         const p = event.payload as Record<string, unknown>;
         const person = resolvePayloadPath(p, "person");
         if (typeof person !== "string" || person === "") continue;
+        const lineInnings = resolvePayloadPath(p, "innings");
 
-        if (!battedFine.has(person)) {
+        if (!hasFineCoverage(batted, person, lineInnings)) {
           const runs = resolvePayloadPath(p, "batting.runs");
           const balls = resolvePayloadPath(p, "batting.balls");
           if (typeof runs === "number") bump(person, "runs", runs);
           if (typeof balls === "number") bump(person, "balls_faced", balls);
           if (resolvePayloadPath(p, "batting.out") === true) bump(person, "dismissals", 1);
         }
-        if (!bowledFine.has(person)) {
+        if (!hasFineCoverage(bowled, person, lineInnings)) {
           const legalBalls = resolvePayloadPath(p, "bowling.legalBalls");
           const bowlRuns = resolvePayloadPath(p, "bowling.runs");
           const wkts = resolvePayloadPath(p, "bowling.wickets");
