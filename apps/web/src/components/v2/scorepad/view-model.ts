@@ -231,3 +231,71 @@ export function buildActionPayload(
   for (const item of action.attribution) entries.push([item.path, values[item.path]]);
   return buildPathObject(entries);
 }
+
+/**
+ * S10/#419 W8 fix 1 — the renderer's own fallback caption for a `PadField`
+ * that ships with no `labelKey` at all. That is legal by design
+ * (`PadFieldEnum`'s own header in sport/module.ts): S7/#427 left it optional
+ * on the reasoning that e.g. cricket's `runs.bat` "sits inside a labelled
+ * Ball action whose whole layout names it" — true of a hand-built skin,
+ * false of THIS universal renderer, which has no per-sport layout to lean
+ * on. Concretely, cricket's `cricket.player.line` action ships SEVEN such
+ * fields, and the renderer's old fallback (`${action label} #${n}`) rendered
+ * them as "Scorecard line #1" … "#7" with no visible caption at all — a
+ * scorer could not tell runs from wickets from overs.
+ *
+ * This derives a real, visible caption from the field's own dotted `path`
+ * instead: split on ".", split each segment's camelCase/snake_case into
+ * words, lowercase everything, join with spaces, capitalize only the first
+ * letter of the whole phrase — "wickets" -> "Wickets", "bowling.legalBalls"
+ * -> "Bowling legal balls". That is A defensible rule, not THE only one; it
+ * is total (never throws, never returns the empty string for a non-empty
+ * path), deterministic, and — unlike using only the last segment — it
+ * disambiguates two fields in the same action that share a leaf name (e.g. a
+ * `kind` nested under two different parents). A declared `labelKey` always
+ * wins over this — see action-form.tsx's `renderField` — so this only ever
+ * fires for a field the engine deliberately left uncaptioned.
+ *
+ * Deliberately NEVER routed through msg()/a dictionary key. `path` is an
+ * engine-internal identifier, not authored copy: there is no English
+ * sentence here for a translator to translate, and four locale files cannot
+ * usefully carry "whatever field path an as-yet-unwritten module happens to
+ * declare". `ChassisLabel`/`MISSING_FIELDS_REASON` above are this file's
+ * pattern for actual human-authored copy; this is deliberately not that, and
+ * `i18n:check` never sees it (it only walks `src/dictionaries/**`).
+ */
+export function deriveFieldPathLabel(path: string): string {
+  const words = path
+    .split(".")
+    .flatMap((segment) =>
+      segment
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2") // camelCase -> word boundary
+        .replace(/[_-]+/g, " ") // snake_case / kebab-case -> word boundary
+        .toLowerCase()
+        .split(" ")
+        .filter(Boolean),
+    );
+  if (words.length === 0) return path; // defensive only — the engine never declares an empty path
+  return words[0]!.charAt(0).toUpperCase() + words[0]!.slice(1) + (words.length > 1 ? " " + words.slice(1).join(" ") : "");
+}
+
+/**
+ * S10/#419 W8 fix 3 — the fold's own headline (`ScoreSummary.headline`,
+ * packages/engine/src/core/types.ts), read defensively. `summary` reaches
+ * this file typed `unknown` (see `PadViewCtx`'s own header above) and stays
+ * that way here on purpose: every SHIPPED module's `summary()` always sets a
+ * non-empty string `headline` once it runs (generic's own comment: "defined
+ * at every prefix; before any result the headline is '—'"), but this file
+ * has never imported `ScoreSummary` and does not start now just to read one
+ * field, so a genuinely malformed or absent summary — a non-conforming
+ * caller, or a future module mid-wiring — degrades to `null` instead of
+ * crashing the renderer or putting the literal string "undefined" on a
+ * scorer's screen. `null` means "render nothing", never "render a
+ * placeholder" — inventing fallback copy here would be exactly the
+ * sport-specific vocabulary this file is not supposed to know.
+ */
+export function summaryHeadline(summary: unknown): string | null {
+  if (!summary || typeof summary !== "object") return null;
+  const headline = (summary as { headline?: unknown }).headline;
+  return typeof headline === "string" && headline.length > 0 ? headline : null;
+}

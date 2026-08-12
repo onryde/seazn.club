@@ -16,6 +16,8 @@ import {
   buildActionPayload,
   buildPadView,
   checkActionValidity,
+  deriveFieldPathLabel,
+  summaryHeadline,
   type PadViewCtx,
 } from "../view-model";
 
@@ -209,6 +211,45 @@ describe("checkActionValidity — required FIELDS only (attribution is a later p
   it("a toggle field counts as set even when its value is `false` (must check `undefined`, not falsy)", () => {
     const action = { fields: [{ kind: "toggle" as const, path: "freeHit" }] };
     expect(checkActionValidity(action, { freeHit: false })).toEqual({ ok: true });
+  });
+});
+
+describe("deriveFieldPathLabel — the renderer's own fallback caption for a labelKey-less field (S10 fix 1)", () => {
+  it.each([
+    ["wickets", "Wickets"],
+    ["runs.bat", "Runs bat"],
+    ["extras.kind", "Extras kind"],
+    ["bowling.legalBalls", "Bowling legal balls"],
+    ["batting.out", "Batting out"],
+    ["ownGoal", "Own goal"],
+  ])("derives %j as %j", (path, expected) => {
+    expect(deriveFieldPathLabel(path)).toBe(expected);
+  });
+
+  it("never prints the raw dotted path verbatim for a multi-segment field", () => {
+    // The exact defect this replaces: printing `path` at a scorer instead of
+    // a human-readable word.
+    expect(deriveFieldPathLabel("bowling.legalBalls")).not.toBe("bowling.legalBalls");
+    expect(deriveFieldPathLabel("bowling.legalBalls")).not.toContain(".");
+  });
+});
+
+describe("summaryHeadline — the fold's own ScoreSummary.headline, read defensively (S10 fix 3)", () => {
+  it("reads a real ScoreSummary-shaped object's headline", () => {
+    expect(summaryHeadline({ headline: "252/8 (50) — 253/4 (48.2)", perSide: [] })).toBe(
+      "252/8 (50) — 253/4 (48.2)",
+    );
+  });
+
+  it.each([
+    ["an undefined summary (pre-fold caller)", undefined],
+    ["a null summary", null],
+    ["a non-object summary", "not an object"],
+    ["an object with no headline field", {}],
+    ["a headline that isn't a string", { headline: 42 }],
+    ["an explicitly empty headline", { headline: "" }],
+  ])("degrades to null for %s — never a crash, never the literal 'undefined'", (_label, input) => {
+    expect(summaryHeadline(input)).toBeNull();
   });
 });
 
