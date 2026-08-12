@@ -1008,10 +1008,14 @@ describe("aggregatePlayerStatsWithDiagnostics: folded-path visibility (S8/#417 W
   // The live hazard: setbased/nested's own replay-based folded implementation
   // bails to `[]` the instant `ctx.entrants.length !== 2` (see
   // reference_playerstatsfoldctx_entrants_fixture_scope in agent memory) — a
-  // caller that built `ctx.entrants` from a whole division's roster gets an
-  // empty table indistinguishable, in the ROWS alone, from "nobody scored".
-  // `foldedEntrantsOutOfScope` is what makes that state visible.
-  it("foldedEntrantsOutOfScope is true when ctx is supplied with anything other than exactly 2 entrants, on a model that HAS folded", () => {
+  // caller that built `ctx.entrants` from a whole division's roster (MORE
+  // than 2) gets an empty table indistinguishable, in the ROWS alone, from
+  // "nobody scored". `foldedEntrantsOutOfScope` is what makes THAT specific
+  // mistake visible — S8/#417 W6 review round 2, fix 3: it deliberately does
+  // NOT fire for FEWER than 2 (see the dedicated test below), because a
+  // dropped null side (bye/TBD) is a different, correct, designed
+  // degradation, not the same caller-scope bug.
+  it("foldedEntrantsOutOfScope is true when ctx has MORE than 2 entrants (a division-wide roster), on a model that HAS folded", () => {
     const model = foldedModel([]);
     const tooMany = aggregatePlayerStatsWithDiagnostics([], model, undefined, {
       entrants: [
@@ -1031,6 +1035,29 @@ describe("aggregatePlayerStatsWithDiagnostics: folded-path visibility (S8/#417 W
       personsOf: () => [],
     });
     expect(exactlyTwo.diagnostics.foldedEntrantsOutOfScope).toBe(false);
+  });
+
+  // S8/#417 W6 review round 2, fix 3 — the bug this pins: the OLD condition
+  // (`ctx.entrants.length !== 2`) also fired for FEWER than 2, mislabelling a
+  // bye/TBD fixture's dropped null side as the SAME "division-wide roster"
+  // hazard a >2 count means. A null side is DROPPED, not padded
+  // (apps/web's entrantFoldCtx docstring: "producing fewer than 2 entrants
+  // is the CORRECT degraded ctx for an unscoreable fixture") — the fold's
+  // own `[]` bail is the right, safe behaviour for it, and this flag must
+  // not report it as the wrong diagnosis.
+  it("foldedEntrantsOutOfScope is false when ctx has FEWER than 2 entrants — a dropped bye/TBD side is a designed degradation, not the division-wide-roster mistake this flag diagnoses", () => {
+    const model = foldedModel([]);
+    const oneEntrant = aggregatePlayerStatsWithDiagnostics([], model, undefined, {
+      entrants: [{ id: "E1", kind: "individual" }],
+      personsOf: () => [],
+    });
+    expect(oneEntrant.diagnostics.foldedEntrantsOutOfScope).toBe(false);
+
+    const zeroEntrants = aggregatePlayerStatsWithDiagnostics([], model, undefined, {
+      entrants: [],
+      personsOf: () => [],
+    });
+    expect(zeroEntrants.diagnostics.foldedEntrantsOutOfScope).toBe(false);
   });
 
   it("foldedEntrantsOutOfScope is false when ctx was never supplied at all (lineups-only call) — not the same as a caller-supplied wrong count", () => {

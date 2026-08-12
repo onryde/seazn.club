@@ -424,7 +424,7 @@ export interface PlayerStatsDiagnostics {
   foldedEmpty: boolean;
   /**
    * `ctx` was supplied (not omitted) on a model that HAS `folded`, but
-   * `ctx.entrants.length !== 2` — the specific, silent hazard the
+   * `ctx.entrants.length > 2` — the specific, silent hazard the
    * replay-based match/set folds (setbased/nested's own default
    * `playerStats.folded`) carry: they require `ctx.entrants` to be exactly
    * ONE fixture's two-sided [home, away] pair and bail to `[]` for any
@@ -433,9 +433,18 @@ export interface PlayerStatsDiagnostics {
    * loose phrasing). A caller that built `ctx.entrants` from a whole
    * division's roster (>2) — the natural-looking but wrong wiring this
    * field exists to catch — gets a table that looks exactly like a fixture
-   * nobody scored. `false` whenever `ctx` was never supplied at all (the
-   * ordinary lineups-only call every production caller makes today) or the
-   * model has no `folded` to hazard in the first place.
+   * nobody scored.
+   *
+   * Deliberately does NOT fire for `ctx.entrants.length < 2` (S8/#417 W6
+   * review round 2, fix 3 — the field used to read `!== 2` and over-fired
+   * here). A dropped null side (bye/TBD) is a CORRECT, designed degradation
+   * — the caller drops it rather than padding it (see apps/web's
+   * `entrantFoldCtx` docstring) — not the division-wide-roster mistake this
+   * field exists to diagnose; reporting it under the same flag would be the
+   * wrong diagnosis for a right-shaped ctx. `false` whenever `ctx` was never
+   * supplied at all (the ordinary lineups-only call every production caller
+   * makes today), the model has no `folded` to hazard in the first place, or
+   * `ctx.entrants.length` is 2 or fewer.
    */
   foldedEntrantsOutOfScope: boolean;
 }
@@ -583,9 +592,12 @@ export function aggregatePlayerStatsWithDiagnostics(
   // The live hazard (see `foldedEntrantsOutOfScope`'s own docstring): only
   // meaningful when a folded fold exists AND the caller actually supplied a
   // `ctx` — an omitted `ctx` (the lineups-only production call shape) is the
-  // ordinary, documented no-op path, not a caller mistake to flag.
+  // ordinary, documented no-op path, not a caller mistake to flag. `> 2`,
+  // not `!== 2` (S8/#417 W6 review round 2, fix 3): fewer than 2 is a
+  // dropped bye/TBD side, a different and correct degradation, not this
+  // hazard — see the field's own docstring.
   const foldedEntrantsOutOfScope =
-    model.folded !== undefined && ctx !== undefined && ctx.entrants.length !== 2;
+    model.folded !== undefined && ctx !== undefined && ctx.entrants.length > 2;
 
   for (const [, stats] of rows) {
     for (const d of model.derived ?? []) {

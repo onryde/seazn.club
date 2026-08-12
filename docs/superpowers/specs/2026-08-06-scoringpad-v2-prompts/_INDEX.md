@@ -20,7 +20,7 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 | S5 | #431 | `S05-431-decisions-register.md` | S3, S4 | **DONE** — register closed, all 8 rulings accounted for; items 2 (tennis game-award) and 4 (football quarters) BUILT this session on owner instruction rather than re-homed, cricket `pairs-6-a-side` dropped with a DB prune fix |
 | S6 | #416 | `S06-416-w5-padspec.md` | S2, S3, S5 | **DONE** — `PadSpec` contract + bidirectional conformance shipped for all 11 modules; fidelity model redesigned per the S2 ruling; 3 named variant-gating regressions fixed; e2e/smoke deferred to S12/S13 |
 | S7 | #427 | `S07-427-pad-vocabulary-i18n.md` | S3, S4, S6 | **DONE** — prompt's own "owed by sport" list was stale (S3/S4/S5 shipped most of it early); real gap was S6's 164-key `PadLabel` namespace never reaching apps/web, a missing per-field label slot, and 3 review-caught rendering bugs. Real e2e shipped, independently verified twice |
-| S8 | #417 | `S08-417-w6-player-stats.md` | S6 | TODO |
+| S8 | #417 | `S08-417-w6-player-stats.md` | S6 | **DONE** — 3 prompt premises false (all 11 modules already declared `playerStats`, dot-paths already shipped, no kernel default existed to copy); the real defect was models declared against OPTIONAL person fields on entrant-attributed payloads, i.e. inert. Owner ruled to widen into `apps/web` so the entrant→person fallback is reachable. Goalkeeper stats shipped (clean sheets, goals conceded; saves stay deferred — no sport records a save event). E2E + smoke deferred to S9/S12/S13 |
 | S9 | #418 | `S09-418-w7-career-rollup.md` | S3, S8 | TODO |
 | S10 | #419 | `S10-419-w8-chassis-renderer.md` | S6 | TODO |
 | S11 | #420 | `S11-420-w9-skins.md` | S7, S10 | TODO |
@@ -1362,6 +1362,36 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   fixture nobody scored. Found while wiring, not while debugging. Recorded here
   because the ctx is built one layer away from the fold that constrains it, and
   nothing in the type system says "two".
+
+- 2026-08-12 — S8/#417 — **round-2 review, aimed at the half round 1 never saw.**
+  The first two reviewers read the engine diff only; the `apps/web` wiring — the
+  part touching SQL, tenancy and production logging — had never been reviewed at
+  all, which is worth noticing as a process failure and not just a scheduling
+  one: the reviewers were dispatched while that pass was still in flight, so its
+  absence from their scope was invisible unless someone checked. Verified clean:
+  tenancy is safe (`entrants`/`entrant_members` both carry `org_id` under
+  `V227__v2_rls.sql`'s blanket `org_id = current_org_id()` policy, the same
+  unstated protection `loadLineupPairsForDivision` already relies on, so a
+  foreign `divisionId` returns zero rows rather than leaking); the `#404`
+  person-merge relabel still runs BEFORE `sumPlayerStats`; the per-fixture ctx
+  scope holds (`entrantFoldCtx` builds `entrants` from `[home, away]` only, and
+  the division-wide `personsOf` is consulted only after `ctx.entrants.find()`
+  has already matched); no log line carries PII; `personsForEntrant` is
+  byte-identical at all five replaced call sites; cricket's schema-derived
+  dismissal list matches the removed hand-written array exactly in membership
+  AND order; the conformance block genuinely runs for 11 of 11.
+  Three gaps, all fixed: (1) **a warning that fires on the happy path** — the
+  disagreement warn also triggered on `teamEntrantsSkipped`, which is the
+  engine's DESIGNED skip for a team-kind entrant and volleyball's routine state,
+  so every healthy recompute of a team-entrant division warned, burying the real
+  `unknownEntrants` signal; invisible until now because the logging test only
+  ever seeded badminton, an individual-kind sport. (2) `org-posts.ts`'s
+  single-fixture `extractScorers` called the DIVISION-wide roster loader for two
+  entrants on every match result, where `lineups.ts`'s scoped/batched pair was
+  the model to copy — and its scoped counterpart was already in use one line
+  above. (3) `foldedEntrantsOutOfScope` was `length !== 2`, so it fired below 2
+  as well and would have reported the wrong diagnosis for a bye-shaped ctx,
+  contradicting both its own docstring and the operator-facing warn text.
 
 - _(append below)_
 

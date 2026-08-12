@@ -22,7 +22,7 @@ import { toLocale, type Locale } from "@/lib/i18n-constants";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPair } from "@/server/engine-db/lineups";
-import { entrantFoldCtx, loadEntrantMembersForDivision } from "@/server/engine-db/entrant-members";
+import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db/entrant-members";
 import { slugify, uniqueSlug } from "./slugs";
 import { resultDraft, roundRecapDraft } from "@/server/news/draft-templates";
 
@@ -601,7 +601,12 @@ async function extractScorers(
       divisionCfgRow?.config,
       stageCfgRow?.config,
     );
-    const entrantMembers = await loadEntrantMembersForDivision(tx, fx.division_id);
+    // S8/#417 W6 review round 2, fix 2 — the fixture-scoped loader, not
+    // loadEntrantMembersForDivision: this function is single-fixture (see
+    // this function's own doc comment above), so pulling the WHOLE
+    // division's roster for two entrants was O(division roster) work
+    // repeated on every fixture-decided write where O(1) is what is needed.
+    const entrantMembers = await loadEntrantMembersForFixture(tx, fx.home_entrant_id, fx.away_entrant_id);
     const ctx = entrantFoldCtx(fx.home_entrant_id, fx.away_entrant_id, entrantMembers, cfg);
     const rows = aggregatePlayerStats(ledger, model, lineups, ctx)
       .filter((r) => (r.stats[metric.key] ?? 0) > 0)

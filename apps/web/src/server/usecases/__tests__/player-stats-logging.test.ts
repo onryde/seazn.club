@@ -27,6 +27,7 @@ import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 const badminton = builtinModules.find((m) => m.key === "badminton")!;
+const volleyball = builtinModules.find((m) => m.key === "volleyball")!;
 
 async function seedOrg(): Promise<{ auth: AuthCtx }> {
   const suffix = randomUUID().slice(0, 8);
@@ -107,6 +108,73 @@ async function seedBadmintonSingles(
   };
 }
 
+// S8/#417 W6 review round 2, fix 1 — a team-kind entrant division (volleyball
+// is the natural case: its default variant's entrantModel is team-only).
+// Mirrors seedBadmintonSingles's shape exactly, swapped to a sport whose
+// entrants are kind "team" rather than "individual".
+async function seedVolleyballTeams(
+  auth: AuthCtx,
+): Promise<{ divisionId: string; fixtureId: string }> {
+  const mod: AnySportModule = volleyball;
+  await sql`
+    insert into sports (key, name, module_version, position_catalog)
+    values (${mod.key}, ${mod.key}, ${mod.version}, ${sql.json(mod.positions as never)})
+    on conflict (key) do nothing`;
+  await sql`
+    insert into sport_variants (sport_key, key, name, config, is_system)
+    values (${mod.key}, 'default', 'Default', ${sql.json({})}, true)
+    on conflict do nothing`;
+  const comp = await createCompetition(auth, {
+    ends_on: "2030-12-31",
+    name: "Log Cup",
+    visibility: "public",
+    branding: {},
+  });
+  const division = await createDivision(auth, comp.id, {
+    name: "Open",
+    slug: "open",
+    sport_key: mod.key,
+    variant_key: "default",
+    config: {},
+    eligibility: [],
+  });
+  // Real, non-empty rosters — a person genuinely on the entrant's squad, so
+  // the test is falsifiable: were the kind guard not enforced, this would
+  // show up as a credited row instead of a skipped entrant.
+  const home1 = await createPerson(auth, {
+    full_name: "Home Log",
+    consent: { public_name: true },
+    dob: null,
+    gender: null,
+    external_ref: null,
+  });
+  const away1 = await createPerson(auth, {
+    full_name: "Away Log",
+    consent: { public_name: true },
+    dob: null,
+    gender: null,
+    external_ref: null,
+  });
+  await createEntrants(auth, division.id, [
+    {
+      kind: "team",
+      display_name: "Reds",
+      seed: 1,
+      members: [{ person_id: home1.id, squad_number: null, is_captain: false, roles: [], default_position_key: null }],
+    },
+    {
+      kind: "team",
+      display_name: "Blues",
+      seed: 2,
+      members: [{ person_id: away1.id, squad_number: null, is_captain: false, roles: [], default_position_key: null }],
+    },
+  ]);
+  const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "League", config: {} });
+  const { fixtures } = await generateStageFixtures(auth, stage!.id);
+  await startDivision(auth, division.id);
+  return { divisionId: division.id, fixtureId: fixtures[0]!.id };
+}
+
 describe.skipIf(!HAS_DB)("S8/#417 recomputePlayerStats structured logging", () => {
   it("logs real fold-derived diagnostics on every recompute, and does not warn when the ledger agrees with ctx.entrants", async () => {
     const { auth } = await seedOrg();
@@ -152,6 +220,58 @@ describe.skipIf(!HAS_DB)("S8/#417 recomputePlayerStats structured logging", () =
     expect(warnSpy).not.toHaveBeenCalled();
     infoSpy.mockRestore();
     warnSpy.mockRestore();
+  });
+
+  it("does NOT warn on a team-kind entrant's designed skip (volleyball) — teamEntrantsSkipped is a routine count, not a ctx/ledger disagreement", async () => {
+    // S8/#417 W6 review round 2, fix 1: before this fix, the warn condition
+    // was `unknownEntrants.size > 0 || teamEntrantsSkipped.size > 0`, so
+    // EVERY healthy volleyball (or football/hockey/cricket) recompute
+    // warned — teamEntrantsSkipped is the engine's DESIGNED skip for a KNOWN
+    // team-kind entrant (packages/engine/src/stats/stats.ts's mandatory kind
+    // guard; DOMAIN.volleyball.md:34 calls this "the designed state for a
+    // team entrant"), not a disagreement between ctx.entrants and the
+    // ledger. A warning that fires on the happy path trains an operator to
+    // ignore the channel, burying the genuine unknownEntrants signal.
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await seedVolleyballTeams(auth);
+
+    await scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    const [fixture] = await sql<{ home_entrant_id: string }[]>`
+      select home_entrant_id from fixtures where id = ${fixtureId}`;
+    // wonBy only — no scorer/server — so the kernel's points_won metric
+    // (entrantField: "wonBy", fromEntrant: true) falls to the entrant
+    // fallback, resolves the home entrant, finds it KNOWN with kind "team",
+    // and the mandatory kind guard skips it: exactly what populates
+    // teamEntrantsSkipped on a perfectly ordinary, healthy recompute.
+    await scoreEvent(auth, fixtureId, {
+      expected_seq: 1,
+      type: "volleyball.rally",
+      payload: { wonBy: fixture!.home_entrant_id },
+    });
+
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => undefined as never);
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+    try {
+      await withTenant(auth.orgId, (tx) => recomputePlayerStats(tx, divisionId));
+
+      const call = infoSpy.mock.calls.find(
+        (c) => typeof c[1] === "string" && c[1].includes("recomputePlayerStats"),
+      );
+      expect(call).toBeDefined();
+      const fields = call![0] as Record<string, unknown>;
+      // The designed skip still surfaces as an ordinary count in the info
+      // line — it must not also duplicate into a warn.
+      expect((fields.teamEntrantsSkipped as string[]).length).toBeGreaterThan(0);
+
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      // try/finally (unlike this file's other tests) because this assertion
+      // is EXPECTED to fail red before the fix — an uncaught throw here
+      // would leave log.info/log.warn permanently mocked for every test
+      // that runs after this one in the same file.
+      infoSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 
   it("logs the folded path's own diagnostics, not just the metric loop's", async () => {

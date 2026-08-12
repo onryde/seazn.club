@@ -235,15 +235,22 @@ export async function recomputePlayerStats(
       "player-stats: ctx.entrants was not scoped to a single fixture — folded stat models produced nothing",
     );
   }
-  if (diagnostics.unknownEntrants.size > 0 || diagnostics.teamEntrantsSkipped.size > 0) {
+  if (diagnostics.unknownEntrants.size > 0) {
     // The caller's own entrant-membership data disagrees with the score
     // ledger it is folding — otherwise undiagnosable in production.
+    //
+    // teamEntrantsSkipped is deliberately NOT part of this condition (S8/#417
+    // W6 review round 2, fix 1): it is the engine's DESIGNED skip for a KNOWN
+    // team-kind entrant (stats.ts's mandatory kind guard), not a ctx/ledger
+    // disagreement — DOMAIN.volleyball.md:34 calls this "the designed state
+    // for a team entrant". Before this fix, every healthy volleyball (or
+    // football/hockey/cricket) recompute warned on its own routine, correct
+    // state; a warning that fires on the happy path trains an operator to
+    // ignore the channel, burying the genuine unknownEntrants signal beneath
+    // it. teamEntrantsSkipped is already reported as an ordinary count in the
+    // info line above — logging it again here would just duplicate it.
     log.warn(
-      {
-        divisionId,
-        unknownEntrants: [...diagnostics.unknownEntrants],
-        teamEntrantsSkipped: [...diagnostics.teamEntrantsSkipped],
-      },
+      { divisionId, unknownEntrants: [...diagnostics.unknownEntrants] },
       "player-stats: entrant-fallback attribution disagreement between ctx.entrants and the score ledger",
     );
   }

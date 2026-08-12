@@ -25,10 +25,30 @@ interface EntrantMemberRow {
   person_id: string | null;
 }
 
+/** Reduce raw entrant_member rows into the `Map<EntrantId, EntrantMembership>`
+ *  shape both loaders below share — the one-row-per-member accumulation
+ *  (an entrant can have many member rows, or none under the LEFT JOIN) lives
+ *  in exactly one place so the division-wide and fixture-scoped queries can
+ *  never drift into two different reductions of the same row shape. */
+function buildMembership(rows: readonly EntrantMemberRow[]): Map<string, EntrantMembership> {
+  const out = new Map<string, EntrantMembership>();
+  for (const r of rows) {
+    const existing = out.get(r.entrant_id);
+    const personIds: string[] = existing ? [...existing.personIds] : [];
+    if (r.person_id !== null) personIds.push(r.person_id);
+    out.set(r.entrant_id, { kind: r.kind, personIds });
+  }
+  return out;
+}
+
 /**
  * Every entrant in a division plus its roster's person ids, in ONE query —
  * the S8/#417 counterpart to lineups.ts's `loadLineupPairsForDivision`,
- * batched the same way (one query per division, not one per fixture).
+ * batched the same way (one query per division, not one per fixture). Used
+ * by `recomputePlayerStats` (player-stats.ts), which genuinely needs every
+ * entrant in the division for one division-wide refold — the fixture-scoped
+ * `loadEntrantMembersForFixture` below is for a caller that only ever needs
+ * ONE fixture's two entrants.
  *
  * LEFT JOIN on `entrant_members`, so an entrant with no roster yet still
  * appears (kind, empty `personIds`) rather than being silently absent — an
@@ -50,14 +70,39 @@ export async function loadEntrantMembersForDivision(
     left join entrant_members em on em.entrant_id = e.id
     where e.division_id = ${divisionId}
   `;
-  const out = new Map<string, EntrantMembership>();
-  for (const r of rows) {
-    const existing = out.get(r.entrant_id);
-    const personIds: string[] = existing ? [...existing.personIds] : [];
-    if (r.person_id !== null) personIds.push(r.person_id);
-    out.set(r.entrant_id, { kind: r.kind, personIds });
-  }
-  return out;
+  return buildMembership(rows);
+}
+
+/**
+ * The SAME `Map<EntrantId, EntrantMembership>` shape as
+ * `loadEntrantMembersForDivision`, scoped to exactly one fixture's home/away
+ * entrants — the `entrant-members.ts` counterpart to lineups.ts's
+ * `loadLineupPair` beside its own `loadLineupPairsForDivision` (S8/#417 W6
+ * review round 2, fix 2). `org-posts.ts`'s `extractScorers` folds ONE
+ * fixture per call, on the fixture-decided write path — pulling the whole
+ * division's roster (`loadEntrantMembersForDivision`) for two entrants was
+ * O(division roster) work repeated on every match result where O(1) is what
+ * the caller actually needs.
+ *
+ * A null side (bye/TBD) is simply omitted from the query rather than turned
+ * into an error — matches `entrantFoldCtx`'s own "drop, don't pad" rule for
+ * the same shape one layer up. Both sides null short-circuits to an empty
+ * map without a round trip.
+ */
+export async function loadEntrantMembersForFixture(
+  tx: Tx,
+  homeEntrantId: string | null,
+  awayEntrantId: string | null,
+): Promise<Map<string, EntrantMembership>> {
+  const ids = [homeEntrantId, awayEntrantId].filter((id): id is string => id !== null);
+  if (ids.length === 0) return new Map();
+  const rows = await tx<EntrantMemberRow[]>`
+    select e.id as entrant_id, e.kind, em.person_id
+    from entrants e
+    left join entrant_members em on em.entrant_id = e.id
+    where e.id in ${tx(ids)}
+  `;
+  return buildMembership(rows);
 }
 
 /**
