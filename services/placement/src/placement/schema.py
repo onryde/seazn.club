@@ -187,12 +187,16 @@ class ModelInput:
     (`parsed.courts`, `parsed.step_minutes`, ...) — every name below is
     unchanged from the string contract even though several TYPES are not.
 
-    The three fields after `wall_seconds` were, when this was written, an
-    exception to "exactly `build_model`'s arguments": C1/C4/C6, validated here
-    like everything else but not among the seven `main.py` passed to
-    `build_model`. All three now flow: task C4 added `rule_groups` and
-    `pinned_rule_group_indices`, and task C6 added `pinned_entrant_indices` —
-    `main.py` now passes TEN arguments (see the module docstring, "#21").
+    The five fields after `wall_seconds` were, when this was written, an
+    exception to "exactly `build_model`'s arguments": the #21 contract
+    programme's own C1/C4/C6 tasks (a different "C1" from the one below —
+    the #21 programme numbered rule_groups C1; the round-order design reused
+    the label independently, three weeks later), validated here like
+    everything else but not among the seven `main.py` originally passed to
+    `build_model`. All five now flow: #21's C4 added `rule_groups` and
+    `pinned_rule_group_indices`, #21's C6 added `pinned_entrant_indices`, and
+    the round-order design's C1 (2026-08-12) added `fixture_rounds` and
+    `pinned_round` — `main.py` now passes TWELVE arguments.
     """
 
     courts: int  # the COUNT of courts (len(court_names)); names never reach the domain

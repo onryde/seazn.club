@@ -150,6 +150,46 @@ def test_accepts_valid_request_with_correct_secret(test_server):
     assert response.elapsed_ms >= 0
 
 
+# --- C1: round order, driven through the real RPC boundary -----------------
+#
+# `test_model.py`/`test_schema.py` already prove the constraint and the wire
+# translation in isolation; this is the smoke test — proto in, real servicer,
+# real solve, proto out — closing the gap neither of those two can: that a
+# `round` field set on the wire survives `SolveBuild` end to end and actually
+# shapes the returned board, not merely the model `build_model` is handed
+# directly in a unit test.
+
+
+def test_round_order_survives_the_full_rpc_round_trip(test_server):
+    """Two round-robin fixtures, disjoint entrants, one court offering two
+    ticks on the same day — round 2 listed FIRST (index 0) so a bug that
+    silently used array order instead of `Fixture.round` would happen to
+    still look right; only reading the round field correctly gets this test
+    to pass either way."""
+    req = _solvable_request(
+        entrant_count=4,
+        fixtures=[
+            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0, round=2),
+            scheduler_pb2.Fixture(entrant_indices=[2, 3], division_index=0, round=1),
+        ],
+        slots=[
+            scheduler_pb2.Slot(court_index=0, start_at_ms=SLOT_MS, day_index=0),
+            scheduler_pb2.Slot(court_index=0, start_at_ms=SLOT_MS + 40 * 60_000, day_index=0),
+        ],
+        wall_seconds=5.0,
+    )
+    response, _, code, _ = _invoke(test_server, req)
+    assert code == grpc.StatusCode.OK
+    assert response.status in (scheduler_pb2.SOLVE_STATUS_OPTIMAL, scheduler_pb2.SOLVE_STATUS_FEASIBLE)
+    assert len(response.assignments) == 2, response.assignments
+
+    start_by_fixture = {a.fixture_index: a.start_at_ms for a in response.assignments}
+    assert start_by_fixture[1] <= start_by_fixture[0], (
+        f"round 1 (fixture index 1) must not start after round 2 (fixture index 0) on the "
+        f"same day: {list(response.assignments)}"
+    )
+
+
 def test_clamps_wall_seconds_to_the_server_ceiling(test_server, monkeypatch):
     """`wall_seconds` is caller-supplied. Without the clamp one request can pin
     a worker thread for as long as it likes."""
