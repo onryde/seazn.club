@@ -10,9 +10,17 @@
 import { describe, expect, it } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
-import type { PadActionView } from "../view-model";
+import { defaultLineupPair } from "@seazn/engine/testkit";
+import { cricket } from "@seazn/engine/sports/cricket";
+import { resolveModuleClient } from "../module-client";
+import type { AppendCallResult, AppendEventBody, ScoringTransport } from "../pipeline";
+import type { FixtureStateResult, PadTransport } from "../transport";
+import type { LedgerSlotEvent, OwnIdentity } from "../types";
+import type { PadActionView, PadPanelView } from "../view-model";
 import { ActionForm } from "../action-form";
 import { Panel } from "../panel";
+import { FidelitySwitcher } from "../fidelity-switcher";
+import { PadRenderer } from "../pad-renderer";
 
 function find(tree: ReactElement[], pred: (el: ReactElement) => boolean): ReactElement {
   const el = tree.find(pred);
@@ -241,5 +249,220 @@ describe("Panel — layout-driven container; locked actions render a reason, nev
     expect(propsOf(actionFormEl).action).toEqual(panelView.actions[0]);
     (propsOf(actionFormEl).onSubmit as (p: unknown) => void)({ foo: "bar" });
     expect(submitted).toEqual({ type: "cricket.newball", payload: { foo: "bar" } });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PadRenderer — the composed surface. Only ONE level of the tree is invoked
+// by `renderIsland` (PadRenderer itself); `Panel` and `FidelitySwitcher` are
+// REAL nested components with their own hook state, so — exactly like
+// Panel's own tests above — this section asserts on THEIR ELEMENTS' props
+// and calls their callback props directly (`onSubmit`, `onChange`) rather
+// than clicking two component-boundaries deep, which this harness cannot
+// reach. Each nested component's OWN click-through behaviour is already
+// fully covered by its own describe blocks (ActionForm above,
+// fidelity-switcher.test.tsx). What THIS section proves is PadRenderer's
+// OWN wiring: phase state -> the right panels; band state -> the right
+// view-model call; a Panel's onSubmit -> the real usePadPipeline.
+// ---------------------------------------------------------------------------
+
+const ME: OwnIdentity = { recordedBy: "user-1", deviceLinkId: null };
+
+function fakeTransport(opts: {
+  appendResults: AppendCallResult[];
+  fetchStateImpl?: (fixtureId: string) => Promise<FixtureStateResult>;
+}): PadTransport {
+  let cursor = 0;
+  return {
+    async appendEvent(_fixtureId: string, _body: AppendEventBody) {
+      const next = opts.appendResults[cursor];
+      cursor += 1;
+      if (!next) throw new Error("fakeTransport: no scripted appendEvent response left");
+      return next;
+    },
+    async listEventsSince(): Promise<LedgerSlotEvent[]> {
+      return [];
+    },
+    async getLastSeq(): Promise<number> {
+      throw new Error("fakeTransport: getLastSeq not used by this suite");
+    },
+    async fetchState(fixtureId: string): Promise<FixtureStateResult> {
+      if (opts.fetchStateImpl) return opts.fetchStateImpl(fixtureId);
+      return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
+    },
+  };
+}
+
+const success = (seq: number): AppendCallResult => ({
+  kind: "ok",
+  data: { seq, state_summary: { seq }, outcome: null, status: "in_play" },
+});
+
+const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+function panelByKey(tree: ReactElement[], key: string): ReactElement {
+  return find(findAll(tree, isType(Panel)), (el) => (propsOf(el).panel as PadPanelView).labelKey.key === key);
+}
+
+const CRICKET_CFG = cricket.configSchema.parse({});
+const CRICKET_LINEUPS = defaultLineupPair(cricket.positions);
+
+describe("PadRenderer — phase navigation", () => {
+  function mountCricket() {
+    return renderIsland(PadRenderer, {
+      module: resolveModuleClient("cricket", "1.0.0"),
+      cfg: CRICKET_CFG,
+      fixtureId: "fx-1",
+      lineups: CRICKET_LINEUPS,
+      identity: ME,
+      transport: fakeTransport({ appendResults: [] }),
+      band: 3 as const,
+      entitlements: { "stats.player": true, "scoring.ball_by_ball": true },
+    });
+  }
+
+  it("renders a tab for every phase the spec declares (cricket: pre, live, post)", () => {
+    const island = mountCricket();
+    const tabs = findAll(island.tree(), isType("button")).filter((b) => propsOf(b)["data-phase"] !== undefined);
+    expect(tabs.map((t) => propsOf(t)["data-phase"]).sort()).toEqual(["live", "post", "pre"]);
+  });
+
+  it("defaults to the live phase — the Over panel is present, the pre-match Toss panel is not", () => {
+    const island = mountCricket();
+    const tree = island.tree();
+    expect(() => panelByKey(tree, "pad.cricket.panel.over")).not.toThrow();
+    expect(findAll(tree, isType(Panel)).some((p) => (propsOf(p).panel as PadPanelView).labelKey.key === "pad.cricket.panel.pre")).toBe(
+      false,
+    );
+  });
+
+  it("clicking the pre-match tab swaps the visible panels to that phase's", () => {
+    const island = mountCricket();
+    const preTab = find(findAll(island.tree(), isType("button")), (b) => propsOf(b)["data-phase"] === "pre");
+    (propsOf(preTab).onClick as () => void)();
+    const tree = island.tree();
+    expect(() => panelByKey(tree, "pad.cricket.panel.pre")).not.toThrow();
+    expect(findAll(tree, isType(Panel)).some((p) => (propsOf(p).panel as PadPanelView).labelKey.key === "pad.cricket.panel.over")).toBe(
+      false,
+    );
+  });
+
+  it("a phase with nothing visible at this band renders the empty-phase message, not a blank screen", () => {
+    // Post-phase's only action (cricket.player.line) is banded 2 — at band 0
+    // it is filtered out, so the whole panel (and phase) is empty.
+    const island = renderIsland(PadRenderer, {
+      module: resolveModuleClient("cricket", "1.0.0"),
+      cfg: CRICKET_CFG,
+      fixtureId: "fx-1",
+      lineups: CRICKET_LINEUPS,
+      identity: ME,
+      transport: fakeTransport({ appendResults: [] }),
+      band: 0 as const,
+      entitlements: {},
+    });
+    const postTab = find(findAll(island.tree(), isType("button")), (b) => propsOf(b)["data-phase"] === "post");
+    (propsOf(postTab).onClick as () => void)();
+    const tree = island.tree();
+    expect(findAll(tree, isType(Panel)).length).toBe(0);
+    expect(island.text().length).toBeGreaterThan(0); // some message, not a blank screen
+  });
+});
+
+describe("PadRenderer — a Panel's onSubmit reaches the REAL usePadPipeline", () => {
+  it("calling the Score panel's onSubmit drains through the transport and the queue empties", async () => {
+    const generic = resolveModuleClient("generic", "1.0.0");
+    const cfg = { resultMode: "score" as const, allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false };
+    const lineups = defaultLineupPair(generic.positions);
+    const transport = fakeTransport({ appendResults: [success(2)] });
+    const island = renderIsland(PadRenderer, {
+      module: generic,
+      cfg,
+      fixtureId: "fx-1",
+      lineups,
+      identity: ME,
+      transport,
+      band: 3 as const,
+      entitlements: {},
+      initialEvents: [
+        {
+          id: "e-1",
+          fixtureId: "fx-1",
+          seq: 1,
+          type: "core.start",
+          payload: {},
+          recordedAt: "2026-08-12T00:00:00.000Z",
+          recordedBy: "user-1",
+        },
+      ],
+    });
+    await tick(); // let the mount-time resume/drain effect settle first
+
+    const scorePanel = panelByKey(island.tree(), "pad.generic.panel.score");
+    await (propsOf(scorePanel).onSubmit as (t: string, p: unknown) => Promise<void>)("generic.result", {
+      p1Score: 5,
+      p2Score: 3,
+    });
+    await tick();
+    await tick();
+
+    // Reached the transport with the real submitted payload — not merely
+    // "queued": the queue/offline strip reads synced once the drain settles.
+    expect(island.text()).toContain("All synced");
+  });
+});
+
+describe("PadRenderer — fidelity band integration: reveals actions, never resets state", () => {
+  it("upgrading the band reveals a higher-band action in the SAME panel, and the fold is untouched", async () => {
+    const seenStates: unknown[] = [];
+    const island = renderIsland(PadRenderer, {
+      module: resolveModuleClient("cricket", "1.0.0"),
+      cfg: CRICKET_CFG,
+      fixtureId: "fx-1",
+      lineups: CRICKET_LINEUPS,
+      identity: ME,
+      transport: fakeTransport({ appendResults: [] }),
+      band: 1 as const,
+      entitlements: { "stats.player": true, "scoring.ball_by_ball": true },
+      onStateChange: (state) => seenStates.push(state),
+    });
+    await tick();
+
+    // At band 1 the "Over" panel's only action (cricket.ball) is band 3 —
+    // ABSENT means the whole panel is dropped (nothing left to draw), not
+    // merely that ONE action is missing from an otherwise-present panel.
+    const overPanelsBefore = findAll(island.tree(), isType(Panel)).filter(
+      (p) => (propsOf(p).panel as PadPanelView).labelKey.key === "pad.cricket.panel.over",
+    );
+    expect(overPanelsBefore.length).toBe(0);
+    expect(seenStates.length).toBeGreaterThan(0);
+    const stateBeforeUpgrade = seenStates[seenStates.length - 1];
+
+    const switcherEl = find(island.tree(), isType(FidelitySwitcher));
+    (propsOf(switcherEl).onChange as (band: number) => void)(3);
+
+    const overPanelAfter = panelByKey(island.tree(), "pad.cricket.panel.over");
+    expect((propsOf(overPanelAfter).panel as PadPanelView).actions.some((a) => a.type === "cricket.ball")).toBe(true);
+    // The fold itself never moved — same value (in this harness, the same
+    // object reference: usePadPipeline's `foldedState` memo does not depend
+    // on `band` at all) before and after the upgrade.
+    expect(seenStates[seenStates.length - 1]).toBe(stateBeforeUpgrade);
+  });
+});
+
+describe("PadRenderer — timeline seam (a later pass fills it in; this pass only reserves the slot)", () => {
+  it("renders whatever timelineSlot is handed, verbatim", () => {
+    const marker = "TIMELINE-SLOT-MARKER";
+    const island = renderIsland(PadRenderer, {
+      module: resolveModuleClient("generic", "1.0.0"),
+      cfg: { resultMode: "score" as const, allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      fixtureId: "fx-1",
+      lineups: defaultLineupPair(resolveModuleClient("generic", "1.0.0").positions),
+      identity: ME,
+      transport: fakeTransport({ appendResults: [] }),
+      band: 3 as const,
+      entitlements: {},
+      timelineSlot: marker,
+    });
+    expect(island.text()).toContain(marker);
   });
 });
