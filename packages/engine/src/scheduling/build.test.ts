@@ -1407,9 +1407,28 @@ describe("buildSchedule — Placement path", () => {
     // before structured logging landed, this branch discarded `err`
     // completely (`catch {`), so a misconfigured shared secret presented as
     // "placement is slow" with nothing anywhere naming the actual cause.
+    // Curated fields, not the raw `Error` object — see the log call's own
+    // comment — so this asserts on `message`/`failure`, not `err` itself.
     expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy.mock.calls[0]?.[0]).toMatchObject({ err: rejection });
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({
+      failure: undefined,
+      message: rejection.message,
+    });
     expect(spy.mock.calls[0]?.[1]).toContain("placement service unavailable");
+  });
+
+  it("logs the PlacementError's own `failure` reason when the rejection carries one", async () => {
+    const rejection = Object.assign(new Error("placement solveBuild failed: UNAUTHENTICATED"), {
+      name: "PlacementError",
+      failure: "unauthenticated",
+    });
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockRejectedValue(rejection);
+    const spy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    await buildSchedule(minimalInput());
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({
+      failure: "unauthenticated",
+      message: rejection.message,
+    });
   });
 
   // Coordinator follow-up (found preparing Task 07): the try/catch around

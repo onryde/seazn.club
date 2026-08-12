@@ -2489,7 +2489,14 @@ export async function aiPlanForDivision(
   try {
     return await planForDivision(auth, divisionId, input, claim);
   } catch (err) {
-    log.warn({ err, orgId: auth.orgId, divisionId }, "schedule-ai: aiPlanForDivision failed");
+    // Curated fields, not the raw `err` — same reasoning as
+    // `placement-client.ts`'s log sites: this catches everything
+    // `planForDivision` can throw (see the JSDoc above), and nothing should
+    // have to reason about what an arbitrary caught object might carry.
+    log.warn(
+      { message: err instanceof Error ? err.message : String(err), orgId: auth.orgId, divisionId },
+      "schedule-ai: aiPlanForDivision failed",
+    );
     if (claim.previewId !== null && !claim.creditConsumed) {
       await releasePreviewQuietly(claim.previewId, auth.orgId);
     }
@@ -2517,7 +2524,10 @@ export async function releasePreviewQuietly(previewId: string, orgId: string): P
   try {
     await releasePreview(previewId, orgId);
   } catch (err) {
-    log.warn({ err, previewId, orgId }, "schedule-ai: could not release preview after a failed run");
+    log.warn(
+      { message: err instanceof Error ? err.message : String(err), previewId, orgId },
+      "schedule-ai: could not release preview after a failed run",
+    );
   }
 }
 

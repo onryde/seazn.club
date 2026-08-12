@@ -798,8 +798,14 @@ export async function solveBuild(
       // channel) would otherwise leave the watchdog armed and hold the process
       // open for the full deadline before anyone learned the call never started.
       settle(() => {
+        // Curated fields, not the raw `thrown` value: same reasoning as the
+        // RPC-error branch above — everything past this boundary should speak
+        // plain, known-safe fields rather than an arbitrary caught object.
         log.warn(
-          { requestId: opts.requestId, err: thrown },
+          {
+            requestId: opts.requestId,
+            message: thrown instanceof Error ? thrown.message : String(thrown),
+          },
           "placement solveBuild: synchronous throw before the call started",
         );
         reject(

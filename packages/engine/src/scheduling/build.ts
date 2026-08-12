@@ -1761,7 +1761,15 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     // needed because every kind lands in the same place; a caller that
     // needs the specific reason still has it on the rejected error's
     // `.failure`/`.message`, this function only decides the fallback board.
-    log.warn({ err }, "buildSchedule: placement service unavailable, falling back to greedy");
+    // Curated fields, not the raw `err`: `failure` (when present — a
+    // `PlacementError`, duck-typed rather than imported, matching this file's
+    // no-static-coupling-to-placement-client convention above) and `message`
+    // only, same idiom `placement-client.ts`'s own log sites use.
+    const failure = err && typeof err === "object" && "failure" in err ? err.failure : undefined;
+    log.warn(
+      { failure, message: err instanceof Error ? err.message : String(err) },
+      "buildSchedule: placement service unavailable, falling back to greedy",
+    );
     return greedy("solver_unavailable", true);
   }
 
