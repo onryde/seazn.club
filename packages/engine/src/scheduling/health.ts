@@ -265,8 +265,63 @@ function courtBalanceMetric(fixtures: readonly HealthFixture[]): HealthMetric {
   };
 }
 
-function gapDispersionMetric(_fixtures: readonly HealthFixture[], _config: HealthConfig): HealthMetric {
-  return NOT_IMPLEMENTED("gapDispersion");
+function courtDayKey(f: HealthFixture): string {
+  return `${f.court}::${f.dayKey}`;
+}
+
+/** Every fixture sharing a (court, day) bucket, ascending by start —
+ *  gapDispersion and primeSlotFairness both group this way. */
+function courtDayFixtures(fixtures: readonly HealthFixture[]): Map<string, HealthFixture[]> {
+  const map = new Map<string, HealthFixture[]>();
+  for (const f of fixtures) {
+    const key = courtDayKey(f);
+    const list = map.get(key);
+    if (list !== undefined) list.push(f);
+    else map.set(key, [f]);
+  }
+  for (const list of map.values()) list.sort((a, b) => a.start - b.start);
+  return map;
+}
+
+/**
+ * Per court-day: idle = window_len − Σ busy; frag f = idle_inside /
+ * (idle_inside + idle_edges). Score = 100 · (1 − mean(f)) over court-days
+ * with >= 2 fixtures (design doc, verbatim).
+ */
+function gapDispersionMetric(fixtures: readonly HealthFixture[], config: HealthConfig): HealthMetric {
+  const byCourtDay = courtDayFixtures(fixtures);
+  const frags: { id: string; f: number; largestHoleMin: number }[] = [];
+  for (const [key, list] of byCourtDay) {
+    if (list.length < 2) continue;
+    const first = list[0]!;
+    const last = list[list.length - 1]!;
+    const busy = list.reduce((s, f) => s + (f.end - f.start), 0);
+    let idleInside = 0;
+    let largestHole = 0;
+    for (let i = 0; i < list.length - 1; i++) {
+      const gap = Math.max(0, list[i + 1]!.start - list[i]!.end);
+      idleInside += gap;
+      if (gap > largestHole) largestHole = gap;
+    }
+    const window = config.courtWindows?.[key];
+    const windowLen = window !== undefined ? window.to - window.from : last.end - first.start;
+    const idle = Math.max(0, windowLen - busy);
+    const idleEdges = Math.max(0, idle - idleInside);
+    const denom = idleInside + idleEdges;
+    const f = denom > 0 ? idleInside / denom : 0;
+    frags.push({ id: key, f, largestHoleMin: largestHole / MS_PER_MIN });
+  }
+  const mean = frags.length > 0 ? frags.reduce((s, x) => s + x.f, 0) / frags.length : 0;
+  const offenders: HealthOffender[] = topOffenders(frags, (x) => x.id, (a, b) => b.f - a.f, 3).map((x) => {
+    const [court, dayKey] = x.id.split("::");
+    return { kind: "courtDay", id: x.id, label: `${court} ${dayKey}`, value: round2(x.largestHoleMin) };
+  });
+  return {
+    key: "gapDispersion",
+    score: roundScore(100 * (1 - mean)),
+    explanation: { key: "schedule.health.explain.gapDispersion", params: { count: offenders.length } },
+    offenders,
+  };
 }
 
 function homeAwayAlternationMetric(_fixtures: readonly HealthFixture[]): HealthMetric {

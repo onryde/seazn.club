@@ -155,3 +155,58 @@ describe("assessHealth — courtBalance", () => {
     expect(Number.isNaN(m.score)).toBe(false);
   });
 });
+
+describe("assessHealth — gapDispersion", () => {
+  it("scores 2 asymmetric court-days (3 fixtures with gaps vs 2 back-to-back) via idle_inside / (idle_inside + idle_edges)", () => {
+    // Court 1 day: fixtures at [0-60],[120-180],[300-360] inside a
+    // configured [0,400] window. idle_inside = 60+120 = 180. idle_edges =
+    // (400-180 busy) - 180 = 40 (0 before first, 40 after last). f=180/220.
+    // Court 2 day: [0-60],[60-120] back-to-back inside a window matching
+    // their own span exactly [0,120] -> zero idle anywhere -> f=0.
+    // mean f = 0.409 -> score 59. Verified via node -e.
+    expect(PRIME_N).toBe(2); // sanity: declared-config constant exists
+    const fixtures: HealthFixture[] = [
+      fx("c1a", "A", "X1", 0, 60, { court: "Court 1" }),
+      fx("c1b", "A", "X2", 120, 60, { court: "Court 1" }),
+      fx("c1c", "A", "X3", 300, 60, { court: "Court 1" }),
+      fx("c2a", "B", "X4", 0, 60, { court: "Court 2" }),
+      fx("c2b", "B", "X5", 60, 60, { court: "Court 2" }),
+    ];
+    const config: HealthConfig = {
+      isRoundRobin: true,
+      courtWindows: {
+        "Court 1::2026-10-19": { from: 0, to: 400 * MS_PER_MIN },
+        "Court 2::2026-10-19": { from: 0, to: 120 * MS_PER_MIN },
+      },
+    };
+    const report = assessHealth(fixtures, config);
+    const m = metric(report, "gapDispersion")!;
+    expect(m.score).toBe(59);
+    // Worst-3 by fragmentation descending: Court 1 day (f=0.818) before
+    // Court 2 day (f=0). Only 2 court-days with >=2 fixtures exist.
+    expect(m.offenders).toEqual([
+      { kind: "courtDay", id: "Court 1::2026-10-19", label: "Court 1 2026-10-19", value: 120 },
+      { kind: "courtDay", id: "Court 2::2026-10-19", label: "Court 2 2026-10-19", value: 0 },
+    ]);
+  });
+
+  it("falls back to the court-day's OWN fixture span when no window is configured — idle_edges=0, so any internal gap makes f=1 (not fractional)", () => {
+    const fixtures: HealthFixture[] = [
+      fx("n1", "C", "X1", 0, 60, { court: "Court 3", dayKey: "2026-10-20" }),
+      fx("n2", "C", "X2", 100, 60, { court: "Court 3", dayKey: "2026-10-20" }),
+    ];
+    const report = assessHealth(fixtures, { isRoundRobin: true }); // no courtWindows
+    const m = metric(report, "gapDispersion")!;
+    // f=1 for the only court-day -> mean=1 -> score=0.
+    expect(m.score).toBe(0);
+    expect(m.offenders[0]!.value).toBe(40); // the 40-minute internal gap
+  });
+
+  it("a court-day with only 1 fixture is excluded entirely (no internal gap can exist)", () => {
+    const fixtures: HealthFixture[] = [fx("solo", "S", "X1", 0, 60, { court: "Court 9" })];
+    const report = assessHealth(fixtures, RR);
+    const m = metric(report, "gapDispersion")!;
+    expect(m.score).toBe(100); // nothing eligible -> nothing to penalise
+    expect(m.offenders).toEqual([]);
+  });
+});
