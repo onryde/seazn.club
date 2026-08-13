@@ -22,7 +22,7 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_SOLVER_QUEUE,
-  TIER_COUNT,
+  TIER_COUNT, TIER_NAMES,
   buildSchedule,
   rejectedBlockingConflicts,
   type BuildInput,
@@ -56,6 +56,17 @@ import type { SolveBuildInput, SolveBuildOutcome } from "./placement-client.ts";
 // something that run never touches. Those tests re-import `./logger.ts`
 // dynamically, alongside their fresh `./build.ts`, instead.
 import { log } from "./logger.ts";
+
+/** The six `(name, value)` rows a FULLY PROVED placement reply carries, in the
+ *  ladder's order. Values are placeholders — nothing here reads them — but the
+ *  NAMES are load-bearing: `solveBuild` will only call a board
+ *  `already_optimal` when the reply's tier names are this exact ladder, so a
+ *  stub that claims `tiersCompleted: TIER_COUNT` with no names is claiming a
+ *  proof it did not describe. See `TIER_NAMES` for why the count alone is not
+ *  enough across two separately deployed apps. */
+const provedTiers = (): { name: string; value: number }[] =>
+  TIER_NAMES.map((name, i) => ({ name, value: i }));
+
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 7, 8, 9, 0);
@@ -223,7 +234,7 @@ describe("buildSchedule", () => {
       ],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
-      objectiveValues: [],
+      objectiveValues: provedTiers(),
       elapsedMs: 5,
       wallExhausted: false,
     });
@@ -253,7 +264,7 @@ describe("buildSchedule", () => {
       ],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
-      objectiveValues: [],
+      objectiveValues: provedTiers(),
       elapsedMs: 5,
       wallExhausted: false,
     });
@@ -286,7 +297,7 @@ describe("buildSchedule", () => {
       ],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
-      objectiveValues: [],
+      objectiveValues: provedTiers(),
       elapsedMs: 5,
       wallExhausted: false,
     });
@@ -336,7 +347,7 @@ describe("buildSchedule", () => {
       })),
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
-      objectiveValues: [],
+      objectiveValues: provedTiers(),
       elapsedMs: 5,
       wallExhausted: false,
     });
@@ -523,7 +534,7 @@ describe("buildSchedule", () => {
       assignments: [],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
-      objectiveValues: [],
+      objectiveValues: provedTiers(),
       elapsedMs: 5,
       wallExhausted: false,
     });
@@ -574,7 +585,7 @@ describe("buildSchedule", () => {
       ],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
-      objectiveValues: [],
+      objectiveValues: provedTiers(),
       elapsedMs: 5,
       wallExhausted: false,
     });
@@ -586,7 +597,7 @@ describe("buildSchedule", () => {
       assignments: [],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
-      objectiveValues: [],
+      objectiveValues: provedTiers(),
       elapsedMs: 5,
       wallExhausted: false,
     });
@@ -642,7 +653,7 @@ describe("buildSchedule", () => {
       ],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
-      objectiveValues: [],
+      objectiveValues: provedTiers(),
       elapsedMs: 5,
       wallExhausted: false,
     });
@@ -656,7 +667,7 @@ describe("buildSchedule", () => {
       assignments: [],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
-      objectiveValues: [],
+      objectiveValues: provedTiers(),
       elapsedMs: 5,
       wallExhausted: false,
     });
@@ -700,7 +711,7 @@ describe("buildSchedule", () => {
         assignments: [{ fixtureId: "b", court: "C1", startAtMs: T0 }],
         status: "OPTIMAL",
         tiersCompleted: TIER_COUNT,
-        objectiveValues: [],
+        objectiveValues: provedTiers(),
         elapsedMs: 5,
         wallExhausted: false,
       });
@@ -748,7 +759,7 @@ describe("buildSchedule", () => {
           ],
           status: "OPTIMAL",
           tiersCompleted: TIER_COUNT,
-          objectiveValues: [],
+          objectiveValues: provedTiers(),
           elapsedMs: 5,
           wallExhausted: false,
         }),
@@ -947,7 +958,7 @@ describe("buildSchedule — lexicographic tiers", () => {
       ],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
-      objectiveValues: [],
+      objectiveValues: provedTiers(),
       elapsedMs: 5,
       wallExhausted: false,
     });
@@ -991,7 +1002,7 @@ describe("buildSchedule — lexicographic tiers", () => {
       ],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
-      objectiveValues: [],
+      objectiveValues: provedTiers(),
       elapsedMs: 5,
       wallExhausted: false,
     });
@@ -1056,7 +1067,7 @@ describe("buildSchedule — lexicographic tiers", () => {
       ],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
-      objectiveValues: [],
+      objectiveValues: provedTiers(),
       elapsedMs: 5,
       wallExhausted: false,
     });
@@ -1121,7 +1132,7 @@ describe("buildSchedule — lexicographic tiers", () => {
       ],
       status: "OPTIMAL",
       tiersCompleted: TIER_COUNT,
-      objectiveValues: [],
+      objectiveValues: provedTiers(),
       elapsedMs: 5,
       wallExhausted: false,
     });
@@ -1356,7 +1367,7 @@ describe("buildSchedule — Placement path", () => {
     assignments,
     status: "OPTIMAL",
     tiersCompleted: TIER_COUNT,
-    objectiveValues: [],
+    objectiveValues: provedTiers(),
     elapsedMs: 1200,
     wallExhausted: false,
   });

@@ -396,8 +396,19 @@ def test_reported_bounds_are_frozen_against_the_final_board(board, chain):
     reported = dict(chain.objective_values)
 
     day_of_start = {start: day for _court, start, day in slots}
+    day_open_of: dict[int, int] = {}
+    for _court, start, day in slots:
+        day_open_of[day] = min(day_open_of.get(day, start), start)
     assert _days_used(chain.assignments, day_of_start) <= reported[TIER_DAYS]
     assert _day_span(chain.assignments, day_of_start, dur_ms) <= reported[TIER_DAY_SPAN]
+    # `day_start` too, recomputed in plain Python off the assignments. Its
+    # reported value on this board is 0, and a `<=` against 0 is only as strong
+    # as the recompute is honest — which is the point of recomputing rather
+    # than reading the term back: a rung that had collapsed onto its domain
+    # floor reports 0 while the BOARD's real offset is positive, and this
+    # catches exactly that. The non-zero case is pinned directly in
+    # `test_day_objective.py`.
+    assert _day_start_offset(chain.assignments, day_of_start, day_open_of) <= reported[TIER_DAY_START]
     # `worst_gap` is a documented OVER-approximation for a participant with 3+
     # fixtures (max over all pairs, not consecutive ones), so the honest
     # relation is <=, in the safe direction: the true gap never exceeds the

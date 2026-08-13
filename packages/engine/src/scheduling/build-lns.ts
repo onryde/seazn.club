@@ -73,7 +73,7 @@
 // existing outer liveness backstop (`build.ts`'s `wallMs`), passed in rather
 // than read here, and they are a cap that should never fire; the real budget is
 // the z3 `rlimit` the injected solve carries (design D9).
-import { boardMetrics, isStrictlyBetter, type BoardMetrics } from "./build-objectives.ts";
+import { boardMetrics, isStrictlyBetter, type BoardMetrics, type DayView } from "./build-objectives.ts";
 import type { Assignment, SchedulableFixture } from "./calendar.ts";
 
 /** The measured `COMPONENT_MOVABLE_LIMIT`, reused deliberately. */
@@ -134,6 +134,14 @@ export interface LnsInput {
    *  itself; nothing here reintroduces a court. */
   courts: readonly string[];
   total: number;
+  /** The run's day resolution, for `boardMetrics`. MEASURED AND REPORTED, NOT
+   *  RANKED: window acceptance is `isStrictlyBetter`, which reads none of the
+   *  three day metrics — the comparator is unchanged by the day-aware rungs,
+   *  and `build-objectives.ts` records why mirroring the solver's ladder into
+   *  it does not work. This exists so a window pass that HAS a view reports
+   *  honest day numbers rather than zeros; supplying it changes no acceptance.
+   *  Both boards in a comparison are measured with THIS one binding. */
+  days?: DayView;
   /** The caller's outer wall-clock backstop, in ITS elapsed-ms frame. Not the
    *  budget — see the header. */
   deadlineMs: number;
@@ -175,7 +183,7 @@ export async function improveByWindows(input: LnsInput): Promise<LnsOutput> {
   const rank = new Map(input.fixtures.map((f, i) => [f.id, i]));
 
   let board = input.board;
-  let metrics = boardMetrics(board, input.courts, input.total);
+  let metrics = boardMetrics(board, input.courts, input.total, input.days);
   let windows = 0;
 
   /**
@@ -226,7 +234,7 @@ export async function improveByWindows(input: LnsInput): Promise<LnsOutput> {
     const candidate = [...placed].sort(
       (a, b) => (rank.get(a.fixtureId) ?? Infinity) - (rank.get(b.fixtureId) ?? Infinity),
     );
-    const candidateMetrics = boardMetrics(candidate, input.courts, input.total);
+    const candidateMetrics = boardMetrics(candidate, input.courts, input.total, input.days);
     if (!isStrictlyBetter(candidateMetrics, metrics)) continue;
     board = candidate;
     metrics = candidateMetrics;

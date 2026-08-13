@@ -327,3 +327,111 @@ C2 prompt's "`bench/` copy of the model **if** the #512 work duplicated the
 chain there" is conditional and the condition is false: this change duplicated
 nothing into it. The bench numbers above were measured against the SERVICE's
 model and chain, which is what ships.
+
+#### C2 follow-up — the acceptance gate ranks on the OLD ladder (OPEN)
+
+`40331cc2` shipped a real defect. PR #557 ships only the part that can be
+verified as behaviour-neutral; **the gate itself is still wrong on main** and
+needs its own task. Read this before attempting it — four variants were tried
+and measured, and all four failed.
+
+**The defect.** `isStrictlyBetter` (`build-objectives.ts`) ranks
+`placed → makespanMinutes → idleGap → imbalance` while the solver optimises
+`placed → days → day_span → day_start → idle_gap → imbalance`. That comparator
+is not advisory: `solveBuild` compares the placement reply against the
+legalised greedy seed and returns the SEED when the candidate does not win. So
+a PROVED-optimal board can be discarded, and — before #557 — the discarded-board
+reply was reported `already_optimal`.
+
+**What #557 ships (behaviour-neutral, verified):** `TIER_NAMES` as the shared
+vocabulary with `objective.py` and the proto comment, `TIER_COUNT` derived from
+it, `already_optimal` gated on the NAMES rather than a bare count, the three day
+metrics on `BoardMetrics` as REPORTED fields, and three test-quality fixes. The
+DB-backed CI command (`src/server src/lib`, real Postgres, real placement
+service) returns **4518 passed / 0 failed on both `origin/main` and the branch**
+— identical, which is the evidence that nothing about which board ships moved.
+
+**WHY MIRRORING THE LADDER INTO THE GATE DOES NOT WORK, and this is the part
+worth reading.** The two boards being compared are not both products of that
+ladder. The seed is GREEDY's, and greedy is **rule-blind**: it packs from the
+first admissible tick, which scores beautifully on `days`, `day_span` and
+`day_start` precisely BECAUSE it ignores the typed rules that push a lawful
+board later. Ranking the day terms therefore makes the gate prefer the board
+that breaks the rule. Measured on a division carrying a durable
+`not_before noon` rule: six cards proposed before noon on a board whose rule
+says none may be.
+
+**The four variants, all measured on the full DB-backed run:**
+
+| variant | result |
+|---|---|
+| mirror the ladder in `isStrictlyBetter` | 5 failed — `not_before` breach + 3 × `assertNoNewBlocking` in locks + `solver.moved` |
+| + conflicts dominate (blocking, then total) | 5 failed, a DIFFERENT five — fixed 2, broke 3 more in `build-honours-locks` |
+| + `moved` zero without a caller board (R21 shape) | broke two POLISH specs that measure `moved` from the caller's board |
+| narrow: legality → placed → the solver's own PROOF | **7** failed, on a brand-new database |
+
+Each fix traded one failure class for another. **That is the signal: this is a
+design problem, not a tuning problem.** The acceptance gate, the delta conflict
+gate, `moved`'s baseline and locks are more coupled than any single ranking rule
+captures.
+
+**What the next attempt should start from, not re-derive:**
+
+- The gate is a DELTA against the greedy seed, not an absolute legality test
+  (standing repo finding). `rejectedBlockingConflicts` closes only the direction
+  where the CANDIDATE is worse; nothing refuses a SEED that is worse. Any fix
+  has to close the other direction, and blocking-conflict count alone does not
+  do it because typed-rule breaches (`warn.instruction`) are not blocking.
+- `moved`'s seed fallback is justified as "a self-comparison, so zero" — true
+  ONLY while every no-`current` exit returns the seed. Any change that lets
+  BUILD return the solver's board breaks that justification, and the R21-shaped
+  fix (zero without a caller board) breaks POLISH, which legitimately measures
+  against a caller board that is sometimes absent from `greedySeed`'s binding.
+- The four `schedule-build-honours-locks` failures survived every variant and
+  were never diagnosed individually. Start there, not with the comparator.
+- Baseline discipline: run
+  `npm test --workspace apps/web -- src/server src/lib` with
+  `PLACEMENT_SERVICE_HOST` set and a **brand-new** database, on `origin/main`
+  first. Main is 4518/0. Anything else is your change.
+
+**Found by two independent reviewers**, separately, within minutes — neither CI
+nor the implementer. All 12 checks were green on #555 and could only ever have
+been green: **no test drove a board where the two ladders disagree.** Green is
+evidence about the paths that are driven, nothing more. The same shape turned up
+three more times the same day in other lanes (a joint report still rendering
+uuids because smoke typed the payload and never read `offenders`; a template
+gallery with no width coverage because every width project is
+`testMatch:/mobile\.spec\.ts/`; a bye seed stranded forever because every test
+used power-of-two counts).
+
+**Deploy order for the 4 → 6 change remains web first, then the placement
+service.** The name guard cannot help a caller already deployed with the old
+list; new web against an old service simply never reaches `TIER_COUNT`, which is
+degraded but honest.
+
+#### OPEN, separately: main can throw `assertNoNewBlocking` on apply (intermittent)
+
+Distinct from the gate defect above, and it reproduces WITHOUT any gate change.
+
+`schedule-solver-telemetry.test.ts` → "reflow leaves an already-legal board
+untouched, including a card parked late" fails on `origin/main` with a real
+placement service and a brand-new database. **Measured 1 red in 3 runs**; a
+second session hit the identical failure on a PR touching only
+`.github/workflows/e2e.yml`, i.e. with zero source changes.
+
+```
+EngineError: schedule change hits a blocking conflict
+  assertNoNewBlocking  schedule.ts:930
+  applySchedule        schedule.ts:2003   <- the manual park, not the build
+```
+
+So main today can propose a board that throws when applied — not merely the
+`already_optimal` misreport. Nondeterministic, so a single green run does not
+clear it and one red does not prove a regression: **always run it several
+times before attributing it to a diff.** That property is what let it sit
+unnoticed, and it is why the C2 gate work spent a cycle chasing it as its own.
+
+Likely related to C2 shipping the day-aware ladder into the solver while the TS
+side still reasons about boards the old way, but that is a hypothesis — the
+failing call is the manual park, so start by asking which conflict
+`deltaConflicts` actually returns there rather than assuming round order.

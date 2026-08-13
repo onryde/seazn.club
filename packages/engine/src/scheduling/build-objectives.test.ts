@@ -17,6 +17,7 @@ const card = (id: string, court: string, startMin: number, durMin = 30, entrants
 describe("boardMetrics", () => {
   it("reports zero for an empty board", () => {
     expect(boardMetrics([], ["C1"], 0)).toEqual({
+      daysUsed: 0, daySpanMinutes: 0, dayStartOffsetMinutes: 0,
       makespanMinutes: 0, worstIdleGapMinutes: 0, courtImbalanceMinutes: 0, placed: 0, total: 0,
     });
   });
@@ -76,20 +77,52 @@ describe("boardMetrics", () => {
 });
 
 describe("isStrictlyBetter", () => {
-  const base = { makespanMinutes: 100, worstIdleGapMinutes: 50, courtImbalanceMinutes: 20, placed: 10, total: 10 };
+  const base = {
+    daysUsed: 3, daySpanMinutes: 300, dayStartOffsetMinutes: 60,
+    makespanMinutes: 100, worstIdleGapMinutes: 50, courtImbalanceMinutes: 20, placed: 10, total: 10,
+  };
 
   it("prefers more placed above everything", () => {
     expect(isStrictlyBetter({ ...base, placed: 11, makespanMinutes: 999 }, base)).toBe(true);
   });
+
+  // The ORDERING here is unchanged by the day-aware rungs, deliberately — see
+  // `isStrictlyBetter`'s note. Mirroring the solver's ladder into this
+  // comparison was tried and reverted: the seed it compares against is
+  // greedy's, and greedy is rule-blind, so ranking the day terms made the gate
+  // prefer a rule-BREAKING board that packed from the day's first tick. Who
+  // decides between a solver board and a greedy seed now lives in `build.ts`,
+  // where legality and the solver's own proof come first.
 
   it("prefers a shorter makespan over a fairer board", () => {
     expect(isStrictlyBetter({ ...base, makespanMinutes: 90, worstIdleGapMinutes: 999 }, base)).toBe(true);
     expect(isStrictlyBetter({ ...base, makespanMinutes: 110, worstIdleGapMinutes: 0 }, base)).toBe(false);
   });
 
+  it("does NOT rank the day metrics — they are reported, not compared", () => {
+    // A board that is better on every day term and worse on nothing the
+    // comparison reads is still not "strictly better" here. If this ever
+    // starts passing, the ladder has been mirrored back into the gate and the
+    // rule-blind-seed problem has come with it.
+    expect(
+      isStrictlyBetter(
+        { ...base, daysUsed: 1, daySpanMinutes: 1, dayStartOffsetMinutes: 0 },
+        base,
+      ),
+    ).toBe(false);
+    // ...and a board that is WORSE on every day term still wins on makespan.
+    expect(
+      isStrictlyBetter(
+        { ...base, daysUsed: 99, daySpanMinutes: 999, dayStartOffsetMinutes: 999, makespanMinutes: 90 },
+        base,
+      ),
+    ).toBe(true);
+  });
+
   it("prefers a fairer board over a balanced one", () => {
     expect(isStrictlyBetter({ ...base, worstIdleGapMinutes: 40, courtImbalanceMinutes: 999 }, base)).toBe(true);
   });
+
 
   it("is false for an identical board", () => {
     expect(isStrictlyBetter(base, base)).toBe(false);

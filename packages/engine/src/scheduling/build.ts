@@ -88,7 +88,7 @@
 // No `z3-solver` type import here any more: `Arith`/`Bool`/`Solver` existed
 // solely for the deleted `buildTiers` encoder. The two remaining `Solver`
 // mentions in this file are prose in comments about the WASM heap, not types.
-import { boardMetrics, isStrictlyBetter, type BoardMetrics } from "./build-objectives.ts";
+import { boardMetrics, isStrictlyBetter, type BoardMetrics, type DayView } from "./build-objectives.ts";
 import { buildGrid, type BuildGrid, type BuildSlot } from "./build-grid.ts";
 import type { BuildConfig } from "./build-encode.ts";
 import {
@@ -184,6 +184,36 @@ export const DEFAULT_BUILD_RLIMIT = 30_000_000;
 export const BUILD_MAIN_RLIMIT_SHARE = 0.75;
 /** The outer safety cap. Not the stopping rule; see the header. */
 export const DEFAULT_BUILD_WALL_MS = 30_000;
+/** The tier ladder's names, in order — the SHARED VOCABULARY with the
+ *  placement service (`placement/objective.py`'s `TIER_ORDER`) and with
+ *  `proto/scheduler.proto`'s `Tier.name` comment. Same strings on both sides;
+ *  the DDD ubiquitous-language rule allows the case convention to change at a
+ *  language boundary and nothing else, and these need no change at all.
+ *
+ *  Checked, not merely declared. `tiersCompleted === TIER_COUNT` used to be the
+ *  whole optimality predicate, and a COUNT cannot tell one ladder from another:
+ *  the two apps deploy separately, so a service running a different ladder of
+ *  the same length would have its `tiers_completed` read as a full proof of
+ *  THIS one. That is not hypothetical — the ladder went 4 -> 6 on 2026-08-13,
+ *  and during that window a service proving four of its six rungs reports
+ *  `tiers_completed: 4`, which a caller expecting four rungs reads as a
+ *  complete ladder and reports `already_optimal` about a board whose idle gap
+ *  and court balance were never optimised. Comparing the NAMES closes the class
+ *  for good, whatever the next change to the ladder is.
+ *
+ *  It cannot close it retroactively: a caller already deployed with the old
+ *  four-name list has no such check, so the safe deploy order for THIS change
+ *  is still web first, then the placement service. New web against an old
+ *  service simply never reaches `TIER_COUNT` — degraded, but honest. */
+export const TIER_NAMES = [
+  "placed",
+  "days",
+  "day_span",
+  "day_start",
+  "idle_gap",
+  "imbalance",
+] as const;
+
 /** T0 plus the five lexicographic tiers
  *  (`placed → days → day_span → day_start → idle_gap → imbalance`).
  *  `tiersCompleted` reaching this is what "the board is lexicographically
@@ -197,7 +227,7 @@ export const DEFAULT_BUILD_WALL_MS = 30_000;
  *  4 → 6 on 2026-08-13, and the warning above turned out to be exactly right:
  *  the web layer's copy was STILL a hand-written literal, not this export, so
  *  it had to be found and moved by hand. It now imports this constant. */
-export const TIER_COUNT = 6;
+export const TIER_COUNT = TIER_NAMES.length;
 
 /**
  * The R18 size gate, in fixture-slots (`fixtures.length x grid.slots.length`).
@@ -1308,8 +1338,8 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   //    function's early exits do rather than a second construction of it.
   const seed = greedySeed(input);
   const { existing, dependencies, verifyConfig, rawSeed, rawSeedConflicts } = seed;
-  const { currentBoard, conflictsForBoard, movedFrom, lostFrom } = seed;
   const seedMetrics = seed.metrics;
+  const { currentBoard, conflictsForBoard, movedFrom, lostFrom } = seed;
 
   const greedy = (
     status: BuildStatus,
@@ -1592,6 +1622,30 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // clock, and the in-scope wrong one typechecks).
   const tz = verifyConfig.tz;
   const dayIndexOf = buildDayIndexOf(grid.slots, tz);
+  // The SAME day resolution, handed to `boardMetrics` so the acceptance gate
+  // ranks boards on the rungs the solver actually optimises. Built here, from
+  // this run's grid, so the placer and the gate cannot disagree about which day
+  // an instant is on — and `undefined` when there is no zone, because without
+  // one every slot resolves to day 0 and "days used" would be a fabricated 1
+  // for every board rather than an honest abstention.
+  const days: DayView | undefined =
+    tz === undefined
+      ? undefined
+      : (() => {
+          const openByDay = new Map<number, number>();
+          for (const s of grid.slots) {
+            const d = dayIndexOf(s.startAt);
+            const seen = openByDay.get(d);
+            if (seen === undefined || s.startAt < seen) openByDay.set(d, s.startAt);
+          }
+          return {
+            dayOf: dayIndexOf,
+            // A pin can sit off the lattice, on no day the grid offers; its
+            // own start is then the only sane opening for that day, and
+            // `boardMetrics` floors the offset at 0 regardless.
+            openOf: (d: number) => openByDay.get(d) ?? 0,
+          };
+        })();
   const hard = effectiveHard(verifyConfig);
 
   /**
@@ -1936,7 +1990,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
 
   const placedAssignments = outcome.assignments.map((a) => assignmentOf(a.fixtureId, a.court, a.startAtMs));
   const incumbent: readonly Assignment[] = [...pinnedAssignments, ...placedAssignments];
-  const incumbentMetrics = boardMetrics(incumbent, config.courts, fixtures.length);
+  const incumbentMetrics = boardMetrics(incumbent, config.courts, fixtures.length, days);
   const budgetExpired = outcome.wallExhausted;
   const tiersCompleted = outcome.tiersCompleted;
   // Whether an absent fixture's `no_slot` conflict may honestly claim a proof
@@ -1988,6 +2042,38 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // (there is no live solver handle left to ask a follow-up `check()` of
   // once the RPC has returned) and is left to Task 06b's status-mapping work
   // (`_RULES.md` §4).
+  // Whether the reply proved OUR ladder — names, not just a count. See
+  // `TIER_NAMES`: two separately deployed apps cannot agree on a ladder by
+  // counting rungs, and `objective_values` is sliced to `[:tiers_completed]`
+  // service side, so a fully proved chain carries exactly these names in
+  // order. Read twice below: it decides whether the solver's proof is
+  // authoritative for THIS caller, and whether `already_optimal` may be said.
+  const provedOurLadder =
+    tiersCompleted === TIER_COUNT &&
+    outcome.objectiveValues.length === TIER_COUNT &&
+    TIER_NAMES.every((name, i) => outcome.objectiveValues[i]?.name === name);
+
+  // D6 — "never worse than greedy" — UNCHANGED by the day-aware rungs, and
+  // that is a deliberate, evidenced decision rather than an omission.
+  //
+  // The obvious move is to mirror the solver's new ladder here, because a gate
+  // ranking on terms the placer no longer optimises can discard a board the
+  // placer proved optimal. That is a real defect and it is open — see the C2
+  // follow-up notes in `docs/superpowers/specs/2026-08-12-release2-prompts/_INDEX.md`.
+  // What is NOT the fix is mirroring the ladder into this comparison. The two
+  // boards are not both products of it: the seed is greedy's, and greedy is
+  // RULE-BLIND. It packs from the first admissible tick, which scores
+  // beautifully on `days`/`day_span`/`day_start` precisely BECAUSE it ignores
+  // the typed rules that push a lawful board later. Measured, four separate
+  // ways over a full DB-backed run: ranking the day terms here made the gate
+  // prefer greedy's 09:00 board on a division whose durable rule says nothing
+  // may start before noon, and drove `assertNoNewBlocking` failures across the
+  // locks suites. Every variant traded one failure class for another.
+  //
+  // So the ladder change ships WITHOUT touching who wins here, and the gate
+  // rework is its own task with its own diagnosis. `isStrictlyBetter` reads
+  // none of the day metrics, so `incumbentMetrics` carrying them (for the
+  // response, which publishes them) cannot change this comparison.
   const improved = isStrictlyBetter(incumbentMetrics, seedMetrics);
 
   if (!improved) {
@@ -1997,12 +2083,11 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     // arm below: a fully-proved ladder that ALSO happens to have beaten the
     // seed is `ok`, and calling it `already_optimal` would deny the very
     // improvement this branch exists to ship.
-    const status: BuildStatus =
-      tiersCompleted === TIER_COUNT
-        ? incumbentMetrics.placed === 0 && fixtures.length > 0
-          ? "infeasible"
-          : "already_optimal"
-        : "ok";
+    const status: BuildStatus = provedOurLadder
+      ? incumbentMetrics.placed === 0 && fixtures.length > 0
+        ? "infeasible"
+        : "already_optimal"
+      : "ok";
     // The floor, not the candidate. `greedy()` recomputes conflicts/moved/
     // lost off `seed.assignments` itself — the SAME derivation every other
     // fallback exit in this function already uses — so this is not a second
