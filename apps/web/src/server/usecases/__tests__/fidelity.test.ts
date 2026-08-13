@@ -2,8 +2,14 @@
 // fidelityTiers declaration (doc 14 §4), not a hand-kept table. Pure — no DB.
 import { describe, expect, it, vi } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
+import { generic } from "@seazn/engine/sports/generic";
 import type { AnySportModule } from "@seazn/engine/sport";
-import { requiredFeatureForEvent, resolveFidelityBand, resolveFidelityEntitlements } from "../fidelity";
+import {
+  requiredFeatureForEvent,
+  resolveFidelityBand,
+  resolveFidelityEntitlements,
+  resolveScorePadBootstrap,
+} from "../fidelity";
 
 const byKey = new Map(builtinModules.map((m) => [m.key, m]));
 const football = byKey.get("football")!;
@@ -135,5 +141,84 @@ describe("resolveFidelityBand", () => {
     // band 2's has been confirmed.
     const fidelityEntitlements = { 3: "scoring.ball_by_ball", 2: "stats.player" };
     expect(resolveFidelityBand(fidelityEntitlements, { "stats.player": false, "scoring.ball_by_ball": true })).toBe(1);
+  });
+});
+
+// S12/#421 — both page loaders' shared "resolve everything the v2 pad needs
+// for one fixture" helper. `divisions.config` IS the resolved, schema-parsed
+// variant cfg (decision log), so parsing normally succeeds — this still
+// degrades to null on ANY throw rather than assumes, because a page reaches
+// this function only once the flag is already ON, and a resolution failure
+// there must fall back to the (always-safe) v1 path, never 500 the page.
+describe("resolveScorePadBootstrap", () => {
+  const GENERIC_CFG = { resultMode: "score" as const, allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false };
+  const IDENTITY = { recordedBy: "user-1", deviceLinkId: null };
+
+  it("builds a full bootstrap when resolution succeeds", async () => {
+    const result = await resolveScorePadBootstrap({
+      sportModule: generic,
+      rawConfig: GENERIC_CFG,
+      hasFeatureFn: async () => true,
+      initialEvents: [],
+      identity: IDENTITY,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.moduleVersion).toBe(generic.version);
+    expect(result!.resolvedConfig).toEqual(GENERIC_CFG);
+    expect(result!.identity).toBe(IDENTITY);
+    expect(result!.band).toBeGreaterThanOrEqual(0);
+    expect(result!.band).toBeLessThanOrEqual(3);
+  });
+
+  it("degrades to null — never throws — when the raw config fails configSchema.parse", async () => {
+    const hasFeatureFn = vi.fn(async () => true);
+    const result = await resolveScorePadBootstrap({
+      sportModule: generic,
+      rawConfig: { totallyNotAValidConfig: true },
+      hasFeatureFn,
+      initialEvents: [],
+      identity: IDENTITY,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("passes initialEvents through verbatim on success", async () => {
+    const events = [
+      {
+        id: "e-1",
+        fixtureId: "fx-1",
+        seq: 1,
+        type: "core.start",
+        payload: {},
+        recordedAt: "2026-08-13T00:00:00.000Z",
+        recordedBy: "user-1",
+      },
+    ];
+    const result = await resolveScorePadBootstrap({
+      sportModule: generic,
+      rawConfig: GENERIC_CFG,
+      hasFeatureFn: async () => true,
+      initialEvents: events,
+      identity: IDENTITY,
+    });
+    expect(result!.initialEvents).toBe(events);
+  });
+
+  it("resolves entitlements/band from the module's OWN padSpec, never grants blindly", async () => {
+    // cricket's ball-by-ball tier is genuinely gated — denying its
+    // entitlement must cap the band below 3, proving this path reads real
+    // padSpec data rather than defaulting to the ceiling.
+    const { cricket } = await import("@seazn/engine/sports/cricket");
+    const cricketCfg = cricket.configSchema.parse({});
+    const result = await resolveScorePadBootstrap({
+      sportModule: cricket as unknown as AnySportModule,
+      rawConfig: cricketCfg,
+      hasFeatureFn: async (key) => key !== "scoring.ball_by_ball",
+      initialEvents: [],
+      identity: IDENTITY,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.entitlements["scoring.ball_by_ball"]).toBe(false);
+    expect(result!.band).toBeLessThan(3);
   });
 });

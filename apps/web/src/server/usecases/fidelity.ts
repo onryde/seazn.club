@@ -2,7 +2,12 @@
 // Derived from each SportModule's own `fidelityTiers` declaration — never a
 // hand-kept table — so a new module (or a new fine event type) is gated the
 // moment it declares itself. Pure: safe to unit-test without a DB.
+import type { EventEnvelope } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport";
+// Type-only: erased at compile time, so this carries no runtime dependency on
+// a "use client" file (registry.tsx) despite `fidelity.ts` being server-only.
+import type { OwnIdentity } from "@/components/v2/scorepad/types";
+import type { ScorePadBootstrap } from "@/components/v2/scorepad/registry";
 
 /**
  * The feature key an org must hold to append `eventType` to a fixture of this
@@ -81,4 +86,46 @@ export function resolveFidelityBand(
     band = b;
   }
   return band;
+}
+
+const EMPTY_SPEC: PadSpec = { panels: [], fidelity: {}, fidelityEntitlements: {} };
+
+/**
+ * Both v2 entry-point loaders' shared "resolve everything `<ScorePad/>`
+ * needs for one fixture" call, wrapping `configSchema.parse` +
+ * `resolveFidelityEntitlements` + `resolveFidelityBand` into one bootstrap —
+ * or `null` on ANY resolution failure.
+ *
+ * The null-on-throw is deliberate, not defensive theatre: `divisions.config`
+ * (and the device-link fixture's own `config` column) IS already the
+ * resolved, schema-parsed variant cfg (S12/#421 decision log — every
+ * `.default()` is materialised by `usecases/divisions.ts` at write time), so
+ * `configSchema.parse` ordinarily succeeds. But a caller reaches this
+ * function only AFTER the `scorepad-v2` flag already read true, and a
+ * resolution failure at that point must fall back to the always-safe v1
+ * path — never 500 a page that was rendering fine before the flag existed.
+ */
+export async function resolveScorePadBootstrap(params: {
+  sportModule: AnySportModule;
+  rawConfig: unknown;
+  hasFeatureFn: (featureKey: string) => Promise<boolean>;
+  initialEvents: readonly EventEnvelope[];
+  identity: OwnIdentity;
+}): Promise<ScorePadBootstrap | null> {
+  try {
+    const resolvedConfig: unknown = params.sportModule.configSchema.parse(params.rawConfig);
+    const spec = params.sportModule.padSpec?.(resolvedConfig) ?? EMPTY_SPEC;
+    const entitlements = await resolveFidelityEntitlements(spec.fidelityEntitlements, params.hasFeatureFn);
+    const band = resolveFidelityBand(spec.fidelityEntitlements, entitlements);
+    return {
+      moduleVersion: params.sportModule.version,
+      resolvedConfig,
+      initialEvents: params.initialEvents,
+      entitlements,
+      band,
+      identity: params.identity,
+    };
+  } catch {
+    return null;
+  }
 }
