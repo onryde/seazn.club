@@ -77,19 +77,47 @@ describe("assessHealth — restSpread", () => {
     expect(m.offenders).toEqual([{ kind: "entrant", id: "T", label: "T", value: 1 }]);
   });
 
-  it("adversarial board: 3 near-zero gaps then one long one scores well below the asymmetric board above (0.667 mean penalty -> 33)", () => {
+  it("adversarial board: 3 near-zero gaps then one long one scores well below the asymmetric board above (0.667 mean penalty -> 33) — AND the other 4 metrics stay high on this same board (review finding #5: no cross-contamination)", () => {
     // D: gaps [0, 0, 240] -> ideal (mean) = 80. p = (1 + 1 + 0)/3 = 2/3.
     // score = round(100*(1-2/3)) = 33. Verified independently via node -e.
+    //
+    // Sides ALTERNATE (home,away,home,away) and the 4th fixture carries a
+    // DIFFERENT dayKey label — both changes are free with respect to
+    // restSpread's own arithmetic (it reads neither field) and with respect
+    // to every OTHER metric's court-day/entrant grouping, verified via
+    // node -e before writing this board: the FIRST version of this board
+    // (D always home, all 4 fixtures on one dayKey) genuinely scored 0 on
+    // BOTH homeAwayAlternation (D's unbroken 4-run) and gapDispersion (the
+    // same 240-minute rest gap read as a 240-minute court-day hole) — real
+    // defects in the BOARD's construction, not in the metrics under test,
+    // and exactly the class of thing this finding exists to catch.
     const fixtures: HealthFixture[] = [
       fx("d1", "D", "R1", 0, 60),
-      fx("d2", "D", "R2", 60, 60), // gap 0
+      fx("d2", "R2", "D", 60, 60), // gap 0
       fx("d3", "D", "R3", 120, 60), // gap 0
-      fx("d4", "D", "R4", 420, 60), // gap 240
+      fx("d4", "R4", "D", 420, 60, { dayKey: "2026-10-20" }), // gap 240, own dayKey
     ];
     const report = assessHealth(fixtures, RR);
     const m = metric(report, "restSpread")!;
     expect(m.score).toBe(33);
     expect(m.offenders[0]).toEqual({ kind: "entrant", id: "D", label: "D", value: 0 });
+
+    // courtBalance: D's only court total is "Court 1" -> Hmax=0 guard -> 100.
+    expect(metric(report, "courtBalance")!.score).toBe(100);
+    // gapDispersion: d1-d3 are now the ONLY qualifying court-day (back-to-
+    // back, f=0); d4 sits alone on its own dayKey (<2 fixtures, excluded).
+    expect(metric(report, "gapDispersion")!.score).toBe(100);
+    // homeAwayAlternation: D now alternates perfectly (home,away,home,away).
+    expect(metric(report, "homeAwayAlternation")!.score).toBe(100);
+    // primeSlotFairness: NOT near-100 — R1-R4 are single-appearance
+    // opponents, and this metric has no |F_e| exclusion (design, verbatim),
+    // so each of them shows some deviation from an expected share built on
+    // just 4 total fixtures. That is an inherent property of a minimal
+    // hand-built board with throwaway opponents, not contamination from
+    // restSpread's own badness — still comfortably above restSpread's own
+    // 33, which is the thing actually being guarded against here.
+    expect(metric(report, "primeSlotFairness")!.score).toBe(70);
+    expect(metric(report, "primeSlotFairness")!.score).toBeGreaterThan(m.score);
   });
 
   it("an entrant with only 1 fixture is excluded entirely — never divides by zero, never appears as an offender", () => {
@@ -163,34 +191,63 @@ describe("assessHealth — restSpread", () => {
 });
 
 describe("assessHealth — courtBalance", () => {
-  it("scores 3 asymmetric entrants (3, 3 and 4 fixtures) by Shannon entropy of their own court distribution vs uniform", () => {
+  it("scores 3 asymmetric entrants (3, 3 and 4 fixtures) by Shannon entropy of their own court distribution vs uniform — AND the other 4 metrics stay high on this same board (review finding #5: no cross-contamination)", () => {
     // A: 3 fixtures, 1 per court (3 courts total) -> H/Hmax = 1 (perfect).
     // B: 3 fixtures, all on Court 1 -> H = 0 (pinned) -> ratio 0 (worst).
     // E: 4 fixtures split 2/2 across 2 of the 3 courts -> ratio = ln(2)/ln(3).
     // mean = (1 + 0 + ln(2)/ln(3))/3 -> score 54. Verified via node -e.
+    //
+    // Sequenced as back-to-back ROUNDS (each entrant plays at most once per
+    // round) and sides alternate per entrant — neither changes WHICH court
+    // each fixture is on, so courtBalance's own score/offenders are
+    // unchanged from the first version of this board. What the first
+    // version got wrong: two fixtures literally double-booked Court 1 at
+    // the same instant (a1 and b1 both 0-60), which courtBalance cannot
+    // see (it never reads `start`/`end`) but which is nonsense as applied-
+    // schedule data, and separately every entrant was always "home",
+    // reading as a genuine (not contaminated) homeAwayAlternation zero.
     expect(COURT_BALANCE_MIN_FIXTURES).toBe(3);
     const fixtures: HealthFixture[] = [
-      fx("a1", "A", "X1", 0, 60, { court: "Court 1" }),
-      fx("a2", "A", "X2", 100, 60, { court: "Court 2" }),
-      fx("a3", "A", "X3", 200, 60, { court: "Court 3" }),
+      fx("a2", "A", "X1", 0, 60, { court: "Court 2" }),
       fx("b1", "B", "X4", 0, 60, { court: "Court 1" }),
-      fx("b2", "B", "X5", 100, 60, { court: "Court 1" }),
-      fx("b3", "B", "X6", 200, 60, { court: "Court 1" }),
-      fx("e1", "E", "X7", 0, 60, { court: "Court 1" }),
-      fx("e2", "E", "X8", 100, 60, { court: "Court 1" }),
-      fx("e3", "E", "X9", 200, 60, { court: "Court 2" }),
-      fx("e4", "E", "X10", 300, 60, { court: "Court 2" }),
+      fx("a3", "X2", "A", 60, 60, { court: "Court 3" }),
+      fx("b2", "X5", "B", 60, 60, { court: "Court 1" }),
+      fx("e3", "E", "X7", 60, 60, { court: "Court 2" }),
+      fx("b3", "B", "X6", 120, 60, { court: "Court 1" }),
+      fx("e4", "X8", "E", 120, 60, { court: "Court 2" }),
+      fx("e1", "E", "X9", 180, 60, { court: "Court 1" }),
+      fx("e2", "X10", "E", 240, 60, { court: "Court 1" }),
+      fx("a1", "A", "X3", 300, 60, { court: "Court 1" }),
     ];
     const report = assessHealth(fixtures, RR);
     const m = metric(report, "courtBalance")!;
     expect(m.score).toBe(54);
     // Bottom-3 by ratio ascending (worst/most-pinned first). value = distinct
     // courts used. All 3 eligible entrants appear (exactly 3 qualify).
+    // IDENTICAL to the first version of this board — court assignment per
+    // entrant is unchanged, only timing/sides moved.
     expect(m.offenders).toEqual([
       { kind: "entrant", id: "B", label: "B", value: 1 },
       { kind: "entrant", id: "E", label: "E", value: 2 },
       { kind: "entrant", id: "A", label: "A", value: 3 },
     ]);
+
+    // gapDispersion: every court-day is now back-to-back internally (zero
+    // gaps within each of Court 1's and Court 2's own sequences) -> f=0 for
+    // both qualifying court-days.
+    expect(metric(report, "gapDispersion")!.score).toBe(100);
+    // homeAwayAlternation: A/B/E each now alternate perfectly.
+    expect(metric(report, "homeAwayAlternation")!.score).toBe(100);
+    // restSpread: high but not pinned to an exact value here (not this
+    // board's target metric) — comfortably above courtBalance's own 54.
+    expect(metric(report, "restSpread")!.score).toBe(83);
+    // primeSlotFairness: also softened here, by an unrelated and larger
+    // effect than the boards above — 10 single-appearance opponents (this
+    // metric has no |F_e| exclusion) against only 3 real multi-fixture
+    // entrants. 47 is close to courtBalance's own 54, but for an
+    // INDEPENDENTLY explicable reason (opponent-count dilution, not a
+    // shared code path) — not evidence of contamination between the two.
+    expect(metric(report, "primeSlotFairness")!.score).toBe(47);
   });
 
   it("an entrant with only 2 fixtures is excluded (below C_min) regardless of how pinned they are", () => {
@@ -243,20 +300,30 @@ describe("assessHealth — courtBalance", () => {
 });
 
 describe("assessHealth — gapDispersion", () => {
-  it("scores 2 asymmetric court-days (3 fixtures with gaps vs 2 back-to-back) via idle_inside / (idle_inside + idle_edges)", () => {
+  it("scores 2 asymmetric court-days (3 fixtures with gaps vs 2 back-to-back) via idle_inside / (idle_inside + idle_edges) — AND the other 4 metrics stay high on this same board (review finding #5: no cross-contamination)", () => {
     // Court 1 day: fixtures at [0-60],[120-180],[300-360] inside a
     // configured [0,400] window. idle_inside = 60+120 = 180. idle_edges =
     // (400-180 busy) - 180 = 40 (0 before first, 40 after last). f=180/220.
     // Court 2 day: [0-60],[60-120] back-to-back inside a window matching
     // their own span exactly [0,120] -> zero idle anywhere -> f=0.
     // mean f = 0.409 -> score 59. Verified via node -e.
+    //
+    // gapDispersion groups by (court, day) alone — WHICH entrants play each
+    // fixture is irrelevant to its own arithmetic, so every fixture below
+    // uses a DISTINCT single-appearance pair (P1..P5 vs Q1..Q5). The FIRST
+    // version of this board reused one entrant (A) across all 3 Court 1
+    // fixtures, which genuinely pinned it to that one court (courtBalance
+    // 0, a real defect in the board, not the metric) purely because 3
+    // fixtures on 1 court happened to meet courtBalance's own C_min — an
+    // accident of reusing an entrant, not anything gapDispersion's target
+    // score needed.
     expect(PRIME_N).toBe(2); // sanity: declared-config constant exists
     const fixtures: HealthFixture[] = [
-      fx("c1a", "A", "X1", 0, 60, { court: "Court 1" }),
-      fx("c1b", "A", "X2", 120, 60, { court: "Court 1" }),
-      fx("c1c", "A", "X3", 300, 60, { court: "Court 1" }),
-      fx("c2a", "B", "X4", 0, 60, { court: "Court 2" }),
-      fx("c2b", "B", "X5", 60, 60, { court: "Court 2" }),
+      fx("c1a", "P1", "Q1", 0, 60, { court: "Court 1" }),
+      fx("c1b", "P2", "Q2", 120, 60, { court: "Court 1" }),
+      fx("c1c", "P3", "Q3", 300, 60, { court: "Court 1" }),
+      fx("c2a", "P4", "Q4", 0, 60, { court: "Court 2" }),
+      fx("c2b", "P5", "Q5", 60, 60, { court: "Court 2" }),
     ];
     const config: HealthConfig = {
       isRoundRobin: true,
@@ -270,10 +337,25 @@ describe("assessHealth — gapDispersion", () => {
     expect(m.score).toBe(59);
     // Worst-3 by fragmentation descending: Court 1 day (f=0.818) before
     // Court 2 day (f=0). Only 2 court-days with >=2 fixtures exist.
+    // IDENTICAL to the first version of this board — gapDispersion's own
+    // arithmetic never read the entrant ids that changed.
     expect(m.offenders).toEqual([
       { kind: "courtDay", id: "Court 1::2026-10-19", label: "Court 1 2026-10-19", value: 120 },
       { kind: "courtDay", id: "Court 2::2026-10-19", label: "Court 2 2026-10-19", value: 0 },
     ]);
+
+    // restSpread/courtBalance/homeAwayAlternation: every entrant here is
+    // single-appearance (|F_e|=1) -> nothing eligible on any of the three
+    // -> the shared "nothing to penalise" default, 100.
+    expect(metric(report, "restSpread")!.score).toBe(100);
+    expect(metric(report, "courtBalance")!.score).toBe(100);
+    expect(metric(report, "homeAwayAlternation")!.score).toBe(100);
+    // primeSlotFairness: softened by the same single-appearance-opponent
+    // structural effect the restSpread adversarial board documents above
+    // (no |F_e| exclusion for this metric) — still clearly above
+    // gapDispersion's own 59, the thing actually being guarded against.
+    expect(metric(report, "primeSlotFairness")!.score).toBe(68);
+    expect(metric(report, "primeSlotFairness")!.score).toBeGreaterThan(m.score);
   });
 
   it("falls back to the court-day's OWN fixture span when no window is configured — idle_edges=0, so any internal gap makes f=1 (not fractional)", () => {
@@ -320,22 +402,34 @@ describe("assessHealth — gapDispersion", () => {
 });
 
 describe("assessHealth — homeAwayAlternation", () => {
-  it("scores 2 asymmetric entrants (4 fixtures perfectly alternating vs 5 with a 4-run) via mean alternation rate minus the worst run's overage penalty", () => {
+  it("scores 2 asymmetric entrants (4 fixtures perfectly alternating vs 5 with a 4-run) via mean alternation rate minus the worst run's overage penalty — AND the other 4 metrics stay high on this same board (review finding #5: no cross-contamination)", () => {
     // A: home,away,home,away (4 fixtures) -> flips=3/3=1 (perfect), r=1.
     // B: home,home,home,home,away (5 fixtures) -> flips=1/4=0.25, r=4 (a
     // 4-run of the same side). meanA=0.625. Only B's r exceeds 3, by 1.
     // score = 100*0.625 - 10*max(0,4-3) = 52.5 -> round-half-up -> 53.
     // Verified via node -e.
+    //
+    // A/B now split 2 courts each (courtBalance) with each entrant's own
+    // fixtures back-to-back within their own court (gapDispersion) — court
+    // and timing changed, but each entrant's ORDER-BY-START side sequence
+    // is IDENTICAL to the first version of this board (home,away,home,away
+    // for A; home,home,home,home,away for B), so homeAwayAlternation's own
+    // computation, which reads only that ordered side sequence, is
+    // unaffected. The first version put A entirely on "Court 1" and B
+    // entirely on "Court 2" with a 40-minute gap before every fixture,
+    // which genuinely pinned both on courtBalance and fragmented both
+    // court-days on gapDispersion — real defects in the board, not this
+    // metric leaking into those two.
     const fixtures: HealthFixture[] = [
-      fx("a1", "A", "P1", 0, 60),
-      fx("a2", "P2", "A", 100, 60),
-      fx("a3", "A", "P3", 200, 60),
-      fx("a4", "P4", "A", 300, 60),
-      fx("b1", "B", "Q1", 0, 60, { court: "Court 2" }),
-      fx("b2", "B", "Q2", 100, 60, { court: "Court 2" }),
-      fx("b3", "B", "Q3", 200, 60, { court: "Court 2" }),
-      fx("b4", "B", "Q4", 300, 60, { court: "Court 2" }),
-      fx("b5", "Q5", "B", 400, 60, { court: "Court 2" }),
+      fx("a1", "A", "Q1", 0, 60, { court: "Court 1" }),
+      fx("b1", "B", "Q2", 0, 60, { court: "Court 2" }),
+      fx("a2", "Q3", "A", 60, 60, { court: "Court 2" }),
+      fx("b2", "B", "Q4", 60, 60, { court: "Court 1" }),
+      fx("a3", "A", "Q5", 120, 60, { court: "Court 1" }),
+      fx("b3", "B", "Q6", 120, 60, { court: "Court 2" }),
+      fx("a4", "Q7", "A", 180, 60, { court: "Court 2" }),
+      fx("b4", "B", "Q8", 180, 60, { court: "Court 1" }),
+      fx("b5", "Q9", "B", 240, 60, { court: "Court 2" }),
     ];
     const report = assessHealth(fixtures, RR);
     const m = metric(report, "homeAwayAlternation")!;
@@ -343,7 +437,20 @@ describe("assessHealth — homeAwayAlternation", () => {
     expect(HOME_AWAY_RUN_THRESHOLD).toBe(4);
     // Only entrants with r >= 4 are offenders — A (r=1) is NOT included,
     // this is a threshold, not a top-3 ranking like the other metrics.
+    // IDENTICAL to the first version — the run/flip pattern is unchanged.
     expect(m.offenders).toEqual([{ kind: "entrant", id: "B", label: "B", value: 4 }]);
+
+    expect(metric(report, "restSpread")!.score).toBe(100);
+    // courtBalance: A splits its 4 fixtures exactly 2/2 across Court 1/2
+    // (perfectly uniform, ratio 1); B splits 5 fixtures 3/2 (very close to
+    // uniform, ratio ~0.97) — mean rounds to 99, not literally 100.
+    expect(metric(report, "courtBalance")!.score).toBe(99);
+    expect(metric(report, "gapDispersion")!.score).toBe(100);
+    // primeSlotFairness: softened by 9 single-appearance opponents against
+    // 2 real entrants (same structural note as the boards above) — still
+    // clearly above homeAwayAlternation's own 53.
+    expect(metric(report, "primeSlotFairness")!.score).toBe(58);
+    expect(metric(report, "primeSlotFairness")!.score).toBeGreaterThan(m.score);
   });
 
   it("is ABSENT (not present-and-zero) for a bracket stage — the caller's isRoundRobin=false gate", () => {
@@ -375,7 +482,7 @@ describe("assessHealth — homeAwayAlternation", () => {
 });
 
 describe("assessHealth — primeSlotFairness", () => {
-  it("scores 6 entrants (2 fixtures each, asymmetric prime exposure) via deviation from their expected prime share", () => {
+  it("scores 6 entrants (2 fixtures each, asymmetric prime exposure) via deviation from their expected prime share — AND the other 4 metrics stay high on this same board (review finding #5: no cross-contamination)", () => {
     // Court 1 day: A v B, A v B, C v D, C v D (4 fixtures) -> prime (last 2)
     // = the two C v D fixtures. A/B get ZERO prime fixtures.
     // Court 2 day: E v F, E v F (2 fixtures) -> prime (last min(2,2)=2) =
@@ -385,13 +492,24 @@ describe("assessHealth — primeSlotFairness", () => {
     // C/D/E/F: actual=2 -> d=0.667/1.333=0.5 (hogging).
     // mean = (1+1+0.5*4)/6 = 0.667 -> score = round(100*(1-0.667)) = 33.
     // Verified via node -e.
+    //
+    // primeSlotFairness only cares about court-day POSITION (chronological
+    // rank within each (court,day) group), never the actual gap sizes
+    // between fixtures — so the pairs below are now back-to-back (zero
+    // gaps) with sides alternating within each pair, which changes NEITHER
+    // which fixtures land in the "last PRIME_N" slots nor any entrant's own
+    // actual/expected prime count. The first version of this board had a
+    // uniform 40-minute gap before every fixture with no window configured
+    // (any gap -> f=1, the documented fallback) and every entrant always on
+    // the same side of its own pairing — both genuinely tanked
+    // gapDispersion and homeAwayAlternation, not a leak from this metric.
     const fixtures: HealthFixture[] = [
       fx("f1", "A", "B", 0, 60, { court: "Court 1" }),
-      fx("f2", "A", "B", 100, 60, { court: "Court 1" }),
-      fx("f3", "C", "D", 200, 60, { court: "Court 1" }),
-      fx("f4", "C", "D", 300, 60, { court: "Court 1" }),
+      fx("f2", "B", "A", 60, 60, { court: "Court 1" }),
+      fx("f3", "C", "D", 120, 60, { court: "Court 1" }),
+      fx("f4", "D", "C", 180, 60, { court: "Court 1" }),
       fx("f5", "E", "F", 0, 60, { court: "Court 2" }),
-      fx("f6", "E", "F", 100, 60, { court: "Court 2" }),
+      fx("f6", "F", "E", 60, 60, { court: "Court 2" }),
     ];
     const report = assessHealth(fixtures, RR);
     const m = metric(report, "primeSlotFairness")!;
@@ -409,6 +527,16 @@ describe("assessHealth — primeSlotFairness", () => {
     expect(m.offenders).toHaveLength(3);
     expect(m.explanation.params?.count).toBe(6);
     expect(m.explanation.params!.count).toBeGreaterThan(m.offenders.length);
+
+    // All 4 of the OTHER metrics score perfectly on this board: every pair
+    // is back-to-back (gapDispersion), every entrant alternates sides
+    // (homeAwayAlternation), and no entrant reaches either metric's own
+    // eligibility floor (courtBalance's C_min=3, restSpread's |F_e|>=2) —
+    // this board's badness is isolated entirely to primeSlotFairness.
+    expect(metric(report, "restSpread")!.score).toBe(100);
+    expect(metric(report, "courtBalance")!.score).toBe(100);
+    expect(metric(report, "gapDispersion")!.score).toBe(100);
+    expect(metric(report, "homeAwayAlternation")!.score).toBe(100);
   });
 
   it("a court-day with fewer than PRIME_N fixtures treats ALL of them as prime (min(PRIME_N, count))", () => {
