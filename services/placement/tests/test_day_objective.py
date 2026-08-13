@@ -183,19 +183,42 @@ def test_day_start_anchors_each_day_to_its_own_first_slot():
 
 
 def test_day_start_is_reported_as_the_real_offset_when_a_day_cannot_start_early():
-    """The rung reports a TRUE offset, not a constant 0.
+    """The rung reports a TRUE, NON-ZERO offset — not a constant 0.
 
-    `day_lo[d]` is bounded from above by the day's starts and from below only
-    by its own domain floor, so a term reading it is exact only while
-    something is pushing it up — see `objective.py`'s note on one-sided terms.
-    Here a pin holds day 0's only court at the day's first two ticks, so the
-    movable cannot start before the third: the honest answer is `2 * step`,
-    and a rung that had collapsed to its floor would report 0.
+    THIS TEST IS WHY THE ZERO ASSERTIONS ELSEWHERE ARE SAFE, so it has to be
+    the one board in the suite where the honest answer is not 0. `day_lo[d]` is
+    bounded from above by the day's starts and from below only by its own
+    domain floor, so a rung reading it would report 0 for every board if it had
+    collapsed onto that floor, and every other `day_start` assertion here and
+    in `test_objective.py` is `== 0`. Those would all still pass against a term
+    that had stopped working. This one would not.
+
+    An earlier revision of this test did NOT do that job, and the way it failed
+    is worth keeping: it pinned day 0's only court at the first two ticks and
+    claimed the answer was `2 * step`. It is 0. A pin is an OCCUPANT of its own
+    day (#512 §6a) and pulls `day_lo` down to itself, so a pin sitting on the
+    open tick anchors the day there however late the movable lands. The
+    assertion said 0 and the docstring said `2 * step`; only the docstring was
+    wrong, and a reader would have taken the test for coverage it never had.
+
+    So the day's open tick has to be blocked by something that is NOT an
+    occupant of that day. An OFF-LATTICE pin is exactly that, and it is a real
+    board rather than a contrivance: an organiser's manual match, running from
+    ten minutes before the window opens, is on no admissible tick, belongs to
+    no day (`_day_of_pin` → `None`, #512 §6b), and therefore pulls nothing —
+    while its court interval still overlaps the day's first tick and keeps the
+    movable off it.
+
+    Expected, checkable by eye: the pin occupies `[A - 10min, A + 20min)`, so
+    tick `A` is unusable and tick `A + step` is the earliest the movable can
+    take. `day_lo` is therefore `A + step` against a `day_open` of `A`, and the
+    rung must report exactly one `step`.
     """
     grid_slots = [(0, _ANCHOR + k * _STEP_MS, 0) for k in range(3)]
     fixtures = [([0, 1], 0)]
-    # Two pins, back to back on the only court, covering ticks 0 and 1.
-    existing = [(0, _ANCHOR), (0, _ANCHOR + _STEP_MS)]
+    # Ten minutes before the day's first admissible tick: on no tick, so on no
+    # day — but its court interval still covers tick 0.
+    existing = [(0, _ANCHOR - 10 * MIN_MS)]
 
     outcome = solve(
         build_model(fixtures, 1, grid_slots, 30, _CONSTRAINTS, existing, []),
@@ -204,13 +227,14 @@ def test_day_start_is_reported_as_the_real_offset_when_a_day_cannot_start_early(
     detail = f"status={outcome.status} assignments={sorted(outcome.assignments)}"
     reported = _reported(outcome)
 
-    assert _starts(outcome) == [_ANCHOR + 2 * _STEP_MS], detail
-    # The pins sit ON day 0's open tick, so the day itself starts at its open
-    # slot and the offset is 0 — the day is anchored by its earliest OCCUPANT,
-    # pinned or movable, which is the whole point of #512 §6a.
-    assert reported[TIER_DAY_START] == 0, detail
-    # ...and the span runs from the first pin to the movable's end.
-    assert reported[TIER_DAY_SPAN] == 2 * _STEP_MS + _DUR_MS, detail
+    assert _starts(outcome) == [_ANCHOR + _STEP_MS], detail
+    assert reported[TIER_DAY_START] == _STEP_MS, (
+        f"the rung must report the day's REAL offset from its open tick, not its "
+        f"domain floor; got {outcome.objective_values}"
+    )
+    # The off-lattice pin is in no day, so the span is the movable's alone.
+    assert reported[TIER_DAY_SPAN] == _DUR_MS, detail
+    assert reported[TIER_DAYS] == 1, detail
 
 
 # --- pins (#512 §6) ----------------------------------------------------------

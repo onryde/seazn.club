@@ -38,7 +38,7 @@
 // solver unable to search, and the fix there is to say so
 // (`status: "not_searched"`) rather than to claim a proof.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSchedule, seedPinsOf, solveBuildForTests, TIER_COUNT } from "./build.ts";
+import { buildSchedule, seedPinsOf, solveBuildForTests, TIER_COUNT, TIER_NAMES } from "./build.ts";
 import { buildGrid } from "./build-grid.ts";
 // `gridStepMinutes` moved out of `build-grid.ts` into its own module on main
 // while this branch was in flight; the rebase conflict here was that move
@@ -52,11 +52,21 @@ import type { Assignment, SchedulableFixture, SlotConfig } from "./calendar.ts";
 import type { SchedulingConstraints } from "./constraints.ts";
 import type { SolveBuildOutcome } from "./placement-client.ts";
 
+/** The six `(name, value)` rows a FULLY PROVED placement reply carries, in the
+ *  ladder's order. Values are placeholders — nothing here reads them — but the
+ *  NAMES are load-bearing: `solveBuild` will only call a board
+ *  `already_optimal` when the reply's tier names are this exact ladder, so a
+ *  stub that claims `tiersCompleted: TIER_COUNT` with no names is claiming a
+ *  proof it did not describe. See `TIER_NAMES` for why the count alone is not
+ *  enough across two separately deployed apps. */
+const provedTiers = (): { name: string; value: number }[] =>
+  TIER_NAMES.map((name, i) => ({ name, value: i }));
+
 const okOutcome = (assignments: SolveBuildOutcome["assignments"]): SolveBuildOutcome => ({
   assignments,
   status: "OPTIMAL",
   tiersCompleted: TIER_COUNT,
-  objectiveValues: [],
+  objectiveValues: provedTiers(),
   elapsedMs: 5,
   wallExhausted: false,
 });

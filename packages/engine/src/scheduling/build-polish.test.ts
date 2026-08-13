@@ -34,7 +34,7 @@
 // unspellable, which is the strongest form of the guard this file was written
 // to provide.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSchedule, TIER_COUNT } from "./build.ts";
+import { buildSchedule, TIER_COUNT, TIER_NAMES } from "./build.ts";
 import { resetZ3 } from "./z3-load.ts";
 import type { Assignment, SchedulableFixture, SlotConfig } from "./calendar.ts";
 import type { SolveBuildOutcome } from "./placement-client.ts";
@@ -43,11 +43,21 @@ import type { SolveBuildOutcome } from "./placement-client.ts";
  *  below builds on. `isolate: false` (vitest.config.ts) plus no global
  *  mock-restore config means a `vi.spyOn` left standing leaks into later
  *  tests, hence `afterEach` below. */
+/** The six `(name, value)` rows a FULLY PROVED placement reply carries, in the
+ *  ladder's order. Values are placeholders — nothing here reads them — but the
+ *  NAMES are load-bearing: `solveBuild` will only call a board
+ *  `already_optimal` when the reply's tier names are this exact ladder, so a
+ *  stub that claims `tiersCompleted: TIER_COUNT` with no names is claiming a
+ *  proof it did not describe. See `TIER_NAMES` for why the count alone is not
+ *  enough across two separately deployed apps. */
+const provedTiers = (): { name: string; value: number }[] =>
+  TIER_NAMES.map((name, i) => ({ name, value: i }));
+
 const okOutcome = (assignments: SolveBuildOutcome["assignments"]): SolveBuildOutcome => ({
   assignments,
   status: "OPTIMAL",
   tiersCompleted: TIER_COUNT,
-  objectiveValues: [],
+  objectiveValues: provedTiers(),
   elapsedMs: 5,
   wallExhausted: false,
 });

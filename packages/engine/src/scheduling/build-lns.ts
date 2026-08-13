@@ -73,7 +73,7 @@
 // existing outer liveness backstop (`build.ts`'s `wallMs`), passed in rather
 // than read here, and they are a cap that should never fire; the real budget is
 // the z3 `rlimit` the injected solve carries (design D9).
-import { boardMetrics, isStrictlyBetter, type BoardMetrics } from "./build-objectives.ts";
+import { boardMetrics, isStrictlyBetter, type BoardMetrics, type DayView } from "./build-objectives.ts";
 import type { Assignment, SchedulableFixture } from "./calendar.ts";
 
 /** The measured `COMPONENT_MOVABLE_LIMIT`, reused deliberately. */
@@ -134,6 +134,13 @@ export interface LnsInput {
    *  itself; nothing here reintroduces a court. */
   courts: readonly string[];
   total: number;
+  /** The run's day resolution, for `boardMetrics`. Window acceptance is the
+   *  same `isStrictlyBetter` the BUILD gate uses, so it ranks on the solver's
+   *  day rungs and needs the same view to measure them — without it every
+   *  candidate and the incumbent alike score 0 days and the day rungs simply
+   *  tie, which is the honest abstention but not the intended comparison.
+   *  Both boards in a comparison are measured with THIS one binding. */
+  days?: DayView;
   /** The caller's outer wall-clock backstop, in ITS elapsed-ms frame. Not the
    *  budget — see the header. */
   deadlineMs: number;
@@ -175,7 +182,7 @@ export async function improveByWindows(input: LnsInput): Promise<LnsOutput> {
   const rank = new Map(input.fixtures.map((f, i) => [f.id, i]));
 
   let board = input.board;
-  let metrics = boardMetrics(board, input.courts, input.total);
+  let metrics = boardMetrics(board, input.courts, input.total, input.days);
   let windows = 0;
 
   /**
@@ -226,7 +233,7 @@ export async function improveByWindows(input: LnsInput): Promise<LnsOutput> {
     const candidate = [...placed].sort(
       (a, b) => (rank.get(a.fixtureId) ?? Infinity) - (rank.get(b.fixtureId) ?? Infinity),
     );
-    const candidateMetrics = boardMetrics(candidate, input.courts, input.total);
+    const candidateMetrics = boardMetrics(candidate, input.courts, input.total, input.days);
     if (!isStrictlyBetter(candidateMetrics, metrics)) continue;
     board = candidate;
     metrics = candidateMetrics;
