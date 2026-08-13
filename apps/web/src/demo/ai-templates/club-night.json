@@ -361,6 +361,34 @@
       "d7020e41-5a61-42fb-8cf4-359122276b27": "4f94b63f-9e16-4496-a428-e22e3bd831a3",
       "87944e3c-44b2-4bfd-88d8-937ceb587d06": "65090790-d0ad-444f-8d1d-f7f81ae858f4"
     },
+    "stageIds": {
+      "3ba27b22-2992-4e3c-a9b0-881877eeebe3": "6f702a5f-c28a-405a-a432-85bfe30b953f",
+      "b5b3f118-9773-45c0-9303-bb11676a1385": "6f702a5f-c28a-405a-a432-85bfe30b953f",
+      "3e29c75c-acf0-4cdd-a442-e44b2b49e011": "6f702a5f-c28a-405a-a432-85bfe30b953f",
+      "cdb0cf73-4a30-4819-98cc-cf3b8f036b8a": "6f702a5f-c28a-405a-a432-85bfe30b953f",
+      "a6556f60-52f2-417b-ae89-eeabb11a902e": "6f702a5f-c28a-405a-a432-85bfe30b953f",
+      "dbe5de70-d3ed-452b-b39c-28509073a4dd": "6f702a5f-c28a-405a-a432-85bfe30b953f",
+      "15ccf29c-b82b-46d2-8aa1-5dfb3f2f044c": "6f702a5f-c28a-405a-a432-85bfe30b953f",
+      "f5b8d2d5-53d3-47a8-970a-0afa8a44c639": "6f702a5f-c28a-405a-a432-85bfe30b953f",
+      "b73e47f7-8882-4b87-96c2-8a2ffa0635e2": "6f702a5f-c28a-405a-a432-85bfe30b953f",
+      "6ddfa1ab-32ab-4d40-aae1-12b32c6c78ec": "6f702a5f-c28a-405a-a432-85bfe30b953f",
+      "d7020e41-5a61-42fb-8cf4-359122276b27": "6f702a5f-c28a-405a-a432-85bfe30b953f",
+      "87944e3c-44b2-4bfd-88d8-937ceb587d06": "6f702a5f-c28a-405a-a432-85bfe30b953f"
+    },
+    "roundNos": {
+      "3ba27b22-2992-4e3c-a9b0-881877eeebe3": 1,
+      "b5b3f118-9773-45c0-9303-bb11676a1385": 1,
+      "3e29c75c-acf0-4cdd-a442-e44b2b49e011": 1,
+      "cdb0cf73-4a30-4819-98cc-cf3b8f036b8a": 1,
+      "a6556f60-52f2-417b-ae89-eeabb11a902e": 2,
+      "dbe5de70-d3ed-452b-b39c-28509073a4dd": 2,
+      "15ccf29c-b82b-46d2-8aa1-5dfb3f2f044c": 2,
+      "f5b8d2d5-53d3-47a8-970a-0afa8a44c639": 2,
+      "b73e47f7-8882-4b87-96c2-8a2ffa0635e2": 3,
+      "6ddfa1ab-32ab-4d40-aae1-12b32c6c78ec": 3,
+      "d7020e41-5a61-42fb-8cf4-359122276b27": 3,
+      "87944e3c-44b2-4bfd-88d8-937ceb587d06": 3
+    },
     "assumptions": [],
     "fixtures": {
       "movable": [
