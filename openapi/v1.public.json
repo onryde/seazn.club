@@ -19324,6 +19324,123 @@
                               "detail": {
                                 "type": "string"
                               },
+                              "details": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "person_double_booking",
+                                      "locked_slot_clash",
+                                      "no_slot_start_window",
+                                      "no_slot_person_bound",
+                                      "no_slot_horizon",
+                                      "instruction_feeder_gap",
+                                      "instruction_day_cap",
+                                      "instruction_weekday",
+                                      "instruction_date",
+                                      "instruction_time",
+                                      "outside_competition_window",
+                                      "outside_start_window",
+                                      "court_double_booking",
+                                      "inside_blackout",
+                                      "outside_session_windows",
+                                      "entrant_overlap",
+                                      "entrant_below_rest",
+                                      "person_overlap",
+                                      "person_below_rest",
+                                      "order_before_feeder",
+                                      "order_inside_feeder_rest",
+                                      "round_order_day",
+                                      "round_order_same_day",
+                                      "no_slot_lattice",
+                                      "no_slot_budget"
+                                    ]
+                                  },
+                                  "entrant_ids": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    }
+                                  },
+                                  "person_ids": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    }
+                                  },
+                                  "other_fixture_id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  "court": {
+                                    "type": "string"
+                                  },
+                                  "day": {
+                                    "type": "string"
+                                  },
+                                  "other_day": {
+                                    "type": "string"
+                                  },
+                                  "weekday": {
+                                    "type": "string"
+                                  },
+                                  "required_weekday": {
+                                    "type": "string"
+                                  },
+                                  "required_date": {
+                                    "type": "string"
+                                  },
+                                  "time": {
+                                    "type": "string"
+                                  },
+                                  "required_time": {
+                                    "type": "string"
+                                  },
+                                  "rule_type": {
+                                    "type": "string"
+                                  },
+                                  "round_no": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "other_round_no": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "minutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "required_minutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "required_count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
+                              },
                               "rule": {
                                 "type": "string",
                                 "enum": [
@@ -20038,6 +20155,123 @@
                               },
                               "detail": {
                                 "type": "string"
+                              },
+                              "details": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "person_double_booking",
+                                      "locked_slot_clash",
+                                      "no_slot_start_window",
+                                      "no_slot_person_bound",
+                                      "no_slot_horizon",
+                                      "instruction_feeder_gap",
+                                      "instruction_day_cap",
+                                      "instruction_weekday",
+                                      "instruction_date",
+                                      "instruction_time",
+                                      "outside_competition_window",
+                                      "outside_start_window",
+                                      "court_double_booking",
+                                      "inside_blackout",
+                                      "outside_session_windows",
+                                      "entrant_overlap",
+                                      "entrant_below_rest",
+                                      "person_overlap",
+                                      "person_below_rest",
+                                      "order_before_feeder",
+                                      "order_inside_feeder_rest",
+                                      "round_order_day",
+                                      "round_order_same_day",
+                                      "no_slot_lattice",
+                                      "no_slot_budget"
+                                    ]
+                                  },
+                                  "entrant_ids": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    }
+                                  },
+                                  "person_ids": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    }
+                                  },
+                                  "other_fixture_id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  "court": {
+                                    "type": "string"
+                                  },
+                                  "day": {
+                                    "type": "string"
+                                  },
+                                  "other_day": {
+                                    "type": "string"
+                                  },
+                                  "weekday": {
+                                    "type": "string"
+                                  },
+                                  "required_weekday": {
+                                    "type": "string"
+                                  },
+                                  "required_date": {
+                                    "type": "string"
+                                  },
+                                  "time": {
+                                    "type": "string"
+                                  },
+                                  "required_time": {
+                                    "type": "string"
+                                  },
+                                  "rule_type": {
+                                    "type": "string"
+                                  },
+                                  "round_no": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "other_round_no": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "minutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "required_minutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "required_count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
                               },
                               "rule": {
                                 "type": "string",
@@ -20801,6 +21035,123 @@
                               },
                               "detail": {
                                 "type": "string"
+                              },
+                              "details": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "person_double_booking",
+                                      "locked_slot_clash",
+                                      "no_slot_start_window",
+                                      "no_slot_person_bound",
+                                      "no_slot_horizon",
+                                      "instruction_feeder_gap",
+                                      "instruction_day_cap",
+                                      "instruction_weekday",
+                                      "instruction_date",
+                                      "instruction_time",
+                                      "outside_competition_window",
+                                      "outside_start_window",
+                                      "court_double_booking",
+                                      "inside_blackout",
+                                      "outside_session_windows",
+                                      "entrant_overlap",
+                                      "entrant_below_rest",
+                                      "person_overlap",
+                                      "person_below_rest",
+                                      "order_before_feeder",
+                                      "order_inside_feeder_rest",
+                                      "round_order_day",
+                                      "round_order_same_day",
+                                      "no_slot_lattice",
+                                      "no_slot_budget"
+                                    ]
+                                  },
+                                  "entrant_ids": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    }
+                                  },
+                                  "person_ids": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    }
+                                  },
+                                  "other_fixture_id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  "court": {
+                                    "type": "string"
+                                  },
+                                  "day": {
+                                    "type": "string"
+                                  },
+                                  "other_day": {
+                                    "type": "string"
+                                  },
+                                  "weekday": {
+                                    "type": "string"
+                                  },
+                                  "required_weekday": {
+                                    "type": "string"
+                                  },
+                                  "required_date": {
+                                    "type": "string"
+                                  },
+                                  "time": {
+                                    "type": "string"
+                                  },
+                                  "required_time": {
+                                    "type": "string"
+                                  },
+                                  "rule_type": {
+                                    "type": "string"
+                                  },
+                                  "round_no": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "other_round_no": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "minutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "required_minutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "required_count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
                               },
                               "rule": {
                                 "type": "string",
@@ -22354,6 +22705,123 @@
                               },
                               "detail": {
                                 "type": "string"
+                              },
+                              "details": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "person_double_booking",
+                                      "locked_slot_clash",
+                                      "no_slot_start_window",
+                                      "no_slot_person_bound",
+                                      "no_slot_horizon",
+                                      "instruction_feeder_gap",
+                                      "instruction_day_cap",
+                                      "instruction_weekday",
+                                      "instruction_date",
+                                      "instruction_time",
+                                      "outside_competition_window",
+                                      "outside_start_window",
+                                      "court_double_booking",
+                                      "inside_blackout",
+                                      "outside_session_windows",
+                                      "entrant_overlap",
+                                      "entrant_below_rest",
+                                      "person_overlap",
+                                      "person_below_rest",
+                                      "order_before_feeder",
+                                      "order_inside_feeder_rest",
+                                      "round_order_day",
+                                      "round_order_same_day",
+                                      "no_slot_lattice",
+                                      "no_slot_budget"
+                                    ]
+                                  },
+                                  "entrant_ids": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    }
+                                  },
+                                  "person_ids": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    }
+                                  },
+                                  "other_fixture_id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  "court": {
+                                    "type": "string"
+                                  },
+                                  "day": {
+                                    "type": "string"
+                                  },
+                                  "other_day": {
+                                    "type": "string"
+                                  },
+                                  "weekday": {
+                                    "type": "string"
+                                  },
+                                  "required_weekday": {
+                                    "type": "string"
+                                  },
+                                  "required_date": {
+                                    "type": "string"
+                                  },
+                                  "time": {
+                                    "type": "string"
+                                  },
+                                  "required_time": {
+                                    "type": "string"
+                                  },
+                                  "rule_type": {
+                                    "type": "string"
+                                  },
+                                  "round_no": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "other_round_no": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "minutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "required_minutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "required_count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
                               },
                               "rule": {
                                 "type": "string",
@@ -45674,6 +46142,117 @@
                               "detail": {
                                 "type": "string"
                               },
+                              "details": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "person_double_booking",
+                                      "locked_slot_clash",
+                                      "no_slot_start_window",
+                                      "no_slot_person_bound",
+                                      "no_slot_horizon",
+                                      "instruction_feeder_gap",
+                                      "instruction_day_cap",
+                                      "instruction_weekday",
+                                      "instruction_date",
+                                      "instruction_time",
+                                      "outside_competition_window",
+                                      "outside_start_window",
+                                      "court_double_booking",
+                                      "inside_blackout",
+                                      "outside_session_windows",
+                                      "entrant_overlap",
+                                      "entrant_below_rest",
+                                      "person_overlap",
+                                      "person_below_rest",
+                                      "order_before_feeder",
+                                      "order_inside_feeder_rest",
+                                      "round_order_day",
+                                      "round_order_same_day",
+                                      "no_slot_lattice",
+                                      "no_slot_budget"
+                                    ]
+                                  },
+                                  "entrantIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "personIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "otherFixtureId": {
+                                    "type": "string"
+                                  },
+                                  "court": {
+                                    "type": "string"
+                                  },
+                                  "day": {
+                                    "type": "string"
+                                  },
+                                  "otherDay": {
+                                    "type": "string"
+                                  },
+                                  "weekday": {
+                                    "type": "string"
+                                  },
+                                  "requiredWeekday": {
+                                    "type": "string"
+                                  },
+                                  "requiredDate": {
+                                    "type": "string"
+                                  },
+                                  "time": {
+                                    "type": "string"
+                                  },
+                                  "requiredTime": {
+                                    "type": "string"
+                                  },
+                                  "ruleType": {
+                                    "type": "string"
+                                  },
+                                  "roundNo": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherRoundNo": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "minutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "requiredMinutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "requiredCount": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
+                              },
                               "direct": {
                                 "type": "boolean"
                               },
@@ -45715,6 +46294,117 @@
                               },
                               "detail": {
                                 "type": "string"
+                              },
+                              "details": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "person_double_booking",
+                                      "locked_slot_clash",
+                                      "no_slot_start_window",
+                                      "no_slot_person_bound",
+                                      "no_slot_horizon",
+                                      "instruction_feeder_gap",
+                                      "instruction_day_cap",
+                                      "instruction_weekday",
+                                      "instruction_date",
+                                      "instruction_time",
+                                      "outside_competition_window",
+                                      "outside_start_window",
+                                      "court_double_booking",
+                                      "inside_blackout",
+                                      "outside_session_windows",
+                                      "entrant_overlap",
+                                      "entrant_below_rest",
+                                      "person_overlap",
+                                      "person_below_rest",
+                                      "order_before_feeder",
+                                      "order_inside_feeder_rest",
+                                      "round_order_day",
+                                      "round_order_same_day",
+                                      "no_slot_lattice",
+                                      "no_slot_budget"
+                                    ]
+                                  },
+                                  "entrantIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "personIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "otherFixtureId": {
+                                    "type": "string"
+                                  },
+                                  "court": {
+                                    "type": "string"
+                                  },
+                                  "day": {
+                                    "type": "string"
+                                  },
+                                  "otherDay": {
+                                    "type": "string"
+                                  },
+                                  "weekday": {
+                                    "type": "string"
+                                  },
+                                  "requiredWeekday": {
+                                    "type": "string"
+                                  },
+                                  "requiredDate": {
+                                    "type": "string"
+                                  },
+                                  "time": {
+                                    "type": "string"
+                                  },
+                                  "requiredTime": {
+                                    "type": "string"
+                                  },
+                                  "ruleType": {
+                                    "type": "string"
+                                  },
+                                  "roundNo": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherRoundNo": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "minutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "requiredMinutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "requiredCount": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
                               },
                               "direct": {
                                 "type": "boolean"
@@ -46255,7 +46945,16 @@
                         "fixtureId": "example",
                         "reason": "example",
                         "detail": "example",
-                        "direct": true
+                        "details": {
+                          "kind": "person_double_booking",
+                          "entrantIds": [
+                            "example"
+                          ],
+                          "personIds": [
+                            "example"
+                          ],
+                          "otherFixtureId": "example"
+                        }
                       }
                     ],
                     "blocking": [
@@ -46263,7 +46962,16 @@
                         "fixtureId": "example",
                         "reason": "example",
                         "detail": "example",
-                        "direct": true
+                        "details": {
+                          "kind": "person_double_booking",
+                          "entrantIds": [
+                            "example"
+                          ],
+                          "personIds": [
+                            "example"
+                          ],
+                          "otherFixtureId": "example"
+                        }
                       }
                     ],
                     "diff": {
@@ -49998,6 +50706,117 @@
                               "detail": {
                                 "type": "string"
                               },
+                              "details": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "person_double_booking",
+                                      "locked_slot_clash",
+                                      "no_slot_start_window",
+                                      "no_slot_person_bound",
+                                      "no_slot_horizon",
+                                      "instruction_feeder_gap",
+                                      "instruction_day_cap",
+                                      "instruction_weekday",
+                                      "instruction_date",
+                                      "instruction_time",
+                                      "outside_competition_window",
+                                      "outside_start_window",
+                                      "court_double_booking",
+                                      "inside_blackout",
+                                      "outside_session_windows",
+                                      "entrant_overlap",
+                                      "entrant_below_rest",
+                                      "person_overlap",
+                                      "person_below_rest",
+                                      "order_before_feeder",
+                                      "order_inside_feeder_rest",
+                                      "round_order_day",
+                                      "round_order_same_day",
+                                      "no_slot_lattice",
+                                      "no_slot_budget"
+                                    ]
+                                  },
+                                  "entrantIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "personIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "otherFixtureId": {
+                                    "type": "string"
+                                  },
+                                  "court": {
+                                    "type": "string"
+                                  },
+                                  "day": {
+                                    "type": "string"
+                                  },
+                                  "otherDay": {
+                                    "type": "string"
+                                  },
+                                  "weekday": {
+                                    "type": "string"
+                                  },
+                                  "requiredWeekday": {
+                                    "type": "string"
+                                  },
+                                  "requiredDate": {
+                                    "type": "string"
+                                  },
+                                  "time": {
+                                    "type": "string"
+                                  },
+                                  "requiredTime": {
+                                    "type": "string"
+                                  },
+                                  "ruleType": {
+                                    "type": "string"
+                                  },
+                                  "roundNo": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherRoundNo": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "minutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "requiredMinutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "requiredCount": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
+                              },
                               "direct": {
                                 "type": "boolean"
                               },
@@ -50039,6 +50858,117 @@
                               },
                               "detail": {
                                 "type": "string"
+                              },
+                              "details": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "person_double_booking",
+                                      "locked_slot_clash",
+                                      "no_slot_start_window",
+                                      "no_slot_person_bound",
+                                      "no_slot_horizon",
+                                      "instruction_feeder_gap",
+                                      "instruction_day_cap",
+                                      "instruction_weekday",
+                                      "instruction_date",
+                                      "instruction_time",
+                                      "outside_competition_window",
+                                      "outside_start_window",
+                                      "court_double_booking",
+                                      "inside_blackout",
+                                      "outside_session_windows",
+                                      "entrant_overlap",
+                                      "entrant_below_rest",
+                                      "person_overlap",
+                                      "person_below_rest",
+                                      "order_before_feeder",
+                                      "order_inside_feeder_rest",
+                                      "round_order_day",
+                                      "round_order_same_day",
+                                      "no_slot_lattice",
+                                      "no_slot_budget"
+                                    ]
+                                  },
+                                  "entrantIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "personIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "otherFixtureId": {
+                                    "type": "string"
+                                  },
+                                  "court": {
+                                    "type": "string"
+                                  },
+                                  "day": {
+                                    "type": "string"
+                                  },
+                                  "otherDay": {
+                                    "type": "string"
+                                  },
+                                  "weekday": {
+                                    "type": "string"
+                                  },
+                                  "requiredWeekday": {
+                                    "type": "string"
+                                  },
+                                  "requiredDate": {
+                                    "type": "string"
+                                  },
+                                  "time": {
+                                    "type": "string"
+                                  },
+                                  "requiredTime": {
+                                    "type": "string"
+                                  },
+                                  "ruleType": {
+                                    "type": "string"
+                                  },
+                                  "roundNo": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherRoundNo": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "minutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "requiredMinutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "requiredCount": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
                               },
                               "direct": {
                                 "type": "boolean"
@@ -50482,7 +51412,16 @@
                         "fixtureId": "example",
                         "reason": "example",
                         "detail": "example",
-                        "direct": true
+                        "details": {
+                          "kind": "person_double_booking",
+                          "entrantIds": [
+                            "example"
+                          ],
+                          "personIds": [
+                            "example"
+                          ],
+                          "otherFixtureId": "example"
+                        }
                       }
                     ],
                     "blocking": [
@@ -50490,7 +51429,16 @@
                         "fixtureId": "example",
                         "reason": "example",
                         "detail": "example",
-                        "direct": true
+                        "details": {
+                          "kind": "person_double_booking",
+                          "entrantIds": [
+                            "example"
+                          ],
+                          "personIds": [
+                            "example"
+                          ],
+                          "otherFixtureId": "example"
+                        }
                       }
                     ],
                     "diff": {
@@ -51412,6 +52360,117 @@
                               "detail": {
                                 "type": "string"
                               },
+                              "details": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "person_double_booking",
+                                      "locked_slot_clash",
+                                      "no_slot_start_window",
+                                      "no_slot_person_bound",
+                                      "no_slot_horizon",
+                                      "instruction_feeder_gap",
+                                      "instruction_day_cap",
+                                      "instruction_weekday",
+                                      "instruction_date",
+                                      "instruction_time",
+                                      "outside_competition_window",
+                                      "outside_start_window",
+                                      "court_double_booking",
+                                      "inside_blackout",
+                                      "outside_session_windows",
+                                      "entrant_overlap",
+                                      "entrant_below_rest",
+                                      "person_overlap",
+                                      "person_below_rest",
+                                      "order_before_feeder",
+                                      "order_inside_feeder_rest",
+                                      "round_order_day",
+                                      "round_order_same_day",
+                                      "no_slot_lattice",
+                                      "no_slot_budget"
+                                    ]
+                                  },
+                                  "entrantIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "personIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "otherFixtureId": {
+                                    "type": "string"
+                                  },
+                                  "court": {
+                                    "type": "string"
+                                  },
+                                  "day": {
+                                    "type": "string"
+                                  },
+                                  "otherDay": {
+                                    "type": "string"
+                                  },
+                                  "weekday": {
+                                    "type": "string"
+                                  },
+                                  "requiredWeekday": {
+                                    "type": "string"
+                                  },
+                                  "requiredDate": {
+                                    "type": "string"
+                                  },
+                                  "time": {
+                                    "type": "string"
+                                  },
+                                  "requiredTime": {
+                                    "type": "string"
+                                  },
+                                  "ruleType": {
+                                    "type": "string"
+                                  },
+                                  "roundNo": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherRoundNo": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "minutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "requiredMinutes": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "requiredCount": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
+                              },
                               "direct": {
                                 "type": "boolean"
                               },
@@ -51462,7 +52521,16 @@
                         "fixtureId": "example",
                         "reason": "example",
                         "detail": "example",
-                        "direct": true
+                        "details": {
+                          "kind": "person_double_booking",
+                          "entrantIds": [
+                            "example"
+                          ],
+                          "personIds": [
+                            "example"
+                          ],
+                          "otherFixtureId": "example"
+                        }
                       }
                     ]
                   },

@@ -240,8 +240,27 @@ describe("solver repair in runCompetitionAiPlan (#401)", () => {
     const repairTurn = JSON.parse(
       (parse.mock.calls[1]![0] as { messages: { role: string; content: string }[] }).messages.at(-1)!
         .content,
-    ) as { focus_fixture_ids?: string[] };
+    ) as { focus_fixture_ids?: string[]; verifier_conflicts: unknown[] };
     expect(repairTurn.focus_fixture_ids).toEqual(expect.arrayContaining([F1, F2]));
+
+    // C3 (2026-08-13 design amendment) — same ruling and same shape as
+    // schedule-ai-repair.test.ts's identical pin on the single-division path:
+    // byte-identical to pre-C3, `detail` never `details`, field set closed.
+    const conflicts = repairTurn.verifier_conflicts as Record<string, unknown>[];
+    expect(conflicts.length).toBeGreaterThan(0);
+    const ALLOWED_VERIFIER_CONFLICT_KEYS = new Set([
+      "fixtureId",
+      "reason",
+      "detail",
+      "direct",
+      "rule",
+      "shortfallMinutes",
+    ]);
+    for (const c of conflicts) {
+      expect(Object.keys(c).every((k) => ALLOWED_VERIFIER_CONFLICT_KEYS.has(k))).toBe(true);
+      expect(c).not.toHaveProperty("details");
+    }
+    expect(conflicts.some((c) => typeof c.detail === "string" && c.detail.length > 0)).toBe(true);
   });
 });
 

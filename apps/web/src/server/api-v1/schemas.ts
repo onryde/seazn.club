@@ -2484,12 +2484,19 @@ const AiPlanAssignment = z.object({
 /** CamelCase mirror of `ScheduleConflictDetail` above — same fields, same
  *  `ConflictDetailKindSchema`, matching the engine's own `ConflictDetail`
  *  casing 1:1 (this schema's whole point is to carry the engine's verbatim
- *  shape, per `AiPlanConflict`'s own comment below). */
+ *  shape, per `AiPlanConflict`'s own comment below).
+ *
+ *  Id fields are plain `z.string()`, NOT `Uuid`, unlike `ScheduleConflictDetail`
+ *  — deliberately looser, matching `AiPlanConflict.fixtureId` right below.
+ *  The joint pack collapses two `persons` rows that share a display name onto
+ *  a synthetic `name:<lowercased name>` key (competition-schedule-ai.ts) and
+ *  that key can be exactly what rides in `personIds` here; a strict UUID
+ *  format would reject a real, correctly-computed conflict. */
 const AiPlanConflictDetail = z.object({
   kind: ConflictDetailKindSchema,
-  entrantIds: z.array(Uuid).optional(),
-  personIds: z.array(Uuid).optional(),
-  otherFixtureId: Uuid.optional(),
+  entrantIds: z.array(z.string()).optional(),
+  personIds: z.array(z.string()).optional(),
+  otherFixtureId: z.string().optional(),
   court: z.string().optional(),
   day: z.string().optional(),
   otherDay: z.string().optional(),

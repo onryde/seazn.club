@@ -269,6 +269,29 @@ describe("solver repair in runAiPlan (#401)", () => {
         .content,
     ) as { focus_fixture_ids?: string[]; verifier_conflicts: unknown[] };
     expect(repairTurn.focus_fixture_ids).toEqual(expect.arrayContaining([F1, F2]));
+
+    // C3 (2026-08-13 design amendment) — "the prose reaches the model, not
+    // just the screen": the model's own copy of a conflict must stay
+    // byte-identical to pre-C3, `detail` (derived legacy prose) and never the
+    // structured `details` the engine now emits, or this request's token
+    // weight silently widens out from under AI-credit accounting. Pinned on
+    // the FIELD SET, not just presence, so a future edit cannot widen it by
+    // adding a key nobody meant to send.
+    const conflicts = repairTurn.verifier_conflicts as Record<string, unknown>[];
+    expect(conflicts.length).toBeGreaterThan(0);
+    const ALLOWED_VERIFIER_CONFLICT_KEYS = new Set([
+      "fixtureId",
+      "reason",
+      "detail",
+      "direct",
+      "rule",
+      "shortfallMinutes",
+    ]);
+    for (const c of conflicts) {
+      expect(Object.keys(c).every((k) => ALLOWED_VERIFIER_CONFLICT_KEYS.has(k))).toBe(true);
+      expect(c).not.toHaveProperty("details");
+    }
+    expect(conflicts.some((c) => typeof c.detail === "string" && c.detail.length > 0)).toBe(true);
   });
 });
 
