@@ -792,6 +792,10 @@ async function main() {
   // fresh free session — not an entitlement gate).
   await scheduleHealthSuite();
 
+  // --- D4a/P5: stage progression — seed -> complete -> propose -> confirm ->
+  // next stage playable (own fresh free session — not an entitlement gate).
+  await stageProgressionSuite();
+
   // --- design/v6 PROMPT-48..50: tennis rally set (nested kernel), icehockey
   // OT points in standings, PP goal + release with the public strength chip.
   // Before gapSuite — needs the org's pro entitlements for tier-3 scoring.
@@ -6460,6 +6464,114 @@ async function templateInstantiationSuite(): Promise<void> {
     gated.status === 402 &&
       (gated.json.error as { code?: string } | undefined)?.code === "PAYMENT_REQUIRED",
   );
+}
+
+/**
+ * D4a/P5 stage progression (own fresh free session — not an entitlement
+ * gate): seed a division whose knockout stage declares `.seeding` instead of
+ * the older `qualification` field, generate its TBD placeholder fixtures
+ * BEFORE the group stage is even generated, decide the group stage, complete
+ * it, propose, confirm, and score the now-real next-stage fixture — proving
+ * the whole chain is actually playable end to end, not just that entrants
+ * landed in the right cells.
+ */
+async function stageProgressionSuite(): Promise<void> {
+  const free = newSession();
+  await signIn(free, `dtx_seed_${tag}@example.com`);
+  const comp = v1data<{ id: string }>(
+    await v1(free, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `DTX Seed ${tag}` }),
+  );
+  const div = v1data<{ id: string }>(
+    await v1(free, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  await v1(
+    free,
+    `/api/v1/divisions/${div.id}/entrants`,
+    "POST",
+    Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `Seed ${i + 1}`, seed: i + 1 })),
+  );
+  const stages = v1data<{ id: string; kind: string }[]>(
+    await v1(free, `/api/v1/divisions/${div.id}/stages`, "POST", [
+      { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
+      {
+        seq: 2,
+        kind: "knockout",
+        name: "KO",
+        config: {},
+        seeding: { source: "previous", take: [{ kind: "topNPerGroup", n: 1 }], placement: "rank_order" },
+      },
+    ]),
+  );
+  const groupId = stages.find((s) => s.kind === "group")!.id;
+  const koId = stages.find((s) => s.kind === "knockout")!.id;
+
+  // "seed": TBD fixtures exist up front, before the group stage has even
+  // been generated — the owner's "placeholders at setup time" ruling.
+  const koGen = v1data<{ created: number; fixtures: { home_entrant_id: string | null }[] }>(
+    await v1(free, `/api/v1/stages/${koId}/generate`, "POST"),
+  );
+  check(
+    "stage progression: .seeding KO generates 1 fully-TBD fixture before the group stage runs at all",
+    koGen.created === 1 && koGen.fixtures[0]!.home_entrant_id === null,
+  );
+
+  const groupGen = v1data<{ fixtures: { id: string }[] }>(
+    await v1(free, `/api/v1/stages/${groupId}/generate`, "POST"),
+  );
+  for (const f of groupGen.fixtures) {
+    const state = v1data<{ last_seq: number }>(await v1(free, `/api/v1/fixtures/${f.id}/state`));
+    await v1(free, `/api/v1/fixtures/${f.id}/events`, "POST", {
+      expected_seq: state.last_seq,
+      type: "generic.result",
+      payload: { p1Score: 2, p2Score: 0 },
+    });
+  }
+
+  // "complete": guarded progression computes a DRAFT proposal, never
+  // auto-fills.
+  const completed = v1data<{ completed: boolean; seed_proposal?: { id: string; status: string } }>(
+    await v1(free, `/api/v1/stages/${groupId}/complete`, "POST"),
+  );
+  check(
+    "stage progression: complete computes a draft seed proposal, never auto-fills",
+    completed.completed === true && completed.seed_proposal?.status === "draft",
+  );
+
+  // "propose": explicit recompute (the real endpoint an organiser's UI hits).
+  const proposal = v1data<{ id: string; computed: { qualifiers: unknown[] } }>(
+    await v1(free, `/api/v1/stages/${koId}/seed-proposal`, "POST"),
+  );
+  check("stage progression: proposal names both qualifiers", proposal.computed.qualifiers.length === 2);
+
+  // "confirm": fills the TBD fixture through the same fillSlot pathway
+  // intra-bracket advancement uses.
+  const confirmed = v1data<{
+    filled: number;
+    fixtures: { id: string; home_entrant_id: string | null; away_entrant_id: string | null }[];
+  }>(await v1(free, `/api/v1/stages/${koId}/seed-proposal/confirm`, "POST", { proposalId: proposal.id }));
+  check(
+    "stage progression: confirm fills both KO slots",
+    confirmed.filled === 2 &&
+      confirmed.fixtures[0]!.home_entrant_id !== null &&
+      confirmed.fixtures[0]!.away_entrant_id !== null,
+  );
+
+  // "next stage playable": the now-real fixture accepts a score exactly like
+  // any other — the scoring guard's WRONG_PHASE only ever fired while it was
+  // still TBD, and that window has closed.
+  const koFixtureId = confirmed.fixtures[0]!.id;
+  const koState = v1data<{ last_seq: number }>(await v1(free, `/api/v1/fixtures/${koFixtureId}/state`));
+  const koScore = await v1(free, `/api/v1/fixtures/${koFixtureId}/events`, "POST", {
+    expected_seq: koState.last_seq,
+    type: "generic.result",
+    payload: { p1Score: 2, p2Score: 1 },
+  });
+  check("stage progression: next stage is playable — the now-filled KO fixture scores 201", koScore.status === 201);
 }
 
 /**

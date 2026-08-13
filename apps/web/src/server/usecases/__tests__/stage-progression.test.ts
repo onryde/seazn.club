@@ -15,7 +15,6 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import {
   completeStage,
-  computeSeedProposal,
   confirmSeedProposal,
   createStages,
   generateStageFixtures,
