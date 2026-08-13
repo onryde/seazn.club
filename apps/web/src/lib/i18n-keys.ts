@@ -2292,6 +2292,7 @@ export type DictionaryKey =
   | "news.kind.news"
   | "news.kind.recap"
   | "news.kind.result"
+  | "news.kind.weekly_digest"
   | "news.latest"
   | "news.new"
   | "news.newer"

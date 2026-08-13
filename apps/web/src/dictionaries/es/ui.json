@@ -2744,6 +2744,7 @@
   "news.composer.create": "Guardar borrador",
   "news.composer.cancel": "Cancelar",
   "news.composer.saveFailed": "No se pudo guardar. Inténtalo de nuevo.",
+  "news.kind.weekly_digest": "Resumen semanal",
   "news.enrich.sectionTitle": "Mejores actuaciones",
   "news.enrich.performer_line": "{name} — {statLine}",
   "news.enrich.leader_move": "{name} sube al puesto #{to} en {metric} (antes #{from}).",

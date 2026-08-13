@@ -2994,7 +2994,7 @@ export const FixtureSquadMember = z.object({
 
 // Org news (SPEC-2 / PROMPT-82) -----------------------------------------------
 
-export const PostKind = z.enum(["news", "result", "round_recap", "announcement"]);
+export const PostKind = z.enum(["news", "result", "round_recap", "announcement", "weekly_digest"]);
 export const PostStatus = z.enum(["draft", "published", "archived"]);
 
 export const CreatePost = z.object({

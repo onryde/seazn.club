@@ -15,21 +15,45 @@ import type { EventEnvelope } from "@seazn/engine/core";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { firePostRevalidate } from "@/server/public-site/revalidate";
-import { hasFeature } from "@/lib/entitlements";
+import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
+import { resolveVenueTz } from "@/lib/tz";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPair } from "@/server/engine-db/lineups";
 import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db/entrant-members";
+import { log } from "@/server/logger";
 import { slugify, uniqueSlug } from "./slugs";
-import { resultDraft, roundRecapDraft } from "@/server/news/draft-templates";
+import { recomputePlayerStats } from "./player-stats";
+import {
+  resultDraft,
+  roundRecapDraft,
+  weeklyDigestDraft,
+  type ResultEnrichment,
+  type RecapEnrichment,
+  type DigestStandingsSection,
+  type DigestLeaderLine,
+  type DigestUpcomingDay,
+  type DigestClaimedHighlight,
+} from "@/server/news/draft-templates";
+import {
+  biggestClimber,
+  biggestMargin,
+  computeLeaderboardMoves,
+  computeStreak,
+  digestWindow,
+  groupUpcomingByDay,
+  type RankedEntrantRow,
+  type ResultOutcome,
+  type UpcomingFixture,
+} from "@/server/news/enrichment";
 
 type Tx = postgres.TransactionSql;
 const superuser = sql as unknown as Tx;
 
-export type PostKind = "news" | "result" | "round_recap" | "announcement";
+export type PostKind = "news" | "result" | "round_recap" | "announcement" | "weekly_digest";
 export type PostStatus = "draft" | "published" | "archived";
 
 export interface OrgPost {
@@ -453,6 +477,8 @@ async function draftResult(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<void
   const movement = TABLE_KINDS.has(fx.stage_kind)
     ? await winnerMovement(tx, fx)
     : null;
+  const enrichment = await assembleResultEnrichment(tx, fx, scorers);
+  const enriched = Object.keys(enrichment).length > 0;
 
   const { title, bodyMd } = resultDraft({
     locale,
@@ -467,6 +493,7 @@ async function draftResult(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<void
     venueTz: fx.venue_tz,
     ...(scorers.length > 0 ? { scorers } : {}),
     movement,
+    ...(enriched ? { enrichment } : {}),
   });
 
   const autoSource = {
@@ -476,7 +503,7 @@ async function draftResult(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<void
     ...(fx.round_no !== null ? { round_no: fx.round_no } : {}),
     stale: false,
   };
-  await insertDraft(tx, fx, "result", title, bodyMd, autoSource);
+  await insertDraft(tx, fx, "result", title, bodyMd, autoSource, enriched);
 }
 
 async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<void> {
@@ -509,6 +536,8 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
   }));
 
   const standings = await topStandings(tx, fx.stage_id);
+  const enrichment = await assembleRecapEnrichment(tx, fx, results);
+  const enriched = Object.keys(enrichment).length > 0;
 
   const { title, bodyMd } = roundRecapDraft({
     locale,
@@ -517,6 +546,7 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
     roundNo,
     results,
     standings,
+    ...(enriched ? { enrichment } : {}),
   });
   const autoSource = {
     trigger: TRIGGER_RECAP,
@@ -525,7 +555,7 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
     round_no: roundNo,
     stale: false,
   };
-  await insertDraft(tx, fx, "round_recap", title, bodyMd, autoSource);
+  await insertDraft(tx, fx, "round_recap", title, bodyMd, autoSource, enriched);
 }
 
 async function insertDraft(
@@ -535,15 +565,58 @@ async function insertDraft(
   title: string,
   bodyMd: string,
   autoSource: Record<string, unknown>,
+  enriched: boolean,
 ): Promise<void> {
-  const slug = await uniqueSlug(slugify(title), (s) => slugTaken(tx, fx.org_id, s));
-  await tx`
+  const row = await insertGeneratedPost(tx, {
+    orgId: fx.org_id,
+    competitionId: fx.competition_id,
+    divisionId: fx.division_id,
+    kind,
+    title,
+    bodyMd,
+    autoSource,
+  });
+  // Only on a REAL insert — the auto-once index (V295) on-conflict-do-nothing
+  // skips a repeat firing for the same fixture/round, and that idempotent
+  // no-op must not be logged as a fresh draft.
+  if (row) {
+    log.info(
+      { orgId: fx.org_id, fixtureId: fx.fixture_id, divisionId: fx.division_id, kind, enriched },
+      "post_drafted",
+    );
+  }
+}
+
+/**
+ * Low-level insert shared by the fixture-scoped auto-drafts (`insertDraft`,
+ * on-conflict-do-nothing against `org_posts_auto_once`) and the org-level
+ * weekly digest (`generateWeeklyDigest`, no fixture/division/stage/round to
+ * key on — V358 exempts `weekly_digest` from that index entirely, so this
+ * `on conflict do nothing` never has a matching constraint to trigger for
+ * it and every digest press inserts a fresh row).
+ */
+async function insertGeneratedPost(
+  tx: Tx,
+  params: {
+    orgId: string;
+    competitionId: string | null;
+    divisionId: string | null;
+    kind: PostKind;
+    title: string;
+    bodyMd: string;
+    autoSource: Record<string, unknown>;
+  },
+): Promise<{ id: string } | null> {
+  const slug = await uniqueSlug(slugify(params.title), (s) => slugTaken(tx, params.orgId, s));
+  const rows = await tx<{ id: string }[]>`
     insert into org_posts
       (org_id, competition_id, division_id, author_user_id, kind, status, slug,
        title, body_md, auto_source)
-    values (${fx.org_id}, ${fx.competition_id}, ${fx.division_id}, null, ${kind}, 'draft',
-            ${slug}, ${title}, ${bodyMd}, ${tx.json(autoSource as never)})
-    on conflict do nothing`;
+    values (${params.orgId}, ${params.competitionId}, ${params.divisionId}, null, ${params.kind}, 'draft',
+            ${slug}, ${params.title}, ${params.bodyMd}, ${tx.json(params.autoSource as never)})
+    on conflict do nothing
+    returning id`;
+  return rows[0] ?? null;
 }
 
 /** Scorers list for the result draft: the fixture's ledger folded through the
@@ -552,7 +625,7 @@ async function insertDraft(
 async function extractScorers(
   tx: Tx,
   fx: FixtureCtx,
-): Promise<{ name: string; count: number }[]> {
+): Promise<{ name: string; count: number; personId: string }[]> {
   try {
     const model = resolveModule(fx.sport_key, fx.module_version).playerStats;
     if (!model) return [];
@@ -620,10 +693,179 @@ async function extractScorers(
     );
     return rows
       .filter((r) => names.has(r.personId))
-      .map((r) => ({ name: names.get(r.personId)!, count: r.stats[metric.key] ?? 0 }));
+      .map((r) => ({ name: names.get(r.personId)!, count: r.stats[metric.key] ?? 0, personId: r.personId }));
   } catch {
     return [];
   }
+}
+
+/** Up to `limit` recent decided results for `entrantId` within one stage
+ *  (round numbers restart per stage, same scoping discipline as the
+ *  round-recap completeness probe), most-recent-first — the input
+ *  `computeStreak` (enrichment.ts) wants. Best-effort: an outcome shape this
+ *  function does not recognise reads as a draw rather than throwing, since a
+ *  wrong streak line is a worse failure mode than a missing one only when it
+ *  silently corrupts data — here it can only under-report a streak. */
+async function entrantRecentOutcomes(
+  tx: Tx,
+  divisionId: string,
+  stageId: string,
+  entrantId: string,
+  limit: number,
+): Promise<ResultOutcome[]> {
+  const rows = await tx<
+    { outcome: unknown; home_entrant_id: string | null; away_entrant_id: string | null }[]
+  >`
+    select outcome, home_entrant_id, away_entrant_id
+    from fixtures
+    where division_id = ${divisionId} and stage_id = ${stageId}
+      and status in ('decided','finalized','forfeited')
+      and (home_entrant_id = ${entrantId} or away_entrant_id = ${entrantId})
+    order by round_no desc, fixture_no desc nulls last, id desc
+    limit ${limit}`;
+  return rows.map((r): ResultOutcome => {
+    const o = r.outcome as { kind?: string; winner?: string } | null;
+    if (!o || o.kind === "draw") return "draw";
+    return o.winner === entrantId ? "win" : "loss";
+  });
+}
+
+/**
+ * P3 (D7) — one pure helper per source, each wrapped so a source erroring
+ * drops ONLY its own field (Failure matrix: "match summary read fails ->
+ * result draft plain, warn logged"). Returns `{}` (no keys) when every
+ * source came back empty/failed — the caller treats an empty object as "no
+ * enrichment" for both rendering and the `enriched` flag on `post_drafted`.
+ */
+async function assembleResultEnrichment(
+  tx: Tx,
+  fx: FixtureCtx,
+  scorers: { name: string; count: number; personId: string }[],
+): Promise<ResultEnrichment> {
+  const out: ResultEnrichment = {};
+  if (scorers.length === 0) return out;
+
+  let metric: { key: string; label: string } | undefined;
+  try {
+    const model = resolveModule(fx.sport_key, fx.module_version).playerStats;
+    metric = model?.metrics.find((m) => m.key === "goals") ?? model?.metrics[0];
+  } catch (err) {
+    log.warn(
+      { fixtureId: fx.fixture_id, source: "topPerformers", err: String(err) },
+      "news enrichment: source failed, dropping section",
+    );
+  }
+
+  if (metric) {
+    // A highlight, not a roster — the existing `scorers` block already lists
+    // everyone; cap at 2 so this reads as "who stood out", not a duplicate.
+    out.topPerformers = scorers
+      .slice(0, 2)
+      .map((s) => ({ personName: s.name, statLine: `${s.count} ${metric!.label.toLowerCase()}` }));
+
+    try {
+      const { rows } = await recomputePlayerStats(tx, fx.division_id);
+      const after = rows.map((r) => ({ personId: r.personId, personName: "", value: r.stats[metric!.key] ?? 0 }));
+      const contributions = scorers.map((s) => ({ personId: s.personId, personName: s.name, credit: s.count }));
+      const moves = computeLeaderboardMoves(after, contributions, metric.label);
+      if (moves.length > 0) out.leaderboardMoves = moves;
+    } catch (err) {
+      log.warn(
+        { fixtureId: fx.fixture_id, source: "leaderboardMoves", err: String(err) },
+        "news enrichment: source failed, dropping section",
+      );
+    }
+  }
+
+  if (TABLE_KINDS.has(fx.stage_kind)) {
+    try {
+      const [row] = await tx<{ outcome: unknown }[]>`
+        select outcome from fixtures where id = ${fx.fixture_id}`;
+      const outcome = row?.outcome as { kind?: string; winner?: string } | null;
+      if (outcome && (outcome.kind === "win" || outcome.kind === "award") && outcome.winner) {
+        const [entrant] = await tx<{ display_name: string }[]>`
+          select display_name from entrants where id = ${outcome.winner}`;
+        const recent = await entrantRecentOutcomes(tx, fx.division_id, fx.stage_id, outcome.winner, 10);
+        const streak = computeStreak(recent);
+        if (streak && entrant) {
+          out.streak = { entrantName: entrant.display_name, kind: streak.kind, length: streak.length };
+        }
+      }
+    } catch (err) {
+      log.warn(
+        { fixtureId: fx.fixture_id, source: "streak", err: String(err) },
+        "news enrichment: source failed, dropping section",
+      );
+    }
+  }
+
+  return out;
+}
+
+/** Same one-helper-per-source, fail-open discipline as
+ *  assembleResultEnrichment, for the round-recap draft. `results` is the
+ *  SAME array `maybeDraftRecap` already built for the plain results list —
+ *  biggestMargin reads it, it is never refetched. */
+async function assembleRecapEnrichment(
+  tx: Tx,
+  fx: FixtureCtx,
+  results: { homeName: string; homeScore: string; awayName: string; awayScore: string }[],
+): Promise<RecapEnrichment> {
+  const out: RecapEnrichment = {};
+
+  try {
+    const { rows, hasModel } = await recomputePlayerStats(tx, fx.division_id);
+    if (hasModel && rows.length > 0) {
+      const model = resolveModule(fx.sport_key, fx.module_version).playerStats;
+      const metric = model?.metrics.find((m) => m.key === "goals") ?? model?.metrics[0];
+      if (metric) {
+        const top = [...rows].sort((a, b) => (b.stats[metric.key] ?? 0) - (a.stats[metric.key] ?? 0))[0];
+        if (top && (top.stats[metric.key] ?? 0) > 0) {
+          const [person] = await tx<{ full_name: string }[]>`
+            select full_name from persons where id = ${top.personId}`;
+          if (person) {
+            out.leaders = [{ metric: metric.label, personName: person.full_name, value: top.stats[metric.key] ?? 0 }];
+          }
+        }
+      }
+    }
+  } catch (err) {
+    log.warn(
+      { divisionId: fx.division_id, source: "recapLeaders", err: String(err) },
+      "news enrichment: source failed, dropping section",
+    );
+  }
+
+  try {
+    const margin = biggestMargin(results);
+    if (margin) out.biggestResult = margin;
+  } catch (err) {
+    log.warn(
+      { divisionId: fx.division_id, source: "biggestResult", err: String(err) },
+      "news enrichment: source failed, dropping section",
+    );
+  }
+
+  try {
+    const [snap] = await tx<{ rows: RankedEntrantRow[]; previous_rows: RankedEntrantRow[] | null }[]>`
+      select rows, previous_rows from standings_snapshots
+      where stage_id = ${fx.stage_id} and pool_id is null`;
+    if (snap) {
+      const climber = biggestClimber(snap.rows, snap.previous_rows);
+      if (climber) {
+        const [entrant] = await tx<{ display_name: string }[]>`
+          select display_name from entrants where id = ${climber.entrantId}`;
+        if (entrant) out.standingsMoves = [{ entrantName: entrant.display_name, from: climber.from, to: climber.to }];
+      }
+    }
+  } catch (err) {
+    log.warn(
+      { divisionId: fx.division_id, source: "standingsMoves", err: String(err) },
+      "news enrichment: source failed, dropping section",
+    );
+  }
+
+  return out;
 }
 
 /** The just-won entrant's current table position, for the "moves up to Nth"

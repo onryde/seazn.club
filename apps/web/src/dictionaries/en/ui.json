@@ -2744,6 +2744,7 @@
   "news.composer.create": "Save draft",
   "news.composer.cancel": "Cancel",
   "news.composer.saveFailed": "Couldn't save. Try again.",
+  "news.kind.weekly_digest": "Weekly digest",
   "news.enrich.sectionTitle": "Top performers",
   "news.enrich.performer_line": "{name} — {statLine}",
   "news.enrich.leader_move": "{name} moved to #{to} in {metric} (was #{from}).",
