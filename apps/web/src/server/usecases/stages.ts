@@ -2026,6 +2026,35 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
   });
 }
 
+/**
+ * Read-only: the latest seed proposal for `stageId` (any status —
+ * draft/confirmed/stale), or null if none has been computed yet (P6/D4b task
+ * B ruling — see docs/superpowers/plans/2026-08-13-p6-progression-ui-plan.md
+ * "There is no read path for a proposal"). `stage_seed_proposals` is
+ * otherwise touched only inside compute/confirm/stale-marking; a panel that
+ * renders on page load must not POST to discover its own state (recompute
+ * marks prior drafts stale and inserts a row — a real side effect). This
+ * function issues one `select`, nothing else — never call computeSeedProposal
+ * from here to paper over a null.
+ *
+ * Consumed by the division page (server component) and handed to
+ * ProgressionPanel as a prop; fresh state after a recompute or confirm comes
+ * from `router.refresh()`, not a re-call of this function reacting to state.
+ */
+export async function getSeedProposal(auth: AuthCtx, stageId: string): Promise<SeedProposalOut | null> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [row] = await tx<
+      { id: string; stage_id: string; status: SeedProposalOut["status"]; computed: SeedProposalOut["computed"] }[]
+    >`
+      select id, stage_id, status, computed from stage_seed_proposals
+      where stage_id = ${stageId}
+      order by created_at desc
+      limit 1`;
+    if (!row) return null;
+    return { id: row.id, stageId: row.stage_id, status: row.status, computed: row.computed };
+  });
+}
+
 export interface ConfirmSeedProposalOut {
   proposalId: string;
   filled: number;
