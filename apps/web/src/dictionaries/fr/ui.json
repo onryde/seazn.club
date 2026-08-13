@@ -3655,5 +3655,19 @@
   "scorepad.timeline.voided": "annulé",
   "scorepad.timeline.unknownRecorder": "Marqueur",
   "scorepad.timeline.devicePad": "Enregistré depuis un appareil lié",
-  "scorepad.header.score": "Score"
+  "scorepad.header.score": "Score",
+  "schedule.capacity.title": "Vérification de capacité",
+  "schedule.capacity.verdict.ok": "Confortable",
+  "schedule.capacity.verdict.tight": "Serré",
+  "schedule.capacity.verdict.impossible": "Ne tiendra pas",
+  "schedule.capacity.summary": "{demand} à placer contre {supply} créneaux disponibles",
+  "schedule.capacity.restViolations": "Participants avec repos insuffisant : {n}",
+  "schedule.capacity.suggestions.title": "Comment y remédier",
+  "schedule.capacity.suggestion.addDay": "Ajouter 1 jour",
+  "schedule.capacity.suggestion.addCourt": "Ajouter 1 {venue}",
+  "schedule.capacity.suggestion.shortenMatch": "Raccourcir les matchs de {n} min",
+  "schedule.capacity.suggestion.shrinkGap": "Réduire l'écart de {n} min",
+  "schedule.capacity.suggestion.raiseCap": "Augmenter la limite quotidienne de matchs de 1",
+  "schedule.capacity.apply": "Appliquer",
+  "schedule.capacity.blockedReason": "La résolution est bloquée tant que cela ne convient pas. Voir la vérification de capacité dans l'onglet Paramètres"
 }
