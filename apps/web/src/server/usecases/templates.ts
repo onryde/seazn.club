@@ -106,17 +106,33 @@ export async function instantiateTemplate(
     visibility?: "private" | "unlisted" | "public";
   },
 ): Promise<FromTemplateResult> {
+  // Generated up front (not `returning id` inside the transaction) so it can
+  // be threaded into the entitlement checks below, BEFORE the row exists —
+  // see the requireFeature calls' own comment for why that is still correct.
+  const competitionId = randomUUID();
+
   // Entitlement gates BEFORE any insert (doc 10 §1 pattern createStages
   // follows) — checked across every division/stage up front so a Community
   // org gets ONE clean 402, never a half-created competition. A template
   // must never become a way to reach a Pro stage kind for free.
+  //
+  // The competition id IS passed, even though the row does not exist yet:
+  // pass-scoping-guard.test.ts sweeps every requireFeature/hasFeature/
+  // getLimit/withinLimit call against a "lifted" (Event-Pass-overridable)
+  // key and fails any enforcement-layer call that drops the competition id
+  // — the exact bug class that made `branding`/`realtime` Event Pass grants
+  // invisible. An Event Pass is always bought FOR an existing competition
+  // (competition_passes.competition_id is a real FK), so no pass can
+  // reference this id before the insert below commits; passing it now
+  // resolves zero passes today (correct — none can exist yet) and is wired
+  // correctly for good, rather than omitted and silently unfixable later.
   for (const division of template.divisions) {
     for (const stage of division.stages) {
       if (stageNeedsDoubleElimGate(stage)) {
-        await requireFeature(auth.orgId, "formats.double_elim");
+        await requireFeature(auth.orgId, "formats.double_elim", competitionId);
       }
       if (stageNeedsAdvancedFormatsGate(stage)) {
-        await requireFeature(auth.orgId, "formats.advanced");
+        await requireFeature(auth.orgId, "formats.advanced", competitionId);
       }
     }
   }
@@ -127,7 +143,6 @@ export async function instantiateTemplate(
   if (input.visibility === "public") await assertPublicQuota(auth);
 
   const dict = await getDictionary("en", "ui");
-  const competitionId = randomUUID();
 
   const { slug, divisions } = await withTenant(auth.orgId, async (tx) => {
     const slug = await uniqueSlug(slugify(input.name), async (s) => {
