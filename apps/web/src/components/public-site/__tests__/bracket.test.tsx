@@ -4,15 +4,19 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { Bracket } from "../bracket";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 const F = (
   id: string, round: number, seq: number,
   home: string | null, away: string | null,
   outcome: { kind?: string; winner?: string } | null,
   status = "scheduled",
+  homeSlotLabel: SlotLabel | null = null,
+  awaySlotLabel: SlotLabel | null = null,
 ) => ({
   id, division_id: "d", stage_id: "s", pool_id: null, round_no: round,
   seq_in_round: seq, home_entrant_id: home, away_entrant_id: away,
+  home_slot_label: homeSlotLabel, away_slot_label: awaySlotLabel,
   scheduled_at: null, venue: null, court_label: null, status, outcome,
   summary: outcome ? { headline: "2–0" } : null,
 });
@@ -126,5 +130,48 @@ describe("public Bracket", () => {
     for (const cap of ["Qualifier 1", "Eliminator", "Qualifier 2", "Final"]) expect(html).toContain(cap);
     expect(html.match(/data-slot=/g)?.length).toBe(4);
     expect(html).toContain("<svg");
+  });
+
+  // P6/D4b task A — regression: a fixture list with a MIX of a filled
+  // (real-entrant) row and an unfilled row carrying a real V360 slot label
+  // must render BOTH correctly through the SAME shared resolver, against the
+  // REAL en dictionary (this file's Bracket never mocks msg()/useMsg() — it
+  // imports the client-safe msg() directly), not the raw "TBD" this surface
+  // printed before P6. Anchored on `="` per the RSC vacuous-assertion rule:
+  // a bare data-* probe would pass whether or not the label actually
+  // resolved (React serialises an omitted prop as the literal string
+  // "$undefined"), so every assertion below checks the actual rendered text
+  // between real tags, not merely that some attribute is present.
+  it("a MIX of filled and slot-labelled TBD rows both render — real dictionary, no raw \"TBD\"", () => {
+    const fixtures = [
+      // f1: fully decided, both sides real entrants — the "filled" row.
+      F("f1", 0, 1, "a", "b", { kind: "win", winner: "a" }, "decided"),
+      // f2: home real, away UNDECIDED but carries a real slot label — the
+      // "TBD with a label" row (V360's descriptorLabel() shape).
+      F("f2", 0, 2, "c", null, null, "scheduled", null, { key: "slot.winner_group", params: { g: "A" } }),
+      // f3 (round 1, the final): BOTH sides undecided, one with a label, one
+      // truly unknown — proves the null-label fallback stays distinct from
+      // a resolved label in the SAME render pass.
+      F("f3", 1, 1, null, null, null, "scheduled", { key: "slot.runner_up_group", params: { g: "B" } }, null),
+    ];
+    const html = renderToStaticMarkup(
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+    );
+    // Filled row: real entrant names, anchored as actual rendered text.
+    expect(html).toMatch(/>Ants<\/span>/);
+    expect(html).toMatch(/>Bees<\/span>/);
+    // TBD-with-label rows: the REAL interpolated English text from
+    // dictionaries/en/ui.json, not the bare key and not a hand-concatenated
+    // string — proves the label path is live end to end on this surface.
+    expect(html).toMatch(/>Winner of Group A<\/span>/);
+    expect(html).toMatch(/>Runner-up of Group B<\/span>/);
+    // The one truly-unknown side (f3's home) falls back to the existing
+    // localized "bracket.tbd" text — still not a hardcoded literal in THIS
+    // component, but genuinely equal to it in English.
+    expect(html).toMatch(/>TBD<\/span>/);
+    // No leaked pattern keys or unfilled {placeholder} tokens anywhere.
+    expect(html).not.toContain("slot.winner_group");
+    expect(html).not.toContain("slot.runner_up_group");
+    expect(html).not.toMatch(/\{[a-zA-Z]+\}/);
   });
 });
