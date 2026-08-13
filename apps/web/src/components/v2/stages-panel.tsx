@@ -656,7 +656,38 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                   <button
                     type="button"
                     disabled={busy !== null}
-                    onClick={() => act(stage.id, "generate")}
+                    onClick={async () => {
+                      // P6/D4b task B, scope item 2: a late structure/rules
+                      // edit makes THIS SAME click destructive —
+                      // generateStageFixtures is an idempotent diff, so
+                      // re-running it once fixtures already exist can
+                      // discard some of them. Gate only that case; the
+                      // common first-generate (stageFixtures.length === 0)
+                      // stays a single click, unchanged.
+                      if (stageFixtures.length > 0) {
+                        const radius = regenerationBlastRadius(stageFixtures);
+                        const ok = await confirmDialog({
+                          title: msg("confirm.regenerateStage.title"),
+                          body: (
+                            <>
+                              <p>{msg("confirm.regenerateStage.body", { n: radius.discarded })}</p>
+                              {(radius.scheduled > 0 || radius.withResults > 0) && (
+                                <p>
+                                  {msg("confirm.regenerateStage.bodyDetail", {
+                                    scheduled: radius.scheduled,
+                                    withResults: radius.withResults,
+                                  })}
+                                </p>
+                              )}
+                            </>
+                          ),
+                          confirmLabel: msg("confirm.regenerateStage.label"),
+                          tone: "danger",
+                        });
+                        if (!ok) return;
+                      }
+                      void act(stage.id, "generate");
+                    }}
                     className="btn btn-ghost px-3 py-1.5 text-xs"
                   >
                     {busy === stage.id
@@ -1018,6 +1049,32 @@ export function generatePreconditionMessage(err: unknown, msg: Msg): string | nu
         groups,
       })
     : msg("schedule.error.tooFewEntrants");
+}
+
+/**
+ * Regeneration blast radius (P6/D4b task B scope item 2 — the destructive-
+ * edit warning dialog). `generateStageFixtures` is an idempotent DIFF: run
+ * again after a stage's size/rules changed (a late structure edit), it can
+ * discard fixtures whose stable id no longer matches the fresh generation.
+ * That diff runs server-side only (the generator is engine-only) — owner
+ * ruling (plan doc): the dialog computes its OWN blast radius client-side,
+ * from the fixtures the panel already holds, rather than reimplementing or
+ * calling out for the real diff. Every fixture currently in the stage is
+ * therefore the (worst-case) discard count; `scheduled`/`withResults` name
+ * how much of that is actually at stake. `withResults` mirrors outcomeText's
+ * own `outcome?.kind` check — the same "has a real result" test this file
+ * already uses, not a second definition of it.
+ */
+export function regenerationBlastRadius(stageFixtures: FixtureRow[]): {
+  discarded: number;
+  scheduled: number;
+  withResults: number;
+} {
+  return {
+    discarded: stageFixtures.length,
+    scheduled: stageFixtures.filter((f) => f.scheduled_at !== null).length,
+    withResults: stageFixtures.filter((f) => Boolean((f.outcome as { kind?: string } | null)?.kind)).length,
+  };
 }
 
 /** A bye: one side empty with an auto-advance award outcome (v3/04 §3 item 6). */
