@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { getScheduleHealth } from "../schedule-health";
+import { getScheduleHealth, getCompetitionScheduleHealth } from "../schedule-health";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -27,6 +27,7 @@ const at = (hhmm: string) => `${DAY}T${hhmm}:00.000Z`;
 interface Seeded {
   auth: AuthCtx;
   stageId: string;
+  competitionId: string;
   names: string[];
 }
 
@@ -107,6 +108,7 @@ async function seedLopsidedLeague(): Promise<Seeded> {
   return {
     auth: { orgId, via: "session", userId, role: "owner", keyId: null },
     stageId,
+    competitionId,
     names,
   };
 }
@@ -156,5 +158,38 @@ describe.skipIf(!HAS_DB)("schedule health — offender labels", () => {
     // test had on its first draft.
     for (const o of entrantOffenders) expect(o.label.length).toBeGreaterThan(0);
     expect(entrantOffenders.some((o) => names.includes(o.label))).toBe(true);
+  });
+});
+
+describe.skipIf(!HAS_DB)("schedule health — JOINT report offender labels", () => {
+  it("names entrant offenders in the combined block too, not just per stage", async () => {
+    // The per-stage fix went inside `computeStageHealth`, which the joint
+    // route calls once per stage — so the per-division entries inherited it.
+    // The `combined` block does NOT go through that function: it calls
+    // `assessHealth` directly on the union of every stage's fixtures,
+    // because there is no single stage to compute. It therefore did not
+    // inherit the name resolution, and the joint report kept rendering
+    // `Entrant · <uuid>` after the per-stage bug was declared fixed.
+    //
+    // Nothing caught it: scripts/smoke.ts and schedule-health.spec.ts both
+    // type `combined.metrics` as `{key, score}` and never read `offenders`
+    // at all. `primeSlotFairness` is one of the two metrics COMBINED keeps
+    // and it emits entrant offenders, so this is the assertion that was
+    // missing.
+    const { auth, competitionId, names } = await seedLopsidedLeague();
+    const report = await getCompetitionScheduleHealth(auth, competitionId);
+
+    const combinedEntrantOffenders = report.combined.metrics.flatMap((m) =>
+      m.offenders.filter((o) => o.kind === "entrant"),
+    );
+    // Guard the premise — no entrant offenders in the combined block would
+    // make every assertion below vacuously true.
+    expect(combinedEntrantOffenders.length).toBeGreaterThan(0);
+
+    for (const o of combinedEntrantOffenders) {
+      expect(o.label, `combined offender label is a raw uuid: ${o.label}`).not.toMatch(UUID_RE);
+      expect(names).toContain(o.label);
+      expect(o.id).toMatch(UUID_RE);
+    }
   });
 });
