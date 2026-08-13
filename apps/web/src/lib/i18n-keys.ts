@@ -2264,6 +2264,7 @@ export type DictionaryKey =
   | "news.composer.titlePlaceholder"
   | "news.delete"
   | "news.digest.claimed.line"
+  | "news.digest.empty"
   | "news.digest.leaders.row"
   | "news.digest.section.claimed"
   | "news.digest.section.leaders"
