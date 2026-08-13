@@ -2800,6 +2800,7 @@
   "news.recap.standingsMovesTitle": "Movers",
   "news.recap.standingsMove": "{entrant} climbed from {from} to {to}.",
   "news.digest.title": "{orgName} — week of {weekOf}",
+  "news.digest.empty": "No results, standings movement or upcoming matches to report this week. Add your own update below, or publish this as is.",
   "news.digest.section.standings": "Standings movement",
   "news.digest.standings.row": "{position}. {name} — {points} pts",
   "news.digest.standings.climber": "Biggest climber: {entrant} ({from} → {to})",

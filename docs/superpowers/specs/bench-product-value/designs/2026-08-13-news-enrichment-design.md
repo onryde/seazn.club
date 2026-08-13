@@ -127,7 +127,8 @@ degradation.
 ## Testing (all four)
 
 - Unit: template rendering with full/partial/absent enrichment (absent =
-  byte-identical to today's output — the no-regression anchor);
+  byte-identical to today's output — the no-regression anchor; see the
+  digest amendment below, which this anchor does NOT govern);
   leaderboard-move diffing; digest assembly windows at a DST boundary in
   org tz.
 - Regression: every new dictionary key present in all 4 locales (seeded
@@ -186,3 +187,37 @@ absent snapshots degrade sections, never abort.
 
 No LLM-generated prose (templates only), no email/push distribution, no
 per-player subscription feeds, no cron infra built for the digest.
+
+## Amendment (2026-08-13): the fully-empty weekly digest
+
+Reported from the running app: pressing **Generate digest** on a quiet
+org produced a post with a title and a completely blank body, which
+reads as a broken button rather than as "nothing happened this week".
+
+**Ruling: a fully-empty digest renders one sentence saying so.** The
+per-section rule above is unchanged — an absent section still renders no
+heading and no "no data" filler line. This governs only the case where
+EVERY section is absent, where the choice is between one sentence and
+nothing at all.
+
+This is recorded because it reverses a test that asserted `bodyMd === ""`
+("every section absent yields an empty body, never a placeholder
+sentence"), and because the reading behind that test is arguable rather
+than obviously wrong. Two clauses pull in opposite directions:
+
+- "Sections render ONLY when their data exists (absent section != empty
+  section — no 'no data' filler lines)" is scoped to SECTIONS, and the
+  test "an absent section renders no heading at all" is what pins it.
+- The Testing section's "absent = byte-identical to today's output — the
+  no-regression anchor" reads as a whole-body constraint.
+
+The second clause is about **enrichment being absent from a draft type
+that already existed** — a result or round_recap draft must not change
+when its enrichment sources go quiet. The weekly digest is new in D7, so
+it has no "today's output" to be byte-identical to, and the anchor cannot
+have been about it. That is the reading this amendment adopts.
+
+Stated plainly because the first attempt cited only the section-scoped
+clause and did not address this one, which made a genuine ambiguity look
+like a settled question. If the owner prefers the blank body, revert
+`news.digest.empty` and this amendment together.

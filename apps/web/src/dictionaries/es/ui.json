@@ -2800,6 +2800,7 @@
   "news.recap.standingsMovesTitle": "Movimientos",
   "news.recap.standingsMove": "{entrant} sube del puesto {from} al {to}.",
   "news.digest.title": "{orgName} — semana del {weekOf}",
+  "news.digest.empty": "Esta semana no hay resultados, cambios en la clasificación ni próximos partidos que contar. Añade tu propia actualización abajo o publícalo tal cual.",
   "news.digest.section.standings": "Movimientos en la clasificación",
   "news.digest.standings.row": "{position}. {name} — {points} pts",
   "news.digest.standings.climber": "Mayor ascenso: {entrant} ({from} → {to})",
