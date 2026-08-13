@@ -311,6 +311,101 @@ describe("assessHealth — primeSlotFairness", () => {
   });
 });
 
+describe("assessHealth — regression: full report pinned for one fixed board", () => {
+  it("matches the frozen report exactly — any metric drift reds this with a diff", () => {
+    // A small, asymmetric, DOUBLE-BOOKING-FREE round-robin board: 5 entrants
+    // (A:3, B:2, C:3, D:3, E:3 fixtures — never uniform), 2 courts, 2 days.
+    // Constructed as sequential "rounds" per court so no entrant is ever
+    // scheduled on two courts at once (verified programmatically while
+    // building this board — an earlier draft had exactly that bug: two
+    // fixtures 90 minutes apart on DIFFERENT courts for the same entrant,
+    // which produced a NEGATIVE restSpread gap and was caught only by
+    // checking for overlaps, not by eyeballing the numbers).
+    //
+    // Every number below was independently hand-derived from the formula
+    // text (shown in comments per metric) before being frozen here — not
+    // copied from a first run and trusted. The one deliberate exception is
+    // primeSlotFairness's 3rd offender: B and A are a MATHEMATICAL tie at
+    // exactly 1/6, but 18/7 and 12/7 round to different float64s on the way
+    // there, so B (whose rounding lands fractionally higher) wins the slot
+    // over lexicographic A — a real, deterministic, reproducible ordering,
+    // not a bug (confirmed via node -e before freezing this).
+    const DAY_MIN = 1440;
+    const day = (dayIdx: number, startMin: number, durMin: number, home: string, away: string, court: string): HealthFixture => ({
+      fixtureId: `${court[court.length - 1]}${dayIdx}_${startMin}`,
+      court,
+      dayKey: dayIdx === 0 ? "2026-11-02" : "2026-11-03",
+      start: (dayIdx * DAY_MIN + startMin) * MS_PER_MIN,
+      end: (dayIdx * DAY_MIN + startMin + durMin) * MS_PER_MIN,
+      home,
+      away,
+    });
+    const fixtures: HealthFixture[] = [
+      day(0, 0, 60, "A", "B", "Court A"),
+      day(0, 0, 60, "C", "D", "Court B"),
+      day(0, 90, 60, "A", "C", "Court A"),
+      day(0, 90, 60, "B", "E", "Court B"),
+      day(0, 200, 60, "D", "E", "Court B"),
+      day(1, 0, 60, "A", "D", "Court A"),
+      day(1, 0, 60, "C", "E", "Court B"),
+    ];
+    const config: HealthConfig = {
+      isRoundRobin: true,
+      courtWindows: { "Court A::2026-11-02": { from: -30 * MS_PER_MIN, to: 300 * MS_PER_MIN } },
+    };
+    const report = assessHealth(fixtures, config);
+    expect(report).toEqual({
+      metrics: [
+        {
+          key: "restSpread",
+          score: 64,
+          explanation: { key: "schedule.health.explain.restSpread", params: { count: 3 } },
+          offenders: [
+            { kind: "entrant", id: "A", label: "A", value: 30 },
+            { kind: "entrant", id: "C", label: "C", value: 30 },
+            { kind: "entrant", id: "E", label: "E", value: 50 },
+          ],
+        },
+        {
+          key: "courtBalance",
+          score: 46,
+          explanation: { key: "schedule.health.explain.courtBalance", params: { count: 3 } },
+          offenders: [
+            { kind: "entrant", id: "A", label: "A", value: 1 },
+            { kind: "entrant", id: "E", label: "E", value: 1 },
+            { kind: "entrant", id: "C", label: "C", value: 2 },
+          ],
+        },
+        {
+          key: "gapDispersion",
+          score: 43,
+          explanation: { key: "schedule.health.explain.gapDispersion", params: { count: 2 } },
+          offenders: [
+            { kind: "courtDay", id: "Court B::2026-11-02", label: "Court B 2026-11-02", value: 50 },
+            { kind: "courtDay", id: "Court A::2026-11-02", label: "Court A 2026-11-02", value: 30 },
+          ],
+        },
+        {
+          key: "homeAwayAlternation",
+          score: 60,
+          explanation: { key: "schedule.health.explain.homeAwayAlternation", params: { count: 0 } },
+          offenders: [],
+        },
+        {
+          key: "primeSlotFairness",
+          score: 81,
+          explanation: { key: "schedule.health.explain.primeSlotFairness", params: { count: 3 } },
+          offenders: [
+            { kind: "entrant", id: "C", label: "C", value: -0.57 },
+            { kind: "entrant", id: "D", label: "D", value: -0.57 },
+            { kind: "entrant", id: "B", label: "B", value: 0.29 },
+          ],
+        },
+      ],
+    });
+  });
+});
+
 describe("assessHealth — module purity (D3 contract: no imports, no DB, no solver, no clock, no pino)", () => {
   it("imports NOTHING — even leafer than capacity.ts, which imports rest-floor.ts — and never reads the wall clock or logs", () => {
     const path = fileURLToPath(new URL("./health.ts", import.meta.url));
