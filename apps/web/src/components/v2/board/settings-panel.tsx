@@ -36,7 +36,7 @@ import { pluralizeVenue } from "@/lib/venue";
 // (server-only).
 import { dayKeyInTz, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
 import { assessCapacity } from "@seazn/engine/scheduling/capacity";
-import { capacityInputForFixtures, type CapacityFixtureInput } from "@/lib/capacity-input";
+import { capacityInputForFixtures } from "@/lib/capacity-input";
 import { CapacityCard } from "@/components/v2/board/capacity-card";
 
 /** The end DATE field bounds a whole day, so it is stored as that day's last
@@ -61,6 +61,7 @@ export function StandaloneScheduleSettings(props: {
    *  zero fixtures). Structural, matching `FixtureRow` (stages.ts), so the
    *  page's already-fetched list passes straight through with no mapping. */
   fixtures?: readonly {
+    id: string;
     status: string;
     home_entrant_id: string | null;
     away_entrant_id: string | null;
@@ -110,6 +111,7 @@ export function SettingsPanel({
   constraintsAllowed: boolean;
   venueCap?: string;
   fixtures?: readonly {
+    id: string;
     status: string;
     home_entrant_id: string | null;
     away_entrant_id: string | null;
@@ -181,11 +183,20 @@ export function SettingsPanel({
             to: endIso ? zonedTimeToUtc(ymdAddDays(dayKeyInTz(Date.parse(endIso), orgTz), 1), "00:00", orgTz) : Infinity,
           };
     const movable = fixtures.filter((f) => f.status === "scheduled"); // MOVABLE_STATUS (schedule.ts) — a client component can't import it (server-only)
+    // `id` lets an `id`-kind fixture_on_date/fixture_on_weekday selector
+    // resolve into a forcedDemand floor on this card too (CapacityFixtureInput,
+    // capacity-input.ts). `extKey`/`winnerTo` are NOT available here — the
+    // page's fetched fixture list never carries `ext_key`/`winner_to_fixture`,
+    // and neither is in the public API schema — so a `terminal`/`ext_key`
+    // selector cannot resolve client-side and stays undercounted on this
+    // card. Same "client hint, server authority" split as demandCap; the
+    // server guard (competition-schedule-ai.ts) supplies all three.
     const input = capacityInputForFixtures(
       movable.map((f) => ({
         home: f.home_entrant_id ?? undefined,
         away: f.away_entrant_id ?? undefined,
         poolId: f.pool_id ?? undefined,
+        id: f.id,
       })),
       {
         courts,

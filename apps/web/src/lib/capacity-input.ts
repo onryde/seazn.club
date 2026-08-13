@@ -6,23 +6,30 @@
 // "which days/courts/entrants" would be exactly the placer/verifier fork
 // this codebase keeps naming as its recurring defect.
 //
-// Deliberately does NOT import `@seazn/engine/scheduling` (the barrel) or
-// any of its non-leaf modules (`calendar.ts`, `repair-domain.ts`): that
-// barrel is server-only (see scheduling/index.ts's header) and a `"use
+// Deliberately does NOT import `@seazn/engine/scheduling` (the barrel):
+// that barrel is server-only (see scheduling/index.ts's header) and a `"use
 // client"` file that reaches it ships z3-solver/@grpc into the browser
 // bundle — `bracket-panel.tsx`/`slideshow.tsx` did exactly this and broke
-// the production build until Task 11 found it. Only two engine imports are
-// used here, both declared LEAVES in package.json: `./scheduling/capacity`
-// (this feature's own pure lib) and `./scheduling/tz` (zero dependencies).
-// `HardConstraint` is a TYPE-ONLY import from the barrel, erased at build
-// time — it costs the bundle nothing regardless of source.
-import { dayKeyInTz, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
+// the production build until Task 11 found it. Every engine import here is
+// a LEAF declared in package.json: `./scheduling/capacity` (this feature's
+// own pure lib), `./scheduling/tz` (zero dependencies), and
+// `./scheduling/calendar` — added for `resolveSelector` alone (forced-
+// demand resolution below), and safe to add: calendar.ts's OWN imports are
+// type-only plus the same two already-approved leaves (`rest-floor.ts`,
+// `tz.ts`), verified before wiring this up. It stays a DEEP import
+// (`.../calendar`, never the barrel) for exactly that reason — the barrel's
+// `export *` chain is what drags in build.ts/placement-client.ts/grpc, not
+// calendar.ts itself. `HardConstraint`/`RuleFixture` are TYPE-ONLY imports,
+// erased at build time — they cost the bundle nothing regardless of source.
+import { dayKeyInTz, weekdayOfYmd, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
+import { resolveSelector } from "@seazn/engine/scheduling/calendar";
 import type {
   CapacityDay,
   CapacityEntrant,
   CapacityInput,
   CapacityWindow,
 } from "@seazn/engine/scheduling/capacity";
+import type { RuleFixture } from "@seazn/engine/scheduling/calendar";
 import type { HardConstraint } from "@seazn/engine/scheduling";
 
 /** Everything `capacityInputForFixtures` reads off a solved config. Plain
@@ -61,6 +68,25 @@ export interface CapacityFixtureInput {
   home?: string | undefined;
   away?: string | undefined;
   poolId?: string | undefined;
+  /** RuleFixture identity (calendar.ts:809 shape, minus `divisionId` — every
+   *  fixture handed to one `capacityInputForFixtures` call already belongs
+   *  to the single division being assessed, so the function's own
+   *  `divisionId` parameter stands in for it when resolving a selector; see
+   *  `forcedFixtureIdsByDate`). ALL THREE OPTIONAL and needed ONLY to
+   *  resolve a `fixture_on_date`/`fixture_on_weekday` selector into a
+   *  per-day FLOOR (`CapacityDay.forcedDemand`, capacity.ts's own doc
+   *  comment). A caller that omits them simply gets no floor computed —
+   *  under-counting is the direction this precheck must always err in, a
+   *  false floor is the direction it must never take (same doc comment).
+   *
+   *  The client card's live form state does not track per-fixture identity
+   *  today (`ext_key`/`winner_to_fixture` are not even in the public API
+   *  schema — see stages-panel.tsx/settings-panel.tsx's own comments at
+   *  their `capacityInputForFixtures` call sites) — that is fine and
+   *  already precedented by `demandCap`: "client hint, server authority". */
+  id?: string | undefined;
+  extKey?: string | null | undefined;
+  winnerTo?: string | null | undefined;
 }
 
 /** The calendar days a window covers, in `tz`, UNPADDED (unlike the
@@ -151,21 +177,127 @@ function dayCapFor(config: CapacityConfigInput, divisionId: string): number | un
   return cap;
 }
 
-function capacityDays(config: CapacityConfigInput, divisionId: string): CapacityDay[] {
+/** A sentinel `winnerTo` for a fixture whose terminal status the caller
+ *  never supplied (`CapacityFixtureInput.winnerTo === undefined`, distinct
+ *  from a KNOWN `null`). MUST be non-null: `null` is `resolveSelector`'s
+ *  own definition of "terminal" (`f.winnerTo === null`), so defaulting an
+ *  UNKNOWN status to `null` would make every fixture of unknown terminal
+ *  status match a `terminal` selector — the over-counting direction
+ *  `forcedDemand`'s doc comment (capacity.ts) forbids. Any fixed non-null
+ *  string is safe here since `resolveSelector` only ever compares this
+ *  field to the literal `null`, never to another fixture's id. */
+const UNRESOLVED_WINNER_TO = "__capacity_input_unresolved_winner_to__";
+
+/** `CapacityFixtureInput[]` -> the `RuleFixture[]` pool `resolveSelector`
+ *  resolves against. A fixture missing `id` can never be identified, so it
+ *  is EXCLUDED from the pool rather than guessed at — the same
+ *  never-manufacture-a-false-floor rule the sentinel above follows for
+ *  `winnerTo`. Every fixture is stamped with THIS division's id regardless
+ *  of what (if anything) it supplies of its own: one `capacityDays` call
+ *  only ever assesses one division's fixtures, so there is nothing for a
+ *  per-fixture `divisionId` to disambiguate, and requiring the caller to
+ *  repeat it on every fixture would be a redundant field to get wrong. */
+function toRuleFixturePool(fixtures: readonly CapacityFixtureInput[], divisionId: string): RuleFixture[] {
+  const out: RuleFixture[] = [];
+  for (const f of fixtures) {
+    if (f.id === undefined) continue;
+    out.push({
+      id: f.id,
+      extKey: f.extKey ?? null,
+      divisionId,
+      ...(f.poolId !== undefined ? { poolId: f.poolId } : {}),
+      winnerTo: f.winnerTo === undefined ? UNRESOLVED_WINNER_TO : f.winnerTo,
+    });
+  }
+  return out;
+}
+
+/** `CapacityDay.forcedDemand` per date — the day's FLOOR, resolved through
+ *  the engine's OWN `resolveSelector` (never reimplemented — see this
+ *  file's header) so a `fixture_on_date`/`fixture_on_weekday` rule is
+ *  judged by the SAME predicate the placer and verifier already use.
+ *
+ *  Scope and merge exactly mirror `dayCapFor`: `hard`/`constraints.hard`
+ *  concatenated (not deduped — `resolveSelector` is called once per rule
+ *  and the results are UNIONED into a per-date Set below, so a fixture
+ *  named by two rules on the same date still counts once), and only
+ *  competition- or this-division-scoped rules apply — a pool/entrant/
+ *  person-scoped rule constrains a SUBSET of the day, not the whole day's
+ *  floor, which is exactly why `dayCapFor` excludes the same scopes for
+ *  `demandCap` (see its own comment).
+ *
+ *  `fixture_on_weekday` floors a date only when EXACTLY ONE bucket in the
+ *  window matches that weekday — several matches is a subset restriction
+ *  across multiple dates, not a floor on any one of them, and proving
+ *  infeasibility over subsets is a Hall condition `capacity.ts` deliberately
+ *  does not attempt (its own doc comment on `forcedDemand`). */
+function forcedFixtureIdsByDate(
+  fixtures: readonly CapacityFixtureInput[],
+  config: CapacityConfigInput,
+  divisionId: string,
+  bucketYmds: readonly string[],
+): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  const ruleFixtures = toRuleFixturePool(fixtures, divisionId);
+  if (ruleFixtures.length === 0) return out;
+
+  const add = (date: string, ids: readonly string[]): void => {
+    if (ids.length === 0) return;
+    let set = out.get(date);
+    if (set === undefined) {
+      set = new Set();
+      out.set(date, set);
+    }
+    for (const id of ids) set.add(id);
+  };
+  const appliesToDivision = (scope: HardConstraint["scope"]): boolean =>
+    scope.kind === "competition" || (scope.kind === "division" && scope.divisionId === divisionId);
+
+  const hard = [...(config.hard ?? []), ...(config.constraints?.hard ?? [])];
+  for (const h of hard) {
+    if (h.type === "fixture_on_date") {
+      if (!appliesToDivision(h.scope)) continue;
+      if (!bucketYmds.includes(h.date)) continue; // outside this window — constrains nothing here
+      add(h.date, resolveSelector(h.selector, h.scope, ruleFixtures).map((f) => f.id));
+    } else if (h.type === "fixture_on_weekday") {
+      if (!appliesToDivision(h.scope)) continue;
+      const matches = bucketYmds.filter((ymd) => weekdayOfYmd(ymd) === h.weekday);
+      if (matches.length !== 1) continue; // 0 or 2+ matches: not a floor (see header)
+      add(matches[0]!, resolveSelector(h.selector, h.scope, ruleFixtures).map((f) => f.id));
+    }
+  }
+  return out;
+}
+
+function capacityDays(
+  config: CapacityConfigInput,
+  divisionId: string,
+  fixtures: readonly CapacityFixtureInput[],
+): CapacityDay[] {
   const window = config.window!;
   const tz = config.tz!;
   const buckets = calendarDays(window, tz);
   const cap = dayCapFor(config, divisionId);
+  const forced = forcedFixtureIdsByDate(
+    fixtures,
+    config,
+    divisionId,
+    buckets.map((b) => b.ymd),
+  );
   const sessionWindows = config.sessionWindows ?? [];
   const blackouts = config.blackouts ?? [];
-  return buckets.map((b) => ({
-    date: b.ymd,
-    courts: config.courts.map((court) => ({
-      court,
-      windows: usableWindowsFor(court, b.from, b.to, sessionWindows, blackouts),
-    })),
-    ...(cap !== undefined ? { demandCap: cap } : {}),
-  }));
+  return buckets.map((b) => {
+    const forcedIds = forced.get(b.ymd);
+    return {
+      date: b.ymd,
+      courts: config.courts.map((court) => ({
+        court,
+        windows: usableWindowsFor(court, b.from, b.to, sessionWindows, blackouts),
+      })),
+      ...(cap !== undefined ? { demandCap: cap } : {}),
+      ...(forcedIds !== undefined && forcedIds.size > 0 ? { forcedDemand: forcedIds.size } : {}),
+    };
+  });
 }
 
 /** Per-entrant participation counts (k_e) off the fixture list, with the
@@ -216,7 +348,7 @@ export function capacityInputForFixtures(
         }
       : {}),
     fixtureCount: fixtures.length,
-    days: capacityDays(config, divisionId),
+    days: capacityDays(config, divisionId, fixtures),
     entrants: capacityEntrants(fixtures),
   };
 }

@@ -206,18 +206,28 @@ export function boardSlotOptionsFor(
  */
 export function capacityForStage(
   stageId: string,
-  fixtures: readonly Pick<FixtureRow, "stage_id" | "status" | "home_entrant_id" | "away_entrant_id" | "pool_id">[],
+  fixtures: readonly Pick<FixtureRow, "id" | "stage_id" | "status" | "home_entrant_id" | "away_entrant_id" | "pool_id">[],
   config: DivisionScheduleSettings["config"] | undefined,
   orgTz: string,
   divisionId: string,
 ): ReturnType<typeof assessCapacity> | null {
   if (config === undefined || config.matchMinutes === undefined || config.gapMinutes === undefined) return null;
   const movable = fixtures.filter((f) => f.stage_id === stageId && f.status === "scheduled");
+  // `id` is free (FixtureRow above already carries it) and lets an `id`-kind
+  // fixture_on_date/fixture_on_weekday selector resolve into a forcedDemand
+  // floor client-side too. `extKey`/`winnerTo` (CapacityFixtureInput's other
+  // two RuleFixture-identity fields, capacity-input.ts) are NOT available
+  // here — `FixtureRow` never fetches `ext_key`/`winner_to_fixture`, and
+  // neither is even in the public API schema — so a `terminal`/`ext_key`
+  // selector cannot resolve client-side and stays undercounted on this card.
+  // Same "client hint, server authority" split as demandCap; the server
+  // guard (competition-schedule-ai.ts) supplies all three from the DB row.
   const input = capacityInputForFixtures(
     movable.map((f) => ({
       home: f.home_entrant_id ?? undefined,
       away: f.away_entrant_id ?? undefined,
       poolId: f.pool_id ?? undefined,
+      id: f.id,
     })),
     {
       courts: config.courts ?? ["Court 1"],
