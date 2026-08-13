@@ -1867,6 +1867,20 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   durability poll (`Expected 3, Received 0`), restored from a `cp` backup and
   byte-verified. Node has no `indexedDB`, so this is the only coverage
   `queue-store.ts`'s open/cursor/transaction paths have anywhere.
+- 2026-08-12 — S10/#419 — **CI flake worth naming, in S8's code not this
+  session's: `entrant-members.test.ts`'s "same kind/personIds as the
+  division-wide loader" assertion is ORDER-SENSITIVE.** Seen once on
+  `d0a4e6a2` (`Smoke — DB + Redis suites`), green on the previous CI run of
+  the same branch and green in every local full-suite run. The reported diff
+  shows the SAME uuid on both sides, so the two loaders agree on membership
+  and disagree on ORDER — i.e. `loadEntrantMembersForFixture` and
+  `loadEntrantMembersForDivision` do not both impose a deterministic
+  `order by`, and Postgres is free to return rows in whatever order a given
+  plan produces. Not fixed here (S8's files, outside this session's set, and
+  the standing rule is not to chase an unrelated red), but recorded because
+  the failure mode is a real latent defect rather than infrastructure noise:
+  it will keep reappearing at random until one of the two loaders sorts, and
+  the person-level stats built on top of them compare by position.
 - _(append below)_
 
 ## Open questions for the owner
