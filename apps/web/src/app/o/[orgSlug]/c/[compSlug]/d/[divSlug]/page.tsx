@@ -11,7 +11,7 @@ import { requireDivisionPage } from "@/server/page-auth";
 import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
 import { getCompetition } from "@/server/usecases/competitions";
-import { listStages, getStandings } from "@/server/usecases/stages";
+import { listStages, getStandings, getSeedProposal } from "@/server/usecases/stages";
 import { listDivisionFixtures, listFixtureHeadlines } from "@/server/usecases/fixtures";
 import { BracketPanel } from "@/components/v2/bracket-panel";
 import { listEntrants } from "@/server/usecases/entrants";
@@ -29,6 +29,7 @@ import { formatLocked } from "@/lib/format-lock";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { StagesPanel } from "@/components/v2/stages-panel";
+import { ProgressionPanel } from "@/components/v2/progression-panel";
 import { LaunchActions } from "@/components/v2/launch-actions";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import { ResultsMatrix } from "@/components/public-site/results-matrix";
@@ -111,6 +112,12 @@ export default async function DivisionPage({
     getScheduleSettings(auth, id),
     hasFeature(auth.orgId, "exports"),
   ]);
+  // Moved up from just before the JSX return (still THE canonical
+  // frozen/editable derivation, unchanged) — the P6/D4b task B proposal
+  // panel below needs it to gate getSeedProposal, which must not fetch (let
+  // alone render mutating controls) for a viewer or a frozen competition.
+  const frozen = competition.frozen ?? false;
+  const editable = canEdit && !frozen;
   const sportModule = resolveModule(division.sport_key, division.module_version);
   // Effective entrant model (sport default ← config.entrants override) — shared
   // by the entrants panel (add form + roster editor) and the Settings tab.
@@ -118,6 +125,17 @@ export default async function DivisionPage({
   const entrantNames = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
   const BRACKET_STAGE_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
   const hasKnockout = stages.some((s) => BRACKET_STAGE_KINDS.has(s.kind));
+  // P6/D4b task B — the proposal panel, one per `.seeding`-declared stage.
+  // getSeedProposal is read-only (no route: stage_seed_proposals has no GET,
+  // see its docstring) and organiser-only, so it's fetched only on the
+  // fixtures tab for an editable (canEdit, not frozen) division — same
+  // conditional-fetch shape as entrantLogos/headlines just above/below.
+  const seedingStages = stages.filter((s) => s.seeding != null);
+  const seedProposals =
+    tab === "fixtures" && editable && seedingStages.length > 0
+      ? await Promise.all(seedingStages.map((s) => getSeedProposal(auth, s.id)))
+      : [];
+  const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
   // Badge chips on standings rows (v3/03 §5) — resolved once per render.
   // PROMPT-62: the bracket panel on the fixtures tab shows them too.
   const entrantLogos =
@@ -178,9 +196,6 @@ export default async function DivisionPage({
           }),
         )
       : [];
-
-  const frozen = competition.frozen ?? false;
-  const editable = canEdit && !frozen;
 
   return (
     <>
@@ -330,6 +345,22 @@ export default async function DivisionPage({
                   />
                 </div>
               ))}
+            {/* P6/D4b task B — one proposal panel per `.seeding`-declared
+                stage, above StagesPanel: propose/edit/confirm who fills the
+                stage's TBD slots before the stage's own timetable card. */}
+            {seedingStages.map((st, i) => (
+              <ProgressionPanel
+                key={st.id}
+                stageId={st.id}
+                stageName={st.name}
+                proposal={seedProposals[i] ?? null}
+                fixtures={fixtures}
+                entrantNames={entrantNames}
+                stageNames={stageNames}
+                locale={locale}
+                canEdit={editable}
+              />
+            ))}
             <StagesPanel
               divisionId={id}
               divisionSeq={division.seq}
