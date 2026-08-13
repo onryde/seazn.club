@@ -408,3 +408,30 @@ used power-of-two counts).
 service.** The name guard cannot help a caller already deployed with the old
 list; new web against an old service simply never reaches `TIER_COUNT`, which is
 degraded but honest.
+
+#### OPEN, separately: main can throw `assertNoNewBlocking` on apply (intermittent)
+
+Distinct from the gate defect above, and it reproduces WITHOUT any gate change.
+
+`schedule-solver-telemetry.test.ts` → "reflow leaves an already-legal board
+untouched, including a card parked late" fails on `origin/main` with a real
+placement service and a brand-new database. **Measured 1 red in 3 runs**; a
+second session hit the identical failure on a PR touching only
+`.github/workflows/e2e.yml`, i.e. with zero source changes.
+
+```
+EngineError: schedule change hits a blocking conflict
+  assertNoNewBlocking  schedule.ts:930
+  applySchedule        schedule.ts:2003   <- the manual park, not the build
+```
+
+So main today can propose a board that throws when applied — not merely the
+`already_optimal` misreport. Nondeterministic, so a single green run does not
+clear it and one red does not prove a regression: **always run it several
+times before attributing it to a diff.** That property is what let it sit
+unnoticed, and it is why the C2 gate work spent a cycle chasing it as its own.
+
+Likely related to C2 shipping the day-aware ladder into the solver while the TS
+side still reasons about boards the old way, but that is a hypothesis — the
+failing call is the manual park, so start by asking which conflict
+`deltaConflicts` actually returns there rather than assuming round order.
