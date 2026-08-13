@@ -75,6 +75,27 @@
 // below now also delegates to, rather than two differently-shaped merges
 // that can drift) — see the effect below the `useFixtureStream` wiring for
 // the adoption itself.
+//
+// SCOPE BOUNDARY, S12/#421 PASS F UPDATE: the PASS E paragraph above ("The
+// ack path (`runDrain`) was never the bug: it already appends its own
+// just-acked event onto `ledgerEventsRef.current` correctly") was only true
+// relative to THAT pass's own traced defect (the missing core.start) - not a
+// general clean bill of health. A later review found the ack append
+// independently broken: it built its result with a raw spread
+// (`[...ledgerEventsRef.current, pendingToEnvelope(...)]`), never through
+// `mergeEnvelopesIntoLedger` like the other two writers into `ledgerEvents`
+// (`onStreamEvents`'s poll path, the `initialEvents`-adoption effect just
+// below). If this device's own append response resolves AFTER a poll tick or
+// an `initialEvents` re-seed has already merged the server's committed row
+// for that SAME seq - realistic exactly because this file's comments (and
+// scoring.ts's doc 08 par.4) treat flaky courtside wifi as the normal case,
+// not an edge case - `ledgerEvents` ended up with TWO entries at one seq,
+// permanently, and every fold after it double-counted that action. Fixed in
+// `runDrain` below: the ack append now goes through `mergeEnvelopesIntoLedger`
+// too, with `incomingWins: true` - the OPPOSITE of the other two callers'
+// default. See that call site's own comment for why the precedence has to
+// flip for this one caller (an `id`/`voids` argument, not an arbitrary
+// choice).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EngineError, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -277,28 +298,36 @@ function ledgerSlotToEnvelope(fixtureId: string, row: LedgerSlotEvent): EventEnv
 
 /**
  * Merge a batch of already-widened envelopes into the known ledger, by seq,
- * deduplicated, kept ascending — the ONE primitive both `mergeLedgerEvents`
- * (the poll/realtime path, S12/#421 pass C) and the `initialEvents`-adoption
- * effect below (pass E) reduce to, rather than two differently-shaped merges
- * that can drift (this repo has a recorded bug from exactly that shape: two
- * parallel lookup paths). A batch may overlap what this hook already knows
- * (its own just-acked events from `runDrain`, a previous poll's rows, or a
- * previous `initialEvents`): on a seq collision the EXISTING entry always
- * wins, never the incoming one, so this can never regress a richer envelope
- * this hook already built or fetched itself — `runDrain`'s own
- * `pendingToEnvelope` sets `voids` for a core.void THIS device recorded,
- * which a bare polled ledger row can never reconstruct. Touches only the
- * ledger list; `pendingEnvelopes` (the offline queue) is untouched by
- * construction, so neither caller can ever drop or reorder a still-queued
+ * deduplicated, kept ascending — the ONE primitive `mergeLedgerEvents` (the
+ * poll/realtime path, S12/#421 pass C), the `initialEvents`-adoption effect
+ * below (pass E), AND `runDrain`'s own ack append (pass F) all reduce to,
+ * rather than differently-shaped merges that can drift (this repo has a
+ * recorded bug from exactly that shape: two parallel lookup paths). Touches
+ * only the ledger list; `pendingEnvelopes` (the offline queue) is untouched
+ * by construction, so no caller can ever drop or reorder a still-queued
  * local write.
+ *
+ * On a seq collision, `current` wins UNLESS `opts.incomingWins` is set.
+ * Default (`current` wins) is what `mergeLedgerEvents` and the
+ * `initialEvents` effect need: a batch may overlap what this hook already
+ * knows (a previous poll's rows, or a previous `initialEvents`), and the
+ * EXISTING entry must win so this can never regress a richer envelope this
+ * hook already built or fetched itself — `runDrain`'s own `pendingToEnvelope`
+ * sets `voids` for a core.void THIS device recorded, which a bare polled
+ * ledger row can never reconstruct. `runDrain`'s ack append (pass F) needs
+ * the OPPOSITE precedence — see that call site's own comment for the
+ * `id`/`voids` argument for why.
  */
 function mergeEnvelopesIntoLedger(
   current: readonly EventEnvelope[],
   incoming: readonly EventEnvelope[],
+  opts?: { incomingWins?: boolean },
 ): EventEnvelope[] {
+  const first = opts?.incomingWins ? incoming : current;
+  const second = opts?.incomingWins ? current : incoming;
   const bySeq = new Map<number, EventEnvelope>();
-  for (const event of current) bySeq.set(event.seq, event);
-  for (const event of incoming) {
+  for (const event of first) bySeq.set(event.seq, event);
+  for (const event of second) {
     if (!bySeq.has(event.seq)) bySeq.set(event.seq, event);
   }
   return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
@@ -573,7 +602,44 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           // so pendingToEnvelope's own expectedSeq+1 default is already
           // right there and needs no override.
           const confirmedSeq = outcome.kind === "acked" ? outcome.result.seq : undefined;
-          const withAck = [...ledgerEventsRef.current, pendingToEnvelope(fixtureId, identity, next, confirmedSeq)];
+          const acked = pendingToEnvelope(fixtureId, identity, next, confirmedSeq);
+          // S12/#421 pass F — was a raw spread
+          // (`[...ledgerEventsRef.current, acked]`), never routed through
+          // mergeEnvelopesIntoLedger like the other two writers into
+          // ledgerEvents. ledgerEventsRef.current can ALREADY hold an entry
+          // at acked.seq if a poll tick (onStreamEvents) or an initialEvents
+          // re-seed observed the server's committed row for this SAME event
+          // before this append's own HTTP response made it back -
+          // skipPollWhileDraining only blocks a NEW poll from starting, not
+          // an initialEvents prop change (no such guard on that effect) or a
+          // poll already in flight when the drain began. The raw spread
+          // never checked for that, so both entries survived - permanent for
+          // the life of the mount, double-counting this event in every fold
+          // after it.
+          //
+          // Seq is server-assigned and unique per fixture (the entire point
+          // of expected_seq optimistic concurrency - append-event.ts), so a
+          // collision here is PROVABLY the same event, never a different
+          // foreign one: safe to let one side win outright.
+          //
+          // incomingWins: true - the OPPOSITE of the other two callers'
+          // default, deliberately. Confirmed against
+          // server/engine-db/append-event.ts: the persisted row's id is
+          // `input.id ?? randomUUID()`, and scoring.ts never passes
+          // input.id - so a poll/initialEvents widening of this same event
+          // always carries a FRESH server-random id, never this pending
+          // event's idempotencyKey. If the existing ledger entry won here
+          // instead, the surviving copy's id would no longer match what
+          // markOwn recorded in ownEventIds for this event - silently
+          // breaking "is this mine" attribution for exactly the race this
+          // fix closes. Worse for a core.void: ledgerSlotToEnvelope never
+          // carries voids (LedgerSlotEvent has no such field, types.ts), so
+          // a foreign-sourced copy of THIS device's own void would fold as a
+          // no-op and silently fail to reverse the event it targeted.
+          // `acked` (built fresh, this call, from this hook's own identity)
+          // is always the richer, correctly-attributed copy, so it must win
+          // outright, not merely survive alongside the other one.
+          const withAck = mergeEnvelopesIntoLedger(ledgerEventsRef.current, [acked], { incomingWins: true });
           commitLedgerEvents(withAck);
           void reconcileAfterAck(withAck);
         } else if (outcome.kind === "rejected") {

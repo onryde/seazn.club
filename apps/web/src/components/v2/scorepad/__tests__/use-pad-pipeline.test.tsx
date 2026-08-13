@@ -1131,3 +1131,142 @@ describe("usePadPipeline — offline queue survives an initialEvents change unde
     expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({ home: 1, away: 1 });
   });
 });
+
+// S12/#421 pass F: runDrain's ack branch built its ledger append with a raw
+// spread ([...ledgerEventsRef.current, pendingToEnvelope(...)]), never
+// through mergeEnvelopesIntoLedger like the other two writers into
+// ledgerEvents (onStreamEvents' poll path above, the initialEvents-adoption
+// effect above that). If this device's own append response resolves AFTER a
+// poll tick or an initialEvents re-seed has already merged the server's
+// committed row for that SAME seq, the raw spread never checked for the
+// collision, so BOTH entries survived at one seq, permanently, and every
+// fold after it double-counted the event. Reproduced here via the
+// initialEvents path (interchangeable with the poll path per the file
+// header's PASS F note - both funnel through mergeEnvelopesIntoLedger).
+describe("usePadPipeline — the ack append shares the ledger merge primitive (S12/#421 pass F)", () => {
+  it("MUTATION TARGET: a server row for this same event merged in first (initialEvents re-seed) leaves exactly one entry at that seq once the ack resolves, and the fold does not double-count it", async () => {
+    const gate = deferred<AppendCallResult>();
+    const transport: PadTransport = {
+      async appendEvent() {
+        return gate.promise;
+      },
+      async listEventsSince() {
+        return [];
+      },
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        // state: null - reconcileAfterAck's own documented no-op guard, so
+        // serverOverride can never mask what ledgerEvents/the optimistic
+        // fold itself computed below (the actual thing under test).
+        return { status: "in_play", last_seq: 1, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport }));
+
+    const submitPromise = pad.current.submit("generic.score", { by: "H", points: 3 });
+    await tick(); // drain reaches sendOne -> transport.appendEvent, now gated on the deferred promise
+
+    // A poll tick or an initialEvents re-seed observes the server's
+    // ALREADY-COMMITTED row for this exact event, at the seq this pending
+    // submit will itself be confirmed at (seq 1: the first event on a fresh
+    // fixture), before this device's own append response makes it back. Its
+    // id is a fresh server-random uuid, deliberately NOT the pending event's
+    // idempotencyKey - exactly what a real ledgerSlotToEnvelope widening
+    // produces (append-event.ts: the persisted row's id is
+    // `input.id ?? randomUUID()`, and scoring.ts never forwards the
+    // client's idempotency key as that id).
+    const serverRow: EventEnvelope = {
+      id: "server-row-1",
+      fixtureId: "fx-1",
+      seq: 1,
+      type: "generic.score",
+      payload: { by: "H", points: 3 },
+      recordedAt: "2026-08-13T00:00:05.000Z",
+      recordedBy: "user-1",
+    };
+    pad.rerender(baseParams({ transport, initialEvents: [serverRow] }));
+
+    // This device's OWN append response finally arrives, for the SAME event.
+    gate.resolve(success(1));
+    await submitPromise;
+
+    const atSeq1 = pad.current.events.filter((e) => e.seq === 1);
+    expect(atSeq1).toHaveLength(1); // never two entries at one seq
+    // Not double-counted - a surviving duplicate would fold generic.score
+    // twice: {home: 6, away: 0}, not {home: 3, away: 0}.
+    expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({ home: 3, away: 0 });
+    // The LOCAL copy must be the survivor, not the foreign-sourced one - it
+    // is the only copy ownEventIds (markOwn's own id) recognises as "mine".
+    expect(atSeq1[0]!.id).not.toBe("server-row-1");
+    expect(pad.current.ownEventIds.has(atSeq1[0]!.id)).toBe(true);
+  });
+
+  it("MUTATION TARGET: the locally-acked envelope wins the collision - a core.void's voids field survives even though a foreign-sourced copy of the same seq has none", async () => {
+    const initialEvents: EventEnvelope[] = [
+      {
+        id: "e-1",
+        fixtureId: "fx-1",
+        seq: 1,
+        type: "core.start",
+        payload: {},
+        recordedAt: "2026-08-13T00:00:00.000Z",
+        recordedBy: "user-1",
+      },
+      {
+        id: "e-2",
+        fixtureId: "fx-1",
+        seq: 2,
+        type: "generic.score",
+        payload: { by: "H", points: 3 },
+        recordedAt: "2026-08-13T00:00:01.000Z",
+        recordedBy: "user-1",
+      },
+    ];
+    const gate = deferred<AppendCallResult>();
+    const transport: PadTransport = {
+      async appendEvent() {
+        return gate.promise;
+      },
+      async listEventsSince() {
+        return [];
+      },
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 2, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport, initialEvents }));
+    expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({ home: 3, away: 0 });
+
+    const submitPromise = pad.current.submit("core.void", { event_id: "e-2" });
+    await tick();
+
+    // A foreign-sourced widening of THIS SAME void (a poll row, or a fresh
+    // initialEvents bootstrap fetched by another render) can never carry
+    // `voids` - LedgerSlotEvent has no such field (types.ts) - so it folds as
+    // a no-op core.void if it is allowed to be the surviving copy at this seq.
+    const foreignVoidRow: EventEnvelope = {
+      id: "server-void-row",
+      fixtureId: "fx-1",
+      seq: 3,
+      type: "core.void",
+      payload: {},
+      recordedAt: "2026-08-13T00:00:05.000Z",
+      recordedBy: "user-1",
+    };
+    pad.rerender(baseParams({ transport, initialEvents: [...initialEvents, foreignVoidRow] }));
+
+    gate.resolve(success(3));
+    await submitPromise;
+
+    expect(pad.current.events.filter((e) => e.seq === 3)).toHaveLength(1);
+    // If the foreign (voids-less) copy had won instead of the local one,
+    // this would still read {home: 3, away: 0} - the void would have folded
+    // as a no-op instead of reversing e-2.
+    expect((pad.current.state as { running: unknown }).running).toBeUndefined();
+  });
+});
