@@ -11,13 +11,21 @@ import { CalendarPlus } from "lucide-react";
 import type { PublicFixture } from "@/server/public-site/data";
 import { fmtTime, fmtDate, fmtZoneAbbrev } from "@/lib/format";
 import { msg } from "@/lib/messages";
-import { resolveSlotLabel } from "@/lib/slot-label";
-// This surface has no locale/<DictProvider> plumbing anywhere in its tree
-// today (confirmed: "Time TBD"/"Round"/"Live"/"Ended" etc. are all already
-// hardcoded English here, a pre-existing gap outside this task) — the slot
-// label goes through the SAME shared resolver as every localized surface,
-// via the client-safe English msg(), consistent with the rest of this file
-// rather than only this one string suddenly switching locale.
+// P6 fix round 1, finding #2 — this is a Client Component ("use client"
+// above) with no locale/<DictProvider> plumbing anywhere in its tree today
+// (confirmed: "Time TBD"/"Round"/"Live"/"Ended" etc. are all still hardcoded
+// English here, a pre-existing gap outside this task's scope). msgFor()
+// carries `server-only` and cannot be imported here at all, so slot labels
+// can't be resolved client-side the way this file's OTHER copy is English.
+// Instead the SERVER parent (the division/embed page, which already holds
+// `org.default_locale` per PublicOrg) pre-resolves every unfilled slot's
+// text via resolveSlotLabel(label, (k,v) => msgFor(orgLocale, k, v), …) and
+// hands the finished strings down as `slotLabels`, keyed `${fixtureId}:home`
+// / `${fixtureId}:away` — same shape as the existing `entrantNames` prop,
+// which is also a pre-resolved Record<string,string>, not a raw id to look
+// up here. `msg()` stays ONLY as the last-resort defensive fallback for a
+// key `slotLabels` should always carry (mirrors this file's existing
+// "never throws" convention).
 
 interface Props {
   fixtures: PublicFixture[];
@@ -26,6 +34,11 @@ interface Props {
   /** Venue zone (schedule_settings.tz) — times + day grouping are venue-local,
    *  the same for every viewer (spec 2026-07-14 two-lane, venue authoritative). */
   tz: string;
+  /** Pre-resolved, ORG-LOCALE slot-label text for every fixture with an
+   *  unfilled slot (V360/V361 home/away_slot_label) — built server-side by
+   *  the caller, keyed `${fixture.id}:home` / `${fixture.id}:away`. Absent
+   *  for a filled slot (real entrant). */
+  slotLabels: Record<string, string>;
 }
 
 // Day bucket key as the venue-local calendar date (YYYY-MM-DD) so a 23:30 venue
@@ -63,12 +76,14 @@ function ScorebugRow({
   href,
   railMode,
   tz,
+  slotLabels,
 }: {
   fixture: PublicFixture;
   entrantNames: Record<string, string>;
   href: string;
   railMode: "time" | "date";
   tz: string;
+  slotLabels: Record<string, string>;
 }) {
   const live = f.status === "in_play";
   const decided = f.status === "decided" || f.status === "finalized";
@@ -76,10 +91,10 @@ function ScorebugRow({
   const lines = decided || live ? sideLines(f) : null;
   const homeName = f.home_entrant_id
     ? (entrantNames[f.home_entrant_id] ?? "?")
-    : resolveSlotLabel(f.home_slot_label, msg, "schedule.tbd");
+    : (slotLabels[`${f.id}:home`] ?? msg("schedule.tbd"));
   const awayName = f.away_entrant_id
     ? (entrantNames[f.away_entrant_id] ?? "?")
-    : resolveSlotLabel(f.away_slot_label, msg, "schedule.tbd");
+    : (slotLabels[`${f.id}:away`] ?? msg("schedule.tbd"));
 
   const nameCls = (id: string | null) =>
     winner && id === winner
@@ -118,7 +133,7 @@ function ScorebugRow({
         </span>
       </span>
 
-      <span className={nameCls(f.home_entrant_id)}>{homeName}</span>
+      <span title={homeName} className={nameCls(f.home_entrant_id)}>{homeName}</span>
       {lines ? (
         <span className={scoreCls(f.home_entrant_id)}>{lines[0]}</span>
       ) : (
@@ -132,13 +147,13 @@ function ScorebugRow({
           {f.summary?.headline ?? (f.venue && railMode === "time" ? f.venue : "")}
         </span>
       )}
-      <span className={nameCls(f.away_entrant_id)}>{awayName}</span>
+      <span title={awayName} className={nameCls(f.away_entrant_id)}>{awayName}</span>
       {lines ? <span className={scoreCls(f.away_entrant_id)}>{lines[1]}</span> : null}
     </Link>
   );
 }
 
-export function Schedule({ fixtures, entrantNames, divisionPath, tz }: Props) {
+export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels }: Props) {
   const [entrant, setEntrant] = useState<string>("");
   // Day view first (fixtures by date) — matches how a spectator reads a
   // timetable on the day. Round view stays a click away for bracket-style flow.
@@ -261,6 +276,7 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz }: Props) {
                     href={`${divisionPath}/fixtures/${f.id}`}
                     railMode={mode === "day" ? "time" : "date"}
                     tz={tz}
+                    slotLabels={slotLabels}
                   />
                 </li>
               ))}

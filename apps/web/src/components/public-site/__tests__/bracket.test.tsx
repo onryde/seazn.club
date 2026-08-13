@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { Bracket } from "../bracket";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
+import { msgFor } from "@/lib/messages-i18n";
 
 const F = (
   id: string, round: number, seq: number,
@@ -173,5 +174,59 @@ describe("public Bracket", () => {
     expect(html).not.toContain("slot.winner_group");
     expect(html).not.toContain("slot.runner_up_group");
     expect(html).not.toMatch(/\{[a-zA-Z]+\}/);
+  });
+
+  // Fix round 1, finding #5 (MINOR): "slot.best_nth" resolves to text like
+  // "Best 3 of the 3rd-place teams" — far wider than a team name — and this
+  // node truncates it. Every side needs a `title` with the SAME text that
+  // renders, so a pointer/keyboard user can still read the whole label.
+  it("every truncated side carries a title with its own resolved text (finding #5)", () => {
+    const fixtures = [
+      F("f1", 0, 1, "a", "d", { kind: "win", winner: "a" }, "decided"),
+      F("f2", 0, 2, "b", null, null, "scheduled", null, { key: "slot.best_nth", params: { rank: 2, nth: 3 } }),
+      F("f3", 1, 1, null, null, null),
+    ];
+    const html = renderToStaticMarkup(
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+    );
+    expect(html).toContain('title="Ants"');
+    expect(html).toContain('title="Dogs"');
+    expect(html).toContain('title="Bees"');
+    expect(html).toContain('title="Best 2 of the 3-place teams"');
+  });
+
+  // Fix round 1, finding #2 (CRITICAL): this component previously had NO way
+  // to reach a real locale at all — it always resolved slot labels through
+  // the client-safe English msg(), regardless of the org's own
+  // default_locale. Proves the new `lookup` prop actually drives the
+  // rendered text (not just accepted and ignored) — the caller (the public
+  // division/embed pages) builds it from msgFor(orgLocale, …), same pattern
+  // as data.ts:502-503.
+  it("resolves slot labels through the injected `lookup`, not always English (finding #2)", () => {
+    const fixtures = [
+      F("f1", 0, 1, "a", "d", { kind: "win", winner: "a" }, "decided"),
+      F("f2", 0, 2, "b", null, null, "scheduled", null, { key: "slot.winner_group", params: { g: "A" } }),
+      F("f3", 1, 1, null, null, null),
+    ];
+    const esLookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor("es", k, v);
+    const html = renderToStaticMarkup(
+      createElement(Bracket, {
+        kind: "knockout",
+        fixtures: fixtures as never,
+        entrantNames: names,
+        fixtureHref: href,
+        lookup: esLookup,
+      }),
+    );
+    expect(html).toMatch(/>Ganador del Grupo A</); // slot.winner_group, es
+    expect(html).not.toContain("Winner of Group A");
+    // The genuinely-unknown side (f3) falls back through the SAME lookup —
+    // es's bracket.tbd ("Por definir"), not the English default. (f3's OWN
+    // scheduled_at/headline area separately and correctly renders a literal
+    // "TBD" — that is FixtureCard's pre-existing, out-of-scope time-status
+    // fallback, not a slot label, so this checks the SLOT specifically via
+    // its title attribute rather than a blanket "no TBD anywhere" scan.)
+    expect(html).toMatch(/title="Por definir"/);
+    expect(html).not.toContain("bracket.tbd");
   });
 });

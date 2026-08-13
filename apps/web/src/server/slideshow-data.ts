@@ -13,8 +13,10 @@ import { BRACKET_SLIDE_KINDS, bracketSlideLaysOut } from "@/components/v2/slides
 import { resolveLogoUrl } from "@/server/public-site/data";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { msg } from "@/lib/messages";
-import { resolveSlotLabel } from "@/lib/slot-label";
+import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
+import { toLocale } from "@/lib/i18n-constants";
+import { msgFor } from "@/lib/messages-i18n";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
@@ -268,6 +270,12 @@ export interface PublicSlideInput {
   }[];
   standings: { stage_id: string; pool_id: string | null; rows: StandingsSlideSnapshotRow[] }[];
   entrants: { id: string; display_name: string; badge_url?: string | null }[];
+  /** P6 fix round 1, finding #2 (CRITICAL) — spectator-facing locale (v5
+   *  i18n §4), `PublicOrg.default_locale` (same field data.ts:502-503
+   *  already resolves from). Optional and defaults to English so every
+   *  existing caller/test that predates this keeps its current behaviour;
+   *  every real /present page has an `org` in scope and should pass it. */
+  orgLocale?: string;
 }
 
 interface StandingsSlideSnapshotRow {
@@ -281,6 +289,8 @@ interface StandingsSlideSnapshotRow {
 }
 
 export function buildPublicDivisionSlides(data: PublicSlideInput): Slide[] {
+  const orgLocale = toLocale(data.orgLocale);
+  const lookup: SlotLabelLookup = (k, v) => msgFor(orgLocale, k, v);
   const names = Object.fromEntries(data.entrants.map((e) => [e.id, e.display_name]));
   const stageById = new Map(data.stages.map((s) => [s.id, s]));
   const poolById = new Map(data.pools.map((p) => [p.id, p]));
@@ -304,11 +314,11 @@ export function buildPublicDivisionSlides(data: PublicSlideInput): Slide[] {
 
   const item = (f: PublicSlideInput["fixtures"][number]): FixtureSlideItem => ({
     home: f.home_entrant_id
-      ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, msg, "schedule.tbd"))
-      : resolveSlotLabel(f.home_slot_label ?? null, msg, "schedule.tbd"),
+      ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
+      : resolveSlotLabel(f.home_slot_label ?? null, lookup, "schedule.tbd"),
     away: f.away_entrant_id
-      ? (names[f.away_entrant_id] ?? resolveSlotLabel(null, msg, "schedule.tbd"))
-      : resolveSlotLabel(f.away_slot_label ?? null, msg, "schedule.tbd"),
+      ? (names[f.away_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
+      : resolveSlotLabel(f.away_slot_label ?? null, lookup, "schedule.tbd"),
     homeLogo: null,
     awayLogo: null,
     line: f.summary?.headline ?? null,
@@ -336,10 +346,23 @@ export function buildPublicDivisionSlides(data: PublicSlideInput): Slide[] {
         division: data.division.name,
         title: stage.name,
         stageKind: stage.kind as "knockout" | "double_elim" | "stepladder" | "page_playoff",
+        // P6 fix round 1, finding #2: home/away are fully resolved HERE
+        // (never left null for an unfilled slot with a real label) so the
+        // shared client <Slideshow> — which has no locale/<DictProvider>
+        // plumbing anywhere in its tree and stays on the client-safe
+        // English msg() for that reason — never has to guess at this org's
+        // locale. Its own `f.home ?? resolveSlotLabel(f.home_slot_label,
+        // msg, …)` fallback is now unreachable from this (public) builder;
+        // it stays live for buildDivisionSlides's org-authed slides above,
+        // which are a DIFFERENT, out-of-scope surface (not a "visitor").
         fixtures: stageFixtures.map((f) => ({
           id: f.id, round_no: f.round_no, seq_in_round: f.seq_in_round,
-          home: f.home_entrant_id ? (names[f.home_entrant_id] ?? null) : null,
-          away: f.away_entrant_id ? (names[f.away_entrant_id] ?? null) : null,
+          home: f.home_entrant_id
+            ? (names[f.home_entrant_id] ?? null)
+            : resolveSlotLabel(f.home_slot_label ?? null, lookup, "bracket.tbd"),
+          away: f.away_entrant_id
+            ? (names[f.away_entrant_id] ?? null)
+            : resolveSlotLabel(f.away_slot_label ?? null, lookup, "bracket.tbd"),
           home_slot_label: f.home_slot_label ?? null,
           away_slot_label: f.away_slot_label ?? null,
           line: f.summary?.headline ?? null,

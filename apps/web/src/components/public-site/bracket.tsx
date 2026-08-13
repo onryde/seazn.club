@@ -7,7 +7,7 @@
 import Link from "next/link";
 import type { PublicFixture } from "@/server/public-site/data";
 import { msg } from "@/lib/messages";
-import { resolveSlotLabel } from "@/lib/slot-label";
+import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import {
   doubleElimBracket,
@@ -29,14 +29,23 @@ interface Props {
    *  standings table takes; nodes render a crest chip before the name. */
   entrantLogos?: Record<string, string | null>;
   fixtureHref: (fixtureId: string) => string;
+  /** P6 fix round 1, finding #2 — a locale-aware lookup for slot labels
+   *  (`msgFor(orgLocale, …)`, built server-side by the caller from
+   *  `PublicOrg.default_locale`, same pattern as data.ts:502-503). This
+   *  component is a Server Component (no "use client"), so passing a real
+   *  function down through the tree is safe — nothing here crosses the RSC
+   *  boundary into a Client Component. Defaults to the client-safe English
+   *  msg() so every existing caller/test that doesn't pass one is unchanged. */
+  lookup?: SlotLabelLookup;
 }
 
 function sideLabel(
   entrantId: string | null,
   names: Record<string, string>,
   slotLabel: SlotLabel | null,
+  lookup: SlotLabelLookup,
 ): string {
-  return entrantId ? (names[entrantId] ?? "?") : resolveSlotLabel(slotLabel, msg, "bracket.tbd");
+  return entrantId ? (names[entrantId] ?? "?") : resolveSlotLabel(slotLabel, lookup, "bracket.tbd");
 }
 
 function FixtureCard({
@@ -44,15 +53,18 @@ function FixtureCard({
   entrantNames,
   entrantLogos,
   href,
+  lookup,
 }: {
   fixture: PublicFixture;
   entrantNames: Record<string, string>;
   entrantLogos?: Record<string, string | null>;
   href: string;
+  lookup: SlotLabelLookup;
 }) {
   const winner = fixture.outcome?.winner;
   const side = (id: string | null, slotLabel: SlotLabel | null) => {
     const badge = id ? entrantLogos?.[id] : null;
+    const label = sideLabel(id, entrantNames, slotLabel, lookup);
     return (
       <span className="flex min-w-0 items-center gap-1.5">
         {badge ? (
@@ -60,6 +72,7 @@ function FixtureCard({
           <img src={badge} alt="" className="h-3.5 w-3.5 shrink-0 rounded-[3px] object-cover" />
         ) : null}
         <span
+          title={label}
           className={
             id && id === winner
               ? "truncate font-semibold text-ink"
@@ -68,7 +81,7 @@ function FixtureCard({
                 : "truncate text-ink"
           }
         >
-          {sideLabel(id, entrantNames, slotLabel)}
+          {label}
         </span>
       </span>
     );
@@ -123,12 +136,14 @@ function TwoSided({
   entrantNames,
   entrantLogos,
   fixtureHref,
+  lookup,
 }: {
   layout: BracketLayout;
   fixtures: PublicFixture[];
   entrantNames: Record<string, string>;
   entrantLogos?: Record<string, string | null>;
   fixtureHref: (fixtureId: string) => string;
+  lookup: SlotLabelLookup;
 }) {
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const rowsPerSide = Math.max(
@@ -198,7 +213,7 @@ function TwoSided({
               className="absolute"
               style={{ left: colX(node), top: nodeTop(node), width: NODE_W }}
             >
-              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} />
+              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} />
             </div>
           );
         })}
@@ -217,12 +232,14 @@ function DoubleElim({
   entrantNames,
   entrantLogos,
   fixtureHref,
+  lookup,
 }: {
   layout: DoubleElimLayout;
   fixtures: PublicFixture[];
   entrantNames: Record<string, string>;
   entrantLogos?: Record<string, string | null>;
   fixtureHref: (fixtureId: string) => string;
+  lookup: SlotLabelLookup;
 }) {
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const LANE_GAP = 48;
@@ -291,7 +308,7 @@ function DoubleElim({
               {node.lane === "GF" && (
                 <p className={`mb-1 ${laneLabel}`}>{node.col === 0 ? "Grand final" : "Reset"}</p>
               )}
-              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} />
+              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} />
             </div>
           );
         })}
@@ -300,7 +317,7 @@ function DoubleElim({
   );
 }
 
-export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHref }: Props) {
+export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHref, lookup = msg }: Props) {
   // PROMPT-62: the connected two-sided tree, when the shape allows it.
   if (kind === "knockout") {
     const result = twoSidedBracket(fixtures);
@@ -312,6 +329,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
           entrantNames={entrantNames}
           entrantLogos={entrantLogos}
           fixtureHref={fixtureHref}
+          lookup={lookup}
         />
       );
     }
@@ -327,6 +345,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
           entrantNames={entrantNames}
           entrantLogos={entrantLogos}
           fixtureHref={fixtureHref}
+          lookup={lookup}
         />
       );
     }
@@ -342,6 +361,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
           entrantNames={entrantNames}
           entrantLogos={entrantLogos}
           fixtureHref={fixtureHref}
+          lookup={lookup}
         />
       );
     }
@@ -389,6 +409,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
                     entrantNames={entrantNames}
                     entrantLogos={entrantLogos}
                     href={fixtureHref(f.id)}
+                    lookup={lookup}
                   />
                 ))}
             </div>
@@ -410,12 +431,14 @@ function PagePlayoff({
   entrantNames,
   entrantLogos,
   fixtureHref,
+  lookup,
 }: {
   layout: PagePlayoffLayout;
   fixtures: PublicFixture[];
   entrantNames: Record<string, string>;
   entrantLogos?: Record<string, string | null>;
   fixtureHref: (fixtureId: string) => string;
+  lookup: SlotLabelLookup;
 }) {
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const LABEL_H = 22;
@@ -451,7 +474,7 @@ function PagePlayoff({
               <p className="mb-1 font-display text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">
                 {PP_LABEL[n.slot]}
               </p>
-              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} />
+              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} />
             </div>
           );
         })}

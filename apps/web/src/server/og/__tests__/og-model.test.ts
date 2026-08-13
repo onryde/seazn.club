@@ -3,6 +3,7 @@
 // (gap 7) — the two rules that MUST hold on platform-cached share images.
 import { describe, expect, it } from "vitest";
 import { fixtureCardModel, ogTheme, standingsCardModel } from "@/server/og/model";
+import { msgFor } from "@/lib/messages-i18n";
 
 const brandingOf = (hex: string) => ({ colors: { primary: hex } });
 
@@ -96,5 +97,24 @@ describe("fixtureCardModel youth rule", () => {
       ...base, youth: false, entrantKind: "team", fixtureStatus: "in_play",
     });
     expect(m.status).toBe("live");
+  });
+
+  // P6 fix round 1, finding #2 (CRITICAL): when neither an entrant NOR a
+  // slot label was known (homeName/awayName both null — e.g. the caller
+  // could not resolve the fixture at all), the model's own internal
+  // fallback must go through the CALLER's locale, not always English. The
+  // caller (fixtures/[fixtureId]/opengraph-image.tsx) already resolves
+  // homeName/awayName itself for the common case; `lookup` only matters for
+  // this residual null/null edge.
+  it("optional `lookup` drives the null/null fallback text; omitting it keeps the old English default (back-compat)", () => {
+    const nullNames = { ...base, homeName: null, awayName: null, youth: false, entrantKind: "individual" as const };
+    const esLookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor("es", k, v);
+    const es = fixtureCardModel({ ...nullNames, lookup: esLookup });
+    expect(es.home).toBe("Por confirmar"); // es schedule.tbd
+    expect(es.away).toBe("Por confirmar");
+
+    const defaulted = fixtureCardModel(nullNames); // no `lookup` passed at all
+    expect(defaulted.home).toBe("TBD"); // en schedule.tbd — unchanged behaviour
+    expect(defaulted.away).toBe("TBD");
   });
 });
