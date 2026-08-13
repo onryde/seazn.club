@@ -2706,6 +2706,8 @@
   "news.tab": "Actualités",
   "news.intro": "Publiez résultats et actualités sur votre fil public. Gratuit sur toutes les formules.",
   "news.new": "Nouvel article",
+  "news.generateDigest": "Générer le résumé",
+  "news.digestUpsell": "Les résumés hebdomadaires sont une fonctionnalité Pro.",
   "news.composeNew": "Rédiger un article",
   "news.editPost": "Modifier l'article",
   "news.drafts": "Brouillons",

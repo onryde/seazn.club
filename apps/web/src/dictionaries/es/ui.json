@@ -2706,6 +2706,8 @@
   "news.tab": "Noticias",
   "news.intro": "Publica resultados y novedades en tu feed público. Gratis en todos los planes.",
   "news.new": "Nueva entrada",
+  "news.generateDigest": "Generar resumen",
+  "news.digestUpsell": "Los resúmenes semanales son una función Pro.",
   "news.composeNew": "Redactar una entrada",
   "news.editPost": "Editar entrada",
   "news.drafts": "Borradores",

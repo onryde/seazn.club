@@ -185,14 +185,18 @@ export default async function SettingsPage({
 
   // News tab (SPEC-2): the org's posts (drafts + published) + the competition
   // list for the composer's scope picker. Manual posts are free on every plan.
+  // hasNewsAuto (P3/D7) also gates the "Generate digest" button — same
+  // entitlement the system auto-drafts already check.
   let newsPosts: OrgPost[] = [];
   let newsCompetitions: { id: string; name: string }[] = [];
+  let hasNewsAuto = false;
   if (tab === "news") {
     newsPosts = await listPosts(auth, active.id);
     newsCompetitions = await sql<{ id: string; name: string }[]>`
       select id, name from competitions
       where org_id = ${active.id}
       order by created_at desc limit 100`;
+    hasNewsAuto = await hasFeature(active.id, "news.auto");
   }
 
   // Platform API tab: api.access = Pro. Scope choice (read/score/manage) is
@@ -418,6 +422,7 @@ export default async function SettingsPage({
                   posts={newsPosts}
                   competitions={newsCompetitions}
                   canEdit={canEdit}
+                  hasNewsAuto={hasNewsAuto}
                 />
               </section>
             )}

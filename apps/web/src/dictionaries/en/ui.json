@@ -2706,6 +2706,8 @@
   "news.tab": "News",
   "news.intro": "Publish results and updates to your public news feed. Free on every plan.",
   "news.new": "New post",
+  "news.generateDigest": "Generate digest",
+  "news.digestUpsell": "Weekly digests are a Pro feature.",
   "news.composeNew": "Compose a post",
   "news.editPost": "Edit post",
   "news.drafts": "Drafts",

@@ -2706,6 +2706,8 @@
   "news.tab": "Nieuws",
   "news.intro": "Publiceer uitslagen en updates op je openbare nieuwsfeed. Gratis op elk plan.",
   "news.new": "Nieuw bericht",
+  "news.generateDigest": "Samenvatting genereren",
+  "news.digestUpsell": "Wekelijkse samenvattingen zijn een Pro-functie.",
   "news.composeNew": "Een bericht schrijven",
   "news.editPost": "Bericht bewerken",
   "news.drafts": "Concepten",
