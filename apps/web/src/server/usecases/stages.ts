@@ -2167,14 +2167,21 @@ export async function confirmSeedProposal(
   return { proposalId: input.proposalId, filled: committed.filled, fixtures: committed.fixtures };
 }
 
-/** A standings override on `sourceStageId` invalidates any dependent
+/** A standings change on `sourceStageId` invalidates any dependent
  *  `.seeding` stage's draft proposal — mark it stale and recompute a fresh
  *  one against the corrected table (design: overrideStandings "marks
  *  dependent draft proposals stale and recomputes"). Best-effort throughout:
  *  a dependent whose recompute now trips (e.g. rules unsatisfiable, or
- *  already confirmed) is left as-is rather than blocking the override, which
- *  already committed. */
-async function markDependentSeedProposalsStale(auth: AuthCtx, sourceStageId: string): Promise<void> {
+ *  already confirmed) is left as-is rather than blocking the write that
+ *  already committed.
+ *
+ *  Exported (P5 review finding): `overrideStandings` is not the only
+ *  standings-mutating path a COMPLETE source stage can still take.
+ *  `LOCKED_FIXTURE_STATUSES` (append-event.ts) is only {finalized,
+ *  cancelled} — "decided" is not locked — so a correction to an
+ *  already-decided fixture via the live scoring path (usecases/scoring.ts
+ *  onDecided) is permitted too, and must call this the same way. */
+export async function markDependentSeedProposalsStale(auth: AuthCtx, sourceStageId: string): Promise<void> {
   const dependents = await withTenant(auth.orgId, async (tx) => {
     const [src] = await tx<{ division_id: string }[]>`select division_id from stages where id = ${sourceStageId}`;
     if (!src) return [];

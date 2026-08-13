@@ -13,6 +13,8 @@ import { EngineError } from "@seazn/engine/core";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
+import { startDivision } from "../schedule";
+import { scoreEvent } from "../scoring";
 import {
   completeStage,
   confirmSeedProposal,
@@ -624,6 +626,52 @@ describe.skipIf(!HAS_DB)("D4a/P5 — standings override marks a draft stale", ()
     expect(fresh.id).not.toBe(originalProposalId);
     // The RECOMPUTED draft reflects the override: O4 now qualifies 1st.
     expect(fresh.computed.qualifiers.map((q) => q.entrantId)).toEqual([bySeed.get(4), bySeed.get(3)]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("D4a/P5 — correcting an already-decided fixture also marks a dependent draft stale", () => {
+  it("void + re-score on a decided (not finalized) fixture in a COMPLETE source stage marks the dependent draft stale — not just overrideStandings", async () => {
+    // Reviewer finding: markDependentSeedProposalsStale fired only from
+    // overrideStandings. LOCKED_FIXTURE_STATUSES (append-event.ts) is only
+    // {finalized, cancelled} — "decided" is NOT locked — so a correction via
+    // the live scoring path (scoreEvent -> onDecided -> recomputeStandings,
+    // scoring.ts) is a legitimate, permitted edit to an already-complete
+    // source stage's standings, and it must ALSO stale the dependent draft.
+    const { auth, divisionId, groupStageId, koStageId, entrantBySeed } = await setupGroupsToKnockout("rank_order");
+    await generateStageFixtures(auth, koStageId);
+    await generateStageFixtures(auth, groupStageId);
+    await startDivision(auth, divisionId);
+    await decideAllGroupFixtures(auth, groupStageId, entrantBySeed);
+
+    const result = await completeStage(auth, groupStageId);
+    const proposalId = result.seed_proposal!.id;
+    const [before] = await sql<{ status: string }[]>`
+      select status from stage_seed_proposals where id = ${proposalId}`;
+    expect(before.status).toBe("draft");
+
+    const [fixture] = await sql<{ id: string; status: string }[]>`
+      select id, status from fixtures where stage_id = ${groupStageId} order by id limit 1`;
+    // Decided, never finalized — exactly the state LOCKED_FIXTURE_STATUSES
+    // does NOT block, so this correction is permitted to reach scoreEvent.
+    expect(fixture.status).toBe("decided");
+    const [decisive] = await sql<{ id: string; seq: number }[]>`
+      select id, seq from score_events where fixture_id = ${fixture.id} order by seq desc limit 1`;
+
+    const voided = await scoreEvent(auth, fixture.id, {
+      expected_seq: decisive.seq,
+      type: "core.void",
+      payload: { event_id: decisive.id },
+    });
+    // Flip the result — a genuine correction, not a no-op replay.
+    await scoreEvent(auth, fixture.id, {
+      expected_seq: voided.seq,
+      type: "generic.result",
+      payload: { p1Score: 0, p2Score: 2 },
+    });
+
+    const [after] = await sql<{ status: string }[]>`
+      select status from stage_seed_proposals where id = ${proposalId}`;
+    expect(after.status).toBe("stale");
   });
 });
 
