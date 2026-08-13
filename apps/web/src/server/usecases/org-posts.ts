@@ -936,24 +936,38 @@ export async function assembleRecapEnrichment(
 }
 
 /** The just-won entrant's current table position, for the "moves up to Nth"
- *  line (league stages only; best-effort). */
+ *  line (league stages only; best-effort).
+ *
+ *  Unplanned fix (found via the P3 review finding 3 investigation, same
+ *  root cause as the savepoints added throughout this file): pre-existing
+ *  SPEC-2 code, and its `catch { return null }` only ever protected against
+ *  a JS-level error — a genuinely malformed `outcome.winner` rejects the
+ *  `entrants where id = ` statement at Postgres, which aborts the WHOLE
+ *  transaction (this function's own catch does not undo that), and
+ *  `assembleResultEnrichment`'s streak block — called immediately after
+ *  this function, in the same transaction — would then fail on its own
+ *  unrelated, first query with "current transaction is aborted", not the
+ *  error its own code actually produced. Measured live via
+ *  org-posts-enrichment-sources.test.ts's streak fail-open test. */
 async function winnerMovement(
   tx: Tx,
   fx: FixtureCtx,
 ): Promise<{ team: string; position: number } | null> {
   try {
-    const [state] = await tx<{ outcome: unknown }[]>`
-      select outcome from fixtures where id = ${fx.fixture_id}`;
-    const outcome = state?.outcome as { kind?: string; winner?: string } | null;
-    if (!outcome || (outcome.kind !== "win" && outcome.kind !== "award") || !outcome.winner) {
-      return null;
-    }
-    const rows = await topStandings(tx, fx.stage_id, Number.MAX_SAFE_INTEGER);
-    const [row] = await tx<{ display_name: string }[]>`
-      select display_name from entrants where id = ${outcome.winner}`;
-    const idx = rows.findIndex((r) => r.entrantId === outcome.winner);
-    if (idx < 0 || !row) return null;
-    return { team: row.display_name, position: rows[idx]!.position };
+    return await tx.savepoint(async (sp) => {
+      const [state] = await sp<{ outcome: unknown }[]>`
+        select outcome from fixtures where id = ${fx.fixture_id}`;
+      const outcome = state?.outcome as { kind?: string; winner?: string } | null;
+      if (!outcome || (outcome.kind !== "win" && outcome.kind !== "award") || !outcome.winner) {
+        return null;
+      }
+      const rows = await topStandings(sp, fx.stage_id, Number.MAX_SAFE_INTEGER);
+      const [row] = await sp<{ display_name: string }[]>`
+        select display_name from entrants where id = ${outcome.winner}`;
+      const idx = rows.findIndex((r) => r.entrantId === outcome.winner);
+      if (idx < 0 || !row) return null;
+      return { team: row.display_name, position: rows[idx]!.position };
+    });
   } catch {
     return null;
   }
