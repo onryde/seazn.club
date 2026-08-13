@@ -11,11 +11,7 @@ import { assertWithinLimit, getLimit, requireFeature } from "@/lib/entitlements"
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
-import {
-  stageNeedsAdvancedFormatsGate,
-  stageNeedsDoubleElimGate,
-  type StageFormatGateInput,
-} from "./format-gates";
+import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
 import { EngineError } from "@seazn/engine/core";
 import {
   generateRoundRobin,
@@ -122,12 +118,7 @@ export async function createStages(
   // Shared with createFromTemplate (usecases/templates.ts, D1a) via
   // usecases/format-gates.ts — see that file's header for why it's a
   // standalone module rather than this usecase calling the other.
-  const advanced = inputs.some((s) =>
-    stageNeedsAdvancedFormatsGate({
-      kind: s.kind,
-      config: s.config as StageFormatGateInput["config"],
-    }),
-  );
+  const advanced = inputs.some((s) => stageNeedsAdvancedFormatsGate({ kind: s.kind, config: s.config }));
   if (advanced) await requireFeature(auth.orgId, "formats.advanced", divComp?.competition_id);
   // Jul3/08 §9: the cross-stage feed graph must be a DAG (fail closed).
   {

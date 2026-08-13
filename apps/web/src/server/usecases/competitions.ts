@@ -149,6 +149,29 @@ export async function fireCompetitionCreated(auth: AuthCtx, visibility: string):
   });
 }
 
+/** Activation funnel completion (feature 1) — fires once, on the transition
+ *  INTO "public" (see shouldFireMadePublic, exported alongside this so a
+ *  caller can decide WHETHER to call it). Exported so createFromTemplate
+ *  (usecases/templates.ts, D1a) can fire the SAME event, with the SAME
+ *  shape, when a template-instantiated competition is created directly
+ *  public — CreateFromTemplate.visibility accepts "public" exactly like
+ *  CreateCompetition's does, so the same completion milestone applies.
+ *
+ *  P4 review follow-up (2026-08-13): the first fix wired up
+ *  COMPETITION_CREATED but stopped at the one emitter the review named,
+ *  instead of auditing every event createCompetition fires — this was the
+ *  second one it missed, of exactly two (the other is patchCompetition's
+ *  transition-into-public case below, unaffected — a template never PATCHes
+ *  during instantiation). */
+export async function fireCompetitionMadePublic(auth: AuthCtx, competitionId: string): Promise<void> {
+  await captureServer({
+    event: EVENTS.COMPETITION_MADE_PUBLIC,
+    distinctId: auth.userId ?? `org:${auth.orgId}`,
+    orgId: auth.orgId,
+    properties: { competition_id: competitionId },
+  });
+}
+
 export async function createCompetition(
   auth: AuthCtx,
   input: CreateCompetition,
@@ -205,12 +228,7 @@ export async function createCompetition(
   await fireCompetitionCreated(auth, input.visibility);
   // Activation funnel completion — created directly public (no prior state).
   if (shouldFireMadePublic(undefined, input.visibility)) {
-    await captureServer({
-      event: EVENTS.COMPETITION_MADE_PUBLIC,
-      distinctId: auth.userId ?? `org:${auth.orgId}`,
-      orgId: auth.orgId,
-      properties: { competition_id: row.id },
-    });
+    await fireCompetitionMadePublic(auth, row.id);
   }
   return row;
 }
@@ -420,12 +438,7 @@ export async function patchCompetition(
   // Activation funnel completion (feature 1) — fires once, on the
   // transition INTO "public" only (see shouldFireMadePublic).
   if (shouldFireMadePublic(oldVisibility, patch.visibility)) {
-    await captureServer({
-      event: EVENTS.COMPETITION_MADE_PUBLIC,
-      distinctId: auth.userId ?? `org:${auth.orgId}`,
-      orgId: auth.orgId,
-      properties: { competition_id: id },
-    });
+    await fireCompetitionMadePublic(auth, id);
   }
   // Growth-loop gate (SPEC-5 §2, v17 gap #296): onboarding + referral-welcome
   // earn credits pay out only once this org proves a human is running a real

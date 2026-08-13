@@ -313,6 +313,10 @@ describe.skipIf(!HAS_DB)("createFromTemplate — activation funnel events (P4 re
     const competitionCalls = calls.filter((c) => c.event === EVENTS.COMPETITION_CREATED);
     expect(competitionCalls).toHaveLength(1);
     expect(competitionCalls[0]).toMatchObject({ properties: { visibility: "private" } });
+    // A private template instantiation must NOT complete the
+    // COMPETITION_MADE_PUBLIC milestone (see the dedicated public-visibility
+    // test below for the positive case).
+    expect(calls.filter((c) => c.event === EVENTS.COMPETITION_MADE_PUBLIC)).toHaveLength(0);
 
     const divisionCalls = calls.filter((c) => c.event === EVENTS.DIVISION_CREATED);
     expect(divisionCalls).toHaveLength(2);
@@ -322,6 +326,22 @@ describe.skipIf(!HAS_DB)("createFromTemplate — activation funnel events (P4 re
     for (const c of divisionCalls) {
       expect(c.properties?.competition_id).toBe(result.competitionId);
     }
+  });
+
+  it("a template instantiated directly public ALSO fires COMPETITION_MADE_PUBLIC exactly once (review follow-up, 2026-08-13)", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    const result = await createFromTemplate(auth, {
+      template_key: "slam128",
+      name: `PublicFunnel ${randomUUID().slice(0, 6)}`,
+      ends_on: "2030-12-31",
+      visibility: "public",
+    });
+    const calls = vi.mocked(captureServer).mock.calls.map(([args]) => args);
+    expect(calls.filter((c) => c.event === EVENTS.COMPETITION_CREATED)).toHaveLength(1);
+    const madePublic = calls.filter((c) => c.event === EVENTS.COMPETITION_MADE_PUBLIC);
+    expect(madePublic).toHaveLength(1);
+    expect(madePublic[0]).toMatchObject({ properties: { competition_id: result.competitionId } });
   });
 
   it("a refused (over-quota) instantiation fires neither event — nothing to count", async () => {

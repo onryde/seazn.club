@@ -42,13 +42,15 @@ import { getDictionary, t } from "@/lib/i18n";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateFromTemplate, FromTemplateResult } from "@/server/api-v1/schemas";
 import { slugify, uniqueSlug } from "./slugs";
-import { assertActiveQuota, assertPublicQuota, fireCompetitionCreated } from "./competitions";
-import { fireDivisionCreated } from "./divisions";
 import {
-  stageNeedsAdvancedFormatsGate,
-  stageNeedsDoubleElimGate,
-  type StageFormatGateInput,
-} from "./format-gates";
+  assertActiveQuota,
+  assertPublicQuota,
+  fireCompetitionCreated,
+  fireCompetitionMadePublic,
+  shouldFireMadePublic,
+} from "./competitions";
+import { fireDivisionCreated } from "./divisions";
+import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
 import { getTemplate } from "@/server/templates/catalog";
 import type { CompetitionTemplate, TemplateStage } from "@/server/templates/schema";
 
@@ -134,12 +136,7 @@ export async function instantiateTemplate(
       if (stageNeedsDoubleElimGate(stage.kind)) {
         await requireFeature(auth.orgId, "formats.double_elim", competitionId);
       }
-      if (
-        stageNeedsAdvancedFormatsGate({
-          kind: stage.kind,
-          config: stage.config as StageFormatGateInput["config"],
-        })
-      ) {
+      if (stageNeedsAdvancedFormatsGate({ kind: stage.kind, config: stage.config })) {
         await requireFeature(auth.orgId, "formats.advanced", competitionId);
       }
     }
@@ -301,6 +298,17 @@ export async function instantiateTemplate(
   // that could still roll back). P4 review finding 1 — an earlier draft
   // called neither emitter, so this path was invisible to the funnel.
   await fireCompetitionCreated(auth, input.visibility ?? "private");
+  // P4 review follow-up (2026-08-13): finding 1's first fix stopped at
+  // COMPETITION_CREATED and missed that createCompetition ALSO fires
+  // COMPETITION_MADE_PUBLIC when a competition is created directly public
+  // (shouldFireMadePublic(undefined, visibility) — see competitions.ts).
+  // CreateFromTemplate.visibility accepts "public" exactly like
+  // CreateCompetition's does, so a template instantiated public must
+  // complete the SAME milestone. Reuses the exact predicate + emitter
+  // createCompetition calls, imported, not restated.
+  if (shouldFireMadePublic(undefined, input.visibility ?? "private")) {
+    await fireCompetitionMadePublic(auth, competitionId);
+  }
   for (const templateDivision of template.divisions) {
     await fireDivisionCreated(auth, templateDivision.sportKey, competitionId);
   }

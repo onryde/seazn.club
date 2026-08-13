@@ -18,7 +18,20 @@ import "server-only";
 
 export interface StageFormatGateInput {
   kind: string;
-  config?: { byes?: unknown; cross_feeds?: unknown; placements?: unknown } | undefined;
+  // Real `stages.config` (and TemplateStage.config) is jsonb and carries far
+  // more than the three keys this gate reads — points, groups,
+  // scheduleDefaults, thirdPlace, sport-specific extras, … — so it is typed
+  // as the open record it actually is, not narrowed to only the keys this
+  // function happens to read. A narrower object type here (previously
+  // `{byes?; cross_feeds?; placements?}`) compiled fine at both real call
+  // sites, which pass a pre-typed VARIABLE (plain assignability, no excess-
+  // property check) — but failed tsc the moment a test passed an object
+  // LITERAL carrying any other real config key (knockout's `thirdPlace`):
+  // TS's excess-property check only fires on literals, so the narrowness
+  // was invisible until a test exercised it. `apps/web` typecheck must be
+  // run for real after touching this file — vitest strips types and cannot
+  // catch this class of error.
+  config?: Record<string, unknown> | undefined;
 }
 
 /** Doc 10 §1: `formats.double_elim` is Pro. */
