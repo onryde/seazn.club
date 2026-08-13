@@ -2,7 +2,7 @@
 // mirrors capacity-input.ts's own (untested-directly, but this module gets
 // its own suite since the tz-bucketing arithmetic is worth pinning).
 import { describe, expect, it } from "vitest";
-import { healthFixturesFor, type HealthFixtureInput } from "./health-input.ts";
+import { healthFixturesFor, type HealthFixtureInput } from "@/lib/health-input";
 
 describe("healthFixturesFor", () => {
   it("computes end from start+matchMinutes and a tz-correct dayKey, preserving home/away/pool/division", () => {
