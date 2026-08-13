@@ -120,6 +120,25 @@ export interface UsePadPipelineResult {
    *  drains. Never throws — a permanent rejection surfaces via
    *  `lastRejection`, a network failure via `offline`. */
   submit: (type: string, payload: unknown) => Promise<void>;
+  /** S12/#421 — every known event (durable ledger + still-queued local
+   *  ones), oldest first: the raw list `state` above was folded FROM, for a
+   *  persistent activity feed (timeline.tsx). Same combination `foldedState`
+   *  folds, exposed directly rather than re-derived by a caller. */
+  events: readonly EventEnvelope[];
+  /** S12/#421 — ids of events THIS hook instance is itself responsible for:
+   *  submitted via `submit()` this mount, or resumed from this device's own
+   *  leftover IndexedDB queue on mount. Survives the pending -> ledger
+   *  transition, unlike `pendingEnvelopes` itself (a purely internal, never
+   *  exposed, implementation detail). `EventEnvelope` (the engine's own core
+   *  type) carries no device-link field at all — it is sport/auth-agnostic —
+   *  so this is the only way a consumer can tell "I recorded this" for an
+   *  event that has already moved into the durable ledger, which is exactly
+   *  what timeline.tsx's own "a device link may only void its own events"
+   *  rule needs in order to be reachable rather than vacuous for anything
+   *  beyond the instant an event is still mid-flight. An event loaded from
+   *  `initialEvents` (server history predating this mount) is never in this
+   *  set — honestly "unknown", never a guess. */
+  ownEventIds: ReadonlySet<string>;
 }
 
 function newId(): string {
@@ -212,6 +231,16 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   const commitPendingEnvelopes = useCallback((next: Map<string, EventEnvelope>) => {
     pendingEnvelopesRef.current = next;
     setPendingEnvelopes(next);
+  }, []);
+
+  // S12/#421 — see UsePadPipelineResult.ownEventIds's own JSDoc for why this
+  // exists. Plain state (not a ref): nothing inside this hook needs a
+  // synchronous read of it, and a caller's own `useMemo` keyed on
+  // `pipeline.ownEventIds` must see a NEW Set identity whenever membership
+  // actually changes, which a mutated-in-place ref would defeat.
+  const [ownEventIds, setOwnEventIds] = useState<ReadonlySet<string>>(() => new Set());
+  const markOwn = useCallback((id: string) => {
+    setOwnEventIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }, []);
 
   const [queueDepth, setQueueDepth] = useState(0);
@@ -386,7 +415,13 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       if (cancelled) return;
       if (leftover.length > 0) {
         const seeded = new Map(pendingEnvelopesRef.current);
-        for (const p of leftover) seeded.set(p.idempotencyKey, pendingToEnvelope(fixtureId, identity, p));
+        for (const p of leftover) {
+          seeded.set(p.idempotencyKey, pendingToEnvelope(fixtureId, identity, p));
+          // S12/#421 — this device's own leftover queue (IndexedDB is
+          // browser/device-local), so it was unquestionably submitted under
+          // THIS `identity`, exactly like a fresh submit() below.
+          markOwn(p.idempotencyKey);
+        }
         commitPendingEnvelopes(seeded);
       }
       await refreshDepth();
@@ -445,6 +480,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
         const withPending = new Map(pendingEnvelopesRef.current);
         withPending.set(pending.idempotencyKey, pendingToEnvelope(fixtureId, identity, pending));
         commitPendingEnvelopes(withPending); // optimistic fold shows immediately
+        markOwn(pending.idempotencyKey); // S12/#421 — this call submitted it, under THIS identity
         setLastRejection(null);
         // Everything below is async.
         await enqueue(store, pending);
@@ -454,8 +490,15 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
         submitInFlight.current = null;
       }
     },
-    [store, fixtureId, identity, commitPendingEnvelopes, refreshDepth, runDrain],
+    [store, fixtureId, identity, commitPendingEnvelopes, markOwn, refreshDepth, runDrain],
   );
 
-  return { state: foldedState, summary, queueDepth, offline, lastRejection, resyncing, submit };
+  // S12/#421 — the raw list `foldedState` above was folded from, exposed for
+  // a persistent activity feed. Same combination as `foldedState`'s own
+  // `events` local above, kept as a SEPARATE memo (not reused verbatim) so a
+  // `serverOverride` never hides ledger events a caller's timeline still
+  // needs to display, even while the FOLD is showing the server's override.
+  const events = useMemo(() => [...ledgerEvents, ...pendingEnvelopes.values()], [ledgerEvents, pendingEnvelopes]);
+
+  return { state: foldedState, summary, queueDepth, offline, lastRejection, resyncing, submit, events, ownEventIds };
 }

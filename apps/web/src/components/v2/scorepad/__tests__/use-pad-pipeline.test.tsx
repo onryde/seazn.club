@@ -661,3 +661,94 @@ describe("usePadPipeline — store fallback", () => {
     expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({ home: 1, away: 0 });
   });
 });
+
+// S12/#421 — the timeline seam. `events` and `ownEventIds` are what
+// pad-renderer.tsx now feeds `<Timeline/>` by default; wiring that render is
+// pad-renderer.test.tsx's job, this file proves the HOOK's own two new
+// fields are correct in isolation, including across the pending -> ledger
+// transition (the case a naive "only currently-pending" marker would miss).
+describe("usePadPipeline — events exposure (S12/#421 timeline seam)", () => {
+  it("exposes initialEvents verbatim, oldest first, before any submit", () => {
+    const params = baseParams({
+      initialEvents: [
+        { id: "e-1", fixtureId: "fx-1", seq: 1, type: "core.start", payload: {}, recordedAt: "2026-08-13T00:00:00.000Z", recordedBy: "user-1" },
+        { id: "e-2", fixtureId: "fx-1", seq: 2, type: "generic.score", payload: { by: "H", points: 3 }, recordedAt: "2026-08-13T00:00:01.000Z", recordedBy: "user-1" },
+      ],
+    });
+    const pad = mountPipeline(params);
+    expect(pad.current.events.map((e) => e.id)).toEqual(["e-1", "e-2"]);
+  });
+
+  it("a freshly submitted, still-queued event appears in events immediately (before the network call resolves)", () => {
+    const gate = deferred<AppendCallResult>();
+    const transport: PadTransport = {
+      async appendEvent() {
+        return gate.promise;
+      },
+      async listEventsSince() {
+        return [];
+      },
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport }));
+    void pad.current.submit("generic.score", { by: "H", points: 3 });
+    expect(pad.current.events.some((e) => e.type === "generic.score")).toBe(true);
+    gate.resolve(success(1));
+  });
+
+  it("an acked event stays in events, exactly once, after moving from pending to the durable ledger", async () => {
+    const { transport } = fakeTransport({ appendResults: [success(1)] });
+    const pad = mountPipeline(baseParams({ transport }));
+    await pad.current.submit("generic.score", { by: "H", points: 3 });
+    const matches = pad.current.events.filter((e) => e.type === "generic.score");
+    expect(matches.length).toBe(1);
+  });
+});
+
+describe("usePadPipeline — ownEventIds (S12/#421 timeline seam: device-link 'undo only mine')", () => {
+  it("marks an event submitted through THIS hook instance as own, while still pending", () => {
+    const gate = deferred<AppendCallResult>();
+    const transport: PadTransport = {
+      async appendEvent() {
+        return gate.promise;
+      },
+      async listEventsSince() {
+        return [];
+      },
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ identity: { recordedBy: "user-1", deviceLinkId: "dev-1" }, transport }));
+    void pad.current.submit("generic.score", { by: "H", points: 3 });
+    const pendingId = pad.current.events.find((e) => e.type === "generic.score")!.id;
+    expect(pad.current.ownEventIds.has(pendingId)).toBe(true);
+    gate.resolve(success(1));
+  });
+
+  it("stays marked own AFTER the pending -> ledger transition (ack), under the SAME id", async () => {
+    const { transport } = fakeTransport({ appendResults: [success(1)] });
+    const pad = mountPipeline(baseParams({ identity: { recordedBy: "user-1", deviceLinkId: "dev-1" }, transport }));
+    await pad.current.submit("generic.score", { by: "H", points: 3 });
+    const ackedId = pad.current.events.find((e) => e.type === "generic.score")!.id;
+    expect(pad.current.ownEventIds.has(ackedId)).toBe(true);
+  });
+
+  it("an event loaded from initialEvents (server history, not submitted by this hook instance) is NOT own", () => {
+    const params = baseParams({
+      initialEvents: [
+        { id: "e-1", fixtureId: "fx-1", seq: 1, type: "core.start", payload: {}, recordedAt: "2026-08-13T00:00:00.000Z", recordedBy: "user-1" },
+      ],
+    });
+    const pad = mountPipeline(params);
+    expect(pad.current.ownEventIds.has("e-1")).toBe(false);
+  });
+});
