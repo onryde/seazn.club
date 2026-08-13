@@ -309,51 +309,78 @@ artifact: its per-failure ARIA snapshot shows what was actually on the
 page, which is how the Entrants-tab diagnosis was settled rather than
 guessed.
 
-### Wave 2 IN FLIGHT (2026-08-13) — state at compaction
+### Wave 2 CLOSED (2026-08-13) — both merged
 
-**P2 (D3 health) — GREEN, PR #547 open and pushed.** 23 commits on
-`feat/p2-schedule-health`, worktree `.claude/worktrees/p2-health`, own
-Postgres `:54411`. Gate re-verified after its fix round: engine
-`test:coverage` exit 0, apps/web 6916/6857/1 (the known
-`schedule-solver-telemetry` no-placement red), tsc 0, lint 0 errors,
-drift gates clean. e2e 5/5 — **run by the orchestrator** against a real
-standalone prod server on :3207. Six review findings closed; details in
-the PR comment.
+**P2 (D3 schedule health) — merged `651c56c3` (PR #547).** Engine
+`scheduling/health.ts` (five normative metrics, no composite grade;
+`homeAwayAlternation` absent rather than zero for bracket stages),
+shared `computeStageHealth`, stage + joint routes, `board/health-panel.tsx`.
+e2e 5/5 run by the orchestrator against a real standalone prod server.
 
-**P4 (D1a templates) — 12 commits, THREE items open.** Branch
-`feat/p4-format-templates`, worktree `.claude/worktrees/p4-templates`,
-own Postgres `:54413`, migration **V359** (`competitions.template_key` /
-`template_version`). Fix round `cdab6d5a` closed all 8 first-review
-findings. Still open when this was written:
-1. `COMPETITION_MADE_PUBLIC` is never fired from the template path
-   (`createCompetition:207-214` fires it via `shouldFireMadePublic`;
-   `CreateFromTemplate.visibility` accepts `"public"`). The fix for
-   "no funnel events" closed only the emitter the review named and left
-   its own bug class half-open.
-2. Nothing pins "fires exactly once" on the ORIGINAL manual paths
-   (`competitions.ts:205`, `divisions.ts:248`) — the extraction is what
-   makes that dangerous.
-3. **`tsc --noEmit` on apps/web is RED at HEAD** —
-   `format-gates.test.ts(46,72)` TS2353, `thirdPlace` not in
-   `{byes?, cross_feeds?, placements?}`. The test is right; the bug is
-   that `stageNeedsAdvancedFormatsGate`'s `config` param is too narrow
-   for jsonb stage config. Production call sites compile only because
-   they pass variables — excess-property checks fire on literals only.
+**P4 (D1a format templates) — merged `e35efff1` (PR #548).** Five-template
+catalog as validated static data (no rows, no migration owns it),
+one-transaction `createFromTemplate`, `POST /competitions/from-template`,
+wizard step 0, migration **V359** (`competitions.template_key` /
+`template_version`, both nullable).
 
-**Next steps in order:** P4 finishes those three → orchestrator reruns
-P4's gate on a QUIESCENT tree → P4 PR → both PRs merged → wave 3 =
-**P5 alone** (it carries the remaining migration; two migrations must
-never be in flight together).
+**Eleven findings closed on P4, and the shape of them is the lesson.**
+Every one was the template path re-implementing something the manual
+create path already owned: format entitlement gates hand-typed twice
+(now shared `usecases/format-gates.ts`), quotas unenforced, points rules
+unvalidated, and three funnel emitters never fired. All are now *shared
+calls*, not second copies. Two of the emitters had no "fires exactly
+once" test on the ORIGINAL manual paths either, so
+`competitions-activation-events.test.ts` and
+`divisions-activation-events.test.ts` cover `createCompetition`,
+`patchCompetition` and `createDivision` — they mock the `captureServer`
+transport and drive the real usecases, so they are not assertions about
+a mock of the thing under test.
 
-**Environment still standing:** CP-SAT placement service on `:50077`
-(secret `dev-secret`) for both-ways scheduling gates; four lane
-databases (`:54401` p1, `:54343` p3, `:54411` p2, `:54413` p4).
+**A wave-2 ruling that generalises: a new UI surface is not covered until
+it is IN `mobile.spec.ts`.** Three of the four lanes' panels (P1 capacity
+card, P2 health panel, P4 template gallery) shipped with no width
+enforcement at all — the seven-width sweep visits a division's Entrants,
+fixtures, standings and registrations tabs but never `/schedule`, and
+never `/c/new`. A new spec file cannot fix it: every width project in
+`playwright.config.ts` is `testMatch: /mobile\.spec\.ts/`, so a fresh
+`portfolio-ui.spec.ts` runs at desktop only and reports green. Both
+additions therefore landed inside `mobile.spec.ts` — four routes on the
+sweep plus one test that seeds until each panel actually renders before
+measuring, because the sweep's own division has no stage and a page with
+no panel cannot overflow because of one.
 
-**Two process notes earned this wave.** Never run a gate on a worktree
-while an agent is active in it — two of three failures in one P4 gate
-run were the sibling's in-flight edits, exactly the documented trap.
-And `roundrobin.test.ts` "idempotence: regeneration is byte-identical"
-joins the load-sensitive set: it went red in a loaded full run and
-passed 42/42 in isolation, with the coverage run passing the same tests
-minutes later. An idempotence test reads as a determinism bug, so it
-will alarm the next session that sees it.
+That test found a real defect on its first run: the template sheet's
+submit and cancel buttons measured **38px** against the 44px touch floor
+(bare `.btn` is `py-2 text-sm`), under the floor at every width, not just
+phones. Fixed with `min-h-11`, matching `components/v2/confirm-dialog.tsx`.
+
+**CI then caught a second real regression the local gate could not.**
+Putting the gallery in front of the wizard removed the name field from
+`/c/new` until a format is chosen, and three specs still filled it
+directly (`competition.spec.ts`, `seo-meta.spec.ts`,
+`journey-community.spec.ts`). It read as a wizard bug because the
+assertion immediately above the fill kept PASSING — the gallery renders
+under the same "New competition" heading — so the 60-second
+`locator.fill` timeout pointed at the form rather than at the unmade
+choice one step earlier. Shared `startBlankCompetition(page)` now makes
+that choice, and is deliberately NOT tolerant of a missing gallery.
+**Standing lesson: a change to a page's entry point owes a sweep of every
+e2e that drives it**, and text-identical headings are exactly what hides
+such a change from a first read.
+
+**One unexplained red, recorded rather than waved off.** `Smoke — DB +
+Redis` failed once on `scripts/__tests__/sync-sports.test.ts`, which
+skipped every later step in that job. Not reproducible: 3/3 locally,
+including with CI's exact step order (`sync:sports` first). P4's diff
+touches no sport, engine, registry or sync file, the job was green on
+#547, and it went green again on the very next push — a commit touching
+only e2e helpers. The job writes its result to a JSON the log never
+echoes, so the failure detail was never recoverable. If it recurs, get
+that JSON out before calling it flake again.
+
+### Wave 3 — P5 alone (D4a stage progression)
+
+P5 carries the remaining migration, and two migrations must never be in
+flight together, so it runs on its own. Waves 1 and 2 both produced
+defects invisible to a green suite; the briefs for this one restate the
+rulings above inline.
