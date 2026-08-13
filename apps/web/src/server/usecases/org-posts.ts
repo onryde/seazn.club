@@ -764,54 +764,84 @@ export async function assembleResultEnrichment(
   scorers: { name: string; count: number; personId: string }[],
 ): Promise<ResultEnrichment> {
   const out: ResultEnrichment = {};
-  if (scorers.length === 0) return out;
 
-  let metric: { key: string; label: string } | undefined;
-  try {
-    const model = resolveModule(fx.sport_key, fx.module_version).playerStats;
-    metric = model?.metrics.find((m) => m.key === "goals") ?? model?.metrics[0];
-  } catch (err) {
-    log.warn(
-      { fixtureId: fx.fixture_id, source: "topPerformers", err: String(err) },
-      "news enrichment: source failed, dropping section",
-    );
-  }
-
-  if (metric) {
-    // A highlight, not a roster — the existing `scorers` block already lists
-    // everyone; cap at 2 so this reads as "who stood out", not a duplicate.
-    out.topPerformers = scorers
-      .slice(0, 2)
-      .map((s) => ({ personName: s.name, statLine: `${s.count} ${metric!.label.toLowerCase()}` }));
-
+  // topPerformers/leaderboardMoves genuinely need scorers — no scorers, no
+  // metric to report on. streak (below) does NOT: it is about the WINNING
+  // ENTRANT's recent form, unrelated to who scored what in this particular
+  // fixture, so a forfeit (zero scorers, still a real winner) must not lose
+  // its streak line.
+  //
+  // Bug fixed here, found while adding this function's first DB-integration
+  // test (P3 review finding 2): the two used to share one `if
+  // (scorers.length === 0) return out;` early exit at the top, which meant
+  // a forfeit-decided fixture — the ordinary way a walkover, retirement or
+  // no-show is scored, and common — could never report a streak at all,
+  // even when the winning entrant genuinely had one.
+  if (scorers.length > 0) {
+    let metric: { key: string; label: string } | undefined;
     try {
-      const { rows } = await recomputePlayerStats(tx, fx.division_id);
-      const after = rows.map((r) => ({ personId: r.personId, personName: "", value: r.stats[metric!.key] ?? 0 }));
-      const contributions = scorers.map((s) => ({ personId: s.personId, personName: s.name, credit: s.count }));
-      const moves = computeLeaderboardMoves(after, contributions, metric.label);
-      if (moves.length > 0) out.leaderboardMoves = moves;
+      const model = resolveModule(fx.sport_key, fx.module_version).playerStats;
+      metric = model?.metrics.find((m) => m.key === "goals") ?? model?.metrics[0];
     } catch (err) {
       log.warn(
-        { fixtureId: fx.fixture_id, source: "leaderboardMoves", err: String(err) },
+        { fixtureId: fx.fixture_id, source: "topPerformers", err: String(err) },
         "news enrichment: source failed, dropping section",
       );
+    }
+
+    if (metric) {
+      // A highlight, not a roster — the existing `scorers` block already
+      // lists everyone; cap at 2 so this reads as "who stood out", not a
+      // duplicate.
+      out.topPerformers = scorers
+        .slice(0, 2)
+        .map((s) => ({ personName: s.name, statLine: `${s.count} ${metric!.label.toLowerCase()}` }));
+
+      try {
+        // Unplanned fix (found while proving this catch on a REAL throw,
+        // P3 review finding 3): a rejected SQL statement aborts the whole
+        // Postgres transaction at the server, and no amount of catching
+        // the JS promise rejection undoes that — only ROLLBACK TO
+        // SAVEPOINT does. Without this, a genuine failure here would have
+        // poisoned the SAME transaction `insertGeneratedPost` commits the
+        // draft in, turning "drop one section" into "drop the whole
+        // draft" — exactly the failure mode this file exists to prevent.
+        const moves = await tx.savepoint(async (sp) => {
+          const { rows } = await recomputePlayerStats(sp, fx.division_id);
+          const after = rows.map((r) => ({ personId: r.personId, personName: "", value: r.stats[metric!.key] ?? 0 }));
+          const contributions = scorers.map((s) => ({ personId: s.personId, personName: s.name, credit: s.count }));
+          return computeLeaderboardMoves(after, contributions, metric.label);
+        });
+        if (moves.length > 0) out.leaderboardMoves = moves;
+      } catch (err) {
+        log.warn(
+          { fixtureId: fx.fixture_id, source: "leaderboardMoves", err: String(err) },
+          "news enrichment: source failed, dropping section",
+        );
+      }
     }
   }
 
   if (TABLE_KINDS.has(fx.stage_kind)) {
     try {
-      const [row] = await tx<{ outcome: unknown }[]>`
-        select outcome from fixtures where id = ${fx.fixture_id}`;
-      const outcome = row?.outcome as { kind?: string; winner?: string } | null;
-      if (outcome && (outcome.kind === "win" || outcome.kind === "award") && outcome.winner) {
-        const [entrant] = await tx<{ display_name: string }[]>`
-          select display_name from entrants where id = ${outcome.winner}`;
-        const recent = await entrantRecentOutcomes(tx, fx.division_id, fx.stage_id, outcome.winner, 10);
-        const streak = computeStreak(recent);
-        if (streak && entrant) {
-          out.streak = { entrantName: entrant.display_name, kind: streak.kind, length: streak.length };
+      // Savepoint for the same reason as leaderboardMoves above — a bad
+      // `outcome.winner` here is a real, observed case (see
+      // entrantRecentOutcomes's own callers), and this block's own queries
+      // must not be able to poison the shared transaction either.
+      await tx.savepoint(async (sp) => {
+        const [row] = await sp<{ outcome: unknown }[]>`
+          select outcome from fixtures where id = ${fx.fixture_id}`;
+        const outcome = row?.outcome as { kind?: string; winner?: string } | null;
+        if (outcome && (outcome.kind === "win" || outcome.kind === "award") && outcome.winner) {
+          const [entrant] = await sp<{ display_name: string }[]>`
+            select display_name from entrants where id = ${outcome.winner}`;
+          const recent = await entrantRecentOutcomes(sp, fx.division_id, fx.stage_id, outcome.winner, 10);
+          const streak = computeStreak(recent);
+          if (streak && entrant) {
+            out.streak = { entrantName: entrant.display_name, kind: streak.kind, length: streak.length };
+          }
         }
-      }
+      });
     } catch (err) {
       log.warn(
         { fixtureId: fx.fixture_id, source: "streak", err: String(err) },
@@ -836,21 +866,27 @@ export async function assembleRecapEnrichment(
   const out: RecapEnrichment = {};
 
   try {
-    const { rows, hasModel } = await recomputePlayerStats(tx, fx.division_id);
-    if (hasModel && rows.length > 0) {
-      const model = resolveModule(fx.sport_key, fx.module_version).playerStats;
-      const metric = model?.metrics.find((m) => m.key === "goals") ?? model?.metrics[0];
-      if (metric) {
-        const top = [...rows].sort((a, b) => (b.stats[metric.key] ?? 0) - (a.stats[metric.key] ?? 0))[0];
-        if (top && (top.stats[metric.key] ?? 0) > 0) {
-          const [person] = await tx<{ full_name: string }[]>`
-            select full_name from persons where id = ${top.personId}`;
-          if (person) {
-            out.leaders = [{ metric: metric.label, personName: person.full_name, value: top.stats[metric.key] ?? 0 }];
+    // Savepoint (P3 review finding 3 unplanned fix — see the identical
+    // comment on assembleResultEnrichment's leaderboardMoves block): a
+    // rejected statement here must not poison the transaction the recap
+    // draft's own INSERT commits in.
+    await tx.savepoint(async (sp) => {
+      const { rows, hasModel } = await recomputePlayerStats(sp, fx.division_id);
+      if (hasModel && rows.length > 0) {
+        const model = resolveModule(fx.sport_key, fx.module_version).playerStats;
+        const metric = model?.metrics.find((m) => m.key === "goals") ?? model?.metrics[0];
+        if (metric) {
+          const top = [...rows].sort((a, b) => (b.stats[metric.key] ?? 0) - (a.stats[metric.key] ?? 0))[0];
+          if (top && (top.stats[metric.key] ?? 0) > 0) {
+            const [person] = await sp<{ full_name: string }[]>`
+              select full_name from persons where id = ${top.personId}`;
+            if (person) {
+              out.leaders = [{ metric: metric.label, personName: person.full_name, value: top.stats[metric.key] ?? 0 }];
+            }
           }
         }
       }
-    }
+    });
   } catch (err) {
     log.warn(
       { divisionId: fx.division_id, source: "recapLeaders", err: String(err) },
@@ -869,17 +905,26 @@ export async function assembleRecapEnrichment(
   }
 
   try {
-    const [snap] = await tx<{ rows: RankedEntrantRow[]; previous_rows: RankedEntrantRow[] | null }[]>`
-      select rows, previous_rows from standings_snapshots
-      where stage_id = ${fx.stage_id} and pool_id is null`;
-    if (snap) {
-      const climber = biggestClimber(snap.rows, snap.previous_rows);
-      if (climber) {
-        const [entrant] = await tx<{ display_name: string }[]>`
-          select display_name from entrants where id = ${climber.entrantId}`;
-        if (entrant) out.standingsMoves = [{ entrantName: entrant.display_name, from: climber.from, to: climber.to }];
+    // Savepoint for the same reason as the two blocks above. Also protects
+    // the OTHER real failure this block already has a proven test for
+    // (org-posts.test.ts's "malformed previous_rows" case) — that one is a
+    // pure JS TypeError with no SQL statement involved, so it never
+    // actually poisoned the transaction, but a bad `climber.entrantId`
+    // reaching the second query below is a genuine SQL-level risk the
+    // savepoint now covers too.
+    await tx.savepoint(async (sp) => {
+      const [snap] = await sp<{ rows: RankedEntrantRow[]; previous_rows: RankedEntrantRow[] | null }[]>`
+        select rows, previous_rows from standings_snapshots
+        where stage_id = ${fx.stage_id} and pool_id is null`;
+      if (snap) {
+        const climber = biggestClimber(snap.rows, snap.previous_rows);
+        if (climber) {
+          const [entrant] = await sp<{ display_name: string }[]>`
+            select display_name from entrants where id = ${climber.entrantId}`;
+          if (entrant) out.standingsMoves = [{ entrantName: entrant.display_name, from: climber.from, to: climber.to }];
+        }
       }
-    }
+    });
   } catch (err) {
     log.warn(
       { divisionId: fx.division_id, source: "standingsMoves", err: String(err) },
@@ -1074,11 +1119,18 @@ export async function loadDivisionHeadlines(
   const out = new Map<string, DivisionHeadline>();
   for (const div of divisions) {
     try {
-      const model = resolveModule(div.sport_key, div.module_version).playerStats;
-      const metric = model?.metrics.find((m) => m.key === "goals") ?? model?.metrics[0];
-      if (!metric) continue;
-      const { rows } = await recomputePlayerStats(tx, div.division_id);
-      if (rows.length > 0) out.set(div.division_id, { metric, rows });
+      // Savepoint (P3 review finding 3 unplanned fix): digestForOrg calls
+      // this before any of the other assemble* sources, in the SAME
+      // transaction the digest draft itself is inserted in — a rejected
+      // statement for one division must not poison every division after
+      // it, or the digest itself.
+      await tx.savepoint(async (sp) => {
+        const model = resolveModule(div.sport_key, div.module_version).playerStats;
+        const metric = model?.metrics.find((m) => m.key === "goals") ?? model?.metrics[0];
+        if (!metric) return;
+        const { rows } = await recomputePlayerStats(sp, div.division_id);
+        if (rows.length > 0) out.set(div.division_id, { metric, rows });
+      });
     } catch (err) {
       log.warn(
         { divisionId: div.division_id, source: "digestHeadline", err: String(err) },
@@ -1100,19 +1152,29 @@ export async function assembleDigestLeaders(
 ): Promise<DigestLeaderLine[]> {
   const out: DigestLeaderLine[] = [];
   for (const div of divisions) {
-    const h = headlines.get(div.division_id);
-    if (!h) continue;
-    const top = [...h.rows].sort((a, b) => (b.stats[h.metric.key] ?? 0) - (a.stats[h.metric.key] ?? 0))[0];
-    if (!top || (top.stats[h.metric.key] ?? 0) <= 0) continue;
-    const [person] = await tx<{ full_name: string }[]>`
-      select full_name from persons where id = ${top.personId}`;
-    if (!person) continue;
-    out.push({
-      divisionName: div.division_name,
-      metricLabel: h.metric.label,
-      personName: person.full_name,
-      value: top.stats[h.metric.key] ?? 0,
-    });
+    try {
+      // Savepoint — same reason as loadDivisionHeadlines above.
+      await tx.savepoint(async (sp) => {
+        const h = headlines.get(div.division_id);
+        if (!h) return;
+        const top = [...h.rows].sort((a, b) => (b.stats[h.metric.key] ?? 0) - (a.stats[h.metric.key] ?? 0))[0];
+        if (!top || (top.stats[h.metric.key] ?? 0) <= 0) return;
+        const [person] = await sp<{ full_name: string }[]>`
+          select full_name from persons where id = ${top.personId}`;
+        if (!person) return;
+        out.push({
+          divisionName: div.division_name,
+          metricLabel: h.metric.label,
+          personName: person.full_name,
+          value: top.stats[h.metric.key] ?? 0,
+        });
+      });
+    } catch (err) {
+      log.warn(
+        { divisionId: div.division_id, source: "digestLeaders", err: String(err) },
+        "news enrichment: source failed, dropping section",
+      );
+    }
   }
   return out;
 }
@@ -1132,25 +1194,35 @@ export async function assembleDigestClaimed(
 ): Promise<DigestClaimedHighlight | undefined> {
   let best: { value: number; personName: string; statLine: string } | undefined;
   for (const div of divisions) {
-    const h = headlines.get(div.division_id);
-    if (!h) continue;
-    const claimed = await tx<{ person_id: string; full_name: string }[]>`
-      select distinct p.id as person_id, p.full_name
-      from entrant_members em
-      join persons p on p.id = em.person_id and p.user_id is not null and p.merged_into is null
-      join fixtures f on f.division_id = ${div.division_id}
-        and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-      join match_states m on m.fixture_id = f.id
-      where f.status in ${tx(DECIDED_STATUSES as unknown as string[])}
-        and m.updated_at >= ${window.start}::timestamptz and m.updated_at < ${window.end}::timestamptz`;
-    if (claimed.length === 0) continue;
-    const statsByPerson = new Map(h.rows.map((r) => [r.personId, r.stats[h.metric.key] ?? 0]));
-    for (const cp of claimed) {
-      const value = statsByPerson.get(cp.person_id) ?? 0;
-      if (value <= 0) continue;
-      if (!best || value > best.value) {
-        best = { value, personName: cp.full_name, statLine: `${value} ${h.metric.label.toLowerCase()}` };
-      }
+    try {
+      // Savepoint — same reason as loadDivisionHeadlines above.
+      await tx.savepoint(async (sp) => {
+        const h = headlines.get(div.division_id);
+        if (!h) return;
+        const claimed = await sp<{ person_id: string; full_name: string }[]>`
+          select distinct p.id as person_id, p.full_name
+          from entrant_members em
+          join persons p on p.id = em.person_id and p.user_id is not null and p.merged_into is null
+          join fixtures f on f.division_id = ${div.division_id}
+            and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+          join match_states m on m.fixture_id = f.id
+          where f.status in ${sp(DECIDED_STATUSES as unknown as string[])}
+            and m.updated_at >= ${window.start}::timestamptz and m.updated_at < ${window.end}::timestamptz`;
+        if (claimed.length === 0) return;
+        const statsByPerson = new Map(h.rows.map((r) => [r.personId, r.stats[h.metric.key] ?? 0]));
+        for (const cp of claimed) {
+          const value = statsByPerson.get(cp.person_id) ?? 0;
+          if (value <= 0) continue;
+          if (!best || value > best.value) {
+            best = { value, personName: cp.full_name, statLine: `${value} ${h.metric.label.toLowerCase()}` };
+          }
+        }
+      });
+    } catch (err) {
+      log.warn(
+        { divisionId: div.division_id, source: "digestClaimed", err: String(err) },
+        "news enrichment: source failed, dropping section",
+      );
     }
   }
   return best ? { personName: best.personName, statLine: best.statLine } : undefined;
@@ -1169,48 +1241,57 @@ export async function assembleDigestUpcoming(
   nowMs: number,
   orgTz: string,
 ): Promise<{ upcoming: DigestUpcomingDay[]; overflow: number }> {
-  const nowIso = new Date(nowMs).toISOString();
-  const endIso = new Date(nowMs + 7 * 24 * 3600_000).toISOString();
-  const rows = await tx<
-    {
-      id: string;
-      home_name: string | null;
-      away_name: string | null;
-      scheduled_at: Date;
-      competition_name: string;
-      division_name: string;
-    }[]
-  >`
-    select f.id, h.display_name as home_name, a.display_name as away_name, f.scheduled_at,
-           c.name as competition_name, d.name as division_name
-    from fixtures f
-    join divisions d on d.id = f.division_id
-    join competitions c on c.id = d.competition_id
-    left join entrants h on h.id = f.home_entrant_id
-    left join entrants a on a.id = f.away_entrant_id
-    where f.org_id = ${orgId} and f.status = 'scheduled'
-      and f.scheduled_at >= ${nowIso}::timestamptz and f.scheduled_at < ${endIso}::timestamptz
-    order by f.scheduled_at`;
-  const fixtures: UpcomingFixture[] = rows.map((r) => ({
-    id: r.id,
-    homeName: r.home_name ?? "TBD",
-    awayName: r.away_name ?? "TBD",
-    scheduledAt: r.scheduled_at.toISOString(),
-    competitionName: r.competition_name,
-    divisionName: r.division_name,
-  }));
-  const { groups, overflow } = groupUpcomingByDay(fixtures, orgTz, 10);
-  return {
-    upcoming: groups.map((g) => ({
-      dayYmd: g.dayYmd,
-      lines: g.fixtures.map((f) => ({
-        homeName: f.homeName,
-        awayName: f.awayName,
-        timeLabel: hhmmInTz(Date.parse(f.scheduledAt), orgTz),
-      })),
-    })),
-    overflow,
-  };
+  const EMPTY = { upcoming: [] as DigestUpcomingDay[], overflow: 0 };
+  try {
+    // Savepoint — same reason as loadDivisionHeadlines above.
+    return await tx.savepoint(async (sp) => {
+      const nowIso = new Date(nowMs).toISOString();
+      const endIso = new Date(nowMs + 7 * 24 * 3600_000).toISOString();
+      const rows = await sp<
+        {
+          id: string;
+          home_name: string | null;
+          away_name: string | null;
+          scheduled_at: Date;
+          competition_name: string;
+          division_name: string;
+        }[]
+      >`
+        select f.id, h.display_name as home_name, a.display_name as away_name, f.scheduled_at,
+               c.name as competition_name, d.name as division_name
+        from fixtures f
+        join divisions d on d.id = f.division_id
+        join competitions c on c.id = d.competition_id
+        left join entrants h on h.id = f.home_entrant_id
+        left join entrants a on a.id = f.away_entrant_id
+        where f.org_id = ${orgId} and f.status = 'scheduled'
+          and f.scheduled_at >= ${nowIso}::timestamptz and f.scheduled_at < ${endIso}::timestamptz
+        order by f.scheduled_at`;
+      const fixtures: UpcomingFixture[] = rows.map((r) => ({
+        id: r.id,
+        homeName: r.home_name ?? "TBD",
+        awayName: r.away_name ?? "TBD",
+        scheduledAt: r.scheduled_at.toISOString(),
+        competitionName: r.competition_name,
+        divisionName: r.division_name,
+      }));
+      const { groups, overflow } = groupUpcomingByDay(fixtures, orgTz, 10);
+      return {
+        upcoming: groups.map((g) => ({
+          dayYmd: g.dayYmd,
+          lines: g.fixtures.map((f) => ({
+            homeName: f.homeName,
+            awayName: f.awayName,
+            timeLabel: hhmmInTz(Date.parse(f.scheduledAt), orgTz),
+          })),
+        })),
+        overflow,
+      };
+    });
+  } catch (err) {
+    log.warn({ orgId, source: "digestUpcoming", err: String(err) }, "news enrichment: source failed, dropping section");
+    return EMPTY;
+  }
 }
 
 /**
