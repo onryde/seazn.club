@@ -412,3 +412,82 @@ describe("assessCapacity — module purity (D2 contract: no DB, no solver, no cl
     }
   });
 });
+
+describe("assessCapacity — per-day FLOOR (fixtures a rule nails to one day)", () => {
+  /** Two roomy days, 6 slots each, 12 total — ample for 8 fixtures on the
+   *  totals alone. The point of every test here is that the totals are not
+   *  the whole story once a rule says WHICH day a fixture must land on. */
+  const twoRoomyDays = (forcedOnDay1?: number): CapacityDay[] => [
+    { ...oneCourtDay("2026-10-19", DAY1, 240), ...(forcedOnDay1 !== undefined ? { forcedDemand: forcedOnDay1 } : {}) },
+    oneCourtDay("2026-10-20", DAY1 + DAY_MS, 240),
+  ];
+
+  const base = (days: CapacityDay[], fixtureCount: number): CapacityInput => ({
+    matchMinutes: 30,
+    gapMinutes: 10, // slot = 40 -> floor((240+10)/40) = 6 per day
+    perEntrantMinRest: 0,
+    fixtureCount,
+    days,
+    entrants: [],
+  });
+
+  it("stays ok when the forced fixtures fit inside their own day", () => {
+    const report = assessCapacity(base(twoRoomyDays(6), 8));
+    expect(report.slotSupply).toBe(12);
+    // 6 nailed to day 1 (its exact capacity), 2 free, 6 free slots on day 2.
+    expect(report.verdict).toBe("ok");
+  });
+
+  it("is impossible when ONE day is nailed past its own capacity, even though total supply is ample", () => {
+    // This is the case a total-supply check cannot see, and the reason the
+    // floor exists: 12 slots for 8 fixtures looks comfortable, but 7 of them
+    // can only go on a day that holds 6. The 7th is unplaceable and no amount
+    // of slack on day 2 can absorb it.
+    const report = assessCapacity(base(twoRoomyDays(7), 8));
+    expect(report.slotSupply).toBe(12);
+    expect(report.slotDemand).toBe(8);
+    expect(report.verdict).toBe("impossible");
+  });
+
+  it("the SAME board with those fixtures free instead of nailed is ok — the floor is doing the work, not the arithmetic", () => {
+    // Identical supply and demand; the only difference is `forcedDemand`.
+    // Without this pairing the test above would also pass if the change had
+    // simply made the whole module stricter.
+    const report = assessCapacity(base(twoRoomyDays(undefined), 8));
+    expect(report.slotSupply).toBe(12);
+    expect(report.slotDemand).toBe(8);
+    expect(report.verdict).toBe("ok");
+  });
+
+  it("counts a forced fixture once, not twice — a fully-nailed board that exactly fits is not impossible", () => {
+    // Every fixture nailed, 6 to each day, 12 slots. If the walk double
+    // counted (forced demand PLUS the same fixtures again as free demand) it
+    // would see 24 against 12 and cry impossible.
+    const days: CapacityDay[] = [
+      { ...oneCourtDay("2026-10-19", DAY1, 240), forcedDemand: 6 },
+      { ...oneCourtDay("2026-10-20", DAY1 + DAY_MS, 240), forcedDemand: 6 },
+    ];
+    const report = assessCapacity(base(days, 12));
+    expect(report.verdict).not.toBe("impossible");
+  });
+
+  it("a per-day rule CAP still binds a forced fixture — the floor cannot push past the ceiling", () => {
+    // Day 1 holds 6 by court supply but a max_fixtures_per_day rule caps it
+    // at 2, and 4 fixtures are nailed to it. The cap is what binds.
+    const days: CapacityDay[] = [
+      { ...oneCourtDay("2026-10-19", DAY1, 240, 2), forcedDemand: 4 },
+      oneCourtDay("2026-10-20", DAY1 + DAY_MS, 240),
+    ];
+    const report = assessCapacity(base(days, 6));
+    expect(report.verdict).toBe("impossible");
+  });
+
+  it("an over-counted floor cannot wrap negative and hide a real shortfall", () => {
+    // Defensive: a caller that reports more forced than the board has
+    // fixtures must not produce a negative free demand that cancels the
+    // overflow. 20 nailed to a 6-slot day is impossible however it is
+    // counted.
+    const report = assessCapacity(base(twoRoomyDays(20), 8));
+    expect(report.verdict).toBe("impossible");
+  });
+});
