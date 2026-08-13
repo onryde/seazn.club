@@ -48,3 +48,27 @@ create unique index org_posts_auto_once on org_posts (
 alter table org_posts drop constraint if exists org_posts_kind_check;
 alter table org_posts add constraint org_posts_kind_check
   check (kind in ('news','result','round_recap','announcement','weekly_digest'));
+
+-- -----------------------------------------------------------------------------
+-- 4) Indexes backing the weekly-digest cron's candidate pre-filter.
+--
+-- `sweepWeeklyDigests` originally walked every row of `organizations` and did
+-- an entitlement round-trip plus a tenant transaction per org. That is O(all
+-- orgs) for a job whose candidate set is tiny, and it does not merely get slow
+-- — against ~7.3k organizations it exceeded a 30s limit and failed outright.
+--
+-- The sweep now narrows to orgs with either recent decided activity or a
+-- fixture scheduled in the coming week, via one UNION query. These two indexes
+-- are what make that query cheap; without them the pre-filter is still a
+-- sequential scan and nothing is actually fixed.
+--
+-- `match_states` had no index on `updated_at` at all (only its pkey on
+-- fixture_id), and `fixtures` had no index leading with `scheduled_at` — the
+-- existing `fixtures_division_idx` leads with `division_id`, so it cannot serve
+-- a bare time-range predicate.
+create index if not exists match_states_updated_at_idx
+  on match_states (updated_at);
+
+create index if not exists fixtures_scheduled_at_idx
+  on fixtures (scheduled_at)
+  where scheduled_at is not null;

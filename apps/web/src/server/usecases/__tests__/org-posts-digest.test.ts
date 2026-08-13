@@ -185,11 +185,20 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     const idleActivePro = await seedOrg("pro"); // Pro, but zero activity this week
 
     const result = await sweepWeeklyDigests();
-    // Loose on the totals — this sweep is unscoped by design (every org in
-    // the shared test DB) and this file is not the only one that creates
-    // orgs, so only >=1 is safe to assert on the aggregate.
-    expect(result.orgsChecked).toBeGreaterThanOrEqual(3);
+    // Loose on the totals — this file is not the only one creating orgs in the
+    // shared test DB, so only lower bounds are safe on the aggregates.
+    expect(result.orgsTotal).toBeGreaterThanOrEqual(3);
     expect(result.digestsCreated).toBeGreaterThanOrEqual(1);
+
+    // Regression guard against the sweep going back to scanning every org.
+    // It used to `select id from organizations` and do an entitlement
+    // round-trip plus a tenant transaction per row, which stopped finishing
+    // altogether once the DB held a few thousand orgs — this test failed on a
+    // 30s timeout, not an assertion. `community` and `idleActivePro` are
+    // seeded with no fixtures whatsoever, so neither can ever be a candidate;
+    // the narrowed set is therefore at least two smaller than the full count,
+    // always. A revert to the full scan makes these equal and reds here.
+    expect(result.orgsChecked).toBeLessThanOrEqual(result.orgsTotal - 2);
 
     const activeDigests = (await listPosts(active.auth, active.orgId)).filter((p) => p.kind === "weekly_digest");
     const communityDigests = (await listPosts(community.auth, community.orgId)).filter(

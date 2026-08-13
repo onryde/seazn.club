@@ -1423,10 +1423,47 @@ export async function generateWeeklyDigest(auth: AuthCtx, orgId: string): Promis
  *  trials, and re-deriving that logic here is exactly how it would drift. */
 export async function sweepWeeklyDigests(
   nowMs: number = Date.now(),
-): Promise<{ orgsChecked: number; digestsCreated: number }> {
-  const orgIds = (await superuser<{ id: string }[]>`select id from organizations`).map((r) => r.id);
+): Promise<{ orgsTotal: number; orgsChecked: number; digestsCreated: number }> {
+  // This used to `select id from organizations` and then do per-org work for
+  // every row — an entitlement round-trip plus a tenant transaction each. That
+  // is O(all orgs) for a job whose real candidate set is tiny, and it stops
+  // finishing rather than merely being slow: against a database holding ~7.3k
+  // organizations it exceeded a 30s limit outright.
+  //
+  // So narrow to organizations that COULD produce a digest, in one query.
+  // The pre-filter is deliberately a conservative NECESSARY condition, not a
+  // second copy of the emptiness rule: `digestForOrg` still computes the exact
+  // window in the org's own timezone and still returns null when every section
+  // comes out empty. Duplicating that decision here is how the two would drift
+  // apart later. The bounds are padded a day past the seven-day window so no
+  // timezone offset can push a genuine candidate outside them — a superset only
+  // ever costs a wasted check, it can never miss a digest.
+  const DAY = 24 * 3600_000;
+  const activityFrom = new Date(nowMs - 8 * DAY).toISOString();
+  const activityTo = new Date(nowMs + DAY).toISOString();
+  const upcomingTo = new Date(nowMs + 8 * DAY).toISOString();
+  const nowIso = new Date(nowMs).toISOString();
+
+  const [totals] = await superuser<{ count: number }[]>`select count(*)::int as count from organizations`;
+  const orgsTotal = totals?.count ?? 0;
+
+  const candidates = (
+    await superuser<{ org_id: string }[]>`
+      select f.org_id
+        from match_states m
+        join fixtures f on f.id = m.fixture_id
+       where m.updated_at >= ${activityFrom}::timestamptz
+         and m.updated_at < ${activityTo}::timestamptz
+         and f.status = any(${[...DECIDED_STATUSES]})
+      union
+      select f.org_id
+        from fixtures f
+       where f.scheduled_at >= ${nowIso}::timestamptz
+         and f.scheduled_at < ${upcomingTo}::timestamptz`
+  ).map((r) => r.org_id);
+
   let digestsCreated = 0;
-  for (const orgId of orgIds) {
+  for (const orgId of candidates) {
     if (!(await hasFeature(orgId, "news.auto"))) continue;
     try {
       const post = await withTenant(orgId, (tx) => digestForOrg(tx, orgId, nowMs, { skipIfEmpty: true }));
@@ -1435,5 +1472,9 @@ export async function sweepWeeklyDigests(
       log.warn({ orgId, err: String(err) }, "weekly digest sweep: org failed, continuing with the rest");
     }
   }
-  return { orgsChecked: orgIds.length, digestsCreated };
+  log.info(
+    { orgsTotal, orgsChecked: candidates.length, digestsCreated },
+    "weekly digest sweep: candidates narrowed from the full org set",
+  );
+  return { orgsTotal, orgsChecked: candidates.length, digestsCreated };
 }
