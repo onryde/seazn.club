@@ -176,8 +176,11 @@ describe("the placer never introduces a person double-booking", () => {
     expect(assignments).toEqual([]);
     const unplaceable = conflicts.filter((c) => c.reason === "no_slot");
     expect(unplaceable).toHaveLength(1);
-    expect(unplaceable[0]!.detail).toContain("p1");
-    expect(unplaceable[0]!.detail).toContain("sib");
+    expect(unplaceable[0]!.details).toEqual({
+      kind: "no_slot_person_bound",
+      personIds: ["p1"],
+      otherFixtureId: "sib",
+    });
     expect(conflicts.some((c) => c.reason === "person_overlap")).toBe(false);
   });
 
