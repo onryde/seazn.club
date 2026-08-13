@@ -152,7 +152,12 @@ function TemplateDetailSheet({
       size="lg"
       footer={
         <>
-          <button type="button" onClick={onClose} className="btn btn-ghost">
+          {/* `min-h-11` = 44px, the phone touch-target floor this repo asserts
+              on (components/v2/confirm-dialog.tsx carries the same note). The
+              bare `.btn` is `py-2 text-sm`, which measures 38px — under the
+              floor at every width, not just phones. Caught by mobile.spec.ts's
+              "portfolio panels" test, which measures these two buttons. */}
+          <button type="button" onClick={onClose} className="btn btn-ghost min-h-11">
             {msg("comp.wizard.cancel")}
           </button>
           <button
@@ -160,7 +165,7 @@ function TemplateDetailSheet({
             form="template-detail-form"
             disabled={busy || !name.trim()}
             data-testid="template-detail-submit"
-            className="btn btn-primary"
+            className="btn btn-primary min-h-11"
           >
             {busy ? msg("comp.wizard.creating") : msg("templates.detail.useTemplate")}
           </button>

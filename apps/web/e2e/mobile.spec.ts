@@ -116,6 +116,18 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     { path: await divisionPath(request, divisionId, "?tab=fixtures") },
     { path: await divisionPath(request, divisionId, "?tab=standings") },
     { path: await divisionPath(request, divisionId, "/registrations") },
+    // The /schedule console was absent from this inventory entirely, so the
+    // three tabs that carry the portfolio's new panels (P1 capacity card on
+    // Settings, P2 health panel on Health, both on the Board's chrome) shipped
+    // with no width enforcement at all — the two /schedule tests further down
+    // this file pin the publish-gate sheet and the z3 strip, not the page.
+    // Page-level only: this setup division has no stage, so neither panel is
+    // in the DOM here. The panels' OWN widths are pinned by
+    // "portfolio panels (P1/P2/P4) hold at this width" below, which seeds
+    // until each one actually renders.
+    { path: await divisionPath(request, divisionId, "/schedule?tab=board") },
+    { path: await divisionPath(request, divisionId, "/schedule?tab=settings") },
+    { path: await divisionPath(request, divisionId, "/schedule?tab=health") },
     { path: "/settings?tab=organization" },
     { path: "/settings?tab=news" },
     { path: "/settings?tab=sponsors" },
@@ -150,6 +162,10 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     { path: "/directory" },
     { path: "/import" },
     { path: "/my-matches" },
+    // P4/D1a wizard step 0 — the template gallery. A 6-card grid, which is the
+    // shape most likely to force a min-width overflow at 320 (grid items
+    // default to `min-width: auto`).
+    { path: `/o/${orgSlug}/c/new` },
   ];
   for (const { path, allowancePx } of routes) {
     await auditRoute(page, path, { allowancePx });
@@ -609,4 +625,212 @@ test("z3 schedule actions + result strip hold at phone width", async ({ page, re
   expect(clipped, "result strip content is clipped at this width").toEqual([]);
 
   await expectNoHorizontalScroll(page);
+});
+
+// The portfolio wave 1 + wave 2 panels (P1 capacity card, P2 health panel, P4
+// template gallery) each shipped a new UI surface, and none of the three was
+// reachable from this file's route inventory — the /schedule console was
+// absent entirely and /c/new had never been listed. The sweep above now visits
+// all four routes, but a route sweep alone is vacuous for these three: the
+// setup division has no stage, so the capacity card and the health panel are
+// simply not in the DOM there, and a page with no panel cannot overflow
+// because of one. This test seeds until each panel actually renders, asserts
+// it is visible, and only then measures — page-level scroll AND the panel's
+// own content, since a card that clips its text inside `overflow-hidden`
+// leaves the page width clean.
+test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request }) => {
+  const DAY = "2026-10-17";
+  const at = (hhmm: string) => `${DAY}T${hhmm}:00.000Z`;
+
+  /** Nothing inside `root` may scroll sideways. Text nodes are the ones that
+   *  fail first at 320: a metric label or a suggestion row with no wrap. */
+  const assertNotClipped = async (selector: string, label: string) => {
+    const clipped = await page.evaluate((sel) => {
+      const root = document.querySelector<HTMLElement>(sel);
+      if (!root) return [`${sel} was not in the DOM`];
+      const suspects: HTMLElement[] = [
+        root,
+        ...Array.from(root.querySelectorAll<HTMLElement>("p,li,dd,dt,h2,h3,span,button")),
+      ];
+      return suspects
+        .filter((el) => el.scrollWidth - el.clientWidth > 1)
+        .map((el) => `${el.tagName.toLowerCase()} ${el.scrollWidth}px content in ${el.clientWidth}px`);
+    }, selector);
+    expect(clipped, `${label} content is clipped at this width`).toEqual([]);
+  };
+
+  // --- P1: the capacity card, in its "impossible" state — the widest it ever
+  // gets, because that is the only verdict carrying the suggestion rows. Same
+  // arithmetic capacity-precheck.spec.ts uses: 28 fixtures, 1 court, 60-minute
+  // matches, one day = 24 slots. 28 > 24, on the free tier.
+  const capComp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Mobile Capacity ${TAG}`,
+    visibility: "private",
+  });
+  const capDiv = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${capComp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Capacity",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  const capDivisionId = capDiv.data!.id;
+  await apiJson(
+    request,
+    `/api/v1/divisions/${capDivisionId}/entrants`,
+    "POST",
+    Array.from({ length: 8 }, (_, i) => ({ kind: "individual", display_name: `C${i + 1}`, seed: i + 1 })),
+  );
+  const capStage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${capDivisionId}/stages`, "POST", {
+    seq: 1,
+    kind: "league",
+    name: "League",
+  });
+  const capGen = await apiJson<{ fixtures: { id: string }[] }>(
+    request,
+    `/api/v1/stages/${capStage.data!.id}/generate`,
+    "POST",
+  );
+  // Guard the premise, not just the render: 28 is what makes the board
+  // impossible, and a generator change that produced fewer would leave this
+  // test measuring a card that never appears.
+  expect(capGen.data!.fixtures.length).toBe(28);
+  const capSettings = await apiJson(request, `/api/v1/divisions/${capDivisionId}/schedule-settings`, "PUT", {
+    config: {
+      startAt: "2026-09-12T00:00:00.000Z",
+      endAt: "2026-09-12T23:59:00.000Z",
+      matchMinutes: 60,
+      gapMinutes: 0,
+      courts: ["Court 1"],
+      perEntrantMinRest: 0,
+    },
+  });
+  expect(capSettings.status).toBe(200);
+
+  await page.goto(await divisionPath(page.request, capDivisionId, "/schedule?tab=settings"), {
+    waitUntil: "load",
+  });
+  const capCard = page.locator('[data-capacity-verdict="impossible"]');
+  await expect(capCard).toBeVisible({ timeout: 30_000 });
+  await expect(capCard.getByText(/Add 1 day|Add 1 court|Shorten matches/i).first()).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  await assertNotClipped('[data-capacity-verdict="impossible"]', "the capacity card");
+
+  // --- P2: the health panel, with a real applied board so all five metric
+  // cards render (an unapplied stage renders the empty state instead, which
+  // is a single line of text and cannot fail a width check).
+  const hComp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Mobile Health ${TAG}`,
+    visibility: "private",
+  });
+  const hDiv = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${hComp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Health",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  const hDivisionId = hDiv.data!.id;
+  const hEntrants = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${hDivisionId}/entrants`, "POST", [
+    { kind: "individual", display_name: "Ada H", seed: 1 },
+    { kind: "individual", display_name: "Bea H", seed: 2 },
+    { kind: "individual", display_name: "Cal H", seed: 3 },
+    { kind: "individual", display_name: "Dev H", seed: 4 },
+  ]);
+  const [h1, h2, h3, h4] = hEntrants.data!.map((e) => e.id);
+  const hStage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${hDivisionId}/stages`, "POST", {
+    seq: 1,
+    kind: "league",
+    name: "League",
+  });
+  const hStageId = hStage.data!.id;
+  type HFixture = { id: string; home_entrant_id: string | null; away_entrant_id: string | null };
+  const hGen = await apiJson<{ fixtures: HFixture[] }>(request, `/api/v1/stages/${hStageId}/generate`, "POST");
+  const pick = (a: string, b: string) =>
+    hGen.data!.fixtures.find(
+      (f) =>
+        (f.home_entrant_id === a && f.away_entrant_id === b) ||
+        (f.home_entrant_id === b && f.away_entrant_id === a),
+    )!;
+  await apiJson(request, `/api/v1/divisions/${hDivisionId}/schedule-settings`, "PUT", {
+    tz: "UTC",
+    config: {
+      startAt: `${DAY}T00:00:00.000Z`,
+      endAt: `${DAY}T23:59:00.000Z`,
+      matchMinutes: 60,
+      gapMinutes: 0,
+      courts: ["Court 1", "Court 2"],
+      perEntrantMinRest: 0,
+      sessionWindows: [{ from: `${DAY}T09:00:00.000Z`, to: `${DAY}T21:00:00.000Z` }],
+    },
+  });
+  // Deliberately lopsided (every one of H1's matches on Court 1) so the cards
+  // carry real offender counts and "Show details" rows, not a uniform 100.
+  const applied = await apiJson(request, `/api/v1/stages/${hStageId}/schedule/apply`, "POST", {
+    assignments: [
+      { f: pick(h1!, h2!), t: "09:00", c: "Court 1" },
+      { f: pick(h3!, h4!), t: "09:00", c: "Court 2" },
+      { f: pick(h1!, h3!), t: "10:15", c: "Court 1" },
+      { f: pick(h2!, h4!), t: "10:15", c: "Court 2" },
+      { f: pick(h1!, h4!), t: "15:00", c: "Court 1" },
+      { f: pick(h2!, h3!), t: "15:00", c: "Court 2" },
+    ].map(({ f, t, c }) => ({ fixture_id: f.id, scheduled_at: at(t), court_label: c })),
+    source: "manual",
+  });
+  expect(applied.status).toBeLessThan(300);
+
+  await page.goto(await divisionPath(page.request, hDivisionId, "/schedule?tab=health"), { waitUntil: "load" });
+  await expect(page.locator('[data-health-status="ready"]').first()).toBeVisible({ timeout: 30_000 });
+  // All five, by name — a panel that rendered one card would otherwise pass.
+  for (const metric of [
+    "restSpread",
+    "courtBalance",
+    "gapDispersion",
+    "homeAwayAlternation",
+    "primeSlotFairness",
+  ]) {
+    await expect(page.locator(`[data-health-metric="${metric}"]`)).toBeVisible();
+  }
+  await expectNoHorizontalScroll(page);
+  await assertNotClipped("[data-health-panel]", "the health panel");
+
+  // Offender lists are the part that grows without a ceiling, so measure them
+  // expanded, not collapsed. "Show details" is the affordance; clicking the
+  // card body does nothing.
+  const restCard = page.locator('[data-health-metric="restSpread"]');
+  await restCard.getByRole("button", { name: /show details/i }).click();
+  await expect(restCard.locator("li").first()).toBeVisible({ timeout: 10_000 });
+  await expectNoHorizontalScroll(page);
+  await assertNotClipped("[data-health-panel]", "the health panel with offenders expanded");
+
+  // --- P4: the template gallery and its detail sheet. The sheet is the part
+  // with a two-column date row, which is where 320 breaks if it does.
+  await page.goto(`/o/${orgSlug}/c/new`, { waitUntil: "load" });
+  const gallery = page.getByTestId("template-gallery");
+  await expect(gallery).toBeVisible({ timeout: 30_000 });
+  await expectNoHorizontalScroll(page);
+  await assertNotClipped('[data-testid="template-gallery"]', "the template gallery");
+
+  await gallery.getByRole("button", { name: /view details/i }).first().click();
+  await expect(page.getByTestId("template-detail-structure")).toBeVisible({ timeout: 15_000 });
+  await expectNoHorizontalScroll(page);
+  const submit = page.getByTestId("template-detail-submit");
+  const submitBox = await submit.boundingBox();
+  expect(submitBox, "the template detail submit has no box").not.toBeNull();
+  expect(submitBox!.height, `submit touch target is ${submitBox!.height}px`).toBeGreaterThanOrEqual(44);
+
+  await page.screenshot({
+    path: `test-results/portfolio-panels-${test.info().project.name}.png`,
+    fullPage: false,
+  });
 });
