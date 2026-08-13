@@ -206,7 +206,7 @@ export function boardSlotOptionsFor(
  */
 export function capacityForStage(
   stageId: string,
-  fixtures: readonly FixtureRow[],
+  fixtures: readonly Pick<FixtureRow, "stage_id" | "status" | "home_entrant_id" | "away_entrant_id" | "pool_id">[],
   config: DivisionScheduleSettings["config"] | undefined,
   orgTz: string,
   divisionId: string,

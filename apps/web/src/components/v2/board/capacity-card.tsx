@@ -86,7 +86,7 @@ export function CapacityCard({ report, onApply, venueLabel = "court" }: Capacity
 
       <p className="mt-2 text-xs text-slate-500">
         {msg("schedule.capacity.summary", { demand: report.slotDemand, supply: report.slotSupply })}
-        {restViolations > 0 ? " " + msg("schedule.capacity.restViolations", { n: restViolations }) : ""}
+        {restViolations > 0 ? " · " + msg("schedule.capacity.restViolations", { n: restViolations }) : ""}
       </p>
       <div className="mt-1.5">
         <Bar value={report.slotDemand} max={Math.max(report.slotSupply, report.slotDemand)} tone={style.bar} />
