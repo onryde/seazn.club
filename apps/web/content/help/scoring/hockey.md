@@ -8,17 +8,17 @@ Ice hockey and field hockey share one pad built around periods, penalties and sh
 
 ## Goals
 
-Tap **+ Goal** for a quick goal, or **Goal details…** to add the scorer, assists (ice hockey, up to two) and the goal type — power play or short-handed on ice, penalty corner or stroke on turf. Details feed player stats and the division's discipline report; skipping them still counts the goal.
+Tap **Goal** and pick who scored — and, on ice, up to two assists — from the roster, or leave it unattributed and confirm; the goal counts either way (see [crediting the player](/help/scoring/attribution)). Mark **Empty net** where it applies. A penalty corner, stroke or penalty shot gets its own **Set piece awarded** entry as it's given, separate from the goal it may or may not lead to.
 
 ## Penalties, cards and team strength
 
-Record a penalty or card with its class — minors, majors and misconducts for ice; green, yellow and red cards for field hockey (the team plays short on **every** FIH card). While a penalty runs, the pad and the public scoreboard show the strength chip — `5v4`, `5v3`, `10v11`.
+Tap **Card** to record a penalty with its class — minors, majors and misconducts for ice; green, yellow and red cards for field hockey (the team plays short on **every** FIH card) — and who served it. While a penalty runs, the pad and the public scoreboard show the strength chip — `5v4`, `5v3`, `10v11`.
 
-The timer on the pad is a hint only: **you release the penalty** when the clock says so (for example, a minor ends early on a power-play goal). Red cards and game misconducts can't be released.
+The timer on the pad is a hint only: tap **Release** when the clock says the penalty's over (for example, a minor ending early on a power-play goal). Red cards and game misconducts can't be released.
 
 ## Periods, overtime, shoot-outs
 
-**End period** moves play along — P1 to P3, or Q1 to Q4. A tied game then follows your division's rules: sudden-death overtime and a shoot-out for IIHF ice hockey, a straight draw for FIH outdoor leagues, or a shoot-out with a bonus point in Pro-League-style formats. Shoot-out attempts alternate; the pad highlights whose turn it is and ends the shoot-out the moment it's decided.
+**Advance period** moves play along — P1 to P3, or Q1 to Q4. A tied game then follows your division's rules: sudden-death overtime and a shoot-out for IIHF ice hockey, a straight draw for FIH outdoor leagues, or a shoot-out with a bonus point in Pro-League-style formats. Record each attempt as it happens — ice hockey calls it a **GWS attempt**, field hockey an **SO attempt** — and the pad ends the shoot-out the moment it's decided.
 
 ## Standings
 
