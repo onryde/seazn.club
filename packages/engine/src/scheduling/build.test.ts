@@ -855,6 +855,33 @@ describe("rejectedBlockingConflicts", () => {
     expect(rejectedBlockingConflicts(before, after, new Set(["a"]))).toEqual([]);
   });
 
+  // The durable typed rules are NOT on the placement wire — `constraints`
+  // carries `matchMinutes`/`gapMinutes` only, `division_rules` (proto field 10)
+  // was retired, and `constraints.startWindows` was never sent — so the service
+  // cannot honour a `not_before`. Greedy can and does (`calendar.ts:759`,
+  // `ready = max(config.startAt, window.notBefore)`). This gate is therefore the
+  // only place a rule-breaking solver board can be caught; before 2026-08-13 the
+  // sole thing catching it was `isStrictlyBetter` happening to prefer greedy's
+  // board, which is incidental rather than a guarantee. Measured that day: with
+  // the gate changed to trust the solver's proof instead of ranking, a division
+  // whose durable rule forbids anything before noon got six cards at 00:00.
+  it("rejects a durable typed-rule breach the solver introduced, though it is warn-only elsewhere", () => {
+    const after = [c({ fixtureId: "a", reason: "instruction" })];
+    expect(rejectedBlockingConflicts([], after, new Set(["a"]))).toEqual(after);
+    // The SHARED predicate is deliberately unchanged: widening it would move
+    // the apply gate, the drag path and the AI pipeline too. An organiser must
+    // still be able to edit a board that already breaches a rule.
+    expect(isBlockingConflict(after[0]!)).toBe(false);
+  });
+
+  it("passes a typed-rule breach greedy shares, because refusing it would be a lock-out", () => {
+    // A rule NEITHER producer can satisfy appears on both sides and cancels —
+    // the same reason `ours` scopes out conflicts between two `existing` rows.
+    const before = [c({ fixtureId: "a", reason: "instruction" })];
+    const after = [c({ fixtureId: "a", reason: "instruction" })];
+    expect(rejectedBlockingConflicts(before, after, new Set(["a"]))).toEqual([]);
+  });
+
   it("rejects a blocking conflict the solver introduced", () => {
     const after = [c({ fixtureId: "a", reason: "person_overlap" })];
     expect(rejectedBlockingConflicts([], after, new Set(["a"]))).toEqual(after);
