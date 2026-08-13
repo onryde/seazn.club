@@ -146,9 +146,6 @@ jobs:
       # CI-only dummy; no real Anthropic call is made.
       SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
       ANTHROPIC_API_KEY: sk-ant-e2e-fixture
-      # S10/#419 — see the note on the same variable in the serial job.
-      # REMOVE THIS WITH THE HARNESS at the S12/S13 cutover.
-      SCOREPAD_V2_HARNESS: "1"
 
     steps:
       - uses: actions/checkout@v5
@@ -374,14 +371,6 @@ jobs:
       STRIPE_WEBHOOK_SECRET: whsec_e2e_payments
       SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
       ANTHROPIC_API_KEY: sk-ant-e2e-fixture
-      # S10/#419 — the v2 pad's browser-verification harness route
-      # (/score/harness). It is `notFound()` unless this is exactly "1", read
-      # per request on the SERVER so the gate can never be baked into a client
-      # bundle, and no deployment sets it. Set here so scorepad-offline.spec.ts
-      # exercises the durable queue against a real server; the spec skips
-      # itself, loudly, wherever the route is absent. REMOVE THIS WITH THE
-      # HARNESS at the S12/S13 cutover.
-      SCOREPAD_V2_HARNESS: "1"
 
     steps:
       - uses: actions/checkout@v5
@@ -550,14 +539,6 @@ jobs:
       STRIPE_WEBHOOK_SECRET: whsec_e2e_payments
       SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
       ANTHROPIC_API_KEY: sk-ant-e2e-fixture
-      # S10/#419 — the v2 pad's browser-verification harness route
-      # (/score/harness). It is `notFound()` unless this is exactly "1", read
-      # per request on the SERVER so the gate can never be baked into a client
-      # bundle, and no deployment sets it. Set here so scorepad-offline.spec.ts
-      # exercises the durable queue against a real server; the spec skips
-      # itself, loudly, wherever the route is absent. REMOVE THIS WITH THE
-      # HARNESS at the S12/S13 cutover.
-      SCOREPAD_V2_HARNESS: "1"
 
     steps:
       - uses: actions/checkout@v5

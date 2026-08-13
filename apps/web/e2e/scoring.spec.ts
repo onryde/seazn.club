@@ -378,17 +378,21 @@ test("cricket DLS scales a five-ball-over format onto the published table", asyn
 
   // And the shortened match is still scoreable — the pad opens on the chase.
   await page.goto(await fixturePath(page.request, fixtureId));
-  // S13/#422 W11 cutover FINDING, not yet fixed here (would require running
-  // Playwright to confirm the real DOM, out of scope this session): "— total"
-  // was v1 CricketPad's own OverByOverForm sentence ("<side> — total <runs>/
-  // <wickets>"). The v2 cricket skin's header (cricket-skin.tsx's
-  // ScoreHeader/buildHeader) never composes that string — score and wickets
-  // are two SEPARATE fields ("Score" "0", "Wickets" "0"), never joined as
-  // "0/0". This assertion needs re-anchoring onto the real v2 header
-  // structure; left as-is (and therefore red) rather than guessed at, unlike
-  // the testid assertion below, which this session could verify both sides
-  // of by reading cricket-skin.tsx directly.
-  await expect(page.getByText(/— total/)).toContainText("0/0", { timeout: 20_000 });
+  // S13/#422 W11 cutover — "— total" was v1 CricketPad's own OverByOverForm
+  // sentence ("<side> — total <runs>/<wickets>"), which the v2 cricket skin
+  // never composes (cricket-skin.tsx's ScoreHeader/buildHeader): score and
+  // wickets are two SEPARATE header fields, each its own caption+value pair,
+  // never joined into one "runs/wickets" string. Scoped inside the skin's own
+  // `data-role="cricket-skin"` container because pad-renderer.tsx's chassis
+  // headline strip carries the SAME "Score" caption as a SIBLING of the skin
+  // (never an ancestor — see scorepad-skins.spec.ts's file header), so a bare
+  // page-wide text match would be ambiguous between the two.
+  const cricketSkin = page.locator('[data-role="cricket-skin"]');
+  await expect(cricketSkin).toBeVisible({ timeout: 20_000 });
+  const scoreField = cricketSkin.getByText("Score", { exact: true }).locator("..");
+  const wicketsField = cricketSkin.getByText("Wickets", { exact: true }).locator("..");
+  await expect(scoreField).toContainText("0");
+  await expect(wicketsField).toContainText("0");
 
   // #467 — the 84 asserted off the state API above must also be ON SCREEN.
   // Until this, the revised target was verifiable only through /state, which is
