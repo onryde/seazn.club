@@ -130,14 +130,17 @@ function toLineupSlot(s: LineupSlotIn, index: number): LineupSlot {
     // own `buildLineup` convention — the engine's own `LineupSlot.role`
     // already defaults absent to "player" (core/lineup.ts), so this is a
     // wire-size choice, not a behaviour one.
-    //
-    // `pairOrder` (doubles serve order) is NOT included here: unlike `role`,
-    // it has no DB column at all today (no caller ever writes one, and
-    // `lineup-editor.tsx` has no UI for it either) — carrying it through
-    // this function would be a dead, always-undefined field, not a fix.
-    // Flagged to the dispatcher rather than expanded into a new migration +
-    // write path, which is well outside this fix's file set.
     ...(s.role && s.role !== "player" ? { role: s.role } : {}),
+    // `pairOrder` (doubles serve order, S3/#426's engine LineupSlot field) —
+    // S12/#421 pass D, V361. Previously omitted deliberately: "no DB column
+    // at all today ... carrying it through this function would be a dead,
+    // always-undefined field" (this comment, pass B/C). The column, the
+    // `readLineup`/`putLineup` write path and the editor's pair-order
+    // control (rendered only for a pair-shaped entrant) all landed together
+    // this pass, so the field is no longer dead — omitted only when
+    // genuinely unset, the same "include only when meaningful" convention
+    // `role`/`roles`/`positionKey` already use above.
+    ...(s.pair_order != null ? { pairOrder: s.pair_order } : {}),
   };
 }
 

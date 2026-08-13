@@ -948,7 +948,16 @@ export async function seedRosteredFixture(
     name: spec.label,
     visibility: "public",
   });
-  const competitionId = comp.data!.id;
+  // Surface the API's own refusal rather than dereferencing `data!` and
+  // throwing `Cannot read properties of undefined (reading 'id')`, which names
+  // the helper instead of the cause and sent one debugging pass down the wrong
+  // path in this session.
+  if (comp.status >= 300 || !comp.data) {
+    throw new Error(
+      `seedRosteredFixture: POST /api/v1/competitions -> ${comp.status} ${JSON.stringify(comp.error)}`,
+    );
+  }
+  const competitionId = comp.data.id;
   const div = await apiJson<{ id: string }>(
     request,
     `/api/v1/competitions/${competitionId}/divisions`,
@@ -981,8 +990,13 @@ export async function seedRosteredFixture(
       },
     ],
   );
-  const homeEntrantId = ents.data![0]!.id;
-  const awayEntrantId = ents.data![1]!.id;
+  if (ents.status >= 300 || !ents.data || ents.data.length < 2) {
+    throw new Error(
+      `seedRosteredFixture: POST entrants -> ${ents.status} ${JSON.stringify(ents.error)}`,
+    );
+  }
+  const homeEntrantId = ents.data[0]!.id;
+  const awayEntrantId = ents.data[1]!.id;
 
   const { fixtureIds } = await createStageAndGenerate(request, divisionId);
   const fixtureId = fixtureIds[0]!;

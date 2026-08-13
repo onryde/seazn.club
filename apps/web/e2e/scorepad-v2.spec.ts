@@ -47,8 +47,8 @@ function pad(page: Page) {
 async function ledger(
   request: APIRequestContext,
   fixtureId: string,
-): Promise<{ seq: number; type: string; payload: Record<string, unknown> }[]> {
-  const res = await apiJson<{ seq: number; type: string; payload: Record<string, unknown> }[]>(
+): Promise<{ id: string; seq: number; type: string; payload: Record<string, unknown> }[]> {
+  const res = await apiJson<{ id: string; seq: number; type: string; payload: Record<string, unknown> }[]>(
     request,
     `/api/v1/fixtures/${fixtureId}/events?since_seq=0`,
   );
@@ -266,36 +266,68 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
   test("undo goes through the pad's own timeline and the ledger records the void", async ({
     page,
   }) => {
-    // Its OWN fixture, seeded over HTTP. The earlier version reused the
-    // describe's shared fixture and assumed the over test had already run —
-    // true under `mode: "serial"`, false now, and a test that depends on a
-    // sibling's side effects is the kind of order coupling that reads as a
-    // product flake later.
+    // FOOTBALL, not generic: undo is sport-agnostic (it submits `core.void`
+    // through the same pipeline whatever produced the event), and football's
+    // scoring flow is proven green above. Driving it through a second,
+    // differently-shaped action form would add an unknown without adding
+    // coverage of the thing under test.
+    //
+    // Its OWN fixture, seeded here rather than reusing the describe's shared
+    // one: the earlier version assumed the over test had already run, which
+    // held under `mode: "serial"` and does not now. A test depending on a
+    // sibling's side effects reads as a product flake later.
     const own = await seedRosteredFixture(page.request, {
       label: `S12 Undo ${TAG}`,
-      sportKey: "generic",
-      variantKey: "score",
-      entrantKind: "individual",
-      home: [{ fullName: `Undo Home ${TAG}` }],
-      away: [{ fullName: `Undo Away ${TAG}` }],
+      sportKey: "football",
+      variantKey: "11-a-side",
+      home: [
+        { fullName: `U Scorer ${TAG}`, positionKey: "FW" },
+        { fullName: `U Keeper ${TAG}`, positionKey: "GK" },
+      ],
+      away: [{ fullName: `U Away ${TAG}`, positionKey: "GK" }],
     });
-    await page.goto(await fixturePath(page.request, own.fixtureId));
-    await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+    await openLiveConsole(page, own);
 
-    await pad(page).getByRole("button", { name: "Add points", exact: true }).click();
+    await pad(page).getByRole("button", { name: "Home · Goal", exact: true }).click();
+    const scorer = pad(page).getByRole("button", { name: `U Scorer ${TAG}`, exact: true });
+    await expect(scorer).toHaveCount(2);
+    await scorer.nth(0).click();
+    const assist = pad(page).getByRole("button", { name: `U Keeper ${TAG}`, exact: true });
+    await expect(assist).toHaveCount(2);
+    await assist.nth(1).click();
+
     await expect
-      .poll(async () => (await fixtureState(page.request, own.fixtureId)).last_seq, { timeout: 20_000 })
-      .toBeGreaterThanOrEqual(1);
-    const beforeVoid = await ledger(page.request, own.fixtureId);
-    const lastScoring = [...beforeVoid].reverse().find((e) => e.type !== "core.void")!;
+      .poll(
+        async () => (await ledger(page.request, own.fixtureId)).filter((e) => e.type === "football.goal").length,
+        { timeout: 20_000 },
+      )
+      .toBe(1);
+    const goal = (await ledger(page.request, own.fixtureId)).find((e) => e.type === "football.goal")!;
 
     // The timeline is the pad's OWN undo, wired to the pipeline's `submit` in
     // this session. Before it, `timeline.tsx` was imported by nothing and
     // could not be wired by any caller, so the only undo was the v1 chrome's —
     // which S13 deletes, and which cannot work offline.
+    // RELOAD before undoing, deliberately. The pad's own optimistic envelope
+    // carries a CLIENT-fabricated id (the idempotency key), while the ledger's
+    // row carries the server-assigned one — they differ by construction, so a
+    // freshly-submitted row cannot be addressed by the id the API reports. A
+    // reload rebuilds the timeline from the server's `initialEvents`, which is
+    // both how a scorer returning to the page sees it and a second exercise of
+    // this session's re-seed fix.
+    await page.reload();
+    await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+
     const timeline = pad(page).locator('[data-role="timeline"]');
     await expect(timeline).toBeVisible();
-    await timeline.locator('[data-role="void"]').first().click();
+    // Scope to the GOAL's own row. `.first()` takes the oldest row, which is
+    // `core.start` — a lifecycle event the server will not void — so the click
+    // landed and nothing happened, which reads as a broken undo rather than as
+    // a mis-aimed test. Voiding a NAMED event is the stronger assertion
+    // anyway: it proves the timeline wires each row to its own event id.
+    const goalRow = timeline.locator(`[data-event-id="${goal.id}"]`);
+    await expect(goalRow).toHaveCount(1);
+    await goalRow.locator('[data-role="void"]').click();
 
     await expect
       .poll(
@@ -305,7 +337,7 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
       .toBeGreaterThanOrEqual(1);
 
     const voidEvent = (await ledger(page.request, own.fixtureId)).find((e) => e.type === "core.void")!;
-    expect(voidEvent.seq).toBeGreaterThan(lastScoring.seq);
+    expect(voidEvent.seq).toBeGreaterThan(goal.seq);
   });
 
   test("no horizontal scroll at 375 or 320", async ({ page }) => {
@@ -345,15 +377,30 @@ test.describe("v2 console — football's goal WITH assist", () => {
     // Asserting on the name is also the regression guard for football-skin's
     // own raw-id defect (`ids.map((id) => ({ value: id, label: id }))`) fixed
     // this session — a UUID label would fail this line, not merely look bad.
-    // The goal declares TWO person slots and each renders the full squad, so
-    // `Scorer X` matches twice — once in the scorer picker, once in the assist
-    // picker. Index by slot order: group 0 is the scorer, group 1 the assist.
-    // (Both groups are captioned generically — "Goal — Person #2" / "#3" —
-    // because football's goal attribution ships no labelKey; that is a real
-    // copy weakness, noted in _INDEX.md, but not what this test is pinning.)
-    await pad(page).getByRole("button", { name: `Scorer ${TAG}`, exact: true }).nth(0).click();
-    await pad(page).getByRole("button", { name: `Assister ${TAG}`, exact: true }).nth(1).click();
-    await pad(page).getByRole("button", { name: "Confirm", exact: true }).click();
+    // The captions are the regression guard for this session's fix replacing
+    // the unreadable ordinal fallback ("Goal — Person #2" / "#3") with each
+    // item's own humanised path. Asserted directly rather than used as a click
+    // scope — scoping by an ancestor div matched a leaf holding no buttons.
+    await expect(pad(page)).toContainText("Goal — Scorer");
+    await expect(pad(page)).toContainText("Goal — Assist");
+
+    // Both pickers offer the whole squad, so each name appears TWICE — once
+    // per slot, in slot order. Asserting the count first means a future
+    // single-picker regression fails loudly here instead of silently clicking
+    // the wrong slot.
+    const scorerBtns = pad(page).getByRole("button", { name: `Scorer ${TAG}`, exact: true });
+    await expect(scorerBtns).toHaveCount(2);
+    await scorerBtns.nth(0).click();
+
+    const assistBtns = pad(page).getByRole("button", { name: `Assister ${TAG}`, exact: true });
+    await expect(assistBtns).toHaveCount(2);
+    // Picking the LAST required attribution auto-submits — measured, not
+    // assumed: after this click the form closes and `football.goal` is already
+    // on the ledger. That is deliberate, and it is what S11's recorded tap
+    // count for this flow means ("football goal with assist 3 vs 6": Goal,
+    // Scorer, Assist). Clicking a `Confirm` afterwards waits forever on a
+    // control the pad has correctly removed.
+    await assistBtns.nth(1).click();
 
     await expect
       .poll(async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "football.goal").length, {
@@ -407,6 +454,11 @@ test("device link: score offline on the universal renderer, reconnect, drain, co
   browser,
   request,
 }) => {
+  // Seed + mint + four scored actions (each a two-step attribution) + a real
+  // offline window + a drain that waits on the queue emptying. That does not
+  // fit the 60s default, and a timeout here would read as a product hang
+  // rather than as a test budget.
+  test.setTimeout(180_000);
   // `generic` deliberately: it is one of the three sports `resolveScorePad`
   // marks "universal", so this exercises the UNIVERSAL renderer on the device
   // entry point while the cricket/football tests above exercise skins on the
@@ -456,10 +508,30 @@ test("device link: score offline on the universal renderer, reconnect, drain, co
     const scoreButton = page.getByRole("button", { name: "Add points", exact: true });
     await expect(scoreButton).toBeVisible({ timeout: 20_000 });
 
+    // `generic.score` declares a REQUIRED `by` side attribution, so the action
+    // tap opens the picker rather than submitting. The offline batch below
+    // repeats both steps — a single-tap loop would queue nothing and the drain
+    // assertions would pass vacuously against an empty queue.
+    // `points` VARIES per call, and that is load-bearing rather than cosmetic:
+    // `usePadPipeline`'s double-submit guard compares (type, payload)
+    // structurally, so three identical `points:1, by:Home` taps are one action
+    // repeated and the guard correctly swallows two of them. Measured — a
+    // fixed value queued 2, not 3. A courtside scorer entering the same score
+    // three times in a row within the guard window is the case the guard
+    // exists for; three genuinely different entries is what this test needs.
+    async function scoreOnce(points: number): Promise<void> {
+      await scoreButton.click();
+      // `generic.score` needs its `points` number as well as the `by` side.
+      await page.locator('input[type="number"]').first().fill(String(points));
+      await page.getByRole("button", { name: "Home", exact: true }).click();
+      const c = page.getByRole("button", { name: "Confirm", exact: true });
+      if ((await c.count()) > 0) await c.click();
+    }
+
     // Land one online first, so the offline batch is provably additive rather
     // than the whole ledger.
     const seqBeforeFirstTap = (await fixtureState(request, fx.fixtureId)).last_seq;
-    await scoreButton.click();
+    await scoreOnce(1);
     await expect
       .poll(async () => (await fixtureState(request, fx.fixtureId)).last_seq, { timeout: 20_000 })
       .toBeGreaterThan(seqBeforeFirstTap);
@@ -469,8 +541,8 @@ test("device link: score offline on the universal renderer, reconnect, drain, co
     // because this scenario never navigates again — `setOffline(true)` blocks
     // every request from the page including a reload's own document fetch.
     await anonCtx.setOffline(true);
-    for (let i = 0; i < 3; i += 1) {
-      await scoreButton.click();
+    for (const points of [2, 3, 4]) {
+      await scoreOnce(points);
       await page.waitForTimeout(200);
     }
 

@@ -127,6 +127,12 @@ export interface LineupSlotIn {
    *  required. Absent means "player", the same default the engine's own
    *  `LineupSlot.role` applies (S12/#421 pass B, Fix 2). */
   role?: "player" | "coach" | "staff";
+  /** Doubles/pair serve order (S3/#426's engine `LineupSlot.pairOrder`) —
+   *  S12/#421 pass D, V361. Optional for the same reason `role` is: nothing
+   *  outside a pair-shaped entrant (tennis/badminton/tabletennis doubles, or
+   *  any other sport whose entrant model allows "pair") ever sets it, and
+   *  test fixtures predating the column construct this type without it. */
+  pair_order?: number | null;
 }
 export interface SideInfo {
   id: string;

@@ -286,3 +286,44 @@ describe("lineupPairFrom: role reaches the client LineupSlot (S12/#421 pass B, F
     expect(state.squads.home.bench).not.toContain("p-coach-1");
   });
 });
+
+// ---------------------------------------------------------------------------
+// S12/#421 pass D — `pairOrder` (doubles serve order, S3/#426's engine
+// LineupSlot field) reaches the client LineupSlot. Was previously omitted on
+// purpose (this file's own prior comment: "no DB column at all today ...
+// carrying it through this function would be a dead, always-undefined
+// field"). V361 adds the column, `fixtures.ts` carries it through
+// readLineup/putLineup, and the editor gained a control for it — this test
+// mirrors the role tests immediately above exactly, one field over.
+// ---------------------------------------------------------------------------
+describe("lineupPairFrom: pairOrder reaches the client LineupSlot (S12/#421 pass D)", () => {
+  it("carries a pairOrder value through to the built LineupSlot", () => {
+    const home: SideInfo = {
+      id: "ent-h",
+      name: "Home",
+      members: [],
+      lineup: [
+        { person_id: "p1", full_name: "Alice", slot: "starting", position_key: null, order_no: 1, roles: [], pair_order: 1 },
+        { person_id: "p2", full_name: "Bob", slot: "starting", position_key: null, order_no: 2, roles: [], pair_order: 2 },
+      ],
+    };
+    const pair = lineupPairFrom(home, { id: "ent-a", name: "Away", members: [], lineup: [] });
+    expect(pair.home.slots[0]).toMatchObject({ personId: "p1", pairOrder: 1 });
+    expect(pair.home.slots[1]).toMatchObject({ personId: "p2", pairOrder: 2 });
+  });
+
+  it("an absent or null pair_order carries no pairOrder key at all", () => {
+    const home: SideInfo = {
+      id: "ent-h",
+      name: "Home",
+      members: [],
+      lineup: [
+        { person_id: "p1", full_name: "Alice", slot: "starting", position_key: null, order_no: 1, roles: [] },
+        { person_id: "p2", full_name: "Bob", slot: "starting", position_key: null, order_no: 2, roles: [], pair_order: null },
+      ],
+    };
+    const pair = lineupPairFrom(home, { id: "ent-a", name: "Away", members: [], lineup: [] });
+    expect(pair.home.slots[0]).not.toHaveProperty("pairOrder");
+    expect(pair.home.slots[1]).not.toHaveProperty("pairOrder");
+  });
+});
