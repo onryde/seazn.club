@@ -2450,6 +2450,28 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   cascade (the later goal replays and 422s `WRONG_PHASE`), which is coherent
   behaviour for an incoherent request but is how the first probe mis-read this
   defect. The timeline renders NEWEST FIRST, so `.last()` is the oldest row.
+- 2026-08-13 — S12/#421 pass D — **the shared-worktree sweep hazard fired
+  TWICE, live, during this pass — no data lost, but every file-ownership
+  split in this session's dispatch depends on knowing it happens.** Pass D's
+  own dirty files (V361, `fixtures.ts`, `schemas.ts`, `fixture-console.tsx`'s
+  `LineupSlotIn`, `registry.tsx`'s `toLineupSlot`, both files' tests) went
+  missing from `git status` mid-session; they were not lost — `git diff HEAD`
+  against each was byte-**zero**, because two OTHER concurrent agents'
+  commits (`29039497` "test(scorepad): all seven v2 e2e green…", then
+  `804031ce` "docs(scoringpad): record the undo-before-reload defect…", the
+  second nominally docs-only) had each already absorbed whatever was dirty on
+  disk at commit time via a broad `git add`. `804031ce`'s stat is the
+  clearest evidence: 28 lines of intended `_INDEX.md` prose plus 429 lines of
+  this pass's brand-new test files it never mentions. Confirm-before-panic
+  recipe that resolved it without any destructive command: `git log --oneline
+  -3 -- <path>` to find who last touched a "missing" file, then `git diff
+  HEAD -- <path>` — zero lines means it is safely upstream, not gone. Ending
+  state was still correct (this pass's own final commit, `1fc4fb50`, holds
+  only what neither sweep had caught) — but a session that assumed "not in
+  git status" meant "lost, redo it" would have duplicated committed work.
+  Lesson for every session sharing this worktree: prefer staging exact paths
+  (`git add <files>`, this pass's own recovery) over `git add -A` / `git
+  commit -am`, which is what both sweeps used.
 - _(append below)_
 
 ## Open questions for the owner
