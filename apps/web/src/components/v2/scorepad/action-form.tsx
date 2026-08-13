@@ -194,8 +194,25 @@ export function ActionForm({ action, onSubmit, submitting = false, renderAttribu
     );
   }
 
+  // S12/#421 — `col-span-2` below sm. An EXPANDED form keeps the single grid
+  // cell its collapsed button occupied, and two of the four panel layouts
+  // (`grid`, `perSide`, panel.tsx) are `grid grid-cols-2` at every width. At
+  // 320 that is a 110px form inside a 228px panel — measured, not estimated —
+  // and everything inside it inherits the squeeze: a number input under 90px,
+  // and attribution chips whose `overflow-x-auto` row now scrolls for a roster
+  // that would otherwise have fitted. The page itself never scrolls
+  // horizontally, so the 320 no-horizontal-scroll gate passes throughout; this
+  // is only visible by looking. Found on the universal renderer's device-link
+  // entry point, which is the courtside surface most likely to BE 320.
+  //
+  // A grid child spanning both columns is the whole fix: the collapsed button
+  // still tiles 2-up (the density courtside wants), and only the one action
+  // being filled in takes the full row. `sm:col-span-1` restores today's
+  // side-by-side behaviour from 640 up, where half a row is 340px+ and reads
+  // correctly — so 768 and 1280 are byte-identical to before. Inert in the
+  // other two layouts: `col-span-*` does nothing to a flex child.
   return (
-    <div className="card space-y-3 border-2 border-accent-line p-3">
+    <div className="card col-span-2 space-y-3 border-2 border-accent-line p-3 sm:col-span-1">
       <p className="label !mb-0">{label}</p>
       {action.fields.map((field) => renderField(field, values[field.path], (v) => setValue(field.path, v), msg))}
       {renderAttribution?.(action, values, setValue)}

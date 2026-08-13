@@ -631,3 +631,73 @@ test("device link: score offline on the universal renderer, reconnect, drain, co
     await anonCtx.close();
   }
 });
+
+test("an expanded action form gets the whole row at 320, not half of one", async ({ browser, request }) => {
+  // The regression this closes is invisible to every gate this session already
+  // runs. `expectNoHorizontalScroll` passes throughout: the PAGE never scrolls,
+  // because the squeezed form's own children scroll INSIDE it. Only a width
+  // measurement sees it. Two of the four panel layouts are `grid grid-cols-2`
+  // at every width (panel.tsx), and an expanded ActionForm kept the single cell
+  // its collapsed button had — 110px inside a 228px panel at 320, measured on
+  // the device-link entry point, which is the surface most likely to BE 320.
+  //
+  // Asserted as a RATIO of the panel, not an absolute pixel width: the panel's
+  // own width is a function of page chrome and card padding, and pinning that
+  // number would make this test fail on any unrelated layout change while
+  // still not saying what it means. The claim is "the form spans its row".
+  const fx = await seedRosteredFixture(request, {
+    label: `S12 Narrow ${TAG}`,
+    sportKey: "generic",
+    variantKey: "score",
+    entrantKind: "individual",
+    home: [{ fullName: `Narrow Home ${TAG}` }],
+    away: [{ fullName: `Narrow Away ${TAG}` }],
+  });
+  const minted = await apiJson<{ id: string; secret: string }>(
+    request,
+    `/api/v1/fixtures/${fx.fixtureId}/device-links`,
+    "POST",
+    { label: `Narrow ${TAG}` },
+  );
+  expect(minted.status, `mint failed: ${JSON.stringify(minted.error)}`).toBe(201);
+
+  const ctx = await browser.newContext({ storageState: undefined, viewport: { width: 320, height: 780 } });
+  try {
+    const page = await ctx.newPage();
+    await page.goto(`/score/${minted.data!.secret}`);
+    // Anonymous context carries no stored consent, so the cookie banner sits
+    // over the pad and would intercept the tap below.
+    const accept = page.getByRole("button", { name: "Accept", exact: true });
+    if ((await accept.count()) > 0) await accept.click();
+
+    const addBtn = page.getByRole("button", { name: "Add points", exact: true });
+    await expect(addBtn).toBeVisible({ timeout: 20_000 });
+    await addBtn.click();
+    // The attribution picker only exists once the form is expanded, so this
+    // also proves the tap opened a form rather than submitting outright.
+    await expect(page.locator('[data-role="attribution-picker"]')).toBeVisible({ timeout: 10_000 });
+
+    const measured = await page.evaluate(() => {
+      const form = document.querySelector('[data-role="attribution-picker"]')?.closest("div.card");
+      const panel = form?.parentElement;
+      if (!form || !panel) return null;
+      return {
+        form: form.getBoundingClientRect().width,
+        panel: panel.getBoundingClientRect().width,
+        panelClass: panel.className,
+      };
+    });
+    expect(measured, "expanded form and its panel must both be in the DOM").not.toBeNull();
+    // Guard the guard: if the panel ever stops being a 2-column grid, this
+    // test would pass for a reason that has nothing to do with the fix.
+    expect(measured!.panelClass, "the layout this regression lives in").toContain("grid-cols-2");
+    expect(
+      measured!.form / measured!.panel,
+      `expanded form ${Math.round(measured!.form)}px of a ${Math.round(measured!.panel)}px panel`,
+    ).toBeGreaterThan(0.9);
+
+    await expectNoHorizontalScroll(page);
+  } finally {
+    await ctx.close();
+  }
+});
