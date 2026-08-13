@@ -4200,6 +4200,24 @@ async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
   const auto = drafts.find((d) => d.kind === "result" && d.auto_source);
   check("news pro: a result post auto-drafted on the decided seam", !!auto);
 
+  // P3 (D7) — this division has exactly 2 entrants, so round 1 has exactly
+  // one fixture: the SAME decided write that drafted the result post above
+  // also completes the round, which should have auto-drafted a round_recap
+  // alongside it. Its enrichment needs no player-level scorer data (unlike
+  // topPerformers/leaderboardMoves) — biggestMargin reads the plain
+  // generic.result score line directly, so this is the cheapest real proof
+  // that enrichment is wired end to end in the deployed app, not just under
+  // vitest.
+  const recap = drafts.find((d) => d.kind === "round_recap" && d.auto_source);
+  check("news pro: the same decided write also auto-drafts a round_recap (single-fixture round)", !!recap);
+  if (recap) {
+    const recapDetail = v1data<{ body_md: string }>(await v1(admin, `/api/v1/posts/${recap.id}`));
+    check(
+      "news pro (P3): round_recap draft carries an enriched biggest-result line",
+      recapDetail.body_md.includes("Biggest result"),
+    );
+  }
+
   const pub = await v1(admin, `/api/v1/posts/${auto!.id}`, "PATCH", {
     action: "publish",
   });
@@ -4253,6 +4271,25 @@ async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
   const backPage = await html(newSession(), `/shared/${proOrgSlug}/news/${pubData.slug}`);
   check("news pro: republished page 200 again", backPage.status === 200);
 
+  // P3 (D7) — the weekly digest button. Same news.auto entitlement as the
+  // auto-drafts above; the org just decided a fixture this instant, so the
+  // digest's [now-7d, now) window covers it and the standings-movement
+  // section should have something to say too.
+  const digest = await v1(admin, `/api/v1/orgs/${proOrgId}/posts/digest`, "POST");
+  const digestData = v1data<{ id: string; kind: string; title: string; body_md: string }>(digest);
+  check(
+    "news pro (P3): Generate digest creates a weekly_digest draft (201)",
+    digest.status === 201 && digestData.kind === "weekly_digest",
+  );
+  check("news pro (P3): digest title is non-empty", digestData.title.length > 0);
+  const digestList = v1data<{ id: string; kind: string }[]>(
+    await v1(admin, `/api/v1/orgs/${proOrgId}/posts?status=draft`),
+  );
+  check(
+    "news pro (P3): the digest draft is listed among the org's drafts",
+    digestList.some((d) => d.id === digestData.id && d.kind === "weekly_digest"),
+  );
+
   // ---- Free path (fresh community owner) ----
   const commOwner = newSession();
   await signIn(commOwner, `newscomm_${tag}@example.com`);
@@ -4292,6 +4329,10 @@ async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
     auto_posts: true,
   });
   check("news free: auto_posts toggle gated 402 (Pro news.auto)", freeToggle.status === 402);
+
+  // P3 (D7) — the digest button is gated the same way (news.auto).
+  const freeDigest = await v1(commOwner, `/api/v1/orgs/${commOrg.id}/posts/digest`, "POST");
+  check("news free (P3): Generate digest gated 402 (Pro news.auto)", freeDigest.status === 402);
 }
 
 /** PLG growth loops (design/plg): the free-tier "Powered by Seazn Club"
