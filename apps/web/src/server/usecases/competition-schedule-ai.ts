@@ -46,11 +46,10 @@ import "server-only";
 import { withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { resolveVenueTz } from "@/lib/tz";
-import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { assessCapacity, type CapacityReport } from "@seazn/engine/scheduling/capacity";
 import { FIXED_OCCUPYING, MOVABLE_STATUS, OCCUPYING, peopleByEntrant, toSlotConfig } from "./schedule";
-import { capacityInputForFixtures } from "./capacity-guard";
+import { CAPACITY_IMPOSSIBLE_CODE, capacityInputForFixtures, logCapacityAssessed } from "./capacity-guard";
 import {
   AI_VERIFY_POLICY,
   buildEngineConstraints,
@@ -2480,10 +2479,14 @@ async function planForCompetition(
       const row = byId.get(id)!;
       const parsed = ScheduleConfig.safeParse(row.config ?? {});
       if (!parsed.success) continue; // already refused by the loop above
-      const slotConfig = toSlotConfig(
-        { division_id: id, config: parsed.data, displayTz: orgTz, orgTz, updated_at: "" },
-        Date.now(),
-      );
+      // `toSlotConfig` ALONE never sets `.tz` — `toVerifyConfig` is the
+      // builder that adds it (`tz: settings.orgTz`), and `capacityInputFor
+      // Fixtures` skips (returns null, "nothing to assess") whenever `tz`
+      // is undefined. Calling `toSlotConfig` directly here — caught only by
+      // the new competition-guard tests this review round added — made
+      // this guard a permanent no-op: every division always resolved to a
+      // skipped assessment, regardless of how oversubscribed it was.
+      const slotConfig = { ...toSlotConfig({ division_id: id, config: parsed.data, displayTz: orgTz, orgTz, updated_at: "" }, Date.now()), tz: orgTz };
       const fixtures = fixtureRows
         .filter((f) => f.division_id === id)
         .map((f) => ({
@@ -2492,21 +2495,14 @@ async function planForCompetition(
           poolId: f.pool_id ?? undefined,
         }));
       const input = capacityInputForFixtures(fixtures, slotConfig, id);
+      if (process.env.DEBUG_CAPACITY === "1") {
+        console.error("DEBUG division", id, row.name, "fixtures.length", fixtures.length, "rawFixtureRows", fixtureRows.length);
+        console.error("DEBUG input", JSON.stringify(input));
+      }
       if (input === null) continue; // no bounded window to assess — skip, not impossible
       const report = assessCapacity(input);
-      log.info(
-        {
-          event: "capacity_assessed",
-          scope: "competition_division",
-          competitionId,
-          divisionId: id,
-          verdict: report.verdict,
-          slotSupply: report.slotSupply,
-          slotDemand: report.slotDemand,
-          ratio: report.slotDemand > 0 ? report.slotSupply / report.slotDemand : null,
-        },
-        "capacity_assessed",
-      );
+      if (process.env.DEBUG_CAPACITY === "1") console.error("DEBUG report", JSON.stringify(report));
+      logCapacityAssessed(report, { scope: "competition_division", divisionId: id, competitionId });
       if (report.verdict === "impossible") capacityImpossible.push({ id, name: row.name, report });
     }
   });
@@ -2514,7 +2510,7 @@ async function planForCompetition(
     throw new HttpError(
       422,
       `these divisions cannot fit their configured courts, dates and rest rules: ${capacityImpossible.map((d) => d.name).join(", ")}`,
-      "CAPACITY_IMPOSSIBLE",
+      CAPACITY_IMPOSSIBLE_CODE,
       { divisions: capacityImpossible },
     );
   }

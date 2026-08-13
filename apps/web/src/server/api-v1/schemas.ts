@@ -737,6 +737,19 @@ export const CompleteResult = z.object({
 // Scheduling console (doc 12, PROMPT-17)
 // ---------------------------------------------------------------------------
 
+/** The wire key CAPACITY_IMPOSSIBLE's 422 carries its report under
+ *  (`HttpError.extra`, spread verbatim onto `error.*` by api-v1/http.ts —
+ *  no rename). Lives here, not in the server-only capacity-guard.ts,
+ *  because openapi.ts documents it too and openapi.ts is NOT server-only
+ *  (it's imported by /api/v1/openapi.json/route.ts, a live bundled route,
+ *  as well as the CI drift script) — schemas.ts is the one home both
+ *  capacity-guard.ts and openapi.ts can import without crossing that
+ *  boundary. A P1 review finding: the throw site, the OpenAPI doc and
+ *  smoke.ts's assertion had each spelled this differently (`report` vs
+ *  `capacity_report`), so the smoke check could never pass. Import this,
+ *  never retype the string. */
+export const CAPACITY_REPORT_KEY = "capacity_report";
+
 const IsoDateTime = z.iso.datetime({ offset: true });
 
 /** Doc 12 §3 schedule_settings.config — the calendar pass inputs (05 §2.6). */

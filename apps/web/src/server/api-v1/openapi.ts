@@ -305,6 +305,22 @@ function envelope(data?: ZodType): Record<string, unknown> {
   };
 }
 
+// Shared by ERROR_ENVELOPE (below) and CAPACITY_ERROR_ENVELOPE (further
+// down): every property a refusal MIGHT carry, regardless of which route
+// threw it. Kept small on purpose — this is the base every response x
+// status in the whole API is built from (`operation()`'s `responses[...]`
+// loop inlines it verbatim, not by $ref), so anything added here is added
+// EVERYWHERE. A route-specific extra (like the capacity precheck's report)
+// belongs on a SCOPED variant instead — see the P1 review finding this
+// comment exists because of: `capacity_report` landed here first and
+// roughly doubled both openapi/v1*.json (776 inlined copies, one per
+// route x error status in the entire API, not just the two guarded routes).
+const BASE_ERROR_PROPERTIES = {
+  code: { type: "string" },
+  message: { type: "string" },
+  current_seq: { type: "integer", description: "On SEQ_CONFLICT (409): the ledger tip to resync from" },
+} as const;
+
 const ERROR_ENVELOPE = {
   type: "object",
   required: ["ok", "error", "requestId"],
@@ -313,13 +329,34 @@ const ERROR_ENVELOPE = {
     error: {
       type: "object",
       required: ["code", "message"],
+      properties: BASE_ERROR_PROPERTIES,
+      additionalProperties: true,
+    },
+    requestId: { type: "string", format: "uuid" },
+  },
+} as const;
+
+// SCOPED to the capacity-guarded routes' 422 only (ERROR_SCHEMA_OVERRIDES,
+// consulted from `operation()`) — never embedded in the shared
+// ERROR_ENVELOPE above. `capacity_report` is the SAME literal
+// `CAPACITY_REPORT_KEY` the throw site (capacity-guard.ts) and smoke.ts's
+// assertion use — imported, not retyped, after those three disagreeing was
+// itself a review finding (the wire key was actually `report`, silently
+// spread from `HttpError.extra` with no rename, while this schema and
+// smoke.ts both said `capacity_report`).
+const CAPACITY_ERROR_ENVELOPE = {
+  type: "object",
+  required: ["ok", "error", "requestId"],
+  properties: {
+    ok: { const: false },
+    error: {
+      type: "object",
+      required: ["code", "message"],
       properties: {
-        code: { type: "string" },
-        message: { type: "string" },
-        current_seq: { type: "integer", description: "On SEQ_CONFLICT (409): the ledger tip to resync from" },
-        capacity_report: {
+        ...BASE_ERROR_PROPERTIES,
+        [S.CAPACITY_REPORT_KEY]: {
           ...toSchema(S.CapacityReport),
-          description: "On CAPACITY_IMPOSSIBLE (422, /stages/{id}/schedule/auto): the D2 arithmetic pre-check report",
+          description: "On CAPACITY_IMPOSSIBLE (422): the D2 arithmetic pre-check report",
         },
       },
       additionalProperties: true,
@@ -327,6 +364,14 @@ const ERROR_ENVELOPE = {
     requestId: { type: "string", format: "uuid" },
   },
 } as const;
+
+// `"METHOD /path"` (the literal `RouteSpec.path`, `{id}` un-substituted) ->
+// status -> the envelope THAT route x status uses instead of the plain
+// ERROR_ENVELOPE. Consulted once, inside `operation()`'s `route.errors`
+// loop, so a route not listed here is completely unaffected.
+const ERROR_SCHEMA_OVERRIDES: Record<string, Partial<Record<number, unknown>>> = {
+  "POST /stages/{id}/schedule/auto": { 422: CAPACITY_ERROR_ENVELOPE },
+};
 
 function pathParams(path: string): object[] {
   const params = [...path.matchAll(/\{([^}]+)\}/g)].map((m) => m[1]);
@@ -410,10 +455,11 @@ function operation(route: RouteSpec): Record<string, unknown> {
     responses["401"] = { description: "Not authenticated", content: { "application/json": { schema: ERROR_ENVELOPE } } };
   }
   responses["404"] = { description: "Not found", content: { "application/json": { schema: ERROR_ENVELOPE } } };
+  const overrides = ERROR_SCHEMA_OVERRIDES[`${route.method.toUpperCase()} ${route.path}`];
   for (const status of route.errors ?? []) {
     responses[String(status)] = {
       description: { 402: "Plan upgrade required", 409: "Conflict", 422: "Rejected by the engine", 429: "Rate limited" }[status] ?? "Error",
-      content: { "application/json": { schema: ERROR_ENVELOPE } },
+      content: { "application/json": { schema: overrides?.[status] ?? ERROR_ENVELOPE } },
     };
   }
   // Response example: success envelope around a data sample.

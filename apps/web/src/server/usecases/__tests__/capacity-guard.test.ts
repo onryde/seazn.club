@@ -7,6 +7,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
+import { v1 } from "@/server/api-v1/http";
+import { CAPACITY_REPORT_KEY } from "@/server/api-v1/schemas";
 import { capacityInputForFixtures as capacityInputForFixturesDirect } from "@/lib/capacity-input";
 import { capacityInputForFixtures, guardCapacity } from "../capacity-guard";
 
@@ -53,7 +55,41 @@ describe("guardCapacity", () => {
     const err = caught as HttpError;
     expect(err.status).toBe(422);
     expect(err.code).toBe("CAPACITY_IMPOSSIBLE");
-    expect((err.extra as { report?: { verdict?: string } } | undefined)?.report?.verdict).toBe("impossible");
+    expect((err.extra as Record<string, { verdict?: string } | undefined> | undefined)?.[CAPACITY_REPORT_KEY]?.verdict).toBe(
+      "impossible",
+    );
+  });
+
+  // P1 review finding: the assertion above catches the THROWN HttpError
+  // in-process and would have stayed green even while the WIRE key was
+  // wrong (the throw used `report`; openapi.ts and smoke.ts both said
+  // `capacity_report` — three places that have to agree, silently
+  // disagreeing). This test goes through `v1()` — the SAME
+  // errorResponse()/NextResponse.json() serialisation a real request
+  // hits — and reads the ACTUAL response body, not the exception object.
+  it("the WIRE response (not just the thrown object) carries the report under CAPACITY_REPORT_KEY", async () => {
+    const config = { ...baseConfig(), matchMinutes: 30, gapMinutes: 10, window: { from: DAY1, to: DAY1 + 240 * MS_PER_MIN } };
+    const input = capacityInputForFixtures(
+      Array.from({ length: 10 }, () => ({ home: undefined, away: undefined, poolId: undefined })),
+      config,
+      "div-1",
+    );
+    const response = await v1(async () => {
+      guardCapacity(input, { scope: "stage", divisionId: "div-1" });
+      throw new Error("unreachable — guardCapacity must have thrown");
+    });
+    expect(response.status).toBe(422);
+    const body = (await response.json()) as {
+      ok: boolean;
+      error: { code: string; [key: string]: unknown };
+    };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("CAPACITY_IMPOSSIBLE");
+    const wireReport = body.error[CAPACITY_REPORT_KEY] as { verdict?: string } | undefined;
+    expect(wireReport?.verdict).toBe("impossible");
+    // The bug this test exists to catch would leave `capacity_report`
+    // undefined on the wire while the OLD key (`report`) carried it instead.
+    expect((body.error as Record<string, unknown>).report).toBeUndefined();
   });
 
   it("does not throw, and returns the report, when the verdict is ok", () => {
