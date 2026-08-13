@@ -21,7 +21,7 @@ import "server-only";
 // design doc's literal "wraps existing usecases" phrasing, made necessary by
 // withTenant's non-reentrant design.
 import { randomUUID } from "node:crypto";
-import { sql, withTenant } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
 import { log } from "@/server/logger";

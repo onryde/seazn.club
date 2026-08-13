@@ -782,6 +782,11 @@ async function main() {
   // gate).
   await capacityPrecheckSuite();
 
+  // --- P4/D1a: format templates — instantiate one through the real route,
+  // confirm normal flow continues on it, and the entitlement gate holds
+  // through the route (own fresh free session — not an entitlement gate).
+  await templateInstantiationSuite();
+
   // --- design/v6 PROMPT-48..50: tennis rally set (nested kernel), icehockey
   // OT points in standings, PP goal + release with the public strength chip.
   // Before gapSuite — needs the org's pro entitlements for tier-3 scoring.
@@ -6398,6 +6403,58 @@ async function capacityPrecheckSuite(): Promise<void> {
   await putSettings([{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T21:00:00.000Z" }]); // 12h -> 12 slots
   const ok = await v1(free, `/api/v1/stages/${stage.id}/schedule/auto`, "POST", { only_unlocked: true });
   check("capacity precheck: a comfortable board proceeds through the real route (200, not refused)", ok.status === 200);
+}
+
+/**
+ * P4/D1a: template instantiation through the REAL route — one template end
+ * to end (own fresh free session, matching capacityPrecheckSuite's shape:
+ * not an entitlement gate in itself), then confirm normal flow continues on
+ * the created competition (the SAME division-list route a manually-created
+ * competition uses returns the template's declared shape). A second call
+ * (americano-night, formats.advanced) proves the free tier is refused
+ * through the SAME route, not only in the unit suite.
+ */
+async function templateInstantiationSuite(): Promise<void> {
+  const free = newSession();
+  await signIn(free, `dtx_template_${tag}@example.com`);
+  const created = v1data<{
+    competitionId: string;
+    slug: string;
+    divisions: { id: string; stages: { id: string; fixtureCount: number }[] }[];
+    templateKey: string;
+    templateVersion: number;
+  }>(
+    await v1(free, "/api/v1/competitions/from-template", "POST", {
+      template_key: "slam128",
+      name: `DTX Slam ${tag}`,
+      ends_on: "2030-12-31",
+    }),
+  );
+  check(
+    "template instantiation: slam128 creates one division with one knockout stage, stamped provenance",
+    created.templateKey === "slam128" &&
+      created.divisions.length === 1 &&
+      created.divisions[0]!.stages.length === 1,
+  );
+
+  const divisions = v1data<{ id: string; sport_key: string }[]>(
+    await v1(free, `/api/v1/competitions/${created.competitionId}/divisions`, "GET"),
+  );
+  check(
+    "template instantiation: normal flow continues — GET divisions returns the template's tennis division",
+    divisions.length === 1 && divisions[0]!.sport_key === "tennis",
+  );
+
+  const gated = await v1(free, "/api/v1/competitions/from-template", "POST", {
+    template_key: "americano-night",
+    name: `DTX Night ${tag}`,
+    ends_on: "2030-12-31",
+  });
+  check(
+    "template instantiation: americano-night is refused 402 PAYMENT_REQUIRED on a free session, through the real route",
+    gated.status === 402 &&
+      (gated.json.error as { code?: string } | undefined)?.code === "PAYMENT_REQUIRED",
+  );
 }
 
 /**
