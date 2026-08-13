@@ -84,4 +84,50 @@ describe("openapi coverage", () => {
     const data = op.responses["200"]!.content["application/json"].schema.properties.data;
     expect(Object.keys(data.properties ?? {}).sort()).toEqual(["failed", "ok", "restored"]);
   });
+
+  // P4 review (2026-08-13) finding 8: the 409 `live_version` and 422
+  // `{divisionIndex, stageIndex, cause}` extras (design doc's error table)
+  // are real wire fields (templates.ts's HttpError `extra`) that were
+  // undocumented in the spec. Registered per-route (ERROR_SCHEMA_OVERRIDES),
+  // never folded into the shared ERROR_ENVELOPE — see
+  // BASE_ERROR_PROPERTIES's own comment for why a shared addition is the
+  // wrong fix (a prior one roughly doubled every route x error status in
+  // the served spec). This test pins both the presence AND the scoping.
+  it("documents the from-template route's 409/422 extras, scoped to that route only", () => {
+    const doc = buildOpenApiDocument() as {
+      paths: Record<
+        string,
+        Record<
+          string,
+          {
+            responses: Record<
+              string,
+              {
+                content: {
+                  "application/json": {
+                    schema: { properties: { error: { properties?: Record<string, unknown> } } };
+                  };
+                };
+              }
+            >;
+          }
+        >
+      >;
+    };
+    const fromTemplate = doc.paths["/api/v1/competitions/from-template"]!.post!;
+    const err409 = fromTemplate.responses["409"]!.content["application/json"].schema.properties.error;
+    expect(Object.keys(err409.properties ?? {}).sort()).toEqual(
+      ["code", "current_seq", "live_version", "message"].sort(),
+    );
+    const err422 = fromTemplate.responses["422"]!.content["application/json"].schema.properties.error;
+    expect(Object.keys(err422.properties ?? {}).sort()).toEqual(
+      ["cause", "code", "current_seq", "divisionIndex", "message", "stageIndex"].sort(),
+    );
+    // Scoped, not global: an unrelated route's 409 must NOT pick up
+    // `live_version` (the #386-shaped mistake this override pattern exists
+    // to prevent — see ERROR_SCHEMA_OVERRIDES's own comment).
+    const otherRoute = doc.paths["/api/v1/competitions"]!.post!;
+    const otherErr409 = otherRoute.responses["409"]!.content["application/json"].schema.properties.error;
+    expect(Object.keys(otherErr409.properties ?? {})).not.toContain("live_version");
+  });
 });

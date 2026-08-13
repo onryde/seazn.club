@@ -17,47 +17,44 @@ import "server-only";
 // validation PRIMITIVES those usecases call internally (resolveModule +
 // configSchema, requireFeature, uniqueSlug/slugify, assertActiveQuota) —
 // reusing the validation path without reusing the transaction-owning
-// function. Flagged for review: this is a deliberate deviation from the
-// design doc's literal "wraps existing usecases" phrasing, made necessary by
-// withTenant's non-reentrant design.
+// function.
+//
+// P4 review (2026-08-13) closeout: an earlier draft of this file duplicated
+// rather than shared four of those primitives — the divisions/stages quota
+// guards were never called at all, `validatePointsRule` was never called at
+// all, and the advanced-formats gate was hand-retyped instead of imported.
+// All four now route through the exact same shared functions
+// createDivision/createStages/createCompetition call — `assertWithinLimit`/
+// `getLimit` (lib/entitlements.ts), `validatePointsRule`
+// (@seazn/engine/competition), `stageNeedsDoubleElimGate`/
+// `stageNeedsAdvancedFormatsGate` (./format-gates.ts), and
+// `fireCompetitionCreated`/`fireDivisionCreated` (./competitions,
+// ./divisions) — so a manual create and a templated one can never disagree
+// about a boundary again.
 import { randomUUID } from "node:crypto";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { requireFeature } from "@/lib/entitlements";
+import { assertWithinLimit, getLimit, requireFeature } from "@/lib/entitlements";
+import { validatePointsRule } from "@seazn/engine/competition";
 import { log } from "@/server/logger";
 import { resolveModule } from "@/server/engine-db";
 import { getDictionary, t } from "@/lib/i18n";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateFromTemplate, FromTemplateResult } from "@/server/api-v1/schemas";
 import { slugify, uniqueSlug } from "./slugs";
-import { assertActiveQuota, assertPublicQuota } from "./competitions";
+import { assertActiveQuota, assertPublicQuota, fireCompetitionCreated } from "./competitions";
+import { fireDivisionCreated } from "./divisions";
+import {
+  stageNeedsAdvancedFormatsGate,
+  stageNeedsDoubleElimGate,
+  type StageFormatGateInput,
+} from "./format-gates";
 import { getTemplate } from "@/server/templates/catalog";
 import type { CompetitionTemplate, TemplateStage } from "@/server/templates/schema";
 
 export const TEMPLATE_UNKNOWN_KEY_CODE = "TEMPLATE_UNKNOWN_KEY";
 export const TEMPLATE_VERSION_RETIRED_CODE = "TEMPLATE_VERSION_RETIRED";
 export const TEMPLATE_INSTANTIATION_FAILED_CODE = "TEMPLATE_INSTANTIATION_FAILED";
-
-function stageNeedsDoubleElimGate(stage: TemplateStage): boolean {
-  return stage.kind === "double_elim" || stage.kind === "page_playoff";
-}
-
-// Mirrors createStages's `advanced` condition (usecases/stages.ts) exactly —
-// duplicated, not shared, for the same reason the module header explains:
-// createStages cannot be called from inside this transaction. If that
-// condition changes, this one must change with it (flagged for review).
-function stageNeedsAdvancedFormatsGate(stage: TemplateStage): boolean {
-  const cfg = stage.config as
-    | { byes?: unknown; cross_feeds?: unknown; placements?: unknown }
-    | undefined;
-  return (
-    stage.kind === "americano" ||
-    stage.kind === "ladder" ||
-    cfg?.byes !== undefined ||
-    cfg?.cross_feeds !== undefined ||
-    cfg?.placements !== undefined
-  );
-}
 
 /** Effective `stages.config` for a template stage: `groups` sugar first
  *  (a `group` stage's `config.pools.count`), then the declared PointsRule,
@@ -126,15 +123,56 @@ export async function instantiateTemplate(
   // reference this id before the insert below commits; passing it now
   // resolves zero passes today (correct — none can exist yet) and is wired
   // correctly for good, rather than omitted and silently unfixable later.
+  //
+  // `stageNeedsDoubleElimGate`/`stageNeedsAdvancedFormatsGate` are the SAME
+  // shared predicates createStages (usecases/stages.ts) gates on — imported
+  // from usecases/format-gates.ts, not a local retype (P4 review finding 5:
+  // an earlier draft hand-duplicated this exact condition, "byte-identical
+  // today, locked by no test").
   for (const division of template.divisions) {
     for (const stage of division.stages) {
-      if (stageNeedsDoubleElimGate(stage)) {
+      if (stageNeedsDoubleElimGate(stage.kind)) {
         await requireFeature(auth.orgId, "formats.double_elim", competitionId);
       }
-      if (stageNeedsAdvancedFormatsGate(stage)) {
+      if (
+        stageNeedsAdvancedFormatsGate({
+          kind: stage.kind,
+          config: stage.config as StageFormatGateInput["config"],
+        })
+      ) {
         await requireFeature(auth.orgId, "formats.advanced", competitionId);
       }
     }
+  }
+  // Doc 10 §1 quota caps — `divisions.per_competition.max` and
+  // `stages.per_division.max` — checked up front against the template's
+  // STATIC shape, exactly like the entitlement gates above and for the same
+  // reason: a template must never become a way to smuggle a competition over
+  // a paid-tier cap "for free" (P4 review finding 2: an earlier draft never
+  // called either guard, and got away with it purely because no catalog
+  // entry happens to exceed Community's ceiling today).
+  //
+  // A live-row COUNT the way createDivision/createStages do it (count
+  // existing rows inside their OWN transaction, doc 10 §2 rule 1) is not
+  // needed here: `competitionId` is a freshly generated id with no row yet,
+  // so there is no possible concurrent writer that could also be adding
+  // divisions/stages to it — the only writer is this function, and every
+  // division/stage it will ever insert is already known up front from the
+  // (static, in-memory) template. Checking the template's total shape
+  // against the resolved cap is therefore equivalent to the incremental
+  // in-tx count check for a brand-new competition, and strictly stronger:
+  // refused here, NOTHING is ever inserted, rather than rolling back a
+  // partially-written transaction.
+  //
+  // `assertWithinLimit`/`getLimit` are the exact same exported primitives
+  // createDivision/restoreDivision (usecases/divisions.ts) and createStages
+  // (usecases/stages.ts) call — reused, not restated, so a manual create and
+  // a templated one can never disagree about where the boundary is.
+  const divisionCap = await getLimit(auth.orgId, "divisions.per_competition.max", competitionId);
+  assertWithinLimit(divisionCap, "divisions.per_competition.max", template.divisions.length);
+  const stageCap = await getLimit(auth.orgId, "stages.per_division.max");
+  for (const division of template.divisions) {
+    assertWithinLimit(stageCap, "stages.per_division.max", division.stages.length);
   }
   // Competition-level quota, same pre-transaction check createCompetition
   // itself runs — a template-created competition is a competition for quota
@@ -204,6 +242,16 @@ export async function instantiateTemplate(
         for (let si = 0; si < templateDivision.stages.length; si++) {
           stageIndexInProgress = si;
           const templateStage = templateDivision.stages[si]!;
+          // Same validation createStages runs on config.points (stages.ts,
+          // @seazn/engine/competition's validatePointsRule): a rule naming a
+          // metric the sport doesn't emit must never reach play (P4 review
+          // finding 3 — an earlier draft wrote `stage.points` straight into
+          // `stages.config.points` unchecked). Thrown inside this try block,
+          // so it's caught below and rolls back the whole transaction like
+          // any other catalog defect.
+          if (templateStage.points !== undefined) {
+            validatePointsRule(templateStage.points, sportModule.metrics);
+          }
           const stageName = t(dict, templateStage.i18nNameKey);
           const [stage] = await tx<{ id: string }[]>`
             insert into stages (division_id, seq, kind, name, config)
@@ -246,6 +294,16 @@ export async function instantiateTemplate(
     },
     "competition_from_template",
   );
+  // Activation funnel (feature 1): a template-instantiated competition/
+  // division is a competition/division for this funnel too — fired after
+  // the transaction commits, mirroring createCompetition/createDivision's
+  // own placement (never inside the tx: analytics must not count a write
+  // that could still roll back). P4 review finding 1 — an earlier draft
+  // called neither emitter, so this path was invisible to the funnel.
+  await fireCompetitionCreated(auth, input.visibility ?? "private");
+  for (const templateDivision of template.divisions) {
+    await fireDivisionCreated(auth, templateDivision.sportKey, competitionId);
+  }
 
   return {
     competitionId,

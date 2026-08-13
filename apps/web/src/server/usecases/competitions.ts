@@ -133,6 +133,22 @@ export async function assertPublicQuota(auth: AuthCtx, excludeId?: string): Prom
   if (!ok) throw new PaymentRequiredError("dashboard.public.max");
 }
 
+/** Activation event (feature 1) — first competition is the "aha" moment.
+ *  Exported so createFromTemplate (usecases/templates.ts, D1a) can fire the
+ *  SAME event, with the SAME shape, after ITS OWN transaction commits — a
+ *  template-instantiated competition is a competition for the activation
+ *  funnel too. P4 review (2026-08-13) finding 1: an earlier draft of the
+ *  template path called no emitter at all, so a feature built to lower
+ *  friction to a first competition could not be measured doing it. */
+export async function fireCompetitionCreated(auth: AuthCtx, visibility: string): Promise<void> {
+  await captureServer({
+    event: EVENTS.COMPETITION_CREATED,
+    distinctId: auth.userId ?? `org:${auth.orgId}`,
+    orgId: auth.orgId,
+    properties: { visibility },
+  });
+}
+
 export async function createCompetition(
   auth: AuthCtx,
   input: CreateCompetition,
@@ -186,12 +202,7 @@ export async function createCompetition(
     fireDiscoveryRevalidate();
   }
   // Activation event (feature 1) — first competition is the "aha" moment.
-  await captureServer({
-    event: EVENTS.COMPETITION_CREATED,
-    distinctId: auth.userId ?? `org:${auth.orgId}`,
-    orgId: auth.orgId,
-    properties: { visibility: input.visibility },
-  });
+  await fireCompetitionCreated(auth, input.visibility);
   // Activation funnel completion — created directly public (no prior state).
   if (shouldFireMadePublic(undefined, input.visibility)) {
     await captureServer({

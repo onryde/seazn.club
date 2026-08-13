@@ -1358,6 +1358,10 @@
                         "current_seq": {
                           "type": "integer",
                           "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        },
+                        "live_version": {
+                          "type": "integer",
+                          "description": "On TEMPLATE_VERSION_RETIRED (409): the catalog's current version for this key"
                         }
                       },
                       "additionalProperties": true
@@ -1402,6 +1406,21 @@
                         "current_seq": {
                           "type": "integer",
                           "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        },
+                        "divisionIndex": {
+                          "type": "integer",
+                          "description": "On TEMPLATE_INSTANTIATION_FAILED (422): 0-based index into the template's divisions"
+                        },
+                        "stageIndex": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "On TEMPLATE_INSTANTIATION_FAILED (422): 0-based index into the division's stages, or null if the division itself failed"
+                        },
+                        "cause": {
+                          "type": "string",
+                          "description": "On TEMPLATE_INSTANTIATION_FAILED (422): the underlying validation error message"
                         }
                       },
                       "additionalProperties": true

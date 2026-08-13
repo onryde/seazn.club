@@ -1,11 +1,13 @@
 // createFromTemplate (D1a design doc, P4): catalog -> competition + divisions
 // + stages in one transaction, through the same validation paths manual
 // creation uses. Real Postgres required.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { captureServer } from "@/lib/posthog-server";
+import { EVENTS } from "@/lib/analytics-events";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { TEMPLATE_CATALOG, getTemplate } from "@/server/templates/catalog";
 import type { CompetitionTemplate } from "@/server/templates/schema";
@@ -18,6 +20,13 @@ import {
 } from "../templates";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+
+// P4 review finding 1 (2026-08-13): mocked so the "fires the activation
+// funnel" tests below can assert on call shape/count without depending on
+// POSTHOG_KEY being set in the test env (captureServer no-ops without it,
+// same as production-unconfigured) — see lib/__tests__/posthog-server.test.ts
+// for the module's own unconfigured-vs-configured contract.
+vi.mock("@/lib/posthog-server", () => ({ captureServer: vi.fn().mockResolvedValue(undefined) }));
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -81,6 +90,20 @@ const SLAM_STAGE_TEMPLATE = (
     },
   ],
 });
+
+/** A minimal, valid single-stage division for synthetic templates that don't
+ *  care about the division's own shape (quota-cap and funnel-event fixtures
+ *  below) — same knockout stage shape as SLAM_STAGE_TEMPLATE's default. */
+function makeDivision(sportKey: string, variantKey: string): CompetitionTemplate["divisions"][0] {
+  return {
+    i18nNameKey: "templates.slam128.div.main",
+    sportKey,
+    variantKey,
+    entrantKind: "individual",
+    entrantCount: 8,
+    stages: [{ i18nNameKey: "templates.stage.mainDraw", kind: "knockout" }],
+  };
+}
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -266,3 +289,165 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
     expect(orphanDivisions).toBe(0);
   });
 });
+
+describe.skipIf(!HAS_DB)("createFromTemplate — activation funnel events (P4 review finding 1)", () => {
+  beforeEach(() => {
+    vi.mocked(captureServer).mockClear();
+  });
+
+  it("fires COMPETITION_CREATED once and DIVISION_CREATED once per division", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    const twoDivisions: CompetitionTemplate = {
+      key: "test-funnel-two-divisions",
+      version: 1,
+      i18n: { nameKey: "templates.slam128.name", descriptionKey: "templates.slam128.desc" },
+      divisions: [makeDivision("tennis", "grand-slam"), makeDivision("boardgame", "classical")],
+    };
+    const result = await instantiateTemplate(auth, twoDivisions, {
+      name: `Funnel ${randomUUID().slice(0, 6)}`,
+      ends_on: "2030-12-31",
+    });
+
+    const calls = vi.mocked(captureServer).mock.calls.map(([args]) => args);
+    const competitionCalls = calls.filter((c) => c.event === EVENTS.COMPETITION_CREATED);
+    expect(competitionCalls).toHaveLength(1);
+    expect(competitionCalls[0]).toMatchObject({ properties: { visibility: "private" } });
+
+    const divisionCalls = calls.filter((c) => c.event === EVENTS.DIVISION_CREATED);
+    expect(divisionCalls).toHaveLength(2);
+    expect(divisionCalls.map((c) => c.properties?.sport_key).sort()).toEqual(
+      ["boardgame", "tennis"].sort(),
+    );
+    for (const c of divisionCalls) {
+      expect(c.properties?.competition_id).toBe(result.competitionId);
+    }
+  });
+
+  it("a refused (over-quota) instantiation fires neither event — nothing to count", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("community");
+    const overCap: CompetitionTemplate = {
+      key: "test-funnel-over-cap",
+      version: 1,
+      i18n: { nameKey: "templates.slam128.name", descriptionKey: "templates.slam128.desc" },
+      divisions: Array.from({ length: 5 }, () => makeDivision("tennis", "grand-slam")),
+    };
+    await expect(
+      instantiateTemplate(auth, overCap, { name: "NoFunnel", ends_on: "2030-12-31" }),
+    ).rejects.toMatchObject({ featureKey: "divisions.per_competition.max" });
+    expect(captureServer).not.toHaveBeenCalled();
+  });
+});
+
+describe.skipIf(!HAS_DB)("createFromTemplate — quota caps (P4 review finding 2)", () => {
+  it("regression: a template with 5 divisions (over Community's divisions.per_competition.max=4) is refused by PaymentRequiredError, leaving nothing behind — no current catalog entry has this shape", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("community");
+    const before = await competitionCount(auth.orgId);
+    const overDivisionCap: CompetitionTemplate = {
+      key: "test-over-division-cap",
+      version: 1,
+      i18n: { nameKey: "templates.slam128.name", descriptionKey: "templates.slam128.desc" },
+      divisions: Array.from({ length: 5 }, () => makeDivision("tennis", "grand-slam")),
+    };
+    await expect(
+      instantiateTemplate(auth, overDivisionCap, { name: "OverDivisionCap", ends_on: "2030-12-31" }),
+    ).rejects.toMatchObject({ status: 402, featureKey: "divisions.per_competition.max" });
+    expect(await competitionCount(auth.orgId)).toBe(before);
+  });
+
+  it("regression: a division with 3 stages (over Community's stages.per_division.max=2) is refused by PaymentRequiredError, leaving nothing behind", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("community");
+    const before = await competitionCount(auth.orgId);
+    const overStageCap = SLAM_STAGE_TEMPLATE({});
+    overStageCap.divisions[0]!.stages = [
+      { i18nNameKey: "templates.stage.mainDraw", kind: "knockout" },
+      { i18nNameKey: "templates.stage.mainDraw", kind: "knockout" },
+      { i18nNameKey: "templates.stage.mainDraw", kind: "knockout" },
+    ];
+    await expect(
+      instantiateTemplate(auth, overStageCap, { name: "OverStageCap", ends_on: "2030-12-31" }),
+    ).rejects.toMatchObject({ status: 402, featureKey: "stages.per_division.max" });
+    expect(await competitionCount(auth.orgId)).toBe(before);
+  });
+});
+
+describe.skipIf(!HAS_DB)(
+  "createFromTemplate — validatePointsRule / shared advanced-formats gate (P4 review findings 3 and 5)",
+  () => {
+    it("a points rule using a margin bonus the sport's metrics can't support is refused 422 by validatePointsRule — the existing bonuses:[] test would not catch this", async () => {
+      await seedTemplateSportCatalog();
+      const { auth } = await seedOrg("pro");
+      const before = await competitionCount(auth.orgId);
+      const template = SLAM_STAGE_TEMPLATE({
+        points: {
+          base: { win: 3, draw: 1, loss: 0 },
+          bonuses: [{ when: "win_margin_gte", param: 2, points: 1 }],
+        },
+      });
+      await expect(
+        instantiateTemplate(auth, template, { name: "BadPoints", ends_on: "2030-12-31" }),
+      ).rejects.toMatchObject({
+        status: 422,
+        code: TEMPLATE_INSTANTIATION_FAILED_CODE,
+        extra: { divisionIndex: 0, stageIndex: 0 },
+      });
+      expect(await competitionCount(auth.orgId)).toBe(before);
+    });
+
+    it("regression: a synthetic stage with config.placements set (the advanced-formats gate shared with stages.ts, not a hand-copy) on a community org is refused, leaving nothing behind", async () => {
+      await seedTemplateSportCatalog();
+      const { auth } = await seedOrg("community");
+      const before = await competitionCount(auth.orgId);
+      const template = SLAM_STAGE_TEMPLATE({
+        kind: "group",
+        config: { placements: [{ from: 1, to: 2 }] },
+      });
+      await expect(
+        instantiateTemplate(auth, template, { name: "Placements gated", ends_on: "2030-12-31" }),
+      ).rejects.toMatchObject({ featureKey: "formats.advanced" });
+      expect(await competitionCount(auth.orgId)).toBe(before);
+    });
+  },
+);
+
+describe.skipIf(!HAS_DB)(
+  "createFromTemplate — independent instantiated-shape pins (P4 review finding 4)",
+  () => {
+    // Hand-written literals, never read from the catalog/template object
+    // under test. The "instantiates every catalog entry..." test above
+    // asserts shape against `template.divisions[i].stages` — circular by
+    // construction, since a catalog edit and its own assertion move
+    // together. wc32 already has an independent pin (catalog.test.ts) and
+    // slam128 a partial one (summary.test.ts); swiss11/americano-night/
+    // box-league had NONE — a catalog edit reshaping any of these three
+    // shipped green.
+    it.each([
+      { key: "swiss11", plan: "community" as const, kinds: ["swiss"] },
+      { key: "americano-night", plan: "pro" as const, kinds: ["americano"] }, // needs formats.advanced
+      { key: "box-league", plan: "community" as const, kinds: ["group"] },
+    ])(
+      "$key instantiates to exactly 1 division with the pinned stage kind(s) $kinds",
+      async ({ key, plan, kinds }) => {
+        await seedTemplateSportCatalog();
+        const { auth } = await seedOrg(plan);
+        const result = await createFromTemplate(auth, {
+          template_key: key,
+          name: `${key}-shape-${randomUUID().slice(0, 6)}`,
+          ends_on: "2030-12-31",
+          visibility: "private",
+        });
+        expect(result.divisions).toHaveLength(1);
+        expect(result.divisions[0]!.stages).toHaveLength(kinds.length);
+        const rows = await sql<{ kind: string }[]>`
+          select s.kind from stages s
+          join divisions d on d.id = s.division_id
+          where d.competition_id = ${result.competitionId}
+          order by s.seq`;
+        expect(rows.map((r) => r.kind)).toEqual(kinds);
+      },
+    );
+  },
+);

@@ -4230,7 +4230,6 @@ export type DictionaryKey =
   | "templates.boxLeague.desc"
   | "templates.boxLeague.div.main"
   | "templates.boxLeague.name"
-  | "templates.detail.back"
   | "templates.detail.structureTitle"
   | "templates.detail.useTemplate"
   | "templates.gallery.cta"
