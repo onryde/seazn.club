@@ -6,6 +6,11 @@ import { createElement } from "react";
 import { Bracket } from "../bracket";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { msgFor } from "@/lib/messages-i18n";
+// P6 fix round 2, coordinator item #2: `lookup` is now compile-mandatory
+// (matches Schedule's `slotLabels`) — every call below that wants the
+// plain English default now passes it explicitly, msg() being exactly
+// what the removed default value used to be.
+import { msg } from "@/lib/messages";
 
 const F = (
   id: string, round: number, seq: number,
@@ -33,7 +38,7 @@ describe("public Bracket", () => {
       F("f3", 1, 1, "a", null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(html).toContain("<svg");
     expect(html).toContain('data-bracket="two-sided"');
@@ -49,7 +54,7 @@ describe("public Bracket", () => {
       F("f3", 3, 1, null, "d", null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "stepladder", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "stepladder", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(html).not.toContain('data-bracket="two-sided"');
     expect(html).toContain("Rung 1");
@@ -58,7 +63,7 @@ describe("public Bracket", () => {
   it("falls back to columns when a knockout's shape isn't single-elim (partial data)", () => {
     const fixtures = [F("f1", 0, 1, "a", "b", null), F("f2", 0, 2, "c", "d", null), F("f3", 0, 3, "a", "c", null)];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(html).not.toContain('data-bracket="two-sided"');
   });
@@ -75,7 +80,7 @@ describe("public Bracket", () => {
       F("gf", 9, 1, null, null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(html).toContain('data-bracket="double-elim"');
     expect(html).toContain("Winners bracket");
@@ -90,7 +95,7 @@ describe("public Bracket", () => {
   it("keeps the column fallback for irregular double-elim shapes", () => {
     const fixtures = [F("f1", 1, 1, "a", "b", null), F("f2", 2, 1, "c", "d", null), F("f3", 2, 2, "a", "c", null)];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(html).not.toContain('data-bracket="double-elim"');
   });
@@ -105,14 +110,14 @@ describe("public Bracket", () => {
     const html = renderToStaticMarkup(
       createElement(Bracket, {
         kind: "knockout", fixtures: fixtures as never, entrantNames: names,
-        entrantLogos: logos, fixtureHref: href,
+        entrantLogos: logos, fixtureHref: href, lookup: msg,
       }),
     );
     expect(html).toContain('src="https://flags.example/a.png"');
     // b has no badge and d has no entry — exactly one img chip.
     expect(html.match(/<img/g)?.length).toBe(1);
     const without = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(without).not.toContain("<img");
   });
@@ -125,7 +130,7 @@ describe("public Bracket", () => {
       F("fin", 3, 1, "a", null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "page_playoff", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "page_playoff", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(html).toContain('data-bracket="page-playoff"');
     for (const cap of ["Qualifier 1", "Eliminator", "Qualifier 2", "Final"]) expect(html).toContain(cap);
@@ -156,7 +161,7 @@ describe("public Bracket", () => {
       F("f3", 1, 1, null, null, null, "scheduled", { key: "slot.runner_up_group", params: { g: "B" } }, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     // Filled row: real entrant names, anchored as actual rendered text.
     expect(html).toMatch(/>Ants<\/span>/);
@@ -187,7 +192,7 @@ describe("public Bracket", () => {
       F("f3", 1, 1, null, null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(html).toContain('title="Ants"');
     expect(html).toContain('title="Dogs"');

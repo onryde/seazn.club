@@ -6,7 +6,6 @@
 // double-elim / stepladder / irregular shapes keep the column fallback.
 import Link from "next/link";
 import type { PublicFixture } from "@/server/public-site/data";
-import { msg } from "@/lib/messages";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import {
@@ -34,9 +33,16 @@ interface Props {
    *  `PublicOrg.default_locale`, same pattern as data.ts:502-503). This
    *  component is a Server Component (no "use client"), so passing a real
    *  function down through the tree is safe — nothing here crosses the RSC
-   *  boundary into a Client Component. Defaults to the client-safe English
-   *  msg() so every existing caller/test that doesn't pass one is unchanged. */
-  lookup?: SlotLabelLookup;
+   *  boundary into a Client Component.
+   *
+   *  Mandatory (fix round 2, coordinator item #2): `Schedule`'s equivalent
+   *  `slotLabels` prop is compile-required, and this was the odd one out —
+   *  optional-with-a-silent-English-default meant a future caller compiles
+   *  clean and silently regresses to English. Both real callers already
+   *  passed it explicitly (no live defect); this only closes the gap for
+   *  the NEXT one. Pass `msg` explicitly from a caller/test that genuinely
+   *  wants the English default. */
+  lookup: SlotLabelLookup;
 }
 
 function sideLabel(
@@ -317,7 +323,7 @@ function DoubleElim({
   );
 }
 
-export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHref, lookup = msg }: Props) {
+export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHref, lookup }: Props) {
   // PROMPT-62: the connected two-sided tree, when the shape allows it.
   if (kind === "knockout") {
     const result = twoSidedBracket(fixtures);
