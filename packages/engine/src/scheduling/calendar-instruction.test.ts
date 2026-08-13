@@ -11,6 +11,7 @@ import {
   validateAssignments,
   type Assignment,
   type Conflict,
+  type ConflictDetail,
   type RuleFixture,
   type VerifyConfig,
 } from "./calendar.ts";
@@ -45,7 +46,8 @@ const cfg = (hard: HardConstraint[], extra: Partial<VerifyConfig> = {}): VerifyC
 });
 
 const instr = (c: readonly Conflict[]): Conflict[] => c.filter((x) => x.reason === "instruction");
-const details = (c: readonly Conflict[]): string[] => instr(c).map((x) => x.detail ?? "");
+const details = (c: readonly Conflict[]): (ConflictDetail | undefined)[] =>
+  instr(c).map((x) => x.details);
 
 const CAP2: HardConstraint = { type: "max_fixtures_per_day", count: 2, scope: { kind: "competition" } };
 
@@ -68,7 +70,12 @@ describe("max_fixtures_per_day (payload A: badminton)", () => {
     ];
     const found = instr(validateAssignments(assign(BADMINTON, SOLO, slots), cfg([CAP2])));
     expect(found).toHaveLength(3);
-    expect(details(found).every((d) => d.includes("2026-08-03") && d.includes("2/day"))).toBe(true);
+    expect(
+      details(found).every(
+        (d) =>
+          d?.kind === "instruction_day_cap" && d.day === "2026-08-03" && d.count === 3 && d.requiredCount === 2,
+      ),
+    ).toBe(true);
   });
 
   it("counts the day in the ORG zone, not UTC", () => {
@@ -115,7 +122,12 @@ describe("fixture_on_weekday with a terminal selector", () => {
     const found = instr(validateAssignments(assign(BADMINTON, SOLO, slots), cfg([FRI])));
     expect(found).toHaveLength(1);
     expect(found[0]!.fixtureId).toBe("gf");
-    expect(found[0]!.detail).toContain("requires FRI");
+    expect(found[0]!.details).toEqual({
+      kind: "instruction_weekday",
+      weekday: "THU",
+      day: "2026-08-06",
+      requiredWeekday: "FRI",
+    });
   });
 
   it("resolves terminal by winner_to === null, never by round number", () => {
@@ -190,7 +202,11 @@ describe("fixture_on_date", () => {
     const slots: [string, string, string][] = [["gf", "2026-08-08T10:00:00Z", "Court 1"]];
     const found = instr(validateAssignments(assign(BADMINTON, SOLO, slots), cfg([ON])));
     expect(found).toHaveLength(1);
-    expect(found[0]!.detail).toContain("2026-08-07");
+    expect(found[0]!.details).toEqual({
+      kind: "instruction_date",
+      day: "2026-08-08",
+      requiredDate: "2026-08-07",
+    });
   });
 
   it("says nothing about a fixture the selector does not name", () => {
@@ -213,14 +229,24 @@ describe("not_before / not_after in the org zone", () => {
     const slots: [string, string, string][] = [["gf", "2026-08-07T06:00:00Z", "Court 1"]];
     const found = instr(validateAssignments(assign(BADMINTON, SOLO, slots), cfg([NB, NA])));
     expect(found).toHaveLength(1);
-    expect(found[0]!.detail).toContain("not_before 09:00");
+    expect(found[0]!.details).toEqual({
+      kind: "instruction_time",
+      time: "07:00",
+      ruleType: "not_before",
+      requiredTime: "09:00",
+    });
   });
 
   it("REJECTS a 21:00 London start", () => {
     const slots: [string, string, string][] = [["gf", "2026-08-07T20:00:00Z", "Court 1"]];
     const found = instr(validateAssignments(assign(BADMINTON, SOLO, slots), cfg([NB, NA])));
     expect(found).toHaveLength(1);
-    expect(found[0]!.detail).toContain("not_after 20:00");
+    expect(found[0]!.details).toEqual({
+      kind: "instruction_time",
+      time: "21:00",
+      ruleType: "not_after",
+      requiredTime: "20:00",
+    });
   });
 
   it("an entrant-scoped bound binds only that entrant's fixtures", () => {
@@ -418,7 +444,12 @@ describe("scoping", () => {
     // Reported on the two cards this run can move, never on the third — a
     // conflict on a fixture nobody can drag is noise the repair round cannot use.
     expect(found.map((c) => c.fixtureId).sort()).toEqual(["wb-r0-i1", "wb-r0-i2"]);
-    expect(details(found)[0]).toContain("3 fixtures");
+    expect(details(found)[0]).toEqual({
+      kind: "instruction_day_cap",
+      count: 3,
+      day: "2026-08-03",
+      requiredCount: 2,
+    });
   });
 
   it("does NOT count an obstacle as a fixture", () => {
@@ -495,7 +526,11 @@ describe("scoping", () => {
     it("REJECTS a dependent that starts 20 minutes after its feeder ends", () => {
       const found = verify(board("2026-07-24T10:50:00Z"), feedRest("feeder_to_dependent"));
       expect(found.map((c) => c.fixtureId)).toEqual(["sl-g2-d1"]);
-      expect(found[0]?.detail).toBe("starts 20 min after its feeder, instruction requires 40");
+      expect(found[0]?.details).toEqual({
+        kind: "instruction_feeder_gap",
+        minutes: 20,
+        requiredMinutes: 40,
+      });
     });
 
     it("ACCEPTS a 45-minute gap", () => {
@@ -613,7 +648,11 @@ describe("scoping", () => {
         ];
         const found = verifyRf(uuidBoard("2026-07-24T10:50:00Z"), rfs);
         expect(found.map((c) => c.fixtureId)).toEqual([DEP_ID]);
-        expect(found[0]?.detail).toBe("starts 20 min after its feeder, instruction requires 40");
+        expect(found[0]?.details).toEqual({
+          kind: "instruction_feeder_gap",
+          minutes: 20,
+          requiredMinutes: 40,
+        });
       });
 
       it("ACCEPTS the same uuid feed once the gap is honoured", () => {
