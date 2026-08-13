@@ -463,6 +463,53 @@ export async function roundRobinStageIds(tx: Tx, divisionId: string): Promise<Se
   return new Set(rows.map((r) => r.id));
 }
 
+/** C1 fix-loop (G2/3rd instance). The same "sequence" identity `calendar.ts`'s
+ *  round-order pair scan groups by — `(divisionId, stageId, poolId)`, `??
+ *  ""`-normalized — mirrored HERE rather than imported, because this is a
+ *  caller-side SELECTION question (which rows belong with the moved
+ *  fixture(s) for THIS gate call), not a comparison rule; `calendar.ts`'s own
+ *  logic is untouched. Every caller of `roundRobinSequenceSiblings` below
+ *  must build its `keys` set with this same function, or the two silently
+ *  drift the way `poolId`-only once did. */
+function roundRobinSequenceKey(f: Pick<FixtureLite, "division_id" | "stage_id" | "pool_id">): string {
+  return `${f.division_id}|${f.stage_id}|${f.pool_id ?? ""}`;
+}
+
+/** Already-placed fixtures sharing one of `keys`' round-robin sequence
+ *  identity, excluding `exclude` (the fixture(s) a caller already lists
+ *  explicitly in its own `assignments`/`proposed`).
+ *
+ *  This is the fix for `moveFixture` and `applySchedule`'s partial-apply
+ *  gate: both compare `assignments` PAIRWISE for round order
+ *  (`validateAssignments`, scoped to `assignments` alone by design — see its
+ *  own comment on the grouping key), and the checked side used to be only the
+ *  fixture(s) a caller explicitly named. A fixture sitting only in `existing`
+ *  can never be paired against anything, so a one- or few-fixture write could
+ *  never detect a round-order violation against an untouched, already-placed
+ *  round-robin sibling.
+ *
+ *  Both call sites must pull this SAME result into `assignments` on BOTH
+ *  sides of their delta comparison (the current-position side and the
+ *  proposed side) — the set composition has to be identical on both sides or
+ *  `assertNoNewBlocking` reads every pre-existing violation among the
+ *  siblings as newly introduced and blocks a move that never touched them
+ *  (see each call site's own comment). `keys` empty (a non-round-robin move)
+ *  short-circuits to no widening at all, matching prior behaviour exactly. */
+function roundRobinSequenceSiblings(
+  all: readonly FixtureLite[],
+  keys: ReadonlySet<string>,
+  exclude: ReadonlySet<string>,
+): FixtureLite[] {
+  if (keys.size === 0) return [];
+  return all.filter(
+    (f) =>
+      !exclude.has(f.id) &&
+      f.scheduled_at !== null &&
+      f.court_label !== null &&
+      keys.has(roundRobinSequenceKey(f)),
+  );
+}
+
 const FIXTURE_LITE_COLS = [
   "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "ext_key",
   "home_entrant_id", "away_entrant_id",
@@ -2010,9 +2057,39 @@ export async function applySchedule(
       };
     });
     const listed = new Set(input.assignments.map((a) => a.fixture_id));
+    // C1 fix-loop (G2/3rd instance). This apply's own round-robin siblings —
+    // same (division, stage, pool) sequence as any LISTED fixture, already
+    // placed, not themselves listed — move from `existing` into `assignments`
+    // on BOTH sides of the delta below, or the round-order pair scan (scoped
+    // to `assignments` alone) can never pair a listed fixture against an
+    // untouched one. See `roundRobinSequenceSiblings`'s own comment for the
+    // full mechanism; this generalizes it to N listed fixtures rather than
+    // exactly one (`moveFixture`'s shape below).
+    const widenKeys = new Set(
+      input.assignments
+        .map((a) => byId.get(a.fixture_id) as FixtureLite)
+        .filter((f) => roundRobin.has(f.stage_id))
+        .map(roundRobinSequenceKey),
+    );
+    const roundRobinSiblings = roundRobinSequenceSiblings(all, widenKeys, listed);
+    const siblingIds = new Set(roundRobinSiblings.map((f) => f.id));
     const untouched = all
-      .filter((f) => !listed.has(f.id) && f.scheduled_at !== null && f.court_label !== null)
+      .filter(
+        (f) =>
+          !listed.has(f.id) &&
+          !siblingIds.has(f.id) &&
+          f.scheduled_at !== null &&
+          f.court_label !== null,
+      )
       .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
+    // Same representation on both sides of the delta below — these fixtures
+    // move in NEITHER the baseline nor the proposed run, only the listed
+    // ones do, so their own conflicts (round-order or otherwise) land
+    // identically in `baseline` and `found` and `assertNoNewBlocking`
+    // correctly reads them as pre-existing, not introduced by this apply.
+    const widenedSiblings = roundRobinSiblings.map((f) =>
+      toAssignment(f, settings.config.matchMinutes, people, roundRobin),
+    );
     const siblings = await siblingAssignments(
       tx,
       stage.division_id,
@@ -2034,11 +2111,18 @@ export async function applySchedule(
     const currentSlots = input.assignments
       .map((a) => byId.get(a.fixture_id) as FixtureLite)
       .filter((f) => f.scheduled_at !== null && f.court_label !== null)
-      .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
+      .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin))
+      .concat(widenedSiblings);
+    const proposedAll = proposed.concat(widenedSiblings);
     const baseline = validateAssignments(currentSlots, slotConfig, board, deps);
-    const found = validateAssignments(proposed, slotConfig, board, deps);
+    const found = validateAssignments(proposedAll, slotConfig, board, deps);
     assertNoNewBlocking(baseline, found);
-    const conflicts = mapConflicts(found);
+    // Scoped to the fixtures THIS apply actually listed (#461's contract,
+    // `moveFixture`'s own return does the same) — the widened siblings above
+    // exist so the GATE can see them, not so their own (possibly pre-existing
+    // and entirely unrelated) conflicts leak into a response about fixtures
+    // the caller never named.
+    const conflicts = mapConflicts(found.filter((c) => !siblingIds.has(c.fixtureId)));
 
     const moves: { fixture: string; from: unknown; to: unknown }[] = [];
     for (const a of input.assignments) {
@@ -2236,6 +2320,10 @@ export async function moveFixture(
         ...new Set(all.flatMap((f) => [f.home_entrant_id, f.away_entrant_id])),
       ].filter((e): e is string => e !== null);
       const people = await peopleByEntrant(tx, entrantIds);
+      // C1 (2026-08-12 round-order design). Same reason `applySchedule` reads
+      // it: round order has to be judged HERE, on the write gate — see
+      // `toAssignment`'s own doc comment.
+      const roundRobin = await roundRobinStageIds(tx, fixture.division_id);
       const start = ms(nextAt);
       const proposed: Assignment = {
         fixtureId: fixture.id,
@@ -2252,10 +2340,51 @@ export async function moveFixture(
         // honoured is silently absent at exactly the moment a human overrides it.
         ...(fixture.pool_id !== null ? { poolId: fixture.pool_id } : {}),
         divisionId: fixture.division_id,
+        // C1 fix-loop (G2/3rd instance). Same shape as `applySchedule`'s own
+        // `proposed` — `stageId` unconditional (`fixtures.stage_id` is NOT
+        // NULL), `roundNo` gated on stage kind, `movable: true`
+        // unconditionally because this call is actively choosing this
+        // position, whatever lock state it ends up carrying. Without these
+        // three, `proposed` could never enter `calendar.ts`'s round-order
+        // `bySequence` grouping at all — a fixture with no `roundNo` is
+        // skipped outright — so widening the sibling set below would still
+        // catch nothing.
+        stageId: fixture.stage_id,
+        ...(roundRobin.has(fixture.stage_id) ? { roundNo: fixture.round_no } : {}),
+        movable: true,
       };
+      // C1 fix-loop (G2/3rd instance). This fixture's own round-robin
+      // sequence siblings — same (division, stage, pool), already placed —
+      // move from `existing` into `assignments` on BOTH sides of the delta
+      // below. `assertNoNewBlocking`'s round-order pair scan is scoped to
+      // `assignments` alone (calendar.ts's own design), and the checked side
+      // here is always exactly one fixture: `[proposed]` or `currentSlot`.
+      // A one-element array can never contain a same-sequence PAIR, so no
+      // amount of correct `roundNo`/`stageId` wiring on `proposed` ALONE
+      // would ever flag a violation against an untouched sibling — the
+      // sibling has to be pulled into the checked set too. See
+      // `roundRobinSequenceSiblings`'s own comment for the full mechanism and
+      // why symmetry (both sides of the delta, not just the proposed one) is
+      // what keeps a pre-existing violation among siblings from reading as a
+      // false "new" block on a move that never touched them.
+      const roundRobinSiblings = roundRobinSequenceSiblings(
+        all,
+        roundRobin.has(fixture.stage_id) ? new Set([roundRobinSequenceKey(fixture)]) : new Set(),
+        new Set([fixture.id]),
+      );
+      const siblingIds = new Set(roundRobinSiblings.map((f) => f.id));
       const others = all
-        .filter((f) => f.id !== fixture.id && f.scheduled_at !== null && f.court_label !== null)
-        .map((f) => toAssignment(f, settings.config.matchMinutes, people));
+        .filter(
+          (f) => f.id !== fixture.id && !siblingIds.has(f.id) && f.scheduled_at !== null && f.court_label !== null,
+        )
+        .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
+      // Same representation on both sides of the delta below — this fixture
+      // moves in NEITHER the baseline nor the proposed run, so its own
+      // conflicts land identically in `baseline` and `found` and
+      // `assertNoNewBlocking` correctly reads them as pre-existing.
+      const widenedSiblings = roundRobinSiblings.map((f) =>
+        toAssignment(f, settings.config.matchMinutes, people, roundRobin),
+      );
       const siblings = await siblingAssignments(
         tx,
         fixture.division_id,
@@ -2269,14 +2398,19 @@ export async function moveFixture(
       // Where this card sits right now (#399). An unscheduled fixture has no
       // baseline, so every blocking conflict its first placement causes is
       // introduced — which is exactly what it is.
-      const currentSlot =
+      const currentSlot = (
         fixture.scheduled_at !== null && fixture.court_label !== null
-          ? [toAssignment(fixture, settings.config.matchMinutes, people)]
-          : [];
+          ? [toAssignment(fixture, settings.config.matchMinutes, people, roundRobin)]
+          : []
+      ).concat(widenedSiblings);
       const baseline = validateAssignments(currentSlot, slotConfig, board, deps);
-      const found = validateAssignments([proposed], slotConfig, board, deps);
+      const found = validateAssignments([proposed, ...widenedSiblings], slotConfig, board, deps);
       assertNoNewBlocking(baseline, found);
-      conflicts = mapConflicts(found);
+      // Scoped to the fixture THIS move actually names (#461's contract) —
+      // the widened siblings above exist so the GATE can see them, not so
+      // their own (possibly pre-existing and entirely unrelated) conflicts
+      // leak into a response about a card the caller never touched.
+      conflicts = mapConflicts(found.filter((c) => !siblingIds.has(c.fixtureId)));
     }
 
     const values: Record<string, unknown> = {};
