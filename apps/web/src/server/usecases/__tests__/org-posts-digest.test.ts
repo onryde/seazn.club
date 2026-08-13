@@ -114,22 +114,22 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
 
     await decideWithRally(ctx, div, div.entrantA, div.entrantB);
 
-    // Standings movement source: a real snapshot with SOME history to diff
-    // (seeded directly — recomputeStandings is a different call path this
-    // test does not need to exercise; org-posts.test.ts's own round-recap
-    // test already seeds standings_snapshots this same way).
+    // Standings movement source: `decideWithRally`'s real scoring pipeline
+    // already ran recomputeStandings (onDecided), which inserted THIS
+    // stage's snapshot row — overwrite it with a `previous_rows` value the
+    // real write path would not have produced on a single decided fixture,
+    // so biggestClimber has a genuine delta to find.
     await sql`
-      insert into standings_snapshots (stage_id, org_id, pool_id, rows, previous_rows, computed_through_seq)
-      values (${div.stageId}, ${ctx.orgId}, null,
-        ${sql.json([
+      update standings_snapshots set
+        rows = ${sql.json([
           { entrantId: div.entrantA, played: 1, won: 1, drawn: 0, lost: 0, points: 3, metrics: {}, rank: 1 },
           { entrantId: div.entrantB, played: 1, won: 0, drawn: 0, lost: 1, points: 0, metrics: {}, rank: 2 },
         ])},
-        ${sql.json([
+        previous_rows = ${sql.json([
           { entrantId: div.entrantA, played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {}, rank: 2 },
           { entrantId: div.entrantB, played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {}, rank: 1 },
-        ])},
-        1)`;
+        ])}
+      where stage_id = ${div.stageId} and pool_id is null`;
 
     // An upcoming fixture in the next 7 days.
     await sql`
