@@ -99,6 +99,7 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
         template_key: template.key,
         name: `${template.key} ${randomUUID().slice(0, 6)}`,
         ends_on: "2030-12-31",
+        visibility: "private",
       });
       expect(result.templateKey).toBe(template.key);
       expect(result.templateVersion).toBe(template.version);
@@ -124,6 +125,7 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
       template_key: "wc32",
       name: `wc32 ${randomUUID().slice(0, 6)}`,
       ends_on: "2030-12-31",
+      visibility: "private",
     });
     const groupStageId = wc32.divisions[0]!.stages[0]!.id;
     const [groupStage] = await sql<{ config: { pools?: { count?: number } } }[]>`
@@ -134,6 +136,7 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
       template_key: "swiss11",
       name: `swiss11 ${randomUUID().slice(0, 6)}`,
       ends_on: "2030-12-31",
+      visibility: "private",
     });
     const swissStageId = swiss.divisions[0]!.stages[0]!.id;
     const [swissStage] = await sql<{ config: { rounds?: number } }[]>`
@@ -144,7 +147,9 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
   it("a stage's PointsRule is written into stages.config.points verbatim", async () => {
     await seedTemplateSportCatalog();
     const { auth } = await seedOrg("pro");
-    const template = SLAM_STAGE_TEMPLATE({ points: { base: { win: 3, draw: 1, loss: 0 } } });
+    const template = SLAM_STAGE_TEMPLATE({
+      points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] },
+    });
     const result = await instantiateTemplate(auth, template, {
       name: `Points ${randomUUID().slice(0, 6)}`,
       ends_on: "2030-12-31",
@@ -161,6 +166,7 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
         template_key: "does-not-exist",
         name: "X",
         ends_on: "2030-12-31",
+        visibility: "private",
       }),
     ).rejects.toMatchObject({ status: 404, code: TEMPLATE_UNKNOWN_KEY_CODE });
   });
@@ -174,6 +180,7 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
         template_version: template.version + 1,
         name: "X",
         ends_on: "2030-12-31",
+        visibility: "private",
       }),
     ).rejects.toMatchObject({
       status: 409,
@@ -207,6 +214,7 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
         template_key: "americano-night",
         name: "Night",
         ends_on: "2030-12-31",
+        visibility: "private",
       }),
     ).rejects.toMatchObject({ featureKey: "formats.advanced" });
     expect(await competitionCount(auth.orgId)).toBe(before);
