@@ -147,7 +147,7 @@ export function AiReviewPanel({
                   <span className="shrink-0 font-mono font-semibold text-slate-700">{l.code}</span>
                   {l.marker && <Marker kind={l.marker} />}
                   {division && <DivisionChip id={division.id} name={division.name} />}
-                  <span className="min-w-0 flex-1 truncate text-slate-600">{l.matchup}</span>
+                  <span title={l.matchup} className="min-w-0 flex-1 truncate text-slate-600">{l.matchup}</span>
                   {row.kind === "unschedulable" && (
                     <span className="shrink-0 rounded bg-amber-100 px-1 font-mono text-[9px] font-bold text-amber-800">
                       {row.rule}

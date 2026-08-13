@@ -159,6 +159,30 @@ describe("BracketPanel — mixed filled + TBD-with-label rows (regression)", () 
     // the existing bracket.tbd key, not a hardcoded "TBD" — and it must NOT
     // be confused with the labelled row above (both present, distinct).
     expect(html).toContain("bracket.tbd");
-    expect((html.match(/bracket\.tbd/g) ?? []).length).toBe(2); // f3's two null sides
+    // f3's two null sides — each renders its resolved text TWICE: once as
+    // the `title` attribute (finding #5), once as the visible child text.
+    expect((html.match(/title="bracket\.tbd"/g) ?? []).length).toBe(2);
+    expect((html.match(/>bracket\.tbd</g) ?? []).length).toBe(2);
+  });
+
+  // Fix round 1, finding #5 (MINOR): a slot label like "Best 3 of the
+  // 3rd-place teams" is far wider than a team name and the node truncates
+  // it — every side needs a `title` so a pointer/keyboard user can still
+  // read the whole thing. Anchored on the real `title="…"` attribute value,
+  // not just its presence, so a `title=""` regression would still fail this.
+  it("every truncated side carries a title with its own resolved text (finding #5)", () => {
+    // Same shape as the mixed-rows regression above (2 semis + 1 final) —
+    // a valid single-elim tree, or twoSidedBracket rejects it and the panel
+    // renders nothing.
+    const fx = [
+      FIX("f1", 0, 1, "e1", "e4", { kind: "win", winner: "e1" }, "decided", 1),
+      FIX("f2", 0, 2, "e2", null, null, "in_play", 2, null, { key: "slot.runner_up_group", params: { g: "B" } }),
+      FIX("f3", 1, 1, null, null, null, "scheduled", 3),
+    ];
+    const html = markup({ fixtures: fx as never });
+    expect(html).toContain('title="Mexico"');
+    expect(html).toContain('title="Chile"');
+    expect(html).toContain('title="Canada"');
+    expect(html).toContain('title="slot.runner_up_group"');
   });
 });

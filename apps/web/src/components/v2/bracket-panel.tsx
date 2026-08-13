@@ -165,6 +165,7 @@ export function BracketPanel({
     live: boolean,
   ) => {
     const name = entrantId ? (entrantNames[entrantId] ?? entrantId) : null;
+    const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd");
     const badge = entrantId ? entrantBadges?.[entrantId] : null;
     const isWinner = winner !== null && winner === entrantId;
     const muted = winner !== null && winner !== entrantId;
@@ -175,6 +176,7 @@ export function BracketPanel({
           <img src={badge} alt="" className="h-3.5 w-3.5 shrink-0 rounded-[3px] object-cover" />
         ) : null}
         <span
+          title={label}
           className={`truncate text-xs ${
             name === null
               ? "italic text-[color:var(--app-fg-muted,#94a3b8)]"
@@ -185,7 +187,7 @@ export function BracketPanel({
                   : "text-[color:var(--app-fg,#e2e8f0)]"
           }`}
         >
-          {name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd")}
+          {label}
         </span>
         {live && <span className="animate-live-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />}
       </span>
@@ -318,6 +320,7 @@ function DoubleElimPanel({
     const headline = headlines?.[f.id];
     const sideRow = (entrantId: string | null, slotLabel: SlotLabel | null | undefined) => {
       const name = entrantId ? (entrantNames[entrantId] ?? entrantId) : null;
+      const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd");
       const badge = entrantId ? entrantBadges?.[entrantId] : null;
       const isWinner = winner !== null && winner === entrantId;
       const mutedRow = winner !== null && winner !== entrantId;
@@ -328,6 +331,7 @@ function DoubleElimPanel({
             <img src={badge} alt="" className="h-3.5 w-3.5 shrink-0 rounded-[3px] object-cover" />
           ) : null}
           <span
+            title={label}
             className={`truncate text-xs ${
               name === null
                 ? "italic text-[color:var(--app-fg-muted,#94a3b8)]"
@@ -338,7 +342,7 @@ function DoubleElimPanel({
                     : "text-[color:var(--app-fg,#e2e8f0)]"
             }`}
           >
-            {name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd")}
+            {label}
           </span>
           {live && <span className="animate-live-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />}
         </span>
@@ -455,6 +459,7 @@ function StepladderPanel({
   const row = (f: FixtureLike, entrantId: string | null, slotLabel: SlotLabel | null | undefined) => {
     const winner = (f.outcome as { winner?: string } | null)?.winner ?? null;
     const name = entrantId ? (entrantNames[entrantId] ?? entrantId) : null;
+    const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd");
     const badge = entrantId ? entrantBadges?.[entrantId] : null;
     const isWinner = winner !== null && winner === entrantId;
     const muted = winner !== null && winner !== entrantId;
@@ -465,6 +470,7 @@ function StepladderPanel({
           <img src={badge} alt="" className="h-3.5 w-3.5 shrink-0 rounded-[3px] object-cover" />
         ) : null}
         <span
+          title={label}
           className={`truncate text-xs ${
             name === null
               ? "italic text-[color:var(--app-fg-muted,#94a3b8)]"
@@ -475,7 +481,7 @@ function StepladderPanel({
                   : "text-[color:var(--app-fg,#e2e8f0)]"
           }`}
         >
-          {name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd")}
+          {label}
         </span>
         {f.status === "in_play" && (
           <span className="animate-live-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
@@ -558,6 +564,7 @@ function PagePlayoffPanel({
   const row = (f: FixtureLike, entrantId: string | null, slotLabel: SlotLabel | null | undefined) => {
     const winner = (f.outcome as { winner?: string } | null)?.winner ?? null;
     const name = entrantId ? (entrantNames[entrantId] ?? entrantId) : null;
+    const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd");
     const badge = entrantId ? entrantBadges?.[entrantId] : null;
     const isWinner = winner !== null && winner === entrantId;
     const mutedRow = winner !== null && winner !== entrantId;
@@ -568,6 +575,7 @@ function PagePlayoffPanel({
           <img src={badge} alt="" className="h-3.5 w-3.5 shrink-0 rounded-[3px] object-cover" />
         ) : null}
         <span
+          title={label}
           className={`truncate text-xs ${
             name === null
               ? "italic text-[color:var(--app-fg-muted,#94a3b8)]"
@@ -578,7 +586,7 @@ function PagePlayoffPanel({
                   : "text-[color:var(--app-fg,#e2e8f0)]"
           }`}
         >
-          {name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd")}
+          {label}
         </span>
         {f.status === "in_play" && <span className="animate-live-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />}
       </span>

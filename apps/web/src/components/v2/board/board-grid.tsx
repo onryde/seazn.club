@@ -311,7 +311,7 @@ function GhostBlockView({ ghost, msg }: { ghost: GhostBlock; msg: (k: MessageKey
         )}
         <span className="ml-auto shrink-0 tabular-nums text-[9px] opacity-80">{timeLabel(ghost.at)}</span>
       </div>
-      <p className="mt-0.5 truncate font-medium">{ghost.matchup}</p>
+      <p title={ghost.matchup} className="mt-0.5 truncate font-medium">{ghost.matchup}</p>
     </div>
   );
 }

@@ -759,14 +759,15 @@ export function JointReviewStep({
             {plan.blocking.map((c) => {
               const f = meta.get(c.fixtureId);
               const divisionId = divisionOf.get(c.fixtureId);
+              const matchupText = f?.matchup ?? c.fixtureId.slice(0, 8);
               return (
                 <li
                   key={`${c.fixtureId}-${c.reason}`}
                   className="rounded-md border border-red-100 bg-white px-2 py-1.5"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-xs text-slate-700">
-                      {f?.matchup ?? c.fixtureId.slice(0, 8)}
+                    <span title={matchupText} className="min-w-0 flex-1 truncate text-xs text-slate-700">
+                      {matchupText}
                     </span>
                     {/* The only control in the list, so it keeps the row it
                         acts on — the division and the reason go underneath. */}
