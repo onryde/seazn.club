@@ -26,6 +26,7 @@ import {
   isBlockingConflict,
   repairSchedule,
   RepairVerificationError,
+  roundOrderConflicts,
   RULE_BY_REASON,
   slotFixtures,
   validateAssignments,
@@ -2067,14 +2068,24 @@ export async function applySchedule(
       };
     });
     const listed = new Set(input.assignments.map((a) => a.fixture_id));
-    // C1 fix-loop (G2/3rd instance). This apply's own round-robin siblings —
-    // same (division, stage, pool) sequence as any LISTED fixture, already
-    // placed, not themselves listed — move from `existing` into `assignments`
-    // on BOTH sides of the delta below, or the round-order pair scan (scoped
-    // to `assignments` alone) can never pair a listed fixture against an
-    // untouched one. See `roundRobinSequenceSiblings`'s own comment for the
-    // full mechanism; this generalizes it to N listed fixtures rather than
+    // C1 fix-loop (G2/3rd instance, re-scoped by the round-order-widening
+    // fix-loop below). This apply's own round-robin siblings — same
+    // (division, stage, pool) sequence as any LISTED fixture, already placed,
+    // not themselves listed. They are needed ONLY so `roundOrderConflicts`
+    // (the round-order-only pass below) can pair a listed fixture against an
+    // untouched one — its pairwise scan is scoped to the set it is handed,
+    // by design. See `roundRobinSequenceSiblings`'s own comment for the full
+    // mechanism; this generalizes it to N listed fixtures rather than
     // exactly one (`moveFixture`'s shape below).
+    //
+    // They deliberately do NOT move into `assignments`/out of `untouched` for
+    // the CORE gate below (rest/court/person/window/feed-order) — that was
+    // the original, too-blunt fix: pulling a sibling out of `existing` made
+    // it FOCAL for every rule family the gate checks, not just round order,
+    // silently changing what rest/court/person judged a pre-existing board
+    // against. Those families see the siblings exactly as they always did —
+    // as fixed CONTEXT via `board`/`existing` below — so their verdicts stay
+    // byte-identical to the pre-round-order gate.
     const widenKeys = new Set(
       input.assignments
         .map((a) => byId.get(a.fixture_id) as FixtureLite)
@@ -2083,20 +2094,15 @@ export async function applySchedule(
     );
     const roundRobinSiblings = roundRobinSequenceSiblings(all, widenKeys, listed);
     const siblingIds = new Set(roundRobinSiblings.map((f) => f.id));
+    // ORIGINAL composition — `siblingIds` stays IN here, matching every rule
+    // family's pre-round-order behaviour (and origin/main's, byte for byte).
     const untouched = all
-      .filter(
-        (f) =>
-          !listed.has(f.id) &&
-          !siblingIds.has(f.id) &&
-          f.scheduled_at !== null &&
-          f.court_label !== null,
-      )
+      .filter((f) => !listed.has(f.id) && f.scheduled_at !== null && f.court_label !== null)
       .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
-    // Same representation on both sides of the delta below — these fixtures
-    // move in NEITHER the baseline nor the proposed run, only the listed
-    // ones do, so their own conflicts (round-order or otherwise) land
-    // identically in `baseline` and `found` and `assertNoNewBlocking`
-    // correctly reads them as pre-existing, not introduced by this apply.
+    // Round-order-only checked set: the siblings, same representation as
+    // `untouched`'s rows, added to BOTH delta sides below so a pre-existing
+    // round-order violation among them reads as pre-existing rather than
+    // newly introduced by a move that never touched them.
     const widenedSiblings = roundRobinSiblings.map((f) =>
       toAssignment(f, settings.config.matchMinutes, people, roundRobin),
     );
@@ -2121,17 +2127,27 @@ export async function applySchedule(
     const currentSlots = input.assignments
       .map((a) => byId.get(a.fixture_id) as FixtureLite)
       .filter((f) => f.scheduled_at !== null && f.court_label !== null)
-      .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin))
-      .concat(widenedSiblings);
-    const proposedAll = proposed.concat(widenedSiblings);
-    const baseline = validateAssignments(currentSlots, slotConfig, board, deps);
-    const found = validateAssignments(proposedAll, slotConfig, board, deps);
+      .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
+    // CORE families (window/start_window/court/blackout/rest/person_overlap/
+    // instruction rules/feed-order): `includeRoundOrder=false` — this call is
+    // byte-identical in shape to the pre-round-order gate, so its verdict is
+    // too. Round order is judged SEPARATELY, immediately below, over the
+    // widened set — merging only its `"order"` conflicts back in keeps every
+    // other family blind to the siblings, exactly as it always was.
+    const baseline = [
+      ...validateAssignments(currentSlots, slotConfig, board, deps, false),
+      ...roundOrderConflicts(currentSlots.concat(widenedSiblings), slotConfig.tz),
+    ];
+    const found = [
+      ...validateAssignments(proposed, slotConfig, board, deps, false),
+      ...roundOrderConflicts(proposed.concat(widenedSiblings), slotConfig.tz),
+    ];
     assertNoNewBlocking(baseline, found);
     // Scoped to the fixtures THIS apply actually listed (#461's contract,
     // `moveFixture`'s own return does the same) — the widened siblings above
-    // exist so the GATE can see them, not so their own (possibly pre-existing
-    // and entirely unrelated) conflicts leak into a response about fixtures
-    // the caller never named.
+    // exist so the round-order GATE can see them, not so their own (possibly
+    // pre-existing and entirely unrelated) conflicts leak into a response
+    // about fixtures the caller never named.
     const conflicts = mapConflicts(found.filter((c) => !siblingIds.has(c.fixtureId)));
 
     const moves: { fixture: string; from: unknown; to: unknown }[] = [];
@@ -2363,35 +2379,44 @@ export async function moveFixture(
         ...(roundRobin.has(fixture.stage_id) ? { roundNo: fixture.round_no } : {}),
         movable: true,
       };
-      // C1 fix-loop (G2/3rd instance). This fixture's own round-robin
-      // sequence siblings — same (division, stage, pool), already placed —
-      // move from `existing` into `assignments` on BOTH sides of the delta
-      // below. `assertNoNewBlocking`'s round-order pair scan is scoped to
-      // `assignments` alone (calendar.ts's own design), and the checked side
-      // here is always exactly one fixture: `[proposed]` or `currentSlot`.
-      // A one-element array can never contain a same-sequence PAIR, so no
-      // amount of correct `roundNo`/`stageId` wiring on `proposed` ALONE
-      // would ever flag a violation against an untouched sibling — the
-      // sibling has to be pulled into the checked set too. See
-      // `roundRobinSequenceSiblings`'s own comment for the full mechanism and
-      // why symmetry (both sides of the delta, not just the proposed one) is
-      // what keeps a pre-existing violation among siblings from reading as a
-      // false "new" block on a move that never touched them.
+      // C1 fix-loop (G2/3rd instance, re-scoped by the round-order-widening
+      // fix-loop below). This fixture's own round-robin sequence siblings —
+      // same (division, stage, pool), already placed. They exist ONLY so
+      // `roundOrderConflicts` (the round-order-only pass below) can pair this
+      // move against an untouched sibling — its scan is scoped to the set
+      // it's handed, and the checked side here is always exactly one
+      // fixture: `[proposed]` or `currentSlot`. A one-element array can never
+      // contain a same-sequence PAIR, so no amount of correct `roundNo`/
+      // `stageId` wiring on `proposed` ALONE would ever flag a violation
+      // against an untouched sibling — the sibling has to be pulled into
+      // round order's OWN checked set. See `roundRobinSequenceSiblings`'s own
+      // comment for the full mechanism and why symmetry (both sides of the
+      // delta, not just the proposed one) is what keeps a pre-existing
+      // violation among siblings from reading as a false "new" block on a
+      // move that never touched them.
+      //
+      // They deliberately do NOT move into `assignments`/out of `others` for
+      // the CORE gate below — that was the original, too-blunt fix: pulling a
+      // sibling out of `existing` made it FOCAL for every rule family, not
+      // just round order, silently changing what rest/court/person judged a
+      // pre-existing board against. Those families see the siblings exactly
+      // as they always did — fixed CONTEXT via `board`/`existing` below.
       const roundRobinSiblings = roundRobinSequenceSiblings(
         all,
         roundRobin.has(fixture.stage_id) ? new Set([roundRobinSequenceKey(fixture)]) : new Set(),
         new Set([fixture.id]),
       );
       const siblingIds = new Set(roundRobinSiblings.map((f) => f.id));
+      // ORIGINAL composition — `siblingIds` stays IN here, matching every
+      // rule family's pre-round-order behaviour (and origin/main's, byte for
+      // byte).
       const others = all
-        .filter(
-          (f) => f.id !== fixture.id && !siblingIds.has(f.id) && f.scheduled_at !== null && f.court_label !== null,
-        )
+        .filter((f) => f.id !== fixture.id && f.scheduled_at !== null && f.court_label !== null)
         .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
-      // Same representation on both sides of the delta below — this fixture
-      // moves in NEITHER the baseline nor the proposed run, so its own
-      // conflicts land identically in `baseline` and `found` and
-      // `assertNoNewBlocking` correctly reads them as pre-existing.
+      // Round-order-only checked set: this fixture's siblings, added to BOTH
+      // delta sides below so a pre-existing round-order violation among them
+      // reads as pre-existing rather than newly introduced by a move that
+      // never touched them.
       const widenedSiblings = roundRobinSiblings.map((f) =>
         toAssignment(f, settings.config.matchMinutes, people, roundRobin),
       );
@@ -2408,18 +2433,29 @@ export async function moveFixture(
       // Where this card sits right now (#399). An unscheduled fixture has no
       // baseline, so every blocking conflict its first placement causes is
       // introduced — which is exactly what it is.
-      const currentSlot = (
+      const currentSlot =
         fixture.scheduled_at !== null && fixture.court_label !== null
           ? [toAssignment(fixture, settings.config.matchMinutes, people, roundRobin)]
-          : []
-      ).concat(widenedSiblings);
-      const baseline = validateAssignments(currentSlot, slotConfig, board, deps);
-      const found = validateAssignments([proposed, ...widenedSiblings], slotConfig, board, deps);
+          : [];
+      // CORE families: `includeRoundOrder=false` — this call is
+      // byte-identical in shape to the pre-round-order gate, so its verdict
+      // is too. Round order is judged SEPARATELY, over the widened set —
+      // merging only its `"order"` conflicts back in keeps every other
+      // family blind to the siblings, exactly as it always was.
+      const baseline = [
+        ...validateAssignments(currentSlot, slotConfig, board, deps, false),
+        ...roundOrderConflicts(currentSlot.concat(widenedSiblings), slotConfig.tz),
+      ];
+      const found = [
+        ...validateAssignments([proposed], slotConfig, board, deps, false),
+        ...roundOrderConflicts([proposed, ...widenedSiblings], slotConfig.tz),
+      ];
       assertNoNewBlocking(baseline, found);
       // Scoped to the fixture THIS move actually names (#461's contract) —
-      // the widened siblings above exist so the GATE can see them, not so
-      // their own (possibly pre-existing and entirely unrelated) conflicts
-      // leak into a response about a card the caller never touched.
+      // the widened siblings above exist so the round-order GATE can see
+      // them, not so their own (possibly pre-existing and entirely
+      // unrelated) conflicts leak into a response about a card the caller
+      // never touched.
       conflicts = mapConflicts(found.filter((c) => !siblingIds.has(c.fixtureId)));
     }
 

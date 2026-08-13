@@ -105,6 +105,7 @@ import type { AiApplyMeta, ScheduleConfig } from "@/server/api-v1/schemas";
 import {
   conflictKey,
   deltaConflicts,
+  roundOrderConflicts,
   validateAssignments,
   type Assignment,
   type Conflict,
@@ -589,14 +590,21 @@ export async function applyCompetitionSchedule(
       // (division, stage, pool) sequence as one of `d`'s LISTED fixtures,
       // already placed, not itself listed. `mine` only holds fixtures THIS
       // apply explicitly named for `d`; an unlisted same-sequence sibling
-      // sits in `untouched`, out of `validateAssignments`' round-order pair
-      // scan (calendar.ts, scoped to its `assignments` parameter alone, by
-      // design). Pulled into the CHECKED set on BOTH delta sides below,
-      // symmetrically, or a pre-existing violation among the siblings reads
-      // as newly introduced and blocks a partial apply that never touched
-      // them — the property the "stays editable over a PRE-EXISTING
-      // round-order violation" test (competition-schedule-apply.test.ts)
-      // exists to pin.
+      // sits in `untouched`, out of `roundOrderConflicts`' pair scan (scoped
+      // to the set it's handed, by design). Pulled into round order's OWN
+      // checked set on BOTH delta sides below, symmetrically, or a
+      // pre-existing violation among the siblings reads as newly introduced
+      // and blocks a partial apply that never touched them — the property
+      // the "stays editable over a PRE-EXISTING round-order violation" test
+      // (competition-schedule-apply.test.ts) exists to pin.
+      //
+      // C1 fix-loop (round-order-widening fix-loop): they deliberately do NOT
+      // move into `mine`/`current-for-d` or out of `untouched` for the CORE
+      // gate below (rest/court/person/window/feed-order) — that was the
+      // original, too-blunt fix, pulling a sibling out of context and making
+      // it FOCAL for every rule family a division's pass checks, not just
+      // round order. `untouched` stays UNMODIFIED for every division's pass,
+      // this one included — round order is judged separately, below.
       const listedIds = new Set(d.input.assignments.map((a) => a.fixture_id));
       const widenKeys = new Set(
         d.input.assignments
@@ -614,25 +622,26 @@ export async function applyCompetitionSchedule(
       const widenedSiblings = roundRobinSiblings.map((f) =>
         toAssignment(f, d.settings.config.matchMinutes, people, roundRobinByDivision.get(d.id)),
       );
-      // Pulled OUT of `untouched` for division `d`'s own two passes below —
-      // left IN `untouched` for every OTHER division's pass, which still
-      // needs to see `d`'s siblings as court/time occupancy for its own
-      // cross-division checks.
-      const untouchedForD = untouched.filter((a) => !siblingIds.has(a.fixtureId));
+      const currentForD = current.filter((a) => a.divisionId === d.id);
+      // `untouched` UNMODIFIED (ORIGINAL composition, byte-identical to
+      // origin/main) — every division's pass, including `d`'s own, sees every
+      // OTHER division's untouched fixtures AND `d`'s own, exactly as it did
+      // before round order existed.
+      const config = verifyConfigFor(packDivisionOf(d), applyWindow(d.settings), undefined, orgTz);
       // The identical pass over the pre-apply board. Same division, same config,
       // same "everyone else" — so a conflict that survives this comparison is
-      // one this apply is responsible for.
+      // one this apply is responsible for. CORE families via
+      // `includeRoundOrder=false` (byte-identical in shape to the
+      // pre-round-order gate); round order separately, over the widened set.
       before.push(
         ...validateAssignments(
-          [...current.filter((a) => a.divisionId === d.id), ...widenedSiblings],
-          verifyConfigFor(packDivisionOf(d), applyWindow(d.settings), undefined, orgTz),
-          [
-            ...current.filter((a) => a.divisionId !== d.id),
-            ...untouchedForD,
-            ...siblings,
-          ],
+          currentForD,
+          config,
+          [...current.filter((a) => a.divisionId !== d.id), ...untouched, ...siblings],
           deps,
+          false,
         ),
+        ...roundOrderConflicts([...currentForD, ...widenedSiblings], orgTz),
       );
       // #399 retired this pass's per-division `crossPersonClash` branch. A human
       // on two courts at once is impossible whoever put them there, so
@@ -642,12 +651,10 @@ export async function applyCompetitionSchedule(
       // decides what may be written. What replaces it is the delta below, which
       // is the thing that actually needed deciding: a board that ALREADY holds
       // an overlap has to stay editable.
-      for (const c of validateAssignments(
-        [...mine, ...widenedSiblings],
-        verifyConfigFor(packDivisionOf(d), applyWindow(d.settings), undefined, orgTz),
-        [...others, ...untouchedForD, ...siblings],
-        deps,
-      )) {
+      for (const c of [
+        ...validateAssignments(mine, config, [...others, ...untouched, ...siblings], deps, false),
+        ...roundOrderConflicts([...mine, ...widenedSiblings], orgTz),
+      ]) {
         // Keyed on (fixtureId, reason, detail) like `verifyJoint`: the engine
         // resolves feed order against the whole board, so a within-division
         // order violation is re-reported verbatim by every other division's
