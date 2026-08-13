@@ -19,6 +19,7 @@ import {
   type CapacityDay,
   type CapacityEntrant,
   type CapacityInput,
+  type CapacityVerdict,
 } from "./capacity.ts";
 
 const MS_PER_MIN = 60_000;
@@ -431,7 +432,12 @@ describe("assessCapacity — per-day FLOOR (fixtures a rule nails to one day)", 
     entrants: [],
   });
 
-  it("stays ok when the forced fixtures fit inside their own day", () => {
+  // CONTROL, not proof. This passes with the floor removed entirely — it
+  // has to, because the point is that a floor which FITS changes nothing.
+  // Labelled because a reader scanning the block would otherwise count it
+  // as evidence the floor works, and it is evidence of the opposite:
+  // evidence the floor does not fire when it should not.
+  it("CONTROL — stays ok when the forced fixtures fit inside their own day", () => {
     const report = assessCapacity(base(twoRoomyDays(6), 8));
     expect(report.slotSupply).toBe(12);
     // 6 nailed to day 1 (its exact capacity), 2 free, 6 free slots on day 2.
@@ -459,7 +465,11 @@ describe("assessCapacity — per-day FLOOR (fixtures a rule nails to one day)", 
     expect(report.verdict).toBe("ok");
   });
 
-  it("counts a forced fixture once, not twice — a fully-nailed board that exactly fits is not impossible", () => {
+  // CONTROL, not proof — also passes with the floor removed. It guards the
+  // double-count regression specifically (forced demand PLUS the same
+  // fixtures again as free demand would read 24 against 12 and cry
+  // impossible), which is a failure mode of the FIX, not of its absence.
+  it("CONTROL — counts a forced fixture once, not twice: a fully-nailed board that exactly fits is not impossible", () => {
     // Every fixture nailed, 6 to each day, 12 slots. If the walk double
     // counted (forced demand PLUS the same fixtures again as free demand) it
     // would see 24 against 12 and cry impossible.
@@ -489,5 +499,54 @@ describe("assessCapacity — per-day FLOOR (fixtures a rule nails to one day)", 
     // counted.
     const report = assessCapacity(base(twoRoomyDays(20), 8));
     expect(report.verdict).toBe("impossible");
+  });
+});
+
+describe("assessCapacity — raise_cap points at the day the cap is actually blocking", () => {
+  it("prefers the day whose CAP blocks forced work over an unrelated day with a wider cap/supply gap", () => {
+    // Day 1: 6 slots, capped at 5, with 6 fixtures nailed to it. The cap is
+    // one short of holding the forced work, so raising it is the only move
+    // that can flip the verdict.
+    // Day 2: 6 slots, capped at 1 — a WIDER (supply − cap) deficit of 5 vs
+    // day 1's 1, and nothing forced. Ranking on deficit alone picks this
+    // one, and raising its cap cannot flip anything.
+    const days: CapacityDay[] = [
+      { ...oneCourtDay("2026-10-19", DAY1, 240, 5), forcedDemand: 6 },
+      oneCourtDay("2026-10-20", DAY1 + DAY_MS, 240, 1),
+    ];
+    const input: CapacityInput = {
+      matchMinutes: 30,
+      gapMinutes: 10,
+      perEntrantMinRest: 0,
+      fixtureCount: 7,
+      days,
+      entrants: [],
+    };
+    const report = assessCapacity(input);
+    expect(report.verdict).toBe("impossible");
+
+    const raise = report.suggestions.find((s) => s.kind === "raise_cap");
+    expect(raise, "no raise_cap suggestion was offered at all").toBeDefined();
+    // `CapacitySuggestion` is {kind, amount, flipsVerdict} — it does NOT
+    // carry the date, so which day was chosen is observable only through
+    // whether the suggestion actually works. That is the right assertion
+    // anyway: ranking on deficit alone picks day 2, whose cap +1 changes
+    // nothing, and `flipsVerdict` is a live re-computation (suggestionsFor
+    // re-runs computeCore on the candidate), not a claim.
+    expect(raise!.flipsVerdict).toBe(true);
+
+    // Independent re-derivation, so this does not rest on the module's own
+    // bookkeeping: raising DAY 1's cap by one fixes the board, raising day
+    // 2's does not. If the ranking ever picks day 2 again, the assertion
+    // above goes false and these two show why.
+    const raiseDay = (date: string): CapacityVerdict =>
+      assessCapacity({
+        ...input,
+        days: input.days.map((d) =>
+          d.date === date ? { ...d, demandCap: (d.demandCap ?? 0) + 1 } : d,
+        ),
+      }).verdict;
+    expect(raiseDay("2026-10-19")).not.toBe("impossible");
+    expect(raiseDay("2026-10-20")).toBe("impossible");
   });
 });

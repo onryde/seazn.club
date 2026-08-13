@@ -347,19 +347,40 @@ function addOneCalendarDay(ymd: string): string {
 /** The day whose EXPLICIT rule cap is below its own court supply — the true
  *  bottleneck a `raise_cap` suggestion can act on. A day defaulted to the
  *  fixture count (no rule cap at all) has nothing to raise: its limit is
- *  court supply, which `add_court`/`add_day` address instead. Ties break on
- *  the largest (supply − cap) deficit, the day where a rule is costing the
- *  most placeable room. */
+ *  court supply, which `add_court`/`add_day` address instead.
+ *
+ *  Ranked by whether the cap is actually BLOCKING FORCED WORK first, and
+ *  only then by the raw (supply − cap) deficit. Deficit alone is the wrong
+ *  primary key once `forcedDemand` exists: a day with fixtures nailed to it
+ *  and a cap one short of holding them is the day whose cap is causing the
+ *  impossible verdict, and it loses on deficit to any unrelated day with a
+ *  wider cap/supply gap. Nothing LIES when that happens — `flipsVerdict`
+ *  re-assesses every candidate, so the offered suggestion is still honestly
+ *  labelled — but the one suggestion that would actually flip the verdict
+ *  goes unoffered, which is the same outcome as having no suggestion at all.
+ *
+ *  `capBlockedForced` is the part of a day's forced demand that the CAP is
+ *  responsible for, not the courts: forced work the courts could physically
+ *  hold (`min(forced, supply)`) minus what the cap permits. Raising the cap
+ *  can move that; raising it cannot help with forced work that exceeds
+ *  court supply, which is `add_court`/`add_day` territory. */
 function bindingCapDay(input: CapacityInput): string | undefined {
   const slot = input.matchMinutes + input.gapMinutes;
   let bestDate: string | undefined;
+  let bestBlocked = -1;
   let bestDeficit = -1;
   for (const day of input.days) {
     if (day.demandCap === undefined) continue;
     const supply = daySupply(day, slot, input.gapMinutes);
     if (day.demandCap >= supply) continue;
+    const forced = Math.max(0, day.forcedDemand ?? 0);
+    const capBlockedForced = Math.max(0, Math.min(forced, supply) - day.demandCap);
     const deficit = supply - day.demandCap;
-    if (deficit > bestDeficit) {
+    if (
+      capBlockedForced > bestBlocked ||
+      (capBlockedForced === bestBlocked && deficit > bestDeficit)
+    ) {
+      bestBlocked = capBlockedForced;
       bestDeficit = deficit;
       bestDate = day.date;
     }
