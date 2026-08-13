@@ -3563,6 +3563,7 @@ export type DictionaryKey =
   | "schedule.health.offenders.empty"
   | "schedule.health.offenders.hide"
   | "schedule.health.offenders.show"
+  | "schedule.health.tabLabel"
   | "schedule.health.title"
   | "schedule.health.unit.courts"
   | "schedule.health.unit.deviation"
