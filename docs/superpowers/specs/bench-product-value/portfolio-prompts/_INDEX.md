@@ -33,10 +33,10 @@ S13-gated. New-branch-in-worktree rule applies to every session.
 
 | Session | Feature | Prompt file | Depends on | External gate | Status |
 |---|---|---|---|---|---|
-| P1 | D2 capacity lib + route guard + card | `P01-capacity-precheck.md` | — | green-light | **PR #544** — 15 commits, gates green both ways |
-| P2 | D3 health lib + route + panel | `P02-schedule-health.md` | — (P1 pattern reuse, soft) | green-light | TODO (wave 2) |
-| P3 | D7 enrichment + weekly digest | `P03-news-enrichment.md` | — | green-light | **PR #545** — 18 commits, V358, gates green |
-| P4 | D1a template catalog + instantiation + wizard | `P04-templates-single-stage.md` | — | green-light | TODO |
+| P1 | D2 capacity lib + route guard + card | `P01-capacity-precheck.md` | — | green-light | **MERGED** `78c8618f` (#544) |
+| P2 | D3 health lib + route + panel | `P02-schedule-health.md` | — (P1 pattern reuse, soft) | green-light | **IN FLIGHT** (wave 2) |
+| P3 | D7 enrichment + weekly digest | `P03-news-enrichment.md` | — | green-light | **MERGED** `51601495` (#545), V358 |
+| P4 | D1a template catalog + instantiation + wizard | `P04-templates-single-stage.md` | — | green-light | **IN FLIGHT** (wave 2) |
 | P5 | D4a seeding rules + TBD fixtures + fill engine | `P05-progression-engine.md` | — | green-light | TODO |
 | P6 | D4b proposal UI + confirm flow | `P06-progression-ui.md` | P5 | green-light | TODO |
 | P7 | D1b multi-stage templates | `P07-templates-multi-stage.md` | P4, P5 (StageSeeding merged) | green-light | TODO |
@@ -274,3 +274,37 @@ Process notes worth carrying forward:
 - The `_INDEX.md` conflict recurs every wave: sessions edit it, main
   edits it. Wave 2 onward, sessions should NOT touch this file — the
   orchestrator writes the outcome at the wave boundary.
+
+### Wave 1 CLOSED — merged 2026-08-13
+
+`78c8618f` (P1 / #544, 12 CI checks green) and `51601495` (P3 / #545,
+8 green). P3 rebased onto post-P1 main cleanly; all four dictionaries
+carry both key families (14 `schedule.capacity.*`, 65 `news.*`/`digest.*`)
+at identical counts, and all three drift gates regenerate to zero drift.
+
+**The four e2e defects CI caught after both sessions reported done** are
+the most transferable lesson of the wave. Every one was in a spec that
+had been authored and typechecked but never executed, and two were
+assertions that could not have failed:
+
+- P1's spec navigated to the bare division path, which renders
+  **Entrants** — `stage-auto-schedule` is not on it at all. The symptom
+  was `toBeEnabled` timing out; the real error was `element(s) not
+  found`. It survived review only because an earlier line failed first,
+  so those lines had never run once.
+- P3's `.first()` wait was **vacuous**: a prior row already satisfied
+  it, so it never waited for the new insert and the API read raced the
+  server. Passing would have meant nothing. Both digest specs now wait
+  on the row count rising by exactly one, which is also retry-proof —
+  digests are deliberately not deduped, so a Playwright retry leaves an
+  extra draft and trips strict mode.
+
+Ruling for waves 2–4: **a session may not report done on an unrun e2e
+spec.** Authoring plus tsc is not evidence. If the session cannot run it,
+it says so as a blocker rather than as a deviation, and the orchestrator
+runs it before the PR — not after.
+
+Ground truth for a CI-only e2e failure is the run's `playwright-report-*`
+artifact: its per-failure ARIA snapshot shows what was actually on the
+page, which is how the Entrants-tab diagnosis was settled rather than
+guessed.
