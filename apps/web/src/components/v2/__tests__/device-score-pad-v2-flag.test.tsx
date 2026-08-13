@@ -36,7 +36,7 @@ const BASE_PROPS = {
   away: { id: "e2", name: "Away FC", members: [], lineup: [] },
   initialState: { status: "in_play", last_seq: 0, summary: null, state: {}, outcome: null },
   initialEvents: [],
-} as const;
+};
 
 const BOOTSTRAP: ScorePadBootstrap = {
   moduleVersion: "1.0.0",

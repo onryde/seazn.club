@@ -2,7 +2,6 @@
 // fidelityTiers declaration (doc 14 §4), not a hand-kept table. Pure — no DB.
 import { describe, expect, it, vi } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
-import { generic } from "@seazn/engine/sports/generic";
 import type { AnySportModule } from "@seazn/engine/sport";
 import {
   requiredFeatureForEvent,

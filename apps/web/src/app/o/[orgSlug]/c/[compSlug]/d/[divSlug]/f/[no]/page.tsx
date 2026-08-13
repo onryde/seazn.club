@@ -29,6 +29,12 @@ import { AuditStrip } from "@/components/v2/audit-strip";
 import { hasFeature } from "@/lib/entitlements";
 import { suspensionsForFixture } from "@/server/usecases/discipline";
 import { sql } from "@/lib/db";
+// S12/#421 W10 — the v2 scoring pad, resolved server-side only inside the
+// scorepad-v2 flag-on branch (never on the v1 path, so a resolution failure
+// can never red a flag-off page — see resolveScorePadBootstrap's own doc).
+import { isServerFeatureEnabled } from "@/lib/posthog-server";
+import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
+import { eventOutToEnvelope } from "@/components/v2/scorepad/registry";
 
 export default async function FixturePage({
   params,
@@ -95,6 +101,24 @@ export default async function FixturePage({
     fixture.home_entrant_id,
     fixture.away_entrant_id,
   ]);
+
+  // S12/#421 — `scorepad-v2`, off by default. `auth.userId` is a real string
+  // for every page reached here (requireFixturePage redirects to /login
+  // otherwise); the `org:` fallback only exists to satisfy distinctId's
+  // `string` type, matching CaptureArgs's own established convention.
+  const scorePadV2Flag = await isServerFeatureEnabled("scorepad-v2", auth.userId ?? `org:${auth.orgId}`, {
+    orgId: auth.orgId,
+    fallback: false,
+  });
+  const scorePadV2 = scorePadV2Flag
+    ? await resolveScorePadBootstrap({
+        sportModule,
+        rawConfig: division.config,
+        hasFeatureFn: (key) => hasFeature(auth.orgId, key, division.competition_id),
+        initialEvents: events.map((e) => eventOutToEnvelope(fixture.id, e)),
+        identity: { recordedBy: auth.userId, deviceLinkId: null },
+      })
+    : null;
 
   return (
     <>
@@ -177,6 +201,7 @@ export default async function FixturePage({
               ? `/shared/${orgSlug}/${competition.slug}/${division.slug}/fixtures/${fixture.id}`
               : null
           }
+          scorePadV2={scorePadV2}
         />
 
         {audit !== null && (
