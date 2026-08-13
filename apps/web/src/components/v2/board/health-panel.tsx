@@ -96,7 +96,7 @@ function MetricCard({ metric }: { metric: HealthMetricWire }) {
       <p className="mt-2 text-xs text-slate-500">
         {msg(metric.explanation.key as MessageKey, metric.explanation.params)}
       </p>
-      {metric.offenders.length > 0 && (
+      {metric.offenders.length > 0 ? (
         <div className="mt-2">
           <button
             type="button"
@@ -120,6 +120,14 @@ function MetricCard({ metric }: { metric: HealthMetricWire }) {
             </ul>
           )}
         </div>
+      ) : (
+        // Review finding #6: this key existed in all 4 dictionaries but was
+        // never read — a metric with nothing to flag rendered no offender
+        // section at all, silently, rather than confirming there is
+        // genuinely nothing wrong.
+        <p className="mt-2 text-xs text-slate-400" data-health-offenders-empty="">
+          {msg("schedule.health.offenders.empty")}
+        </p>
       )}
     </div>
   );

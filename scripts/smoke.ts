@@ -6492,6 +6492,43 @@ async function scheduleHealthSuite(): Promise<void> {
     after.metrics.some((m) => m.key === "homeAwayAlternation"),
   );
 
+  // Review finding #1: `abandoned` occupies real court time and must count
+  // as an applied fixture, the same as scheduled/in_play/decided/finalized/
+  // forfeited — dropping it would shrink restSpread's span_e and invent a
+  // phantom idle gap for gapDispersion/primeSlotFairness. Sharpest possible
+  // proof: mark EVERY fixture on the stage abandoned directly (a real
+  // status this app reaches via a match that started and was called off,
+  // not reachable through this smoke session's own API surface) and
+  // confirm the route still returns 200 with real metrics — if abandoned
+  // were excluded, `stageFixtures` would return zero rows and this would
+  // 409 SCHEDULE_NOT_APPLIED exactly like the "before" check above.
+  {
+    const url = process.env.DATABASE_URL;
+    if (url) {
+      const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
+      const sql = postgres(url, {
+        connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+        ssl: process.env.DATABASE_SSL === "disable" ? false : isLocal ? false : "require",
+        prepare: !url.includes(":6543"),
+        max: 1,
+      });
+      try {
+        await sql`update fixtures set status = 'abandoned' where stage_id = ${stage.id}`;
+        const abandoned = v1data<{ metrics: { key: string; score: number }[] }>(
+          await v1(free, `/api/v1/stages/${stage.id}/schedule/health`, "GET"),
+        );
+        check(
+          "schedule health: a stage where every fixture is ABANDONED still returns 200 with all 5 metrics — abandoned counts as occupied, not excluded (#1)",
+          abandoned.metrics.length === 5,
+        );
+      } finally {
+        await sql.end();
+      }
+    } else {
+      console.log("SKIP  schedule health: abandoned-status check (DATABASE_URL not set)");
+    }
+  }
+
   // ========================================================================
   // Joint (competition-scope) variant — coordinator addendum, D3 Scope item
   // 2 ("+ joint competition aggregation"), originally under-scoped in this

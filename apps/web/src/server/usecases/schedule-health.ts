@@ -28,9 +28,13 @@ import "server-only";
 // file structurally forecloses that: `getCompetitionScheduleHealth` calls
 // `computeStageHealth` — the exact function `getScheduleHealth` calls —
 // once per stage, so there is no second implementation left to fork from
-// the first. `schedule-health.competition.test.ts` (smoke) asserts this
-// directly: a stage's entry inside a joint response must deep-equal that
-// same stage's standalone report.
+// the first. Asserted directly, not just claimed: `scripts/smoke.ts`'s
+// `scheduleHealthSuite` (the "embedded stage report EXACTLY matches the
+// standalone stage route's own report" check) and
+// `apps/web/e2e/schedule-health.spec.ts`'s joint test (the
+// "exact-match cross-check" — `JSON.stringify` byte comparison) both
+// require a stage's entry inside a joint response to equal that same
+// stage's standalone report exactly.
 import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -84,12 +88,22 @@ interface HealthFixtureRow {
  *  caller. No stage-scoped equivalent of `divisionFixtures` exists yet
  *  (schedule.ts's loader is division-scoped only) — this is deliberately
  *  NOT added there; see this file's header. */
+// Review finding #1: `abandoned` IS a status this occupies real court time
+// under — it is a valid state in the canonical enum (api-v1/schemas.ts's
+// `Fixture.status`) and `me-officiating.ts`'s own FINISHED_STATUSES groups
+// it with decided/finalized/forfeited as "the match happened". Dropping it
+// here would shrink an affected entrant's restSpread `span_e` and invent a
+// phantom idle gap on its court-day for gapDispersion/primeSlotFairness —
+// the board would read as healthier than it actually is. `cancelled` is
+// deliberately NOT included: unlike abandoned, a cancelled fixture is not
+// established to have occupied a court slot at all, and the review finding
+// this comment answers was scoped to abandoned specifically.
 async function stageFixtures(tx: Tx, stageId: string): Promise<HealthFixtureRow[]> {
   return tx<HealthFixtureRow[]>`
     select id, scheduled_at, court_label, home_entrant_id, away_entrant_id, pool_id, round_no
     from fixtures
     where stage_id = ${stageId}
-      and status in ('scheduled', 'in_play', 'decided', 'finalized', 'forfeited')
+      and status in ('scheduled', 'in_play', 'decided', 'finalized', 'abandoned', 'forfeited')
       and scheduled_at is not null
       and court_label is not null
     order by scheduled_at`;
