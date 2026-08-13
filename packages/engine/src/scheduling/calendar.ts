@@ -1393,7 +1393,7 @@ export function validateAssignments(
       conflicts.push({
         fixtureId: a.fixtureId,
         reason: "window",
-        detail: "outside the competition window",
+        details: { kind: "outside_competition_window" },
       });
     }
     // Bounds the START, matching the solver's `start > window.notAfter`.
@@ -1402,7 +1402,7 @@ export function validateAssignments(
       conflicts.push({
         fixtureId: a.fixtureId,
         reason: "start_window",
-        detail: "outside the target's start window",
+        details: { kind: "outside_start_window" },
       });
     }
     // Court clash / blackout — check against everything else on the board.
@@ -1427,25 +1427,36 @@ export function validateAssignments(
           overlaps(a.startAt - gapMs, a.endAt + gapMs, o.startAt, o.endAt),
       );
       // `courtBlocked` said "court", so at least one exists; the fallback keeps
-      // the reason reportable if the two predicates ever drift apart.
+      // the reason reportable if the two predicates ever drift apart. That
+      // fallback is a reportability guard, not a real counterparty: `hit` is
+      // the literal string `"another fixture"` when it fires, so
+      // `otherFixtureId` is omitted rather than set to a non-id.
       for (const hit of hits.length > 0 ? hits.map((h) => h.fixtureId) : ["another fixture"]) {
         conflicts.push({
           fixtureId: a.fixtureId,
           reason: "court",
-          detail: `court ${a.court} double-booked with ${hit}`,
+          details: {
+            kind: "court_double_booking",
+            court: a.court,
+            ...(hit === "another fixture" ? {} : { otherFixtureId: hit }),
+          },
         });
       }
     }
     for (const bo of blackouts) {
       if (bo.court !== undefined && bo.court !== a.court) continue;
       if (overlaps(a.startAt, a.endAt, bo.from, bo.to)) {
-        conflicts.push({ fixtureId: a.fixtureId, reason: "blackout", detail: "inside a blackout window" });
+        conflicts.push({ fixtureId: a.fixtureId, reason: "blackout", details: { kind: "inside_blackout" } });
         break;
       }
     }
     // Session windows: the match must sit fully inside one (doc 12 §2).
     if (windows.length > 0 && !windows.some((w) => a.startAt >= w.from && a.endAt <= w.to)) {
-      conflicts.push({ fixtureId: a.fixtureId, reason: "blackout", detail: "outside session windows" });
+      conflicts.push({
+        fixtureId: a.fixtureId,
+        reason: "blackout",
+        details: { kind: "outside_session_windows" },
+      });
     }
     // Rest & person overlap — against other matches sharing an entrant/person.
     for (const other of board) {
@@ -1456,7 +1467,7 @@ export function validateAssignments(
           conflicts.push({
             fixtureId: a.fixtureId,
             reason: "person_overlap",
-            detail: `entrant ${e} overlap with ${other.fixtureId}`,
+            details: { kind: "entrant_overlap", entrantIds: [e], otherFixtureId: other.fixtureId },
           });
         } else {
           // Resolved per PAIR: restByGroup can differ pool to pool, the other
@@ -1465,7 +1476,11 @@ export function validateAssignments(
           const restMs = pairRestMinutesWith(hard, fixtureById, config, a, other) * MS_PER_MIN;
           const gap = a.startAt >= other.endAt ? a.startAt - other.endAt : other.startAt - a.endAt;
           if (gap < restMs) {
-            conflicts.push({ fixtureId: a.fixtureId, reason: "rest", detail: `entrant ${e} below rest` });
+            conflicts.push({
+              fixtureId: a.fixtureId,
+              reason: "rest",
+              details: { kind: "entrant_below_rest", entrantIds: [e] },
+            });
           }
         }
       }
@@ -1476,7 +1491,7 @@ export function validateAssignments(
             conflicts.push({
               fixtureId: a.fixtureId,
               reason: "person_overlap",
-              detail: `person ${p} overlap with ${other.fixtureId}`,
+              details: { kind: "person_overlap", personIds: [p], otherFixtureId: other.fixtureId },
             });
           }
         } else if (!a.entrants.some((e) => other.entrants.includes(e))) {
@@ -1495,7 +1510,11 @@ export function validateAssignments(
             conflicts.push({
               fixtureId: a.fixtureId,
               reason: "rest",
-              detail: `person ${sharedPeople.join("/")} below rest`,
+              // `personIds` keeps `sharedPeople`'s BOARD order verbatim — the
+              // legacy `sharedPeople.join("/")` prose is reproducible from the
+              // array as given, per `canonConflictDetail`'s own contract that
+              // id-array order is meaningful, never re-sorted.
+              details: { kind: "person_below_rest", personIds: sharedPeople },
             });
           }
         }
