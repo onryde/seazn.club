@@ -121,13 +121,6 @@ export const COURT_BALANCE_MIN_FIXTURES = 3;
  *  homeAwayAlternation offender (design doc's threshold, verbatim). */
 export const HOME_AWAY_RUN_THRESHOLD = 4;
 
-const NOT_IMPLEMENTED = (key: HealthMetricKey): HealthMetric => ({
-  key,
-  score: -1,
-  explanation: { key: "NOT_IMPLEMENTED" },
-  offenders: [],
-});
-
 const MS_PER_MIN = 60_000;
 
 /** Lexicographic tie-break (design doc's Rounding/Determinism note,
