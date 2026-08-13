@@ -24,6 +24,10 @@ import type {
 import { useMsg } from "@/components/i18n/dict-provider";
 import { scoringErrorText } from "@/lib/scoring-vocab";
 import type { MessageKey } from "@/lib/messages";
+// S12/#421 W10 — the v2 scoring pad, behind the `scorepad-v2` flag. Additive:
+// `scorePadV2` is optional and defaults to null, so every existing caller
+// (and every test that does not pass it) keeps the v1 chain below untouched.
+import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/registry";
 
 export type PadSideInfo = SideInfo;
 
@@ -55,6 +59,13 @@ interface Props {
   away: PadSideInfo | null;
   initialState: LiveState;
   initialEvents: PadEventIn[];
+  /** S12/#421 — the `scorepad-v2` flag's verdict for THIS fixture, resolved
+   *  server-side, plus everything `<ScorePad/>` needs beyond what this
+   *  component already has. Presence IS the flag: null/omitted (the
+   *  default) renders the v1 chain below exactly as before; present renders
+   *  `<ScorePad/>` instead — including for carrom, which this dispatcher's
+   *  v1 chain has never been able to score (no carrom branch at all here). */
+  scorePadV2?: ScorePadBootstrap | null;
 }
 
 const SETBASED = new Set(["volleyball", "badminton", "tabletennis"]);
@@ -74,6 +85,7 @@ export function DeviceScorePad({
   away,
   initialState,
   initialEvents,
+  scorePadV2 = null,
 }: Props) {
   const msg = useMsg();
   const statusLabel = (s: string) => {
@@ -271,7 +283,32 @@ export function DeviceScorePad({
         </div>
       )}
 
-      {scoring && !decided && home && away && (
+      {/* Sport pad (v2) — S12/#421. A fully separate, mutually-exclusive
+          block from the v1 one below (never `scorePadV2 &&` nested inside
+          it), so the v1 ternary chain's own lines stay byte-identical; only
+          its guard condition below gains a `!scorePadV2 &&` to keep the two
+          from ever rendering at once. */}
+      {scorePadV2 && scoring && !decided && home && away && (
+        <section className="card p-4">
+          <ScoringErrorBoundary>
+            <ScorePad
+              fixtureId={fixture.id}
+              sportKey={sport.key}
+              moduleVersion={scorePadV2.moduleVersion}
+              resolvedConfig={scorePadV2.resolvedConfig}
+              home={home}
+              away={away}
+              initialEvents={scorePadV2.initialEvents}
+              auth={{ kind: "device_link", token }}
+              identity={scorePadV2.identity}
+              entitlements={scorePadV2.entitlements}
+              band={scorePadV2.band}
+            />
+          </ScoringErrorBoundary>
+        </section>
+      )}
+
+      {!scorePadV2 && scoring && !decided && home && away && (
         <section className="card p-4">
           <ScoringErrorBoundary>
             {sport.key === "cricket" ? (

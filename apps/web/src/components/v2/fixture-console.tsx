@@ -25,6 +25,10 @@ import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-bann
 import { useMsg } from "@/components/i18n/dict-provider";
 import { scoringErrorText } from "@/lib/scoring-vocab";
 import type { MessageKey } from "@/lib/messages";
+// S12/#421 W10 — the v2 scoring pad, behind the `scorepad-v2` flag. Additive:
+// `scorePadV2` is optional and defaults to null, so every existing caller
+// (and every test that does not pass it) keeps the v1 chain below untouched.
+import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/registry";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -186,6 +190,13 @@ interface Props {
   /** Active suspensions among this fixture's entrants (SPEC-1), joined server
    *  side into the bootstrap payload. Drives the soft pad warning banner. */
   activeSuspensions?: { personId: string; personName: string; served: number; total: number }[];
+  /** S12/#421 — the `scorepad-v2` flag's verdict for THIS fixture, resolved
+   *  server-side (`isServerFeatureEnabled`) plus everything `<ScorePad/>`
+   *  needs beyond what this component already has (fixture id, sport key,
+   *  home/away). Presence IS the flag: null/omitted (the default) renders
+   *  the v1 chain below exactly as before; present renders `<ScorePad/>`
+   *  instead. Never both. */
+  scorePadV2?: ScorePadBootstrap | null;
 }
 
 /** Payload keys that carry a person id across the sport modules (card, goal,
@@ -243,6 +254,7 @@ export function FixtureConsole({
   publicPath = null,
   availability = {},
   activeSuspensions = [],
+  scorePadV2 = null,
 }: Props) {
   const msg = useMsg();
   const router = useRouter();
@@ -453,8 +465,34 @@ export function FixtureConsole({
         </div>
       )}
 
+      {/* Sport pad (v2) — S12/#421. A fully separate, mutually-exclusive
+          block from the v1 one below (never `scorePadV2 &&` nested inside
+          it), so the v1 ternary chain's own lines stay byte-identical; only
+          its guard condition below gains a `!scorePadV2 &&` to keep the two
+          from ever rendering at once. */}
+      {scorePadV2 && scoring && !decided && home && away && (
+        <section className="card p-5" data-testid="score-pad">
+          <h2 className="mb-3 text-sm font-semibold text-slate-700">{msg("score.scoring")}</h2>
+          <ScoringErrorBoundary fixtureId={fixture.id}>
+            <ScorePad
+              fixtureId={fixture.id}
+              sportKey={sport.key}
+              moduleVersion={scorePadV2.moduleVersion}
+              resolvedConfig={scorePadV2.resolvedConfig}
+              home={home}
+              away={away}
+              initialEvents={scorePadV2.initialEvents}
+              auth={{ kind: "session" }}
+              identity={scorePadV2.identity}
+              entitlements={scorePadV2.entitlements}
+              band={scorePadV2.band}
+            />
+          </ScoringErrorBoundary>
+        </section>
+      )}
+
       {/* Sport pad */}
-      {scoring && !decided && home && away && (
+      {!scorePadV2 && scoring && !decided && home && away && (
         <section className="card p-5" data-testid="score-pad">
           <h2 className="mb-3 text-sm font-semibold text-slate-700">{msg("score.scoring")}</h2>
           <ScoringErrorBoundary fixtureId={fixture.id}>
