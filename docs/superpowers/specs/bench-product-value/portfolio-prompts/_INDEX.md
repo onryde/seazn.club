@@ -33,9 +33,9 @@ S13-gated. New-branch-in-worktree rule applies to every session.
 
 | Session | Feature | Prompt file | Depends on | External gate | Status |
 |---|---|---|---|---|---|
-| P1 | D2 capacity lib + route guard + card | `P01-capacity-precheck.md` | — | green-light | **IN FLIGHT** (wave 1) |
+| P1 | D2 capacity lib + route guard + card | `P01-capacity-precheck.md` | — | green-light | **PR #544** — 15 commits, gates green both ways |
 | P2 | D3 health lib + route + panel | `P02-schedule-health.md` | — (P1 pattern reuse, soft) | green-light | TODO (wave 2) |
-| P3 | D7 enrichment + weekly digest | `P03-news-enrichment.md` | — | green-light | DONE — impl+tests on `feat/p3-news-enrichment`, PR not yet opened |
+| P3 | D7 enrichment + weekly digest | `P03-news-enrichment.md` | — | green-light | **PR #545** — 18 commits, V358, gates green |
 | P4 | D1a template catalog + instantiation + wizard | `P04-templates-single-stage.md` | — | green-light | TODO |
 | P5 | D4a seeding rules + TBD fixtures + fill engine | `P05-progression-engine.md` | — | green-light | TODO |
 | P6 | D4b proposal UI + confirm flow | `P06-progression-ui.md` | P5 | green-light | TODO |
@@ -213,3 +213,64 @@ the scout's four rulings, found during implementation:
   `apps/web/e2e/news.spec.ts`) and the full `scripts/smoke.ts` run
   (extended, syntax-checked, unrun) — both need a live prod-built
   server; orchestrator runs them at the wave boundary.
+
+### Wave 1 outcome (2026-08-13) — PRs #544 (P1) / #545 (P3)
+
+Both lanes green. Nine defects were found that no scout and no spec
+predicted; six of them were **invisible to a passing test suite**, which
+is the reusable lesson for waves 2–4.
+
+Real defects found, by how they hid:
+
+1. **Inert feature, compiler-proof.** P1's competition guard called
+   `toSlotConfig` (never sets `tz`) where `toVerifyConfig` was meant.
+   `SlotConfig` is structurally assignable to `VerifyConfig`, so tsc
+   could not see it and the guard silently no-opped on every division
+   since it was written. The review had filed this as "route lacks test
+   coverage"; the missing test was hiding a dead feature, not merely an
+   unproven one. See [[reference_verifyconfig_slotconfig_silent_widening]].
+2. **Unique index swallows the feature.** `org_posts_auto_once` (V295)
+   keys on five fields a weekly digest does not have, so every digest
+   after an org's first would have silently no-opped.
+3. **Aborted-transaction masking.** A rejected SQL statement aborts the
+   whole `withTenant` transaction server-side; a JS `catch` does not
+   undo that, so a later unrelated try/catch fails on its own first
+   query with "current transaction is aborted", masking its real error
+   and risking the draft's own INSERT. Fail-open that has never actually
+   caught anything is an untested branch. Fixed with `tx.savepoint()`.
+4. **Wrong-at-scale, not wrong-in-the-small.** The digest cron scanned
+   every org: fine at 3 orgs, exceeded a 30s timeout at 7,305. Passed in
+   isolation, failed only in a full run — and CI runs full. 30005ms →
+   2051ms after an indexed pre-filter. The test's failure was a
+   **timeout**, which `rtk` had redacted to `STACK_TRACE_ERROR`.
+5. **Contract bloat.** `capacity_report` landed on the shared
+   `ERROR_ENVELOPE`: 776 occurrences, both OpenAPI artifacts roughly
+   doubled (`v1.json` 74,098 → 166,486 lines).
+6. **Three-way name disagreement.** Guard threw `report`; OpenAPI and
+   smoke read `capacity_report`. The smoke assertion could never have
+   passed, unnoticed only because smoke was authored-not-run.
+7. `computeLeaderboardMoves` rolled back one contributor's credit, so
+   any 2+ scorer fixture fabricated rank-move claims in published drafts.
+8. A new test called `run()` bare and never reached its own assertion.
+9. `streak` sat behind the scorers guard, unreachable for forfeits.
+
+Process notes worth carrying forward:
+
+- **Mutation, not argument.** The reviewer hand-derived the arithmetic
+  and concluded P1's cited regression test could not catch the
+  `declaredConfig` bug. Reverting the line reds that exact test. Derive
+  nothing about solver behaviour by hand — mutate and run.
+- **Both-ways placement runs earned their keep.** The one persistent red
+  (`schedule-solver-telemetry`, `expected 'solver_unavailable' to be
+  'infeasible'`) passes with CP-SAT live and also appears on P3, which
+  touches no scheduling code — two independent proofs it is
+  environmental. The engine coverage gate also went red purely under
+  concurrent agent load and was exit 0 on a quiet machine; run gates
+  serially before believing a timing red.
+- **Agents died to the 600s watchdog five times**, twice losing their
+  transcript so they could not be resumed. Long commands must be
+  detached-and-polled, and work committed before any long run. Two lanes
+  were finished by the orchestrator directly for this reason.
+- The `_INDEX.md` conflict recurs every wave: sessions edit it, main
+  edits it. Wave 2 onward, sessions should NOT touch this file — the
+  orchestrator writes the outcome at the wave boundary.
