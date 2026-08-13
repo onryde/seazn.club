@@ -2053,7 +2053,7 @@ export async function confirmSeedProposal(
         throw new HttpError(
           422,
           `edit references a slot this proposal doesn't have: ${edit.destinationSlot}`,
-          "SEEDING_SLOT_DOUBLE_ASSIGNED",
+          "SEEDING_EDIT_UNKNOWN_SLOT",
         );
       }
       bySlot.set(edit.destinationSlot, edit.entrantId);
@@ -2127,7 +2127,7 @@ export async function confirmSeedProposal(
       const [fixtureId, side] = slot.split(":");
       const fixture = fixtureId ? fixtureById.get(fixtureId) : undefined;
       if (!fixture) {
-        throw new HttpError(422, `destinationSlot names a fixture outside this stage: ${slot}`, "SEEDING_SLOT_DOUBLE_ASSIGNED");
+        throw new HttpError(422, `destinationSlot names a fixture outside this stage: ${slot}`, "SEEDING_SLOT_FOREIGN_FIXTURE");
       }
       const already = side === "home" ? fixture.home_entrant_id : fixture.away_entrant_id;
       if (already !== null) {

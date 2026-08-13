@@ -268,6 +268,43 @@ describe.skipIf(!HAS_DB)("D4a/P5 — confirm validation (double-assignment, fore
     expect((err as { code?: string }).code).toBe("SEEDING_SLOT_DOUBLE_ASSIGNED");
   });
 
+  it("422 SEEDING_EDIT_UNKNOWN_SLOT when an edit references a slot this proposal doesn't have (review finding: was misreported as SEEDING_SLOT_DOUBLE_ASSIGNED)", async () => {
+    const { auth, groupStageId, koStageId, entrantBySeed } = await setupGroupsToKnockout("rank_order");
+    await generateStageFixtures(auth, koStageId);
+    await generateStageFixtures(auth, groupStageId);
+    await decideAllGroupFixtures(auth, groupStageId, entrantBySeed);
+    const result = await completeStage(auth, groupStageId);
+    const err = await confirmSeedProposal(auth, koStageId, {
+      proposalId: result.seed_proposal!.id,
+      edits: [{ destinationSlot: `${randomUUID()}:home`, entrantId: entrantBySeed.get(1)! }],
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as { code?: string }).code).toBe("SEEDING_EDIT_UNKNOWN_SLOT");
+  });
+
+  it("422 SEEDING_SLOT_FOREIGN_FIXTURE when a resolved slot names a fixture outside this stage (review finding: was misreported as SEEDING_SLOT_DOUBLE_ASSIGNED)", async () => {
+    // tiePicks apply unconditionally (bySlot.set with no bySlot.has guard,
+    // unlike edits) — the vector this stage's OWN validation is meant to
+    // catch, engineered here rather than found live: a slot naming a REAL
+    // fixture that belongs to a different stage entirely.
+    const { auth, groupStageId, koStageId, entrantBySeed } = await setupGroupsToKnockoutWithBye();
+    await generateStageFixtures(auth, koStageId);
+    await generateStageFixtures(auth, groupStageId);
+    await decideAllGroupFixtures(auth, groupStageId, entrantBySeed);
+    const result = await completeStage(auth, groupStageId);
+    const [groupFixture] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${groupStageId} limit 1`;
+    const foreignSlot = `${groupFixture.id}:home`;
+    // Seeds 4/5/6 are this setup's pool LOSERS (lower seed always wins) — real
+    // division entrants, but never one of the proposal's own 3 qualifiers, so
+    // this doesn't trip the "same entrant assigned twice" check first.
+    const err = await confirmSeedProposal(auth, koStageId, {
+      proposalId: result.seed_proposal!.id,
+      tiePicks: [{ slots: [foreignSlot], order: [entrantBySeed.get(6)!] }],
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as { code?: string }).code).toBe("SEEDING_SLOT_FOREIGN_FIXTURE");
+  });
+
   it("422 SEEDING_ENTRANT_FOREIGN when an edit names an entrant outside the division", async () => {
     const { auth, groupStageId, koStageId, entrantBySeed } = await setupGroupsToKnockout("rank_order");
     await generateStageFixtures(auth, koStageId);
