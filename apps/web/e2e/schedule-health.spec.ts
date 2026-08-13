@@ -173,3 +173,110 @@ test("schedule health: 409 before any fixture is scheduled renders the panel's e
   await expect(page.locator('[data-health-status="empty"]')).toBeVisible({ timeout: 20_000 });
   await expect(page.locator("[data-health-metric]")).toHaveCount(0);
 });
+
+// Joint (competition-scope) variant — coordinator addendum, D3 Scope item 2
+// ("+ joint competition aggregation"), added after this session's initial
+// pass under-scoped it. API-level, same shape `capacity-precheck.spec.ts`'s
+// last assertion already uses in this file family ("server is the
+// authority" — a real HTTP round trip through the real route, no UI to
+// drive since no dedicated joint panel exists yet). Two divisions in ONE
+// competition, one scheduled and one deliberately left unscheduled, so the
+// response proves "report every division, never short-circuit on the
+// first" — the shape `aiPlanForCompetition`'s own capacity guard uses.
+test("schedule health (joint): one applied + one unscheduled division both report, and the embedded stage report matches the standalone route exactly", async ({
+  request,
+}) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Health Joint E2E ${TAG}`,
+    visibility: "private",
+  });
+  const compId = comp.data!.id;
+
+  // Division 1: scheduled, via the SAME hand-assigned recipe as the single-
+  // stage test above (asymmetric, guarantees real offenders).
+  const div1 = await apiJson<{ id: string }>(request, `/api/v1/competitions/${compId}/divisions`, "POST", {
+    name: "JointA", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const div1Id = div1.data!.id;
+  const entrants1 = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${div1Id}/entrants`, "POST", [
+    { kind: "individual", display_name: "J1", seed: 1 },
+    { kind: "individual", display_name: "J2", seed: 2 },
+    { kind: "individual", display_name: "J3", seed: 3 },
+    { kind: "individual", display_name: "J4", seed: 4 },
+  ]);
+  const [j1, j2, j3, j4] = entrants1.data!.map((e) => e.id);
+  const stage1 = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div1Id}/stages`, "POST", {
+    seq: 1, kind: "league", name: "League",
+  });
+  const stage1Id = stage1.data!.id;
+  const gen1 = await apiJson<{ fixtures: GenFixture[] }>(request, `/api/v1/stages/${stage1Id}/generate`, "POST");
+  const fx1 = gen1.data!.fixtures;
+  await apiJson(request, `/api/v1/divisions/${div1Id}/schedule-settings`, "PUT", {
+    tz: "UTC",
+    config: {
+      startAt: `${DAY}T00:00:00.000Z`, endAt: `${DAY}T23:59:00.000Z`,
+      matchMinutes: 60, gapMinutes: 0, courts: ["Court 1", "Court 2"], perEntrantMinRest: 0,
+      sessionWindows: [{ from: `${DAY}T09:00:00.000Z`, to: `${DAY}T21:00:00.000Z` }],
+    },
+  });
+  const assignments1 = [
+    { f: findFixture(fx1, j1, j2), at: "09:00", court: "Court 1" },
+    { f: findFixture(fx1, j3, j4), at: "09:00", court: "Court 2" },
+    { f: findFixture(fx1, j1, j3), at: "10:15", court: "Court 1" },
+    { f: findFixture(fx1, j2, j4), at: "10:15", court: "Court 2" },
+    { f: findFixture(fx1, j1, j4), at: "15:00", court: "Court 1" },
+    { f: findFixture(fx1, j2, j3), at: "15:00", court: "Court 2" },
+  ].map(({ f, at, court }) => ({ fixture_id: f.id, scheduled_at: `${DAY}T${at}:00.000Z`, court_label: court }));
+  await apiJson(request, `/api/v1/stages/${stage1Id}/schedule/apply`, "POST", { assignments: assignments1, source: "manual" });
+
+  // Division 2: generated but deliberately never scheduled.
+  const div2 = await apiJson<{ id: string }>(request, `/api/v1/competitions/${compId}/divisions`, "POST", {
+    name: "JointB", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const div2Id = div2.data!.id;
+  await apiJson(request, `/api/v1/divisions/${div2Id}/entrants`, "POST", [
+    { kind: "individual", display_name: "K1", seed: 1 },
+    { kind: "individual", display_name: "K2", seed: 2 },
+  ]);
+  const stage2 = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div2Id}/stages`, "POST", {
+    seq: 1, kind: "league", name: "League",
+  });
+  await apiJson(request, `/api/v1/stages/${stage2.data!.id}/generate`, "POST");
+
+  // The standalone stage report — the value the joint response's embedded
+  // entry must match EXACTLY.
+  const standalone = await apiJson<{
+    stageId: string; computedAt: string;
+    metrics: { key: string; score: number; explanation: { key: string; params?: Record<string, number> }; offenders: unknown[] }[];
+  }>(request, `/api/v1/stages/${stage1Id}/schedule/health`, "GET");
+  expect(standalone.status).toBe(200);
+
+  const joint = await apiJson<{
+    competitionId: string;
+    divisions: {
+      divisionId: string;
+      stages: (
+        | { stageId: string; status: "empty" }
+        | { stageId: string; status: "ready"; computedAt: string; metrics: typeof standalone.data extends { metrics: infer M } ? M : never }
+      )[];
+    }[];
+    combined: { metrics: { key: string; score: number }[] };
+  }>(request, `/api/v1/competitions/${compId}/schedule/health`, "GET");
+  expect(joint.status).toBe(200);
+  expect(joint.data!.divisions).toHaveLength(2);
+
+  const jointDiv1 = joint.data!.divisions.find((d) => d.divisionId === div1Id);
+  const jointDiv2 = joint.data!.divisions.find((d) => d.divisionId === div2Id);
+  expect(jointDiv1?.stages[0]?.status).toBe("ready");
+  expect(jointDiv2?.stages[0]?.status).toBe("empty");
+
+  // The exact-match cross-check: no second implementation, no tz drift.
+  const embedded = jointDiv1!.stages[0] as { status: "ready"; metrics: unknown };
+  expect(JSON.stringify(embedded.metrics)).toBe(JSON.stringify(standalone.data!.metrics));
+
+  expect(joint.data!.combined.metrics.map((m) => m.key).sort()).toEqual(["gapDispersion", "primeSlotFairness"]);
+
+  const unknown = await apiJson(request, `/api/v1/competitions/00000000-0000-0000-0000-000000000000/schedule/health`, "GET");
+  expect(unknown.status).toBe(404);
+});

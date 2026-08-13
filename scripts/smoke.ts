@@ -6491,6 +6491,92 @@ async function scheduleHealthSuite(): Promise<void> {
     "schedule health: homeAwayAlternation is one of the 5 (present, not skipped) for this table-shaped stage",
     after.metrics.some((m) => m.key === "homeAwayAlternation"),
   );
+
+  // ========================================================================
+  // Joint (competition-scope) variant — coordinator addendum, D3 Scope item
+  // 2 ("+ joint competition aggregation"), originally under-scoped in this
+  // session's brief. A SECOND division in the SAME competition, deliberately
+  // left UNSCHEDULED, so the joint call has one ready division and one empty
+  // one — proving "aggregate every division, never short-circuit" (the
+  // shape `aiPlanForCompetition`'s capacity guard uses) the same way that
+  // guard's own tests do: report EVERY division, not just the first.
+  // ========================================================================
+  const div2 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Health B",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  await v1(free, `/api/v1/divisions/${div2.id}/entrants`, "POST", [
+    { kind: "individual", display_name: "C", seed: 1 },
+    { kind: "individual", display_name: "D", seed: 2 },
+    { kind: "individual", display_name: "E", seed: 3 },
+  ]);
+  const stage2 = v1data<{ id: string }>(
+    await v1(free, `/api/v1/divisions/${div2.id}/stages`, "POST", { seq: 1, kind: "league", name: "L2", config: {} }),
+  );
+  await v1(free, `/api/v1/stages/${stage2.id}/generate`, "POST");
+  // NO schedule-settings PUT, NO auto, NO apply for div2/stage2 — this
+  // division stays deliberately unscheduled.
+
+  const joint = v1data<{
+    competitionId: string;
+    computedAt: string;
+    divisions: {
+      divisionId: string;
+      name: string;
+      stages: (
+        | { stageId: string; status: "empty" }
+        | { stageId: string; status: "ready"; computedAt: string; metrics: { key: string; score: number; explanation: { key: string }; offenders: unknown[] }[] }
+      )[];
+    }[];
+    combined: { metrics: { key: string; score: number }[] };
+  }>(await v1(free, `/api/v1/competitions/${comp.id}/schedule/health`, "GET"));
+
+  check(
+    "joint schedule health: 200 for the WHOLE competition despite one division having no applied schedule — never aborts on the first offender",
+    joint.competitionId === comp.id && joint.divisions.length === 2,
+  );
+
+  const jointDiv1 = joint.divisions.find((d) => d.divisionId === div.id);
+  const jointDiv2 = joint.divisions.find((d) => d.divisionId === div2.id);
+  check(
+    "joint schedule health: the SCHEDULED division's stage reports status=ready with all 5 metrics",
+    jointDiv1?.stages.length === 1 &&
+      jointDiv1.stages[0]!.status === "ready" &&
+      (jointDiv1.stages[0] as { metrics: unknown[] }).metrics.length === 5,
+  );
+  check(
+    "joint schedule health: the UNSCHEDULED division's stage reports status=empty, not a thrown error for the whole call",
+    jointDiv2?.stages.length === 1 && jointDiv2.stages[0]!.status === "empty",
+  );
+
+  // THE cross-check (coordinator's explicit ask): the scheduled stage's
+  // entry INSIDE the joint response must be byte-for-byte the same report
+  // `computeStageHealth` already produced for the standalone stage route
+  // (`after`, above) — not a re-derivation. This is what would have caught
+  // P1's actual bug (a SECOND config-building path silently omitting
+  // `.tz`): a fork produces a DIFFERENT number here, not merely a missing
+  // one, because a wrong/absent tz shifts every fixture's day-bucketing and
+  // therefore gapDispersion/primeSlotFairness's scores.
+  const jointStage1 = jointDiv1!.stages[0] as { status: "ready"; metrics: typeof after.metrics };
+  check(
+    "joint schedule health: the embedded stage report EXACTLY matches the standalone stage route's own report (no second implementation, no tz drift)",
+    JSON.stringify(jointStage1.metrics) === JSON.stringify(after.metrics),
+  );
+
+  check(
+    "joint schedule health: combined block is EXACTLY {gapDispersion, primeSlotFairness} — the two metrics 'meaningful' over the union (design doc, verbatim)",
+    joint.combined.metrics.length === 2 &&
+      new Set(joint.combined.metrics.map((m) => m.key)).size === 2 &&
+      joint.combined.metrics.every((m) => m.key === "gapDispersion" || m.key === "primeSlotFairness") &&
+      joint.combined.metrics.every((m) => Number.isInteger(m.score) && m.score >= 0 && m.score <= 100),
+  );
+
+  const unknownJoint = await v1(free, `/api/v1/competitions/00000000-0000-0000-0000-000000000000/schedule/health`, "GET");
+  check("joint schedule health: unknown competition 404s", unknownJoint.status === 404);
 }
 
 /**
