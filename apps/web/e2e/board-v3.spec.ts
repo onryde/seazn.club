@@ -112,17 +112,41 @@ async function buildRig(request: APIRequestContext, page: Page): Promise<Rig> {
     // competition's own `ends_on` still gets a tab, just not the DEFAULT
     // one. The rest-violation bait below navigates to it explicitly
     // ("Next day", bounded) rather than needing every fixture on-screen
-    // by default — so the ORIGINAL spread stays untouched here (a tighter
-    // one inflated this division's pre-existing rest-floor violations
-    // from ~2 to ~34 once the bait test raises `perEntrantMinRest`, which
-    // then visually clutters an unrelated later mobile test).
+    // by default — so the ORIGINAL spread's day/court RANGE stays untouched
+    // here (a tighter one inflated this division's pre-existing rest-floor
+    // violations from ~2 to ~34 once the bait test raises
+    // `perEntrantMinRest`, which then visually clutters an unrelated later
+    // mobile test).
+    //
+    // C1: round order is now a hard H6 gate on every fixture PATCH
+    // (moveFixture), and `day = i % 3` cycles days FASTER than the
+    // generator's round numbering advances — round 2's fixtures landed on
+    // an EARLIER day than round 1's for 2 of every 3 of them. Confirmed
+    // against a live board: 40 of every division's 66 PATCHes 409'd
+    // (SCHEDULE_CONFLICT / warn.order / H6), and this loop never checked
+    // its own result, so 40 fixtures per division were silently left
+    // unscheduled — not the ~1 later tests expect — ballooning the mobile
+    // "Unscheduled" tray and causing board-v3.spec.ts:364's click timeout
+    // (an unrelated "Pick to move" button from the oversized tray
+    // intercepting the pointer event), not a UI flake.
+    //
+    // Fix: make `at` strictly increasing in round order by construction,
+    // for any row order the API returns — sort by round_no explicitly
+    // (stable, so same-round fixtures keep the generator's own relative
+    // order) and make day the OUTER, slower-changing index. Same set of
+    // 3 days × ceil(66/3) hourly slots × 2 courts as before, just a
+    // different assignment of fixture → slot, so the day/court RANGE the
+    // comment above is about is unchanged.
+    const byRound = [...gen.data!.fixtures].sort((a, b) => a.round_no - b.round_no);
+    const slotsPerDay = Math.ceil(byRound.length / 3);
     const atMs = new Map<string, number>();
-    for (let i = 0; i < ids.length; i++) {
-      const day = i % 3;
-      const slot = Math.floor(i / 3);
+    for (let i = 0; i < byRound.length; i++) {
+      const fixtureId = byRound[i]!.id;
+      const day = Math.floor(i / slotsPerDay);
+      const slot = i % slotsPerDay;
       const at = base + day * 24 * 60 * 60_000 + slot * 60 * 60_000;
-      atMs.set(ids[i]!, at);
-      await apiJson(request, `/api/v1/fixtures/${ids[i]!}`, "PATCH", {
+      atMs.set(fixtureId, at);
+      await apiJson(request, `/api/v1/fixtures/${fixtureId}`, "PATCH", {
         scheduled_at: new Date(at).toISOString(),
         court_label: courtsOf(di)[i % 2],
       });
@@ -482,7 +506,17 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     });
 
     await page.goto(`${boardUrl}?d=${d0.slug}`);
+    // C1: the board is a DAY-TABBED view defaulting to its earliest day (see
+    // the "injected rest violation" test's own comment on this). Index 24's
+    // day depends on the round-order-safe seeding scheme above rather than
+    // a fixed `i % 3`, so — same idiom as that test — hop forward with
+    // "Next day" until the blackout cell built around `target`'s OWN live
+    // slot actually exists, instead of assuming it is on the default day.
     const blackoutCell = page.locator('[data-blackout="true"]').first();
+    const nextDay = page.getByRole("button", { name: "Next day" });
+    for (let hop = 0; hop < 7 && (await blackoutCell.count()) === 0; hop++) {
+      await nextDay.click();
+    }
     await expect(blackoutCell).toBeVisible();
 
     // Soft: pick the unscheduled fixture, place it INTO the hatched cell —
@@ -522,12 +556,35 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     await page.goto(filtered);
     await pageB.goto(filtered);
 
+    // C1: round order is now a hard H6 gate. "Whichever pick button is first
+    // in DOM order" is the board's temporally-earliest fixture — round 1,
+    // since buildRig's seeding above makes `at` strictly increasing in round
+    // order — and day 18 (chosen below to dodge every COURT clash on the
+    // seeded 15th-17th grid, see that comment) sits past every other round
+    // still sitting on those days: moving round 1 there is a genuine H6
+    // violation, not the seq-conflict race this test means to exercise.
+    // Target the division's LAST fixture instead — `rig.fixtures[d0.id]` is
+    // in the generator's own round-grouped order (the same fact buildRig's
+    // seeding loop above relies on), so `.at(-1)` is the highest round in
+    // the division, and nothing has a higher round to violate H6 against no
+    // matter how far into the future it moves.
+    const targetId = rig.fixtures[d0.id]!.at(-1)!;
+
     // Client A moves a fixture through the pick → MovePanel path. Each move is
     // gated on its own PATCH landing: on a slow runner an ungated A could still
     // be in flight when B writes — B's seq would then be VALID, no 409, no
     // toast, and the test times out (the CI-only failure this replaces).
     const move = async (p: Page, when: string) => {
-      await p.locator("[data-fixture-id] button[aria-pressed]").first().click();
+      // The board is a DAY-TABBED view defaulting to its earliest day (see
+      // "injected rest violation"/"blackout window" above) — `targetId`'s
+      // round-11 slot is very likely on a later one. Each page navigates its
+      // own tab state independently, same bounded "Next day" idiom.
+      const pickBtn = p.locator(`[data-fixture-id="${targetId}"] button[aria-pressed]`);
+      const nextDay = p.getByRole("button", { name: "Next day" });
+      for (let hop = 0; hop < 7 && (await pickBtn.count()) === 0; hop++) {
+        await nextDay.click();
+      }
+      await pickBtn.click();
       const dialog = p.getByRole("dialog", { name: /^Move / });
       // MovePanel's "When" is a native date input + time <select> now, not
       // `input[type=datetime-local]` — Chrome's clock popup ignored `step`
