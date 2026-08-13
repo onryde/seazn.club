@@ -367,7 +367,12 @@ export async function publicPost(orgSlug: string, postSlug: string): Promise<Org
 // nothing. Never auto-edits/publishes/deletes; a void stamps stale on the DRAFT.
 // ---------------------------------------------------------------------------
 
-interface FixtureCtx {
+// P3 review finding 2: exported so tests can call the assembly functions
+// directly with a hand-crafted context — the only way to isolate ONE
+// wrapped source's fail-open behavior from the others sharing the same
+// captured fx snapshot (see assembleResultEnrichment/assembleRecapEnrichment
+// below and their test-only "test-support exports" callers).
+export interface FixtureCtx {
   fixture_id: string;
   org_id: string;
   division_id: string;
@@ -742,8 +747,18 @@ async function entrantRecentOutcomes(
  * result draft plain, warn logged"). Returns `{}` (no keys) when every
  * source came back empty/failed — the caller treats an empty object as "no
  * enrichment" for both rendering and the `enriched` flag on `post_drafted`.
+ *
+ * Exported (P3 review finding 2/3): direct-called by tests that need to
+ * isolate ONE wrapped source's fail-open behavior. `fx`'s captured
+ * `sport_key`/`module_version` gate `extractScorers` upstream of this
+ * function too (both read the SAME row), so module-corruption can only ever
+ * disable topPerformers/leaderboardMoves TOGETHER with the caller's own
+ * `scorers` derivation — it cannot isolate leaderboardMoves alone. A bogus
+ * `fx.division_id` (well-formed UUID, no such division) can: `scorers` is a
+ * plain parameter here, not derived from `fx.division_id`, so it stays
+ * real while `recomputePlayerStats(tx, fx.division_id)` genuinely 404s.
  */
-async function assembleResultEnrichment(
+export async function assembleResultEnrichment(
   tx: Tx,
   fx: FixtureCtx,
   scorers: { name: string; count: number; personId: string }[],
@@ -811,8 +826,9 @@ async function assembleResultEnrichment(
 /** Same one-helper-per-source, fail-open discipline as
  *  assembleResultEnrichment, for the round-recap draft. `results` is the
  *  SAME array `maybeDraftRecap` already built for the plain results list —
- *  biggestMargin reads it, it is never refetched. */
-async function assembleRecapEnrichment(
+ *  biggestMargin reads it, it is never refetched. Exported for the same
+ *  direct-test reason as assembleResultEnrichment. */
+export async function assembleRecapEnrichment(
   tx: Tx,
   fx: FixtureCtx,
   results: { homeName: string; homeScore: string; awayName: string; awayScore: string }[],
