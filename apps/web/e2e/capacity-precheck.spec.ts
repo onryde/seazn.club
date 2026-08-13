@@ -115,7 +115,9 @@ test("capacity precheck: applying a suggestion clears the block and enables Solv
   // 24 slots/day -> 2 days comfortably clears it) and its knob (`endAt`) is
   // local to this panel — apply it, then Save.
   await card.getByRole("button", { name: "Apply" }).first().click();
-  await page.getByRole("button", { name: /^Save$/ }).click();
+  // "Save settings" (boardset.save), not "Save" — verified against en/ui.json
+  // rather than guessed, after an earlier draft of this spec got it wrong.
+  await page.getByRole("button", { name: "Save settings" }).click();
   await expect(page.getByText(/saved/i)).toBeVisible({ timeout: 20_000 });
 
   // The card itself should no longer read impossible after the save+refresh
