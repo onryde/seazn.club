@@ -33,6 +33,105 @@ otherFixtureId? }`, with kinds covering the whole family:
 `person_overlap`, `person_double_booking`. The engine stays id-only — it has
 no display names, and gains none.
 
+#### AMENDED 2026-08-13 (C3 session) — the family is 25 kinds, not 4
+
+Re-pinning the citations found the design had **understated the family the
+same way C1's "same-division pair" was understated**. Ground truth:
+`calendar.ts` builds **23** detail templates and `build.ts` two more, and the
+four kinds named above cover five of them. Owner ruled 2026-08-13: convert
+**all** of them, because the badge `title` joins every detail with `"; "` —
+a partial conversion renders a localized fragment next to an English one in
+one string, which is worse than the uniform English it replaces.
+
+Nine templates leak a raw id, not the four this design implies. The four it
+never named are `no_slot_person_bound`, `court_double_booking`,
+`order_before_feeder` and `order_inside_feeder_rest`.
+
+The shape above is also insufficient: several templates interpolate scalars
+(a court label, a day key, a weekday, minute counts, round numbers) that
+`{entrantIds, personIds, fixtureIds, otherFixtureId}` cannot carry. The
+shipped `ConflictDetail` keeps that id vocabulary and adds those scalars as
+optional fields. `fixtureIds` is dropped — no template ever needed a list;
+every counterparty reference is the single `otherFixtureId`.
+
+| # | site | kind | fields beyond `kind` |
+|---|---|---|---|
+| 1 | `calendar.ts:735` | `person_double_booking` | `personIds`, `otherFixtureId` |
+| 2 | `calendar.ts:748` | `locked_slot_clash` | `court` |
+| 3 | `calendar.ts:835` | `no_slot_start_window` | — |
+| 4 | `calendar.ts:837` | `no_slot_person_bound` | `personIds`, `otherFixtureId` |
+| 5 | `calendar.ts:838` | `no_slot_horizon` | — |
+| 6 | `calendar.ts:1088` | `instruction_feeder_gap` | `minutes`, `requiredMinutes` |
+| 7 | `calendar.ts:1117` | `instruction_day_cap` | `count`, `day`, `requiredCount` |
+| 8 | `calendar.ts:1136` | `instruction_weekday` | `weekday`, `day`, `requiredWeekday` |
+| 9 | `calendar.ts:1143` | `instruction_date` | `day`, `requiredDate` |
+| 10 | `calendar.ts:1159` | `instruction_time` | `time`, `ruleType`, `requiredTime` |
+| 11 | `calendar.ts:1349` | `outside_competition_window` | — |
+| 12 | `calendar.ts:1358` | `outside_start_window` | — |
+| 13 | `calendar.ts:1388` | `court_double_booking` | `court`, `otherFixtureId?` |
+| 14 | `calendar.ts:1395` | `inside_blackout` | — |
+| 15 | `calendar.ts:1401` | `outside_session_windows` | — |
+| 16 | `calendar.ts:1412` | `entrant_overlap` | `entrantIds`, `otherFixtureId` |
+| 17 | `calendar.ts:1421` | `entrant_below_rest` | `entrantIds` |
+| 18 | `calendar.ts:1432` | `person_overlap` | `personIds`, `otherFixtureId` |
+| 19 | `calendar.ts:1451` | `person_below_rest` | `personIds` (multi) |
+| 20 | `calendar.ts:1497` | `order_before_feeder` | `otherFixtureId` |
+| 21 | `calendar.ts:1498` | `order_inside_feeder_rest` | `otherFixtureId`, `requiredMinutes` |
+| 22 | `calendar.ts:1618` | `round_order_day` | `roundNo`, `otherRoundNo`, `day`, `otherDay` |
+| 23 | `calendar.ts:1625` | `round_order_same_day` | `roundNo`, `otherRoundNo`, `day` |
+| 24 | `build.ts:809` | `no_slot_lattice` | — |
+| 25 | `build.ts:810` | `no_slot_budget` | — |
+
+`court_double_booking` alone has an optional `otherFixtureId`: `:1384`
+falls back to the literal `"another fixture"` when `courtBlocked` and the
+`hits` filter disagree, and that fallback is a reportability guard the
+conversion must keep rather than a counterparty it can assume exists.
+
+### `conflictKey` — the constraint this design did not account for
+
+`conflictKey` (`calendar.ts:218`) is `fixtureId|reason|detail`, and the
+prose is in there **deliberately**: three separate comments
+(`:829`, `:1364-1376`, `:1479-1495`) record that the counterparty id inside
+the string is what makes a swap, an added collision, and a rest breach
+hiding behind an ordering violation distinguishable. It feeds
+`deltaConflicts` (`:262`, `:270`), `repair-minimality.ts:173/178/190` and the
+joint apply gate (`competition-schedule-apply.ts:663/675/699/701`) — so
+changing what it hashes changes which edits the organiser's apply refuses.
+
+Owner ruled 2026-08-13: key on a **canonical serialization** of the
+structured detail, and prove the partition is unchanged rather than assume
+it. Two tests carry that proof, because neither alone is sufficient:
+
+- **per-kind field participation** (engine): for every kind, mutating each
+  populated field changes the key. Catches a field dropped from `canon`.
+- **legacy prose parity** (API layer): over a fixture corpus the derived
+  English equals today's byte-for-byte, and grouping that corpus by old
+  prose key and by new canonical key yields the **same partition**.
+
+### Consumers this design did not name
+
+The four surfaces listed under `Client` are not the whole set, and two of
+them do not render `detail` at all. `conflicts-panel.tsx:125` and
+`schedule-gate-dialog.tsx` resolve `board.conflictHelp.<code>` first and
+only fall back to `detail` when that key is missing — and every live code
+has one, so the prose is already dead on both. The surfaces that DO render
+it are `fixture-block.tsx:153` (the reported symptom), `ai-diff-panel.tsx`,
+`ai-review-panel.tsx` (via `ai-review.ts:64`), `ai-competition-console.tsx:790`
+and `ai-trace-compose.ts:58`.
+
+And one consumer parses it: **`use-board-actions.ts:303` regex-scrapes a
+UUID back out of the prose** to title a card. It is also latently wrong —
+the regex takes the FIRST id, which for `entrant_overlap` / `person_overlap`
+is the entrant or person, so `board.find(x => x.id === …)` misses and the
+enrichment silently degrades to "another match". Structured details fix
+that as a side effect; it reads `details.otherFixtureId` instead.
+
+Officials conflicts (`packages/engine/src/officials/assign.ts:157`,
+`:274`, `:293`, `:326`) are a **different producer and a different type**
+(`OfficialConflict` / `AiOfficialsConflict`), and `:157` embeds a fixture
+id. Out of scope here, and left alone — recorded so the next reader does
+not mistake it for a miss.
+
 ### API
 The public validate route keeps the legacy `detail` string for back-compat,
 now **derived at the API layer** from the structured entry (English), marked
