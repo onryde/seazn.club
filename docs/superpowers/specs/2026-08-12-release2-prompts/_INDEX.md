@@ -327,3 +327,63 @@ C2 prompt's "`bench/` copy of the model **if** the #512 work duplicated the
 chain there" is conditional and the condition is false: this change duplicated
 nothing into it. The bench numbers above were measured against the SERVICE's
 model and chain, which is what ships.
+
+#### C2 follow-up — the acceptance gate was left on the old ladder
+
+`40331cc2` shipped a real defect. Recorded in full because the way it got
+through is more useful than the bug.
+
+**What was wrong.** `isStrictlyBetter` (`build-objectives.ts`) still ranked
+`placed → makespanMinutes → idleGap → imbalance` while the solver had moved to
+`placed → days → day_span → day_start → idle_gap → imbalance`. That comparator
+is not advisory — `solveBuild` compares the placement reply against the
+legalised greedy seed and returns the SEED when the candidate does not win. So
+a board the solver had PROVED optimal could be discarded, and this is not a
+corner case: `day_start` deliberately buys an earlier day start with a worse
+idle gap (132 600 000 → 170 400 000 ms on the production board) *because* it
+outranks it, which is exactly the trade the gate was still scoring the old way.
+With all six rungs proved, the discarded-board reply was then reported
+`already_optimal` — an organiser told a greedy board was lexicographically
+optimal on a ladder the solver had just proved it was not optimal on.
+
+**The lesson, and it is not "merge more carefully".** All 12 checks were green
+on #555, and they could only ever have been green: **no test on that branch
+drove a board where the two ladders disagree.** Green is evidence about the
+paths that are driven and nothing else. The same shape turned up three more
+times the same day in other lanes (a joint report still rendering uuids because
+smoke typed the payload and never read `offenders`; a template gallery with no
+width coverage because every width project is `testMatch:/mobile\.spec\.ts/`; a
+bye seed stranded forever because every test used power-of-two counts). When a
+change moves a CONTRACT, the test to write first is the one that drives the
+seam between the two sides of it.
+
+**Found by two independent reviewers**, separately, within minutes of each
+other — `/code-review high` and the repo's own `reviewer` agent. Neither CI nor
+the implementer found it. Per the standing note, N agents reporting ONE gap is
+a shared-contract defect, and that is exactly what it was.
+
+**Fix** (branch `fix/c2-day-aware-acceptance-gate`): `boardMetrics` gains
+`daysUsed`/`daySpanMinutes`/`dayStartOffsetMinutes` from an optional `DayView`;
+`build.ts` builds one from this run's grid via the existing `buildDayIndexOf`
+so placer and gate cannot disagree about which day an instant is on; the seed
+is RE-MEASURED with that view before comparison (its own metrics predate the
+grid, and comparing two different measurements lets a board win a rung on how
+it was measured); `isStrictlyBetter` mirrors `TIER_ORDER` rung for rung, with
+`makespanMinutes` demoted to a last tie-break.
+
+**Ruling — no day view means ONE day, not "no days".** A test earned this.
+Dropping whole-board makespan out of the ranking entirely left
+`improveByWindows` (which has no day view) blind on every day term and falling
+through to court balance, so it would have ACCEPTED stretching a board from 90
+to 210 minutes to buy a flatter court split — a strictly worse board, taken by
+the gate that exists to refuse it. Falling back to a single day mirrors what
+the placer already does (`buildDayIndexOf(slots, undefined)` returns `() => 0`)
+and makes summed day span equal the whole-board span, so the old protection
+survives precisely where there is no day information.
+
+**Ruling — `already_optimal` requires the tier NAMES, not a count.** Two
+separately deployed apps cannot agree on a ladder by counting rungs. It does
+not close the window retroactively (a caller already shipped with the old list
+has no such check), so the safe deploy order for the 4 → 6 change remains **web
+first, then the placement service** — new web against an old service simply
+never reaches `TIER_COUNT`, which is degraded but honest.
