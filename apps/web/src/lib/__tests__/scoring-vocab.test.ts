@@ -4,7 +4,7 @@ import {
   eventLabel, enumLabel, engineErrorLabel, scoringErrorText, positionLabel,
   padLabel, squadRoleLabel, squadProvenanceLabel, configLabel, playerStatLabel,
   EVENT_KEY, ENUM_VOCAB, ENGINE_ERROR_KEY, POSITION_KEY, PAD_LABEL_KEYS,
-  SCORING_VOCAB_KEYS, type MsgFn,
+  SCORING_VOCAB_KEYS, SPORT_KEY, type MsgFn,
 } from "@/lib/scoring-vocab";
 import { builtinModules } from "@seazn/engine/sports";
 import { EngineErrorCode, matchPositionOf, SquadRole } from "@seazn/engine/core";
@@ -82,6 +82,19 @@ interface EngineModule {
   key: string;
   fidelityTiers?: readonly { eventTypes: readonly string[] }[];
   eventSchema?: unknown;
+}
+
+/**
+ * Every sport key the engine actually ships (#S13) — the ONLY sport-key list
+ * this repo maintains by hand is `builtinModules` itself
+ * (`packages/engine/src/sports/index.ts`). `SportKey`/`SPORT_KEY` in
+ * scoring-vocab.ts stay hand-written (see that file's #S13 comment for why
+ * they can't be derived at the type level: `SportModule.key` is plain
+ * `string`, not a literal), so this is what proves they never drift from the
+ * engine's real list, in either direction.
+ */
+function declaredSportKeys(): string[] {
+  return builtinModules.map((m) => m.key).sort();
 }
 
 /**
@@ -396,6 +409,26 @@ describe("scoring-vocab covers what the engine declares", () => {
         "NON_MONOTONIC_TIME", "UNKNOWN_PHASE", "EXPEDITE_WRONG_WINNER", "SUB_WINDOW_EXCEEDED",
       ]),
     );
+
+    // Vacuity guard for the sport-key derivation below: a fold that silently
+    // returned nothing would make the equality check that follows pass over
+    // two empty arrays.
+    const sportKeys = declaredSportKeys();
+    expect(sportKeys.length).toBeGreaterThanOrEqual(11);
+    expect(sportKeys).toContain("cricket");
+    expect(sportKeys).toContain("icehockey");
+  });
+
+  // #S13 — `SportKey`/`SPORT_KEY` (scoring-vocab.ts) used to be an independent
+  // eleven-member union nothing pinned to the engine. `SportModule.key` is
+  // declared plain `string`, not a literal (`packages/engine/src/sport/
+  // module.ts`), so there is no type-level trick that derives a literal union
+  // from `builtinModules` without editing all eleven modules' own object
+  // literals — out of scope here. This is the runtime pin instead: exactly
+  // the engine's key set, no more (a stale extra `SPORT_KEY` entry) and no
+  // fewer (a sport the engine ships with no label).
+  it("SPORT_KEY carries exactly the engine's sport keys — none missing, none stale", () => {
+    expect(Object.keys(SPORT_KEY).sort()).toEqual(declaredSportKeys());
   });
 
   it("the position derivation reaches every projecting sport", () => {

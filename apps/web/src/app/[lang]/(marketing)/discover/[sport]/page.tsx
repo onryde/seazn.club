@@ -14,8 +14,13 @@ import { sportLabel } from "@/lib/scoring-vocab";
 import { msgFor } from "@/lib/messages-i18n";
 
 // Sport keys with bespoke SEO copy in the marketing catalog; others fall back
-// to the generic block.
-const SPORTS_WITH_COPY = new Set([
+// to the generic block. A content decision (which sports get bespoke copy),
+// not a drift risk to widen automatically — but a stale or misspelled member
+// degrades silently to generic copy with nothing failing, so this is exported
+// for `__tests__/page.test.ts` to pin: every member must be a real engine
+// sport key, and must resolve its `.intro`/`.detail` keys in all four
+// dictionaries (#S13).
+export const SPORTS_WITH_COPY = new Set([
   "cricket", "football", "volleyball", "badminton", "tabletennis", "boardgame", "carrom",
 ]);
 
