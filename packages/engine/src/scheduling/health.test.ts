@@ -7,6 +7,8 @@
 // counts on purpose (the symmetric-fixture trap: a bug that averages across
 // entrants, or hardcodes "2 courts", can hide on a board where every
 // dimension happens to divide evenly).
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { assessHealth, PRIME_N, COURT_BALANCE_MIN_FIXTURES, HOME_AWAY_RUN_THRESHOLD, type HealthFixture, type HealthConfig } from "./health.ts";
 
@@ -263,5 +265,63 @@ describe("assessHealth — homeAwayAlternation", () => {
     const report = assessHealth(fixtures, RR);
     const m = metric(report, "homeAwayAlternation")!;
     expect(m.offenders).toEqual([]);
+  });
+});
+
+describe("assessHealth — primeSlotFairness", () => {
+  it("scores 6 entrants (2 fixtures each, asymmetric prime exposure) via deviation from their expected prime share", () => {
+    // Court 1 day: A v B, A v B, C v D, C v D (4 fixtures) -> prime (last 2)
+    // = the two C v D fixtures. A/B get ZERO prime fixtures.
+    // Court 2 day: E v F, E v F (2 fixtures) -> prime (last min(2,2)=2) =
+    // BOTH. |F|=6 total, P=4 total prime.
+    // expected_e = 2*4/6 = 1.333 for everyone (each plays exactly 2).
+    // A/B: actual=0 -> d=1.333/1.333=1 (fully starved, capped at 1).
+    // C/D/E/F: actual=2 -> d=0.667/1.333=0.5 (hogging).
+    // mean = (1+1+0.5*4)/6 = 0.667 -> score = round(100*(1-0.667)) = 33.
+    // Verified via node -e.
+    const fixtures: HealthFixture[] = [
+      fx("f1", "A", "B", 0, 60, { court: "Court 1" }),
+      fx("f2", "A", "B", 100, 60, { court: "Court 1" }),
+      fx("f3", "C", "D", 200, 60, { court: "Court 1" }),
+      fx("f4", "C", "D", 300, 60, { court: "Court 1" }),
+      fx("f5", "E", "F", 0, 60, { court: "Court 2" }),
+      fx("f6", "E", "F", 100, 60, { court: "Court 2" }),
+    ];
+    const report = assessHealth(fixtures, RR);
+    const m = metric(report, "primeSlotFairness")!;
+    expect(m.score).toBe(33);
+    // top-3 by |d_e| descending: A, B tie at d=1 (lex: A, B), then C/D/E/F
+    // tie at d=0.5 — lex picks C third.
+    expect(m.offenders).toEqual([
+      { kind: "entrant", id: "A", label: "A", value: -1.33 },
+      { kind: "entrant", id: "B", label: "B", value: -1.33 },
+      { kind: "entrant", id: "C", label: "C", value: 0.67 },
+    ]);
+  });
+
+  it("a court-day with fewer than PRIME_N fixtures treats ALL of them as prime (min(PRIME_N, count))", () => {
+    expect(PRIME_N).toBe(2);
+    // Single fixture on its own court-day: min(2,1)=1 prime fixture, so this
+    // lone entrant's actual share is 100%, not diluted by a nonexistent 2nd.
+    const fixtures: HealthFixture[] = [fx("solo", "A", "B", 0, 60)];
+    const report = assessHealth(fixtures, RR);
+    const m = metric(report, "primeSlotFairness")!;
+    // |F|=1, P=1. expected_A = 1*1/1 = 1. actual_A=1. d=0 -> perfect.
+    expect(m.score).toBe(100);
+  });
+});
+
+describe("assessHealth — module purity (D3 contract: no imports, no DB, no solver, no clock, no pino)", () => {
+  it("imports NOTHING — even leafer than capacity.ts, which imports rest-floor.ts — and never reads the wall clock or logs", () => {
+    const path = fileURLToPath(new URL("./health.ts", import.meta.url));
+    const src = readFileSync(path, "utf8");
+    const importLines = [...src.matchAll(/^import\s.*$/gm)].map((m) => m[0]);
+    expect(importLines).toEqual([]);
+    // Scoped to actual `import` lines (none exist, but keep the shape
+    // parallel to capacity.test.ts's purity test for whoever edits this
+    // next and adds a real one).
+    expect(src, "must not read the ambient wall clock").not.toMatch(/Date\.now\(\)|new Date\(\)(?!\.)/);
+    expect(src, "must not import pino").not.toMatch(/^import[^\n]*pino/m);
+    expect(src, "must not import postgres/DB").not.toMatch(/^import[^\n]*postgres/m);
   });
 });

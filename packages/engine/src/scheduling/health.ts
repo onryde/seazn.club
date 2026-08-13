@@ -367,8 +367,44 @@ function homeAwayAlternationMetric(fixtures: readonly HealthFixture[]): HealthMe
   };
 }
 
-function primeSlotFairnessMetric(_fixtures: readonly HealthFixture[]): HealthMetric {
-  return NOT_IMPLEMENTED("primeSlotFairness");
+/**
+ * Prime = last PRIME_N slots per court-day. Expected share per entrant =
+ * |F_e| · P / |F|. Deviation d_e = |actual_e − expected_e| / max(expected_e,
+ * 1). Score = 100 · (1 − mean_e(min(d_e, 1))) (design doc, verbatim). No
+ * |F_e| exclusion — unlike restSpread/courtBalance/homeAwayAlternation, the
+ * design states none for this metric, and a 1-fixture entrant still has a
+ * well-defined expected share.
+ */
+function primeSlotFairnessMetric(fixtures: readonly HealthFixture[]): HealthMetric {
+  const byCourtDay = courtDayFixtures(fixtures);
+  const primeFixtureIds = new Set<string>();
+  for (const list of byCourtDay.values()) {
+    const primeCount = Math.min(PRIME_N, list.length);
+    for (let i = list.length - primeCount; i < list.length; i++) primeFixtureIds.add(list[i]!.fixtureId);
+  }
+  const totalFixtures = fixtures.length;
+  const totalPrime = primeFixtureIds.size;
+  const byEntrant = entrantFixtures(fixtures);
+  const devs: { id: string; d: number; signed: number }[] = [];
+  for (const [id, list] of byEntrant) {
+    const expected = totalFixtures > 0 ? (list.length * totalPrime) / totalFixtures : 0;
+    const actual = list.filter((f) => primeFixtureIds.has(f.fixtureId)).length;
+    const d = Math.abs(actual - expected) / Math.max(expected, 1);
+    devs.push({ id, d, signed: actual - expected });
+  }
+  const meanD = devs.length > 0 ? devs.reduce((s, x) => s + Math.min(x.d, 1), 0) / devs.length : 0;
+  const offenders: HealthOffender[] = topOffenders(devs, (x) => x.id, (a, b) => b.d - a.d, 3).map((x) => ({
+    kind: "entrant",
+    id: x.id,
+    label: x.id,
+    value: round2(x.signed),
+  }));
+  return {
+    key: "primeSlotFairness",
+    score: roundScore(100 * (1 - meanD)),
+    explanation: { key: "schedule.health.explain.primeSlotFairness", params: { count: offenders.length } },
+    offenders,
+  };
 }
 
 /**
