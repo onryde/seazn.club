@@ -39,17 +39,35 @@ assertion phrased in terms of the term itself.
 --- THIS SUITE IS WALL-CLOCK SENSITIVE. Read before calling a red one a bug --
 
 `test_every_tier_completes_on_production_board` asserts six PROVED optima at
-`CHAIN_WALL_SECONDS`. Measured over 6 runs, that chain costs 7.7-19.5 s
-(median 17.7 s: placed 255 ms, days 367 ms, day_span 1 237 ms, day_start
-396 ms, idle_gap 14 931 ms, imbalance 321 ms) — `idle_gap` is essentially the
-whole cost, and it is the rung that got dearer, not the new ones.
+`CHAIN_WALL_SECONDS`. `idle_gap` is still the bulk of that chain, but it is no
+longer the whole of it — RE-MEASURED 2026-08-13, after T2 started counting in
+tick-lattice units instead of milliseconds (`placement.model`'s T2 section):
 
-That cost is REPORTED, not hidden. Before the day rungs the same chain proved
-four tiers in 1.1-2.1 s. The control run that explains it: `placed` +
-`idle_gap` alone, with no day rungs at all, costs 12.4 s — so the old
+    6 runs, load 3-6, production board
+    placed 206 / days 263 / day_span 749 / day_start 251
+    idle_gap 4 282-6 381 (was 10 692-16 159 at the same load)
+    imbalance 200, whole chain 5 997-8 083 ms
+
+What that changed at the 8 s PRODUCTION wall, 6 runs per arm back to back on
+one box: before, 4 of 6 rungs proved on every single run (all six runs clamped
+at ~8.05 s); after, 6 of 6 rungs proved on three of six runs. So the wall now
+sometimes proves the whole ladder and never used to. It is NOT a guarantee at
+8 s and this suite does not assert one — `CHAIN_WALL_SECONDS` is what the
+correctness tests run at, for the reason that constant records.
+
+The cost that remains is REPORTED, not hidden. Before the day rungs the same
+chain proved four tiers in 1.1-2.1 s. The control run that explains the rest:
+`placed` + `idle_gap` alone, with no day rungs at all, cost 12.4 s — so the old
 whole-board `makespan` freeze had been doing `idle_gap`'s pruning for it, and
 retiring the term is what the wall pays for. Not a defect in the new rungs;
-they cost ~2 s of the total between them.
+they cost ~1.3 s of the total between them.
+
+`idle_gap`'s remaining cost is a DUAL BOUND, not search: measured with the
+solver's own log, the optimum is found in ~4 s and everything after that is
+proof, at 0 conflicts and 0 LP iterations. The lattice unit made each step of
+that proof 600 000x coarser; what it did not do is make the bound STRONG. See
+`placement.model`'s T2 note for why `day_span`'s redundant-floor lever does not
+transfer here (every entrant on this board plays exactly two fixtures).
 
 The solver takes eight search workers on a six-core machine, so a box already
 running other agents stretches those numbers past the wall and the chain
@@ -78,6 +96,7 @@ itself is untouched by round 6 — it never keys on identity at all, only on
 
 import logging
 import os
+import time
 
 import pytest
 import structlog
@@ -194,22 +213,91 @@ T3_PROVED_IMBALANCE_MS = 2_400_000
 T1B_PROVED_DAY_SPAN_PIN_FREE_MS = 45_600_000
 T2_PROVED_IDLE_GAP_PIN_FREE_MS = 170_400_000
 
-#: The wall the two cut-short tests run at, on the pin-free board. Chosen from
-#: measurement, not by feel — the whole point is a wall that lands in the same
-#: state on every run and at any plausible load:
+#: RETIRED 2026-08-13: `CUT_SHORT_WALL_SECONDS = 8.0`, a FIXED wall for the two
+#: cut-short tests, justified by "the four rungs cost ~1.6-3.4 s and `idle_gap`
+#: ~26 s more (never under 24)", giving ~2.4x margin above and ~3x below.
 #:
-#:     placed -> days -> day_span -> day_start   ~1.6-3.4 s (6 runs)
-#:     idle_gap                                  ~26 s more (never under 24)
+#: T2 now counts in tick-lattice units and `idle_gap` proves in 4.3-6.4 s, so
+#: 8.0 s cut nothing short — the chain ran to 6/6 and both tests lost the state
+#: they exist to pin. Kept as a comment rather than deleted because the SHAPE of
+#: the mistake outlived the number: a fixed wall racing a rung's proof time is
+#: green by lottery. Only one of the two tests went red for it, on a box whose
+#: load average was observed between 3 and 213 inside a single 6-run bench.
 #:
-#: so 8 s proves exactly four rungs and cuts `idle_gap` short with ~2.4x margin
-#: above the four and ~3x below the fifth. Measured 6/6 in exactly that state
-#: (`tiers_completed=4`, five recorded values, `idle_gap` FEASIBLE at 8.02 s).
+#: `_cut_short_wall` replaces it, and the second constant is a SLICE, not a
+#: wall, so the four rungs' cost is measured instead of assumed.
+
+#: How much clock `idle_gap` is given AFTER the four rungs above it have
+#: actually finished — see `_cut_short_wall`, which is what the two cut-short
+#: tests use now instead of the constant above.
 #:
-#: This replaces a 1.5 s wall that relied on "T1 has never proved in under
-#: 2 260 ms". That argument died with the whole-board term: the three day rungs
-#: together prove in under 2 s on this board, so 1.5 s now lands mid-`days`
-#: and the state it was pinning is gone.
-CUT_SHORT_WALL_SECONDS = 8.0
+#: RE-DERIVED 2026-08-13, when T2 started counting in tick-lattice units
+#: instead of milliseconds. The old fixed 8.0 s wall was measured against
+#: `idle_gap` needing "~26 s more (never under 24)" on this board. It now
+#: proves in 4.3-6.4 s (6 runs, load 3-6), so 8.0 s stopped cutting anything
+#: short: the chain ran to 6/6 and both tests below lost the state they exist
+#: to pin. Only ONE of the two went red for it, which is the tell — a fixed
+#: wall racing a rung's proof time is green by lottery, not by design.
+#:
+#: So the wall is no longer fixed. The four rungs above `idle_gap` are TIMED,
+#: and this slice is added to whatever they actually cost, which takes the
+#: load out of that half of the race entirely — the old constant's own comment
+#: had to reason about "any plausible load" precisely because it could not.
+#:
+#: TWO slices, because the two tests want different things out of the same
+#: mechanism and one number cannot serve both — which is what made the first
+#: attempt at this still race.
+#:
+#: 0.75 s for the cut-short test, which needs only that `idle_gap` RAN and
+#: produced a board: it takes >= 4 282 ms to prove (5.7x margin, so it cannot
+#: finish by accident on an idle box) and its first solution lands ~0.2 s in.
+CUT_SHORT_SLICE_SECONDS = 0.75
+
+#: 2.0 s for the better-board test, which needs `idle_gap` to actually IMPROVE
+#: on the four-rung board: it reaches 1.4424e+09 at ~1.6 s against the stopped
+#: arm's 1 812 000 000, so a slice much under 2 s can leave it holding its own
+#: first solution, which is WORSE (2.157e+09) than the board it is compared to.
+#:
+#: That test no longer asserts the cut at all — see its own note. Its subject is
+#: which board comes back, and the adopted board is better whether the tier was
+#: cut short or proved outright, so a load swing between the timing solve and
+#: the real one cannot flip it any more.
+IMPROVED_BOARD_SLICE_SECONDS = 2.0
+
+
+def _cut_short_wall(board, slice_seconds: float) -> tuple[float, "object"]:
+    """A wall that lands INSIDE `idle_gap` whatever else the box is running.
+
+    Returns `(wall_seconds, four_rung_outcome)`. The caller gets the four-rung
+    outcome back because both cut-short tests need it anyway — one to assert
+    the rungs above proved, the other to compare boards against — so timing it
+    here costs neither of them an extra solve.
+    """
+    model = _model_without_pins(board)
+    started = time.perf_counter()
+    outcome = run_tier_chain(
+        model, model.fixture_vars, CHAIN_WALL_SECONDS, tiers=TIER_ORDER[:4]
+    )
+    elapsed = time.perf_counter() - started
+    # If this ever fails the box cannot prove four cheap rungs in 90 s and
+    # nothing below it means anything.
+    assert outcome.tiers_completed == 4, (
+        f"the four rungs above idle_gap did not prove in {CHAIN_WALL_SECONDS}s "
+        f"({outcome.tiers_completed}/4) — the box, not the chain"
+    )
+    # DOUBLED, not just offset. The failure this replaces: the four rungs were
+    # timed in one solve and re-run in another, and their own run-to-run spread
+    # (1 070-2 564 ms at load 3-6, and this box has been observed at load 213)
+    # is larger than any fixed slice — measured, `tiers_completed=2`, the chain
+    # cut inside `day_span` having never reached `idle_gap` at all.
+    #
+    # Doubling is safe on the OTHER side because `idle_gap`'s cost scales with
+    # the same load the four rungs do: it needs ~4x their time (4 282 ms against
+    # 1 255 ms, same runs), so a budget of `elapsed + slice` leaves it around a
+    # third of what proving takes, at any load. The two failure directions are
+    # therefore not a trade-off here — this widens one without narrowing the
+    # other.
+    return 2 * elapsed + slice_seconds, outcome
 
 
 def _production_board():
@@ -467,7 +555,8 @@ def test_a_tier_cut_short_is_adopted_but_not_counted(board):
     contract turns on.
 
     The wall is chosen so that a known set of tiers settles and the next one is
-    provably cut short — see `CUT_SHORT_WALL_SECONDS` for the measurement it
+    provably cut short — see `_cut_short_wall`, which times the four rungs
+    above it rather than assuming what they cost. The measurement it
     comes from. `idle_gap` is the rung that gets cut, because it is now the
     expensive one: the four above it prove in under 3.5 s and it needs ~26 s.
 
@@ -497,15 +586,16 @@ def test_a_tier_cut_short_is_adopted_but_not_counted(board):
     relaxation variables: 1 812 000 000 -> 170 400 000, 6/6 (see
     `test_the_adopted_board_is_the_better_one`).
     """
+    wall, _four = _cut_short_wall(board, CUT_SHORT_SLICE_SECONDS)
     model = _model_without_pins(board)
-    outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=CUT_SHORT_WALL_SECONDS)
+    outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=wall)
 
     # The cut tier RAN and was cut short — without this the test would pass
     # vacuously on a chain that stopped before it ever started, which is a
     # different code path (the deadline check at the top of the loop) reaching
     # the same numbers. The four rungs above cost ~3.5 s at worst, so a chain
     # that consumed nearly the whole wall spent the rest inside `idle_gap`.
-    assert outcome.elapsed_ms >= int(CUT_SHORT_WALL_SECONDS * 1000) - 600
+    assert outcome.elapsed_ms >= int(wall * 1000) - 600
 
     assert outcome.status == "FEASIBLE"  # a board, but an unfinished chain
     assert outcome.tiers_completed == 4
@@ -549,16 +639,20 @@ def test_the_adopted_board_is_the_better_one(board):
 
     # Pin-free, both arms, for the reason `_model_without_pins` records. Both
     # arms must use the same board or the comparison is meaningless.
-    stopped_model = _model_without_pins(board)
-    stopped = run_tier_chain(
-        stopped_model, stopped_model.fixture_vars, CUT_SHORT_WALL_SECONDS, tiers=TIER_ORDER[:4]
-    )
+    wall, stopped = _cut_short_wall(board, IMPROVED_BOARD_SLICE_SECONDS)
     full_model = _model_without_pins(board)
-    full = run_tier_chain(full_model, full_model.fixture_vars, CUT_SHORT_WALL_SECONDS)
+    full = run_tier_chain(full_model, full_model.fixture_vars, wall)
 
     assert stopped.tiers_completed == 4  # every rung above `idle_gap` proved
-    assert full.tiers_completed == 4  # `idle_gap` ran and was cut short
-    assert len(full.objective_values) == 5  # ...and its board was adopted
+    # `>=`, not `==`, and that is the point of this test's rewrite. Whether
+    # `idle_gap` gets CUT SHORT or proves outright is a race against the box,
+    # and it is not what this test is about — the semantics of "cut short =>
+    # adopted but not counted" belong to
+    # `test_a_tier_cut_short_is_adopted_but_not_counted`, which forces that
+    # state with a slice too small to prove in. What is asserted here is the
+    # board that comes back, which is better either way.
+    assert full.tiers_completed >= 4  # `idle_gap` ran
+    assert len(full.objective_values) >= 5  # ...and its board was adopted
     assert len(full.assignments) == len(stopped.assignments)
     assert _worst_consecutive_gap(full.assignments, entrants_of, dur_ms) < _worst_consecutive_gap(
         stopped.assignments, entrants_of, dur_ms
