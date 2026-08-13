@@ -6,7 +6,9 @@
 // object on every render — the established idiom for testing a standalone
 // hook this way (see marketing/__tests__/use-start-on-view.test.tsx).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EventEnvelope, LineupPair } from "@seazn/engine/core";
 import { defaultLineupPair } from "@seazn/engine/testkit";
+import type { CricketBallEv, CricketCfg, CricketState } from "@seazn/engine/sports/cricket";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { foldClient, resolveModuleClient } from "../module-client";
 import type { AppendCallResult, AppendEventBody } from "../pipeline";
@@ -133,10 +135,18 @@ function mountPipeline(params: UsePadPipelineParams) {
     props.onReady(result);
     return null;
   }
-  renderIsland(Probe, { params, onReady: (r) => (latest = r) });
+  const island = renderIsland(Probe, { params, onReady: (r) => (latest = r) });
   return {
     get current() {
       return latest;
+    },
+    /** Re-render with new params — the way a parent handing down a fresh
+     *  `initialEvents` after a `router.refresh()` would (S12/#421 pass E:
+     *  the console chrome's "Start match" round trip). Hook state (the
+     *  queue, the ledger, refs) carries over across this, exactly as it
+     *  would across a real React re-render of the same component instance. */
+    rerender(nextParams: UsePadPipelineParams) {
+      island.rerender({ params: nextParams, onReady: (r) => (latest = r) });
     },
   };
 }
@@ -907,5 +917,217 @@ describe("usePadPipeline — a throwing optimistic fold degrades instead of cras
     await pad.current.submit("generic.score", { by: "H", points: 2 });
     expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({ home: 2, away: 0 });
     expect(pad.current.lastRejection).toBeNull(); // cleared by the fresh submit
+  });
+});
+
+// S12/#421 pass E, FOURTH defect (_INDEX.md decision log, 2026-08-13): the
+// console chrome's own "Start match" button lives OUTSIDE the pad section in
+// both dispatchers (registry.tsx's `<ScorePad/>` only mounts the pad; the
+// chrome owns the button). Measured live: `<ScorePad/>` mounts while the
+// fixture is still "scheduled" (`initialEvents: []`), "Start match" appends
+// `core.start` server-side, and the chrome's own `router.refresh()` hands
+// THIS hook a NEW `initialEvents` prop containing it — but `ledgerEvents`
+// seeds from `params.initialEvents` only in the `useState` initializer,
+// which runs exactly once, at mount. React reconciles this component rather
+// than remounting it, so the new prop was silently dropped: every fold after
+// that validated a scoring event against a ledger missing `core.start` and
+// threw, degrading to the mount-time empty fold forever. Real network trace:
+// exactly one scoring event could ever be recorded, on any sport.
+//
+// Cricket (not generic) below on purpose for the three-submit test: its
+// `cricket.ball` payload carries `over`/`ballInOver`, fields a real skin
+// computes FROM the current folded state (`buildBallPayload`,
+// skins/cricket-skin.tsx — not imported here, out of this session's file
+// set; this test reconstructs the same state-derived shape independently so
+// it does not depend on that file). A frozen fold reads back the SAME
+// `ballInOver` every time, which is the real bug's own observed signature
+// (`_INDEX.md`: "ballInOver is 1 on every ball"). `generic.score`'s payload
+// never depends on state, so it cannot exercise this half of the defect —
+// only cricket's own ball grammar can.
+describe("usePadPipeline — initialEvents re-adopted after a later render, not just at mount (S12/#421 pass E)", () => {
+  const FIXTURE_ID = "fx-cricket-1";
+  const cricketModule = resolveModuleClient("cricket", "1.0.0");
+  const cricketCfg = cricketModule.configSchema.parse(cricketModule.variants.t20) as CricketCfg;
+  const bpo = cricketCfg.ballsPerOver;
+
+  function cricketLineup(prefix: string): LineupPair["home"] {
+    return {
+      entrantId: prefix,
+      slots: Array.from({ length: 11 }, (_, i) => ({
+        personId: `${prefix}-${i + 1}`,
+        slot: "starting" as const,
+        orderNo: i + 1,
+        ...(i === 0 ? { roles: ["captain"] } : i === 1 ? { roles: ["wicketkeeper"] } : {}),
+      })),
+    };
+  }
+  const cricketLineups: LineupPair = { home: cricketLineup("H"), away: cricketLineup("A") };
+
+  // The console chrome's OWN write — `recordedBy` deliberately differs from
+  // `ME` (the pad's own identity, defined at the top of this file) so this
+  // is unambiguously a FOREIGN event, exactly like the real trace.
+  const coreStart: EventEnvelope = {
+    id: "console-core-start",
+    fixtureId: FIXTURE_ID,
+    seq: 1,
+    type: "core.start",
+    payload: {},
+    recordedAt: "2026-08-13T00:00:00.000Z",
+    recordedBy: "console-user",
+  };
+
+  /** Mirrors what a skin reads off the live fold to build the NEXT ball's
+   *  payload — over/ballInOver derived from `legalBalls`, the same
+   *  expression cricket.ts's own position projection uses
+   *  (`(legalBalls % ballsPerOver) + 1`). Striker/nonStriker/bowler and a
+   *  dot ball (`bat: 0`) throughout: no boundary, no wicket, no strike
+   *  rotation, so nothing else about the ball needs to be recomputed. */
+  function nextBallPayload(state: unknown): CricketBallEv {
+    const innings = (state as CricketState).innings as ReadonlyArray<{ legalBalls: number }> | undefined;
+    const current = innings && innings.length > 0 ? innings[innings.length - 1] : undefined;
+    const legalBalls = current?.legalBalls ?? 0;
+    return {
+      over: Math.floor(legalBalls / bpo),
+      ballInOver: (legalBalls % bpo) + 1,
+      striker: "H-1",
+      nonStriker: "H-2",
+      bowler: "A-11",
+      runs: { bat: 0 },
+    };
+  }
+
+  it("MUTATION TARGET: three consecutive scoring submits each build on the fold the PREVIOUS one produced", async () => {
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(2), success(3), success(4)] });
+    // Mounts exactly like <ScorePad/> does while a fixture is still
+    // "scheduled" — NOT pre-seeded with core.start.
+    const pad = mountPipeline(
+      baseParams({ fixtureId: FIXTURE_ID, module: cricketModule, cfg: cricketCfg, lineups: cricketLineups, transport }),
+    );
+    expect((pad.current.state as CricketState).phase).toBe("pre");
+
+    // The console chrome's "Start match" round trip: router.refresh() hands
+    // THIS hook a NEW initialEvents prop containing core.start. Nothing else
+    // about the mount changes.
+    pad.rerender(
+      baseParams({
+        fixtureId: FIXTURE_ID,
+        module: cricketModule,
+        cfg: cricketCfg,
+        lineups: cricketLineups,
+        transport,
+        initialEvents: [coreStart],
+      }),
+    );
+    expect((pad.current.state as CricketState).phase).toBe("live"); // adopted into the FOLD BASE, not merely displayed
+
+    const first = nextBallPayload(pad.current.state);
+    await pad.current.submit("cricket.ball", first);
+
+    const second = nextBallPayload(pad.current.state);
+    await pad.current.submit("cricket.ball", second);
+
+    const third = nextBallPayload(pad.current.state);
+    await pad.current.submit("cricket.ball", third);
+
+    expect(appendCalls).toHaveLength(3);
+    // The real bug's own signature: without the fix, every submit reads the
+    // SAME frozen pre-first-ball state, so ballInOver is 1 every time.
+    expect(third.ballInOver).not.toBe(first.ballInOver);
+    expect([first.ballInOver, second.ballInOver, third.ballInOver]).toEqual([1, 2, 3]);
+  });
+
+  it("MUTATION TARGET: an acked own-event advances expected_seq for the NEXT submit — 2, not 1, after core.start + one ball", async () => {
+    const appendCalls: AppendEventBody[] = [];
+    let cursor = 0;
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        cursor += 1;
+        return success(cursor + 1); // core.start already occupies seq 1
+      },
+      async listEventsSince() {
+        return [];
+      },
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
+      },
+    };
+    // Fresh generic mount, no core.start yet — matches a fixture still
+    // "scheduled" at the moment <ScorePad/> first mounts.
+    const pad = mountPipeline(baseParams({ transport }));
+    pad.rerender(baseParams({ transport, initialEvents: [coreStart] }));
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    // core.start must already be in the fold base for the FIRST submit too.
+    expect(appendCalls[0]?.expected_seq).toBe(1);
+
+    await pad.current.submit("generic.score", { by: "A", points: 1 });
+    // NOT 1 — the acked ball above must have entered the fold base alongside core.start.
+    expect(appendCalls[1]?.expected_seq).toBe(2);
+  });
+});
+
+describe("usePadPipeline — offline queue survives an initialEvents change underneath it (S12/#421 pass E)", () => {
+  it("a still-queued LOCAL event is untouched — never dropped, never reordered — when initialEvents changes underneath it", async () => {
+    let appendShouldFail = true;
+    let ackSeq = 3; // seq 1/2 already occupied by core.start/the foreign note below
+    const transport: PadTransport = {
+      async appendEvent() {
+        if (appendShouldFail) return { kind: "network-error", message: "offline" };
+        const seq = ackSeq;
+        ackSeq += 1;
+        return success(seq);
+      },
+      async listEventsSince() {
+        return [];
+      },
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
+      },
+    };
+    const coreStart: EventEnvelope = {
+      id: "console-core-start",
+      fixtureId: "fx-1",
+      seq: 1,
+      type: "core.start",
+      payload: {},
+      recordedAt: "2026-08-13T00:00:00.000Z",
+      recordedBy: "console-user",
+    };
+    const pad = mountPipeline(baseParams({ transport, initialEvents: [coreStart] }));
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 }); // stays queued — network error
+    expect(pad.current.queueDepth).toBe(1);
+    const pendingIdBefore = pad.current.events.find((e) => e.type === "generic.score")!.id;
+
+    // A parent re-render hands down a NEW initialEvents reference carrying a
+    // second, foreign event (a concurrent scorer's note) — a router.refresh()
+    // landing WHILE this device is offline with work still queued. Must
+    // merge the foreign event in, and must NOT touch the still-queued local
+    // write.
+    const foreignNote: EventEnvelope = {
+      id: "foreign-note-1",
+      fixtureId: "fx-1",
+      seq: 2,
+      type: "core.note",
+      payload: { text: "concurrent" },
+      recordedAt: "2026-08-13T00:00:05.000Z",
+      recordedBy: "user-2",
+    };
+    pad.rerender(baseParams({ transport, initialEvents: [coreStart, foreignNote] }));
+
+    expect(pad.current.queueDepth).toBe(1); // untouched by the merge
+    expect(pad.current.events.map((e) => e.id)).toEqual(["console-core-start", "foreign-note-1", pendingIdBefore]);
+
+    appendShouldFail = false;
+    await pad.current.submit("generic.score", { by: "A", points: 1 }); // retries the whole queue
+    expect(pad.current.queueDepth).toBe(0);
+    expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({ home: 1, away: 1 });
   });
 });

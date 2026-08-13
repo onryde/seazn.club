@@ -50,6 +50,31 @@
 // own guess wrong, not a foreign-event gap) still adopts the server's fold
 // as-is without reconstructing the exact event list that produced it — nothing
 // in this pass changes that half of the original boundary.
+//
+// SCOPE BOUNDARY, S12/#421 PASS E UPDATE: pass C's fix above covers a
+// FOREIGN write arriving via the POLL/realtime path. It left a second,
+// narrower gap open: `ledgerEvents` seeds from `params.initialEvents` ONLY
+// in the `useState` initializer below, which runs exactly once, at mount. A
+// fixture that flips scheduled -> live WHILE this hook is already mounted —
+// the console chrome's own "Start match" button (still outside the pad
+// section in both dispatchers) triggers a `router.refresh()` that hands
+// THIS hook a NEW `initialEvents` containing `core.start` — never reaches
+// `ledgerEvents` at all, because React reconciles this component instead of
+// remounting it. Every optimistic fold after that keeps validating a
+// scoring event against a ledger missing `core.start` and throws (cricket:
+// `ball in phase "pre"`), which `foldedState` below degrades to
+// `lastGoodStateRef.current` — frozen at whatever the LAST successful fold
+// was, typically the trivial empty one from mount. The ack path
+// (`runDrain`) was never the bug: it already appends its own just-acked
+// event onto `ledgerEventsRef.current` correctly — every fold built on it
+// just kept lacking `core.start` underneath, so it kept throwing. Measured
+// end to end in a real browser: exactly one scoring event could ever be
+// recorded, on any sport (`_INDEX.md`'s decision log, "FOURTH defect").
+// Fixed the same way as the poll path — merge, never overwrite, through the
+// SAME shared primitive (`mergeEnvelopesIntoLedger`, which `mergeLedgerEvents`
+// below now also delegates to, rather than two differently-shaped merges
+// that can drift) — see the effect below the `useFixtureStream` wiring for
+// the adoption itself.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EngineError, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -87,7 +112,14 @@ export interface UsePadPipelineParams {
   identity: OwnIdentity;
   transport: PadTransport;
   /** The ledger so far, oldest first — e.g. a server bootstrap's
-   *  `GET /events?since_seq=0`. Defaults to empty (a brand-new fixture). */
+   *  `GET /events?since_seq=0`. Defaults to empty (a brand-new fixture).
+   *  Seeds `ledgerEvents` at mount AND is re-adopted (merged, never
+   *  overwritten — a still-queued local write always survives) on every
+   *  later render where this changes — S12/#421 pass E: a fixture that
+   *  flips scheduled -> live while this hook is already mounted hands down
+   *  a NEW value here (the console chrome's own "Start match" triggers a
+   *  `router.refresh()`), and a `useState` initializer alone only ever
+   *  reads the first one. */
   initialEvents?: readonly EventEnvelope[];
   /** IndexedDB store name. Defaults to one name per fixture so two fixtures
    *  never share a queue. `indexedDbQueueStore` already degrades to an
@@ -244,31 +276,53 @@ function ledgerSlotToEnvelope(fixtureId: string, row: LedgerSlotEvent): EventEnv
 }
 
 /**
- * Merge a polled/realtime batch of ledger rows into the known ledger, by
- * seq, deduplicated, kept ascending — S12/#421. A batch may overlap what
- * this hook already knows (its own just-acked events from `runDrain`, or a
- * previous poll's rows): on a seq collision the EXISTING entry always wins,
- * never the incoming row, so this can never regress a richer envelope this
- * hook already built itself — `runDrain`'s own `pendingToEnvelope` sets
- * `voids` for a core.void THIS device recorded, which `ledgerSlotToEnvelope`
- * above can never reconstruct from a bare ledger row. Touches only the
+ * Merge a batch of already-widened envelopes into the known ledger, by seq,
+ * deduplicated, kept ascending — the ONE primitive both `mergeLedgerEvents`
+ * (the poll/realtime path, S12/#421 pass C) and the `initialEvents`-adoption
+ * effect below (pass E) reduce to, rather than two differently-shaped merges
+ * that can drift (this repo has a recorded bug from exactly that shape: two
+ * parallel lookup paths). A batch may overlap what this hook already knows
+ * (its own just-acked events from `runDrain`, a previous poll's rows, or a
+ * previous `initialEvents`): on a seq collision the EXISTING entry always
+ * wins, never the incoming one, so this can never regress a richer envelope
+ * this hook already built or fetched itself — `runDrain`'s own
+ * `pendingToEnvelope` sets `voids` for a core.void THIS device recorded,
+ * which a bare polled ledger row can never reconstruct. Touches only the
  * ledger list; `pendingEnvelopes` (the offline queue) is untouched by
- * construction, so a poll tick can never drop or reorder a still-queued
+ * construction, so neither caller can ever drop or reorder a still-queued
  * local write.
+ */
+function mergeEnvelopesIntoLedger(
+  current: readonly EventEnvelope[],
+  incoming: readonly EventEnvelope[],
+): EventEnvelope[] {
+  const bySeq = new Map<number, EventEnvelope>();
+  for (const event of current) bySeq.set(event.seq, event);
+  for (const event of incoming) {
+    if (!bySeq.has(event.seq)) bySeq.set(event.seq, event);
+  }
+  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+}
+
+/**
+ * Merge a polled/realtime batch of ledger ROWS into the known ledger —
+ * S12/#421 pass C. Widens each row first (dropping any this hook cannot
+ * reconstruct — a row missing `id`/`recorded_at`, per `ledgerSlotToEnvelope`
+ * above), then delegates to `mergeEnvelopesIntoLedger` for the actual
+ * by-seq merge; see that function's own doc for the "existing wins" rule
+ * and the `pendingEnvelopes` guarantee.
  */
 function mergeLedgerEvents(
   fixtureId: string,
   current: readonly EventEnvelope[],
   incoming: readonly LedgerSlotEvent[],
 ): EventEnvelope[] {
-  const bySeq = new Map<number, EventEnvelope>();
-  for (const event of current) bySeq.set(event.seq, event);
+  const widened: EventEnvelope[] = [];
   for (const row of incoming) {
-    if (bySeq.has(row.seq)) continue;
     const envelope = ledgerSlotToEnvelope(fixtureId, row);
-    if (envelope !== null) bySeq.set(row.seq, envelope);
+    if (envelope !== null) widened.push(envelope);
   }
-  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+  return mergeEnvelopesIntoLedger(current, widened);
 }
 
 export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResult {
@@ -451,6 +505,42 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     connector: params.streamConnector,
     pollMs: params.streamPollMs,
   });
+
+  // S12/#421 pass E — adopt a CHANGED `initialEvents` prop after mount (file
+  // header, PASS E UPDATE, has the full trace: the FOURTH defect). The
+  // `useState` initializer above only ever reads `params.initialEvents`
+  // once, at mount; this effect is what a fixture flipping scheduled -> live
+  // UNDER an already-mounted pad actually needs. Reuses
+  // `mergeEnvelopesIntoLedger` — the SAME primitive `onStreamEvents` above
+  // uses — rather than a second, differently-shaped merge: `initialEvents`
+  // is already `EventEnvelope[]` (a server bootstrap fetch), so no widening
+  // step is needed here, unlike the poll path's raw `LedgerSlotEvent[]`.
+  //
+  // Guarded on the merge actually adding something new: a parent server
+  // component re-rendering for an unrelated reason routinely hands down a
+  // content-identical but reference-NEW `initialEvents` array (server
+  // components do not memoise their return value), and this effect's own
+  // dependency is that reference — committing a same-length array and
+  // kicking off a reconciliation read on every such render would be pure
+  // waste. `pendingEnvelopes` (the offline queue) is never touched, by
+  // construction of `mergeEnvelopesIntoLedger` itself — a still-queued local
+  // write survives an `initialEvents` change underneath it.
+  //
+  // Deliberately makes `ledgerEvents` itself the authoritative fix, not
+  // `serverOverride`: a bare `setServerOverride` call here would repair the
+  // DISPLAY while leaving the fold BASE exactly as broken as pass C found it
+  // — the mirror of this very defect. `reconcileAfterAck` is still called
+  // afterwards, same as `onStreamEvents` above, to catch any GENUINE
+  // divergence from the server's own fold beyond what merely adopting the
+  // new events already fixes.
+  useEffect(() => {
+    const incoming = params.initialEvents;
+    if (incoming === undefined || incoming.length === 0) return;
+    const merged = mergeEnvelopesIntoLedger(ledgerEventsRef.current, incoming);
+    if (merged.length === ledgerEventsRef.current.length) return; // nothing new
+    commitLedgerEvents(merged);
+    void reconcileAfterAck(merged);
+  }, [params.initialEvents, commitLedgerEvents, reconcileAfterAck]);
 
   const runDrain = useCallback(async () => {
     // Piggyback on an already-running drain rather than no-op'ing: whatever
