@@ -1542,26 +1542,28 @@ export function validateAssignments(
     // luck. A rule should not depend on luck.
     const restMinutes = effectiveRestMinutes(config, target);
     if (target.startAt < source.endAt + restMinutes * MS_PER_MIN) {
-      // Two distinct details on purpose. They are different failures, and the
-      // delta gate keys on `detail`: one string for both would let a newly
-      // introduced rest breach hide behind a pre-existing ordering violation.
+      // Two distinct KINDS on purpose. They are different failures, and the
+      // delta gate keys on `details` (via `conflictKey`/`canonConflictDetail`):
+      // one kind for both would let a newly introduced rest breach hide behind
+      // a pre-existing ordering violation.
       const before = target.startAt < source.endAt;
       const gapMin = (target.startAt - source.endAt) / MS_PER_MIN;
       conflicts.push({
         fixtureId: dep.fixtureId,
         reason: "order",
-        // Two distinct details on purpose: they are different failures, and one
-        // string for both would let a newly introduced rest breach hide behind
-        // a pre-existing ordering violation.
+        // Two distinct kinds on purpose: they are different failures, and one
+        // kind for both would let a newly introduced rest breach hide behind a
+        // pre-existing ordering violation.
         //
-        // NEITHER carries the measured gap. `conflictKey` includes `detail`, so
-        // a number in here would move the identity every time the card moved —
-        // and dragging a dependent from 10 minutes short to 20 would read as a
-        // NEW conflict and be refused, which is the exact lock-out this wave
-        // exists to prevent. The size rides in `shortfallMinutes` instead.
-        detail: before
-          ? `starts before feeder ${dep.dependsOn} ends`
-          : `starts inside feeder ${dep.dependsOn}'s ${restMinutes} min rest`,
+        // NEITHER carries the measured gap. `conflictKey` folds `details` in,
+        // so a number in here would move the identity every time the card
+        // moved — and dragging a dependent from 10 minutes short to 20 would
+        // read as a NEW conflict and be refused, which is the exact lock-out
+        // this wave exists to prevent. The size rides in `shortfallMinutes`
+        // instead.
+        details: before
+          ? { kind: "order_before_feeder", otherFixtureId: dep.dependsOn }
+          : { kind: "order_inside_feeder_rest", otherFixtureId: dep.dependsOn, requiredMinutes: restMinutes },
         direct: dep.direct === true,
         shortfallMinutes: Math.max(0, Math.round(restMinutes - gapMin)),
       });
@@ -1681,14 +1683,14 @@ export function roundOrderConflicts(
           conflicts.push({
             fixtureId: b.fixtureId,
             reason: "order",
-            detail: `round ${b.roundNo} (day ${dayB}) starts before round ${a.roundNo} (day ${dayA})`,
+            details: { kind: "round_order_day", roundNo: b.roundNo, otherRoundNo: a.roundNo, day: dayB, otherDay: dayA },
             direct: true,
           });
         } else if (dayA === dayB && a.startAt > b.startAt) {
           conflicts.push({
             fixtureId: b.fixtureId,
             reason: "order",
-            detail: `round ${b.roundNo} starts before round ${a.roundNo} on the same day (${dayA})`,
+            details: { kind: "round_order_same_day", roundNo: b.roundNo, otherRoundNo: a.roundNo, day: dayA },
             direct: true,
           });
         }
