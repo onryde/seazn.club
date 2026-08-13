@@ -1516,7 +1516,11 @@ describe("usePadPipeline — undo a pad-submitted event with no reload (S12/#421
 // persisting the target's seq on the queued PendingEvent itself
 // (types.ts `voidTargetSeq`) — see use-pad-pipeline.ts's own PASS H UPDATE
 // (file header and `resolveVoidTargetId`/`voidTargetSeqAtSubmit`) for the
-// full trace.
+// full trace. S12/#421 pass I extends this SAME test below: the WIRE send
+// was already correct here from pass H onward (proven by the assertions
+// on voidCall!.payload), but the LOCAL optimistic fold was not — see
+// pendingWithLocalVoidTarget (use-pad-pipeline.ts) and the file header's
+// PASS I UPDATE.
 describe("usePadPipeline — undo a pad-submitted event ACROSS a reload (S12/#421 pass H)", () => {
   it("MUTATION TARGET: a queued void's target resolves to the SERVER id after a genuine unmount+remount, not the stale client-fabricated one", async () => {
     const REAL_SERVER_ID = "server-real-goal-id-reload";
@@ -1624,33 +1628,22 @@ describe("usePadPipeline — undo a pad-submitted event ACROSS a reload (S12/#42
     expect(voidCall!.payload).not.toEqual({ event_id: scoredId });
     expect(listEventsSinceCalls.length).toBeGreaterThan(0);
     expect(pad2.current.queueDepth).toBe(0);
-    // A SEPARATE, pre-existing, OUT-OF-SCOPE characteristic this test
-    // surfaces but does not fix: pendingToEnvelope's LOCAL/optimistic void
-    // envelope always keeps the ORIGINAL untranslated target id (pass G's
-    // own deliberate invariant — its file-header comment: "next itself is
-    // NEVER reassigned... pendingToEnvelope's LOCAL fold envelope must keep
-    // reading the LOCAL target id, consistent with ledgerEvents' own `.id`
-    // fields"). That consistency holds WITHIN one mount (the ack-merge keeps
-    // the client id forever, pass F), but breaks here: this reload's
-    // initialEvents replaced the target's ledgerEvents entry with the SERVER
-    // id, so the void's own local `voids: scoredId` no longer matches
-    // anything in the list being folded. The engine's own resolveVoids
-    // (packages/engine/src/core/events.ts) is unconditional — not
-    // strict-gated, see reference_client_fold_is_always_nonstrict — and
-    // throws INVALID_EVENT for a `voids` reference it cannot find; caught by
-    // foldedState's own catch (S3/#426 OWNER RULING 2: degrade, never crash)
-    // and surfaced via lastRejection, the same shape as this file's own
-    // documented "foreign core.void" boundary (voids_event_id dropped by
-    // LedgerSlotEvent). The WIRE operation this pass fixes is unaffected
-    // (proven above); only the LOCAL display's transient error banner is —
-    // and only until the next server reconciliation with a real (non-null)
-    // state, or the next submit() (lastRejection has no auto-clear
-    // otherwise, by design — see the "lastRejection" describe block above).
-    // Pinned here, not asserted away, so a future change to either side of
-    // this seam gets noticed.
-    expect(pad2.current.lastRejection).toEqual({
-      code: "INVALID_EVENT",
-      message: `core.void targets unknown or non-prior event "${scoredId}"`,
-    });
+    // S12/#421 pass I — this is where the gap USED TO be pinned: the LOCAL
+    // optimistic fold's own `voids` field kept the ORIGINAL client-fabricated
+    // id even though this reload's initialEvents replaced ledgerEvents' own
+    // entry for the target with the SERVER id, so the engine's own
+    // resolveVoids (packages/engine/src/core/events.ts, matches `voids`
+    // against `.id` in the SAME list being folded) could never find it and
+    // threw INVALID_EVENT — degrading to the last good state (S3/#426 OWNER
+    // RULING 2) and surfacing a rejection banner for an undo that, on the
+    // wire (proven above), had already succeeded. Fixed by
+    // pendingWithLocalVoidTarget (use-pad-pipeline.ts): the local fold now
+    // agrees with the wire, so no rejection survives to be shown.
+    expect(pad2.current.lastRejection).toBeNull();
+    // And the fold actually reflects the undo — not merely a suppressed
+    // banner over a still-broken fold: the scored event must be genuinely
+    // reversed, exactly like the no-reload case (the "undo a pad-submitted
+    // event with no reload" describe block above).
+    expect((pad2.current.state as { running: unknown }).running).toBeUndefined();
   });
 });

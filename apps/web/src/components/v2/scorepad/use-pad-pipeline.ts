@@ -148,6 +148,42 @@
 // pre-pass-H queued record (degrades to the old, same-mount-only behaviour,
 // never throws) or a target not yet acked at void-submit time (self-resolves
 // via FIFO ordering instead, exactly as before this pass).
+//
+// SCOPE BOUNDARY, S12/#421 PASS I UPDATE (undo-before-reload, LOCAL fold
+// still wrong): pass H fixed the WIRE send across a reload but left the
+// LOCAL optimistic fold broken, pinning it with an explicit assertion rather
+// than fixing it (use-pad-pipeline.test.tsx's own pass H test carried the
+// full original trace in a comment, since replaced by this update). Root
+// cause: `pendingToEnvelope`'s core.void envelope always read its `voids`
+// target off the ORIGINAL submitted payload, unconditionally. That is
+// correct WITHIN one mount — pass F's ack-merge keeps a pad-submitted
+// event's CLIENT-fabricated id in `ledgerEvents` forever, so the void's own
+// `voids` field, naming that same client id, always found a match — but
+// wrong the moment a reload re-seeds `ledgerEvents` from `initialEvents`
+// (`ledgerSlotToEnvelope`'s own `id: row.id`): the LOCAL ledger then only
+// knows the target under the SERVER's real id, so the void's untranslated
+// `voids: <client id>` named an id `resolveVoids`
+// (packages/engine/src/core/events.ts — unconditional, matches `voids`
+// against `.id` in the SAME event list being folded) could never find,
+// throwing INVALID_EVENT on every fold from that point on. `foldedState`'s
+// own catch degrades that to the last good state and surfaces it via
+// `lastRejection` (S3/#426 OWNER RULING 2) — so the scorer saw a rejection
+// banner for an undo that, on the wire, had already succeeded: worse than no
+// banner, since the correct response to a genuine rejection (retry
+// differently) is the wrong response to a false one (re-undo something
+// already undone). Fixed by a new, purely LOCAL and synchronous helper,
+// `pendingWithLocalVoidTarget` — a `voidTargetSeq` lookup against
+// `ledgerEvents` itself, no network call — applied everywhere a queued
+// void's `PendingEvent` becomes a local fold envelope: `runDrain`'s own ack
+// append, AND the mount-time leftover-queue resume effect's pre-send
+// seeding (which throws transiently on its own, even before runDrain gets a
+// chance to act, and nothing later clears the `lastRejection` that leaves
+// behind — see that helper's own doc for the full reasoning, including why
+// `submit()`'s own first-ever pre-send build provably never needs it).
+// Deliberately NOT reusing `resolveVoidTargetId`'s own resolved id for this:
+// that answers a genuinely different question (what the SERVER calls the
+// row, needed only for the wire) and would make this hook's OWN fold
+// consistency depend on a network read it does not otherwise need.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EngineError, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -471,7 +507,13 @@ function mergeLedgerEvents(
  *  void-submit time, by `voidTargetSeqAtSubmit` just below — a live mount,
  *  never subject to that gap) over the in-memory `ownEventIds` lookup,
  *  which survives only as a fallback for a void queued before this field
- *  existed, or one whose target had not yet been acked at submit time. */
+ *  existed, or one whose target had not yet been acked at submit time.
+ *
+ *  S12/#421 PASS I — this function's own `eventId` answers the WIRE
+ *  question only (what the SERVER calls the row) and is never read for the
+ *  LOCAL optimistic fold's own `voids` field — see `pendingWithLocalVoidTarget`
+ *  (just below `voidTargetSeqAtSubmit`) for that separate, purely-local
+ *  question and why it needs an independent answer. */
 export type VoidTargetResolution =
   | { kind: "same"; eventId: string }
   | { kind: "resolved"; eventId: string }
@@ -556,6 +598,61 @@ function voidTargetSeqAtSubmit(
   const targetId = extractVoidEventId(payload);
   if (targetId === null || !ownEventIds.has(targetId)) return undefined;
   return ledgerEvents.find((e) => e.id === targetId)?.seq;
+}
+
+/** S12/#421 pass I — retarget a core.void `PendingEvent`'s payload so its
+ *  LOCAL optimistic-fold envelope (built by `pendingToEnvelope`) references
+ *  whatever id `ledgerEvents` ITSELF currently holds for the durably
+ *  recorded target seq, rather than whatever id the caller originally
+ *  queued it under. See the file header's PASS I UPDATE for the full trace
+ *  this closes.
+ *
+ *  A DIFFERENT question from `resolveVoidTargetId`'s own `eventId`, despite
+ *  both existing to retarget the same void: that function answers "what id
+ *  does the SERVER use for this row" (a network read, needed because the
+ *  wire request must name a row the server itself recognises). This
+ *  function answers "what id does THIS HOOK'S OWN `ledgerEvents` use for it
+ *  right now" — the engine's own `resolveVoids`
+ *  (packages/engine/src/core/events.ts) matches a void's `voids` field
+ *  against `.id` in the SAME list being folded and has no concept of a
+ *  server truth beyond whatever this hook has already merged in. The two
+ *  answers usually coincide (a foreign/history target's `ledgerEvents` id
+ *  IS the server id) but diverge for exactly the case this pass fixes: a
+ *  target THIS hook itself submitted and acked keeps its CLIENT-fabricated
+ *  id in `ledgerEvents` forever, within the mount that acked it (pass F's
+ *  `incomingWins: true`), and only starts showing the server id once a
+ *  reload re-seeds `ledgerEvents` from `initialEvents`
+ *  (`ledgerSlotToEnvelope`'s own `id: row.id`).
+ *
+ *  Purely local and synchronous — a `voidTargetSeq` lookup against
+ *  `ledgerEvents`, no network call — so it is safe to call from the
+ *  mount-time leftover-queue resume effect too, BEFORE `runDrain`'s own
+ *  async wire resolution has even started; that matters because the resume
+ *  effect builds its OWN pre-send optimistic entry independently (never
+ *  reused by runDrain's later ack), and an untranslated entry there throws
+ *  transiently for however many renders it takes the drain to actually
+ *  resolve and re-ack — long enough to set `lastRejection` via
+ *  `foldedState`'s own catch and leave it stuck there, since nothing clears
+ *  it on a later SUCCESSFUL fold (only a fresh `submit()` call does), even
+ *  once the wire and the ledger both end up correct.
+ *
+ *  A no-op (returns `pending` unchanged) whenever: not a core.void; no
+ *  durable `voidTargetSeq` (pre-pass-H record, or a target not yet acked at
+ *  submit time — the pre-existing `ownEventIds`-only fallback territory,
+ *  unaffected by this pass); `ledgerEvents` has no row at that seq yet
+ *  (nothing to retarget to); or the row already sits under the SAME id the
+ *  payload already names (the common case — this only ever changes anything
+ *  post-reload). NOT applied at `submit()`'s own first-ever pre-send build:
+ *  `voidTargetSeqAtSubmit` above only ever sets `voidTargetSeq` by finding
+ *  the target in `ledgerEvents` BY THAT EXACT `targetId` in the first place,
+ *  so at that one call site this would provably always be a no-op. */
+function pendingWithLocalVoidTarget(pending: PendingEvent, ledgerEvents: readonly EventEnvelope[]): PendingEvent {
+  if (pending.type !== "core.void" || pending.voidTargetSeq === undefined) return pending;
+  const targetId = extractVoidEventId(pending.payload);
+  if (targetId === null) return pending;
+  const localRow = ledgerEvents.find((e) => e.seq === pending.voidTargetSeq);
+  if (localRow === undefined || localRow.id === targetId) return pending;
+  return { ...pending, payload: { event_id: localRow.id } };
 }
 
 export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResult {
@@ -809,11 +906,15 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
         const next = queued[0]!;
 
         // S12/#421 pass G — undo-before-reload (file header PASS G UPDATE,
-        // _INDEX.md decision log). `next` itself is NEVER reassigned below:
-        // pendingToEnvelope's LOCAL fold envelope (the acked branch, further
-        // down) must keep reading the LOCAL target id, consistent with
-        // ledgerEvents' own `.id` fields — only the WIRE-BOUND copy
-        // (`eventToSend`) carries the translated one, if any.
+        // _INDEX.md decision log). `next` itself is NEVER reassigned below —
+        // `eventToSend` is the WIRE-BOUND copy, translated (if at all) to
+        // whatever id `resolveVoidTargetId` proves the SERVER uses for the
+        // target. S12/#421 pass I: the LOCAL fold envelope built further
+        // down (the acked branch) needs a genuinely DIFFERENT answer —
+        // whatever id THIS HOOK'S OWN ledgerEvents uses for the target right
+        // now, which is the same as the wire id only sometimes — see
+        // `pendingWithLocalVoidTarget`'s own doc for why they diverge after
+        // a reload, and the file header's PASS I UPDATE for the full trace.
         let eventToSend = next;
         if (next.type === "core.void") {
           const targetId = extractVoidEventId(next.payload);
@@ -880,7 +981,13 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           // so pendingToEnvelope's own expectedSeq+1 default is already
           // right there and needs no override.
           const confirmedSeq = outcome.kind === "acked" ? outcome.result.seq : undefined;
-          const acked = pendingToEnvelope(fixtureId, identity, next, confirmedSeq);
+          // S12/#421 pass I — `next` itself still never reassigned (pass G's
+          // own invariant, unchanged); pendingWithLocalVoidTarget hands
+          // pendingToEnvelope a COPY with only `payload` possibly rewritten,
+          // exactly like `eventToSend` above does for the wire, but answering
+          // the LOCAL question instead (see that helper's own doc, and the
+          // file header's PASS I UPDATE, for why the two can differ).
+          const acked = pendingToEnvelope(fixtureId, identity, pendingWithLocalVoidTarget(next, ledgerEventsRef.current), confirmedSeq);
           // S12/#421 pass F — was a raw spread
           // (`[...ledgerEventsRef.current, acked]`), never routed through
           // mergeEnvelopesIntoLedger like the other two writers into
@@ -962,7 +1069,13 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       if (leftover.length > 0) {
         const seeded = new Map(pendingEnvelopesRef.current);
         for (const p of leftover) {
-          seeded.set(p.idempotencyKey, pendingToEnvelope(fixtureId, identity, p));
+          // S12/#421 pass I — retarget a RESUMED void's pre-send optimistic
+          // entry too, not just runDrain's later ack: see
+          // pendingWithLocalVoidTarget's own doc for why an untranslated
+          // entry here throws transiently and leaves a stale lastRejection,
+          // even though the drain below eventually resolves and acks it
+          // correctly.
+          seeded.set(p.idempotencyKey, pendingToEnvelope(fixtureId, identity, pendingWithLocalVoidTarget(p, ledgerEventsRef.current)));
           // S12/#421 — this device's own leftover queue (IndexedDB is
           // browser/device-local), so it was unquestionably submitted under
           // THIS `identity`, exactly like a fresh submit() below.
