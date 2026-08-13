@@ -327,14 +327,35 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
     // anyway: it proves the timeline wires each row to its own event id.
     const goalRow = timeline.locator(`[data-event-id="${goal.id}"]`);
     await expect(goalRow).toHaveCount(1);
-    await goalRow.locator('[data-role="void"]').click();
 
-    await expect
-      .poll(
-        async () => (await ledger(page.request, own.fixtureId)).filter((e) => e.type === "core.void").length,
-        { timeout: 20_000 },
-      )
-      .toBeGreaterThanOrEqual(1);
+    // A click straight after a reload can land PRE-HYDRATION: the button is
+    // visible, stable and enabled — everything Playwright's actionability
+    // checks cover — but React has not attached its handler yet, so the click
+    // is swallowed and the test then times out waiting for a void that was
+    // never requested. Measured here: one red in six runs of this file, on a
+    // warm server as well as a deliberately cold one. Same pattern and same
+    // cause as `v6-sports.spec.ts`'s Release retry and `scoring.spec.ts`'s
+    // re-fill loops.
+    //
+    // There is no prompt client-only signal to wait on instead: the pad's
+    // `useFixtureStream` arms `setInterval` at `POLL_MS` (15s) without an
+    // immediate fetch, so waiting on its first poll would cost 15s per run and
+    // still prove only that the stream mounted.
+    //
+    // The retry is GUARDED on the ledger rather than blind, so a click that
+    // did register can never be issued twice — voiding an already-voided event
+    // is a real state change, not a harmless repeat, and a blind retry would
+    // trade a flake for a silent second void.
+    const voidCount = async (): Promise<number> =>
+      (await ledger(page.request, own.fixtureId)).filter((e) => e.type === "core.void").length;
+
+    await expect(async () => {
+      if ((await voidCount()) === 0) {
+        await goalRow.locator('[data-role="void"]').click();
+        await page.waitForTimeout(1_500);
+      }
+      expect(await voidCount()).toBeGreaterThanOrEqual(1);
+    }).toPass({ timeout: 25_000 });
 
     const voidEvent = (await ledger(page.request, own.fixtureId)).find((e) => e.type === "core.void")!;
     expect(voidEvent.seq).toBeGreaterThan(goal.seq);

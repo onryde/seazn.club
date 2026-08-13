@@ -2564,6 +2564,31 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   does not. And when a spec file is wired into a project MATRIX, verifying one
   project is not verifying the test; check which projects the file runs under
   before believing a green.
+- 2026-08-13 — S12/#421 — **a post-reload click that passes every actionability
+  check and is still swallowed.** `e2e/scorepad-v2.spec.ts`'s after-reload undo
+  went red once in six runs of the file — on a warm server and on a
+  deliberately cold one, so not a cold-start artefact. Cause is
+  pre-hydration: after `page.reload()` the void button is visible, stable and
+  enabled — everything Playwright's actionability checks cover — but React has
+  not attached its handler, so the click lands on nothing and the test times
+  out waiting for a `core.void` that was never requested. It reads as a broken
+  undo.
+  **Diagnosis discipline worth repeating:** the first two theories were both
+  wrong and both plausible. "Shared fixture race" — no, both undo tests seed
+  their own. "Regression from the pass that just landed on that exact path" —
+  no, and the implementer disproved it from the code rather than by rerunning:
+  the click fires strictly after the reload and addresses the row by the
+  SERVER id, so no client-fabricated id enters play and neither new branch
+  runs. A flake on the same seam as your last change is not evidence that your
+  change caused it.
+  Fixed with the repo's existing idiom (`v6-sports.spec.ts`'s Release retry,
+  `scoring.spec.ts`'s re-fill loops): `expect(async () => {…}).toPass()`,
+  **guarded on the ledger** so a click that did register is never issued twice
+  — voiding an already-voided event is a real state change, and a blind retry
+  trades a flake for a silent second void. Not waited on the pad's own stream
+  instead: `useFixtureStream` arms `setInterval` at `POLL_MS` (15s) with no
+  immediate fetch, so that would cost 15s a run and still prove only that the
+  stream mounted.
 - _(append below)_
 
 ## Open questions for the owner
