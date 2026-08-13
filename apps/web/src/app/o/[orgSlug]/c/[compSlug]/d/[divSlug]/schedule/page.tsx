@@ -36,6 +36,9 @@ import {
 import { feedLabels, type FeedRow } from "@/lib/schedule-board";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { HealthTabLabel } from "@/components/v2/board/health-panel";
+import { resolveLocale } from "@/lib/resolve-locale";
+import { msgFor } from "@/lib/messages-i18n";
+import { resolveSlotLabel } from "@/lib/slot-label";
 
 const TABS = ["board", "health", "settings", "constraints", "officials", "history"] as const;
 type Tab = (typeof TABS)[number];
@@ -59,6 +62,7 @@ export default async function DivisionSchedulePage({
   const tab: Tab = (TABS as readonly string[]).includes(rawTab ?? "") ? (rawTab as Tab) : "board";
   const page = await requireDivisionPage(orgSlug, compSlug, divSlug, { tail: "/schedule" });
   const { auth, canEdit } = page;
+  const locale = await resolveLocale();
   // The GOVERNING venue clock (#448), resolved exactly as `loadSettings` does
   // it server-side — `resolveVenueTz(null, org.timezone)`, org → UTC, with the
   // division's own `tz` deliberately excluded so a display override cannot
@@ -301,8 +305,13 @@ export default async function DivisionSchedulePage({
           }))}
           fixtures={fixtures.map((f) => {
             const names = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
-            const home = f.home_entrant_id ? names[f.home_entrant_id] ?? "TBD" : "TBD";
-            const away = f.away_entrant_id ? names[f.away_entrant_id] ?? "TBD" : "TBD";
+            const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor(locale, k, v);
+            const home = f.home_entrant_id
+              ? (names[f.home_entrant_id] ?? lookup("schedule.tbd"))
+              : resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd");
+            const away = f.away_entrant_id
+              ? (names[f.away_entrant_id] ?? lookup("schedule.tbd"))
+              : resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd");
             return {
               id: f.id,
               label: `${home} vs ${away}`,

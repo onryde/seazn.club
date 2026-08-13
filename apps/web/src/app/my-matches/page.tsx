@@ -12,12 +12,16 @@ import { LogoutButton } from "@/components/logout-button";
 import { Zoned, ViewerTzProvider } from "@/components/client-time";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
+import { msgFor } from "@/lib/messages-i18n";
+import { resolveSlotLabel } from "@/lib/slot-label";
+import type { Locale } from "@/lib/i18n-constants";
 
 export default async function MyMatchesPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login?next=/my-matches");
   const fixtures = await listAssignedFixtures(user.id);
-  const dict = await getDictionary(await resolveLocale(), "console");
+  const locale = await resolveLocale();
+  const dict = await getDictionary(locale, "console");
 
   const today = fixtures.filter(
     (f) => f.scheduled_at !== null && sameDay(new Date(f.scheduled_at), new Date()),
@@ -50,8 +54,8 @@ export default async function MyMatchesPage() {
           </p>
         )}
 
-        {today.length > 0 && <Section title="Today" fixtures={today} />}
-        {later.length > 0 && <Section title="Upcoming" fixtures={later} />}
+        {today.length > 0 && <Section title="Today" fixtures={today} locale={locale} />}
+        {later.length > 0 && <Section title="Upcoming" fixtures={later} locale={locale} />}
       </main>
     </ViewerTzProvider>
   );
@@ -67,7 +71,16 @@ function sameDay(a: Date, b: Date): boolean {
 
 type Assigned = Awaited<ReturnType<typeof listAssignedFixtures>>[number];
 
-function Section({ title, fixtures }: { title: string; fixtures: Assigned[] }) {
+function Section({
+  title,
+  fixtures,
+  locale,
+}: {
+  title: string;
+  fixtures: Assigned[];
+  locale: Locale;
+}) {
+  const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor(locale, k, v);
   return (
     <section className="mb-8">
       <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
@@ -82,8 +95,9 @@ function Section({ title, fixtures }: { title: string; fixtures: Assigned[] }) {
             >
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-slate-800">
-                  {f.home_name ?? "TBD"} <span className="text-slate-400">vs</span>{" "}
-                  {f.away_name ?? "TBD"}
+                  {f.home_name ?? resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd")}{" "}
+                  <span className="text-slate-400">vs</span>{" "}
+                  {f.away_name ?? resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd")}
                 </p>
                 <p className="mt-0.5 text-xs text-slate-400">
                   {f.competition_name} · {f.division_name} · Round {f.round_no}

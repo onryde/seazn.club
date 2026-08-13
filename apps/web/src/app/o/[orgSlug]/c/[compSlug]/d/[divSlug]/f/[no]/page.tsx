@@ -162,6 +162,8 @@ export default async function FixturePage({
             venue: fixture.venue,
             court_label: fixture.court_label,
             round_no: fixture.round_no,
+            home_slot_label: fixture.home_slot_label,
+            away_slot_label: fixture.away_slot_label,
           }}
           sport={{
             key: division.sport_key,

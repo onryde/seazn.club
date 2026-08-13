@@ -10,6 +10,13 @@ import { publicThemeStyle } from "@/lib/public-theme";
 import { LiveScore } from "@/components/public-site/live-score";
 import { ShareButton } from "@/components/share-button";
 import { fixtureSubheading } from "./fixture-subheading";
+import { msg } from "@/lib/messages";
+import { resolveSlotLabel } from "@/lib/slot-label";
+// No locale plumbing anywhere in the public-site component tree today
+// (schedule.tsx/bracket.tsx are the same) — client-safe English msg() for
+// consistency across the public surfaces this task touches, not a
+// page-by-page patchwork where the same fixture reads differently depending
+// on which tab a visitor is on.
 
 export const revalidate = 30;
 
@@ -33,11 +40,11 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const data = await getPublicFixture(orgSlug, competitionSlug, divisionSlug, fixtureId);
   if (!data) return {};
   const home = data.fixture.home_entrant_id
-    ? (data.entrantNames[data.fixture.home_entrant_id] ?? "TBD")
-    : "TBD";
+    ? (data.entrantNames[data.fixture.home_entrant_id] ?? resolveSlotLabel(null, msg, "schedule.tbd"))
+    : resolveSlotLabel(data.fixture.home_slot_label, msg, "schedule.tbd");
   const away = data.fixture.away_entrant_id
-    ? (data.entrantNames[data.fixture.away_entrant_id] ?? "TBD")
-    : "TBD";
+    ? (data.entrantNames[data.fixture.away_entrant_id] ?? resolveSlotLabel(null, msg, "schedule.tbd"))
+    : resolveSlotLabel(data.fixture.away_slot_label, msg, "schedule.tbd");
   return {
     title: `${home} vs ${away} — ${data.division.name}`,
     description: data.fixture.summary?.headline ?? `${home} vs ${away} at ${data.competition.name}`,
@@ -53,8 +60,12 @@ export default async function FixturePage({ params }: Props) {
   if (!data) notFound();
   const { org, competition, division, fixture, entrantNames, realtime } = data;
 
-  const home = fixture.home_entrant_id ? (entrantNames[fixture.home_entrant_id] ?? "TBD") : "TBD";
-  const away = fixture.away_entrant_id ? (entrantNames[fixture.away_entrant_id] ?? "TBD") : "TBD";
+  const home = fixture.home_entrant_id
+    ? (entrantNames[fixture.home_entrant_id] ?? resolveSlotLabel(null, msg, "schedule.tbd"))
+    : resolveSlotLabel(fixture.home_slot_label, msg, "schedule.tbd");
+  const away = fixture.away_entrant_id
+    ? (entrantNames[fixture.away_entrant_id] ?? resolveSlotLabel(null, msg, "schedule.tbd"))
+    : resolveSlotLabel(fixture.away_slot_label, msg, "schedule.tbd");
   const basePath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
 
   const jsonLd = sportsEventJsonLd({

@@ -2,6 +2,9 @@
 // these straight from the usecases; everything client-side derives from them.
 
 import type { FeedLabelPair } from "@/lib/schedule-board";
+import { msg } from "@/lib/messages";
+import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 export interface BoardDivision {
   id: string;
@@ -31,6 +34,10 @@ export interface BoardFixture {
   seq_in_round: number;
   home_entrant_id: string | null;
   away_entrant_id: string | null;
+  /** D4b (P6) — {key, params} i18n pattern ref while the matching
+   *  *_entrant_id is null (V360's fixtures.home/away_slot_label). */
+  home_slot_label?: SlotLabel | null;
+  away_slot_label?: SlotLabel | null;
   /** ISO string over the wire, Date when it crosses straight from an RSC. */
   scheduled_at: string | Date | null;
   venue: string | null;
@@ -108,13 +115,23 @@ export function cardTitle(
   f: BoardFixture,
   names: Record<string, string>,
   feeds: Record<string, FeedLabelPair>,
+  // `feeds` is a SEPARATE, pre-existing scheduling-feed label mechanism
+  // (built in schedule/page.tsx from winner_to_fixture/winner_to_slot, out of
+  // this task's file set) — left untouched. `home_slot_label` (V360, D4b) is
+  // only consulted once `feeds` has nothing, so it never overrides it.
+  // `lookup` defaults to the client-safe English msg(); pass useMsg()'s bound
+  // fn from a caller that already sits inside a <DictProvider> for real
+  // localization (schedule-board.tsx's card render does; consoleFixtures()
+  // below is a plain exported function with no hook context, so it stays on
+  // the default).
+  lookup: SlotLabelLookup = msg,
 ): string {
   const home = f.home_entrant_id
     ? (names[f.home_entrant_id] ?? "?")
-    : (feeds[f.id]?.home ?? "TBD");
+    : (feeds[f.id]?.home ?? resolveSlotLabel(f.home_slot_label ?? null, lookup, "schedule.tbd"));
   const away = f.away_entrant_id
     ? (names[f.away_entrant_id] ?? "?")
-    : (feeds[f.id]?.away ?? "TBD");
+    : (feeds[f.id]?.away ?? resolveSlotLabel(f.away_slot_label ?? null, lookup, "schedule.tbd"));
   return `${home} vs ${away}`;
 }
 

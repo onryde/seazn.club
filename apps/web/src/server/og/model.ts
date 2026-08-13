@@ -5,6 +5,8 @@ import "server-only";
 // the brand contrast guard (gap 7: failing accents → violet) are unit-tested
 // here, without rendering a pixel.
 import { resolvePublicTheme, publicBrandColor } from "@/lib/public-theme";
+import { msg } from "@/lib/messages";
+import { resolveSlotLabel } from "@/lib/slot-label";
 
 export interface OgTheme {
   /** Card background (court slab). */
@@ -143,8 +145,12 @@ export function fixtureCardModel(input: FixtureInput): FixtureCardModel {
     divisionName: input.divisionName,
     logo: input.logo,
     // Youth (gap 8): the matchup renders as the division, never the players.
-    home: youthHide ? input.divisionName : (input.homeName ?? "TBD"),
-    away: youthHide ? "Match centre" : (input.awayName ?? "TBD"),
+    // homeName/awayName arrive already resolved (real entrant name, or the
+    // caller's own slot-label resolution) — null here means neither an
+    // entrant nor a slot label was known, the same "nothing at all" case
+    // resolveSlotLabel(null, …) covers everywhere else.
+    home: youthHide ? input.divisionName : (input.homeName ?? resolveSlotLabel(null, msg, "schedule.tbd")),
+    away: youthHide ? "Match centre" : (input.awayName ?? resolveSlotLabel(null, msg, "schedule.tbd")),
     headline: youthHide ? null : input.headline,
     status,
   };

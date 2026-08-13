@@ -24,6 +24,8 @@ import { CricketPad } from "@/components/v2/pads/cricket-pad";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { scoringErrorText } from "@/lib/scoring-vocab";
+import { resolveSlotLabel } from "@/lib/slot-label";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import type { MessageKey } from "@/lib/messages";
 // S12/#421 W10 — the v2 scoring pad, behind the `scorepad-v2` flag. Additive:
 // `scorePadV2` is optional and defaults to null, so every existing caller
@@ -197,6 +199,10 @@ interface Props {
     venue: string | null;
     court_label: string | null;
     round_no: number;
+    /** D4b (P6) — {key, params} i18n pattern ref while `home`/`away` (below)
+     *  is null (V360's fixtures.home/away_slot_label). */
+    home_slot_label?: SlotLabel | null;
+    away_slot_label?: SlotLabel | null;
   };
   sport: SportInfo;
   home: SideInfo | null;
@@ -370,8 +376,9 @@ export function FixtureConsole({
       <header className="card p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-lg font-semibold tracking-tight text-slate-900">
-            {home?.name ?? msg("schedule.tbd")} <span className="text-slate-400">{msg("schedule.vs")}</span>{" "}
-            {away?.name ?? msg("schedule.tbd")}
+            {home?.name ?? resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd")}{" "}
+            <span className="text-slate-400">{msg("schedule.vs")}</span>{" "}
+            {away?.name ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd")}
           </h1>
           <span className={`badge ${STATUS_STYLE[live.status] ?? ""}`}>
             {scoreStatusLabel(msg, live.status)}

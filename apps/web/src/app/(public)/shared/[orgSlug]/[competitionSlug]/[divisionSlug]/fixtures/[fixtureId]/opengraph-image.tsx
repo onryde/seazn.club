@@ -5,6 +5,8 @@ import { sql } from "@/lib/db";
 import { getPublicDivision } from "@/server/public-site/data";
 import { fixtureCardModel } from "@/server/og/model";
 import { CardFrame, LivePill, OG_SIZE } from "@/server/og/card";
+import { msg } from "@/lib/messages";
+import { resolveSlotLabel } from "@/lib/slot-label";
 
 export const size = OG_SIZE;
 export const contentType = "image/png";
@@ -37,8 +39,16 @@ export default async function Image({ params }: Props) {
     branding: [data?.competition.branding, data?.org.branding],
     youth: priv?.youth ?? false,
     entrantKind: data?.entrants[0]?.kind ?? null,
-    homeName: fixture?.home_entrant_id ? (names[fixture.home_entrant_id] ?? null) : null,
-    awayName: fixture?.away_entrant_id ? (names[fixture.away_entrant_id] ?? null) : null,
+    homeName: fixture?.home_entrant_id
+      ? (names[fixture.home_entrant_id] ?? null)
+      : fixture
+        ? resolveSlotLabel(fixture.home_slot_label, msg, "schedule.tbd")
+        : null,
+    awayName: fixture?.away_entrant_id
+      ? (names[fixture.away_entrant_id] ?? null)
+      : fixture
+        ? resolveSlotLabel(fixture.away_slot_label, msg, "schedule.tbd")
+        : null,
     headline: summary?.headline ?? null,
     fixtureStatus: fixture?.status ?? "scheduled",
   });

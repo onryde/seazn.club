@@ -10,6 +10,14 @@ import { useState } from "react";
 import { CalendarPlus } from "lucide-react";
 import type { PublicFixture } from "@/server/public-site/data";
 import { fmtTime, fmtDate, fmtZoneAbbrev } from "@/lib/format";
+import { msg } from "@/lib/messages";
+import { resolveSlotLabel } from "@/lib/slot-label";
+// This surface has no locale/<DictProvider> plumbing anywhere in its tree
+// today (confirmed: "Time TBD"/"Round"/"Live"/"Ended" etc. are all already
+// hardcoded English here, a pre-existing gap outside this task) — the slot
+// label goes through the SAME shared resolver as every localized surface,
+// via the client-safe English msg(), consistent with the rest of this file
+// rather than only this one string suddenly switching locale.
 
 interface Props {
   fixtures: PublicFixture[];
@@ -66,8 +74,12 @@ function ScorebugRow({
   const decided = f.status === "decided" || f.status === "finalized";
   const winner = f.outcome?.winner ?? null;
   const lines = decided || live ? sideLines(f) : null;
-  const homeName = f.home_entrant_id ? (entrantNames[f.home_entrant_id] ?? "?") : "TBD";
-  const awayName = f.away_entrant_id ? (entrantNames[f.away_entrant_id] ?? "?") : "TBD";
+  const homeName = f.home_entrant_id
+    ? (entrantNames[f.home_entrant_id] ?? "?")
+    : resolveSlotLabel(f.home_slot_label, msg, "schedule.tbd");
+  const awayName = f.away_entrant_id
+    ? (entrantNames[f.away_entrant_id] ?? "?")
+    : resolveSlotLabel(f.away_slot_label, msg, "schedule.tbd");
 
   const nameCls = (id: string | null) =>
     winner && id === winner

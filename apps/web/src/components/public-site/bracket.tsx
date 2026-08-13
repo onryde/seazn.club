@@ -6,6 +6,9 @@
 // double-elim / stepladder / irregular shapes keep the column fallback.
 import Link from "next/link";
 import type { PublicFixture } from "@/server/public-site/data";
+import { msg } from "@/lib/messages";
+import { resolveSlotLabel } from "@/lib/slot-label";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import {
   doubleElimBracket,
   lbRowUnit,
@@ -28,8 +31,12 @@ interface Props {
   fixtureHref: (fixtureId: string) => string;
 }
 
-function sideLabel(entrantId: string | null, names: Record<string, string>): string {
-  return entrantId ? (names[entrantId] ?? "?") : "TBD";
+function sideLabel(
+  entrantId: string | null,
+  names: Record<string, string>,
+  slotLabel: SlotLabel | null,
+): string {
+  return entrantId ? (names[entrantId] ?? "?") : resolveSlotLabel(slotLabel, msg, "bracket.tbd");
 }
 
 function FixtureCard({
@@ -44,7 +51,7 @@ function FixtureCard({
   href: string;
 }) {
   const winner = fixture.outcome?.winner;
-  const side = (id: string | null) => {
+  const side = (id: string | null, slotLabel: SlotLabel | null) => {
     const badge = id ? entrantLogos?.[id] : null;
     return (
       <span className="flex min-w-0 items-center gap-1.5">
@@ -61,7 +68,7 @@ function FixtureCard({
                 : "truncate text-ink"
           }
         >
-          {sideLabel(id, entrantNames)}
+          {sideLabel(id, entrantNames, slotLabel)}
         </span>
       </span>
     );
@@ -77,8 +84,8 @@ function FixtureCard({
       {winner ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-accent" /> : null}
       {live ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-emerald-400" /> : null}
       <div className="flex flex-col gap-0.5">
-        {side(fixture.home_entrant_id)}
-        {side(fixture.away_entrant_id)}
+        {side(fixture.home_entrant_id, fixture.home_slot_label)}
+        {side(fixture.away_entrant_id, fixture.away_slot_label)}
       </div>
       <div className="mt-1.5 text-xs text-ink-muted">
         {live ? (

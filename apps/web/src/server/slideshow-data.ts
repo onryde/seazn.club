@@ -12,6 +12,9 @@ import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
 import { BRACKET_SLIDE_KINDS, bracketSlideLaysOut } from "@/components/v2/slideshow-rotation";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { msg } from "@/lib/messages";
+import { resolveSlotLabel } from "@/lib/slot-label";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
@@ -46,6 +49,13 @@ export interface BracketSlideFixture {
   seq_in_round: number;
   home: string | null;
   away: string | null;
+  /** D4b (P6) — {key, params} i18n pattern ref while `home`/`away` (above) is
+   *  null (V360's fixtures.home/away_slot_label); slideshow.tsx resolves it —
+   *  this feature has no locale/DictProvider anywhere in its tree, so it
+   *  stays on the client-safe English msg() rather than only ever showing a
+   *  bare "TBD". */
+  home_slot_label: SlotLabel | null;
+  away_slot_label: SlotLabel | null;
   line: string | null;
   status: string;
 }
@@ -172,8 +182,12 @@ export async function buildDivisionSlides(
   const lineOf = new Map(summaries.map((s) => [s.fixture_id, s.summary?.headline ?? null]));
 
   const item = (f: (typeof fixtures)[number]): FixtureSlideItem => ({
-    home: names[f.home_entrant_id ?? ""] ?? "TBD",
-    away: names[f.away_entrant_id ?? ""] ?? "TBD",
+    home: f.home_entrant_id
+      ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, msg, "schedule.tbd"))
+      : resolveSlotLabel(f.home_slot_label, msg, "schedule.tbd"),
+    away: f.away_entrant_id
+      ? (names[f.away_entrant_id] ?? resolveSlotLabel(null, msg, "schedule.tbd"))
+      : resolveSlotLabel(f.away_slot_label, msg, "schedule.tbd"),
     homeLogo: logos[f.home_entrant_id ?? ""] ?? null,
     awayLogo: logos[f.away_entrant_id ?? ""] ?? null,
     line: lineOf.get(f.id) ?? null,
@@ -215,6 +229,8 @@ export async function buildDivisionSlides(
           seq_in_round: f.seq_in_round,
           home: f.home_entrant_id ? (names[f.home_entrant_id] ?? null) : null,
           away: f.away_entrant_id ? (names[f.away_entrant_id] ?? null) : null,
+          home_slot_label: f.home_slot_label,
+          away_slot_label: f.away_slot_label,
           line: lineOf.get(f.id) ?? null,
           status: f.status,
         })),
@@ -243,6 +259,10 @@ export interface PublicSlideInput {
     seq_in_round: number;
     home_entrant_id: string | null;
     away_entrant_id: string | null;
+    /** Optional: several existing unit tests construct this input by hand
+     *  without it — absent reads the same as null. */
+    home_slot_label?: SlotLabel | null;
+    away_slot_label?: SlotLabel | null;
     status: string;
     summary: { headline?: string } | null;
   }[];
@@ -283,8 +303,12 @@ export function buildPublicDivisionSlides(data: PublicSlideInput): Slide[] {
   }
 
   const item = (f: PublicSlideInput["fixtures"][number]): FixtureSlideItem => ({
-    home: names[f.home_entrant_id ?? ""] ?? "TBD",
-    away: names[f.away_entrant_id ?? ""] ?? "TBD",
+    home: f.home_entrant_id
+      ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, msg, "schedule.tbd"))
+      : resolveSlotLabel(f.home_slot_label ?? null, msg, "schedule.tbd"),
+    away: f.away_entrant_id
+      ? (names[f.away_entrant_id] ?? resolveSlotLabel(null, msg, "schedule.tbd"))
+      : resolveSlotLabel(f.away_slot_label ?? null, msg, "schedule.tbd"),
     homeLogo: null,
     awayLogo: null,
     line: f.summary?.headline ?? null,
@@ -316,6 +340,8 @@ export function buildPublicDivisionSlides(data: PublicSlideInput): Slide[] {
           id: f.id, round_no: f.round_no, seq_in_round: f.seq_in_round,
           home: f.home_entrant_id ? (names[f.home_entrant_id] ?? null) : null,
           away: f.away_entrant_id ? (names[f.away_entrant_id] ?? null) : null,
+          home_slot_label: f.home_slot_label ?? null,
+          away_slot_label: f.away_slot_label ?? null,
           line: f.summary?.headline ?? null,
           status: f.status,
         })),

@@ -836,7 +836,7 @@ export function ScheduleBoard({
         const next = cur === fixtureId ? null : fixtureId;
         const f = actions.board.find((x) => x.id === fixtureId);
         if (next && f) {
-          setAnnounce(msg("board.announce.picked", { title: cardTitle(f, entrantNames, feedLabels) }));
+          setAnnounce(msg("board.announce.picked", { title: cardTitle(f, entrantNames, feedLabels, msg) }));
         } else {
           setAnnounce(msg("board.announce.cancelled"));
         }
@@ -849,7 +849,7 @@ export function ScheduleBoard({
   const place = useCallback(
     async (atIso: string, court: string | null) => {
       if (!pickedFixture) return;
-      const title = cardTitle(pickedFixture, entrantNames, feedLabels);
+      const title = cardTitle(pickedFixture, entrantNames, feedLabels, msg);
       const ok = await actions.moveCard(pickedFixture.id, atIso, court);
       if (ok) {
         setPickedId(null);
@@ -1678,7 +1678,7 @@ function WeekView({
                         <span>{f.court_label}</span>
                       </div>
                       <p className="truncate font-medium text-slate-700">
-                        {cardTitle(f, entrantNames, feedLabels)}
+                        {cardTitle(f, entrantNames, feedLabels, msg)}
                       </p>
                       {multi && (
                         <p className="truncate text-[10px] text-slate-500">

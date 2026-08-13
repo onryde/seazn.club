@@ -8,6 +8,7 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { ScorerScopeType } from "@/lib/types";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 export interface FixtureScope {
   id: string;
@@ -148,6 +149,10 @@ export interface AssignedFixture {
   away_entrant_id: string | null;
   home_name: string | null;
   away_name: string | null;
+  /** D4b (P6) — {key, params} i18n pattern ref while the matching
+   *  *_entrant_id is null (V360's fixtures.home/away_slot_label). */
+  home_slot_label: SlotLabel | null;
+  away_slot_label: SlotLabel | null;
   scheduled_at: string | null;
   /** Venue zone (V305): division override → org timezone → UTC. */
   venue_tz: string | null;
@@ -175,6 +180,7 @@ export async function listAssignedFixtures(
              d.sport_key, d.module_version, f.round_no,
              f.home_entrant_id, f.away_entrant_id,
              he.display_name as home_name, ae.display_name as away_name,
+             f.home_slot_label, f.away_slot_label,
              f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.venue, f.court_label, f.status
       from scorer_assignments sa
       join fixtures f on (
@@ -201,6 +207,7 @@ export async function listAssignedFixtures(
              d.sport_key, d.module_version, f.round_no,
              f.home_entrant_id, f.away_entrant_id,
              he.display_name as home_name, ae.display_name as away_name,
+             f.home_slot_label, f.away_slot_label,
              f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz, f.venue, f.court_label, f.status
       from fixture_officials fo
       join officials ofc on ofc.id = fo.official_id
