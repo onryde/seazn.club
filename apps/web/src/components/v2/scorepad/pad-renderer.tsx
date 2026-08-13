@@ -230,7 +230,11 @@ export function PadRenderer(props: PadRendererProps) {
                 data-phase={p}
                 aria-pressed={p === phase}
                 onClick={() => setPhase(p)}
-                className={`rounded-full px-3 py-1.5 text-xs font-semibold uppercase tracking-widest transition ${
+                /* min-h-11 = 44px: the phase tabs are the pad's most-tapped
+                 * chrome and sat at 28px until S11 measured them in a real
+                 * browser at 375. Height only — the pill's horizontal padding
+                 * already exceeds the bar. */
+                className={`inline-flex min-h-11 items-center rounded-full px-3 py-1.5 text-xs font-semibold uppercase tracking-widest transition ${
                   p === phase ? "bg-emerald-400 text-slate-900" : "text-slate-400 hover:text-slate-200"
                 }`}
               >

@@ -78,7 +78,10 @@ export function FidelitySwitcher({ value, onChange, entitlements, fidelityEntitl
               aria-pressed={active}
               title={locked ? msg("scorepad.fidelity.locked") : undefined}
               onClick={() => requestChange(band)}
-              className={`flex-1 rounded-lg border px-2 py-2 text-xs font-semibold transition ${
+              /* min-h-11 = 44px — measured at 34px in a real browser during
+               * S11's skin screenshots; every skin draws this switcher, so it
+               * failed the touch bar on all five screens. */
+              className={`min-h-11 flex-1 rounded-lg border px-2 py-2 text-xs font-semibold transition ${
                 active
                   ? "border-purple-600 bg-purple-600 text-white"
                   : locked
