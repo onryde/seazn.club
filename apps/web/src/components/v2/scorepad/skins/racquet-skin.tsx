@@ -62,6 +62,7 @@ import {
   type SkinProminence,
   type SkinProps,
 } from "./types";
+import { renderLockedTile } from "./shared";
 
 // ---------------------------------------------------------------------------
 // layout() — PURE. No React, no DOM, no i18n lookup (types.ts's own rule):
@@ -267,29 +268,6 @@ function isSideTapOnly(action: PadActionView): boolean {
 function sideAttributionPath(action: PadActionView): string {
   const item = action.attribution.find((it) => it.kind === "side");
   return item?.path ?? "by";
-}
-
-/** Mirrors panel.tsx's own `renderLockedTile` (same visual language, same
- *  reason text) — not imported, because that one is a private, unexported
- *  function of a file this skin does not own; duplicating ~8 lines beats
- *  either editing a shared chassis file or forking `Panel` wholesale. Byte-
- *  identical to tennis-skin.tsx's/football-skin.tsx's own copy of the same
- *  comment+function, for the same reason (S11/#420 W9 review fix: this file
- *  never checked `availability` at all before, so a locked action rendered
- *  as a live, tappable control the server would then refuse). */
-function renderLockedTile(action: PadActionView, msg: MsgFn): ReactNode {
-  if (action.availability.kind !== "locked") return null;
-  const label = padLabel(action.labelKey.key, msg, action.labelKey.label);
-  return (
-    <div
-      key={action.type + action.labelKey.key}
-      className="flex h-14 w-full flex-col items-center justify-center gap-0.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-center opacity-75"
-      aria-disabled="true"
-    >
-      <span className="text-sm font-medium text-amber-900">{label}</span>
-      <span className="text-[11px] text-amber-700">{msg(action.availability.reason.key)}</span>
-    </div>
-  );
 }
 
 function SideTapAction(props: {

@@ -48,6 +48,7 @@ import {
   type SkinProminence,
   type SkinProps,
 } from "./types";
+import { renderLockedTile } from "./shared";
 
 type MsgFn = ReturnType<typeof useMsg>;
 
@@ -767,19 +768,10 @@ function AdminGroup({
       {group.actions.map((type) => {
         const action = actionByType(view, type);
         if (!action) return null;
-        if (action.availability.kind === "locked") {
-          return (
-            <div
-              key={type}
-              className="flex h-14 w-full flex-col items-center justify-center gap-0.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-center opacity-75"
-            >
-              <span className="text-sm font-medium text-amber-900">
-                {padLabel(action.labelKey.key as MessageKey, msg, action.labelKey.label)}
-              </span>
-              <span className="text-[11px] text-amber-700">{msg(action.availability.reason.key)}</span>
-            </div>
-          );
-        }
+        // Shared with every other skin AND with the universal renderer — this
+        // copy had already drifted, omitting `aria-disabled`, which announced a
+        // locked control to a screen reader as an ordinary element.
+        if (action.availability.kind === "locked") return renderLockedTile(action, msg);
         return (
           <ActionForm
             key={type}

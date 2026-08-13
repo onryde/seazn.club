@@ -64,6 +64,7 @@ import {
   type SkinProminence,
   type SkinProps,
 } from "./types";
+import { renderLockedTile, chipClass } from "./shared";
 
 /** `useMsg()`'s own return shape (dict-provider.tsx:78), typed explicitly
  *  rather than `ReturnType<typeof useMsg>` — every render helper below takes
@@ -264,12 +265,6 @@ const GROUP_TITLE_KEY: Record<string, MessageKey> = {
  *  `HEADER_*_CAPTION` constants declared next to it. */
 function capMsg(msg: MsgFn, key: string | null): string {
   return key ? msg(key as MessageKey) : "";
-}
-
-function chipClass(pressed: boolean): string {
-  return `inline-flex min-h-11 shrink-0 items-center rounded-full border px-4 text-sm font-medium transition ${
-    pressed ? "border-accent-line bg-accent-line/10 text-slate-900" : "border-slate-200 text-slate-600"
-  }`;
 }
 
 /** A scorer's own vocabulary: a squad member is a NUMBER, never a personId —
@@ -480,31 +475,6 @@ function renderHeader(header: SkinHeader | null, queueDepth: number, offline: bo
         </div>
       )}
     </header>
-  );
-}
-
-/** Mirrors panel.tsx's own `renderLockedTile` (same visual language, same
- *  reason text) — not imported, because that one is a private, unexported
- *  function of a file this skin does not own; duplicating ~8 lines beats
- *  either editing a shared chassis file or forking `Panel` wholesale. Byte-
- *  identical to tennis-skin.tsx's/football-skin.tsx's/racquet-skin.tsx's own
- *  copy of the same comment+function, for the same reason (S11/#420 W9
- *  review fix: this file never checked `availability` at all before, so a
- *  locked action rendered as a live, tappable control the server would then
- *  refuse). A PLAIN FUNCTION, called directly — never JSX-instantiated, per
- *  this file's own module header. */
-function renderLockedTile(action: PadActionView, msg: MsgFn): ReactNode {
-  if (action.availability.kind !== "locked") return null;
-  const label = padLabel(action.labelKey.key, msg, action.labelKey.label);
-  return (
-    <div
-      key={action.type + action.labelKey.key}
-      className="flex h-14 w-full flex-col items-center justify-center gap-0.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-center opacity-75"
-      aria-disabled="true"
-    >
-      <span className="text-sm font-medium text-amber-900">{label}</span>
-      <span className="text-[11px] text-amber-700">{msg(action.availability.reason.key)}</span>
-    </div>
   );
 }
 

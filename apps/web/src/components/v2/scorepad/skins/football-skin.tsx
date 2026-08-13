@@ -61,6 +61,7 @@ import {
   type SkinProminence,
   type SkinProps,
 } from "./types";
+import { renderLockedTile, chipClass } from "./shared";
 
 /** `useMsg()`'s own return type (dict-provider.tsx), which supports `vars`
  *  interpolation -- WIDER than `@/lib/scoring-vocab`'s `MsgFn` (single
@@ -253,12 +254,6 @@ interface ChipOption {
   label: string;
 }
 
-function chipClass(pressed: boolean): string {
-  return `inline-flex min-h-11 shrink-0 items-center rounded-full border px-4 text-sm font-medium transition ${
-    pressed ? "border-accent-line bg-accent-line/10 text-slate-900" : "border-slate-200 text-slate-600"
-  }`;
-}
-
 /** One labelled row of tap-to-select chips -- single select, re-tap clears.
  *  A plain function, not a component: this repo's node-only `_hook-harness`
  *  walks a rendered tree by descending into `.props.children` only
@@ -290,21 +285,6 @@ function renderChipRow(
           })}
         </div>
       )}
-    </div>
-  );
-}
-
-function renderLockedTile(action: PadActionView, msg: MsgFn): ReactNode {
-  if (action.availability.kind !== "locked") return null;
-  const label = padLabel(action.labelKey.key, msg, action.labelKey.label);
-  return (
-    <div
-      key={action.type + action.labelKey.key}
-      className="flex h-14 w-full flex-col items-center justify-center gap-0.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-center opacity-75"
-      aria-disabled="true"
-    >
-      <span className="text-sm font-medium text-amber-900">{label}</span>
-      <span className="text-[11px] text-amber-700">{msg(action.availability.reason.key)}</span>
     </div>
   );
 }

@@ -43,6 +43,7 @@ import {
   type SkinProminence,
   type SkinProps,
 } from "./types";
+import { renderLockedTile } from "./shared";
 
 // ---------------------------------------------------------------------------
 // layout() — pure. Reads `ctx.cfg` / `ctx.state` defensively; never throws.
@@ -254,25 +255,6 @@ type RenderAttribution = NonNullable<ActionFormProps["renderAttribution"]>;
  *  of what a skin can offer without those two props, not a silent gap. */
 function syntheticLineups(entrants: { home: string; away: string }): LineupPair {
   return { home: { entrantId: entrants.home, slots: [] }, away: { entrantId: entrants.away, slots: [] } };
-}
-
-/** Mirrors panel.tsx's own `renderLockedTile` (same visual language, same
- *  reason text) — not imported, because that one is a private, unexported
- *  function of a file this skin does not own; duplicating ~8 lines beats
- *  either editing a shared chassis file or forking `Panel` wholesale. */
-function renderLockedTile(action: PadActionView, msg: MsgFn): ReactNode {
-  if (action.availability.kind !== "locked") return null;
-  const label = padLabel(action.labelKey.key, msg, action.labelKey.label);
-  return (
-    <div
-      key={action.type + action.labelKey.key}
-      className="flex h-14 w-full flex-col items-center justify-center gap-0.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-center opacity-75"
-      aria-disabled="true"
-    >
-      <span className="text-sm font-medium text-amber-900">{label}</span>
-      <span className="text-[11px] text-amber-700">{msg(action.availability.reason.key)}</span>
-    </div>
-  );
 }
 
 function renderActionTile(
