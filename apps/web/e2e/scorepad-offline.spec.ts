@@ -192,6 +192,23 @@ function scoreEvents(entrantId: string, ...points: number[]): { type: string; pa
   return points.map((n) => ({ type: "generic.score", payload: { by: entrantId, points: n } }));
 }
 
+// The harness route is `notFound()` unless the SERVER was started with
+// SCOREPAD_V2_HARNESS=1 (page.tsx), so on a target that does not set it these
+// three specs would fail on a missing button and read as a chassis defect.
+// Skip instead — but LOUDLY, and only after PROVING the route is absent for
+// that reason (a 404), never on a bare env-var read from the runner's own
+// process, which says nothing about the server under test. A silent skip is
+// the "test that cannot fail" shape this programme has shipped four times.
+test.beforeAll(async ({ request, baseURL }) => {
+  const res = await request.get(`${baseURL ?? ""}/score/harness?sport=generic`);
+  if (res.status() === 404) {
+    console.warn(
+      "[scorepad-offline] SKIPPED: /score/harness returned 404 — this server was started without SCOREPAD_V2_HARNESS=1. The durable-queue criteria are NOT covered by this run.",
+    );
+  }
+  test.skip(res.status() === 404, "harness route disabled on this target (SCOREPAD_V2_HARNESS unset)");
+});
+
 test("tab death mid-queue: the durable queue survives a real reload and drains in order with no duplicates", async ({
   page,
   request,
