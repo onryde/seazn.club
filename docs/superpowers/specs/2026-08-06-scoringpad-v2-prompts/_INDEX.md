@@ -2422,6 +2422,34 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   (11 keys) is NOT part of this deletion. It is a separate hardcoded list the
   registry does not replace, and the drift guard added this session does not
   cover it.
+- 2026-08-13 — S12/#421 — **the pad's own undo silently does nothing for an
+  event you just scored — only a reload makes it work.** Found by probing the
+  seam this session wired under owner ruling, which is the point: the fix
+  itself needed browser proof, not just the flows it enabled.
+  Measured, no reload, football goal scored through the pad then its OWN
+  timeline row's Undo clicked:
+  ```
+  VP_ROW_0 {id:"89a9fa93…", txt:"#2 Goal Home (Scorer) … Undo"}   <- pad-submitted
+  VP_ROW_1 {id:"100ccb9a…", txt:"#1 Match started (Scorer) … Undo"} <- server-sourced
+  clicked row 0 -> ledger stays ["core.start","football.goal"], and NO third
+  POST is made at all.
+  ```
+  Cause: the timeline MIXES two id namespaces. A row the pad learned from the
+  server (via `initialEvents` or a poll) carries the server's row id and voids
+  fine — that is why the e2e passes after a `page.reload()`. A row the pad
+  submitted itself carries the CLIENT-FABRICATED id (the idempotency key,
+  `use-pad-pipeline.ts`'s `newId()`), because `appendEvent`'s ack returns
+  `{seq, state_summary, outcome, status}` and no row id, and pass F's
+  `incomingWins` deliberately keeps the local copy on the seq collision. So
+  `handleVoid` submits `core.void {event_id: <a client id the server has never
+  seen>}`, and it is swallowed before the network.
+  Why it is worse than it looks: "I just tapped the wrong thing" IS the undo
+  case. The one that works — undoing something from a previous page load — is
+  the rare one. And it is silent: no error, no rejection, no queued event.
+  Note also that voiding `core.start` after scoring produces a confusing
+  cascade (the later goal replays and 422s `WRONG_PHASE`), which is coherent
+  behaviour for an incoherent request but is how the first probe mis-read this
+  defect. The timeline renders NEWEST FIRST, so `.last()` is the oldest row.
 - _(append below)_
 
 ## Open questions for the owner
