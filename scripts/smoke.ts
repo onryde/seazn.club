@@ -736,6 +736,14 @@ async function main() {
   // (already Pro); keyless-safe.
   await playerStatsSuite(admin, org2.id);
 
+  // --- S13/W11: the v2 ScorePad's append path (transport.ts/
+  // use-pad-pipeline.ts) had ZERO real-HTTP smoke coverage — closes the
+  // debt S1/S3-S8/S10/S11 all deferred. Scores one fixture to a DECIDED
+  // result on org2 (Pro) AND a fresh free org, asserting the server's own
+  // reported outcome. Own fresh competitions on org2 (already Pro); the free
+  // half mints its own community org — keyless-safe, no entitlement grant.
+  await scorePadV2AppendSuite(admin, org2.id);
+
   // --- v16 SPEC-3 marks & reports: rate an accepted, decided official (Pro
   // 204 + summary avg) and file/submit a report (free) on org2; mark PUT 402
   // on a fresh community org while the report still files. Runs while org2 is
@@ -13662,6 +13670,143 @@ async function careerRollupSuite(
     await v1(admin, `/api/v1/persons/${scorerId}/stats?group=nonsense`),
   );
   check("career: an unknown group value falls back to per-division", Array.isArray(bogus.divisions));
+}
+
+/**
+ * S13/W11 — post one score event through the SAME wire contract the v2
+ * ScorePad's own transport.ts sends (POST /api/v1/fixtures/{id}/events with
+ * expected_seq/type/payload/idempotency_key), retrying on a genuine 409
+ * SEQ_CONFLICT rather than assuming the first attempt lands clean (doc 08
+ * §4). `current_seq` rides the 409 body only when the engine error carried a
+ * numeric actualSeq (http.ts) — falls back to a fresh GET .../state read
+ * exactly like transport.ts's own documented fallback when it does not. A
+ * FRESH idempotency_key on every attempt: engine-db/append-event.ts always
+ * mints its own randomUUID() for the persisted row id regardless of the key
+ * sent (scoring.ts never forwards the client's key as the row id), and the
+ * dedup cache in front of it is fail-open Redis with no ledger column — so
+ * reusing one key across a retry buys no provable no-op here, and this
+ * helper never leans on it for correctness.
+ */
+async function appendScoreEvent(
+  s: Session,
+  fixtureId: string,
+  type: string,
+  payload: unknown,
+): Promise<V1Res> {
+  let expectedSeq = v1data<{ last_seq: number }>(
+    await v1(s, `/api/v1/fixtures/${fixtureId}/state`),
+  ).last_seq;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await v1(s, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+      expected_seq: expectedSeq,
+      type,
+      payload,
+      idempotency_key: `smoke-${tag}-${fixtureId}-${type}-${attempt}`,
+    });
+    if (res.status !== 409) return res;
+    expectedSeq =
+      typeof res.json.error?.current_seq === "number"
+        ? res.json.error.current_seq
+        : v1data<{ last_seq: number }>(await v1(s, `/api/v1/fixtures/${fixtureId}/state`)).last_seq;
+  }
+  throw new Error(`${type} on fixture ${fixtureId} never landed after 3 attempts (persistent SEQ_CONFLICT)`);
+}
+
+/**
+ * S13/W11 — closes the smoke debt S1/S3-S8/S10/S11 all deferred: the v2
+ * ScorePad's append path (transport.ts/use-pad-pipeline.ts) had ZERO
+ * real-HTTP coverage in this file. Scores one fixture to a DECIDED result on
+ * the Pro org AND a fresh free (community) org, asserting the server's own
+ * reported outcome — never merely a 201.
+ *
+ * Sport chosen: generic. generic.ts's own `fidelityTiers` declares band/tier
+ * 0 (the lowest granularity — module.ts's `FIDELITY[0] === "result"`, what
+ * the design docs called "quick" before that three-word vocabulary was
+ * retired 2026-08-06 in favour of the closed 0-3 numeric scale) as EXACTLY
+ * ONE event type: `generic.result` alone, nothing else. That event legally
+ * folds from a fixture's initial "pre" phase (generic.ts's apply(): the only
+ * guard on `generic.result` is `phase !== "pre" && phase !== "live"`), and
+ * append-event.ts places no fixture-status precondition beyond the LOCKED
+ * set (finalized/cancelled) — so a single POST decides a brand-new fixture
+ * outright, with no core.start first. No other shipped module reaches a
+ * decided result in fewer than a core.start plus at least one sport-specific
+ * event, which makes this provably the shortest decided-result path of any
+ * module here, not just a convenient one. This mirrors how
+ * `pagePlayoffSuite`'s own `decide()` helper and `v1Suite`'s
+ * standings-decide loop already score fixtures elsewhere in this file.
+ *
+ * Tier 0 is free on every plan (fidelity.ts's `requiredFeatureForEvent`:
+ * `core.*` is always free, and generic's tier 0 carries no `entitlement` at
+ * all — `padSpec`'s own `fidelityEntitlements` is `{}` for generic) — so the
+ * free half is expected to reach the SAME decided outcome as the Pro half,
+ * with no plan flip. If it did not, that would be a finding to report, not
+ * something to paper over with a Pro entitlement on the free org.
+ */
+async function scorePadV2AppendSuite(admin: Session, proOrgId: string): Promise<void> {
+  const genericConfig = { points: { w: 3, d: 1, l: 0 }, progressScore: false };
+
+  const decideOneFixture = async (s: Session, orgId: string, label: string): Promise<void> => {
+    s.cookies["seazn_org"] = orgId;
+    const comp = v1data<{ id: string }>(
+      await v1(s, "/api/v1/competitions", "POST", {
+        ends_on: "2030-12-31",
+        name: `ScorePad Append ${label} ${tag}`,
+      }),
+    );
+    const div = v1data<{ id: string }>(
+      await v1(s, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+        name: "Decided",
+        sport_key: "generic",
+        variant_key: "score",
+        config: genericConfig,
+      }),
+    );
+    await v1(s, `/api/v1/divisions/${div.id}/entrants`, "POST", [
+      { kind: "individual", display_name: `${label} Home ${tag}`, seed: 1, members: [] },
+      { kind: "individual", display_name: `${label} Away ${tag}`, seed: 2, members: [] },
+    ]);
+    const stage = v1data<{ id: string }>(
+      await v1(s, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" }),
+    );
+    const fx = v1data<{ fixtures: { id: string }[] }>(
+      await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"),
+    ).fixtures[0]!.id;
+    await v1(s, `/api/v1/divisions/${div.id}/start`, "POST");
+
+    // THE append: one event, the exact wire shape use-pad-pipeline.ts's own
+    // transport sends, retried on a real 409 rather than assumed clean.
+    const scored = await appendScoreEvent(s, fx, "generic.result", { p1Score: 2, p2Score: 0 });
+    check(`scorepad append ${label}: generic.result accepted (201)`, scored.status === 201);
+    const acked = v1data<{ status: string; outcome: unknown }>(scored);
+    check(
+      `scorepad append ${label}: the append ack reports the fixture DECIDED`,
+      acked.status === "decided",
+    );
+    check(
+      `scorepad append ${label}: the ack's outcome is a real win, not null`,
+      !!acked.outcome && (acked.outcome as { kind?: string }).kind === "win",
+    );
+
+    // Confirm through the SAME read the pad's own reconciliation step uses
+    // (transport.ts's fetchState / GET .../state) — never just the append ack.
+    const state = v1data<{ status: string; outcome: unknown }>(
+      await v1(s, `/api/v1/fixtures/${fx}/state`),
+    );
+    check(
+      `scorepad append ${label}: GET .../state independently confirms decided`,
+      state.status === "decided" && !!state.outcome,
+    );
+  };
+
+  // ---- Pro path ----
+  await decideOneFixture(admin, proOrgId, "Pro");
+
+  // ---- Free (community) path: proves a free org can score at all through
+  // the same append door — tier 0 carries no entitlement, so no plan flip. ----
+  const freeOwner = newSession();
+  await signIn(freeOwner, `scorepadfree_${tag}@example.com`);
+  const freeOrgId = ((await call(freeOwner, "/api/orgs")) as { id: string }[])[0]!.id;
+  await decideOneFixture(freeOwner, freeOrgId, "Free");
 }
 
 /**
