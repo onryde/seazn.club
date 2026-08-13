@@ -3695,6 +3695,7 @@
   "schedule.capacity.apply": "Toepassen",
   "schedule.capacity.blockedReason": "Oplossen is geblokkeerd totdat dit past. Zie de capaciteitscontrole op het tabblad Instellingen",
   "schedule.health.title": "Schemastatus",
+  "schedule.health.tabLabel": "Status",
   "schedule.health.metric.restSpread": "Rustspreiding",
   "schedule.health.metric.courtBalance": "Baanbalans",
   "schedule.health.metric.gapDispersion": "Spreiding van gaten",

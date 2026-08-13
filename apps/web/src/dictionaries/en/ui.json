@@ -3695,6 +3695,7 @@
   "schedule.capacity.apply": "Apply",
   "schedule.capacity.blockedReason": "Solve is blocked until this fits — see the Capacity check on the Settings tab",
   "schedule.health.title": "Schedule health",
+  "schedule.health.tabLabel": "Health",
   "schedule.health.metric.restSpread": "Rest spread",
   "schedule.health.metric.courtBalance": "Court balance",
   "schedule.health.metric.gapDispersion": "Gap dispersion",

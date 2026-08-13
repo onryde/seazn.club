@@ -3695,6 +3695,7 @@
   "schedule.capacity.apply": "Aplicar",
   "schedule.capacity.blockedReason": "La resolución está bloqueada hasta que esto encaje. Consulta la comprobación de capacidad en la pestaña Configuración",
   "schedule.health.title": "Estado del calendario",
+  "schedule.health.tabLabel": "Estado",
   "schedule.health.metric.restSpread": "Distribución del descanso",
   "schedule.health.metric.courtBalance": "Equilibrio de pistas",
   "schedule.health.metric.gapDispersion": "Dispersión de huecos",

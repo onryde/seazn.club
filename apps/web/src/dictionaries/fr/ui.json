@@ -3695,6 +3695,7 @@
   "schedule.capacity.apply": "Appliquer",
   "schedule.capacity.blockedReason": "La résolution est bloquée tant que cela ne convient pas. Voir la vérification de capacité dans l'onglet Paramètres",
   "schedule.health.title": "État du calendrier",
+  "schedule.health.tabLabel": "État",
   "schedule.health.metric.restSpread": "Répartition du repos",
   "schedule.health.metric.courtBalance": "Équilibre des terrains",
   "schedule.health.metric.gapDispersion": "Dispersion des creux",
