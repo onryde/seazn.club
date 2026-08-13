@@ -645,3 +645,82 @@ describe("ThisOverGroup: person picker options show ctx.personNames, not a raw i
     expect(propsOf(option).children).toBe(NAME_STRIKER);
   });
 });
+
+// ---------------------------------------------------------------------------
+// S12/#421 — the first ball of EVERY over was schema-invalid, so no cricket
+// over could be scored past its own first delivery.
+//
+// `legalBalls % bpo` is the count of legal balls this over has ALREADY seen
+// (0..bpo-1). `CricketBall.ballInOver` is WHICH ball this delivery IS
+// (1..bpo), declared `z.number().int().positive()`. The skin sent the count as
+// the ordinal, so a fresh over submitted `ballInOver: 0` and the server
+// rejected it 422.
+//
+// Why nothing caught it: `skin-coverage.test.ts` asserts on `layout()`'s DATA
+// and never on a built payload, and every existing payload test supplied a
+// mid-over `BallEntry` by hand, where the off-by-one is still a positive
+// number and so still parses. Found by submitting a real ball against the real
+// API — the browser coverage cricket had never had.
+//
+// The assertion validates against the MODULE'S OWN schema
+// (`eventSchemas["cricket.ball"]`, S6/#416's registry) rather than against a
+// hand-written expectation, so it also catches any other payload drift and
+// cannot disagree with the server about what is valid.
+// ---------------------------------------------------------------------------
+describe("ThisOverGroup: the ball payload is valid against the engine's own schema (S12/#421)", () => {
+  type MsgFn = (key: MessageKey, vars?: Record<string, string | number>) => string;
+  const msg: MsgFn = (key, vars) => tRuntime(messages, key, vars);
+  const LP = defaultLineupPair(cricketEngine.positions);
+  const CFG: CricketCfg = cricketEngine.configSchema.parse(cricketEngine.variants.t20);
+
+  function freshState(): CricketState {
+    const events: EventEnvelope[] = [makeEnvelope(0, { type: "core.start", payload: {} })];
+    return foldMatch(cricketEngine, CFG, LP, events, { strictFromSeq: 0 });
+  }
+
+  /** Click the run button whose label is `label`, returning what was dispatched. */
+  function tapRun(label: string): { type: string; payload: unknown } {
+    const sent: { type: string; payload: unknown }[] = [];
+    const state = freshState();
+    const island = renderIsland(ThisOverGroup, {
+      msg,
+      view: viewFor(CFG, "live", state),
+      state,
+      bpo: CFG.ballsPerOver,
+      submittingType: null,
+      dispatch: async (type: string, payload: unknown) => {
+        sent.push({ type, payload });
+      },
+      personNames: undefined,
+    });
+    const btn = island
+      .tree()
+      // The run buttons render their label as a NUMBER (`{n}`), not a string,
+      // so compare coerced — matching on `=== label` finds nothing and the
+      // test fails for the wrong reason.
+      .find((e) => e.type === "button" && String(propsOf(e).children) === label);
+    if (!btn) throw new Error(`no run button labelled "${label}"`);
+    (propsOf(btn).onClick as () => void)();
+    if (sent.length !== 1) throw new Error(`expected exactly one dispatch, got ${sent.length}`);
+    return sent[0]!;
+  }
+
+  it("the FIRST ball of an over is ballInOver 1, not 0, and parses against cricket.ball", () => {
+    const { type, payload } = tapRun("1");
+    expect(type).toBe("cricket.ball");
+    expect((payload as { ballInOver: number }).ballInOver).toBe(1);
+    expect((payload as { over: number }).over).toBe(0);
+
+    const schema = cricketEngine.eventSchemas?.["cricket.ball"];
+    if (!schema) throw new Error("cricket.ball has no registered payload schema");
+    const parsed = schema.safeParse(payload);
+    expect(parsed.success, `cricket.ball payload rejected: ${JSON.stringify(parsed.error?.issues)}`).toBe(true);
+  });
+
+  it("a dot ball builds the same valid shape — the defect was the ordinal, not the runs", () => {
+    const { payload } = tapRun("0");
+    expect((payload as { ballInOver: number }).ballInOver).toBe(1);
+    const schema = cricketEngine.eventSchemas!["cricket.ball"]!;
+    expect(schema.safeParse(payload).success).toBe(true);
+  });
+});

@@ -2325,6 +2325,42 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   DROPS `role` on save, so the column the fix above now reads correctly can
   only ever be populated by something other than the product's own lineup UI.
   Both are S13 or later work, named here rather than filed.
+- 2026-08-13 — S12/#421 — **the deferred-e2e debt, discharged per session with a
+  verdict each rather than a blanket claim.** The acceptance criterion allows
+  "covered here OR explicitly re-deferred to S13 with a reason", and the honest
+  answer differs by session:
+  - **S6/#416 (`PadSpec`) — DISCHARGED BY CONSTRUCTION, and this is the
+    strongest of the five.** The v2 pad renders entirely FROM `PadSpec`: every
+    panel, action, field and bound in the cricket, football and generic flows
+    driven this session came out of a module's own `padSpec(cfg)`. There is no
+    separate thing left to test — a spec-driven renderer working in a browser
+    IS the e2e S6 deferred. Recorded explicitly because "covered by
+    construction" is exactly the claim that deserves suspicion, and the
+    evidence is that the flows fail if the spec is wrong, which is what the
+    session's own defects demonstrated.
+  - **S3/#426 (mutable squads) — PARTIALLY covered, remainder to S13.** The
+    lineup/`role` half is now driven end to end (the coach-in-batting-order fix
+    above was found this way). `core.lineup.*` substitution through the pad is
+    NOT driven: no skin declares a substitution action reachable in the flows
+    covered here, so driving it needs football's `subs` panel, which is S13's
+    surface work.
+  - **S4/#428 (offence taxonomies) — RE-DEFERRED to S13, with cause.** The
+    person-role discriminator IS now proved in a browser (it is the same
+    `role` path). The offence ENUMS (`PenaltyOffence`,
+    `PeriodSuspensionReason`) need a card/suspension driven with a reason
+    selected, and the sports that declare them are football and the period
+    pair — reachable, but not in any flow this session's acceptance names.
+  - **S1/#429 — RE-DEFERRED to S13, with cause.** Its fold fixes (icehockey
+    GWS +1, `metricOf` no-data vs recorded zero, the `resolved` set-piece
+    counter) surface on STANDINGS and summary projections, not on the pad. The
+    pad is now a reachable surface for the events that feed them, but the
+    assertions belong on a standings page, which this session does not touch.
+  - **S5/#431 — RE-DEFERRED to S13, with cause.** Tennis's game-award panel is
+    entitlement-gated and football's quarters are a cfg variant; both need a
+    seeded division on a non-default variant, which is setup this session's
+    flows do not build.
+  Recorded here rather than only in the PR body, because a PR body does not
+  survive compaction and S13's brief needs this list to be exact.
 - _(append below)_
 
 ## Open questions for the owner

@@ -543,7 +543,27 @@ export function ThisOverGroup({ msg, view, state, bpo, submittingType, dispatch,
 
   const submitting = submittingType === ballType;
   const legalBalls = open?.legalBalls ?? 0;
-  const ballInOver = legalBalls % bpo;
+  // TWO DIFFERENT QUANTITIES, and collapsing them into one was a real defect
+  // (S12/#421, found by submitting a ball against the real API — cricket had
+  // no browser coverage before this session).
+  //
+  //   ballsCompletedInOver  0..bpo-1  — how many legal balls this over has
+  //                                     already seen. What the progress dots
+  //                                     fill, and what `legalBalls % bpo` is.
+  //   ballInOver            1..bpo    — WHICH ball of the over this delivery
+  //                                     IS. What `CricketBall` declares, and
+  //                                     it is `z.number().int().positive()`,
+  //                                     so 0 is not merely off by one, it is
+  //                                     schema-invalid.
+  //
+  // Sending the count as the ordinal meant the FIRST ball of EVERY over was
+  // submitted as `ballInOver: 0` and rejected 422 by the server — i.e. no
+  // cricket over could ever be scored past its own first delivery. No unit
+  // test saw it: the skin-coverage gate asserts on `layout()`'s data, never on
+  // a built payload, and every payload test used a mid-over state where the
+  // off-by-one is still a positive number.
+  const ballsCompletedInOver = legalBalls % bpo;
+  const ballInOver = ballsCompletedInOver + 1;
   const over = Math.floor(legalBalls / bpo);
   const dismissed = new Set(fine?.dismissed ?? []);
   const canScore = striker !== "" && nonStriker !== "" && bowler !== "";
@@ -632,7 +652,10 @@ export function ThisOverGroup({ msg, view, state, bpo, submittingType, dispatch,
         })}
       </div>
 
-      <OverProgress ballInOver={ballInOver} bpo={bpo} />
+      {/* The COUNT, not the ordinal — an over that has seen no legal ball
+          fills no dot. Passing the ordinal here would light the first dot
+          before the first delivery. */}
+      <OverProgress ballInOver={ballsCompletedInOver} bpo={bpo} />
 
       <div className="grid grid-cols-6 gap-1.5" role="group" aria-label={label}>
         {[0, 1, 2, 3, 4, 6].map((r) => (
