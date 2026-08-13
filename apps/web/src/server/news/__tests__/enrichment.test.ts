@@ -175,6 +175,46 @@ describe("computeLeaderboardMoves — leaderboard diff math", () => {
     );
     expect(moves).toEqual([]);
   });
+
+  // REGRESSION (review finding 1): every earlier test above passes a
+  // single-element `contributions` array, which is why this bug survived —
+  // org-posts.ts always passes the FULL scorer list for a fixture, never
+  // one scorer, and football/hockey routinely have 2+.
+  it("REGRESSION: rolls back ALL same-fixture contributors at once, not just the one being described", () => {
+    // Reviewer's repro. after={A:7,B:7}, credits={A:2,B:3}. True before is
+    // {A:5,B:4} — A already led and nothing about A moved. The bug held
+    // every OTHER contributor at their POST-fixture value while rolling
+    // back only the contributor currently being ranked: for Alice, that
+    // reads "before" as {A:5, B:7 (still inflated)} — B's un-rolled-back 7
+    // outranks Alice's 5, so the buggy code reported Alice moving from #2
+    // to #1, a statement that would have published false into a real draft.
+    const after = [
+      { personId: "A", personName: "Alice", value: 7 },
+      { personId: "B", personName: "Bob", value: 7 },
+    ];
+    const contributions = [
+      { personId: "A", personName: "Alice", credit: 2 },
+      { personId: "B", personName: "Bob", credit: 3 },
+    ];
+    const moves = computeLeaderboardMoves(after, contributions, "goals");
+    expect(moves.find((m) => m.personName === "Alice")).toBeUndefined();
+  });
+
+  it("a genuine multi-scorer move still reports correctly once every contributor is rolled back together", () => {
+    // Same fixture as above. True before {A:5,B:4} -> Alice leads. True
+    // after {A:7,B:7} -> tied for #1. Bob genuinely climbed #2 -> #1; Alice
+    // did not move at all (covered by the regression case above).
+    const after = [
+      { personId: "A", personName: "Alice", value: 7 },
+      { personId: "B", personName: "Bob", value: 7 },
+    ];
+    const contributions = [
+      { personId: "A", personName: "Alice", credit: 2 },
+      { personId: "B", personName: "Bob", credit: 3 },
+    ];
+    const moves = computeLeaderboardMoves(after, contributions, "goals");
+    expect(moves).toEqual([{ personName: "Bob", metric: "goals", from: 2, to: 1 }]);
+  });
 });
 
 describe("computeStreak", () => {

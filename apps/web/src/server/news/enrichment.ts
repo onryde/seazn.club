@@ -178,13 +178,26 @@ export interface LeaderboardMove {
 /**
  * Rank-before-vs-after for the scorers of ONE just-decided fixture, without
  * needing a persisted stat-history table: `after` is already the current
- * cumulative leaderboard (recompute-on-read), and subtracting a scorer's OWN
- * credit from THIS fixture reconstructs their pre-fixture value — every
- * other player's total is unaffected by a fixture they were not part of, so
- * holding the rest of `after` constant while re-ranking is exact, not an
- * approximation. Competition ranking (rank = 1 + count strictly greater).
- * Omits any scorer whose rank did not actually change, and any contribution
- * that is zero-credit or not found in `after` (fail-open: skip, never throw).
+ * cumulative leaderboard (recompute-on-read), and subtracting each
+ * contributor's OWN credit from THIS fixture reconstructs their pre-fixture
+ * value. A player who did NOT play in this fixture is genuinely unaffected
+ * and stays at their `after` value in the "before" table too — but every
+ * player who DID (every entry in `contributions`) must be rolled back
+ * SIMULTANEOUSLY, all at once, before any ranking happens.
+ *
+ * Review finding 1 (real, shipped bug): an earlier version rolled back only
+ * the one contributor currently being described and left every OTHER
+ * contributor at their post-fixture value in the "before" table. For a
+ * fixture with 2+ scorers — the ordinary case for football/hockey, and
+ * org-posts.ts always passes the full scorer list, never one scorer — that
+ * inflates every other scorer's "before" standing by exactly their own
+ * credit from this fixture, which can manufacture a rank change for a
+ * player whose position never actually moved (see
+ * enrichment.test.ts's REGRESSION case for the concrete repro).
+ *
+ * Competition ranking (rank = 1 + count strictly greater). Omits any scorer
+ * whose rank did not actually change, and any contribution that is
+ * zero-credit or not found in `after` (fail-open: skip, never throw).
  */
 export function computeLeaderboardMoves(
   after: readonly LeaderboardAfterRow[],
@@ -193,15 +206,27 @@ export function computeLeaderboardMoves(
 ): LeaderboardMove[] {
   const rankOf = (value: number, rows: readonly { value: number }[]): number =>
     1 + rows.filter((r) => r.value > value).length;
+
+  // Roll back EVERY same-fixture contribution at once, into one shared
+  // "before" table — every contributor's pre-fixture value must be used
+  // simultaneously, not one at a time, or every OTHER contributor's
+  // still-inflated post-fixture value distorts the ranking.
+  const creditByPerson = new Map(
+    contributions.filter((c) => c.credit > 0).map((c) => [c.personId, c.credit] as const),
+  );
+  const beforeRows = after.map((r) => ({
+    personId: r.personId,
+    value: r.value - (creditByPerson.get(r.personId) ?? 0),
+  }));
+
   const moves: LeaderboardMove[] = [];
   for (const c of contributions) {
     if (c.credit <= 0) continue;
     const row = after.find((r) => r.personId === c.personId);
     if (!row) continue;
-    const beforeValue = row.value - c.credit;
-    const beforeRows = after.map((r) => (r.personId === c.personId ? { value: beforeValue } : r));
+    const beforeRow = beforeRows.find((r) => r.personId === c.personId)!;
     const toRank = rankOf(row.value, after);
-    const fromRank = rankOf(beforeValue, beforeRows);
+    const fromRank = rankOf(beforeRow.value, beforeRows);
     if (fromRank === toRank) continue;
     moves.push({ personName: c.personName, metric: metricLabel, from: fromRank, to: toRank });
   }
