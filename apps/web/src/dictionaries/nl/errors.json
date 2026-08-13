@@ -1,1 +1,15 @@
-{}
+{
+  "seeding.SEEDING_MAP_SLOT_INVALID": "De plaatsingstabel van deze fase bevat een ongeldige positie. Corrigeer de plaatsingsregels en probeer het opnieuw.",
+  "seeding.SEEDING_MAP_SOURCE_INVALID": "De plaatsingstabel van deze fase verwijst naar een geplaatste die niet bestaat. Corrigeer de plaatsingsregels en probeer het opnieuw.",
+  "seeding.SEEDING_RULES_MISSING": "Deze fase heeft geen plaatsingsregels, of de gegenereerde wedstrijden komen er niet meer mee overeen. Voeg plaatsingsregels toe of genereer de wedstrijden van deze fase opnieuw.",
+  "seeding.SEEDING_SOURCE_INCOMPLETE": "De bronfase is nog niet afgerond. Rond die eerst af voordat je dit voorstel berekent.",
+  "seeding.SEEDING_BESTNTH_UNEQUAL_POOLS": "Deze groepen hebben een verschillend aantal wedstrijden gespeeld, dus hun standen kunnen nog niet met elkaar worden vergeleken.",
+  "seeding.SEEDING_ALREADY_CONFIRMED": "De posities van deze fase zijn al ingevuld vanuit een bevestigd voorstel.",
+  "seeding.SEEDING_PROPOSAL_STALE": "De stand is gewijzigd sinds dit voorstel werd berekend. Bereken het opnieuw om de actuele geplaatsten te zien.",
+  "seeding.SEEDING_EDIT_UNKNOWN_SLOT": "Een van je wijzigingen verwijst naar een positie die dit voorstel niet heeft. Bereken het voorstel opnieuw en probeer het nogmaals.",
+  "seeding.SEEDING_TIE_UNRESOLVED": "Los elke gelijke stand op voordat je bevestigt — kies welke deelnemer elke positie invult.",
+  "seeding.SEEDING_SLOT_DOUBLE_ASSIGNED": "Dezelfde deelnemer is aan meer dan één positie toegewezen. Corrigeer je wijzigingen en probeer het opnieuw.",
+  "seeding.SEEDING_ENTRANT_FOREIGN": "Een van de geplaatste deelnemers hoort niet meer bij deze divisie.",
+  "seeding.SEEDING_SLOT_FOREIGN_FIXTURE": "Een van de doelposities hoort bij een andere fase. Bereken het voorstel opnieuw en probeer het nogmaals.",
+  "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "Een van de doelposities is al ingevuld. Bereken het voorstel opnieuw om te zien wat er nog over is."
+}

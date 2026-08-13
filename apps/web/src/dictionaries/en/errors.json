@@ -1,1 +1,15 @@
-{}
+{
+  "seeding.SEEDING_MAP_SLOT_INVALID": "This stage's seeding map has an invalid position. Fix the seeding rules and try again.",
+  "seeding.SEEDING_MAP_SOURCE_INVALID": "This stage's seeding map points to a qualifier that doesn't exist. Fix the seeding rules and try again.",
+  "seeding.SEEDING_RULES_MISSING": "This stage has no seeding rules, or its generated fixtures no longer match them. Add seeding rules, or regenerate this stage's fixtures.",
+  "seeding.SEEDING_SOURCE_INCOMPLETE": "The source stage isn't finished yet. Complete it before computing this proposal.",
+  "seeding.SEEDING_BESTNTH_UNEQUAL_POOLS": "These groups have played different numbers of games, so their standings can't be compared yet.",
+  "seeding.SEEDING_ALREADY_CONFIRMED": "This stage's slots are already filled from a confirmed proposal.",
+  "seeding.SEEDING_PROPOSAL_STALE": "Standings changed since this proposal was computed. Recompute it to see the current qualifiers.",
+  "seeding.SEEDING_EDIT_UNKNOWN_SLOT": "One of your edits refers to a slot this proposal doesn't have. Recompute the proposal and try again.",
+  "seeding.SEEDING_TIE_UNRESOLVED": "Resolve every tied slot before confirming — pick which entrant fills each one.",
+  "seeding.SEEDING_SLOT_DOUBLE_ASSIGNED": "The same entrant is assigned to more than one slot. Fix your edits and try again.",
+  "seeding.SEEDING_ENTRANT_FOREIGN": "One of the qualifying entrants no longer belongs to this division.",
+  "seeding.SEEDING_SLOT_FOREIGN_FIXTURE": "One of the destination slots belongs to a different stage. Recompute the proposal and try again.",
+  "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "One of the destination slots is already filled. Recompute the proposal to see what's left."
+}
