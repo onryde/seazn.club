@@ -3749,6 +3749,7 @@
   "schedule.health.explain.homeAwayAlternation": "{count} participants ont de longues séries du même côté",
   "schedule.health.explain.primeSlotFairness": "{count} participants ont une répartition inégale des créneaux privilégiés",
   "schedule.health.offenders.show": "Voir le détail",
+  "schedule.health.about": "À propos : {metric}",
   "schedule.health.offenders.hide": "Masquer le détail",
   "schedule.health.offenders.empty": "Aucun problème",
   "schedule.health.offenderKind.entrant": "Participant",

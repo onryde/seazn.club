@@ -3749,6 +3749,7 @@
   "schedule.health.explain.homeAwayAlternation": "{count} participantes tienen rachas largas en el mismo lado",
   "schedule.health.explain.primeSlotFairness": "{count} participantes tienen un reparto desigual de franjas preferentes",
   "schedule.health.offenders.show": "Ver detalles",
+  "schedule.health.about": "Acerca de: {metric}",
   "schedule.health.offenders.hide": "Ocultar detalles",
   "schedule.health.offenders.empty": "Sin incidencias",
   "schedule.health.offenderKind.entrant": "Participante",

@@ -3749,6 +3749,7 @@
   "schedule.health.explain.homeAwayAlternation": "{count} entrants have long same-side runs",
   "schedule.health.explain.primeSlotFairness": "{count} entrants have an uneven share of prime slots",
   "schedule.health.offenders.show": "Show details",
+  "schedule.health.about": "About: {metric}",
   "schedule.health.offenders.hide": "Hide details",
   "schedule.health.offenders.empty": "No offenders",
   "schedule.health.offenderKind.entrant": "Entrant",

@@ -3544,6 +3544,7 @@ export type DictionaryKey =
   | "schedule.fstatus.forfeited"
   | "schedule.fstatus.in_play"
   | "schedule.generate"
+  | "schedule.health.about"
   | "schedule.health.empty"
   | "schedule.health.error"
   | "schedule.health.explain.courtBalance"

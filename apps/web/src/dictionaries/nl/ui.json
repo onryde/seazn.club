@@ -3749,6 +3749,7 @@
   "schedule.health.explain.homeAwayAlternation": "{count} deelnemers hebben lange reeksen aan dezelfde kant",
   "schedule.health.explain.primeSlotFairness": "{count} deelnemers hebben een ongelijk aandeel piekmomenten",
   "schedule.health.offenders.show": "Details tonen",
+  "schedule.health.about": "Over: {metric}",
   "schedule.health.offenders.hide": "Details verbergen",
   "schedule.health.offenders.empty": "Geen aandachtspunten",
   "schedule.health.offenderKind.entrant": "Deelnemer",
