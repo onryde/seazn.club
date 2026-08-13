@@ -168,7 +168,7 @@ const RACQUET_SPORTS = ["volleyball", "badminton", "tabletennis"] as const;
 
 function moduleFor(sport: string): AnySportModule {
   const found = (builtinModules as readonly AnySportModule[]).find((m) => m.key === sport);
-  if (!found) throw new Error(`no builtin module for "${sport}" — engine catalog changed under this test`);
+  if (!found) throw new Error(`no builtin sportModule for "${sport}" — engine catalog changed under this test`);
   return found;
 }
 
@@ -194,7 +194,7 @@ function fullView(spec: PadSpec): PadView {
   return { phase: "live", phases: ["pre", "live", "post"], panels };
 }
 
-// Accepts either a raw engine `PadAction` (straight off `module.padSpec()`,
+// Accepts either a raw engine `PadAction` (straight off `sportModule.padSpec()`,
 // no `availability` — this describe block reads bounds directly off the
 // spec, never through `layout()`, which never touches field bounds at all)
 // or a view-model `PadActionView`.
@@ -209,9 +209,9 @@ describe("racquet skin — full cfg-space sweep (real engine specs)", () => {
     let cfgsSwept = 0;
     const problems: string[] = [];
     for (const sport of RACQUET_SPORTS) {
-      const module = moduleFor(sport);
-      for (const cfg of cfgSpace(module)) {
-        const spec = module.padSpec?.(cfg);
+      const sportModule = moduleFor(sport);
+      for (const cfg of cfgSpace(sportModule)) {
+        const spec = sportModule.padSpec?.(cfg);
         if (!spec) continue;
         cfgsSwept += 1;
         const view = fullView(spec);
@@ -245,17 +245,17 @@ describe("racquet skin — full cfg-space sweep (real engine specs)", () => {
 
 describe("racquet skin — cfg knobs visibly change the layout", () => {
   it("badminton: records.timeouts toggles the timeouts group — no shipped variant sets it true, so this is a synthetic cfg override (the same flag cfgSpace's own leaf-override pass discovers)", () => {
-    const module = moduleFor("badminton");
-    const withoutTimeouts = module.configSchema.parse({});
-    const specOff = module.padSpec!(withoutTimeouts);
+    const sportModule = moduleFor("badminton");
+    const withoutTimeouts = sportModule.configSchema.parse({});
+    const specOff = sportModule.padSpec!(withoutTimeouts);
     const layoutOff = racquetSkin.layout(fullView(specOff), { cfg: withoutTimeouts, state: {}, summary: {}, band: FULL_BAND });
     expect(layoutActionTypes(layoutOff)).not.toContain("badminton.timeout");
     expect(layoutOff.groups.some((g) => g.id === "timeouts")).toBe(false);
 
-    const withTimeouts = module.configSchema.parse({
+    const withTimeouts = sportModule.configSchema.parse({
       records: { timeouts: true, sanctions: true, substitutions: false, expedite: false },
     });
-    const specOn = module.padSpec!(withTimeouts);
+    const specOn = sportModule.padSpec!(withTimeouts);
     const layoutOn = racquetSkin.layout(fullView(specOn), { cfg: withTimeouts, state: {}, summary: {}, band: FULL_BAND });
     expect(layoutActionTypes(layoutOn)).toContain("badminton.timeout");
     const timeoutsGroup = layoutOn.groups.find((g) => g.id === "timeouts");
@@ -264,16 +264,16 @@ describe("racquet skin — cfg knobs visibly change the layout", () => {
   });
 
   it("volleyball: indoor keeps subs, beach drops them (records.substitutions — the shipped variant divergence the W5 regression fix introduced)", () => {
-    const module = moduleFor("volleyball");
-    const indoorCfg = module.configSchema.parse(module.variants!.indoor as Record<string, unknown>);
-    const beachCfg = module.configSchema.parse(module.variants!.beach as Record<string, unknown>);
-    const indoorLayout = racquetSkin.layout(fullView(module.padSpec!(indoorCfg)), {
+    const sportModule = moduleFor("volleyball");
+    const indoorCfg = sportModule.configSchema.parse(sportModule.variants!.indoor as Record<string, unknown>);
+    const beachCfg = sportModule.configSchema.parse(sportModule.variants!.beach as Record<string, unknown>);
+    const indoorLayout = racquetSkin.layout(fullView(sportModule.padSpec!(indoorCfg)), {
       cfg: indoorCfg,
       state: {},
       summary: {},
       band: FULL_BAND,
     });
-    const beachLayout = racquetSkin.layout(fullView(module.padSpec!(beachCfg)), {
+    const beachLayout = racquetSkin.layout(fullView(sportModule.padSpec!(beachCfg)), {
       cfg: beachCfg,
       state: {},
       summary: {},
@@ -286,9 +286,9 @@ describe("racquet skin — cfg knobs visibly change the layout", () => {
 });
 
 describe("racquet skin — tabletennis expedite is a RUNTIME state flag, not a cfg one", () => {
-  const module = moduleFor("tabletennis");
-  const cfg = module.configSchema.parse({});
-  const spec = module.padSpec!(cfg);
+  const sportModule = moduleFor("tabletennis");
+  const cfg = sportModule.configSchema.parse({});
+  const spec = sportModule.padSpec!(cfg);
   const entitlements = grantAllEntitlements(spec);
 
   function liveView(state: unknown): PadView {
@@ -334,11 +334,11 @@ describe("racquet skin — tabletennis expedite is a RUNTIME state flag, not a c
 
 describe("racquet skin — the score-bound difference (cap vs uncapped) passes through the view untouched", () => {
   it("badminton: capped at cfg.cap — 30 for bwf, 15 for the short junior/social variant", () => {
-    const module = moduleFor("badminton");
-    const bwf = module.configSchema.parse(module.variants!.bwf as Record<string, unknown>);
-    const short = module.configSchema.parse(module.variants!.short as Record<string, unknown>);
+    const sportModule = moduleFor("badminton");
+    const bwf = sportModule.configSchema.parse(sportModule.variants!.bwf as Record<string, unknown>);
+    const short = sportModule.configSchema.parse(sportModule.variants!.short as Record<string, unknown>);
     const summaryFor = (cfg: unknown) =>
-      module
+      sportModule
         .padSpec!(cfg)
         .panels.flatMap((p) => p.actions)
         .find((a) => a.type === "badminton.game.summary")!;
@@ -350,9 +350,9 @@ describe("racquet skin — the score-bound difference (cap vs uncapped) passes t
     const volleyball = moduleFor("volleyball");
     const indoor = volleyball.configSchema.parse(volleyball.variants!.indoor as Record<string, unknown>);
     const beach = volleyball.configSchema.parse(volleyball.variants!.beach as Record<string, unknown>);
-    const boundFor = (module: AnySportModule, cfg: unknown, type: string) =>
+    const boundFor = (sportModule: AnySportModule, cfg: unknown, type: string) =>
       numberFieldMax(
-        module
+        sportModule
           .padSpec!(cfg)
           .panels.flatMap((p) => p.actions)
           .find((a) => a.type === type)!,

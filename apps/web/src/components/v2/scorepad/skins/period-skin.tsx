@@ -396,7 +396,10 @@ export function buildAttributionRenderer(
 ): (action: PadActionView, values: ActionValues, setValue: (path: string, value: PadFieldValue | undefined) => void) => ReactNode {
   const entrants = readEntrants(ctx.state);
   const squads = readSquads(ctx.state);
-  return (action, values, setValue) => {
+  // Named, not an anonymous arrow: it returns JSX, so eslint's react/display-name
+  // treats it as a component definition. It is really a render prop, but a name
+  // costs nothing and keeps `apps/web`'s own lint (the one CI runs) clean.
+  return function periodAttribution(action, values, setValue) {
     if (action.attribution.length === 0) return null;
     const actionLabel = padLabel(action.labelKey.key, msg, action.labelKey.label);
     return (
@@ -517,8 +520,7 @@ export function PeriodSkin(props: SkinProps): ReactNode {
   const msg = useMsg();
   const { view, layout, dispatch, submittingType, queueDepth, offline } = props;
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the
-  // fold's own state identity, matching pad-renderer.tsx's own
+  // Keyed on the fold's own state identity, matching pad-renderer.tsx's own
   // `renderAttribution` memo one level up (module-client.ts's `foldClient`
   // gives a fresh `state` identity on every fold advance).
   const renderAttribution = useMemo(() => buildAttributionRenderer(props.ctx, msg), [props.ctx, msg]);

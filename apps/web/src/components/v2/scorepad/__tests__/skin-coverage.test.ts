@@ -55,7 +55,7 @@ function moduleFor(sport: string): AnySportModule | undefined {
   return (builtinModules as readonly AnySportModule[]).find((m) => m.key === sport);
 }
 
-/** One sweep, reused by every it() below — walked once at module scope would
+/** One sweep, reused by every it() below — walked once at sportModule scope would
  *  risk collection-time throws, so it is a plain function called inside tests. */
 function sweep(): { problems: Problem[]; sportsSwept: number; cfgsSwept: number; actionsChecked: number } {
   const problems: Problem[] = [];
@@ -65,11 +65,11 @@ function sweep(): { problems: Problem[]; sportsSwept: number; cfgsSwept: number;
 
   for (const skin of SKINS) {
     for (const sport of skin.sports) {
-      const module = moduleFor(sport);
-      if (!module) continue; // registry integrity is its own it()
+      const sportModule = moduleFor(sport);
+      if (!sportModule) continue; // registry integrity is its own it()
       sportsSwept += 1;
-      for (const cfg of cfgSpace(module)) {
-        const spec = module.padSpec?.(cfg);
+      for (const cfg of cfgSpace(sportModule)) {
+        const spec = sportModule.padSpec?.(cfg);
         if (!spec) continue;
         cfgsSwept += 1;
         const entitlements = grantAllEntitlements(spec);
@@ -220,13 +220,13 @@ describe("skin headline actions reach the primary surface", () => {
     const misplaced: string[] = [];
     for (const [sport, headline] of Object.entries(HEADLINE)) {
       const skin = skinFor(sport) as SkinDef | null;
-      const module = moduleFor(sport);
-      if (!skin || !module) {
-        misplaced.push(`${sport}: no skin or module`);
+      const sportModule = moduleFor(sport);
+      if (!skin || !sportModule) {
+        misplaced.push(`${sport}: no skin or sportModule`);
         continue;
       }
-      const cfg = cfgSpace(module)[0];
-      const spec = module.padSpec?.(cfg);
+      const cfg = cfgSpace(sportModule)[0];
+      const spec = sportModule.padSpec?.(cfg);
       if (!spec) {
         misplaced.push(`${sport}: no padSpec`);
         continue;

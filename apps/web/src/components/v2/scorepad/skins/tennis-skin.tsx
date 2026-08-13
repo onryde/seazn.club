@@ -25,7 +25,7 @@
 // this file has to keep producing a real header against that shape.
 import type { ReactNode } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
-import { padLabel, type MsgFn } from "@/lib/scoring-vocab";
+import { type MsgFn } from "@/lib/scoring-vocab";
 import type { MessageKey } from "@/lib/messages";
 import type { LineupPair } from "@seazn/engine/core";
 import { ActionForm, type ActionFormProps } from "../action-form";
