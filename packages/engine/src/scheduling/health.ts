@@ -324,8 +324,47 @@ function gapDispersionMetric(fixtures: readonly HealthFixture[], config: HealthC
   };
 }
 
-function homeAwayAlternationMetric(_fixtures: readonly HealthFixture[]): HealthMetric {
-  return NOT_IMPLEMENTED("homeAwayAlternation");
+/**
+ * Round-robin divisions only — the CALLER gates this (config.isRoundRobin);
+ * assessHealth omits the metric entirely rather than scoring a bracket
+ * stage's non-existent home/away pattern. Per entrant: r = longest same-side
+ * run, a = alternation rate = flips / (|F_e|−1). Score = 100 · mean_e(a) −
+ * 10 · max(0, max_e(r) − 3), clamped (design doc, verbatim). Entrants with
+ * |F_e| < 2 excluded — same reason as restSpread: a is undefined with zero
+ * gaps to flip across.
+ */
+function homeAwayAlternationMetric(fixtures: readonly HealthFixture[]): HealthMetric {
+  const byEntrant = entrantFixtures(fixtures);
+  const stats: { id: string; a: number; r: number }[] = [];
+  for (const [id, list] of byEntrant) {
+    if (list.length < 2) continue;
+    const sides = list.map((f) => (f.home === id ? "home" : "away"));
+    let flips = 0;
+    let run = 1;
+    let maxRun = 1;
+    for (let i = 1; i < sides.length; i++) {
+      if (sides[i] !== sides[i - 1]) {
+        flips++;
+        run = 1;
+      } else {
+        run++;
+        if (run > maxRun) maxRun = run;
+      }
+    }
+    stats.push({ id, a: flips / (sides.length - 1), r: maxRun });
+  }
+  const meanA = stats.length > 0 ? stats.reduce((s, x) => s + x.a, 0) / stats.length : 1;
+  const maxR = stats.length > 0 ? Math.max(...stats.map((x) => x.r)) : 0;
+  const offenders: HealthOffender[] = stats
+    .filter((x) => x.r >= HOME_AWAY_RUN_THRESHOLD)
+    .sort((a, b) => b.r - a.r || lex(a.id, b.id))
+    .map((x) => ({ kind: "entrant", id: x.id, label: x.id, value: x.r }));
+  return {
+    key: "homeAwayAlternation",
+    score: roundScore(100 * meanA - 10 * Math.max(0, maxR - 3)),
+    explanation: { key: "schedule.health.explain.homeAwayAlternation", params: { count: offenders.length } },
+    offenders,
+  };
 }
 
 function primeSlotFairnessMetric(_fixtures: readonly HealthFixture[]): HealthMetric {

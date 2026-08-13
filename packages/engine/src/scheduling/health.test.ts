@@ -210,3 +210,58 @@ describe("assessHealth — gapDispersion", () => {
     expect(m.offenders).toEqual([]);
   });
 });
+
+describe("assessHealth — homeAwayAlternation", () => {
+  it("scores 2 asymmetric entrants (4 fixtures perfectly alternating vs 5 with a 4-run) via mean alternation rate minus the worst run's overage penalty", () => {
+    // A: home,away,home,away (4 fixtures) -> flips=3/3=1 (perfect), r=1.
+    // B: home,home,home,home,away (5 fixtures) -> flips=1/4=0.25, r=4 (a
+    // 4-run of the same side). meanA=0.625. Only B's r exceeds 3, by 1.
+    // score = 100*0.625 - 10*max(0,4-3) = 52.5 -> round-half-up -> 53.
+    // Verified via node -e.
+    const fixtures: HealthFixture[] = [
+      fx("a1", "A", "P1", 0, 60),
+      fx("a2", "P2", "A", 100, 60),
+      fx("a3", "A", "P3", 200, 60),
+      fx("a4", "P4", "A", 300, 60),
+      fx("b1", "B", "Q1", 0, 60, { court: "Court 2" }),
+      fx("b2", "B", "Q2", 100, 60, { court: "Court 2" }),
+      fx("b3", "B", "Q3", 200, 60, { court: "Court 2" }),
+      fx("b4", "B", "Q4", 300, 60, { court: "Court 2" }),
+      fx("b5", "Q5", "B", 400, 60, { court: "Court 2" }),
+    ];
+    const report = assessHealth(fixtures, RR);
+    const m = metric(report, "homeAwayAlternation")!;
+    expect(m.score).toBe(53);
+    expect(HOME_AWAY_RUN_THRESHOLD).toBe(4);
+    // Only entrants with r >= 4 are offenders — A (r=1) is NOT included,
+    // this is a threshold, not a top-3 ranking like the other metrics.
+    expect(m.offenders).toEqual([{ kind: "entrant", id: "B", label: "B", value: 4 }]);
+  });
+
+  it("is ABSENT (not present-and-zero) for a bracket stage — the caller's isRoundRobin=false gate", () => {
+    const fixtures: HealthFixture[] = [
+      fx("k1", "A", "P1", 0, 60),
+      fx("k2", "P2", "A", 100, 60),
+      fx("k3", "A", "P3", 200, 60),
+      fx("k4", "P4", "A", 300, 60),
+    ];
+    const report = assessHealth(fixtures, BRACKET);
+    expect(metric(report, "homeAwayAlternation")).toBeUndefined();
+    // The other 4 metrics are still present — only this one is gated.
+    expect(report.metrics.map((x) => x.key).sort()).toEqual(
+      ["courtBalance", "gapDispersion", "primeSlotFairness", "restSpread"].sort(),
+    );
+    expect(report.metrics).toHaveLength(4);
+  });
+
+  it("no offender when every entrant's longest run stays at or below the threshold", () => {
+    const fixtures: HealthFixture[] = [
+      fx("c1", "C", "P1", 0, 60),
+      fx("c2", "P2", "C", 100, 60),
+      fx("c3", "C", "P3", 200, 60),
+    ];
+    const report = assessHealth(fixtures, RR);
+    const m = metric(report, "homeAwayAlternation")!;
+    expect(m.offenders).toEqual([]);
+  });
+});
