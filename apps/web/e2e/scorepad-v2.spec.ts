@@ -391,12 +391,42 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
       .toBe(1);
   });
 
-  test("no horizontal scroll at 375 or 320", async ({ page }) => {
+  test("no horizontal scroll at 375 or 320, and this over's pickers meet the touch bar", async ({
+    page,
+  }) => {
     for (const width of [375, 320]) {
       await page.setViewportSize({ width, height: 800 });
       await page.goto(await fixturePath(page.request, fx.fixtureId));
       await expect(pad(page)).toBeVisible({ timeout: 20_000 });
       await expectNoHorizontalScroll(page);
+
+      // `fx` is shared with the sibling tests in this describe, which run in
+      // PARALLEL — so the match may or may not already be live by the time
+      // this one loads. Conditional rather than unconditional: calling
+      // `openLiveConsole` here would wait forever on a "Start match" button a
+      // sibling has already consumed, and skipping the click entirely would
+      // find no "This over" panel on the run where this test happens to be
+      // first.
+      const startBtn = page.getByRole("button", { name: "Start match", exact: true });
+      if ((await startBtn.count()) > 0) await startBtn.click();
+
+      // The three "This over" selects are the REQUIRED entry before every
+      // over, so a courtside scorer hits them once per over for a whole
+      // innings — the strongest case in this pad for the repo's 44px bar, and
+      // measured at 33px before this session (`.select`'s own padding loses to
+      // the `px-2 py-1 text-xs` density utilities beside it). Guarded by count
+      // first: a selector that matches nothing passes a for-all height check
+      // vacuously, which is exactly how a renamed `data-role` would slip past.
+      const selects = pad(page).locator('[data-role="cricket-this-over"] select');
+      const n = await selects.count();
+      expect(n, `this over's pickers must be present at ${width}`).toBe(3);
+      for (let i = 0; i < n; i++) {
+        const box = await selects.nth(i).boundingBox();
+        expect(box, `picker ${i} must be laid out at ${width}`).not.toBeNull();
+        expect(box!.height, `picker ${i} at ${width}px is ${Math.round(box!.height)}px`).toBeGreaterThanOrEqual(
+          44,
+        );
+      }
     }
   });
 });

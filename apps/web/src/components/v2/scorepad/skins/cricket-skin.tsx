@@ -639,7 +639,22 @@ export function ThisOverGroup({ msg, view, state, bpo, submittingType, dispatch,
           return (
             <label key={role} className="block">
               <span className="label">{deriveFieldPathLabel(role)}</span>
-              <select className="select px-2 py-1 text-xs" value={value} onChange={(e) => onChange(e.target.value)}>
+              {/* S12/#421 — `min-h-11`. `.select` (a components-layer class)
+                  sets its own padding, but Tailwind's utilities layer wins, so
+                  the `px-2 py-1 text-xs` density recipe here collapsed these to
+                  33px at 320 — measured in a real browser, against this repo's
+                  44px touch bar. That matters more here than it would on an
+                  incidental control: these three are the REQUIRED entry before
+                  every over, so a courtside scorer hits them once per over for
+                  the whole innings. `min-h-11` is a different property from the
+                  padding utilities, so it survives the same override that ate
+                  the padding, and it is the same 44px idiom the chassis already
+                  uses for its own chips and phase tabs. */}
+              <select
+                className="select min-h-11 px-2 py-1 text-xs"
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+              >
                 <option value="">—</option>
                 {pool.map((id) => (
                   <option key={id} value={id}>
