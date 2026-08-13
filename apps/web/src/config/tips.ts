@@ -189,6 +189,63 @@ export const TIPS = {
     body: "This limit is set in two places, and the stricter value always wins. Put 30 in one and 10 in the other and entrants rest 30. Raising either raises the floor; leaving one at 0 simply lets the other decide.",
     helpSlug: "scheduling/constraints",
   },
+  // The five Health tab bars. No helpSlug: there is no scheduling/health
+  // article yet, and lib/help.ts renders "Learn more" only when the article
+  // resolves — a slug pointing at nothing would simply never link, so the
+  // honest thing is to omit it until the article exists.
+  //
+  // Each body says what the SCORE measures, not what the offender list
+  // counts. That is the distinction the cards themselves cannot make: the
+  // line under each bar reports offenders, so "0 entrants have long
+  // same-side runs" can sit beside a score of 57 and read as a bug. It is
+  // not one — the score is a mean over everybody, the offender list is a
+  // threshold. Where a metric excludes entrants or stages, the body says so
+  // rather than leaving a 100 or an absent bar unexplained.
+  "schedule.health.restSpread": {
+    title: "Rest spread",
+    body: "Whether each entrant's matches are spaced evenly across their own playing window, or bunched together with one long wait. Only entrants with three or more matches can score anything but perfect — with a single gap, that gap is the ideal by definition — and a double-booking always scores worst.",
+    // No scheduling/health article exists yet; `helpUrl` resolves nothing
+    // and the Learn-more link simply does not render. Explicit `undefined`
+    // rather than omitted: `as const` makes an absent optional key
+    // inaccessible on the union, which breaks help-content.test.ts.
+    helpSlug: undefined,
+  },
+  "schedule.health.courtBalance": {
+    title: "Court balance",
+    body: "Whether entrants move around the courts or keep landing on the same one. 100 means their matches are spread as evenly as the number of courts allows, so it is capped by how many courts you actually run.",
+    // No scheduling/health article exists yet; `helpUrl` resolves nothing
+    // and the Learn-more link simply does not render. Explicit `undefined`
+    // rather than omitted: `as const` makes an absent optional key
+    // inaccessible on the union, which breaks help-content.test.ts.
+    helpSlug: undefined,
+  },
+  "schedule.health.gapDispersion": {
+    title: "Gap dispersion",
+    body: "Dead time on a court, measured per court per day. Idle stretches in the middle of a court's day score worse than the same amount of idle time before the first match or after the last, because only the middle strands people at the venue.",
+    // No scheduling/health article exists yet; `helpUrl` resolves nothing
+    // and the Learn-more link simply does not render. Explicit `undefined`
+    // rather than omitted: `as const` makes an absent optional key
+    // inaccessible on the union, which breaks help-content.test.ts.
+    helpSlug: undefined,
+  },
+  "schedule.health.homeAwayAlternation": {
+    title: "Home/away alternation",
+    body: "How often each entrant swaps sides instead of playing the same side repeatedly, averaged over everyone — so a middling score can appear even when nobody is flagged below. Only scored for table-shaped stages; a knockout bracket has no home/away pattern, so the bar is absent rather than zero.",
+    // No scheduling/health article exists yet; `helpUrl` resolves nothing
+    // and the Learn-more link simply does not render. Explicit `undefined`
+    // rather than omitted: `as const` makes an absent optional key
+    // inaccessible on the union, which breaks help-content.test.ts.
+    helpSlug: undefined,
+  },
+  "schedule.health.primeSlotFairness": {
+    title: "Prime-slot fairness",
+    body: "Prime slots are the last few of each court's day. This checks whether they are shared out in proportion to how many matches each entrant plays, rather than falling to the same people every time.",
+    // No scheduling/health article exists yet; `helpUrl` resolves nothing
+    // and the Learn-more link simply does not render. Explicit `undefined`
+    // rather than omitted: `as const` makes an absent optional key
+    // inaccessible on the union, which breaks help-content.test.ts.
+    helpSlug: undefined,
+  },
 } as const satisfies Record<string, TipEntry>;
 
 export type TipId = keyof typeof TIPS;

@@ -197,9 +197,53 @@ async function computeStageHealth(tx: Tx, stageId: string): Promise<StageHealthR
     divisionId: stage.division_id,
     status: "ready",
     computedAt: new Date().toISOString(),
-    metrics: assessed.metrics,
+    metrics: await withEntrantNames(tx, assessed.metrics),
     fixtures,
   };
+}
+
+/**
+ * Replace entrant-kind offender labels with the entrant's display name.
+ *
+ * The engine is pure and knows nothing about the `entrants` table, so
+ * `HealthOffender.label` arrives as the raw id — health.ts documents this
+ * verbatim ("Raw id (entrant id, court label, or `${court}::${dayKey}`) …
+ * the module and the route stay at raw labels for now"). Nothing then did
+ * the resolving, so the panel rendered `Entrant · e3a37cef-54f3-47cc-…`:
+ * a seam left for a later pass that shipped user-visible. Resolving it is
+ * the APP layer's job — teaching the engine about a table would be the
+ * wrong fix, and it stays a pure function this way.
+ *
+ * Applied INSIDE `computeStageHealth`, deliberately, so the single-stage
+ * route and the joint route cannot diverge: this file's whole premise is
+ * that there is exactly one per-stage computation (see the header), and
+ * both the smoke suite and the joint e2e byte-compare a stage's embedded
+ * report against its standalone one. Resolving names in either caller
+ * instead would break that equality on the first run.
+ *
+ * `court` and `courtDay` labels are already human-readable (the latter is
+ * built as `${court} ${dayKey}`) and pass through untouched. An id with no
+ * matching row keeps the id rather than rendering blank — a withdrawn
+ * entrant still deserves an identifiable row.
+ */
+async function withEntrantNames(tx: Tx, metrics: HealthMetric[]): Promise<HealthMetric[]> {
+  const ids = [
+    ...new Set(
+      metrics.flatMap((m) => m.offenders.filter((o) => o.kind === "entrant").map((o) => o.id)),
+    ),
+  ];
+  if (ids.length === 0) return metrics;
+
+  const rows = await tx<{ id: string; display_name: string }[]>`
+    select id, display_name from entrants where id = any(${ids}::uuid[])`;
+  const nameById = new Map(rows.map((r) => [r.id, r.display_name]));
+
+  return metrics.map((m) => ({
+    ...m,
+    offenders: m.offenders.map((o) =>
+      o.kind === "entrant" ? { ...o, label: nameById.get(o.id) ?? o.label } : o,
+    ),
+  }));
 }
 
 /**

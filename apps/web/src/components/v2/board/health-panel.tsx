@@ -18,6 +18,8 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, HeartPulse } from "lucide-react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { Tip } from "@/components/ui/tip";
+import type { TipId } from "@/config/tips";
 import type { MessageKey } from "@/lib/messages";
 
 export type HealthMetricKey =
@@ -73,6 +75,23 @@ const OFFENDER_KIND_KEY: Record<HealthOffenderWire["kind"], MessageKey> = {
   courtDay: "schedule.health.offenderKind.courtDay",
 };
 
+/** Each bar is a different formula over a different unit, and the one-line
+ *  explanation under it reports the OFFENDER COUNT, not what is being
+ *  measured — so a card can read "0 entrants have long same-side runs" next
+ *  to a score of 57 and look self-contradictory. It is not: that score is
+ *  `100·mean(alternation rate) − 10·(longest run over 3)`, which a merely
+ *  mediocre overall rate drags down without any single entrant crossing the
+ *  offender threshold. The tip is where that distinction is explained; it
+ *  goes through the standard <Tip> framework (config/tips.ts, 4 locales)
+ *  rather than a bespoke chip. */
+const METRIC_TIP_ID: Record<HealthMetricKey, TipId> = {
+  restSpread: "schedule.health.restSpread",
+  courtBalance: "schedule.health.courtBalance",
+  gapDispersion: "schedule.health.gapDispersion",
+  homeAwayAlternation: "schedule.health.homeAwayAlternation",
+  primeSlotFairness: "schedule.health.primeSlotFairness",
+};
+
 function scoreTone(score: number): { bar: string; track: string; text: string } {
   if (score >= 80) return { bar: "bg-emerald-500", track: "bg-emerald-100", text: "text-emerald-700" };
   if (score >= 50) return { bar: "bg-amber-500", track: "bg-amber-100", text: "text-amber-700" };
@@ -87,7 +106,10 @@ function MetricCard({ metric }: { metric: HealthMetricWire }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4" data-health-metric={metric.key} data-health-score={metric.score}>
       <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-medium text-slate-800">{msg(METRIC_TITLE_KEY[metric.key])}</p>
+        <p className="flex min-w-0 items-center gap-1 text-sm font-medium text-slate-800">
+          <span className="min-w-0">{msg(METRIC_TITLE_KEY[metric.key])}</span>
+          <Tip id={METRIC_TIP_ID[metric.key]} small className="shrink-0" />
+        </p>
         <span className={`text-sm font-semibold tabular-nums ${tone.text}`}>{metric.score}</span>
       </div>
       <div className={`mt-2 h-1.5 w-full overflow-hidden rounded-full ${tone.track}`} role="presentation">
