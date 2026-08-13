@@ -42,7 +42,6 @@ const HAS_DB = !!process.env.DATABASE_URL;
 
 const T0 = "2026-08-01T09:00:00.000Z";
 const MIN = 60_000;
-const at = (m: number) => new Date(Date.parse(T0) + m * MIN).toISOString();
 
 const DIVISION_CONFIG = {
   resultMode: "score",
@@ -135,44 +134,105 @@ async function seedStage(
 /**
  * C1 fix-loop (G2/3rd instance). `seedStage`'s board (4 entrants, 2 courts,
  * `perEntrantMinRest` equal to `matchMinutes`) is the same ZERO-SLACK shape
- * `schedule-delta-blocking.test.ts`'s round-order suite documents: every
- * round packs back to back with nothing free anywhere, so displacing a
- * fixture to an atypical slot is only UNCONDITIONALLY safe in one direction
- * — a round-1 fixture, moved BACKWARD, has no earlier round to violate H6
- * (round order) against, whatever the rest of the board looks like. This
- * used to hand `parkAndLock`/`parkAndScopeLock` `first.assignments[0]` —
- * solver output order is not round-sorted, so it could already park a
- * round-2/3 fixture ahead of an untouched round-1 sibling, a genuine
- * round-order violation invisible only because the delta gate's own
- * round-robin blind spot (this task's fix) could not see it before.
- * `round_no` is a fixture-generation-time fact (`generateStageFixtures`,
- * inside `seedStage`), so it can be read straight off the row regardless of
- * where the solver's own proposal happened to place it.
+ * `schedule-delta-blocking.test.ts`'s round-order suite documents: every round
+ * packs back to back with nothing free anywhere, so displacing a fixture to an
+ * atypical slot is only UNCONDITIONALLY safe in ONE DIRECTION — and which
+ * direction that is follows from which round the card belongs to.
+ *
+ * This used to be `round1FixtureId`, paired with a BACKWARD park: a round-1
+ * fixture, moved earlier, has no preceding round to violate H6 (round order)
+ * against. `parkSlot` now parks FORWARD (see there for why backward could not
+ * be made robust), so the safe end flips with it — a LAST-round fixture, moved
+ * later, has no subsequent round to violate H6 against, whatever the rest of
+ * the board looks like. Keeping round 1 while parking forward would jump the
+ * card over its own successors and manufacture exactly the `order` conflict
+ * both choices exist to avoid.
+ *
+ * Read off `round_no`, never `first.assignments[0]`: solver output order is not
+ * round-sorted, so indexing the proposal could pick a middle-round card and
+ * produce a genuine round-order violation — one that was invisible only because
+ * the delta gate's round-robin blind spot could not see it before. `round_no`
+ * is a fixture-generation-time fact (`generateStageFixtures`, inside
+ * `seedStage`), so it holds regardless of where the solver put the card.
  */
-async function round1FixtureId(stageId: string): Promise<string> {
+async function lastRoundFixtureId(stageId: string): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
-    select id from fixtures where stage_id = ${stageId} and round_no = 1 limit 1`;
+    select id from fixtures
+    where stage_id = ${stageId}
+      and round_no = (select max(round_no) from fixtures where stage_id = ${stageId})
+    limit 1`;
   return row!.id;
 }
 
 /**
- * Moves a round-1 fixture to a slot no compacting solver would choose on its
- * own — 8 hours before the board's own `startAt` (same calendar day, so
- * nothing else about the window changes), on the second court — then locks
- * it. A re-solve that ignores the lock relocates the card back into the
- * compact region the rest of the board occupies; one that honours it must
- * not move it AT ALL. Mirrors the exact technique
- * `schedule-solver-telemetry.test.ts`'s parked-card specs use, for the same
- * reason: two runs of the same solver over the same input can otherwise
- * coincide by construction, which would make "unchanged" true whether or not
- * the lock was ever read.
+ * Eight hours AFTER the board's own last card — read off the board that is
+ * actually there, and deliberately FORWARD of it. Both halves of that sentence
+ * were paid for.
+ *
+ * IT USED TO BE `at(-480)`: eight hours before the CONFIG's `startAt`, which is
+ * a fixed instant (`2026-08-01T01:00Z`) that assumed where the board would be.
+ * That assumption is no longer true, and the failure it produced is the whole
+ * of the "1-in-3 intermittent `assertNoNewBlocking`":
+ *
+ *   * `config.startAt` is NOT the solver's floor. The apply gate's window comes
+ *     from `applyWindow`, which floors at START-OF-DAY of `config.startAt` in
+ *     the org zone — `2026-08-01T00:00Z`, not 09:00 — and `boundSolverWindow`
+ *     returns a two-finite-bound window untouched. So the solver's grid opens
+ *     at midnight while GREEDY's cursor opens at 09:00
+ *     (`calendar.ts:759`, `ready = max(config.startAt, window.notBefore)`).
+ *   * Under C2's day-aware rungs the solver compacts to that midnight, on
+ *     either the seed day or the next, run to run — both boards verify clean,
+ *     so nothing downstream picks a side.
+ *   * Board on the NEXT day: `at(-480)` is empty, park lands, test green.
+ *     Board on the SEED day: the board IS 00:00/01:00/02:00 on both courts, so
+ *     `at(-480)` — 01:00 — is a genuine C2 double-booking plus two entrant
+ *     overlaps, and `assertNoNewBlocking` refused it, correctly. Measured over
+ *     5 auto applies: 3 next-day (pass), 2 seed-day (fail).
+ *
+ * The suite only ever looked stable because `isStrictlyBetter` kept discarding
+ * the solver's midnight board for greedy's 09:00 one. It is a TEST premise that
+ * broke, not the product: every board involved verifies clean.
+ *
+ * WHY FORWARD, not simply "8h before the board's earliest card". That was the
+ * first fix and it is not robust: when the solver picks the seed day its
+ * earliest card sits EXACTLY ON the window floor, so no legal slot exists
+ * before it at all, and the park is refused with `window` — "outside the
+ * competition window" — instead of `court`. Forward has no such edge: the
+ * window's ceiling is the competition's `ends_on` (2030), four years out.
+ *
+ * Forward is safe for the same reason backward was, mirrored — see
+ * `lastRoundFixtureId`.
  */
-async function parkAndLock(auth: AuthCtx, stageId: string, fixtureId: string): Promise<void> {
+async function parkSlot(stageId: string): Promise<string> {
+  const [row] = await sql<{ latest: Date | null }[]>`
+    select max(scheduled_at) as latest from fixtures where stage_id = ${stageId}`;
+  const latest = row?.latest;
+  if (!latest) throw new Error("parkSlot: the board is empty — apply an auto board first");
+  return new Date(latest.getTime() + 480 * MIN).toISOString();
+}
+
+/**
+ * Moves a round-1 fixture to a slot no compacting solver would choose on its
+ * own — see `parkSlot` — on the second court, then locks it. A re-solve that
+ * ignores the lock relocates the card back into the compact region the rest of
+ * the board occupies; one that honours it must not move it AT ALL. Mirrors the
+ * exact technique `schedule-solver-telemetry.test.ts`'s parked-card specs use,
+ * for the same reason: two runs of the same solver over the same input can
+ * otherwise coincide by construction, which would make "unchanged" true
+ * whether or not the lock was ever read.
+ *
+ * Returns the slot it parked at, because the caller must assert against the
+ * instant actually used — a second `parkSlot()` call would re-read a board the
+ * park itself has since changed.
+ */
+async function parkAndLock(auth: AuthCtx, stageId: string, fixtureId: string): Promise<string> {
+  const parkedAt = await parkSlot(stageId);
   await applySchedule(auth, stageId, {
-    assignments: [{ fixture_id: fixtureId, scheduled_at: at(-480), court_label: "C2" }],
+    assignments: [{ fixture_id: fixtureId, scheduled_at: parkedAt, court_label: "C2" }],
     source: "manual",
   });
   await patchFixture(auth, fixtureId, { schedule_locked: true });
+  return parkedAt;
 }
 
 /**
@@ -189,12 +249,14 @@ async function parkAndScopeLock(
   stageId: string,
   divisionId: string,
   fixtureId: string,
-): Promise<void> {
+): Promise<string> {
+  const parkedAt = await parkSlot(stageId);
   await applySchedule(auth, stageId, {
-    assignments: [{ fixture_id: fixtureId, scheduled_at: at(-480), court_label: "C2" }],
+    assignments: [{ fixture_id: fixtureId, scheduled_at: parkedAt, court_label: "C2" }],
     source: "manual",
   });
   await setDivisionLocks(auth, divisionId, { locked_scopes: [{ courts: ["C2"] }] });
+  return parkedAt;
 }
 
 describe.skipIf(!HAS_DB)("BUILD honours a lock (owner report, 2026-08-12)", () => {
@@ -218,8 +280,8 @@ describe.skipIf(!HAS_DB)("BUILD honours a lock (owner report, 2026-08-12)", () =
     });
 
     // Pin one fixture via the lock toggle, at a deliberately atypical slot.
-    const targetId = await round1FixtureId(stageId);
-    await parkAndLock(auth, stageId, targetId);
+    const targetId = await lastRoundFixtureId(stageId);
+    const parkedAt = await parkAndLock(auth, stageId, targetId);
 
     // Click 2: "Auto-schedule" again — the owner's exact reported sequence,
     // same body as click 1.
@@ -228,7 +290,7 @@ describe.skipIf(!HAS_DB)("BUILD honours a lock (owner report, 2026-08-12)", () =
     const proposed = second.assignments.find((a) => a.fixture_id === targetId);
     // BOTH time and court, matching the owner's report precisely ("Its time
     // AND court both changed").
-    expect(proposed?.scheduled_at).toBe(at(-480));
+    expect(proposed?.scheduled_at).toBe(parkedAt);
     expect(proposed?.court_label).toBe("C2");
   }, 180_000);
 });
@@ -249,21 +311,21 @@ describe.skipIf(!HAS_DB)("REFLOW and POLISH keep honouring a lock, unchanged by 
       source: "auto",
     });
 
-    const targetId = await round1FixtureId(stageId);
-    await parkAndLock(auth, stageId, targetId);
+    const targetId = await lastRoundFixtureId(stageId);
+    const parkedAt = await parkAndLock(auth, stageId, targetId);
 
     // REFLOW: the exact shape the Re-flow button sends
     // (`only_unlocked: true`, no explicit mode — the default derivation).
     const reflow = await autoSchedule(auth, stageId, { only_unlocked: true, mode: "reflow" });
     const reflowed = reflow.assignments.find((a) => a.fixture_id === targetId);
-    expect(reflowed?.scheduled_at).toBe(at(-480));
+    expect(reflowed?.scheduled_at).toBe(parkedAt);
     expect(reflowed?.court_label).toBe("C2");
 
     // POLISH: the exact shape the Polish button sends
     // (`only_unlocked: true, mode: "polish"`, per schedule-board-polish.test.tsx).
     const polish = await autoSchedule(auth, stageId, { only_unlocked: true, mode: "polish" });
     const polished = polish.assignments.find((a) => a.fixture_id === targetId);
-    expect(polished?.scheduled_at).toBe(at(-480));
+    expect(polished?.scheduled_at).toBe(parkedAt);
     expect(polished?.court_label).toBe("C2");
   }, 180_000);
 });
@@ -284,14 +346,14 @@ describe.skipIf(!HAS_DB)("ignore_locks is the explicit escape hatch", () => {
       source: "auto",
     });
 
-    const targetId = await round1FixtureId(stageId);
-    await parkAndLock(auth, stageId, targetId);
+    const targetId = await lastRoundFixtureId(stageId);
+    const parkedAt = await parkAndLock(auth, stageId, targetId);
 
     // Without the escape hatch: the fix under test — stays put, and the
     // response says exactly one fixture was held for being locked.
     const kept = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
     const keptCard = kept.assignments.find((a) => a.fixture_id === targetId);
-    expect(keptCard?.scheduled_at).toBe(at(-480));
+    expect(keptCard?.scheduled_at).toBe(parkedAt);
     expect(keptCard?.court_label).toBe("C2");
     expect(kept.solver.locked_kept).toBe(1);
 
@@ -303,7 +365,7 @@ describe.skipIf(!HAS_DB)("ignore_locks is the explicit escape hatch", () => {
       ignore_locks: true,
     });
     const movedCard = moved.assignments.find((a) => a.fixture_id === targetId);
-    expect(movedCard?.scheduled_at).not.toBe(at(-480));
+    expect(movedCard?.scheduled_at).not.toBe(parkedAt);
     expect(moved.solver.locked_kept).toBe(0);
   }, 180_000);
 });
@@ -326,8 +388,8 @@ describe.skipIf(!HAS_DB)(
         source: "auto",
       });
 
-      const targetId = await round1FixtureId(stageId);
-      await parkAndScopeLock(auth, stageId, divisionId, targetId);
+      const targetId = await lastRoundFixtureId(stageId);
+      const parkedAt = await parkAndScopeLock(auth, stageId, divisionId, targetId);
 
       // Same click the owner's report reproduced — `only_unlocked: false`,
       // `mode: "build"` — but this time the lock comes ONLY from the
@@ -335,7 +397,7 @@ describe.skipIf(!HAS_DB)(
       // stays false throughout.
       const second = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
       const proposed = second.assignments.find((a) => a.fixture_id === targetId);
-      expect(proposed?.scheduled_at).toBe(at(-480));
+      expect(proposed?.scheduled_at).toBe(parkedAt);
       expect(proposed?.court_label).toBe("C2");
     }, 180_000);
   },
@@ -359,8 +421,8 @@ describe.skipIf(!HAS_DB)(
         source: "auto",
       });
 
-      const targetId = await round1FixtureId(stageId);
-      await parkAndScopeLock(auth, stageId, divisionId, targetId);
+      const targetId = await lastRoundFixtureId(stageId);
+      const parkedAt = await parkAndScopeLock(auth, stageId, divisionId, targetId);
 
       const { pack } = await buildSchedulePack(auth, divisionId, {
         now: Date.parse(T0),
@@ -373,7 +435,7 @@ describe.skipIf(!HAS_DB)(
       // Compared on the instant, not the rendered string: the pack renders
       // in the ORG zone (`zonedIso`), which may not spell the same offset
       // `at()` does even when it names the same instant.
-      expect(Date.parse(drafted!.scheduled_at as string)).toBe(Date.parse(at(-480)));
+      expect(Date.parse(drafted!.scheduled_at as string)).toBe(Date.parse(parkedAt));
       expect(drafted!.court_label).toBe("C2");
 
       // Task 4: `PackFixture.pinned` (feeds `structuralCheck` and

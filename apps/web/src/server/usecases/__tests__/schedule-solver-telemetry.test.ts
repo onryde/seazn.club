@@ -422,9 +422,30 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
       select id from fixtures where stage_id = ${stageId}
       order by round_no desc, seq_in_round desc limit 1`;
     const parked = rows[0]!;
+    // TEN HOURS AFTER THE BOARD'S OWN LAST CARD, not ten hours after `T0`.
+    //
+    // `at(600)` is a FIXED instant, and the comment above it — "still legal,
+    // nothing else is near it" — was an assumption about where the board would
+    // be, not a fact about where it is. `config.startAt` is not the solver's
+    // floor: `applyWindow` floors the window at START-OF-DAY, and
+    // `boundSolverWindow` returns a two-finite-bound window untouched, so the
+    // solver's grid opens at midnight while greedy's cursor opens at `startAt`
+    // (`calendar.ts:759`). Under the day-aware rungs the solver compacts to that
+    // midnight, on the seed day or the NEXT one, run to run — both boards verify
+    // clean, so nothing downstream picks a side.
+    //
+    // When it picks the next day, the whole board sits AFTER `at(600)`, and this
+    // card is the LAST round — so parking it there puts it before every round
+    // that must precede it, which is a direct `order` breach, which is blocking.
+    // That is the "1-in-3 intermittent `assertNoNewBlocking`" this suite has been
+    // red with: it is a TEST premise, not a product defect. Reading the slot off
+    // the board keeps the card provably last whichever day the solver chose.
+    const [boardEnd] = await sql<{ latest: Date | null }[]>`
+      select max(scheduled_at) as latest from fixtures where stage_id = ${stageId}`;
+    const parkedAt = new Date(boardEnd!.latest!.getTime() + 600 * 60_000).toISOString();
     await applySchedule(auth, stageId, {
       assignments: [
-        { fixture_id: parked.id, scheduled_at: at(600), court_label: "C1" },
+        { fixture_id: parked.id, scheduled_at: parkedAt, court_label: "C1" },
       ],
       source: "manual",
     });
@@ -436,7 +457,7 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
     expect(reflow.solver.moved).toBe(0);
     expect(
       reflow.assignments.find((a) => a.fixture_id === parked.id)?.scheduled_at,
-    ).toBe(at(600));
+    ).toBe(parkedAt);
 
     // …and the rest of the board is where the organiser left it too, not merely
     // the parked card.
@@ -463,7 +484,7 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
     });
     expect(
       rebuilt.assignments.find((a) => a.fixture_id === parked.id)?.scheduled_at,
-    ).not.toBe(at(600));
+    ).not.toBe(parkedAt);
 
     // …and a LOCK now wins over `only_unlocked: false` too (owner ruling,
     // 2026-08-12 — full regression coverage in
@@ -495,7 +516,7 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
         mode: "build",
       });
       const stillParked = full.assignments.find((a) => a.fixture_id === parked.id);
-      expect(stillParked?.scheduled_at).toBe(at(600));
+      expect(stillParked?.scheduled_at).toBe(parkedAt);
       expect(stillParked?.court_label).toBe("C1");
     }
   }, 180_000);
