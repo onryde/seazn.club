@@ -1074,6 +1074,12 @@
                           "format": "uuid",
                           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                         },
+                        "slug": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80,
+                          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                        },
                         "divisions": {
                           "type": "array",
                           "items": {
@@ -1126,6 +1132,7 @@
                       },
                       "required": [
                         "competitionId",
+                        "slug",
                         "divisions",
                         "templateKey",
                         "templateVersion"
@@ -1142,6 +1149,7 @@
                   "ok": true,
                   "data": {
                     "competitionId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "slug": "example",
                     "divisions": [
                       {
                         "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
