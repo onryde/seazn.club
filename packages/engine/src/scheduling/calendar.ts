@@ -15,6 +15,15 @@ import type {
 } from "./constraints.ts";
 import { restFloor } from "./rest-floor.ts";
 import { dayKeyInTz, hhmmInTz, weekdayOfYmd, ymdAddDays, zonedTimeToUtc } from "./tz.ts";
+import { canonConflictDetail, type ConflictDetail } from "./conflict-detail.ts";
+
+// Re-exported beside `Conflict` itself (below) so the many call sites that
+// already do `import { ..., type Conflict, ... } from "./calendar.ts"` can
+// add `type ConflictDetail` to that same list rather than a second import
+// statement — this file is the type's usual point of contact even though it
+// is DEFINED in `./conflict-detail.ts`, the same way `RuleFixture` and
+// `ScopeRow` live here despite describing something `Assignment`-adjacent.
+export type { ConflictDetail, ConflictDetailKind } from "./conflict-detail.ts";
 
 const MS_PER_MIN = 60_000;
 
@@ -192,7 +201,12 @@ export const RULE_BY_REASON: Record<ConflictReason, RuleCode> = {
 export interface Conflict {
   fixtureId: string;
   reason: ConflictReason;
-  detail?: string;
+  /** Structured, id-only (C3, 2026-08-13 design amendment) — the engine
+   *  builds no prose. `kind` names which of the 25 family templates produced
+   *  this row; the rest of `ConflictDetail`'s fields are whichever scalars
+   *  and ids that template needs. Resolving an id to a display name is a
+   *  client concern; the engine never sees a name to begin with. */
+  details?: ConflictDetail;
   /** `order` only: true when the dependency is a direct feed (blocks, doc 12 §2). */
   direct?: boolean;
   /** The rule the prompt taught for this reason (#399). Stamped at one choke
@@ -213,9 +227,24 @@ export interface Conflict {
 const withRule = (c: Conflict): Conflict => ({ ...c, rule: RULE_BY_REASON[c.reason] });
 
 /** Stable conflict identity — the key `verifyJoint`'s dedupe and the joint apply
- *  gate already use. `detail` is deliberately part of it: a worse breach writes a
- *  different detail string, so "worsened" needs no second comparison. */
-export const conflictKey = (c: Conflict): string => `${c.fixtureId}|${c.reason}|${c.detail ?? ""}`;
+ *  gate already use. `details` is deliberately part of it, folded through
+ *  `canonConflictDetail` rather than compared structurally: a worse breach
+ *  writes a different canon string, so "worsened" needs no second comparison.
+ *
+ *  This used to be a raw `detail` prose string (pre-C3); the prose is gone,
+ *  but the THREE REASONS the counterparty had to be part of the key have not
+ *  changed, and the canon carries every one of them exactly as the string
+ *  did: naming the court alone made a SWAP invisible (:829 — a card already
+ *  clashing with B, dragged onto C instead, must key differently); one row
+ *  per CARD is what makes an ADDED collision visible rather than one that
+ *  reads as pre-existing (:1364-1376); and two distinct kinds — never one
+ *  shared string — keep a rest breach from hiding behind a pre-existing
+ *  ordering violation (:1479-1495). `canonConflictDetail` is exhaustive over
+ *  every populated field (`conflict-detail.test.ts`'s per-kind sweep), so
+ *  none of those distinctions can be dropped silently the way an
+ *  under-interpolated template string once could. */
+export const conflictKey = (c: Conflict): string =>
+  `${c.fixtureId}|${c.reason}|${c.details ? canonConflictDetail(c.details) : ""}`;
 
 /**
  * A conflict that makes the schedule PHYSICALLY IMPOSSIBLE, as opposed to
@@ -732,7 +761,7 @@ export function slotFixtures(input: SlotInput): SlotResult {
           conflicts.push({
             fixtureId: f.id,
             reason: "person_overlap",
-            detail: `person ${person} also in ${other.fixtureId}`,
+            details: { kind: "person_double_booking", personIds: [person], otherFixtureId: other.fixtureId },
           });
         }
       }
@@ -745,7 +774,11 @@ export function slotFixtures(input: SlotInput): SlotResult {
     const lock = f.locked as { court: string; startAt: number };
     const clash = courtBlocked(lock.court, lock.startAt, durMs, gapMs, bookings, blackouts);
     if (clash !== null) {
-      conflicts.push({ fixtureId: f.id, reason: clash, detail: `locked slot clashes on ${lock.court}` });
+      conflicts.push({
+        fixtureId: f.id,
+        reason: clash,
+        details: { kind: "locked_slot_clash", court: lock.court },
+      });
     }
     commit(f, lock.court, lock.startAt);
   }
@@ -826,16 +859,21 @@ export function slotFixtures(input: SlotInput): SlotResult {
       // NOT `person_overlap`. Nothing was placed, so there is no overlap on the
       // board to report — and `person_overlap` is BLOCKING, so claiming one here
       // would make a card the placer declined to place refuse the organiser's
-      // apply. The person travels in `detail`, which is part of `conflictKey`
-      // and so already distinguishes this from an ordinary exhausted horizon.
+      // apply. The person travels in `details`, which `conflictKey` folds in
+      // (via `canonConflictDetail`), and so already distinguishes this from an
+      // ordinary exhausted horizon.
       conflicts.push({
         fixtureId: f.id,
         reason: windowBound ? "start_window" : "no_slot",
-        detail: windowBound
-          ? "no feasible slot before the start window's notAfter bound"
+        details: windowBound
+          ? { kind: "no_slot_start_window" }
           : personBound !== null
-            ? `no court/time within horizon free of person ${personBound.person} (also in ${personBound.other})`
-            : "no court/time within horizon",
+            ? {
+                kind: "no_slot_person_bound",
+                personIds: [personBound.person],
+                otherFixtureId: personBound.other,
+              }
+            : { kind: "no_slot_horizon" },
       });
       continue;
     }
