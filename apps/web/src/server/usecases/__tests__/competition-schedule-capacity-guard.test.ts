@@ -290,10 +290,23 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition — D2 capacity guard (per kept d
       content: [],
     });
 
-    await run(auth, competitionId, divisions.map((d) => d.id));
+    // The mocked compile returns an empty plan, so the AI ladder exhausts and
+    // `run` rejects with "could not produce a usable plan". That is expected
+    // and is not what this test is about — getting as far as the compile is
+    // itself the proof the guard did not wrongly refuse a comfortable board.
+    // So: assert the failure is NOT the capacity refusal, and that the compile
+    // was reached. Asserting the literal code rather than importing
+    // CAPACITY_IMPOSSIBLE_CODE is deliberate: a test that imports the constant
+    // still passes if the constant's value changes, which is the wire-level
+    // drift this is meant to pin.
+    let caught: unknown;
+    try {
+      await run(auth, competitionId, divisions.map((d) => d.id));
+    } catch (err) {
+      caught = err;
+    }
 
-    // Reaching the compile step is itself the proof the guard did not
-    // wrongly refuse a comfortable board.
+    expect((caught as { code?: string } | undefined)?.code).not.toBe("CAPACITY_IMPOSSIBLE");
     expect(parse).toHaveBeenCalled();
   });
 });
