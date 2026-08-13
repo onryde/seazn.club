@@ -52,8 +52,8 @@ describe("a card that greedy placed and something later dropped", () => {
     // business answering for it.
     const seed = slotFixtures({ fixtures: collide, config });
     expect(seed.assignments.map((a) => a.fixtureId)).toEqual(["a", "b"]);
-    expect(seed.conflicts.map((c) => [c.fixtureId, c.detail])).toEqual([
-      ["b", "locked slot clashes on C1"],
+    expect(seed.conflicts.map((c) => [c.fixtureId, c.details])).toEqual([
+      ["b", { kind: "locked_slot_clash", court: "C1" }],
     ]);
 
     const out = await buildSchedule({ fixtures: collide, config });
@@ -64,9 +64,9 @@ describe("a card that greedy placed and something later dropped", () => {
     // ONE collision, described the same way from both sides, each naming the
     // other card. Before the fix `b` read "locked slot clashes on C1" — greedy's
     // row about the placement it had just made.
-    expect(out.conflicts.map((c) => [c.fixtureId, c.reason, c.detail])).toEqual([
-      ["a", "court", "court C1 double-booked with b"],
-      ["b", "court", "court C1 double-booked with a"],
+    expect(out.conflicts.map((c) => [c.fixtureId, c.reason, c.details])).toEqual([
+      ["a", "court", { kind: "court_double_booking", court: "C1", otherFixtureId: "b" }],
+      ["b", "court", { kind: "court_double_booking", court: "C1", otherFixtureId: "a" }],
     ]);
     await resetZ3();
   }, 120_000);
