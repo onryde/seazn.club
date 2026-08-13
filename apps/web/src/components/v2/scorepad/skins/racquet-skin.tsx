@@ -269,6 +269,29 @@ function sideAttributionPath(action: PadActionView): string {
   return item?.path ?? "by";
 }
 
+/** Mirrors panel.tsx's own `renderLockedTile` (same visual language, same
+ *  reason text) — not imported, because that one is a private, unexported
+ *  function of a file this skin does not own; duplicating ~8 lines beats
+ *  either editing a shared chassis file or forking `Panel` wholesale. Byte-
+ *  identical to tennis-skin.tsx's/football-skin.tsx's own copy of the same
+ *  comment+function, for the same reason (S11/#420 W9 review fix: this file
+ *  never checked `availability` at all before, so a locked action rendered
+ *  as a live, tappable control the server would then refuse). */
+function renderLockedTile(action: PadActionView, msg: MsgFn): ReactNode {
+  if (action.availability.kind !== "locked") return null;
+  const label = padLabel(action.labelKey.key, msg, action.labelKey.label);
+  return (
+    <div
+      key={action.type + action.labelKey.key}
+      className="flex h-14 w-full flex-col items-center justify-center gap-0.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-center opacity-75"
+      aria-disabled="true"
+    >
+      <span className="text-sm font-medium text-amber-900">{label}</span>
+      <span className="text-[11px] text-amber-700">{msg(action.availability.reason.key)}</span>
+    </div>
+  );
+}
+
 function SideTapAction(props: {
   action: PadActionView;
   ids: { home: string; away: string };
@@ -388,27 +411,35 @@ function GroupBody(props: {
         const nodes: ReactNode[] = [];
         if (tap) {
           nodes.push(
-            <SideTapAction
-              key={`${tap.type}:tap`}
-              action={tap}
-              ids={ids}
-              dispatch={dispatch}
-              submitting={submittingType === tap.type}
-              msg={msg}
-              compact={compact}
-            />,
+            tap.availability.kind === "locked" ? (
+              renderLockedTile(tap, msg)
+            ) : (
+              <SideTapAction
+                key={`${tap.type}:tap`}
+                action={tap}
+                ids={ids}
+                dispatch={dispatch}
+                submitting={submittingType === tap.type}
+                msg={msg}
+                compact={compact}
+              />
+            ),
           );
         }
         for (const action of detailed) {
           const key = `${action.type}:${action.fields.map((f) => f.path).join(",")}`;
           nodes.push(
-            <ActionForm
-              key={key}
-              action={action}
-              submitting={submittingType === action.type}
-              onSubmit={(payload) => void dispatch(action.type, payload)}
-              renderAttribution={renderAttribution}
-            />,
+            action.availability.kind === "locked" ? (
+              renderLockedTile(action, msg)
+            ) : (
+              <ActionForm
+                key={key}
+                action={action}
+                submitting={submittingType === action.type}
+                onSubmit={(payload) => void dispatch(action.type, payload)}
+                renderAttribution={renderAttribution}
+              />
+            ),
           );
         }
         return nodes;
