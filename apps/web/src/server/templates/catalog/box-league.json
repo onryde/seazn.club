@@ -1,0 +1,29 @@
+{
+  "key": "box-league",
+  "version": 1,
+  "i18n": {
+    "nameKey": "templates.boxLeague.name",
+    "descriptionKey": "templates.boxLeague.desc"
+  },
+  "divisions": [
+    {
+      "i18nNameKey": "templates.boxLeague.div.main",
+      "sportKey": "badminton",
+      "variantKey": "short",
+      "entrantKind": "individual",
+      "entrantCount": 16,
+      "stages": [
+        {
+          "i18nNameKey": "templates.stage.boxes",
+          "kind": "group",
+          "groups": 4,
+          "scheduleDefaults": {
+            "matchMinutes": 25,
+            "gapMinutes": 5,
+            "suggestedCourtTags": ["indoor"]
+          }
+        }
+      ]
+    }
+  ]
+}

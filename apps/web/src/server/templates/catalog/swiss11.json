@@ -1,0 +1,28 @@
+{
+  "key": "swiss11",
+  "version": 1,
+  "i18n": {
+    "nameKey": "templates.swiss11.name",
+    "descriptionKey": "templates.swiss11.desc"
+  },
+  "divisions": [
+    {
+      "i18nNameKey": "templates.swiss11.div.main",
+      "sportKey": "boardgame",
+      "variantKey": "classical",
+      "entrantKind": "individual",
+      "entrantCount": 32,
+      "stages": [
+        {
+          "i18nNameKey": "templates.stage.swissRounds",
+          "kind": "swiss",
+          "config": { "rounds": 11 },
+          "scheduleDefaults": {
+            "matchMinutes": 90,
+            "gapMinutes": 15
+          }
+        }
+      ]
+    }
+  ]
+}

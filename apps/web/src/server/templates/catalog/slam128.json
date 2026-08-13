@@ -1,0 +1,29 @@
+{
+  "key": "slam128",
+  "version": 1,
+  "i18n": {
+    "nameKey": "templates.slam128.name",
+    "descriptionKey": "templates.slam128.desc"
+  },
+  "divisions": [
+    {
+      "i18nNameKey": "templates.slam128.div.main",
+      "sportKey": "tennis",
+      "variantKey": "grand-slam",
+      "entrantKind": "individual",
+      "entrantCount": 128,
+      "stages": [
+        {
+          "i18nNameKey": "templates.stage.mainDraw",
+          "kind": "knockout",
+          "size": 128,
+          "scheduleDefaults": {
+            "matchMinutes": 180,
+            "gapMinutes": 30,
+            "suggestedCourtTags": ["grass", "show-court"]
+          }
+        }
+      ]
+    }
+  ]
+}

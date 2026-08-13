@@ -1,0 +1,39 @@
+{
+  "key": "wc32",
+  "version": 1,
+  "i18n": {
+    "nameKey": "templates.wc32.name",
+    "descriptionKey": "templates.wc32.desc"
+  },
+  "divisions": [
+    {
+      "i18nNameKey": "templates.wc32.div.main",
+      "sportKey": "football",
+      "variantKey": "11-a-side",
+      "entrantKind": "team",
+      "entrantCount": 32,
+      "stages": [
+        {
+          "i18nNameKey": "templates.stage.groupStage",
+          "kind": "group",
+          "groups": 8,
+          "scheduleDefaults": {
+            "matchMinutes": 90,
+            "gapMinutes": 30,
+            "suggestedCourtTags": ["grass"]
+          }
+        },
+        {
+          "i18nNameKey": "templates.stage.knockout",
+          "kind": "knockout",
+          "size": 16,
+          "scheduleDefaults": {
+            "matchMinutes": 90,
+            "gapMinutes": 30,
+            "suggestedCourtTags": ["grass"]
+          }
+        }
+      ]
+    }
+  ]
+}
