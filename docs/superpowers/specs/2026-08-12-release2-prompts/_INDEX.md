@@ -31,7 +31,7 @@ C6 (prose) is safe whenever.
 |---|---|---|---|---|
 | C0 | `C0-division-rules-retirement.md` | division_rules | — | **MERGED** #537 → `f0f83939` |
 | C1 | `C1-round-ordering.md` | round ordering | C0 (same proto/build.ts region) | **MERGED** #546 → `78db2f1f` |
-| C2 | `C2-day-start-rung.md` | day_start | C1 (model.py overlap; rebase either way) | **IN REVIEW** — branch `feat/c2-day-start-rung`; shipped #512's two rungs too (see below) |
+| C2 | `C2-day-start-rung.md` | day_start | C1 (model.py overlap; rebase either way) | **IN REVIEW** — PR #555, `feat/c2-day-start-rung`; shipped #512's two rungs too (see below) |
 | C3 | `C3-conflict-detail-names.md` | conflict details | not concurrent with C1 (schedule.ts) | TODO |
 | C4 | `C4-z3-reflow-cpsat.md` | z3 stage A | C1 (reflow inherits round rule) | TODO |
 | C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | TODO |
@@ -216,7 +216,7 @@ is outside the corpus's scope entirely). `openapi:gen` produced zero diff.
 ### C2 — T1 `day_start` rung (2026-08-13)
 
 Branch `feat/c2-day-start-rung`, worktree `.claude/worktrees/c2-day-start`,
-off `3d64222a`.
+off `3d64222a`. **PR #555**, commit `ab4a1aee`.
 
 **False premise, and it changed the scope: #512 WAS NEVER IMPLEMENTED.** The
 C2 prompt reads as if the two day rungs already exist ("reusing #512's
