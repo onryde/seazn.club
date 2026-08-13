@@ -288,7 +288,7 @@ export function LineupEditor({
                 setSlots((prev) => prev.map((x, j) => (j === i ? { ...x, slot: v } : x)));
                 setSaved(false);
               }}
-              className="select min-h-11 w-24 px-2 py-1 text-xs sm:min-h-0"
+              className="select min-h-11 w-24 px-2 py-1 text-xs"
               aria-label={msg("lineup.slotAria", { name: s.full_name })}
             >
               <option value="starting">{msg("lineup.slotStarting")}</option>
@@ -305,7 +305,7 @@ export function LineupEditor({
                   );
                   setSaved(false);
                 }}
-                className="select min-h-11 w-32 px-2 py-1 text-xs sm:min-h-0"
+                className="select min-h-11 w-32 px-2 py-1 text-xs"
                 aria-label={msg("lineup.positionAria", { name: s.full_name })}
               >
                 <option value="">{msg("lineup.positionPlaceholder")}</option>
@@ -324,7 +324,7 @@ export function LineupEditor({
                 setSlots((prev) => prev.map((x, j) => (j === i ? { ...x, role: v } : x)));
                 setSaved(false);
               }}
-              className="select min-h-11 w-24 px-2 py-1 text-xs sm:min-h-0"
+              className="select min-h-11 w-24 px-2 py-1 text-xs"
               aria-label={msg("lineup.roleAria", { name: s.full_name })}
               data-testid="lineup-role-select"
             >
@@ -343,7 +343,7 @@ export function LineupEditor({
                   );
                   setSaved(false);
                 }}
-                className="select min-h-11 w-32 px-2 py-1 text-xs sm:min-h-0"
+                className="select min-h-11 w-32 px-2 py-1 text-xs"
                 aria-label={msg("lineup.pairOrderAria", { name: s.full_name })}
                 data-testid="lineup-pairorder-select"
               >

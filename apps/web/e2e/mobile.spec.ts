@@ -514,8 +514,15 @@ test("the publish gate's confirm sheet holds at phone width", async ({ page, req
  * shrinks well under this repo's 44px touch-target floor — and this file had
  * zero references to the lineup editor at all despite already owning the
  * exact assertion pattern this test reuses (`toBeGreaterThanOrEqual(44)`,
- * see T15 below). `min-h-11 sm:min-h-0` is now on both selects, mobile-only,
- * same recipe as every other control this file already holds to the floor.
+ * see T15 below). `min-h-11` is now on both selects, at EVERY width — not
+ * `sm:min-h-0`, which was the first shape of this fix and is wrong here for a
+ * reason worth writing down: this file runs under all SEVEN width projects,
+ * including `tablet-768` and `tablet-834`, and those are touch devices too. A
+ * `sm:` escape hatch would have restored 26px controls at exactly two of the
+ * widths this very test runs at — the assertion below is unconditional, so the
+ * fix would have shipped its own red. Same recipe as every other control this
+ * file already holds to the floor, and the same bare `min-h-11` the scorepad
+ * chassis uses for its chips and phase tabs.
  *
  * A pair-kind entrant (`entrantKind: "pair"`, not a sport-specific position
  * catalog — S12/#421 pass E Finding 1 made the pair-order control read the
