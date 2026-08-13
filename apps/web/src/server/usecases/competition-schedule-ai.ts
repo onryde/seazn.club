@@ -2580,24 +2580,29 @@ async function planForCompetition(
       // this guard a permanent no-op: every division always resolved to a
       // skipped assessment, regardless of how oversubscribed it was.
       const slotConfig = { ...toSlotConfig({ division_id: id, config: parsed.data, displayTz: orgTz, orgTz, updated_at: "" }, Date.now()), tz: orgTz };
+      // The identity half comes from the ONE shared builder, not a second
+      // literal. `capacityInputForFixtures` needs exactly the facts a
+      // `RuleFixture` already carries — id, extKey, poolId, winnerTo — so
+      // writing them out here would be a fourth producer of `winnerTo`, and
+      // #443 was precisely two copies of that drifting onto a shared wrong
+      // assumption. `competition-schedule-ai-repair.test.ts` counts the
+      // producers per file and requires zero in this one; it caught this
+      // exact regression, which is why the delegation is not optional.
+      // Column names differ on this row shape, hence the adapter — the same
+      // move the two other call sites in this file already make.
       const fixtures = fixtureRows
         .filter((f) => f.division_id === id)
         .map((f) => ({
           home: f.home_entrant_id ?? undefined,
           away: f.away_entrant_id ?? undefined,
-          poolId: f.pool_id ?? undefined,
-          id: f.id,
-          extKey: f.ext_key,
-          winnerTo: f.winner_to_fixture,
+          ...toRuleFixture(
+            { id: f.id, ext_key: f.ext_key, pool: f.pool_id, feeds: { winner_to: f.winner_to_fixture } },
+            id,
+          ),
         }));
       const input = capacityInputForFixtures(fixtures, slotConfig, id);
-      if (process.env.DEBUG_CAPACITY === "1") {
-        console.error("DEBUG division", id, row.name, "fixtures.length", fixtures.length, "rawFixtureRows", fixtureRows.length);
-        console.error("DEBUG input", JSON.stringify(input));
-      }
       if (input === null) continue; // no bounded window to assess — skip, not impossible
       const report = assessCapacity(input);
-      if (process.env.DEBUG_CAPACITY === "1") console.error("DEBUG report", JSON.stringify(report));
       logCapacityAssessed(report, { scope: "competition_division", divisionId: id, competitionId });
       if (report.verdict === "impossible") capacityImpossible.push({ id, name: row.name, report });
     }
