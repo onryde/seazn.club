@@ -321,12 +321,22 @@ export function buildBallPayload(batRuns: number, entry: BallEntry): Record<stri
 }
 
 // ---------------------------------------------------------------------------
-// React Component — NOT unit-tested (apps/web's vitest is `environment:
-// "node"`, no jsdom/@testing-library — see ./types.ts's own header). Thin by
-// design: everything it draws comes from `layout` or `view`, so this and
-// `cricketLayout` can never disagree. Screenshot-verified at 375px/1280px via
-// a throwaway render harness (dispatch report), since no route mounts a skin
-// yet (pad-renderer.tsx's registry wiring is a sibling task, not owned here).
+// React Component — mostly screenshot-only, not unit-tested (apps/web's
+// vitest is `environment: "node"`, no jsdom/@testing-library — see
+// ./types.ts's own header). Thin by design: everything it draws comes from
+// `layout` or `view`, so this and `cricketLayout` can never disagree.
+// Screenshot-verified at 375px/1280px via a throwaway render harness
+// (dispatch report), since no route mounts a skin yet (pad-renderer.tsx's
+// registry wiring is a sibling task, not owned here).
+//
+// ONE exception (S11 review fix): `ThisOverGroup` owns real hook state (the
+// batter/bowler picker), which is exactly the kind of fact a pure `layout()`
+// comparison or a static screenshot cannot see — a picker can render the
+// right thing at mount and silently go stale on every render after. That
+// state-sync property is unit-tested directly, through the node-only
+// `_hook-harness` (`renderIsland`), the same technique pad-renderer.test.tsx
+// and period-skin.test.ts already use for a component with its own hooks.
+// See `ThisOverGroup`'s own export comment and cricket-skin.test.ts.
 // ---------------------------------------------------------------------------
 
 /** SkinProps carries no lineup/personNames channel (file header) — the
@@ -426,7 +436,7 @@ function renderSkinAttribution(state: CricketStateShape, msg: MsgFn) {
   };
 }
 
-interface ThisOverProps {
+export interface ThisOverProps {
   msg: MsgFn;
   view: PadView;
   state: CricketStateShape;
@@ -439,8 +449,14 @@ interface ThisOverProps {
  *  extras are one-tap chips (default 1 run, matching the common case);
  *  the dismissal flow expands in two short steps (kind, then — only when the
  *  kind needs one — who/fielder) and submits on its own last tap. See the
- *  dispatch report for the counted tap totals against v1. */
-function ThisOverGroup({ msg, view, state, bpo, submittingType, dispatch }: ThisOverProps) {
+ *  dispatch report for the counted tap totals against v1.
+ *
+ *  Exported (S11 review fix) so `__tests__/cricket-skin.test.ts` can drive
+ *  it directly through the node-only `_hook-harness` — this is the one part
+ *  of the Component with its own hook state (the batter/bowler picker), so
+ *  it is the one part that needs more than a pure `layout()` comparison or a
+ *  screenshot to prove correct. See that file's own header. */
+export function ThisOverGroup({ msg, view, state, bpo, submittingType, dispatch }: ThisOverProps) {
   const open = currentInnings(state);
   const battingSide = open?.battingSide ?? "home";
   const bowlingSide = opponentSide(battingSide);
@@ -456,9 +472,49 @@ function ThisOverGroup({ msg, view, state, bpo, submittingType, dispatch }: This
   // bare action label would undersell it.
   const label = msg("scorepad.skin.cricket.group.thisOver");
 
+  // Local picker selection, resynced to the fold whenever the fold's OWN
+  // value changes (S11 review fix — reviewed defect: `useState(initial)`
+  // seeds ONCE at mount and silently ignores every later value, so after the
+  // first ball the picker's idea of who is on strike drifts from the fold's
+  // and every subsequent ball is attributed to the wrong batter).
+  //
+  // React's own answer is "adjusting state when a prop changes" — this repo
+  // already relies on the identical render-phase-update pattern in
+  // use-board-actions.ts (`seenFixtures`/`setOverrides({})`, "Render-time
+  // state adjustment ... no effect cascade"): track the LAST FOLD VALUE seen
+  // in its own state slot, and when the incoming fold value differs from it,
+  // overwrite the local selection during render (see _hook-harness.tsx's own
+  // render-phase-update note for why this converges rather than looping).
+  //
+  // Comparing the FOLD'S PRIMITIVE VALUE (a person id or null), never an
+  // object/array reference, is load-bearing: `ctx.state` is a fresh object
+  // every render in the real pipeline, so reference comparison would resync
+  // on every render and defeat the other half of this fix below.
+  //
+  // A manual override (via onChange) only ever touches `striker`/
+  // `nonStriker`/`bowler`, never the `lastFold*` slot — so it survives any
+  // re-render whose fold value is unchanged, and is overwritten only once
+  // the fold itself actually moves. That is the deliberate answer to "must
+  // not fight a deliberate correction mid-entry": follow the fold whenever
+  // the fold's own value changes, keep the manual choice until it does.
   const [striker, setStriker] = useState(fine?.striker ?? battingOrder[0] ?? "");
+  const [lastFoldStriker, setLastFoldStriker] = useState(fine?.striker ?? null);
   const [nonStriker, setNonStriker] = useState(fine?.nonStriker ?? battingOrder[1] ?? "");
+  const [lastFoldNonStriker, setLastFoldNonStriker] = useState(fine?.nonStriker ?? null);
   const [bowler, setBowler] = useState(fine?.currentBowler ?? bowlingOrder[0] ?? "");
+  const [lastFoldBowler, setLastFoldBowler] = useState(fine?.currentBowler ?? null);
+  if ((fine?.striker ?? null) !== lastFoldStriker) {
+    setLastFoldStriker(fine?.striker ?? null);
+    setStriker(fine?.striker ?? battingOrder[0] ?? "");
+  }
+  if ((fine?.nonStriker ?? null) !== lastFoldNonStriker) {
+    setLastFoldNonStriker(fine?.nonStriker ?? null);
+    setNonStriker(fine?.nonStriker ?? battingOrder[1] ?? "");
+  }
+  if ((fine?.currentBowler ?? null) !== lastFoldBowler) {
+    setLastFoldBowler(fine?.currentBowler ?? null);
+    setBowler(fine?.currentBowler ?? bowlingOrder[0] ?? "");
+  }
   const [wicketOpen, setWicketOpen] = useState(false);
   const [wicketKind, setWicketKind] = useState<WicketKind | null>(null);
   const [wicketOut, setWicketOut] = useState<string>("");

@@ -5,12 +5,22 @@
 // from the actual engine module (never hand-typed fixtures) — the same
 // "measure, don't assume" discipline the dispatch brief was written under.
 //
-// `layout()` is pure (types.ts's own contract), so every assertion here is a
+// `layout()` is pure (types.ts's own contract), so most assertions here are a
 // data comparison — no React, no jsdom (apps/web's vitest is `environment:
-// "node"`, vitest.config.ts:71). The few facts that live in the React
-// Component (name resolution, tap sequencing) are not testable here at all;
-// see cricket-skin.tsx's own header comment for why, and the dispatch
-// report for the tap-count reasoning.
+// "node"`, vitest.config.ts:71). Most facts that live in the React Component
+// (name resolution, tap sequencing) are not testable here at all; see
+// cricket-skin.tsx's own header comment for why, and the dispatch report for
+// the tap-count reasoning.
+//
+// ONE exception, at the bottom of this file (S11 review-caught defect): the
+// batter/bowler picker's own resync-to-the-fold behaviour is real hook state
+// inside `ThisOverGroup`, not a `layout()` fact, so it is driven directly
+// through this repo's node-only `_hook-harness` (`renderIsland`) — the same
+// technique pad-renderer.test.tsx and period-skin.test.ts already use for a
+// component with its own hooks. Fixtures there are REAL folds off the real
+// `cricket` module (foldMatch + real EventEnvelopes) for the same reason the
+// rest of this file uses real PadSpecs: a hand-typed CricketState is exactly
+// how a test silently drifts from the real fold's shape.
 //
 // Independent-oracle discipline (reference_wrapper_delegate_parity_is_a_tautology):
 // every "did the layout place the right things" assertion below compares
@@ -18,10 +28,22 @@
 // the REAL `view` it was given — never against a number this file invents —
 // so a bug that empties both sides at once cannot read as a pass.
 import { describe, expect, it } from "vitest";
+import type { ReactElement } from "react";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
+import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
+import {
+  cricket as cricketEngine,
+  type CricketBallEv,
+  type CricketCfg,
+  type CricketState,
+} from "@seazn/engine/sports/cricket";
+import { messages, type MessageKey } from "@/lib/messages";
+import { t as tRuntime } from "@/lib/i18n-runtime";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { buildPadView } from "../view-model";
-import { cricketSkin, buildBallPayload } from "../skins/cricket-skin";
+import { cricketSkin, buildBallPayload, ThisOverGroup } from "../skins/cricket-skin";
 import { createSkinDispatch, layoutActionTypes, layoutActionTypesAt, type SkinHeader } from "../skins/types";
 import { cfgSpace, grantAllEntitlements } from "./_cfg-space";
 
@@ -389,5 +411,182 @@ describe("dispatch: refuses any action cricket's own current view does not decla
     const view = viewFor(cfg, "live");
     const dispatch = createSkinDispatch(view, async () => {});
     await expect(dispatch("cricket.doesnotexist", {})).rejects.toThrow(/does not declare/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review finding (S11/#420): the batter/bowler pickers never resynced to the
+// engine's folded state after mount. `useState(fine?.striker ?? ...)` seeds
+// ONCE, so after the very first ball the picker's idea of who is on strike
+// silently drifts from the fold's, and every subsequent ball is attributed
+// to the wrong batter — a well-formed payload the server accepts, so nothing
+// downstream ever sees the mistake. Proven here with a REAL fold, driven
+// through `ThisOverGroup` directly (exported from cricket-skin.tsx for
+// exactly this).
+// ---------------------------------------------------------------------------
+describe("ThisOverGroup: the picker resyncs to the fold (S11 review finding)", () => {
+  // The exact fallback `useMsg()` resolves to outside a `<DictProvider>`
+  // (mirrors period-skin.test.ts's own established pattern) — real English
+  // lookup, not a stub.
+  type MsgFn = (key: MessageKey, vars?: Record<string, string | number>) => string;
+  const msg: MsgFn = (key, vars) => tRuntime(messages, key, vars);
+
+  const RESYNC_LINEUPS = defaultLineupPair(cricketEngine.positions);
+  const RESYNC_CFG: CricketCfg = cricketEngine.configSchema.parse(cricketEngine.variants.t20);
+  const bpo = RESYNC_CFG.ballsPerOver;
+
+  // Openers by orderNo — defaultLineupPair's own scheme (testkit/helpers.ts):
+  // personId `${entrantId}-p${orderNo}`.
+  const S0 = RESYNC_LINEUPS.home.slots[0]!.personId;
+  const N0 = RESYNC_LINEUPS.home.slots[1]!.personId;
+  // Deliberately NOT bowlingOrder[0] — the component's own null-bowler
+  // fallback IS bowlingOrder[0], so bowling the over with anyone else makes
+  // the over-end resync (bowler -> null -> fallback) a REAL, visible change
+  // rather than a coincidence a broken fix could still pass.
+  const OVER_BOWLER = RESYNC_LINEUPS.away.slots[2]!.personId;
+  const BOWLER_FALLBACK = RESYNC_LINEUPS.away.slots[0]!.personId;
+
+  interface Ball {
+    striker: string;
+    nonStriker: string;
+    bowler: string;
+    bat: number;
+  }
+  // One legal run (rotates strike), then five balls that touch nothing, so
+  // the only strike swap left standing by the end of the over is the
+  // mandatory over-end one — see the "sanity" test below for the hand trace,
+  // checked against the real fold rather than trusted blind.
+  const OVER: readonly Ball[] = [
+    { striker: S0, nonStriker: N0, bowler: OVER_BOWLER, bat: 1 }, // odd -> rotates strike
+    { striker: N0, nonStriker: S0, bowler: OVER_BOWLER, bat: 0 },
+    { striker: N0, nonStriker: S0, bowler: OVER_BOWLER, bat: 2 },
+    { striker: N0, nonStriker: S0, bowler: OVER_BOWLER, bat: 0 },
+    { striker: N0, nonStriker: S0, bowler: OVER_BOWLER, bat: 0 },
+    { striker: N0, nonStriker: S0, bowler: OVER_BOWLER, bat: 0 }, // 6th legal ball -> over ends
+  ];
+
+  function envelopesThrough(n: number): EventEnvelope[] {
+    const events: EventEnvelope[] = [makeEnvelope(0, { type: "core.start", payload: {} })];
+    OVER.slice(0, n).forEach((spec, i) => {
+      const payload: CricketBallEv = {
+        over: Math.floor(i / bpo),
+        ballInOver: (i % bpo) + 1,
+        striker: spec.striker,
+        nonStriker: spec.nonStriker,
+        bowler: spec.bowler,
+        runs: { bat: spec.bat },
+      };
+      events.push(makeEnvelope(i + 1, { type: "cricket.ball", payload }));
+    });
+    return events;
+  }
+
+  // A FRESH fold every call (never memoised across calls in this suite) —
+  // deliberate: it means two snapshots with identical VALUES are never the
+  // same object reference, so a resync implementation that (wrongly)
+  // compares fold objects by identity instead of by value cannot pass the
+  // override test below by accident.
+  function foldThrough(n: number): CricketState {
+    return foldMatch(cricketEngine, RESYNC_CFG, RESYNC_LINEUPS, envelopesThrough(n), { strictFromSeq: 0 });
+  }
+
+  function propsFor(state: CricketState) {
+    const view = viewFor(RESYNC_CFG, "live", state);
+    return { msg, view, state, bpo, submittingType: null, dispatch: async () => {} };
+  }
+
+  // find/findAll/isType: local, mirroring pad-renderer.test.tsx and
+  // period-skin.test.ts — `_hook-harness.tsx` exports `propsOf`/`walk`/
+  // `textOf`/`renderIsland` only, and every consumer defines its own
+  // tree-search sugar on top.
+  function find(tree: ReactElement[], pred: (el: ReactElement) => boolean): ReactElement {
+    const el = tree.find(pred);
+    if (!el) throw new Error("element not found in rendered tree");
+    return el;
+  }
+  function findAll(tree: ReactElement[], pred: (el: ReactElement) => boolean): ReactElement[] {
+    return tree.filter(pred);
+  }
+  const isType = (type: unknown) => (el: ReactElement) => el.type === type;
+
+  // The three pickers are drawn by `(["striker","nonStriker","bowler"] as
+  // const).map(...)`, in that literal order (cricket-skin.tsx) — the length
+  // assertion means a future reordering fails loudly here instead of
+  // silently misindexing every assertion that follows.
+  function selectValues(tree: ReactElement[]): { striker: unknown; nonStriker: unknown; bowler: unknown } {
+    const selects = findAll(tree, isType("select"));
+    expect(selects.length).toBe(3);
+    const [strikerEl, nonStrikerEl, bowlerEl] = selects;
+    return {
+      striker: propsOf(strikerEl!).value,
+      nonStriker: propsOf(nonStrikerEl!).value,
+      bowler: propsOf(bowlerEl!).value,
+    };
+  }
+
+  it("sanity: the real fold behaves the way this suite's hand trace says it does", () => {
+    const afterBall1 = foldThrough(1);
+    const fine1 = afterBall1.innings[0]!.fine!;
+    expect(fine1.striker).toBe(N0);
+    expect(fine1.nonStriker).toBe(S0);
+    expect(fine1.currentBowler).toBe(OVER_BOWLER);
+
+    const afterOver = foldThrough(6);
+    const fineOver = afterOver.innings[0]!.fine!;
+    expect(fineOver.striker).toBe(S0);
+    expect(fineOver.nonStriker).toBe(N0);
+    expect(fineOver.currentBowler).toBeNull();
+  });
+
+  it("resyncs striker/nonStriker/bowler after a single run, then again when the over ends", () => {
+    const island = renderIsland(ThisOverGroup, propsFor(foldThrough(0)));
+    // Mount-time fallback (no fine yet — no ball has been folded) is
+    // unaffected by this fix; asserted as a baseline so the rerenders below
+    // are provably a CHANGE, not the component having shown the right thing
+    // by luck all along.
+    expect(selectValues(island.tree())).toEqual({ striker: S0, nonStriker: N0, bowler: BOWLER_FALLBACK });
+
+    island.rerender(propsFor(foldThrough(1)));
+    expect(selectValues(island.tree()), "a single run must rotate strike in the PICKER, not just the fold").toEqual({
+      striker: N0,
+      nonStriker: S0,
+      bowler: OVER_BOWLER,
+    });
+
+    island.rerender(propsFor(foldThrough(6)));
+    expect(
+      selectValues(island.tree()),
+      "six legal balls must end the over in the picker too: ends swap, bowler clears to the fallback",
+    ).toEqual({
+      striker: S0,
+      nonStriker: N0,
+      bowler: BOWLER_FALLBACK,
+    });
+  });
+
+  it("a manual override survives a re-render the fold did not cause, and yields once the fold itself moves", () => {
+    const island = renderIsland(ThisOverGroup, propsFor(foldThrough(1)));
+    expect(selectValues(island.tree()).striker).toBe(N0);
+
+    // Deliberate correction: the scorer taps a THIRD batter, not the fold's
+    // own striker — e.g. spotting a mistake before this ball is submitted.
+    const OVERRIDE = RESYNC_LINEUPS.home.slots[2]!.personId;
+    const strikerSelect = find(island.tree(), isType("select"));
+    (propsOf(strikerSelect).onChange as (e: unknown) => void)({ target: { value: OVERRIDE } });
+    expect(selectValues(island.tree()).striker).toBe(OVERRIDE);
+
+    // A re-render carrying the SAME fold VALUES but a freshly-recomputed
+    // (referentially different) CricketState — exactly how the real fold
+    // reaches this component on every render, never reference-memoised by
+    // this file. Must NOT fight the override: the fold's own value has not
+    // moved.
+    island.rerender(propsFor(foldThrough(1)));
+    expect(selectValues(island.tree()).striker, "an unrelated re-render must not discard a manual override").toBe(
+      OVERRIDE,
+    );
+
+    // Now the fold genuinely advances — the override must yield to it.
+    island.rerender(propsFor(foldThrough(6)));
+    expect(selectValues(island.tree()).striker, "a real fold change must win over a stale manual override").toBe(S0);
   });
 });
