@@ -273,10 +273,21 @@ export interface BuildConstraints {
 /** One rung of the lexicographic objective chain and the value it PROVED. */
 export interface Tier {
   /**
-   * `placed` | `makespan` | `idle_gap` | `imbalance`, in that order. Shared
-   * vocabulary with the TypeScript caller; see the DDD standard's
-   * ubiquitous-language rule. Untouched by the identity change -- a tier name
-   * is a fixed protocol constant, not caller data.
+   * `placed` | `days` | `day_span` | `day_start` | `idle_gap` | `imbalance`,
+   * in that order. Shared vocabulary with the TypeScript caller; see the DDD
+   * standard's ubiquitous-language rule. A tier name is a fixed protocol
+   * constant, not caller data.
+   *
+   * `makespan` was RETIRED here on 2026-08-13, not renamed. It meant
+   * whole-board span, which on a multi-day board is mostly measuring the
+   * overnight hours nobody can schedule into; the three day-aware rungs that
+   * replaced it mean something else. Reusing the name for `day_span` would
+   * have shipped a number whose meaning changed while its name did not, so a
+   * consumer still keying on `"makespan"` now gets an unknown name and fails
+   * loudly. That is deliberate. The count moved with it: `TIER_COUNT` /
+   * `TIERS_TOTAL` went 4 -> 6 on both sides, and it is the optimality
+   * predicate (`tiers_completed == tiers_total`), so the two move together or
+   * the predicate silently never fires.
    */
   name: string;
   /**

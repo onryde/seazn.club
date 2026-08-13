@@ -29,6 +29,7 @@ import {
   roundOrderConflicts,
   RULE_BY_REASON,
   slotFixtures,
+  TIER_COUNT,
   validateAssignments,
   validateInstructionRules,
   ymdAddDays,
@@ -937,18 +938,26 @@ function assertNoNewBlocking(before: readonly Conflict[], after: readonly Confli
 // ---------------------------------------------------------------------------
 
 /**
- * The lexicographic improvement targets `buildSchedule` walks (T0's placement
- * count, then makespan, idle gap, court balance).
+ * The lexicographic improvement targets `buildSchedule` walks: T0's placement
+ * count, then days used, per-day span, per-day start offset, idle gap, court
+ * balance.
  *
- * MIRRORS `TIER_COUNT` in `packages/engine/src/scheduling/build.ts`, which is
- * module-private there. It is not free-floating: `buildSchedule` returns
+ * RE-EXPORTS the engine's `TIER_COUNT` rather than restating it. It used to be
+ * a hand-written `4` with a comment claiming it "MIRRORS `TIER_COUNT` ...
+ * which is module-private there" — and that comment was already wrong when it
+ * was written: `build.ts` exports the constant precisely so this layer does not
+ * need a copy (its own comment records the ruling, R17). The copy survived
+ * anyway and had to be corrected by hand when the ladder went from four rungs
+ * to six on 2026-08-13, which is the drift the export existed to prevent.
+ *
+ * Not free-floating either way: `buildSchedule` returns
  * `status: "already_optimal"` only when `tiersCompleted` reached the ladder's
  * length, so a run that comes back `already_optimal` states the engine's number
  * out loud. `__tests__/schedule-solver-telemetry.test.ts` drives exactly that
- * run and compares, so a ladder that grows or shrinks in the engine reds here
+ * run and compares, so a ladder that grows or shrinks in the engine reds there
  * rather than shipping a wrong denominator to the board.
  */
-export const TIERS_TOTAL = 4;
+export const TIERS_TOTAL = TIER_COUNT;
 
 export interface AutoScheduleOut {
   assignments: { fixture_id: string; scheduled_at: string; ends_at: string; court_label: string }[];

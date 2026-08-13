@@ -1,8 +1,13 @@
-"""The T0->T3 lexicographic objective chain.
+"""The T0->T5 lexicographic objective chain.
 
-T0 max-placed -> T1 makespan -> T2 worst idle gap -> T3 court imbalance, in
-that fixed order. The order is a protocol constant shared with the TS side,
-not wire data (design spec, "Tier/objective semantics are a fixed protocol
+T0 max-placed -> T1a days used -> T1b summed per-day span -> T1c summed per-day
+start offset -> T2 worst idle gap -> T3 court imbalance, in that fixed order.
+
+T1 was ONE rung (whole-board `makespan`) until 2026-08-13; see `TIER_ORDER`
+below and `placement.model`'s T1 section for why a whole-board span on a
+multi-day board is mostly measuring the hours nobody can play in.
+
+The order is a protocol constant shared with the TS side, not wire data (design spec, "Tier/objective semantics are a fixed protocol
 constant"), and it encodes a product ruling: `placed` dominates absolutely.
 A shorter day, a tighter idle gap or a flatter court load must NEVER be
 bought by dropping a match an organiser asked to fit. `build.ts:1577-1585`
@@ -37,8 +42,8 @@ passes the previous tiers' bounds into `build_model` as `placed_floor` /
 benchmark measuring build cost per tier; there is no reason to pay it four
 times in the service. One model is built once (`placement.model.build_model`,
 which deliberately sets NO objective for this reason) and this module drives
-it through four objectives. `model.Maximize`/`Minimize` REPLACES the objective
-rather than adding to it, so the tiers do not blend — verified, not assumed:
+it through the chain's objectives one at a time. `model.Maximize`/`Minimize`
+REPLACES the objective rather than adding to it, so the tiers do not blend — verified, not assumed:
 `test_full_chain_places_exactly_what_t0_alone_places` fails if they do.
 
 --- what `tiers_completed` means, and why FEASIBLE does not count -----------
@@ -71,12 +76,14 @@ recorded below, because the argument still LOOKS right.
 The old argument: a FEASIBLE board satisfies every frozen bound, so it is no
 worse on any EARLIER tier's metric — but its own tier's metric may be worse
 than the board already in hand, and there is no honest way to check from here,
-because `makespan` and `worst_gap` are ONE-SIDED terms. `mk_lo <= start[i]` and
-`mk_hi >= start[i] + dur` squeeze the makespan onto the true extremes only
-because something is minimising the difference; `worst_gap`'s per-pair
+because the T1 term and `worst_gap` are ONE-SIDED. (The T1 term was
+whole-board `makespan` when this was written — `mk_lo <= start[i]` and
+`mk_hi >= start[i] + dur`, squeezed onto the true extremes only because
+something minimised the difference. It is three per-day rungs now, and each is
+one-sided in exactly the same way; see `_TIER_SPECS`.) `worst_gap`'s per-pair
 variables are likewise only bounded from below. Each reads true ONLY for the
 tier optimising it; anywhere else `solver.Value()` returns arbitrary slack.
-(That part is still true and still matters — the bench records all four
+(That part is still true and still matters — the bench records all its
 numbers on every tier row and some of them are meaningless. `placed` and,
 since the T3 encoding became a max/min EQUALITY, `imbalance` read true
 everywhere.) Re-deriving the other two in Python would be a second
@@ -93,13 +100,19 @@ board, -24% on a 3-day, -22% on an 8-day, 1 557 600 000 -> 1 519 800 000 on
 the bench production board.
 
 That cost is not occasional. On a real multi-day board T1 essentially never
-proves — the model hands CP-SAT no counting relation between the makespan
-window and how many fixtures must fit it, so the dual bound starts at 0 and
-has to be walked up by branching. A 2-day board of 304 variables and 575
-constraints does not close in 15 s, and neither does a hand-fed floor within
-4% of the optimum. So "the tier was cut short" is the NORMAL path for T1, not
-the edge case, and discarding its board meant an organiser reliably received
-T0's.
+proved — the model handed CP-SAT no counting relation between the span and how
+many fixtures must fit it, so the dual bound started at 0 and had to be walked
+up by branching. A 2-day board of 304 variables and 575 constraints did not
+close in 15 s, and neither did a hand-fed floor within 4% of the optimum. So
+"the tier was cut short" was the NORMAL path for T1, and discarding its board
+meant an organiser reliably received T0's.
+
+That diagnosis outlived the term it was about, and 2026-08-13 acted on it: the
+day rungs carry an explicit per-day floor (`placement.model`'s T1 section)
+precisely so the counting relation EXISTS, and with it `day_span` proves in
+~1 s where it had not proved in 180 s. `idle_gap` still has no such floor and
+is now the rung that eats the wall — the adopt-don't-discard rule below is
+what keeps its board.
 
 Adopting is sound for the reason the old argument half-stated: every earlier
 bound is a hard constraint in this model, so the adopted board is proved on
@@ -158,12 +171,41 @@ log = structlog.get_logger(__name__)
 # of case-folding reconciles. `build.ts` is the side that cannot move — it is
 # shared with the z3 and greedy placers, which have their own tier tables — so
 # the service moved.
+#
+# `makespan` was RETIRED, not renamed, on 2026-08-13 (#512 §5.2). It meant
+# whole-board span; the three rungs that replaced it mean something else.
+# Reusing the name for `day_span` would have shipped a number whose MEANING
+# changed while its name did not — the failure mode this programme keeps
+# hitting. A TS consumer keying on `"makespan"` now gets an unknown name and
+# fails loudly, which is the point; a same-named number that quietly means
+# something else is the outcome being avoided.
 TIER_PLACED = "placed"
-TIER_MAKESPAN = "makespan"
+TIER_DAYS = "days"
+TIER_DAY_SPAN = "day_span"
+TIER_DAY_START = "day_start"
 TIER_IDLE_GAP = "idle_gap"
 TIER_IMBALANCE = "imbalance"
 
-TIER_ORDER: tuple[str, ...] = (TIER_PLACED, TIER_MAKESPAN, TIER_IDLE_GAP, TIER_IMBALANCE)
+# The ORDER is the product ruling, not an implementation detail:
+#
+#   * `days` first of the three — a board that touches fewer calendar days is
+#     better before any question about how those days are shaped.
+#   * `day_span` next, so the anchor below acts on an already-tight block.
+#   * `day_start` below `day_span` and ABOVE `idle_gap`: the day's block is
+#     anchored to the day's first slot first, and only then are the day's
+#     interior gaps arranged inside it. Reversing those two buys a tighter
+#     idle gap with an empty first morning, which is the symptom the rung
+#     exists to kill (`tests/test_day_objective.py` asserts the resulting
+#     idle_gap as an EQUALITY on the worse value, so the ordering is pinned
+#     and not merely the presence of the term).
+TIER_ORDER: tuple[str, ...] = (
+    TIER_PLACED,
+    TIER_DAYS,
+    TIER_DAY_SPAN,
+    TIER_DAY_START,
+    TIER_IDLE_GAP,
+    TIER_IMBALANCE,
+)
 #: `build.ts`'s `TIER_COUNT`. Reaching it means every tier was PROVED optimal.
 TIER_COUNT = len(TIER_ORDER)
 
@@ -189,8 +231,24 @@ _TIER_SPECS: dict[str, _TierSpec] = {
     # a FLOOR (`>=`). Also the only exact term of the four: a sum of literals
     # reads true whether or not it is the current objective.
     TIER_PLACED: _TierSpec(TIER_PLACED, maximize=True, term=lambda fv: fv.placed_sum),
-    # T1-T3 minimise, and freeze CEILINGS (`<=`) — `Tier.atMost` in build.ts.
-    TIER_MAKESPAN: _TierSpec(TIER_MAKESPAN, maximize=False, term=lambda fv: fv.makespan),
+    # T1-T5 minimise, and freeze CEILINGS (`<=`) — `Tier.atMost` in build.ts.
+    #
+    # `day_span` and `day_start` are one-sided in the same way `makespan` and
+    # `worst_gap` are (see the module docstring), with one consequence worth
+    # stating because the chain is what resolves it. `day_lo[d]` is bounded
+    # from above by the day's starts and from below only by its own domain
+    # floor, so `day_start` would read as a floor-hugging 0 if it ran on its
+    # own. It does not: `day_span`'s freeze is `sum(day_hi - day_lo) <=
+    # PROVED_MINIMUM`, and every feasible board's summed true span is `>=` that
+    # minimum, so the freeze forces each day's `hi`/`lo` ONTO the true extremes
+    # for every rung below it. `day_start` therefore reads a true offset — but
+    # only because it sits below a PROVED `day_span`, which is exactly what
+    # `tiers_completed` not counting a cut-short tier already guarantees (a
+    # tier that did not prove ENDS the chain, so `day_start` never runs on an
+    # unfrozen `day_span`).
+    TIER_DAYS: _TierSpec(TIER_DAYS, maximize=False, term=lambda fv: fv.days_used),
+    TIER_DAY_SPAN: _TierSpec(TIER_DAY_SPAN, maximize=False, term=lambda fv: fv.day_span),
+    TIER_DAY_START: _TierSpec(TIER_DAY_START, maximize=False, term=lambda fv: fv.day_start),
     TIER_IDLE_GAP: _TierSpec(TIER_IDLE_GAP, maximize=False, term=lambda fv: fv.worst_gap),
     TIER_IMBALANCE: _TierSpec(TIER_IMBALANCE, maximize=False, term=lambda fv: fv.imbalance),
 }
@@ -218,7 +276,7 @@ def run_tier_chain(
             not sliced per tier — `build.ts:1587-1597` rules that out, because a
             slice makes "which tier ran" a property of the machine, and the same
             request would come back differently optimised on a faster box.
-        tiers: the rungs to attempt. Defaults to all four, and must be a PREFIX
+        tiers: the rungs to attempt. Defaults to the whole ladder, and must be a PREFIX
             of `TIER_ORDER` — the bench's `tiers=("placed",)` isolation run is
             the reason this is a parameter at all, and the only subset in use.
         knobs: the CP-SAT search settings every tier in this chain runs under.
@@ -256,7 +314,7 @@ def run_tier_chain(
     # `tiers_completed == tiers_requested` as `0 == 0`. Rejected rather than
     # defaulted to the full ladder: the default argument already IS the full
     # ladder, so an empty sequence can only come from a caller that computed
-    # one, and substituting four tiers for the zero they asked for would hide
+    # one, and substituting the whole ladder for the zero they asked for would hide
     # whatever computed it.
     if len(tiers) == 0:
         raise ValueError(

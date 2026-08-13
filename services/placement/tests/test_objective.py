@@ -1,25 +1,31 @@
-"""T0->T3 lexicographic objective chain — acceptance tests.
+"""T0->T5 lexicographic objective chain — acceptance tests.
 
 Same board as `test_model.py` (`placement_bench_boards.production_board()`, the
 shared generator) and the same "nothing is mocked" stance: a green run here
-means CP-SAT actually proved four successive optima on the real board inside
-one 8 s wall.
+means CP-SAT actually proved six successive optima on the real board.
+
+THE CHAIN IS SIX RUNGS as of 2026-08-13:
+`placed -> days -> day_span -> day_start -> idle_gap -> imbalance`. The single
+whole-board `makespan` term was RETIRED, not renamed; the rungs that replaced
+it are covered here for the production board and in `test_day_objective.py`
+for their own behaviour on boards built to isolate each one.
 
 WHAT THESE TESTS HAVE TO PIN, and why the obvious assertions do not do it.
-`tiers_completed == 4` plus the tier NAMES is satisfied by a chain that
-computes a single weighted score and reports four numbers off it — which is
+`tiers_completed == TIER_COUNT` plus the tier NAMES is satisfied by a chain
+that computes a single weighted score and reports six numbers off it — which is
 precisely the thing the design forbids (build.ts's D3: `placed` dominates
 absolutely; a shorter day must never be bought by dropping a match). So the
 ordering is pinned three further ways, each of which fails if a freeze is
 removed:
 
   * `test_full_chain_places_exactly_what_t0_alone_places` — the T0 floor.
-    Without `placed >= floor`, T1 minimises the makespan by placing almost
-    nothing (an empty board has makespan 0), so the count collapses.
+    Without `placed >= floor`, the rungs below it minimise their terms by
+    placing almost nothing (an empty board uses no days and spans nothing), so
+    the count collapses.
   * `test_reported_bounds_are_frozen_against_the_final_board` — the T1 and T2
-    ceilings. The board that comes back is T3's, several solves after T1
-    reported its makespan; if that value was not frozen as a constraint, T3 is
-    free to return a board that blows straight through it.
+    ceilings. The board that comes back is the LAST rung's, several solves
+    after `days`/`day_span` reported theirs; if those values were not frozen as
+    constraints, the rungs below are free to blow straight through them.
   * `test_reported_values_match_the_board_that_came_back` — the reported
     numbers describe THIS board, not some intermediate one.
 
@@ -32,12 +38,22 @@ assertion phrased in terms of the term itself.
 
 --- THIS SUITE IS WALL-CLOCK SENSITIVE. Read before calling a red one a bug --
 
-`test_all_four_tiers_complete_on_production_board` asserts four PROVED optima
-inside the production 8 s budget. Measured on an idle box, that chain costs
-~4.9 s (T0 88 ms, T1 2 257 ms, T2 2 094 ms, T3 501 ms) — comfortable, but not
-by a factor. The solver takes eight search workers on a six-core machine, so a
-box already running other agents stretches those numbers past the wall and the
-chain reports `tiers_completed=2` or `3`. That is the budget working exactly as
+`test_every_tier_completes_on_production_board` asserts six PROVED optima at
+`CHAIN_WALL_SECONDS`. Measured over 6 runs, that chain costs 7.7-19.5 s
+(median 17.7 s: placed 255 ms, days 367 ms, day_span 1 237 ms, day_start
+396 ms, idle_gap 14 931 ms, imbalance 321 ms) — `idle_gap` is essentially the
+whole cost, and it is the rung that got dearer, not the new ones.
+
+That cost is REPORTED, not hidden. Before the day rungs the same chain proved
+four tiers in 1.1-2.1 s. The control run that explains it: `placed` +
+`idle_gap` alone, with no day rungs at all, costs 12.4 s — so the old
+whole-board `makespan` freeze had been doing `idle_gap`'s pruning for it, and
+retiring the term is what the wall pays for. Not a defect in the new rungs;
+they cost ~2 s of the total between them.
+
+The solver takes eight search workers on a six-core machine, so a box already
+running other agents stretches those numbers past the wall and the chain
+reports fewer rungs than it can prove alone. That is the budget working exactly as
 designed (it under-reports rather than claiming an unproved optimum) and it is
 NOT a regression in the tier code.
 
@@ -69,9 +85,12 @@ import structlog
 from _board_positional import rule_groups_for, to_positional
 from placement.model import MIN_MS, build_model, solve
 from placement.objective import (
+    TIER_COUNT,
+    TIER_DAY_SPAN,
+    TIER_DAY_START,
+    TIER_DAYS,
     TIER_IMBALANCE,
     TIER_IDLE_GAP,
-    TIER_MAKESPAN,
     TIER_ORDER,
     TIER_PLACED,
     run_tier_chain,
@@ -83,23 +102,31 @@ PRODUCTION_WALL_SECONDS = 8.0
 
 #: The wall the chain-behaviour tests run under. Deliberately far above the
 #: production budget, and it costs nothing: the chain STOPS when it has proved
-#: its four optima (~4.9 s idle), so a generous ceiling changes the runtime of
-#: a converging chain not at all — it only stops machine load from deciding
-#: how many tiers a CORRECTNESS test gets to see.
+#: its optima, so a generous ceiling changes the runtime of a converging chain
+#: not at all — it only stops machine load from deciding how many tiers a
+#: CORRECTNESS test gets to see.
 #:
-#: Splitting these two apart is the whole point. "Four tiers, in D3's order,
+#: Splitting these two apart is the whole point. "Six tiers, in D3's order,
 #: each freezing the last" is a property of the code and must be pinned
 #: deterministically; "the chain fits in 8 s" is a property of this board on
 #: this machine, and asserting it inside the same test made four unrelated
 #: assertions hostage to the box's load average (measured: 4 tiers at load
 #: ~2.5, 2 tiers at load ~6, same code, same commit).
-CHAIN_WALL_SECONDS = 30.0
+#:
+#: RAISED 2026-08-13, 30 s -> 90 s, when the chain went from four rungs to six.
+#: 30 s was "far above" a 4.9 s chain; against a 7.7-19.5 s one (6 runs, and
+#: `idle_gap` is now the bulk of it) it is close enough that a loaded box would
+#: start deciding how many rungs a CORRECTNESS test gets to see, which is the
+#: exact failure this constant exists to prevent. It still costs nothing: the
+#: chain stops when it has proved its optima, so a generous ceiling changes a
+#: converging chain's runtime not at all.
+CHAIN_WALL_SECONDS = 90.0
 
 # --- the proved optima of `production_board()` ------------------------------
 #
 # These are not observations of a run, they are PROVED lexicographic optima of
-# a deterministic model, so each is a single exact value: `tiers_completed == 4`
-# means CP-SAT proved there is no better one. That is what makes them safe to
+# a deterministic model, so each is a single exact value: a chain that reaches
+# `TIER_COUNT` means CP-SAT proved there is no better one. That is what makes them safe to
 # assert with `==`, and asserting them with `==` is the point — every existing
 # assertion on these three numbers is one-sided in the SAFE direction
 # (`recomputed <= reported`), which a WORSE value satisfies more easily. A
@@ -112,34 +139,77 @@ CHAIN_WALL_SECONDS = 30.0
 # fails first and says which part of the board moved. Do not re-baseline them
 # without reading that test's failure.
 #
-# T1 RE-BASELINED 2026-08-11 by #511 (pinned rows join the makespan span),
-# 1 519 800 000 -> 1 557 600 000, deliberately and with the board unchanged.
-# The board did not move; what T1 MEASURES did. `production_board()` carries
-# three pins, and the old term squeezed `mk_lo`/`mk_hi` onto placed MOVABLE
-# fixtures only, so it reported the span of a board nobody was looking at.
+# RE-BASELINED 2026-08-13 — T1 IS NOW THREE RUNGS, NOT ONE. The single
+# whole-board `makespan` term (`mk_hi - mk_lo`) was RETIRED and replaced by
+# `days` -> `day_span` -> `day_start`; see `placement.model`'s T1 section for
+# why a whole-board span on a multi-day board is mostly measuring darkness.
+# The retired constants and their history, kept so a future reader can tell a
+# re-baseline from a drift:
 #
-# The new value is not a worse optimum, it is the honest one — and it was
-# already written down as such: `test_a_tier_cut_short_is_adopted_but_not_
-# counted`'s docstring quotes 1 557 600 000 as the "true span read off the
-# assignments" on this very board. T1 now proves exactly that number.
+#     T1_PROVED_MAKESPAN_MS          1 557 600 000  (was 1 519 800 000 before
+#                                    #511 put pins in the span, 2026-08-11)
+#     T1_PROVED_MAKESPAN_PIN_FREE_MS 1 519 800 000
 #
-# This is a re-baseline, so it is stated rather than silently edited: the code
-# change ships with it, the old value is recorded above, and the reason is a
-# term change, not a board change. `test_bench_contract.py` is untouched and
-# still green, which is the evidence that the BOARD is the same one.
-T1_PROVED_MAKESPAN_MS = 1_557_600_000
+# The BOARD did not move — `test_bench_contract.py` is untouched and still
+# green, which is the evidence for that. What moved is what T1 measures, and
+# this time the name moved with it (#512 §5.2: retire `makespan`, do not reuse
+# it for `day_span`, because a same-named number that quietly means something
+# else is the failure mode this programme keeps hitting).
+#
+# All five values below are PROVED lexicographic optima of a deterministic
+# model, measured 6/6 identical at a 30 s wall, so `==` is the right assertion.
+T1A_PROVED_DAYS = 19
+T1B_PROVED_DAY_SPAN_MS = 69_600_000
 
-#: The same optimum on the PIN-FREE board (`_model_without_pins`), for the two
-#: chain-behaviour tests that run there. Measured 3/3 identical at a 30 s wall
-#: with all four tiers proved.
+#: `day_start` proves to 0 on this board: every used day CAN start on its own
+#: first admissible tick, and the rung makes it do so.
 #:
-#: It is the OLD pinned value, and that is the useful part: T1's optimum moved
-#: only because three pins joined the span, so with them removed the board
-#: proves exactly what it always did. That is the evidence that #511 changed
-#: what T1 MEASURES and not the board itself.
-T1_PROVED_MAKESPAN_PIN_FREE_MS = 1_519_800_000
-T2_PROVED_IDLE_GAP_MS = 132_600_000
+#: A zero is a weak assertion on its own — a term that had collapsed to its
+#: domain floor would also report 0 — so the non-zero case is pinned
+#: separately and deterministically in
+#: `test_day_objective.py::test_day_start_is_reported_as_the_real_offset_when_a_day_cannot_start_early`.
+T1C_PROVED_DAY_START_MS = 0
+
+#: RE-BASELINED 2026-08-13, 132 600 000 -> 170 400 000. NOT a regression in T2
+#: and not a board change: T2 optimises subject to every bound above it, and
+#: the rungs above it changed. A board whose every day is anchored to its own
+#: opening slot spreads one entrant's matches further apart than a board free
+#: to slide each day's block around, and 37 800 000 ms is what that costs on
+#: this board. The trade is the product ruling (`day_start` outranks
+#: `idle_gap`), asserted directly in
+#: `test_day_objective.py::test_day_start_anchors_each_day_to_its_own_first_slot`.
+T2_PROVED_IDLE_GAP_MS = 170_400_000
+
+#: Unchanged by the T1 rework, which is itself worth recording — T3 is below
+#: everything that moved, and it still proves the same optimum.
 T3_PROVED_IMBALANCE_MS = 2_400_000
+
+#: The same optima on the PIN-FREE board (`_model_without_pins`), for the two
+#: chain-behaviour tests that run there. Measured 6/6 identical.
+#:
+#: `day_span` is lower without the pins (45 600 000 against 69 600 000) and the
+#: difference is the pins themselves: three pinned rows hold instants their own
+#: days must then stretch to cover, and #512 §6a is what makes the objective
+#: see them. `idle_gap` is the SAME on both boards.
+T1B_PROVED_DAY_SPAN_PIN_FREE_MS = 45_600_000
+T2_PROVED_IDLE_GAP_PIN_FREE_MS = 170_400_000
+
+#: The wall the two cut-short tests run at, on the pin-free board. Chosen from
+#: measurement, not by feel — the whole point is a wall that lands in the same
+#: state on every run and at any plausible load:
+#:
+#:     placed -> days -> day_span -> day_start   ~1.6-3.4 s (6 runs)
+#:     idle_gap                                  ~26 s more (never under 24)
+#:
+#: so 8 s proves exactly four rungs and cuts `idle_gap` short with ~2.4x margin
+#: above the four and ~3x below the fifth. Measured 6/6 in exactly that state
+#: (`tiers_completed=4`, five recorded values, `idle_gap` FEASIBLE at 8.02 s).
+#:
+#: This replaces a 1.5 s wall that relied on "T1 has never proved in under
+#: 2 260 ms". That argument died with the whole-board term: the three day rungs
+#: together prove in under 2 s on this board, so 1.5 s now lands mid-`days`
+#: and the state it was pinning is gone.
+CUT_SHORT_WALL_SECONDS = 8.0
 
 
 def _production_board():
@@ -229,10 +299,10 @@ def chain(board):
 # --- the two acceptance tests named in the prompt ---------------------------
 
 
-def test_all_four_tiers_complete_on_production_board(chain):
-    assert chain.tiers_completed == 4
+def test_every_tier_completes_on_production_board(chain):
+    assert chain.tiers_completed == TIER_COUNT == 6
     names = [name for name, _ in chain.objective_values]
-    assert names == ["placed", "makespan", "idle_gap", "imbalance"]
+    assert names == ["placed", "days", "day_span", "day_start", "idle_gap", "imbalance"]
 
 
 def test_tier_order_is_lexicographic_not_weighted(chain):
@@ -248,7 +318,7 @@ def test_chain_fits_the_production_budget(board):
         idle box        4 tiers OPTIMAL, 4 940 ms   (T0 88, T1 2 257, T2 2 094, T3 501)
         load avg ~6     2-3 tiers, chain stopped by the wall at ~8 020 ms
 
-    so the acceptance criterion — all four tiers inside the budget — holds,
+    so the acceptance criterion — every tier inside the budget — holds,
     with roughly a 40% margin on an unloaded machine and none at all on a
     machine already running other work. Asserting `tiers_completed == 4` HERE
     would therefore be asserting something about the box, so what is asserted
@@ -279,7 +349,7 @@ def test_chain_fits_the_production_budget(board):
     # Whatever it got through, it got through IN ORDER — never a later tier
     # reported without the ones that dominate it.
     names = [name for name, _ in outcome.objective_values]
-    assert names == [TIER_PLACED, TIER_MAKESPAN, TIER_IDLE_GAP, TIER_IMBALANCE][: len(names)]
+    assert names == list(TIER_ORDER)[: len(names)]
 
 
 # --- the ordering, pinned properly ------------------------------------------
@@ -315,17 +385,19 @@ def test_reported_values_match_the_board_that_came_back(board, chain):
 
 
 def test_reported_bounds_are_frozen_against_the_final_board(board, chain):
-    """T1's makespan and T2's idle gap were achieved by boards that T3 then
+    """T1's day terms and T2's idle gap were achieved by boards that T3 then
     replaced. They are reported as BOUNDS, and the board that came back has to
     honour them — that is the whole content of "frozen", and it is exactly
     what a blended score would not give you.
     """
-    fixtures, _num_courts, _slots, _step, constraints, _existing, _deps, _rule_groups = board
+    fixtures, _num_courts, slots, _step, constraints, _existing, _deps, _rule_groups = board
     dur_ms = constraints["match_minutes"] * MIN_MS
     entrants_of = [ents for ents, _div in fixtures]  # identity is position now
     reported = dict(chain.objective_values)
 
-    assert _makespan(chain.assignments, dur_ms) <= reported[TIER_MAKESPAN]
+    day_of_start = {start: day for _court, start, day in slots}
+    assert _days_used(chain.assignments, day_of_start) <= reported[TIER_DAYS]
+    assert _day_span(chain.assignments, day_of_start, dur_ms) <= reported[TIER_DAY_SPAN]
     # `worst_gap` is a documented OVER-approximation for a participant with 3+
     # fixtures (max over all pairs, not consecutive ones), so the honest
     # relation is <=, in the safe direction: the true gap never exceeds the
@@ -339,33 +411,43 @@ def test_a_completed_chain_reports_optimal(chain):
     `assignments` at all, so OPTIMAL has to mean the whole ladder, not "the
     last solve happened to prove its own objective"."""
     assert chain.status == "OPTIMAL"
-    assert chain.tiers_completed == 4
+    assert chain.tiers_completed == TIER_COUNT
 
     # A REAL ceiling, not just "inside the generous wall it was given".
-    # Splitting the four-tier claim off the 8 s budget removed the only
+    # Splitting the six-tier claim off the 8 s budget removed the only
     # elapsed-time assertion in the suite, which would let a 3x regression in
-    # tier cost pass silently. 15 s is chosen to sit above the worst measured
-    # loaded run (9 200-11 300 ms at load ~7.6) and well under 3x the 4 940 ms
-    # idle cost — it catches a regression, not a busy afternoon.
-    assert chain.elapsed_ms <= 15_000
+    # tier cost pass silently.
+    #
+    # RE-BASELINED 2026-08-13, 15 s -> 45 s, with the reason stated because the
+    # number tripled and a tripled ceiling is exactly how a real regression
+    # gets waved through later. The chain went from four rungs to six, and
+    # measured over 6 runs at a 30 s wall the whole chain costs 7 739 -
+    # 19 485 ms (median 17 657). Almost none of that is the new rungs — they
+    # cost ~2 s of the total between them — it is `idle_gap`, which went from a
+    # 1 348 ms median to a 14 931 ms median because it now optimises subject to
+    # three frozen day bounds. 45 s sits above the worst measured run with
+    # margin for a loaded box and still under 3x the median, so it catches a
+    # regression rather than an afternoon. The cost itself is REPORTED, not
+    # hidden: see the PR body's bench table.
+    assert chain.elapsed_ms <= 45_000
 
 
 def test_a_wall_too_short_to_finish_reports_fewer_tiers_not_a_lie(board):
     """The budget-expired path. Under-reporting is safe (TS just does more
     work); over-reporting would have TS claim an optimality nobody proved.
     `tiers_completed` carries `BuildResult.tiersCompleted`'s meaning — tiers
-    PROVED optimal — so a chain the clock cut short must report fewer than
-    four, whatever it managed to place.
+    PROVED optimal — so a chain the clock cut short must report fewer than the
+    ladder's length, whatever it managed to place.
     """
     short = _model_for(board)
     outcome = run_tier_chain(short, short.fixture_vars, wall_seconds=0.05)
-    assert outcome.tiers_completed < 4
+    assert outcome.tiers_completed < TIER_COUNT
     # Whatever it recorded is a PREFIX of the ladder, and it never counts more
     # tiers than it recorded. (It may record one MORE than it counted: a T0 cut
     # short is adopted, since there is no earlier board to fall back on, but it
     # is not counted as proved.)
     names = [name for name, _ in outcome.objective_values]
-    assert names == [TIER_PLACED, TIER_MAKESPAN, TIER_IDLE_GAP, TIER_IMBALANCE][: len(names)]
+    assert names == list(TIER_ORDER)[: len(names)]
     assert outcome.tiers_completed <= len(names) <= outcome.tiers_completed + 1
 
 
@@ -373,97 +455,103 @@ def test_a_tier_cut_short_is_adopted_but_not_counted(board):
     """The FEASIBLE case, isolated — the semantic the whole `tiers_completed`
     contract turns on.
 
-    The wall is chosen so that exactly one tier settles and the next one is
-    provably cut short: T0 proves in ~100 ms, T1 has never proved in under
-    2 260 ms on this board, so 1.5 s starts T1 and guarantees it cannot
-    finish. Load can only widen that gap, never close it, which is what makes
-    this deterministic where an 8 s chain is not.
+    The wall is chosen so that a known set of tiers settles and the next one is
+    provably cut short — see `CUT_SHORT_WALL_SECONDS` for the measurement it
+    comes from. `idle_gap` is the rung that gets cut, because it is now the
+    expensive one: the four above it prove in under 3.5 s and it needs ~26 s.
 
-    Runs on the PIN-FREE board as of #511 — `_model_without_pins`, whose
-    docstring carries the measurement. The wall and the reasoning above are
-    unchanged; what changed is that pins now bound the makespan directly and
-    close the gap that argument depends on. Verified 8/8 in the required state
-    on the pin-free board at this wall.
+    Runs on the PIN-FREE board (`_model_without_pins`) as of #511, for the
+    reason that docstring carries.
 
     Two things must then be true, and neither is implied by the other:
 
-      * `tiers_completed == 1`, NOT 2. CP-SAT hands back a real board with a
-        real makespan on a FEASIBLE verdict, and counting it would tell TS that
-        the makespan tier was PROVED optimal when nothing proved it — TS gates
+      * `tiers_completed == 4`, NOT 5. CP-SAT hands back a real board with a
+        real idle gap on a FEASIBLE verdict, and counting it would tell TS that
+        the tier was PROVED optimal when nothing proved it — TS gates
         `already_optimal` and its whole LNS fallback on that number.
-      * the T1 board is ADOPTED all the same — two recorded objective values,
-        not one. `schema.py` slices `objective_values[:tiers_completed]` before
-        the wire, so the extra entry publishes nothing; it is what lets the
-        board that came back BE the better one.
+      * the cut tier's board is ADOPTED all the same — FIVE recorded objective
+        values, not four. `schema.py` slices
+        `objective_values[:tiers_completed]` before the wire, so the extra
+        entry publishes nothing; it is what lets the board that came back BE
+        the better one.
 
-    This reverses the rule that shipped originally ("the T1 board is
+    This reverses the rule that shipped originally ("the tier's board is
     DISCARDED... adopting it would replace a proved board with an unproved
     one"). That rationale conflated two claims. The adopted board satisfies
-    every frozen bound as a HARD CONSTRAINT, so it is proved on T0's metric
-    exactly as the discarded board was; the only thing unproved about it is
-    that its makespan is minimal, which `tiers_completed == 1` already says.
-    Measured cost of the old rule, true span read off the assignments rather
-    than off the relaxation variables: 130 800 000 -> 79 200 000 (-39%) on a
-    2-day board, -24% on a 3-day, -22% on an 8-day, and 1 557 600 000 ->
-    1 519 800 000 on this one. See `test_the_adopted_board_is_the_better_one`.
+    every frozen bound as a HARD CONSTRAINT, so it is proved on the earlier
+    tiers' metrics exactly as the discarded board was; the only thing unproved
+    about it is that its OWN metric is minimal, which `tiers_completed == 4`
+    already says. Measured cost of the old rule on this board and this wall,
+    worst idle gap recomputed off the assignments rather than read off the
+    relaxation variables: 1 812 000 000 -> 170 400 000, 6/6 (see
+    `test_the_adopted_board_is_the_better_one`).
     """
     model = _model_without_pins(board)
-    outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=1.5)
+    outcome = run_tier_chain(model, model.fixture_vars, wall_seconds=CUT_SHORT_WALL_SECONDS)
 
-    # T1 RAN and was cut short — without this the test would pass vacuously on
-    # a chain that stopped before T1 ever started, which is a different code
-    # path (the deadline check at the top of the loop) reaching the same
-    # numbers. T0 costs ~100 ms, so a chain that consumed nearly the whole
-    # 1.5 s wall spent it inside T1.
-    assert outcome.elapsed_ms >= 1400
+    # The cut tier RAN and was cut short — without this the test would pass
+    # vacuously on a chain that stopped before it ever started, which is a
+    # different code path (the deadline check at the top of the loop) reaching
+    # the same numbers. The four rungs above cost ~3.5 s at worst, so a chain
+    # that consumed nearly the whole wall spent the rest inside `idle_gap`.
+    assert outcome.elapsed_ms >= int(CUT_SHORT_WALL_SECONDS * 1000) - 600
 
     assert outcome.status == "FEASIBLE"  # a board, but an unfinished chain
-    assert outcome.tiers_completed == 1
-    assert [name for name, _ in outcome.objective_values] == [TIER_PLACED, TIER_MAKESPAN]
-    # The whole board survives — adopting T1's is not the same as losing rows.
+    assert outcome.tiers_completed == 4
+    assert [name for name, _ in outcome.objective_values] == list(TIER_ORDER[:5])
+    # The whole board survives — adopting the cut tier's is not losing rows.
     assert len(outcome.assignments) == len(board[0])
     # A cut-short tier cannot have beaten the proved optimum; if it claims to,
     # the recorded value belongs to some other board than the one returned.
     reported = dict(outcome.objective_values)
     fixtures, _num_courts, _slots, _step, constraints, _existing, _deps, _rule_groups = board
     dur_ms = constraints["match_minutes"] * MIN_MS
-    assert reported[TIER_MAKESPAN] >= T1_PROVED_MAKESPAN_PIN_FREE_MS
-    assert _makespan(outcome.assignments, dur_ms) <= reported[TIER_MAKESPAN]
+    entrants_of = [ents for ents, _div in fixtures]
+    assert reported[TIER_IDLE_GAP] >= T2_PROVED_IDLE_GAP_PIN_FREE_MS
+    assert _worst_consecutive_gap(outcome.assignments, entrants_of, dur_ms) <= reported[TIER_IDLE_GAP]
 
 
 def test_the_adopted_board_is_the_better_one(board):
-    """The point of adopting: the board an organiser receives is T1's, and T1's
-    is shorter than the one T0 alone produces.
+    """The point of adopting: the board an organiser receives is the CUT tier's,
+    and it is better — on that tier's own metric — than the board the chain
+    would have returned had it stopped at the last rung that proved.
 
     Asserted with `<`, not `<=`, deliberately. Under the old discard rule the
-    returned board simply WAS T0's, so a `<=` would pass vacuously against the
-    behaviour this test exists to pin.
+    returned board simply WAS the previous rung's, so a `<=` would pass
+    vacuously against the behaviour this test exists to pin.
 
-    Load hazard, stated because this repo has been bitten by it: both walls are
-    1.5 s, so a heavily loaded box gives T1 less search and narrows the margin.
-    Measured stable at 1 557 600 000 -> 1 519 800 000 across two load averages
-    (17.4 and 27.6) and 6 runs, and 6/6 on three synthetic shapes. A red here
-    with the two spans EQUAL means T1 found nothing in its slice, which is the
-    box; a red with the adopted span LARGER is the code.
+    Both arms run the SAME wall on the SAME pin-free board, and differ only in
+    whether the chain is allowed to enter `idle_gap` at all. Measured 6/6 at
+    this wall, worst consecutive gap recomputed off the assignments:
+
+        stopped at day_start   1 812 000 000 / 2 157 600 000 ms
+        adopted idle_gap's       170 400 000 ms  (~10x better, never equal)
+
+    Load hazard, stated because this repo has been bitten by it: a heavily
+    loaded box gives `idle_gap` less search and narrows the margin. A red here
+    with the two gaps EQUAL means it found nothing in its slice, which is the
+    box; a red with the adopted gap LARGER is the code.
     """
     fixtures, _num_courts, _slots, _step, constraints, _existing, _deps, _rule_groups = board
     dur_ms = constraints["match_minutes"] * MIN_MS
+    entrants_of = [ents for ents, _div in fixtures]
 
-    # Pin-free as of #511, both arms, for the reason `_model_without_pins`
-    # records: with pins on the board T1 proves inside this wall, so "T1 ran
-    # and was cut short" (asserted below) silently stopped holding and the two
-    # arms returned the SAME board, making the final comparison 1557600000 <
-    # 1557600000. Both arms must use the same board or the comparison is
-    # meaningless.
-    t0_model = _model_without_pins(board)
-    t0_only = run_tier_chain(t0_model, t0_model.fixture_vars, 1.5, tiers=(TIER_PLACED,))
-    two_tier_model = _model_without_pins(board)
-    two_tier = run_tier_chain(two_tier_model, two_tier_model.fixture_vars, 1.5)
+    # Pin-free, both arms, for the reason `_model_without_pins` records. Both
+    # arms must use the same board or the comparison is meaningless.
+    stopped_model = _model_without_pins(board)
+    stopped = run_tier_chain(
+        stopped_model, stopped_model.fixture_vars, CUT_SHORT_WALL_SECONDS, tiers=TIER_ORDER[:4]
+    )
+    full_model = _model_without_pins(board)
+    full = run_tier_chain(full_model, full_model.fixture_vars, CUT_SHORT_WALL_SECONDS)
 
-    assert t0_only.tiers_completed == 1
-    assert two_tier.tiers_completed == 1  # T1 ran and was cut short
-    assert len(two_tier.assignments) == len(t0_only.assignments)
-    assert _makespan(two_tier.assignments, dur_ms) < _makespan(t0_only.assignments, dur_ms)
+    assert stopped.tiers_completed == 4  # every rung above `idle_gap` proved
+    assert full.tiers_completed == 4  # `idle_gap` ran and was cut short
+    assert len(full.objective_values) == 5  # ...and its board was adopted
+    assert len(full.assignments) == len(stopped.assignments)
+    assert _worst_consecutive_gap(full.assignments, entrants_of, dur_ms) < _worst_consecutive_gap(
+        stopped.assignments, entrants_of, dur_ms
+    )
 
 
 # --- each tier's optimisation DIRECTION, pinned two-sidedly -----------------
@@ -493,14 +581,35 @@ def _proved(chain, tier, rung):
     return dict(chain.objective_values)[tier]
 
 
-def test_t1_reports_the_proved_minimum_makespan_not_merely_a_ceiling(chain):
-    """T1 MINIMISES. Inverted, the reported makespan is not a slightly worse
-    number — `mk_lo` is only squeezed from above and `mk_hi` only from below,
-    so maximising drives them to the ends of their domains and the reported
-    value becomes the whole lattice span (measured: 1 769 454 600 000 ms
-    against the true optimum's 1 519 800 000, with all four tiers still
-    proved in 3 792 ms). A one-sided `<=` welcomes that; `==` refuses it."""
-    assert _proved(chain, TIER_MAKESPAN, 2) == T1_PROVED_MAKESPAN_MS
+def test_t1a_reports_the_proved_minimum_day_count(chain):
+    """T1a MINIMISES. `day_used[d]` is implied by `on_day` one-directionally,
+    so a MAXIMISING rung simply turns every day's bool on and reports the grid's
+    whole day count (26 here, against the true optimum's 19) while placing
+    exactly the same board. Nothing downstream would notice — which is why the
+    value is asserted with `==` and not `<=`."""
+    assert _proved(chain, TIER_DAYS, 2) == T1A_PROVED_DAYS
+
+
+def test_t1b_reports_the_proved_minimum_day_span(chain):
+    """T1b MINIMISES. Each `day_lo[d]` is squeezed from above only and each
+    `day_hi[d]` from below only, so maximising drives every used day's pair to
+    the ends of its own window and the reported value becomes the summed width
+    of the days rather than a real span — the same one-sided failure the
+    retired whole-board term had, once per day."""
+    assert _proved(chain, TIER_DAY_SPAN, 3) == T1B_PROVED_DAY_SPAN_MS
+
+
+def test_t1c_reports_the_proved_minimum_day_start_offset(chain):
+    """T1c MINIMISES. Maximising it pushes every used day's block as LATE as
+    the day allows, which is the exact symptom the rung was added to remove
+    (`day_start` would come back as the summed distance from each day's open to
+    its last usable start).
+
+    Asserting 0 is weak on its own; the direction is what this pins on the
+    production board, and the non-zero reading is pinned deterministically in
+    `test_day_objective.py`. See `T1C_PROVED_DAY_START_MS`.
+    """
+    assert _proved(chain, TIER_DAY_START, 4) == T1C_PROVED_DAY_START_MS
 
 
 def test_t2_reports_the_proved_minimum_idle_gap_not_merely_a_ceiling(chain):
@@ -512,7 +621,7 @@ def test_t2_reports_the_proved_minimum_idle_gap_not_merely_a_ceiling(chain):
     term is a per-pair lower bound, true only while something minimises it, so
     inverted it reads as the lattice span rather than a real gap.
     """
-    assert _proved(chain, TIER_IDLE_GAP, 3) == T2_PROVED_IDLE_GAP_MS
+    assert _proved(chain, TIER_IDLE_GAP, 5) == T2_PROVED_IDLE_GAP_MS
 
 
 def test_t3_reports_the_proved_minimum_court_imbalance(chain):
@@ -527,11 +636,11 @@ def test_t3_reports_the_proved_minimum_court_imbalance(chain):
     wall, and a mutant that dies by wall clock is not a killed mutant:
     measured, the same T3 mutation was green at a 22 s wall and red at 44 s.
     """
-    assert _proved(chain, TIER_IMBALANCE, 4) == T3_PROVED_IMBALANCE_MS
+    assert _proved(chain, TIER_IMBALANCE, 6) == T3_PROVED_IMBALANCE_MS
 
 
 def test_tier_directions_are_pinned_without_the_clock():
-    """T1's and T3's directions, on a board that proves all four tiers in ~20 ms.
+    """T1's and T3's directions, on a board that proves every tier in ~20 ms.
 
     `imbalance_probe_board()` exists because a direction assertion carried on
     the production chain inherits that chain's load sensitivity, and the T3
@@ -553,8 +662,8 @@ def test_tier_directions_are_pinned_without_the_clock():
     """
     from placement_bench_boards import (
         PROBE_FIXTURES,
+        PROBE_OPTIMAL_DAY_SPAN_MS,
         PROBE_OPTIMAL_IMBALANCE_MS,
-        PROBE_OPTIMAL_MAKESPAN_MS,
         PROBE_WORST_IMBALANCE_MS,
         imbalance_probe_board,
     )
@@ -567,11 +676,17 @@ def test_tier_directions_are_pinned_without_the_clock():
         f"status={outcome.status} tiers={outcome.tiers_completed} elapsed_ms={outcome.elapsed_ms} "
         f"values={outcome.objective_values} load1={os.getloadavg()[0]:.2f}"
     )
-    assert outcome.tiers_completed == 4, detail
+    assert outcome.tiers_completed == TIER_COUNT, detail
     reported = dict(outcome.objective_values)
 
     assert reported[TIER_PLACED] == PROBE_FIXTURES, detail
-    assert reported[TIER_MAKESPAN] == PROBE_OPTIMAL_MAKESPAN_MS, detail
+    # One calendar day, two ticks: `days` is 1 and the summed per-day span is
+    # the same number the retired whole-board term proved here.
+    assert reported[TIER_DAYS] == 1, detail
+    assert reported[TIER_DAY_SPAN] == PROBE_OPTIMAL_DAY_SPAN_MS, detail
+    # Both ticks are usable and the earlier one is taken, so the day is
+    # anchored to its own open and the offset is 0.
+    assert reported[TIER_DAY_START] == 0, detail
     assert reported[TIER_IDLE_GAP] == 0, detail
     assert reported[TIER_IMBALANCE] == PROBE_OPTIMAL_IMBALANCE_MS, detail
     # The assertion above is only two-sided because a worse value is reachable
@@ -593,9 +708,9 @@ def test_tier_completed_debug_event_fires_once_per_tier():
     reason as `model.py`'s `model_built` event: this fires inside the hot tier
     loop and `PLACEMENT_LOG_LEVEL` defaults to INFO in production.
 
-    Uses `imbalance_probe_board()` (proves all four tiers in ~20ms) rather than
+    Uses `imbalance_probe_board()` (proves every tier in ~20ms) rather than
     the module-scoped `chain`/`board` fixtures — those back a real multi-second
-    four-solve walk on the production board, and this test only needs to know
+    six-solve walk on the production board, and this test only needs to know
     an event fires per tier, not what the production numbers are.
     """
     from placement_bench_boards import imbalance_probe_board
@@ -613,8 +728,8 @@ def test_tier_completed_debug_event_fires_once_per_tier():
         structlog.configure(wrapper_class=old_wrapper_class)
 
     events = [entry for entry in captured if entry["event"] == "tier_completed"]
-    assert len(events) == outcome.tiers_completed == 4, captured
-    assert [e["tier"] for e in events] == [TIER_PLACED, TIER_MAKESPAN, TIER_IDLE_GAP, TIER_IMBALANCE]
+    assert len(events) == outcome.tiers_completed == TIER_COUNT, captured
+    assert [e["tier"] for e in events] == list(TIER_ORDER)
     for entry in events:
         assert entry["status"] in ("OPTIMAL", "FEASIBLE")
         assert isinstance(entry["achieved"], int)
@@ -648,16 +763,21 @@ def test_rejects_a_tier_sequence_that_is_not_a_prefix_of_the_ladder(board):
     """Skipping or reordering rungs is not a smaller chain, it is a wrong one.
 
     `tiers=("imbalance",)` balances courts across a board whose placement
-    was never maximised and whose makespan was never bounded — and, before this
+    was never maximised and whose day span was never bounded — and, before this
     guard, reported `status="OPTIMAL"` for it, because every requested tier had
     indeed been proved. `SolveStatus` is what Task 4/5 map onto the wire, so
     that is a lie with a straight route to a caller.
     """
     for bad in (
         (TIER_IMBALANCE,),
-        (TIER_MAKESPAN, TIER_PLACED),
+        (TIER_DAYS, TIER_PLACED),
         (TIER_PLACED, TIER_IDLE_GAP),
-        (TIER_PLACED, TIER_IMBALANCE, TIER_MAKESPAN, TIER_IDLE_GAP),
+        # A REORDERING of the T1 rungs — the case the day-aware chain added,
+        # and the one that matters most: `day_start` above `day_span` anchors a
+        # block that has not been tightened yet, which is a different objective
+        # wearing the same six names.
+        (TIER_PLACED, TIER_DAYS, TIER_DAY_START, TIER_DAY_SPAN),
+        (TIER_PLACED, TIER_IMBALANCE, TIER_DAYS, TIER_IDLE_GAP),
     ):
         model = _model_for(board)
         with pytest.raises(ValueError, match="prefix"):
@@ -677,8 +797,8 @@ def test_rejects_an_empty_tier_sequence(board):
 
     Rejecting is the ruling rather than defaulting to the full ladder: the
     default argument already IS the full ladder, so an empty sequence can only
-    arrive from a caller that computed it, and quietly substituting four tiers
-    for the zero they asked for would hide the bug that computed it.
+    arrive from a caller that computed it, and quietly substituting the whole
+    ladder for the zero they asked for would hide the bug that computed it.
 
     Cannot arrive from the wire — `SolveBuildRequest` carries no tier list, by
     design — so this is a domain contract check on a domain caller, exactly
@@ -733,11 +853,33 @@ def test_chain_status_describes_the_board_not_the_last_solve():
 # --- independent metric re-computation (see the module docstring) -----------
 
 
-def _makespan(assignments, dur_ms):
-    starts = [start for _fi, _court, start in assignments]
-    if not starts:
-        return 0
-    return max(starts) + dur_ms - min(starts)
+def _days_used(assignments, day_of_start):
+    """How many distinct calendar days the returned board touches.
+
+    `day_of_start` maps an admissible start to its caller-supplied day index —
+    the same mapping `build_model` builds section 9 from, rebuilt here from the
+    board's own slot list rather than read off the model, per this module's
+    "recompute independently" stance.
+    """
+    return len({day_of_start[start] for _fi, _court, start in assignments})
+
+
+def _day_span(assignments, day_of_start, dur_ms):
+    """Summed per-day span: for each day the board touches, its last match's
+    end minus its first match's start."""
+    by_day: dict[int, list[int]] = {}
+    for _fi, _court, start in assignments:
+        by_day.setdefault(day_of_start[start], []).append(start)
+    return sum(max(starts) + dur_ms - min(starts) for starts in by_day.values())
+
+
+def _day_start_offset(assignments, day_of_start, day_open_of):
+    """Summed distance from each used day's first admissible tick to the first
+    match actually played on it."""
+    by_day: dict[int, list[int]] = {}
+    for _fi, _court, start in assignments:
+        by_day.setdefault(day_of_start[start], []).append(start)
+    return sum(min(starts) - day_open_of[day] for day, starts in by_day.items())
 
 
 def _court_imbalance(assignments, num_courts, dur_ms):

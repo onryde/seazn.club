@@ -347,7 +347,7 @@ DAY_MS = 86_400_000
 
 # Tier names are fixed protocol constants shared with the TS side (see the
 # design spec, "Tier/objective semantics are a fixed protocol constant") and
-# they live in `placement.objective`, with the chain that uses them — all four in
+# they live in `placement.objective`, with the chain that uses them — all of them in
 # one place, since the ORDER is as much of the constant as the names are.
 
 @dataclass(frozen=True)
@@ -457,7 +457,14 @@ class FixtureVars:
     start: list[Any]
     presence_court: list[list[Any]]  # presence_court[fixture_i][court_index]
     placed_sum: Any
-    makespan: Any
+    #: T1a/T1b/T1c, the day-aware terms that replaced the whole-board
+    #: `makespan` span in 2026-08-13's #512 + `day_start` change. `day_span`
+    #: and `day_start` read TRUE only once the rung above each has frozen its
+    #: proved optimum — see `build_model`'s T1 section and `objective.py`'s
+    #: note on one-sided terms.
+    days_used: Any
+    day_span: Any
+    day_start: Any
     worst_gap: Any
     imbalance: Any
 
@@ -1063,57 +1070,151 @@ def build_model(
     horizon_ends += [existing_start + dur_ms for _court, existing_start in existing]
     max_end = max(horizon_ends) if horizon_ends else dur_ms
 
-    # T1: makespan, exact native term (mk_hi - mk_lo), squeezed onto the true
-    # extremes exactly as build.ts:2075-2082 does.
-    mk_lo = model.NewIntVar(0, max_end, "mk_lo")
-    mk_hi = model.NewIntVar(0, max_end, "mk_hi")
+    # T1: the DAY-AWARE objective — three rungs (`days`, `day_span`,
+    # `day_start`), replacing the single whole-board `mk_hi - mk_lo` span this
+    # model carried until 2026-08-13. Designs of record:
+    # `docs/superpowers/specs/2026-08-11-t1-day-aware-objective-design.md`
+    # (#512, the first two rungs) and `2026-08-12-t1-day-start-rung-design.md`
+    # (the third).
+    #
+    # WHY THE SPAN HAD TO GO. On a single-day board `mk_hi - mk_lo` is exactly
+    # right — "finish early, strand nobody". On a MULTI-DAY board it is mostly
+    # measuring darkness: play hours of 10:30-16:00 are 5.5 of every 24, so
+    # ~77% of the interval it minimised was overnight, time nobody can
+    # schedule into. That was never an encoding bug. A week-long interval can
+    # only be shortened by shaving the front of the first day and the back of
+    # the last, so the solver spent its whole effort on the two ends — and the
+    # board it produced, measured on staging over 37 fixtures and six days,
+    # ran its first day 14:30-15:30 against a window that opened at 10:30 and
+    # its last day three matches short. Both ends are the term working as
+    # written, which is why the fix is a different term and not a repair.
+    #
+    # Every input below already existed in section 9 (`day_bounds`, `day_ids`,
+    # `on_day`, `_day_of_pin`), which is most of why this was worth doing now.
+    # Nothing here is reified beyond the per-day clamps: no new relation
+    # between fixtures, no `AddMinEquality` over the board.
+
+    # T1a's variable: is this calendar day used at all. The implication is
+    # ONE-DIRECTIONAL, which looks like a missing constraint to a reader who
+    # does not have the objective in view — it is sufficient precisely BECAUSE
+    # the rung minimises the sum. Nothing rewards setting a `day_used[d]` the
+    # board does not need, and the freeze that follows the rung
+    # (`days_used <= achieved`, with `achieved` the proved minimum) forbids a
+    # spurious one for every rung below it too.
+    day_used = {d: model.NewBoolVar(f"day_used_{d}") for d in day_ids}
     for i in range(n):
-        model.Add(mk_lo <= start[i]).OnlyEnforceIf(placed[i])
-        model.Add(mk_hi >= start[i] + dur_ms).OnlyEnforceIf(placed[i])
-    # `existing` rows are IN the span (#511). They are matches on the
-    # organiser's board, at instants the organiser chose, and a span that
-    # excludes them is a span of a board nobody is looking at.
+        for d in day_ids:
+            model.AddImplication(on_day[i][d], day_used[d])
+
+    # T1b/T1c's variables, one pair of bounds per day.
     #
-    # Left out until now, and it was never argued for — the docstring's list of
-    # `existing` gaps is entirely about day caps. The cost was measured on a
-    # real staging board: 37 fixtures Mon-Sun, day cap 7, SIX pinned on Monday
-    # afternoon. With the pins outside the span the solver's own interval began
-    # Tuesday, so putting anything in Monday's morning would have dragged
-    # `mk_lo` back a day and a half — the objective PAID to leave a whole
-    # morning empty, and the organiser could find no constraint that explained
-    # it, because there was none.
+    # Every day's variables are confined to THAT DAY'S OWN WINDOW rather than
+    # to the whole horizon. The bound is EXACT, not a heuristic: section 9's
+    # own range constraint puts every start on day `d` inside `[lo_d, hi_d]`,
+    # and a pin only has a day at all because `_day_of_pin` found it inside
+    # those same bounds — so no board is cut, only slack the solver would
+    # otherwise carry. Stated honestly, because it is easy to assume this is
+    # what made the rung tractable and it is NOT: measured on the production
+    # board, narrowing these domains alone left `day_span` exactly as
+    # unprovable as before (same 69 600 000 incumbent, still FEASIBLE at the
+    # 8 s wall). What made it prove is the redundant floor further down.
     #
-    # No reification and no new variables: a pinned row's start is an integer
-    # known at build time, so these are plain bounds. They also strengthen the
-    # `mk_hi >= mk_lo` clamp below on any board with a pin — `mk_lo` and
-    # `mk_hi` can no longer both float when nothing movable is placed.
+    # `day_lo[d]`'s FLOOR carries a second job for T1c. `day_lo` is squeezed
+    # from ABOVE only (`<= start[i]`), so a rung minimising `day_lo - day_open`
+    # would otherwise drive it to 0 — publishing an offset of 0 for every day
+    # whatever the board looks like, and, since `day_open` is an epoch, a
+    # NEGATIVE epoch-shaped number on the way there.
+    day_lo: dict[int, Any] = {}
+    day_hi: dict[int, Any] = {}
+    day_span_terms: list[Any] = []
+    day_start_terms: list[Any] = []
+    for d in day_ids:
+        day_open, day_close = day_bounds[d]
+        day_lo[d] = model.NewIntVar(day_open, day_close, f"day_lo_{d}")
+        day_hi[d] = model.NewIntVar(day_open + dur_ms, day_close + dur_ms, f"day_hi_{d}")
+        for i in range(n):
+            model.Add(day_lo[d] <= start[i]).OnlyEnforceIf(on_day[i][d])
+            model.Add(day_hi[d] >= start[i] + dur_ms).OnlyEnforceIf(on_day[i][d])
+
+        # THE EMPTY-DAY CLAMP IS NOT OPTIONAL, and this module has already paid
+        # for learning that once. The old whole-board term carried a
+        # `mk_hi >= mk_lo` clamp because without it a board where nothing was
+        # placed left both ends floating over `[0, max_end]`, and a MINIMISING
+        # tier drove the high end to 0 and the low end to `max_end` —
+        # publishing `('makespan', -1767258600000)`, a negative epoch-shaped
+        # number, as a proved optimum with `error` unset. Per-day variables are
+        # that same trap once per day: every unused day is an unconstrained
+        # min/max pair. The `day_used[d].Not()` branch is what forecloses it,
+        # and the non-negative DOMAIN on each term below is what makes the
+        # foreclosure total — a clamp stated only as a constraint can be
+        # satisfied by a value the domain still allows to be published.
+        span = model.NewIntVar(0, day_close - day_open + dur_ms, f"day_span_{d}")
+        model.Add(span == day_hi[d] - day_lo[d]).OnlyEnforceIf(day_used[d])
+        model.Add(span == 0).OnlyEnforceIf(day_used[d].Not())
+        # A used day holds at least one match, so it spans at least one match.
+        #
+        # THIS ONE LINE IS THE DIFFERENCE BETWEEN A RUNG THAT PROVES AND A RUNG
+        # THAT EATS THE WALL, and it is worth understanding why, because it
+        # looks like it does nothing. It is REDUNDANT as a statement about any
+        # real board — `day_hi >= s + dur_ms` and `day_lo <= s` already imply
+        # it for the occupant `s`. It is not redundant to the DUAL BOUND:
+        # `day_used[d]` is implied BY `on_day` one-directionally and never
+        # implies an occupant back, so the relaxation is free to hold a day
+        # "used" with a span of nothing, and `sum(span)`'s lower bound starts
+        # at 0 and has to be walked up by branching. That is the shape of "T1
+        # never proves", which this whole change exists to escape, and it would
+        # have been shipped straight back in.
+        #
+        # Measured, production board (37 fixtures, 5 courts, 26 grid days, cap
+        # 1 per rule group per day, so 19 days used):
+        #
+        #     without this line   day_span FEASIBLE at 180 s, never proved
+        #     with it             day_span OPTIMAL in 1.0 s, same value
+        #                         (69 600 000) — the incumbent was optimal all
+        #                         along and could not be proved
+        #
+        # Same lever as T3's max/min equality below, and the same lesson the
+        # module has now learned twice: when a tier cannot finish, the thing to
+        # fix is its dual bound, not its search.
+        model.Add(span >= dur_ms).OnlyEnforceIf(day_used[d])
+        day_span_terms.append(span)
+
+        offset = model.NewIntVar(0, day_close - day_open, f"day_start_{d}")
+        model.Add(offset == day_lo[d] - day_open).OnlyEnforceIf(day_used[d])
+        model.Add(offset == 0).OnlyEnforceIf(day_used[d].Not())
+        day_start_terms.append(offset)
+
+    # Pins force their day, and bound it (#512 §6a). Without this a day
+    # holding ONLY pinned matches reads as unused: `day_used[d]` stays 0, its
+    # span and offset are clamped to 0, and T1a is free to "save" a day that is
+    # in fact occupied — the organiser sees matches on a day the objective
+    # believes is empty. This is #511's defect (pins invisible to T1) in a new
+    # coat, and closing it here is the same three bounds that closed it there,
+    # per day instead of per board. No reification and no new variables: a
+    # pinned row's start is an integer known at build time.
+    #
+    # A pin that belongs to NO day is skipped, deliberately — see `_day_of_pin`
+    # and #512 §6b, resolved as "accept and document". Such a pin sits between
+    # one day's last admissible tick and the next day's first; C4 already
+    # treats it as counting against no day cap, and consistency with that has
+    # value of its own. The consequence, stated rather than discovered later:
+    # under a per-day objective an off-lattice pin is invisible to T1 entirely.
+    # `tests/test_day_objective.py` pins that behaviour so a future reader
+    # finds a decision.
     for _court, existing_start in existing:
-        model.Add(mk_lo <= existing_start)
-        model.Add(mk_hi >= existing_start + dur_ms)
-    # A duration cannot be negative — and without this it can be, spectacularly.
-    # Both squeeze constraints above are `OnlyEnforceIf(placed[i])`, so on a
-    # board where NOTHING is placed `mk_lo` and `mk_hi` float freely over
-    # [0, max_end] and T1, which MINIMISES the difference, drives `mk_hi` to 0
-    # and `mk_lo` to `max_end`. The chain proves that optimal and publishes it:
-    # measured, one fixture made unplaceable by a self-dependency,
-    # `objective_values=[('placed', 0), ('makespan', -1767258600000), ...]` —
-    # a negative epoch-shaped number presented to the caller as a proved
-    # optimum, on a response with `error` unset.
-    #
-    # Stated here rather than clamped at the wire for two reasons that are
-    # about this module: the freeze `Add(makespan <= achieved)` that T2 and T3
-    # inherit has to be a real bound, and `schema.py` should not need a special
-    # case for a value the term should never have produced. It costs nothing on
-    # a non-empty board: `mk_lo <= min start` and `mk_hi >= max start + dur_ms`
-    # already force `mk_hi > mk_lo` there.
-    #
-    # An earlier version of this comment also claimed it kept "the bench" in
-    # agreement. It does NOT, and the correction matters more than the
-    # sentence: `bench/placement_bench.py` has its own `build_model` (:378, called
-    # at :658) with its own unclamped `mk_lo`/`mk_hi` (:542-547) and imports
-    # nothing from `placement`. See this module's docstring.
-    model.Add(mk_hi >= mk_lo)
-    makespan = mk_hi - mk_lo
+        pin_day = _day_of_pin(existing_start, day_bounds)
+        if pin_day is None:
+            continue
+        model.Add(day_used[pin_day] == 1)
+        model.Add(day_lo[pin_day] <= existing_start)
+        model.Add(day_hi[pin_day] >= existing_start + dur_ms)
+
+    # `day_ids` is never empty — `grid_slots` is guarded non-empty above — so
+    # all three are real linear expressions, not the bare `0` that `sum([])`
+    # would hand `model.Minimize`.
+    days_used = sum(day_used[d] for d in day_ids)
+    day_span_total = sum(day_span_terms)
+    day_start_total = sum(day_start_terms)
 
     # T3: court imbalance — busiest configured-or-used court minus the
     # quietest, in ms, exactly `boardMetrics.courtImbalanceMinutes`.
@@ -1187,7 +1288,9 @@ def build_model(
         start=start,
         presence_court=presence_court,
         placed_sum=placed_sum,
-        makespan=makespan,
+        days_used=days_used,
+        day_span=day_span_total,
+        day_start=day_start_total,
         worst_gap=worst_gap,
         imbalance=imbalance,
     )
@@ -1207,7 +1310,7 @@ def solve(
     wall_seconds: float,
     knobs: SolverKnobs = DEFAULT_SOLVER_KNOBS,
 ) -> SolveOutcome:
-    """Solve `model` through the full lexicographic T0->T3 tier chain within
+    """Solve `model` through the full lexicographic T0->T5 tier chain within
     `wall_seconds`.
 
     A thin wrapper over `placement.objective.run_tier_chain`, which owns the
