@@ -308,3 +308,52 @@ Ground truth for a CI-only e2e failure is the run's `playwright-report-*`
 artifact: its per-failure ARIA snapshot shows what was actually on the
 page, which is how the Entrants-tab diagnosis was settled rather than
 guessed.
+
+### Wave 2 IN FLIGHT (2026-08-13) — state at compaction
+
+**P2 (D3 health) — GREEN, PR #547 open and pushed.** 23 commits on
+`feat/p2-schedule-health`, worktree `.claude/worktrees/p2-health`, own
+Postgres `:54411`. Gate re-verified after its fix round: engine
+`test:coverage` exit 0, apps/web 6916/6857/1 (the known
+`schedule-solver-telemetry` no-placement red), tsc 0, lint 0 errors,
+drift gates clean. e2e 5/5 — **run by the orchestrator** against a real
+standalone prod server on :3207. Six review findings closed; details in
+the PR comment.
+
+**P4 (D1a templates) — 12 commits, THREE items open.** Branch
+`feat/p4-format-templates`, worktree `.claude/worktrees/p4-templates`,
+own Postgres `:54413`, migration **V359** (`competitions.template_key` /
+`template_version`). Fix round `cdab6d5a` closed all 8 first-review
+findings. Still open when this was written:
+1. `COMPETITION_MADE_PUBLIC` is never fired from the template path
+   (`createCompetition:207-214` fires it via `shouldFireMadePublic`;
+   `CreateFromTemplate.visibility` accepts `"public"`). The fix for
+   "no funnel events" closed only the emitter the review named and left
+   its own bug class half-open.
+2. Nothing pins "fires exactly once" on the ORIGINAL manual paths
+   (`competitions.ts:205`, `divisions.ts:248`) — the extraction is what
+   makes that dangerous.
+3. **`tsc --noEmit` on apps/web is RED at HEAD** —
+   `format-gates.test.ts(46,72)` TS2353, `thirdPlace` not in
+   `{byes?, cross_feeds?, placements?}`. The test is right; the bug is
+   that `stageNeedsAdvancedFormatsGate`'s `config` param is too narrow
+   for jsonb stage config. Production call sites compile only because
+   they pass variables — excess-property checks fire on literals only.
+
+**Next steps in order:** P4 finishes those three → orchestrator reruns
+P4's gate on a QUIESCENT tree → P4 PR → both PRs merged → wave 3 =
+**P5 alone** (it carries the remaining migration; two migrations must
+never be in flight together).
+
+**Environment still standing:** CP-SAT placement service on `:50077`
+(secret `dev-secret`) for both-ways scheduling gates; four lane
+databases (`:54401` p1, `:54343` p3, `:54411` p2, `:54413` p4).
+
+**Two process notes earned this wave.** Never run a gate on a worktree
+while an agent is active in it — two of three failures in one P4 gate
+run were the sibling's in-flight edits, exactly the documented trap.
+And `roundrobin.test.ts` "idempotence: regeneration is byte-identical"
+joins the load-sensitive set: it went red in a loaded full run and
+passed 42/42 in isolation, with the coverage run passing the same tests
+minutes later. An idempotence test reads as a determinism bug, so it
+will alarm the next session that sees it.

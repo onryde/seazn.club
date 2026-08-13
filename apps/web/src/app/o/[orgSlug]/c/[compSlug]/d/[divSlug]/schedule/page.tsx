@@ -21,6 +21,7 @@ import { ScheduleBoard } from "@/components/v2/schedule-board";
 import { RungConfigProvider } from "@/components/v2/board/rung-config-provider";
 import { resolveRungConfig } from "@/lib/ai-rung";
 import { StandaloneScheduleSettings } from "@/components/v2/board/settings-panel";
+import { HealthPanel } from "@/components/v2/board/health-panel";
 import { OfficialsPanel } from "@/components/v2/officials-panel";
 import { HistoryPanel } from "@/components/v2/history-panel";
 import { ConstraintsPanel } from "@/components/v2/constraints-panel";
@@ -34,8 +35,9 @@ import {
 } from "@/server/usecases/officials";
 import { feedLabels, type FeedRow } from "@/lib/schedule-board";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import { HealthTabLabel } from "@/components/v2/board/health-panel";
 
-const TABS = ["board", "settings", "constraints", "officials", "history"] as const;
+const TABS = ["board", "health", "settings", "constraints", "officials", "history"] as const;
 type Tab = (typeof TABS)[number];
 
 /** The "didn't load it" arm of a gated `Promise.all` slot. Explicitly typed
@@ -211,17 +213,17 @@ export default async function DivisionSchedulePage({
         {/* Tabs (Jul3): the board + each panel is its own view — the page was
             one long scroll otherwise. */}
         <nav className="scroll-x scroll-x-fade mb-6 flex gap-1 whitespace-nowrap border-b border-slate-200">
-          {TABS.map((t) => (
+          {TABS.map((tabId) => (
             <Link
-              key={t}
-              href={`${routes.divisionSchedule(orgSlug, compSlug, divSlug)}?tab=${t}`}
+              key={tabId}
+              href={`${routes.divisionSchedule(orgSlug, compSlug, divSlug)}?tab=${tabId}`}
               className={`border-b-2 px-4 py-2 text-sm font-medium capitalize transition ${
-                tab === t
+                tab === tabId
                   ? "border-purple-600 text-purple-700"
                   : "border-transparent text-slate-500 hover:text-slate-800"
               }`}
             >
-              {t}
+              {tabId === "health" ? <HealthTabLabel /> : tabId}
             </Link>
           ))}
         </nav>
@@ -267,6 +269,21 @@ export default async function DivisionSchedulePage({
             />
             </RungConfigProvider>
           </>
+        )}
+
+        {/* D3 schedule health (design doc bench-product-value/designs/
+            2026-08-13-schedule-health-design.md) — one panel per stage: the
+            route is stage-scoped (round-robin vs bracket gates one of its
+            five metrics), but this page is division-scoped and a division
+            may hold several stages, so there is no single "the" stage to
+            pick. Report-only — renders even for a stage with no schedule
+            yet (the panel's own empty state), never blocks anything. */}
+        {tab === "health" && (
+          <div className="space-y-4">
+            {stages.map((s) => (
+              <HealthPanel key={s.id} stageId={s.id} stageLabel={s.name} />
+            ))}
+          </div>
         )}
 
         {tab === "officials" && (

@@ -1304,6 +1304,80 @@ export const CapacityReport = z.object({
 });
 export type CapacityReport = z.infer<typeof CapacityReport>;
 
+// ---------------------------------------------------------------------------
+// Schedule health score (D3, docs/superpowers/specs/bench-product-value/
+// designs/2026-08-13-schedule-health-design.md) — GET /stages/{id}/schedule/
+// health's 200 body. camelCase, same deliberate break from this file's
+// snake_case wire convention CapacityReport takes above, and for the same
+// reason: mirrors the engine's HealthMetric/HealthReport field for field
+// (packages/engine/src/scheduling/health.ts's assessHealth) so the panel can
+// render the wire response with the same renderer a client-side recompute
+// would use, no mapping step.
+export const HealthOffender = z.object({
+  kind: z.enum(["entrant", "court", "courtDay"]),
+  id: z.string(),
+  label: z.string(),
+  value: z.number(),
+});
+
+export const HealthMetric = z.object({
+  key: z.enum(["restSpread", "courtBalance", "gapDispersion", "homeAwayAlternation", "primeSlotFairness"]),
+  score: z.number().int().min(0).max(100),
+  // Structured, never literal prose — the engine lib emits an i18n KEY, not
+  // English (standing i18n rule; see health.ts's HealthExplanation doc
+  // comment). The panel resolves `key` against the active locale's
+  // `schedule.health.explain.*` dictionary entry, interpolating `params`.
+  explanation: z.object({
+    key: z.string(),
+    params: z.record(z.string(), z.number()).optional(),
+  }),
+  offenders: z.array(HealthOffender),
+});
+export type HealthMetric = z.infer<typeof HealthMetric>;
+
+/** 5 entries, or 4 when the stage is not table-shaped (league/group/swiss/
+ *  americano) — homeAwayAlternation is ABSENT then, never a present entry
+ *  scored 0 (design doc, verbatim; see schedule-health.ts's TABLE_KINDS). */
+export const ScheduleHealthReport = z.object({
+  stageId: Uuid,
+  computedAt: z.iso.datetime({ offset: true }),
+  metrics: z.array(HealthMetric).min(4).max(5),
+});
+export type ScheduleHealthReport = z.infer<typeof ScheduleHealthReport>;
+
+/** GET /competitions/{id}/schedule/health's 200 body — the joint variant
+ *  (design doc: "returns per-division arrays + a combined block"). A stage
+ *  entry is EITHER a full report or a bare `{stageId, status:"empty"}` —
+ *  never a thrown 409, so one unscheduled division cannot take the whole
+ *  joint call down (mirrors the "aggregate every division, never
+ *  short-circuit on the first" shape `aiPlanForCompetition`'s capacity
+ *  guard uses). */
+export const StageHealthEntry = z.discriminatedUnion("status", [
+  z.object({
+    stageId: Uuid,
+    status: z.literal("ready"),
+    computedAt: z.iso.datetime({ offset: true }),
+    metrics: z.array(HealthMetric).min(4).max(5),
+  }),
+  z.object({ stageId: Uuid, status: z.literal("empty") }),
+]);
+
+export const DivisionHealthEntry = z.object({
+  divisionId: Uuid,
+  name: z.string(),
+  stages: z.array(StageHealthEntry),
+});
+
+export const CompetitionScheduleHealthReport = z.object({
+  competitionId: Uuid,
+  computedAt: z.iso.datetime({ offset: true }),
+  divisions: z.array(DivisionHealthEntry),
+  // gapDispersion + primeSlotFairness ONLY (design doc: "computed over the
+  // union where meaningful") — always exactly 2 entries.
+  combined: z.object({ metrics: z.array(HealthMetric).length(2) }),
+});
+export type CompetitionScheduleHealthReport = z.infer<typeof CompetitionScheduleHealthReport>;
+
 export const AutoScheduleResult = z.object({
   assignments: z.array(ScheduleAssignment),
   conflicts: z.array(ScheduleConflict),
