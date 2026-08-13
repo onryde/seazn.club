@@ -35,7 +35,7 @@ interface Props {
    *  the same for every viewer (spec 2026-07-14 two-lane, venue authoritative). */
   tz: string;
   /** Pre-resolved, ORG-LOCALE slot-label text for every fixture with an
-   *  unfilled slot (V360/V361 home/away_slot_label) — built server-side by
+   *  unfilled slot (V360/V362 home/away_slot_label) — built server-side by
    *  the caller, keyed `${fixture.id}:home` / `${fixture.id}:away`. Absent
    *  for a filled slot (real entrant). */
   slotLabels: Record<string, string>;

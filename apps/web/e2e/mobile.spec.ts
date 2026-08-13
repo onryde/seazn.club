@@ -1015,7 +1015,7 @@ test("P6 org surface: the TBD fixture renders its resolved slot label, in the sw
   page,
 }) => {
   test.skip(p6DivisionId === "", "P6 setup test did not run/complete");
-  // Default locale first — proves the whole pipeline (usecase -> V360/V361
+  // Default locale first — proves the whole pipeline (usecase -> V360/V362
   // columns -> API -> stages-panel.tsx) is actually live, not merely
   // unit-tested in isolation.
   await page.goto(await divisionPath(page.request, p6DivisionId, "?tab=fixtures"));

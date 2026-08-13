@@ -1,5 +1,5 @@
 -- =============================================================================
--- V361 — Stage progression UI (D4b / P6): expose the slot-label columns on
+-- V362 — Stage progression UI (D4b / P6): expose the slot-label columns on
 -- the public fixtures view.
 --
 -- V360 added fixtures.home_slot_label / away_slot_label (jsonb {key, params}

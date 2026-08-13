@@ -2,7 +2,7 @@
 // against the prompt's blanket export exemption — "a subscribed calendar
 // showing 'TBD vs TBD' for the final is the exact product value TBD
 // fixtures exist to deliver"). Regression: a TBD fixture (no entrant, a real
-// V360/V361 slot label) that IS scheduled — pre-booking a court/time for a
+// V360/V362 slot label) that IS scheduled — pre-booking a court/time for a
 // final before the semis decide who plays it is the whole point — must
 // resolve its label through the org's own default_locale, not print the
 // raw, hardcoded, always-English "TBD vs TBD" the route shipped with.

@@ -6540,7 +6540,7 @@ async function stageProgressionSuite(): Promise<void> {
   );
   // P6 (D4b task A) fix round 1 — smoke coverage for the data contract every
   // localized renderer this task wired depends on: a real server, real DB,
-  // real V360/V361 columns, real /generate response — not a mock. Both
+  // real V360/V362 columns, real /generate response — not a mock. Both
   // slots of the fully-TBD KO fixture must carry a real {key,params}
   // descriptor (this seeding — 2 pools, top 1 each — always produces
   // slot.winner_group), never null and never a hand-built string.
@@ -6548,7 +6548,7 @@ async function stageProgressionSuite(): Promise<void> {
     const home = koGen.fixtures[0]!.home_slot_label;
     const away = koGen.fixtures[0]!.away_slot_label;
     check(
-      "stage progression: the TBD KO fixture's home/away slot labels are real {key,params} descriptors (V360/V361, not a raw string)",
+      "stage progression: the TBD KO fixture's home/away slot labels are real {key,params} descriptors (V360/V362, not a raw string)",
       home?.key === "slot.winner_group" &&
         away?.key === "slot.winner_group" &&
         typeof home.params.g === "string" &&
