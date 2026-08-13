@@ -134,11 +134,12 @@ export interface LnsInput {
    *  itself; nothing here reintroduces a court. */
   courts: readonly string[];
   total: number;
-  /** The run's day resolution, for `boardMetrics`. Window acceptance is the
-   *  same `isStrictlyBetter` the BUILD gate uses, so it ranks on the solver's
-   *  day rungs and needs the same view to measure them — without it every
-   *  candidate and the incumbent alike score 0 days and the day rungs simply
-   *  tie, which is the honest abstention but not the intended comparison.
+  /** The run's day resolution, for `boardMetrics`. MEASURED AND REPORTED, NOT
+   *  RANKED: window acceptance is `isStrictlyBetter`, which reads none of the
+   *  three day metrics — the comparator is unchanged by the day-aware rungs,
+   *  and `build-objectives.ts` records why mirroring the solver's ladder into
+   *  it does not work. This exists so a window pass that HAS a view reports
+   *  honest day numbers rather than zeros; supplying it changes no acceptance.
    *  Both boards in a comparison are measured with THIS one binding. */
   days?: DayView;
   /** The caller's outer wall-clock backstop, in ITS elapsed-ms frame. Not the

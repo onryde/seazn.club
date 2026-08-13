@@ -123,14 +123,18 @@ export function boardMetrics(
   // it is what the placer does. `buildDayIndexOf(slots, undefined)` returns
   // `() => 0`: without a timezone every slot is on day 0, the verifier skips
   // day-cap counting, and the model's day rungs see a single day. Mirroring
-  // that here keeps this function honest for a caller with no grid, and it has
-  // a second effect worth stating because a test caught it: with one day,
-  // `daySpanMinutes` IS the whole-board span, so the ladder's third rung
-  // degrades into exactly the whole-board comparison that used to sit at rung
-  // two. A window pass with no day view therefore keeps its old protection —
-  // `improveByWindows` still refuses a candidate that stretches the board from
-  // 90 minutes to 210 to buy a flatter court split — rather than going blind
-  // on every day term and falling through to court balance.
+  // that here keeps this function honest for a caller with no grid: one day is
+  // what the board IS to a caller that cannot resolve days, and reporting zero
+  // days for a board that plainly has matches on it would be a lie rather than
+  // an abstention. It also makes `daySpanMinutes` equal the whole-board span in
+  // that case, which is the right number for a single day by definition.
+  //
+  // NONE OF THE THREE IS RANKED. `isStrictlyBetter` reads only `placed`,
+  // `makespanMinutes`, `worstIdleGapMinutes` and `courtImbalanceMinutes`, and
+  // is unchanged by the day-aware rungs — see its own note for why mirroring
+  // the solver's ladder into it does not work, and the release-2 index
+  // (`2026-08-12-release2-prompts/_INDEX.md`) for the four attempts that
+  // proved it. These fields are for the response and the board's result strip.
   const dayOf = days?.dayOf ?? ((): number => 0);
   const byDay = new Map<number, { lo: number; hi: number }>();
   for (const a of assignments) {
