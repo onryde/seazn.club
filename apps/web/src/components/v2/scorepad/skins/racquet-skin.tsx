@@ -372,17 +372,47 @@ function GroupBody(props: {
 
   return (
     <div className="flex flex-col gap-2">
-      {group.actions.flatMap((type) =>
-        actionsForType(view, type).map((action) => {
-          const submitting = submittingType === action.type;
-          const key = `${action.type}:${action.fields.map((f) => f.path).join(",")}`;
-          return isSideTapOnly(action) ? (
-            <SideTapAction key={key} action={action} ids={ids} dispatch={dispatch} submitting={submitting} msg={msg} compact={compact} />
-          ) : (
-            <ActionForm key={key} action={action} submitting={submitting} onSubmit={(payload) => void dispatch(action.type, payload)} renderAttribution={renderAttribution} />
+      {group.actions.flatMap((type) => {
+        const actions = actionsForType(view, type);
+        // At most ONE tap control per type. The plain rally (`wonBy` only)
+        // and the attributed rally (+server/scorer) are BOTH zero-field —
+        // the kernel declares them together, unconditionally, in every cfg
+        // (setbased/kernel.ts's Rally panel) — so both satisfy
+        // `isSideTapOnly` and would otherwise render as two identical-
+        // looking Home/Away button rows for what a scorer reads as one
+        // control. The extra attribution on the richer shape is unreachable
+        // without roster data anyway (module header), so nothing is lost by
+        // collapsing to the first.
+        const tap = actions.find(isSideTapOnly);
+        const detailed = actions.filter((a) => !isSideTapOnly(a));
+        const nodes: ReactNode[] = [];
+        if (tap) {
+          nodes.push(
+            <SideTapAction
+              key={`${tap.type}:tap`}
+              action={tap}
+              ids={ids}
+              dispatch={dispatch}
+              submitting={submittingType === tap.type}
+              msg={msg}
+              compact={compact}
+            />,
           );
-        }),
-      )}
+        }
+        for (const action of detailed) {
+          const key = `${action.type}:${action.fields.map((f) => f.path).join(",")}`;
+          nodes.push(
+            <ActionForm
+              key={key}
+              action={action}
+              submitting={submittingType === action.type}
+              onSubmit={(payload) => void dispatch(action.type, payload)}
+              renderAttribution={renderAttribution}
+            />,
+          );
+        }
+        return nodes;
+      })}
     </div>
   );
 }

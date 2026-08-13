@@ -194,7 +194,11 @@ function fullView(spec: PadSpec): PadView {
   return { phase: "live", phases: ["pre", "live", "post"], panels };
 }
 
-function numberFieldMax(action: PadActionView, path: string): number {
+// Accepts either a raw engine `PadAction` (straight off `module.padSpec()`,
+// no `availability` — this describe block reads bounds directly off the
+// spec, never through `layout()`, which never touches field bounds at all)
+// or a view-model `PadActionView`.
+function numberFieldMax(action: Pick<PadActionView, "type" | "fields">, path: string): number {
   const field = action.fields.find((f) => f.path === path);
   if (!field || field.kind !== "number") throw new Error(`expected a number field at "${path}" on ${action.type}`);
   return field.max;
