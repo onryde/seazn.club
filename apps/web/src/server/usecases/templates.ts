@@ -129,7 +129,7 @@ export async function instantiateTemplate(
   const dict = await getDictionary("en", "ui");
   const competitionId = randomUUID();
 
-  const divisions = await withTenant(auth.orgId, async (tx) => {
+  const { slug, divisions } = await withTenant(auth.orgId, async (tx) => {
     const slug = await uniqueSlug(slugify(input.name), async (s) => {
       const [taken] = await tx`select 1 from competitions where slug = ${s}`;
       return !!taken;
@@ -218,7 +218,7 @@ export async function instantiateTemplate(
         );
       }
     }
-    return divisionResults;
+    return { slug, divisions: divisionResults };
   });
 
   log.info(
@@ -234,6 +234,7 @@ export async function instantiateTemplate(
 
   return {
     competitionId,
+    slug,
     divisions,
     templateKey: template.key,
     templateVersion: template.version,

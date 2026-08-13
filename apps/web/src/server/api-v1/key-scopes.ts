@@ -72,6 +72,9 @@ const RULES: RouteRule[] = [
   // competitions
   { method: "GET", path: "/competitions", scope: "read" },
   { method: "POST", path: "/competitions", scope: "manage" },
+  // Template instantiation (D1a): a competition-creating write like the bare
+  // POST above — same scope, unpinnable (no competition exists yet).
+  { method: "POST", path: "/competitions/from-template", scope: "manage" },
   { method: "GET", path: "/competitions/:id", scope: "read", pin: "competition" },
   { method: "PATCH", path: "/competitions/:id", scope: "manage", pin: "competition" },
   // DELETE /competitions/:id is structurally excluded from keys — see

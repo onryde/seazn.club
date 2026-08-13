@@ -107,9 +107,13 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
         expect(div.stages).toHaveLength(template.divisions[i]!.stages.length);
         for (const stage of div.stages) expect(stage.fixtureCount).toBe(0);
       }
-      const [row] = await sql<{ template_key: string; template_version: number }[]>`
-        select template_key, template_version from competitions where id = ${result.competitionId}`;
+      const [row] = await sql<{ template_key: string; template_version: number; slug: string }[]>`
+        select template_key, template_version, slug from competitions where id = ${result.competitionId}`;
       expect(row).toMatchObject({ template_key: template.key, template_version: template.version });
+      // The wizard navigates straight to the created competition page (same
+      // pattern the blank-form wizard already uses) — needs the slug, not
+      // just the id, back on the response.
+      expect(result.slug).toBe(row!.slug);
     }
   });
 

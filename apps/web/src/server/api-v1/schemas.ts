@@ -576,6 +576,9 @@ const TemplateStageResultS = z.object({ id: Uuid, fixtureCount: z.number().int()
 const TemplateDivisionResultS = z.object({ id: Uuid, stages: z.array(TemplateStageResultS) });
 export const FromTemplateResult = z.object({
   competitionId: Uuid,
+  /** So the wizard can navigate straight to the created competition page —
+   *  same pattern the blank-form wizard already uses off its own POST. */
+  slug: Slug,
   divisions: z.array(TemplateDivisionResultS),
   templateKey: z.string(),
   templateVersion: z.number().int(),
