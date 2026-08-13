@@ -136,12 +136,14 @@ jobs:
       # is a separate piece of work, and failing on them today would mean either
       # a mass rewrite in this PR or a gate nobody can keep green.
       #
-      # This comment used to name the tree's one react-hooks/exhaustive-deps
-      # suppression tied to #355 (a ref read during render on a live-scoring
-      # countdown) — it lived in cricket-pad.tsx, not period-pad.tsx as
-      # written here, and both were deleted in the S13/#422 cutover along
-      # with the rest of the v1 pads. A suppression should still be rare and
-      # should still name the issue it exists for.
+      # A react-hooks/exhaustive-deps suppression should be rare and should
+      # name the issue it exists for. This comment used to point at the
+      # tree's one such suppression by name (#355, a ref read during render
+      # on a v1 pad's live-scoring countdown) — that suppression was deleted
+      # along with the rest of the v1 pads in the S13/#422 cutover, and the
+      # v2 skin #355's own coverage moved onto (period-skin.tsx) needs none;
+      # the several suppressions in the tree today each carry their own
+      # inline reasoning at their own call site instead.
       - name: eslint
         run: npx turbo run lint
 
