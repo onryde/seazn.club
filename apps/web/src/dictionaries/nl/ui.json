@@ -2790,6 +2790,7 @@
   "news.recap.standingsMovesTitle": "Stijgers",
   "news.recap.standingsMove": "{entrant} klimt van plek {from} naar {to}.",
   "news.digest.title": "{orgName} — week van {weekOf}",
+  "news.digest.empty": "Deze week geen uitslagen, verschuivingen in de stand of aankomende wedstrijden om te melden. Voeg hieronder je eigen update toe, of publiceer dit zoals het is.",
   "news.digest.section.standings": "Bewegingen in de stand",
   "news.digest.standings.row": "{position}. {name} — {points} ptn",
   "news.digest.standings.climber": "Grootste stijger: {entrant} ({from} → {to})",

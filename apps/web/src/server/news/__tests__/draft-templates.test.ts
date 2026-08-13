@@ -366,9 +366,32 @@ describe("weeklyDigestDraft", () => {
     expect(bodyMd).toContain("Stat leaders");
   });
 
-  it("every section absent yields an empty body, never a placeholder sentence", () => {
+  it("every section absent yields ONE sentence saying so — not a blank body", () => {
+    // Reversal of this test's original assertion (`toBe("")`), recorded
+    // deliberately rather than quietly flipped.
+    //
+    // It was reported from the running app: pressing Generate digest on a
+    // quiet org produced a post with a title and a completely blank body,
+    // which reads as a broken button, not as "nothing happened this week".
+    //
+    // The design doc's normative rule is narrower than the old assertion
+    // was. It says sections render only when their data exists — "absent
+    // section != empty section — no 'no data' filler lines" — which is a
+    // rule about PER-SECTION filler, and the sibling test above ("an absent
+    // section renders no heading at all") is the one that pins it. Nothing
+    // in the doc required the WHOLE body to be empty when every section is
+    // absent; the old assertion generalised the section rule one level up.
+    //
+    // The per-section rule is unchanged: no headings, no "Standings
+    // movement: no data". Just one sentence instead of nothing at all.
     const { bodyMd } = weeklyDigestDraft(DIGEST_BASE);
-    expect(bodyMd).toBe("");
+    expect(bodyMd.trim().length).toBeGreaterThan(0);
+    expect(bodyMd).toContain("to report this week");
+    // Still no section headings — the filler-line rule holds.
+    expect(bodyMd).not.toContain("Standings movement");
+    expect(bodyMd).not.toContain("Stat leaders");
+    expect(bodyMd).not.toContain("Next 7 days");
+    expect(bodyMd).not.toContain("player of the week");
   });
 
   it("fr locale renders fully localized, no unresolved tokens", () => {

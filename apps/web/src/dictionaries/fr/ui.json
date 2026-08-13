@@ -2790,6 +2790,7 @@
   "news.recap.standingsMovesTitle": "Mouvements",
   "news.recap.standingsMove": "{entrant} monte de la {from}e à la {to}e place.",
   "news.digest.title": "{orgName} — semaine du {weekOf}",
+  "news.digest.empty": "Aucun résultat, mouvement au classement ou match à venir à signaler cette semaine. Ajoutez votre propre actualité ci-dessous, ou publiez tel quel.",
   "news.digest.section.standings": "Mouvements au classement",
   "news.digest.standings.row": "{position}. {name} — {points} pts",
   "news.digest.standings.climber": "Plus forte progression : {entrant} ({from} → {to})",
