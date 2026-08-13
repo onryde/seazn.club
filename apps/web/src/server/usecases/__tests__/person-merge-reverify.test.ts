@@ -125,11 +125,16 @@ describe.skipIf(!HAS_DB)("#404 re-verify published boards after a merge", () => 
     const board = res.revealed.find((r) => r.division_id === divisionId);
     expect(board, "the published board was not re-verified").toBeTruthy();
     const overlap = board!.conflicts.filter(
-      (c) => c.reason === "person_overlap" && (c.detail ?? "").includes(survivor),
+      (c) => c.reason === "person_overlap" && c.details?.personIds?.includes(survivor),
     );
     expect(overlap.length, `no person_overlap naming ${survivor}`).toBeGreaterThan(0);
-    // The two cards are the pair the organiser has to move.
+    // The two cards are the pair the organiser has to move, each naming the
+    // OTHER as its counterparty — never `kind` alone, which would pass with
+    // the counterparty dropped.
     expect(new Set(overlap.map((c) => c.fixtureId))).toEqual(new Set([first.id, second.id]));
+    expect(
+      overlap.every((c) => c.details?.otherFixtureId === (c.fixtureId === first.id ? second.id : first.id)),
+    ).toBe(true);
   });
 
   it("still commits the merge that revealed it", async () => {

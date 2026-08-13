@@ -7,7 +7,7 @@ import { z } from "zod";
 // #398: durable division rules speak the SAME vocabulary a compiled instruction
 // does, so the wire schema reuses the engine's zod rather than restating it —
 // a second declaration is a second thing to drift.
-import { HardConstraint } from "@seazn/engine/scheduling";
+import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/scheduling";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -989,6 +989,81 @@ export const ScheduleSettings = z.object({
 export const RuleCode = z.enum(["H2", "H3", "H4", "H5", "H6", "H8", "CAP"]);
 export type RuleCode = z.infer<typeof RuleCode>;
 
+// Structured conflict detail (C3, 2026-08-13 design amendment,
+// `docs/superpowers/specs/2026-08-12-conflict-detail-names-design.md`). One
+// member per family template the engine's `ConflictDetailKind` union
+// enumerates.
+//
+// The witness below is the SAME idiom the engine's own
+// `conflict-detail.ts` uses for its field-order witness: a
+// `Record<ConflictDetailKind, true>` object literal requires every key of
+// the engine's union and rejects any key not in it, so a kind added to (or
+// renamed in) the engine's 25 and forgotten here is a TYPE ERROR at this
+// file, not a wire enum that silently stops matching what the engine emits.
+const CONFLICT_DETAIL_KIND_WITNESS: Record<ConflictDetailKind, true> = {
+  person_double_booking: true,
+  locked_slot_clash: true,
+  no_slot_start_window: true,
+  no_slot_person_bound: true,
+  no_slot_horizon: true,
+  instruction_feeder_gap: true,
+  instruction_day_cap: true,
+  instruction_weekday: true,
+  instruction_date: true,
+  instruction_time: true,
+  outside_competition_window: true,
+  outside_start_window: true,
+  court_double_booking: true,
+  inside_blackout: true,
+  outside_session_windows: true,
+  entrant_overlap: true,
+  entrant_below_rest: true,
+  person_overlap: true,
+  person_below_rest: true,
+  order_before_feeder: true,
+  order_inside_feeder_rest: true,
+  round_order_day: true,
+  round_order_same_day: true,
+  no_slot_lattice: true,
+  no_slot_budget: true,
+};
+const CONFLICT_DETAIL_KINDS = Object.keys(CONFLICT_DETAIL_KIND_WITNESS) as [
+  ConflictDetailKind,
+  ...ConflictDetailKind[],
+];
+/** Shared between the snake_case wire shape below and the camelCase
+ *  `AiPlanConflict` one near it — the kind STRING never changes casing,
+ *  only the sibling field names do. */
+const ConflictDetailKindSchema = z.enum(CONFLICT_DETAIL_KINDS);
+
+/** Snake_case wire mirror of the engine's `ConflictDetail` (house style for
+ *  this schema — see `fixture_id`/`shortfall_minutes` on `ScheduleConflict`
+ *  below). Every field beyond `kind` is optional because each family
+ *  template only populates the subset it needs (design doc's per-kind
+ *  table); id fields are `Uuid` to match `fixture_id` on the conflict
+ *  itself. */
+const ScheduleConflictDetail = z.object({
+  kind: ConflictDetailKindSchema,
+  entrant_ids: z.array(Uuid).optional(),
+  person_ids: z.array(Uuid).optional(),
+  other_fixture_id: Uuid.optional(),
+  court: z.string().optional(),
+  day: z.string().optional(),
+  other_day: z.string().optional(),
+  weekday: z.string().optional(),
+  required_weekday: z.string().optional(),
+  required_date: z.string().optional(),
+  time: z.string().optional(),
+  required_time: z.string().optional(),
+  rule_type: z.string().optional(),
+  round_no: z.number().int().optional(),
+  other_round_no: z.number().int().optional(),
+  minutes: z.number().int().optional(),
+  required_minutes: z.number().int().optional(),
+  count: z.number().int().optional(),
+  required_count: z.number().int().optional(),
+});
+
 /** Doc 12 §2 conflict taxonomy. Since #399 `blocking` is DELTA-based: a court
  *  clash, a person double-booking, an out-of-window slot or a direct feed
  *  ordering breach blocks when THIS change introduced or worsened it. The same
@@ -1017,7 +1092,18 @@ export const ScheduleConflict = z.object({
     "warn.official_unavailable",
   ]),
   blocking: z.boolean(),
+  /** @deprecated Pre-C3 English, derived server-side (byte-for-byte) from
+   *  `details` by the deprecated `legacyConflictDetail` — kept only for
+   *  clients that read prose off the wire. New clients should read
+   *  `details` and localize at render time (C3, 2026-08-13 design
+   *  amendment). */
   detail: z.string().optional(),
+  /** Structured, id-only conflict detail (C3, 2026-08-13 design amendment).
+   *  Additive: absent only for a `Conflict` the engine built without a
+   *  `details` entry (there should be none — every one of the 25 family
+   *  templates sets it — but the field stays optional to match the
+   *  engine's own `Conflict.details?`). */
+  details: ScheduleConflictDetail.optional(),
   /** The rule this conflict breaks, in the vocabulary the AI prompts teach
    *  (#399) — so a refusal, a badge and a repair round all cite one token. */
   rule: RuleCode.optional(),
@@ -2395,11 +2481,50 @@ const AiPlanAssignment = z.object({
   schedule_locked: z.boolean().optional(),
 });
 
+/** CamelCase mirror of `ScheduleConflictDetail` above — same fields, same
+ *  `ConflictDetailKindSchema`, matching the engine's own `ConflictDetail`
+ *  casing 1:1 (this schema's whole point is to carry the engine's verbatim
+ *  shape, per `AiPlanConflict`'s own comment below). */
+const AiPlanConflictDetail = z.object({
+  kind: ConflictDetailKindSchema,
+  entrantIds: z.array(Uuid).optional(),
+  personIds: z.array(Uuid).optional(),
+  otherFixtureId: Uuid.optional(),
+  court: z.string().optional(),
+  day: z.string().optional(),
+  otherDay: z.string().optional(),
+  weekday: z.string().optional(),
+  requiredWeekday: z.string().optional(),
+  requiredDate: z.string().optional(),
+  time: z.string().optional(),
+  requiredTime: z.string().optional(),
+  ruleType: z.string().optional(),
+  roundNo: z.number().int().optional(),
+  otherRoundNo: z.number().int().optional(),
+  minutes: z.number().int().optional(),
+  requiredMinutes: z.number().int().optional(),
+  count: z.number().int().optional(),
+  requiredCount: z.number().int().optional(),
+});
+
 // Engine verifier conflict (camelCase, @seazn/engine/scheduling Conflict).
 const AiPlanConflict = z.object({
   fixtureId: z.string(),
   reason: z.string(),
+  /** @deprecated Pre-C3 English, derived server-side (byte-for-byte) from
+   *  `details` by the deprecated `legacyConflictDetail` — kept only for
+   *  clients that read prose off the wire (the C3 design doc's ruling: the
+   *  MODEL's own copy of a conflict, on the repair-round conversation, is a
+   *  separate JSON.stringify that never reaches this schema and stays
+   *  byte-identical to pre-C3 on its own — see schedule-ai.ts/
+   *  competition-schedule-ai.ts). New clients should read `details` and
+   *  localize at render time. */
   detail: z.string().optional(),
+  /** Structured, id-only conflict detail (C3, 2026-08-13 design amendment).
+   *  Declared here or zod strips it on any call site that actually
+   *  `.parse()`s this shape, the same trap the `rule` comment above already
+   *  names for this object. */
+  details: AiPlanConflictDetail.optional(),
   direct: z.boolean().optional(),
   /** The rule the prompt taught for this reason (#399), so a repair round is
    *  handed the token it knows instead of a word we invented. Declared here or

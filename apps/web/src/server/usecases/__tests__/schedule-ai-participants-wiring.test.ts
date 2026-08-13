@@ -306,7 +306,15 @@ describe.skipIf(!HAS_DB)("pack.participants is wired into both consumers (#396)"
       overlapsOnFinal.length,
       `expected a person_overlap on the TBD final; got ${JSON.stringify(out.blocking)}`,
     ).toBeGreaterThan(0);
-    // It is the recursed human, named in the detail.
-    expect(overlapsOnFinal.some((c) => (c.detail ?? "").includes(sharedPersonId))).toBe(true);
+    // It is the recursed human, named in `details` — kind, the person id AND
+    // the counterparty fixture, never kind alone.
+    expect(
+      overlapsOnFinal.some(
+        (c) =>
+          c.details?.kind === "person_overlap" &&
+          c.details.personIds?.includes(sharedPersonId) &&
+          c.details.otherFixtureId === fixtureIds.other,
+      ),
+    ).toBe(true);
   });
 });

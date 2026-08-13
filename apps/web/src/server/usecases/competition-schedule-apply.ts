@@ -102,6 +102,7 @@ import { EngineError } from "@seazn/engine/core";
 import { appendDivisionEvent } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { AiApplyMeta, ScheduleConfig } from "@/server/api-v1/schemas";
+import { withLegacyDetail } from "@/server/api-v1/conflict-detail-legacy";
 import {
   conflictKey,
   deltaConflicts,
@@ -705,7 +706,11 @@ export async function applyCompetitionSchedule(
       // answers 409 with the conflict list attached and the board renders the
       // offending cards identically.
       throw new EngineError("SCHEDULE_CONFLICT", "schedule change hits a blocking conflict", {
-        conflicts: blocking,
+        // `withLegacyDetail` restores the deprecated `detail` string the
+        // engine stopped producing (C3, 2026-08-13 design amendment) — this
+        // list rides on the 409's `extra.conflicts` verbatim (http.ts), same
+        // "carries `Conflict` verbatim" contract `AiPlanConflict` documents.
+        conflicts: blocking.map(withLegacyDetail),
       });
     }
 
@@ -775,7 +780,10 @@ export async function applyCompetitionSchedule(
       // the apply is never filtered — the throw above fires from the
       // unfiltered `conflicts`/`blockingKeys` pair, before this line is ever
       // reached.
-      conflicts: conflicts.filter((c) => !allSiblingIds.has(c.fixtureId)),
+      // `withLegacyDetail` restores the deprecated `detail` string the engine
+      // stopped producing (C3, 2026-08-13 design amendment) — `CompetitionApplyOut`
+      // carries `Conflict` verbatim otherwise, same as `AiPlanConflict`.
+      conflicts: conflicts.filter((c) => !allSiblingIds.has(c.fixtureId)).map(withLegacyDetail),
       divisionIds: order.map((d) => d.id),
     };
   });
@@ -805,7 +813,11 @@ function sortConflicts(conflicts: readonly Conflict[], order: readonly LoadedDiv
       ra[2] - rb[2] ||
       cmp(ra[3], rb[3]) ||
       cmp(a.reason, b.reason) ||
-      cmp(a.detail ?? "", b.detail ?? "") ||
+      // `conflictKey` rather than the old raw `detail` string (C3,
+      // 2026-08-13): `reason` is already equal by this point, so this reduces
+      // to comparing the two conflicts' canonical detail suffix —
+      // deterministic ordering, same as before, off the structured detail.
+      cmp(conflictKey(a), conflictKey(b)) ||
       cmp(a.fixtureId, b.fixtureId)
     );
   });

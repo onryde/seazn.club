@@ -104,6 +104,7 @@ import {
 } from "./schedule-ai-parse";
 import { consumePreview, PREVIEW_STALE } from "./schedule-ai-preview";
 import { validateInstructionRules } from "@seazn/engine/scheduling";
+import { legacyVerifierConflict, withLegacyDetail } from "@/server/api-v1/conflict-detail-legacy";
 import type { HardConstraint, RuleCode, RuleFixture, VerifyConfig } from "@seazn/engine/scheduling";
 import { resolveProvider, selectProvider, type ProviderName } from "@/server/ai/select-provider";
 import {
@@ -134,6 +135,7 @@ import { assertCompetitionNotFrozen } from "./entitlement-freeze";
 import { maybeAlertExpensiveRun } from "./ai-runs-admin";
 import {
   computeParticipants,
+  conflictKey,
   validateAssignments,
   type Clock,
   type Assignment,
@@ -1703,7 +1705,11 @@ export function verifyJoint(plan: AiSchedulePlan, pack: CompetitionPack): Confli
   // `obstacles` as the third argument: a per-day cap counts what is already on
   // the day, and an outside booking occupies a court just as surely as a fixture.
   for (const c of validateInstructionRules(all, { tz: pack.tz, hard, ruleFixtures }, obstacles)) {
-    const key = `${c.fixtureId}|${c.reason}|${c.detail ?? ""}`;
+    // The engine's own identity (calendar.ts's `conflictKey`, C3 2026-08-13:
+    // now folds `details` through `canonConflictDetail` rather than a raw
+    // prose string) — reused rather than reimplemented so this dedupe can
+    // never drift from what `deltaConflicts` and the joint apply gate key on.
+    const key = conflictKey(c);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(c);
@@ -1719,7 +1725,7 @@ export function verifyJoint(plan: AiSchedulePlan, pack: CompetitionPack): Confli
       [...others, ...obstacles],
       deps,
     )) {
-      const key = `${c.fixtureId}|${c.reason}|${c.detail ?? ""}`;
+      const key = conflictKey(c);
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(c);
@@ -1744,7 +1750,11 @@ export function verifyJoint(plan: AiSchedulePlan, pack: CompetitionPack): Confli
       ra[2] - rb[2] ||
       cmp(ra[3], rb[3]) ||
       cmp(a.reason, b.reason) ||
-      cmp(a.detail ?? "", b.detail ?? "") ||
+      // `conflictKey` rather than the old raw `detail` string (C3, 2026-08-13):
+      // `reason` is already equal by this point, so this reduces to comparing
+      // the two conflicts' canonical detail suffix — deterministic ordering,
+      // same as before, off the structured detail instead of its prose.
+      cmp(conflictKey(a), conflictKey(b)) ||
       // Last-resort only: two conflicts identical on every domain key. Reaching
       // this means the seed has duplicate (round, seq, ext_key) within one
       // division, which the fixture generator does not produce.
@@ -2127,7 +2137,10 @@ export async function runCompetitionAiPlan(
     conversation.push({
       role: "user",
       content: JSON.stringify({
-        verifier_conflicts: conflicts,
+        // Byte-identical to pre-C3 (C3 2026-08-13 design doc ruling: "the
+        // prose reaches the model, not just the screen") — see the identical
+        // comment at schedule-ai.ts's own `verifier_conflicts`.
+        verifier_conflicts: conflicts.map(legacyVerifierConflict),
         ...(boardEngine === "z3" ? { repaired_assignments: chosen.assignments } : {}),
         ...(unresolved.length > 0 ? { focus_fixture_ids: [...unresolved] } : {}),
         note:
@@ -2971,8 +2984,12 @@ async function planForCompetition(
     // violations neither block nor trigger a repair round — the organiser
     // reviewing this response is the last automated-gate-free line of defence,
     // and the board cannot render what is not returned here.
-    warnings: result.warnings,
-    blocking: result.blocking,
+    // `AiPlanConflict` carries the engine `Conflict` verbatim (see its own
+    // comment in schemas.ts) — `details` already rides along unchanged;
+    // `withLegacyDetail` only restores the deprecated `detail` string the
+    // engine stopped producing (C3, 2026-08-13 design amendment).
+    warnings: result.warnings.map(withLegacyDetail),
+    blocking: result.blocking.map(withLegacyDetail),
     diff: result.diff,
     explanations: result.explanations,
     // constraint_suggestions is dropped on purpose — see the response type.

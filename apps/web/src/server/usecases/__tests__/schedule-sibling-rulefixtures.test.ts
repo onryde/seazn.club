@@ -212,7 +212,7 @@ async function seedBoard(placed: boolean, endAt?: string): Promise<{
 }
 
 const capRows = (conflicts: readonly ScheduleConflict[]): ScheduleConflict[] =>
-  conflicts.filter((c) => c.code === "warn.instruction" && (c.detail ?? "").includes("/day cap"));
+  conflicts.filter((c) => c.code === "warn.instruction" && c.details?.kind === "instruction_day_cap");
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -233,10 +233,11 @@ describe.skipIf(!HAS_DB)("sibling fixtures carry their rule identity (#462)", ()
     // which nobody looking at this board can drag.
     expect(capped).toHaveLength(2);
     expect(capped.map((c) => c.fixture_id).sort()).toEqual([fa1, fa2].sort());
-    // The NUMBER is the point: `2 fixtures on …` would be the undercount that
-    // reports nothing at all, and any figure other than 3 means the sibling was
+    // The NUMBER is the point: `count: 2` would be the undercount that reports
+    // nothing at all, and any figure other than 3 means the sibling was
     // counted the wrong number of times.
-    expect(capped[0]!.detail).toContain(`3 fixtures on ${DAY}`);
+    expect(capped[0]!.details?.count).toBe(3);
+    expect(capped[0]!.details?.day).toBe(DAY);
   }, 120_000);
 
   it("applySchedule's gate counts it too", async () => {
@@ -253,7 +254,8 @@ describe.skipIf(!HAS_DB)("sibling fixtures carry their rule identity (#462)", ()
     const capped = capRows(out.conflicts);
     expect(capped).toHaveLength(2);
     expect(capped.map((c) => c.fixture_id).sort()).toEqual([fa1, fa2].sort());
-    expect(capped[0]!.detail).toContain(`3 fixtures on ${DAY}`);
+    expect(capped[0]!.details?.count).toBe(3);
+    expect(capped[0]!.details?.day).toBe(DAY);
   }, 120_000);
 
   it("autoSchedule refuses to propose the card the sibling pushes over the cap", async () => {

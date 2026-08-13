@@ -361,7 +361,7 @@ describe("verifyJoint — cross-division occupancy (#350)", () => {
     expect(out).toHaveLength(1);
     expect(out[0]!.fixtureId).toBe(F1);
     expect(out[0]!.reason).toBe("blackout");
-    expect(out[0]!.detail).toContain("session windows");
+    expect(out[0]!.details?.kind).toBe("outside_session_windows");
   });
 
   it("a division's blackout does not blackout another division", () => {
@@ -448,7 +448,14 @@ describe("verifyJoint — cross-division occupancy (#350)", () => {
     );
     expect(out.map((c) => c.reason)).toEqual(["person_overlap", "person_overlap"]);
     expect(new Set(out.map((c) => c.fixtureId))).toEqual(new Set([F1, F2]));
-    expect(out.every((c) => c.detail?.includes(PERSON))).toBe(true);
+    expect(
+      out.every(
+        (c) =>
+          c.details?.kind === "person_overlap" &&
+          c.details.personIds?.includes(PERSON) &&
+          c.details.otherFixtureId === (c.fixtureId === F1 ? F2 : F1),
+      ),
+    ).toBe(true);
   });
 
   it("a division's parallelism:'block' never reaches the verifier, so the draft's asymmetry cannot become a verification asymmetry", () => {
@@ -1285,7 +1292,7 @@ describe("isBlocking (#399)", () => {
     // `planIsAcceptable`'s ratio, so promoting a reason changes what counts
     // toward SCHEDULING_AI_ESCALATE_WARN_RATIO and can bring
     // `stopped_on_budget` forward.
-    const overlap = c("person_overlap", { detail: "person p-fischer overlap" });
+    const overlap = c("person_overlap", { details: { kind: "person_overlap", personIds: ["p-fischer"] } });
     const part = partitionConflicts([overlap, c("rest")]);
     expect(part.blocking).toEqual([overlap]);
     expect(part.warnings).toEqual([c("rest")]);
@@ -1390,8 +1397,14 @@ describe("verifyJoint — compiled instruction (#398)", () => {
       ),
     );
     expect(found.length).toBeGreaterThan(0);
-    expect(found.every((c) => c.detail?.includes("2026-08-01"))).toBe(true);
-    expect(found.every((c) => c.detail?.includes("2/day"))).toBe(true);
+    expect(
+      found.every(
+        (c) =>
+          c.details?.kind === "instruction_day_cap" &&
+          c.details.day === "2026-08-01" &&
+          c.details.requiredCount === 2,
+      ),
+    ).toBe(true);
   });
 
   it("ACCEPTS the same three fixtures once they are spread over two days", () => {
@@ -1447,7 +1460,14 @@ describe("verifyJoint — compiled instruction (#398)", () => {
       ),
     );
     expect(found.length).toBeGreaterThan(0);
-    expect(found.every((c) => c.detail?.includes("2026-08-01"))).toBe(true);
+    expect(
+      found.every(
+        (c) =>
+          c.details?.kind === "instruction_day_cap" &&
+          c.details.day === "2026-08-01" &&
+          c.details.requiredCount === 1,
+      ),
+    ).toBe(true);
   });
 
   it("an unqualified 'final on Friday' binds EVERY division's terminal fixture", () => {
@@ -1543,7 +1563,10 @@ describe("verifyJoint — compiled instruction (#398)", () => {
     );
     const found = instrOf(verifyJoint(plan([assign(F1, at("09:00"), "Court 1")]), p));
     expect(found).toHaveLength(1);
-    expect(found[0]!.detail).toContain("not_before 10:00");
+    expect(found[0]!.details?.kind).toBe("instruction_time");
+    expect(found[0]!.details?.ruleType).toBe("not_before");
+    expect(found[0]!.details?.requiredTime).toBe("10:00");
+    expect(found[0]!.details?.time).toBe("09:00");
   });
 });
 

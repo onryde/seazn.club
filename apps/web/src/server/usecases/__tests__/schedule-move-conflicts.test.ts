@@ -200,7 +200,9 @@ describe.skipIf(!HAS_DB)("a move returns the conflicts it computes (#461)", () =
     // THREE, not two: this division's own two cards plus the SIBLING division's
     // (#462, call site four). Two would mean the sibling's card was on the board
     // as court occupancy and invisible to the rule.
-    expect(conflicts[0]!.detail).toContain(`3 fixtures on ${DAY}`);
+    expect(conflicts[0]!.details?.kind).toBe("instruction_day_cap");
+    expect(conflicts[0]!.details?.count).toBe(3);
+    expect(conflicts[0]!.details?.day).toBe(DAY);
 
     // The write happened anyway — a warn never refuses.
     const [row] = await sql<{ court_label: string }[]>`
@@ -262,6 +264,8 @@ describe.skipIf(!HAS_DB)("a move returns the conflicts it computes (#461)", () =
     expect(out.conflicts[0]!.blocking).toBe(false);
     expect(out.conflicts[0]!.code).toBe("warn.instruction");
     expect(out.conflicts[0]!.fixture_id).toBe(mover);
-    expect(out.conflicts[0]!.detail).toContain(`3 fixtures on ${DAY}`);
+    expect(out.conflicts[0]!.details?.kind).toBe("instruction_day_cap");
+    expect(out.conflicts[0]!.details?.count).toBe(3);
+    expect(out.conflicts[0]!.details?.day).toBe(DAY);
   }, 120_000);
 });

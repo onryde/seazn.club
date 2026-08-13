@@ -175,7 +175,7 @@ function refereeConflicts(pack: SchedulePack, ids: readonly string[]): Conflict[
 }
 
 const dayCapConflicts = (cs: readonly Conflict[]): Conflict[] =>
-  cs.filter((c) => c.reason === "instruction" && (c.detail ?? "").includes("/day cap"));
+  cs.filter((c) => c.reason === "instruction" && c.details?.kind === "instruction_day_cap");
 
 /** BOARD 1 — two `persons` rows share a display name, so the pack collapses
  *  them to `name:tam okoro`. The stored rule names ONE of those uuids. */
@@ -292,7 +292,8 @@ describe.skipIf(!HAS_DB)("person-scoped rules collapse with the rosters (#450)",
     const capped = dayCapConflicts(refereeConflicts(pack, [f1, f2]));
     expect(capped).toHaveLength(2);
     expect(capped.map((c) => c.fixtureId).sort()).toEqual([f1, f2].sort());
-    expect(capped[0]!.detail).toContain(`2 fixtures on ${DAY}`);
+    expect(capped[0]!.details?.count).toBe(2);
+    expect(capped[0]!.details?.day).toBe(DAY);
 
     // The mechanism, asserted where it is made, so a regression fails with a
     // readable message and not only through a verdict two functions away: the
@@ -328,6 +329,7 @@ describe.skipIf(!HAS_DB)("person-scoped rules collapse with the rosters (#450)",
     expect(capped).toHaveLength(2);
     expect(capped.map((c) => c.fixtureId).sort()).toEqual([...withUma].sort());
     expect(capped.map((c) => c.fixtureId)).not.toContain(withoutUma);
-    expect(capped[0]!.detail).toContain(`2 fixtures on ${DAY}`);
+    expect(capped[0]!.details?.count).toBe(2);
+    expect(capped[0]!.details?.day).toBe(DAY);
   }, 120_000);
 });

@@ -208,7 +208,9 @@ describe("durable min_rest_minutes across a feed edge (#447)", () => {
     const instruction = conflicts.filter((c) => c.reason === "instruction");
     expect(instruction).toHaveLength(1);
     expect(instruction[0]!.fixtureId).toBe(F2);
-    expect(instruction[0]!.detail).toContain("20 min after its feeder");
+    expect(instruction[0]!.details?.kind).toBe("instruction_feeder_gap");
+    expect(instruction[0]!.details?.minutes).toBe(20);
+    expect(instruction[0]!.details?.requiredMinutes).toBe(60);
   });
 
   it("binds nothing without ruleFixtures — the join has no left side", () => {

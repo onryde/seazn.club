@@ -240,8 +240,19 @@ describe.skipIf(!HAS_DB)("the auto pass honours feed order (#452)", () => {
     // would survive these two turning into two entirely different rules, and
     // dropping `blocking` would survive the row going warn-only, which is the
     // difference between the organiser seeing red and seeing nothing.
-    const byDetail = (x: { detail?: string }, y: { detail?: string }) =>
-      (x.detail ?? "").localeCompare(y.detail ?? "");
+    //
+    // Sorted on `details.other_fixture_id` (not the old `detail` prose, C3
+    // 2026-08-13; snake_case — `ScheduleConflict`'s house style, unlike the
+    // engine's own camelCase `ConflictDetail`) and `detail` stripped before
+    // the `toEqual`: it is still populated — same legacy English as before,
+    // proven by the dedicated legacy-parity suite — but this test's job is
+    // the WIRE SHAPE, and asserting its exact text here would be exactly the
+    // prose-coupling this design amendment removes.
+    const byOtherFixture = (
+      x: { details?: { other_fixture_id?: string } },
+      y: { details?: { other_fixture_id?: string } },
+    ) => (x.details?.other_fixture_id ?? "").localeCompare(y.details?.other_fixture_id ?? "");
+    const stripDetail = <T extends { detail?: string }>({ detail: _detail, ...rest }: T) => rest;
     const expected = [...b.feeders]
       .map((feeder) => ({
         fixture_id: b.final,
@@ -249,9 +260,9 @@ describe.skipIf(!HAS_DB)("the auto pass honours feed order (#452)", () => {
         rule: "H6",
         blocking: true,
         shortfall_minutes: 90,
-        detail: `starts before feeder ${feeder} ends`,
+        details: { kind: "order_before_feeder" as const, other_fixture_id: feeder },
       }))
-      .sort(byDetail);
-    expect([...out.conflicts].sort(byDetail)).toEqual(expected);
+      .sort(byOtherFixture);
+    expect([...out.conflicts].sort(byOtherFixture).map(stripDetail)).toEqual(expected);
   }, 120_000);
 });
