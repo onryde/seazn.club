@@ -2501,6 +2501,42 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   **Known unrelated red, do not chase:** `schedule-solver-telemetry.test.ts`
   `expected 5 to be 6` — red alone, zero scheduling/placement files in this
   diff (placement gRPC unreachable locally).
+- 2026-08-13 — S12/#421 — **Two UI defects that every gate this session runs
+  passed, in both states.** Both found by taking the screenshots the standing
+  rule asks for and then MEASURING what looked wrong, not by any assertion.
+  (a) An expanded `ActionForm` kept the single grid cell its collapsed button
+  occupied, and two of the four panel layouts (`grid`, `perSide`) are
+  `grid grid-cols-2` at every width — so on the device-link entry point at 320
+  the form was **110px inside a 228px panel**, with a number input under 90px.
+  `expectNoHorizontalScroll` passes in both states, because the squeezed form's
+  own children scroll INSIDE it; the page never scrolls. Fixed with
+  `col-span-2 sm:col-span-1` (inert on a flex child, so the other two layouts
+  are untouched; 768 and 1280 unchanged). (b) Cricket's three "This over"
+  pickers measured **33px** at 320 and 375 against the repo's 44px bar:
+  `.select` is a components-layer class, Tailwind's utilities layer wins, and
+  the `px-2 py-1 text-xs` density recipe beside it silently overrode the sizing
+  the class existed to provide. `min-h-11` is a different property, so it
+  survives the same override. Worth more than an incidental control: those
+  three are required entry before EVERY over.
+  **The general lesson, which is the reusable part:** a no-horizontal-scroll
+  assertion is not a layout assertion. It cannot see a control that is half the
+  width it should be, or a third of the height, because both stay inside the
+  viewport. Width and height have to be measured, and the cheapest way to know
+  WHICH one to measure is to look at a screenshot first.
+- 2026-08-13 — S12/#421 — **The same Tailwind override is repo-wide: 19 files
+  under `apps/web/src/components` carry a `.select`/`.input` + `px-2 py-1
+  text-xs` pair.** Deliberately NOT swept in this session, for two separate
+  reasons. Ten of the hits are in `src/components/v2/pads/**` — the v1 pads,
+  which this session must keep byte-identical (the flag-off half of the
+  integration bar) and which S13 deletes outright, so touching them would break
+  a bar to improve code that is about to be removed. The rest
+  (`americano-panel`, `entrants-panel`, `division-builder`, `club-hub/*`,
+  `history-panel`, `board/move-panel`) are pre-existing debt this session did
+  not create or make reachable. S12 fixed the recipe only where it fixed a
+  surface S12 makes reachable: `scorepad/**` (verified clean by
+  `git grep` afterwards — one hit, the fixed one) and the lineup editor's own
+  new controls. **If someone sweeps the rest, `min-h-11` is the fix and the
+  44px assertion pattern already exists in `e2e/mobile.spec.ts`.**
 - _(append below)_
 
 ## Open questions for the owner
