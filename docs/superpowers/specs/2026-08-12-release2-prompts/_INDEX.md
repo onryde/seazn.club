@@ -436,3 +436,84 @@ Likely related to C2 shipping the day-aware ladder into the solver while the TS
 side still reasons about boards the old way, but that is a hypothesis — the
 failing call is the manual park, so start by asking which conflict
 `deltaConflicts` actually returns there rather than assuming round order.
+
+#### CLOSED (2026-08-13): it was the locks suite's park slot, not the product
+
+The question above — "which conflict does `deltaConflicts` actually return at
+the manual park" — has an answer, and it is not round order. Instrumenting
+`assertNoNewBlocking` to dump `refused`/`before`/`after` plus the proposed and
+untouched boards, on a run made to fail deterministically:
+
+```
+site: applySchedule   source: manual
+refused: court          | C2 double-booked with 3bb183c1
+         person_overlap | entrant 2af01252 overlap with 5a2afb35
+         person_overlap | entrant 2ef216b8 overlap with 3bb183c1
+before:  (none)
+proposed:  96e0a3b5  C2  01:00
+untouched: 3bb183c1  C2  01:00     <- already there
+```
+
+One fixture proposed, onto an occupied slot. The park is a genuine court
+double-booking and the gate refused it correctly.
+
+**Why the slot was occupied.** `config.startAt` is NOT the solver's floor. The
+apply gate's window comes from `applyWindow`, which floors at START-OF-DAY of
+`config.startAt` in the org zone — `2026-08-01T00:00Z`, not the configured
+09:00 — and `boundSolverWindow` returns a two-finite-bound window untouched. So
+the solver's grid opens at midnight while GREEDY's cursor opens at 09:00
+(`calendar.ts:759`, `ready = max(config.startAt, window.notBefore)`). Under C2's
+day-aware rungs the solver compacts to that midnight, on the seed day or the
+next, run to run — both boards verify clean, so nothing downstream picks a side.
+The suite's park slot was the fixed instant `at(-480)` = `01:00Z`, which is free
+under greedy's 09:00 board and IS the board under the solver's midnight one.
+
+Traced over 5 auto applies: **3 next-day (pass), 2 seed-day (fail)**. That is
+the whole of the "1 in 3". The suite only ever looked stable because
+`isStrictlyBetter` kept discarding the solver's midnight board for greedy's.
+
+**A TEST premise broke, not the product.** Every board involved verifies clean.
+Fixed by reading the park slot off the board that is actually there, and parking
+FORWARD (`parkSlot` + `lastRoundFixtureId`) — backward cannot be made robust,
+because on the seed day the earliest card sits exactly ON the window floor, so
+no legal slot exists before it and the park fails with `window` instead of
+`court`. Result: **10 of 10 green** with the acceptance gate REMOVED, against
+2-3 failures in 10 before.
+
+#### The gate: both directions now measured, both fail
+
+With the premise fixed, the fix-vs-remove question was re-opened — including
+the option this index had recorded as rejected, since **that rejection's
+evidence was contaminated by the premise above**.
+
+Baseline (premise fix only, gate untouched): **61/61** across the six
+scheduling suites. Gate reworked to trust `provedOurLadder` instead of ranking:
+**58/61**, two reproducing deterministically over two runs.
+
+1. **The proof is not authority over the durable rules.** On a division whose
+   durable rule forbids anything before noon, the reworked gate shipped six
+   cards at `2026-08-02T00:00:00.000Z`. `provedOurLadder` proves the OBJECTIVE
+   LADDER and says nothing about typed rules; instruction conflicts are not in
+   `isBlockingConflict` (`court`/`person_overlap`/`window`/`order`+`direct`), so
+   step 7's verifier gate will not refuse them either. The greedy seed IS
+   legalised, so it respects the rule. Net: `isStrictlyBetter` is currently the
+   only thing keeping a rule-breaking proved board off the organiser's screen —
+   incidentally, not by design.
+2. **Metric equality is not board equality.** A `ladderTied` predicate over the
+   six rungs shipped greedy's board where the baseline shipped the solver's
+   (`does not anchor a BUILD to the board it was asked to replace`, 6 unchanged
+   where 0 is required). Fixable by comparing assignments, but moot given 1.
+
+**Why the solver breaks the rule: it is never told.** `not_before` does not
+appear in `build-encode-rules.ts`, and `placement-client.ts` records twice that
+`division_rules` — proto field 10 — was RETIRED from the wire. The placement
+service receives no typed division rules and structurally cannot honour them.
+
+**So the gate is not fixable at the gate**, and the prerequisite is to make a
+durable-rule violation REFUSABLE. `build.ts` step 7 already has the path —
+`rejectedBlockingConflicts` -> "verifier rejected the placement solver's board —
+falling back to the greedy seed". Add durable-rule conflicts to the set THERE,
+at the build gate only, not by widening `isBlockingConflict` globally (which
+would also change the apply gate's delta check and every surface sharing the
+predicate). With that guard in place the proved board never reaches the
+comparator, and trusting the proof becomes safe.
