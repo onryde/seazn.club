@@ -35,7 +35,7 @@ S13-gated. New-branch-in-worktree rule applies to every session.
 |---|---|---|---|---|---|
 | P1 | D2 capacity lib + route guard + card | `P01-capacity-precheck.md` | — | green-light | **IN FLIGHT** (wave 1) |
 | P2 | D3 health lib + route + panel | `P02-schedule-health.md` | — (P1 pattern reuse, soft) | green-light | TODO (wave 2) |
-| P3 | D7 enrichment + weekly digest | `P03-news-enrichment.md` | — | green-light | **IN FLIGHT** (wave 1) |
+| P3 | D7 enrichment + weekly digest | `P03-news-enrichment.md` | — | green-light | DONE — impl+tests on `feat/p3-news-enrichment`, PR not yet opened |
 | P4 | D1a template catalog + instantiation + wizard | `P04-templates-single-stage.md` | — | green-light | TODO |
 | P5 | D4a seeding rules + TBD fixtures + fill engine | `P05-progression-engine.md` | — | green-light | TODO |
 | P6 | D4b proposal UI + confirm flow | `P06-progression-ui.md` | P5 | green-light | TODO |
@@ -173,3 +173,43 @@ the same API-enum-⊃-DB-CHECK mismatch already flagged for D1's
   + `lib/i18n-keys.ts`. P1 and P3 both add keys there too, so keys are
   namespaced disjointly: **P1 `schedule.capacity.*`, P3 `news.*` /
   `digest.*`** (note `register.capacity.*` already exists, unrelated).
+
+### P3 completion notes (2026-08-13)
+
+Implemented on `feat/p3-news-enrichment` (11 commits), not yet PR'd.
+V358 migration applied to the session's own test DB. Two things beyond
+the scout's four rulings, found during implementation:
+
+- Ruling 4 said `previous_positions`; the real column is `rows` (JSON
+  array of `StandingsRow`, not `positions`), so the migration/code use
+  `previous_rows` — same `is distinct from` guard, adapted name.
+- **New finding, not scouted**: `org_posts_auto_once` (V295) keys on
+  `(org_id, trigger, fixture_id, division_id, stage_id, round_no)` —
+  none of which a digest has, so every digest after an org's first
+  would collide and silently no-op. V358 also narrows that index's
+  `where` clause to exempt `trigger = 'weekly_digest'`. Consequence:
+  the button is deliberately NOT idempotent (every press is a fresh
+  draft); the cron (ruling 7) relies on its own weekly schedule as the
+  only dedup, and skips an org with nothing to report rather than
+  posting an empty digest weekly — see `digestForOrg`'s docstring in
+  `org-posts.ts`.
+- `key-scopes.test.ts` (every v1 route classified for API keys) only
+  reds under a FULL `apps/web` sweep, not a news-scoped one — the new
+  digest route needed an explicit entry. Worth a standing note for
+  every session adding a route: run the full suite at least once
+  before calling it done, not just the feature's own directory.
+- Digest button gated on `news.auto` (same entitlement as the
+  system auto-drafts) — a judgment call, not explicit in the prompt;
+  reasoning: a digest is system-composed content, same PLG line V295
+  already draws between manual (free) and generated (Pro).
+- e2e/screenshot mechanics: the MCP Playwright browser was locked by a
+  concurrent process this session, so verification screenshots used a
+  standalone `playwright-core` script instead (launches its own
+  Chromium); hit the `Secure`-cookie-on-`127.0.0.1` trap (browsers
+  don't send `Secure` cookies to a bare IP over HTTP, only to the
+  literal `localhost` hostname) — worth flagging for any other
+  wave-1/2 session doing its own local screenshot verification.
+- Deferred per this session's brief: full e2e run (authored, unrun —
+  `apps/web/e2e/news.spec.ts`) and the full `scripts/smoke.ts` run
+  (extended, syntax-checked, unrun) — both need a live prod-built
+  server; orchestrator runs them at the wave boundary.
