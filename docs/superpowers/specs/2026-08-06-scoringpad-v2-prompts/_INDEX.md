@@ -24,7 +24,7 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 | S9 | #418 | `S09-418-w7-career-rollup.md` | S3, S8 | **DONE** — scope 1 (the `personsOf`/`cfg` plumbing) was ALREADY SHIPPED by S8/#417, so the prompt's central "Why" premise is false; the real work was the rollup, the route, the two surfaces and the e2e S8 owed forward. First session in the programme with a real user-facing surface, so all four test types landed here with no deferrals. Three defects found by RENDERING it that no unit test could see (see the decision log) |
 | S10 | #419 | `S10-419-w8-chassis-renderer.md` | S6 | **DONE, MERGED `cc907a0b` (PR #542)** — 4 prompt premises false (server idempotency is a fail-open Redis cache with NO ledger column, no pad subscribes to realtime, the client cannot import the engine as the brief assumed, the 409 already carries `current_seq`); the replay ruling was rewritten around ledger-slot inspection because blind `expected_seq` renegotiation — which the brief calls "the correctness heart" — IS the duplicate bug given that. Chassis + renderer + picker + timeline shipped; **the picker was found INERT by the e2e** (written, tested, wired to nothing — fifth instance of this programme's signature defect) and is now the pad's default. E2E covers tab death / offline / 409-mid-drain against the real API and RUNS IN CI (`SCOREPAD_V2_HARNESS=1` in the three e2e jobs). Smoke deferred to S13 (verified: `scripts/smoke.ts` has zero references). Contract S11 consumes: `PadRenderer` props + the `renderAttribution` / `timelineSlot` override seams. Flag `scorepad-v2` (PostHog) declared, wired to nothing, flipped in S12 |
 | S11 | #420 | `S11-420-w9-skins.md` | S7, S10 | **DONE** — **five** skins, not three: the prompt's two sport groupings were disproved by building the real specs (tennis is a different kernel from the setbased three; football cannot share with the period pair, but hockey/icehockey are byte-identical to each other). Coverage gate landed RED first and is mutation-proved. Renderer now consults the registry by default — owner ruling, taken because a registry nothing calls is S10's inert-picker defect again. Review caught 5 gaps, 2 of them real: `racquet`/`period` rendered PAID-GATED actions as live controls for 5 of 8 sports (the sweeps could not see it — `grantAllEntitlements` means `locked` never occurs in the suite), and cricket's batter/bowler pickers never resynced to the fold, so a scorer could score against the wrong end. Cricket has NO browser coverage: the harness's lineups are synthetic and every `cricket.ball` needs real roster members — S12 owes it, along with football's goal-with-assist |
-| S12 | #421 | `S12-421-w10-integration-flag.md` | S11 | TODO |
+| S12 | #421 | `S12-421-w10-integration-flag.md` | S11 | **DONE** — v2 reaches both real entry points behind `scorepad-v2`, and driving it in a browser against real rosters found **nine** product defects plus two layout defects, none of which `tsc`, ~6000 unit tests, lint or a green production build could see. The chain was sequential — each fix uncovered the next — which is the signature of a path nothing had ever executed: a `"use client"` mapper called from both server loaders (invisible because `[].map(fn)` never invokes `fn`, so it is unreachable until the ledger has one row); the fold throwing on a foreign `core.start`; `ballInOver: 0` making the first ball of every over schema-invalid; the fold not advancing on its own ack, so exactly ONE event was ever scoreable on ANY sport; a duplicate-seq double-count on the ack path; undo swallowed for a just-scored event, and again for one queued across a reload; raw UUIDs in three skins' person pickers; a coach able to open the batting; and the lineup editor silently dropping `role`, which made that last fix unreachable from the product's own UI. The flag needed its own reader (`lib/scorepad-flag.ts`, three-state `SCOREPAD_V2_FORCE`) because `isServerFeatureEnabled` returns `fallback ?? false` with no PostHog client — so the v2 pad was unreachable from EVERY e2e run. Flag-off byte-identity proved two ways and **counted, not asserted**: exactly three non-additive lines across the three files on that path, all inert with the flag off; plus v1's own e2e green against a second server off the SAME build with `SCOREPAD_V2_FORCE=0`. Deferred e2e debt discharged per session with a verdict each (S6 by construction, S3 partially, S4 and S1 re-deferred with cause). Note for S13: the lineup-editor half is NOT flag-gated and ships live |
 | S13 | #422 | `S13-422-w11-cutover.md` | S12 | TODO |
 | L1 | #412 | `L1-412-w1-eligibility.md` | — | TODO |
 | L2 | #413 | `L2-413-w2-date-hardening.md` | L1 | TODO |
@@ -2472,35 +2472,6 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   Lesson for every session sharing this worktree: prefer staging exact paths
   (`git add <files>`, this pass's own recovery) over `git add -A` / `git
   commit -am`, which is what both sweeps used.
-- 2026-08-13 — S12/#421 — **SESSION STATE (written for compaction survival;
-  delete when S12 closes).**
-  Branch `feat/s12-w10-integration`, rebased on `origin/main`, tree clean.
-  **Environment to recreate:** throwaway Postgres on **:54363**, db
-  `seazn_s12`, schema at **v361** (`show data_directory` must be this
-  session's own scratchpad — ports 54341/54357 were both squatted by other
-  sessions and `createdb` SUCCEEDS against a foreign server). Two standalone
-  servers off ONE prod build: **:3100 `SCOREPAD_V2_FORCE=0`** (flag off, v1
-  regression) and **:3101 `SCOREPAD_V2_FORCE=1`** (flag on, v2 specs). Server
-  env copied from `.github/workflows/e2e.yml`'s env block.
-  **Green so far:** `apps/web/e2e/scorepad-v2.spec.ts` 7/7 against :3101 —
-  cricket over-with-extra + fielder-credited dismissal, football goal WITH
-  assist, device-link offline drain + convergence, timeline undo after reload,
-  375/320 no horizontal scroll. Flag-off regression 12/12 against :3100
-  (carrom-pad, scorepad-offline ×3, scorepad-skins ×4, scorer ×2). Engine
-  goldens 133/133 with zero corpus dirty. `tsc` EXIT=0 both trees; `apps/web`
-  lint 0 errors.
-  **Just added, NOT yet run:** a no-reload undo test (pass G's regression).
-  Needs a rebuild first — pass D and pass G both changed client code.
-  **In flight:** reviewers for pass D (`1fc4fb50`, `da9d4192`) and pass G
-  (`0ad55cc8`).
-  **Still owed before the PR:** rebuild + rerun the v2 spec including the new
-  test; screenshots at 1280/768/375/320 on both entry points; full gate rerun
-  inline; the CI-only drift gates (`openapi:gen`, `i18n:gen-keys`, porcelain
-  empty); flip the S12 row to DONE; memory + `scripts/agent-memory-snapshot.sh`;
-  PR closing #421.
-  **Known unrelated red, do not chase:** `schedule-solver-telemetry.test.ts`
-  `expected 5 to be 6` — red alone, zero scheduling/placement files in this
-  diff (placement gRPC unreachable locally).
 - 2026-08-13 — S12/#421 — **Two UI defects that every gate this session runs
   passed, in both states.** Both found by taking the screenshots the standing
   rule asks for and then MEASURING what looked wrong, not by any assertion.
@@ -2589,6 +2560,39 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   instead: `useFixtureStream` arms `setInterval` at `POLL_MS` (15s) with no
   immediate fetch, so that would cost 15s a run and still prove only that the
   stream mounted.
+- 2026-08-13 — S12/#421 — **CLOSING GATE, all numbers measured on the final
+  build.** apps/web unit **7344 total / 7285 passed / 0 failed / 59 pending**,
+  2391 of 2391 suites, all 767 suite files resolved inside the worktree — run
+  against a FRESH Postgres, because the session's own e2e had been writing
+  TAG rows into the working DB all day and the sweep suites walk every row.
+  Engine `test:coverage` **3922 passed / 0 failed**, thresholds met. `tsc`
+  EXIT=0 in both trees. `cd apps/web && rtk proxy pnpm run lint` →
+  **`✖ 78 problems (0 errors, 78 warnings)`** — the two warnings that fall in
+  files this branch touches are the repo-wide pre-existing
+  `exhaustive-deps`/missing-`msg` pattern at lines outside the diff hunks (the
+  same warning fires in `division-builder` and `import-wizard`, untouched).
+  E2E: v2 spec 9/9 flag-on, v1 regression 10 passed + 1 by-design skip
+  + 4 serial flag-off, lineup 44px green at `mobile-se`/`tablet-768`/
+  `tablet-834`. `openapi:gen` + `i18n:gen-keys` leave `git status --porcelain`
+  empty.
+- 2026-08-13 — S12/#421 — **the near-miss worth recording: a sequential
+  comparison nearly produced "my branch broke the solver".**
+  `src/scheduling/repair-scale.test.ts` failed on this branch three runs in a
+  row, INCLUDING in isolation, while `origin/main` in a fresh baseline worktree
+  passed twice. Every instinct says regression. It was not: the assertion is a
+  wall clock against a computed budget, and the same test measured 19618,
+  13072, 11934, 10234 and 10018 ms on identical code — a 2x spread. The branch
+  runs happened while two peer Claude sessions were busy; the baseline runs
+  happened after they went quiet. **Interleaving the two trees A/B/A/B gave
+  4/4 pass on BOTH** — and a full engine gate on the quiet machine then went
+  3922/0.
+  **Rule:** for any load-sensitive assertion, a branch-then-main comparison is
+  worthless — machine load drifts between the two halves and the drift is
+  indistinguishable from the effect you are testing. Interleave, or measure
+  nothing. The same run also showed three OTHER engine suites
+  (`repair-decompose`, `roundrobin`, and `simulation`'s cricket case) failing
+  only under full-suite parallelism and passing alone, which is how a
+  four-failure run and a two-failure run of the same code both happened.
 - _(append below)_
 
 ## Open questions for the owner
