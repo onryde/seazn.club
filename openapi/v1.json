@@ -19999,7 +19999,7 @@
     },
     "/api/v1/stages/{id}/seed-proposal/confirm": {
       "post": {
-        "summary": "Confirm a draft proposal: fills the stage's TBD fixtures via the same slot-fill pathway as intra-bracket advancement, never regenerates. 409 SEEDING_PROPOSAL_STALE/SEEDING_ALREADY_CONFIRMED/SEEDING_FIXTURES_ALREADY_FILLED, 422 SEEDING_SLOT_DOUBLE_ASSIGNED/SEEDING_ENTRANT_FOREIGN/SEEDING_TIE_UNRESOLVED",
+        "summary": "Confirm a draft proposal: fills the stage's TBD fixtures via the same slot-fill pathway as intra-bracket advancement, never regenerates. 409 SEEDING_PROPOSAL_STALE/SEEDING_ALREADY_CONFIRMED/SEEDING_FIXTURES_ALREADY_FILLED, 422 SEEDING_EDIT_UNKNOWN_SLOT/SEEDING_SLOT_DOUBLE_ASSIGNED/SEEDING_SLOT_FOREIGN_FIXTURE/SEEDING_ENTRANT_FOREIGN/SEEDING_TIE_UNRESOLVED",
         "tags": [
           "stages"
         ],
