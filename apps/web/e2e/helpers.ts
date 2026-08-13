@@ -923,12 +923,32 @@ export async function scoreRemainingFixtures(
 }
 
 /** Create a competition through the wizard UI; returns its id (parsed from the URL). */
+/** P4/D1a put a template gallery in front of the wizard: `/c/new` now renders
+ *  step 0 (five named formats plus "Start from blank"), and the name field
+ *  does not exist in the DOM until one of them is chosen. Every journey that
+ *  drives the BLANK wizard has to make that choice first — without this, three
+ *  specs sat in `locator.fill` until the 60-second test timeout and reported a
+ *  wizard regression when the real cause was an unmade choice one step earlier.
+ *
+ *  Deliberately NOT tolerant of a missing gallery. It is ungated —
+ *  app/o/[orgSlug]/c/new/page.tsx renders it on every plan — so an
+ *  `if (visible)` click would silently no-op the day it stops rendering and
+ *  leave these journeys green against a step nobody can reach. */
+export async function startBlankCompetition(page: Page): Promise<void> {
+  await expect(page.getByTestId("template-gallery")).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId("template-start-blank").click();
+  // Wait for the form, not the click: the gallery swaps to the blank wizard in
+  // client state, so the very next `fill` can otherwise race the re-render.
+  await expect(page.getByPlaceholder("Summer Championship 2026")).toBeVisible({ timeout: 10_000 });
+}
+
 export async function createCompetitionViaUi(
   page: Page,
   name: string,
   visibility: "public" | "private" | "unlisted" = "public",
 ): Promise<string> {
   await page.goto("/competitions/new");
+  await startBlankCompetition(page);
   await page.getByPlaceholder("Summer Championship 2026").fill(name);
   // #376: the end date is mandatory and the wizard refuses to submit without
   // one, so this journey has to fill it like an organiser would. A date well

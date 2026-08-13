@@ -9,6 +9,7 @@ import {
   createStageAndGenerate,
   scoreRemainingFixtures,
   divisionPath,
+  startBlankCompetition,
 } from "./helpers";
 
 // The free tier runs a real (small) tournament end-to-end, and every plan
@@ -238,6 +239,10 @@ test.describe.serial("community lifecycle", () => {
     // …and the wizard shows the paywall instead of a dead error (the org is at
     // the ceiling now).
     await page.goto("/competitions/new");
+    // P4/D1a: the gallery is step 0 for every plan, including an org sitting at
+    // its competition ceiling — the paywall this test is about fires on SUBMIT,
+    // not on reaching the wizard, so the blank path still has to be chosen.
+    await startBlankCompetition(page);
     await page.getByPlaceholder("Summer Championship 2026").fill(`Ceiling UI ${TAG}`);
     // #376: the end date is mandatory now, and without it the wizard refuses to
     // submit at all — which would leave this assertion waiting for a paywall
