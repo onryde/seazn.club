@@ -26,6 +26,7 @@
 //     @seazn/engine/scheduling/bracket-layout   geometry, zero imports
 //     @seazn/engine/scheduling/capacity         D2 precheck; imports only rest-floor
 //     @seazn/engine/scheduling/grid-step
+//     @seazn/engine/scheduling/health           D3 health score; zero imports
 //     @seazn/engine/scheduling/rest-floor
 //     @seazn/engine/scheduling/tz
 //
@@ -53,6 +54,10 @@ export * from "./tz.ts";
 // a leaf (imports only rest-floor.ts), for the same bundle reason as
 // `grid-step`/`rest-floor` above — the setup card computes this client-side.
 export * from "./capacity.ts";
+// D3 schedule health score. Also reachable as `@seazn/engine/scheduling/health`,
+// a leaf (imports NOTHING at all), for the same bundle reason as `capacity`
+// above — the health panel's adapter computes fixture shaping client-side.
+export * from "./health.ts";
 // The build solver (this plan). Pure metrics first — no z3 anywhere in here.
 export * from "./build-objectives.ts";
 // The grid step both the solver and the BOARD are built from. Also reachable

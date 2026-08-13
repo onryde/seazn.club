@@ -19,6 +19,7 @@
     "./scheduling/bracket-layout": "./src/scheduling/bracket-layout.ts",
     "./scheduling/capacity": "./src/scheduling/capacity.ts",
     "./scheduling/grid-step": "./src/scheduling/grid-step.ts",
+    "./scheduling/health": "./src/scheduling/health.ts",
     "./scheduling/rest-floor": "./src/scheduling/rest-floor.ts",
     "./scheduling/tz": "./src/scheduling/tz.ts",
     "./testkit": "./src/testkit/index.ts"
