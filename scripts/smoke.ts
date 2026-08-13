@@ -6540,13 +6540,21 @@ async function stageProgressionSuite(): Promise<void> {
   const groupGen = v1data<{ fixtures: { id: string }[] }>(
     await v1(free, `/api/v1/stages/${groupId}/generate`, "POST"),
   );
+  // Scoring is closed until the division starts (WRONG_PHASE otherwise) —
+  // missing this call was the actual root cause of a prior CI failure here:
+  // the event POSTs below 422'd silently (unchecked), fixtures stayed
+  // undecided, completeStageIfReady correctly returned false, and BOTH
+  // downstream checks failed for a reason neither of them named.
+  const started = await v1(free, `/api/v1/divisions/${div.id}/start`, "POST");
+  check("stage progression: division starts", started.status < 300);
   for (const f of groupGen.fixtures) {
     const state = v1data<{ last_seq: number }>(await v1(free, `/api/v1/fixtures/${f.id}/state`));
-    await v1(free, `/api/v1/fixtures/${f.id}/events`, "POST", {
+    const scored = await v1(free, `/api/v1/fixtures/${f.id}/events`, "POST", {
       expected_seq: state.last_seq,
       type: "generic.result",
       payload: { p1Score: 2, p2Score: 0 },
     });
+    check(`stage progression: group fixture ${f.id} scores 201`, scored.status === 201);
   }
 
   // "complete": guarded progression computes a DRAFT proposal, never
