@@ -55,14 +55,31 @@ function scorepadImports(
   source: string,
 ): { module: string; bindings: string[]; typeOnly: boolean }[] {
   const out: { module: string; bindings: string[]; typeOnly: boolean }[] = [];
-  const re = /import\s+(type\s+)?\{([^}]*)\}\s*from\s*["']@\/components\/v2\/scorepad\/([^"']+)["']/g;
+  // Review finding (S12/#421): the first version matched ONLY braced named
+  // imports, so `import * as X from` and `import X from` bypassed the sweep
+  // entirely — a gate with a blind spot exactly the shape of the defect it
+  // exists to catch. `[\s\S]` rather than `.` so a multi-line import list
+  // (which prettier produces the moment the line is long) is not skipped
+  // either.
+  const braced =
+    /import\s+(type\s+)?\{([\s\S]*?)\}\s*from\s*["']@\/components\/v2\/scorepad\/([^"']+)["']/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(source)) !== null) {
+  while ((m = braced.exec(source)) !== null) {
     const bindings = m[2]
       .split(",")
       .map((b) => b.trim())
       .filter(Boolean);
     out.push({ module: m[3], bindings, typeOnly: Boolean(m[1]) });
+  }
+  // `import * as ns` and `import def` — a namespace object reaches every
+  // export including the plain functions, and a default import is a value
+  // like any other. Both are recorded as a lowercase binding so the caller's
+  // "capitalised means component" rule treats them as values to flag.
+  const nsOrDefault =
+    /import\s+(type\s+)?(?:\*\s+as\s+(\w+)|(\w+))\s+from\s*["']@\/components\/v2\/scorepad\/([^"']+)["']/g;
+  while ((m = nsOrDefault.exec(source)) !== null) {
+    const name = m[2] ?? m[3]!;
+    out.push({ module: m[4], bindings: [`ns:${name}`], typeOnly: Boolean(m[1]) });
   }
   return out;
 }

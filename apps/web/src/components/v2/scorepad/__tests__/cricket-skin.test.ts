@@ -717,6 +717,75 @@ describe("ThisOverGroup: the ball payload is valid against the engine's own sche
     expect(parsed.success, `cricket.ball payload rejected: ${JSON.stringify(parsed.error?.issues)}`).toBe(true);
   });
 
+  /** Fold `n` legal deliveries plus `wides` wides, so the boundary cases are
+   *  driven through the REAL engine rather than by arithmetic that would just
+   *  restate the implementation. */
+  function stateAfter(legal: number, wides = 0): CricketState {
+    const LP0 = LP.home.slots[0]!.personId;
+    const LP1 = LP.home.slots[1]!.personId;
+    const BOWL = LP.away.slots[0]!.personId;
+    const evs: EventEnvelope[] = [makeEnvelope(0, { type: "core.start", payload: {} })];
+    let seq = 1;
+    let balls = 0;
+    for (let i = 0; i < legal + wides; i += 1) {
+      const isWide = i < wides;
+      if (!isWide) balls += 1;
+      evs.push(
+        makeEnvelope(seq++, {
+          type: "cricket.ball",
+          payload: {
+            over: Math.floor((isWide ? balls : balls - 1) / CFG.ballsPerOver),
+            ballInOver: ((isWide ? balls : balls - 1) % CFG.ballsPerOver) + 1,
+            striker: LP0,
+            nonStriker: LP1,
+            bowler: BOWL,
+            runs: { bat: 0, ...(isWide ? { extras: { kind: "wide", runs: 1 } } : {}) },
+          },
+        }),
+      );
+    }
+    return foldMatch(cricketEngine, CFG, LP, evs, { strictFromSeq: 0 });
+  }
+
+  function ordinalAt(state: CricketState): { over: number; ballInOver: number } {
+    const sent: { payload: unknown }[] = [];
+    const island = renderIsland(ThisOverGroup, {
+      msg,
+      view: viewFor(CFG, "live", state),
+      state,
+      bpo: CFG.ballsPerOver,
+      submittingType: null,
+      dispatch: async (_t: string, payload: unknown) => {
+        sent.push({ payload });
+      },
+      personNames: undefined,
+    });
+    const btn = island.tree().find((e) => e.type === "button" && String(propsOf(e).children) === "0");
+    if (!btn) throw new Error("no dot-ball button");
+    (propsOf(btn).onClick as () => void)();
+    const p = sent[0]!.payload as { over: number; ballInOver: number };
+    return { over: p.over, ballInOver: p.ballInOver };
+  }
+
+  it("the LAST ball of an over is ballInOver bpo, not bpo-1", () => {
+    // 5 legal balls already bowled -> the next delivery is the 6th.
+    expect(ordinalAt(stateAfter(5))).toEqual({ over: 0, ballInOver: CFG.ballsPerOver });
+  });
+
+  it("the ball after a completed over rolls over to over 1, ballInOver 1", () => {
+    expect(ordinalAt(stateAfter(CFG.ballsPerOver))).toEqual({ over: 1, ballInOver: 1 });
+  });
+
+  it("a WIDE does not advance the ordinal — the next delivery reuses it", () => {
+    // Two legal balls and one wide: the wide is not a legal delivery, so the
+    // next ball is still the 3rd of the over, not the 4th. Getting this wrong
+    // is how an over silently becomes five or seven balls long.
+    const noWide = ordinalAt(stateAfter(2, 0));
+    const withWide = ordinalAt(stateAfter(2, 1));
+    expect(withWide).toEqual(noWide);
+    expect(withWide.ballInOver).toBe(3);
+  });
+
   it("a dot ball builds the same valid shape — the defect was the ordinal, not the runs", () => {
     const { payload } = tapRun("0");
     expect((payload as { ballInOver: number }).ballInOver).toBe(1);

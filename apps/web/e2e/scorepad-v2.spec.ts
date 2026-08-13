@@ -29,7 +29,11 @@ import {
 // the v1 specs against a SECOND server on another port with
 // `SCOREPAD_V2_FORCE=0`; see the session's PR body for both invocations.
 
-test.describe.configure({ mode: "serial" });
+// Deliberately NOT serial. Each test seeds its OWN competition/division, so
+// there is no shared-org race, and a serial file stops at the first failure —
+// which during this session meant seeing one defect per run when four were
+// present. Parallel gives every test's verdict in one pass.
+test.describe.configure({ mode: "parallel" });
 
 /** The pad's own scoring surface, scoped so a page-wide text match can never
  *  satisfy an assertion the skin was supposed to. */
@@ -198,14 +202,28 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
 
     // A caught dismissal, credited to a fielder who is a real member of the
     // fielding side.
+    //
+    // The wicket surface is hand-rolled BUTTONS — `ThisOverGroup` builds it
+    // itself and never routes through `action-form.tsx`, so there is no
+    // `<select>` and no `[data-role="confirm"]` here (football's goal DOES go
+    // through ActionForm, which is why the same selector is right there and
+    // wrong here). The flow is: Wicket -> kind -> [which batter, only when the
+    // kind is ambiguous] -> fielder, and picking the fielder submits.
+    //
+    // Nothing below is wrapped in `.catch()`. A swallowed step would leave the
+    // flagship "credited to a named fielder" assertion passing over a UI it
+    // never actually drove.
     await pad(page).getByRole("button", { name: "Wicket", exact: true }).click();
-    await page.waitForTimeout(500);
-    const wicketForm = pad(page).locator('[data-role="cricket-skin"]');
-    await wicketForm.getByRole("combobox").filter({ hasText: /caught|bowled/i }).first()
-      .selectOption("caught")
-      .catch(() => undefined);
-    await page.waitForTimeout(250);
-    await pad(page).locator('[data-role="confirm"]').click();
+    await pad(page).getByRole("button", { name: "Caught", exact: true }).click();
+
+    // Only some dismissal kinds ask which batter is out (a run-out can take
+    // either end); a catch cannot, so this step is conditional by design
+    // rather than by defensiveness — and it asserts by NAME, which also pins
+    // that the picker resolves personNames rather than drawing a raw id.
+    const outChoice = pad(page).getByRole("button", { name: `Striker ${TAG}`, exact: true });
+    if ((await outChoice.count()) > 0) await outChoice.first().click();
+
+    await pad(page).getByRole("button", { name: `Fielder ${TAG}`, exact: true }).click();
 
     await expect
       .poll(async () => {

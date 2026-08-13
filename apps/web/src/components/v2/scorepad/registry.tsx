@@ -115,14 +115,17 @@ function toLineupSlot(s: LineupSlotIn, index: number): LineupSlot {
     // "player" regardless of what was actually recorded. Verified end-to-end
     // (registry.test.tsx): this closes it for football's own scorer/assist
     // pool, which already filters by role via the kernel's `playingSquad`.
-    // CRICKET IS NOT FULLY CLOSED BY THIS FIX: `orderFromLineup`
-    // (packages/engine/src/sports/cricket/cricket.ts) builds `state.orders`
-    // (battingOrder/bowlingOrder) straight off `lineup.slots` filtered only
-    // on `slot === "starting"`, never on `role` — measured live, a
-    // role:"coach" starting slot still lands in the batting order even with
-    // role now wired correctly. That is a separate, engine-level gap outside
-    // this fix's file set (packages/engine, not fixtures.ts/registry.tsx/the
-    // api-v1 schema); flagged to the dispatcher rather than fixed here.
+    // Cricket was NOT closed by this wire-shape fix alone and is now closed
+    // separately: `orderFromLineup` (packages/engine/.../cricket.ts) built
+    // `state.orders` off `lineup.slots` filtered only on
+    // `slot === "starting"`, so a role:"coach" starting slot still opened the
+    // batting even with `role` wired correctly here. Fixed in the same
+    // session under owner ruling, with a regression test that puts the coach
+    // at orderNo 1 and golden replay re-run at 133/133 with zero corpus files
+    // dirty. Comment updated rather than left standing: a note that defers
+    // work must be edited when the same session then does the work, or the
+    // next reader re-diagnoses a closed gap (S11/#420 recorded this exact
+    // cost).
     // Omitted for "player" itself, mirroring server/engine-db/lineups.ts's
     // own `buildLineup` convention — the engine's own `LineupSlot.role`
     // already defaults absent to "player" (core/lineup.ts), so this is a
