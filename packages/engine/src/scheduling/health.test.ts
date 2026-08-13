@@ -100,3 +100,58 @@ describe("assessHealth — restSpread", () => {
     expect(m.offenders).toEqual([]);
   });
 });
+
+describe("assessHealth — courtBalance", () => {
+  it("scores 3 asymmetric entrants (3, 3 and 4 fixtures) by Shannon entropy of their own court distribution vs uniform", () => {
+    // A: 3 fixtures, 1 per court (3 courts total) -> H/Hmax = 1 (perfect).
+    // B: 3 fixtures, all on Court 1 -> H = 0 (pinned) -> ratio 0 (worst).
+    // E: 4 fixtures split 2/2 across 2 of the 3 courts -> ratio = ln(2)/ln(3).
+    // mean = (1 + 0 + ln(2)/ln(3))/3 -> score 54. Verified via node -e.
+    expect(COURT_BALANCE_MIN_FIXTURES).toBe(3);
+    const fixtures: HealthFixture[] = [
+      fx("a1", "A", "X1", 0, 60, { court: "Court 1" }),
+      fx("a2", "A", "X2", 100, 60, { court: "Court 2" }),
+      fx("a3", "A", "X3", 200, 60, { court: "Court 3" }),
+      fx("b1", "B", "X4", 0, 60, { court: "Court 1" }),
+      fx("b2", "B", "X5", 100, 60, { court: "Court 1" }),
+      fx("b3", "B", "X6", 200, 60, { court: "Court 1" }),
+      fx("e1", "E", "X7", 0, 60, { court: "Court 1" }),
+      fx("e2", "E", "X8", 100, 60, { court: "Court 1" }),
+      fx("e3", "E", "X9", 200, 60, { court: "Court 2" }),
+      fx("e4", "E", "X10", 300, 60, { court: "Court 2" }),
+    ];
+    const report = assessHealth(fixtures, RR);
+    const m = metric(report, "courtBalance")!;
+    expect(m.score).toBe(54);
+    // Bottom-3 by ratio ascending (worst/most-pinned first). value = distinct
+    // courts used. All 3 eligible entrants appear (exactly 3 qualify).
+    expect(m.offenders).toEqual([
+      { kind: "entrant", id: "B", label: "B", value: 1 },
+      { kind: "entrant", id: "E", label: "E", value: 2 },
+      { kind: "entrant", id: "A", label: "A", value: 3 },
+    ]);
+  });
+
+  it("an entrant with only 2 fixtures is excluded (below C_min) regardless of how pinned they are", () => {
+    const fixtures: HealthFixture[] = [
+      fx("p1", "PIN", "Y1", 0, 60, { court: "Court 1" }),
+      fx("p2", "PIN", "Y2", 100, 60, { court: "Court 1" }),
+    ];
+    const report = assessHealth(fixtures, RR);
+    const m = metric(report, "courtBalance")!;
+    expect(m.score).toBe(100); // nothing eligible -> nothing to penalise
+    expect(m.offenders).toEqual([]);
+  });
+
+  it("a single-court board cannot penalise anyone for using it exclusively (Hmax=0 guard, not NaN)", () => {
+    const fixtures: HealthFixture[] = [
+      fx("o1", "ONLY", "Z1", 0, 60, { court: "Court 1" }),
+      fx("o2", "ONLY", "Z2", 100, 60, { court: "Court 1" }),
+      fx("o3", "ONLY", "Z3", 200, 60, { court: "Court 1" }),
+    ];
+    const report = assessHealth(fixtures, RR);
+    const m = metric(report, "courtBalance")!;
+    expect(m.score).toBe(100);
+    expect(Number.isNaN(m.score)).toBe(false);
+  });
+});

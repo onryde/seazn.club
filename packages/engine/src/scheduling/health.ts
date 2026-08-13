@@ -223,8 +223,46 @@ function restSpreadMetric(fixtures: readonly HealthFixture[]): HealthMetric {
   };
 }
 
-function courtBalanceMetric(_fixtures: readonly HealthFixture[]): HealthMetric {
-  return NOT_IMPLEMENTED("courtBalance");
+/**
+ * Per entrant with |F_e| >= C_min: Shannon entropy H_e of its court
+ * distribution / H_max = log(min(|courts|, |F_e|)). Score = 100 · mean_e(H_e
+ * / H_max) (design doc, verbatim). |courts| is the board-wide distinct court
+ * count, not a per-entrant count.
+ */
+function courtBalanceMetric(fixtures: readonly HealthFixture[]): HealthMetric {
+  const byEntrant = entrantFixtures(fixtures);
+  const courtsTotal = new Set(fixtures.map((f) => f.court)).size;
+  const ratios: { id: string; ratio: number; distinctCourts: number }[] = [];
+  for (const [id, list] of byEntrant) {
+    if (list.length < COURT_BALANCE_MIN_FIXTURES) continue;
+    const counts = new Map<string, number>();
+    for (const f of list) counts.set(f.court, (counts.get(f.court) ?? 0) + 1);
+    const n = list.length;
+    let h = 0;
+    for (const c of counts.values()) {
+      const p = c / n;
+      h -= p * Math.log(p);
+    }
+    const hMax = Math.log(Math.min(courtsTotal, n));
+    // hMax === 0 only when there is nowhere TO spread (one court total, or
+    // min(courtsTotal, n) === 1) — every fixture necessarily lands on the
+    // same court then, which is not a defect: full marks rather than 0/0.
+    const ratio = hMax > 0 ? h / hMax : 1;
+    ratios.push({ id, ratio, distinctCourts: counts.size });
+  }
+  const mean = ratios.length > 0 ? ratios.reduce((s, x) => s + x.ratio, 0) / ratios.length : 1;
+  const offenders: HealthOffender[] = topOffenders(ratios, (x) => x.id, (a, b) => a.ratio - b.ratio, 3).map((x) => ({
+    kind: "entrant",
+    id: x.id,
+    label: x.id,
+    value: x.distinctCourts,
+  }));
+  return {
+    key: "courtBalance",
+    score: roundScore(100 * mean),
+    explanation: { key: "schedule.health.explain.courtBalance", params: { count: offenders.length } },
+    offenders,
+  };
 }
 
 function gapDispersionMetric(_fixtures: readonly HealthFixture[], _config: HealthConfig): HealthMetric {
