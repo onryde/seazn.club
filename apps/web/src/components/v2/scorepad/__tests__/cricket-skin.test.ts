@@ -590,3 +590,206 @@ describe("ThisOverGroup: the picker resyncs to the fold (S11 review finding)", (
     expect(selectValues(island.tree()).striker, "a real fold change must win over a stale manual override").toBe(S0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// S12/#421 pass B (owner-approved widening into skins/**, review pass + a real
+// browser): the striker/non-striker/bowler pickers rendered the raw person id
+// as their OPTION TEXT. `ctx.personNames` (S11's SkinLayoutCtx) has existed
+// since S11 but no skin consumed it -- fixed here for cricket. Driven through
+// the same real-fold + `ThisOverGroup` + hook-harness technique as the resync
+// tests above, reading the rendered <option> TEXT this time, not the
+// <select>'s value.
+// ---------------------------------------------------------------------------
+describe("ThisOverGroup: person picker options show ctx.personNames, not a raw id (S12/#421 pass B)", () => {
+  type MsgFn = (key: MessageKey, vars?: Record<string, string | number>) => string;
+  const msg: MsgFn = (key, vars) => tRuntime(messages, key, vars);
+
+  const NAME_LINEUPS = defaultLineupPair(cricketEngine.positions);
+  const NAME_CFG: CricketCfg = cricketEngine.configSchema.parse(cricketEngine.variants.t20);
+  const NAME_STRIKER = NAME_LINEUPS.home.slots[0]!.personId;
+
+  function foldFresh(): CricketState {
+    const events: EventEnvelope[] = [makeEnvelope(0, { type: "core.start", payload: {} })];
+    return foldMatch(cricketEngine, NAME_CFG, NAME_LINEUPS, events, { strictFromSeq: 0 });
+  }
+
+  function findOption(tree: ReactElement[], value: string): ReactElement {
+    const el = tree.find((e) => e.type === "option" && propsOf(e).value === value);
+    if (!el) throw new Error(`no <option value="${value}"> found in rendered tree`);
+    return el;
+  }
+
+  function renderWithNames(personNames: Readonly<Record<string, string>> | undefined) {
+    const state = foldFresh();
+    const view = viewFor(NAME_CFG, "live", state);
+    return renderIsland(ThisOverGroup, {
+      msg,
+      view,
+      state,
+      bpo: NAME_CFG.ballsPerOver,
+      submittingType: null,
+      dispatch: async () => {},
+      personNames,
+    });
+  }
+
+  it("renders the resolved name from ctx.personNames as the option text, not the raw id", () => {
+    const island = renderWithNames({ [NAME_STRIKER]: "Priya Opener" });
+    const option = findOption(island.tree(), NAME_STRIKER);
+    expect(propsOf(option).children).toBe("Priya Opener");
+  });
+
+  it("still renders (falls back to the raw id) when ctx carries no personNames -- total without a roster", () => {
+    const island = renderWithNames(undefined);
+    const option = findOption(island.tree(), NAME_STRIKER);
+    expect(propsOf(option).children).toBe(NAME_STRIKER);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S12/#421 — the first ball of EVERY over was schema-invalid, so no cricket
+// over could be scored past its own first delivery.
+//
+// `legalBalls % bpo` is the count of legal balls this over has ALREADY seen
+// (0..bpo-1). `CricketBall.ballInOver` is WHICH ball this delivery IS
+// (1..bpo), declared `z.number().int().positive()`. The skin sent the count as
+// the ordinal, so a fresh over submitted `ballInOver: 0` and the server
+// rejected it 422.
+//
+// Why nothing caught it: `skin-coverage.test.ts` asserts on `layout()`'s DATA
+// and never on a built payload, and every existing payload test supplied a
+// mid-over `BallEntry` by hand, where the off-by-one is still a positive
+// number and so still parses. Found by submitting a real ball against the real
+// API — the browser coverage cricket had never had.
+//
+// The assertion validates against the MODULE'S OWN schema
+// (`eventSchemas["cricket.ball"]`, S6/#416's registry) rather than against a
+// hand-written expectation, so it also catches any other payload drift and
+// cannot disagree with the server about what is valid.
+// ---------------------------------------------------------------------------
+describe("ThisOverGroup: the ball payload is valid against the engine's own schema (S12/#421)", () => {
+  type MsgFn = (key: MessageKey, vars?: Record<string, string | number>) => string;
+  const msg: MsgFn = (key, vars) => tRuntime(messages, key, vars);
+  const LP = defaultLineupPair(cricketEngine.positions);
+  const CFG: CricketCfg = cricketEngine.configSchema.parse(cricketEngine.variants.t20);
+
+  function freshState(): CricketState {
+    const events: EventEnvelope[] = [makeEnvelope(0, { type: "core.start", payload: {} })];
+    return foldMatch(cricketEngine, CFG, LP, events, { strictFromSeq: 0 });
+  }
+
+  /** Click the run button whose label is `label`, returning what was dispatched. */
+  function tapRun(label: string): { type: string; payload: unknown } {
+    const sent: { type: string; payload: unknown }[] = [];
+    const state = freshState();
+    const island = renderIsland(ThisOverGroup, {
+      msg,
+      view: viewFor(CFG, "live", state),
+      state,
+      bpo: CFG.ballsPerOver,
+      submittingType: null,
+      dispatch: async (type: string, payload: unknown) => {
+        sent.push({ type, payload });
+      },
+      personNames: undefined,
+    });
+    const btn = island
+      .tree()
+      // The run buttons render their label as a NUMBER (`{n}`), not a string,
+      // so compare coerced — matching on `=== label` finds nothing and the
+      // test fails for the wrong reason.
+      .find((e) => e.type === "button" && String(propsOf(e).children) === label);
+    if (!btn) throw new Error(`no run button labelled "${label}"`);
+    (propsOf(btn).onClick as () => void)();
+    if (sent.length !== 1) throw new Error(`expected exactly one dispatch, got ${sent.length}`);
+    return sent[0]!;
+  }
+
+  it("the FIRST ball of an over is ballInOver 1, not 0, and parses against cricket.ball", () => {
+    const { type, payload } = tapRun("1");
+    expect(type).toBe("cricket.ball");
+    expect((payload as { ballInOver: number }).ballInOver).toBe(1);
+    expect((payload as { over: number }).over).toBe(0);
+
+    const schema = cricketEngine.eventSchemas?.["cricket.ball"];
+    if (!schema) throw new Error("cricket.ball has no registered payload schema");
+    const parsed = schema.safeParse(payload);
+    expect(parsed.success, `cricket.ball payload rejected: ${JSON.stringify(parsed.error?.issues)}`).toBe(true);
+  });
+
+  /** Fold `n` legal deliveries plus `wides` wides, so the boundary cases are
+   *  driven through the REAL engine rather than by arithmetic that would just
+   *  restate the implementation. */
+  function stateAfter(legal: number, wides = 0): CricketState {
+    const LP0 = LP.home.slots[0]!.personId;
+    const LP1 = LP.home.slots[1]!.personId;
+    const BOWL = LP.away.slots[0]!.personId;
+    const evs: EventEnvelope[] = [makeEnvelope(0, { type: "core.start", payload: {} })];
+    let seq = 1;
+    let balls = 0;
+    for (let i = 0; i < legal + wides; i += 1) {
+      const isWide = i < wides;
+      if (!isWide) balls += 1;
+      evs.push(
+        makeEnvelope(seq++, {
+          type: "cricket.ball",
+          payload: {
+            over: Math.floor((isWide ? balls : balls - 1) / CFG.ballsPerOver),
+            ballInOver: ((isWide ? balls : balls - 1) % CFG.ballsPerOver) + 1,
+            striker: LP0,
+            nonStriker: LP1,
+            bowler: BOWL,
+            runs: { bat: 0, ...(isWide ? { extras: { kind: "wide", runs: 1 } } : {}) },
+          },
+        }),
+      );
+    }
+    return foldMatch(cricketEngine, CFG, LP, evs, { strictFromSeq: 0 });
+  }
+
+  function ordinalAt(state: CricketState): { over: number; ballInOver: number } {
+    const sent: { payload: unknown }[] = [];
+    const island = renderIsland(ThisOverGroup, {
+      msg,
+      view: viewFor(CFG, "live", state),
+      state,
+      bpo: CFG.ballsPerOver,
+      submittingType: null,
+      dispatch: async (_t: string, payload: unknown) => {
+        sent.push({ payload });
+      },
+      personNames: undefined,
+    });
+    const btn = island.tree().find((e) => e.type === "button" && String(propsOf(e).children) === "0");
+    if (!btn) throw new Error("no dot-ball button");
+    (propsOf(btn).onClick as () => void)();
+    const p = sent[0]!.payload as { over: number; ballInOver: number };
+    return { over: p.over, ballInOver: p.ballInOver };
+  }
+
+  it("the LAST ball of an over is ballInOver bpo, not bpo-1", () => {
+    // 5 legal balls already bowled -> the next delivery is the 6th.
+    expect(ordinalAt(stateAfter(5))).toEqual({ over: 0, ballInOver: CFG.ballsPerOver });
+  });
+
+  it("the ball after a completed over rolls over to over 1, ballInOver 1", () => {
+    expect(ordinalAt(stateAfter(CFG.ballsPerOver))).toEqual({ over: 1, ballInOver: 1 });
+  });
+
+  it("a WIDE does not advance the ordinal — the next delivery reuses it", () => {
+    // Two legal balls and one wide: the wide is not a legal delivery, so the
+    // next ball is still the 3rd of the over, not the 4th. Getting this wrong
+    // is how an over silently becomes five or seven balls long.
+    const noWide = ordinalAt(stateAfter(2, 0));
+    const withWide = ordinalAt(stateAfter(2, 1));
+    expect(withWide).toEqual(noWide);
+    expect(withWide.ballInOver).toBe(3);
+  });
+
+  it("a dot ball builds the same valid shape — the defect was the ordinal, not the runs", () => {
+    const { payload } = tapRun("0");
+    expect((payload as { ballInOver: number }).ballInOver).toBe(1);
+    const schema = cricketEngine.eventSchemas!["cricket.ball"]!;
+    expect(schema.safeParse(payload).success).toBe(true);
+  });
+});

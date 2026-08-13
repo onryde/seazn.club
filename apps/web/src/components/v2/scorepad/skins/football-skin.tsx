@@ -19,21 +19,20 @@
 // `useMsg()`/JSX, and draws nothing `footballLayout` did not already decide
 // -- it never re-derives which action goes where or at what prominence.
 //
-// A GAP FOUND WHILE BUILDING THIS SKIN (new this session, distinct from the
-// brief's own S10 finding below): `SkinProps` (types.ts) hands a skin
-// `ctx.state` and nothing else roster-shaped -- no `lineups` (the kickoff
-// team sheet) and no `personNames` (id -> display name), both of which the
-// chassis's shared `AttributionPicker` (../attribution-picker.tsx) requires.
-// Neither reaches a skin today, and types.ts/pad-renderer.tsx are not this
-// skin's files to widen. Rather than block on that, this Component reads
-// football's own live `state.squads` (private `FootballSquad`, person ids
-// only) directly and renders each candidate BY ID. That is an honest
-// degrade, not a pretty one: it never fabricates a name, and -- because
-// football's own `onPitch`/`bench` already move on every `football.sub`/
-// `.card`/`.sinbin.*` -- it is in fact MORE live than the shared picker's
-// own kickoff-sheet fallback would be for this sport. It cannot show "Jane
-// Smith" until SkinProps carries a name source; flagged in the session
-// report, not fixed here.
+// A GAP FOUND WHILE BUILDING THIS SKIN, partly closed since (S12/#421 pass
+// B): `SkinProps` (types.ts) hands a skin `ctx.state` and, as of S11,
+// `ctx.personNames` (id -> display name) -- but STILL no `lineups` (the
+// kickoff team sheet), which the chassis's shared `AttributionPicker`
+// (../attribution-picker.tsx) also requires. `lineups` does not reach a skin
+// today, and types.ts/pad-renderer.tsx are not this skin's files to widen, so
+// this Component still reads football's own live `state.squads` (private
+// `FootballSquad`, person ids only) directly rather than routing through the
+// shared picker -- because football's own `onPitch`/`bench` already move on
+// every `football.sub`/`.card`/`.sinbin.*`, it is in fact MORE live than the
+// shared picker's own kickoff-sheet fallback would be for this sport. Each
+// candidate now renders through `personOptions`, which resolves
+// `ctx.personNames[id]` and falls back to the id itself only when no name is
+// known -- the raw-id fallback that used to be unconditional.
 //
 // THE S10 FINDING THE BRIEF NAMED: football's `State.squads` is a PRIVATE
 // `FootballSquad`, not the kernel's shared `SquadState` (S3/#426's ONE squad
@@ -243,10 +242,14 @@ function footballRoster(state: unknown, side: "home" | "away"): FootballRosterSi
   return { onPitch: toStringArray(squad?.onPitch), bench: toStringArray(squad?.bench) };
 }
 
-/** Chip label for a person candidate. No display-name source reaches a skin
- *  today (this file's header) -- the id IS the label. Honest, not pretty. */
-function personOptions(ids: readonly string[]): { value: string; label: string }[] {
-  return ids.map((id) => ({ value: id, label: id }));
+/** Chip label for a person candidate. Resolves through `ctx.personNames`
+ *  (this file's header); the raw id is the last-resort fallback, never a
+ *  crash or a blank label, so this skin stays total without a roster. */
+function personOptions(
+  ids: readonly string[],
+  personNames: Readonly<Record<string, string>> | undefined,
+): { value: string; label: string }[] {
+  return ids.map((id) => ({ value: id, label: personNames?.[id] ?? id }));
 }
 
 interface ChipOption {
@@ -455,12 +458,19 @@ function renderPeriodStrip(view: PadView, dispatch: SkinDispatch, submittingType
  *  BOTH sides, matching `candidatesForPerson`'s own "either side" scope for
  *  an item that does not itself name one (cricket's fielder is the
  *  precedent cited there). */
-function renderFootballAttribution(action: PadActionView, values: ActionValues, setValue: (path: string, value: PadFieldValue | undefined) => void, state: unknown, msg: MsgFn): ReactNode {
+function renderFootballAttribution(
+  action: PadActionView,
+  values: ActionValues,
+  setValue: (path: string, value: PadFieldValue | undefined) => void,
+  state: unknown,
+  personNames: Readonly<Record<string, string>> | undefined,
+  msg: MsgFn,
+): ReactNode {
   if (action.attribution.length === 0) return null;
   const actionLabel = padLabel(action.labelKey.key, msg, action.labelKey.label);
   const home = footballRoster(state, "home");
   const away = footballRoster(state, "away");
-  const bothSides = personOptions([...home.onPitch, ...home.bench, ...away.onPitch, ...away.bench]);
+  const bothSides = personOptions([...home.onPitch, ...home.bench, ...away.onPitch, ...away.bench], personNames);
   return (
     <div className="space-y-3" data-role="football-attribution">
       {action.attribution.map((item, index) => {
@@ -505,6 +515,7 @@ interface FootballGroupArgs {
   submittingType: string | null;
   msg: MsgFn;
   renderAttribution: (action: PadActionView, values: ActionValues, setValue: (path: string, value: PadFieldValue | undefined) => void) => ReactNode;
+  personNames: Readonly<Record<string, string>> | undefined;
 }
 
 function renderGoalsGroup(args: FootballGroupArgs): ReactNode {
@@ -516,7 +527,7 @@ function renderGoalsGroup(args: FootballGroupArgs): ReactNode {
     dispatch: args.dispatch,
     msg: args.msg,
     buildSlots: (action, roster, actionLabel) => {
-      const options = personOptions(roster.onPitch);
+      const options = personOptions(roster.onPitch, args.personNames);
       const slots: QuickSlot[] = [];
       const scorerItem = action.attribution.find((a) => a.path === "scorer");
       const assistItem = action.attribution.find((a) => a.path === "assist");
@@ -547,7 +558,7 @@ function renderCardsGroup(args: FootballGroupArgs): ReactNode {
         slots.push({ path: "color", required: true, caption, options: colorField.values.map((v) => ({ value: v, label: enumLabel("color", v, args.msg) })) });
       }
       const personItem = action.attribution.find((a) => a.path === "person");
-      if (personItem) slots.push({ path: "person", required: false, caption: attributionItemCaption(personItem, action.attribution.indexOf(personItem), args.msg, actionLabel), options: personOptions(roster.onPitch) });
+      if (personItem) slots.push({ path: "person", required: false, caption: attributionItemCaption(personItem, action.attribution.indexOf(personItem), args.msg, actionLabel), options: personOptions(roster.onPitch, args.personNames) });
       return slots;
     },
   });
@@ -565,8 +576,8 @@ function renderSubsGroup(args: FootballGroupArgs): ReactNode {
       const slots: QuickSlot[] = [];
       const offItem = action.attribution.find((a) => a.path === "off");
       const onItem = action.attribution.find((a) => a.path === "on");
-      if (offItem) slots.push({ path: "off", required: true, caption: attributionItemCaption(offItem, action.attribution.indexOf(offItem), args.msg, actionLabel), options: personOptions(roster.onPitch) });
-      if (onItem) slots.push({ path: "on", required: true, caption: attributionItemCaption(onItem, action.attribution.indexOf(onItem), args.msg, actionLabel), options: personOptions(roster.bench) });
+      if (offItem) slots.push({ path: "off", required: true, caption: attributionItemCaption(offItem, action.attribution.indexOf(offItem), args.msg, actionLabel), options: personOptions(roster.onPitch, args.personNames) });
+      if (onItem) slots.push({ path: "on", required: true, caption: attributionItemCaption(onItem, action.attribution.indexOf(onItem), args.msg, actionLabel), options: personOptions(roster.bench, args.personNames) });
       return slots;
     },
   });
@@ -656,8 +667,8 @@ export function FootballSkin(props: SkinProps) {
   const secondaryGroups = layout.groups.filter((g) => g.prominence === "secondary");
   const drawerGroups = layout.groups.filter((g) => g.prominence === "drawer");
 
-  const renderAttribution = (action: PadActionView, values: ActionValues, setValue: (path: string, value: PadFieldValue | undefined) => void) => renderFootballAttribution(action, values, setValue, state, msg);
-  const groupArgs: FootballGroupArgs = { view, state, dispatch, submittingType, msg, renderAttribution };
+  const renderAttribution = (action: PadActionView, values: ActionValues, setValue: (path: string, value: PadFieldValue | undefined) => void) => renderFootballAttribution(action, values, setValue, state, ctx.personNames, msg);
+  const groupArgs: FootballGroupArgs = { view, state, dispatch, submittingType, msg, renderAttribution, personNames: ctx.personNames };
 
   return (
     <div className="space-y-3" data-role="football-skin">

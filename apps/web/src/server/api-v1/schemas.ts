@@ -694,6 +694,12 @@ export const LineupSlotInput = z.object({
   // the same `?? default` idiom `position_key`/`order_no` already use on
   // the line above.
   role: z.enum(["player", "coach", "staff"]).optional(),
+  // S12/#421 pass D — V361. Mirrors LineupSlot.pairOrder exactly (which of a
+  // pair entrant's two bound members serves/plays first). `.nullish()`, the
+  // same convention `order_no` already uses one line up: it stays optional
+  // on the inferred PutLineup TS type (never required), and an explicit
+  // `null` is a valid "no declared order" alongside an omitted key.
+  pair_order: z.number().int().positive().nullish(),
 });
 
 export const PutLineup = z.object({

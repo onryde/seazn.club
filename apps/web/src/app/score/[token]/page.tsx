@@ -17,6 +17,13 @@ import {
   DeviceScorePad,
   type PadSideInfo,
 } from "@/components/v2/device-score-pad";
+// S12/#421 W10 — the v2 scoring pad, resolved server-side only inside the
+// scorepad-v2 flag-on branch (never on the v1 path, so a resolution failure
+// can never red a flag-off page — see resolveScorePadBootstrap's own doc).
+import { scorepadV2Enabled } from "@/lib/scorepad-flag";
+import { hasFeature } from "@/lib/entitlements";
+import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
+import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
 
 export default async function ScorePadPage({
   params,
@@ -62,6 +69,7 @@ export default async function ScorePadPage({
         sport_key: string;
         module_version: string;
         config: unknown;
+        competition_id: string;
         competition_name: string;
         division_name: string;
         competition_branding: unknown;
@@ -70,7 +78,7 @@ export default async function ScorePadPage({
       select f.id, f.round_no, f.venue, f.court_label, f.scheduled_at,
              f.home_entrant_id, f.away_entrant_id,
              d.sport_key, d.module_version, d.config,
-             c.name as competition_name, d.name as division_name,
+             c.id as competition_id, c.name as competition_name, d.name as division_name,
              c.branding as competition_branding
       from fixtures f
       join divisions d on d.id = f.division_id
@@ -114,6 +122,23 @@ export default async function ScorePadPage({
     side(fixture.away_entrant_id),
   ]);
 
+  // S12/#421 — `scorepad-v2`, off by default. distinctId is the ISSUING
+  // human (`link.issued_by` — doc 13 §7 attribution, the same value
+  // `read.userId` above already carries); identity's `deviceLinkId` is this
+  // specific link's own id, distinct from any other link the same issuer may
+  // have handed out — see registry.tsx's `ScorePadBootstrap` doc for why
+  // that distinction matters to the timeline's own "undo only mine" rule.
+  const scorePadV2Flag = await scorepadV2Enabled(link.issued_by, link.org_id);
+  const scorePadV2 = scorePadV2Flag
+    ? await resolveScorePadBootstrap({
+        sportModule,
+        rawConfig: fixture.config,
+        hasFeatureFn: (key) => hasFeature(link.org_id, key, fixture.competition_id),
+        initialEvents: events.map((e) => eventOutToEnvelope(fixture.id, e)),
+        identity: { recordedBy: link.issued_by, deviceLinkId: link.id },
+      })
+    : null;
+
   return (
     <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">
       <div className="mx-auto max-w-2xl">
@@ -156,6 +181,7 @@ export default async function ScorePadPage({
           voids_event_id: e.voids_event_id,
           device_link_id: e.device_link_id,
         }))}
+        scorePadV2={scorePadV2}
         />
       </div>
     </main>

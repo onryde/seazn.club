@@ -411,10 +411,32 @@ describe("attributionItemCaption — labelled items use padLabel; unlabelled ite
     expect(caption).toBe("TRANSLATED");
   });
 
-  it("falls back to a kind+index caption when there is no labelKey", () => {
+  // SUPERSEDED by S12/#421, deliberately rewritten rather than deleted. This
+  // used to pin the ordinal fallback ("Person #3"). Measured in a real
+  // browser, that fallback captioned football's two goal pickers "Goal —
+  // Person #2" and "Goal — Person #3", so a scorer could not tell which one
+  // credited the goal and which the assist. A PERSON item's path is a real
+  // name (`scorer`, `assist`, `wicket.fielder`), so it is humanised the same
+  // way S10/#419 already humanises uncaptioned FIELDS — in the renderer, not
+  // by minting engine label keys in four locales.
+  it("humanises a person item's own path when there is no labelKey", () => {
     const item: PadActionView["attribution"][number] = { kind: "person", path: "striker" };
-    const caption = attributionItemCaption(item, 2, ((k: string) => (k === "scorepad.attribution.person" ? "Person" : k)) as never);
-    expect(caption).toContain("Person");
+    const caption = attributionItemCaption(item, 2, ((k: string) => k) as never);
+    expect(caption).toBe("Striker");
+  });
+
+  it("humanises a dotted person path too, and prefixes the action label when given", () => {
+    const item: PadActionView["attribution"][number] = { kind: "person", path: "wicket.fielder" };
+    expect(attributionItemCaption(item, 1, ((k: string) => k) as never)).toBe("Wicket fielder");
+    expect(attributionItemCaption(item, 1, ((k: string) => k) as never, "Ball")).toBe("Ball — Wicket fielder");
+  });
+
+  // SIDE items keep the ordinal fallback on purpose: their path is normally
+  // `by`, and "Goal — By" reads worse than "Goal — Side".
+  it("a side item still falls back to the kind+index caption", () => {
+    const item: PadActionView["attribution"][number] = { kind: "side", path: "by" };
+    const caption = attributionItemCaption(item, 2, ((k: string) => (k === "scorepad.attribution.side" ? "Side" : k)) as never);
+    expect(caption).toContain("Side");
     expect(caption).toContain("3"); // 1-based
   });
 });

@@ -28,6 +28,7 @@ import type { ActionValues } from "./action-form";
 import { Panel } from "./panel";
 import { FidelitySwitcher } from "./fidelity-switcher";
 import { AttributionPicker } from "./attribution-picker";
+import { Timeline, type TimelineEvent } from "./timeline";
 import { skinFor } from "./skins/registry";
 import { createSkinDispatch, type SkinDef } from "./skins/types";
 
@@ -66,10 +67,15 @@ export interface PadRendererProps {
     values: ActionValues,
     setValue: (path: string, value: ActionValues[string]) => void,
   ) => ReactNode;
-  /** Typed seam for the timeline (a later pass) — rendered as-is, wherever
-   *  this component decides a persistent slot belongs. Neither built nor
-   *  interpreted here. */
-  timelineSlot?: ReactNode;
+  /** OVERRIDE for the built-in timeline (`Timeline`, this file's default) —
+   *  same pattern as `renderAttribution` above: a render prop receiving what
+   *  it needs (the resolved event list, already narrowed to this pad's own
+   *  `TimelineEvent` wire shape, plus an `onVoid` already wired to this
+   *  pipeline's `submit`), not a bare slot a caller fills blindly. Omitted
+   *  (the default) ⇒ this component renders `Timeline` itself, fed the live
+   *  event list and this pad's own `identity` — S11's skins may draw their
+   *  own instead, exactly as they may override `renderAttribution`. */
+  timelineSlot?: (events: readonly TimelineEvent[], onVoid: (eventId: string) => void) => ReactNode;
   /** Skin selection. THREE distinct states, and the difference matters:
    *   - `undefined` (the default): consult the registry — a sport with a
    *     hand-crafted layout gets it, everything else gets the universal panel
@@ -210,6 +216,60 @@ export function PadRenderer(props: PadRendererProps) {
     [props.renderAttribution, props.lineups, props.personNames, pipeline.state],
   );
 
+  // S12/#421 — Timeline's own props (TimelineEvent, snake_case wire shape),
+  // built from the pipeline's engine-shaped `events` (camelCase, no
+  // device-link field at all — see use-pad-pipeline.ts's `ownEventIds`
+  // JSDoc). `device_link_id` is populated ONLY for events `ownEventIds`
+  // marks as this pipeline instance's own — never guessed for a row loaded
+  // from server history — so Timeline's "a device link may only void its
+  // own events" rule never over-grants on data this component isn't sure of.
+  const timelineEvents = useMemo<TimelineEvent[]>(
+    () =>
+      pipeline.events.map((e) => ({
+        id: e.id,
+        seq: e.seq,
+        type: e.type,
+        payload: e.payload,
+        recorded_at: e.recordedAt,
+        recorded_by: e.recordedBy,
+        device_link_id: pipeline.ownEventIds.has(e.id) ? props.identity.deviceLinkId : null,
+        voids_event_id: e.voids ?? null,
+      })),
+    [pipeline.events, pipeline.ownEventIds, props.identity.deviceLinkId],
+  );
+
+  const [voidingId, setVoidingId] = useState<string | null>(null);
+  async function handleVoid(eventId: string) {
+    setVoidingId(eventId);
+    try {
+      await pipeline.submit("core.void", { event_id: eventId });
+    } finally {
+      setVoidingId(null);
+    }
+  }
+
+  // The timeline is the DEFAULT, not an opt-in — same reasoning as the
+  // attribution picker above, restated because this is the sixth instance of
+  // this programme's signature defect (_INDEX.md, S12/#421): `timeline.tsx`
+  // was imported by NOTHING outside its own test and could not be wired by
+  // any caller even in principle before this session (`timelineSlot` was a
+  // bare ReactNode; `usePadPipeline` exposed neither `submit` upward nor its
+  // event list). `timelineSlot` survives as an OVERRIDE, exactly like
+  // `renderAttribution`.
+  const timeline = props.timelineSlot ? (
+    props.timelineSlot(timelineEvents, handleVoid)
+  ) : (
+    <Timeline
+      events={timelineEvents}
+      personNames={props.personNames}
+      homeEntrantId={props.lineups.home.entrantId}
+      awayEntrantId={props.lineups.away.entrantId}
+      deviceLinkId={props.identity.deviceLinkId}
+      onVoid={handleVoid}
+      voidingId={voidingId}
+    />
+  );
+
   return (
     <div className="space-y-3">
       <header className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-[0_0_40px_-12px_rgba(16,185,129,0.25)]">
@@ -313,7 +373,7 @@ export function PadRenderer(props: PadRendererProps) {
         ))
       )}
 
-      {props.timelineSlot}
+      {timeline}
     </div>
   );
 }

@@ -34,13 +34,26 @@ import type { AppendSuccess, LedgerSlotEvent } from "./types";
 // so this boundary hands resolveConflict exactly the type it already
 // declares, and any OTHER shape change (a renamed/mistyped field) surfaces
 // as a thrown parse error here instead of a silent mis-compare downstream.
-// Deliberately narrower than the server's real EventOut (extra columns like
-// `id`/`recorded_at`/`voids_event_id` are validated-then-dropped) — matching
-// LedgerSlotEvent's own documented scope (types.ts).
+//
+// S12/#421: `id`/`recorded_at` joined the two identity fields above —
+// use-pad-pipeline.ts needs both to widen a polled/realtime ledger row into
+// a foldable `EventEnvelope` (its own `ledgerSlotToEnvelope`). Unlike
+// recorded_by/device_link_id, score_events.id/.recorded_at are NOT NULL
+// columns (db/migration/v2-engine/tables/V216__score_events.sql) — the real
+// server response never omits or nulls either — so these get the SAME
+// rigor applied to `seq`/`type` below (a required, non-nullish
+// `z.string()`): a row missing one is a genuine wire-contract violation and
+// should hard-fail here, not silently degrade. (LedgerSlotEvent's own TYPE
+// still marks both optional, for a DIFFERENT, TS-compile-time reason — see
+// its JSDoc in types.ts.) Still narrower than the server's real EventOut:
+// `voids_event_id` is validated-then-dropped, matching LedgerSlotEvent's
+// own documented scope (types.ts) — out of this pass's stated fix.
 const ledgerSlotEventSchema = z.object({
+  id: z.string(),
   seq: z.number(),
   type: z.string(),
   payload: z.unknown(),
+  recorded_at: z.string(),
   recorded_by: z
     .string()
     .nullish()

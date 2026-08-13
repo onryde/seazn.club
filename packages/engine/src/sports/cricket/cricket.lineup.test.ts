@@ -425,6 +425,47 @@ describe("state.orders — APPEND-ONLY, because it is also a cursor", () => {
     expect(crease(t20, stream(...live)).orders.home).toEqual(XI);
   });
 
+  // S12/#421 — S3/#426 OWNER RULING 3 applied on the ORDER path, which is
+  // where it was missing. `orderFromLineup` filtered on `slot === "starting"`
+  // alone, so a team sheet naming a coach in a starting slot put that coach
+  // into `state.orders` — and `state.orders` is exactly what the v2 pad's
+  // striker / non-striker / bowler pickers offer, so a coach was selectable
+  // and could be credited with runs. The ruling was enforced on the stats
+  // projections (`playingSquad`/`onFieldPersons`) and nowhere near here.
+  // Found by driving the real cricket console against a real roster.
+  it("excludes a coach or staff member from the batting order, even in a starting slot", () => {
+    const withCoach: LineupPair = {
+      home: {
+        entrantId: "H",
+        slots: [
+          // Deliberately FIRST in the order: a filter applied after the sort,
+          // or one that only trimmed the tail, would still pass with the coach
+          // last. Being at orderNo 1 means a wrong answer changes who opens.
+          { personId: "H-coach", slot: "starting" as const, orderNo: 1, role: "coach" as const },
+          { personId: "H-physio", slot: "starting" as const, orderNo: 2, role: "staff" as const },
+          ...Array.from({ length: SIDE }, (_, i) => ({
+            personId: `H-${i + 1}`,
+            slot: "starting" as const,
+            orderNo: i + 3,
+          })),
+        ],
+      },
+      away: lineup("A"),
+    };
+    const orders = crease(t20, stream(["core.start"]), withCoach).orders;
+    expect(orders.home).toEqual(XI);
+    expect(orders.home).not.toContain("H-coach");
+    expect(orders.home).not.toContain("H-physio");
+  });
+
+  // The other half of the same rule: `role` absent MUST still mean player, or
+  // this filter would empty every lineup ever recorded (the field only reached
+  // the wire in S12) and re-baseline all eleven golden corpora.
+  it("treats an absent role as player, so every recorded lineup is unchanged", () => {
+    expect(crease(t20, stream(...live)).orders.home).toEqual(XI);
+    expect(crease(t20, stream(...live)).orders.away).toHaveLength(SIDE);
+  });
+
   it("appends the replacement, preserving every existing index", () => {
     const after = crease(t20, stream(...live, concussion("H-1", "H-12", 1)));
     expect(after.orders.home).toEqual([...XI, "H-12"]);

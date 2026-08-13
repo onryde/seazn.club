@@ -878,6 +878,165 @@ export async function createStageAndGenerate(
   return { stageId: created.data!.id, fixtureIds: (gen.data?.fixtures ?? []).map((f) => f.id) };
 }
 
+/** One entrant's real roster: the persons behind it and the lineup slot each
+ *  one starts in. `positionKey` is optional because most sports' catalogs do
+ *  not require one — football's does (GK), cricket's does not. */
+export interface RosterSlotSpec {
+  fullName: string;
+  positionKey?: string;
+}
+
+export interface RosteredFixture {
+  competitionId: string;
+  divisionId: string;
+  fixtureId: string;
+  homeEntrantId: string;
+  awayEntrantId: string;
+  /** `fullName` → `person_id`, for both sides. The pad's person pickers render
+   *  these names, so a spec asserts on the NAME a scorer would actually tap
+   *  and gets the id for the payload from the same map. */
+  personIds: Record<string, string>;
+}
+
+/**
+ * Seed a started fixture whose two entrants have REAL person members and REAL
+ * saved lineups — the thing no existing helper produced.
+ *
+ * Why this exists rather than another `addEntrantsViaApi` call: that helper
+ * creates display-name-only entrants, which is enough for the sports whose
+ * events attribute to a SIDE, and useless for the ones that attribute to a
+ * PERSON. Every `cricket.ball` carries striker/nonStriker/bowler and
+ * `football.goal` carries scorer/assist; the server folds those against the
+ * fixture's real lineup (`server/engine-db/lineups.ts`) and 422s on a person
+ * it cannot find on the pitch. S11 could not drive either flow in a browser
+ * for exactly this reason — the harness route's lineups are synthetic — so
+ * the two headline pads in the product had no browser coverage at all.
+ *
+ * Both sides always get a lineup, never just the one under test: football's
+ * `applyGoal` rejects a scorer who is not on the pitch, so a one-sided lineup
+ * fails at the event rather than at the setup, which reads as a pad bug.
+ */
+export async function seedRosteredFixture(
+  request: APIRequestContext,
+  spec: {
+    label: string;
+    sportKey: string;
+    variantKey: string;
+    home: RosterSlotSpec[];
+    away: RosterSlotSpec[];
+    entrantKind?: "individual" | "team" | "pair";
+    /** Leave false to stop after `start` — a spec that wants to drive the pad
+     *  through `pre → live` itself must NOT have `core.start` already folded. */
+    emitCoreStart?: boolean;
+  },
+): Promise<RosteredFixture> {
+  const kind = spec.entrantKind ?? "team";
+  const personIds: Record<string, string> = {};
+  for (const slot of [...spec.home, ...spec.away]) {
+    const person = await apiJson<{ id: string }>(request, "/api/v1/persons", "POST", {
+      full_name: slot.fullName,
+      consent: { public_name: true },
+    });
+    if (!person.data) {
+      throw new Error(`seedRosteredFixture: person "${slot.fullName}" → ${person.status}`);
+    }
+    personIds[slot.fullName] = person.data.id;
+  }
+
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: spec.label,
+    visibility: "public",
+  });
+  // Surface the API's own refusal rather than dereferencing `data!` and
+  // throwing `Cannot read properties of undefined (reading 'id')`, which names
+  // the helper instead of the cause and sent one debugging pass down the wrong
+  // path in this session.
+  if (comp.status >= 300 || !comp.data) {
+    throw new Error(
+      `seedRosteredFixture: POST /api/v1/competitions -> ${comp.status} ${JSON.stringify(comp.error)}`,
+    );
+  }
+  const competitionId = comp.data.id;
+  const div = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${competitionId}/divisions`,
+    "POST",
+    { name: spec.label.slice(0, 40), sport_key: spec.sportKey, variant_key: spec.variantKey },
+  );
+  if (!div.data) {
+    throw new Error(
+      `seedRosteredFixture: division ${spec.sportKey}/${spec.variantKey} → ${div.status} ${JSON.stringify(div.error)}`,
+    );
+  }
+  const divisionId = div.data.id;
+
+  const ents = await apiJson<{ id: string }[]>(
+    request,
+    `/api/v1/divisions/${divisionId}/entrants`,
+    "POST",
+    [
+      {
+        kind,
+        display_name: `Home ${spec.label}`,
+        seed: 1,
+        members: spec.home.map((s) => ({ person_id: personIds[s.fullName] })),
+      },
+      {
+        kind,
+        display_name: `Away ${spec.label}`,
+        seed: 2,
+        members: spec.away.map((s) => ({ person_id: personIds[s.fullName] })),
+      },
+    ],
+  );
+  if (ents.status >= 300 || !ents.data || ents.data.length < 2) {
+    throw new Error(
+      `seedRosteredFixture: POST entrants -> ${ents.status} ${JSON.stringify(ents.error)}`,
+    );
+  }
+  const homeEntrantId = ents.data[0]!.id;
+  const awayEntrantId = ents.data[1]!.id;
+
+  const { fixtureIds } = await createStageAndGenerate(request, divisionId);
+  const fixtureId = fixtureIds[0]!;
+  await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+
+  for (const [entrantId, roster] of [
+    [homeEntrantId, spec.home],
+    [awayEntrantId, spec.away],
+  ] as const) {
+    const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/lineups/${entrantId}`, "PUT", {
+      slots: roster.map((s, i) => ({
+        person_id: personIds[s.fullName],
+        slot: "starting",
+        order_no: i + 1,
+        roles: [],
+        ...(s.positionKey ? { position_key: s.positionKey } : {}),
+      })),
+    });
+    if (res.status >= 300) {
+      throw new Error(
+        `seedRosteredFixture: lineup for ${entrantId} → ${res.status} ${JSON.stringify(res.error)}`,
+      );
+    }
+  }
+
+  if (spec.emitCoreStart) {
+    const started = await apiJson<{ seq: number }>(
+      request,
+      `/api/v1/fixtures/${fixtureId}/events`,
+      "POST",
+      { expected_seq: 0, type: "core.start", payload: {} },
+    );
+    if (started.status >= 300) {
+      throw new Error(`seedRosteredFixture: core.start → ${started.status}`);
+    }
+  }
+
+  return { competitionId, divisionId, fixtureId, homeEntrantId, awayEntrantId, personIds };
+}
+
 /** Record a generic.result for one fixture (reads last_seq for optimistic concurrency). */
 export async function scoreFixture(
   request: APIRequestContext,

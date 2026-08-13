@@ -9,6 +9,7 @@ import {
   CreateEntrant,
   CreateStage,
   CreateTeam,
+  LineupSlotInput,
   PatchCompetition,
   PatchEntrant,
   SetTeamSquad,
@@ -307,5 +308,31 @@ describe("division tiebreakers are validated keys (F5)", () => {
         name: "Open", sport_key: "football", variant_key: "std", tiebreakers: ["fifa2026"],
       }).success,
     ).toBe(false); // silent seed-order standings, never again
+  });
+});
+
+// S12/#421 pass D, V361 — `pair_order` mirrors `order_no`'s own convention
+// exactly (`.nullish()`, not `.default()`): optional on the inferred
+// PutLineup TS type so every pre-existing caller that builds a slots array
+// without it keeps compiling.
+describe("LineupSlotInput.pair_order (S12/#421 pass D)", () => {
+  const base = { person_id: UUID };
+
+  it("accepts a positive integer", () => {
+    expect(LineupSlotInput.safeParse({ ...base, pair_order: 1 }).success).toBe(true);
+    expect(LineupSlotInput.safeParse({ ...base, pair_order: 2 }).success).toBe(true);
+  });
+
+  it("accepts null and an absent key — both mean 'no declared order'", () => {
+    expect(LineupSlotInput.safeParse({ ...base, pair_order: null }).success).toBe(true);
+    const r = LineupSlotInput.safeParse(base);
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.pair_order).toBeUndefined();
+  });
+
+  it("rejects zero, negative and non-integer values", () => {
+    expect(LineupSlotInput.safeParse({ ...base, pair_order: 0 }).success).toBe(false);
+    expect(LineupSlotInput.safeParse({ ...base, pair_order: -1 }).success).toBe(false);
+    expect(LineupSlotInput.safeParse({ ...base, pair_order: 1.5 }).success).toBe(false);
   });
 });

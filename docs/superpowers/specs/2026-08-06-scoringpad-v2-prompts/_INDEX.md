@@ -24,7 +24,7 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 | S9 | #418 | `S09-418-w7-career-rollup.md` | S3, S8 | **DONE** — scope 1 (the `personsOf`/`cfg` plumbing) was ALREADY SHIPPED by S8/#417, so the prompt's central "Why" premise is false; the real work was the rollup, the route, the two surfaces and the e2e S8 owed forward. First session in the programme with a real user-facing surface, so all four test types landed here with no deferrals. Three defects found by RENDERING it that no unit test could see (see the decision log) |
 | S10 | #419 | `S10-419-w8-chassis-renderer.md` | S6 | **DONE, MERGED `cc907a0b` (PR #542)** — 4 prompt premises false (server idempotency is a fail-open Redis cache with NO ledger column, no pad subscribes to realtime, the client cannot import the engine as the brief assumed, the 409 already carries `current_seq`); the replay ruling was rewritten around ledger-slot inspection because blind `expected_seq` renegotiation — which the brief calls "the correctness heart" — IS the duplicate bug given that. Chassis + renderer + picker + timeline shipped; **the picker was found INERT by the e2e** (written, tested, wired to nothing — fifth instance of this programme's signature defect) and is now the pad's default. E2E covers tab death / offline / 409-mid-drain against the real API and RUNS IN CI (`SCOREPAD_V2_HARNESS=1` in the three e2e jobs). Smoke deferred to S13 (verified: `scripts/smoke.ts` has zero references). Contract S11 consumes: `PadRenderer` props + the `renderAttribution` / `timelineSlot` override seams. Flag `scorepad-v2` (PostHog) declared, wired to nothing, flipped in S12 |
 | S11 | #420 | `S11-420-w9-skins.md` | S7, S10 | **DONE** — **five** skins, not three: the prompt's two sport groupings were disproved by building the real specs (tennis is a different kernel from the setbased three; football cannot share with the period pair, but hockey/icehockey are byte-identical to each other). Coverage gate landed RED first and is mutation-proved. Renderer now consults the registry by default — owner ruling, taken because a registry nothing calls is S10's inert-picker defect again. Review caught 5 gaps, 2 of them real: `racquet`/`period` rendered PAID-GATED actions as live controls for 5 of 8 sports (the sweeps could not see it — `grantAllEntitlements` means `locked` never occurs in the suite), and cricket's batter/bowler pickers never resynced to the fold, so a scorer could score against the wrong end. Cricket has NO browser coverage: the harness's lineups are synthetic and every `cricket.ball` needs real roster members — S12 owes it, along with football's goal-with-assist |
-| S12 | #421 | `S12-421-w10-integration-flag.md` | S11 | TODO |
+| S12 | #421 | `S12-421-w10-integration-flag.md` | S11 | **DONE** — v2 reaches both real entry points behind `scorepad-v2`, and driving it in a browser against real rosters found **nine** product defects plus two layout defects, none of which `tsc`, ~6000 unit tests, lint or a green production build could see. The chain was sequential — each fix uncovered the next — which is the signature of a path nothing had ever executed: a `"use client"` mapper called from both server loaders (invisible because `[].map(fn)` never invokes `fn`, so it is unreachable until the ledger has one row); the fold throwing on a foreign `core.start`; `ballInOver: 0` making the first ball of every over schema-invalid; the fold not advancing on its own ack, so exactly ONE event was ever scoreable on ANY sport; a duplicate-seq double-count on the ack path; undo swallowed for a just-scored event, and again for one queued across a reload; raw UUIDs in three skins' person pickers; a coach able to open the batting; and the lineup editor silently dropping `role`, which made that last fix unreachable from the product's own UI. The flag needed its own reader (`lib/scorepad-flag.ts`, three-state `SCOREPAD_V2_FORCE`) because `isServerFeatureEnabled` returns `fallback ?? false` with no PostHog client — so the v2 pad was unreachable from EVERY e2e run. Flag-off byte-identity proved two ways and **counted, not asserted**: exactly three non-additive lines across the three files on that path, all inert with the flag off; plus v1's own e2e green against a second server off the SAME build with `SCOREPAD_V2_FORCE=0`. Deferred e2e debt discharged per session with a verdict each (S6 by construction, S3 partially, S4 and S1 re-deferred with cause). Note for S13: the lineup-editor half is NOT flag-gated and ships live |
 | S13 | #422 | `S13-422-w11-cutover.md` | S12 | TODO |
 | L1 | #412 | `L1-412-w1-eligibility.md` | — | TODO |
 | L2 | #413 | `L2-413-w2-date-hardening.md` | L1 | TODO |
@@ -2089,6 +2089,510 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   run locally with `git status --porcelain` empty. Screenshots: 20 captures, 5
   skins × 320/375/768/1280, `OVERFLOWING=0 SMALL_TAP=0`.
   Smoke remains **deferred to S13**, as the prompt directs.
+- 2026-08-13 — S12/#421 — **the deferred-e2e debt, resolved to a concrete list.**
+  `_INDEX.md`'s summary line says "S1, S3–S8", which over-counts by two. Read
+  from each prompt's own `Test types` block (the authoritative per-session
+  mapping `_RULES.md` §5 requires): **S1/#429** (`:92`), **S3/#426** (`:123`),
+  **S4/#428** (`:99`), **S5/#431** (`:91`) and **S6/#416** (`:159`) each say
+  "E2E + smoke deferred to S12/S13" and are genuinely outstanding. **S7/#427
+  and S8/#417 are NOT** — S7 shipped a real e2e and verified it twice, and
+  S8's own deferral was to "S9 and S12/S13", discharged in the S8b follow-up
+  (`apps/web/e2e/stats.spec.ts` + `scripts/smoke.ts` `playerStatsSuite`).
+  Recorded because chasing the summary line rather than the prompts would have
+  spent this session re-covering two sessions that already paid.
+- 2026-08-13 — S12/#421 — **a live v1 defect: carrom is unscoreable over a
+  device link, and has been.** `fixture-console.tsx:473-477` has a `carrom`
+  branch whose own comment states the reason — "the generic 1-result pad would
+  send `generic.result`, which the module rejects as an unknown event type" —
+  and `device-score-pad.tsx:277-291` **has no carrom branch at all**, so a
+  carrom fixture on `/score/[token]` falls through to `GenericPad` and 422s on
+  every submit. The two dispatchers were described in this programme's design
+  as "near-duplicate"; they are not duplicates, they are a duplicate with one
+  arm missing, which is exactly the drift the S12 registry exists to make
+  impossible. NOT fixed on the v1 path: flag-off byte-identity is this
+  session's review bar and a v1 fix would breach it. Flag-on it is fixed for
+  free — one registry, both entry points — and the drift guard prevents the
+  next one. S13's cutover closes it permanently.
+- 2026-08-13 — S12/#421 — **`divisions.config` IS the resolved, schema-parsed
+  variant cfg — with one field that is not.** `usecases/divisions.ts:568-570`
+  merges `{...variant.config, ...patch.config}` and runs
+  `sportModule.configSchema.safeParse(merged)`, storing the parsed output
+  (`:580-606`), so every `.default()` is already materialised and a client
+  `configSchema.parse(sport.config)` is safe. The exception: `config.entrants`
+  is re-added AFTER the parse and is not declared in any `configSchema`, so a
+  naive client re-parse silently STRIPS it. Harmless for the pad specifically —
+  a module cannot read a key its own schema does not declare — but it means
+  `divisions.config` is not a fixpoint of `configSchema.parse`, which is the
+  kind of thing a later session will assume. The cfg is therefore resolved
+  **server-side inside the flag-on branch only**, never on the v1 path, so a
+  parse failure on some future malformed row cannot red a flag-off page.
+- 2026-08-13 — S12/#421 — **RULING (owner): `timeline.tsx` is wired in here,
+  accepting an edit to two S10 files outside the prompt's stated set
+  (`pad-renderer.tsx`, `use-pad-pipeline.ts`).** SIXTH instance of this
+  programme's signature defect, and the worst-formed one yet: `timeline.tsx`
+  is imported by **nothing** in `apps/web/src` outside its own test, and it
+  could not be wired by any caller even in principle — `PadRenderer.timelineSlot`
+  is a bare `ReactNode` while `Timeline` needs `onVoid` → `submit`, and
+  `UsePadPipelineResult` exposes neither `submit` upward nor its event list.
+  A seam that no caller can reach is not "left for later", it is unreachable.
+  Fixed on the file's own established pattern: `PadRenderer` renders `Timeline`
+  BY DEFAULT from the pipeline's events with `onVoid` →
+  `submit("core.void", {event_id})`, exactly as it already renders
+  `AttributionPicker` by default, and `timelineSlot` is demoted to the
+  override seam `renderAttribution` already is. `usePadPipeline` exposes the
+  events it already tracks.
+  Why it was not deferred to S13 despite not blocking S12's acceptance: the v1
+  chrome's own "Undo last" button sits OUTSIDE the pad section in both
+  dispatchers, so flag-on it still fires `core.void` over the synchronous v1
+  `apiV1` path — which means **undo fails offline**, on the one entry point
+  whose headline acceptance criterion is scoring offline. And S13 deletes that
+  chrome, so deferring would hand the cutover a pad with no undo at all.
+  Recorded in the PR body under `Unplanned fixes`.
+- 2026-08-13 — S12/#421 — **the flag as S10 declared it is UNDRIVABLE by any
+  e2e, which would have made every flag-on acceptance criterion untestable.**
+  `posthog-server.ts:70-71`: `isServerFeatureEnabled` calls `getClient()` and
+  returns `opts.fallback ?? false` when PostHog is unconfigured. No e2e run
+  configures PostHog, so with the required `fallback: false` the flag is
+  **always off** in a local or CI browser run — the v2 pad could never be
+  reached, and a spec written against it would have failed for the environment
+  rather than the code. Not a defect in S10's choice (a product flag SHOULD
+  default off with no provider); a gap in what S12 needs to test it.
+  Fix: one server-read wrapper owning the whole flag decision, with
+  `SCOREPAD_V2_FORCE` as a three-state override — `"1"` on, `"0"` off, unset
+  ⇒ ask PostHog. Server-read and NOT `NEXT_PUBLIC_*`, so it is absent from
+  every real deploy for the same reason S10 gave for `SCOREPAD_V2_HARNESS`
+  (a `NEXT_PUBLIC_*` value is baked into the client bundle at build time and
+  would ship the gate's answer to production). One home for the decision means
+  the two entry points cannot drift on it — which is the same failure this
+  session's registry exists to prevent, one level up.
+  **What the override makes unobservable, named per the `grant-all` rule:** the
+  PostHog branch itself. No browser run ever exercises `c.isFeatureEnabled`,
+  so that path is covered by unit tests with an injected client instead —
+  on, off, and throw-degrades-to-fallback.
+- 2026-08-13 — S12/#421 — **flag-off and flag-on need TWO servers in one e2e
+  phase, and that is a feature.** A process-wide override cannot be both states
+  at once, so the run is structured as two `node server.js` processes off the
+  SAME prod build: `:3100` with the flag off (v1's own specs re-run as the
+  regression half of the byte-identity bar) and `:3101` with it on (this
+  session's v2 specs). Two Playwright invocations, one per base URL. Worth
+  keeping rather than working around: it means the v1 regression genuinely runs
+  against a server configured the way production is, instead of against a
+  server that merely has not been asked to turn v2 on.
+- 2026-08-13 — S12/#421 — **SEVENTH instance of the signature defect, and the
+  first where the contract fix itself is what shipped inert: three skins render
+  a person as a RAW UUID, and `SkinLayoutCtx.personNames` — added centrally by
+  S11 to prevent exactly this — is consumed by NONE of them.** Found on the
+  very first real-browser render of the v2 console against a real roster, which
+  is the coverage S11 recorded that it could not obtain. Measured:
+  `cricket-skin.tsx:345-347` is literally `function displayPerson(id: string):
+  string { return id; }`, used at four call sites (`:428`, `:618`, `:705`,
+  `:719`) — so the striker, non-striker and bowler selects, the attribution
+  selects and the wicket/fielder picker all draw
+  `<option value="123fb88b-…">123fb88b-7682-4008-93fb-f607fd7a9570</option>`.
+  `football-skin.tsx:249` is `ids.map((id) => ({ value: id, label: id }))`, on
+  the scorer/assist picker. `period-skin.tsx:274` falls back to
+  `personId.slice(0, 6)` whenever a lineup carries no squad number.
+  Why it survived S11's own review: five skins still carry COMMENTS asserting
+  "SkinProps carries no lineup/personNames channel" (`cricket-skin.tsx:26,343`,
+  `football-skin.tsx:25`, `period-skin.tsx:280`, `racquet-skin.tsx:201`,
+  `tennis-skin.tsx:248`). They were true when written and were not revisited
+  when the channel landed on `SkinLayoutCtx` mid-session — and `SkinProps.ctx`
+  IS a `SkinLayoutCtx`, so every skin has had the names all along. A stale
+  comment denying a channel is as good as not having one.
+  **The general rule this earns:** when parallel agents report a shared-contract
+  gap and it is fixed centrally, the fix is not done until every reporting
+  consumer is re-dispatched to CONSUME it. S11 added the channel and closed the
+  loop on the contract, not on the callers; the coverage sweep could not see the
+  difference because `layout()` returns data and option TEXT is drawn by the
+  Component. **OWNER RULING: fix all three skins** — cricket and football to
+  `ctx.personNames?.[id] ?? id`, period keeping `#squadNumber` first (a
+  deliberate scorer-vocabulary choice) but preferring the name over an id
+  fragment as its fallback.
+- 2026-08-13 — S12/#421 — **two review gaps worth recording beyond their fixes.**
+  (a) `getLineup`'s wire shape carries neither `role` nor `pairOrder`, so
+  `registry.tsx`'s `toLineupSlot` cannot set them and `core/lineup.ts:350`
+  defaults EVERY roster member to `role: "player"`. Authoritative stats are
+  unaffected — `player-stats.ts`/`org-posts.ts` read `loadLineupPair`
+  (`server/engine-db/lineups.ts:27-40`), a separate DB read that does carry the
+  real column — but the PAD's own picker pools are built from the client fold,
+  so S3/#426's OWNER RULING 3 ("a card to a coach records against the person
+  but never enters a playing record") is enforced on the stats path and not on
+  the entry path. (b) `fidelity.ts:91,117` falls back to `EMPTY_SPEC` when
+  `padSpec?.(cfg)` is absent — and `padSpec` is an OPTIONAL module hook
+  (`sport/module.ts:388`) — so a module without one declares no
+  `fidelityEntitlements`, gates nothing, and lands on band 3 with the full v2
+  UI unlocked. Dead today (all 11 implement it) and not a billing bypass (the
+  append path still refuses via `requiredFeatureForEvent`), but it is misleading
+  UI with no drift guard. Closed structurally by extending the registry drift
+  guard to assert every `builtinModules` entry implements `padSpec`, rather than
+  by a comment.
+- 2026-08-13 — S12/#421 — **new wrapper trap: the `rtk` hook silently TRUNCATES
+  `git diff`.** A reviewer's `git diff main...HEAD` came back missing 9 of 23
+  changed files — including the flag wrapper the review was partly about — with
+  no error and no truncation marker, so the diff looked complete and simply did
+  not contain the work. Same family as `rtk`'s `PASS(0) FAIL(0)` for a suite
+  that failed to collect: a wrapper returning a plausible smaller answer rather
+  than an error. Use `rtk proxy git diff`, and sanity-check the file count
+  against `git diff --stat` before drawing any conclusion from a diff's
+  ABSENCE. A related, subtler misread from the same run: `rtk`'s diff shows
+  COMMITTED state while the working tree may be newer, so a reviewer reading
+  both can conclude a file was fabricated when it was merely stale — check
+  `git status` before calling content invented.
+- 2026-08-13 — S12/#421 — **the v2 console 500s on the SECOND page load, and an
+  EMPTY ARRAY is why nothing caught it.** Driving the real flag-on console in a
+  real browser: the fixture page renders correctly, "Start match" appends
+  `core.start` (verified on the ledger — `last_seq: 1`, `status: in_play`,
+  `phase: "live"`), and the `router.refresh()` that follows renders
+  `Try again`. Server log:
+  `Error: Attempted to call eventOutToEnvelope() from the server but
+  eventOutToEnvelope is on the client.`
+  `eventOutToEnvelope` is defined in `scorepad/registry.tsx`, which is
+  `"use client"`, and both server loaders call it as
+  `events.map((e) => eventOutToEnvelope(fixture.id, e))`. **On a fixture with
+  no events yet, `[].map(fn)` never invokes `fn`**, so the boundary violation
+  is unreachable until the ledger has its first row — which is exactly one tap
+  after the page a screenshot would be taken of.
+  What did NOT catch it, each checked rather than assumed: `tsc --noEmit`
+  EXIT=0; 3251 unit tests green; `next build` green with 237/237 static pages;
+  `apps/web` lint 0 errors. A client/server boundary violation is invisible to
+  every one of those — the index's own note that "a prod build is the only gate
+  that catches a client-bundle leak" is half right, because the build compiled
+  this happily too. **The only instrument that reads it is a prod server with
+  REAL DATA in it.** That is the whole argument for this session's e2e debt
+  being the weight rather than the flag, restated as evidence.
+  Recorded before the fix so the shape survives: when a server component maps a
+  collection through a helper, the helper's module boundary is only tested by a
+  NON-EMPTY collection, and every one of this repo's cheap gates runs against
+  the empty case.
+- 2026-08-13 — S12/#421 — **no sport is scoreable through the v2 console after
+  the match starts, because a FOREIGN write never enters the pad's fold base.**
+  Measured in a real browser, flag on, immediately after the client/server
+  boundary fix above: "Start match" (the v1 chrome's own button, which sits
+  OUTSIDE the pad section in both dispatchers) appends `core.start`; the server
+  is then `phase: "live"`; the first run tap throws
+  `EngineError: ball in phase "pre"` out of the client fold.
+  Mechanism, traced rather than guessed. `use-pad-pipeline.ts:323-329`
+  `onStreamEvents` receives the polled batch and calls
+  `reconcileAfterAck(ledgerEventsRef.current)` — it **discards the fetched
+  events** and reconciles against the list the pad already had. That comparison
+  diverges, so `setServerOverride(server.state)` fires and `foldedState`
+  (`:279-283`) returns the server's state, which makes the DISPLAY correct. But
+  `submit()` folds optimistically from `[...ledgerEvents, ...pending]`, which
+  `serverOverride` does not touch — so the fold BASE is still empty and every
+  subsequent action validates against `phase: "pre"` and throws.
+  Root cause is a type, not an oversight: `LedgerSlotEvent` carries
+  `seq/type/payload/recorded_by/device_link_id` and no `id`/`recorded_at`, so
+  it cannot be widened to an `EventEnvelope` and folded — the file's own
+  comment says exactly that ("deliberately narrow … cannot be folded directly,
+  so an inbound signal is treated as 'go verify the true state' rather than
+  data to fold ourselves"). That was a sound call for S10's harness, where the
+  pad was the only writer. It stops being sound the moment the pad shares a
+  fixture with the console chrome, which is what S12 mounts.
+  Note this is the MIRROR of the hazard S11 recorded ("once `serverOverride` is
+  set, `foldedState` returns it verbatim and ignores every later local submit")
+  — same root, opposite symptom: display and fold base are two states that only
+  agree by luck. Fixing it is not scope widening; acceptance criterion 2 is
+  "both entry points fully scoreable via v2 for all 11 sports", and without it
+  none are.
+- 2026-08-13 — S12/#421 — **wiring `role` closes the coach hole for football and
+  NOT for cricket, and the reason is one level below the wire shape.** Pass B
+  carried `role` through `LineupSlotIn` → `toLineupSlot` (the DB column and
+  `readLineup`'s SQL always had it; only the client wire shape dropped it, so
+  the fold defaulted every slot to `"player"`). Football is genuinely closed —
+  its scorer/assist pool filters through the kernel's `playingSquad`, proved
+  end to end against the real engine. **Cricket is not**:
+  `orderFromLineup` (`packages/engine/src/sports/cricket/cricket.ts`) builds
+  `state.orders.batting`/`bowling` from `lineup.slots` filtered ONLY on
+  `slot === "starting"`, never on `role` — measured live, a `role: "coach"`
+  starting slot still lands in the batting order with `role` wired correctly.
+  So S3/#426 OWNER RULING 3 ("squad and stat projections keep only
+  `role === 'player'`") is enforced on the STATS path and not on cricket's
+  ORDER path, which is what the pad's pickers read. Not fixed in pass B —
+  `packages/engine` was outside its stated file set and it flagged rather than
+  expanded, correctly. Recorded here so it is not re-derived: the fix is a
+  `role` filter in `orderFromLineup`, and it cannot move a golden corpus,
+  because no recorded lineup carries a non-`player` role at all (the field
+  never reached the wire until today).
+- 2026-08-13 — S12/#421 — **`pairOrder` has NO database column, so the brief
+  that told pass B to "carry it through, the DB already has it" was wrong.**
+  Verified: no `pair_order` column exists anywhere, no caller writes one, and
+  `lineup-editor.tsx` has no UI for it. S3/#426 added `pairOrder` to the
+  engine's `LineupSlot` type and nothing downstream ever grew a way to set it,
+  so threading it through the wire shape would have added a permanently
+  `undefined` field and called it a fix — the same declared-but-inert shape
+  this programme keeps finding, introduced deliberately this time. Left
+  unwired. Related pre-existing gap found alongside it: `lineup-editor.tsx`
+  DROPS `role` on save, so the column the fix above now reads correctly can
+  only ever be populated by something other than the product's own lineup UI.
+  Both are S13 or later work, named here rather than filed.
+- 2026-08-13 — S12/#421 — **the deferred-e2e debt, discharged per session with a
+  verdict each rather than a blanket claim.** The acceptance criterion allows
+  "covered here OR explicitly re-deferred to S13 with a reason", and the honest
+  answer differs by session:
+  - **S6/#416 (`PadSpec`) — DISCHARGED BY CONSTRUCTION, and this is the
+    strongest of the five.** The v2 pad renders entirely FROM `PadSpec`: every
+    panel, action, field and bound in the cricket, football and generic flows
+    driven this session came out of a module's own `padSpec(cfg)`. There is no
+    separate thing left to test — a spec-driven renderer working in a browser
+    IS the e2e S6 deferred. Recorded explicitly because "covered by
+    construction" is exactly the claim that deserves suspicion, and the
+    evidence is that the flows fail if the spec is wrong, which is what the
+    session's own defects demonstrated.
+  - **S3/#426 (mutable squads) — PARTIALLY covered, remainder to S13.** The
+    lineup/`role` half is now driven end to end (the coach-in-batting-order fix
+    above was found this way). `core.lineup.*` substitution through the pad is
+    NOT driven: no skin declares a substitution action reachable in the flows
+    covered here, so driving it needs football's `subs` panel, which is S13's
+    surface work.
+  - **S4/#428 (offence taxonomies) — RE-DEFERRED to S13, with cause.** The
+    person-role discriminator IS now proved in a browser (it is the same
+    `role` path). The offence ENUMS (`PenaltyOffence`,
+    `PeriodSuspensionReason`) need a card/suspension driven with a reason
+    selected, and the sports that declare them are football and the period
+    pair — reachable, but not in any flow this session's acceptance names.
+  - **S1/#429 — RE-DEFERRED to S13, with cause.** Its fold fixes (icehockey
+    GWS +1, `metricOf` no-data vs recorded zero, the `resolved` set-piece
+    counter) surface on STANDINGS and summary projections, not on the pad. The
+    pad is now a reachable surface for the events that feed them, but the
+    assertions belong on a standings page, which this session does not touch.
+  - **S5/#431 — RE-DEFERRED to S13, with cause.** Tennis's game-award panel is
+    entitlement-gated and football's quarters are a cfg variant; both need a
+    seeded division on a non-default variant, which is setup this session's
+    flows do not build.
+  Recorded here rather than only in the PR body, because a PR body does not
+  survive compaction and S13's brief needs this list to be exact.
+- 2026-08-13 — S12/#421 — **FOURTH defect, and the decisive trace: the client
+  fold never advances after its OWN successful ack, so exactly one ball can
+  ever be scored.** Captured from the browser's real network traffic (POST
+  bodies and response bodies, not inferred):
+  ```
+  core.start  expected_seq 0            -> 201 seq 1
+  ball 1      expected_seq 0, ballInOver 1 -> 409 SEQ_CONFLICT (ledger at 1)
+              retry expected_seq 1         -> 201 seq 2, summary "1/0 (0.1)"
+  ball 2      expected_seq 1, ballInOver 1 -> 409, then
+                                             422 INVALID_EVENT
+                                             "over/ballInOver do not match the ledger"
+  ball 3      expected_seq 1, ballInOver 1 -> same 409 then same 422
+  ```
+  Two facts fall out of it that no amount of reading would have settled:
+  (a) `expected_seq` starts at 0 for the pad's FIRST write even though
+  `core.start` is already on the ledger — the pad's `ledgerEvents` is empty at
+  mount and never adopts the event the console chrome wrote. The 409-retry
+  protocol rescues the write, so this looks harmless and is not.
+  (b) `ballInOver` is 1 on every subsequent ball, so the fold the skin reads
+  is frozen at the pre-first-ball state. The server's own ack carries
+  `state_summary: "1/0 (0.1)"`, i.e. the server knew; the pad did not.
+  Note this is NOT the same fix as the poll-path merge (pass C): that path
+  fires on `POLL_MS` = 15s and covers a FOREIGN write. This is the pad failing
+  to advance on its OWN acked write, which is the ack path. The two share a
+  root — `serverOverride` corrects the DISPLAY while the fold BASE is a
+  separate, un-updated list — and fixing one leaves the other.
+  Worth recording as a general lesson: `expected_seq` renegotiation on 409 is
+  a REPAIR mechanism, and a repair mechanism that always succeeds hides the
+  fault it repairs. The first ball landing made the pad look functional; only
+  the second ball's 422 named the real state.
+- 2026-08-13 — S12/#421 — **the v1 deletion inventory S13 executes.** Measured
+  on the rebased branch, not copied from the earlier prompt. Full list here
+  rather than a pointer to the PR body, because a PR body does not survive
+  compaction.
+  **8 pad components** (`apps/web/src/components/v2/pads/`): `boardgame-pad`
+  2.4K, `carrom-pad` 9.6K, `cricket-pad` 23.9K, `football-pad` 10.1K,
+  `generic-pad` 2.7K, `period-pad` 17.2K, `setbased-pad` 6.5K, `tennis-pad`
+  9.2K — 81.6K total.
+  **3 pad test files** (`pads/__tests__/`): `cricket-pad-i18n.test.tsx`,
+  `cricket-pad-revised-target.test.tsx`, `period-pad-countdown.test.tsx`. Each
+  pins behaviour that must be re-pinned against the v2 skin BEFORE deletion,
+  not simply dropped — the revised-target and countdown cases especially.
+  **19 import sites**: 8 in `fixture-console.tsx`, 7 in `device-score-pad.tsx`
+  (it has no `carrom` import — that asymmetry IS the carrom device-link defect
+  recorded above), 1 in `__tests__/device-score-pad.test.tsx`, 3 self-imports
+  inside `pads/__tests__/`.
+  **2 dispatch chains** to delete whole: `fixture-console.tsx`'s ternary over
+  `sport.key` and `device-score-pad.tsx`'s near-copy. Plus the three
+  now-unused key sets each file declares (`SETBASED`/`NESTED`/`PERIOD`).
+  **The harness route**: `apps/web/src/app/score/harness/page.tsx` +
+  `harness-client.tsx` (11K), and `SCOREPAD_V2_HARNESS: "1"` at
+  `.github/workflows/e2e.yml:151`, `:384`, `:560` — three lines, and the line
+  numbers moved when #559 sharded the parallel project, so re-pin them.
+  **One reference that is NOT a deletion**: `server/api-v1/__tests__/
+  schemas.test.ts:256` names `generic-pad.tsx` in a COMMENT explaining why the
+  engine is the only source of truth for a payload shape. Deleting the file
+  does not break that test, but the comment goes stale — update it.
+  Sequencing note for S13: `scoring-vocab.ts`'s hardcoded `SportKey` union
+  (11 keys) is NOT part of this deletion. It is a separate hardcoded list the
+  registry does not replace, and the drift guard added this session does not
+  cover it.
+- 2026-08-13 — S12/#421 — **the pad's own undo silently does nothing for an
+  event you just scored — only a reload makes it work.** Found by probing the
+  seam this session wired under owner ruling, which is the point: the fix
+  itself needed browser proof, not just the flows it enabled.
+  Measured, no reload, football goal scored through the pad then its OWN
+  timeline row's Undo clicked:
+  ```
+  VP_ROW_0 {id:"89a9fa93…", txt:"#2 Goal Home (Scorer) … Undo"}   <- pad-submitted
+  VP_ROW_1 {id:"100ccb9a…", txt:"#1 Match started (Scorer) … Undo"} <- server-sourced
+  clicked row 0 -> ledger stays ["core.start","football.goal"], and NO third
+  POST is made at all.
+  ```
+  Cause: the timeline MIXES two id namespaces. A row the pad learned from the
+  server (via `initialEvents` or a poll) carries the server's row id and voids
+  fine — that is why the e2e passes after a `page.reload()`. A row the pad
+  submitted itself carries the CLIENT-FABRICATED id (the idempotency key,
+  `use-pad-pipeline.ts`'s `newId()`), because `appendEvent`'s ack returns
+  `{seq, state_summary, outcome, status}` and no row id, and pass F's
+  `incomingWins` deliberately keeps the local copy on the seq collision. So
+  `handleVoid` submits `core.void {event_id: <a client id the server has never
+  seen>}`, and it is swallowed before the network.
+  Why it is worse than it looks: "I just tapped the wrong thing" IS the undo
+  case. The one that works — undoing something from a previous page load — is
+  the rare one. And it is silent: no error, no rejection, no queued event.
+  Note also that voiding `core.start` after scoring produces a confusing
+  cascade (the later goal replays and 422s `WRONG_PHASE`), which is coherent
+  behaviour for an incoherent request but is how the first probe mis-read this
+  defect. The timeline renders NEWEST FIRST, so `.last()` is the oldest row.
+- 2026-08-13 — S12/#421 pass D — **the shared-worktree sweep hazard fired
+  TWICE, live, during this pass — no data lost, but every file-ownership
+  split in this session's dispatch depends on knowing it happens.** Pass D's
+  own dirty files (V361, `fixtures.ts`, `schemas.ts`, `fixture-console.tsx`'s
+  `LineupSlotIn`, `registry.tsx`'s `toLineupSlot`, both files' tests) went
+  missing from `git status` mid-session; they were not lost — `git diff HEAD`
+  against each was byte-**zero**, because two OTHER concurrent agents'
+  commits (`29039497` "test(scorepad): all seven v2 e2e green…", then
+  `804031ce` "docs(scoringpad): record the undo-before-reload defect…", the
+  second nominally docs-only) had each already absorbed whatever was dirty on
+  disk at commit time via a broad `git add`. `804031ce`'s stat is the
+  clearest evidence: 28 lines of intended `_INDEX.md` prose plus 429 lines of
+  this pass's brand-new test files it never mentions. Confirm-before-panic
+  recipe that resolved it without any destructive command: `git log --oneline
+  -3 -- <path>` to find who last touched a "missing" file, then `git diff
+  HEAD -- <path>` — zero lines means it is safely upstream, not gone. Ending
+  state was still correct (this pass's own final commit, `1fc4fb50`, holds
+  only what neither sweep had caught) — but a session that assumed "not in
+  git status" meant "lost, redo it" would have duplicated committed work.
+  Lesson for every session sharing this worktree: prefer staging exact paths
+  (`git add <files>`, this pass's own recovery) over `git add -A` / `git
+  commit -am`, which is what both sweeps used.
+- 2026-08-13 — S12/#421 — **Two UI defects that every gate this session runs
+  passed, in both states.** Both found by taking the screenshots the standing
+  rule asks for and then MEASURING what looked wrong, not by any assertion.
+  (a) An expanded `ActionForm` kept the single grid cell its collapsed button
+  occupied, and two of the four panel layouts (`grid`, `perSide`) are
+  `grid grid-cols-2` at every width — so on the device-link entry point at 320
+  the form was **110px inside a 228px panel**, with a number input under 90px.
+  `expectNoHorizontalScroll` passes in both states, because the squeezed form's
+  own children scroll INSIDE it; the page never scrolls. Fixed with
+  `col-span-2 sm:col-span-1` (inert on a flex child, so the other two layouts
+  are untouched; 768 and 1280 unchanged). (b) Cricket's three "This over"
+  pickers measured **33px** at 320 and 375 against the repo's 44px bar:
+  `.select` is a components-layer class, Tailwind's utilities layer wins, and
+  the `px-2 py-1 text-xs` density recipe beside it silently overrode the sizing
+  the class existed to provide. `min-h-11` is a different property, so it
+  survives the same override. Worth more than an incidental control: those
+  three are required entry before EVERY over.
+  **The general lesson, which is the reusable part:** a no-horizontal-scroll
+  assertion is not a layout assertion. It cannot see a control that is half the
+  width it should be, or a third of the height, because both stay inside the
+  viewport. Width and height have to be measured, and the cheapest way to know
+  WHICH one to measure is to look at a screenshot first.
+- 2026-08-13 — S12/#421 — **The same Tailwind override is repo-wide: 19 files
+  under `apps/web/src/components` carry a `.select`/`.input` + `px-2 py-1
+  text-xs` pair.** Deliberately NOT swept in this session, for two separate
+  reasons. Ten of the hits are in `src/components/v2/pads/**` — the v1 pads,
+  which this session must keep byte-identical (the flag-off half of the
+  integration bar) and which S13 deletes outright, so touching them would break
+  a bar to improve code that is about to be removed. The rest
+  (`americano-panel`, `entrants-panel`, `division-builder`, `club-hub/*`,
+  `history-panel`, `board/move-panel`) are pre-existing debt this session did
+  not create or make reachable. S12 fixed the recipe only where it fixed a
+  surface S12 makes reachable: `scorepad/**` (verified clean by
+  `git grep` afterwards — one hit, the fixed one) and the lineup editor's own
+  new controls. **If someone sweeps the rest, `min-h-11` is the fix and the
+  44px assertion pattern already exists in `e2e/mobile.spec.ts`.**
+- 2026-08-13 — S12/#421 — **a shape check stood in for a declared fact, and it
+  was wrong in both directions.** `lineup-editor.tsx`'s `isPairShaped` inferred
+  "this is a pair" from *empty position catalog + exactly 2 members*. Neither
+  half holds: `generic` declares no `entrantModel` at all, so its defaults
+  include `"team"` with `maxTeamMembers: null`, and `assertRosterFits` only
+  enforces an upper bound — a generic TEAM of two got the pair/serve-order
+  control. And volleyball declares a genuine `pair` kind (beach 2v2) but has a
+  five-group position catalog, so real beach pairs never got it. Fixed by
+  reading the entrant's own declared `kind`, threaded onto `SideInfo.kind` by
+  the fixture page loader, rather than guessing from two proxies — so the next
+  sport to declare `pair` works with no edit here. Second-order: `toPutSlot`
+  carried `pair_order` unconditionally, so an entrant that hit the false
+  positive kept re-sending a stale value forever after losing the control; it
+  now nulls it whenever the side is not pair-shaped.
+- 2026-08-13 — S12/#421 — **a touch-target fix that would have failed its own
+  test at two of the seven widths it runs at.** The first shape of the
+  lineup-editor fix was `min-h-11 sm:min-h-0` — 44px on phones, back to ~26px
+  from 640px up. But `e2e/mobile.spec.ts` runs under ALL SEVEN width projects,
+  `tablet-768` and `tablet-834` included, and the new assertion is an
+  unconditional `toBeGreaterThanOrEqual(44)`. The fix and its own regression
+  test contradicted each other at exactly two widths. It read green because the
+  verification run exercised `mobile-se` only.
+  **Two rules, both cheap:** a `sm:`/`md:` escape hatch on an accessibility
+  floor needs a reason that survives "is a tablet a touch device?" — usually it
+  does not. And when a spec file is wired into a project MATRIX, verifying one
+  project is not verifying the test; check which projects the file runs under
+  before believing a green.
+- 2026-08-13 — S12/#421 — **a post-reload click that passes every actionability
+  check and is still swallowed.** `e2e/scorepad-v2.spec.ts`'s after-reload undo
+  went red once in six runs of the file — on a warm server and on a
+  deliberately cold one, so not a cold-start artefact. Cause is
+  pre-hydration: after `page.reload()` the void button is visible, stable and
+  enabled — everything Playwright's actionability checks cover — but React has
+  not attached its handler, so the click lands on nothing and the test times
+  out waiting for a `core.void` that was never requested. It reads as a broken
+  undo.
+  **Diagnosis discipline worth repeating:** the first two theories were both
+  wrong and both plausible. "Shared fixture race" — no, both undo tests seed
+  their own. "Regression from the pass that just landed on that exact path" —
+  no, and the implementer disproved it from the code rather than by rerunning:
+  the click fires strictly after the reload and addresses the row by the
+  SERVER id, so no client-fabricated id enters play and neither new branch
+  runs. A flake on the same seam as your last change is not evidence that your
+  change caused it.
+  Fixed with the repo's existing idiom (`v6-sports.spec.ts`'s Release retry,
+  `scoring.spec.ts`'s re-fill loops): `expect(async () => {…}).toPass()`,
+  **guarded on the ledger** so a click that did register is never issued twice
+  — voiding an already-voided event is a real state change, and a blind retry
+  trades a flake for a silent second void. Not waited on the pad's own stream
+  instead: `useFixtureStream` arms `setInterval` at `POLL_MS` (15s) with no
+  immediate fetch, so that would cost 15s a run and still prove only that the
+  stream mounted.
+- 2026-08-13 — S12/#421 — **CLOSING GATE, all numbers measured on the final
+  build.** apps/web unit **7344 total / 7285 passed / 0 failed / 59 pending**,
+  2391 of 2391 suites, all 767 suite files resolved inside the worktree — run
+  against a FRESH Postgres, because the session's own e2e had been writing
+  TAG rows into the working DB all day and the sweep suites walk every row.
+  Engine `test:coverage` **3922 passed / 0 failed**, thresholds met. `tsc`
+  EXIT=0 in both trees. `cd apps/web && rtk proxy pnpm run lint` →
+  **`✖ 78 problems (0 errors, 78 warnings)`** — the two warnings that fall in
+  files this branch touches are the repo-wide pre-existing
+  `exhaustive-deps`/missing-`msg` pattern at lines outside the diff hunks (the
+  same warning fires in `division-builder` and `import-wizard`, untouched).
+  E2E: v2 spec 9/9 flag-on, v1 regression 10 passed + 1 by-design skip
+  + 4 serial flag-off, lineup 44px green at `mobile-se`/`tablet-768`/
+  `tablet-834`. `openapi:gen` + `i18n:gen-keys` leave `git status --porcelain`
+  empty.
+- 2026-08-13 — S12/#421 — **the near-miss worth recording: a sequential
+  comparison nearly produced "my branch broke the solver".**
+  `src/scheduling/repair-scale.test.ts` failed on this branch three runs in a
+  row, INCLUDING in isolation, while `origin/main` in a fresh baseline worktree
+  passed twice. Every instinct says regression. It was not: the assertion is a
+  wall clock against a computed budget, and the same test measured 19618,
+  13072, 11934, 10234 and 10018 ms on identical code — a 2x spread. The branch
+  runs happened while two peer Claude sessions were busy; the baseline runs
+  happened after they went quiet. **Interleaving the two trees A/B/A/B gave
+  4/4 pass on BOTH** — and a full engine gate on the quiet machine then went
+  3922/0.
+  **Rule:** for any load-sensitive assertion, a branch-then-main comparison is
+  worthless — machine load drifts between the two halves and the drift is
+  indistinguishable from the effect you are testing. Interleave, or measure
+  nothing. The same run also showed three OTHER engine suites
+  (`repair-decompose`, `roundrobin`, and `simulation`'s cricket case) failing
+  only under full-suite parallelism and passing alone, which is how a
+  four-failure run and a two-failure run of the same code both happened.
 - _(append below)_
 
 ## Open questions for the owner

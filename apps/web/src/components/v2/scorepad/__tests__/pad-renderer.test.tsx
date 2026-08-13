@@ -14,7 +14,7 @@ import { defaultLineupPair } from "@seazn/engine/testkit";
 import { cricket } from "@seazn/engine/sports/cricket";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { resolveModuleClient } from "../module-client";
-import type { AppendCallResult } from "../pipeline";
+import type { AppendCallResult, AppendEventBody } from "../pipeline";
 import type { FixtureStateResult, PadTransport } from "../transport";
 import type { LedgerSlotEvent, OwnIdentity } from "../types";
 import type { PadActionView, PadPanelView } from "../view-model";
@@ -22,6 +22,7 @@ import { ActionForm } from "../action-form";
 import { Panel } from "../panel";
 import { FidelitySwitcher } from "../fidelity-switcher";
 import { AttributionPicker } from "@/components/v2/scorepad/attribution-picker";
+import { Timeline, type TimelineEvent } from "../timeline";
 import { PadRenderer } from "../pad-renderer";
 import { skinFor } from "../skins/registry";
 
@@ -620,21 +621,202 @@ describe("PadRenderer — fidelity band integration: reveals actions, never rese
   });
 });
 
-describe("PadRenderer — timeline seam (a later pass fills it in; this pass only reserves the slot)", () => {
-  it("renders whatever timelineSlot is handed, verbatim", () => {
-    const marker = "TIMELINE-SLOT-MARKER";
-    const island = renderIsland(PadRenderer, {
-      module: resolveModuleClient("generic", "1.0.0"),
-      cfg: { resultMode: "score" as const, allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+describe("PadRenderer — Timeline is the DEFAULT (S12/#421), not an opt-in", () => {
+  // The regression this pins: `timeline.tsx` was imported by NOTHING outside
+  // its own test and could not be wired by any caller even in principle —
+  // `timelineSlot` was a bare ReactNode while Timeline needs `onVoid` ->
+  // `submit`, and `UsePadPipelineResult` exposed neither `submit` upward nor
+  // its event list. Sixth instance of this programme's signature defect
+  // (_INDEX.md, S12/#421): a seam nothing can reach is not "left for later",
+  // it is unreachable. Fixed on the SAME pattern `renderAttribution` already
+  // used — see that describe block above.
+  const GENERIC_CFG = { resultMode: "score" as const, allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false };
+
+  function mountWithHistory(transport: PadTransport, identity: OwnIdentity = ME) {
+    const generic = resolveModuleClient("generic", "1.0.0");
+    return renderIsland(PadRenderer, {
+      module: generic,
+      cfg: GENERIC_CFG,
       fixtureId: "fx-1",
-      lineups: defaultLineupPair(resolveModuleClient("generic", "1.0.0").positions),
+      lineups: defaultLineupPair(generic.positions),
+      identity,
+      transport,
+      band: 3 as const,
+      entitlements: {},
+      initialEvents: [
+        {
+          id: "e-1",
+          fixtureId: "fx-1",
+          seq: 1,
+          type: "core.start",
+          payload: {},
+          recordedAt: "2026-08-13T00:00:00.000Z",
+          recordedBy: "user-1",
+        },
+      ],
+    });
+  }
+
+  it("renders Timeline from the pipeline's own events when no timelineSlot override is passed", async () => {
+    const island = mountWithHistory(fakeTransport({ appendResults: [] }));
+    await tick(); // let the mount-time resume/drain effect settle first
+    const timelineEl = find(island.tree(), isType(Timeline));
+    const events = propsOf(timelineEl).events as TimelineEvent[];
+    expect(events.some((e) => e.id === "e-1" && e.type === "core.start")).toBe(true);
+  });
+
+  it("Timeline's onVoid fires submit(\"core.void\", {event_id}) through the REAL pipeline, not a stub", async () => {
+    const appendCalls: { fixtureId: string; body: AppendEventBody }[] = [];
+    const transport: PadTransport = {
+      async appendEvent(fixtureId, body) {
+        appendCalls.push({ fixtureId, body });
+        return { kind: "ok", data: { seq: appendCalls.length + 1, state_summary: null, outcome: null, status: "in_play" } };
+      },
+      async listEventsSince(): Promise<LedgerSlotEvent[]> {
+        return [];
+      },
+      async getLastSeq(): Promise<number> {
+        throw new Error("fakeTransport: getLastSeq not used by this suite");
+      },
+      async fetchState(): Promise<FixtureStateResult> {
+        return { status: "in_play", last_seq: 1, state: null, summary: null, outcome: null };
+      },
+    };
+    const island = mountWithHistory(transport);
+    await tick();
+    const timelineEl = find(island.tree(), isType(Timeline));
+    const onVoid = propsOf(timelineEl).onVoid as (eventId: string) => void;
+    expect(typeof onVoid).toBe("function");
+    onVoid("e-1");
+    await tick();
+    await tick();
+    const voidCall = appendCalls.find((c) => c.body.type === "core.void");
+    expect(voidCall, "onVoid must reach the transport as a real core.void append").toBeTruthy();
+    // pipeline.ts's own core.void translation: the wire payload carries the
+    // voided event's id (server/usecases/scoring.ts extracts it into the
+    // persisted envelope's `voids` field) — see use-pad-pipeline.ts's
+    // toEnvelopeFields for the client-side mirror of that same rule.
+    expect(voidCall!.body.payload).toEqual({ event_id: "e-1" });
+  });
+
+  it("feeds Timeline the REAL identity's deviceLinkId, never a hardcoded permissive default", async () => {
+    const deviceIdentity: OwnIdentity = { recordedBy: "user-1", deviceLinkId: "dev-xyz" };
+    const island = mountWithHistory(fakeTransport({ appendResults: [] }), deviceIdentity);
+    await tick();
+    const timelineEl = find(island.tree(), isType(Timeline));
+    expect(propsOf(timelineEl).deviceLinkId).toBe("dev-xyz");
+  });
+
+  it("an explicit timelineSlot override still wins, receiving the resolved events and a wired onVoid", async () => {
+    const marker = "TIMELINE-SLOT-OVERRIDE-MARKER";
+    let receivedEvents: TimelineEvent[] | null = null;
+    let receivedOnVoid: unknown = null;
+    const generic = resolveModuleClient("generic", "1.0.0");
+    const island = renderIsland(PadRenderer, {
+      module: generic,
+      cfg: GENERIC_CFG,
+      fixtureId: "fx-1",
+      lineups: defaultLineupPair(generic.positions),
       identity: ME,
       transport: fakeTransport({ appendResults: [] }),
       band: 3 as const,
       entitlements: {},
-      timelineSlot: marker,
+      initialEvents: [
+        {
+          id: "e-1",
+          fixtureId: "fx-1",
+          seq: 1,
+          type: "core.start",
+          payload: {},
+          recordedAt: "2026-08-13T00:00:00.000Z",
+          recordedBy: "user-1",
+        },
+      ],
+      timelineSlot: (events: readonly TimelineEvent[], onVoid: (eventId: string) => void) => {
+        receivedEvents = [...events];
+        receivedOnVoid = onVoid;
+        return marker;
+      },
     });
+    await tick();
     expect(island.text()).toContain(marker);
+    // Never drawn when an override is supplied — same "one or the other"
+    // contract the skin routing describe block pins below.
+    expect(findAll(island.tree(), isType(Timeline)).length).toBe(0);
+    expect(receivedEvents, "the override must receive the SAME resolved events the default draws").not.toBeNull();
+    expect(receivedEvents!.some((e) => e.id === "e-1")).toBe(true);
+    expect(typeof receivedOnVoid).toBe("function");
+  });
+
+  // S12/#421 pass G (_INDEX.md decision log, "the pad's own undo silently
+  // does nothing for an event you just scored"). Every OTHER void test in
+  // this block targets "e-1" from initialEvents — a server-known id that
+  // never exposed the bug. This one scores through a REAL rendered action
+  // tile first, so the row Timeline exposes carries the client-fabricated id
+  // pendingToEnvelope stamps (use-pad-pipeline.ts), exactly like a scorer
+  // tapping Undo on the goal they just entered — no reload, no poll tick in
+  // between.
+  it("a PAD-SUBMITTED event's own Undo control voids it with no reload and no intervening poll", async () => {
+    const REAL_SERVER_ID = "server-real-score-row-id";
+    const appendCalls: { fixtureId: string; body: AppendEventBody }[] = [];
+    const transport: PadTransport = {
+      async appendEvent(fixtureId, body) {
+        appendCalls.push({ fixtureId, body });
+        return { kind: "ok", data: { seq: appendCalls.length + 1, state_summary: null, outcome: null, status: "in_play" } };
+      },
+      async listEventsSince(): Promise<LedgerSlotEvent[]> {
+        // The only row the resolution step ever asks about: the pad-
+        // submitted score, at seq 2 (seq 1 is mountWithHistory's core.start).
+        return [
+          {
+            id: REAL_SERVER_ID,
+            seq: 2,
+            type: "generic.score",
+            payload: { points: 3 },
+            recorded_at: "2026-08-13T00:00:01.000Z",
+            recorded_by: "user-1",
+            device_link_id: null,
+          },
+        ];
+      },
+      async getLastSeq(): Promise<number> {
+        throw new Error("fakeTransport: getLastSeq not used by this suite");
+      },
+      async fetchState(): Promise<FixtureStateResult> {
+        return { status: "in_play", last_seq: 2, state: null, summary: null, outcome: null };
+      },
+    };
+    const island = mountWithHistory(transport);
+    await tick();
+
+    // Score through the REAL rendered Tally panel's own onSubmit prop —
+    // this file's established boundary for a stateful nested child
+    // (panel.tsx's own header: "children are elements, not markup" — the
+    // SAME pattern the fidelity-switcher tests above use via panelByKey,
+    // and Timeline's onVoid prop is exercised the identical way below).
+    // ActionForm's OWN expand/validate/confirm interaction is that file's
+    // separately-owned test surface, not this one's.
+    const tallyPanel = panelByKey(island.tree(), "pad.generic.panel.tally");
+    const submitAction = propsOf(tallyPanel).onSubmit as (type: string, payload: Record<string, unknown>) => void;
+    submitAction("generic.score", { points: 3 });
+    await tick();
+    await tick();
+    expect(appendCalls.some((c) => c.body.type === "generic.score")).toBe(true);
+
+    // The row the pad itself just submitted — read off the REAL rendered
+    // Timeline, exactly as a scorer would see it, not off the pipeline
+    // directly.
+    const timelineEl = find(island.tree(), isType(Timeline));
+    const scoreRow = (propsOf(timelineEl).events as TimelineEvent[]).find((e) => e.type === "generic.score")!;
+    const onVoid = propsOf(timelineEl).onVoid as (eventId: string) => Promise<void> | void;
+    await onVoid(scoreRow.id);
+
+    const voidCall = appendCalls.find((c) => c.body.type === "core.void");
+    expect(voidCall, "the undo must reach the transport, not vanish silently").toBeTruthy();
+    // THE regression: the wire payload must carry the server's real row id,
+    // never the client-fabricated one Timeline happened to expose.
+    expect(voidCall!.body.payload).toEqual({ event_id: REAL_SERVER_ID });
+    expect(voidCall!.body.payload).not.toEqual({ event_id: scoreRow.id });
   });
 });
 

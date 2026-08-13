@@ -484,3 +484,70 @@ describe("period skin — the suspension flow is a real, fillable form (not a ra
     expect(submitted).toMatchObject({ class: "minor", reason: "tripping", minutes: 2, person: "12", servedBy: "7" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// S12/#421 pass B (owner-approved widening into skins/**): a squad member
+// with no declared squadNumber fell back to a 6-char id slice as its chip
+// label. `ctx.personNames` (S11's SkinLayoutCtx) has existed since S11 but
+// this skin never consumed it for that fallback. squadNumber stays the
+// FIRST choice (a scorer's own vocabulary -- module header) — only the
+// no-squadNumber fallback changes, to prefer the resolved name over the id
+// slice. `defaultLineupPair`/`lineupFromCatalog` (testkit/helpers.ts) never
+// sets `squadNumber`, so every member in this file's own fixtures already
+// exercises the fallback branch, same as the suspension-flow tests above.
+// ---------------------------------------------------------------------------
+describe("period skin — person attribution chips show ctx.personNames, not the id slice, when no squadNumber is set (S12/#421 pass B)", () => {
+  it("hockey: the offender chip shows the resolved name", () => {
+    const cfg = hockey.configSchema.parse({});
+    const lineups = defaultLineupPair(hockey.positions);
+    const H = lineups.home.entrantId;
+    const OFFENDER = "H-p2";
+    const events = [
+      makeEnvelope(0, { type: "core.start", payload: {} }),
+      makeEnvelope(1, { type: "core.lineup.position", payload: { side: H, personId: OFFENDER, positionKey: "FW" } }),
+    ];
+    const state = foldClient(hockey, cfg, lineups, events);
+    const summary = hockey.summary(state);
+    const spec = hockey.padSpec!(cfg);
+    const entitlements = grantAllEntitlements(spec);
+    const view = buildPadView(spec, { state, summary, phase: "live", band: FULL_BAND, entitlements });
+    const action = actionByType(view, "hockey.suspension.start");
+    expect(action).not.toBeNull();
+
+    const personNames = { [OFFENDER]: "Alice Offender" };
+    const renderAttribution = buildAttributionRenderer({ cfg, state, summary, band: FULL_BAND, personNames }, msg);
+    const island = renderIsland(ActionForm, { action: action!, onSubmit: () => {}, renderAttribution });
+
+    (propsOf(find(island.tree(), isType("button"))).onClick as () => void)();
+    const tree = island.tree();
+    const personChips = chipsOf(byPath(tree, "person"));
+    const offenderChip = find(personChips, (c) => propsOf(c)["data-value"] === OFFENDER);
+    expect(textOf(offenderChip)).toBe("Alice Offender");
+  });
+
+  it("hockey: falls back to the id slice when personNames has no entry for that person -- total without a roster", () => {
+    const cfg = hockey.configSchema.parse({});
+    const lineups = defaultLineupPair(hockey.positions);
+    const H = lineups.home.entrantId;
+    const OFFENDER = "H-p2";
+    const events = [
+      makeEnvelope(0, { type: "core.start", payload: {} }),
+      makeEnvelope(1, { type: "core.lineup.position", payload: { side: H, personId: OFFENDER, positionKey: "FW" } }),
+    ];
+    const state = foldClient(hockey, cfg, lineups, events);
+    const summary = hockey.summary(state);
+    const spec = hockey.padSpec!(cfg);
+    const entitlements = grantAllEntitlements(spec);
+    const view = buildPadView(spec, { state, summary, phase: "live", band: FULL_BAND, entitlements });
+    const action = actionByType(view, "hockey.suspension.start");
+
+    const renderAttribution = buildAttributionRenderer({ cfg, state, summary, band: FULL_BAND }, msg);
+    const island = renderIsland(ActionForm, { action: action!, onSubmit: () => {}, renderAttribution });
+
+    (propsOf(find(island.tree(), isType("button"))).onClick as () => void)();
+    const tree = island.tree();
+    const personChips = chipsOf(byPath(tree, "person"));
+    const offenderChip = find(personChips, (c) => propsOf(c)["data-value"] === OFFENDER);
+    expect(textOf(offenderChip)).toBe(OFFENDER.slice(0, 6));
+  });
+});

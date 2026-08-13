@@ -45,6 +45,7 @@ import type { LineupPair, SideSquad, SquadState } from "@seazn/engine/core";
 import { initSquads, personsAtPosition, playingSquad } from "@seazn/engine/core";
 import type { PadAttributionItem, PadFieldValue } from "@seazn/engine/sport";
 import type { ActionValues } from "./action-form";
+import { deriveFieldPathLabel } from "./view-model";
 import type { PadActionView } from "./view-model";
 
 function isSideSquadLike(x: unknown): x is SideSquad {
@@ -91,8 +92,9 @@ export function candidatesForPerson(
 }
 
 /**
- * Caption for one attribution item: the engine's own `labelKey` when
- * declared (S7/#427's `padLabel`), else a chassis-owned fallback —
+ * Caption for one attribution item, in three tiers: the engine's own
+ * `labelKey` when declared (S7/#427's `padLabel`); else, for a PERSON item,
+ * its own path humanised (`scorer` -> "Scorer"); else the chassis fallback
  * `${kind} #${index+1}`, optionally prefixed with the owning action's own
  * label. Mirrors action-form.tsx's `renderField` fallback pattern
  * (`${fallbackName} #${index+1}`) for the same accessibility reason: a
@@ -108,6 +110,33 @@ export function attributionItemCaption(
   actionLabel?: string,
 ): string {
   if (item.labelKey) return padLabel(item.labelKey.key, msg, item.labelKey.label);
+
+  // S12/#421 — before the ordinal, humanise the item's OWN path. Football's
+  // goal declares `scorer` and `assist` with no labelKey, so the ordinal
+  // fallback captioned its two person pickers "Goal — Person #2" and
+  // "Goal — Person #3": a scorer looking at the headline flow of the second
+  // busiest pad could not tell which picker credited the goal and which the
+  // assist. Measured in a real browser, flag on, against a real roster.
+  //
+  // Derived in the RENDERER rather than by declaring engine label keys — the
+  // precedent S10/#419 set for uncaptioned FIELDS, and for the same reason it
+  // gave then: the alternative is minting 100+ keys across four locales for
+  // surfaces a skin may relabel anyway. `deriveFieldPathLabel` is the exact
+  // function that pass already uses, so the two fallbacks read identically
+  // (`scorer` -> "Scorer", `assist` -> "Assist", `wicket.fielder` ->
+  // "Wicket fielder"), and view-model.ts's own header explains why it is
+  // deliberately never routed through msg(): a path is an engine-internal
+  // identifier, not authored copy, and there is no English sentence in it for
+  // a translator to translate.
+  //
+  // SIDE items keep the kind label: their path is usually `by`, and
+  // "Goal — By" is worse than "Goal — Side". Only person paths carry a name
+  // worth showing.
+  if (item.kind === "person" && item.path) {
+    const derived = deriveFieldPathLabel(item.path);
+    return actionLabel ? `${actionLabel} — ${derived}` : derived;
+  }
+
   const kindLabel = msg(item.kind === "side" ? "scorepad.attribution.side" : "scorepad.attribution.person");
   const base = `${kindLabel} #${index + 1}`;
   return actionLabel ? `${actionLabel} — ${base}` : base;
