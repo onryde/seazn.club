@@ -97,7 +97,11 @@ export async function listCompetitions(
 // competition past that boundary was keeping a free slot for ever. Same
 // predicate the resolver uses (V343's pass_applies), so the three sites cannot
 // drift apart again. Enforced at the write (doc 10 §2 rule 1).
-async function assertActiveQuota(auth: AuthCtx): Promise<void> {
+// Exported (only) for createFromTemplate (usecases/templates.ts, D1a): a
+// template-instantiated competition is a competition for quota purposes, and
+// this is the SAME pre-transaction check createCompetition itself runs below
+// — reused, not restated, so the two can never disagree about the boundary.
+export async function assertActiveQuota(auth: AuthCtx): Promise<void> {
   const count = await withTenant(auth.orgId, async (tx) => {
     const [{ n }] = await tx<{ n: number }[]>`
       select count(*)::int as n from competitions c
@@ -114,7 +118,8 @@ async function assertActiveQuota(auth: AuthCtx): Promise<void> {
 
 // Doc 10 §1: `dashboard.public.max` — Community holds 1 public competition at
 // a time. Enforced here, at the write (doc 10 §2 rule 1), not in the UI.
-async function assertPublicQuota(auth: AuthCtx, excludeId?: string): Promise<void> {
+/** Exported (only) for createFromTemplate — see assertActiveQuota above. */
+export async function assertPublicQuota(auth: AuthCtx, excludeId?: string): Promise<void> {
   const count = await withTenant(auth.orgId, async (tx) => {
     const rows = excludeId
       ? await tx<{ n: string }[]>`
