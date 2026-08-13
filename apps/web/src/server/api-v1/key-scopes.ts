@@ -93,6 +93,9 @@ const RULES: RouteRule[] = [
   // …and the atomic apply of what it planned: a WRITE across every selected
   // division, so `manage`, pinned to the competition that owns them.
   { method: "POST", path: "/competitions/:id/schedule/apply", scope: "manage", pin: "competition" },
+  // D3 joint health — report-only, reads every division's stages, `read`
+  // pinned to the competition (same scope as the single-stage GET).
+  { method: "GET", path: "/competitions/:id/schedule/health", scope: "read", pin: "competition" },
   // …and its undo. Same scope as the apply for the same reason — it rewrites
   // every one of those divisions' boards — matching the per-division
   // /divisions/:id/restore, which is `manage` too.

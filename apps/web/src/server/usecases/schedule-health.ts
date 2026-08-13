@@ -14,12 +14,29 @@ import "server-only";
 // benefit. `stageFixtures` below is intentionally the smallest possible
 // query for this purpose (a handful of columns, not the full `FixtureLite`
 // column set) rather than importing schedule.ts's private column list.
+//
+// `computeStageHealth` (below) is the ONE per-stage computation both the
+// single-stage route and the joint competition route call — never a second
+// copy. This is not incidental tidiness: P1's competition-scope capacity
+// guard (`competition-schedule-ai.ts:2482-2489`) built its per-division
+// config with `toSlotConfig` alone, which never sets `.tz`, where
+// `toVerifyConfig` does — the compiler could not catch it (`SlotConfig` is
+// structurally assignable to `VerifyConfig`), and the guard silently
+// no-opped on every division until a review round caught it. That bug was
+// possible only because the joint path had grown its OWN config-building
+// code instead of calling the already-correct single-division path. This
+// file structurally forecloses that: `getCompetitionScheduleHealth` calls
+// `computeStageHealth` — the exact function `getScheduleHealth` calls —
+// once per stage, so there is no second implementation left to fork from
+// the first. `schedule-health.competition.test.ts` (smoke) asserts this
+// directly: a stage's entry inside a joint response must deep-equal that
+// same stage's standalone report.
 import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { assessHealth, type HealthConfig, type HealthMetric } from "@seazn/engine/scheduling/health";
+import { assessHealth, type HealthConfig, type HealthFixture, type HealthMetric } from "@seazn/engine/scheduling/health";
 import { healthFixturesFor, type HealthFixtureInput } from "@/lib/health-input";
 import { loadSettings } from "./schedule";
 
@@ -99,6 +116,78 @@ function logHealthAssessed(report: ScheduleHealthReport, context: { divisionId: 
   );
 }
 
+function logCompetitionHealthAssessed(report: CompetitionScheduleHealthReport): void {
+  log.info(
+    {
+      event: "schedule_health_assessed",
+      competitionId: report.competitionId,
+      divisions: report.divisions.length,
+      readyStages: report.divisions.reduce((n, d) => n + d.stages.filter((s) => s.status === "ready").length, 0),
+      combinedScores: Object.fromEntries(report.combined.metrics.map((m) => [m.key, m.score])),
+    },
+    "schedule_health_assessed",
+  );
+}
+
+/** Either a fully-computed report (a schedule exists) or a bare "empty"
+ *  marker (no fixture scheduled yet) — the shape the single-stage route
+ *  turns into a 409 and the joint route turns into one entry in a
+ *  division's `stages` array, never a whole-response abort. `fixtures` is
+ *  carried alongside `metrics` so the joint aggregator can union them into
+ *  the COMBINED block without a second DB round trip or a second
+ *  `healthFixturesFor` call. */
+type StageHealthResult =
+  | { stageId: string; divisionId: string; status: "empty" }
+  | {
+      stageId: string;
+      divisionId: string;
+      status: "ready";
+      computedAt: string;
+      metrics: HealthMetric[];
+      fixtures: HealthFixture[];
+    };
+
+/**
+ * THE per-stage computation — called by both `getScheduleHealth` (single
+ * stage) and `getCompetitionScheduleHealth` (joint), and by neither of them
+ * a second time under a different name. See this file's header for why
+ * that matters more than it looks like it should.
+ */
+async function computeStageHealth(tx: Tx, stageId: string): Promise<StageHealthResult> {
+  const [stage] = await tx<{ division_id: string; kind: string }[]>`
+    select division_id, kind from stages where id = ${stageId}`;
+  if (!stage) throw new HttpError(404, `stage not found: ${stageId}`);
+
+  const rows = await stageFixtures(tx, stageId);
+  if (rows.length === 0) {
+    return { stageId, divisionId: stage.division_id, status: "empty" };
+  }
+
+  const settings = await loadSettings(tx, stage.division_id);
+  const inputs: HealthFixtureInput[] = rows.map((r) => ({
+    fixtureId: r.id,
+    scheduledAtMs: toMs(r.scheduled_at),
+    court: r.court_label,
+    ...(r.home_entrant_id !== null ? { home: r.home_entrant_id } : {}),
+    ...(r.away_entrant_id !== null ? { away: r.away_entrant_id } : {}),
+    roundNo: r.round_no,
+    ...(r.pool_id !== null ? { poolId: r.pool_id } : {}),
+    divisionId: stage.division_id,
+  }));
+  const fixtures = healthFixturesFor(inputs, settings.config.matchMinutes, settings.orgTz);
+  const config: HealthConfig = { isRoundRobin: TABLE_KINDS.has(stage.kind) };
+  const assessed = assessHealth(fixtures, config);
+
+  return {
+    stageId,
+    divisionId: stage.division_id,
+    status: "ready",
+    computedAt: new Date().toISOString(),
+    metrics: assessed.metrics,
+    fixtures,
+  };
+}
+
 /**
  * getScheduleHealth (D3) — loads the stage's applied fixtures, resolves the
  * division's schedule config for matchMinutes + the ORG governing clock
@@ -107,37 +196,107 @@ function logHealthAssessed(report: ScheduleHealthReport, context: { divisionId: 
  * fixture has been scheduled yet — report-only, this never blocks Solve.
  */
 export async function getScheduleHealth(auth: AuthCtx, stageId: string): Promise<ScheduleHealthReport> {
-  return withTenant(auth.orgId, async (tx) => {
-    const [stage] = await tx<{ division_id: string; kind: string }[]>`
-      select division_id, kind from stages where id = ${stageId}`;
-    if (!stage) throw new HttpError(404, "stage not found");
+  const result = await withTenant(auth.orgId, (tx) => computeStageHealth(tx, stageId));
+  if (result.status === "empty") {
+    throw new HttpError(409, "No applied schedule for this stage yet", SCHEDULE_NOT_APPLIED_CODE);
+  }
+  const report: ScheduleHealthReport = {
+    stageId: result.stageId,
+    computedAt: result.computedAt,
+    metrics: result.metrics,
+  };
+  logHealthAssessed(report, { divisionId: result.divisionId });
+  return report;
+}
 
-    const rows = await stageFixtures(tx, stageId);
-    if (rows.length === 0) {
-      throw new HttpError(409, "No applied schedule for this stage yet", SCHEDULE_NOT_APPLIED_CODE);
+export type StageHealthEntry =
+  | { stageId: string; status: "empty" }
+  | { stageId: string; status: "ready"; computedAt: string; metrics: HealthMetric[] };
+
+export interface DivisionHealthEntry {
+  divisionId: string;
+  name: string;
+  stages: StageHealthEntry[];
+}
+
+export interface CompetitionScheduleHealthReport {
+  competitionId: string;
+  computedAt: string;
+  divisions: DivisionHealthEntry[];
+  /** gapDispersion + primeSlotFairness ONLY, computed over the UNION of
+   *  every ready stage's fixtures across every division (design doc,
+   *  verbatim: "computed over the union where meaningful" — these two key
+   *  off shared court-day resources; the other three are per-entrant, and
+   *  entrants never cross divisions, so combining them would not mean
+   *  anything). Always exactly 2 entries. */
+  combined: { metrics: HealthMetric[] };
+}
+
+const COMBINED_METRIC_KEYS = new Set(["gapDispersion", "primeSlotFairness"]);
+
+/**
+ * getCompetitionScheduleHealth (D3 joint variant) — every division under
+ * the competition, every one of ITS stages assessed via `computeStageHealth`
+ * (never a second implementation — see this file's header), reported in
+ * full even when some stages have no applied schedule yet: a joint report
+ * names every division's state rather than aborting the whole call because
+ * ONE division is not ready, the same "aggregate, don't short-circuit"
+ * shape `aiPlanForCompetition` (P1) uses for its per-division capacity
+ * check. 404 only for an unknown competition — an empty or all-unscheduled
+ * competition is still a valid 200 (there is something real to report:
+ * which divisions/stages are and are not ready), never a synthetic 409.
+ */
+export async function getCompetitionScheduleHealth(
+  auth: AuthCtx,
+  competitionId: string,
+): Promise<CompetitionScheduleHealthReport> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [comp] = await tx<{ id: string }[]>`select id from competitions where id = ${competitionId}`;
+    if (!comp) throw new HttpError(404, "competition not found");
+
+    const divisionRows = await tx<{ id: string; name: string }[]>`
+      select id, name from divisions where competition_id = ${competitionId} order by name, id`;
+    const stageRows = await tx<{ id: string; division_id: string }[]>`
+      select s.id, s.division_id from stages s
+      join divisions d on d.id = s.division_id
+      where d.competition_id = ${competitionId}
+      order by d.name, d.id, s.seq, s.id`;
+
+    const byDivision = new Map<string, StageHealthEntry[]>();
+    const combinedFixtures: HealthFixture[] = [];
+    for (const s of stageRows) {
+      const result = await computeStageHealth(tx, s.id);
+      const entry: StageHealthEntry =
+        result.status === "ready"
+          ? { stageId: result.stageId, status: "ready", computedAt: result.computedAt, metrics: result.metrics }
+          : { stageId: result.stageId, status: "empty" };
+      const list = byDivision.get(result.divisionId);
+      if (list !== undefined) list.push(entry);
+      else byDivision.set(result.divisionId, [entry]);
+      if (result.status === "ready") combinedFixtures.push(...result.fixtures);
     }
 
-    const settings = await loadSettings(tx, stage.division_id);
-    const inputs: HealthFixtureInput[] = rows.map((r) => ({
-      fixtureId: r.id,
-      scheduledAtMs: toMs(r.scheduled_at),
-      court: r.court_label,
-      ...(r.home_entrant_id !== null ? { home: r.home_entrant_id } : {}),
-      ...(r.away_entrant_id !== null ? { away: r.away_entrant_id } : {}),
-      roundNo: r.round_no,
-      ...(r.pool_id !== null ? { poolId: r.pool_id } : {}),
-      divisionId: stage.division_id,
+    const divisions: DivisionHealthEntry[] = divisionRows.map((d) => ({
+      divisionId: d.id,
+      name: d.name,
+      stages: byDivision.get(d.id) ?? [],
     }));
-    const fixtures = healthFixturesFor(inputs, settings.config.matchMinutes, settings.orgTz);
-    const config: HealthConfig = { isRoundRobin: TABLE_KINDS.has(stage.kind) };
-    const assessed = assessHealth(fixtures, config);
 
-    const report: ScheduleHealthReport = {
-      stageId,
+    // isRoundRobin is irrelevant to the two metrics COMBINED keeps
+    // (neither reads it — only homeAwayAlternation does, and that is
+    // filtered out below) — `false` is a deterministic placeholder, not a
+    // real classification of a fixture set that may span several stage
+    // kinds at once.
+    const combinedAssessed = assessHealth(combinedFixtures, { isRoundRobin: false });
+    const combined = { metrics: combinedAssessed.metrics.filter((m) => COMBINED_METRIC_KEYS.has(m.key)) };
+
+    const report: CompetitionScheduleHealthReport = {
+      competitionId,
       computedAt: new Date().toISOString(),
-      metrics: assessed.metrics,
+      divisions,
+      combined,
     };
-    logHealthAssessed(report, { divisionId: stage.division_id });
+    logCompetitionHealthAssessed(report);
     return report;
   });
 }

@@ -1309,6 +1309,39 @@ export const ScheduleHealthReport = z.object({
 });
 export type ScheduleHealthReport = z.infer<typeof ScheduleHealthReport>;
 
+/** GET /competitions/{id}/schedule/health's 200 body — the joint variant
+ *  (design doc: "returns per-division arrays + a combined block"). A stage
+ *  entry is EITHER a full report or a bare `{stageId, status:"empty"}` —
+ *  never a thrown 409, so one unscheduled division cannot take the whole
+ *  joint call down (mirrors the "aggregate every division, never
+ *  short-circuit on the first" shape `aiPlanForCompetition`'s capacity
+ *  guard uses). */
+export const StageHealthEntry = z.discriminatedUnion("status", [
+  z.object({
+    stageId: Uuid,
+    status: z.literal("ready"),
+    computedAt: z.iso.datetime({ offset: true }),
+    metrics: z.array(HealthMetric).min(4).max(5),
+  }),
+  z.object({ stageId: Uuid, status: z.literal("empty") }),
+]);
+
+export const DivisionHealthEntry = z.object({
+  divisionId: Uuid,
+  name: z.string(),
+  stages: z.array(StageHealthEntry),
+});
+
+export const CompetitionScheduleHealthReport = z.object({
+  competitionId: Uuid,
+  computedAt: z.iso.datetime({ offset: true }),
+  divisions: z.array(DivisionHealthEntry),
+  // gapDispersion + primeSlotFairness ONLY (design doc: "computed over the
+  // union where meaningful") — always exactly 2 entries.
+  combined: z.object({ metrics: z.array(HealthMetric).length(2) }),
+});
+export type CompetitionScheduleHealthReport = z.infer<typeof CompetitionScheduleHealthReport>;
+
 export const AutoScheduleResult = z.object({
   assignments: z.array(ScheduleAssignment),
   conflicts: z.array(ScheduleConflict),
