@@ -2361,6 +2361,36 @@ Append one line per ruling: date, session, decision, reason. Never delete.
     flows do not build.
   Recorded here rather than only in the PR body, because a PR body does not
   survive compaction and S13's brief needs this list to be exact.
+- 2026-08-13 — S12/#421 — **FOURTH defect, and the decisive trace: the client
+  fold never advances after its OWN successful ack, so exactly one ball can
+  ever be scored.** Captured from the browser's real network traffic (POST
+  bodies and response bodies, not inferred):
+  ```
+  core.start  expected_seq 0            -> 201 seq 1
+  ball 1      expected_seq 0, ballInOver 1 -> 409 SEQ_CONFLICT (ledger at 1)
+              retry expected_seq 1         -> 201 seq 2, summary "1/0 (0.1)"
+  ball 2      expected_seq 1, ballInOver 1 -> 409, then
+                                             422 INVALID_EVENT
+                                             "over/ballInOver do not match the ledger"
+  ball 3      expected_seq 1, ballInOver 1 -> same 409 then same 422
+  ```
+  Two facts fall out of it that no amount of reading would have settled:
+  (a) `expected_seq` starts at 0 for the pad's FIRST write even though
+  `core.start` is already on the ledger — the pad's `ledgerEvents` is empty at
+  mount and never adopts the event the console chrome wrote. The 409-retry
+  protocol rescues the write, so this looks harmless and is not.
+  (b) `ballInOver` is 1 on every subsequent ball, so the fold the skin reads
+  is frozen at the pre-first-ball state. The server's own ack carries
+  `state_summary: "1/0 (0.1)"`, i.e. the server knew; the pad did not.
+  Note this is NOT the same fix as the poll-path merge (pass C): that path
+  fires on `POLL_MS` = 15s and covers a FOREIGN write. This is the pad failing
+  to advance on its OWN acked write, which is the ack path. The two share a
+  root — `serverOverride` corrects the DISPLAY while the fold BASE is a
+  separate, un-updated list — and fixing one leaves the other.
+  Worth recording as a general lesson: `expected_seq` renegotiation on 409 is
+  a REPAIR mechanism, and a repair mechanism that always succeeds hides the
+  fault it repairs. The first ball landing made the pad look functional; only
+  the second ball's 422 named the real state.
 - _(append below)_
 
 ## Open questions for the owner

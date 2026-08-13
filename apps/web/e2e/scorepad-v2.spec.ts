@@ -150,12 +150,34 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
     // advance `ballInOver`, so an over containing one is six legal balls
     // across seven events — the exact arithmetic a pad gets wrong if it
     // counts taps instead of legal balls.
+    // Wait for the LEDGER to advance between taps rather than sleeping a fixed
+    // interval. Two reasons, both real: the submit is async through a durable
+    // queue, so a fixed wait races the drain; and `usePadPipeline`'s
+    // double-submit guard suppresses a repeat of the SAME (type, payload)
+    // within its window — two dot balls tapped before the fold advances build
+    // byte-identical payloads and the second is correctly swallowed. A scorer
+    // tapping at human speed never hits either; a test with `waitForTimeout`
+    // hits both and reads as a pad bug.
+    let delivered = 0;
     for (const runs of ["1", "0", "2", "0", "4"]) {
       await pad(page).getByRole("button", { name: runs, exact: true }).click();
-      await page.waitForTimeout(250);
+      delivered += 1;
+      await expect
+        .poll(
+          async () =>
+            (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+          { timeout: 20_000 },
+        )
+        .toBe(delivered);
     }
     await pad(page).getByRole("button", { name: "Wide", exact: true }).click();
-    await page.waitForTimeout(250);
+    await expect
+      .poll(
+        async () =>
+          (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+        { timeout: 20_000 },
+      )
+      .toBe(6);
 
     const afterOver = await ledger(page.request, fx.fixtureId);
     const balls = afterOver.filter((e) => e.type === "cricket.ball");
