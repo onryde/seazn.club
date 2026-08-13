@@ -1070,37 +1070,61 @@ export async function assembleDigestStandings(
 ): Promise<DigestStandingsSection[]> {
   const out: DigestStandingsSection[] = [];
   for (const stage of stages) {
-    const [snap] = await tx<{ rows: RankedEntrantRow[]; previous_rows: RankedEntrantRow[] | null }[]>`
-      select rows, previous_rows from standings_snapshots
-      where stage_id = ${stage.stage_id} and pool_id is null`;
-    if (!snap || snap.rows.length === 0) continue;
-    const sorted = [...snap.rows].sort(
-      (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
-    );
-    const top3 = sorted.slice(0, 3);
-    if (top3.length === 0) continue;
-    const names = new Map(
-      (
-        await tx<{ id: string; display_name: string }[]>`
-          select id, display_name from entrants where id = any(${top3.map((r) => r.entrantId)})`
-      ).map((e) => [e.id, e.display_name]),
-    );
-    let climberOut: DigestStandingsSection["climber"];
-    const climber = biggestClimber(snap.rows, snap.previous_rows);
-    if (climber) {
-      const [entrant] = await tx<{ display_name: string }[]>`
-        select display_name from entrants where id = ${climber.entrantId}`;
-      if (entrant) climberOut = { entrantName: entrant.display_name, from: climber.from, to: climber.to };
+    try {
+      // Savepoint — same reason as every other digest source, and this one
+      // was the ONLY source in the family without it. That mattered more
+      // than a missing guard usually does: a REJECTED statement aborts the
+      // whole Postgres transaction, and a JS `catch` does not undo that. So
+      // one bad row here did not cost the standings section, it cost the
+      // WHOLE DIGEST — digestForOrg's next three sources each died on their
+      // own first query inside the poisoned transaction, were caught by
+      // their own catch, and were dropped. The organiser saw an empty draft
+      // and no error at all; the only trace was four
+      // "news enrichment: source failed" lines in the server log.
+      //
+      // `standings_snapshots.rows` is jsonb and nothing validates the
+      // `entrantId` inside it, so `= any(...)` below is one malformed value
+      // away from `invalid input syntax for type uuid` — that is the exact
+      // trigger org-posts-digest.test.ts now reproduces.
+      await tx.savepoint(async (sp) => {
+        const [snap] = await sp<{ rows: RankedEntrantRow[]; previous_rows: RankedEntrantRow[] | null }[]>`
+          select rows, previous_rows from standings_snapshots
+          where stage_id = ${stage.stage_id} and pool_id is null`;
+        if (!snap || snap.rows.length === 0) return;
+        const sorted = [...snap.rows].sort(
+          (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
+        );
+        const top3 = sorted.slice(0, 3);
+        if (top3.length === 0) return;
+        const names = new Map(
+          (
+            await sp<{ id: string; display_name: string }[]>`
+              select id, display_name from entrants where id = any(${top3.map((r) => r.entrantId)})`
+          ).map((e) => [e.id, e.display_name]),
+        );
+        let climberOut: DigestStandingsSection["climber"];
+        const climber = biggestClimber(snap.rows, snap.previous_rows);
+        if (climber) {
+          const [entrant] = await sp<{ display_name: string }[]>`
+            select display_name from entrants where id = ${climber.entrantId}`;
+          if (entrant) climberOut = { entrantName: entrant.display_name, from: climber.from, to: climber.to };
+        }
+        out.push({
+          divisionName: stage.division_name,
+          top3: top3.map((r, i) => ({
+            position: r.rank ?? i + 1,
+            name: names.get(r.entrantId) ?? "—",
+            points: r.points,
+          })),
+          ...(climberOut ? { climber: climberOut } : {}),
+        });
+      });
+    } catch (err) {
+      log.warn(
+        { stageId: stage.stage_id, source: "digestStandings", err: String(err) },
+        "news enrichment: source failed, dropping section",
+      );
     }
-    out.push({
-      divisionName: stage.division_name,
-      top3: top3.map((r, i) => ({
-        position: r.rank ?? i + 1,
-        name: names.get(r.entrantId) ?? "—",
-        points: r.points,
-      })),
-      ...(climberOut ? { climber: climberOut } : {}),
-    });
   }
   return out;
 }

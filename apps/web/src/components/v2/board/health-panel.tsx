@@ -107,12 +107,18 @@ function scoreTone(score: number): { bar: string; track: string; text: string } 
   return { bar: "bg-red-500", track: "bg-red-100", text: "text-red-700" };
 }
 
-function MetricCard({ metric }: { metric: HealthMetricWire }) {
+function MetricCard({ metric, stageId }: { metric: HealthMetricWire; stageId: string }) {
   const msg = useMsg();
   const [expanded, setExpanded] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const tone = scoreTone(metric.score);
-  const aboutId = `health-about-${metric.key}`;
+  // Scoped by STAGE as well as metric: schedule/page.tsx renders one
+  // HealthPanel per stage and mounts them all at once, so a division with
+  // two stages emitted two elements with id="health-about-restSpread" and
+  // every aria-controls after the first pointed at the wrong stage's
+  // paragraph. Invisible to a single-stage screenshot and to the
+  // single-stage e2e fixture, which is why it shipped.
+  const aboutId = `health-about-${stageId}-${metric.key}`;
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4" data-health-metric={metric.key} data-health-score={metric.score}>
@@ -252,7 +258,7 @@ export function HealthPanel({ stageId, stageLabel }: HealthPanelProps) {
       {state.status === "ready" && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {state.report.metrics.map((m) => (
-            <MetricCard key={m.key} metric={m} />
+            <MetricCard key={m.key} metric={m} stageId={stageId} />
           ))}
         </div>
       )}

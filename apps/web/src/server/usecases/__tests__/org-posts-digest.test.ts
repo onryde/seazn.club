@@ -169,11 +169,77 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     expect(digests).toHaveLength(2);
   });
 
-  it("an org with no activity at all still gets a (near-empty) draft from the button — 'a missing draft is a defect'", async () => {
+  it("an org with no activity at all still gets a draft from the button, and it SAYS so instead of being blank", async () => {
     const ctx = await seedOrg("pro");
     const post = await generateWeeklyDigest(ctx.auth, ctx.orgId);
     expect(post.kind).toBe("weekly_digest");
     expect(post.bodyMd).not.toContain("undefined");
+    // Was `bodyMd: ""` — a title with a completely blank body, which reads
+    // as a broken button rather than as a quiet week. "a missing DRAFT is a
+    // defect" is a rule about whether the draft EXISTS; it never licensed a
+    // blank one.
+    expect(post.bodyMd.trim().length).toBeGreaterThan(0);
+    expect(post.bodyMd).toContain("to report this week");
+  });
+
+  it("one malformed standings row drops ONLY the standings section, not the whole digest", async () => {
+    // The regression this exists for: the four digest sources are each
+    // wrapped in their own try/catch, which looks like isolation and is not.
+    // A REJECTED statement aborts the entire Postgres transaction, and a JS
+    // catch cannot undo that — so before the savepoint went onto
+    // assembleDigestStandings, one bad row here poisoned the transaction and
+    // the next three sources all died on their own first query, were caught
+    // by their own catch, and were dropped. The organiser got an empty draft
+    // and no error; the only evidence was four log lines.
+    //
+    // `standings_snapshots.rows` is jsonb and nothing validates the
+    // `entrantId` inside it, so a non-uuid there is a real reachable state,
+    // not a contrived one: `where id = any(...)` rejects it with
+    // `invalid input syntax for type uuid`.
+    const ctx = await seedOrg("pro");
+    const div = await seedDivision(ctx);
+    // Same seeding the happy-path test above uses — a claimed person on
+    // entrantA and an upcoming fixture — so the OTHER three sources have
+    // genuine content. Without it they are legitimately empty and the test
+    // passes for the wrong reason, which is exactly what the first draft of
+    // this test did.
+    const [{ id: playerUserId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified)
+      values (${`cascade-${randomUUID().slice(0, 8)}@test.local`}, 'Player', true) returning id`;
+    const [{ id: personId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, user_id)
+      values (${ctx.orgId}, 'Riverside Player', ${playerUserId}) returning id`;
+    await sql`
+      insert into entrant_members (entrant_id, person_id, org_id)
+      values (${div.entrantA}, ${personId}, ${ctx.orgId})`;
+    await decideWithRally(ctx, div, div.entrantA, div.entrantB);
+    await sql`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round,
+        home_entrant_id, away_entrant_id, status, scheduled_at)
+      values (${div.stageId}, ${div.divisionId}, ${ctx.orgId}, 2, 1,
+        ${div.entrantA}, ${div.entrantB}, 'scheduled', now() + interval '2 days')`;
+
+    // Corrupt the snapshot the scoring path already wrote, rather than
+    // inserting one: that is the reachable state (a stored row going bad),
+    // and it avoids guessing at computed_through_seq / pool_scope defaults.
+    const updated = await sql`
+      update standings_snapshots
+         set rows = ${sql.json([{ entrantId: "not-a-uuid", rank: 1, points: 3 }] as never)}
+       where stage_id = ${div.stageId} and pool_id is null
+      returning stage_id`;
+    // Guard the premise: with no snapshot to corrupt there is no standings
+    // source to poison, and the whole test would pass vacuously.
+    expect(updated).toHaveLength(1);
+
+    const post = await generateWeeklyDigest(ctx.auth, ctx.orgId);
+
+    // The poisoned source is gone...
+    expect(post.bodyMd).not.toContain("Standings movement");
+    // ...and the survivors are still there. Before the fix this was the
+    // empty-digest body instead, which is precisely the symptom that is
+    // invisible from the UI.
+    expect(post.bodyMd).toContain("Stat leaders");
+    expect(post.bodyMd).not.toContain("to report this week");
   });
 
   it("sweepWeeklyDigests: creates for an active Pro org, skips a community org, skips a Pro org with nothing to report", async () => {

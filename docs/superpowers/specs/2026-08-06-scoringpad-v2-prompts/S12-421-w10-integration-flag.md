@@ -9,6 +9,51 @@ Design: `../2026-08-03-scoringpad-v2-design.md` (Part II, "Rollout").
 **This session discharges the e2e debt** every engine session deferred. Read the
 deferred list in `_INDEX.md` and cover it here.
 
+## What S11 ALREADY SHIPPED — do not rebuild it (added 2026-08-13, PR #553)
+
+This prompt was written before S11 ran, and S11 moved four of its premises.
+Re-pin before trusting anything below.
+
+1. **A skin registry already exists and is already consulted.**
+   `scorepad/skins/registry.ts` maps `sportKey → SkinDef | null`, and
+   `PadRenderer` calls `skinFor(module.key)` **by default** (owner ruling: a
+   registry nothing calls is S10's inert-picker defect again). So scope item 1
+   below is NOT "build a registry" — what actually remains is the `<ScorePad/>`
+   wrapper and the **drift guard over every `builtinModules` key**, which S11's
+   registry deliberately does not have: it only names the 8 skinned sports, and
+   an unskinned sport resolves to `null` → universal renderer.
+2. **`PadRenderer.skin` already has the three states you need**: `undefined` =
+   consult the registry, `null` = force the universal path, a `SkinDef` = draw
+   that one. Use `null` rather than inventing a second bypass.
+3. **FIVE skins exist, not three** — cricket, racquet (volleyball + badminton +
+   tabletennis), tennis, football, period (hockey + icehockey). The remaining
+   sports stay universal deliberately.
+4. **Flag name: `scorepad-v2` (HYPHEN)**, as S10 declared it via the repo's
+   PostHog convention. This prompt says `scorepad_v2` with an underscore in
+   scope item 2 — that is wrong; check `_INDEX.md`'s S10 entry and the code.
+
+### Browser coverage S11 OWES you, and why it could not do it itself
+
+S11's skin e2e drives tennis, volleyball, football and icehockey through S10's
+harness route. **Two flows have no browser coverage at all**, and they are yours:
+
+- **cricket: a full over including an extra, and a dismissal credited to a
+  fielder** — the headline flow of the busiest pad in the product.
+- **football: a goal WITH assist attribution** — S11 could only drive a
+  side-only goal.
+
+The cause is not neglect: every `cricket.ball` carries striker/nonStriker/bowler
+and football's goal carries scorer/assist, and **the harness route's client
+lineups are permanently SYNTHETIC**, so those payloads 422 against the real API
+in either harness mode. S12 mounts the real entry points with real rosters, so
+both become drivable here — and only here, before S13 deletes the harness.
+Treat these two as first-class acceptance criteria, not extras.
+
+Two more harness facts you will hit immediately: with no `?fixture=` param every
+sport except `generic` is stuck in the `pre` phase forever (nothing emits
+`core.start`), and `SCOREPAD_V2_HARNESS=1` is set in three e2e jobs in
+`e2e.yml` — S13 removes both the route and those three lines.
+
 ## Why
 
 Two near-duplicate dispatchers pick the pad today — `fixture-console.tsx`
@@ -59,7 +104,14 @@ before S13 flips anything.
       reconnect, queue drains, server state converges — assert final `last_seq`
       **and** summary
 - [ ] Registry drift-guard test fails when a module key lacks resolution
-      (mutation-prove it)
+      (mutation-prove it). Note S11's registry names only the 8 skinned sports —
+      the guard must sweep **every** `builtinModules` key and treat "universal"
+      as a written decision, not a fallthrough
+- [ ] **Cricket's over-with-an-extra and fielder-credited dismissal are driven
+      in a real browser** — S11 could not (synthetic harness lineups 422). This
+      is the busiest pad in the product and S13 deletes the only other route
+- [ ] **Football's goal WITH assist attribution is driven in a real browser** —
+      same reason; S11 covered a side-only goal
 - [ ] Every deferred assertion from earlier sessions is either covered here or
       explicitly re-deferred to S13 with a reason, listed in `_INDEX.md`
 - [ ] Local e2e via prod build + `E2E_PROD_TARGET` on **`localhost`**:3100 with
@@ -98,6 +150,22 @@ before S13 flips anything.
   server causes 404s.
 - Do **not** dispatch a subagent to run the e2e suite — long e2e runs have died
   to the 600s watchdog twice. Run it in the main thread.
+- **A green root `npm run lint` says NOTHING about the lint CI runs.** CI runs
+  `pnpm run lint` with cwd `apps/web`, which loads Next's own rule set on top.
+  S11 shipped a root-green branch that failed CI with 7 eslint errors
+  (`no-assign-module-variable` on a `const module = …` in tests,
+  `react/display-name` on an anonymous arrow returning JSX). Run
+  `cd apps/web && rtk proxy pnpm run lint` before pushing.
+- **`next build` WORKS again** (measured 2026-08-13: 103s, 237/237 static pages,
+  `BUILD_EXIT=0`). Any older note saying the build is broken on `/help/*` and to
+  use `next dev` instead is stale — and it matters here, because a prod build is
+  the only gate that catches a client-bundle leak while tsc and unit tests pass.
+- The `grant-all` blind spot, since this session adds a flag: any test helper
+  that normalises inputs to make one question answerable defines a blind spot
+  its own size. S11's coverage sweeps granted every entitlement, so `locked`
+  never occurred anywhere in the suite and two skins shipped rendering
+  paid-gated actions as live controls. If you write a "flag on" helper, ask what
+  it makes unobservable.
 
 ## Execution
 

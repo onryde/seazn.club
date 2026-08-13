@@ -476,5 +476,21 @@ export function weeklyDigestDraft(input: WeeklyDigestDraftInput): { title: strin
     );
   }
 
+  // Every section can legitimately be empty — a quiet week, or an org whose
+  // first competition has not started. `lines` is then `[]` and this used to
+  // return `bodyMd: ""`: pressing Generate digest produced a post with a
+  // title and a completely blank body, which reads as a broken button rather
+  // than as "there was nothing to report".
+  //
+  // The button deliberately always creates a draft ("a missing DRAFT is a
+  // defect" — digestForOrg returns null only when the CRON sweep passes
+  // skipIfEmpty, so a silent org's weekly run creates nothing while a
+  // deliberate press always gets something). That ruling is about whether a
+  // draft EXISTS; it never said the draft may be blank. So the empty case
+  // gets a real sentence the organiser can publish or write over, and a
+  // quiet week stops being indistinguishable from a failure.
+  if (lines.length === 0) {
+    return { title, bodyMd: msgFor(input.locale, "news.digest.empty") };
+  }
   return { title, bodyMd: lines.join("\n") };
 }
