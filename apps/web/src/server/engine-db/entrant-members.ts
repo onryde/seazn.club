@@ -69,6 +69,13 @@ export async function loadEntrantMembersForDivision(
     from entrants e
     left join entrant_members em on em.entrant_id = e.id
     where e.division_id = ${divisionId}
+    -- Deterministic member order. Without it Postgres returns whatever the
+    -- chosen plan produces, and this loader and the per-fixture one below can
+    -- report the SAME pair's personIds in DIFFERENT orders — which their own
+    -- parity test caught only intermittently in CI (S10/#419). Callers compare
+    -- these arrays positionally, so "same set, different order" is a real
+    -- disagreement, not a cosmetic one.
+    order by e.id, em.person_id
   `;
   return buildMembership(rows);
 }
@@ -101,6 +108,8 @@ export async function loadEntrantMembersForFixture(
     from entrants e
     left join entrant_members em on em.entrant_id = e.id
     where e.id in ${tx(ids)}
+    -- Same ordering as the division-wide loader above, for the same reason.
+    order by e.id, em.person_id
   `;
   return buildMembership(rows);
 }

@@ -1683,6 +1683,211 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   match counts alone. Changing that is a product call, not a consistency
   cleanup. Recorded because the next reviewer will propose it again.
 
+- 2026-08-12 — S10/#419 — **scout re-pin, and it moves four of the prompt's
+  premises.** Measured on `main` @ `ae22e299`:
+  (a) **Server-side idempotency is a Redis cache, fail-open, 24h TTL — there is
+  NO `idempotency_key` column on `score_events` and no unique index.**
+  `scoring.ts:88-92` reads `cacheGet(idemKey(fixtureId, key))` and replays the
+  cached `ScoreOutcome`; `cache.ts:1-10` documents the whole module as
+  "fail-open … Redis is a latency optimisation, never a correctness
+  dependency"; `V216__score_events.sql` has `unique (fixture_id, seq)` and
+  nothing else. So the acceptance criterion "queued events replay in order,
+  none duplicated (idempotency proven)" **cannot rest on the server's
+  idempotency key**: with `REDIS_URL` unset (every local run, and the e2e
+  target) a replayed event is appended AGAIN.
+  (b) neither pad subscribes to Supabase realtime today —
+  `fixture-console.tsx` and `device-score-pad.tsx` are POST-then-`resync()`
+  only (`device-score-pad.tsx:99-160`, 3 in-memory retries + 800ms backoff).
+  The realtime precedent to copy is `public-site/live-score.tsx:72-85` +
+  `api/v1/public/fixtures/[id]/realtime-token/route.ts:18-44`, which already
+  carries the device-link bypass the prompt's gotcha names.
+  (c) **`apps/web` imports the engine NOWHERE on the client, and there is no
+  root `.` export to import** — `packages/engine/package.json` exposes subpaths
+  only (`./core`, `./sport`, `./sports/*`, `./stats`, …); `index.ts` does not
+  exist. `resolveModule` (`server/engine-db/registry.ts:1`) opens with
+  `import "server-only"`, so the browser fold needs its OWN client-safe
+  resolver — new code, not a reuse.
+  (d) the 409 body already carries what renegotiation needs:
+  `{ok:false, error:{code:"SEQ_CONFLICT", message, current_seq}}`
+  (`api-v1/http.ts:140-145`), and `listEvents` (`fixtures.ts:182-192`) returns
+  `seq, type, payload, recorded_at, recorded_by, voids_event_id,
+  device_link_id` — i.e. the ledger is inspectable per slot, with provenance.
+- 2026-08-12 — S10/#419 — **RULING: replay sends the ORIGINAL `expected_seq`,
+  never a renegotiated one, and renegotiation happens only AFTER the ledger
+  proves the event did not land.** The prompt calls blind renegotiation "the
+  correctness heart"; taken literally it is the DUPLICATE BUG, given (a) above.
+  The protocol that is correct without any ledger/API change:
+  1. Replay each pending event with the `expected_seq` and `idempotency_key`
+     it was first minted with. Both outcomes are safe: a Redis hit replays the
+     recorded `ScoreOutcome` with no second write; a miss hits the exact-match
+     seq check and returns **409, which is a refusal, not a write**.
+  2. On 409, read `GET /events?since_seq=<expected_seq - 1>` and inspect the
+     row AT `expected_seq`. `appendEvent` accepts only at exactly
+     `expected_seq`, so that one slot is a COMPLETE test of whether our event
+     landed — it cannot have landed anywhere else. Same `type` + deep-equal
+     `payload` + same `recorded_by`/`device_link_id` ⇒ it is ours, already
+     applied: drop it from the queue, do not resend.
+  3. Only when the slot holds a FOREIGN event does the client renegotiate
+     (`expected_seq := current_seq`) and resend — at which point the event
+     provably has not been written.
+  This makes dedupe rest on the hash-chained ledger (durable, no TTL) instead
+  of on a fail-open cache, which is also what `cache.ts` says its own
+  contract is. Recorded because a later session reading only the prompt would
+  re-introduce the blind renegotiation.
+  **Open question for the owner (not filed as an issue):** the durable fix one
+  layer down is `score_events.idempotency_key` + `unique (fixture_id,
+  idempotency_key)`, which would make the server idempotent regardless of
+  Redis. NOT taken this session — it is a ledger/append-API change, which the
+  design's own non-goals forbid and which is outside this session's stated
+  file set (`scorepad/` + dictionaries), so it needs an owner ruling first.
+- 2026-08-12 — S10/#419 — **the test topology is forced by the workspace, not
+  chosen.** `apps/web/vitest.config.ts:71` is `environment: "node"` with no
+  jsdom, no happy-dom and no `@testing-library` in `apps/web/package.json`, so
+  a DOM-rendered component test is not available without adding a permanent
+  dependency to every suite in the workspace. Consequence, and it shapes the
+  renderer's architecture: the PadSpec walk ships as a **pure view-model**
+  (`spec + folded state + tier + entitlements → panels/actions/fields, with
+  `evalPadGate` called from the engine, never re-implemented`), unit-tested
+  exhaustively over S6's conformance fixtures with no React at all; the React
+  layer on top stays thin and is driven, where it holds state, through the
+  repo's existing `components/__tests__/_hook-harness` (renders ONE function
+  component one level deep — so no `useId`, which that harness does not
+  supply). Real DOM behaviour — tab death, offline, queue drain — is proved in
+  a real browser via Playwright against a harness route, which is what the
+  prompt already requires.
+- 2026-08-12 — S10/#419 — **flag names chosen.** Product flag is `scorepad-v2`,
+  read through the repo's existing PostHog convention (`isServerFeatureEnabled`
+  `posthog-server.ts:65-79` server-side, `posthog.isFeatureEnabled` client-side,
+  as `ai-scheduling` does) — declared this session, wired to nothing, flipped in
+  S12. The browser-verification harness route is gated separately on a
+  **server-read, non-public** env var `SCOREPAD_V2_HARNESS=1` (read in the
+  server component, so it is NOT baked at build time the way a `NEXT_PUBLIC_*`
+  var is, and is therefore absent from every real deploy) — no dev-only page
+  precedent existed in `apps/web/src/app` to copy, so this is the new one.
+- 2026-08-12 — S10/#419 — **CORRECTION to the replay ruling above: the slot to
+  inspect is `expected_seq + 1`, not `expected_seq`.** `expected_seq` is the
+  LAST seq the client saw; `appendEvent` refuses unless `lastSeq ===
+  expectedSeq` and then writes the new row at `expectedSeq + 1`
+  (`server/engine-db/append-event.ts:189,215`). The ruling's mechanism is
+  unchanged and still complete — a write can only ever land at exactly one
+  seq, so one row is a total test — but the arithmetic as first recorded was
+  off by one, and an implementation following it literally would inspect the
+  PREVIOUS event and read every own-event replay as foreign, i.e. duplicate
+  exactly what the ruling exists to prevent. Found by the implementer against
+  the append path rather than by review; shipped as `targetSeqFor(expectedSeq)
+  = expectedSeq + 1` in `pipeline.ts`. Recorded rather than edited in place so
+  the earlier entry's shas keep matching.
+- 2026-08-12 — S10/#419 — **S7's reason for leaving `PadField.labelKey`
+  optional does not survive contact with the universal renderer, and the
+  screenshots are how it surfaced.** S7/#427 ruled: "an action always needs a
+  name — it is a button. A field frequently does not: cricket's `runs.bat` sits
+  inside a labelled 'Ball' action whose whole layout names it." That reasoning
+  assumes a hand-built SKIN (S11). The universal renderer has no such layout,
+  so on the real page cricket's `cricket.player.line` action draws **seven
+  inputs whose only accessible name is `Scorecard line #1 … #7`** — the action's
+  own label plus an ordinal — and no visible label at all. Confirmed in the
+  browser, not inferred: every `<input>` carried `aria-label="Scorecard line
+  #N"`, no `<label for>`, no placeholder. A scorer cannot tell runs from
+  wickets from overs. (What DOES work: the bounds are genuinely spec-derived
+  and differ per field — `1-2`, `0-2000`, `0-120`, `0-10` — so the cfg-derived
+  bound requirement is met.)
+  Fix belongs in the RENDERER, not the engine: humanise the field's own dotted
+  path as the last resort (`runs.bat` → "Runs (bat)"), visibly, with the
+  accessible name kept in sync. Declaring 100+ new engine label keys instead
+  would mint exactly the copy S7 deliberately refused to translate, in four
+  locales, for surfaces a skin may relabel anyway. Recorded so S11 does not
+  "fix" it a second time in each skin.
+- 2026-08-12 — S10/#419 — **harness route shipped as
+  `apps/web/src/app/score/harness/`, gated on a SERVER-read
+  `SCOREPAD_V2_HARNESS=1`.** Two modes on purpose: `?fixture=<uuid>` drives the
+  real API with the session cookie (the mode the offline/drain/tab-death e2e
+  must use), and with no `fixture` an in-page ledger stands in — real
+  IndexedDB, real queue, real fold, real renderer, no seeded division — so the
+  pad can be screenshotted and hand-driven. The second mode is explicitly NOT
+  evidence about the server contract and the file says so. Deleted at S13's
+  cutover at the latest; S12 owns the real entry points.
+  Screenshots taken at 1280 / 768 / 375 / 320 (cricket `t20` and football
+  `eleven`): no horizontal page scroll at any width, measured
+  (`scrollWidth === clientWidth === 320`, and no element overflowing with
+  `overflow-x: visible`), touch-sized targets, and the pad draws through the
+  app's own `btn btn-primary` design-system classes rather than inventing a
+  palette. Open design debt, deliberately NOT fixed blind this session:
+  `layout: "grid"` panels leave a half-width button in a full-width card
+  (Cards / Substitutions / Shots at 768 and 1280), and the pad has no score
+  header of its own — a scorer sees actions but not the state they are
+  scoring. Both are S11 skin-shaped questions; raised for the owner rather
+  than restyled unilaterally (restyles need sign-off).
+- 2026-08-12 — S10/#419 — **football's `State.squads` is a PRIVATE
+  `FootballSquad`, not the kernel's `SquadState`, so the attribution picker's
+  live-squad tier lights up for every family kernel EXCEPT football.** Found
+  while wiring the picker, not while debugging it. The kernels (period,
+  setbased, nested) and cricket adopt the shared `SquadCarrier` shape, so
+  `personsAtPosition` reads live folded state there; football keeps the squad
+  field it already had before S3/#426 (which is exactly why S3 recorded
+  football as the one module that persists squads at `init`
+  unconditionally). Handled structurally rather than by sport name — the
+  picker shape-checks with `isSquadState` before trusting `state.squads` and
+  otherwise degrades to the team sheet, so a module that adopts the kernel
+  shape later starts working with no picker change. Consequence a reader
+  should not have to rediscover: football's keeper-after-a-mid-match-change is
+  named from the team sheet, so a post-kickoff keeper swap is not reflected in
+  football's picker candidates until football adopts `SquadState`. Tested and
+  documented in `attribution-picker.tsx`'s header.
+- 2026-08-12 — S10/#419 — **the attribution picker shipped REACHABLE ONLY IF A
+  CALLER REMEMBERED TO PASS IT, and the e2e is what exposed that.** The picker
+  pass reported (correctly) that `PadRenderer`'s existing `renderAttribution`
+  seam was sufficient and needed no renderer edit — but nothing ever passed
+  that seam, so the default pad drew no picker at all, and every action whose
+  zod schema requires attribution (cricket's toss `wonBy`) was unsubmittable.
+  It surfaced only when the e2e drove a REAL fixture and the server 422'd.
+  Fifth instance of this programme's signature defect: S4's person-role
+  discriminator (engine-tested, unreachable from real code), S8's stat models
+  (declared against optional fields, inert), S8's folded rows (computed,
+  persisted, unrenderable), S7's `hitballtwice` (correct copy, unreachable
+  picker), and now this. The pattern is always the same shape — a component or
+  value that is written, tested, and connected to nothing — and a test at the
+  unit level cannot see it by construction.
+  Fixed by making the picker the DEFAULT (`PadRenderer` renders it itself, fed
+  the LIVE folded state so the keeper comes from `core.lineup.*` rather than
+  the kickoff sheet); `renderAttribution` survives as an OVERRIDE for S11's
+  skins. Mutation-verified: removing the default reds the reachability test.
+  **Lesson for S11/S12, worth restating in their briefs:** a seam left for a
+  later pass must ship with a working default, or the later pass inherits an
+  inert component and nobody notices until something drives the real API.
+- 2026-08-12 — S10/#419 — **browser evidence, and what it cost to get.** The
+  e2e (`apps/web/e2e/scorepad-offline.spec.ts`) proves the three claims no
+  unit test can reach, against the real API through the harness: queued events
+  survive a real reload and drain **in order**; airplane-mode scoring
+  continues with visible queue depth and drains on reconnect; a 409 raised
+  mid-drain by an out-of-band append resyncs and completes with BOTH that
+  event and every queued one present **exactly once** — asserted against the
+  ledger as exact `{type, payload}` sequences, never as counts. Falsifiability
+  proved, not claimed: forcing `indexedDbQueueStore()` to return the
+  non-durable memory store fails the tab-death test at the pre-reload
+  durability poll (`Expected 3, Received 0`), restored from a `cp` backup and
+  byte-verified. Node has no `indexedDB`, so this is the only coverage
+  `queue-store.ts`'s open/cursor/transaction paths have anywhere.
+- 2026-08-12 — S10/#419 — **CI flake worth naming, in S8's code not this
+  session's: `entrant-members.test.ts`'s "same kind/personIds as the
+  division-wide loader" assertion is ORDER-SENSITIVE.** Seen once on
+  `d0a4e6a2` (`Smoke — DB + Redis suites`), green on the previous CI run of
+  the same branch and green in every local full-suite run. The reported diff
+  shows the SAME uuid on both sides, so the two loaders agree on membership
+  and disagree on ORDER — i.e. `loadEntrantMembersForFixture` and
+  `loadEntrantMembersForDivision` do not both impose a deterministic
+  `order by`, and Postgres is free to return rows in whatever order a given
+  plan produces. Not fixed here (S8's files, outside this session's set, and
+  the standing rule is not to chase an unrelated red), but recorded because
+  the failure mode is a real latent defect rather than infrastructure noise:
+  it will keep reappearing at random until one of the two loaders sorts, and
+  the person-level stats built on top of them compare by position.
+  **FIXED after all, because it blocked the merge**: it recurred on a
+  docs-only commit (2 of 3 runs), which is not a rate anyone should merge
+  past, and the fix is two lines — `order by e.id, em.person_id` on BOTH
+  queries, so the two loaders agree by construction rather than by luck of
+  the plan. Recorded as an unplanned fix (RULES.md §1) in S8's file, with
+  the 85 tests across its consumers (`player-stats`, `org-posts`, the whole
+  `engine-db` tree) rerun green.
 - _(append below)_
 
 ## Open questions for the owner
