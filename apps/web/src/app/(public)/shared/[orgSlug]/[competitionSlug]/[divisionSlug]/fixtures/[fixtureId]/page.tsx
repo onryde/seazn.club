@@ -10,13 +10,17 @@ import { publicThemeStyle } from "@/lib/public-theme";
 import { LiveScore } from "@/components/public-site/live-score";
 import { ShareButton } from "@/components/share-button";
 import { fixtureSubheading } from "./fixture-subheading";
-import { msg } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";
-// No locale plumbing anywhere in the public-site component tree today
-// (schedule.tsx/bracket.tsx are the same) — client-safe English msg() for
-// consistency across the public surfaces this task touches, not a
-// page-by-page patchwork where the same fixture reads differently depending
-// on which tab a visitor is on.
+import { toLocale } from "@/lib/i18n-constants";
+import { msgFor } from "@/lib/messages-i18n";
+// P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, same pattern
+// as data.ts:502-503 and every other public surface this fix round wires.
+// This IS a server component and getPublicFixture already carries `org`, so
+// (unlike schedule/page.tsx's org-console equivalent) there is no
+// direct-invocation-test/cookies() trap here: msgFor() takes an explicit
+// Locale and never touches next/headers.
+const lookup = (locale: Parameters<typeof msgFor>[0]) =>
+  (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor(locale, k, v);
 
 export const revalidate = 30;
 
@@ -39,12 +43,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { orgSlug, competitionSlug, divisionSlug, fixtureId } = await params;
   const data = await getPublicFixture(orgSlug, competitionSlug, divisionSlug, fixtureId);
   if (!data) return {};
+  const msgFn = lookup(toLocale(data.org.default_locale));
   const home = data.fixture.home_entrant_id
-    ? (data.entrantNames[data.fixture.home_entrant_id] ?? resolveSlotLabel(null, msg, "schedule.tbd"))
-    : resolveSlotLabel(data.fixture.home_slot_label, msg, "schedule.tbd");
+    ? (data.entrantNames[data.fixture.home_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
+    : resolveSlotLabel(data.fixture.home_slot_label, msgFn, "schedule.tbd");
   const away = data.fixture.away_entrant_id
-    ? (data.entrantNames[data.fixture.away_entrant_id] ?? resolveSlotLabel(null, msg, "schedule.tbd"))
-    : resolveSlotLabel(data.fixture.away_slot_label, msg, "schedule.tbd");
+    ? (data.entrantNames[data.fixture.away_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
+    : resolveSlotLabel(data.fixture.away_slot_label, msgFn, "schedule.tbd");
   return {
     title: `${home} vs ${away} — ${data.division.name}`,
     description: data.fixture.summary?.headline ?? `${home} vs ${away} at ${data.competition.name}`,
@@ -59,13 +64,14 @@ export default async function FixturePage({ params }: Props) {
   const data = await getPublicFixture(orgSlug, competitionSlug, divisionSlug, fixtureId);
   if (!data) notFound();
   const { org, competition, division, fixture, entrantNames, realtime } = data;
+  const msgFn = lookup(toLocale(org.default_locale));
 
   const home = fixture.home_entrant_id
-    ? (entrantNames[fixture.home_entrant_id] ?? resolveSlotLabel(null, msg, "schedule.tbd"))
-    : resolveSlotLabel(fixture.home_slot_label, msg, "schedule.tbd");
+    ? (entrantNames[fixture.home_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
+    : resolveSlotLabel(fixture.home_slot_label, msgFn, "schedule.tbd");
   const away = fixture.away_entrant_id
-    ? (entrantNames[fixture.away_entrant_id] ?? resolveSlotLabel(null, msg, "schedule.tbd"))
-    : resolveSlotLabel(fixture.away_slot_label, msg, "schedule.tbd");
+    ? (entrantNames[fixture.away_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
+    : resolveSlotLabel(fixture.away_slot_label, msgFn, "schedule.tbd");
   const basePath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
 
   const jsonLd = sportsEventJsonLd({
