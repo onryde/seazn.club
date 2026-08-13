@@ -45,8 +45,12 @@ import "server-only";
 // it was handed.
 import { withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { resolveVenueTz } from "@/lib/tz";
+import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { FIXED_OCCUPYING, MOVABLE_STATUS, OCCUPYING, peopleByEntrant } from "./schedule";
+import { assessCapacity, type CapacityReport } from "@seazn/engine/scheduling/capacity";
+import { FIXED_OCCUPYING, MOVABLE_STATUS, OCCUPYING, peopleByEntrant, toSlotConfig } from "./schedule";
+import { capacityInputForFixtures } from "./capacity-guard";
 import {
   AI_VERIFY_POLICY,
   buildEngineConstraints,
@@ -2452,6 +2456,68 @@ async function planForCompetition(
         cmp(a.name, b.name) || cmp(byId.get(a.id)!.slug, byId.get(b.id)!.slug),
     );
   if (kept.length < 2) throw singleDivision();
+
+  // D2 capacity pre-check (owner ruling, guard `aiPlanForCompetition`):
+  // assess each kept division's arithmetic feasibility BEFORE the wallet is
+  // touched, same reasoning as the courts/config checks just above — an AI
+  // run that cannot possibly fit its courts and dates must not spend a
+  // credit finding that out. Scope is deliberately narrower than the stage
+  // guard: whole-day aggregate caps and court/rest arithmetic only, no
+  // per-entrant rest bound here (that runs per-division at solve time via
+  // the SAME `autoSchedule` path when an organiser later runs Auto-schedule
+  // on one of these divisions) — this is a coarse, cheap pre-flight, not a
+  // second copy of the full check.
+  const capacityImpossible: { id: string; name: string; report: CapacityReport }[] = [];
+  await withTenant(auth.orgId, async (tx) => {
+    const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
+    const orgTz = resolveVenueTz(null, org?.timezone ?? null);
+    const fixtureRows = await tx<
+      { division_id: string; home_entrant_id: string | null; away_entrant_id: string | null; pool_id: string | null }[]
+    >`
+      select division_id, home_entrant_id, away_entrant_id, pool_id from fixtures
+      where division_id in ${tx(kept)} and status = ${MOVABLE_STATUS}`;
+    for (const id of kept) {
+      const row = byId.get(id)!;
+      const parsed = ScheduleConfig.safeParse(row.config ?? {});
+      if (!parsed.success) continue; // already refused by the loop above
+      const slotConfig = toSlotConfig(
+        { division_id: id, config: parsed.data, displayTz: orgTz, orgTz, updated_at: "" },
+        Date.now(),
+      );
+      const fixtures = fixtureRows
+        .filter((f) => f.division_id === id)
+        .map((f) => ({
+          home: f.home_entrant_id ?? undefined,
+          away: f.away_entrant_id ?? undefined,
+          poolId: f.pool_id ?? undefined,
+        }));
+      const input = capacityInputForFixtures(fixtures, slotConfig, id);
+      if (input === null) continue; // no bounded window to assess — skip, not impossible
+      const report = assessCapacity(input);
+      log.info(
+        {
+          event: "capacity_assessed",
+          scope: "competition_division",
+          competitionId,
+          divisionId: id,
+          verdict: report.verdict,
+          slotSupply: report.slotSupply,
+          slotDemand: report.slotDemand,
+          ratio: report.slotDemand > 0 ? report.slotSupply / report.slotDemand : null,
+        },
+        "capacity_assessed",
+      );
+      if (report.verdict === "impossible") capacityImpossible.push({ id, name: row.name, report });
+    }
+  });
+  if (capacityImpossible.length > 0) {
+    throw new HttpError(
+      422,
+      `these divisions cannot fit their configured courts, dates and rest rules: ${capacityImpossible.map((d) => d.name).join(", ")}`,
+      "CAPACITY_IMPOSSIBLE",
+      { divisions: capacityImpossible },
+    );
+  }
 
   // AI runs are wallet-metered on every tier (v17 SPEC-2 §5.2). Resolved here;
   // the reserve itself happens below, right around the model call, so a

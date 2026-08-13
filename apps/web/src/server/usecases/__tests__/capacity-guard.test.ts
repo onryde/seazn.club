@@ -5,12 +5,21 @@
 import { describe, expect, it, vi } from "vitest";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
+import type { HardConstraint } from "@seazn/engine/scheduling";
 import { capacityInputForFixtures, guardCapacity } from "../capacity-guard";
 
 const MS_PER_MIN = 60_000;
 const DAY_MS = 24 * 60 * MS_PER_MIN;
 // 2026-10-19T00:00:00Z, an exact UTC midnight so day-bucket math is trivial.
 const DAY1 = Date.UTC(2026, 9, 19, 0, 0);
+
+/** `max_fixtures_per_day` is the only HardConstraint variant these tests
+ *  build — a tiny typed helper beats hand-rolling the discriminated union
+ *  (whose `type` a loose `string` literal does not narrow) at every call
+ *  site. */
+function maxPerDay(count: number, scope: HardConstraint["scope"]): HardConstraint {
+  return { type: "max_fixtures_per_day", count, scope };
+}
 
 function baseConfig() {
   return {
@@ -23,7 +32,7 @@ function baseConfig() {
     window: { from: DAY1, to: DAY1 + DAY_MS },
     tz: "UTC",
     constraints: undefined,
-    hard: undefined as { type: string; count?: number; scope?: { kind: string; divisionId?: string } }[] | undefined,
+    hard: undefined as HardConstraint[] | undefined,
   };
 }
 
@@ -90,8 +99,8 @@ describe("capacityInputForFixtures — day cap resolution (max_fixtures_per_day)
     const config = {
       ...baseConfig(),
       hard: [
-        { type: "max_fixtures_per_day", count: 5, scope: { kind: "division", divisionId: "div-1" } },
-        { type: "max_fixtures_per_day", count: 1, scope: { kind: "division", divisionId: "OTHER" } },
+        maxPerDay(5, { kind: "division", divisionId: "div-1" }),
+        maxPerDay(1, { kind: "division", divisionId: "OTHER" }),
       ],
     };
     const input = capacityInputForFixtures([], config, "div-1")!;
@@ -99,7 +108,7 @@ describe("capacityInputForFixtures — day cap resolution (max_fixtures_per_day)
   });
 
   it("applies a competition-scoped cap", () => {
-    const config = { ...baseConfig(), hard: [{ type: "max_fixtures_per_day", count: 7, scope: { kind: "competition" } }] };
+    const config = { ...baseConfig(), hard: [maxPerDay(7, { kind: "competition" })] };
     const input = capacityInputForFixtures([], config, "div-1")!;
     expect(input.days[0]!.demandCap).toBe(7);
   });
@@ -108,8 +117,8 @@ describe("capacityInputForFixtures — day cap resolution (max_fixtures_per_day)
     const config = {
       ...baseConfig(),
       hard: [
-        { type: "max_fixtures_per_day", count: 9, scope: { kind: "competition" } },
-        { type: "max_fixtures_per_day", count: 2, scope: { kind: "division", divisionId: "div-1" } },
+        maxPerDay(9, { kind: "competition" }),
+        maxPerDay(2, { kind: "division", divisionId: "div-1" }),
       ],
     };
     const input = capacityInputForFixtures([], config, "div-1")!;
@@ -119,7 +128,7 @@ describe("capacityInputForFixtures — day cap resolution (max_fixtures_per_day)
   it("ignores a pool/entrant-scoped cap (v1 scope: whole-day aggregate caps only) and leaves demandCap undefined", () => {
     const config = {
       ...baseConfig(),
-      hard: [{ type: "max_fixtures_per_day", count: 1, scope: { kind: "pool", divisionId: "div-1", pool: "A" } }],
+      hard: [maxPerDay(1, { kind: "pool", divisionId: "div-1", pool: "A" })],
     };
     const input = capacityInputForFixtures([], config, "div-1")!;
     expect(input.days[0]!.demandCap).toBeUndefined();

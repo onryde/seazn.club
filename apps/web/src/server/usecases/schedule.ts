@@ -55,6 +55,7 @@ import {
   type StartDivisionRequest,
 } from "@/server/api-v1/schemas";
 import { sendOfficialAssignmentChangedEmail } from "@/lib/email";
+import { capacityInputForFixtures, guardCapacity } from "./capacity-guard";
 import { buildEngineConstraints } from "./engine-constraints";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { generateStageFixtures } from "./stages";
@@ -840,6 +841,11 @@ interface AutoSchedulePlan {
   schedulable: SchedulableFixture[];
   config: SlotConfig & VerifyConfig & { courts: string[] };
   board: Assignment[];
+  /** D2 capacity guard inputs — carried out of the transaction alongside
+   *  everything else `capacityInputForFixtures` needs, so phase 2 does not
+   *  have to re-open a connection to ask for them. */
+  divisionId: string;
+  orgTz: string;
   /**
    * The direct winner/loser feed edges of the whole division (#452).
    *
@@ -1017,6 +1023,8 @@ export async function autoSchedule(
       schedulable,
       config,
       board,
+      divisionId: stage.division_id,
+      orgTz: settings.orgTz,
       // Over `all`, not over `movable`: `feedDependencies` keeps only edges whose
       // BOTH ends are in the list it is given, and a semi already decided (so not
       // movable) still constrains the final it feeds. The same argument every
@@ -1041,6 +1049,16 @@ export async function autoSchedule(
   // re-places every unlocked card even when nothing is wrong, which is the
   // defect this mode replaces.
   const { schedulable, config, board, dependencies, total } = plan;
+  // D2 capacity pre-check: arithmetic-provable impossibility refuses with a
+  // typed 422 BEFORE either solver is reached — no db connection is held
+  // here (phase 1 already closed), so this costs nothing a real solve
+  // wouldn't have paid anyway. `guardCapacity` returns null and does
+  // nothing when the config has no bounded window to assess.
+  guardCapacity(capacityInputForFixtures(schedulable, config, plan.divisionId), {
+    scope: "stage",
+    divisionId: plan.divisionId,
+    stageId,
+  });
   /**
    * The organiser's board as it stands — every movable card that currently has a
    * time, whether or not this run may move it.
