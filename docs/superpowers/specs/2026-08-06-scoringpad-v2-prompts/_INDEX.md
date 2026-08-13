@@ -2537,6 +2537,33 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   `git grep` afterwards — one hit, the fixed one) and the lineup editor's own
   new controls. **If someone sweeps the rest, `min-h-11` is the fix and the
   44px assertion pattern already exists in `e2e/mobile.spec.ts`.**
+- 2026-08-13 — S12/#421 — **a shape check stood in for a declared fact, and it
+  was wrong in both directions.** `lineup-editor.tsx`'s `isPairShaped` inferred
+  "this is a pair" from *empty position catalog + exactly 2 members*. Neither
+  half holds: `generic` declares no `entrantModel` at all, so its defaults
+  include `"team"` with `maxTeamMembers: null`, and `assertRosterFits` only
+  enforces an upper bound — a generic TEAM of two got the pair/serve-order
+  control. And volleyball declares a genuine `pair` kind (beach 2v2) but has a
+  five-group position catalog, so real beach pairs never got it. Fixed by
+  reading the entrant's own declared `kind`, threaded onto `SideInfo.kind` by
+  the fixture page loader, rather than guessing from two proxies — so the next
+  sport to declare `pair` works with no edit here. Second-order: `toPutSlot`
+  carried `pair_order` unconditionally, so an entrant that hit the false
+  positive kept re-sending a stale value forever after losing the control; it
+  now nulls it whenever the side is not pair-shaped.
+- 2026-08-13 — S12/#421 — **a touch-target fix that would have failed its own
+  test at two of the seven widths it runs at.** The first shape of the
+  lineup-editor fix was `min-h-11 sm:min-h-0` — 44px on phones, back to ~26px
+  from 640px up. But `e2e/mobile.spec.ts` runs under ALL SEVEN width projects,
+  `tablet-768` and `tablet-834` included, and the new assertion is an
+  unconditional `toBeGreaterThanOrEqual(44)`. The fix and its own regression
+  test contradicted each other at exactly two widths. It read green because the
+  verification run exercised `mobile-se` only.
+  **Two rules, both cheap:** a `sm:`/`md:` escape hatch on an accessibility
+  floor needs a reason that survives "is a tablet a touch device?" — usually it
+  does not. And when a spec file is wired into a project MATRIX, verifying one
+  project is not verifying the test; check which projects the file runs under
+  before believing a green.
 - _(append below)_
 
 ## Open questions for the owner
