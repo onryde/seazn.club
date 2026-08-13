@@ -795,15 +795,29 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
   };
   // Deliberately lopsided (every one of H1's matches on Court 1) so the cards
   // carry real offender counts and "Show details" rows, not a uniform 100.
+  //
+  // That two-court split only works because this division has exactly FOUR
+  // entrants, so a round-robin round holds exactly two fixtures: one with H1
+  // (Court 1) and one without (Court 2). Raise the entrant count and a round
+  // holds three or more, every non-H1 fixture lands on "Court 2" at the same
+  // `scheduled_at`, and the apply route 409s on a court double-booking — a
+  // loud failure, but one whose message points at the court conflict rather
+  // than at the entrant count that actually caused it. The assertion below
+  // fails first, and says so.
   const assignments = roundNos.flatMap((roundNo, i) => {
     const t = slotTime(i);
-    return hGen.data!.fixtures
-      .filter((f) => f.round_no === roundNo)
-      .map((f) => ({
-        fixture_id: f.id,
-        scheduled_at: at(t),
-        court_label: f.home_entrant_id === h1! || f.away_entrant_id === h1! ? "Court 1" : "Court 2",
-      }));
+    const inRound = hGen.data!.fixtures.filter((f) => f.round_no === roundNo);
+    expect(
+      inRound.length,
+      `round ${roundNo} holds ${inRound.length} fixtures; the H1/not-H1 court split only ` +
+        `covers two. Raise the court count in schedule-settings to match, or keep this ` +
+        `division at 4 entrants.`,
+    ).toBeLessThanOrEqual(2);
+    return inRound.map((f) => ({
+      fixture_id: f.id,
+      scheduled_at: at(t),
+      court_label: f.home_entrant_id === h1! || f.away_entrant_id === h1! ? "Court 1" : "Court 2",
+    }));
   });
   const applied = await apiJson(request, `/api/v1/stages/${hStageId}/schedule/apply`, "POST", {
     assignments,

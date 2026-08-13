@@ -50,6 +50,26 @@ export interface CapacityDay {
    *  by RULES, the day is still bounded by its own court `supply` in the
    *  feasibility walk below. */
   demandCap?: number;
+  /** The day's FLOOR: how many fixtures can go on this day and no other,
+   *  because a rule nails them here — a `pin`, a `fixture_on_date`, or a
+   *  `fixture_on_weekday` that only one date in the window satisfies. The
+   *  caller resolves those (this module still never sees `HardConstraint`).
+   *
+   *  `demandCap` is a maximum and this is a minimum, and the two answer
+   *  different questions. Without this, a board could be declared feasible
+   *  on total supply while eleven fixtures were all nailed to a Tuesday
+   *  with four slots — the precheck reported "fits" and the solver then
+   *  proved otherwise, which is the one outcome this whole feature exists
+   *  to pre-empt.
+   *
+   *  Deliberately conservative: the caller counts a fixture here only when
+   *  it is pinned to EXACTLY one day. A weekday rule matching several dates
+   *  is a subset restriction, not a floor, and proving infeasibility over
+   *  subsets is a Hall condition this module does not attempt — see the
+   *  walk below. Undercounting only ever costs a missed warning; it can
+   *  never manufacture a false "impossible", which is the direction this
+   *  precheck must never be wrong in. */
+  forcedDemand?: number;
 }
 
 export interface CapacityEntrant {
@@ -223,18 +243,40 @@ function computeCore(input: CapacityInput): CapacityCore {
   // condition ① of the design ("slotDemand > slotSupply") falls out of this
   // same walk as the case where no day carries a rule cap at all.
   //
-  // Order does not change the final remainder in THIS model — no per-fixture
-  // day eligibility is represented here, only per-day rule ceilings — but
-  // the walk stays day-ordered because that is the natural reading of "an
-  // organiser's timetable" and the shape this leaves room to extend, per the
-  // design's own non-goal ("no soft-constraint prediction — that's the
-  // solver's job"): this precheck proves impossibility, it does not attempt
-  // the solver's day-by-day placement choice.
-  let remaining = slotDemand;
-  for (const d of perDay) {
+  // Order does not change the final remainder in THIS model — the only
+  // per-fixture day eligibility represented is `forcedDemand`, and that is
+  // subtracted from its own day BEFORE the walk, so no ordering of the
+  // remaining free fixtures can change the outcome. The walk stays
+  // day-ordered because that is the natural reading of "an organiser's
+  // timetable", per the design's own non-goal ("no soft-constraint
+  // prediction — that's the solver's job"): this precheck proves
+  // impossibility, it does not attempt the solver's placement choice.
+  //
+  // Two passes, because a floor and a ceiling fail differently:
+  //
+  //  1. Forced fixtures cannot move. If a day is nailed with more than it
+  //     can hold, the excess is unplaceable no matter how much slack the
+  //     rest of the week has — a total-supply check cannot see this, and
+  //     that blind spot is what let a board pass the precheck and then come
+  //     back infeasible from the solver.
+  //  2. Whatever capacity each day has LEFT after its forced fixtures is
+  //     what the free ones can use.
+  let forcedOverflow = 0;
+  let freeCapacity = 0;
+  let totalForced = 0;
+  for (const [i, d] of perDay.entries()) {
     const placeable = Math.min(d.supply, d.demandCeiling);
-    remaining -= Math.min(remaining, placeable);
+    const forced = Math.max(0, input.days[i]?.forcedDemand ?? 0);
+    totalForced += forced;
+    forcedOverflow += Math.max(0, forced - placeable);
+    freeCapacity += Math.max(0, placeable - forced);
   }
+  // `slotDemand` counts every fixture, forced ones included, so the free
+  // demand is what is left after they take their own days' capacity. Guarded
+  // at zero: a caller that over-counts `forcedDemand` past the board's total
+  // must not wrap into a negative that silently cancels a real shortfall.
+  const freeDemand = Math.max(0, slotDemand - totalForced);
+  const remaining = forcedOverflow + Math.max(0, freeDemand - freeCapacity);
   const hallViolation = remaining > 0;
 
   const restBound: CapacityRestBound[] = [];
@@ -305,19 +347,40 @@ function addOneCalendarDay(ymd: string): string {
 /** The day whose EXPLICIT rule cap is below its own court supply — the true
  *  bottleneck a `raise_cap` suggestion can act on. A day defaulted to the
  *  fixture count (no rule cap at all) has nothing to raise: its limit is
- *  court supply, which `add_court`/`add_day` address instead. Ties break on
- *  the largest (supply − cap) deficit, the day where a rule is costing the
- *  most placeable room. */
+ *  court supply, which `add_court`/`add_day` address instead.
+ *
+ *  Ranked by whether the cap is actually BLOCKING FORCED WORK first, and
+ *  only then by the raw (supply − cap) deficit. Deficit alone is the wrong
+ *  primary key once `forcedDemand` exists: a day with fixtures nailed to it
+ *  and a cap one short of holding them is the day whose cap is causing the
+ *  impossible verdict, and it loses on deficit to any unrelated day with a
+ *  wider cap/supply gap. Nothing LIES when that happens — `flipsVerdict`
+ *  re-assesses every candidate, so the offered suggestion is still honestly
+ *  labelled — but the one suggestion that would actually flip the verdict
+ *  goes unoffered, which is the same outcome as having no suggestion at all.
+ *
+ *  `capBlockedForced` is the part of a day's forced demand that the CAP is
+ *  responsible for, not the courts: forced work the courts could physically
+ *  hold (`min(forced, supply)`) minus what the cap permits. Raising the cap
+ *  can move that; raising it cannot help with forced work that exceeds
+ *  court supply, which is `add_court`/`add_day` territory. */
 function bindingCapDay(input: CapacityInput): string | undefined {
   const slot = input.matchMinutes + input.gapMinutes;
   let bestDate: string | undefined;
+  let bestBlocked = -1;
   let bestDeficit = -1;
   for (const day of input.days) {
     if (day.demandCap === undefined) continue;
     const supply = daySupply(day, slot, input.gapMinutes);
     if (day.demandCap >= supply) continue;
+    const forced = Math.max(0, day.forcedDemand ?? 0);
+    const capBlockedForced = Math.max(0, Math.min(forced, supply) - day.demandCap);
     const deficit = supply - day.demandCap;
-    if (deficit > bestDeficit) {
+    if (
+      capBlockedForced > bestBlocked ||
+      (capBlockedForced === bestBlocked && deficit > bestDeficit)
+    ) {
+      bestBlocked = capBlockedForced;
       bestDeficit = deficit;
       bestDate = day.date;
     }

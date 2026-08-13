@@ -4,6 +4,8 @@
 // function rather than holding a second copy.
 import { describe, expect, it } from "vitest";
 import type { HardConstraint } from "@seazn/engine/scheduling";
+import { assessCapacity } from "@seazn/engine/scheduling/capacity";
+import { weekdayOfYmd } from "@seazn/engine/scheduling/tz";
 import { capacityInputForFixtures } from "../capacity-input";
 
 const MS_PER_MIN = 60_000;
@@ -17,6 +19,22 @@ const DAY1 = Date.UTC(2026, 9, 19, 0, 0);
  *  site. */
 function maxPerDay(count: number, scope: HardConstraint["scope"]): HardConstraint {
   return { type: "max_fixtures_per_day", count, scope };
+}
+
+/** `fixture_on_date`/`fixture_on_weekday` — the other two HardConstraint
+ *  variants the forced-demand tests below build, both with an `id` selector
+ *  (the one selector kind `capacityInputForFixtures` can resolve without a
+ *  full RuleFixture identity — see the `terminal` tests further down, which
+ *  build their own literal). */
+function fixtureOnDate(fixtureId: string, date: string, scope: HardConstraint["scope"]): HardConstraint {
+  return { type: "fixture_on_date", selector: { kind: "id", fixtureId }, date, scope };
+}
+function fixtureOnWeekday(
+  fixtureId: string,
+  weekday: ReturnType<typeof weekdayOfYmd>,
+  scope: HardConstraint["scope"],
+): HardConstraint {
+  return { type: "fixture_on_weekday", selector: { kind: "id", fixtureId }, weekday, scope };
 }
 
 function baseConfig() {
@@ -179,5 +197,136 @@ describe("capacityInputForFixtures — entrant aggregation", () => {
     const input = capacityInputForFixtures(fixtures, baseConfig(), "div-1")!;
     expect(input.fixtureCount).toBe(1);
     expect(input.entrants).toEqual([{ entrantId: "A", fixtures: 1 }]);
+  });
+});
+
+describe("capacityInputForFixtures — forced demand (fixture_on_date / fixture_on_weekday floors)", () => {
+  const DIV_SCOPE: HardConstraint["scope"] = { kind: "division", divisionId: "div-1" };
+
+  // Two roomy days: m=30 g=10 -> slot=40, a 240-minute window each day ->
+  // supply 6/day, 12 total -- ample for 8 fixtures on TOTAL supply alone
+  // (ratio 12/8=1.5 >= TIGHT_RATIO -> "ok" with no rule at all). Same
+  // numbers capacity.test.ts's own "per-day FLOOR" describe block uses on
+  // the engine side; reusing them here proves this ADAPTER resolves a real
+  // fixture_on_date rule into that same forcedDemand field end to end, not
+  // just that the engine's walk honours the field once populated by hand.
+  function twoRoomyDaysConfig(hard: HardConstraint[] | undefined) {
+    return {
+      ...baseConfig(),
+      window: { from: DAY1, to: DAY1 + 2 * DAY_MS },
+      sessionWindows: [
+        { from: DAY1, to: DAY1 + 240 * MS_PER_MIN },
+        { from: DAY1 + DAY_MS, to: DAY1 + DAY_MS + 240 * MS_PER_MIN },
+      ],
+      gapMinutes: 10,
+      hard,
+    };
+  }
+  const eightFixtures = Array.from({ length: 8 }, (_, i) => ({ id: `f${i + 1}` }));
+  const idRulesFor = (ids: string[], date: string): HardConstraint[] => ids.map((id) => fixtureOnDate(id, date, DIV_SCOPE));
+
+  it("fixture_on_date nailing more fixtures onto one day than it holds is impossible, even though total supply is ample", () => {
+    const config = twoRoomyDaysConfig(idRulesFor(["f1", "f2", "f3", "f4", "f5", "f6", "f7"], "2026-10-19"));
+    const input = capacityInputForFixtures(eightFixtures, config, "div-1")!;
+    expect(input.days[0]!.forcedDemand).toBe(7);
+    expect(assessCapacity(input).verdict).toBe("impossible");
+  });
+
+  it("the paired control -- the SAME board with the rule removed -- is not impossible (the floor is doing the work, not the arithmetic)", () => {
+    const config = twoRoomyDaysConfig(undefined);
+    const input = capacityInputForFixtures(eightFixtures, config, "div-1")!;
+    expect(input.days[0]!.forcedDemand).toBeUndefined();
+    expect(assessCapacity(input).verdict).not.toBe("impossible");
+  });
+
+  it("two rules naming the SAME fixture on the same date -- one compiled, one durable -- count it once, not twice", () => {
+    const config = {
+      ...twoRoomyDaysConfig([fixtureOnDate("f1", "2026-10-19", DIV_SCOPE)]),
+      constraints: { hard: [fixtureOnDate("f1", "2026-10-19", DIV_SCOPE)] },
+    };
+    const input = capacityInputForFixtures(eightFixtures, config, "div-1")!;
+    expect(input.days[0]!.forcedDemand).toBe(1);
+  });
+
+  it("fixture_on_weekday matching SEVERAL dates in the window contributes NO floor on any of them", () => {
+    // 8 consecutive days -> day1 and day8 share a weekday (7 days apart); a
+    // rule targeting that weekday is a subset restriction across BOTH
+    // dates, not a floor on either one (capacity.ts's own doc comment on
+    // `forcedDemand`: proving infeasibility over subsets is a Hall
+    // condition this precheck deliberately does not attempt).
+    const config = {
+      ...baseConfig(),
+      window: { from: DAY1, to: DAY1 + 8 * DAY_MS },
+      hard: [fixtureOnWeekday("f1", weekdayOfYmd("2026-10-19"), DIV_SCOPE)],
+    };
+    const input = capacityInputForFixtures([{ id: "f1" }], config, "div-1")!;
+    expect(input.days).toHaveLength(8);
+    expect(input.days[0]!.forcedDemand).toBeUndefined();
+    expect(input.days[7]!.forcedDemand).toBeUndefined();
+  });
+
+  it("fixture_on_weekday matching EXACTLY ONE date in the window DOES floor that date (the positive counterpart)", () => {
+    const config = {
+      ...baseConfig(),
+      hard: [fixtureOnWeekday("f1", weekdayOfYmd("2026-10-19"), DIV_SCOPE)],
+    };
+    const input = capacityInputForFixtures([{ id: "f1" }, { id: "f2" }], config, "div-1")!;
+    expect(input.days[0]!.forcedDemand).toBe(1);
+  });
+
+  it("fixture_on_date outside the window's day buckets is ignored (it constrains nothing inside this window)", () => {
+    const config = twoRoomyDaysConfig([fixtureOnDate("f1", "2026-11-01", DIV_SCOPE)]);
+    const input = capacityInputForFixtures(eightFixtures, config, "div-1")!;
+    expect(input.days.every((d) => d.forcedDemand === undefined)).toBe(true);
+  });
+
+  it("a pool-scoped rule is ignored for forcedDemand, exactly as dayCapFor ignores one for demandCap (v1 scope: competition/division only)", () => {
+    const config = twoRoomyDaysConfig([
+      fixtureOnDate("f1", "2026-10-19", { kind: "pool", divisionId: "div-1", pool: "A" }),
+    ]);
+    const input = capacityInputForFixtures(eightFixtures, config, "div-1")!;
+    expect(input.days[0]!.forcedDemand).toBeUndefined();
+  });
+
+  it("a caller supplying no fixture identity (id absent) gets forcedDemand ABSENT, never 0-by-accident", () => {
+    // Same rule as the impossible case above, but the fixtures carry no
+    // `id` at all -- exactly the client card's shape today (home/away/
+    // poolId only, see settings-panel.tsx). The rule cannot be resolved
+    // against unidentifiable fixtures, so the day must read as "not
+    // assessed" (key absent), never as a computed, misleadingly precise 0.
+    const config = twoRoomyDaysConfig(idRulesFor(["f1", "f2", "f3", "f4", "f5", "f6", "f7"], "2026-10-19"));
+    const input = capacityInputForFixtures([{ home: "A", away: "B" }, { home: "C", away: "D" }], config, "div-1")!;
+    expect(input.days[0]!.forcedDemand).toBeUndefined();
+  });
+
+  it("an unknown winnerTo (caller never supplied it) never matches a `terminal` selector -- unknown must not default to null", () => {
+    // `null` is resolveSelector's OWN definition of "terminal" (winnerTo
+    // === null). Defaulting an UNKNOWN status to null would make every
+    // fixture of unknown terminal status match a `terminal` selector --
+    // the overcounting direction forcedDemand's own doc comment forbids
+    // ("undercounting only ever costs a missed warning; it can never
+    // manufacture a false impossible").
+    const config = {
+      ...baseConfig(),
+      hard: [{ type: "fixture_on_date", selector: { kind: "terminal" }, date: "2026-10-19", scope: DIV_SCOPE } satisfies HardConstraint],
+    };
+    const input = capacityInputForFixtures([{ id: "f1" }], config, "div-1")!; // winnerTo NEVER supplied
+    expect(input.days[0]!.forcedDemand).toBeUndefined();
+  });
+
+  it("an EXPLICITLY terminal fixture (winnerTo: null) DOES match a `terminal` selector", () => {
+    const config = {
+      ...baseConfig(),
+      hard: [{ type: "fixture_on_date", selector: { kind: "terminal" }, date: "2026-10-19", scope: DIV_SCOPE } satisfies HardConstraint],
+    };
+    const input = capacityInputForFixtures(
+      [
+        { id: "f1", winnerTo: null }, // terminal
+        { id: "f2", winnerTo: "f1" }, // feeds f1 -- not terminal
+      ],
+      config,
+      "div-1",
+    )!;
+    expect(input.days[0]!.forcedDemand).toBe(1);
   });
 });

@@ -29,6 +29,7 @@
 // slow/hanging network path.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import type { HardConstraint } from "@seazn/engine/scheduling";
 
 const { parse, isServerFeatureEnabled, captureServer, incrWindow, rlCounts, MockAPIError } = vi.hoisted(() => {
   const rlCounts = new Map<string, number>();
@@ -187,6 +188,45 @@ const OK_CONFIG: DivSpec["config"] = {
   sessionWindows: [{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T21:00:00.000Z" }],
 };
 
+// D2-wave1 followup (CapacityDay.forcedDemand): 2 real days, day1 holds 2
+// slots (1h window), day2 holds 24 (12h window) -- 26 total, vastly more
+// than the 6-fixture round robin's demand, so total-supply arithmetic alone
+// calls this comfortable. The forced-demand tests below nail 3 of those 6
+// fixtures onto day1 specifically -- more than day1's own 2 slots can hold
+// -- which NEITHER total supply nor a max_fixtures_per_day cap would catch,
+// and is exactly the gap this followup closes.
+const TWO_DAY_ROOMY_CONFIG: DivSpec["config"] = {
+  startAt: "2026-08-01T09:00:00.000Z",
+  endAt: "2026-08-02T23:59:00.000Z",
+  matchMinutes: 30,
+  gapMinutes: 0,
+  courts: ["Court 1"],
+  perEntrantMinRest: 0,
+  sessionWindows: [
+    { from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" },
+    { from: "2026-08-02T09:00:00.000Z", to: "2026-08-02T21:00:00.000Z" },
+  ],
+};
+
+/** Force `n` of `divisionId`'s already-generated fixtures onto `date` via
+ *  `fixture_on_date`/`id`-selector rules, merged into the division's
+ *  seeded `schedule_settings.config` (jsonb `||` -- additive: none of this
+ *  file's DivSpec configs set `constraints` themselves, so this only ADDS
+ *  the key). This is the same `constraints.hard` vocabulary the
+ *  Constraints tab writes through the API -- not a second, test-only
+ *  mechanism. */
+async function forceFixturesOntoDate(divisionId: string, date: string, n: number): Promise<void> {
+  const rows = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} limit ${n}`;
+  expect(rows.length).toBe(n); // the fixtures this test forces must actually exist
+  const hard: HardConstraint[] = rows.map((r) => ({
+    type: "fixture_on_date",
+    selector: { kind: "id", fixtureId: r.id },
+    date,
+    scope: { kind: "division", divisionId },
+  }));
+  await sql`update schedule_settings set config = config || ${sql.json({ constraints: { hard } } as never)} where division_id = ${divisionId}`;
+}
+
 // EMPTY instruction, deliberately: a non-empty one takes the stage-1
 // compile branch (`parseInstruction`, schedule-ai-parse.ts) which is NOT
 // mocked in this file (unlike competition-schedule-ai-route.test.ts) and
@@ -299,6 +339,67 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition — D2 capacity guard (per kept d
     // CAPACITY_IMPOSSIBLE_CODE is deliberate: a test that imports the constant
     // still passes if the constant's value changes, which is the wire-level
     // drift this is meant to pin.
+    let caught: unknown;
+    try {
+      await run(auth, competitionId, divisions.map((d) => d.id));
+    } catch (err) {
+      caught = err;
+    }
+
+    expect((caught as { code?: string } | undefined)?.code).not.toBe("CAPACITY_IMPOSSIBLE");
+    expect(parse).toHaveBeenCalled();
+  });
+});
+
+describe.skipIf(!HAS_DB)("aiPlanForCompetition — D2 capacity guard forcedDemand (fixture_on_date floor, wave1 followup)", () => {
+  it("a fixture_on_date rule nailing more fixtures onto one day than it holds is impossible, even though TOTAL supply is ample", async () => {
+    const auth = await seedPlusOrg();
+    const walletId = await walletIdFor(auth.orgId);
+    const before = await balance(walletId);
+    const { competitionId, divisions } = await seedCompetition(auth, "Floored", [
+      { name: "Alpha", config: TWO_DAY_ROOMY_CONFIG },
+      { name: "Bravo", config: OK_CONFIG },
+    ]);
+    const alpha = divisions.find((d) => d.name === "Alpha")!;
+    await forceFixturesOntoDate(alpha.id, "2026-08-01", 3); // day1 holds 2 -- 3 overflows it
+
+    let caught: unknown;
+    try {
+      await run(auth, competitionId, divisions.map((d) => d.id));
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toMatchObject({ status: 422, code: "CAPACITY_IMPOSSIBLE" });
+    const err = caught as { message: string; extra?: { divisions?: { id: string; name: string }[] } };
+    expect(err.message).toContain("Alpha");
+    // Bravo (OK_CONFIG, no forcing rule) is unaffected -- proves this 422 is
+    // Alpha's floor specifically, not a blanket refusal that would fire
+    // regardless of which division carried the rule.
+    expect(err.message).not.toContain("Bravo");
+    expect((err.extra?.divisions ?? []).map((d) => d.name)).toEqual(["Alpha"]);
+    expect(await balance(walletId)).toBe(before);
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  it("the paired control — the SAME board with no forcing rule — reaches the AI compile (total supply alone is comfortable)", async () => {
+    const auth = await seedPlusOrg();
+    const { competitionId, divisions } = await seedCompetition(auth, "NotFloored", [
+      { name: "Alpha", config: TWO_DAY_ROOMY_CONFIG },
+      { name: "Bravo", config: OK_CONFIG },
+    ]);
+    parse.mockResolvedValue({
+      parsed_output: { assignments: [], unschedulable: [], explanations: [], summary: "ok" },
+      stop_reason: "end_turn",
+      usage: { input_tokens: 100, output_tokens: 50 },
+      content: [],
+    });
+
+    // Same reasoning as "proceeds (reaches the AI compile)" above: the
+    // mocked compile returns an empty plan so the AI ladder exhausts and
+    // `run` rejects downstream — reaching the compile at all is itself the
+    // proof this pair's ONLY difference (the forcing rule) is what flips
+    // the earlier test to CAPACITY_IMPOSSIBLE.
     let caught: unknown;
     try {
       await run(auth, competitionId, divisions.map((d) => d.id));

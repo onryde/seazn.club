@@ -2550,10 +2550,23 @@ async function planForCompetition(
   await withTenant(auth.orgId, async (tx) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const orgTz = resolveVenueTz(null, org?.timezone ?? null);
+    // id/ext_key/winner_to_fixture (same three columns rowToRuleFixture
+    // renames, schedule.ts) are what let this guard's forcedDemand floor
+    // (fixture_on_date/fixture_on_weekday) resolve at all — without them
+    // capacityInputForFixtures still runs, just with no fixture identity to
+    // resolve a selector against (see CapacityFixtureInput's own comment).
     const fixtureRows = await tx<
-      { division_id: string; home_entrant_id: string | null; away_entrant_id: string | null; pool_id: string | null }[]
+      {
+        id: string;
+        division_id: string;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
+        pool_id: string | null;
+        ext_key: string | null;
+        winner_to_fixture: string | null;
+      }[]
     >`
-      select division_id, home_entrant_id, away_entrant_id, pool_id from fixtures
+      select id, division_id, home_entrant_id, away_entrant_id, pool_id, ext_key, winner_to_fixture from fixtures
       where division_id in ${tx(kept)} and status = ${MOVABLE_STATUS}`;
     for (const id of kept) {
       const row = byId.get(id)!;
@@ -2567,21 +2580,29 @@ async function planForCompetition(
       // this guard a permanent no-op: every division always resolved to a
       // skipped assessment, regardless of how oversubscribed it was.
       const slotConfig = { ...toSlotConfig({ division_id: id, config: parsed.data, displayTz: orgTz, orgTz, updated_at: "" }, Date.now()), tz: orgTz };
+      // The identity half comes from the ONE shared builder, not a second
+      // literal. `capacityInputForFixtures` needs exactly the facts a
+      // `RuleFixture` already carries — id, extKey, poolId, winnerTo — so
+      // writing them out here would be a fourth producer of `winnerTo`, and
+      // #443 was precisely two copies of that drifting onto a shared wrong
+      // assumption. `competition-schedule-ai-repair.test.ts` counts the
+      // producers per file and requires zero in this one; it caught this
+      // exact regression, which is why the delegation is not optional.
+      // Column names differ on this row shape, hence the adapter — the same
+      // move the two other call sites in this file already make.
       const fixtures = fixtureRows
         .filter((f) => f.division_id === id)
         .map((f) => ({
           home: f.home_entrant_id ?? undefined,
           away: f.away_entrant_id ?? undefined,
-          poolId: f.pool_id ?? undefined,
+          ...toRuleFixture(
+            { id: f.id, ext_key: f.ext_key, pool: f.pool_id, feeds: { winner_to: f.winner_to_fixture } },
+            id,
+          ),
         }));
       const input = capacityInputForFixtures(fixtures, slotConfig, id);
-      if (process.env.DEBUG_CAPACITY === "1") {
-        console.error("DEBUG division", id, row.name, "fixtures.length", fixtures.length, "rawFixtureRows", fixtureRows.length);
-        console.error("DEBUG input", JSON.stringify(input));
-      }
       if (input === null) continue; // no bounded window to assess — skip, not impossible
       const report = assessCapacity(input);
-      if (process.env.DEBUG_CAPACITY === "1") console.error("DEBUG report", JSON.stringify(report));
       logCapacityAssessed(report, { scope: "competition_division", divisionId: id, competitionId });
       if (report.verdict === "impossible") capacityImpossible.push({ id, name: row.name, report });
     }
