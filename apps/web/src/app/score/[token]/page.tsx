@@ -23,7 +23,7 @@ import {
 import { scorepadV2Enabled } from "@/lib/scorepad-flag";
 import { hasFeature } from "@/lib/entitlements";
 import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
-import { eventOutToEnvelope } from "@/components/v2/scorepad/registry";
+import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
 
 export default async function ScorePadPage({
   params,

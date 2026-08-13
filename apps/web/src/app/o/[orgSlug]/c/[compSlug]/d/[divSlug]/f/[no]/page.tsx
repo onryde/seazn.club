@@ -34,7 +34,7 @@ import { sql } from "@/lib/db";
 // can never red a flag-off page — see resolveScorePadBootstrap's own doc).
 import { scorepadV2Enabled } from "@/lib/scorepad-flag";
 import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
-import { eventOutToEnvelope } from "@/components/v2/scorepad/registry";
+import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
 
 export default async function FixturePage({
   params,

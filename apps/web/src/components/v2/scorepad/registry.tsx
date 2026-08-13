@@ -89,36 +89,13 @@ export function resolveScorePad(sportKey: string): ScorePadResolution {
  * bans any `@/server/**` import from this directory), and both page loaders'
  * `listEvents` rows already satisfy this shape without a cast.
  */
-export interface WireEvent {
-  id: string;
-  seq: number;
-  type: string;
-  payload: unknown;
-  recorded_at: string;
-  recorded_by: string | null;
-  voids_event_id: string | null;
-}
-
-/**
- * `EventOut` (snake_case, server wire) -> `EventEnvelope` (camelCase, engine
- * core) — the one mapping both page loaders use to build `initialEvents` for
- * `<ScorePad/>`. Drops `device_link_id`: the engine's own envelope has no
- * such field (it is sport/auth-agnostic) — see use-pad-pipeline.ts's
- * `ownEventIds` for how the pad's timeline recovers per-event device-link
- * ownership without it.
- */
-export function eventOutToEnvelope(fixtureId: string, e: WireEvent): EventEnvelope {
-  return {
-    id: e.id,
-    fixtureId,
-    seq: e.seq,
-    type: e.type,
-    payload: e.payload,
-    recordedAt: e.recorded_at,
-    recordedBy: e.recorded_by,
-    ...(e.voids_event_id ? { voids: e.voids_event_id } : {}),
-  };
-}
+// MOVED to ./wire (S12/#421). `WireEvent` and `eventOutToEnvelope` cannot
+// live in this file: it is `"use client"`, and BOTH server page loaders call
+// the mapper to build `initialEvents`. React refuses that at runtime, and
+// `[].map(fn)` hid it until a fixture had its first event. See wire.ts's own
+// header for the measurement. Deliberately NOT re-exported from here — a
+// re-export through a `"use client"` module is still a client binding, so it
+// would reintroduce exactly the crossing it looks like it fixes.
 
 function toLineupSlot(s: LineupSlotIn, index: number): LineupSlot {
   return {

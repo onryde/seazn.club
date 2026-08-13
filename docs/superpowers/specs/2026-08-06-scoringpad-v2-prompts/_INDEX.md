@@ -2178,6 +2178,92 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   keeping rather than working around: it means the v1 regression genuinely runs
   against a server configured the way production is, instead of against a
   server that merely has not been asked to turn v2 on.
+- 2026-08-13 — S12/#421 — **SEVENTH instance of the signature defect, and the
+  first where the contract fix itself is what shipped inert: three skins render
+  a person as a RAW UUID, and `SkinLayoutCtx.personNames` — added centrally by
+  S11 to prevent exactly this — is consumed by NONE of them.** Found on the
+  very first real-browser render of the v2 console against a real roster, which
+  is the coverage S11 recorded that it could not obtain. Measured:
+  `cricket-skin.tsx:345-347` is literally `function displayPerson(id: string):
+  string { return id; }`, used at four call sites (`:428`, `:618`, `:705`,
+  `:719`) — so the striker, non-striker and bowler selects, the attribution
+  selects and the wicket/fielder picker all draw
+  `<option value="123fb88b-…">123fb88b-7682-4008-93fb-f607fd7a9570</option>`.
+  `football-skin.tsx:249` is `ids.map((id) => ({ value: id, label: id }))`, on
+  the scorer/assist picker. `period-skin.tsx:274` falls back to
+  `personId.slice(0, 6)` whenever a lineup carries no squad number.
+  Why it survived S11's own review: five skins still carry COMMENTS asserting
+  "SkinProps carries no lineup/personNames channel" (`cricket-skin.tsx:26,343`,
+  `football-skin.tsx:25`, `period-skin.tsx:280`, `racquet-skin.tsx:201`,
+  `tennis-skin.tsx:248`). They were true when written and were not revisited
+  when the channel landed on `SkinLayoutCtx` mid-session — and `SkinProps.ctx`
+  IS a `SkinLayoutCtx`, so every skin has had the names all along. A stale
+  comment denying a channel is as good as not having one.
+  **The general rule this earns:** when parallel agents report a shared-contract
+  gap and it is fixed centrally, the fix is not done until every reporting
+  consumer is re-dispatched to CONSUME it. S11 added the channel and closed the
+  loop on the contract, not on the callers; the coverage sweep could not see the
+  difference because `layout()` returns data and option TEXT is drawn by the
+  Component. **OWNER RULING: fix all three skins** — cricket and football to
+  `ctx.personNames?.[id] ?? id`, period keeping `#squadNumber` first (a
+  deliberate scorer-vocabulary choice) but preferring the name over an id
+  fragment as its fallback.
+- 2026-08-13 — S12/#421 — **two review gaps worth recording beyond their fixes.**
+  (a) `getLineup`'s wire shape carries neither `role` nor `pairOrder`, so
+  `registry.tsx`'s `toLineupSlot` cannot set them and `core/lineup.ts:350`
+  defaults EVERY roster member to `role: "player"`. Authoritative stats are
+  unaffected — `player-stats.ts`/`org-posts.ts` read `loadLineupPair`
+  (`server/engine-db/lineups.ts:27-40`), a separate DB read that does carry the
+  real column — but the PAD's own picker pools are built from the client fold,
+  so S3/#426's OWNER RULING 3 ("a card to a coach records against the person
+  but never enters a playing record") is enforced on the stats path and not on
+  the entry path. (b) `fidelity.ts:91,117` falls back to `EMPTY_SPEC` when
+  `padSpec?.(cfg)` is absent — and `padSpec` is an OPTIONAL module hook
+  (`sport/module.ts:388`) — so a module without one declares no
+  `fidelityEntitlements`, gates nothing, and lands on band 3 with the full v2
+  UI unlocked. Dead today (all 11 implement it) and not a billing bypass (the
+  append path still refuses via `requiredFeatureForEvent`), but it is misleading
+  UI with no drift guard. Closed structurally by extending the registry drift
+  guard to assert every `builtinModules` entry implements `padSpec`, rather than
+  by a comment.
+- 2026-08-13 — S12/#421 — **new wrapper trap: the `rtk` hook silently TRUNCATES
+  `git diff`.** A reviewer's `git diff main...HEAD` came back missing 9 of 23
+  changed files — including the flag wrapper the review was partly about — with
+  no error and no truncation marker, so the diff looked complete and simply did
+  not contain the work. Same family as `rtk`'s `PASS(0) FAIL(0)` for a suite
+  that failed to collect: a wrapper returning a plausible smaller answer rather
+  than an error. Use `rtk proxy git diff`, and sanity-check the file count
+  against `git diff --stat` before drawing any conclusion from a diff's
+  ABSENCE. A related, subtler misread from the same run: `rtk`'s diff shows
+  COMMITTED state while the working tree may be newer, so a reviewer reading
+  both can conclude a file was fabricated when it was merely stale — check
+  `git status` before calling content invented.
+- 2026-08-13 — S12/#421 — **the v2 console 500s on the SECOND page load, and an
+  EMPTY ARRAY is why nothing caught it.** Driving the real flag-on console in a
+  real browser: the fixture page renders correctly, "Start match" appends
+  `core.start` (verified on the ledger — `last_seq: 1`, `status: in_play`,
+  `phase: "live"`), and the `router.refresh()` that follows renders
+  `Try again`. Server log:
+  `Error: Attempted to call eventOutToEnvelope() from the server but
+  eventOutToEnvelope is on the client.`
+  `eventOutToEnvelope` is defined in `scorepad/registry.tsx`, which is
+  `"use client"`, and both server loaders call it as
+  `events.map((e) => eventOutToEnvelope(fixture.id, e))`. **On a fixture with
+  no events yet, `[].map(fn)` never invokes `fn`**, so the boundary violation
+  is unreachable until the ledger has its first row — which is exactly one tap
+  after the page a screenshot would be taken of.
+  What did NOT catch it, each checked rather than assumed: `tsc --noEmit`
+  EXIT=0; 3251 unit tests green; `next build` green with 237/237 static pages;
+  `apps/web` lint 0 errors. A client/server boundary violation is invisible to
+  every one of those — the index's own note that "a prod build is the only gate
+  that catches a client-bundle leak" is half right, because the build compiled
+  this happily too. **The only instrument that reads it is a prod server with
+  REAL DATA in it.** That is the whole argument for this session's e2e debt
+  being the weight rather than the flag, restated as evidence.
+  Recorded before the fix so the shape survives: when a server component maps a
+  collection through a helper, the helper's module boundary is only tested by a
+  NON-EMPTY collection, and every one of this repo's cheap gates runs against
+  the empty case.
 - _(append below)_
 
 ## Open questions for the owner

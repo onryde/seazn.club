@@ -10,7 +10,8 @@ import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import type { SideInfo } from "@/components/v2/fixture-console";
 import { skinFor } from "../skins/registry";
-import { RESOLUTION_KIND, eventOutToEnvelope, lineupPairFrom, personNamesFrom, resolveScorePad } from "../registry";
+import { RESOLUTION_KIND, lineupPairFrom, personNamesFrom, resolveScorePad } from "../registry";
+import { eventOutToEnvelope } from "../wire";
 
 describe("resolveScorePad — drift guard over every builtinModules key", () => {
   it("assertion 1: every builtinModules key has a table row", () => {
