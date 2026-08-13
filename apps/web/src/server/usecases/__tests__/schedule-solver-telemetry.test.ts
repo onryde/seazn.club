@@ -405,12 +405,23 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
     await applyAll(auth, stageId, first.assignments);
 
     // Park the last card ten hours out. Still legal — nothing else is near it.
-    const rows = await sql<
-      { id: string; scheduled_at: Date; court_label: string }[]
-    >`
-      select id, scheduled_at, court_label from fixtures
-      where stage_id = ${stageId} order by scheduled_at, court_label, id`;
-    const parked = rows[rows.length - 1]!;
+    //
+    // C1 fix-loop (G2/3rd instance). `order by round_no desc, seq_in_round
+    // desc` — the LAST round, explicitly — not `order by scheduled_at,
+    // court_label, id`. With 2 courts serving 3 simultaneous matches a
+    // round, the greedy seed can interleave a round's own fixtures across
+    // more than one time wave, so "last by scheduled_at" is not provably
+    // "last round" the way it is on a board with courts >= matches-per-round
+    // (the 4-entrant/2-court fixture family this file's OTHER specs use).
+    // Parking anything but the true last round ten hours out forces the
+    // solver to place every fixture in a LATER round after that same mark
+    // too (round order, this task's fix) — a materially harder problem than
+    // the one this spec is actually about, and the delta gate's own
+    // round-robin blind spot is what let that go unnoticed until now.
+    const rows = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${stageId}
+      order by round_no desc, seq_in_round desc limit 1`;
+    const parked = rows[0]!;
     await applySchedule(auth, stageId, {
       assignments: [
         { fixture_id: parked.id, scheduled_at: at(600), court_label: "C1" },
@@ -511,8 +522,20 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
     const { stageId, created } = await seedStage(auth, 4);
     expect(created).toBe(6);
 
+    // C1 fix-loop (G2/3rd instance). `order by round_no desc, seq_in_round
+    // desc` — the LAST round — not `order by id` (a random UUID, so
+    // effectively an arbitrary round). Parking a fixture ten hours out
+    // imposes no round-order constraint on anyone when it is the last round
+    // (nothing has to come after it); parking an EARLY round there instead
+    // would force the solver to place every LATER round after the same
+    // ten-hour mark too, a much harder — and, at `id`'s ~4-in-6 odds of
+    // landing on round 1 or 2, usually budget-exceeding — problem than the
+    // one this spec is actually about. This is the delta gate's own
+    // round-robin blind spot (this task's fix) finally being visible to a
+    // test that picked its anchor without regard to round.
     const rows = await sql<{ id: string }[]>`
-      select id from fixtures where stage_id = ${stageId} order by id`;
+      select id from fixtures where stage_id = ${stageId}
+      order by round_no desc, seq_in_round desc limit 1`;
     const pinned = rows[0]!;
 
     // Ten hours out, on the second court: nowhere a compacting placer would put

@@ -317,8 +317,19 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
 
     // The move assembles official-assignment-changed notices in-tx (fires the
     // v11 query) and must not disturb the response or the schedule write.
+    //
+    // C1 fix-loop (G2/3rd instance): 1 day out, not 14. `fixtureId` is
+    // `fixtures[0]` — round 1, per `generateStageFixtures`'s own
+    // `order by round_no, seq_in_round` — and `seedFutureDivision`'s other
+    // fixtures all sit within `t0 (= now + 7 days)` plus a few minutes.
+    // Pushing round 1 to `now + 14 days`, past every later round's untouched
+    // position, was a genuine round-order violation this test was
+    // unknowingly creating; the delta gate's own round-robin blind spot
+    // (this task's fix) simply couldn't see it before. `now + 1 day` stays
+    // safely before the whole board (round 1 moving earlier can never
+    // breach round order) while still testing a real reschedule.
     const moved = await patchFixture(auth, fixtureId, {
-      scheduled_at: new Date(Date.now() + 14 * 86_400_000).toISOString(),
+      scheduled_at: new Date(Date.now() + 1 * 86_400_000).toISOString(),
     });
     expect(moved.scheduled_at).not.toBeNull();
     const [row] = await sql<{ response: string }[]>`
