@@ -31,7 +31,7 @@ C6 (prose) is safe whenever.
 |---|---|---|---|---|
 | C0 | `C0-division-rules-retirement.md` | division_rules | — | **MERGED** #537 → `f0f83939` |
 | C1 | `C1-round-ordering.md` | round ordering | C0 (same proto/build.ts region) | **MERGED** #546 → `78db2f1f` |
-| C2 | `C2-day-start-rung.md` | day_start | C1 (model.py overlap; rebase either way) | **IN REVIEW** — PR #555, `feat/c2-day-start-rung`; shipped #512's two rungs too (see below) |
+| C2 | `C2-day-start-rung.md` | day_start | C1 (model.py overlap; rebase either way) | **MERGED** #555 → `40331cc2`, follow-up #557 → `4dc38a0e`. Shipped #512's two rungs too. **Leaves 3 open defects — see the C2 entries below before starting C3.** |
 | C3 | `C3-conflict-detail-names.md` | conflict details | not concurrent with C1 (schedule.ts) | TODO |
 | C4 | `C4-z3-reflow-cpsat.md` | z3 stage A | C1 (reflow inherits round rule) | TODO |
 | C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | TODO |
@@ -216,7 +216,8 @@ is outside the corpus's scope entirely). `openapi:gen` produced zero diff.
 ### C2 — T1 `day_start` rung (2026-08-13)
 
 Branch `feat/c2-day-start-rung`, worktree `.claude/worktrees/c2-day-start`,
-off `3d64222a`. **PR #555**, commit `ab4a1aee`.
+off `3d64222a`. **PR #555 MERGED** as `40331cc2`; follow-up **#557 MERGED** as
+`4dc38a0e` (the safe half only — the gate defect below is still open).
 
 **False premise, and it changed the scope: #512 WAS NEVER IMPLEMENTED.** The
 C2 prompt reads as if the two day rungs already exist ("reusing #512's
@@ -343,7 +344,7 @@ legalised greedy seed and returns the SEED when the candidate does not win. So
 a PROVED-optimal board can be discarded, and — before #557 — the discarded-board
 reply was reported `already_optimal`.
 
-**What #557 ships (behaviour-neutral, verified):** `TIER_NAMES` as the shared
+**#557 MERGED as `4dc38a0e`** — behaviour-neutral, verified: `TIER_NAMES` as the shared
 vocabulary with `objective.py` and the proto comment, `TIER_COUNT` derived from
 it, `already_optimal` gated on the NAMES rather than a bare count, the three day
 metrics on `BoardMetrics` as REPORTED fields, and three test-quality fixes. The
