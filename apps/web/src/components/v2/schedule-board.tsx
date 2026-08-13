@@ -46,6 +46,7 @@ import {
   type Density,
   type GhostBlock,
 } from "./board/types";
+import type { SlotLabelLookup } from "@/lib/slot-label";
 import { useBoardActions, type AutoScheduleMode, type GateRefusal } from "./board/use-board-actions";
 
 export type { BoardConfig, BoardConflict, BoardDivision, BoardFixture, BoardStage } from "./board/types";
@@ -238,6 +239,13 @@ export function consoleFixtures(
   boardFixtures: BoardFixture[],
   entrantNames: Record<string, string>,
   feedLabels: Record<string, FeedLabelPair>,
+  // Fix round 1, finding #4 — optional and undefined by default (NOT a
+  // hardcoded `= msg`): passing `undefined` through to cardTitle() lets
+  // ITS OWN default parameter apply, so every existing caller that omits
+  // this (the demo-template capture/drift tests, which want canonical
+  // English regardless of any org's locale) is unchanged. The real client
+  // render site (below) passes the component's own useMsg()-bound `msg`.
+  lookup?: SlotLabelLookup,
 ): AiConsoleFixture[] {
   const maxRoundOf = new Map<string, number>();
   for (const f of boardFixtures) {
@@ -261,7 +269,7 @@ export function consoleFixtures(
       scheduled_at: f.scheduled_at ? new Date(f.scheduled_at).toISOString() : null,
       court_label: f.court_label,
       code: `R${f.round_no}·${f.seq_in_round}`,
-      matchup: cardTitle(f, entrantNames, feedLabels),
+      matchup: cardTitle(f, entrantNames, feedLabels, lookup),
       isFinal: maxRound > 0 && f.round_no === maxRound && atMaxRound.get(f.division_id) === 1,
       isJunior: false,
       // Carried for the PHASE B quote: the officials pack holds the fixtures
@@ -659,8 +667,16 @@ export function ScheduleBoard({
   // proposal spans every selected division, so narrowing to one would leave
   // most of its ghosts without a code or a matchup.
   const aiFixtures = useMemo<AiConsoleFixture[]>(
-    () => consoleFixtures(single ? divBoardFixtures : actions.board, entrantNames, feedLabels),
-    [single, divBoardFixtures, actions.board, entrantNames, feedLabels],
+    // Fix round 1, finding #4: this file's own `msg` (line 441, useMsg()-
+    // bound) — the same real, localized lookup schedule-board.tsx's own
+    // card render already passes to cardTitle() at lines 839/852/1681.
+    // consoleFixtures() previously left this 4th argument off entirely, so
+    // cardTitle() fell through to ITS default (client-safe English),
+    // regardless of the org/viewer's own locale — feeding five AI-console
+    // surfaces (ai-competition-console, ai-diff-panel, ai-officials-review,
+    // ai-review-panel) and the board ghost block English-only.
+    () => consoleFixtures(single ? divBoardFixtures : actions.board, entrantNames, feedLabels, msg),
+    [single, divBoardFixtures, actions.board, entrantNames, feedLabels, msg],
   );
 
   // The joint console's per-division inputs. Derived here (not in the console)
@@ -1677,7 +1693,7 @@ function WeekView({
                         <span>{timeLabel(f.scheduled_at as string)}</span>
                         <span>{f.court_label}</span>
                       </div>
-                      <p className="truncate font-medium text-slate-700">
+                      <p title={cardTitle(f, entrantNames, feedLabels, msg)} className="truncate font-medium text-slate-700">
                         {cardTitle(f, entrantNames, feedLabels, msg)}
                       </p>
                       {multi && (

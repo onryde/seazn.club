@@ -13,6 +13,7 @@ import en from "@/dictionaries/en/ui.json";
 import { consoleFixtures, ghostBlocks } from "../schedule-board";
 import { BoardGrid } from "../board/board-grid";
 import type { AiConsoleFixture } from "../board/ai-diff";
+import { msgFor } from "@/lib/messages-i18n";
 
 const dict = en as unknown as Dict;
 
@@ -174,5 +175,32 @@ describe("consoleFixtures", () => {
     // matches in that round means it cannot be one.
     const marked = consoleFixtures([bf("a", "d1", 2), bf("b", "d1", 2)], {}, {});
     expect(marked.some((f) => f.isFinal)).toBe(false);
+  });
+
+  // Fix round 1, finding #4 (IMPORTANT): consoleFixtures() fed cardTitle()
+  // its default English lookup unconditionally — board/types.ts's own
+  // comment discloses this ("no hook context… stays on the default"). The
+  // matchup it produces feeds five AI-console surfaces + the board ghost
+  // block, so a non-English org saw English matchups there regardless of
+  // its own locale, even though the SAME file's card render (schedule-
+  // board.tsx:839/852/1681) already passes a real useMsg()-bound lookup.
+  it("threads a locale-aware `lookup` into cardTitle() instead of leaving the English default (finding #4)", () => {
+    const tbd = {
+      ...bf("final", "d1", 1),
+      home_entrant_id: null,
+      away_entrant_id: null,
+      home_slot_label: { key: "slot.winner_group", params: { g: "A" } },
+      away_slot_label: { key: "slot.winner_group", params: { g: "B" } },
+    };
+    const esLookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
+      msgFor("es", k, v);
+    const withEs = consoleFixtures([tbd], {}, {}, esLookup);
+    expect(withEs[0]!.matchup).toBe("Ganador del Grupo A vs Ganador del Grupo B");
+
+    // Omitting `lookup` entirely keeps the existing English default —
+    // back-compat for demo-template capture/drift tests, which want the
+    // canonical English text regardless of any org's locale.
+    const withoutLookup = consoleFixtures([tbd], {}, {});
+    expect(withoutLookup[0]!.matchup).toBe("Winner of Group A vs Winner of Group B");
   });
 });
