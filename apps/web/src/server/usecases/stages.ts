@@ -1195,9 +1195,10 @@ async function wireCrossFeeds(tx: Tx, divisionId: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 // Persisted labels carry an internal `seed` alongside the rendered
-// {key, params} — computeSeedProposal's destinationSlotsBySeed() is the only
-// reader; renderers destructure {key, params} and ignore it (see the design's
-// "Renderers receive {key, params}" — this is bookkeeping, not wire contract).
+// {key, params} — destinationSlotsBySeed() (read by both computeSeedProposal
+// and confirmSeedProposal) is the only reader; renderers destructure
+// {key, params} and ignore it (see the design's "Renderers receive
+// {key, params}" — this is bookkeeping, not wire contract).
 type StoredSlotLabel = SlotLabel & { seed: number };
 
 type SeededGenFixture = GenFixture & {
@@ -1341,12 +1342,19 @@ async function generateSeededStageFixtures(auth: AuthCtx, stageId: string): Prom
 
     // Convert synthetic slot refs into labels. A bye AWARD line propagates
     // its label into the winner feed too (both resolve to the SAME
-    // descriptor at confirm time) — see the third pass below.
+    // descriptor at confirm time) — see the third pass below. A bye seed
+    // therefore legitimately owns TWO destination slots: the bye fixture's
+    // own `home` slot (stamped right here) AND the winner-feed target's slot
+    // (stamped by the third pass). destinationSlotsBySeed() returns every
+    // slot for a given seed, and confirmSeedProposal fills all of them
+    // through fillSlot — #554 fixed a bug where collapsing a seed's slots to
+    // ONE (last-write-wins, no ORDER BY) silently stranded whichever slot
+    // wasn't picked.
     //
-    // KNOWN GAP (reported, not silent — see P5's final report): the bye-line
-    // fixture itself is not auto-decided the way a live/registered-entrant
-    // bye is (there is no real entrant yet to record a walkover for); it
-    // stays 'scheduled' until confirm fills it.
+    // The bye-line fixture itself is still not auto-decided the way a
+    // live/registered-entrant bye is (there is no real entrant yet to record
+    // a walkover for) — it stays 'scheduled' until confirmSeedProposal fills
+    // it, same as any other TBD slot.
     for (const g of gen) {
       if (typeof g.home === "string" && slotOf.has(g.home)) {
         g.homeLabel = { ...descriptorLabel(slotOf.get(g.home)!), seed: seedOfSlotId(g.home) };
@@ -1833,18 +1841,31 @@ async function sourceStandingsTables(tx: Tx, source: { id: string }): Promise<Po
   return snapshots.map((s) => ({ pool: s.pool_id ? (keyOf.get(s.pool_id) ?? s.pool_id) : "", rows: s.rows }));
 }
 
-/** seed -> "<fixtureId>:home" | "<fixtureId>:away", read off the TBD
- *  fixtures' own slot_label (generateSeededStageFixtures stamps an internal
- *  `seed` alongside {key,params} for exactly this lookup — renderers
- *  destructure {key,params} and ignore it). */
-async function destinationSlotsBySeed(tx: Tx, stageId: string): Promise<Map<number, string>> {
+/** seed -> every "<fixtureId>:home" | "<fixtureId>:away" slot carrying that
+ *  seed's label, read off the TBD fixtures' own slot_label
+ *  (generateSeededStageFixtures stamps an internal `seed` alongside
+ *  {key,params} for exactly this lookup — renderers destructure
+ *  {key,params} and ignore it). Usually a singleton list, but a BYE seed
+ *  owns TWO: its own bye fixture's slot AND the winner-feed target's slot
+ *  (both get the SAME seed stamped — see the third pass in
+ *  generateSeededStageFixtures). #554: this used to collapse to a single
+ *  `Map<number,string>` (last-write-wins over an unordered SELECT), which
+ *  silently stranded whichever slot the DB didn't return last. `order by
+ *  id` makes the returned list's order — not just its membership —
+ *  reproducible across calls against the same fixture rows. */
+async function destinationSlotsBySeed(tx: Tx, stageId: string): Promise<Map<number, string[]>> {
   const fixtures = await tx<
     { id: string; home_slot_label: { seed?: number } | null; away_slot_label: { seed?: number } | null }[]
-  >`select id, home_slot_label, away_slot_label from fixtures where stage_id = ${stageId}`;
-  const bySeed = new Map<number, string>();
+  >`select id, home_slot_label, away_slot_label from fixtures where stage_id = ${stageId} order by id`;
+  const bySeed = new Map<number, string[]>();
+  const add = (seed: number, slot: string) => {
+    const list = bySeed.get(seed);
+    if (list) list.push(slot);
+    else bySeed.set(seed, [slot]);
+  };
   for (const f of fixtures) {
-    if (typeof f.home_slot_label?.seed === "number") bySeed.set(f.home_slot_label.seed, `${f.id}:home`);
-    if (typeof f.away_slot_label?.seed === "number") bySeed.set(f.away_slot_label.seed, `${f.id}:away`);
+    if (typeof f.home_slot_label?.seed === "number") add(f.home_slot_label.seed, `${f.id}:home`);
+    if (typeof f.away_slot_label?.seed === "number") add(f.away_slot_label.seed, `${f.id}:away`);
   }
   return bySeed;
 }
@@ -1932,7 +1953,12 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
         rank: q.rank,
       },
       entrantId: q.entrantId,
-      destinationSlot: slotBySeed.get(q.seed) ?? "",
+      // Wire contract: ONE slot, for display (design's "Renderers receive
+      // {key,params}" convention extends here — first of the deterministic,
+      // order-by-id list). A bye seed's OTHER slot isn't dropped — it's
+      // filled too at confirm time via a fresh destinationSlotsBySeed() call
+      // keyed off this same `rank`; see confirmSeedProposal.
+      destinationSlot: slotBySeed.get(q.seed)?.[0] ?? "",
     }));
     if (computedQualifiers.some((q) => q.destinationSlot === "")) {
       throw new HttpError(
@@ -1945,7 +1971,7 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     const computedTies = ties.map((t) => ({
       slots: t.descriptors.map((d) => {
         const seed = seedOfKey.get(descriptorKey(d));
-        return (seed !== undefined ? slotBySeed.get(seed) : undefined) ?? descriptorKey(d);
+        return (seed !== undefined ? slotBySeed.get(seed)?.[0] : undefined) ?? descriptorKey(d);
       }),
       entrantIds: t.entrantIds,
       reason: t.reason,
@@ -2069,12 +2095,35 @@ export async function confirmSeedProposal(
     if (known.length !== new Set(entrantIds).size) {
       throw new HttpError(422, "a qualifier does not belong to this division", "SEEDING_ENTRANT_FOREIGN");
     }
-    const fixtureIds = [...new Set(finalSlots.map(([slot]) => slot.split(":")[0] as string))];
+    // #554 — a bye seed owns TWO destination slots (its own bye fixture's
+    // slot AND the winner-feed target's slot), but the wire-level
+    // `destinationSlot` above names only one of them (computeSeedProposal's
+    // single-slot display convention — see its comment). Expand every wire
+    // slot into every slot sharing its seed so BOTH get filled, through the
+    // SAME fillSlot pathway used everywhere else (D4a/P5 scope item 3), not
+    // a second one. Re-derive fresh rather than trust the draft's persisted
+    // `computed` (which, by the same wire convention, only ever recorded one
+    // slot per seed) — `rank` on each persisted qualifier IS the seed
+    // destinationSlotsBySeed keys on, so this is an exact re-lookup, not a
+    // re-derivation of the proposal itself.
+    const seedByWireSlot = new Map(proposal.computed.qualifiers.map((q) => [q.destinationSlot, q.rank] as const));
+    const freshSlotsBySeed = await destinationSlotsBySeed(tx, stageId);
+    const expandedSlots = new Map<string, string>();
+    for (const [wireSlot, entrantId] of finalSlots) {
+      const seed = seedByWireSlot.get(wireSlot);
+      const siblings = seed !== undefined ? freshSlotsBySeed.get(seed) : undefined;
+      for (const slot of siblings && siblings.length > 0 ? siblings : [wireSlot]) {
+        expandedSlots.set(slot, entrantId);
+      }
+    }
+    const expandedEntries = [...expandedSlots.entries()];
+
+    const fixtureIds = [...new Set(expandedEntries.map(([slot]) => slot.split(":")[0] as string))];
     const fixtureRows = await tx<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null }[]>`
       select id, home_entrant_id, away_entrant_id from fixtures
       where id in ${tx(fixtureIds)} and stage_id = ${stageId}`;
     const fixtureById = new Map(fixtureRows.map((f) => [f.id, f]));
-    for (const [slot] of finalSlots) {
+    for (const [slot] of expandedEntries) {
       const [fixtureId, side] = slot.split(":");
       const fixture = fixtureId ? fixtureById.get(fixtureId) : undefined;
       if (!fixture) {
@@ -2087,7 +2136,7 @@ export async function confirmSeedProposal(
     }
 
     // Step 4 — single transaction: fill through fillSlot, mark confirmed.
-    for (const [slot, entrantId] of finalSlots) {
+    for (const [slot, entrantId] of expandedEntries) {
       const [fixtureId, side] = slot.split(":");
       await fillSlot(tx, fixtureId as string, side === "home" ? 1 : 2, entrantId);
     }
@@ -2095,7 +2144,7 @@ export async function confirmSeedProposal(
 
     const fixtures = await tx<FixtureRow[]>`
       select ${tx(FIXTURE_COLS)} from fixtures where stage_id = ${stageId} order by round_no, seq_in_round`;
-    return { filled: finalSlots.length, fixtures, divisionId: stage.division_id };
+    return { filled: expandedEntries.length, fixtures, divisionId: stage.division_id };
   });
 
   log.info(

@@ -367,6 +367,139 @@ describe.skipIf(!HAS_DB)("D4a/P5 — confirm validation (double-assignment, fore
   });
 });
 
+/**
+ * 6 entrants, 3 pools of 2 (seeded-snake: A={1,6} B={2,5} C={3,4}), KO stage
+ * declares `.seeding` with topNPerGroup(1) sourced from "previous" — 3
+ * qualifiers, an ODD count. Every scenario above uses a power-of-two count
+ * (8, 4, 2); a knockout bracket for 3 entrants pads to 4 slots with exactly
+ * 1 bye — the #554 reproduction: a bye seed owns TWO destination slots (its
+ * own bye fixture's `home` slot AND the winner-feed final's slot), which
+ * `destinationSlotsBySeed`'s old `Map<number,string>` (last-write-wins, no
+ * ORDER BY) could only remember one of.
+ */
+async function setupGroupsToKnockoutWithBye(): Promise<Setup> {
+  const { auth } = await seedOrg("pro");
+  const comp = await createCompetition(auth, {
+    ends_on: "2030-12-31",
+    name: "Bye " + randomUUID().slice(0, 6),
+    visibility: "private",
+    branding: {},
+  });
+  const division = await createDivision(auth, comp.id, {
+    name: "Open",
+    slug: "open",
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC_CONFIG,
+    eligibility: [],
+  });
+  const entrants = await createEntrants(
+    auth,
+    division.id,
+    Array.from({ length: 6 }, (_, i) => ({
+      kind: "individual" as const,
+      display_name: `B${i + 1}`,
+      seed: i + 1,
+      members: [],
+    })),
+  );
+  const entrantBySeed = new Map(entrants.map((e) => [e.seed as number, e.id]));
+  const stages = await createStages(auth, division.id, [
+    { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 3 } } },
+    {
+      seq: 2,
+      kind: "knockout",
+      name: "KO",
+      config: {},
+      seeding: { source: "previous", take: [{ kind: "topNPerGroup", n: 1 }], placement: "rank_order" },
+    },
+  ]);
+  const groupStage = stages.find((s) => s.kind === "group")!;
+  const koStage = stages.find((s) => s.kind === "knockout")!;
+  return { auth, divisionId: division.id, entrantBySeed, groupStageId: groupStage.id, koStageId: koStage.id };
+}
+
+describe.skipIf(!HAS_DB)("D4a/P5 — a bye seed owns TWO destination slots (#554)", () => {
+  it("confirm leaves NO fixture with a stale slot_label and no entrant — odd qualifier count, 1 bye", async () => {
+    const { auth, groupStageId, koStageId, entrantBySeed } = await setupGroupsToKnockoutWithBye();
+    await generateStageFixtures(auth, koStageId);
+    await generateStageFixtures(auth, groupStageId);
+    await decideAllGroupFixtures(auth, groupStageId, entrantBySeed);
+
+    const result = await completeStage(auth, groupStageId);
+    expect(result.seed_proposal?.status).toBe("draft");
+    const [proposal] = await sql<{ id: string; computed: { qualifiers: unknown[] } }[]>`
+      select id, computed from stage_seed_proposals where id = ${result.seed_proposal!.id}`;
+    expect(proposal.computed.qualifiers).toHaveLength(3);
+
+    const confirmed = await confirmSeedProposal(auth, koStageId, { proposalId: proposal.id });
+
+    // THE assertion that catches #554 — checked first, standalone: after
+    // confirm, nothing in the stage is left holding a placeholder label with
+    // no entrant behind it. That is exactly the "stranded" state the
+    // last-write-wins bug produced for whichever of {the bye fixture, the
+    // winner-feed target} Postgres didn't return last from the unordered
+    // SELECT.
+    const fixtures = await sql<{
+      id: string;
+      home_slot_label: unknown;
+      home_entrant_id: string | null;
+      away_slot_label: unknown;
+      away_entrant_id: string | null;
+    }[]>`select id, home_slot_label, home_entrant_id, away_slot_label, away_entrant_id
+         from fixtures where stage_id = ${koStageId}`;
+    const stranded = fixtures.filter(
+      (f) =>
+        (f.home_slot_label !== null && f.home_entrant_id === null) ||
+        (f.away_slot_label !== null && f.away_entrant_id === null),
+    );
+    expect(stranded).toEqual([]);
+
+    // Sanity check on the fill count: the bye's seed fills its own bye
+    // fixture's slot AND the winner-feed target's slot — 4 slots filled for
+    // 3 qualifiers, not 3.
+    expect(confirmed.filled).toBe(4);
+  });
+
+  it("is deterministic: the same qualifier shape fills the same way across independent fresh runs", async () => {
+    async function runOnce(): Promise<{ roundNo: number; homeSeed: number | null; awaySeed: number | null }[]> {
+      const { auth, groupStageId, koStageId, entrantBySeed } = await setupGroupsToKnockoutWithBye();
+      await generateStageFixtures(auth, koStageId);
+      await generateStageFixtures(auth, groupStageId);
+      await decideAllGroupFixtures(auth, groupStageId, entrantBySeed);
+      const result = await completeStage(auth, groupStageId);
+      const [proposal] = await sql<{ id: string }[]>`
+        select id from stage_seed_proposals where id = ${result.seed_proposal!.id}`;
+      const confirmed = await confirmSeedProposal(auth, koStageId, { proposalId: proposal.id });
+      const seedOfEntrant = new Map([...entrantBySeed.entries()].map(([seed, id]) => [id, seed]));
+      // Observable outcome only — never Postgres row order: which ORIGINAL
+      // seed (1..6) ended up on which round's home/away side.
+      return confirmed.fixtures
+        .map((f) => ({
+          roundNo: f.round_no,
+          homeSeed: f.home_entrant_id ? (seedOfEntrant.get(f.home_entrant_id) ?? null) : null,
+          awaySeed: f.away_entrant_id ? (seedOfEntrant.get(f.away_entrant_id) ?? null) : null,
+        }))
+        .sort((a, b) => a.roundNo - b.roundNo || (a.homeSeed ?? -1) - (b.homeSeed ?? -1));
+    }
+
+    const first = await runOnce();
+    const second = await runOnce();
+    expect(second).toEqual(first);
+
+    // AND the shape actually exercises the doubled-seed path: one original
+    // seed (the pool winner that drew the bye) appears in TWO fixtures,
+    // never just one — that's the part a lucky, always-same-order Postgres
+    // scan could otherwise hide from a bare cross-run equality check.
+    const seedCounts = new Map<number, number>();
+    for (const f of first) {
+      if (f.homeSeed !== null) seedCounts.set(f.homeSeed, (seedCounts.get(f.homeSeed) ?? 0) + 1);
+      if (f.awaySeed !== null) seedCounts.set(f.awaySeed, (seedCounts.get(f.awaySeed) ?? 0) + 1);
+    }
+    expect([...seedCounts.values()].sort()).toEqual([1, 1, 2]);
+  });
+});
+
 describe.skipIf(!HAS_DB)("D4a/P5 — standings override marks a draft stale", () => {
   it("overrideStandings on the source stage marks the dependent draft stale and recomputes", async () => {
     // A single-table (league) source: overrideStandings/recomputeStandings
