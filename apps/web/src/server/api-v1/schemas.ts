@@ -550,6 +550,42 @@ export const Stage = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Templates (D1a design doc, P4) — curated built-ins only, v1: no
+// user-generated templates, no sharing. `checkDateOrder` is the SAME
+// superRefine CreateCompetition uses; a template still needs real dates,
+// only the structure comes from the catalog.
+// ---------------------------------------------------------------------------
+
+export const CreateFromTemplate = z
+  .object({
+    template_key: z.string().min(1),
+    /** Optional stale-catalog guard: when present, must match the catalog's
+     *  CURRENT version for this key, else 409 template.version_retired — a
+     *  wizard detail sheet that sat open across a catalog deploy must not
+     *  silently instantiate a different shape than what was reviewed. */
+    template_version: z.number().int().positive().optional(),
+    name: z.string().min(1).max(200),
+    starts_on: z.iso.date().nullish(),
+    ends_on: z.iso.date(),
+    visibility: Visibility.default("private"),
+  })
+  .superRefine(checkDateOrder);
+export type CreateFromTemplate = z.infer<typeof CreateFromTemplate>;
+
+const TemplateStageResultS = z.object({ id: Uuid, fixtureCount: z.number().int().min(0) });
+const TemplateDivisionResultS = z.object({ id: Uuid, stages: z.array(TemplateStageResultS) });
+export const FromTemplateResult = z.object({
+  competitionId: Uuid,
+  /** So the wizard can navigate straight to the created competition page —
+   *  same pattern the blank-form wizard already uses off its own POST. */
+  slug: Slug,
+  divisions: z.array(TemplateDivisionResultS),
+  templateKey: z.string(),
+  templateVersion: z.number().int(),
+});
+export type FromTemplateResult = z.infer<typeof FromTemplateResult>;
+
+// ---------------------------------------------------------------------------
 // Fixtures, lineups, scoring
 // ---------------------------------------------------------------------------
 

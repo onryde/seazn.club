@@ -97,7 +97,11 @@ export async function listCompetitions(
 // competition past that boundary was keeping a free slot for ever. Same
 // predicate the resolver uses (V343's pass_applies), so the three sites cannot
 // drift apart again. Enforced at the write (doc 10 §2 rule 1).
-async function assertActiveQuota(auth: AuthCtx): Promise<void> {
+// Exported (only) for createFromTemplate (usecases/templates.ts, D1a): a
+// template-instantiated competition is a competition for quota purposes, and
+// this is the SAME pre-transaction check createCompetition itself runs below
+// — reused, not restated, so the two can never disagree about the boundary.
+export async function assertActiveQuota(auth: AuthCtx): Promise<void> {
   const count = await withTenant(auth.orgId, async (tx) => {
     const [{ n }] = await tx<{ n: number }[]>`
       select count(*)::int as n from competitions c
@@ -114,7 +118,8 @@ async function assertActiveQuota(auth: AuthCtx): Promise<void> {
 
 // Doc 10 §1: `dashboard.public.max` — Community holds 1 public competition at
 // a time. Enforced here, at the write (doc 10 §2 rule 1), not in the UI.
-async function assertPublicQuota(auth: AuthCtx, excludeId?: string): Promise<void> {
+/** Exported (only) for createFromTemplate — see assertActiveQuota above. */
+export async function assertPublicQuota(auth: AuthCtx, excludeId?: string): Promise<void> {
   const count = await withTenant(auth.orgId, async (tx) => {
     const rows = excludeId
       ? await tx<{ n: string }[]>`
@@ -126,6 +131,45 @@ async function assertPublicQuota(auth: AuthCtx, excludeId?: string): Promise<voi
   });
   const { ok } = await withinLimit(auth.orgId, "dashboard.public.max", count + 1);
   if (!ok) throw new PaymentRequiredError("dashboard.public.max");
+}
+
+/** Activation event (feature 1) — first competition is the "aha" moment.
+ *  Exported so createFromTemplate (usecases/templates.ts, D1a) can fire the
+ *  SAME event, with the SAME shape, after ITS OWN transaction commits — a
+ *  template-instantiated competition is a competition for the activation
+ *  funnel too. P4 review (2026-08-13) finding 1: an earlier draft of the
+ *  template path called no emitter at all, so a feature built to lower
+ *  friction to a first competition could not be measured doing it. */
+export async function fireCompetitionCreated(auth: AuthCtx, visibility: string): Promise<void> {
+  await captureServer({
+    event: EVENTS.COMPETITION_CREATED,
+    distinctId: auth.userId ?? `org:${auth.orgId}`,
+    orgId: auth.orgId,
+    properties: { visibility },
+  });
+}
+
+/** Activation funnel completion (feature 1) — fires once, on the transition
+ *  INTO "public" (see shouldFireMadePublic, exported alongside this so a
+ *  caller can decide WHETHER to call it). Exported so createFromTemplate
+ *  (usecases/templates.ts, D1a) can fire the SAME event, with the SAME
+ *  shape, when a template-instantiated competition is created directly
+ *  public — CreateFromTemplate.visibility accepts "public" exactly like
+ *  CreateCompetition's does, so the same completion milestone applies.
+ *
+ *  P4 review follow-up (2026-08-13): the first fix wired up
+ *  COMPETITION_CREATED but stopped at the one emitter the review named,
+ *  instead of auditing every event createCompetition fires — this was the
+ *  second one it missed, of exactly two (the other is patchCompetition's
+ *  transition-into-public case below, unaffected — a template never PATCHes
+ *  during instantiation). */
+export async function fireCompetitionMadePublic(auth: AuthCtx, competitionId: string): Promise<void> {
+  await captureServer({
+    event: EVENTS.COMPETITION_MADE_PUBLIC,
+    distinctId: auth.userId ?? `org:${auth.orgId}`,
+    orgId: auth.orgId,
+    properties: { competition_id: competitionId },
+  });
 }
 
 export async function createCompetition(
@@ -181,20 +225,10 @@ export async function createCompetition(
     fireDiscoveryRevalidate();
   }
   // Activation event (feature 1) — first competition is the "aha" moment.
-  await captureServer({
-    event: EVENTS.COMPETITION_CREATED,
-    distinctId: auth.userId ?? `org:${auth.orgId}`,
-    orgId: auth.orgId,
-    properties: { visibility: input.visibility },
-  });
+  await fireCompetitionCreated(auth, input.visibility);
   // Activation funnel completion — created directly public (no prior state).
   if (shouldFireMadePublic(undefined, input.visibility)) {
-    await captureServer({
-      event: EVENTS.COMPETITION_MADE_PUBLIC,
-      distinctId: auth.userId ?? `org:${auth.orgId}`,
-      orgId: auth.orgId,
-      properties: { competition_id: row.id },
-    });
+    await fireCompetitionMadePublic(auth, row.id);
   }
   return row;
 }
@@ -404,12 +438,7 @@ export async function patchCompetition(
   // Activation funnel completion (feature 1) — fires once, on the
   // transition INTO "public" only (see shouldFireMadePublic).
   if (shouldFireMadePublic(oldVisibility, patch.visibility)) {
-    await captureServer({
-      event: EVENTS.COMPETITION_MADE_PUBLIC,
-      distinctId: auth.userId ?? `org:${auth.orgId}`,
-      orgId: auth.orgId,
-      properties: { competition_id: id },
-    });
+    await fireCompetitionMadePublic(auth, id);
   }
   // Growth-loop gate (SPEC-5 §2, v17 gap #296): onboarding + referral-welcome
   // earn credits pay out only once this org proves a human is running a real

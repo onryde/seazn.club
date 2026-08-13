@@ -43,6 +43,7 @@ export const ROUTES: RouteSpec[] = [
   // Competitions
   { path: "/competitions", method: "get", summary: "List competitions", tag: "competitions", response: pageOf(S.Competition), query: PAGE_QUERY },
   { path: "/competitions", method: "post", summary: "Create a competition", tag: "competitions", request: S.CreateCompetition, response: S.Competition, status: 201, errors: [409] },
+  { path: "/competitions/from-template", method: "post", summary: "Instantiate a curated format template (D1a) — competition + divisions + stages in one transaction", tag: "competitions", request: S.CreateFromTemplate, response: S.FromTemplateResult, status: 201, errors: [402, 404, 409, 422] },
   { path: "/competitions/{id}", method: "get", summary: "Get a competition", tag: "competitions", response: S.Competition },
   { path: "/competitions/{id}", method: "patch", summary: "Update a competition", tag: "competitions", request: S.PatchCompetition, response: S.Competition, errors: [409] },
   { path: "/competitions/{id}", method: "delete", summary: "Delete a competition (no recorded play)", tag: "competitions", response: z.object({ deleted: z.boolean() }), errors: [409] },
@@ -370,12 +371,76 @@ const CAPACITY_ERROR_ENVELOPE = {
   },
 } as const;
 
+// SCOPED to POST /competitions/from-template's 409 only (D1a design doc's
+// error table: template.version_retired) — same reasoning as
+// CAPACITY_ERROR_ENVELOPE above: a route-specific extra never joins the
+// shared BASE_ERROR_PROPERTIES (P4 review 2026-08-13 finding 8 — these two
+// extras were real HttpError `extra` fields, undocumented in the served
+// spec, and the fix must not repeat the capacity_report mistake this
+// comment describes).
+const TEMPLATE_VERSION_RETIRED_ENVELOPE = {
+  type: "object",
+  required: ["ok", "error", "requestId"],
+  properties: {
+    ok: { const: false },
+    error: {
+      type: "object",
+      required: ["code", "message"],
+      properties: {
+        ...BASE_ERROR_PROPERTIES,
+        live_version: {
+          type: "integer",
+          description: "On TEMPLATE_VERSION_RETIRED (409): the catalog's current version for this key",
+        },
+      },
+      additionalProperties: true,
+    },
+    requestId: { type: "string", format: "uuid" },
+  },
+} as const;
+
+// SCOPED to POST /competitions/from-template's 422 only (D1a design doc's
+// error table: template.instantiation_failed) — locates which division/
+// stage the transaction was on when it rolled back.
+const TEMPLATE_INSTANTIATION_FAILED_ENVELOPE = {
+  type: "object",
+  required: ["ok", "error", "requestId"],
+  properties: {
+    ok: { const: false },
+    error: {
+      type: "object",
+      required: ["code", "message"],
+      properties: {
+        ...BASE_ERROR_PROPERTIES,
+        divisionIndex: {
+          type: "integer",
+          description: "On TEMPLATE_INSTANTIATION_FAILED (422): 0-based index into the template's divisions",
+        },
+        stageIndex: {
+          type: ["integer", "null"],
+          description: "On TEMPLATE_INSTANTIATION_FAILED (422): 0-based index into the division's stages, or null if the division itself failed",
+        },
+        cause: {
+          type: "string",
+          description: "On TEMPLATE_INSTANTIATION_FAILED (422): the underlying validation error message",
+        },
+      },
+      additionalProperties: true,
+    },
+    requestId: { type: "string", format: "uuid" },
+  },
+} as const;
+
 // `"METHOD /path"` (the literal `RouteSpec.path`, `{id}` un-substituted) ->
 // status -> the envelope THAT route x status uses instead of the plain
 // ERROR_ENVELOPE. Consulted once, inside `operation()`'s `route.errors`
 // loop, so a route not listed here is completely unaffected.
 const ERROR_SCHEMA_OVERRIDES: Record<string, Partial<Record<number, unknown>>> = {
   "POST /stages/{id}/schedule/auto": { 422: CAPACITY_ERROR_ENVELOPE },
+  "POST /competitions/from-template": {
+    409: TEMPLATE_VERSION_RETIRED_ENVELOPE,
+    422: TEMPLATE_INSTANTIATION_FAILED_ENVELOPE,
+  },
 };
 
 function pathParams(path: string): object[] {

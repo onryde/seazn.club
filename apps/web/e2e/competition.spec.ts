@@ -1,11 +1,15 @@
 import { test, expect } from "@playwright/test";
-import { TAG, apiJson, competitionPath } from "./helpers";
+import { TAG, apiJson, competitionPath, startBlankCompetition } from "./helpers";
 
 // Core organiser journey: create a competition through the wizard.
 test("create a competition via the wizard", async ({ page }) => {
   const name = `Autumn Cup ${TAG}`;
   await page.goto("/competitions/new");
+  // The heading survived P4/D1a unchanged — the template gallery renders under
+  // the same "New competition" title — so this assertion kept passing while the
+  // fill below timed out. Choose the blank path explicitly.
   await expect(page.getByRole("heading", { name: "New competition" })).toBeVisible();
+  await startBlankCompetition(page);
 
   await page.getByPlaceholder("Summer Championship 2026").fill(name);
   // #376: an end date is mandatory, so the core organiser journey now includes

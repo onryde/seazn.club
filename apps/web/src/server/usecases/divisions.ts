@@ -126,6 +126,24 @@ async function assertCompetitionNotEnded(tx: postgres.TransactionSql, competitio
   }
 }
 
+/** Activation funnel (feature 1): step after competition_created. Exported
+ *  so createFromTemplate (usecases/templates.ts, D1a) can fire the SAME
+ *  event, with the SAME shape, after ITS OWN transaction commits — see
+ *  fireCompetitionCreated's comment in usecases/competitions.ts for why this
+ *  needs to exist at all (P4 review 2026-08-13 finding 1). */
+export async function fireDivisionCreated(
+  auth: AuthCtx,
+  sportKey: string,
+  competitionId: string,
+): Promise<void> {
+  await captureServer({
+    event: EVENTS.DIVISION_CREATED,
+    distinctId: auth.userId ?? `org:${auth.orgId}`,
+    orgId: auth.orgId,
+    properties: { sport_key: sportKey, competition_id: competitionId },
+  });
+}
+
 export async function createDivision(
   auth: AuthCtx,
   competitionId: string,
@@ -227,12 +245,7 @@ export async function createDivision(
     return row;
   });
   // Activation funnel (feature 1): step after competition_created.
-  await captureServer({
-    event: EVENTS.DIVISION_CREATED,
-    distinctId: auth.userId ?? `org:${auth.orgId}`,
-    orgId: auth.orgId,
-    properties: { sport_key: input.sport_key, competition_id: competitionId },
-  });
+  await fireDivisionCreated(auth, input.sport_key, competitionId);
   return row;
 }
 

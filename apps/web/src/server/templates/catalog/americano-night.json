@@ -1,0 +1,29 @@
+{
+  "key": "americano-night",
+  "version": 1,
+  "i18n": {
+    "nameKey": "templates.americanoNight.name",
+    "descriptionKey": "templates.americanoNight.desc"
+  },
+  "divisions": [
+    {
+      "i18nNameKey": "templates.americanoNight.div.main",
+      "sportKey": "tennis",
+      "variantKey": "doubles-noad-mtb10",
+      "entrantKind": "individual",
+      "entrantCount": 12,
+      "stages": [
+        {
+          "i18nNameKey": "templates.stage.americanoRounds",
+          "kind": "americano",
+          "config": { "mode": "americano", "courtCount": 3, "rounds": 7 },
+          "scheduleDefaults": {
+            "matchMinutes": 20,
+            "gapMinutes": 5,
+            "suggestedCourtTags": ["indoor"]
+          }
+        }
+      ]
+    }
+  ]
+}
