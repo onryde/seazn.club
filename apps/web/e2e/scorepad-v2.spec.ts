@@ -192,13 +192,25 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
     );
     expect(wide, "the wide must reach the ledger as a real extras payload").toBeTruthy();
 
-    // Every ball must carry the REAL roster ids. This is the assertion the
-    // harness route could never make: synthetic lineups 422 here.
+    // Every ball must carry REAL roster ids — the assertion the harness route
+    // could never make, since synthetic lineups 422 here.
+    //
+    // Asserted as SET MEMBERSHIP for the two batters, not fixed identity: an
+    // odd number of runs changes ends, and S11 deliberately fixed cricket's
+    // pickers to resync to the fold for exactly that reason ("a scorer could
+    // score against the wrong end"). Pinning `striker` to one person would
+    // therefore assert the bug S11 fixed. The bowler IS fixed within an over,
+    // so that one is pinned by identity.
+    const batters = new Set([striker, nonStriker]);
     for (const b of balls) {
-      expect(b.payload.striker).toBe(striker);
-      expect(b.payload.nonStriker).toBe(nonStriker);
+      expect(batters.has(b.payload.striker as string)).toBe(true);
+      expect(batters.has(b.payload.nonStriker as string)).toBe(true);
+      expect(b.payload.striker).not.toBe(b.payload.nonStriker);
       expect(b.payload.bowler).toBe(bowler);
     }
+    // And the ends really did change at least once, or the "set membership"
+    // relaxation above would be hiding a pad that never rotates strike.
+    expect(new Set(balls.map((b) => b.payload.striker as string)).size).toBe(2);
 
     // A caught dismissal, credited to a fielder who is a real member of the
     // fielding side.
@@ -244,34 +256,55 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
       bowlerCredited: boolean;
     };
     expect(wicket.kind).toBe("caught");
-    expect(wicket.out).toBe(striker);
+    // Whoever was ON STRIKE when the catch was taken — which rotates with odd
+    // runs, so this is membership, not identity, for the same reason as the
+    // per-ball assertion above.
+    expect([striker, nonStriker]).toContain(wicket.out);
     expect(wicket.fielder, "the dismissal must be credited to a REAL fielder").toBe(fielder);
   });
 
   test("undo goes through the pad's own timeline and the ledger records the void", async ({
     page,
   }) => {
-    await page.goto(await fixturePath(page.request, fx.fixtureId));
+    // Its OWN fixture, seeded over HTTP. The earlier version reused the
+    // describe's shared fixture and assumed the over test had already run —
+    // true under `mode: "serial"`, false now, and a test that depends on a
+    // sibling's side effects is the kind of order coupling that reads as a
+    // product flake later.
+    const own = await seedRosteredFixture(page.request, {
+      label: `S12 Undo ${TAG}`,
+      sportKey: "generic",
+      variantKey: "score",
+      entrantKind: "individual",
+      home: [{ fullName: `Undo Home ${TAG}` }],
+      away: [{ fullName: `Undo Away ${TAG}` }],
+    });
+    await page.goto(await fixturePath(page.request, own.fixtureId));
     await expect(pad(page)).toBeVisible({ timeout: 20_000 });
 
-    const before = await ledger(page.request, fx.fixtureId);
-    const lastScoring = [...before].reverse().find((e) => e.type === "cricket.ball")!;
+    await pad(page).getByRole("button", { name: "Add points", exact: true }).click();
+    await expect
+      .poll(async () => (await fixtureState(page.request, own.fixtureId)).last_seq, { timeout: 20_000 })
+      .toBeGreaterThanOrEqual(1);
+    const beforeVoid = await ledger(page.request, own.fixtureId);
+    const lastScoring = [...beforeVoid].reverse().find((e) => e.type !== "core.void")!;
 
     // The timeline is the pad's OWN undo, wired to the pipeline's `submit` in
     // this session. Before it, `timeline.tsx` was imported by nothing and
-    // could not be wired by any caller, so the only undo was the v1 chrome's
-    // — which S13 deletes, and which cannot work offline.
+    // could not be wired by any caller, so the only undo was the v1 chrome's —
+    // which S13 deletes, and which cannot work offline.
     const timeline = pad(page).locator('[data-role="timeline"]');
     await expect(timeline).toBeVisible();
     await timeline.locator('[data-role="void"]').first().click();
 
     await expect
-      .poll(async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "core.void").length, {
-        timeout: 15_000,
-      })
+      .poll(
+        async () => (await ledger(page.request, own.fixtureId)).filter((e) => e.type === "core.void").length,
+        { timeout: 20_000 },
+      )
       .toBeGreaterThanOrEqual(1);
 
-    const voidEvent = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "core.void")!;
+    const voidEvent = (await ledger(page.request, own.fixtureId)).find((e) => e.type === "core.void")!;
     expect(voidEvent.seq).toBeGreaterThan(lastScoring.seq);
   });
 
@@ -306,22 +339,21 @@ test.describe("v2 console — football's goal WITH assist", () => {
     const scorer = fx.personIds[`Scorer ${TAG}`]!;
     const assist = fx.personIds[`Assister ${TAG}`]!;
 
-    await pad(page).getByRole("button", { name: /Goal/, exact: false }).first().click();
-    await page.waitForTimeout(500);
+    await pad(page).getByRole("button", { name: "Home · Goal", exact: true }).click();
 
-    // Names, not ids — football-skin labelled its scorer/assist options with
-    // the raw person id before this session.
-    const attribution = pad(page).locator('[data-role="football-attribution"], [data-role="skin-attribution"]').first();
-    await expect(attribution).toBeVisible();
-    await expect(attribution).toContainText(`Scorer ${TAG}`);
-
-    await attribution.locator(`[data-value="${scorer}"]`).first().click().catch(async () => {
-      await attribution.getByRole("combobox").first().selectOption(scorer);
-    });
-    await attribution.locator(`[data-value="${assist}"]`).first().click().catch(async () => {
-      await attribution.getByRole("combobox").nth(1).selectOption(assist);
-    });
-    await pad(page).locator('[data-role="confirm"]').click();
+    // The scorer/assist pickers are BUTTONS labelled with the person's name.
+    // Asserting on the name is also the regression guard for football-skin's
+    // own raw-id defect (`ids.map((id) => ({ value: id, label: id }))`) fixed
+    // this session — a UUID label would fail this line, not merely look bad.
+    // The goal declares TWO person slots and each renders the full squad, so
+    // `Scorer X` matches twice — once in the scorer picker, once in the assist
+    // picker. Index by slot order: group 0 is the scorer, group 1 the assist.
+    // (Both groups are captioned generically — "Goal — Person #2" / "#3" —
+    // because football's goal attribution ships no labelKey; that is a real
+    // copy weakness, noted in _INDEX.md, but not what this test is pinning.)
+    await pad(page).getByRole("button", { name: `Scorer ${TAG}`, exact: true }).nth(0).click();
+    await pad(page).getByRole("button", { name: `Assister ${TAG}`, exact: true }).nth(1).click();
+    await pad(page).getByRole("button", { name: "Confirm", exact: true }).click();
 
     await expect
       .poll(async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "football.goal").length, {
@@ -410,17 +442,27 @@ test("device link: score offline on the universal renderer, reconnect, drain, co
   try {
     const page = await anonCtx.newPage();
     await page.goto(`/score/${secret}`);
-    await expect(pad(page)).toBeVisible({ timeout: 20_000 });
-
-    const scoreButton = page.getByRole("button", { name: /Add|Point|Score/i }).first();
-    await expect(scoreButton).toBeVisible();
+    // NOT `pad(page)`: `data-testid="score-pad"` exists only in
+    // fixture-console.tsx. The device route renders its own bare <section>,
+    // so scoping to that testid here matches nothing and every assertion
+    // below would fail for the wrong reason.
+    const startBtn = page.getByRole("button", { name: "Start match", exact: true });
+    if ((await startBtn.count()) > 0) {
+      await startBtn.click();
+      await expect
+        .poll(async () => (await fixtureState(request, fx.fixtureId)).last_seq, { timeout: 20_000 })
+        .toBeGreaterThanOrEqual(1);
+    }
+    const scoreButton = page.getByRole("button", { name: "Add points", exact: true });
+    await expect(scoreButton).toBeVisible({ timeout: 20_000 });
 
     // Land one online first, so the offline batch is provably additive rather
     // than the whole ledger.
+    const seqBeforeFirstTap = (await fixtureState(request, fx.fixtureId)).last_seq;
     await scoreButton.click();
     await expect
       .poll(async () => (await fixtureState(request, fx.fixtureId)).last_seq, { timeout: 20_000 })
-      .toBeGreaterThanOrEqual(1);
+      .toBeGreaterThan(seqBeforeFirstTap);
     const seqBeforeOffline = (await fixtureState(request, fx.fixtureId)).last_seq;
 
     // Context-level network kill, as the brief mandates. Safe here precisely

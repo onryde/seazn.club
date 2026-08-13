@@ -2391,6 +2391,37 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   a REPAIR mechanism, and a repair mechanism that always succeeds hides the
   fault it repairs. The first ball landing made the pad look functional; only
   the second ball's 422 named the real state.
+- 2026-08-13 — S12/#421 — **the v1 deletion inventory S13 executes.** Measured
+  on the rebased branch, not copied from the earlier prompt. Full list here
+  rather than a pointer to the PR body, because a PR body does not survive
+  compaction.
+  **8 pad components** (`apps/web/src/components/v2/pads/`): `boardgame-pad`
+  2.4K, `carrom-pad` 9.6K, `cricket-pad` 23.9K, `football-pad` 10.1K,
+  `generic-pad` 2.7K, `period-pad` 17.2K, `setbased-pad` 6.5K, `tennis-pad`
+  9.2K — 81.6K total.
+  **3 pad test files** (`pads/__tests__/`): `cricket-pad-i18n.test.tsx`,
+  `cricket-pad-revised-target.test.tsx`, `period-pad-countdown.test.tsx`. Each
+  pins behaviour that must be re-pinned against the v2 skin BEFORE deletion,
+  not simply dropped — the revised-target and countdown cases especially.
+  **19 import sites**: 8 in `fixture-console.tsx`, 7 in `device-score-pad.tsx`
+  (it has no `carrom` import — that asymmetry IS the carrom device-link defect
+  recorded above), 1 in `__tests__/device-score-pad.test.tsx`, 3 self-imports
+  inside `pads/__tests__/`.
+  **2 dispatch chains** to delete whole: `fixture-console.tsx`'s ternary over
+  `sport.key` and `device-score-pad.tsx`'s near-copy. Plus the three
+  now-unused key sets each file declares (`SETBASED`/`NESTED`/`PERIOD`).
+  **The harness route**: `apps/web/src/app/score/harness/page.tsx` +
+  `harness-client.tsx` (11K), and `SCOREPAD_V2_HARNESS: "1"` at
+  `.github/workflows/e2e.yml:151`, `:384`, `:560` — three lines, and the line
+  numbers moved when #559 sharded the parallel project, so re-pin them.
+  **One reference that is NOT a deletion**: `server/api-v1/__tests__/
+  schemas.test.ts:256` names `generic-pad.tsx` in a COMMENT explaining why the
+  engine is the only source of truth for a payload shape. Deleting the file
+  does not break that test, but the comment goes stale — update it.
+  Sequencing note for S13: `scoring-vocab.ts`'s hardcoded `SportKey` union
+  (11 keys) is NOT part of this deletion. It is a separate hardcoded list the
+  registry does not replace, and the drift guard added this session does not
+  cover it.
 - _(append below)_
 
 ## Open questions for the owner
