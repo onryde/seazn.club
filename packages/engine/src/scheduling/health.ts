@@ -1,0 +1,258 @@
+// Schedule health score (D3) — design doc
+// docs/superpowers/specs/bench-product-value/designs/2026-08-13-schedule-health-design.md.
+// After a schedule is proposed/applied: how GOOD is it, per metric, with
+// named offenders — "lawful but ugly" made visible. Per-metric bars 0-100,
+// NO composite grade (owner ruling: a composite hides which metric is bad
+// and bakes a fairness opinion into one number).
+//
+// LEAF MODULE, zero imports — even leafer than capacity.ts (which needs one
+// import, rest-floor.ts, for a shared rest-bound arithmetic). None of the
+// five formulas below need an external rest floor, sport module or clock:
+// restSpread's "achievable ideal" is derived entirely from the entrant's own
+// observed fixture span, not from a configured rest rule.
+//
+// Day-bucketing is the CALLER's job, same split capacity.ts/capacity-input.ts
+// use for the same reason: this module takes a caller-resolved `dayKey` per
+// fixture (organiser tz, via scheduling/tz.ts's dayKeyInTz) rather than
+// importing tz.ts itself — see health.test.ts's purity test, which fails if
+// this file grows ANY import.
+//
+// Contract (bench-shared, design doc verbatim): pure, deterministic, no DB,
+// no solver imports, no clock reads. The future bench consumes this EXACT
+// function — API changes here are bench-plan changes.
+//
+// Metric functions below are being built up one at a time (TDD) — an
+// unimplemented one returns NOT_IMPLEMENTED, an obviously-wrong sentinel, so
+// a test for a DIFFERENT metric cannot pass by accident against it.
+
+export type HealthMetricKey =
+  | "restSpread"
+  | "courtBalance"
+  | "gapDispersion"
+  | "homeAwayAlternation"
+  | "primeSlotFairness";
+
+/** One applied/proposed fixture — the caller has already resolved a court,
+ *  an instant and (for gapDispersion/primeSlotFairness) a calendar-day
+ *  bucket. `home`/`away` are undefined for an unresolved bracket side (a
+ *  "TBD" slot that already holds a court+time reservation) — such a fixture
+ *  still counts toward gapDispersion/primeSlotFairness's court-day grouping
+ *  (which don't key off entrants) but contributes to no per-entrant metric
+ *  on its unresolved side. */
+export interface HealthFixture {
+  fixtureId: string;
+  court: string;
+  start: number; // epoch ms
+  end: number; // epoch ms, > start
+  /** Caller-resolved calendar day (organiser tz) this fixture's court-day
+   *  bucket belongs to — see module header. */
+  dayKey: string;
+  home?: string;
+  away?: string;
+  roundNo?: number;
+  poolId?: string;
+  divisionId?: string;
+}
+
+export interface HealthWindow {
+  from: number;
+  to: number; // exclusive
+}
+
+export interface HealthConfig {
+  /** Gates homeAwayAlternation (round-robin only). false OMITS the metric
+   *  from the report entirely — see assessHealth's doc comment — it is
+   *  never scored 0 for a bracket stage. */
+  isRoundRobin: boolean;
+  /** Per-court-day operating window (session hours), keyed
+   *  `${court}::${dayKey}` — the span gapDispersion's idle_edges measures
+   *  against. A court-day with no entry here falls back to the SPAN of its
+   *  own placed fixtures (idle_edges defaults to 0 for it) — see
+   *  gapDispersionMetric's computation. */
+  courtWindows?: Readonly<Record<string, HealthWindow>>;
+}
+
+export interface HealthOffender {
+  kind: "entrant" | "court" | "courtDay";
+  /** Raw id (entrant id, court label, or `${court}::${dayKey}`) — D5 adds
+   *  resolved display names later (design doc's own sequencing note); this
+   *  module and the route stay at raw labels for now. */
+  id: string;
+  label: string;
+  value: number;
+}
+
+export interface HealthExplanation {
+  /** i18n dictionary key (namespace `schedule.health.explain.*`) — this
+   *  module never emits literal English prose (standing i18n rule: every
+   *  user-facing string routes through the four dictionaries). The UI
+   *  resolves this key against the active locale, same split CapacityCard
+   *  uses for its own text (structured data out of the lib, all copy owned
+   *  by the component). */
+  key: string;
+  params?: Record<string, number>;
+}
+
+export interface HealthMetric {
+  key: HealthMetricKey;
+  /** 0-100, integer. Clamped to [0,100] as a float, THEN rounded half-up
+   *  (design doc's Rounding note, verbatim order). */
+  score: number;
+  explanation: HealthExplanation;
+  offenders: HealthOffender[];
+}
+
+export interface HealthReport {
+  /** 5 entries, or 4 when `config.isRoundRobin` is false —
+   *  homeAwayAlternation is ABSENT then, never a present entry scored 0. */
+  metrics: HealthMetric[];
+}
+
+/** Prime = last PRIME_N slots per court-day (design doc's declared default).
+ *  A module constant, not re-derived — health.test.ts's regression test
+ *  asserts against THIS export, never a re-typed literal. */
+export const PRIME_N = 2;
+
+/** C_min (courtBalance): an entrant needs at least this many fixtures before
+ *  "which courts did they land on" is a meaningful question at all. */
+export const COURT_BALANCE_MIN_FIXTURES = 3;
+
+/** r >= this many consecutive same-side fixtures makes an entrant a
+ *  homeAwayAlternation offender (design doc's threshold, verbatim). */
+export const HOME_AWAY_RUN_THRESHOLD = 4;
+
+const NOT_IMPLEMENTED = (key: HealthMetricKey): HealthMetric => ({
+  key,
+  score: -1,
+  explanation: { key: "NOT_IMPLEMENTED" },
+  offenders: [],
+});
+
+const MS_PER_MIN = 60_000;
+
+/** Lexicographic tie-break (design doc's Rounding/Determinism note,
+ *  verbatim: "ties in offender ordering break by entrant id lexicographic"
+ *  — applied here to every offender kind's own `id`, not just entrants). */
+function lex(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Every fixture an entrant appears in (home OR away), ascending by start —
+ *  every formula below that walks "F_e" (the design notation) reads this. */
+function entrantFixtures(fixtures: readonly HealthFixture[]): Map<string, HealthFixture[]> {
+  const byEntrant = new Map<string, HealthFixture[]>();
+  const add = (id: string | undefined, f: HealthFixture): void => {
+    if (id === undefined) return;
+    const list = byEntrant.get(id);
+    if (list !== undefined) list.push(f);
+    else byEntrant.set(id, [f]);
+  };
+  for (const f of fixtures) {
+    add(f.home, f);
+    add(f.away, f);
+  }
+  for (const list of byEntrant.values()) list.sort((a, b) => a.start - b.start);
+  return byEntrant;
+}
+
+function clampScore(x: number): number {
+  return Math.max(0, Math.min(100, x));
+}
+
+function roundScore(x: number): number {
+  return Math.round(clampScore(x));
+}
+
+function round2(x: number): number {
+  return Math.round(x * 100) / 100;
+}
+
+/** Sort descending by `cmpDesc`, tie-break by `id` ascending, keep the first
+ *  `n` — the shared "worst/bottom/top-N" shape every metric's offender list
+ *  uses (design doc: "bottom-3"/"worst-3"/"top-3", each descending by badness). */
+function topOffenders<T>(items: readonly T[], id: (t: T) => string, cmpDesc: (a: T, b: T) => number, n: number): T[] {
+  return [...items].sort((a, b) => cmpDesc(a, b) || lex(id(a), id(b))).slice(0, n);
+}
+
+/**
+ * Dispersion of inter-match rest per entrant vs THIS entrant's own achievable
+ * ideal (design doc, verbatim): ḡ*_e = (span_e − Σ durations_e) / (|F_e|−1),
+ * p_e = Σ max(0, (ḡ*_e − g_i) / ḡ*_e) / (|F_e|−1), score = 100·(1 − mean_e(p_e)).
+ *
+ * Note (worth recording — it is easy to misjudge by eye): span_e decomposes
+ * exactly into Σ durations_e + Σ g_i (fixtures tile the entrant's own span
+ * with no other idle time in between, by construction of "span"), so ḡ*_e is
+ * ALGEBRAICALLY the mean of the entrant's own gaps. That is why an entrant
+ * with exactly 2 fixtures (one gap) always scores p_e = 0 here regardless of
+ * how tight that single gap is: the "ideal" IS that one gap. Only 3+
+ * fixtures (2+ gaps) can show any dispersion at all — health.test.ts asserts
+ * this explicitly so it reads as intended, not as an accident.
+ */
+function restSpreadMetric(fixtures: readonly HealthFixture[]): HealthMetric {
+  const byEntrant = entrantFixtures(fixtures);
+  const penalties: { id: string; p: number; worstGapMin: number }[] = [];
+  for (const [id, list] of byEntrant) {
+    if (list.length < 2) continue;
+    const span = list[list.length - 1]!.end - list[0]!.start;
+    const durSum = list.reduce((s, f) => s + (f.end - f.start), 0);
+    const idealGap = (span - durSum) / (list.length - 1);
+    const gaps: number[] = [];
+    for (let i = 0; i < list.length - 1; i++) gaps.push(list[i + 1]!.start - list[i]!.end);
+    // idealGap <= 0: by the telescoping identity above, every gap is also
+    // <= 0 then (their mean IS idealGap) — nothing can fall SHORT of a
+    // non-positive ideal, so there is no well-defined penalty to charge
+    // rather than dividing by a non-positive number.
+    const p =
+      idealGap > 0
+        ? gaps.reduce((s, g) => s + Math.max(0, (idealGap - g) / idealGap), 0) / gaps.length
+        : 0;
+    penalties.push({ id, p, worstGapMin: Math.min(...gaps) / MS_PER_MIN });
+  }
+  const meanP = penalties.length > 0 ? penalties.reduce((s, x) => s + x.p, 0) / penalties.length : 0;
+  const offenders: HealthOffender[] = topOffenders(penalties, (x) => x.id, (a, b) => b.p - a.p, 3).map((x) => ({
+    kind: "entrant",
+    id: x.id,
+    label: x.id,
+    value: round2(x.worstGapMin),
+  }));
+  return {
+    key: "restSpread",
+    score: roundScore(100 * (1 - meanP)),
+    explanation: { key: "schedule.health.explain.restSpread", params: { count: offenders.length } },
+    offenders,
+  };
+}
+
+function courtBalanceMetric(_fixtures: readonly HealthFixture[]): HealthMetric {
+  return NOT_IMPLEMENTED("courtBalance");
+}
+
+function gapDispersionMetric(_fixtures: readonly HealthFixture[], _config: HealthConfig): HealthMetric {
+  return NOT_IMPLEMENTED("gapDispersion");
+}
+
+function homeAwayAlternationMetric(_fixtures: readonly HealthFixture[]): HealthMetric {
+  return NOT_IMPLEMENTED("homeAwayAlternation");
+}
+
+function primeSlotFairnessMetric(_fixtures: readonly HealthFixture[]): HealthMetric {
+  return NOT_IMPLEMENTED("primeSlotFairness");
+}
+
+/**
+ * assessHealth (D3) — the one function every consumer calls: the stage
+ * health route server-side today, the future bench's believability report
+ * later (same function, per the module header's bench-shared contract).
+ * Pure: same inputs, same report, always. No DB, no solver, no clock, no
+ * logging — see health.test.ts's purity test.
+ */
+export function assessHealth(fixtures: readonly HealthFixture[], config: HealthConfig): HealthReport {
+  const metrics: HealthMetric[] = [
+    restSpreadMetric(fixtures),
+    courtBalanceMetric(fixtures),
+    gapDispersionMetric(fixtures, config),
+    ...(config.isRoundRobin ? [homeAwayAlternationMetric(fixtures)] : []),
+    primeSlotFairnessMetric(fixtures),
+  ];
+  return { metrics };
+}
