@@ -22,6 +22,7 @@ test.describe.serial("schedule board", () => {
 
   interface FixtureRow {
     id: string;
+    round_no: number;
     scheduled_at: string | null;
     court_label: string | null;
     home_entrant_id: string | null;
@@ -190,19 +191,39 @@ test.describe.serial("schedule board", () => {
         byEntrant.set(e, [...(byEntrant.get(e) ?? []), f]);
       }
     }
-    const pair = [...byEntrant.values()].find((v) => v.length >= 2)!.slice(0, 2);
-    const t0 = Date.UTC(2026, 8, 23, 9, 0);
+    // C1: two fixtures sharing an entrant are NECESSARILY in different rounds
+    // (an entrant plays at most once per round in a round robin) — take the
+    // entrant's two HIGHEST rounds, earlier-first.
+    const pair = [...byEntrant.values()]
+      .find((v) => v.length >= 2)!
+      .sort((a, b) => b.round_no - a.round_no)
+      .slice(0, 2)
+      .sort((a, b) => a.round_no - b.round_no);
+    // `pair[0]` (round N) is left EXACTLY where the auto-schedule already put
+    // it — the whole board just applied cleanly as one call (H6 checked
+    // pairwise among all 6), so it is provably round-order-consistent
+    // already, and moving `pair[0]` at all risks landing it after whatever
+    // untouched sibling shares its OWN round with `pair[1]` (round N+1, only
+    // exempt from H6 against `pair[0]` because a same-round pair is skipped
+    // outright). Only `pair[1]` moves, to immediately after `pair[0]` ends
+    // plus the court gap (matchMinutes 45 + gapMinutes 5 = 50) — short of the
+    // 30' rest floor, so still a warning, and safe for H6 both ways: it can
+    // only be COMPARED against round N (pair[0], `pair[1]` moving later only
+    // helps that) and earlier rounds (already well behind), never against its
+    // own round N+1 (same-round pairs are exempt from the scan entirely).
+    const pair0Start = Date.parse(pair[0]!.scheduled_at!);
+    const pair1Start = pair0Start + (45 + 5) * 60_000;
+    const pair1Court = pair[0]!.court_label === "Court A" ? "Court B" : "Court A";
     const tight = await apiJson<{ applied: number; conflicts: { code: string; blocking: boolean }[] }>(
       request,
       `/api/v1/stages/${stageId}/schedule/apply`,
       "POST",
       {
         assignments: [
-          { fixture_id: pair[0]!.id, scheduled_at: new Date(t0).toISOString(), court_label: "Court A" },
           {
             fixture_id: pair[1]!.id,
-            scheduled_at: new Date(t0 + 45 * 60_000).toISOString(), // 0' rest
-            court_label: "Court B",
+            scheduled_at: new Date(pair1Start).toISOString(), // 5' rest — below the 30' floor
+            court_label: pair1Court,
           },
         ],
         source: "manual",
@@ -225,19 +246,28 @@ test.describe.serial("schedule board", () => {
   });
 
   test("a single fixture moves via PATCH; an occupied slot is rejected", async ({ request }) => {
+    // C1: parking a fixture ten-odd days out imposes no H6 constraint on
+    // anyone ONLY when it is the last round (nothing has to come after it);
+    // an arbitrary index risks leapfrogging an untouched later-round sibling
+    // still on its original (much earlier) slot. Pick the true last round
+    // explicitly rather than `fixtureIds[2]` (see roundrobin-board-zero-slack
+    // memory).
+    const allFixtures = await Promise.all(fixtureIds.map((id) => getFixture(request, id)));
+    const lastRound = allFixtures.reduce((max, f) => (f.round_no > max.round_no ? f : max));
     const free = new Date(Date.UTC(2026, 8, 24, 15, 0)).toISOString();
-    const moved = await apiJson(request, `/api/v1/fixtures/${fixtureIds[2]!}`, "PATCH", {
+    const moved = await apiJson(request, `/api/v1/fixtures/${lastRound.id}`, "PATCH", {
       scheduled_at: free,
       court_label: "Court B",
     });
     expect(moved.status).toBe(200);
-    const after = await getFixture(request, fixtureIds[2]!);
+    const after = await getFixture(request, lastRound.id);
     expect(after.scheduled_at).toBe(free);
     expect(after.court_label).toBe("Court B");
-    slotOf.set(fixtureIds[2]!, { scheduled_at: free, court_label: "Court B" });
+    slotOf.set(lastRound.id, { scheduled_at: free, court_label: "Court B" });
 
     // Moving another fixture onto that exact slot is a blocking court clash.
-    const onto = await apiJson(request, `/api/v1/fixtures/${fixtureIds[3]!}`, "PATCH", {
+    const other = allFixtures.find((f) => f.id !== lastRound.id)!;
+    const onto = await apiJson(request, `/api/v1/fixtures/${other.id}`, "PATCH", {
       scheduled_at: free,
       court_label: "Court B",
     });
