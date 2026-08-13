@@ -960,14 +960,16 @@ async function topStandings(tx: Tx, stageId: string, top = RECAP_STANDINGS_TOP):
 // answer either way).
 // ---------------------------------------------------------------------------
 
-interface ActiveDivision {
+// Exported (P3 review finding 3): test-support types for direct-calling the
+// digest assemble* functions below with a hand-crafted division/stage list.
+export interface ActiveDivision {
   division_id: string;
   division_name: string;
   sport_key: string;
   module_version: string;
 }
 
-interface ActiveTableStage {
+export interface ActiveTableStage {
   stage_id: string;
   division_name: string;
 }
@@ -1003,7 +1005,7 @@ async function activeTableStagesInWindow(tx: Tx, orgId: string, window: DigestWi
       and m.updated_at >= ${window.start}::timestamptz and m.updated_at < ${window.end}::timestamptz`;
 }
 
-async function assembleDigestStandings(
+export async function assembleDigestStandings(
   tx: Tx,
   stages: readonly ActiveTableStage[],
 ): Promise<DigestStandingsSection[]> {
@@ -1044,33 +1046,54 @@ async function assembleDigestStandings(
   return out;
 }
 
-interface DivisionHeadline {
+export interface DivisionHeadline {
   metric: { key: string; label: string };
   rows: PlayerStatRow[];
 }
 
-/** One `recomputePlayerStats` + headline-metric resolution per active
- *  division, shared by assembleDigestLeaders and assembleDigestClaimed so
- *  neither recomputes the same division's stats twice. */
-async function loadDivisionHeadlines(
+/**
+ * One `recomputePlayerStats` + headline-metric resolution per active
+ * division, shared by assembleDigestLeaders and assembleDigestClaimed so
+ * neither recomputes the same division's stats twice.
+ *
+ * Unplanned fix (found during P3 review, finding 3 investigation): both
+ * `resolveModule` and `recomputePlayerStats` were UNGUARDED here, and this
+ * whole function is called unconditionally in `digestForOrg` before any of
+ * the try/catch-wrapped assemble* calls — so one active division with an
+ * unregistered/corrupted module would throw straight out of `digestForOrg`
+ * and kill the ENTIRE digest (every division's every section, not just the
+ * bad one), the same "a missing draft is a defect" failure the rest of this
+ * file goes out of its way to avoid. Per-division try/catch: one bad
+ * division is skipped and logged, every other division's headline is
+ * unaffected.
+ */
+export async function loadDivisionHeadlines(
   tx: Tx,
   divisions: readonly ActiveDivision[],
 ): Promise<Map<string, DivisionHeadline>> {
   const out = new Map<string, DivisionHeadline>();
   for (const div of divisions) {
-    const model = resolveModule(div.sport_key, div.module_version).playerStats;
-    const metric = model?.metrics.find((m) => m.key === "goals") ?? model?.metrics[0];
-    if (!metric) continue;
-    const { rows } = await recomputePlayerStats(tx, div.division_id);
-    if (rows.length > 0) out.set(div.division_id, { metric, rows });
+    try {
+      const model = resolveModule(div.sport_key, div.module_version).playerStats;
+      const metric = model?.metrics.find((m) => m.key === "goals") ?? model?.metrics[0];
+      if (!metric) continue;
+      const { rows } = await recomputePlayerStats(tx, div.division_id);
+      if (rows.length > 0) out.set(div.division_id, { metric, rows });
+    } catch (err) {
+      log.warn(
+        { divisionId: div.division_id, source: "digestHeadline", err: String(err) },
+        "news enrichment: source failed, dropping section",
+      );
+    }
   }
   return out;
 }
 
 /** Top metric leader per active division — the CURRENT cumulative value
  *  divisionPlayerStats already emits, never a window-scoped diff (design
- *  ruling: "never derived ad hoc"). */
-async function assembleDigestLeaders(
+ *  ruling: "never derived ad hoc"). Exported for direct-test isolation
+ *  (P3 review finding 3). */
+export async function assembleDigestLeaders(
   tx: Tx,
   divisions: readonly ActiveDivision[],
   headlines: ReadonlyMap<string, DivisionHeadline>,
@@ -1099,8 +1122,9 @@ async function assembleDigestLeaders(
  *  branch uses) with the best current headline-metric value, among those
  *  who actually played a fixture decided WITHIN the window — eligibility is
  *  window-scoped, the displayed value is the same current cumulative total
- *  assembleDigestLeaders reads (never a window diff). */
-async function assembleDigestClaimed(
+ *  assembleDigestLeaders reads (never a window diff). Exported for
+ *  direct-test isolation (P3 review finding 3). */
+export async function assembleDigestClaimed(
   tx: Tx,
   divisions: readonly ActiveDivision[],
   headlines: ReadonlyMap<string, DivisionHeadline>,
@@ -1137,8 +1161,9 @@ async function assembleDigestClaimed(
  *  calendar-exact arithmetic `digestWindow` uses for the lookback — only the
  *  lookback window's DST behaviour is a stated acceptance criterion, and a
  *  fixture landing a few hours either side of the cutoff has no product
- *  consequence the way the digest's OWN window boundary would. */
-async function assembleDigestUpcoming(
+ *  consequence the way the digest's OWN window boundary would. Exported for
+ *  direct-test isolation (P3 review finding 3). */
+export async function assembleDigestUpcoming(
   tx: Tx,
   orgId: string,
   nowMs: number,
