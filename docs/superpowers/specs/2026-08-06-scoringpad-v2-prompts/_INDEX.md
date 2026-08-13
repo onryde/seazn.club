@@ -1881,6 +1881,13 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   the failure mode is a real latent defect rather than infrastructure noise:
   it will keep reappearing at random until one of the two loaders sorts, and
   the person-level stats built on top of them compare by position.
+  **FIXED after all, because it blocked the merge**: it recurred on a
+  docs-only commit (2 of 3 runs), which is not a rate anyone should merge
+  past, and the fix is two lines — `order by e.id, em.person_id` on BOTH
+  queries, so the two loaders agree by construction rather than by luck of
+  the plan. Recorded as an unplanned fix (RULES.md §1) in S8's file, with
+  the 85 tests across its consumers (`player-stats`, `org-posts`, the whole
+  `engine-db` tree) rerun green.
 - _(append below)_
 
 ## Open questions for the owner
