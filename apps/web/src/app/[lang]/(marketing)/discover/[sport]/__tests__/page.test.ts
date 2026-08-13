@@ -1,16 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 
-// page.tsx pulls in MarketingShell, which loads next/font/google at module
-// scope — unavailable under vitest (same fix ../../__tests__/page.test.tsx
-// uses for the parent /discover page). This test only reads the exported
-// SPORTS_WITH_COPY constant, so a no-op passthrough is enough. vitest hoists
-// vi.mock() above the imports below regardless of this textual position.
-vi.mock("@/components/marketing/marketing-shell", () => ({
-  MarketingShell: ({ children }: { children: React.ReactNode }) => children,
-}));
-
-import { SPORTS_WITH_COPY } from "../page";
+// Imports the sibling module, not the page: Next allows only a fixed export
+// set from a `page.tsx` and `app-module-exports.test.ts` enforces it, so the
+// list lives in `sport-copy.ts`. Reading it from there also means this test no
+// longer drags in MarketingShell (and `next/font/google`, unavailable under
+// vitest), so the passthrough mock that used to be needed here is gone.
+import { SPORTS_WITH_COPY } from "../sport-copy";
 import mktEn from "@/dictionaries/en/marketing.json";
 import mktEs from "@/dictionaries/es/marketing.json";
 import mktFr from "@/dictionaries/fr/marketing.json";
