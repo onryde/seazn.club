@@ -2264,6 +2264,67 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   collection through a helper, the helper's module boundary is only tested by a
   NON-EMPTY collection, and every one of this repo's cheap gates runs against
   the empty case.
+- 2026-08-13 — S12/#421 — **no sport is scoreable through the v2 console after
+  the match starts, because a FOREIGN write never enters the pad's fold base.**
+  Measured in a real browser, flag on, immediately after the client/server
+  boundary fix above: "Start match" (the v1 chrome's own button, which sits
+  OUTSIDE the pad section in both dispatchers) appends `core.start`; the server
+  is then `phase: "live"`; the first run tap throws
+  `EngineError: ball in phase "pre"` out of the client fold.
+  Mechanism, traced rather than guessed. `use-pad-pipeline.ts:323-329`
+  `onStreamEvents` receives the polled batch and calls
+  `reconcileAfterAck(ledgerEventsRef.current)` — it **discards the fetched
+  events** and reconciles against the list the pad already had. That comparison
+  diverges, so `setServerOverride(server.state)` fires and `foldedState`
+  (`:279-283`) returns the server's state, which makes the DISPLAY correct. But
+  `submit()` folds optimistically from `[...ledgerEvents, ...pending]`, which
+  `serverOverride` does not touch — so the fold BASE is still empty and every
+  subsequent action validates against `phase: "pre"` and throws.
+  Root cause is a type, not an oversight: `LedgerSlotEvent` carries
+  `seq/type/payload/recorded_by/device_link_id` and no `id`/`recorded_at`, so
+  it cannot be widened to an `EventEnvelope` and folded — the file's own
+  comment says exactly that ("deliberately narrow … cannot be folded directly,
+  so an inbound signal is treated as 'go verify the true state' rather than
+  data to fold ourselves"). That was a sound call for S10's harness, where the
+  pad was the only writer. It stops being sound the moment the pad shares a
+  fixture with the console chrome, which is what S12 mounts.
+  Note this is the MIRROR of the hazard S11 recorded ("once `serverOverride` is
+  set, `foldedState` returns it verbatim and ignores every later local submit")
+  — same root, opposite symptom: display and fold base are two states that only
+  agree by luck. Fixing it is not scope widening; acceptance criterion 2 is
+  "both entry points fully scoreable via v2 for all 11 sports", and without it
+  none are.
+- 2026-08-13 — S12/#421 — **wiring `role` closes the coach hole for football and
+  NOT for cricket, and the reason is one level below the wire shape.** Pass B
+  carried `role` through `LineupSlotIn` → `toLineupSlot` (the DB column and
+  `readLineup`'s SQL always had it; only the client wire shape dropped it, so
+  the fold defaulted every slot to `"player"`). Football is genuinely closed —
+  its scorer/assist pool filters through the kernel's `playingSquad`, proved
+  end to end against the real engine. **Cricket is not**:
+  `orderFromLineup` (`packages/engine/src/sports/cricket/cricket.ts`) builds
+  `state.orders.batting`/`bowling` from `lineup.slots` filtered ONLY on
+  `slot === "starting"`, never on `role` — measured live, a `role: "coach"`
+  starting slot still lands in the batting order with `role` wired correctly.
+  So S3/#426 OWNER RULING 3 ("squad and stat projections keep only
+  `role === 'player'`") is enforced on the STATS path and not on cricket's
+  ORDER path, which is what the pad's pickers read. Not fixed in pass B —
+  `packages/engine` was outside its stated file set and it flagged rather than
+  expanded, correctly. Recorded here so it is not re-derived: the fix is a
+  `role` filter in `orderFromLineup`, and it cannot move a golden corpus,
+  because no recorded lineup carries a non-`player` role at all (the field
+  never reached the wire until today).
+- 2026-08-13 — S12/#421 — **`pairOrder` has NO database column, so the brief
+  that told pass B to "carry it through, the DB already has it" was wrong.**
+  Verified: no `pair_order` column exists anywhere, no caller writes one, and
+  `lineup-editor.tsx` has no UI for it. S3/#426 added `pairOrder` to the
+  engine's `LineupSlot` type and nothing downstream ever grew a way to set it,
+  so threading it through the wire shape would have added a permanently
+  `undefined` field and called it a fix — the same declared-but-inert shape
+  this programme keeps finding, introduced deliberately this time. Left
+  unwired. Related pre-existing gap found alongside it: `lineup-editor.tsx`
+  DROPS `role` on save, so the column the fix above now reads correctly can
+  only ever be populated by something other than the product's own lineup UI.
+  Both are S13 or later work, named here rather than filed.
 - _(append below)_
 
 ## Open questions for the owner

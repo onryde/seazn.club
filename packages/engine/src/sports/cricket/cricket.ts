@@ -2047,9 +2047,28 @@ function positionsFor(cfg: CricketCfg): PositionCatalog {
 // Module
 // ---------------------------------------------------------------------------
 
+/**
+ * The batting/bowling order this side starts with.
+ *
+ * The `role` filter is S3/#426 OWNER RULING 3 applied on the ORDER path, and
+ * it was missing: `state.orders[side]` fed every batter/bowler picker in the
+ * v2 pad, so a team sheet naming a coach in a starting slot offered that coach
+ * as a striker or a bowler, and runs could be credited to them. The ruling —
+ * "squad and stat projections keep only `role === 'player'`, so a card to a
+ * coach records against the person but never enters a playing record" — was
+ * enforced on the stats projections (`playingSquad`/`onFieldPersons`,
+ * core/lineup.ts) and nowhere near here, because this function predates the
+ * role field reaching any caller. Found by S12/#421 driving the real cricket
+ * console against a real roster.
+ *
+ * `role` absent means `player` (core/lineup.ts's own default), so every
+ * recorded lineup — none of which carries a non-`player` role, the field
+ * having never reached the wire before S12 — produces a byte-identical order
+ * and no golden corpus moves.
+ */
 function orderFromLineup(lineup: LineupPair["home"]): string[] {
   return lineup.slots
-    .filter((slot) => slot.slot === "starting")
+    .filter((slot) => slot.slot === "starting" && (slot.role ?? "player") === "player")
     .sort((a, b) => a.orderNo - b.orderNo)
     .map((slot) => slot.personId);
 }
