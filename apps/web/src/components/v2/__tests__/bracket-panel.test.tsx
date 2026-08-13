@@ -21,9 +21,12 @@ const FIX = (
   outcome: unknown,
   status: string,
   no: number,
+  homeSlotLabel: { key: string; params: Record<string, unknown> } | null = null,
+  awaySlotLabel: { key: string; params: Record<string, unknown> } | null = null,
 ) => ({
   id, stage_id: "st1", division_id: "d1", pool_id: null, round_no: round,
   seq_in_round: seq, fixture_no: no, home_entrant_id: home, away_entrant_id: away,
+  home_slot_label: homeSlotLabel, away_slot_label: awaySlotLabel,
   scheduled_at: null, venue: null, court_label: null, officials: null,
   status, outcome, schedule_source: null, schedule_locked: false, created_at: "",
 });
@@ -121,5 +124,41 @@ describe("BracketPanel — page playoffs", () => {
     }
     expect(html.match(/data-slot=/g)?.length).toBe(4);
     expect(html).toContain('href="/o/org/c/cup/d/open/f/3"');
+  });
+});
+
+// P6/D4b task A — regression: a fixture list with a MIX of filled and
+// TBD-with-a-real-label rows renders both correctly. useMsg() is mocked to
+// identity in this file (line 7-9) so the assertions check that the
+// CORRECT key (proving the resolver picked the right slot.* pattern and did
+// not fall through to the generic null fallback) reaches the DOM, anchored
+// on `="` per the RSC vacuous-assertion rule — a bare data-* probe passes
+// whether React actually resolved anything (an omitted prop serialises as
+// the literal string "$undefined"), so this checks real rendered text
+// between real tags instead.
+describe("BracketPanel — mixed filled + TBD-with-label rows (regression)", () => {
+  it("a filled side and a slot-labelled TBD side render distinctly in the same tree", () => {
+    const fx = [
+      FIX("f1", 0, 1, "e1", "e4", { kind: "win", winner: "e1" }, "decided", 1),
+      // f2 home is a real entrant; away is undecided but carries a real
+      // group_rank descriptor — the "TBD with a label" row.
+      FIX("f2", 0, 2, "e2", null, null, "in_play", 2, null, { key: "slot.runner_up_group", params: { g: "B" } }),
+      // f3 (the final): home fed by f1's winner (still null pre-fill, no
+      // label yet — the genuinely-unknown case), away has NO label either.
+      FIX("f3", 1, 1, null, null, null, "scheduled", 3),
+    ];
+    const html = markup({ fixtures: fx as never });
+    // Filled sides: real entrant names, anchored as actual rendered text.
+    expect(html).toMatch(/>Mexico<\/span>|font-semibold[^>]*>Mexico</);
+    expect(html).toMatch(/>Canada<\/span>/);
+    // The slot-labelled TBD side: the mocked useMsg returns the key
+    // unchanged, so seeing the EXACT key (not "bracket.tbd") proves
+    // resolveSlotLabel chose the real label over the null fallback.
+    expect(html).toContain("slot.runner_up_group");
+    // The genuinely-unknown side (f3, no label at all) still falls back to
+    // the existing bracket.tbd key, not a hardcoded "TBD" — and it must NOT
+    // be confused with the labelled row above (both present, distinct).
+    expect(html).toContain("bracket.tbd");
+    expect((html.match(/bracket\.tbd/g) ?? []).length).toBe(2); // f3's two null sides
   });
 });
