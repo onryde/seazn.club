@@ -340,6 +340,57 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
     expect(voidEvent.seq).toBeGreaterThan(goal.seq);
   });
 
+  // S12/#421 pass G — the case the reload above deliberately does NOT cover.
+  // A pad-submitted event carries a client-fabricated id, so before pass G its
+  // Undo was swallowed entirely: no core.void, and no POST at all. That is the
+  // undo that matters ("I just tapped the wrong thing"); undoing something
+  // from a previous page load is the rare one. No reload anywhere here.
+  test("undo works for an event this pad just scored, with no reload", async ({ page }) => {
+    const own = await seedRosteredFixture(page.request, {
+      label: `S12 UndoLive ${TAG}`,
+      sportKey: "football",
+      variantKey: "11-a-side",
+      home: [
+        { fullName: `L Scorer ${TAG}`, positionKey: "FW" },
+        { fullName: `L Keeper ${TAG}`, positionKey: "GK" },
+      ],
+      away: [{ fullName: `L Away ${TAG}`, positionKey: "GK" }],
+    });
+    await openLiveConsole(page, own);
+
+    await pad(page).getByRole("button", { name: "Home · Goal", exact: true }).click();
+    const sc = pad(page).getByRole("button", { name: `L Scorer ${TAG}`, exact: true });
+    await expect(sc).toHaveCount(2);
+    await sc.nth(0).click();
+    const as = pad(page).getByRole("button", { name: `L Keeper ${TAG}`, exact: true });
+    await expect(as).toHaveCount(2);
+    await as.nth(1).click();
+
+    await expect
+      .poll(
+        async () => (await ledger(page.request, own.fixtureId)).filter((e) => e.type === "football.goal").length,
+        { timeout: 20_000 },
+      )
+      .toBe(1);
+
+    // Straight to Undo on the goal's row. Located by TEXT, because the row's
+    // own `data-event-id` is the client id and deliberately does not match the
+    // ledger's — that mismatch is the whole defect.
+    const goalRow = pad(page)
+      .locator('[data-role="timeline"] [data-event-id]')
+      .filter({ hasText: /Goal/i })
+      .first();
+    await expect(goalRow).toHaveCount(1);
+    await goalRow.locator('[data-role="void"]').click();
+
+    await expect
+      .poll(
+        async () => (await ledger(page.request, own.fixtureId)).filter((e) => e.type === "core.void").length,
+        { timeout: 25_000 },
+      )
+      .toBe(1);
+  });
+
   test("no horizontal scroll at 375 or 320", async ({ page }) => {
     for (const width of [375, 320]) {
       await page.setViewportSize({ width, height: 800 });

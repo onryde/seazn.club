@@ -2472,6 +2472,35 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   Lesson for every session sharing this worktree: prefer staging exact paths
   (`git add <files>`, this pass's own recovery) over `git add -A` / `git
   commit -am`, which is what both sweeps used.
+- 2026-08-13 — S12/#421 — **SESSION STATE (written for compaction survival;
+  delete when S12 closes).**
+  Branch `feat/s12-w10-integration`, rebased on `origin/main`, tree clean.
+  **Environment to recreate:** throwaway Postgres on **:54363**, db
+  `seazn_s12`, schema at **v361** (`show data_directory` must be this
+  session's own scratchpad — ports 54341/54357 were both squatted by other
+  sessions and `createdb` SUCCEEDS against a foreign server). Two standalone
+  servers off ONE prod build: **:3100 `SCOREPAD_V2_FORCE=0`** (flag off, v1
+  regression) and **:3101 `SCOREPAD_V2_FORCE=1`** (flag on, v2 specs). Server
+  env copied from `.github/workflows/e2e.yml`'s env block.
+  **Green so far:** `apps/web/e2e/scorepad-v2.spec.ts` 7/7 against :3101 —
+  cricket over-with-extra + fielder-credited dismissal, football goal WITH
+  assist, device-link offline drain + convergence, timeline undo after reload,
+  375/320 no horizontal scroll. Flag-off regression 12/12 against :3100
+  (carrom-pad, scorepad-offline ×3, scorepad-skins ×4, scorer ×2). Engine
+  goldens 133/133 with zero corpus dirty. `tsc` EXIT=0 both trees; `apps/web`
+  lint 0 errors.
+  **Just added, NOT yet run:** a no-reload undo test (pass G's regression).
+  Needs a rebuild first — pass D and pass G both changed client code.
+  **In flight:** reviewers for pass D (`1fc4fb50`, `da9d4192`) and pass G
+  (`0ad55cc8`).
+  **Still owed before the PR:** rebuild + rerun the v2 spec including the new
+  test; screenshots at 1280/768/375/320 on both entry points; full gate rerun
+  inline; the CI-only drift gates (`openapi:gen`, `i18n:gen-keys`, porcelain
+  empty); flip the S12 row to DONE; memory + `scripts/agent-memory-snapshot.sh`;
+  PR closing #421.
+  **Known unrelated red, do not chase:** `schedule-solver-telemetry.test.ts`
+  `expected 5 to be 6` — red alone, zero scheduling/placement files in this
+  diff (placement gRPC unreachable locally).
 - _(append below)_
 
 ## Open questions for the owner
