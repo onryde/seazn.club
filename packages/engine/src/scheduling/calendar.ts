@@ -1123,7 +1123,11 @@ if (tz !== undefined) {
             conflicts.push({
               fixtureId: d.id,
               reason: "instruction",
-              detail: `starts ${Math.round(gapMin)} min after its feeder, instruction requires ${h.minutes}`,
+              details: {
+                kind: "instruction_feeder_gap",
+                minutes: Math.round(gapMin),
+                requiredMinutes: h.minutes,
+              },
             });
           }
         }
@@ -1152,7 +1156,7 @@ if (tz !== undefined) {
           conflicts.push({
             fixtureId: a.fixtureId,
             reason: "instruction",
-            detail: `${total} fixtures on ${day} exceed the ${h.count}/day cap`,
+            details: { kind: "instruction_day_cap", count: total, day, requiredCount: h.count },
           });
         }
       }
@@ -1171,14 +1175,19 @@ if (tz !== undefined) {
           conflicts.push({
             fixtureId: f.id,
             reason: "instruction",
-            detail: `is on ${weekdayOfYmd(day)} ${day}, instruction requires ${h.weekday}`,
+            details: {
+              kind: "instruction_weekday",
+              weekday: weekdayOfYmd(day),
+              day,
+              requiredWeekday: h.weekday,
+            },
           });
         }
         if (h.type === "fixture_on_date" && day !== h.date) {
           conflicts.push({
             fixtureId: f.id,
             reason: "instruction",
-            detail: `is on ${day}, instruction requires ${h.date}`,
+            details: { kind: "instruction_date", day, requiredDate: h.date },
           });
         }
       }
@@ -1194,7 +1203,7 @@ if (tz !== undefined) {
         conflicts.push({
           fixtureId: a.fixtureId,
           reason: "instruction",
-          detail: `starts ${start}, violating ${h.type} ${h.time}`,
+          details: { kind: "instruction_time", time: start, ruleType: h.type, requiredTime: h.time },
         });
       }
     }
