@@ -10,8 +10,9 @@ import "server-only";
 // idempotency is the V295 partial unique index (org_posts_auto_once), never an
 // app pre-check; a void/re-decide stamps auto_source.stale on the DRAFT only.
 import type postgres from "postgres";
-import { aggregatePlayerStats } from "@seazn/engine/stats";
+import { aggregatePlayerStats, type PlayerStatRow } from "@seazn/engine/stats";
 import type { EventEnvelope } from "@seazn/engine/core";
+import { hhmmInTz } from "@seazn/engine/scheduling/tz";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { firePostRevalidate } from "@/server/public-site/revalidate";
@@ -45,6 +46,7 @@ import {
   computeStreak,
   digestWindow,
   groupUpcomingByDay,
+  type DigestWindow,
   type RankedEntrantRow,
   type ResultOutcome,
   type UpcomingFixture,
@@ -85,6 +87,10 @@ export interface OrgPost {
 // (round numbers restart per stage — fixtures' natural key is stage+round+seq).
 const TRIGGER_RESULT = "fixture_decided";
 const TRIGGER_RECAP = "round_complete";
+// P3 (D7) — button/cron trigger for the weekly digest. V358 exempts this
+// trigger from org_posts_auto_once entirely (see that migration's own
+// comment): every button press is a deliberate request for a fresh draft.
+const TRIGGER_DIGEST = "weekly_digest";
 
 /** post_published fires only on the transition INTO published (mirrors
  *  competitions.shouldFireMadePublic): a publish action from any non-published
@@ -926,4 +932,372 @@ async function topStandings(tx: Tx, stageId: string, top = RECAP_STANDINGS_TOP):
     played: r.played,
     points: r.points,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Weekly digest (P3 / D7). Two callers: the console button
+// (generateWeeklyDigest, auth-gated, always creates a draft even when
+// every section is empty — "A missing DRAFT (any path) is a defect")
+// and the stg cron sweep (sweepWeeklyDigests, no AuthCtx — an automated
+// weekly run for an org with genuinely nothing to report skips it instead
+// of spamming an empty post; a HUMAN pressing the button gets a definite
+// answer either way).
+// ---------------------------------------------------------------------------
+
+interface ActiveDivision {
+  division_id: string;
+  division_name: string;
+  sport_key: string;
+  module_version: string;
+}
+
+interface ActiveTableStage {
+  stage_id: string;
+  division_name: string;
+}
+
+const DECIDED_STATUSES = ["decided", "finalized", "forfeited"] as const;
+
+/** Divisions with >=1 fixture the fold last touched inside the window
+ *  (`match_states.updated_at`, not `scheduled_at` — a late-recorded result
+ *  still counts as "happened this week", the same recompute-on-read
+ *  discipline the rest of this file uses). */
+async function activeDivisionsInWindow(tx: Tx, orgId: string, window: DigestWindow): Promise<ActiveDivision[]> {
+  return tx<ActiveDivision[]>`
+    select distinct d.id as division_id, d.name as division_name, d.sport_key, d.module_version
+    from fixtures f
+    join match_states m on m.fixture_id = f.id
+    join divisions d on d.id = f.division_id
+    where f.org_id = ${orgId} and f.status in ${tx(DECIDED_STATUSES as unknown as string[])}
+      and m.updated_at >= ${window.start}::timestamptz and m.updated_at < ${window.end}::timestamptz`;
+}
+
+/** Same window probe, scoped to TABLE_KINDS stages only (standings movement
+ *  makes sense only where there is a table — mirrors org-posts.ts's own
+ *  TABLE_KINDS gate on the round-recap trigger). */
+async function activeTableStagesInWindow(tx: Tx, orgId: string, window: DigestWindow): Promise<ActiveTableStage[]> {
+  return tx<ActiveTableStage[]>`
+    select distinct s.id as stage_id, d.name as division_name
+    from fixtures f
+    join match_states m on m.fixture_id = f.id
+    join stages s on s.id = f.stage_id
+    join divisions d on d.id = f.division_id
+    where f.org_id = ${orgId} and f.status in ${tx(DECIDED_STATUSES as unknown as string[])}
+      and s.kind in ${tx([...TABLE_KINDS])}
+      and m.updated_at >= ${window.start}::timestamptz and m.updated_at < ${window.end}::timestamptz`;
+}
+
+async function assembleDigestStandings(
+  tx: Tx,
+  stages: readonly ActiveTableStage[],
+): Promise<DigestStandingsSection[]> {
+  const out: DigestStandingsSection[] = [];
+  for (const stage of stages) {
+    const [snap] = await tx<{ rows: RankedEntrantRow[]; previous_rows: RankedEntrantRow[] | null }[]>`
+      select rows, previous_rows from standings_snapshots
+      where stage_id = ${stage.stage_id} and pool_id is null`;
+    if (!snap || snap.rows.length === 0) continue;
+    const sorted = [...snap.rows].sort(
+      (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
+    );
+    const top3 = sorted.slice(0, 3);
+    if (top3.length === 0) continue;
+    const names = new Map(
+      (
+        await tx<{ id: string; display_name: string }[]>`
+          select id, display_name from entrants where id = any(${top3.map((r) => r.entrantId)})`
+      ).map((e) => [e.id, e.display_name]),
+    );
+    let climberOut: DigestStandingsSection["climber"];
+    const climber = biggestClimber(snap.rows, snap.previous_rows);
+    if (climber) {
+      const [entrant] = await tx<{ display_name: string }[]>`
+        select display_name from entrants where id = ${climber.entrantId}`;
+      if (entrant) climberOut = { entrantName: entrant.display_name, from: climber.from, to: climber.to };
+    }
+    out.push({
+      divisionName: stage.division_name,
+      top3: top3.map((r, i) => ({
+        position: r.rank ?? i + 1,
+        name: names.get(r.entrantId) ?? "—",
+        points: r.points,
+      })),
+      ...(climberOut ? { climber: climberOut } : {}),
+    });
+  }
+  return out;
+}
+
+interface DivisionHeadline {
+  metric: { key: string; label: string };
+  rows: PlayerStatRow[];
+}
+
+/** One `recomputePlayerStats` + headline-metric resolution per active
+ *  division, shared by assembleDigestLeaders and assembleDigestClaimed so
+ *  neither recomputes the same division's stats twice. */
+async function loadDivisionHeadlines(
+  tx: Tx,
+  divisions: readonly ActiveDivision[],
+): Promise<Map<string, DivisionHeadline>> {
+  const out = new Map<string, DivisionHeadline>();
+  for (const div of divisions) {
+    const model = resolveModule(div.sport_key, div.module_version).playerStats;
+    const metric = model?.metrics.find((m) => m.key === "goals") ?? model?.metrics[0];
+    if (!metric) continue;
+    const { rows } = await recomputePlayerStats(tx, div.division_id);
+    if (rows.length > 0) out.set(div.division_id, { metric, rows });
+  }
+  return out;
+}
+
+/** Top metric leader per active division — the CURRENT cumulative value
+ *  divisionPlayerStats already emits, never a window-scoped diff (design
+ *  ruling: "never derived ad hoc"). */
+async function assembleDigestLeaders(
+  tx: Tx,
+  divisions: readonly ActiveDivision[],
+  headlines: ReadonlyMap<string, DivisionHeadline>,
+): Promise<DigestLeaderLine[]> {
+  const out: DigestLeaderLine[] = [];
+  for (const div of divisions) {
+    const h = headlines.get(div.division_id);
+    if (!h) continue;
+    const top = [...h.rows].sort((a, b) => (b.stats[h.metric.key] ?? 0) - (a.stats[h.metric.key] ?? 0))[0];
+    if (!top || (top.stats[h.metric.key] ?? 0) <= 0) continue;
+    const [person] = await tx<{ full_name: string }[]>`
+      select full_name from persons where id = ${top.personId}`;
+    if (!person) continue;
+    out.push({
+      divisionName: div.division_name,
+      metricLabel: h.metric.label,
+      personName: person.full_name,
+      value: top.stats[h.metric.key] ?? 0,
+    });
+  }
+  return out;
+}
+
+/** At most one: the CLAIMED person (persons.user_id not null, same
+ *  discriminator player-stats.ts's countMatchesByDivision "claimedPersons"
+ *  branch uses) with the best current headline-metric value, among those
+ *  who actually played a fixture decided WITHIN the window — eligibility is
+ *  window-scoped, the displayed value is the same current cumulative total
+ *  assembleDigestLeaders reads (never a window diff). */
+async function assembleDigestClaimed(
+  tx: Tx,
+  divisions: readonly ActiveDivision[],
+  headlines: ReadonlyMap<string, DivisionHeadline>,
+  window: DigestWindow,
+): Promise<DigestClaimedHighlight | undefined> {
+  let best: { value: number; personName: string; statLine: string } | undefined;
+  for (const div of divisions) {
+    const h = headlines.get(div.division_id);
+    if (!h) continue;
+    const claimed = await tx<{ person_id: string; full_name: string }[]>`
+      select distinct p.id as person_id, p.full_name
+      from entrant_members em
+      join persons p on p.id = em.person_id and p.user_id is not null and p.merged_into is null
+      join fixtures f on f.division_id = ${div.division_id}
+        and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+      join match_states m on m.fixture_id = f.id
+      where f.status in ${tx(DECIDED_STATUSES as unknown as string[])}
+        and m.updated_at >= ${window.start}::timestamptz and m.updated_at < ${window.end}::timestamptz`;
+    if (claimed.length === 0) continue;
+    const statsByPerson = new Map(h.rows.map((r) => [r.personId, r.stats[h.metric.key] ?? 0]));
+    for (const cp of claimed) {
+      const value = statsByPerson.get(cp.person_id) ?? 0;
+      if (value <= 0) continue;
+      if (!best || value > best.value) {
+        best = { value, personName: cp.full_name, statLine: `${value} ${h.metric.label.toLowerCase()}` };
+      }
+    }
+  }
+  return best ? { personName: best.personName, statLine: best.statLine } : undefined;
+}
+
+/** Next-7-days fixtures, org-wide, grouped by org-local day and capped at 10
+ *  (design). The lookahead boundary is a flat +7d duration, not the
+ *  calendar-exact arithmetic `digestWindow` uses for the lookback — only the
+ *  lookback window's DST behaviour is a stated acceptance criterion, and a
+ *  fixture landing a few hours either side of the cutoff has no product
+ *  consequence the way the digest's OWN window boundary would. */
+async function assembleDigestUpcoming(
+  tx: Tx,
+  orgId: string,
+  nowMs: number,
+  orgTz: string,
+): Promise<{ upcoming: DigestUpcomingDay[]; overflow: number }> {
+  const nowIso = new Date(nowMs).toISOString();
+  const endIso = new Date(nowMs + 7 * 24 * 3600_000).toISOString();
+  const rows = await tx<
+    {
+      id: string;
+      home_name: string | null;
+      away_name: string | null;
+      scheduled_at: Date;
+      competition_name: string;
+      division_name: string;
+    }[]
+  >`
+    select f.id, h.display_name as home_name, a.display_name as away_name, f.scheduled_at,
+           c.name as competition_name, d.name as division_name
+    from fixtures f
+    join divisions d on d.id = f.division_id
+    join competitions c on c.id = d.competition_id
+    left join entrants h on h.id = f.home_entrant_id
+    left join entrants a on a.id = f.away_entrant_id
+    where f.org_id = ${orgId} and f.status = 'scheduled'
+      and f.scheduled_at >= ${nowIso}::timestamptz and f.scheduled_at < ${endIso}::timestamptz
+    order by f.scheduled_at`;
+  const fixtures: UpcomingFixture[] = rows.map((r) => ({
+    id: r.id,
+    homeName: r.home_name ?? "TBD",
+    awayName: r.away_name ?? "TBD",
+    scheduledAt: r.scheduled_at.toISOString(),
+    competitionName: r.competition_name,
+    divisionName: r.division_name,
+  }));
+  const { groups, overflow } = groupUpcomingByDay(fixtures, orgTz, 10);
+  return {
+    upcoming: groups.map((g) => ({
+      dayYmd: g.dayYmd,
+      lines: g.fixtures.map((f) => ({
+        homeName: f.homeName,
+        awayName: f.awayName,
+        timeLabel: hhmmInTz(Date.parse(f.scheduledAt), orgTz),
+      })),
+    })),
+    overflow,
+  };
+}
+
+/**
+ * The shared core behind both callers below. `skipIfEmpty` is what tells
+ * them apart: the button caller never sets it (a human asked, they get an
+ * answer, even an empty one — "a missing DRAFT is a defect"); the cron
+ * sweep sets it so a silent org's automated weekly run creates nothing
+ * rather than a blank post every week.
+ */
+async function digestForOrg(
+  tx: Tx,
+  orgId: string,
+  nowMs: number,
+  opts: { skipIfEmpty?: boolean } = {},
+): Promise<OrgPost | null> {
+  const [org] = await tx<{ name: string; timezone: string | null; default_locale: string | null }[]>`
+    select name, timezone, default_locale from organizations where id = ${orgId}`;
+  if (!org) throw new HttpError(404, "organization not found");
+  const orgTz = resolveVenueTz(null, org.timezone);
+  const locale = toLocale(org.default_locale);
+  const window = digestWindow(nowMs, orgTz);
+
+  const divisions = await activeDivisionsInWindow(tx, orgId, window);
+  const stages = await activeTableStagesInWindow(tx, orgId, window);
+  const headlines = await loadDivisionHeadlines(tx, divisions);
+
+  let standings: DigestStandingsSection[] = [];
+  try {
+    standings = await assembleDigestStandings(tx, stages);
+  } catch (err) {
+    log.warn({ orgId, source: "digestStandings", err: String(err) }, "news enrichment: source failed, dropping section");
+  }
+
+  let leaders: DigestLeaderLine[] = [];
+  try {
+    leaders = await assembleDigestLeaders(tx, divisions, headlines);
+  } catch (err) {
+    log.warn({ orgId, source: "digestLeaders", err: String(err) }, "news enrichment: source failed, dropping section");
+  }
+
+  let upcoming: DigestUpcomingDay[] = [];
+  let upcomingOverflow = 0;
+  try {
+    const res = await assembleDigestUpcoming(tx, orgId, nowMs, orgTz);
+    upcoming = res.upcoming;
+    upcomingOverflow = res.overflow;
+  } catch (err) {
+    log.warn({ orgId, source: "digestUpcoming", err: String(err) }, "news enrichment: source failed, dropping section");
+  }
+
+  let claimedHighlight: DigestClaimedHighlight | undefined;
+  try {
+    claimedHighlight = await assembleDigestClaimed(tx, divisions, headlines, window);
+  } catch (err) {
+    log.warn({ orgId, source: "digestClaimed", err: String(err) }, "news enrichment: source failed, dropping section");
+  }
+
+  const enriched =
+    standings.length > 0 || leaders.length > 0 || upcoming.length > 0 || claimedHighlight !== undefined;
+  if (!enriched && opts.skipIfEmpty) return null;
+
+  const { title, bodyMd } = weeklyDigestDraft({
+    locale,
+    orgName: org.name,
+    weekOfYmd: window.weekOfYmd,
+    standings,
+    leaders,
+    upcoming,
+    upcomingOverflow,
+    ...(claimedHighlight ? { claimedHighlight } : {}),
+  });
+
+  const autoSource = { trigger: TRIGGER_DIGEST, window_start: window.start, window_end: window.end };
+  const inserted = await insertGeneratedPost(tx, {
+    orgId,
+    competitionId: null,
+    divisionId: null,
+    kind: "weekly_digest",
+    title,
+    bodyMd,
+    autoSource,
+  });
+  // Unreachable in practice: V358 exempts weekly_digest from the only unique
+  // index `on conflict do nothing` guards against, so this insert has no
+  // constraint left to collide with. Guarded rather than asserted with `!`
+  // so a future re-introduction of a digest uniqueness rule fails loud here
+  // instead of a silent `mapPost(undefined)`.
+  if (!inserted) throw new HttpError(500, "digest draft insert failed unexpectedly");
+  log.info(
+    { orgId, fixtureId: null, divisionId: null, kind: "weekly_digest" as const, enriched },
+    "post_drafted",
+  );
+  const [row] = await tx<OrgPostRow[]>`select ${COLS(tx)} from org_posts where id = ${inserted.id}`;
+  return mapPost(row!);
+}
+
+/** POST /orgs/{id}/posts/digest (console button). Pro `news.auto` — same
+ *  entitlement as the system auto-drafts: a digest is system-COMPOSED
+ *  content (assembled from stats), not organiser-authored, same PLG line
+ *  the V295 migration draws between manual (free) and generated (Pro). */
+export async function generateWeeklyDigest(auth: AuthCtx, orgId: string): Promise<OrgPost> {
+  void orgId; // RLS scopes to auth.orgId; the route proved auth against this org.
+  await requireFeature(auth.orgId, "news.auto");
+  const post = await withTenant(auth.orgId, (tx) => digestForOrg(tx, auth.orgId, Date.now()));
+  // skipIfEmpty is not set above, so digestForOrg cannot return null here.
+  if (!post) throw new HttpError(500, "digest generation failed unexpectedly");
+  return post;
+}
+
+/** The stg cron sweep (`/api/cron/news-digest`, no AuthCtx — a system
+ *  trigger, not a user session). Every org table row is checked for the
+ *  entitlement directly (`hasFeature`, the same resolver the button path's
+ *  `requireFeature` uses) rather than pre-filtering by plan in SQL — the
+ *  resolver already accounts for Event Passes, billing-group overrides and
+ *  trials, and re-deriving that logic here is exactly how it would drift. */
+export async function sweepWeeklyDigests(
+  nowMs: number = Date.now(),
+): Promise<{ orgsChecked: number; digestsCreated: number }> {
+  const orgIds = (await superuser<{ id: string }[]>`select id from organizations`).map((r) => r.id);
+  let digestsCreated = 0;
+  for (const orgId of orgIds) {
+    if (!(await hasFeature(orgId, "news.auto"))) continue;
+    try {
+      const post = await withTenant(orgId, (tx) => digestForOrg(tx, orgId, nowMs, { skipIfEmpty: true }));
+      if (post) digestsCreated += 1;
+    } catch (err) {
+      log.warn({ orgId, err: String(err) }, "weekly digest sweep: org failed, continuing with the rest");
+    }
+  }
+  return { orgsChecked: orgIds.length, digestsCreated };
 }
