@@ -1541,6 +1541,8 @@
   "slot.nth_group": "N° {n} du Groupe {g}",
   "slot.best_nth": "Meilleur {rank} des équipes classées {nth}èmes",
   "slot.rank_range": "Rang {rank}",
+  "slot.winner_match": "Vainqueur de {ext}",
+  "slot.loser_match": "Perdant de {ext}",
   "schedule.bracket.rung": "Échelon {n}",
   "schedule.bracket.final": "Finale",
   "schedule.bracket.semi": "Demi-finales",

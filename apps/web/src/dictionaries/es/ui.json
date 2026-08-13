@@ -1541,6 +1541,8 @@
   "slot.nth_group": "N.º {n} del Grupo {g}",
   "slot.best_nth": "Mejor {rank} de los equipos en {nth}.º puesto",
   "slot.rank_range": "Puesto {rank}",
+  "slot.winner_match": "Ganador de {ext}",
+  "slot.loser_match": "Perdedor de {ext}",
   "schedule.bracket.rung": "Peldaño {n}",
   "schedule.bracket.final": "Final",
   "schedule.bracket.semi": "Semifinales",
