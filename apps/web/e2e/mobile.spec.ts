@@ -13,6 +13,7 @@ import {
   seedRosteredFixture,
   loginUi,
   claimProfileBySql,
+  setOrgLocaleSql,
 } from "./helpers";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
@@ -930,4 +931,131 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
     path: `test-results/portfolio-panels-${test.info().project.name}.png`,
     fullPage: false,
   });
+});
+
+// ---------------------------------------------------------------------------
+// P6 (D4b task A) fix round 1 — a TBD fixture's slot label, rendered in a
+// real browser, on an org surface AND a public one (the two gaps the review
+// found: finding #2, public surfaces stuck on hardcoded English regardless
+// of the org's own locale; the unit/regression suites already prove the
+// resolver + dictionaries are correct in isolation, but P5's own
+// stage-progression.spec.ts is request-only (no `page`) and never asserted
+// on rendered text at all). Lives in mobile.spec.ts — not a new spec file —
+// specifically so it inherits the seven-width viewport matrix; a new file
+// would run desktop-only and silently skip 320/360/375/390/430/768/834.
+// A brand-new logged-in user (own auto-provisioned org), never the file's
+// shared `orgSlug`/`divisionId` above — this scenario needs to flip the
+// ORG's own default_locale, which would otherwise leak into every other
+// scenario in this file that reuses the same account.
+// ---------------------------------------------------------------------------
+
+let p6OrgSlug = "";
+let p6CompSlug = "";
+let p6DivSlug = "";
+let p6DivisionId = "";
+
+test("P6 setup: a fresh org with an up-front TBD knockout fixture (seeded, group stage never generated)", async ({
+  page,
+}) => {
+  await loginUi(page, `p6-fix1-${TAG}@example.com`);
+  const org = await activeOrg(page);
+  p6OrgSlug = org.slug;
+
+  const comp = await apiJson<{ id: string; slug: string }>(page.request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `P6 Fix1 ${TAG}`,
+    visibility: "unlisted", // reachable on /shared/... — default is private
+  });
+  expect(comp.status).toBeLessThan(300);
+  p6CompSlug = comp.data!.slug;
+
+  const div = await apiJson<{ id: string; slug: string }>(
+    page.request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    { name: "Open", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false } },
+  );
+  expect(div.status).toBeLessThan(300);
+  p6DivisionId = div.data!.id;
+  p6DivSlug = div.data!.slug;
+
+  await addEntrantsViaApi(page.request, p6DivisionId, ["Seed 1", "Seed 2", "Seed 3", "Seed 4"]);
+
+  // Groups (2 pools of 2) feeding a knockout final via .seeding — same shape
+  // as scripts/smoke.ts's stageProgressionSuite() and P5's own
+  // stage-progression.spec.ts. The KO fixture is generated BEFORE the group
+  // stage even has fixtures (the owner's "placeholders at setup time"
+  // ruling) — both slots stay TBD, carrying real slot.winner_group labels.
+  const stages = await apiJson<{ id: string; kind: string }[]>(
+    page.request,
+    `/api/v1/divisions/${p6DivisionId}/stages`,
+    "POST",
+    [
+      { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
+      {
+        seq: 2, kind: "knockout", name: "KO", config: {},
+        seeding: { source: "previous", take: [{ kind: "topNPerGroup", n: 1 }], placement: "rank_order" },
+      },
+    ],
+  );
+  expect(stages.status).toBeLessThan(300);
+  const koId = stages.data!.find((s) => s.kind === "knockout")!.id;
+
+  const koGen = await apiJson<{ created: number; fixtures: { home_entrant_id: string | null }[] }>(
+    page.request,
+    `/api/v1/stages/${koId}/generate`,
+    "POST",
+  );
+  expect(koGen.status).toBeLessThan(300);
+  expect(koGen.data!.created).toBe(1);
+  expect(koGen.data!.fixtures[0]!.home_entrant_id).toBeNull();
+});
+
+test("P6 org surface: the TBD fixture renders its resolved slot label, in the switcher's locale (finding #2/#5)", async ({
+  page,
+}) => {
+  test.skip(p6DivisionId === "", "P6 setup test did not run/complete");
+  // Default locale first — proves the whole pipeline (usecase -> V360/V361
+  // columns -> API -> stages-panel.tsx) is actually live, not merely
+  // unit-tested in isolation.
+  await page.goto(await divisionPath(page.request, p6DivisionId, "?tab=fixtures"));
+  await expect(page.getByText("Winner of Group A", { exact: false }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Winner of Group B", { exact: false }).first()).toBeVisible();
+  // No raw "TBD" (the pre-P6 behaviour on the surfaces this task touched)
+  // and no leaked slot.* key or unfilled {placeholder}.
+  await expect(page.getByText(/^TBD$/)).toHaveCount(0);
+  await expect(page.locator("body")).not.toContainText("slot.winner_group");
+  await expectNoHorizontalScroll(page);
+
+  // The explicit switcher cookie (resolveLocale()'s #1 priority, ahead of
+  // even a signed-in user's own users.locale) — proves this is really a
+  // LOOKUP, not a coincidentally-English hardcoded string.
+  const origin = new URL(page.url()).origin;
+  await page.context().addCookies([{ name: "seazn_locale", value: "es", url: origin }]);
+  await page.reload({ waitUntil: "load" });
+  await expect(page.getByText("Ganador del Grupo A", { exact: false }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Ganador del Grupo B", { exact: false }).first()).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("Winner of Group");
+  await expectNoHorizontalScroll(page);
+});
+
+test("P6 public surface: a visitor sees the resolved slot label in the ORG's own default_locale, not English (finding #2 — the review's core defect)", async ({
+  page,
+}) => {
+  test.skip(p6DivisionId === "", "P6 setup test did not run/complete");
+  const org = await activeOrg(page);
+  // The org's OWN locale — a public/embed page has no per-viewer request
+  // scope to read a switcher cookie from (ISR), so THIS is the only lever a
+  // visitor's browser has no control over and the review's finding #2 was
+  // about: bracket.tsx/schedule.tsx/og-model.ts/slideshow-data.ts (+ the
+  // fixture detail page, same pattern) previously ignored it completely.
+  await setOrgLocaleSql(org.id, "es");
+
+  await page.goto(`/shared/${p6OrgSlug}/${p6CompSlug}/${p6DivSlug}`, { waitUntil: "load" });
+  // Default tab is Schedule (Tabs labels=["Schedule","Standings","Entrants"]).
+  await expect(page.getByText("Ganador del Grupo A", { exact: false }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Ganador del Grupo B", { exact: false }).first()).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("Winner of Group");
+  await expect(page.locator("body")).not.toContainText("slot.winner_group");
+  await expectNoHorizontalScroll(page);
 });

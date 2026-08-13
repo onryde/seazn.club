@@ -724,6 +724,21 @@ export async function setOrgStatusSql(orgId: string, status: "active" | "suspend
   });
 }
 
+/**
+ * Set an org's spectator-facing locale (v5 i18n §4, `organizations.default_
+ * locale`) directly — the API has no PATCH for it, same SQL-flip convention
+ * as plans/status. Public/embed pages resolve slot-label copy from this
+ * column (never resolveLocale(): those routes are ISR/have no per-viewer
+ * request scope), so this is the only way an e2e spec can prove a non-
+ * English org actually gets non-English copy on its public surfaces.
+ */
+export async function setOrgLocaleSql(orgId: string, locale: "en" | "fr" | "es" | "nl"): Promise<void> {
+  await withDb(async (sql) => {
+    const res = await sql`update organizations set default_locale = ${locale} where id = ${orgId}`;
+    if (res.count === 0) throw new Error(`no organization ${orgId}`);
+  });
+}
+
 /** Flip the org owner's staff bit (the calling session in every e2e spec) so a
  *  test can drive the superadmin surfaces. ALWAYS restore it in a finally —
  *  the shared Pro user outlives the test that borrowed the privilege. */
