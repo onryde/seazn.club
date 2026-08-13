@@ -195,10 +195,16 @@ test.describe.serial("weekly digest (P3 / D7)", () => {
     const digestButton = page.getByTestId("news-generate-digest");
     await expect(digestButton).toBeVisible();
     await expect(page.getByTestId("news-digest-upsell")).toHaveCount(0);
-    await digestButton.click();
 
-    const digestDraft = page.getByTestId("draft-row").filter({ hasText: "Weekly digest" });
-    await expect(digestDraft).toBeVisible();
+    // Digests are deliberately NOT deduped (see V358's org_posts_auto_once
+    // exemption), so a Playwright retry of this test leaves the previous
+    // attempt's draft behind. Count first and assert the increase: a bare
+    // toBeVisible() trips strict mode on the second row, and a `.first()`
+    // would be satisfied by the OLD row without ever waiting for the new one.
+    const digestRows = page.getByTestId("draft-row").filter({ hasText: "Weekly digest" });
+    const rowsBefore = await digestRows.count();
+    await digestButton.click();
+    await expect(digestRows).toHaveCount(rowsBefore + 1, { timeout: 20_000 });
 
     const drafts = await apiJson<{ id: string; kind: string; body_md: string }[]>(
       page.request,
@@ -220,8 +226,13 @@ test.describe.serial("weekly digest (P3 / D7)", () => {
 
     await page.goto(`/o/${org.slug}/settings?tab=news`);
     await expect(page.getByTestId("news-tab")).toBeVisible();
+    const digestRows = page.getByTestId("draft-row").filter({ hasText: "Weekly digest" });
+    const rowsBefore = await digestRows.count();
     await page.getByTestId("news-generate-digest").click();
-    await expect(page.getByTestId("draft-row").filter({ hasText: "Weekly digest" }).first()).toBeVisible();
+    // Wait on the count RISING, not on `.first()` being visible — the prior
+    // test already left a row, so `.first()` resolves immediately and the API
+    // read below then races the server finishing this press's insert.
+    await expect(digestRows).toHaveCount(rowsBefore + 1, { timeout: 20_000 });
 
     const after = await apiJson<{ id: string; kind: string }[]>(
       page.request,
