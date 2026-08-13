@@ -775,7 +775,7 @@ describe("buildSchedule", () => {
         ): Conflict[] => [
           ...(actual.validateAssignments as (...a: unknown[]) => Conflict[])(assignments, ...rest),
           ...(assignments.length === 2
-            ? [{ fixtureId: "b", reason: "person_overlap" as const, detail: "injected fork" }]
+            ? [{ fixtureId: "b", reason: "person_overlap" as const, details: { kind: "person_overlap" as const } }]
             : []),
         ],
       };
@@ -845,7 +845,7 @@ describe("rejectedBlockingConflicts", () => {
   // makes the gate a guard against a FUTURE encoder change, and a guard nothing
   // can trigger is a guard nothing can test end to end.
   const c = (over: Partial<Conflict> & Pick<Conflict, "fixtureId" | "reason">): Conflict => ({
-    detail: "d",
+    details: { kind: "inside_blackout" },
     ...over,
   });
 
@@ -907,7 +907,7 @@ describe("rejectedBlockingConflicts", () => {
 
   it("filters BLOCKING before it takes the delta, so a warn-only twin cannot cancel it", () => {
     // The rationale the function's doc gives, exercised rather than asserted.
-    // `conflictKey` is `fixtureId|reason|detail` and does NOT include `direct`,
+    // `conflictKey` is `fixtureId|reason|canon(details)` and does NOT include `direct`,
     // so a warn-only `order` row and a blocking one are the same key. Take the
     // delta first and they cancel: the board goes from "the dependent is a bit
     // tight" to "the dependent starts before its feeder finishes" and the gate
