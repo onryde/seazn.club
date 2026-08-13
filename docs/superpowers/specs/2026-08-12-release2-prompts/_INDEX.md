@@ -614,10 +614,41 @@ read back so the spec still proves a write happened. Full DB-backed run
 (`src/server src/lib`, real Postgres, real placement service): **4594 passed /
 0 failed**, against CI's 4593/1 before the fix.
 
-**Anyone changing this gate again should expect a FOURTH site.** The search is
-`grep -n "at(-\?[0-9]" ` over the scheduling suites: any fixed instant handed to
-`applySchedule`/`moveFixture` is a latent instance, because nothing pins which
-day the solver picks.
+**SWEPT 2026-08-14: there is no fourth site today.** The recipe below is what
+the sweep actually needed — the naive one in the first draft of this entry
+produced BOTH false negatives and false leads, so use this and not that.
+
+*The discriminator is DATAFLOW, not the literal.* A fixed instant is only a
+hazard when it is parked ONTO a solver-produced board (`autoSchedule` -> park),
+because nothing pins which day the solver picks. These are NOT instances:
+
+  * a whole board the test authors at fixed offsets from one `T0` origin — it is
+    internally consistent wherever `T0` lands (`schedule-durable-hard-surfaces`
+    builds `violating` this way and applies it `source: "manual"`, overwriting
+    the proposal it took at :208);
+  * a write onto an EMPTY board — nothing to collide with
+    (`schedule-solver-telemetry`'s `at(0)`/`at(30)` at :744 and
+    `schedule.test.ts`'s `at(0)` at :658/:715 all follow `seedStage` /
+    `generateStageFixtures` with no `autoSchedule` between);
+  * `schedule-solver-telemetry`'s pinned-anchor spec at :593, which parks the
+    LAST round forward onto an empty board — deliberately preserved, twice now.
+
+*The dangerous shape is the INPUT, not an equality assertion.* All three known
+sites failed as `scheduled_at: at(N)` handed to `applySchedule`/`moveFixture`,
+throwing at the park before any assertion ran; the locks site's own
+`expect(...).toBe(at(-480))` lines never executed. A rule that hunts equality
+assertions and treats `scheduled_at: at(600)` as safe excludes every instance
+found so far — that literal IS the telemetry site's failing line.
+
+*`git grep -E` is POSIX ERE: `\s` matches NOTHING and fails silently.* The
+sweep's first pass returned zero hits on a pattern with 40+ real ones. Use
+`[[:space:]]`, and always run a positive control before believing an empty set:
+
+    git grep -naE "(scheduled_at|startAt)[[:space:]]*:[[:space:]]*at\(-?[0-9]" -- apps/web/src
+
+Anchor `\bat\(` if you widen it — a bare `at(` also matches CSS like
+`repeat(4,4rem)`. And grep by ADDED LINE, not by file: a touched file's
+pre-existing hits are not yours.
 
 **Load warning for whoever runs the engine suite next.** On a contended box the
 full engine run produced a DIFFERENT red set every time (15, then 2, then 5,
