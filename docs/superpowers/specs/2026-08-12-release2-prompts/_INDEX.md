@@ -328,62 +328,83 @@ chain there" is conditional and the condition is false: this change duplicated
 nothing into it. The bench numbers above were measured against the SERVICE's
 model and chain, which is what ships.
 
-#### C2 follow-up — the acceptance gate was left on the old ladder
+#### C2 follow-up — the acceptance gate ranks on the OLD ladder (OPEN)
 
-`40331cc2` shipped a real defect. Recorded in full because the way it got
-through is more useful than the bug.
+`40331cc2` shipped a real defect. PR #557 ships only the part that can be
+verified as behaviour-neutral; **the gate itself is still wrong on main** and
+needs its own task. Read this before attempting it — four variants were tried
+and measured, and all four failed.
 
-**What was wrong.** `isStrictlyBetter` (`build-objectives.ts`) still ranked
-`placed → makespanMinutes → idleGap → imbalance` while the solver had moved to
+**The defect.** `isStrictlyBetter` (`build-objectives.ts`) ranks
+`placed → makespanMinutes → idleGap → imbalance` while the solver optimises
 `placed → days → day_span → day_start → idle_gap → imbalance`. That comparator
-is not advisory — `solveBuild` compares the placement reply against the
+is not advisory: `solveBuild` compares the placement reply against the
 legalised greedy seed and returns the SEED when the candidate does not win. So
-a board the solver had PROVED optimal could be discarded, and this is not a
-corner case: `day_start` deliberately buys an earlier day start with a worse
-idle gap (132 600 000 → 170 400 000 ms on the production board) *because* it
-outranks it, which is exactly the trade the gate was still scoring the old way.
-With all six rungs proved, the discarded-board reply was then reported
-`already_optimal` — an organiser told a greedy board was lexicographically
-optimal on a ladder the solver had just proved it was not optimal on.
+a PROVED-optimal board can be discarded, and — before #557 — the discarded-board
+reply was reported `already_optimal`.
 
-**The lesson, and it is not "merge more carefully".** All 12 checks were green
-on #555, and they could only ever have been green: **no test on that branch
-drove a board where the two ladders disagree.** Green is evidence about the
-paths that are driven and nothing else. The same shape turned up three more
-times the same day in other lanes (a joint report still rendering uuids because
-smoke typed the payload and never read `offenders`; a template gallery with no
-width coverage because every width project is `testMatch:/mobile\.spec\.ts/`; a
-bye seed stranded forever because every test used power-of-two counts). When a
-change moves a CONTRACT, the test to write first is the one that drives the
-seam between the two sides of it.
+**What #557 ships (behaviour-neutral, verified):** `TIER_NAMES` as the shared
+vocabulary with `objective.py` and the proto comment, `TIER_COUNT` derived from
+it, `already_optimal` gated on the NAMES rather than a bare count, the three day
+metrics on `BoardMetrics` as REPORTED fields, and three test-quality fixes. The
+DB-backed CI command (`src/server src/lib`, real Postgres, real placement
+service) returns **4518 passed / 0 failed on both `origin/main` and the branch**
+— identical, which is the evidence that nothing about which board ships moved.
 
-**Found by two independent reviewers**, separately, within minutes of each
-other — `/code-review high` and the repo's own `reviewer` agent. Neither CI nor
-the implementer found it. Per the standing note, N agents reporting ONE gap is
-a shared-contract defect, and that is exactly what it was.
+**WHY MIRRORING THE LADDER INTO THE GATE DOES NOT WORK, and this is the part
+worth reading.** The two boards being compared are not both products of that
+ladder. The seed is GREEDY's, and greedy is **rule-blind**: it packs from the
+first admissible tick, which scores beautifully on `days`, `day_span` and
+`day_start` precisely BECAUSE it ignores the typed rules that push a lawful
+board later. Ranking the day terms therefore makes the gate prefer the board
+that breaks the rule. Measured on a division carrying a durable
+`not_before noon` rule: six cards proposed before noon on a board whose rule
+says none may be.
 
-**Fix** (branch `fix/c2-day-aware-acceptance-gate`): `boardMetrics` gains
-`daysUsed`/`daySpanMinutes`/`dayStartOffsetMinutes` from an optional `DayView`;
-`build.ts` builds one from this run's grid via the existing `buildDayIndexOf`
-so placer and gate cannot disagree about which day an instant is on; the seed
-is RE-MEASURED with that view before comparison (its own metrics predate the
-grid, and comparing two different measurements lets a board win a rung on how
-it was measured); `isStrictlyBetter` mirrors `TIER_ORDER` rung for rung, with
-`makespanMinutes` demoted to a last tie-break.
+**The four variants, all measured on the full DB-backed run:**
 
-**Ruling — no day view means ONE day, not "no days".** A test earned this.
-Dropping whole-board makespan out of the ranking entirely left
-`improveByWindows` (which has no day view) blind on every day term and falling
-through to court balance, so it would have ACCEPTED stretching a board from 90
-to 210 minutes to buy a flatter court split — a strictly worse board, taken by
-the gate that exists to refuse it. Falling back to a single day mirrors what
-the placer already does (`buildDayIndexOf(slots, undefined)` returns `() => 0`)
-and makes summed day span equal the whole-board span, so the old protection
-survives precisely where there is no day information.
+| variant | result |
+|---|---|
+| mirror the ladder in `isStrictlyBetter` | 5 failed — `not_before` breach + 3 × `assertNoNewBlocking` in locks + `solver.moved` |
+| + conflicts dominate (blocking, then total) | 5 failed, a DIFFERENT five — fixed 2, broke 3 more in `build-honours-locks` |
+| + `moved` zero without a caller board (R21 shape) | broke two POLISH specs that measure `moved` from the caller's board |
+| narrow: legality → placed → the solver's own PROOF | **7** failed, on a brand-new database |
 
-**Ruling — `already_optimal` requires the tier NAMES, not a count.** Two
-separately deployed apps cannot agree on a ladder by counting rungs. It does
-not close the window retroactively (a caller already shipped with the old list
-has no such check), so the safe deploy order for the 4 → 6 change remains **web
-first, then the placement service** — new web against an old service simply
-never reaches `TIER_COUNT`, which is degraded but honest.
+Each fix traded one failure class for another. **That is the signal: this is a
+design problem, not a tuning problem.** The acceptance gate, the delta conflict
+gate, `moved`'s baseline and locks are more coupled than any single ranking rule
+captures.
+
+**What the next attempt should start from, not re-derive:**
+
+- The gate is a DELTA against the greedy seed, not an absolute legality test
+  (standing repo finding). `rejectedBlockingConflicts` closes only the direction
+  where the CANDIDATE is worse; nothing refuses a SEED that is worse. Any fix
+  has to close the other direction, and blocking-conflict count alone does not
+  do it because typed-rule breaches (`warn.instruction`) are not blocking.
+- `moved`'s seed fallback is justified as "a self-comparison, so zero" — true
+  ONLY while every no-`current` exit returns the seed. Any change that lets
+  BUILD return the solver's board breaks that justification, and the R21-shaped
+  fix (zero without a caller board) breaks POLISH, which legitimately measures
+  against a caller board that is sometimes absent from `greedySeed`'s binding.
+- The four `schedule-build-honours-locks` failures survived every variant and
+  were never diagnosed individually. Start there, not with the comparator.
+- Baseline discipline: run
+  `npm test --workspace apps/web -- src/server src/lib` with
+  `PLACEMENT_SERVICE_HOST` set and a **brand-new** database, on `origin/main`
+  first. Main is 4518/0. Anything else is your change.
+
+**Found by two independent reviewers**, separately, within minutes — neither CI
+nor the implementer. All 12 checks were green on #555 and could only ever have
+been green: **no test drove a board where the two ladders disagree.** Green is
+evidence about the paths that are driven, nothing more. The same shape turned up
+three more times the same day in other lanes (a joint report still rendering
+uuids because smoke typed the payload and never read `offenders`; a template
+gallery with no width coverage because every width project is
+`testMatch:/mobile\.spec\.ts/`; a bye seed stranded forever because every test
+used power-of-two counts).
+
+**Deploy order for the 4 → 6 change remains web first, then the placement
+service.** The name guard cannot help a caller already deployed with the old
+list; new web against an old service simply never reaches `TIER_COUNT`, which is
+degraded but honest.

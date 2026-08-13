@@ -176,43 +176,35 @@ function push(map: Map<string, Assignment[]>, key: string, a: Assignment): void 
 /** Design D3's ordering, as one comparison. Lexicographic rather than weighted
  *  so a reviewer and an organiser can both say WHY one board won.
  *
- *  THIS ORDER MUST MIRROR THE SOLVER'S TIER CHAIN, rung for rung. It is not a
- *  second opinion about what a good board is — it is the gate that decides
- *  whether the solver's board ships at all (`build.ts`'s `improved`) and which
- *  LNS windows are kept (`build-lns.ts`), so a term here that the placer does
- *  not optimise silently throws away boards the placer just proved optimal.
+ *  UNCHANGED by the 2026-08-13 day-aware rungs, deliberately, and the reason is
+ *  worth recording because the obvious move is to mirror the solver's ladder
+ *  here and it was tried and reverted.
  *
- *  That is not hypothetical; it is what this function did between the day-aware
- *  rungs landing in the service and this change. `makespanMinutes` ranked
- *  second while the solver had stopped computing a whole-board span at all, and
- *  the new `day_start` rung deliberately WORSENS the idle gap (measured on the
- *  production board: 132 600 000 -> 170 400 000 ms) because it outranks it. A
- *  day-anchored board could therefore lose here, be discarded for the greedy
- *  seed, and — with all six rungs proved — be reported `already_optimal`: the
- *  organiser told a greedy board was lexicographically optimal on a ladder the
- *  solver had just proved it was not optimal on.
+ *  Mirroring looks right — a gate ranking on terms the placer does not optimise
+ *  can discard a board the placer proved optimal, which is a real defect this
+ *  same change had to fix. But the two boards being compared are NOT both
+ *  products of that ladder: the seed is greedy's, and greedy is rule-blind. It
+ *  packs from the first admissible tick, which scores beautifully on `days`,
+ *  `day_span` and `day_start` precisely BECAUSE it ignores the typed rules that
+ *  would push a legal board later. Measured: on a division with a durable
+ *  `not_before noon` rule, ranking the day terms here made the gate prefer
+ *  greedy's 09:00 board — six cards proposed before noon on a board whose rule
+ *  says none may be — and the same shape reached `assertNoNewBlocking` at apply
+ *  on three other suites.
  *
- *  So: `placed` -> `days` -> `day_span` -> `day_start` -> `idle_gap` ->
- *  `imbalance`, which is `placement/objective.py`'s `TIER_ORDER` exactly.
- *  `makespanMinutes` is still MEASURED and published; it is simply no longer
- *  the thing that decides. If a rung is ever added, removed or reordered in the
- *  service, it moves here in the same change. */
+ *  So the ladder is NOT the right question to ask of these two boards. The
+ *  right question is asked in `build.ts`: refuse a candidate that is more
+ *  conflicted or places fewer, and otherwise let the SOLVER's own proof decide,
+ *  because the service is the authority on its own objective. This comparison
+ *  survives as the tie-break for a reply that proved nothing, and as
+ *  `improveByWindows`' acceptance rule, where both boards do come from the same
+ *  producer and the comparison is meaningful.
+ *
+ *  The day metrics on `BoardMetrics` are REPORTED, not ranked here. */
 export function isStrictlyBetter(a: BoardMetrics, b: BoardMetrics): boolean {
   if (a.placed !== b.placed) return a.placed > b.placed;
-  if (a.daysUsed !== b.daysUsed) return a.daysUsed < b.daysUsed;
-  if (a.daySpanMinutes !== b.daySpanMinutes) return a.daySpanMinutes < b.daySpanMinutes;
-  if (a.dayStartOffsetMinutes !== b.dayStartOffsetMinutes)
-    return a.dayStartOffsetMinutes < b.dayStartOffsetMinutes;
+  if (a.makespanMinutes !== b.makespanMinutes) return a.makespanMinutes < b.makespanMinutes;
   if (a.worstIdleGapMinutes !== b.worstIdleGapMinutes) return a.worstIdleGapMinutes < b.worstIdleGapMinutes;
-  if (a.courtImbalanceMinutes !== b.courtImbalanceMinutes)
-    return a.courtImbalanceMinutes < b.courtImbalanceMinutes;
-  // BELOW the ladder, not in it. The solver's chain ends at `imbalance` and has
-  // no opinion past it, so a deterministic last tie-break costs the mirror
-  // nothing and buys two things. It keeps `improveByWindows` able to tell a
-  // board that got longer from one that did not — window acceptance has no day
-  // view, so every day term ties there and dropping the span outright would
-  // have made a window that stretches the board 90 -> 210 minutes look like an
-  // improvement. And on a board where all six rungs genuinely tie it prefers
-  // the shorter one rather than flipping a coin.
-  return a.makespanMinutes < b.makespanMinutes;
+  return a.courtImbalanceMinutes < b.courtImbalanceMinutes;
 }
+

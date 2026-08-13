@@ -1,4 +1,4 @@
-// The acceptance gate, and the two ways it can lie after a ladder change.
+// The tier-name guard, and the day metrics reaching the response.
 //
 // `solveBuild` does not return the placement service's board because the
 // service says so — it compares that board against the legalised greedy seed
@@ -88,23 +88,22 @@ const stub = async (outcome: SolveBuildOutcome): Promise<void> => {
   vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(outcome);
 };
 
-describe("the acceptance gate measures the rungs the solver optimises", () => {
+describe("the day metrics reach the response", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   it("hands the day view to boardMetrics, so a shipped board reports real day metrics", async () => {
-    // THE WIRING, and it is the half a unit test of `isStrictlyBetter` cannot
-    // reach. `boardMetrics`' day fields are 0 unless a `DayView` is passed, and
-    // 0 is a legal value — an unwired gate therefore does not throw or fail a
-    // type check, it silently scores every board `daysUsed: 0` and compares
-    // ladders that are all ties. Worse, the seed's metrics are computed before
-    // this run has a grid: if the gate compared THOSE against a day-aware
-    // candidate, the seed would win `days` automatically by never having been
-    // measured, and every solver board on every board would be discarded.
+    // `boardMetrics` day fields are 0 unless a `DayView` is passed, and 0 is a
+    // legal value — an unwired call therefore does not throw or fail a type
+    // check, it silently reports every board as touching no days at all. A
+    // shipped board carrying non-zero day metrics is the observable proof that
+    // the view reached the metric call.
     //
-    // A shipped board carrying non-zero day metrics is the observable proof
-    // that the view reached the metric call.
+    // REPORTED, NOT RANKED. `isStrictlyBetter` deliberately does not read these
+    // — see its own note, and the C2 follow-up in the release-2 index for why
+    // mirroring the solver's ladder into the acceptance gate is a separate,
+    // still-open task rather than something this change does.
     await stub(
       reply([
         { fixtureId: "b", court: "C1", startAtMs: T0 },
@@ -114,13 +113,11 @@ describe("the acceptance gate measures the rungs the solver optimises", () => {
 
     const out = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
 
-    // The solver's board shipped — `engine` names where the board came from.
     expect(out.engine).toBe("optimized");
     expect(out.metrics.placed).toBe(2);
     // Both cards are on one calendar day, 09:00 and 09:30 London.
     expect(out.metrics.daysUsed).toBe(1);
     expect(out.metrics.daySpanMinutes).toBe(60);
-    // The day opens at the first admissible tick and the board starts there.
     expect(out.metrics.dayStartOffsetMinutes).toBe(0);
   });
 });

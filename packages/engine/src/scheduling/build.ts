@@ -1338,6 +1338,7 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   //    function's early exits do rather than a second construction of it.
   const seed = greedySeed(input);
   const { existing, dependencies, verifyConfig, rawSeed, rawSeedConflicts } = seed;
+  const seedMetrics = seed.metrics;
   const { currentBoard, conflictsForBoard, movedFrom, lostFrom } = seed;
 
   const greedy = (
@@ -1990,16 +1991,6 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   const placedAssignments = outcome.assignments.map((a) => assignmentOf(a.fixtureId, a.court, a.startAtMs));
   const incumbent: readonly Assignment[] = [...pinnedAssignments, ...placedAssignments];
   const incumbentMetrics = boardMetrics(incumbent, config.courts, fixtures.length, days);
-  // The seed's metrics RE-MEASURED against the same day view, and this is not
-  // redundant with `seed.metrics`. `greedySeed` runs before this function has
-  // built a grid, so the metrics it carries were measured with NO day view: a
-  // whole board on one notional day. Comparing those against a day-aware
-  // `incumbentMetrics` would compare two different measurements and let the
-  // seed win or lose a rung on how it was measured rather than on what it is.
-  // The gate needs both sides measured the same way, so it re-measures.
-  // `seed.metrics` stays as it is for REPORTING, where it is only ever read on
-  // its own and never against a day-aware board.
-  const seedMetricsForGate = boardMetrics(seed.assignments, config.courts, fixtures.length, days);
   const budgetExpired = outcome.wallExhausted;
   const tiersCompleted = outcome.tiersCompleted;
   // Whether an absent fixture's `no_slot` conflict may honestly claim a proof
@@ -2051,7 +2042,39 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // (there is no live solver handle left to ask a follow-up `check()` of
   // once the RPC has returned) and is left to Task 06b's status-mapping work
   // (`_RULES.md` §4).
-  const improved = isStrictlyBetter(incumbentMetrics, seedMetricsForGate);
+  // Whether the reply proved OUR ladder — names, not just a count. See
+  // `TIER_NAMES`: two separately deployed apps cannot agree on a ladder by
+  // counting rungs, and `objective_values` is sliced to `[:tiers_completed]`
+  // service side, so a fully proved chain carries exactly these names in
+  // order. Read twice below: it decides whether the solver's proof is
+  // authoritative for THIS caller, and whether `already_optimal` may be said.
+  const provedOurLadder =
+    tiersCompleted === TIER_COUNT &&
+    outcome.objectiveValues.length === TIER_COUNT &&
+    TIER_NAMES.every((name, i) => outcome.objectiveValues[i]?.name === name);
+
+  // D6 — "never worse than greedy" — UNCHANGED by the day-aware rungs, and
+  // that is a deliberate, evidenced decision rather than an omission.
+  //
+  // The obvious move is to mirror the solver's new ladder here, because a gate
+  // ranking on terms the placer no longer optimises can discard a board the
+  // placer proved optimal. That is a real defect and it is open — see the C2
+  // follow-up notes in `docs/superpowers/specs/2026-08-12-release2-prompts/_INDEX.md`.
+  // What is NOT the fix is mirroring the ladder into this comparison. The two
+  // boards are not both products of it: the seed is greedy's, and greedy is
+  // RULE-BLIND. It packs from the first admissible tick, which scores
+  // beautifully on `days`/`day_span`/`day_start` precisely BECAUSE it ignores
+  // the typed rules that push a lawful board later. Measured, four separate
+  // ways over a full DB-backed run: ranking the day terms here made the gate
+  // prefer greedy's 09:00 board on a division whose durable rule says nothing
+  // may start before noon, and drove `assertNoNewBlocking` failures across the
+  // locks suites. Every variant traded one failure class for another.
+  //
+  // So the ladder change ships WITHOUT touching who wins here, and the gate
+  // rework is its own task with its own diagnosis. `isStrictlyBetter` reads
+  // none of the day metrics, so `incumbentMetrics` carrying them (for the
+  // response, which publishes them) cannot change this comparison.
+  const improved = isStrictlyBetter(incumbentMetrics, seedMetrics);
 
   if (!improved) {
     // `already_optimal`/`infeasible` are ONLY reachable here — both require
@@ -2060,15 +2083,6 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     // arm below: a fully-proved ladder that ALSO happens to have beaten the
     // seed is `ok`, and calling it `already_optimal` would deny the very
     // improvement this branch exists to ship.
-    // NAMES, not just the count — see `TIER_NAMES`. A service running a
-    // different ladder of the same length would otherwise have its
-    // `tiers_completed` read as a full proof of ours, and the two apps deploy
-    // separately. `objective_values` is sliced to `[:tiers_completed]` service
-    // side, so a fully proved chain carries exactly these names in this order.
-    const provedOurLadder =
-      tiersCompleted === TIER_COUNT &&
-      outcome.objectiveValues.length === TIER_COUNT &&
-      TIER_NAMES.every((name, i) => outcome.objectiveValues[i]?.name === name);
     const status: BuildStatus = provedOurLadder
       ? incumbentMetrics.placed === 0 && fixtures.length > 0
         ? "infeasible"

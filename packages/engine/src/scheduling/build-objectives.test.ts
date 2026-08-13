@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { boardMetrics, isStrictlyBetter } from "./build-objectives.ts";
-import { TIER_NAMES } from "./build.ts";
 import type { Assignment } from "./calendar.ts";
 
 const T0 = Date.UTC(2026, 7, 8, 9, 0);
@@ -87,74 +86,43 @@ describe("isStrictlyBetter", () => {
     expect(isStrictlyBetter({ ...base, placed: 11, makespanMinutes: 999 }, base)).toBe(true);
   });
 
-  // THE LADDER, rung by rung. Each case makes the rung under test better and
-  // everything BELOW it worse, so it can only pass if that rung outranks them.
-  //
-  // These replace a `prefers a shorter makespan over a fairer board` case that
-  // encoded the pre-2026-08-13 order. Whole-board makespan is no longer the
-  // second rung — it is no longer a rung at all, only the last tie-break — and
-  // that is the entire point of the change: the solver stopped optimising it,
-  // so a gate that ranked on it discarded boards the solver had proved optimal.
+  // The ORDERING here is unchanged by the day-aware rungs, deliberately — see
+  // `isStrictlyBetter`'s note. Mirroring the solver's ladder into this
+  // comparison was tried and reverted: the seed it compares against is
+  // greedy's, and greedy is rule-blind, so ranking the day terms made the gate
+  // prefer a rule-BREAKING board that packed from the day's first tick. Who
+  // decides between a solver board and a greedy seed now lives in `build.ts`,
+  // where legality and the solver's own proof come first.
 
-  it("prefers fewer days used over every board metric below it", () => {
+  it("prefers a shorter makespan over a fairer board", () => {
+    expect(isStrictlyBetter({ ...base, makespanMinutes: 90, worstIdleGapMinutes: 999 }, base)).toBe(true);
+    expect(isStrictlyBetter({ ...base, makespanMinutes: 110, worstIdleGapMinutes: 0 }, base)).toBe(false);
+  });
+
+  it("does NOT rank the day metrics — they are reported, not compared", () => {
+    // A board that is better on every day term and worse on nothing the
+    // comparison reads is still not "strictly better" here. If this ever
+    // starts passing, the ladder has been mirrored back into the gate and the
+    // rule-blind-seed problem has come with it.
     expect(
       isStrictlyBetter(
-        { ...base, daysUsed: 2, daySpanMinutes: 999, dayStartOffsetMinutes: 999, worstIdleGapMinutes: 999, makespanMinutes: 999 },
+        { ...base, daysUsed: 1, daySpanMinutes: 1, dayStartOffsetMinutes: 0 },
+        base,
+      ),
+    ).toBe(false);
+    // ...and a board that is WORSE on every day term still wins on makespan.
+    expect(
+      isStrictlyBetter(
+        { ...base, daysUsed: 99, daySpanMinutes: 999, dayStartOffsetMinutes: 999, makespanMinutes: 90 },
         base,
       ),
     ).toBe(true);
-    expect(isStrictlyBetter({ ...base, daysUsed: 4, daySpanMinutes: 0 }, base)).toBe(false);
-  });
-
-  it("prefers a tighter summed day span over a fairer board", () => {
-    expect(
-      isStrictlyBetter({ ...base, daySpanMinutes: 200, worstIdleGapMinutes: 999, makespanMinutes: 999 }, base),
-    ).toBe(true);
-    expect(isStrictlyBetter({ ...base, daySpanMinutes: 400, worstIdleGapMinutes: 0 }, base)).toBe(false);
-  });
-
-  it("prefers an earlier day start over a fairer board — the trade day_start exists to make", () => {
-    // The rung deliberately BUYS an earlier start with a worse idle gap; that
-    // is what "day_start outranks idle_gap" means, and on the production board
-    // it costs 132 600 000 -> 170 400 000 ms of idle gap. A gate that ranked
-    // idle gap first would discard exactly the board the rung produces.
-    expect(
-      isStrictlyBetter({ ...base, dayStartOffsetMinutes: 0, worstIdleGapMinutes: 999 }, base),
-    ).toBe(true);
-    expect(isStrictlyBetter({ ...base, dayStartOffsetMinutes: 120, worstIdleGapMinutes: 0 }, base)).toBe(false);
-  });
-
-  it("ranks whole-board makespan LAST, below every rung the solver optimises", () => {
-    // Better makespan cannot buy a worse rung...
-    expect(isStrictlyBetter({ ...base, makespanMinutes: 1, daysUsed: 4 }, base)).toBe(false);
-    expect(isStrictlyBetter({ ...base, makespanMinutes: 1, courtImbalanceMinutes: 21 }, base)).toBe(false);
-    // ...but it still breaks an otherwise exact tie, which is what keeps
-    // `improveByWindows` (no day view, so every day term ties there) able to
-    // tell a board that got longer from one that did not.
-    expect(isStrictlyBetter({ ...base, makespanMinutes: 90 }, base)).toBe(true);
-    expect(isStrictlyBetter({ ...base, makespanMinutes: 110 }, base)).toBe(false);
   });
 
   it("prefers a fairer board over a balanced one", () => {
     expect(isStrictlyBetter({ ...base, worstIdleGapMinutes: 40, courtImbalanceMinutes: 999 }, base)).toBe(true);
   });
 
-  it("matches the placement service's TIER_ORDER, name for name and in order", () => {
-    // The gate and the solver's chain are ONE ordering expressed twice — a
-    // rung here that the placer does not optimise throws away proved boards,
-    // and vice versa. `TIER_NAMES` is the shared vocabulary; this pins the
-    // comparator against it so a future ladder change cannot move one side
-    // only. `placed` is the maximised rung and has no board-metric ordering
-    // pair below, so it is asserted separately above.
-    expect([...TIER_NAMES]).toEqual([
-      "placed",
-      "days",
-      "day_span",
-      "day_start",
-      "idle_gap",
-      "imbalance",
-    ]);
-  });
 
   it("is false for an identical board", () => {
     expect(isStrictlyBetter(base, base)).toBe(false);
