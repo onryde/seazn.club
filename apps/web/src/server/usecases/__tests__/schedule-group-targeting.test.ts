@@ -193,6 +193,9 @@ describe("pool-targeted rules through the single-division AI adapter (#446)", ()
       // this test used to author the uuid there, a shape the real builder never
       // produces, so the two namespaces looked like one.
       poolIds: { "f-1": POOL_A, "f-2": POOL_A },
+      // C1 gap B: no round-robin fixtures in this pack, so nothing to gate.
+      stageIds: {},
+      roundNos: {},
       assumptions: [],
       parsed: { hard: [], soft: [], unparsed: [] },
       fixtures: {

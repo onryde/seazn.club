@@ -437,7 +437,13 @@ describe("improveByWindows — against the real build solver", () => {
       elapsed: () => 0,
       solveWindow: realSolve(config),
     });
-    expect(out.board.find((x) => x.fixtureId === "a")).toEqual(card("a", "C1", 0));
+    // `toMatchObject`, not `toEqual`: this test is about the `existing`-vs-
+    // `locked` distinction the header explains (card `a` did not MOVE), not
+    // about the Assignment's exact key set — `commit` (calendar.ts, C1
+    // 2026-08-12) now also carries `roundNo`/`movable` through, which is
+    // correct (this frozen card genuinely is round 1 and genuinely is
+    // immovable this sub-solve) but incidental to what this test asserts.
+    expect(out.board.find((x) => x.fixtureId === "a")).toMatchObject(card("a", "C1", 0));
     expect({ makespan: out.metrics.makespanMinutes, placed: out.metrics.placed }).toEqual({
       makespan: 60,
       placed: 3,

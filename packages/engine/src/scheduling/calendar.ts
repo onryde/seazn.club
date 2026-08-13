@@ -73,6 +73,10 @@ export interface SchedulableFixture {
   people?: readonly string[]; // person ids, for cross-division overlap (doc 06 §4.3)
   poolId?: string; // restByGroup / startWindows targeting (Jul3/04 §3)
   divisionId?: string;
+  /** C1 fix-loop (2026-08-12 round-order design, Finding 2). Which stage the
+   *  fixture belongs to — see `Assignment.stageId` below for why this exists
+   *  and what it disambiguates. */
+  stageId?: string;
   locked?: { court: string; startAt: number }; // pinned assignment — honoured as-is
 }
 
@@ -85,6 +89,35 @@ export interface Assignment {
   people: string[];
   poolId?: string; // restByGroup targeting when validating (Jul3/04 §3)
   divisionId?: string;
+  /** C1 fix-loop (2026-08-12 round-order design, Finding 2). Which stage the
+   *  fixture belongs to. The round-order pair scan below groups by
+   *  `(divisionId, stageId, poolId)`, not `(divisionId, poolId)` alone: a
+   *  division can carry MORE THAN ONE round-robin-kind stage (two `league`
+   *  stages, or a `league` alongside an unpooled `group`), and every one of
+   *  them restarts its own round-robin at round 1
+   *  (`roundrobin.ts`'s `generateRoundRobin`). Two such stages sharing a
+   *  division but neither one pooled both carry `poolId: undefined`, so
+   *  `(divisionId, poolId)` alone collapsed them into ONE sequence — the
+   *  stage-cardinality sibling of the pool bug `poolId` itself was added to
+   *  fix (see the comment on the grouping key). Omitted only when the
+   *  underlying fixture's stage is unknown to the caller; every caller that
+   *  sets `roundNo` at all should set this too, the same way it must already
+   *  set `poolId`/`divisionId`. */
+  stageId?: string;
+  /** C1 (2026-08-12 round-order design). Round-robin-generated fixtures
+   *  only — absent means unconstrained by round order, not round 0.
+   *  `validateAssignments` reads this for its round-order pair scan;
+   *  `slotFixtures`' own `commit` carries it through from
+   *  `SchedulableFixture.roundNo` (:70) so a greedy-produced board can be
+   *  re-verified without losing the fact, same reasoning as `poolId`/
+   *  `divisionId` just above (#446). */
+  roundNo?: number;
+  /** C1. Whether THIS run may move the fixture. Defaults to `true` when
+   *  absent — every pre-C1 caller that never sets it keeps its previous
+   *  behaviour exactly (inert regardless, since none of them set `roundNo`
+   *  either). A pin/locked card is `false`; pin-pin round-order pairs are
+   *  exempt (design doc), pin-movable pairs are enforced. */
+  movable?: boolean;
 }
 
 /** The rest an entrant owes between two matches, in minutes — the strictest of
@@ -666,6 +699,22 @@ export function slotFixtures(input: SlotInput): SlotResult {
       // the placer/verifier fork this module exists to prevent.
       ...(f.poolId !== undefined ? { poolId: f.poolId } : {}),
       ...(f.divisionId !== undefined ? { divisionId: f.divisionId } : {}),
+      // C1 fix-loop (2026-08-12 round-order design, Finding 2). Same
+      // reasoning as poolId/divisionId just above, carried through for the
+      // same reason: the round-order grouping key below reads `stageId` off
+      // the Assignment, not the SchedulableFixture, so a greedy-produced
+      // board that dropped it would re-verify as one sequence again.
+      ...(f.stageId !== undefined ? { stageId: f.stageId } : {}),
+      // C1 (2026-08-12 round-order design). Same reasoning as poolId/
+      // divisionId just above — `validateAssignments`' round-order pair scan
+      // needs both off the Assignment, or a greedy-produced board loses the
+      // fact the instant it is re-verified. `movable` is `f.locked ===
+      // undefined`: this exact `commit` closure runs for BOTH "1) Locked
+      // fixtures" and "2) Greedy placement" below, so `f.locked` is the one
+      // signal in scope that already answers "did THIS run choose where
+      // this sits".
+      ...(f.roundNo !== undefined ? { roundNo: f.roundNo } : {}),
+      movable: f.locked === undefined,
     };
     bookings.push(assignment);
     placed.push(assignment);
@@ -1247,6 +1296,28 @@ export function validateAssignments(
   config: VerifyConfig,
   existing: readonly Assignment[] = [],
   dependencies: readonly OrderDependency[] = [],
+  /** C1 fix-loop (delta-gate widening scoped to round order only). Round
+   *  order (H6, below) is O(n²) over `assignments` alone BY DESIGN — see that
+   *  block's own comment. A delta-gate caller that widens `assignments` with
+   *  extra already-placed siblings JUST so round order can see them
+   *  (`moveFixture`/`applySchedule`'s partial-apply path, joint multi-
+   *  division apply — the two of the six enforcement seams that do this
+   *  widening at all) must not let every OTHER rule family evaluate pairwise
+   *  among those siblings too: rest/court/person/window were fixed CONTEXT
+   *  before those siblings were pulled into the checked set, and widening
+   *  silently changed their input composition, which is a wholly different
+   *  bug from the one round order's widening exists to fix (see
+   *  `roundOrderConflicts`'s own comment for the full story).
+   *
+   *  `false` here means: skip this function's OWN round-order pass entirely.
+   *  The two widening callers pass `false` and run `roundOrderConflicts`
+   *  themselves, once on their WIDENED set, and merge only its `"order"`
+   *  conflicts into the result — so round order sees the siblings and
+   *  nothing else does. Every other caller (autoSchedule's preview,
+   *  validateScheduleIn's absolute checks, the AI planning path, every test
+   *  in this package) omits this parameter and keeps EXACTLY today's
+   *  behaviour — round order included, computed over `assignments` as given. */
+  includeRoundOrder = true,
 ): Conflict[] {
   const gapMs = config.gapMinutes * MS_PER_MIN;
   const blackouts = config.blackouts ?? [];
@@ -1428,6 +1499,134 @@ export function validateAssignments(
         direct: dep.direct === true,
         shortfallMinutes: Math.max(0, Math.round(restMinutes - gapMin)),
       });
+    }
+  }
+
+  // C1 (2026-08-12 round-order design), C1 fix-loop (delta-gate widening
+  // scoped to round order only). Extracted to `roundOrderConflicts` below —
+  // see its own comment for the full mechanism (same-sequence pairs,
+  // lexicographic day/time compare, pin-pin exemption). Gated on
+  // `includeRoundOrder` so the two delta-gate seams that widen `assignments`
+  // with extra siblings just for THIS family (`validateAssignments`'s own
+  // parameter comment explains why) can skip it here and run it themselves
+  // on the widened set instead — every other caller keeps today's behaviour
+  // untouched, this call included.
+  if (includeRoundOrder) {
+    conflicts.push(...roundOrderConflicts(assignments, config.tz));
+  }
+  return conflicts.map(withRule);
+}
+
+/**
+ * Round order (H6) ALONE — same-SEQUENCE pairs with round_i < round_j and at
+ * least one movable side: day_i <= day_j (unconditional) and, when they land
+ * on the same day, start_i <= start_j (ties legal — the pair set is all
+ * r < r', never r <= r'). Reported as `reason: "order", direct: true` — the
+ * SAME family feed-order violations use (RULE_BY_REASON maps it to H6, and
+ * the AI prompt's own H6 text already says "Rounds generally flow in order;
+ * never schedule a final before its semifinals finish" — round order is that
+ * same statement, just derived from a round NUMBER instead of a winner/loser
+ * edge). Blamed on the LATER round (`b`, the side with a "must not start
+ * before" obligation), matching how feed-order blames the dependent fixture
+ * rather than the feeder.
+ *
+ * "Same sequence" is (divisionId, stageId, poolId), NOT divisionId alone —
+ * found during implementation, not named in the spec's literal
+ * "same-division" text: a `kind: "group"` stage with N pools runs N
+ * INDEPENDENT round-robin sequences, each restarting at round 1 (`stages.ts`'s
+ * `generate()` calls `roundRobinGen` once per pool). Two pools sharing one
+ * division but each on their own round 2 are not comparable, the same way two
+ * stages are not — omitting `poolId` from the key compared Pool A's round 3
+ * against Pool B's round 1 as if they were one sequence, on the ordinary,
+ * common shape of a pooled group stage (proven wrong by `schedule.test.ts`'s
+ * "8-team group+KO division", the very first end-to-end reflow scenario this
+ * design was checked against). A division with no pools (`poolId` undefined
+ * on every row) collapses to one group, unchanged from dividing by
+ * `divisionId` alone.
+ *
+ * `stageId` joined the key later (C1 fix-loop, Finding 2): a division can
+ * carry MORE than one round-robin-kind stage — two `league` stages, or a
+ * `league` beside an unpooled `group` — and none of them is required to have
+ * a pool. `poolId` alone cannot separate two such stages: both read
+ * `undefined`, so `(divisionId, poolId)` collapsed them into one sequence
+ * exactly the way bare `divisionId` once collapsed two pools into one.
+ * `stageId` is the dimension that was still missing.
+ *
+ * Scoped to `assignments` only, not `existing` — this function takes no
+ * `existing` parameter at all, structurally, because round order has never
+ * needed one: every caller that folds this run's own pins into the board
+ * being verified does so INTO `assignments` (see `apps/web`'s `settle`/
+ * `full` — "the pinned cards rejoin the proposal here"), so a pin-movable
+ * pair for THIS run's division is already covered without reaching into
+ * `existing`, which is cross-division/cross-stage context where a SECOND,
+ * independently 1-based round-robin sequence could otherwise silently
+ * collide with this one (design doc's stage-scoping ruling — `build.ts` owns
+ * the wire-side defensive guard for that case, and for the pooled case,
+ * since the wire has no pool index at all — see `build.ts`'s own comment on
+ * the mixed-sequence guard).
+ *
+ * Absent `tz` skips the whole family, same convention `slotFixtures`' typed-
+ * rule block already uses: a calendar day cannot be derived without one, and
+ * reporting a violation the organiser never expressed (bucketed in UTC) is
+ * worse than reporting none. `dayKeyInTz` is the ONE shared day-derivation
+ * helper both TS sides already import — no second copy.
+ *
+ * EXPORTED, standalone (C1 fix-loop): the delta gate's checked-set widening
+ * (`moveFixture`/`applySchedule`'s partial-apply path, joint multi-division
+ * apply) exists ONLY so this pairwise scan can see a moved fixture's
+ * already-placed round-robin siblings — those two seams pull siblings out of
+ * `existing` into the checked set specifically so THIS function's grouping
+ * sees them, symmetrically on both sides of their delta compare. Folding that
+ * widened set into the ordinary `validateAssignments` call, as the original
+ * fix did, meant every OTHER rule family (rest/court/person/window) ALSO
+ * started evaluating pairwise among those siblings — they had always been
+ * fixed CONTEXT before, visible only via `existing`, never focal. Calling
+ * THIS function separately on the widened set, and merging only its `"order"`
+ * conflicts into the result, gets round order the visibility it needs
+ * without moving one sibling out of `existing` for anyone else.
+ */
+export function roundOrderConflicts(
+  assignments: readonly Assignment[],
+  tz: string | undefined,
+): Conflict[] {
+  const conflicts: Conflict[] = [];
+  if (tz === undefined) return conflicts;
+  const bySequence = new Map<string, Assignment[]>();
+  for (const a of assignments) {
+    if (a.roundNo === undefined) continue;
+    const key = `${a.divisionId ?? ""}|${a.stageId ?? ""}|${a.poolId ?? ""}`;
+    (bySequence.get(key) ?? bySequence.set(key, []).get(key)!).push(a);
+  }
+  for (const group of bySequence.values()) {
+    for (const a of group) {
+      for (const b of group) {
+        // `a.roundNo < b.roundNo` visits each unordered pair exactly once
+        // (a = the earlier round) and skips ties in the same line — a
+        // round never compared against itself or an equal round.
+        if (a.roundNo === undefined || b.roundNo === undefined) continue;
+        if (a.roundNo >= b.roundNo) continue;
+        // Pin-pin exempt: neither side can move, so constraining them
+        // would turn caller data into a refused edit for no one's
+        // benefit. `movable` defaults to true when absent.
+        if (a.movable === false && b.movable === false) continue;
+        const dayA = dayKeyInTz(a.startAt, tz);
+        const dayB = dayKeyInTz(b.startAt, tz);
+        if (dayA > dayB) {
+          conflicts.push({
+            fixtureId: b.fixtureId,
+            reason: "order",
+            detail: `round ${b.roundNo} (day ${dayB}) starts before round ${a.roundNo} (day ${dayA})`,
+            direct: true,
+          });
+        } else if (dayA === dayB && a.startAt > b.startAt) {
+          conflicts.push({
+            fixtureId: b.fixtureId,
+            reason: "order",
+            detail: `round ${b.roundNo} starts before round ${a.roundNo} on the same day (${dayA})`,
+            direct: true,
+          });
+        }
+      }
     }
   }
   return conflicts.map(withRule);

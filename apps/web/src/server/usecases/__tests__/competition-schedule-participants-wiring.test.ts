@@ -546,11 +546,20 @@ describe.skipIf(!HAS_DB)("CompetitionPack.participants is wired into both joint 
     // `poolIds` (#449) is stripped for the same reason: the model schedules by
     // pool LABEL, which `fixtures.movable[].pool` still carries.
     expect("poolIds" in payload).toBe(false);
+    // `stageIds`/`roundNos` (C1 gap B) are stripped for the same reason: they
+    // are the verification-only twins `toJointEngineAssignments` reads to
+    // stamp `Assignment.stageId`/`roundNo`, and the model has no use for a
+    // stage uuid or a gated round number — `fixtures.movable[].round` is what
+    // it reads instead.
+    expect("stageIds" in payload).toBe(false);
+    expect("roundNos" in payload).toBe(false);
     // Everything else survives the trim byte-for-byte.
     expect(payload).toEqual(
       Object.fromEntries(
         Object.entries(pack).filter(
-          ([k]) => k !== "participants" && k !== "assumptions" && k !== "poolIds",
+          ([k]) =>
+            k !== "participants" && k !== "assumptions" && k !== "poolIds" &&
+            k !== "stageIds" && k !== "roundNos",
         ),
       ),
     );

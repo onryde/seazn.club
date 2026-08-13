@@ -83,13 +83,24 @@ async function seedAppliedLeague(request: import("@playwright/test").APIRequestC
   // 225min] gap pattern relative to their own span (restSpread offender for
   // everyone: ideal=120min, p=(0.875+0)/2=0.4375, score 56 — independently
   // re-derivable from health.test.ts's own worked examples, same formula).
+  //
+  // C1: the generator's circle method (seed 1 fixed, 2/3/4 rotate) pairs
+  // round 1 = (e1,e4)+(e2,e3), round 2 = (e1,e3)+(e2,e4), round 3 =
+  // (e1,e2)+(e3,e4) — confirmed against a live board, not assumed. The three
+  // time slots below are matched to THAT round order (round order is now a
+  // hard H6 gate); the original narrative order — (e1,e2) first — put round
+  // 3 at 09:00 and round 1 at 15:00, a genuine violation the apply now
+  // (correctly) 409s on. Which opponent sits in which slot is otherwise
+  // irrelevant to the offender guarantees above: those depend only on E1
+  // playing all three slots on Court 1 and every entrant playing one match
+  // per slot, never on pairing identity.
   const assignments = [
-    { f: findFixture(fixtures, e1, e2), at: "09:00", court: "Court 1" },
-    { f: findFixture(fixtures, e3, e4), at: "09:00", court: "Court 2" },
+    { f: findFixture(fixtures, e1, e4), at: "09:00", court: "Court 1" },
+    { f: findFixture(fixtures, e2, e3), at: "09:00", court: "Court 2" },
     { f: findFixture(fixtures, e1, e3), at: "10:15", court: "Court 1" },
     { f: findFixture(fixtures, e2, e4), at: "10:15", court: "Court 2" },
-    { f: findFixture(fixtures, e1, e4), at: "15:00", court: "Court 1" },
-    { f: findFixture(fixtures, e2, e3), at: "15:00", court: "Court 2" },
+    { f: findFixture(fixtures, e1, e2), at: "15:00", court: "Court 1" },
+    { f: findFixture(fixtures, e3, e4), at: "15:00", court: "Court 2" },
   ].map(({ f, at, court }) => ({
     fixture_id: f.id,
     scheduled_at: `${DAY}T${at}:00.000Z`,
@@ -220,15 +231,19 @@ test("schedule health (joint): one applied + one unscheduled division both repor
       sessionWindows: [{ from: `${DAY}T09:00:00.000Z`, to: `${DAY}T21:00:00.000Z` }],
     },
   });
+  // C1: same round-order fix as seedAppliedLeague above — round 1 =
+  // (j1,j4)+(j2,j3), round 2 = (j1,j3)+(j2,j4), round 3 = (j1,j2)+(j3,j4),
+  // matched to ascending time so the apply is not a genuine H6 violation.
   const assignments1 = [
-    { f: findFixture(fx1, j1, j2), at: "09:00", court: "Court 1" },
-    { f: findFixture(fx1, j3, j4), at: "09:00", court: "Court 2" },
+    { f: findFixture(fx1, j1, j4), at: "09:00", court: "Court 1" },
+    { f: findFixture(fx1, j2, j3), at: "09:00", court: "Court 2" },
     { f: findFixture(fx1, j1, j3), at: "10:15", court: "Court 1" },
     { f: findFixture(fx1, j2, j4), at: "10:15", court: "Court 2" },
-    { f: findFixture(fx1, j1, j4), at: "15:00", court: "Court 1" },
-    { f: findFixture(fx1, j2, j3), at: "15:00", court: "Court 2" },
+    { f: findFixture(fx1, j1, j2), at: "15:00", court: "Court 1" },
+    { f: findFixture(fx1, j3, j4), at: "15:00", court: "Court 2" },
   ].map(({ f, at, court }) => ({ fixture_id: f.id, scheduled_at: `${DAY}T${at}:00.000Z`, court_label: court }));
-  await apiJson(request, `/api/v1/stages/${stage1Id}/schedule/apply`, "POST", { assignments: assignments1, source: "manual" });
+  const applied1 = await apiJson(request, `/api/v1/stages/${stage1Id}/schedule/apply`, "POST", { assignments: assignments1, source: "manual" });
+  expect(applied1.status).toBeLessThan(300);
 
   // Division 2: generated but deliberately never scheduled.
   const div2 = await apiJson<{ id: string }>(request, `/api/v1/competitions/${compId}/divisions`, "POST", {

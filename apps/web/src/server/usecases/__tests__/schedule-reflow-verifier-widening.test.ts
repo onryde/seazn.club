@@ -127,36 +127,71 @@ describe.skipIf(!HAS_DB)(
       const { auth, stageId } = await seed();
 
       const rows = await sql<
-        { id: string; home_entrant_id: string; away_entrant_id: string }[]
-      >`select id, home_entrant_id, away_entrant_id
+        { id: string; home_entrant_id: string; away_entrant_id: string; round_no: number }[]
+      >`select id, home_entrant_id, away_entrant_id, round_no
       from fixtures where stage_id = ${stageId} order by id`;
       expect(rows).toHaveLength(6);
 
       // Two cards that share an entrant, 30 minutes apart under a 30-minute rest
       // rule: they need 60. Rest is warn-only at the write gate, which is the only
       // reason a board can reach this state at all.
-      const first = rows[0]!;
-      const clashing = rows.find(
-        (r) =>
-          r.id !== first.id &&
-          [r.home_entrant_id, r.away_entrant_id].some((e) =>
-            [first.home_entrant_id, first.away_entrant_id].includes(e),
-          ),
+      //
+      // Chosen as ROUND 1 and ROUND 2 specifically (C1, 2026-08-12 round-order
+      // design fix-loop finding 1's determinism fix), the same reasoning the
+      // court-clash test below uses: a round-robin entrant plays AT MOST once
+      // per round, so any entrant-sharing pair is guaranteed two DIFFERENT
+      // rounds, but an ARBITRARY such pair could be rounds 1-and-3 — leaving
+      // the untouched round 2 with nowhere consistent to sit relative to both
+      // (round order tolerates ties, not gaps). Rounds 1-and-2 leaves round 3
+      // as the board's own maximum, so parking every `others` fixture
+      // chronologically LAST (round-ascending among themselves) is always
+      // safe regardless of what rounds 1/2 are doing. In a 4-entrant round
+      // robin every entrant plays every round, so round 1's fixture
+      // containing a given entrant and round 2's fixture containing that SAME
+      // entrant always both exist.
+      const byRound = new Map<number, (typeof rows)[number][]>();
+      for (const r of rows) {
+        (byRound.get(r.round_no) ?? byRound.set(r.round_no, []).get(r.round_no)!).push(r);
+      }
+      const round1 = byRound.get(1)!;
+      const round2 = byRound.get(2)!;
+      const pivotEntrant = round1[0]!.home_entrant_id;
+      const first = round1.find(
+        (r) => r.home_entrant_id === pivotEntrant || r.away_entrant_id === pivotEntrant,
       )!;
-      // Everything else is parked two hours apart on one court, so the ONLY thing
-      // wrong with this board is the pair above and the expected set is exact.
-      const others = rows.filter(
-        (r) => r.id !== first.id && r.id !== clashing.id,
-      );
+      const clashing = round2.find(
+        (r) => r.home_entrant_id === pivotEntrant || r.away_entrant_id === pivotEntrant,
+      )!;
+      // The other 4 fixtures cannot just be parked "later than the pivot
+      // pair": with exactly 4 entrants there are only 3 distinct perfect
+      // matchings (K4), so round 1's OTHER fixture necessarily shares one
+      // entrant with `clashing` (round 2's pivot fixture) AND a DIFFERENT
+      // entrant with round 2's OTHER fixture — and the same cross-sharing
+      // repeats between round 2 and round 3. Dumping every non-pivot fixture
+      // chronologically after `clashing` (as an earlier version of this test
+      // did) put round 1's other fixture AFTER a round 2 fixture, which is
+      // itself a round-order violation the (now round-order-aware) write
+      // gate correctly refuses to create — that was this test's failure.
+      // These offsets are the minimum-margin, round_no-keyed placement that
+      // keeps every OTHER entrant's pair of same-round-gap matches >= the
+      // 60-minute rest floor, while leaving exactly the pivot pair (30
+      // minutes apart) as the board's one deliberate breach:
+      //   round 1 other: -60  (must clear BOTH round 2 fixtures by >= 60)
+      //   first (pivot):   0
+      //   clashing (pivot): 30
+      //   round 2 other:   60  (must clear round 1's other fixture by >= 60)
+      //   round 3 (both): 150  (must clear both round 2 fixtures by >= 60)
+      const round1Other = round1.find((r) => r.id !== first.id)!;
+      const round2Other = round2.find((r) => r.id !== clashing.id)!;
+      const round3 = byRound.get(3)!;
       await applySchedule(auth, stageId, {
         assignments: [
+          { fixture_id: round1Other.id, scheduled_at: at(-60), court_label: "C2" },
           { fixture_id: first.id, scheduled_at: at(0), court_label: "C1" },
           { fixture_id: clashing.id, scheduled_at: at(30), court_label: "C2" },
-          ...others.map((r, i) => ({
-            fixture_id: r.id,
-            scheduled_at: at(300 + i * 120),
-            court_label: "C1",
-          })),
+          { fixture_id: round2Other.id, scheduled_at: at(60), court_label: "C1" },
+          { fixture_id: round3[0]!.id, scheduled_at: at(150), court_label: "C1" },
+          { fixture_id: round3[1]!.id, scheduled_at: at(150), court_label: "C2" },
         ],
         source: "manual",
       });
@@ -206,6 +241,136 @@ describe.skipIf(!HAS_DB)(
     }, 120_000);
 
     /**
+     * FINDING 1's OWN regression test (C1, 2026-08-12 round-order design
+     * fix-loop): a board where the ONLY thing wrong is round order, pinned
+     * against a card the repair solver cannot move. `rest`/`court`/etc. are
+     * real `RepairFamily` members the repair solver can legitimately RELAX
+     * and report honestly (see the test above, and the court-clash test
+     * below, both now kept clean of incidental round noise for exactly this
+     * reason) — round order is not one of them at all (the design doc's own
+     * "out of scope" ruling), so it can NEVER appear in a relaxed family, and
+     * a board dirty ONLY by round order forces `solveRepair`'s
+     * "moved.length === 0 && relaxed.length === 0" branch: z3 finds a model
+     * satisfying every family it knows about, with nothing moved, while the
+     * REAL verifier still rejects the board — the `RepairVerificationError`
+     * "encoding_drift" shape.
+     *
+     * Only ONE card is locked, not every card — `solveRepair`'s own
+     * pre-existing-conflict check is scoped to the proposal (the UNLOCKED
+     * fixtures) and never looks at conflicts between two LOCKED cards, so
+     * "lock everything" makes the proposal empty and the check trivially
+     * clean, which is the opposite of what this test needs (see the inline
+     * comment at the lock site below).
+     *
+     * Before the fix this reached the organiser as an unhandled exception —
+     * `apps/web/src/server/api-v1/http.ts`'s generic catch-all turned it into
+     * an opaque `{ok:false, code:"INTERNAL"}` at HTTP 500. `reflowExisting` now
+     * catches it and degrades exactly the way `buildSchedule` already degrades
+     * its own solver/verifier disagreement: the untouched board comes back
+     * with `engine:"greedy"`, `status:"verifier_rejected"`, and the real,
+     * already-computed conflict — never a 500.
+     */
+    it("degrades gracefully when round order is the only thing a pinned board violates", async () => {
+      const { auth, stageId } = await seed();
+
+      const rows = await sql<{ id: string; round_no: number }[]>`
+        select id, round_no from fixtures where stage_id = ${stageId} order by round_no, id`;
+      expect(rows).toHaveLength(6);
+      const byRound = new Map<number, (typeof rows)[number][]>();
+      for (const r of rows) {
+        (byRound.get(r.round_no) ?? byRound.set(r.round_no, []).get(r.round_no)!).push(r);
+      }
+      // One fixture per round (3 rounds), each on its own court/well-separated
+      // entrant set so NEITHER rest NOR court NOR person-overlap has anything
+      // to say — round order is the only rule in play, and the pair set is
+      // full (C1's own ruling): round 1 vs round 3 is checked directly, not
+      // only the adjacent round 1-vs-2 / 2-vs-3 pairs.
+      const round1 = byRound.get(1)![0]!;
+      const round2 = byRound.get(2)![0]!;
+      const round3 = byRound.get(3)![0]!;
+      // The OTHER 3 fixtures must also be scheduled — left unscheduled, z3's
+      // repair pass legitimately places them (nothing else is movable),
+      // which counts as "moved" and silently defeats the very condition
+      // (`moved.length === 0`) this test exists to trigger. Mirrors each
+      // pivot's own time on the other court: round 1's sibling has no
+      // shared entrant with round 1's own fixture (a round is a perfect
+      // matching), so tying the time is rest-safe, and K4's cross-round
+      // sharing (see the rest-breach test's comment) is satisfied too since
+      // every gap between differently-timed rounds here is 120 minutes,
+      // double the 60-minute floor.
+      const round1Other = byRound.get(1)!.find((r) => r.id !== round1.id)!;
+      const round2Other = byRound.get(2)!.find((r) => r.id !== round2.id)!;
+      const round3Other = byRound.get(3)!.find((r) => r.id !== round3.id)!;
+      // Round order violated between EVERY pair: 3 (latest) first, 1 (earliest)
+      // last, all same day, all different courts/times so nothing else fires.
+      //
+      // Written straight to the table, not through `applySchedule`: the
+      // (now round-order-aware) write gate would refuse to CREATE this board
+      // in the first place — matching the court-clash test above, which hits
+      // the identical trap for the identical reason (refusing to create a
+      // disordered board is not the same as never having to read one).
+      for (const [f, minutes, court] of [
+        [round3, 0, "C1"],
+        [round2, 120, "C1"],
+        [round1, 240, "C1"],
+        [round3Other, 0, "C2"],
+        [round2Other, 120, "C2"],
+        [round1Other, 240, "C2"],
+      ] as const) {
+        await sql`
+          update fixtures set scheduled_at = ${at(minutes)}, court_label = ${court}
+          where id = ${f.id}`;
+      }
+      // ONLY round 1 is locked. This is deliberate, not a weaker stand-in for
+      // "pin every card": `solveRepair`'s own pre-existing-conflict check
+      // (`repair.ts`'s `pre = validateAssignments(proposal, ...)`) is scoped
+      // to the PROPOSAL — the UNLOCKED fixtures — and never looks at
+      // conflicts BETWEEN two locked cards at all. Lock all 6 (tried first)
+      // and `proposal` is empty, `pre` is trivially empty, and the throw
+      // this test exists to prove can never fire. Locking just round 1 keeps
+      // round 2 and round 3 in the proposal, so the round-order breach
+      // against the one immovable anchor — and against each other — is
+      // exactly what `pre` is computed over. z3 still has no reason to MOVE
+      // either (round order is invisible to it, and nothing it does track is
+      // wrong at their current slots), so `moved` and `relaxed` both come
+      // back empty regardless.
+      await patchFixture(auth, round1.id, { schedule_locked: true });
+
+      const out = await autoSchedule(auth, stageId, {
+        only_unlocked: true,
+        mode: "reflow",
+      });
+
+      // Untouched — no exception reached the caller, and nothing moved.
+      expect(out.assignments).toHaveLength(6);
+      expect(
+        out.assignments.find((a) => a.fixture_id === round3.id)?.scheduled_at,
+      ).toBe(at(0));
+      expect(
+        out.assignments.find((a) => a.fixture_id === round1.id)?.scheduled_at,
+      ).toBe(at(240));
+
+      // The graceful fallback, by name — mirrors `buildSchedule`'s own
+      // `BuildStatus.verifier_rejected` ("the encoder and validateAssignments
+      // disagreed... the greedy seed is returned and the disagreement is
+      // logged"), the same status this file's other two tests never see
+      // because their own violations ARE relaxable.
+      expect(out.solver.engine).toBe("greedy");
+      expect(out.solver.status).toBe("verifier_rejected");
+
+      // And the real conflict rides along — both directly-adjacent pairs, at
+      // minimum, each blaming the LATER round for starting first (mirrors
+      // feed-order blaming the dependent side, not the feeder).
+      expect(out.conflicts).toContainEqual(
+        expect.objectContaining({ fixture_id: round3.id, code: "warn.order", rule: "H6", blocking: true }),
+      );
+      expect(out.conflicts).toContainEqual(
+        expect.objectContaining({ fixture_id: round2.id, code: "warn.order", rule: "H6", blocking: true }),
+      );
+      expect(out.conflicts.every((c) => c.code === "warn.order")).toBe(true);
+    }, 120_000);
+
+    /**
      * THE SHARP EDGE, and the reason the widening needed a ruling at all.
      *
      * The case above is warn-level, which is uncomfortable but harmless. This one
@@ -224,39 +389,72 @@ describe.skipIf(!HAS_DB)(
       const { auth, stageId } = await seed();
 
       const rows = await sql<
-        { id: string; home_entrant_id: string; away_entrant_id: string }[]
-      >`select id, home_entrant_id, away_entrant_id
+        { id: string; home_entrant_id: string; away_entrant_id: string; round_no: number }[]
+      >`select id, home_entrant_id, away_entrant_id, round_no
       from fixtures where stage_id = ${stageId} order by id`;
-      // The pair is CHOSEN, not taken as rows[0]/rows[1]. In a 4-entrant round
-      // robin exactly one other fixture is entrant-disjoint from any given one, so
-      // an arbitrary pair is disjoint about a fifth of the time — and the expected
-      // set below would then be two rows instead of four, at random, on a suite
-      // that runs against fresh uuids every time.
-      const a = rows[0]!;
-      const b = rows.find(
-        (r) =>
-          r.id !== a.id &&
-          [r.home_entrant_id, r.away_entrant_id].some((e) =>
-            [a.home_entrant_id, a.away_entrant_id].includes(e),
-          ),
+      // The pair is CHOSEN, not taken as rows[0]/rows[1] — and, since C1
+      // (2026-08-12 round-order design fix-loop finding 1's determinism fix),
+      // chosen as ROUND 1 and ROUND 2 specifically, not merely "some pair that
+      // shares an entrant". Two reasons, both about keeping this board's ONLY
+      // violation the court clash it is about:
+      //
+      //   * a round-robin entrant plays AT MOST once per round, so ANY pair
+      //     sharing an entrant is guaranteed to be two DIFFERENT rounds — but
+      //     an arbitrary such pair could be rounds 1-and-3, and `others` would
+      //     then have to include round 2's fixtures sitting BETWEEN two
+      //     rounds this test pins to the SAME instant, which is
+      //     unsatisfiable for `others` to place without itself becoming a
+      //     round-order violation (round order tolerates ties, not gaps).
+      //   * round 1 and round 2 specifically means the untouched THIRD round
+      //     (round 3) is the board's own maximum, so parking it — and round
+      //     2's own other fixture — chronologically LAST is always safe
+      //     regardless of what round 1/2 are doing.
+      //
+      // In a 4-entrant round robin every entrant plays every round, so round
+      // 1's fixture containing a given entrant and round 2's fixture
+      // containing that SAME entrant always both exist.
+      const byRound = new Map<number, (typeof rows)[number][]>();
+      for (const r of rows) {
+        (byRound.get(r.round_no) ?? byRound.set(r.round_no, []).get(r.round_no)!).push(r);
+      }
+      const round1 = byRound.get(1)!;
+      const round2 = byRound.get(2)!;
+      const round3 = byRound.get(3)!;
+      const pivotEntrant = round1[0]!.home_entrant_id;
+      const a = round1.find(
+        (r) => r.home_entrant_id === pivotEntrant || r.away_entrant_id === pivotEntrant,
       )!;
-      const shared = [a.home_entrant_id, a.away_entrant_id].find((e) =>
-        [b.home_entrant_id, b.away_entrant_id].includes(e),
+      const b = round2.find(
+        (r) => r.home_entrant_id === pivotEntrant || r.away_entrant_id === pivotEntrant,
       )!;
-      const others = rows.filter((r) => r.id !== a.id && r.id !== b.id);
+      const shared = pivotEntrant;
+      const aOther = round1.find((r) => r.id !== a.id)!;
+      const bOther = round2.find((r) => r.id !== b.id)!;
+      // Same round_no-keyed placement as the rest-breach test above (see its
+      // comment: K4's 3-matching structure forces round 1's other fixture to
+      // share an entrant with BOTH round 2 fixtures, so it cannot simply be
+      // parked "later than the clash"). Here the pivot pair ties at the SAME
+      // instant (0 apart, not 30) since the deliberate violation is the court
+      // double-booking, not rest — round order tolerates ties, so `a`/`b`
+      // sitting together is not itself a violation.
+      await sql`
+        update fixtures set scheduled_at = ${at(-60)}, court_label = 'C2'
+        where id = ${aOther.id}`;
+      await sql`
+        update fixtures set scheduled_at = ${at(60)}, court_label = 'C1'
+        where id = ${bOther.id}`;
+      await sql`
+        update fixtures set scheduled_at = ${at(150)}, court_label = 'C1'
+        where id = ${round3[0]!.id}`;
+      await sql`
+        update fixtures set scheduled_at = ${at(150)}, court_label = 'C2'
+        where id = ${round3[1]!.id}`;
 
       // Two cards stacked on ONE court at ONE time — physically impossible, and
       // `assertNoNewBlocking` would refuse to write it, so it goes in directly.
       await sql`
       update fixtures set scheduled_at = ${at(0)}, court_label = 'C1'
       where id in ${sql([a.id, b.id])}`;
-      // Everything else parked two hours apart on the other court, so this clash
-      // is the only thing wrong and the expected set below is exact.
-      for (const [i, r] of others.entries()) {
-        await sql`
-        update fixtures set scheduled_at = ${at(300 + i * 120)}, court_label = 'C2'
-        where id = ${r.id}`;
-      }
       // Pinned, so the repair solver may not resolve the clash and the incumbent
       // board is what comes back.
       for (const f of [a, b])

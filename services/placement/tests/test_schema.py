@@ -140,6 +140,55 @@ def test_maps_every_field_through():
     assert parsed.constraints == {"match_minutes": 30, "gap_minutes": 10}
     assert parsed.existing == [(0, SLOT_MS)]
     assert parsed.dependencies == [(0, 1)]
+    # C1: both fixtures left `round` unset on the wire, so both entries here
+    # are `None`, not 0 -- see the presence tests below for why that
+    # distinction is the whole point of the field.
+    assert parsed.fixture_rounds == [None, None]
+    assert parsed.pinned_round == [None]
+
+
+# --- C1: round-order presence (2026-08-12 round-order design) --------------
+#
+# `fixture_rounds`/`pinned_round` are kept OFF `fixtures`/`existing`'s own
+# tuple shape, same reasoning as `pinned_rule_group_indices`/
+# `pinned_entrant_indices`: `model.py` unpacks both as bare tuples
+# (`for i, (entrant_indices, _division) in enumerate(fixtures)`,
+# `for k, (existing_court, existing_start) in enumerate(existing)`), so a
+# wider tuple there is a crash, not a behaviour change.
+
+
+def test_fixture_round_wire_presence_is_not_conflated_with_zero():
+    """0 is round 1's neighbour, not "unset" -- proto3 `optional` is the only
+    thing that can tell them apart, so this asserts presence survives the
+    translation rather than trusting the wire type alone."""
+    req = _valid_request(
+        fixtures=[
+            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0, round=0),
+        ]
+    )
+    parsed = request_to_model_input(req)
+    assert parsed.fixture_rounds == [0]
+
+
+def test_fixture_round_absent_decodes_as_none_not_zero():
+    req = _valid_request(
+        fixtures=[scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0)]
+    )
+    parsed = request_to_model_input(req)
+    assert parsed.fixture_rounds == [None]
+    assert parsed.fixture_rounds != [0]
+
+
+def test_pinned_round_round_trips_alongside_existing():
+    req = _valid_request(
+        existing=[
+            scheduler_pb2.PinnedRow(court_index=0, start_at_ms=SLOT_MS, round=3),
+            scheduler_pb2.PinnedRow(court_index=0, start_at_ms=SLOT_MS + 3_600_000),
+        ]
+    )
+    parsed = request_to_model_input(req)
+    assert parsed.existing == [(0, SLOT_MS), (0, SLOT_MS + 3_600_000)]
+    assert parsed.pinned_round == [3, None]
 
 
 # --- degenerate scalars ----------------------------------------------------
@@ -775,12 +824,16 @@ def _maximal_request() -> scheduler_pb2.SolveBuildRequest:
         ],
         step_minutes=10,
         fixtures=[
-            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0),
-            scheduler_pb2.Fixture(entrant_indices=[2, 3], division_index=0),
+            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0, round=1),
+            scheduler_pb2.Fixture(entrant_indices=[2, 3], division_index=0, round=2),
         ],
         existing=[
             scheduler_pb2.PinnedRow(
-                court_index=0, start_at_ms=SLOT_MS, rule_group_indices=[0], entrant_indices=[0]
+                court_index=0,
+                start_at_ms=SLOT_MS,
+                rule_group_indices=[0],
+                entrant_indices=[0],
+                round=1,
             )
         ],
         dependencies=[scheduler_pb2.OrderPair(before_index=0, after_index=1)],
@@ -807,11 +860,22 @@ INDEX_FIELDS = {
 
 #: Deliberately outside the range/presence policy, with the reason. Listed
 #: rather than omitted so the completeness test still has to account for the
-#: field. Neither is an INDEX — each is the declared BOUND other indices are
-#: checked against.
+#: field. `entrant_count`/`division_count` are declared BOUNDs other indices
+#: are checked against, not indices themselves. `Fixture.round`/
+#: `PinnedRow.round` (C1, 2026-08-12 round-order design) are `uint32` but not
+#: positional at all -- an opaque ordering key the caller assigns within its
+#: own round-robin sequence. Never range-checked (no `round_count` a round is
+#: bounded against; any `uint32` value is legitimate) and, unlike
+#: `PRESENCE_FIELDS` below, NEVER presence-REJECTED either -- an absent round
+#: is a real, common answer ("not round-robin-generated, or the caller chose
+#: not to attribute it"), not a caller mistake. Presence is still tracked
+#: (`request_to_model_input` maps unset to `None`, never to 0), it is simply
+#: never grounds for `InvalidRequestError`.
 EXEMPT_INDEX_FIELDS = {
     "SolveBuildRequest.entrant_count": "a declared bound for entrant_indices, not itself an index",
     "SolveBuildRequest.division_count": "a declared bound for division_index fields, not itself an index",
+    "Fixture.round": "an opaque ordering key in the caller's own round-robin sequence, not a position",
+    "PinnedRow.round": "an opaque ordering key in the caller's own round-robin sequence, not a position",
 }
 
 
@@ -852,6 +916,8 @@ def test_the_index_policy_accounts_for_every_uint32_field_in_the_contract():
     assert set(EXEMPT_INDEX_FIELDS) == {
         "SolveBuildRequest.entrant_count",
         "SolveBuildRequest.division_count",
+        "Fixture.round",
+        "PinnedRow.round",
     }
     assert set(INDEX_FIELDS).isdisjoint(EXEMPT_INDEX_FIELDS)
 
@@ -875,6 +941,11 @@ def test_the_maximal_request_is_valid_unperturbed():
     assert parsed.rule_groups == [([0, 1], 15, None)]
     assert parsed.pinned_rule_group_indices == [[0]]
     assert parsed.pinned_entrant_indices == [[0]]
+    # C1: round is not an INDEX field (exempt below), but the maximal request
+    # populates it too, so this proves it flows through unperturbed alongside
+    # everything else.
+    assert parsed.fixture_rounds == [1, 2]
+    assert parsed.pinned_round == [1]
 
 
 def test_an_exempt_field_carries_no_range_or_presence_check():

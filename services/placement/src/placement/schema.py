@@ -187,12 +187,16 @@ class ModelInput:
     (`parsed.courts`, `parsed.step_minutes`, ...) — every name below is
     unchanged from the string contract even though several TYPES are not.
 
-    The three fields after `wall_seconds` were, when this was written, an
-    exception to "exactly `build_model`'s arguments": C1/C4/C6, validated here
-    like everything else but not among the seven `main.py` passed to
-    `build_model`. All three now flow: task C4 added `rule_groups` and
-    `pinned_rule_group_indices`, and task C6 added `pinned_entrant_indices` —
-    `main.py` now passes TEN arguments (see the module docstring, "#21").
+    The five fields after `wall_seconds` were, when this was written, an
+    exception to "exactly `build_model`'s arguments": the #21 contract
+    programme's own C1/C4/C6 tasks (a different "C1" from the one below —
+    the #21 programme numbered rule_groups C1; the round-order design reused
+    the label independently, three weeks later), validated here like
+    everything else but not among the seven `main.py` originally passed to
+    `build_model`. All five now flow: #21's C4 added `rule_groups` and
+    `pinned_rule_group_indices`, #21's C6 added `pinned_entrant_indices`, and
+    the round-order design's C1 (2026-08-12) added `fixture_rounds` and
+    `pinned_round` — `main.py` now passes TWELVE arguments.
     """
 
     courts: int  # the COUNT of courts (len(court_names)); names never reach the domain
@@ -218,6 +222,23 @@ class ModelInput:
     pinned_rule_group_indices: list[list[int]]
     # C6 -- parallel to `existing` the same way.
     pinned_entrant_indices: list[list[int]]
+    # C1 (2026-08-12 round-ordering design) -- parallel to `fixtures` (same
+    # length, same order): `fixture_rounds[i]` is `fixtures[i]`'s round, or
+    # `None` when the wire left it unset. Kept off `fixtures`'s own tuple
+    # shape for the same reason `pinned_rule_group_indices` is kept off
+    # `existing`'s: `model.py` unpacks `fixtures` as a bare 2-tuple
+    # (`for i, (entrant_indices, _division) in enumerate(fixtures)`), so a
+    # 3-tuple there is a crash, not a behaviour change.
+    fixture_rounds: list[int | None]
+    # C1 -- parallel to `existing` the same way: `pinned_round[k]` is
+    # `existing[k]`'s round, or `None` when unset (the common case -- most
+    # pins carry no round at all). `None` is also what a caller sends for a
+    # pin that is genuinely round-less (a bracket/stepladder pin), so this
+    # module does not and cannot distinguish "no round" from "the caller
+    # chose not to attribute this pin to the movable round-robin sequence" --
+    # both read identically as "this pin is unconstrained by round order",
+    # which is the only interpretation `model.py`'s pair scan needs.
+    pinned_round: list[int | None]
 
 
 def _require_index_present(has_field: bool, where: str) -> None:
@@ -256,13 +277,22 @@ def _require_index_range(value: int, bound: int, where: str) -> int:
 
 def _validated_fixtures(
     proto_fixtures, entrant_count: int, division_count: int
-) -> list[tuple[list[int], int]]:
-    """The movable fixtures, with every index they carry checked for range.
+) -> tuple[list[tuple[list[int], int]], list[int | None]]:
+    """The movable fixtures, with every index they carry checked for range,
+    plus their C1 round numbers as a SEPARATE parallel list (see
+    `ModelInput.fixture_rounds`'s own comment for why it is not folded onto
+    the tuple).
 
     Runs first because everything after it resolves against what it returns:
     the dependency endpoints resolve against `len(fixtures)`.
+
+    `round` needs no range check unlike every other index field here: it is
+    not a position into any list this request declares (there is no
+    `round_count`), just an opaque ordering key the caller assigns within
+    its own round-robin sequence -- any `uint32` value is a legitimate round.
     """
     fixtures: list[tuple[list[int], int]] = []
+    fixture_rounds: list[int | None] = []
     for i, f in enumerate(proto_fixtures):
         if len(f.entrant_indices) == 0:
             raise InvalidRequestError(
@@ -293,7 +323,8 @@ def _validated_fixtures(
             f.division_index, division_count, f"fixtures[{i}].division_index"
         )
         fixtures.append((entrant_indices, division_index))
-    return fixtures
+        fixture_rounds.append(f.round if f.HasField("round") else None)
+    return fixtures, fixture_rounds
 
 
 def _validated_rule_groups(
@@ -375,10 +406,10 @@ def _validated_slots(proto_slots, num_courts: int) -> list[tuple[int, int, int]]
 
 def _validated_existing(
     rows, num_courts: int, num_rule_groups: int, entrant_count: int
-) -> tuple[list[tuple[int, int]], list[list[int]], list[list[int]]]:
-    """`existing`, plus its two C4/C6 companions -- kept as SEPARATE parallel
-    lists (same length and order as the returned `existing`) rather than
-    widened onto its `(court_index, start_at_ms)` tuple. `existing` is
+) -> tuple[list[tuple[int, int]], list[list[int]], list[list[int]], list[int | None]]:
+    """`existing`, plus its three C4/C6/C1 companions -- kept as SEPARATE
+    parallel lists (same length and order as the returned `existing`) rather
+    than widened onto its `(court_index, start_at_ms)` tuple. `existing` is
     `build_model`'s argument, UNCHANGED, and `model.py` unpacks it as a bare
     2-tuple (`for k, (existing_court, existing_start) in enumerate(existing)`)
     -- a 4-tuple there is a crash, not a behaviour change.
@@ -386,6 +417,7 @@ def _validated_existing(
     out: list[tuple[int, int]] = []
     rule_group_indices_by_row: list[list[int]] = []
     entrant_indices_by_row: list[list[int]] = []
+    round_by_row: list[int | None] = []
     for i, a in enumerate(rows):
         _require_index_present(a.HasField("court_index"), f"existing[{i}].court_index")
         court_index = _require_index_range(a.court_index, num_courts, f"existing[{i}].court_index")
@@ -416,7 +448,11 @@ def _validated_existing(
                 for j, idx in enumerate(a.entrant_indices)
             ]
         )
-    return out, rule_group_indices_by_row, entrant_indices_by_row
+        # C1 -- this pin's round, or `None` when the wire left it unset (the
+        # common case). No range check: same reasoning as `Fixture.round` in
+        # `_validated_fixtures` -- not a position into anything declared.
+        round_by_row.append(a.round if a.HasField("round") else None)
+    return out, rule_group_indices_by_row, entrant_indices_by_row, round_by_row
 
 
 def _validated_dependencies(pairs, num_fixtures: int) -> list[tuple[int, int]]:
@@ -557,7 +593,7 @@ def request_to_model_input(req) -> ModelInput:
     entrant_count = req.entrant_count
     division_count = req.division_count
 
-    fixtures = _validated_fixtures(req.fixtures, entrant_count, division_count)
+    fixtures, fixture_rounds = _validated_fixtures(req.fixtures, entrant_count, division_count)
     # C1. Must run before `existing` below: `existing[].rule_group_indices`
     # resolves against `len(rule_groups)`.
     rule_groups = _validated_rule_groups(req.rule_groups, len(fixtures))
@@ -572,7 +608,7 @@ def request_to_model_input(req) -> ModelInput:
     # per-court blackout is placed correctly instead of the whole request
     # bouncing the caller back to its own greedy fallback. See that module's
     # docstring, "per-court grids" / "task C2".
-    existing, pinned_rule_group_indices, pinned_entrant_indices = _validated_existing(
+    existing, pinned_rule_group_indices, pinned_entrant_indices, pinned_round = _validated_existing(
         req.existing, num_courts, len(rule_groups), entrant_count
     )
     dependencies = _validated_dependencies(req.dependencies, len(fixtures))
@@ -597,6 +633,8 @@ def request_to_model_input(req) -> ModelInput:
         rule_groups=rule_groups,
         pinned_rule_group_indices=pinned_rule_group_indices,
         pinned_entrant_indices=pinned_entrant_indices,
+        fixture_rounds=fixture_rounds,
+        pinned_round=pinned_round,
     )
 
 

@@ -78,7 +78,36 @@ function loadFixture(slug: string): AiDemoFixture {
   } catch {
     throw new Error(`no committed fixture at ${file} — run \`npm run capture:ai-demo\``);
   }
-  return JSON.parse(raw) as AiDemoFixture;
+  const fixture = JSON.parse(raw) as AiDemoFixture;
+  backfillRoundOrderFields(fixture.pack);
+  return fixture;
+}
+
+/**
+ * C1 gap B: `SchedulePack.stageIds`/`.roundNos` (and their joint twins on
+ * `CompetitionPack`) postdate every committed recording — captured before the
+ * fields existed, so the raw JSON has neither key at all. `unknown` is what
+ * keeps this file compiling as the schema evolves (see the header); the flip
+ * side is that a genuinely NEW field is invisible to `tsc` and surfaces as a
+ * runtime crash instead (`pack.stageIds[id]` on an `undefined` map) the
+ * moment a consumer starts reading it — which is what happened here the
+ * instant `toEngineAssignments`/`toJointEngineAssignments` started reading
+ * `stageIds`/`roundNos`.
+ *
+ * Backfilling empty maps is the historically honest reading: these
+ * recordings genuinely carry no stage/round-robin data, so every fixture in
+ * them comes through un-gated exactly as `buildSchedulePack` would leave a
+ * non-round-robin fixture — never invented from `f.round` (the ungated,
+ * model-facing display value), which would be the same forwarding bug this
+ * whole feature exists to prevent, just relocated into a test. A future
+ * `npm run capture:ai-demo` re-recording that already carries real values is
+ * untouched — this only fills a key that is genuinely absent.
+ */
+function backfillRoundOrderFields(pack: unknown): void {
+  if (typeof pack !== "object" || pack === null) return;
+  const p = pack as { stageIds?: unknown; roundNos?: unknown };
+  if (p.stageIds === undefined) p.stageIds = {};
+  if (p.roundNos === undefined) p.roundNos = {};
 }
 
 /**

@@ -121,6 +121,32 @@ export const FIXTURE_CLASH_OFFSET_MS = 20_000;
 const CLASH_OFFSET_FROM_INDEX = 2;
 
 /**
+ * C1 gap B — forces the canned plan to violate round order.
+ *
+ * `pack.draft` is `.sort(byAssignment)`-ordered on `scheduled_at`
+ * (schedule-ai.ts), and the greedy placer fills a round-robin division's
+ * EARLIEST rounds into the EARLIEST slots first, so for a clean draft the
+ * first entry is (chronologically, and therefore also by round) the
+ * earliest-round fixture and the last entry is the latest-round one. Swaps
+ * exactly those two cards' `scheduled_at`/`court_label` — a straight SWAP
+ * of two already-occupied slots, not a collapse onto one, so total court
+ * occupancy is UNCHANGED (no new `court` conflict) and the only thing that
+ * becomes illegal is round order: the latest round now starts before the
+ * earliest one does.
+ *
+ * A REAL violation for the same reason `FIXTURE_CLASH` is: it proves the
+ * runner's own verify seam (`toEngineAssignments` → `validateAssignments`,
+ * apps/web/src/server/usecases/schedule-ai.ts) actually detects the round
+ * order the model proposed, over real HTTP, through the real pack the
+ * runner built — not a hand-written conflict report. Whether a repair round
+ * subsequently resolves it is a `repair.ts`/z3 question this fixture takes
+ * no position on either way; callers should assert on DETECTION (the
+ * conflict was reported, or a repair round was visibly engaged), not on a
+ * specific pass/fail repair outcome.
+ */
+export const FIXTURE_ROUND_ORDER = "FIXTURE_ROUND_ORDER";
+
+/**
  * W5 (#400) — the one brief this server actually COMPILES.
  *
  * Stage 1 is a model call like any other, so against the canned `{}` below
@@ -182,13 +208,32 @@ interface ParseRequestLite {
   context?: { divisions?: unknown[] };
 }
 
-function buildSchedulePlan(pack: SchedulePackLite, clashOffsetMs: number | null = null): unknown {
+function buildSchedulePlan(
+  pack: SchedulePackLite,
+  clashOffsetMs: number | null = null,
+  roundOrderViolation = false,
+): unknown {
   const draft = Array.isArray(pack.draft) ? pack.draft : [];
   const assignments = draft.map((d) => ({
     fixture_id: d.fixture_id,
     scheduled_at: d.scheduled_at,
     court_label: d.court_label,
   }));
+  // C1 gap B: swap the first and last card's slots — see `FIXTURE_ROUND_ORDER`'s
+  // own doc comment for why this is a straight swap (no new court conflict)
+  // and why the first/last split tracks round order. Applied before the
+  // FIXTURE_CLASH transform below so the two sentinels compose rather than
+  // one silently overriding the other if a caller ever combined them.
+  if (roundOrderViolation && assignments.length >= 2) {
+    const first = assignments[0]!;
+    const last = assignments[assignments.length - 1]!;
+    assignments[0] = { ...first, scheduled_at: last.scheduled_at, court_label: last.court_label };
+    assignments[assignments.length - 1] = {
+      ...last,
+      scheduled_at: first.scheduled_at,
+      court_label: first.court_label,
+    };
+  }
   // W6 (#401): put the second card exactly where the first one is. One blocking
   // `court` conflict, on a board whose remaining slots are free — so the minimal
   // repair is a single move, and a solver that moved more than one fixture is
@@ -295,6 +340,8 @@ function generatePlan(
   /** null = no clash; 0 = the whole-minute clash; >0 = that many ms off the
    *  minute (#452). */
   clashOffsetMs: number | null = null,
+  /** C1 gap B — see `FIXTURE_ROUND_ORDER`. */
+  roundOrderViolation = false,
 ): GeneratedPlan {
   let phase: FixtureCall["phase"] = "unknown";
   const model = body.model ?? fallbackModel;
@@ -316,7 +363,7 @@ function generatePlan(
     } else {
       phase = "schedule";
       movable = pack.fixtures?.movable?.length ?? 0;
-      plan = buildSchedulePlan(pack as SchedulePackLite, clashOffsetMs);
+      plan = buildSchedulePlan(pack as SchedulePackLite, clashOffsetMs, roundOrderViolation);
     }
   } catch {
     /* leave defaults; a malformed pack becomes an empty-plan response */
@@ -356,10 +403,12 @@ export async function startAiFixtureServer(port = AI_FIXTURE_PORT): Promise<AiFi
         : raw.includes(FIXTURE_CLASH)
           ? 0
           : null;
+      const roundOrderViolation = raw.includes(FIXTURE_ROUND_ORDER);
       const { phase, model, plan, movable } = generatePlan(
         body,
         isAnthropic ? "claude-sonnet-5" : "anthropic/claude-sonnet-5",
         clashOffsetMs,
+        roundOrderViolation,
       );
       const planLike = plan as { assignments?: unknown[] } | null;
       calls.push({ phase, refusal, movable, assignments: planLike?.assignments?.length ?? 0 });

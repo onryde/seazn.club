@@ -1020,23 +1020,37 @@ describe("buildSchedule — lexicographic tiers", () => {
 
   it("closes an idle gap greedy left open, without lengthening the board", async () => {
     // Three slots, three cards, so the makespan is 90 on every board that
-    // places them all and T1 can do nothing. E1 plays `a` and `b`; greedy walks
-    // fixtures in (roundNo, id) order, so `c` gets served before `b` and E1 is
-    // left with a 30-minute wait in the middle. T2 swaps them.
+    // places them all and T1 can do nothing. E1 plays `a` and `d`; greedy
+    // walks fixtures in (roundNo, id) order, so `c` gets served before `d`
+    // and E1 is left with a 30-minute wait in the middle. T2 swaps them.
+    //
+    // All three tie at `fx`'s default roundNo (1) rather than `d` carrying an
+    // explicit higher one, as an earlier version of this test had it (`b`,
+    // before the rename below). C1 (2026-08-12 round-order design) made that
+    // round difference load-bearing for a REASON UNRELATED to this test: the
+    // "improved" board two paragraphs down moves the round-2 card ahead of
+    // the round-1 `c` on the same day, which the new hard constraint now
+    // correctly refuses — this test's own idle-gap fix was, incidentally,
+    // also a round-order violation once rounds meant anything. Tying all
+    // three exempts every pair here from round-order comparison entirely (a
+    // round-order pair is never compared when the two rounds are equal), so
+    // the greedy processing order this test actually cares about is steered
+    // by the id alone instead — `d` sorts after `c` (a < c < d), same
+    // processing order the roundNo override used to force.
     const config = cfg({ window: { from: T0, to: T0 + 90 * MIN } });
-    const fixtures = [fx("a", "E1", "E2"), fx("b", "E1", "E3", { roundNo: 2 }), fx("c", "E4", "E5")];
+    const fixtures = [fx("a", "E1", "E2"), fx("d", "E1", "E3"), fx("c", "E4", "E5")];
     const seed = rawSeedOf({ fixtures, config });
     const seedMetrics = boardMetrics(seed.assignments, config.courts, 3);
     expect(seedMetrics.worstIdleGapMinutes).toBe(30);
     expect(seedMetrics.makespanMinutes).toBe(90);
 
-    // `a`/`b` share E1 — placing them back-to-back (rather than greedy's
-    // a, c, b order) closes E1's idle gap to 0 without touching the
+    // `a`/`d` share E1 — placing them back-to-back (rather than greedy's
+    // a, c, d order) closes E1's idle gap to 0 without touching the
     // 90-minute makespan three back-to-back slots on one court already have.
     vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
       assignments: [
         { fixtureId: "a", court: "C1", startAtMs: T0 },
-        { fixtureId: "b", court: "C1", startAtMs: T0 + 30 * MIN },
+        { fixtureId: "d", court: "C1", startAtMs: T0 + 30 * MIN },
         { fixtureId: "c", court: "C1", startAtMs: T0 + 60 * MIN },
       ],
       status: "OPTIMAL",
@@ -2036,5 +2050,334 @@ describe("buildSchedule — Placement path", () => {
 
     const withTz = await run("Europe/London");
     expect(withTz.ruleGroups).toEqual([{ fixtureIds: ["f1"], minRestMinutes: undefined, maxFixturesPerDay: 2 }]);
+  });
+
+  // --- C1: round order on the wire (2026-08-12 round-order design) --------
+
+  it("forwards roundNo on the wire for a round-bearing fixture, omits it for a round-less one", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const fixtures = [
+      fx("with-round", "E1", "E2", { roundNo: 3 }),
+      fx("no-round", "E3", "E4", { roundNo: undefined }),
+    ];
+    await buildSchedule({ fixtures, config: cfg() });
+    expect(captured).toBeDefined();
+    const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
+    expect(byId.get("with-round")?.roundNo).toBe(3);
+    expect(byId.get("no-round")?.roundNo).toBeUndefined();
+  });
+
+  it("forwards a pin's round when exactly one round-robin division is in play", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const locked = { court: "C1", startAt: T0 };
+    const fixtures = [
+      fx("movable", "E1", "E2", { roundNo: 1, divisionId: "D1" }),
+      fx("pinned", "E3", "E4", { roundNo: 2, divisionId: "D1", locked }),
+    ];
+    await buildSchedule({ fixtures, config: cfg() });
+    expect(captured).toBeDefined();
+    const pinnedRow = captured!.existing.find((e) => e.court === "C1" && e.startAtMs === T0);
+    expect(pinnedRow?.roundNo).toBe(2);
+  });
+
+  it("does not forward a pin's round when movable fixtures span more than one round-bearing division", async () => {
+    // `PinnedRow` carries no division index on the wire (its own proto
+    // comment explains why), so the model cannot scope a pin-movable round
+    // pair by division the way it scopes movable-movable pairs — this is
+    // the one case build.ts itself cannot guarantee is unambiguous, and it
+    // must not guess.
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const locked = { court: "C1", startAt: T0 };
+    const fixtures = [
+      fx("d1-movable", "E1", "E2", { roundNo: 1, divisionId: "D1" }),
+      fx("d2-movable", "E5", "E6", { roundNo: 1, divisionId: "D2" }),
+      fx("d1-pinned", "E3", "E4", { roundNo: 2, divisionId: "D1", locked }),
+    ];
+    await buildSchedule({ fixtures, config: cfg() });
+    expect(captured).toBeDefined();
+    const pinnedRow = captured!.existing.find((e) => e.court === "C1" && e.startAtMs === T0);
+    expect(pinnedRow?.roundNo).toBeUndefined();
+    // Movable-movable pairs are unaffected: each fixture's own round still
+    // rides along, scoped by the wire's own divisionIndex.
+    const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
+    expect(byId.get("d1-movable")?.roundNo).toBe(1);
+    expect(byId.get("d2-movable")?.roundNo).toBe(1);
+  });
+
+  // C1 fix-loop round 2 (2026-08-12, Item B): the pin-path sibling of the
+  // multi-stage/multi-pool contamination guard above. Division alone is not
+  // enough to know a pin's round is safe to forward — a division can carry
+  // a clean, all-movable round-robin stage AND a second, entirely PINNED
+  // round-robin stage (or pool) at once. `multiPoolContaminated`'s own
+  // guard never sees the second one: contamination there is scored over
+  // `freeFixtures`, and every fixture in the pinned stage/pool is, by
+  // construction, not free. Before this fix, `singleRoundRobinDivision`
+  // read exactly one DIVISION (stage A's, the only one with a round-bearing
+  // movable fixture) and forwarded ANY pin sharing that division — this pin
+  // belongs to the SAME division but a DIFFERENT stage, and its round has
+  // no business being compared against stage A's.
+  it("does not forward a pin's round when it belongs to a DIFFERENT round-robin stage than the single clean movable one", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const locked = { court: "C1", startAt: T0 };
+    const fixtures = [
+      fx("stageA-movable", "E1", "E2", { roundNo: 1, divisionId: "D1", stageId: "A" }),
+      fx("stageB-pinned", "E3", "E4", { roundNo: 1, divisionId: "D1", stageId: "B", locked }),
+    ];
+    await buildSchedule({ fixtures, config: cfg() });
+    expect(captured).toBeDefined();
+    const pinnedRow = captured!.existing.find((e) => e.court === "C1" && e.startAtMs === T0);
+    expect(pinnedRow?.roundNo).toBeUndefined();
+    const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
+    expect(byId.get("stageA-movable")?.roundNo).toBe(1);
+  });
+
+  // The converse dimension: SAME stage, DIFFERENT pool — a `kind: "group"`
+  // stage with one pool entirely movable and a second entirely pinned.
+  // `roundBearingSequenceOf` is one compound key over (division, stage,
+  // pool) together, but this proves the pool component is independently
+  // load-bearing, not merely along for the ride behind stageId.
+  it("does not forward a pin's round when it belongs to a DIFFERENT pool of the same round-robin stage than the single clean movable one", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const locked = { court: "C1", startAt: T0 };
+    const fixtures = [
+      fx("poolA-movable", "E1", "E2", { roundNo: 1, divisionId: "D1", stageId: "S", poolId: "A" }),
+      fx("poolB-pinned", "E3", "E4", { roundNo: 1, divisionId: "D1", stageId: "S", poolId: "B", locked }),
+    ];
+    await buildSchedule({ fixtures, config: cfg() });
+    expect(captured).toBeDefined();
+    const pinnedRow = captured!.existing.find((e) => e.court === "C1" && e.startAtMs === T0);
+    expect(pinnedRow?.roundNo).toBeUndefined();
+    const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
+    expect(byId.get("poolA-movable")?.roundNo).toBe(1);
+  });
+
+  it("strips rounds for a WHOLE division when one of its fixtures also carries a feed dependency (mixed-sequence guard)", async () => {
+    // Real round-robin fixtures never have a dependency edge — brackets and
+    // stepladder fixtures are already ordered by winner_to/loser_to instead,
+    // and never carry a round (design doc). A round-bearing fixture that IS
+    // a dependency endpoint is therefore contaminated input (a mixed
+    // sequence, or a caller bug), and the guard strips the WHOLE division's
+    // rounds rather than risk a false ordering — proven here by an
+    // `innocent` third fixture in the SAME division, sharing no dependency
+    // edge of its own, whose round is stripped too.
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const fixtures = [
+      fx("semi", "E1", "E2", { roundNo: 1, divisionId: "D1" }),
+      fx("final", "E3", "E4", { roundNo: 2, divisionId: "D1" }),
+      fx("innocent", "E5", "E6", { roundNo: 1, divisionId: "D1" }),
+    ];
+    await buildSchedule({
+      fixtures,
+      config: cfg(),
+      dependencies: [{ fixtureId: "final", dependsOn: "semi", direct: true }],
+    });
+    expect(captured).toBeDefined();
+    const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
+    expect(byId.get("semi")?.roundNo).toBeUndefined();
+    expect(byId.get("final")?.roundNo).toBeUndefined();
+    expect(byId.get("innocent")?.roundNo).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[1]).toContain("stripping round");
+    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ divisions: ["D1"] });
+  });
+
+  it("does not strip an untouched division's rounds when a different division is contaminated", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const fixtures = [
+      fx("d1-semi", "E1", "E2", { roundNo: 1, divisionId: "D1" }),
+      fx("d1-final", "E3", "E4", { roundNo: 2, divisionId: "D1" }),
+      fx("d2-clean", "E5", "E6", { roundNo: 1, divisionId: "D2" }),
+    ];
+    await buildSchedule({
+      fixtures,
+      config: cfg(),
+      dependencies: [{ fixtureId: "d1-final", dependsOn: "d1-semi", direct: true }],
+    });
+    expect(captured).toBeDefined();
+    const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
+    expect(byId.get("d1-semi")?.roundNo).toBeUndefined();
+    expect(byId.get("d2-clean")?.roundNo).toBe(1);
+  });
+
+  // Found via schedule.test.ts's "8-team group+KO division" end-to-end case,
+  // not named in the brief: `kind: "group"` with N pools calls
+  // `roundRobinGen` once PER POOL, so pool A's round 2 and pool B's round 2
+  // are two unrelated "round 2"s. `Fixture` (the wire message) has no pool
+  // index at all — only `division_index` — so unlike the TS verifier (which
+  // scopes by `Assignment.poolId`, see calendar.test.ts's own pool-scoping
+  // tests), the solver-side wire cannot express "these two rounds are
+  // incomparable because they're different pools". Stripping the whole
+  // division's rounds is therefore the only safe answer here, the identical
+  // mechanism the dependency-edge contamination guard already uses.
+  it("strips rounds for a division whose round-bearing fixtures span more than one pool", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const fixtures = [
+      fx("poolA-r1", "E1", "E2", { roundNo: 1, divisionId: "D1", poolId: "A" }),
+      fx("poolA-r2", "E3", "E4", { roundNo: 2, divisionId: "D1", poolId: "A" }),
+      fx("poolB-r1", "E5", "E6", { roundNo: 1, divisionId: "D1", poolId: "B" }),
+    ];
+    await buildSchedule({ fixtures, config: cfg() });
+    expect(captured).toBeDefined();
+    const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
+    expect(byId.get("poolA-r1")?.roundNo).toBeUndefined();
+    expect(byId.get("poolA-r2")?.roundNo).toBeUndefined();
+    expect(byId.get("poolB-r1")?.roundNo).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[1]).toContain("span more than one pool");
+    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ divisions: ["D1"] });
+  });
+
+  it("does not strip a single-pool division when a DIFFERENT division has multiple pools", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const fixtures = [
+      fx("d1-poolA-r1", "E1", "E2", { roundNo: 1, divisionId: "D1", poolId: "A" }),
+      fx("d1-poolB-r1", "E3", "E4", { roundNo: 1, divisionId: "D1", poolId: "B" }),
+      fx("d2-clean", "E5", "E6", { roundNo: 1, divisionId: "D2" }),
+    ];
+    await buildSchedule({ fixtures, config: cfg() });
+    expect(captured).toBeDefined();
+    const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
+    expect(byId.get("d1-poolA-r1")?.roundNo).toBeUndefined();
+    expect(byId.get("d2-clean")?.roundNo).toBe(1);
+  });
+
+  // C1 fix-loop (2026-08-12 round-order design, Finding 2): the
+  // stage-cardinality sibling of the multi-pool test above, and — before
+  // this fix — the one shape NEITHER contamination guard caught. A division
+  // can carry more than one round-robin-kind stage (two `league` stages, or
+  // a `league` beside an unpooled `group` — `stages.ts`'s
+  // `stages.per_division.max` caps count, not kind-uniqueness), and none of
+  // them needs a pool. Both fixtures below then read `poolId: undefined`,
+  // one bucket under the OLD `poolId`-only key, no trip — exactly the
+  // "clean non-pooled round-robin stages" shape the review that opened this
+  // fix-loop named. `stageId` differs, which is now enough on its own.
+  it("strips rounds for a division whose round-bearing fixtures span more than one round-robin STAGE, even with no pool on either side", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const fixtures = [
+      fx("stageA-r1", "E1", "E2", { roundNo: 1, divisionId: "D1", stageId: "A" }),
+      fx("stageA-r2", "E3", "E4", { roundNo: 2, divisionId: "D1", stageId: "A" }),
+      fx("stageB-r1", "E5", "E6", { roundNo: 1, divisionId: "D1", stageId: "B" }),
+    ];
+    await buildSchedule({ fixtures, config: cfg() });
+    expect(captured).toBeDefined();
+    const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
+    expect(byId.get("stageA-r1")?.roundNo).toBeUndefined();
+    expect(byId.get("stageA-r2")?.roundNo).toBeUndefined();
+    expect(byId.get("stageB-r1")?.roundNo).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[1]).toContain("span more than one pool");
+    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ divisions: ["D1"] });
+  });
+
+  it("does not strip a single-stage division when a DIFFERENT division has multiple round-robin stages", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const fixtures = [
+      fx("d1-stageA-r1", "E1", "E2", { roundNo: 1, divisionId: "D1", stageId: "A" }),
+      fx("d1-stageB-r1", "E3", "E4", { roundNo: 1, divisionId: "D1", stageId: "B" }),
+      fx("d2-clean", "E5", "E6", { roundNo: 1, divisionId: "D2", stageId: "A" }),
+    ];
+    await buildSchedule({ fixtures, config: cfg() });
+    expect(captured).toBeDefined();
+    const byId = new Map(captured!.fixtures.map((f) => [f.fixtureId, f]));
+    expect(byId.get("d1-stageA-r1")?.roundNo).toBeUndefined();
+    expect(byId.get("d2-clean")?.roundNo).toBe(1);
+  });
+
+  // C1 fix-loop round 2 (2026-08-12, Item A): the wire-stripping tests just
+  // above both call `okOutcome()` with NO argument, whose default is
+  // `assignments: []` — `incumbent` (`placedAssignments` + `pinnedAssignments`,
+  // both built through `assignmentOf`) is therefore empty and the
+  // encoder/verifier SELF-CHECK below the wire call (`conflictsForBoard`
+  // over `incumbent`) never runs on anything. `roundBearingFor`'s own
+  // stripping (proven above) protects the SOLVER from seeing a false
+  // cross-stage round comparison; it says nothing about whether the
+  // SELF-CHECK — which reads `assignmentOf`'s OWN `stageId` field, entirely
+  // independent of what got stripped for the wire — makes the identical
+  // mistake one step later, over the solver's genuine, correct reply.
+  //
+  // This solver reply is deliberately clean per-stage (stage A: round 1 at
+  // T0+60 <= round 2 at T0+90; stage B: round 1 at T0 <= round 2 at T0+30)
+  // but, compared as ONE naive sequence with stageId dropped, stage A's
+  // round 1 (T0+60) sits AFTER stage B's round 2 (T0+30) — round 1 must be
+  // <= round 2, so that pair reads as a violation without `stageId` in the
+  // key, and does not with it. All four fixtures sit on the one configured
+  // court in disjoint 30-minute windows, so nothing else (court, entrant,
+  // rest) has anything to say — round order is the only rule that could
+  // possibly fire either way.
+  it("does not reject a genuinely valid placement board over a false cross-stage round comparison in its OWN encoder/verifier self-check", async () => {
+    const errorSpy = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async () =>
+      okOutcome([
+        { fixtureId: "stageB-r1", court: "C1", startAtMs: T0 },
+        { fixtureId: "stageB-r2", court: "C1", startAtMs: T0 + 30 * MIN },
+        { fixtureId: "stageA-r1", court: "C1", startAtMs: T0 + 60 * MIN },
+        { fixtureId: "stageA-r2", court: "C1", startAtMs: T0 + 90 * MIN },
+      ]),
+    );
+    const fixtures = [
+      fx("stageA-r1", "E1", "E2", { roundNo: 1, divisionId: "D1", stageId: "A" }),
+      fx("stageA-r2", "E3", "E4", { roundNo: 2, divisionId: "D1", stageId: "A" }),
+      fx("stageB-r1", "E5", "E6", { roundNo: 1, divisionId: "D1", stageId: "B" }),
+      fx("stageB-r2", "E7", "E8", { roundNo: 2, divisionId: "D1", stageId: "B" }),
+    ];
+    const result = await buildSchedule({ fixtures, config: cfg({ courts: ["C1"] }) });
+    // The exact symptom the review named: a valid solver board quietly
+    // discarded, and a false "verifier rejected" error logged nobody would
+    // ever see. Without the `stageId` line on `assignmentOf`, this fails —
+    // `status` comes back `"verifier_rejected"` and `errorSpy` is called
+    // with the false-positive pair.
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(result.status).not.toBe("verifier_rejected");
+    expect(result.conflicts.filter((c) => c.reason === "order")).toEqual([]);
   });
 });

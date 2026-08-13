@@ -97,6 +97,9 @@ function makePack(): CompetitionPack {
     participants: { [F1]: [], [F2]: [] },
     // #449: no pooled fixtures in this pack, so no pool uuids to carry.
     poolIds: {},
+    // C1 gap B: no round-robin fixtures in this pack, so nothing to gate.
+    stageIds: {},
+    roundNos: {},
     assumptions: [],
     fixtures: {
       movable: [

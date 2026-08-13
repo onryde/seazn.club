@@ -50,7 +50,7 @@ test("rounds group with dates, times honour the competition tz, reschedule undoe
     },
     tz: "UTC",
   });
-  const gen = await apiJson<{ fixtures: { id: string }[] }>(
+  const gen = await apiJson<{ fixtures: { id: string; round_no: number; fixture_no: number }[] }>(
     request,
     `/api/v1/stages/${stage.data!.id}/generate`,
     "POST",
@@ -64,6 +64,17 @@ test("rounds group with dates, times honour the competition tz, reschedule undoe
       court_label: "Court 1",
     });
   }
+  // C1: the inline-reschedule bait below moves a scheduled fixture to a LATER
+  // day than every sibling still sitting at its original position. That is
+  // only safe for the LAST round (see roundrobin-board-zero-slack memory) —
+  // moving an EARLY round forward past untouched later-round siblings still
+  // on day one is a genuine H6 round-order violation, which `ids[0]` (an
+  // arbitrary, round-agnostic pick) risked tripping. Pick the highest
+  // round_no among the SCHEDULED subset (excludes the one deliberately left
+  // unscheduled above) instead.
+  const latestScheduled = gen.data!.fixtures
+    .filter((f) => f.id !== ids[ids.length - 1])
+    .reduce((max, f) => (f.round_no > max.round_no ? f : max));
 
   const org = await activeOrg(page);
   const url = `/o/${org.slug}/c/${comp.data!.slug}/d/${div.data!.slug}?tab=fixtures`;
@@ -87,23 +98,29 @@ test("rounds group with dates, times honour the competition tz, reschedule undoe
   await expect(page.getByRole("button", { name: "Auto-schedule remaining" })).toBeVisible();
 
   // Inline reschedule (item 5) → notice grows an Undo that restores the slot.
+  // `latestScheduled` (not `ids[0]`, see its own comment above) — scoped by
+  // its public `/f/{no}` URL (`routes.fixture`), the one stable per-fixture
+  // hook this row carries; there is no `data-fixture-id` on it.
   const before = (
-    await apiJson<{ scheduled_at: string }>(request, `/api/v1/fixtures/${ids[0]!}`)
+    await apiJson<{ scheduled_at: string }>(request, `/api/v1/fixtures/${latestScheduled.id}`)
   ).data!.scheduled_at;
-  await page.getByRole("button", { name: "Edit time" }).first().click();
+  const targetRow = page.locator("li").filter({
+    has: page.locator(`a[href$="/f/${latestScheduled.fixture_no}"]`),
+  });
+  await targetRow.getByRole("button", { name: "Edit time" }).click();
   // The inline "When" field is a native date input + time <select> now, not
   // `input[type=datetime-local]` — Chrome's clock popup ignored `step`
   // (quarter-hour-time-select design doc). Only one row is ever "editing" at
   // once, so exactly one such pair is on the page here.
   await setDateTime(page, "2026-09-16T15:00");
-  await page.getByRole("button", { name: "Save", exact: true }).first().click();
+  await targetRow.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("button", { name: "Undo" })).toBeVisible({ timeout: 15_000 });
   await page.getByRole("button", { name: "Undo" }).click();
   await expect
     .poll(
       async () =>
-        (await apiJson<{ scheduled_at: string }>(request, `/api/v1/fixtures/${ids[0]!}`)).data!
-          .scheduled_at,
+        (await apiJson<{ scheduled_at: string }>(request, `/api/v1/fixtures/${latestScheduled.id}`))
+          .data!.scheduled_at,
       { timeout: 15_000 },
     )
     .toBe(before);

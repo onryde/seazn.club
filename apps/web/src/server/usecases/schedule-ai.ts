@@ -100,6 +100,7 @@ import {
   loadSettings,
   lockedFixtureIds,
   peopleByEntrant,
+  roundRobinStageIds,
   siblingAssignments,
   toAssignment,
   toSlotConfig,
@@ -376,6 +377,34 @@ export interface SchedulePack {
    *  array's order, so a build is byte-identical on a reseed for the same reason
    *  `participants` is. */
   poolIds: Record<string, string>;
+  /** C1 gap B — the AI-plan verification twin of `poolIds` just above (#449).
+   *  Movable fixture id → its own stage's UUID, for EVERY movable fixture:
+   *  unlike `poolIds`, `fixtures.stage_id` is NOT NULL, so this map is total
+   *  over `fixtures.movable`.
+   *
+   *  SERVER-SIDE ONLY, like `poolIds`: `toModelPayload` omits it — the model
+   *  has no use for a stage uuid. Exists so `toEngineAssignments` can stamp
+   *  `Assignment.stageId` unconditionally, the same way `schedulable` below
+   *  and the board path's `toAssignment` already do. See `calendar.ts`'s
+   *  round-order pair scan, which groups by `(divisionId, stageId, poolId)`
+   *  — omitting `stageId` from that key would let two round-robin-kind
+   *  stages in one division collide (Finding 2 of the round-order design). */
+  stageIds: Record<string, string>;
+  /** C1 gap B. Movable fixture id → `fixtures.round_no`, ONLY for fixtures
+   *  whose stage is round-robin-kind — the SAME `roundRobin` set that gates
+   *  `schedulable`'s own `roundNo` below. `fixtures.round_no` is shared
+   *  display numbering for EVERY stage kind (bracket rounds, swiss rounds,
+   *  stepladder legs all reuse the column — `stages.ts`'s `roundTitle`), so
+   *  forwarding it ungated would recreate the cross-sequence collision the
+   *  whole round-order feature exists to prevent (the design doc's own
+   *  motivating symptom). Absent key means "not round-robin, or not
+   *  movable" — never round 0.
+   *
+   *  SERVER-SIDE ONLY, like `poolIds`/`stageIds`: `toModelPayload` omits it.
+   *  `PackFixture.round` stays the UNGATED display value the model reads;
+   *  this is the gated, verification-only twin `toEngineAssignments` reads
+   *  to stamp `Assignment.roundNo`. */
+  roundNos: Record<string, number>;
   /** Deterministic preprocessing choices worth telling the organiser about:
    *  stripped bye feeders, same-name person grouping. Rendered at W5 (#400). */
   assumptions: string[];
@@ -424,13 +453,13 @@ export interface SchedulePack {
  */
 export function toModelPayload(
   pack: SchedulePack,
-): Omit<SchedulePack, "participants" | "assumptions" | "poolIds"> {
+): Omit<SchedulePack, "participants" | "assumptions" | "poolIds" | "stageIds" | "roundNos"> {
   return {
     mode: pack.mode,
     division: pack.division,
     // #397: the calendar anchor IS prompt material — W2 is the wave that moves
     // the prompt boundary. The enforcement inputs (participants, assumptions,
-    // poolIds) stay server-side.
+    // poolIds, stageIds, roundNos) stay server-side.
     tz: pack.tz,
     clock: pack.clock,
     window: pack.window,
@@ -631,6 +660,20 @@ export async function buildSchedulePack(
     // through.
     const { scopes: lockScopes } = await divisionLockState(tx, divisionId);
     const lockedIds = lockedFixtureIds(movable, lockScopes, false);
+
+    // C1 gap B: hoisted from inside the "generate" mode branch, where it used
+    // to be computed only for the greedy draft's own `schedulable` builder.
+    // `packMovable`'s `stageIds`/`roundNos` (below, feeding `toEngineAssignments`
+    // — the AI-plan verify seam) need this set in EVERY mode, not just
+    // generate: a refine/repair plan is verified through the same seam. `f.
+    // round_no` is display numbering shared by every stage kind (bracket
+    // rounds, swiss rounds, stepladder legs all reuse the column — see
+    // `stages.ts`'s `roundTitle`), so `roundRobin.has(f.stage_id)` is the gate
+    // that keeps a non-round-robin stage's round_no from being read as
+    // round-robin order — the design doc's own motivating symptom. Computed
+    // ONCE here, ahead of every mode branch, same reasoning as `lockedIds`
+    // just above.
+    const roundRobin = await roundRobinStageIds(tx, divisionId);
 
     // People map (entrant → person ids) for the engine draft and the pack's
     // shared-player list.
@@ -977,14 +1020,21 @@ export async function buildSchedulePack(
       const rankById = new Map(orderedMovable.map((f, i) => [f.id, String(i).padStart(6, "0")]));
       const realIdByRank = new Map(orderedMovable.map((f, i) => [String(i).padStart(6, "0"), f.id]));
 
-      // `lockedIds` computed once, above every mode branch — see the comment
-      // at its declaration.
+      // `lockedIds` and `roundRobin` computed once, above every mode branch —
+      // see the comments at their declarations. (`roundRobin` used to be
+      // computed here, generate-only; C1 gap B hoisted it so `packMovable`'s
+      // `stageIds`/`roundNos` below can share it in every mode.)
       const schedulable: SchedulableFixture[] = movable.map((f) => ({
         // Domain-ranked stand-in for the UUID so the solver's tie-break is stable.
         id: rankById.get(f.id)!,
-        roundNo: f.round_no,
+        ...(roundRobin.has(f.stage_id) ? { roundNo: f.round_no } : {}),
         ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
         divisionId: f.division_id,
+        // stageId unconditional, same as divisionId — `fixtures.stage_id` is
+        // NOT NULL. Needed for `validateAssignments`' round-order grouping
+        // key (`divisionId`, `stageId`, `poolId`) wherever this board is
+        // re-verified after the placer runs.
+        stageId: f.stage_id,
         ...(f.home_entrant_id !== null ? { home: f.home_entrant_id } : {}),
         ...(f.away_entrant_id !== null ? { away: f.away_entrant_id } : {}),
         // #396: participants, not named entrants — a TBD slot carries whoever
@@ -1273,6 +1323,25 @@ export async function buildSchedulePack(
         packMovable.flatMap((f) => {
           const id = poolIdByFixture.get(f.id);
           return id !== undefined ? [[f.id, id] as const] : [];
+        }),
+      ),
+      // C1 gap B: the AI-plan verification twins of `poolIds` just above.
+      // `stageIds` is unconditional — `fixtures.stage_id` is NOT NULL, the
+      // same fact that makes `schedulable`'s own `stageId: f.stage_id` above
+      // unconditional. `roundNos` is gated on the SAME `roundRobin` set that
+      // gates `schedulable`'s `roundNo` above (hoisted so every mode shares
+      // one query) — see `SchedulePack.roundNos`'s own doc comment for why an
+      // ungated forward would recreate the cross-sequence collision this
+      // feature exists to prevent. Both built from `packMovable`, in that
+      // array's board order, for the same byte-identical-pack reason
+      // `poolIds` is.
+      stageIds: Object.fromEntries(
+        packMovable.map((f) => [f.id, liteById.get(f.id)!.stage_id] as const),
+      ),
+      roundNos: Object.fromEntries(
+        packMovable.flatMap((f) => {
+          const src = liteById.get(f.id)!;
+          return roundRobin.has(src.stage_id) ? [[f.id, src.round_no] as const] : [];
         }),
       ),
       assumptions,
@@ -1599,6 +1668,20 @@ export function toEngineAssignments(plan: AiSchedulePlan, pack: SchedulePack): A
         ? { poolId: pack.poolIds[a.fixture_id]! }
         : {}),
       divisionId: pack.division.id,
+      // C1 gap B: `stageId` unconditional (`pack.stageIds` is total over
+      // `fixtures.movable`, same fact that makes it unconditional there),
+      // `roundNo` gated on `pack.roundNos` (round-robin only, already
+      // filtered at pack-build time — see its own doc comment). Without
+      // these, every AI-plan assignment landed in one anonymous bucket with
+      // no round data and `calendar.ts`'s round-order pair scan skipped it
+      // outright — the AI planning path could not evaluate round order at
+      // all.
+      ...(pack.stageIds[a.fixture_id] !== undefined
+        ? { stageId: pack.stageIds[a.fixture_id]! }
+        : {}),
+      ...(pack.roundNos[a.fixture_id] !== undefined
+        ? { roundNo: pack.roundNos[a.fixture_id]! }
+        : {}),
     };
   });
 }

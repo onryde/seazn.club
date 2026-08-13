@@ -58,6 +58,9 @@ function makePack(overrides: Partial<import("../schedule-ai").SchedulePack> = {}
     participants: Object.fromEntries([F1, F2, F3, F4].map((id) => [id, [] as string[]])),
     // #449: no pooled fixtures in this pack, so no pool uuids to carry.
     poolIds: {},
+    // C1 gap B: no round-robin fixtures in this pack, so nothing to gate.
+    stageIds: {},
+    roundNos: {},
     assumptions: [],
     fixtures: {
       movable: [F1, F2, F3, F4].map((id, i) => ({

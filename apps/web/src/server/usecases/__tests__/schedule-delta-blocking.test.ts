@@ -165,14 +165,24 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
     await forceSlot(sharer.id, anchor.at, "Court 2");
 
     // An unrelated card still moves.
+    //
+    // C1 fix-loop (G2/3rd instance): moved EARLIER than the board (`at(-60)`),
+    // not later (the original `at(600)`). `unrelated` is round 1 here (the
+    // round robin's OTHER round-1 fixture, `sharingPair`'s `first` being the
+    // one this file always draws `anchor` from) — pushing it ten hours PAST
+    // rounds 2/3's untouched, still-original-position siblings was a genuine
+    // round-order violation this test was unknowingly creating; the delta
+    // gate's own round-robin blind spot (this task's fix) simply couldn't see
+    // it before. Round 1 moving earlier can never breach round order,
+    // however far — see `roundRobinSequenceSiblings`'s own comment.
     const unrelated = board.fixtures.find((f) => f.id !== anchor.id && f.id !== sharer.id)!;
     await moveFixture(board.auth, unrelated.id, {
-      scheduled_at: at(600),
+      scheduled_at: at(-60),
       court_label: "Court 2",
     });
     const [moved] = await sql<{ scheduled_at: Date }[]>`
       select scheduled_at from fixtures where id = ${unrelated.id}`;
-    expect(moved!.scheduled_at.toISOString()).toBe(at(600));
+    expect(moved!.scheduled_at.toISOString()).toBe(at(-60));
 
     // And the pre-existing overlap is still REPORTED. `blocking` on a report
     // means IMPOSSIBLE, not "refused" (#399): the board paints that card red,
@@ -292,5 +302,161 @@ describe.skipIf(!HAS_DB)("delta-based blocking (#399)", () => {
     await expect(
       moveFixture(board.auth, b.id, { scheduled_at: a.at, court_label: a.court }),
     ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
+  });
+});
+
+// C1 fix-loop, G2/3rd instance. `moveFixture` and `applySchedule`'s partial
+// (not-all-fixtures) apply share one structural blind spot: the round-order
+// pair scan (calendar.ts, scoped to `assignments` alone by design) can only
+// ever compare fixtures that are BOTH in `assignments`. Before this fix, the
+// checked side here is always the one moved fixture — a one-element array can
+// never contain a same-sequence PAIR — so a drag/partial-apply that put a
+// fixture in round-order violation against an untouched, already-placed
+// sibling succeeded silently. The fix pulls that fixture's round-robin
+// sequence siblings out of `existing` and into `assignments`, symmetrically
+// on BOTH the baseline (current position) and proposed (new position) side of
+// the delta comparison.
+//
+// `seedBoard`'s round robin (4 entrants, `kind: "league"`) is round-robin by
+// `roundRobinStageIds`'s own definition, applied round-ascending at hourly
+// slots — `board.fixtures[i]`'s round is monotonic in `i` by construction
+// (`generateStageFixtures` orders `round_no, seq_in_round`), confirmed via a
+// direct `round_no` read rather than assumed, so a change to the generator's
+// shape reds this loudly instead of silently testing the wrong pair.
+describe.skipIf(!HAS_DB)("round order is part of the delta gate too (C1 fix-loop, G2/3rd instance)", () => {
+  async function roundsOf(board: Board): Promise<Map<string, number>> {
+    const rows = await sql<{ id: string; round_no: number }[]>`
+      select id, round_no from fixtures where id in ${sql(board.fixtures.map((f) => f.id))}`;
+    return new Map(rows.map((r) => [r.id, r.round_no]));
+  }
+
+  it("REFUSES a moveFixture drag of an already-placed fixture into a round-order violation against an untouched sibling", async () => {
+    const board = await seedBoard();
+    const rounds = await roundsOf(board);
+    const laterRound = board.fixtures.find((f) => (rounds.get(f.id) ?? 0) > 1)!;
+    expect(laterRound, "no round > 1 in this board — the round-robin shape assumption broke").toBeDefined();
+
+    // An hour before round 1 (`at(0)`), on a court nobody else uses — no
+    // overlap in time or court with anything already on the board, so the
+    // ONLY thing this drag can trip is round order.
+    await expect(
+      moveFixture(board.auth, laterRound.id, { scheduled_at: at(-60), court_label: "Court 3" }),
+    ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
+    const [after] = await sql<{ scheduled_at: Date }[]>`
+      select scheduled_at from fixtures where id = ${laterRound.id}`;
+    expect(after!.scheduled_at.toISOString()).toBe(laterRound.at);
+  });
+
+  it("names round order on the refusal, blamed on the later round (calendar.ts's own convention)", async () => {
+    const board = await seedBoard();
+    const rounds = await roundsOf(board);
+    const laterRound = board.fixtures.find((f) => (rounds.get(f.id) ?? 0) > 1)!;
+
+    const err = await moveFixture(board.auth, laterRound.id, {
+      scheduled_at: at(-60),
+      court_label: "Court 3",
+    }).catch((e: unknown) => e);
+    expect(EngineError.is(err, "SCHEDULE_CONFLICT")).toBe(true);
+    const conflicts = ((err as EngineError).data as {
+      conflicts: { code: string; rule?: string; blocking: boolean; fixture_id: string }[];
+    }).conflicts;
+    const order = conflicts.filter((c) => c.code === "warn.order");
+    expect(order.length).toBeGreaterThan(0);
+    expect(order.every((c) => c.blocking && c.rule === "H6")).toBe(true);
+    expect(order.some((c) => c.fixture_id === laterRound.id)).toBe(true);
+  });
+
+  it("REFUSES moveFixture placing a never-scheduled fixture directly into a round-order violation (currentSlot=[] branch)", async () => {
+    const board = await seedBoard();
+    const rounds = await roundsOf(board);
+    const laterRound = board.fixtures.find((f) => (rounds.get(f.id) ?? 0) > 1)!;
+    // Manufacture a fixture with NO current slot, so `moveFixture`'s
+    // `currentSlot` ternary (schedule.ts:2232-2235) takes its `[]` branch —
+    // baseline gets nothing from the moved fixture itself, only from the
+    // widened siblings. The other unit tests above/below all move an
+    // already-placed fixture, which takes the ternary's other branch.
+    await sql`update fixtures set scheduled_at = null, court_label = null where id = ${laterRound.id}`;
+
+    await expect(
+      moveFixture(board.auth, laterRound.id, { scheduled_at: at(-60), court_label: "Court 3" }),
+    ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
+    const [after] = await sql<{ scheduled_at: Date | null }[]>`
+      select scheduled_at from fixtures where id = ${laterRound.id}`;
+    expect(after!.scheduled_at).toBeNull();
+  });
+
+  it("ALLOWS a legal moveFixture drag on a board that already has a round-order violation among untouched siblings", async () => {
+    const board = await seedBoard();
+    const rounds = await roundsOf(board);
+    const round1 = board.fixtures.find((f) => rounds.get(f.id) === 1)!;
+    // A SECOND round-1 fixture — round robin over 4 entrants pairs two
+    // fixtures per round, so this always exists — is the "unrelated" mover.
+    // Round 1 has no earlier round to violate H6 against, so moving it
+    // BACKWARD (never forward — see the zero-slack note below) is
+    // unconditionally safe regardless of where the rest of the board sits.
+    const otherRound1 = board.fixtures.find((f) => f.id !== round1.id && rounds.get(f.id) === 1)!;
+    const laterRound = board.fixtures.find((f) => (rounds.get(f.id) ?? 0) > 1)!;
+    expect(otherRound1, "expected two round-1 fixtures — the round-robin shape assumption broke").toBeDefined();
+    // Bypass every gate — the only way to manufacture the board a pre-fix
+    // organiser could legitimately already be sitting on (same idiom as the
+    // person-overlap tests above, `forceSlot`).
+    await forceSlot(laterRound.id, at(-60), "Court 3");
+
+    // The false-block regression this file exists to catch: if the sibling
+    // widening were asymmetric (assignments side only, not the baseline
+    // side too), the pre-existing violation forced above would read as "new"
+    // against ANY move touching this round-robin sequence and wrongly 409
+    // here, even though this move touches neither `round1` nor `laterRound`.
+    //
+    // Moved BACKWARD (`at(-120)`, earlier than laterRound's forced `at(-60)`)
+    // — moving a round-1 fixture forward instead risks leapfrogging past an
+    // untouched later-round sibling still sitting at its original (much
+    // earlier) position, which would be a SECOND, genuine violation this
+    // test does not intend to create.
+    await moveFixture(board.auth, otherRound1.id, { scheduled_at: at(-120), court_label: "Court 2" });
+    const [moved] = await sql<{ scheduled_at: Date }[]>`
+      select scheduled_at from fixtures where id = ${otherRound1.id}`;
+    expect(moved!.scheduled_at.toISOString()).toBe(at(-120));
+
+    // And the pre-existing violation is still REPORTED on the full board —
+    // proving the move above was accepted DESPITE the violation still being
+    // true, not because it silently vanished.
+    const report = await validateSchedule(board.auth, board.divisionId);
+    const order = report.conflicts.filter((c) => c.code === "warn.order");
+    expect(order.length).toBeGreaterThan(0);
+  });
+
+  it("REFUSES an applySchedule partial move that creates a round-order violation against an untouched sibling", async () => {
+    const board = await seedBoard();
+    const rounds = await roundsOf(board);
+    const laterRound = board.fixtures.find((f) => (rounds.get(f.id) ?? 0) > 1)!;
+
+    await expect(
+      applySchedule(board.auth, board.stageId, {
+        assignments: [{ fixture_id: laterRound.id, scheduled_at: at(-60), court_label: "Court 3" }],
+        source: "manual",
+      }),
+    ).rejects.toSatisfy((err: unknown) => EngineError.is(err, "SCHEDULE_CONFLICT"));
+    const [after] = await sql<{ scheduled_at: Date }[]>`
+      select scheduled_at from fixtures where id = ${laterRound.id}`;
+    expect(after!.scheduled_at.toISOString()).toBe(laterRound.at);
+  });
+
+  it("ALLOWS a legal applySchedule partial move on a board that already has a round-order violation among untouched siblings", async () => {
+    const board = await seedBoard();
+    const rounds = await roundsOf(board);
+    const round1 = board.fixtures.find((f) => rounds.get(f.id) === 1)!;
+    const otherRound1 = board.fixtures.find((f) => f.id !== round1.id && rounds.get(f.id) === 1)!;
+    const laterRound = board.fixtures.find((f) => (rounds.get(f.id) ?? 0) > 1)!;
+    await forceSlot(laterRound.id, at(-60), "Court 3");
+
+    const out = await applySchedule(board.auth, board.stageId, {
+      assignments: [{ fixture_id: otherRound1.id, scheduled_at: at(-120), court_label: "Court 2" }],
+      source: "manual",
+    });
+    expect(out.applied).toBe(1);
+    expect(out.conflicts.filter((c) => c.blocking)).toHaveLength(0);
+    const report = await validateSchedule(board.auth, board.divisionId);
+    expect(report.conflicts.filter((c) => c.code === "warn.order").length).toBeGreaterThan(0);
   });
 });

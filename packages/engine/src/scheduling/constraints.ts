@@ -36,11 +36,16 @@ export const ConstraintScope = z.discriminatedUnion("kind", [
 ]);
 export type ConstraintScope = z.infer<typeof ConstraintScope>;
 
-/** NO `round` member, on purpose. Round numbers are DISPLAY LABELS: an
- *  elimination bracket numbers sparsely (1,2,3 winners / 7-10 losers / 14 grand
- *  final) and a rule keyed on one would silently address the wrong fixtures.
- *  `terminal` means `feeds.winner_to === null`, resolved per division in scope —
- *  never a round number, never a naming convention. */
+/** NO `round` member, on purpose — NARROWED 2026-08-12 (C1, round-order
+ *  design), not reversed. Round is now a scheduling ORDERING input on the
+ *  wire (`Fixture.round` / `PinnedRow.round`, round-robin-generated fixtures
+ *  only — see `calendar.ts`'s `validateAssignments` round-order pair scan
+ *  and `docs/superpowers/specs/2026-08-12-round-order-hard-lexicographic-
+ *  design.md`), but it still has no place HERE: an elimination bracket
+ *  numbers sparsely (1,2,3 winners / 7-10 losers / 14 grand final) and a
+ *  USER-FACING RULE keyed on one would silently address the wrong fixtures.
+ *  `terminal` means `feeds.winner_to === null`, resolved per division in
+ *  scope — never a round number, never a naming convention. */
 export const FixtureSelector = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("terminal") }),
   z.object({

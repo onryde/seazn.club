@@ -12,7 +12,13 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
-import { buildCompetitionPack, COMPETITION_MOVABLE_CAP, verifyJoint } from "../competition-schedule-ai";
+import {
+  buildCompetitionPack,
+  COMPETITION_MOVABLE_CAP,
+  toJointEngineAssignments,
+  toJointModelPayload,
+  verifyJoint,
+} from "../competition-schedule-ai";
 import { buildSchedulePack, isBlocking, OTHER_DIVISION_LABEL } from "../schedule-ai";
 import { seedOrg } from "./_seed";
 
@@ -272,6 +278,72 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
     for (const e of pack.entrants) expect(ids.has(e.division_id)).toBe(true);
     // Draft assignments are tagged the same way.
     for (const a of pack.draft) expect(ids.has(a.division_id)).toBe(true);
+  }, 60_000);
+
+  // C1 gap B — the joint pack round-trip through a REAL buildCompetitionPack
+  // (not a hand-built literal, which schedule-ai-round-order.test.ts and
+  // competition-schedule-verify.test.ts already cover). Both selected
+  // divisions (Alpha, Bravo) are single round-robin-stage boards seeded by
+  // `seedCompetition` (`kind: "league"`), so this proves the UNION step
+  // (`buildCompetitionPack`'s own `stageIdBySourceFixture`/
+  // `roundNoBySourceFixture`) keeps two divisions' otherwise-identical
+  // round-robin sequences distinct — the one property neither the
+  // single-division DB test (schedule-ai-pack.test.ts, one division) nor the
+  // pure joint unit tests (hand-built CompetitionPack literals) can reach.
+  it("unions stageIds/roundNos across divisions without collapsing their round-robin sequences into one", async () => {
+    const { pack } = await buildCompetitionPack(auth, competitionId, selected(), {
+      now: NOW_W2,
+      mode: "generate",
+      instruction: "x",
+    });
+    // Total over the union: every fixture in both divisions is round-robin.
+    expect(Object.keys(pack.roundNos).sort()).toEqual(
+      pack.fixtures.movable.map((f) => f.id).sort(),
+    );
+    for (const f of pack.fixtures.movable) expect(pack.roundNos[f.id]).toBe(f.round);
+
+    // stageIds unconditional, and each DIVISION's fixtures share exactly ONE
+    // stage id — but the TWO divisions' stage ids differ from each other.
+    // Collapsing them (e.g. re-deriving roundNos from scratch instead of
+    // unioning each source pack's already-gated map) is exactly the
+    // (divisionId, poolId)-without-stageId bug calendar.ts's own round-order
+    // scan was fixed for once already (Finding 2) — a division-scoped test
+    // alone cannot see it, since it only ever has one stage in play.
+    const stageIdsByDivision = new Map<string, Set<string>>();
+    for (const f of pack.fixtures.movable) {
+      const set = stageIdsByDivision.get(f.division_id) ?? new Set<string>();
+      set.add(pack.stageIds[f.id]!);
+      stageIdsByDivision.set(f.division_id, set);
+    }
+    expect(stageIdsByDivision.size).toBe(2);
+    for (const ids of stageIdsByDivision.values()) expect(ids.size).toBe(1);
+    const [stageA, stageB] = [...stageIdsByDivision.values()].map((s) => [...s][0]!);
+    expect(stageA).not.toBe(stageB);
+
+    // Through the LLM shape: neither field reaches the model.
+    const payload = toJointModelPayload(pack) as Record<string, unknown>;
+    expect("roundNos" in payload).toBe(false);
+    expect("stageIds" in payload).toBe(false);
+
+    // …and back: toJointEngineAssignments recovers both from the pack.
+    const first = pack.fixtures.movable[0]!;
+    const [assignment] = toJointEngineAssignments(
+      {
+        assignments: [
+          {
+            fixture_id: first.id,
+            scheduled_at: first.current.at ?? new Date(T0).toISOString(),
+            court_label: "Court 1",
+          },
+        ],
+        unschedulable: [],
+        explanations: [],
+        summary: "",
+      },
+      pack,
+    );
+    expect(assignment!.stageId).toBe(pack.stageIds[first.id]);
+    expect(assignment!.roundNo).toBe(pack.roundNos[first.id]);
   }, 60_000);
 
   it("courts is the union of both divisions' labels, sorted", async () => {

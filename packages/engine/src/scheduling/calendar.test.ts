@@ -409,3 +409,284 @@ describe("slotFixtures — invariants (spec 05 §6)", () => {
 function dedupeIds(raw: SchedulableFixture[]): SchedulableFixture[] {
   return raw.map((f, i) => ({ ...f, id: `${f.id}-${i}` }));
 }
+
+// --- C1: round order (2026-08-12 round-order design) ------------------------
+//
+// For every same-division pair with round_i < round_j and at least one
+// movable side: day_i <= day_j (unconditional) and, when they land on the
+// same day, start_i <= start_j (ties legal). Mirrors
+// `services/placement/tests/test_model.py`'s CP-SAT tests one for one — same
+// day/round shapes, same expected verdicts — so the two sides can be read
+// side by side even though nothing here calls into Python.
+describe("validateAssignments — round order (C1, 2026-08-12 round-order design)", () => {
+  const TZ = "America/Los_Angeles";
+  // Sat 10:00 / 12:00 local, and Sun 10:00 local (a whole day later) — well
+  // clear of any DST edge, chosen only to be two clearly distinct calendar
+  // days plus two same-day ticks in the org zone.
+  const DAY_A_T0 = Date.UTC(2026, 6, 11, 17, 0);
+  const DAY_A_T1 = Date.UTC(2026, 6, 11, 19, 0);
+  const DAY_B_T0 = Date.UTC(2026, 6, 12, 17, 0);
+  const config = { perEntrantMinRest: 0, gapMinutes: 0, tz: TZ };
+
+  const row = (over: Partial<Assignment> & Pick<Assignment, "fixtureId" | "startAt">): Assignment => ({
+    court: "C1",
+    endAt: over.startAt + 30 * MIN,
+    entrants: [over.fixtureId], // distinct per row unless overridden — never the reason for a conflict here
+    people: [],
+    divisionId: "d1",
+    ...over,
+  });
+
+  it("flags round order violated on the same day", () => {
+    const a = [
+      row({ fixtureId: "r2", startAt: DAY_A_T0, roundNo: 2, movable: true }),
+      row({ fixtureId: "r1", startAt: DAY_A_T1, roundNo: 1, movable: true }),
+    ];
+    const conflicts = validateAssignments(a, config);
+    expect(conflicts).toEqual([
+      expect.objectContaining({ fixtureId: "r2", reason: "order", direct: true }),
+    ]);
+  });
+
+  it("permits round order respected on the same day (ties legal)", () => {
+    const a = [
+      row({ fixtureId: "r2", startAt: DAY_A_T1, roundNo: 2, movable: true }),
+      row({ fixtureId: "r1", startAt: DAY_A_T0, roundNo: 1, movable: true }),
+    ];
+    expect(validateAssignments(a, config).filter((c) => c.reason === "order")).toEqual([]);
+
+    // Ties (identical start) are legal too, not merely "not yet checked".
+    const tied = [
+      row({ fixtureId: "r2", startAt: DAY_A_T0, roundNo: 2, movable: true, court: "C2" }),
+      row({ fixtureId: "r1", startAt: DAY_A_T0, roundNo: 1, movable: true }),
+    ];
+    expect(validateAssignments(tied, config).filter((c) => c.reason === "order")).toEqual([]);
+  });
+
+  it("flags round order violated across days — the R8-on-day-1 symptom", () => {
+    const a = [
+      row({ fixtureId: "r2", startAt: DAY_A_T0, roundNo: 2, movable: true }),
+      row({ fixtureId: "r1", startAt: DAY_B_T0, roundNo: 1, movable: true }),
+    ];
+    const conflicts = validateAssignments(a, config);
+    expect(conflicts).toEqual([
+      expect.objectContaining({ fixtureId: "r2", reason: "order", direct: true }),
+    ]);
+  });
+
+  it("tolerates pin-pin round disorder", () => {
+    const a = [
+      row({ fixtureId: "r2", startAt: DAY_A_T0, roundNo: 2, movable: false }),
+      row({ fixtureId: "r1", startAt: DAY_B_T0, roundNo: 1, movable: false }),
+    ];
+    expect(validateAssignments(a, config).filter((c) => c.reason === "order")).toEqual([]);
+  });
+
+  it("enforces a pin-movable round disorder", () => {
+    const a = [
+      row({ fixtureId: "r2-pin", startAt: DAY_A_T0, roundNo: 2, movable: false }),
+      row({ fixtureId: "r1-movable", startAt: DAY_B_T0, roundNo: 1, movable: true }),
+    ];
+    const conflicts = validateAssignments(a, config);
+    expect(conflicts).toEqual([
+      expect.objectContaining({ fixtureId: "r2-pin", reason: "order", direct: true }),
+    ]);
+  });
+
+  it("never constrains round-less assignments", () => {
+    const a = [
+      row({ fixtureId: "x", startAt: DAY_A_T0 }), // no roundNo
+      row({ fixtureId: "y", startAt: DAY_B_T0 }), // no roundNo
+    ];
+    expect(validateAssignments(a, config).filter((c) => c.reason === "order")).toEqual([]);
+  });
+
+  it("scopes round order per division", () => {
+    const a = [
+      row({ fixtureId: "d1-r2", startAt: DAY_A_T0, roundNo: 2, movable: true, divisionId: "d1" }),
+      row({ fixtureId: "d2-r1", startAt: DAY_B_T0, roundNo: 1, movable: true, divisionId: "d2" }),
+    ];
+    expect(validateAssignments(a, config).filter((c) => c.reason === "order")).toEqual([]);
+  });
+
+  it("scopes round order per pool WITHIN one division (a pooled group stage runs one independent round-robin sequence per pool)", () => {
+    // Found via schedule.test.ts's "8-team group+KO division" end-to-end
+    // case: `kind: "group"` with N pools calls `roundRobinGen` once PER
+    // POOL, so pool A's round 2 and pool B's round 2 are two unrelated
+    // "round 2"s, the same way two divisions' rounds are unrelated. Without
+    // scoping by poolId this pair reads as pool B's round 1 (day B, later)
+    // sitting after pool A's round 2 (day A, earlier) -- day_2 <= day_1 is
+    // false, so it wrongly flags.
+    const a = [
+      row({
+        fixtureId: "poolA-r2", startAt: DAY_A_T0, roundNo: 2, movable: true,
+        divisionId: "d1", poolId: "A",
+      }),
+      row({
+        fixtureId: "poolB-r1", startAt: DAY_B_T0, roundNo: 1, movable: true,
+        divisionId: "d1", poolId: "B",
+      }),
+    ];
+    expect(validateAssignments(a, config).filter((c) => c.reason === "order")).toEqual([]);
+  });
+
+  it("still enforces round order WITHIN one pool of a multi-pool division", () => {
+    // The converse of the test above: pool scoping must narrow the
+    // comparison, not disable it — two rows in the SAME pool are still
+    // compared exactly as a single-pool division would be.
+    const a = [
+      row({
+        fixtureId: "poolA-r2", startAt: DAY_A_T0, roundNo: 2, movable: true,
+        divisionId: "d1", poolId: "A",
+      }),
+      row({
+        fixtureId: "poolA-r1", startAt: DAY_B_T0, roundNo: 1, movable: true,
+        divisionId: "d1", poolId: "A",
+      }),
+    ];
+    const conflicts = validateAssignments(a, config);
+    expect(conflicts).toEqual([
+      expect.objectContaining({ fixtureId: "poolA-r2", reason: "order", direct: true }),
+    ]);
+  });
+
+  it("scopes round order per stage WITHIN one division (C1 fix-loop, Finding 2: two round-robin-kind stages, NEITHER pooled, run independent sequences)", () => {
+    // The stage-cardinality sibling of the pool test above. A division can
+    // carry more than one round-robin-kind stage — two `league` stages, or
+    // a `league` beside an unpooled `group` (`stages.ts`'s
+    // `stages.per_division.max` caps COUNT, not kind-uniqueness) — and
+    // `roundrobin.ts`'s `generateRoundRobin` restarts at round 1 for each
+    // one independently, the same way it does per pool. Neither stage has
+    // a pool here, so BOTH rows read `poolId: undefined`: before `stageId`
+    // joined the grouping key this pair collapsed to `(d1, undefined)`, one
+    // sequence, and stage B's round 1 (day B, later) read as sitting after
+    // stage A's round 2 (day A, earlier) — day_2 <= day_1 is false, the
+    // exact false positive the pool test above proves for pools.
+    const a = [
+      row({
+        fixtureId: "stageA-r2", startAt: DAY_A_T0, roundNo: 2, movable: true,
+        divisionId: "d1", stageId: "A",
+      }),
+      row({
+        fixtureId: "stageB-r1", startAt: DAY_B_T0, roundNo: 1, movable: true,
+        divisionId: "d1", stageId: "B",
+      }),
+    ];
+    expect(validateAssignments(a, config).filter((c) => c.reason === "order")).toEqual([]);
+  });
+
+  it("still enforces round order WITHIN one stage that has no pool", () => {
+    // The converse of the test above: stage scoping must narrow the
+    // comparison, not disable it — two rows in the SAME (unpooled) stage
+    // are still compared exactly as before `stageId` joined the key.
+    const a = [
+      row({
+        fixtureId: "stageA-r2", startAt: DAY_A_T0, roundNo: 2, movable: true,
+        divisionId: "d1", stageId: "A",
+      }),
+      row({
+        fixtureId: "stageA-r1", startAt: DAY_B_T0, roundNo: 1, movable: true,
+        divisionId: "d1", stageId: "A",
+      }),
+    ];
+    const conflicts = validateAssignments(a, config);
+    expect(conflicts).toEqual([
+      expect.objectContaining({ fixtureId: "stageA-r2", reason: "order", direct: true }),
+    ]);
+  });
+
+  it("is inert without an org timezone (absent tz skips the whole family)", () => {
+    const a = [
+      row({ fixtureId: "r2", startAt: DAY_A_T0, roundNo: 2, movable: true }),
+      row({ fixtureId: "r1", startAt: DAY_B_T0, roundNo: 1, movable: true }),
+    ];
+    expect(
+      validateAssignments(a, { perEntrantMinRest: 0, gapMinutes: 0 }).filter((c) => c.reason === "order"),
+    ).toEqual([]);
+  });
+});
+
+// The greedy claim at `calendar.ts`'s `SchedulableFixture.roundNo` doc comment
+// ("scheduled in ascending round order") was never tested — the screenshot
+// board that motivated this whole design came from the PLACEMENT path, not
+// greedy. Proven here directly against `slotFixtures`' own output.
+describe("slotFixtures — ascending roundNo per division-day (greedy regression)", () => {
+  it("emits non-decreasing roundNo as startAt increases within a division-day", () => {
+    // Four round-robin fixtures, disjoint entrants (so nothing but round
+    // order — soft, via the (roundNo, id) placement comparator — decides
+    // where each lands), built out of round order on purpose (round 3, 1, 4,
+    // 2) so a comparator that stopped sorting by round would leave this
+    // exact input order visible in the output.
+    const fixtures: SchedulableFixture[] = [
+      { id: "f-round3", roundNo: 3, home: "e1", away: "e2", divisionId: "d1" },
+      { id: "f-round1", roundNo: 1, home: "e3", away: "e4", divisionId: "d1" },
+      { id: "f-round4", roundNo: 4, home: "e5", away: "e6", divisionId: "d1" },
+      { id: "f-round2", roundNo: 2, home: "e7", away: "e8", divisionId: "d1" },
+    ];
+    const { assignments, conflicts } = slotFixtures({
+      fixtures,
+      config: baseConfig({ courts: ["C1"], startAt: 0 }), // one court forces a strict placement order
+    });
+    expect(conflicts).toEqual([]);
+    expect(assignments).toHaveLength(4);
+
+    const byStart = [...assignments].sort((a, b) => a.startAt - b.startAt);
+    const rounds = byStart.map((a) => a.roundNo);
+    expect(rounds).toEqual([1, 2, 3, 4]);
+
+    // And the fact itself survives onto the Assignment, not only the
+    // placement ORDER — `validateAssignments`' round-order scan (and any
+    // caller re-verifying a greedy board) needs it on the object.
+    for (const a of assignments) expect(a.roundNo).toBeDefined();
+  });
+
+  it("keeps ascending roundNo per division even when two divisions interleave on shared courts", () => {
+    const fixtures: SchedulableFixture[] = [
+      { id: "d1-r2", roundNo: 2, home: "e1", away: "e2", divisionId: "d1" },
+      { id: "d1-r1", roundNo: 1, home: "e3", away: "e4", divisionId: "d1" },
+      { id: "d2-r2", roundNo: 2, home: "e5", away: "e6", divisionId: "d2" },
+      { id: "d2-r1", roundNo: 1, home: "e7", away: "e8", divisionId: "d2" },
+    ];
+    const { assignments, conflicts } = slotFixtures({
+      fixtures,
+      config: baseConfig({ courts: ["C1", "C2"], startAt: 0 }),
+    });
+    expect(conflicts).toEqual([]);
+    const byDivision = new Map<string, Assignment[]>();
+    for (const a of assignments) {
+      const key = a.divisionId as string;
+      (byDivision.get(key) ?? byDivision.set(key, []).get(key)!).push(a);
+    }
+    for (const group of byDivision.values()) {
+      const byStart = [...group].sort((a, b) => a.startAt - b.startAt);
+      expect(byStart.map((a) => a.roundNo)).toEqual([1, 2]);
+    }
+  });
+});
+
+// THE test placer/verifier parity is proven with, not asserted (the recurring
+// fork this whole module exists to prevent) — matches
+// `calendar-placer-verifier-parity.test.ts`'s own established pattern
+// exactly: feed the placer's OWN OUTPUT back into `validateAssignments` and
+// require it clean. `services/placement/tests/test_model.py` proves the same
+// semantic rules hold on the CP-SAT solver side, over the identical day/round
+// shapes used above — the two suites cannot be run against each other
+// directly (different languages, different processes), so this is the
+// within-repo parity evidence: both sides are written from, and tested
+// against, the one spec.
+describe("round order — placer/verifier parity", () => {
+  it("a greedy board that respects round order verifies clean", () => {
+    const fixtures: SchedulableFixture[] = [
+      { id: "f-round2", roundNo: 2, home: "e1", away: "e2", divisionId: "d1" },
+      { id: "f-round1", roundNo: 1, home: "e3", away: "e4", divisionId: "d1" },
+    ];
+    const config = baseConfig({ courts: ["C1"], startAt: Date.UTC(2026, 6, 11, 17, 0), tz: "America/Los_Angeles" });
+    const { assignments, conflicts } = slotFixtures({ fixtures, config });
+    expect(conflicts).toEqual([]);
+
+    // The SAME config drives both sides — one clock, one rule list, exactly
+    // the parity file's own established convention.
+    const verdict = validateAssignments(assignments, config);
+    expect(verdict.filter((c) => c.reason === "order")).toEqual([]);
+  });
+});

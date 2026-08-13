@@ -94,7 +94,22 @@ export interface Fixture {
    * zero" trap this whole redesign exists to close, now on an index instead
    * of a string.
    */
-  divisionIndex?: number | undefined;
+  divisionIndex?:
+    | number
+    | undefined;
+  /**
+   * C1 (2026-08-12 round-ordering design) -- this fixture's 1-based position
+   * in ITS OWN round-robin sequence, not a global or cross-stage counter.
+   * `optional`: round 0 would otherwise be indistinguishable from "no round",
+   * and MOST fixtures carry none at all -- bracket/stepladder/swiss fixtures
+   * are already ordered by `dependencies` (winner/loser feed edges) and never
+   * get one; only round-robin-generated fixtures do. Absent means
+   * unconstrained by the round-order pair scan, not "round 0". The caller
+   * (`build.ts`) is responsible for never sending round-bearing fixtures from
+   * more than one round sequence in one division -- see
+   * `docs/superpowers/specs/2026-08-12-round-order-hard-lexicographic-design.md`.
+   */
+  round?: number | undefined;
 }
 
 export interface Slot {
@@ -168,6 +183,18 @@ export interface PinnedRow {
    * board z3 proves INFEASIBLE.
    */
   entrantIndices: number[];
+  /**
+   * C1 (2026-08-12 round-ordering design) -- this pin's round, in the SAME
+   * sequence as `Fixture.round`, so a pin-movable pair can be ordered even
+   * though the pin never moves. `optional`, same reasoning as `Fixture.round`
+   * -- most pins carry none. No `division_index` accompanies it: this
+   * message deliberately carries none at all (see the message's own header
+   * comment), so the CALLER (`build.ts`) is the one place that can attribute
+   * a pin to a division, and it must only ever forward a pin's round when
+   * that division match against the movable round-robin sequence is
+   * unambiguous -- the model has no way to re-verify it.
+   */
+  round?: number | undefined;
 }
 
 /**
@@ -344,7 +371,7 @@ export interface SolveBuildResponse {
 }
 
 function createBaseFixture(): Fixture {
-  return { entrantIndices: [], divisionIndex: undefined };
+  return { entrantIndices: [], divisionIndex: undefined, round: undefined };
 }
 
 export const Fixture: MessageFns<Fixture> = {
@@ -356,6 +383,9 @@ export const Fixture: MessageFns<Fixture> = {
     writer.join();
     if (message.divisionIndex !== undefined) {
       writer.uint32(16).uint32(message.divisionIndex);
+    }
+    if (message.round !== undefined) {
+      writer.uint32(24).uint32(message.round);
     }
     return writer;
   },
@@ -393,6 +423,14 @@ export const Fixture: MessageFns<Fixture> = {
           message.divisionIndex = reader.uint32();
           continue;
         }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.round = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -414,6 +452,7 @@ export const Fixture: MessageFns<Fixture> = {
         : isSet(object.division_index)
         ? globalThis.Number(object.division_index)
         : undefined,
+      round: isSet(object.round) ? globalThis.Number(object.round) : undefined,
     };
   },
 
@@ -425,6 +464,9 @@ export const Fixture: MessageFns<Fixture> = {
     if (message.divisionIndex !== undefined) {
       obj.divisionIndex = Math.round(message.divisionIndex);
     }
+    if (message.round !== undefined) {
+      obj.round = Math.round(message.round);
+    }
     return obj;
   },
 
@@ -435,6 +477,7 @@ export const Fixture: MessageFns<Fixture> = {
     const message = createBaseFixture();
     message.entrantIndices = object.entrantIndices?.map((e) => e) || [];
     message.divisionIndex = object.divisionIndex ?? undefined;
+    message.round = object.round ?? undefined;
     return message;
   },
 };
@@ -544,7 +587,7 @@ export const Slot: MessageFns<Slot> = {
 };
 
 function createBasePinnedRow(): PinnedRow {
-  return { courtIndex: undefined, startAtMs: 0, ruleGroupIndices: [], entrantIndices: [] };
+  return { courtIndex: undefined, startAtMs: 0, ruleGroupIndices: [], entrantIndices: [], round: undefined };
 }
 
 export const PinnedRow: MessageFns<PinnedRow> = {
@@ -565,6 +608,9 @@ export const PinnedRow: MessageFns<PinnedRow> = {
       writer.uint32(v);
     }
     writer.join();
+    if (message.round !== undefined) {
+      writer.uint32(40).uint32(message.round);
+    }
     return writer;
   },
 
@@ -627,6 +673,14 @@ export const PinnedRow: MessageFns<PinnedRow> = {
 
           break;
         }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.round = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -658,6 +712,7 @@ export const PinnedRow: MessageFns<PinnedRow> = {
         : globalThis.Array.isArray(object?.entrant_indices)
         ? object.entrant_indices.map((e: any) => globalThis.Number(e))
         : [],
+      round: isSet(object.round) ? globalThis.Number(object.round) : undefined,
     };
   },
 
@@ -675,6 +730,9 @@ export const PinnedRow: MessageFns<PinnedRow> = {
     if (message.entrantIndices?.length) {
       obj.entrantIndices = message.entrantIndices.map((e) => Math.round(e));
     }
+    if (message.round !== undefined) {
+      obj.round = Math.round(message.round);
+    }
     return obj;
   },
 
@@ -687,6 +745,7 @@ export const PinnedRow: MessageFns<PinnedRow> = {
     message.startAtMs = object.startAtMs ?? 0;
     message.ruleGroupIndices = object.ruleGroupIndices?.map((e) => e) || [];
     message.entrantIndices = object.entrantIndices?.map((e) => e) || [];
+    message.round = object.round ?? undefined;
     return message;
   },
 };

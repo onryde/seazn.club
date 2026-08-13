@@ -137,8 +137,12 @@ const uuid = (tag: string, n: number) =>
 // as `locked`, and only the fixtures the solver actually placed appear (an
 // unplaceable fixture is left for the model, exactly as in production). No DB,
 // no obstacles/siblings (synthetic packs have none), so `existing: []`.
-/** A pack before its derived fields exist — see `withGreedyDraft`. */
-type PackDraft = Omit<SchedulePack, "participants" | "assumptions" | "poolIds">;
+/** A pack before its derived fields exist — see `withGreedyDraft`. `stageIds`/
+ *  `roundNos` (C1 gap B) are derived too, the same way `poolIds` is — this
+ *  bench authors bare pool/round labels and drives no round-order-scoped
+ *  assertion, so `withGreedyDraft` below stubs both to `{}` rather than
+ *  deriving them for real. */
+type PackDraft = Omit<SchedulePack, "participants" | "assumptions" | "poolIds" | "stageIds" | "roundNos">;
 
 function withGreedyDraft(pack: PackDraft): SchedulePack {
   const tz = pack.division.tz;
@@ -202,8 +206,18 @@ function withGreedyDraft(pack: PackDraft): SchedulePack {
     }))
     .sort((x, y) => (x.scheduled_at < y.scheduled_at ? -1 : x.scheduled_at > y.scheduled_at ? 1 : 0));
   // #449: this bench authors pools as bare labels and drives no pool-scoped
-  // rule, so there is no uuid to carry.
-  return { ...pack, participants, poolIds: {}, assumptions: stripped.assumptions, draft };
+  // rule, so there is no uuid to carry. Same reasoning for `stageIds`/
+  // `roundNos` (C1 gap B): this bench measures model quality, not
+  // round-order verification, and drives no round-order-scoped assertion.
+  return {
+    ...pack,
+    participants,
+    poolIds: {},
+    stageIds: {},
+    roundNos: {},
+    assumptions: stripped.assumptions,
+    draft,
+  };
 }
 
 // --- Pack A: 15 teams, 3 pools of 5, round robin within pool = 30 fixtures --
