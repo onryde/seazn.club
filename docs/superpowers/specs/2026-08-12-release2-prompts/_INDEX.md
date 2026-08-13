@@ -437,7 +437,14 @@ side still reasons about boards the old way, but that is a hypothesis — the
 failing call is the manual park, so start by asking which conflict
 `deltaConflicts` actually returns there rather than assuming round order.
 
-#### CLOSED (2026-08-13): it was the locks suite's park slot, not the product
+#### CLOSED (2026-08-13): a fixed park instant, in TWO suites — not the product
+
+**Scope correction.** This section was first closed against the LOCKS suite
+alone (`schedule-build-honours-locks.test.ts`). That was an overclaim: the suite
+named in the report above is `schedule-solver-telemetry.test.ts`, a different
+file, and it went red on CI for PR #563 while the locks fix was green. Same
+defect CLASS, two separate sites. Both are fixed below; the locks one is
+described first because it is where the mechanism was traced.
 
 The question above — "which conflict does `deltaConflicts` actually return at
 the manual park" — has an answer, and it is not round order. Instrumenting
@@ -517,3 +524,29 @@ at the build gate only, not by widening `isBlockingConflict` globally (which
 would also change the apply gate's delta check and every surface sharing the
 predicate). With that guard in place the proved board never reaches the
 comparator, and trusting the proof becomes safe.
+
+#### The second site: `schedule-solver-telemetry.test.ts`
+
+"reflow leaves an already-legal board untouched, including a card parked late"
+parked at `at(600)` — a fixed instant ten hours after `T0` — under a comment
+asserting "still legal, nothing else is near it". Same false premise, different
+failure mode: the parked card is the LAST round, so when the solver compacts to
+the NEXT day the whole board sits AFTER the park, and a last-round card placed
+before every round that must precede it is a direct `order` breach, which is
+blocking.
+
+**Local runs cannot discriminate here, in either direction.** Measured against
+the boards produced locally: every August board starts at `08-01 00:00` and ends
+between 01:00 and 10:00 — always BEFORE `at(600)` — so the park is safely after
+the board and the test passes. 6 of 6 green with the fix; a subagent measured
+0 red in 6 WITHOUT it on the same branch. CI is the only arbiter that exercises
+the other day choice. The fix is therefore justified by removing the dependency
+on which day the solver picks, NOT by a green local run — do not treat a local
+pass here as evidence either way.
+
+That same measurement independently re-confirms `config.startAt` is not the
+solver's floor: every board starts at midnight, never the configured 09:00.
+
+The pinned-anchor spec lower in that file also uses `at(600)`, and is
+deliberately NOT changed: it parks onto an EMPTY board, so there is no board to
+read a slot from, and it is not failing.
