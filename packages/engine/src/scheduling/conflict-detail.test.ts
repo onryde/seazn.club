@@ -106,7 +106,7 @@ describe("canonConflictDetail — per-kind field participation (all 25 kinds)", 
 
       for (const field of fields) {
         it(`\`${field}\` participates in the canon — dropping it would go undetected`, () => {
-          const mutated = { ...base, [field]: ALT_VALUE[field] } as ConflictDetail;
+          const mutated = { ...base, [field]: ALT_VALUE[field] };
           // Guard the fixture itself: if this ever stops being an actual
           // mutation the assertion below would pass for the wrong reason.
           expect(mutated).not.toEqual(base);
