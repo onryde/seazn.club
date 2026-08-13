@@ -67,8 +67,35 @@ jobs:
   # playwright.config.ts's `parallel` project.
   # ---------------------------------------------------------------------
   e2e-parallel:
-    name: Playwright e2e — parallel (Postgres container)
+    name: Playwright e2e — parallel ${{ matrix.shard }}/3 (Postgres container)
     runs-on: ubuntu-latest
+
+    # Sharded because this project is the wall-clock floor of a PR. Measured on
+    # run 31691106751: 8.2 min total, of which the Playwright step alone was
+    # 5.0 — and on a bad run the step reached 15.6 min while setup stayed flat.
+    # Tests dominate, and they dominate WORST on exactly the runs that hurt.
+    #
+    # Sharding rather than raising `workers` (playwright.config.ts pins CI to
+    # 2) on purpose: `ubuntu-latest` is 4 cores, already shared with the Next
+    # server and a Postgres service container. Adding workers buys contention,
+    # and both failures seen on 2026-08-13 were TIMEOUTS (60s and 240s), which
+    # contention makes more likely, not less. Shards get their own runners, so
+    # each keeps the same 2 workers on its own 4 cores.
+    #
+    # The cost is real and worth stating: every shard repeats the whole setup
+    # — Flyway migrate, sport sync, production build, placement image, server
+    # start (~3.2 min warm). Three shards spend ~3x those runner-minutes to buy
+    # back wall clock. Expect ~5 min typical and ~8 min on a bad run, against
+    # 8.2 and 15.6 today. If setup ever grows past the test time, revisit: the
+    # trade inverts.
+    #
+    # Each shard is a separate JOB, so each gets its own Postgres service and
+    # its own `auth.setup` orgs — no cross-shard state, which is what makes
+    # this safe for a project whose tests share an org within a run.
+    strategy:
+      fail-fast: false # one shard's failure must not hide another's
+      matrix:
+        shard: [1, 2, 3]
 
     services:
       postgres:
@@ -278,7 +305,7 @@ jobs:
         run: npx playwright install --with-deps chromium
         working-directory: apps/web
       - name: Run Playwright e2e (parallel project)
-        run: npx playwright test --project=parallel
+        run: npx playwright test --project=parallel --shard=${{ matrix.shard }}/3
         working-directory: apps/web
         env:
           PLAYWRIGHT_BASE: http://localhost:3000
@@ -287,7 +314,10 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-parallel
+          # Per shard: three jobs uploading one artifact name collide and the
+          # later ones fail the upload, losing the report for the failure you
+          # actually wanted to read.
+          name: playwright-report-parallel-${{ matrix.shard }}
           path: apps/web/playwright-report
           retention-days: 7
 
