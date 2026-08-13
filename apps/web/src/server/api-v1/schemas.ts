@@ -516,12 +516,51 @@ export const QualificationSpecSchema: z.ZodType<QualificationSpecInput> = z.lazy
   ]),
 );
 
+// D4a design doc (P5) — TBD placeholder fixtures + the propose/confirm
+// cross-stage fill flow. Separate from QualificationSpec above: `.seeding` is
+// declared on the TARGET stage, can name ANY earlier stage as its source (not
+// just seq-1), and controls bracket SEEDING (snake / explicit map), neither
+// of which QualificationSpec models. A stage declares ONE of the two — a
+// stage with `.seeding` set goes through the new propose/confirm flow instead
+// of the old auto-seed-on-complete `qualification` path.
+//
+// Mirrors the plain-TS shape in usecases/stage-seeding.ts (TakeRule /
+// Placement / SeededMapEntry) field-for-field — the usecase imports THOSE
+// types, not these zod schemas, so a shape drift here would 400 at the edge
+// without tripping tsc. Keep them in lockstep by hand.
+const RankRangeTakeS = z
+  .object({ kind: z.literal("rankRange"), from: z.number().int().min(1), to: z.number().int().min(1) })
+  .strict()
+  .refine((t) => t.to >= t.from, { message: "rankRange: to must be >= from", path: ["to"] });
+const TopNPerGroupTakeS = z.object({ kind: z.literal("topNPerGroup"), n: z.number().int().min(1).max(16) }).strict();
+const BestNthTakeS = z
+  .object({ kind: z.literal("bestNth"), nth: z.number().int().min(1), count: z.number().int().min(1) })
+  .strict();
+export const TakeRuleSchema = z.union([RankRangeTakeS, TopNPerGroupTakeS, BestNthTakeS]);
+
+const SeededMapEntryS = z.object({ slot: z.string().min(1).max(20), source: z.string().min(1).max(40) }).strict();
+
+export const StageSeedingSchema = z
+  .object({
+    source: z.union([z.literal("previous"), z.object({ stageId: Uuid }).strict()]),
+    take: z.array(TakeRuleSchema).min(1).max(8),
+    placement: z.enum(["seeded_map", "snake", "rank_order"]),
+    map: z.array(SeededMapEntryS).max(64).optional(),
+  })
+  .strict()
+  .refine((s) => s.placement !== "seeded_map" || (s.map !== undefined && s.map.length > 0), {
+    message: "seeded_map placement needs a non-empty map",
+    path: ["map"],
+  });
+export type StageSeedingInput = z.infer<typeof StageSeedingSchema>;
+
 export const CreateStage = z.object({
   seq: z.number().int().min(1),
   kind: StageKind,
   name: z.string().min(1).max(200),
   config: z.record(z.string(), z.unknown()).default({}),
   qualification: QualificationSpecSchema.nullish(),
+  seeding: StageSeedingSchema.nullish(),
 });
 
 /** POST /divisions/{id}/stages — the stage graph, one or many (doc 08 §3). */
@@ -546,6 +585,7 @@ export const Stage = z.object({
   name: z.string(),
   config: z.record(z.string(), z.unknown()),
   qualification: z.record(z.string(), z.unknown()).nullable(),
+  seeding: z.record(z.string(), z.unknown()).nullable(),
   status: z.enum(["pending", "active", "complete"]),
 });
 
@@ -620,6 +660,11 @@ export const Fixture = z.object({
   fixture_no: z.number().int(),
   home_entrant_id: Uuid.nullable(),
   away_entrant_id: Uuid.nullable(),
+  /** D4a (P5): i18n pattern ref for a not-yet-filled slot ("Winner Group A"),
+   *  {key, params} — never a prebuilt string. Cleared on fill (design's Fill
+   *  algorithm step 4); non-null only while the matching *_entrant_id is null. */
+  home_slot_label: z.object({ key: z.string(), params: z.record(z.string(), z.unknown()) }).nullable(),
+  away_slot_label: z.object({ key: z.string(), params: z.record(z.string(), z.unknown()) }).nullable(),
   scheduled_at: z.string().nullable(),
   venue: z.string().nullable(),
   court_label: z.string().nullable(),
@@ -2967,6 +3012,59 @@ export const OverrideStandings = z.object({
     .max(64),
 });
 export type OverrideStandings = z.infer<typeof OverrideStandings>;
+
+// ---------------------------------------------------------------------------
+// Seed proposals (D4a design doc, P5) — propose + confirm cross-stage fill.
+// API contracts & error codes section, verbatim shape; error CODES are
+// ALL_CAPS_SNAKE per repo convention (ruling already made for D2/P1's
+// CAPACITY_IMPOSSIBLE — the design doc's dotted-lowercase codes here
+// (`seeding.source_stage_incomplete` etc.) are i18n-key-shaped, not the
+// convention typed codes use anywhere in this tree; see stages.ts for the
+// SEEDING_* HttpError codes this route surface actually throws).
+// ---------------------------------------------------------------------------
+
+const QualifierOutS = z.object({
+  rank: z.number().int(),
+  source: z.object({ stageId: Uuid, group: z.string().optional(), rank: z.number().int() }),
+  entrantId: Uuid,
+  /** `"<fixtureId>:home" | "<fixtureId>:away"` — resolvable straight back to
+   *  a fillSlot(tx, fixtureId, slot, entrantId) call at confirm time. */
+  destinationSlot: z.string(),
+});
+const TieOutS = z.object({
+  slots: z.array(z.string()),
+  entrantIds: z.array(Uuid),
+  reason: z.string(),
+});
+export const SeedProposalComputed = z.object({
+  qualifiers: z.array(QualifierOutS),
+  ties: z.array(TieOutS),
+  standingsHash: z.string(),
+});
+export type SeedProposalComputed = z.infer<typeof SeedProposalComputed>;
+
+export const SeedProposal = z.object({
+  id: Uuid,
+  stageId: Uuid,
+  status: z.enum(["draft", "confirmed", "stale"]),
+  computed: SeedProposalComputed,
+});
+export type SeedProposal = z.infer<typeof SeedProposal>;
+
+/** POST /stages/{id}/seed-proposal/confirm. */
+export const ConfirmSeedProposal = z.object({
+  proposalId: Uuid,
+  edits: z.array(z.object({ destinationSlot: z.string(), entrantId: Uuid })).max(200).optional(),
+  tiePicks: z.array(z.object({ slots: z.array(z.string()).min(1), order: z.array(Uuid).min(2) })).max(50).optional(),
+});
+export type ConfirmSeedProposal = z.infer<typeof ConfirmSeedProposal>;
+
+export const ConfirmSeedProposalResult = z.object({
+  proposalId: Uuid,
+  filled: z.number().int(),
+  fixtures: z.array(Fixture),
+});
+export type ConfirmSeedProposalResult = z.infer<typeof ConfirmSeedProposalResult>;
 
 // Format extensions (Jul3/08, PROMPT-28) --------------------------------------
 
