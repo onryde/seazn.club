@@ -158,8 +158,12 @@ export function HealthPanel({ stageId, stageLabel }: HealthPanelProps) {
   >({ status: "loading" });
 
   useEffect(() => {
+    // No synchronous setState("loading") here: the initial useState value
+    // already is "loading", and this component is always mounted with
+    // `key={stageId}` (health-panel.tsx's caller maps one panel per stage),
+    // so a stageId change remounts a fresh instance rather than reusing this
+    // one — there is no "loading" reset to perform mid-life.
     let live = true;
-    setState({ status: "loading" });
     void apiV1<ScheduleHealthReportWire>(`/api/v1/stages/${stageId}/schedule/health`)
       .then((report) => {
         if (live) setState({ status: "ready", report });
