@@ -30,7 +30,7 @@ C6 (prose) is safe whenever.
 | Session | Prompt file | Spec | Depends on | Status |
 |---|---|---|---|---|
 | C0 | `C0-division-rules-retirement.md` | division_rules | — | **MERGED** #537 → `f0f83939` |
-| C1 | `C1-round-ordering.md` | round ordering | C0 (same proto/build.ts region) | **DONE** — this PR |
+| C1 | `C1-round-ordering.md` | round ordering | C0 (same proto/build.ts region) | **MERGED** #546 → `78db2f1f` |
 | C2 | `C2-day-start-rung.md` | day_start | C1 (model.py overlap; rebase either way) | TODO |
 | C3 | `C3-conflict-detail-names.md` | conflict details | not concurrent with C1 (schedule.ts) | TODO |
 | C4 | `C4-z3-reflow-cpsat.md` | z3 stage A | C1 (reflow inherits round rule) | TODO |
