@@ -13,9 +13,12 @@
 // builtinModules sweep, named-variant cfg reactivity, score bounds, the
 // expedite gate.
 import { describe, expect, it } from "vitest";
-import type { PadActionView, PadPanelView, PadView } from "../view-model";
+import type { AnySportModule, PadSpec } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
+import { allActionViews, buildPadView, type PadActionView, type PadPanelView, type PadView, type PadViewCtx } from "../view-model";
 import { createSkinDispatch, layoutActionTypes, layoutActionTypesAt, type SkinLayoutCtx } from "../skins/types";
 import { racquetSkin } from "../skins/racquet-skin";
+import { cfgSpace, grantAllEntitlements } from "./_cfg-space";
 
 function action(type: string): PadActionView {
   return {
@@ -71,7 +74,7 @@ describe("racquet skin — layout mechanics (hand-built view)", () => {
     expect(layoutActionTypes(layout).slice().sort()).toEqual(
       ["badminton.game.summary", "badminton.rally", "tabletennis.game.summary", "tabletennis.rally"].sort(),
     );
-    expect(layoutActionTypesAt(layout, "primary").sort()).toEqual(["badminton.rally", "tabletennis.rally"]);
+    expect(layoutActionTypesAt(layout, "primary").slice().sort()).toEqual(["badminton.rally", "tabletennis.rally"]);
   });
 
   it("never invents a type absent from the view", () => {
@@ -147,5 +150,217 @@ describe("racquet skin — dispatch", () => {
     await dispatch("volleyball.rally", { wonBy: "H" });
     await expect(dispatch("volleyball.invented", {})).rejects.toThrow(/does not declare/);
     expect(sent).toEqual(["volleyball.rally"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// STAGE 2 — real engine integration. skin-coverage.test.ts is the SHARED gate
+// (every skin, every sport, whole cfg space via __tests__/_cfg-space.ts) —
+// this section proves this skin independently, against the same cfg space,
+// BEFORE relying on that shared gate, plus pins racquet-specific behaviour
+// the shared gate does not: named-variant cfg reactivity, the tabletennis
+// expedite RUNTIME gate, the score-bound difference, and the rally type's
+// multiple co-existing shapes collapsing to one placement.
+// ---------------------------------------------------------------------------
+
+const FULL_BAND = 3 as const;
+const RACQUET_SPORTS = ["volleyball", "badminton", "tabletennis"] as const;
+
+function moduleFor(sport: string): AnySportModule {
+  const found = (builtinModules as readonly AnySportModule[]).find((m) => m.key === sport);
+  if (!found) throw new Error(`no builtin module for "${sport}" — engine catalog changed under this test`);
+  return found;
+}
+
+/** Gate-free view: every action the spec declares, band/entitlement filtered
+ *  only. Mirrors skin-coverage.test.ts's own (non-exported) `fullView`
+ *  technique exactly, built from the SAME exported `allActionViews` the
+ *  shared gate itself uses as its one source of "what does this spec
+ *  declare" — a small, deliberate local restatement, never a second,
+ *  independent policy (this repo has a recorded bug where two parallel
+ *  lookup paths drifted; the two must agree on what "declares" means). */
+function fullView(spec: PadSpec): PadView {
+  const entitlements = grantAllEntitlements(spec);
+  const resolved = allActionViews(spec, { band: FULL_BAND, entitlements });
+  const byType = new Map(resolved.map((a) => [a.type, a] as const));
+  const panels = spec.panels
+    .map((panel) => ({
+      labelKey: panel.labelKey,
+      phase: panel.phase,
+      layout: panel.layout,
+      actions: panel.actions.map((a) => byType.get(a.type)).filter((a): a is PadActionView => a !== undefined),
+    }))
+    .filter((panel) => panel.actions.length > 0);
+  return { phase: "live", phases: ["pre", "live", "post"], panels };
+}
+
+function numberFieldMax(action: PadActionView, path: string): number {
+  const field = action.fields.find((f) => f.path === path);
+  if (!field || field.kind !== "number") throw new Error(`expected a number field at "${path}" on ${action.type}`);
+  return field.max;
+}
+
+describe("racquet skin — full cfg-space sweep (real engine specs)", () => {
+  it("places every action exactly once, rally always primary, header always present — for all three sports across their whole cfg space", () => {
+    let cfgsSwept = 0;
+    const problems: string[] = [];
+    for (const sport of RACQUET_SPORTS) {
+      const module = moduleFor(sport);
+      for (const cfg of cfgSpace(module)) {
+        const spec = module.padSpec?.(cfg);
+        if (!spec) continue;
+        cfgsSwept += 1;
+        const view = fullView(spec);
+        const entitlements = grantAllEntitlements(spec);
+        const expected = new Set(allActionViews(spec, { band: FULL_BAND, entitlements }).map((a) => a.type));
+        const layout = racquetSkin.layout(view, { cfg, state: {}, summary: {}, band: FULL_BAND });
+        const placed = layoutActionTypes(layout);
+        const placedSet = new Set(placed);
+        const cfgId = JSON.stringify(cfg).slice(0, 100);
+
+        for (const type of expected) if (!placedSet.has(type)) problems.push(`${sport} [${cfgId}]: missing ${type}`);
+        for (const type of placedSet) if (!expected.has(type)) problems.push(`${sport} [${cfgId}]: invented ${type}`);
+        if (placed.length !== placedSet.size) problems.push(`${sport} [${cfgId}]: duplicated in [${placed.join(",")}]`);
+
+        const rallyType = `${sport}.rally`;
+        if (!layoutActionTypesAt(layout, "primary").includes(rallyType)) {
+          problems.push(`${sport} [${cfgId}]: ${rallyType} not primary`);
+        }
+        if (!layout.header || layout.header.fields.length === 0) {
+          problems.push(`${sport} [${cfgId}]: no header`);
+        }
+      }
+    }
+    // Guards the sweep itself (skin-coverage.test.ts's own recorded lesson):
+    // a walk that silently stops finding cfgs would make every assertion
+    // above vacuously green.
+    expect(cfgsSwept).toBeGreaterThan(10);
+    expect(problems).toEqual([]);
+  });
+});
+
+describe("racquet skin — cfg knobs visibly change the layout", () => {
+  it("badminton: records.timeouts toggles the timeouts group — no shipped variant sets it true, so this is a synthetic cfg override (the same flag cfgSpace's own leaf-override pass discovers)", () => {
+    const module = moduleFor("badminton");
+    const withoutTimeouts = module.configSchema.parse({});
+    const specOff = module.padSpec!(withoutTimeouts);
+    const layoutOff = racquetSkin.layout(fullView(specOff), { cfg: withoutTimeouts, state: {}, summary: {}, band: FULL_BAND });
+    expect(layoutActionTypes(layoutOff)).not.toContain("badminton.timeout");
+    expect(layoutOff.groups.some((g) => g.id === "timeouts")).toBe(false);
+
+    const withTimeouts = module.configSchema.parse({
+      records: { timeouts: true, sanctions: true, substitutions: false, expedite: false },
+    });
+    const specOn = module.padSpec!(withTimeouts);
+    const layoutOn = racquetSkin.layout(fullView(specOn), { cfg: withTimeouts, state: {}, summary: {}, band: FULL_BAND });
+    expect(layoutActionTypes(layoutOn)).toContain("badminton.timeout");
+    const timeoutsGroup = layoutOn.groups.find((g) => g.id === "timeouts");
+    expect(timeoutsGroup?.prominence).toBe("drawer");
+    expect(timeoutsGroup?.actions).toEqual(["badminton.timeout"]);
+  });
+
+  it("volleyball: indoor keeps subs, beach drops them (records.substitutions — the shipped variant divergence the W5 regression fix introduced)", () => {
+    const module = moduleFor("volleyball");
+    const indoorCfg = module.configSchema.parse(module.variants!.indoor as Record<string, unknown>);
+    const beachCfg = module.configSchema.parse(module.variants!.beach as Record<string, unknown>);
+    const indoorLayout = racquetSkin.layout(fullView(module.padSpec!(indoorCfg)), {
+      cfg: indoorCfg,
+      state: {},
+      summary: {},
+      band: FULL_BAND,
+    });
+    const beachLayout = racquetSkin.layout(fullView(module.padSpec!(beachCfg)), {
+      cfg: beachCfg,
+      state: {},
+      summary: {},
+      band: FULL_BAND,
+    });
+    expect(layoutActionTypes(indoorLayout)).toContain("volleyball.sub");
+    expect(layoutActionTypes(beachLayout)).not.toContain("volleyball.sub");
+    expect(beachLayout.groups.some((g) => g.id === "subs")).toBe(false);
+  });
+});
+
+describe("racquet skin — tabletennis expedite is a RUNTIME state flag, not a cfg one", () => {
+  const module = moduleFor("tabletennis");
+  const cfg = module.configSchema.parse({});
+  const spec = module.padSpec!(cfg);
+  const entitlements = grantAllEntitlements(spec);
+
+  function liveView(state: unknown): PadView {
+    const ctx: PadViewCtx = { state, summary: {}, phase: "live", band: FULL_BAND, entitlements };
+    return buildPadView(spec, ctx);
+  }
+
+  it("before expedite: start-expedite is offered; the expedite rally shape (returns/serving) is not in the view at all", () => {
+    const v = liveView({});
+    const rallyActionsPre = v.panels.flatMap((p) => p.actions).filter((a) => a.type === "tabletennis.rally");
+    expect(rallyActionsPre.some((a) => a.fields.some((f) => f.path === "returns"))).toBe(false);
+
+    const layout = racquetSkin.layout(v, { cfg, state: {}, summary: {}, band: FULL_BAND });
+    expect(layoutActionTypes(layout)).toContain("tabletennis.expedite.start");
+  });
+
+  it("once expedite is live: the rally action GAINS the returns/serving shape — the second shape genuinely surfacing in the view — the start action is gone (can't start twice), and the skin still places tabletennis.rally exactly once, primary", () => {
+    const v = liveView({ expedite: true });
+    const rallyActionsLive = v.panels.flatMap((p) => p.actions).filter((a) => a.type === "tabletennis.rally");
+    expect(rallyActionsLive.some((a) => a.fields.some((f) => f.path === "returns"))).toBe(true);
+
+    const layout = racquetSkin.layout(v, { cfg, state: { expedite: true }, summary: {}, band: FULL_BAND });
+    expect(layoutActionTypes(layout)).not.toContain("tabletennis.expedite.start");
+    expect(layout.groups.some((g) => g.id === "expedite")).toBe(false);
+    const placed = layoutActionTypes(layout);
+    expect(placed.filter((t) => t === "tabletennis.rally")).toHaveLength(1);
+    expect(layoutActionTypesAt(layout, "primary")).toContain("tabletennis.rally");
+  });
+
+  it("collapses the rally type to ONE placement even when handed a gate-free view carrying it from TWO panels at once (Rally + Expedite scoring) — exactly the shape skin-coverage.test.ts's sweep feeds every skin, for every tabletennis cfg", () => {
+    const v = fullView(spec);
+    const rallyPanelsCount = v.panels.filter((p) => p.actions.some((a) => a.type === "tabletennis.rally")).length;
+    // Sanity on the scenario itself: if this ever drops to 1, the kernel
+    // stopped emitting two rally-bearing panels and this test is no longer
+    // exercising the collapse it claims to.
+    expect(rallyPanelsCount).toBeGreaterThanOrEqual(2);
+
+    const layout = racquetSkin.layout(v, { cfg, state: {}, summary: {}, band: FULL_BAND });
+    const placed = layoutActionTypes(layout);
+    expect(placed.filter((t) => t === "tabletennis.rally")).toHaveLength(1);
+  });
+});
+
+describe("racquet skin — the score-bound difference (cap vs uncapped) passes through the view untouched", () => {
+  it("badminton: capped at cfg.cap — 30 for bwf, 15 for the short junior/social variant", () => {
+    const module = moduleFor("badminton");
+    const bwf = module.configSchema.parse(module.variants!.bwf as Record<string, unknown>);
+    const short = module.configSchema.parse(module.variants!.short as Record<string, unknown>);
+    const summaryFor = (cfg: unknown) =>
+      module
+        .padSpec!(cfg)
+        .panels.flatMap((p) => p.actions)
+        .find((a) => a.type === "badminton.game.summary")!;
+    expect(numberFieldMax(summaryFor(bwf), "home")).toBe(30);
+    expect(numberFieldMax(summaryFor(short), "home")).toBe(15);
+  });
+
+  it("volleyball/tabletennis: uncapped, bound is max(setTo, finalSetTo) + 20", () => {
+    const volleyball = moduleFor("volleyball");
+    const indoor = volleyball.configSchema.parse(volleyball.variants!.indoor as Record<string, unknown>);
+    const beach = volleyball.configSchema.parse(volleyball.variants!.beach as Record<string, unknown>);
+    const boundFor = (module: AnySportModule, cfg: unknown, type: string) =>
+      numberFieldMax(
+        module
+          .padSpec!(cfg)
+          .panels.flatMap((p) => p.actions)
+          .find((a) => a.type === type)!,
+        "home",
+      );
+    expect(boundFor(volleyball, indoor, "volleyball.set.summary")).toBe(45); // max(25,15)+20
+    expect(boundFor(volleyball, beach, "volleyball.set.summary")).toBe(41); // max(21,15)+20
+
+    const tabletennis = moduleFor("tabletennis");
+    const bo5 = tabletennis.configSchema.parse({});
+    const hardbat = tabletennis.configSchema.parse(tabletennis.variants!["hardbat-21"] as Record<string, unknown>);
+    expect(boundFor(tabletennis, bo5, "tabletennis.game.summary")).toBe(31); // max(11,11)+20
+    expect(boundFor(tabletennis, hardbat, "tabletennis.game.summary")).toBe(41); // max(21,21)+20
   });
 });
