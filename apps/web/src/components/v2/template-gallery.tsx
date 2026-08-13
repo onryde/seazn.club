@@ -8,6 +8,17 @@
 // POSTs /api/v1/competitions/from-template and lands on the new competition
 // page, exactly like the blank-form wizard already does off its own POST.
 // "Start blank" falls through to the EXISTING, unmodified CompetitionWizard.
+//
+// `templates` arrives as a PROP from the Server Component page, not a direct
+// `@/server/templates/catalog` import — that module resolves `StageKind`
+// through api-v1/schemas.ts, which (for the OpenAPI generator's sake) pulls
+// in `@seazn/engine/scheduling`'s HardConstraint, whose barrel also reaches
+// the gRPC placement client (`@grpc/grpc-js`, Node-only: dns/fs/http2/net).
+// A plain Server Component never ships that chain to the browser; a "use
+// client" file that VALUE-imports it does — caught by e2e, not tsc or
+// vitest, which is exactly why the acceptance criteria requires a REAL e2e
+// run. `CompetitionTemplate` below stays a TYPE-only import (erased at
+// build, zero runtime weight) — only the catalog.ts VALUE import moved.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
@@ -17,7 +28,6 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { routes } from "@/lib/routes";
 import { useT } from "@/components/i18n/dict-provider";
-import { TEMPLATE_CATALOG } from "@/server/templates/catalog";
 import type { CompetitionTemplate } from "@/server/templates/schema";
 import { templateEntrantTotal, templateStageKinds } from "@/server/templates/summary";
 
@@ -213,20 +223,28 @@ function TemplateDetailSheet({
   );
 }
 
-export function TemplateGallery({ orgSlug }: { orgSlug: string }) {
+export function TemplateGallery({
+  orgSlug,
+  templates,
+}: {
+  orgSlug: string;
+  /** The catalog, passed down from the Server Component page — see the
+   *  module header for why this can't be a direct catalog.ts import here. */
+  templates: CompetitionTemplate[];
+}) {
   const msg = useT();
   const [mode, setMode] = useState<"gallery" | "blank">("gallery");
   const [detailKey, setDetailKey] = useState<string | null>(null);
 
   if (mode === "blank") return <CompetitionWizard orgSlug={orgSlug} />;
 
-  const selected = detailKey ? TEMPLATE_CATALOG.find((t) => t.key === detailKey) ?? null : null;
+  const selected = detailKey ? templates.find((t) => t.key === detailKey) ?? null : null;
 
   return (
     <div className="space-y-5" data-testid="template-gallery">
       <p className="text-sm text-slate-500">{msg("templates.gallery.subtitle")}</p>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {TEMPLATE_CATALOG.map((template) => (
+        {templates.map((template) => (
           <TemplateCard
             key={template.key}
             template={template}

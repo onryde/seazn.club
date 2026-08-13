@@ -1,11 +1,15 @@
 // Format templates — CompetitionTemplate schema (D1a design doc, P4 scope).
 //
-// NOT server-only: pure Zod, same reasoning as api-v1/schemas.ts — the
-// create-competition wizard's client-side gallery imports the catalog this
-// validates (apps/web/src/server/templates/catalog.ts) directly, the same
-// way apps/web/src/config/format-gallery.tsx is "Client-safe: the picker
-// side panel imports this too." Only the DB-writing usecase
-// (usecases/templates.ts) is server-only.
+// `server-only`. An EARLIER draft of this file claimed "NOT server-only,
+// client-safe like format-gallery.tsx" — wrong, caught by e2e (not tsc or
+// vitest): `kind` below reuses api-v1/schemas.ts's StageKind, and that
+// module VALUE-imports HardConstraint from @seazn/engine/scheduling, whose
+// barrel also reaches the gRPC placement client (@grpc/grpc-js — Node-only
+// dns/fs/http2/net). Bundling that into a "use client" file breaks the
+// browser build. Only the CompetitionTemplate TYPE is client-safe (type-only
+// imports are erased before bundling); components/v2/template-gallery.tsx
+// imports just that, and receives the actual parsed catalog as a prop from
+// its Server Component page instead.
 //
 // `kind` reuses the API-v1 StageKind enum (schemas.ts), never the engine's
 // core StageKind (packages/engine/src/core/types.ts) — the portfolio scout's
@@ -19,6 +23,7 @@
 // No `seeding` field yet on TemplateStage — that lands in P7 with D4's
 // StageSeeding. wc32's knockout stage therefore carries no qualification
 // wiring to its group stage in P4 (documented in catalog/wc32.json).
+import "server-only";
 import { z } from "zod";
 import { StageKind } from "@/server/api-v1/schemas";
 import { PointsRule } from "@seazn/engine/competition";

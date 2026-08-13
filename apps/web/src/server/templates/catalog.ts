@@ -3,10 +3,16 @@
 // entry is zod-parsed at MODULE INIT, so a broken catalog file fails to
 // import at all rather than shipping a template that 500s at instantiation.
 //
-// NOT server-only — see schema.ts's header. The create-competition wizard's
-// gallery imports this directly for the launch set's structure (division/
-// stage shape, entrant counts), the same way format-gallery.tsx is
-// client-safe.
+// `server-only`, corrected from an earlier "client-safe, like format-
+// gallery.tsx" design (e2e caught it, not tsc/vitest): this module
+// VALUE-imports schema.ts's CompetitionTemplate, which VALUE-imports
+// StageKind from api-v1/schemas.ts, which imports HardConstraint from
+// @seazn/engine/scheduling — a barrel that also reaches the gRPC placement
+// client (@grpc/grpc-js, Node-only). A Server Component can still import
+// this fine (it never ships to the browser); the wizard's gallery client
+// island receives the parsed catalog as a PROP from the page instead — see
+// components/v2/template-gallery.tsx's header.
+import "server-only";
 import { CompetitionTemplate } from "./schema";
 import slam128 from "./catalog/slam128.json";
 import swiss11 from "./catalog/swiss11.json";
