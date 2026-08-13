@@ -18,6 +18,7 @@ import {
   FIXTURE_CLASH_SECONDS,
   FIXTURE_CLASH_OFFSET_MS,
   FIXTURE_REFUSE,
+  FIXTURE_ROUND_ORDER,
   FIXTURE_COMPILE_BRIEF,
   FIXTURE_COMPILE_SOFT,
   FIXTURE_COMPILE_UNPARSED,
@@ -1205,6 +1206,70 @@ test("a clash off the minute boundary is repaired without losing its seconds (#4
   // pair too (which measurably costs the minimal repair) fails here rather than
   // quietly changing what this test covers.
   expect(seconds.filter((s) => s === 0)).toHaveLength(2);
+});
+
+/**
+ * C1 gap B — the AI planning path's round-order blind spot, browser proof.
+ *
+ * `schedule-ai-round-order.test.ts` (apps/web unit) already proves
+ * `toEngineAssignments` detects a round-order violation in isolation; this
+ * proves the WIRING through the real console: a real brief → compile →
+ * confirm run, through the real model round trip (the fixture server) and
+ * the real `buildSchedulePack`/verify pass, actually surfaces one to the
+ * organiser — the same property `round-order.spec.ts` proves for a manual
+ * drag, for the AI-plan path instead.
+ *
+ * `FIXTURE_ROUND_ORDER` swaps the canned plan's first and last draft cards
+ * (see its own doc comment, ai-fixture-server.ts) — a genuine round-order
+ * violation on this division's 6-fixture round-robin, built from a straight
+ * swap of two already-occupied slots so no court conflict rides along to
+ * confound the assertion.
+ *
+ * Asserts DETECTION, not a specific repair outcome: either the blocking
+ * panel shows the conflict directly, or the repair strip shows the solver
+ * was engaged because of it. Whether z3 can or does resolve a round-order
+ * violation is a repair.ts question this branch's C1 work does not touch —
+ * see FIXTURE_CLASH's own tests just above for what a solver-resolved
+ * board looks like when the underlying conflict IS one repair.ts handles.
+ * Before this branch's fix (953fbdaf) neither element could ever appear for
+ * this reason: toEngineAssignments carried no roundNo/stageId at all, so
+ * this exact canned plan read CLEAN — nothing for the organiser to see, ever.
+ */
+test("a round-order violation in the canned plan is detected, not silently accepted (C1 gap B)", async ({
+  page,
+  request,
+}) => {
+  fixture.reset();
+  await activateFreshProPlusOrg(page, request);
+  const { divisionId } = await seedAiDivision(request);
+
+  await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
+  await openConsole(page);
+
+  await page.locator("#ai-instruction").fill(
+    `${FIXTURE_ROUND_ORDER} — spread the fixtures across both courts.`,
+  );
+  await compileAndConfirm(page);
+
+  const blockingBadge = page.getByText(/\d+ blocking/);
+  const repairStrip = page.locator('[data-testid="ai-repair-strip"]');
+  await expect(blockingBadge.or(repairStrip)).toBeVisible({ timeout: 30_000 });
+  await shot(page, "15-round-order-detected");
+
+  // Proof the model was actually asked and the violation actually came back,
+  // so this cannot pass by quietly never reaching the fixture server.
+  const scheduleCall = fixture.calls.find((c) => c.phase === "schedule");
+  expect(scheduleCall).toBeTruthy();
+
+  // 375px: whichever element rendered stays visible and nothing it adds
+  // pushes the page into horizontal scroll.
+  await page.setViewportSize({ width: 375, height: 800 });
+  await expect(blockingBadge.or(repairStrip)).toBeVisible();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+  await shot(page, "15-round-order-detected-375");
 });
 
 test("blackout injected over a scheduled fixture surfaces the repair nudge", async ({
