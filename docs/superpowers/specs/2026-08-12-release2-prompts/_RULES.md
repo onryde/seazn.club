@@ -33,6 +33,29 @@ Bring-up (fresh DB, worktree, prod server for smoke/e2e): follow the
 `sync:sports`); never bind :3000; never touch the local dev DB; confirm
 `show data_directory` is yours.
 
+**A BRAND-NEW DATABASE FOR EVERY FULL DB-BACKED RUN.** Not per session, per
+RUN. This is written here rather than left to the skill because on 2026-08-13
+two sessions independently lost hours to it in one afternoon, both of them
+with the trap already recorded and both of them reusing a database anyway:
+
+- a C2 run's failure SET moved between otherwise identical runs (5 failures,
+  then a different 5, then 7), which made a design problem look like a tuning
+  problem and cost three wrong fixes before a fresh DB steadied the signal;
+- a P5 lane accumulated **25 427 organisations** across a day, and
+  `sweepWeeklyDigests` — which walks every org — went red on the volume alone.
+
+Rebuild it: `initdb` a new datadir, confirm `show data_directory` is yours (a
+`pg_ctl` that fails "Address already in use" is followed by a `createdb` that
+SUCCEEDS against someone else's server), then `db:apply` + `sync:sports`.
+
+**And baseline before attributing.** Run the same command on `origin/main`
+with the same DB and the same services before calling any red yours. For the
+DB-backed suites that is
+`npm test --workspace apps/web -- src/server src/lib` with
+`PLACEMENT_SERVICE_HOST` set; main was 4518/0 on 2026-08-13. Several reds that
+looked like C2's were main's, and one of them is INTERMITTENT at 1-in-3 — so
+run it more than once in each arm before believing either colour.
+
 ## 3. Verification traps that bite these tasks specifically
 
 - **rtk wrappers lie:** vitest green only from
