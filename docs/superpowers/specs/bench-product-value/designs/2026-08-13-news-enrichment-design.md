@@ -33,8 +33,29 @@ RoundRecapDraftInput += { enrichment?: {
 Sources: match `summary`/`sideMetrics` (already in `match_states`),
 `divisionPlayerStats` (leaderboard before/after the round — computed by
 diffing against the previous snapshot), standings snapshots. Assembly
-lives in the existing draft call sites (`draftPostsForDecidedFixture` and
-the round-recap trigger), one new pure helper per source. Fail-open: any
+lives in the existing draft call site, one new pure helper per source.
+
+**Corrected 2026-08-13 (wave-1 scout), two premises:**
+
+- *There is one call site, not two.* Round-recap is **not** a separate
+  trigger — it is drafted inline inside `draftPostsForDecidedFixture`
+  when `TABLE_KINDS.has(stage_kind)`. `draftPostsForDecidedFixture`
+  itself has exactly one caller (`usecases/scoring.ts:310`).
+- *"Standings moves" had no data source at all.* `writeSnapshot`
+  (`engine-db/competition.ts:224-236`) is an `on conflict do update`
+  keyed `(stage_id, pool_id)` that **clobbers the prior row**; no
+  history table exists and nothing reads an older row. Ruling: add
+  `previous_positions jsonb` to `standings_snapshots` and preserve one
+  step of history on upsert:
+  `set previous_positions = case when standings_snapshots.positions is
+  distinct from excluded.positions then standings_snapshots.positions
+  else standings_snapshots.previous_positions end`. The
+  `is distinct from` guard is load-bearing — `recomputeStandings` is
+  idempotent and re-runs, so an unguarded assignment erases the delta on
+  the second run. This makes D7 a schema-touching feature, which this
+  spec originally assumed it was not.
+
+Fail-open: any
 enrichment source erroring yields the un-enriched draft, never a missing
 draft (posts must not become less reliable because stats hiccuped) — with
 a pino warn.
@@ -49,6 +70,14 @@ a pino warn.
   clock). Auto-cron ONLY if a job runner already exists in the repo at
   plan time (scout question); if none, button-only ships and cron is a
   one-line follow-up note, not new infra built for this.
+  **Resolved 2026-08-13 (wave-1 scout): a runner DOES exist**, so the
+  conditional fires and the cron ships. The established shape is a
+  GitHub Actions `schedule:` job hitting an `x-cron-secret`-guarded
+  endpoint — `funnel-reminders-stg.yml:16-19`, plus billing-events,
+  billing-grant, billing-quantity, ai-preview-sweep. All are `-stg`;
+  the digest cron follows that pattern exactly and stays stg-only. No
+  vercel-cron / node-cron / pg_cron / worker service exists — do not
+  introduce one.
 - Digest is a DRAFT like all others — publish flow, public visibility,
   `shouldFirePostPublished` side effects unchanged.
 
@@ -116,13 +145,35 @@ All enrichment sentence templates + digest section headers ×4 locales,
 flat dotted keys, parameterized ({name}, {count}, {metric}) — never
 concatenated fragments (grammar differs per locale).
 
+Key namespace is `news.*` / `digest.*`, disjoint from the sibling
+capacity work's `schedule.capacity.*` — both land in the same four
+`dictionaries/*/ui.json` files, which `feat/s10-w8-chassis-renderer` is
+also editing. Note the pre-existing, unrelated `register.capacity.*`.
+
 ## Dependencies & sequencing
 
 Reads S8/S9 surfaces — both merged, so P3 is buildable early in the
 portfolio order (D2 → D3 → **D7** → …). No overlap with release-2 or
 S10+ (pads/UI). No OpenAPI change unless the digest button needs a new
 route (`POST /orgs/{id}/posts/digest` — regen owed if so). Structured
-logging: pino `post_drafted` gains `enriched: boolean`, `kind`.
+logging: pino `post_drafted` carries `{orgId, fixtureId, divisionId,
+kind, enriched}`.
+
+**Corrected 2026-08-13 (wave-1 scout):** this spec said `post_drafted`
+"gains" those fields, implying an existing event to extend.
+**`post_drafted` does not exist anywhere** — `git grep -na
+"post_drafted\|postDrafted"` returns zero hits across `apps/web`, there
+is no logger call in `org-posts.ts` at all, and the structured-logging
+wave (`989e0ba8`) touched no news files. D7 **creates** the event. That
+also means the "new server code ships structured logging" rule applies
+here in full, not as an incremental field add.
+
+One more site to verify, not assume: `PostKind` is declared **twice** —
+`usecases/org-posts.ts:32` and `api-v1/schemas.ts:2941`. Adding
+`weekly_digest` must touch both or they silently drift, and `posts.kind`
+may additionally carry a DB CHECK constraint, which would be a third
+site needing a migration. This is the same API-enum-⊃-DB-CHECK mismatch
+already flagged for D1's `americano`/`page_playoff`.
 
 ## Risks / re-pin
 

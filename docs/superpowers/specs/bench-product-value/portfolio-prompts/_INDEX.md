@@ -33,9 +33,9 @@ S13-gated. New-branch-in-worktree rule applies to every session.
 
 | Session | Feature | Prompt file | Depends on | External gate | Status |
 |---|---|---|---|---|---|
-| P1 | D2 capacity lib + route guard + card | `P01-capacity-precheck.md` | — | green-light | TODO |
-| P2 | D3 health lib + route + panel | `P02-schedule-health.md` | — (P1 pattern reuse, soft) | green-light | TODO |
-| P3 | D7 enrichment + weekly digest | `P03-news-enrichment.md` | — | green-light | TODO |
+| P1 | D2 capacity lib + route guard + card | `P01-capacity-precheck.md` | — | green-light | **IN FLIGHT** (wave 1) |
+| P2 | D3 health lib + route + panel | `P02-schedule-health.md` | — (P1 pattern reuse, soft) | green-light | TODO (wave 2) |
+| P3 | D7 enrichment + weekly digest | `P03-news-enrichment.md` | — | green-light | **IN FLIGHT** (wave 1) |
 | P4 | D1a template catalog + instantiation + wizard | `P04-templates-single-stage.md` | — | green-light | TODO |
 | P5 | D4a seeding rules + TBD fixtures + fill engine | `P05-progression-engine.md` | — | green-light | TODO |
 | P6 | D4b proposal UI + confirm flow | `P06-progression-ui.md` | P5 | green-light | TODO |
@@ -106,3 +106,70 @@ All owner-ratified 2026-08-13 in the design session:
 
 - 2026-08-13 — programme authored: 7 specs + 11 prompts committed,
   build-gated. C1 + S10 in flight at authoring time; S9 + C0 merged.
+- 2026-08-13 — **wave 1 green-lit and started** (P1 ∥ P3, one worktree and
+  one dedicated Postgres each). Ratified wave plan for the rest:
+  W2 = P2 ∥ P4, W3 = P5 alone (two migrations must never run
+  concurrently — mid-wave `V<n>` collision), W4 = P6 ∥ P7. P8→P9→P10 and
+  P11 stay strictly sequential behind their external gates.
+
+### False premises found by wave-1 scouts (rulings, do not re-derive)
+
+Seven citations in the D2/D7 specs were wrong at authoring time. All are
+now rulings; the specs below are corrected in place.
+
+**D2 / P1**
+
+1. `capacity.impossible` matched **no** convention in the tree. Typed
+   codes here are ALL_CAPS_SNAKE, no dots (`EngineErrorCode`:
+   `STAGE_NOT_READY`; `HttpError`: `AI_PLAN_FAILED`); dotted-lowercase
+   `capacity.*` exists in source only as i18n keys. **Ruling: the code is
+   `CAPACITY_IMPOSSIBLE`**, thrown as
+   `new HttpError(422, msg, "CAPACITY_IMPOSSIBLE", { report })`. The
+   engine enum and `ENGINE_HTTP` map are NOT widened — the lib stays pure
+   and throws nothing; the web layer throws.
+2. **There is no competition-scope `/schedule/auto` route.** The prompt's
+   "joint competition variant" does not exist under that name. Ruling:
+   guard the stage auto route + `aiPlanForCompetition` (assess
+   per-division, 422 with the impossible set); leave the apply route
+   alone.
+3. `ScheduleConfig`'s real field is **`matchMinutes`**, not the spec's
+   `m`/`matchDuration`.
+
+**D7 / P3**
+
+4. **`standings_snapshots` has no history** — `writeSnapshot`
+   (`engine-db/competition.ts:224-236`) is `on conflict do update` keyed
+   `(stage_id, pool_id)` and clobbers the prior row. The spec's
+   "standings moves" enrichment therefore had **no data source at all**.
+   Ruling: add `previous_positions jsonb`, preserved on upsert via
+   `case when positions is distinct from excluded.positions then …`.
+   The `is distinct from` guard is load-bearing — `recomputeStandings` is
+   idempotent and re-runs, and an unguarded assignment erases the delta
+   on the second run. This makes P3 a schema session, which the table
+   above did not anticipate.
+5. **`post_drafted` does not exist** (`git grep` = 0 hits; the
+   structured-logging wave `989e0ba8` touched no news files). The spec
+   cited it as an existing event to extend. It is being created.
+6. **Round-recap is not a separate trigger** — it is drafted inline by
+   `draftPostsForDecidedFixture` when `TABLE_KINDS.has(stage_kind)`. One
+   call site, not two.
+7. **A job runner already exists** — GitHub Actions `schedule:` cron →
+   `x-cron-secret`-guarded endpoint (funnel-reminders, billing-events,
+   billing-grant, billing-quantity, ai-preview-sweep, all `-stg`). D7's
+   conditional ("cron only if a runner exists") therefore resolves to
+   **ship the cron**, following that shape, stg-only.
+
+Watch item for every wave-1/2 session: `PostKind` is declared **twice**
+(`org-posts.ts:32` and `schemas.ts:2941`) and may also carry a DB CHECK —
+the same API-enum-⊃-DB-CHECK mismatch already flagged for D1's
+`americano`/`page_playoff`. Verify all three sites, never two.
+
+### Live-branch collisions during wave 1
+
+- `feat/c1-round-ordering` edits `usecases/schedule.ts` (the exact file
+  P1's guard touches) + `engine/src/scheduling/build.ts`. P1's edit to
+  that file is kept minimal and additive for this reason.
+- `feat/s10-w8-chassis-renderer` edits all four `dictionaries/*/ui.json`
+  + `lib/i18n-keys.ts`. P1 and P3 both add keys there too, so keys are
+  namespaced disjointly: **P1 `schedule.capacity.*`, P3 `news.*` /
+  `digest.*`** (note `register.capacity.*` already exists, unrelated).

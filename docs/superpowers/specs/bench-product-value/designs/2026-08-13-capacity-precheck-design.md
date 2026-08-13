@@ -43,20 +43,29 @@ the recurring bug — one function, both sides):
 **Consumers**:
 1. Schedule setup UI: live card, recomputes on every knob change
    (client-side import of the engine lib — no network).
-2. `POST /stages/{id}/schedule/auto` (and joint competition plan): server
-   re-runs `assessCapacity` and refuses with a typed 422 (`code:
-   "capacity.impossible"`, report attached) — client hint, server authority.
+2. `POST /stages/{id}/schedule/auto` and the competition-scope plan
+   entry point: server re-runs `assessCapacity` and refuses with a typed
+   422 (`code: "CAPACITY_IMPOSSIBLE"`, report attached) — client hint,
+   server authority.
+   **Corrected 2026-08-13 (wave-1 scout):** there is no competition-scope
+   `/schedule/auto` route. The competition solve entry points are
+   `/competitions/{id}/schedule/ai-plan` (→ `aiPlanForCompetition`) and
+   `.../schedule/apply`. Guard `ai-plan`, assessing per division and
+   returning the impossible set; leave `apply` alone — it lands an
+   already-solved board.
 3. Future bench independent checker consumes the same lib (contract:
    pure, no DB, no solver imports, no Date.now).
 
-**UI**: card in schedule setup (stage + joint competition variants):
+**UI**: card in schedule setup (stage + competition-scope variants):
 verdict chip, supply/demand bar, per-day mini-bars, suggestion rows with
 one-click apply where the knob is local (e.g. extend endAt). `/admin` not
 involved; full polish bar. Mobile 320/768/1280, no horizontal scroll.
 
 ## Arithmetic (normative)
 
-Let m = matchMinutes, g = gapMinutes, slot = m + g.
+Let m = `matchMinutes`, g = `gapMinutes`, slot = m + g. (Both are the
+real `ScheduleConfig` field names, confirmed at `schemas.ts:743-793`;
+`perEntrantMinRest` is r.)
 
 - **Supply**: per court c, per day d: usable windows W_{c,d} (config
   sessionWindows − blackouts today; D5 court calendars later).
@@ -85,8 +94,19 @@ Let m = matchMinutes, g = gapMinutes, slot = m + g.
 
 ## Error/API shape
 
-Server refusal on auto/joint routes: 422
-`{code: "capacity.impossible", report: CapacityReport}`.
+Server refusal on the guarded routes: 422
+`{code: "CAPACITY_IMPOSSIBLE", report: CapacityReport}`.
+
+**Corrected 2026-08-13 (wave-1 scout).** This spec originally wrote the
+code as dotted-lowercase `capacity.impossible`, which matches nothing in
+the tree: typed codes here are ALL_CAPS_SNAKE with no dots
+(`EngineErrorCode`: `STAGE_NOT_READY`, `SCHEDULE_CONFLICT`; `HttpError`
+codes: `AI_PLAN_FAILED`), and dotted `capacity.*` exists in source only
+as i18n keys (`register.capacity.taken`). The throw is
+`new HttpError(422, msg, "CAPACITY_IMPOSSIBLE", { report })`, following
+the `AI_PLAN_FAILED` precedent. `EngineErrorCode` and the `ENGINE_HTTP`
+map are deliberately NOT widened — the engine lib stays pure and throws
+nothing; the web layer owns the refusal.
 `CapacityReport = {verdict, slotSupply, slotDemand, perDay:
 Array<{date, supply, demandCeiling}>, restBound: Array<{entrantId,
 need, available, violated}>, suggestions: Array<{kind, amount,
