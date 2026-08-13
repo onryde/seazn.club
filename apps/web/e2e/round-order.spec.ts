@@ -515,3 +515,83 @@ test("a joint apply that INTRODUCES a round-order violation is refused, and NOTH
   await page.goto(await divisionPath(page.request, alpha.divisionId, "/schedule?tab=board"));
   await expect(page.locator("[data-fixture-id]")).toHaveCount(6);
 });
+
+// C1 final-review — the same endpoint, but with a PARTIAL per-division
+// listing: only the moved fixture is named, and the round-robin sibling its
+// new position collides with is left OUT of `assignments` entirely, sitting
+// wherever the clean apply below already placed it. The delta gate used to
+// compare `assignments` against itself only (calendar.ts's round-order pair
+// scan, by design) — an unlisted sibling could never be paired against
+// anything, so this exact shape was invisible before the fix this test is
+// pinned to. The two tests above prove the FULL-listing case; this is the
+// gap `competition-schedule-apply.test.ts`'s own "C1 gap A" tests never
+// covered either.
+test("a joint apply that introduces a round-order violation via a PARTIAL listing is refused, and the untouched sibling's card stays put on screen", async ({
+  page,
+  request,
+}) => {
+  const { competitionId, alpha, bravo } = await seedJointRoundRobinBoard(request);
+  const alphaSeq = await currentDivisionSeq(request, competitionId, alpha.divisionId, alpha.fixtureIds[0]!);
+  const bravoSeq = await currentDivisionSeq(request, competitionId, bravo.divisionId, bravo.fixtureIds[0]!);
+
+  // A real, round-order-correct board first, through the same joint
+  // endpoint the "lands both divisions" test above proves renders clean.
+  const clean = await apiJson(request, `/api/v1/competitions/${competitionId}/schedule/apply`, "POST", {
+    divisions: [
+      { division_id: alpha.divisionId, expected_seq: alphaSeq, assignments: lineUp(alpha.fixtureIds, "Court A") },
+      { division_id: bravo.divisionId, expected_seq: bravoSeq, assignments: lineUp(bravo.fixtureIds, "Court B") },
+    ],
+    source: "ai",
+  });
+  expect(clean.status, JSON.stringify(clean)).toBe(200);
+
+  // PARTIAL: Alpha's round-1 fixture ALONE, pushed a full day past
+  // round 3 — round 3's fixture (the LAST id) stays untouched at the clean
+  // position above and is never named in this request's `assignments`.
+  const partialSeq = await currentDivisionSeq(request, competitionId, alpha.divisionId, alpha.fixtureIds[0]!);
+  const refused = await apiJson(request, `/api/v1/competitions/${competitionId}/schedule/apply`, "POST", {
+    divisions: [
+      {
+        division_id: alpha.divisionId,
+        expected_seq: partialSeq,
+        assignments: [
+          { fixture_id: alpha.fixtureIds[0]!, scheduled_at: jointAt(24 * 60), court_label: "Court A" },
+        ],
+      },
+    ],
+    source: "ai",
+  });
+  // Same wire-shape note as the full-listing refusal test above: the RAW
+  // engine `Conflict` shape, camelCase, on `error.conflicts` directly.
+  const conflicts =
+    (refused.error as { conflicts?: { fixtureId?: string; reason?: string; direct?: boolean }[] } | undefined)
+      ?.conflicts ?? [];
+  expect(refused.status, JSON.stringify(refused)).toBe(409);
+  expect(conflicts.some((c) => c.reason === "order")).toBe(true);
+
+  // THE on-screen proof: the board is unchanged from the clean baseline —
+  // still 6 cards, still non-decreasing round labels top to bottom. If the
+  // partial move had silently gone through (the bug this test is pinned
+  // to), round 1's card would now render after round 3's.
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto(await divisionPath(page.request, alpha.divisionId, "/schedule?tab=board"));
+  const cards = page.locator("[data-fixture-id]");
+  const count = await cards.count();
+  expect(count, "a card vanished from Alpha's board after a REFUSED partial apply").toBe(6);
+  const rounds: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const text = (await cards.nth(i).textContent()) ?? "";
+    const m = /R(\d+)/.exec(text);
+    expect(m, `card ${i} carries no R<n> label`).not.toBeNull();
+    rounds.push(Number(m![1]));
+  }
+  for (let i = 1; i < rounds.length; i++) {
+    expect(
+      rounds[i]!,
+      `round order broke ON SCREEN after a PARTIAL move that should have been REFUSED: card ${i - 1} shows ` +
+        `R${rounds[i - 1]}, card ${i} shows R${rounds[i]}`,
+    ).toBeGreaterThanOrEqual(rounds[i - 1]!);
+  }
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: "test-results/joint-round-order-partial-refused-375.png", fullPage: true });
+});

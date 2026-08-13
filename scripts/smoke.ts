@@ -7034,6 +7034,62 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
     "joint round order: still applies over a board that ALREADY holds a round-order violation — the delta property",
     stillApplies.status === 200 && stillConflicts.some((c) => c.reason === "order"),
   );
+
+  // C1 final-review — the SAME endpoint, but with a PARTIAL per-division
+  // listing: only the moved fixture is named, and the round-robin sibling
+  // its new position collides with is left OUT of `assignments` entirely,
+  // sitting wherever the clean apply below placed it. The delta gate used
+  // to compare `assignments` against itself only (calendar.ts's round-order
+  // pair scan, by design) — an unlisted sibling could never be paired
+  // against anything, so this exact shape was invisible before the fix
+  // this suite is now pinned to. `competition-schedule-apply.test.ts`
+  // (apps/web unit, DB-gated) proves the mechanism in isolation; what only
+  // smoke can prove is that a real POST against a real running server still
+  // refuses it once a PARTIAL listing is in play, not just a full one.
+  const seqs4 = await divisionSeqs([alpha.id, bravo.id]);
+  const reClean = await v1(s, `/api/v1/competitions/${comp.id}/schedule/apply`, "POST", {
+    divisions: [
+      { division_id: alpha.id, expected_seq: seqs4[alpha.id] ?? 0, assignments: alphaClean },
+      { division_id: bravo.id, expected_seq: seqs4[bravo.id] ?? 0, assignments: bravoClean },
+    ],
+    source: "ai",
+  });
+  check("joint round order (partial): re-established a clean baseline (200)", reClean.status === 200);
+
+  const seqs5 = await divisionSeqs([alpha.id]);
+  const partial = await v1(s, `/api/v1/competitions/${comp.id}/schedule/apply`, "POST", {
+    divisions: [
+      {
+        division_id: alpha.id,
+        expected_seq: seqs5[alpha.id] ?? 0,
+        // Round 1's fixture ALONE, pushed a full day past everything —
+        // every other Alpha fixture, including round 3's (still at
+        // `at(last*30)` from `alphaClean` above), stays right where it is
+        // and is never named here.
+        assignments: [{ fixture_id: alpha.fixtureIds[0]!, scheduled_at: at(24 * 60), court_label: "Court 1" }],
+      },
+    ],
+    source: "ai",
+  });
+  const partialConflicts =
+    (partial.json.error as { conflicts?: { fixtureId?: string; reason?: string; direct?: boolean }[] } | undefined)
+      ?.conflicts ?? [];
+  check(
+    "joint round order (partial): a PARTIAL apply introducing a violation against an UNLISTED sibling is refused (409, reason order)",
+    partial.status === 409 && partialConflicts.some((c) => c.reason === "order"),
+  );
+
+  const sql2 = smokeDb();
+  try {
+    const [row] = await sql2<{ scheduled_at: Date }[]>`
+      select scheduled_at from fixtures where id = ${alpha.fixtureIds[0]}`;
+    check(
+      "joint round order (partial): the refused move wrote nothing — round 1 is still at its clean slot",
+      row !== undefined && new Date(row.scheduled_at).toISOString() === at(0),
+    );
+  } finally {
+    await sql2.end();
+  }
 }
 
 /** Flip Stripe Connect readiness (spec 2026-07-12) — Express onboarding can't
