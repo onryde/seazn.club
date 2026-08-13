@@ -1212,6 +1212,49 @@ export const ScheduleSolverInfo = z.object({
 });
 export type ScheduleSolverInfo = z.infer<typeof ScheduleSolverInfo>;
 
+// ---------------------------------------------------------------------------
+// Capacity pre-check (D2, docs/superpowers/specs/bench-product-value/designs/
+// 2026-08-13-capacity-precheck-design.md) — the 422 CAPACITY_IMPOSSIBLE
+// report on /stages/{id}/schedule/auto and /competitions/{id}/schedule/
+// ai-plan, and the shape the setup card's live client-side recompute
+// produces (packages/engine/src/scheduling/capacity.ts's assessCapacity —
+// an engine lib import, no fetch, for that path).
+//
+// camelCase, DELIBERATELY breaking this file's snake_case wire convention:
+// mirrors the engine's CapacityReport field for field so the client can hand
+// a 422's `report` extra straight to the SAME renderer the live card uses,
+// with no mapping step — the design doc states this explicitly ("the card
+// consumes the identical type client-side"), unlike ScheduleConflict, whose
+// `Conflict.reason` union genuinely needs `REASON_CODE` at the boundary.
+export const CapacityReport = z.object({
+  verdict: z.enum(["impossible", "tight", "ok"]),
+  slotSupply: z.number().int().nonnegative(),
+  slotDemand: z.number().int().nonnegative(),
+  perDay: z.array(
+    z.object({
+      date: z.string(),
+      supply: z.number().int().nonnegative(),
+      demandCeiling: z.number().int().nonnegative(),
+    }),
+  ),
+  restBound: z.array(
+    z.object({
+      entrantId: z.string(),
+      need: z.number().nonnegative(),
+      available: z.number().nonnegative(),
+      violated: z.boolean(),
+    }),
+  ),
+  suggestions: z.array(
+    z.object({
+      kind: z.enum(["add_day", "add_court", "shorten_match", "shrink_gap", "raise_cap"]),
+      amount: z.number(),
+      flipsVerdict: z.boolean(),
+    }),
+  ),
+});
+export type CapacityReport = z.infer<typeof CapacityReport>;
+
 export const AutoScheduleResult = z.object({
   assignments: z.array(ScheduleAssignment),
   conflicts: z.array(ScheduleConflict),
