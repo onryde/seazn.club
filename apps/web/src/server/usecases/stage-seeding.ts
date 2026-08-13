@@ -25,6 +25,12 @@ import "server-only";
 // integration than this module's pure-StandingsRow-in surface). EQUAL-sized
 // pools (the acceptance criterion's "UEFA third-place table") are unaffected
 // — normalisation is a no-op when every pool played the same number of games.
+// UNEQUAL pools are not silently ranked on raw stats either (review finding,
+// P5/#554 follow-up): `resolveQualifiers` REFUSES a bestNth cascade whose
+// pools differ in size (422 SEEDING_BESTNTH_UNEQUAL_POOLS) rather than
+// producing an order that looks legitimate — every pool has an nth-place row
+// — but isn't, because a smaller pool's nth place and a larger pool's nth
+// place aren't comparable without the normalisation this module doesn't have.
 import { rankStandings, type StandingsRow } from "@seazn/engine/competition";
 import { HttpError } from "@/lib/errors";
 
@@ -285,6 +291,26 @@ export function resolveQualifiers(
     let ordered = bestNthOrder.get(nth);
     if (ordered) return ordered;
     const candidates = tables.map((t) => rowAt(tables, t.pool, nth));
+    // Refuse rather than silently rank raw stats across unequal-sized pools
+    // — see the KNOWN GAP comment at the top of this file. Every pool here
+    // already has an nth-place row (rowAt above didn't throw), so this is
+    // specifically the "looks fine, isn't" case: without UEFA's drop-the-
+    // extra-games normalisation, a smaller pool's nth place (its LAST place)
+    // and a larger pool's nth place (a mid-table finish) are not the same
+    // kind of result, and comparing them raw silently favours whichever
+    // pool happens to have easier opposition. Scoped to exactly the pools
+    // this bestNth draws from (== all of `tables`, same scope rowAt uses
+    // above) — group_rank/rank_range never hit this, they rank one pool
+    // at a time and unequal sizes don't affect them.
+    const sizes = new Set(tables.map((t) => t.rows.length));
+    if (sizes.size > 1) {
+      throw new HttpError(
+        422,
+        `bestNth cannot compare rank-${nth} finishers across pools of different sizes (${[...sizes].sort((a, b) => a - b).join(",")}) — UEFA normalisation for unequal pools isn't implemented`,
+        "SEEDING_BESTNTH_UNEQUAL_POOLS",
+        { nth, poolSizes: tables.map((t) => ({ pool: t.pool, size: t.rows.length })) },
+      );
+    }
     ordered = crossGroupOrder(candidates);
     bestNthOrder.set(nth, ordered);
     return ordered;

@@ -5,6 +5,7 @@
 // placement, and a tie FLAGGED rather than silently ordered.
 import { describe, expect, it } from "vitest";
 import type { StandingsRow } from "@seazn/engine/competition";
+import { HttpError } from "@/lib/errors";
 import {
   descriptorKey,
   descriptorLabel,
@@ -254,5 +255,42 @@ describe("resolveQualifiers — bestNth cross-group cascade (UEFA third-place ta
     const tables: PoolTableRows[] = [{ pool: "A", rows: [row("a1", 1)] }];
     const seedOrder: SlotDescriptor[] = [{ kind: "group_rank", pool: "A", rank: 2 }];
     expect(() => resolveQualifiers(seedOrder, tables)).toThrow(/no entrant ranked 2/);
+  });
+
+  it("bestNth on UNEQUAL pool sizes refuses rather than silently ranking raw (non-normalised) stats", () => {
+    // Pool A has 4 members, pool B has only 3 — B's "3rd place" is also its
+    // LAST place, while A's 3rd place is a mid-table finish. Comparing their
+    // raw points/diff without UEFA's "drop the extra games" normalisation
+    // (the KNOWN GAP this module documents) produces a plausible-looking but
+    // WRONG order. Both pools still have a rank-3 row, so `rowAt` alone would
+    // never catch this — only an explicit pool-size check does.
+    const tables: PoolTableRows[] = [
+      { pool: "A", rows: [row("a1", 1), row("a2", 2), row("a3", 3, { points: 4 }), row("a4", 4)] },
+      { pool: "B", rows: [row("b1", 1), row("b2", 2), row("b3", 3, { points: 10 })] },
+    ];
+    const seedOrder: SlotDescriptor[] = [{ kind: "best_nth", nth: 3, position: 1 }];
+    expect(() => resolveQualifiers(seedOrder, tables)).toThrow(/unequal|different size/i);
+    try {
+      resolveQualifiers(seedOrder, tables);
+      expect.fail("expected resolveQualifiers to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(HttpError);
+      expect((err as HttpError).status).toBe(422);
+      expect((err as HttpError).code).toBe("SEEDING_BESTNTH_UNEQUAL_POOLS");
+    }
+  });
+
+  it("bestNth on EQUAL pool sizes is unaffected by the unequal-pool refusal (regression guard)", () => {
+    // Same shape as the UEFA third-place test above, pinned separately here
+    // so a too-eager equality check (e.g. comparing rows.length INCLUDING
+    // pools the rule doesn't touch) can't silently break the acceptance
+    // criterion this module exists to satisfy.
+    const tables: PoolTableRows[] = [
+      { pool: "A", rows: [row("a1", 1), row("a2", 2), row("a3", 3)] },
+      { pool: "B", rows: [row("b1", 1), row("b2", 2), row("b3", 3)] },
+    ];
+    const seedOrder: SlotDescriptor[] = [{ kind: "best_nth", nth: 3, position: 1 }];
+    const { qualifiers } = resolveQualifiers(seedOrder, tables);
+    expect(qualifiers).toHaveLength(1);
   });
 });
