@@ -1,6 +1,7 @@
 import "server-only";
 import type postgres from "postgres";
 import {
+  EngineError,
   foldMatch,
   resolveVoids,
   type EventEnvelope,
@@ -72,8 +73,28 @@ export async function foldFixture(tx: Tx, fixtureId: string): Promise<FoldedFixt
   `;
   if (!division) return null;
 
+  // D4a (P5) — reachable now that entrant slots can be null (TBD/bye, or an
+  // entrant deleted after scoring via the FK's `on delete set null`): a bare
+  // `Error` here 500s where the sibling guard in append-event.ts (the write
+  // path, same precondition) 422s via EngineError. Match it — a read that
+  // can't fold a fixture with an unassigned entrant is the same "wrong
+  // phase" as a write that can't append to one.
+  //
+  // `reason: "unassigned_entrant"` is load-bearing, not decoration:
+  // admin-fixture-config.ts's resnapshot preflight denylists EngineErrors
+  // that reach it "without the fold having judged anything" (today: the
+  // registry's MODULE_NOT_FOUND/MODULE_DUPLICATE) so it doesn't mislabel a
+  // data defect as "the live config can't read this" — WRONG_PHASE is also
+  // thrown BY sport modules' own fold/apply logic for genuine phase-order
+  // config problems, so denylisting the whole code would swallow those too.
+  // This reason lets that caller (or any other) distinguish "this guard,
+  // before the fold ran" from "the fold itself judged the config" without
+  // widening the exemption to every WRONG_PHASE.
   if (!fixture.home_entrant_id || !fixture.away_entrant_id) {
-    throw new Error(`fixture ${fixtureId} has events but an unassigned entrant`);
+    throw new EngineError("WRONG_PHASE", "fixture has an unassigned entrant (bye/TBD)", {
+      fixtureId,
+      reason: "unassigned_entrant",
+    });
   }
 
   const sportModule = resolveModule(division.sport_key, division.module_version);

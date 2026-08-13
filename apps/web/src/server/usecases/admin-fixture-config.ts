@@ -256,7 +256,20 @@ export async function resnapshotFixtureConfig(
       // anything, and a code added to the taxonomy later is far more likely to
       // be a new fold refusal than a new registry failure — so the default has
       // to be "the config could not read it".
-      if (!EngineError.is(err) || err.code === "MODULE_NOT_FOUND" || err.code === "MODULE_DUPLICATE") {
+      //
+      // D4a (P5): "a fixture whose entrant went missing" (this comment's own
+      // example, above) is now a real EngineError (fold.ts, WRONG_PHASE) where
+      // it used to be a bare Error — but WRONG_PHASE is ALSO thrown by sport
+      // modules' own fold/apply logic for genuine config-driven phase
+      // problems, so it can't be denylisted by CODE alone without swallowing
+      // those too. `reason: "unassigned_entrant"` is fold.ts's marker for
+      // exactly this pre-fold case (set there, checked here) — narrower than
+      // the code, so a real mid-fold WRONG_PHASE still gets relabelled.
+      const isUnassignedEntrant =
+        EngineError.is(err) &&
+        err.code === "WRONG_PHASE" &&
+        (err.data as { reason?: unknown } | undefined)?.reason === "unassigned_entrant";
+      if (!EngineError.is(err) || err.code === "MODULE_NOT_FOUND" || err.code === "MODULE_DUPLICATE" || isUnassignedEntrant) {
         throw err;
       }
       throw new HttpError(

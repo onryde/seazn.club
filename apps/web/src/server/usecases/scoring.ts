@@ -24,7 +24,7 @@ import type { AppendEventRequest } from "@/server/api-v1/schemas";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { requiredFeatureForEvent } from "./fidelity";
 import { scoresViaAssignment } from "./scorers";
-import { fillSlot } from "./stages";
+import { fillSlot, markDependentSeedProposalsStale } from "./stages";
 import { detectSuspensions } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
 
@@ -381,6 +381,13 @@ async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unknown): Pr
   });
   if (context && TABLE_KINDS.has(context.kind)) {
     await recomputeStandings(auth.orgId, context.stage_id, context.pool_id ?? undefined);
+    // D4a (P5 review finding): a decided-fixture correction is a standings
+    // mutation exactly like overrideStandings' — LOCKED_FIXTURE_STATUSES
+    // doesn't cover "decided", so this fires even on a fixture inside an
+    // already-COMPLETE source stage. Same best-effort contract as the
+    // overrideStandings call site: never blocks a score write that already
+    // committed.
+    await markDependentSeedProposalsStale(auth, context.stage_id);
   }
   // Auto-advance (Jul3/08 §5, 16 Sep): when the flag is on and the stage just
   // finished, progression fires without a button.

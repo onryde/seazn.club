@@ -548,6 +548,15 @@ export async function peopleByEntrant(tx: Tx, entrantIds: string[]): Promise<Map
   return map;
 }
 
+// D4a (P5): a TBD/seeded fixture's null side(s) contribute NO people here, so
+// crossPersonClash structurally skips a not-yet-filled slot — there is no
+// person to clash on until confirm fills it (design: "Person-level
+// constraints (crossPersonClash) skip TBD slots until filled — recorded
+// limitation, re-validate on fill"). confirmSeedProposal (stages.ts)
+// re-runs validateSchedule straight after its fillSlot commit so a clash that
+// only becomes REAL once real entrants land surfaces as a warning then, not
+// silently forever — this function needs no change for that, since it
+// already reads whatever fixtures.*_entrant_id holds at call time.
 function peopleOf(f: FixtureLite, people: Map<string, string[]>): string[] {
   return [
     ...(f.home_entrant_id ? (people.get(f.home_entrant_id) ?? []) : []),

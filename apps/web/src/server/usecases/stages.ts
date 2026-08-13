@@ -2,7 +2,7 @@ import "server-only";
 // Stage use-cases (doc 08 §3): define the stage graph, generate fixtures
 // (idempotent — regeneration diffs against what exists, keyed by the pure
 // generator's stable ids), guarded completion, standings reads.
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
@@ -41,9 +41,22 @@ import {
 import { completeStageIfReady, recomputeStandings, type CompleteResult } from "@/server/engine-db";
 import { resolveModule } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { CreateStages } from "@/server/api-v1/schemas";
+import type { CreateStages, StageSeedingInput } from "@/server/api-v1/schemas";
 import { z } from "zod";
 import { CreateStage } from "@/server/api-v1/schemas";
+import { log } from "@/server/logger";
+import { validateSchedule } from "./schedule";
+import {
+  descriptorKey,
+  descriptorLabel,
+  expandTake,
+  placeDescriptors,
+  resolveQualifiers,
+  type PoolTableRows,
+  type SlotDescriptor,
+  type SlotLabel,
+  type SourceShape,
+} from "./stage-seeding";
 
 type Tx = postgres.TransactionSql;
 type StageInput = z.infer<typeof CreateStage>;
@@ -56,14 +69,18 @@ export interface StageRow {
   name: string;
   config: Record<string, unknown>;
   qualification: Record<string, unknown> | null;
+  /** D4a (P5) — StageSeeding rule; mutually exclusive with `qualification` in
+   *  practice (a stage declares one flow or the other). See stage-seeding.ts. */
+  seeding: Record<string, unknown> | null;
   status: string;
 }
 
-const STAGE_COLS = ["id", "division_id", "seq", "kind", "name", "config", "qualification", "status"] as const;
+const STAGE_COLS = ["id", "division_id", "seq", "kind", "name", "config", "qualification", "seeding", "status"] as const;
 
 export const FIXTURE_COLS = [
   "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "fixture_no",
-  "home_entrant_id", "away_entrant_id", "scheduled_at", "venue", "court_label",
+  "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",
+  "scheduled_at", "venue", "court_label",
   "officials", "status", "outcome", "schedule_source", "schedule_locked", "created_at",
 ] as const;
 
@@ -78,6 +95,10 @@ export interface FixtureRow {
   fixture_no: number;
   home_entrant_id: string | null;
   away_entrant_id: string | null;
+  /** D4a (P5) — {key, params} i18n pattern ref while the matching
+   *  *_entrant_id is null; cleared on fill. */
+  home_slot_label: SlotLabel | null;
+  away_slot_label: SlotLabel | null;
   scheduled_at: string | null;
   venue: string | null;
   court_label: string | null;
@@ -187,15 +208,37 @@ export async function createStages(
 
     const rows: StageRow[] = [];
     for (const s of inputs) {
+      // D4a (P5): a stage declares ONE cross-stage-fill mechanism — the OLD
+      // auto-seed-on-complete `qualification`, or the NEW propose/confirm
+      // `.seeding` — never both (undefined precedence otherwise).
+      if (s.qualification != null && s.seeding != null) {
+        throw new HttpError(
+          422,
+          "a stage declares either 'qualification' or 'seeding', not both",
+          "SEEDING_RULES_MISSING",
+        );
+      }
       const [dupe] = await tx`
         select 1 from stages where division_id = ${divisionId} and seq = ${s.seq}`;
       if (dupe) throw new HttpError(409, `stage seq ${s.seq} already exists`);
       const [row] = await tx<StageRow[]>`
-        insert into stages (division_id, seq, kind, name, config, qualification)
+        insert into stages (division_id, seq, kind, name, config, qualification, seeding)
         values (${divisionId}, ${s.seq}, ${s.kind}, ${s.name}, ${tx.json(s.config as never)},
-                ${s.qualification ? tx.json(s.qualification as never) : null})
+                ${s.qualification ? tx.json(s.qualification as never) : null},
+                ${s.seeding ? tx.json(s.seeding as never) : null})
         returning ${tx(STAGE_COLS)}`;
       rows.push(row);
+    }
+    // Seeding rules validated AFTER every stage in this batch is inserted, so
+    // `source: "previous"` / `{stageId}` resolves against sibling stages in
+    // THIS batch too, regardless of input array order (resolution is by seq,
+    // not insertion order) — a bad seeded_map or an unreachable source 422s
+    // here at rule-save time, never discovered later at proposal time
+    // (design's Edge inventory).
+    for (const s of inputs) {
+      if (!s.seeding) continue;
+      const row = rows.find((r) => r.seq === s.seq)!;
+      await validateStageSeeding(tx, row, s.seeding as StageSeedingInput);
     }
     // Adding a stage to a completed division (e.g. finals after the league
     // wrapped the graph) reopens it — 'completed' must mean "nothing left".
@@ -808,27 +851,48 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
   // (config.qualified), never from the whole entrant list. If it isn't seeded
   // yet: seed it now when the previous stage is complete (stage added after
   // the fact), otherwise refuse — generating early would bracket everyone.
+  //
+  // D4a (P5): a `.seeding`-declared stage is a DIFFERENT mechanism (see
+  // stage-seeding.ts) — it generates fully-TBD placeholder fixtures at
+  // division SETUP time, with NO wait on its source stage's completion
+  // (owner ruling: "ALL stages' fixtures are generated at setup time with
+  // placeholder slots"), so it short-circuits before this gate rather than
+  // going through it.
   {
     const pre = await withTenant(auth.orgId, async (tx) => {
       const [stage] = await tx<StageRow[]>`
         select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
       if (!stage) throw new HttpError(404, "stage not found");
+      if (stage.seeding) return { seeded: true as const };
       if (!stage.qualification || Array.isArray(stage.config.qualified)) return null;
       const [prev] = await tx<{ id: string; status: string }[]>`
         select id, status from stages
         where division_id = ${stage.division_id} and seq < ${stage.seq}
         order by seq desc limit 1`;
-      return prev ?? null;
+      return prev ? { seeded: false as const, prev } : null;
     });
+    if (pre?.seeded) {
+      const outcome = await generateSeededStageFixtures(auth, stageId);
+      void fireStageRevalidate(auth.orgId, stageId);
+      if (outcome.created > 0) {
+        await captureServer({
+          event: EVENTS.SCHEDULE_GENERATED,
+          distinctId: auth.userId ?? `org:${auth.orgId}`,
+          orgId: auth.orgId,
+          properties: { stage_id: stageId, fixtures_created: outcome.created },
+        });
+      }
+      return outcome;
+    }
     if (pre) {
-      if (pre.status !== "complete") {
+      if (pre.prev.status !== "complete") {
         throw new EngineError(
           "STAGE_NOT_READY",
           "this stage draws its entrants from the previous stage's final table — complete the previous stage first",
-          { stageId, previousStageId: pre.id },
+          { stageId, previousStageId: pre.prev.id },
         );
       }
-      await seedNextStage(auth, pre.id);
+      await seedNextStage(auth, pre.prev.id);
     }
   }
   const outcome = await withTenant(auth.orgId, async (tx) => {
@@ -922,6 +986,19 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
     const byKey = new Map<string, string>(); // ext_key → fixture uuid
     for (const f of existing) if (f.ext_key) byKey.set(f.ext_key, f.id);
 
+    // Cross-stage fill unification (D4a/P5 scope item 3): when `entrants`
+    // came from `stage.config.qualified` (the OLD auto-seed-on-complete
+    // flow — see seedNextStage below), the two REAL sides of a fixture must
+    // land through the SAME slot-fill pathway as intra-bracket advancement
+    // (fillSlot), not baked into this INSERT — one pathway, not two. A bye
+    // AWARD stays a direct bake: it is an immediate, self-contained
+    // walkover decision made at generation time (same as it always was for
+    // the plain/registered-entrant path), not a "fill a slot with a
+    // qualified entrant" concern, so it is out of scope for this
+    // unification and untouched.
+    const viaFillSlot = qualified !== null;
+    const bakeDirect = (g: GenFixture) => !viaFillSlot || g.award !== undefined;
+
     // First pass: all new fixtures in one multi-row insert. Ids are generated
     // client-side so the feed/bye passes can reference them without relying
     // on RETURNING order.
@@ -934,8 +1011,8 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
         pool_id: g.poolId ?? null,
         round_no: g.roundNo,
         seq_in_round: g.seqInRound,
-        home_entrant_id: g.home,
-        away_entrant_id: g.away,
+        home_entrant_id: bakeDirect(g) ? g.home : null,
+        away_entrant_id: bakeDirect(g) ? g.away : null,
         ext_key: g.extKey,
         status: g.award !== undefined ? "forfeited" : "scheduled",
         outcome: g.award !== undefined ? JSON.stringify({ kind: "award", winner: g.award }) : null,
@@ -944,6 +1021,21 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
     for (const r of newRows) byKey.set(r.ext_key, r.id);
     const created = newRows.length;
     const createdIds = newRows.map((r) => r.id);
+
+    // 1b pass — cross-stage fill, through fillSlot (see viaFillSlot above).
+    // Runs over the FULL `gen` (not just newRows): fillSlot's own
+    // `and *_entrant_id is null` guard makes an already-filled fixture a
+    // no-op, so a resumed/partial regeneration also fills anything a prior
+    // run left open.
+    if (viaFillSlot) {
+      for (const g of gen) {
+        if (g.award !== undefined) continue; // byes: see bakeDirect above
+        const fixtureId = byKey.get(g.extKey);
+        if (fixtureId === undefined) continue;
+        if (g.home) await fillSlot(tx, fixtureId, 1, g.home);
+        if (g.away) await fillSlot(tx, fixtureId, 2, g.away);
+      }
+    }
 
     // Second pass: feeds, batched per side. A target's homeFrom/awayFrom
     // becomes the SOURCE fixture's winner_to/loser_to (+slot 1=home, 2=away).
@@ -1002,7 +1094,25 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
           fills[source.winner_to_slot].push({ fixture: source.winner_to_fixture, entrant: g.award! });
         }
       }
+      // Invariant guard (P5 review finding): this is the ONE other
+      // home/away_entrant_id writer in this file that bypasses fillSlot, so
+      // unlike every other entrant-write here it does NOT clear a matching
+      // *_slot_label. Verified harmless today only because a PLAIN
+      // (non-`.seeding`) stage's fixtures never carry a label to begin with
+      // — only generateSeededStageFixtures' own third pass (above) stamps
+      // one, and that path never reaches this bulk UPDATE. Nothing enforces
+      // that stays true, so refuse loudly if it ever stops holding, rather
+      // than silently filling the entrant and leaving the label stale
+      // (which would make a filled slot render as if it were still TBD).
       if (fills[1].length > 0) {
+        const stale = await tx<{ id: string }[]>`
+          select id from fixtures
+          where id in ${tx(fills[1].map((x) => x.fixture))} and home_slot_label is not null`;
+        if (stale.length > 0) {
+          throw new Error(
+            `generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label on fixture(s) ${stale.map((f) => f.id).join(",")} instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present`,
+          );
+        }
         await tx`
           update fixtures f
           set home_entrant_id = v.entrant_id
@@ -1011,6 +1121,14 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
           where f.id = v.fixture_id and f.home_entrant_id is null`;
       }
       if (fills[2].length > 0) {
+        const stale = await tx<{ id: string }[]>`
+          select id from fixtures
+          where id in ${tx(fills[2].map((x) => x.fixture))} and away_slot_label is not null`;
+        if (stale.length > 0) {
+          throw new Error(
+            `generateStageFixtures: bye-award bulk UPDATE would strand away_slot_label on fixture(s) ${stale.map((f) => f.id).join(",")} instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present`,
+          );
+        }
         await tx`
           update fixtures f
           set away_entrant_id = v.entrant_id
@@ -1095,7 +1213,322 @@ async function wireCrossFeeds(tx: Tx, divisionId: string): Promise<void> {
   }
 }
 
-/** Fill one side of a fixture (slot 1=home, 2=away) if still open. */
+// ---------------------------------------------------------------------------
+// D4a (P5) — TBD-shape generation for a `.seeding`-declared stage. Runs at
+// division setup time, independent of the source stage's completion; count/
+// shape derive purely from the seeding rules (stage-seeding.ts). See
+// generateStageFixtures' `.seeding` short-circuit above.
+// ---------------------------------------------------------------------------
+
+// Persisted labels carry an internal `seed` alongside the rendered
+// {key, params} — destinationSlotsBySeed() (read by both computeSeedProposal
+// and confirmSeedProposal) is the only reader; renderers destructure
+// {key, params} and ignore it (see the design's "Renderers receive
+// {key, params}" — this is bookkeeping, not wire contract).
+type StoredSlotLabel = SlotLabel & { seed: number };
+
+type SeededGenFixture = GenFixture & {
+  homeLabel?: StoredSlotLabel;
+  awayLabel?: StoredSlotLabel;
+  awardLabel?: StoredSlotLabel;
+};
+
+/** "slot:7" -> 7 — the synthetic entrant id generateSeededStageFixtures mints
+ *  for placement seat i (1-based), and the only place that format is parsed. */
+function seedOfSlotId(id: string): number {
+  return Number(id.slice("slot:".length));
+}
+
+/** Resolve `.seeding.source` to a concrete, EARLIER stage in the same
+ *  division. `"previous"` = the immediately-preceding stage by seq; an
+ *  explicit `{stageId}` may name any earlier stage — unlike the old
+ *  `qualification` mechanism, which is always implicitly seq-1. */
+async function resolveSeedingSource(
+  tx: Tx,
+  target: { division_id: string; seq: number },
+  source: StageSeedingInput["source"],
+): Promise<{ id: string; kind: string; status: string }> {
+  if (source === "previous") {
+    const [prev] = await tx<{ id: string; kind: string; status: string }[]>`
+      select id, kind, status from stages
+      where division_id = ${target.division_id} and seq < ${target.seq}
+      order by seq desc limit 1`;
+    if (!prev) {
+      throw new HttpError(
+        422,
+        "seeding.source is 'previous' but this is the division's first stage",
+        "SEEDING_RULES_MISSING",
+      );
+    }
+    return prev;
+  }
+  const [row] = await tx<{ id: string; seq: number; kind: string; status: string }[]>`
+    select id, seq, kind, status from stages where id = ${source.stageId} and division_id = ${target.division_id}`;
+  if (!row) {
+    throw new HttpError(422, "seeding.source names a stage that isn't in this division", "SEEDING_RULES_MISSING", {
+      stageId: source.stageId,
+    });
+  }
+  if (row.seq >= target.seq) {
+    throw new HttpError(
+      422,
+      "seeding.source must be an earlier stage (by seq) than the stage declaring it",
+      "SEEDING_RULES_MISSING",
+      { stageId: source.stageId },
+    );
+  }
+  return row;
+}
+
+/** The source stage's pool KEYS in stable order — [] for an ungrouped
+ *  (league/swiss/…) source, where `topNPerGroup` degenerates to a single
+ *  implicit pool (key ""), the same overall-snapshot convention getStandings/
+ *  seedNextStage already use. Reads `pools` if the source already generated
+ *  them, else derives the count from its OWN config the way
+ *  generateStageFixtures' poolCount() does — so shape is knowable from the
+ *  moment the source stage is CREATED, no generation required there either. */
+async function sourceShapeOf(tx: Tx, source: { id: string; kind: string }): Promise<SourceShape> {
+  if (source.kind !== "group") return { poolKeys: [] };
+  const pools = await tx<{ key: string }[]>`select key from pools where stage_id = ${source.id} order by key`;
+  if (pools.length > 0) return { poolKeys: pools.map((p) => p.key) };
+  const [row] = await tx<{ config: Record<string, unknown> }[]>`select config from stages where id = ${source.id}`;
+  const count = poolCount(row?.config ?? {});
+  return { poolKeys: POOL_KEYS.slice(0, count).split("") };
+}
+
+/** Validate a StageSeeding rule at SAVE time (createStages/replaceStages) —
+ *  a bad `seeded_map` reference or a too-small shape 422s there, never
+ *  discovered later at proposal time (design's Edge inventory). Cheap: only
+ *  needs the source's SHAPE (pool keys / count), not its standings. */
+async function validateStageSeeding(
+  tx: Tx,
+  target: { division_id: string; seq: number },
+  seeding: StageSeedingInput,
+): Promise<void> {
+  const source = await resolveSeedingSource(tx, target, seeding.source);
+  const shape = await sourceShapeOf(tx, source);
+  const pots = expandTake(seeding.take, shape);
+  placeDescriptors(pots, seeding.placement, seeding.map); // throws on a bad seeded_map
+  if (pots.reduce((n, p) => n + p.length, 0) < 2) {
+    throw new HttpError(422, "this stage's seeding rules produce fewer than 2 qualifiers", "SEEDING_RULES_MISSING");
+  }
+}
+
+async function generateSeededStageFixtures(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [stage] = await tx<StageRow[]>`
+      select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
+    if (!stage) throw new HttpError(404, "stage not found");
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+    const seeding = stage.seeding as unknown as StageSeedingInput;
+
+    const source = await resolveSeedingSource(tx, stage, seeding.source);
+    const shape = await sourceShapeOf(tx, source);
+    const pots = expandTake(seeding.take, shape);
+    const placed = placeDescriptors(pots, seeding.placement, seeding.map);
+    if (placed.length < 2) {
+      throw new EngineError("STAGE_NOT_READY", "this stage's seeding rules produce fewer than 2 qualifiers", {
+        stageId,
+        count: placed.length,
+      });
+    }
+
+    const slotOf = new Map<string, SlotDescriptor>();
+    const entrants: ActiveEntrant[] = placed.map((d, i) => {
+      const id = `slot:${i + 1}`;
+      slotOf.set(id, d);
+      return { id, seed: i + 1 };
+    });
+
+    // Group-kind target (e.g. a "Super 8" round robin fed by group-stage
+    // qualifiers): materialise ITS pools rows first, same as the plain path.
+    const poolIds = new Map<string, string>();
+    if (stage.kind === "group" && poolCount(stage.config) > 1) {
+      const existingPools = await tx<{ id: string; key: string }[]>`
+        select id, key from pools where stage_id = ${stageId}`;
+      for (const pool of existingPools) poolIds.set(pool.key, pool.id);
+      for (let i = 0; i < poolCount(stage.config); i++) {
+        const key = POOL_KEYS[i];
+        if (poolIds.has(key)) continue;
+        const [row] = await tx<{ id: string }[]>`
+          insert into pools (stage_id, key, name)
+          values (${stageId}, ${key}, ${"Pool " + key}) returning id`;
+        poolIds.set(key, row.id);
+      }
+    }
+
+    const existing = await tx<{ id: string; ext_key: string | null }[]>`
+      select id, ext_key from fixtures where stage_id = ${stageId}`;
+
+    // `.seeding` stages generate off SYNTHETIC entrants — score-dependent
+    // formats (swiss/americano/ladder) have no seed-order shape to draw
+    // before results exist, same restriction the plain path has; `generate()`
+    // covers every bracket/table kind that DOES have one.
+    const gen: SeededGenFixture[] = generate(stage.kind, stage.config, entrants, poolIds);
+
+    // Convert synthetic slot refs into labels. A bye AWARD line propagates
+    // its label into the winner feed too (both resolve to the SAME
+    // descriptor at confirm time) — see the third pass below. A bye seed
+    // therefore legitimately owns TWO destination slots: the bye fixture's
+    // own `home` slot (stamped right here) AND the winner-feed target's slot
+    // (stamped by the third pass). destinationSlotsBySeed() returns every
+    // slot for a given seed, and confirmSeedProposal fills all of them
+    // through fillSlot — #554 fixed a bug where collapsing a seed's slots to
+    // ONE (last-write-wins, no ORDER BY) silently stranded whichever slot
+    // wasn't picked.
+    //
+    // The bye-line fixture itself is still not auto-decided the way a
+    // live/registered-entrant bye is (there is no real entrant yet to record
+    // a walkover for) — it stays 'scheduled' until confirmSeedProposal fills
+    // it, same as any other TBD slot.
+    for (const g of gen) {
+      if (typeof g.home === "string" && slotOf.has(g.home)) {
+        g.homeLabel = { ...descriptorLabel(slotOf.get(g.home)!), seed: seedOfSlotId(g.home) };
+        g.home = null;
+      }
+      if (typeof g.away === "string" && slotOf.has(g.away)) {
+        g.awayLabel = { ...descriptorLabel(slotOf.get(g.away)!), seed: seedOfSlotId(g.away) };
+        g.away = null;
+      }
+      if (typeof g.award === "string" && slotOf.has(g.award)) {
+        g.awardLabel = g.homeLabel ?? { ...descriptorLabel(slotOf.get(g.award)!), seed: seedOfSlotId(g.award) };
+      }
+    }
+
+    const byKey = new Map<string, string>();
+    for (const f of existing) if (f.ext_key) byKey.set(f.ext_key, f.id);
+
+    const newRows = gen
+      .filter((g) => !byKey.has(g.extKey))
+      .map((g) => ({
+        id: randomUUID(),
+        stage_id: stageId,
+        division_id: stage.division_id,
+        pool_id: g.poolId ?? null,
+        round_no: g.roundNo,
+        seq_in_round: g.seqInRound,
+        home_entrant_id: null,
+        away_entrant_id: null,
+        ext_key: g.extKey,
+        status: "scheduled",
+        outcome: null,
+      }));
+    if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
+    for (const r of newRows) byKey.set(r.ext_key, r.id);
+    const created = newRows.length;
+    const createdIds = newRows.map((r) => r.id);
+
+    // Labels via a direct per-row update with tx.json() (the pattern proven
+    // everywhere else in this file, e.g. wireCrossFeeds/config writes) —
+    // NOT folded into the bulk array-insert above: that helper's per-column
+    // type inference binds a JSON.stringify'd JS string as `text`, and
+    // Postgres has no implicit text->jsonb PARSE cast in that bound-
+    // parameter context, so it lands double-encoded (a jsonb STRING
+    // containing escaped JSON text, not the parsed object) — confirmed
+    // empirically against this exact insert, not assumed.
+    for (const g of gen) {
+      const fixtureId = byKey.get(g.extKey);
+      if (fixtureId === undefined) continue;
+      if (g.homeLabel) {
+        await tx`update fixtures set home_slot_label = ${tx.json(g.homeLabel as never)} where id = ${fixtureId}`;
+      }
+      if (g.awayLabel) {
+        await tx`update fixtures set away_slot_label = ${tx.json(g.awayLabel as never)} where id = ${fixtureId}`;
+      }
+    }
+
+    // Feed wiring — identical shape to generateStageFixtures' second pass.
+    const feedUpdates = { winner: [], loser: [] } as Record<
+      "winner" | "loser",
+      { source: string; target: string; slot: number }[]
+    >;
+    for (const g of gen) {
+      const targetId = byKey.get(g.extKey);
+      if (!targetId) continue;
+      for (const [feed, slot] of [
+        [g.homeFrom, 1],
+        [g.awayFrom, 2],
+      ] as const) {
+        if (!feed) continue;
+        const sourceId = byKey.get(feed.extKey);
+        if (!sourceId) continue;
+        feedUpdates[feed.side].push({ source: sourceId, target: targetId, slot });
+      }
+    }
+    if (feedUpdates.winner.length > 0) {
+      const u = feedUpdates.winner;
+      await tx`
+        update fixtures f
+        set winner_to_fixture = v.target_id, winner_to_slot = v.slot
+        from (select unnest(${u.map((x) => x.source)}::uuid[]) as source_id,
+                     unnest(${u.map((x) => x.target)}::uuid[]) as target_id,
+                     unnest(${u.map((x) => x.slot)}::int[])    as slot) v
+        where f.id = v.source_id and f.winner_to_fixture is null`;
+    }
+    if (feedUpdates.loser.length > 0) {
+      const u = feedUpdates.loser;
+      await tx`
+        update fixtures f
+        set loser_to_fixture = v.target_id, loser_to_slot = v.slot
+        from (select unnest(${u.map((x) => x.source)}::uuid[]) as source_id,
+                     unnest(${u.map((x) => x.target)}::uuid[]) as target_id,
+                     unnest(${u.map((x) => x.slot)}::int[])    as slot) v
+        where f.id = v.source_id and f.loser_to_fixture is null`;
+    }
+
+    // Third pass — TBD-aware bye propagation: writes the SAME label into the
+    // winner feed's slot instead of a real entrant id.
+    const awardedLabelled = gen.filter((g) => g.awardLabel !== undefined && byKey.has(g.extKey));
+    if (awardedLabelled.length > 0) {
+      const sources = await tx<
+        { id: string; winner_to_fixture: string | null; winner_to_slot: number | null }[]
+      >`select id, winner_to_fixture, winner_to_slot from fixtures
+        where id in ${tx(awardedLabelled.map((g) => byKey.get(g.extKey)!))}`;
+      const srcOf = new Map(sources.map((s) => [s.id, s]));
+      for (const g of awardedLabelled) {
+        const source = srcOf.get(byKey.get(g.extKey)!);
+        if (!source?.winner_to_fixture) continue;
+        if (source.winner_to_slot === 1) {
+          await tx`update fixtures set home_slot_label = ${tx.json(g.awardLabel as never)}
+                   where id = ${source.winner_to_fixture} and home_entrant_id is null`;
+        } else if (source.winner_to_slot === 2) {
+          await tx`update fixtures set away_slot_label = ${tx.json(g.awardLabel as never)}
+                   where id = ${source.winner_to_fixture} and away_entrant_id is null`;
+        }
+      }
+    }
+
+    if (stage.status === "pending") {
+      await tx`update stages set status = 'active' where id = ${stageId}`;
+    }
+
+    const fixtures = await tx<FixtureRow[]>`
+      select ${tx(FIXTURE_COLS)} from fixtures
+      where stage_id = ${stageId} order by round_no, seq_in_round`;
+
+    if (created > 0) {
+      const [{ seq: last }] = await tx<{ seq: number }[]>`
+        select coalesce(max(seq), 0)::int as seq from division_events
+        where division_id = ${stage.division_id}`;
+      await tx`
+        insert into division_events (division_id, seq, type, payload)
+        values (${stage.division_id}, ${last + 1}, 'fixtures_generated',
+                ${tx.json({ stage_id: stageId, fixture_ids: createdIds } as never)})`;
+      await tx`update divisions set seq = ${last + 1}, edit_watermark = null
+               where id = ${stage.division_id}`;
+    }
+    return { created, existing: gen.length - created, fixtures };
+  });
+}
+
+/** Fill one side of a fixture (slot 1=home, 2=away) if still open. The ONE
+ *  real mutation point for putting an entrant into a fixture slot — every
+ *  cross-stage or intra-bracket advancement routes through this (D4a/P5
+ *  scope item 3: "one pathway, not two"). Also clears the matching
+ *  `*_slot_label` (D4a design's Fill algorithm step 4: "clear its
+ *  *_slot_label params" — label text is derivable post-fill, and the
+ *  proposal row keeps it for history); a no-op for the pre-existing
+ *  intra-bracket callers, whose fixtures never had a label set. */
 export async function fillSlot(
   tx: Tx,
   fixtureId: string,
@@ -1103,10 +1536,10 @@ export async function fillSlot(
   entrantId: string,
 ): Promise<void> {
   if (slot === 1) {
-    await tx`update fixtures set home_entrant_id = ${entrantId}
+    await tx`update fixtures set home_entrant_id = ${entrantId}, home_slot_label = null
              where id = ${fixtureId} and home_entrant_id is null`;
   } else {
-    await tx`update fixtures set away_entrant_id = ${entrantId}
+    await tx`update fixtures set away_entrant_id = ${entrantId}, away_slot_label = null
              where id = ${fixtureId} and away_entrant_id is null`;
   }
 }
@@ -1119,32 +1552,63 @@ export interface SeededStage {
 }
 
 export interface CompleteStageResult extends CompleteResult {
-  /** Set when completion resolved the next stage's qualification spec. */
+  /** Set when completion resolved the next stage's qualification spec (the
+   *  OLD `stages.qualification` auto-seed flow). */
   qualified?: SeededStage;
   /** Fixtures auto-generated for the seeded next stage. */
   next_stage_fixtures?: number;
   /** True when this was the last stage — the division is now completed. */
   division_completed?: boolean;
+  /** D4a (P5) — set when completion computed a draft seed proposal for a
+   *  `.seeding`-declared next stage. Propose + confirm, never fully
+   *  automatic (owner ruling): unlike `qualified` above, this never fills
+   *  anything by itself. */
+  seed_proposal?: { id: string; status: string };
 }
 
 /**
  * Guarded progression (doc 08 §3): no-op unless the completion predicate
- * holds. On completion, if the next stage declares a qualification spec
- * (doc 05 §3), resolve it against this stage's ranked tables into an ordered
- * seed list, snapshotted as the next stage's `config.qualified` — and then
- * generate that stage's fixtures so the bracket appears immediately (the
- * organiser shouldn't have to know a second Generate click is needed).
- * Idempotent: an already-seeded stage is not re-seeded.
+ * holds. On completion:
+ *  - a `.seeding`-declared next stage (D4a/P5) gets a DRAFT seed proposal
+ *    computed (never auto-filled — propose + confirm); its fixtures already
+ *    exist as TBD placeholders, generated at division setup time.
+ *  - a `.qualification`-declared next stage (the OLDER mechanism) keeps its
+ *    existing auto-seed-then-generate behaviour, idempotent — an
+ *    already-seeded stage is not re-seeded.
  */
 export async function completeStage(auth: AuthCtx, stageId: string): Promise<CompleteStageResult> {
-  await withTenant(auth.orgId, async (tx) => {
-    const [stage] = await tx`select 1 from stages where id = ${stageId}`;
+  const current = await withTenant(auth.orgId, async (tx) => {
+    const [stage] = await tx<{ division_id: string; seq: number }[]>`
+      select division_id, seq from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
+    return stage;
   });
   const result = await completeStageIfReady(auth.orgId, stageId);
   if (!result.completed) return result;
-  const qualified = await seedNextStage(auth, stageId);
+
+  const next = await withTenant(auth.orgId, async (tx) => {
+    const [row] = await tx<{ id: string; seeding: Record<string, unknown> | null; qualification: Record<string, unknown> | null }[]>`
+      select id, seeding, qualification from stages
+      where division_id = ${current.division_id} and seq > ${current.seq}
+      order by seq limit 1`;
+    return row ?? null;
+  });
+
   void fireStageRevalidate(auth.orgId, stageId);
+
+  if (next?.seeding) {
+    // Best-effort, same spirit as the qualification path's generation step
+    // below: completion stands even if the proposal compute trips (e.g. the
+    // source stage this points at isn't THIS one and isn't ready yet).
+    try {
+      const proposal = await computeSeedProposal(auth, next.id);
+      return { ...result, seed_proposal: { id: proposal.id, status: proposal.status } };
+    } catch {
+      return result;
+    }
+  }
+
+  const qualified = next?.qualification ? await seedNextStage(auth, stageId) : null;
   if (!qualified) {
     // No stage follows: the division itself is done (doc 02 lifecycle
     // setup → active → completed). Idempotent — re-completing is a no-op.
@@ -1362,7 +1826,415 @@ export async function overrideStandings(
   });
   // pinned ranks land in the snapshots immediately
   await recomputeStandings(auth.orgId, stageId);
+  // D4a (P5): a correction here invalidates any dependent `.seeding` stage's
+  // draft proposal — mark it stale and recompute a fresh one.
+  await markDependentSeedProposalsStale(auth, stageId);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// D4a (P5) — seed proposals: propose + confirm cross-stage fill. See
+// stage-seeding.ts for the pure shape/placement/tie-detection logic this
+// wraps with DB reads (standings, TBD fixtures) and the fillSlot write.
+// ---------------------------------------------------------------------------
+
+/** Deterministic order-independent digest of a set of standings tables — the
+ *  `standingsHash` a proposal is derived from (design's Fill algorithm step
+ *  1: confirm re-checks this and refuses on drift, 409 SEEDING_PROPOSAL_STALE). */
+function standingsHash(tables: readonly PoolTableRows[]): string {
+  const material = [...tables]
+    .sort((a, b) => a.pool.localeCompare(b.pool))
+    .map((t) => `${t.pool}:${[...t.rows].map((r) => `${r.entrantId}=${r.rank ?? 0}`).join(",")}`)
+    .join("|");
+  return createHash("sha256").update(material).digest("hex").slice(0, 16);
+}
+
+/** The source stage's standings, as PoolTableRows keyed by pool KEY ('A'…, ""
+ *  for the overall/ungrouped table) — mirrors seedNextStage's own pool-uuid
+ *  → key translation. Throws SEEDING_SOURCE_INCOMPLETE if nothing has been
+ *  snapshotted yet (the source stage may exist but have no results). */
+async function sourceStandingsTables(tx: Tx, source: { id: string }): Promise<PoolTableRows[]> {
+  const poolRows = await tx<{ id: string; key: string }[]>`
+    select id, key from pools where stage_id = ${source.id}`;
+  const keyOf = new Map(poolRows.map((p) => [p.id, p.key]));
+  const snapshots = await tx<{ pool_id: string | null; rows: StandingsRow[] }[]>`
+    select pool_id, rows from standings_snapshots where stage_id = ${source.id}`;
+  if (snapshots.length === 0) {
+    throw new HttpError(409, "the source stage has no standings snapshots yet", "SEEDING_SOURCE_INCOMPLETE", {
+      sourceStageId: source.id,
+    });
+  }
+  return snapshots.map((s) => ({ pool: s.pool_id ? (keyOf.get(s.pool_id) ?? s.pool_id) : "", rows: s.rows }));
+}
+
+/** seed -> every "<fixtureId>:home" | "<fixtureId>:away" slot carrying that
+ *  seed's label, read off the TBD fixtures' own slot_label
+ *  (generateSeededStageFixtures stamps an internal `seed` alongside
+ *  {key,params} for exactly this lookup — renderers destructure
+ *  {key,params} and ignore it). Usually a singleton list, but a BYE seed
+ *  owns TWO: its own bye fixture's slot AND the winner-feed target's slot
+ *  (both get the SAME seed stamped — see the third pass in
+ *  generateSeededStageFixtures). #554: this used to collapse to a single
+ *  `Map<number,string>` (last-write-wins over an unordered SELECT), which
+ *  silently stranded whichever slot the DB didn't return last. `order by
+ *  id` makes the returned list's order — not just its membership —
+ *  reproducible across calls against the same fixture rows. */
+async function destinationSlotsBySeed(tx: Tx, stageId: string): Promise<Map<number, string[]>> {
+  const fixtures = await tx<
+    { id: string; home_slot_label: { seed?: number } | null; away_slot_label: { seed?: number } | null }[]
+  >`select id, home_slot_label, away_slot_label from fixtures where stage_id = ${stageId} order by id`;
+  const bySeed = new Map<number, string[]>();
+  const add = (seed: number, slot: string) => {
+    const list = bySeed.get(seed);
+    if (list) list.push(slot);
+    else bySeed.set(seed, [slot]);
+  };
+  for (const f of fixtures) {
+    if (typeof f.home_slot_label?.seed === "number") add(f.home_slot_label.seed, `${f.id}:home`);
+    if (typeof f.away_slot_label?.seed === "number") add(f.away_slot_label.seed, `${f.id}:away`);
+  }
+  return bySeed;
+}
+
+export interface SeedProposalOut {
+  id: string;
+  stageId: string;
+  status: "draft" | "confirmed" | "stale";
+  computed: {
+    qualifiers: {
+      rank: number;
+      source: { stageId: string; group?: string; rank: number };
+      entrantId: string;
+      destinationSlot: string;
+    }[];
+    ties: { slots: string[]; entrantIds: string[]; reason: string }[];
+    standingsHash: string;
+  };
+}
+
+/**
+ * Compute (or recompute) a DRAFT seed proposal for a `.seeding`-declared
+ * stage (design's API contract: POST /stages/{id}/seed-proposal). Never
+ * fills anything — propose + confirm, owner ruling. At most one 'draft' row
+ * per stage (DB partial unique index backs this too): any existing draft is
+ * marked 'stale' first.
+ *
+ * Errors: 422 SEEDING_RULES_MISSING (no `.seeding`, or its rules can't
+ * resolve against this stage's generated TBD fixtures — generate them
+ * first); 409 SEEDING_SOURCE_INCOMPLETE (source stage not complete, or has
+ * no standings yet); 409 SEEDING_ALREADY_CONFIRMED (this stage's slots are
+ * already filled — recompute is refused, not just a no-op, so the caller
+ * doesn't mistake a stale draft for something actionable).
+ */
+export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promise<SeedProposalOut> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [stage] = await tx<StageRow[]>`select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
+    if (!stage) throw new HttpError(404, "stage not found");
+    if (!stage.seeding) {
+      throw new HttpError(422, "this stage has no seeding rules declared", "SEEDING_RULES_MISSING");
+    }
+    const seeding = stage.seeding as unknown as StageSeedingInput;
+
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+
+    const [confirmed] = await tx<{ id: string }[]>`
+      select id from stage_seed_proposals where stage_id = ${stageId} and status = 'confirmed' limit 1`;
+    if (confirmed) {
+      throw new HttpError(
+        409,
+        "this stage's slots are already filled from a confirmed proposal",
+        "SEEDING_ALREADY_CONFIRMED",
+      );
+    }
+
+    const source = await resolveSeedingSource(tx, stage, seeding.source);
+    if (source.status !== "complete") {
+      throw new HttpError(409, "the source stage isn't complete yet", "SEEDING_SOURCE_INCOMPLETE", {
+        sourceStageId: source.id,
+      });
+    }
+    const tables = await sourceStandingsTables(tx, source);
+
+    const shape = await sourceShapeOf(tx, source);
+    const pots = expandTake(seeding.take, shape);
+    const placed = placeDescriptors(pots, seeding.placement, seeding.map);
+    const { qualifiers, ties } = resolveQualifiers(placed, tables);
+
+    const slotBySeed = await destinationSlotsBySeed(tx, stageId);
+    if (slotBySeed.size === 0) {
+      throw new HttpError(
+        422,
+        "this stage has no generated TBD fixtures yet — generate its fixtures first",
+        "SEEDING_RULES_MISSING",
+        { stageId },
+      );
+    }
+    const seedOfKey = new Map(qualifiers.map((q) => [descriptorKey(q.descriptor), q.seed] as const));
+
+    const computedQualifiers = qualifiers.map((q) => ({
+      rank: q.seed,
+      source: {
+        stageId: source.id,
+        ...(q.descriptor.kind === "group_rank" ? { group: q.descriptor.pool } : {}),
+        rank: q.rank,
+      },
+      entrantId: q.entrantId,
+      // Wire contract: ONE slot, for display (design's "Renderers receive
+      // {key,params}" convention extends here — first of the deterministic,
+      // order-by-id list). A bye seed's OTHER slot isn't dropped — it's
+      // filled too at confirm time via a fresh destinationSlotsBySeed() call
+      // keyed off this same `rank`; see confirmSeedProposal.
+      destinationSlot: slotBySeed.get(q.seed)?.[0] ?? "",
+    }));
+    if (computedQualifiers.some((q) => q.destinationSlot === "")) {
+      throw new HttpError(
+        422,
+        "this stage's generated TBD fixtures don't match its current seeding rules — regenerate them first",
+        "SEEDING_RULES_MISSING",
+        { stageId },
+      );
+    }
+    const computedTies = ties.map((t) => ({
+      slots: t.descriptors.map((d) => {
+        const seed = seedOfKey.get(descriptorKey(d));
+        return (seed !== undefined ? slotBySeed.get(seed)?.[0] : undefined) ?? descriptorKey(d);
+      }),
+      entrantIds: t.entrantIds,
+      reason: t.reason,
+    }));
+
+    const computed = { qualifiers: computedQualifiers, ties: computedTies, standingsHash: standingsHash(tables) };
+
+    await tx`update stage_seed_proposals set status = 'stale' where stage_id = ${stageId} and status = 'draft'`;
+    const [row] = await tx<{ id: string }[]>`
+      insert into stage_seed_proposals (org_id, stage_id, computed, status)
+      values (${auth.orgId}, ${stageId}, ${tx.json(computed as never)}, 'draft')
+      returning id`;
+
+    return { id: row!.id, stageId, status: "draft", computed };
+  });
+}
+
+export interface ConfirmSeedProposalOut {
+  proposalId: string;
+  filled: number;
+  fixtures: FixtureRow[];
+}
+
+/**
+ * Confirm a draft seed proposal (design's Fill algorithm, verbatim):
+ * 1. freshness (standingsHash) — else 409 stale.
+ * 2. apply edits + tiePicks over `computed` -> final slot map.
+ * 3. validate: bijection destinationSlot<->entrant, entrant ∈ division, no
+ *    slot already filled.
+ * 4. single transaction: fill via fillSlot (the SAME pathway intra-bracket
+ *    advancement uses — D4a/P5 scope item 3), mark the proposal confirmed.
+ * 5. post-commit: re-run schedule validation, pino `stage_seeded`.
+ */
+export async function confirmSeedProposal(
+  auth: AuthCtx,
+  stageId: string,
+  input: {
+    proposalId: string;
+    edits?: { destinationSlot: string; entrantId: string }[];
+    tiePicks?: { slots: string[]; order: string[] }[];
+  },
+): Promise<ConfirmSeedProposalOut> {
+  const committed = await withTenant(auth.orgId, async (tx) => {
+    const [stage] = await tx<StageRow[]>`select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
+    if (!stage) throw new HttpError(404, "stage not found");
+    if (!stage.seeding) throw new HttpError(422, "this stage has no seeding rules declared", "SEEDING_RULES_MISSING");
+    const seeding = stage.seeding as unknown as StageSeedingInput;
+
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+
+    const [proposal] = await tx<{ id: string; status: string; computed: SeedProposalOut["computed"] }[]>`
+      select id, status, computed from stage_seed_proposals where id = ${input.proposalId} and stage_id = ${stageId}`;
+    if (!proposal) throw new HttpError(404, "seed proposal not found");
+    if (proposal.status === "confirmed") {
+      throw new HttpError(
+        409,
+        "this stage's slots are already filled from a confirmed proposal",
+        "SEEDING_ALREADY_CONFIRMED",
+      );
+    }
+    if (proposal.status === "stale") {
+      throw new HttpError(409, "standings changed since this proposal was computed — recompute it first", "SEEDING_PROPOSAL_STALE");
+    }
+
+    // Step 1 — freshness. A standings override could have landed between the
+    // draft's compute and this request; re-derive the hash rather than trust
+    // the row's status alone.
+    const source = await resolveSeedingSource(tx, stage, seeding.source);
+    const tables = await sourceStandingsTables(tx, source);
+    if (standingsHash(tables) !== proposal.computed.standingsHash) {
+      await tx`update stage_seed_proposals set status = 'stale' where id = ${proposal.id}`;
+      throw new HttpError(409, "standings changed since this proposal was computed — recompute it first", "SEEDING_PROPOSAL_STALE");
+    }
+
+    // Step 2 — apply edits + tiePicks over the computed slate.
+    const bySlot = new Map(proposal.computed.qualifiers.map((q) => [q.destinationSlot, q.entrantId] as const));
+    for (const edit of input.edits ?? []) {
+      if (!bySlot.has(edit.destinationSlot)) {
+        throw new HttpError(
+          422,
+          `edit references a slot this proposal doesn't have: ${edit.destinationSlot}`,
+          "SEEDING_EDIT_UNKNOWN_SLOT",
+        );
+      }
+      bySlot.set(edit.destinationSlot, edit.entrantId);
+    }
+    // Every flagged tie must be resolved by an edit or a tiePick covering
+    // every one of its slots — never silently confirmed on the engine's
+    // deterministic (seed/id) fallback (design: "a tie is FLAGGED, never
+    // silently ordered").
+    const editedSlots = new Set((input.edits ?? []).map((e) => e.destinationSlot));
+    const pickedGroups = new Set((input.tiePicks ?? []).map((p) => [...p.slots].sort().join(",")));
+    for (const tie of proposal.computed.ties) {
+      const coveredByEdit = tie.slots.every((slot) => editedSlots.has(slot));
+      const coveredByPick = pickedGroups.has([...tie.slots].sort().join(","));
+      if (!coveredByEdit && !coveredByPick) {
+        throw new HttpError(
+          422,
+          "a flagged tie is not resolved — supply an edit or a tiePick for every tied slot",
+          "SEEDING_TIE_UNRESOLVED",
+          { slots: tie.slots, entrantIds: tie.entrantIds },
+        );
+      }
+    }
+    for (const pick of input.tiePicks ?? []) {
+      pick.slots.forEach((slot, i) => {
+        const entrantId = pick.order[i];
+        if (entrantId) bySlot.set(slot, entrantId);
+      });
+    }
+
+    // Step 3 — validate: bijection destinationSlot<->entrant, entrant ∈
+    // division, no slot already filled.
+    const finalSlots = [...bySlot.entries()];
+    const entrantIds = finalSlots.map(([, id]) => id);
+    if (new Set(entrantIds).size !== entrantIds.length) {
+      throw new HttpError(422, "the same entrant is assigned to more than one slot", "SEEDING_SLOT_DOUBLE_ASSIGNED");
+    }
+    const known = await tx<{ id: string }[]>`
+      select id from entrants where id in ${tx(entrantIds)} and division_id = ${stage.division_id}`;
+    if (known.length !== new Set(entrantIds).size) {
+      throw new HttpError(422, "a qualifier does not belong to this division", "SEEDING_ENTRANT_FOREIGN");
+    }
+    // #554 — a bye seed owns TWO destination slots (its own bye fixture's
+    // slot AND the winner-feed target's slot), but the wire-level
+    // `destinationSlot` above names only one of them (computeSeedProposal's
+    // single-slot display convention — see its comment). Expand every wire
+    // slot into every slot sharing its seed so BOTH get filled, through the
+    // SAME fillSlot pathway used everywhere else (D4a/P5 scope item 3), not
+    // a second one. Re-derive fresh rather than trust the draft's persisted
+    // `computed` (which, by the same wire convention, only ever recorded one
+    // slot per seed) — `rank` on each persisted qualifier IS the seed
+    // destinationSlotsBySeed keys on, so this is an exact re-lookup, not a
+    // re-derivation of the proposal itself.
+    const seedByWireSlot = new Map(proposal.computed.qualifiers.map((q) => [q.destinationSlot, q.rank] as const));
+    const freshSlotsBySeed = await destinationSlotsBySeed(tx, stageId);
+    const expandedSlots = new Map<string, string>();
+    for (const [wireSlot, entrantId] of finalSlots) {
+      const seed = seedByWireSlot.get(wireSlot);
+      const siblings = seed !== undefined ? freshSlotsBySeed.get(seed) : undefined;
+      for (const slot of siblings && siblings.length > 0 ? siblings : [wireSlot]) {
+        expandedSlots.set(slot, entrantId);
+      }
+    }
+    const expandedEntries = [...expandedSlots.entries()];
+
+    const fixtureIds = [...new Set(expandedEntries.map(([slot]) => slot.split(":")[0] as string))];
+    const fixtureRows = await tx<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+      select id, home_entrant_id, away_entrant_id from fixtures
+      where id in ${tx(fixtureIds)} and stage_id = ${stageId}`;
+    const fixtureById = new Map(fixtureRows.map((f) => [f.id, f]));
+    for (const [slot] of expandedEntries) {
+      const [fixtureId, side] = slot.split(":");
+      const fixture = fixtureId ? fixtureById.get(fixtureId) : undefined;
+      if (!fixture) {
+        throw new HttpError(422, `destinationSlot names a fixture outside this stage: ${slot}`, "SEEDING_SLOT_FOREIGN_FIXTURE");
+      }
+      const already = side === "home" ? fixture.home_entrant_id : fixture.away_entrant_id;
+      if (already !== null) {
+        throw new HttpError(409, `slot ${slot} is already filled`, "SEEDING_FIXTURES_ALREADY_FILLED");
+      }
+    }
+
+    // Step 4 — single transaction: fill through fillSlot, mark confirmed.
+    for (const [slot, entrantId] of expandedEntries) {
+      const [fixtureId, side] = slot.split(":");
+      await fillSlot(tx, fixtureId as string, side === "home" ? 1 : 2, entrantId);
+    }
+    await tx`update stage_seed_proposals set status = 'confirmed', confirmed_at = now() where id = ${proposal.id}`;
+
+    const fixtures = await tx<FixtureRow[]>`
+      select ${tx(FIXTURE_COLS)} from fixtures where stage_id = ${stageId} order by round_no, seq_in_round`;
+    return { filled: expandedEntries.length, fixtures, divisionId: stage.division_id };
+  });
+
+  log.info(
+    { event: "stage_seeded", stageId, proposalId: input.proposalId, edits: input.edits?.length ?? 0 },
+    "stage_seeded",
+  );
+  void fireStageRevalidate(auth.orgId, stageId);
+
+  // Step 5 — post-commit: re-run schedule validation so newly-real person
+  // clashes surface as warnings, run not blocked (design's Fill algorithm;
+  // crossPersonClash already skips TBD slots — usecases/schedule.ts
+  // peopleOf()). Best-effort: a validation hiccup must not undo a fill that
+  // already committed.
+  try {
+    await validateSchedule(auth, committed.divisionId);
+  } catch {
+    // best-effort, see above
+  }
+
+  return { proposalId: input.proposalId, filled: committed.filled, fixtures: committed.fixtures };
+}
+
+/** A standings change on `sourceStageId` invalidates any dependent
+ *  `.seeding` stage's draft proposal — mark it stale and recompute a fresh
+ *  one against the corrected table (design: overrideStandings "marks
+ *  dependent draft proposals stale and recomputes"). Best-effort throughout:
+ *  a dependent whose recompute now trips (e.g. rules unsatisfiable, or
+ *  already confirmed) is left as-is rather than blocking the write that
+ *  already committed.
+ *
+ *  Exported (P5 review finding): `overrideStandings` is not the only
+ *  standings-mutating path a COMPLETE source stage can still take.
+ *  `LOCKED_FIXTURE_STATUSES` (append-event.ts) is only {finalized,
+ *  cancelled} — "decided" is not locked — so a correction to an
+ *  already-decided fixture via the live scoring path (usecases/scoring.ts
+ *  onDecided) is permitted too, and must call this the same way. */
+export async function markDependentSeedProposalsStale(auth: AuthCtx, sourceStageId: string): Promise<void> {
+  const dependents = await withTenant(auth.orgId, async (tx) => {
+    const [src] = await tx<{ division_id: string }[]>`select division_id from stages where id = ${sourceStageId}`;
+    if (!src) return [];
+    const rows = await tx<{ id: string; seq: number; seeding: Record<string, unknown> | null }[]>`
+      select id, seq, seeding from stages where division_id = ${src.division_id} and seeding is not null`;
+    const matches: string[] = [];
+    for (const row of rows) {
+      const seeding = row.seeding as unknown as StageSeedingInput;
+      try {
+        const source = await resolveSeedingSource(tx, { division_id: src.division_id, seq: row.seq }, seeding.source);
+        if (source.id === sourceStageId) matches.push(row.id);
+      } catch {
+        // an unresolvable source can't depend on this stage
+      }
+    }
+    if (matches.length > 0) {
+      await tx`update stage_seed_proposals set status = 'stale' where stage_id in ${tx(matches)} and status = 'draft'`;
+    }
+    return matches;
+  });
+  for (const dependentStageId of dependents) {
+    try {
+      await computeSeedProposal(auth, dependentStageId);
+    } catch {
+      // best-effort, see docstring
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
