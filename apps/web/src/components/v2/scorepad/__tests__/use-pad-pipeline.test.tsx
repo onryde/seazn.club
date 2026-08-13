@@ -15,6 +15,7 @@ import type { AppendCallResult, AppendEventBody } from "../pipeline";
 import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "../types";
 import type { FixtureStateResult, PadTransport } from "../transport";
 import type { RealtimeConnector } from "../use-fixture-stream";
+import type { QueueStore } from "../queue-store";
 import {
   DOUBLE_SUBMIT_WINDOW_MS,
   pendingToEnvelope,
@@ -22,6 +23,39 @@ import {
   type UsePadPipelineParams,
   type UsePadPipelineResult,
 } from "../use-pad-pipeline";
+
+// S12/#421 pass H test seam: this suite's vitest environment is Node, with
+// no real `indexedDB` (queue-store.ts's own documented fallback — see the
+// "store fallback" describe block below, which pins that precondition).
+// `indexedDbQueueStore` therefore hands back a brand-new, ISOLATED
+// `memoryQueueStore()` on EVERY call regardless of dbName — fine for every
+// existing test here (one mount each), but it means "two separate
+// usePadPipeline mounts sharing a dbName" can never be told apart from "two
+// mounts that happen to use the same string" without this seam: a real
+// reload keeps IndexedDB (keyed by dbName) intact, and proving a fix
+// survives one needs that same persistence in a Node test. Caches by dbName
+// so a second mount reusing the SAME dbName sees the first mount's queue —
+// cleared in `beforeEach` below so this can never leak state into an
+// UNRELATED test that happens to reuse the same default dbName
+// (`baseParams()`'s "fx-1").
+const queueStoreRegistry = vi.hoisted(() => new Map<string, QueueStore>());
+vi.mock("../queue-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../queue-store")>();
+  return {
+    ...actual,
+    indexedDbQueueStore: (dbName: string): QueueStore => {
+      const existing = queueStoreRegistry.get(dbName);
+      if (existing !== undefined) return existing;
+      const fresh = actual.memoryQueueStore();
+      queueStoreRegistry.set(dbName, fresh);
+      return fresh;
+    },
+  };
+});
+
+beforeEach(() => {
+  queueStoreRegistry.clear();
+});
 
 const ME: OwnIdentity = { recordedBy: "user-1", deviceLinkId: null };
 
@@ -147,6 +181,17 @@ function mountPipeline(params: UsePadPipelineParams) {
      *  would across a real React re-render of the same component instance. */
     rerender(nextParams: UsePadPipelineParams) {
       island.rerender({ params: nextParams, onReady: (r) => (latest = r) });
+    },
+    /** Tear this instance down the way a real page navigation/reload would
+     *  (S12/#421 pass H) — runs every mount effect's cleanup once. A FRESH
+     *  `mountPipeline(...)` call afterwards is a genuinely NEW hook instance
+     *  — `renderIsland` allocates new cells/refs/effects per call — unlike
+     *  `rerender` above, which keeps THIS instance (and its `ownEventIds`)
+     *  alive. Pairing `unmount()` with a fresh `mountPipeline` is how this
+     *  suite tells "survives a real reload" apart from "survives a
+     *  re-render". */
+    unmount() {
+      island.unmount();
     },
   };
 }
@@ -1456,5 +1501,156 @@ describe("usePadPipeline — undo a pad-submitted event with no reload (S12/#421
     const voidCall = appendCalls.find((c) => c.type === "core.void");
     expect(voidCall, "the queued void must eventually drain, not stay stuck forever").toBeTruthy();
     expect(voidCall!.payload).toEqual({ event_id: REAL_SERVER_ID });
+  });
+});
+
+// S12/#421 pass H — undo-before-reload, REOPENED. Pass G (above) fixed
+// resolveVoidTargetId WITHIN one mount; a review found the fix held only
+// there — `ownEventIds` is plain useState, reset empty on every fresh mount,
+// and the mount-time "resume leftover queue" effect only re-marks a queued
+// void's OWN id, never its TARGET's (an already-acked target has already
+// left the queue by definition, so it is never among the "leftover" entries
+// that effect iterates). So a void queued offline that survives to a
+// genuine reload before it drains used to put the stale client-fabricated
+// id back on the wire all over again — silently, forever. Fixed by
+// persisting the target's seq on the queued PendingEvent itself
+// (types.ts `voidTargetSeq`) — see use-pad-pipeline.ts's own PASS H UPDATE
+// (file header and `resolveVoidTargetId`/`voidTargetSeqAtSubmit`) for the
+// full trace.
+describe("usePadPipeline — undo a pad-submitted event ACROSS a reload (S12/#421 pass H)", () => {
+  it("MUTATION TARGET: a queued void's target resolves to the SERVER id after a genuine unmount+remount, not the stale client-fabricated one", async () => {
+    const REAL_SERVER_ID = "server-real-goal-id-reload";
+    const DB_NAME = "pass-h-reload-repro";
+    let appendMode: "ok" | "fail" = "ok";
+    let listMode: "ok" | "fail" = "ok";
+    let ackSeq = 1;
+    const appendCalls: AppendEventBody[] = [];
+    const listEventsSinceCalls: number[] = [];
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        if (appendMode === "fail") return { kind: "network-error", message: "offline" };
+        const seq = ackSeq;
+        ackSeq += 1;
+        return success(seq);
+      },
+      async listEventsSince(_fixtureId, sinceSeq): Promise<LedgerSlotEvent[]> {
+        listEventsSinceCalls.push(sinceSeq);
+        if (listMode === "fail") throw new Error("offline");
+        return [
+          {
+            id: REAL_SERVER_ID,
+            seq: 1,
+            type: "generic.score",
+            payload: { by: "H", points: 3 },
+            recorded_at: "2026-08-13T00:00:01.000Z",
+            recorded_by: "user-1",
+            device_link_id: null,
+          },
+        ];
+      },
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 1, state: null, summary: null, outcome: null };
+      },
+    };
+
+    // Mount 1: score ONLINE (a real, already-acked target to undo — same
+    // precondition as the "undo still queues while OFFLINE" test above),
+    // then go offline and undo it. The void enqueues but cannot drain.
+    const pad1 = mountPipeline(baseParams({ transport, queueDbName: DB_NAME }));
+    await pad1.current.submit("generic.score", { by: "H", points: 3 });
+    const scoredId = pad1.current.events.find((e) => e.type === "generic.score")!.id;
+    // Pins the bug's own precondition — this IS the id handleVoid submits
+    // verbatim: the client's own idempotency key, never a real row id.
+    expect(pad1.current.ownEventIds.has(scoredId)).toBe(true);
+    expect(pad1.current.queueDepth).toBe(0);
+
+    appendMode = "fail";
+    listMode = "fail";
+    await pad1.current.submit("core.void", { event_id: scoredId });
+    expect(pad1.current.queueDepth).toBe(1); // queued, not dropped
+    expect(appendCalls.some((c) => c.type === "core.void")).toBe(false); // never reached the wire yet
+
+    // Genuinely tear this instance down — a real page reload, not a
+    // same-mount rerender (pass E's own idiom just above, and deliberately
+    // NOT what this test needs: rerender keeps ownEventIds alive, which is
+    // exactly the in-memory state a real reload discards).
+    pad1.unmount();
+
+    // Back online, and mount a BRAND NEW hook instance sharing the SAME
+    // durable queue (this file's queueStoreRegistry mock, above) — a fresh
+    // ownEventIds (empty), fresh ledgerEvents seeded from initialEvents the
+    // way a real bootstrap fetch would hand back the ALREADY-ACKED scored
+    // event: under its REAL server id, never the client-fabricated one.
+    appendMode = "ok";
+    listMode = "ok";
+    const serverRow: EventEnvelope = {
+      id: REAL_SERVER_ID,
+      fixtureId: "fx-1",
+      seq: 1,
+      type: "generic.score",
+      payload: { by: "H", points: 3 },
+      recordedAt: "2026-08-13T00:00:01.000Z",
+      recordedBy: "user-1",
+    };
+    const pad2 = mountPipeline(baseParams({ transport, queueDbName: DB_NAME, initialEvents: [serverRow] }));
+    // The bug's own precondition, reproduced: a fresh mount never rebuilds
+    // this — not immediately, and (unlike the void's OWN id) not ever, since
+    // the resume effect below only re-marks leftover QUEUE entries, and the
+    // already-acked target is not one.
+    expect(pad2.current.ownEventIds.has(scoredId)).toBe(false);
+
+    // The mount-time "resume leftover queue" effect drains fire-and-forget;
+    // give its microtask chain room to settle. No fake timers in this
+    // describe block, and nothing in this chain arms a real setTimeout —
+    // streamConnector defaults to autoConfirmConnector() (baseParams()),
+    // matching this file's own established "never arms setInterval" idiom
+    // (see the "live stream wiring" describe block's own comment above) — so
+    // a handful of real ticks is enough regardless of how deep the chain is.
+    for (let i = 0; i < 5; i += 1) {
+      await tick();
+    }
+
+    const voidCall = appendCalls.find((c) => c.type === "core.void");
+    expect(voidCall, "the queued void must actually drain after the remount, not stay stuck forever").toBeTruthy();
+    // THE regression, and the actual point of this test: the WIRE payload
+    // must carry the server's real row id, resolved from the durably-
+    // persisted seq — never the client-fabricated one ownEventIds alone can
+    // no longer vouch for after a reload.
+    expect(voidCall!.payload).toEqual({ event_id: REAL_SERVER_ID });
+    expect(voidCall!.payload).not.toEqual({ event_id: scoredId });
+    expect(listEventsSinceCalls.length).toBeGreaterThan(0);
+    expect(pad2.current.queueDepth).toBe(0);
+    // A SEPARATE, pre-existing, OUT-OF-SCOPE characteristic this test
+    // surfaces but does not fix: pendingToEnvelope's LOCAL/optimistic void
+    // envelope always keeps the ORIGINAL untranslated target id (pass G's
+    // own deliberate invariant — its file-header comment: "next itself is
+    // NEVER reassigned... pendingToEnvelope's LOCAL fold envelope must keep
+    // reading the LOCAL target id, consistent with ledgerEvents' own `.id`
+    // fields"). That consistency holds WITHIN one mount (the ack-merge keeps
+    // the client id forever, pass F), but breaks here: this reload's
+    // initialEvents replaced the target's ledgerEvents entry with the SERVER
+    // id, so the void's own local `voids: scoredId` no longer matches
+    // anything in the list being folded. The engine's own resolveVoids
+    // (packages/engine/src/core/events.ts) is unconditional — not
+    // strict-gated, see reference_client_fold_is_always_nonstrict — and
+    // throws INVALID_EVENT for a `voids` reference it cannot find; caught by
+    // foldedState's own catch (S3/#426 OWNER RULING 2: degrade, never crash)
+    // and surfaced via lastRejection, the same shape as this file's own
+    // documented "foreign core.void" boundary (voids_event_id dropped by
+    // LedgerSlotEvent). The WIRE operation this pass fixes is unaffected
+    // (proven above); only the LOCAL display's transient error banner is —
+    // and only until the next server reconciliation with a real (non-null)
+    // state, or the next submit() (lastRejection has no auto-clear
+    // otherwise, by design — see the "lastRejection" describe block above).
+    // Pinned here, not asserted away, so a future change to either side of
+    // this seam gets noticed.
+    expect(pad2.current.lastRejection).toEqual({
+      code: "INVALID_EVENT",
+      message: `core.void targets unknown or non-prior event "${scoredId}"`,
+    });
   });
 });

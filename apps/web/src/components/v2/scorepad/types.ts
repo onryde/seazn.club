@@ -39,6 +39,20 @@ export interface PendingEvent {
    *  ledger slot could not be read/resolved). Absent once a send attempt has
    *  not yet failed. */
   lastError?: string;
+  /** S12/#421 pass H — for a `core.void` ONLY: the target's seq, as resolved
+   *  from `ledgerEvents` at the moment this void was submitted (see
+   *  use-pad-pipeline.ts `voidTargetSeqAtSubmit`). Durable so a still-queued
+   *  void's target can be translated from its real client-fabricated id to
+   *  the server's row id from this record ALONE, independent of
+   *  `ownEventIds` (in-memory, reset empty on every fresh mount — the exact
+   *  state a reload discards before a queued void gets a chance to drain).
+   *  Absent for every non-void event, for a void whose target was not yet
+   *  acked at submit time (falls back to the pre-existing ownEventIds/FIFO
+   *  resolution instead — see use-pad-pipeline.ts `resolveVoidTargetId`),
+   *  and for any record persisted by a build predating this field — reading
+   *  it as `undefined` must never throw, only degrade to that older,
+   *  same-mount-only behaviour. */
+  voidTargetSeq?: number;
 }
 
 /** Network reachability as the pipeline understands it. The pipeline still

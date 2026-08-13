@@ -122,6 +122,32 @@
 // default. See that call site's own comment for why the precedence has to
 // flip for this one caller (an `id`/`voids` argument, not an arbitrary
 // choice).
+//
+// SCOPE BOUNDARY, S12/#421 PASS H UPDATE (undo-before-reload, REOPENED by a
+// reload — _INDEX.md decision log): pass G's own fix above holds only WITHIN
+// one mount. `ownEventIds` is plain `useState`, reset empty on every fresh
+// mount, and the mount-time "resume leftover queue" effect (below) re-marks
+// own only the ids of entries STILL SITTING in the durable queue — a queued
+// void's OWN idempotencyKey, never its TARGET's, since an already-acked
+// target has by definition already left that queue. So: score an event
+// online (acked — the client-fabricated id survives the ack merge forever,
+// pass F above); go offline; undo it (the void enqueues, correctly deferred
+// by pass G's own `unresolvable-transient` path); reload before it drains.
+// The fresh mount's `ownEventIds` no longer recognises the target's id as
+// this device's own, so `resolveVoidTargetId` took the `"same"` fast path
+// and put the stale client id back on the wire — silently, forever, the
+// exact failure pass G exists to close, reopened by a reload it never
+// accounted for. Fixed by threading the target's SEQ through the durable
+// queue itself (`PendingEvent.voidTargetSeq`, types.ts), captured once at
+// void-SUBMIT time (`voidTargetSeqAtSubmit`, just above
+// `resolveVoidTargetId`) — a live mount, `ownEventIds` fully warm, never
+// subject to the reload gap. Whenever present it is authoritative and skips
+// the ownEventIds gate entirely, which is what makes `ownEventIds` an
+// OPTIMISATION from here on rather than a correctness dependency —
+// `resolveVoidTargetId`'s own doc has the fallback it still keeps, for a
+// pre-pass-H queued record (degrades to the old, same-mount-only behaviour,
+// never throws) or a target not yet acked at void-submit time (self-resolves
+// via FIFO ordering instead, exactly as before this pass).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EngineError, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -436,7 +462,16 @@ function mergeLedgerEvents(
  *  posture is that flaky courtside wifi is the normal case, not an edge
  *  case) gets another attempt on the next drain — `kind:
  *  "unresolvable-transient"`, deliberately NOT treated as permanent so a
- *  genuinely valid undo is never killed by one bad read. */
+ *  genuinely valid undo is never killed by one bad read.
+ *
+ *  S12/#421 PASS H UPDATE — the `ownEventIds`-gated path described above
+ *  holds only WITHIN the mount that submitted the void; see the file
+ *  header's PASS H UPDATE for the reload-shaped gap that reopened. `seq`
+ *  below now prefers the DURABLE `voidTargetSeq` (captured once, at
+ *  void-submit time, by `voidTargetSeqAtSubmit` just below — a live mount,
+ *  never subject to that gap) over the in-memory `ownEventIds` lookup,
+ *  which survives only as a fallback for a void queued before this field
+ *  existed, or one whose target had not yet been acked at submit time. */
 export type VoidTargetResolution =
   | { kind: "same"; eventId: string }
   | { kind: "resolved"; eventId: string }
@@ -447,24 +482,80 @@ export async function resolveVoidTargetId(
   transport: Pick<PadTransport, "listEventsSince">,
   fixtureId: string,
   targetId: string,
+  voidTargetSeq: number | undefined,
   ownEventIds: ReadonlySet<string>,
   ledgerEvents: readonly EventEnvelope[],
   cache: Map<string, string>,
 ): Promise<VoidTargetResolution> {
-  if (!ownEventIds.has(targetId)) return { kind: "same", eventId: targetId };
+  // The durable seq wins whenever present — it is what makes this correct
+  // across a reload (see the file header's PASS H UPDATE). Falls back to
+  // the original ownEventIds+id lookup only for a void that never had one
+  // captured — see `voidTargetSeqAtSubmit`'s own doc for the two reasons
+  // that happens, neither of which is "translation was actually needed and
+  // we lost track of it".
+  const seq =
+    voidTargetSeq ?? (ownEventIds.has(targetId) ? ledgerEvents.find((e) => e.id === targetId)?.seq : undefined);
+  if (seq === undefined) {
+    // No durable hint, and this mount does not recognise the target as its
+    // own either — the fast, common path: a target loaded from
+    // initialEvents/a poll never needed translation in the first place, and
+    // costs no network round trip to confirm that.
+    if (!ownEventIds.has(targetId)) return { kind: "same", eventId: targetId };
+    // Claimed as own (by this mount, or durably by a prior one) but no seq
+    // anywhere to resolve from — genuinely never landed.
+    return { kind: "unresolvable-permanent" };
+  }
   const cached = cache.get(targetId);
   if (cached !== undefined) return { kind: "resolved", eventId: cached };
-  const target = ledgerEvents.find((e) => e.id === targetId);
-  if (target === undefined) return { kind: "unresolvable-permanent" };
   try {
-    const rows = await transport.listEventsSince(fixtureId, target.seq - 1);
-    const row = rows.find((r) => r.seq === target.seq);
+    const rows = await transport.listEventsSince(fixtureId, seq - 1);
+    const row = rows.find((r) => r.seq === seq);
     if (row === undefined || row.id === undefined) return { kind: "unresolvable-transient" };
     cache.set(targetId, row.id);
     return { kind: "resolved", eventId: row.id };
   } catch {
     return { kind: "unresolvable-transient" };
   }
+}
+
+/** S12/#421 pass H — the target's seq, captured ONCE, at void-SUBMIT time
+ *  (`submit()`, below), from whatever `ledgerEvents` shows for the target
+ *  RIGHT THEN. Persisted on the queued `PendingEvent` (types.ts) so
+ *  `resolveVoidTargetId` above can translate a still-queued void's target id
+ *  from the durable record alone, independent of `ownEventIds` — which a
+ *  reload resets empty before a queued void gets a chance to drain (file
+ *  header, PASS H UPDATE).
+ *
+ *  Gated on `ownEventIds.has(targetId)`, deliberately mirroring
+ *  `resolveVoidTargetId`'s own original gate: at SUBMIT time this mount's
+ *  `ownEventIds` is always warm (never subject to the reload gap — that only
+ *  bites LATER, at drain time), so this is the one moment a correct verdict
+ *  is cheap to get for free. Capturing a seq REGARDLESS of ownEventIds would
+ *  wrongly mark a foreign/history target (loaded from initialEvents, never
+ *  needing translation at all) as needing one too — turning the fast `same`
+ *  path into a needless network round trip for the common case of undoing
+ *  something nobody ever fabricated an id for.
+ *
+ *  Returns `undefined` — never a guess — when: `type` is not `core.void`;
+ *  the payload's own `event_id` cannot be read at all; the target is not
+ *  (yet, or ever) one of THIS mount's own submissions; or the target IS own
+ *  but has not been acked yet (still sitting in `pendingEnvelopes`, not
+ *  `ledgerEvents`, at this exact instant). That last case does not regress:
+ *  nothing enqueues a void before its target exists, and `runDrain`'s strict
+ *  FIFO order guarantees the target settles (acked into `ledgerEvents`, or
+ *  permanently rejected) before this void's own turn ever comes up, whether
+ *  that happens in this same drain pass or a later one after a reload — see
+ *  `resolveVoidTargetId`'s own ownEventIds fallback for that path. */
+function voidTargetSeqAtSubmit(
+  type: string,
+  payload: unknown,
+  ownEventIds: ReadonlySet<string>,
+  ledgerEvents: readonly EventEnvelope[],
+): number | undefined {
+  if (type !== "core.void") return undefined;
+  const targetId = extractVoidEventId(payload);
+  if (targetId === null || !ownEventIds.has(targetId)) return undefined;
+  return ledgerEvents.find((e) => e.id === targetId)?.seq;
 }
 
 export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResult {
@@ -731,6 +822,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
               transport,
               fixtureId,
               targetId,
+              next.voidTargetSeq,
               ownEventIdsRef.current,
               ledgerEventsRef.current,
               voidTargetServerIdRef.current,
@@ -922,6 +1014,11 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       lastAccepted.current = { type, payload, at: now };
       try {
         const nextExpectedSeq = ledgerEventsRef.current.length + pendingEnvelopesRef.current.size;
+        // S12/#421 pass H — captured HERE, not derived later at drain time,
+        // so it is correct even if this exact void is still sitting in the
+        // queue after a reload wipes ownEventIds. See voidTargetSeqAtSubmit's
+        // own doc for why this read is safe to trust unconditionally.
+        const voidTargetSeq = voidTargetSeqAtSubmit(type, payload, ownEventIdsRef.current, ledgerEventsRef.current);
         const pending: PendingEvent = {
           localId: newId(),
           idempotencyKey: newId(),
@@ -930,6 +1027,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           expectedSeq: nextExpectedSeq,
           createdAt: new Date().toISOString(),
           attempts: 0,
+          ...(voidTargetSeq === undefined ? {} : { voidTargetSeq }),
         };
         const withPending = new Map(pendingEnvelopesRef.current);
         withPending.set(pending.idempotencyKey, pendingToEnvelope(fixtureId, identity, pending));
