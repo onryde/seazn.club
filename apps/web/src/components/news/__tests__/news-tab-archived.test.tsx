@@ -38,7 +38,7 @@ function post(overrides: Partial<OrgPost>): OrgPost {
   };
 }
 
-const base = { orgId: "o", orgSlug: "org", competitions: [], canEdit: true };
+const base = { orgId: "o", orgSlug: "org", competitions: [], canEdit: true, hasNewsAuto: true };
 
 describe("NewsTab archived disclosure", () => {
   it("folds archived posts into an Archived (N) details with republish + delete", () => {

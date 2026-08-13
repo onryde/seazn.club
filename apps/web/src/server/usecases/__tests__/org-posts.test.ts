@@ -764,4 +764,51 @@ describe.skipIf(!HAS_DB)("org-posts auto-drafts", () => {
     expect(results).toHaveLength(1);
     expect(results[0]!.bodyMd).toContain("Alex Player");
   });
+
+  // P3 (D7) acceptance criterion (b): a GENUINELY poisoned stats source — a
+  // real function throwing for a real reason, not a mock that cannot fail —
+  // must still yield the draft, with only the poisoned section missing.
+  //
+  // Tried first, and instructive enough to leave a trace of: corrupting
+  // divisions.module_version between two reads does NOT isolate cleanly —
+  // `scoreEvent` itself calls `assertEntitledToScore` -> resolveModule on
+  // EVERY write, so a bad module_version breaks the SETUP (scoreEvent
+  // throws before the fixture ever decides), not just the enrichment read.
+  // The clean, isolated poison is a malformed `previous_rows` JSON shape:
+  // `biggestClimber` calls `.map()` on it unconditionally once past its
+  // null/empty guard, so a stored value that is an OBJECT (not an array —
+  // truthy, and `{}.length` is `undefined`, not `0`, so the empty-guard
+  // does not catch it either) makes `.map` throw "not a function" for
+  // real — no mock, and nothing else in the round-recap draft depends on
+  // that column, so the rest of the draft is untouched.
+  it("P3 fail-open: a malformed previous_rows value drops only the standings-moves line, never the recap draft", async () => {
+    const ctx = await seedOrg();
+    const div = await seedDivision(ctx, { autoPosts: true });
+    const fx1 = await seedDecidedFixture(ctx, div, { round: 1, homeLine: "3", awayLine: "1" });
+    const fx2 = await seedDecidedFixture(ctx, div, { round: 1, homeLine: "0", awayLine: "0" });
+    void fx1;
+    await sql`
+      insert into standings_snapshots (stage_id, org_id, pool_id, rows, previous_rows, computed_through_seq)
+      values (${div.stageId}, ${ctx.orgId}, null,
+        ${sql.json([
+          { entrantId: div.entrantA, played: 1, won: 1, drawn: 0, lost: 0, points: 3, metrics: {}, rank: 1 },
+          { entrantId: div.entrantB, played: 1, won: 0, drawn: 0, lost: 1, points: 0, metrics: {}, rank: 2 },
+        ])},
+        ${sql.json({ corrupt: "not an array" })},
+        2)`;
+
+    await draft(ctx, fx2);
+
+    const recap = (await listPosts(ctx.auth, ctx.orgId)).filter((p) => p.kind === "round_recap");
+    expect(recap).toHaveLength(1); // the draft was NOT dropped
+    // The plain results + standings blocks (unrelated to previous_rows)
+    // still render normally.
+    expect(recap[0]!.bodyMd).toContain("Riverside");
+    expect(recap[0]!.bodyMd).toContain("Standings");
+    // The poisoned source's OWN line is genuinely absent — not silently
+    // wrong, just missing, and nothing about the crash leaked into the body.
+    expect(recap[0]!.bodyMd).not.toContain("climbed from");
+    expect(recap[0]!.bodyMd).not.toContain("Movers");
+    expect(recap[0]!.bodyMd).not.toContain("undefined");
+  });
 });

@@ -1,0 +1,49 @@
+# Weekly news digest (P3 / D7): POST the sweep endpoint once a week. The
+# schedule itself is the idempotency guarantee — sweepWeeklyDigests (and the
+# console button beneath it) deliberately does NOT dedupe per-org per-week
+# (V358 exempts weekly_digest from org_posts_auto_once, org-posts.ts's
+# generateWeeklyDigest docstring explains why), so this workflow must fire at
+# most once a week or every org would get one digest per run.
+#
+# Auth: the x-cron-secret header must match the app's CRON_SECRET env — same
+# secret this repo's other cron workflows already share:
+#   gh secret set CRON_SECRET                      # this workflow
+#   flyctl secrets set -c fly.stg.toml CRON_SECRET=<same>  # the app
+#
+# Skips with a warning until the GitHub secret exists (a missing secret must
+# not fill the Actions tab with red), and fails loud on any non-200 so a
+# mismatch or a broken endpoint is visible.
+name: Weekly News Digest STAGE
+
+on:
+  schedule:
+    - cron: "17 8 * * 1" # Monday mornings UTC, off the top-of-hour rush
+  workflow_dispatch: {} # manual run for testing
+
+permissions: {}
+
+concurrency:
+  group: news-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    name: Generate weekly digests (staging)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      BASE_URL: https://stg.seazn.club
+    steps:
+      - name: Secret missing — skip
+        if: env.CRON_SECRET == ''
+        run: echo "::warning::CRON_SECRET not set — weekly digests not generated. Set it with 'gh secret set CRON_SECRET' and mirror it into the Fly app."
+
+      - name: POST /api/cron/news-digest
+        if: env.CRON_SECRET != ''
+        run: |
+          body=$(curl --silent --show-error --fail-with-body \
+            --max-time 60 --retry 2 --retry-all-errors \
+            -X POST "$BASE_URL/api/cron/news-digest" \
+            -H "x-cron-secret: $CRON_SECRET")
+          echo "response: $body"

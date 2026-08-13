@@ -315,6 +315,9 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "GET /posts/:id",
   "PATCH /posts/:id",
   "DELETE /posts/:id",
+  // Weekly digest (P3 / D7): the "Generate digest" button is the same
+  // organiser console CRM surface as the composer above it, same reasoning.
+  "POST /orgs/:id/posts/digest",
   // Duplicate review + merge (#404): a merge rewrites every dependent row of
   // two people and the ledger stores WHO confirmed it — `confirmed_by` is a
   // user id, and a key has no user behind it. The queue that proposes the

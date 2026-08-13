@@ -22,5 +22,6 @@
   "news.kind.result": "Résultat",
   "news.kind.recap": "Résumé",
   "news.kind.announcement": "Annonce",
-  "news.kind.news": "Actualité du club"
+  "news.kind.news": "Actualité du club",
+  "news.kind.weekly_digest": "Résumé hebdomadaire"
 }

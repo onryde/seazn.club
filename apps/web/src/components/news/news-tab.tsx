@@ -7,11 +7,12 @@
 // drift. Manual posts are free on every plan; nothing here gates.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Zap, Pencil, Trash2, Send, Archive, ExternalLink, RotateCcw } from "lucide-react";
+import { Plus, Zap, Pencil, Trash2, Send, Archive, ExternalLink, RotateCcw, Sparkles } from "lucide-react";
 import { apiV1 } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { kindEyebrow } from "@/lib/news-presentation";
 import { Composer } from "@/components/news/composer";
+import { PlanBadge } from "@/components/plan-badge";
 import type { OrgPost, PostKind } from "@/server/usecases/org-posts";
 
 const KIND_CHIP: Record<
@@ -37,12 +38,16 @@ export function NewsTab({
   posts,
   competitions,
   canEdit,
+  hasNewsAuto,
 }: {
   orgId: string;
   orgSlug: string;
   posts: OrgPost[];
   competitions: { id: string; name: string }[];
   canEdit: boolean;
+  /** P3 (D7) — gates the "Generate digest" button, same entitlement the
+   *  system auto-drafts already check. */
+  hasNewsAuto: boolean;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -50,6 +55,7 @@ export function NewsTab({
     kind: "closed",
   });
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [digestBusy, setDigestBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const drafts = posts.filter((p) => p.status === "draft");
@@ -76,23 +82,58 @@ export function NewsTab({
   const remove = (p: OrgPost) =>
     act(p.id, () => apiV1(`/api/v1/posts/${p.id}`, { method: "DELETE" }));
 
+  async function generateDigest() {
+    setDigestBusy(true);
+    setError(null);
+    try {
+      await apiV1(`/api/v1/orgs/${orgId}/posts/digest`, { method: "POST" });
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : msg("news.actionFailed"));
+    } finally {
+      setDigestBusy(false);
+    }
+  }
+
   function kindLabel(kind: PostKind): string {
     return msg(`news.kind.${kind === "round_recap" ? "recap" : kind}`);
   }
 
   return (
     <div className="space-y-6" data-testid="news-tab">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-slate-500">{msg("news.intro")}</p>
         {canEdit && mode.kind === "closed" && (
-          <button
-            type="button"
-            onClick={() => setMode({ kind: "new" })}
-            className="btn btn-primary min-h-11 text-sm"
-            data-testid="news-new"
-          >
-            <Plus className="h-4 w-4" /> {msg("news.new")}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {hasNewsAuto ? (
+              <button
+                type="button"
+                onClick={generateDigest}
+                disabled={digestBusy}
+                className="btn btn-ghost min-h-11 text-sm"
+                data-testid="news-generate-digest"
+              >
+                <Sparkles className="h-4 w-4" /> {msg("news.generateDigest")}
+              </button>
+            ) : (
+              <span
+                className="flex items-center gap-1.5 text-xs text-slate-400"
+                title={msg("news.digestUpsell")}
+                data-testid="news-digest-upsell"
+              >
+                <PlanBadge feature="news.auto" />
+                {msg("news.generateDigest")}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setMode({ kind: "new" })}
+              className="btn btn-primary min-h-11 text-sm"
+              data-testid="news-new"
+            >
+              <Plus className="h-4 w-4" /> {msg("news.new")}
+            </button>
+          </div>
         )}
       </div>
 

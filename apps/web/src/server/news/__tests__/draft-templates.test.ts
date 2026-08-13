@@ -2,7 +2,13 @@
 // composition (competition line, venue-tz date, conditional scorers/movement),
 // round recap results + standings, and locale switching of static strings.
 import { describe, expect, it } from "vitest";
-import { resultDraft, roundRecapDraft, draftWhen } from "../draft-templates";
+import {
+  resultDraft,
+  roundRecapDraft,
+  draftWhen,
+  weeklyDigestDraft,
+  ENRICHMENT_DICT_KEYS,
+} from "../draft-templates";
 
 const BASE = {
   locale: "en" as const,
@@ -147,5 +153,246 @@ describe("draftWhen", () => {
   it("returns the locale's TBC placeholder when unscheduled", () => {
     expect(draftWhen(null, "Europe/London", "en")).toBe("TBC");
     expect(draftWhen(null, null, "es")).toBe("Por confirmar");
+  });
+});
+
+// P3 (D7) — the no-regression anchor. Recorded from the UNMODIFIED function,
+// before enrichment support existed, via a throwaway node script printing
+// JSON.stringify(resultDraft(...)) / JSON.stringify(roundRecapDraft(...)).
+// Absent `enrichment` must produce this EXACT object — a real byte compare,
+// not a `toContain` fragment check, so nothing about the pre-existing output
+// can drift while enrichment is being added.
+describe("byte-identical output when enrichment is absent (regression anchor)", () => {
+  it("resultDraft(BASE) — no scorers, no movement, no enrichment", () => {
+    expect(resultDraft(BASE)).toEqual({
+      title: "Riverside 3–1 Northside",
+      bodyMd: "**Spring Cup** · Premier\nRiverside Park · Sun 10 May, 14:30 (Europe/London)",
+    });
+  });
+
+  it("resultDraft with scorers + movement, still no enrichment field", () => {
+    expect(
+      resultDraft({
+        ...BASE,
+        scorers: [{ name: "A. Smith", count: 2 }],
+        movement: { team: "Riverside", position: 2 },
+      }),
+    ).toEqual({
+      title: "Riverside 3–1 Northside",
+      bodyMd:
+        "**Spring Cup** · Premier\nRiverside Park · Sun 10 May, 14:30 (Europe/London)\n\n**Scorers**\n- A. Smith (2)\n\nRiverside moves up to 2nd.",
+    });
+  });
+
+  it("roundRecapDraft — no enrichment field", () => {
+    const input = {
+      locale: "en" as const,
+      competitionName: "Spring Cup",
+      divisionName: "Premier",
+      roundNo: 3,
+      results: [
+        { homeName: "Riverside", homeScore: "3", awayName: "Northside", awayScore: "1" },
+        { homeName: "Eastend", homeScore: "0", awayName: "Westgate", awayScore: "0" },
+      ],
+      standings: [
+        { position: 1, name: "Riverside", played: 3, points: 9 },
+        { position: 2, name: "Westgate", played: 3, points: 5 },
+        { position: 3, name: "Eastend", played: 3, points: 4 },
+      ],
+    };
+    expect(roundRecapDraft(input)).toEqual({
+      title: "Round 3 recap: Premier",
+      bodyMd:
+        "**Spring Cup** · Premier\n\n**Results**\n- Riverside 3–1 Northside\n- Eastend 0–0 Westgate\n\n**Standings**\n1. Riverside — 9 pts (3)\n2. Westgate — 5 pts (3)\n3. Eastend — 4 pts (3)",
+    });
+  });
+});
+
+describe("resultDraft enrichment", () => {
+  it("full enrichment adds a top-performers block, leader moves, and a streak line", () => {
+    const { bodyMd } = resultDraft({
+      ...BASE,
+      enrichment: {
+        topPerformers: [{ personName: "A. Smith", statLine: "2 goals" }],
+        leaderboardMoves: [{ personName: "A. Smith", metric: "goals", from: 4, to: 2 }],
+        streak: { entrantName: "Riverside", kind: "win", length: 3 },
+      },
+    });
+    expect(bodyMd).toContain("Top performers");
+    expect(bodyMd).toContain("A. Smith — 2 goals");
+    expect(bodyMd).toContain("A. Smith moved to #2 in goals (was #4).");
+    expect(bodyMd).toContain("Riverside have now won 3 in a row.");
+  });
+
+  it("unbeaten streak uses the unbeaten wording, not the win wording", () => {
+    const { bodyMd } = resultDraft({
+      ...BASE,
+      enrichment: { streak: { entrantName: "Riverside", kind: "unbeaten", length: 5 } },
+    });
+    expect(bodyMd).toContain("Riverside are unbeaten in their last 5.");
+    expect(bodyMd).not.toContain("have now won");
+  });
+
+  it("partial enrichment (only topPerformers) renders only that block", () => {
+    const { bodyMd } = resultDraft({
+      ...BASE,
+      enrichment: { topPerformers: [{ personName: "A. Smith", statLine: "2 goals" }] },
+    });
+    expect(bodyMd).toContain("Top performers");
+    expect(bodyMd).not.toContain("moved to #");
+    expect(bodyMd).not.toContain("in a row");
+    expect(bodyMd).not.toContain("unbeaten");
+  });
+
+  it("an enrichment object with every field empty/absent renders no extra block", () => {
+    const withEmpty = resultDraft({ ...BASE, enrichment: {} });
+    expect(withEmpty).toEqual(resultDraft(BASE));
+  });
+
+  it("fr locale renders enrichment fully localized, no unresolved tokens", () => {
+    const { bodyMd } = resultDraft({
+      ...BASE,
+      locale: "fr",
+      enrichment: {
+        topPerformers: [{ personName: "A. Smith", statLine: "2 buts" }],
+        streak: { entrantName: "Riverside", kind: "win", length: 3 },
+      },
+    });
+    expect(bodyMd).toContain("Meilleures performances");
+    expect(bodyMd).toContain("Riverside enchaîne 3 victoires de suite.");
+    expect(bodyMd).not.toContain("{{");
+    expect(bodyMd).not.toContain("undefined");
+  });
+});
+
+describe("roundRecapDraft enrichment", () => {
+  const RECAP_BASE = {
+    locale: "en" as const,
+    competitionName: "Spring Cup",
+    divisionName: "Premier",
+    roundNo: 3,
+    results: [{ homeName: "Riverside", homeScore: "3", awayName: "Northside", awayScore: "1" }],
+    standings: [{ position: 1, name: "Riverside", played: 3, points: 9 }],
+  };
+
+  it("full enrichment renders leaders, biggest result, and standings moves", () => {
+    const { bodyMd } = roundRecapDraft({
+      ...RECAP_BASE,
+      enrichment: {
+        leaders: [{ metric: "goals", personName: "A. Smith", value: 12 }],
+        biggestResult: { label: "Riverside 5–0 Eastend" },
+        standingsMoves: [{ entrantName: "Riverside", from: 3, to: 1 }],
+      },
+    });
+    expect(bodyMd).toContain("Leaders");
+    expect(bodyMd).toContain("goals: A. Smith (12)");
+    expect(bodyMd).toContain("Biggest result: Riverside 5–0 Eastend");
+    expect(bodyMd).toContain("Movers");
+    expect(bodyMd).toContain("Riverside climbed from 3 to 1.");
+  });
+
+  it("partial enrichment (only biggestResult) renders only that line", () => {
+    const { bodyMd } = roundRecapDraft({
+      ...RECAP_BASE,
+      enrichment: { biggestResult: { label: "Riverside 5–0 Eastend" } },
+    });
+    expect(bodyMd).toContain("Biggest result: Riverside 5–0 Eastend");
+    expect(bodyMd).not.toContain("Leaders");
+    expect(bodyMd).not.toContain("Movers");
+  });
+
+  it("absent enrichment is byte-identical to the pre-existing call", () => {
+    expect(roundRecapDraft(RECAP_BASE)).toEqual(roundRecapDraft({ ...RECAP_BASE, enrichment: undefined }));
+  });
+});
+
+describe("weeklyDigestDraft", () => {
+  const DIGEST_BASE = {
+    locale: "en" as const,
+    orgName: "Riverside FC",
+    weekOfYmd: "2026-08-03",
+    standings: [],
+    leaders: [],
+    upcoming: [],
+    upcomingOverflow: 0,
+  };
+
+  it("title carries the org name and a formatted week-of date", () => {
+    const { title } = weeklyDigestDraft(DIGEST_BASE);
+    expect(title).toContain("Riverside FC");
+    expect(title).toContain("3 Aug 2026");
+  });
+
+  it("every section renders when data exists", () => {
+    const { bodyMd } = weeklyDigestDraft({
+      ...DIGEST_BASE,
+      standings: [
+        {
+          divisionName: "Premier",
+          top3: [{ position: 1, name: "Riverside", points: 12 }],
+          climber: { entrantName: "Eastend", from: 5, to: 2 },
+        },
+      ],
+      leaders: [{ divisionName: "Premier", metricLabel: "goals", personName: "A. Smith", value: 9 }],
+      upcoming: [
+        {
+          dayYmd: "2026-08-10",
+          lines: [{ homeName: "Riverside", awayName: "Northside", timeLabel: "14:30" }],
+        },
+      ],
+      upcomingOverflow: 4,
+      claimedHighlight: { personName: "A. Smith", statLine: "9 goals" },
+    });
+    expect(bodyMd).toContain("Standings movement");
+    expect(bodyMd).toContain("1. Riverside — 12 pts");
+    expect(bodyMd).toContain("Biggest climber: Eastend (5 → 2)");
+    expect(bodyMd).toContain("Stat leaders");
+    expect(bodyMd).toContain("Premier — goals: A. Smith (9)");
+    expect(bodyMd).toContain("Next 7 days");
+    expect(bodyMd).toContain("Riverside v Northside (14:30)");
+    expect(bodyMd).toContain("…and 4 more");
+    expect(bodyMd).toContain("Your player of the week");
+    expect(bodyMd).toContain("A. Smith — 9 goals");
+  });
+
+  it("an absent section renders no heading at all — no 'no data' filler line", () => {
+    const { bodyMd } = weeklyDigestDraft({
+      ...DIGEST_BASE,
+      leaders: [{ divisionName: "Premier", metricLabel: "goals", personName: "A. Smith", value: 9 }],
+    });
+    expect(bodyMd).not.toContain("Standings movement");
+    expect(bodyMd).not.toContain("Next 7 days");
+    expect(bodyMd).not.toContain("player of the week");
+    expect(bodyMd).toContain("Stat leaders");
+  });
+
+  it("every section absent yields an empty body, never a placeholder sentence", () => {
+    const { bodyMd } = weeklyDigestDraft(DIGEST_BASE);
+    expect(bodyMd).toBe("");
+  });
+
+  it("fr locale renders fully localized, no unresolved tokens", () => {
+    const { title, bodyMd } = weeklyDigestDraft({
+      ...DIGEST_BASE,
+      locale: "fr",
+      leaders: [{ divisionName: "Premier", metricLabel: "buts", personName: "A. Smith", value: 9 }],
+    });
+    expect(title).toContain("semaine du");
+    expect(bodyMd).toContain("Meilleures stats");
+    expect(title).not.toContain("{{");
+    expect(bodyMd).not.toContain("undefined");
+  });
+});
+
+// The i18n regression gate (dictionary-copy-truth-style, but for THIS
+// namespace): seeded from the template's OWN key list, not from the
+// dictionaries — the event-copy-gate lesson (a gate that reads its expected
+// list off the thing it is checking cannot fail).
+describe("ENRICHMENT_DICT_KEYS", () => {
+  it("is non-empty and every entry is under news.enrich./news.recap./news.digest.", () => {
+    expect(ENRICHMENT_DICT_KEYS.length).toBeGreaterThan(15);
+    for (const key of ENRICHMENT_DICT_KEYS) {
+      expect(key).toMatch(/^news\.(enrich|recap|digest)\./);
+    }
   });
 });

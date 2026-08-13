@@ -23,6 +23,9 @@ const KIND_EYEBROW: Record<PostKind, KindEyebrow> = {
   round_recap: { labelKey: "news.kind.recap", tone: "white" },
   announcement: { labelKey: "news.kind.announcement", tone: "red" },
   news: { labelKey: "news.kind.news", tone: "muted" },
+  // P3 (D7) — a digest is a summary like a recap, not a live result or an
+  // announcement; reuses the recap tone rather than inventing a 5th.
+  weekly_digest: { labelKey: "news.kind.weekly_digest", tone: "white" },
 };
 
 export function kindEyebrow(kind: PostKind): KindEyebrow {

@@ -22,5 +22,6 @@
   "news.kind.result": "Uitslag",
   "news.kind.recap": "Samenvatting",
   "news.kind.announcement": "Aankondiging",
-  "news.kind.news": "Clubnieuws"
+  "news.kind.news": "Clubnieuws",
+  "news.kind.weekly_digest": "Wekelijkse samenvatting"
 }

@@ -22,5 +22,6 @@
   "news.kind.result": "Result",
   "news.kind.recap": "Recap",
   "news.kind.announcement": "Announcement",
-  "news.kind.news": "Club news"
+  "news.kind.news": "Club news",
+  "news.kind.weekly_digest": "Weekly digest"
 }
