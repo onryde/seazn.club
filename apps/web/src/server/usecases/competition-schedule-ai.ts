@@ -1377,6 +1377,31 @@ export function verifyConfigFor(
     ruleFixtures: readonly RuleFixture[];
     restByDivision: Readonly<Record<string, number>>;
   },
+  /** The ORG zone ALONE, for the apply path (#399 follow-up, C1 gap A).
+   *  Mirrors `window` exactly, for the identical reason: the round-order scan
+   *  (`validateAssignments`, calendar.ts ~1535) is gated on `config.tz` alone
+   *  and reads no other field `rules` carries, so this switches on THAT and
+   *  nothing else — never `hard`/`ruleFixtures`/`restByDivision`, which stay
+   *  `undefined` whenever `rules` is not also given. Provably so, not just by
+   *  convention: `effectiveHard` (calendar.ts) merges `config.hard` with
+   *  `config.constraints?.hard`, and `buildEngineConstraints` — the ONE
+   *  builder `constraints` above goes through, `rules` or not — never
+   *  populates `.hard` under `AI_VERIFY_POLICY` (`hard: false`). So
+   *  `effectiveHard(config)` is `[]` at any call site that omits `rules`,
+   *  this parameter included, and `validateInstructionRules`'s entire typed-
+   *  rule block (gated on that same `tz`) loops over nothing regardless.
+   *
+   *  Ignored when `rules` is also supplied — `rules.tz` wins, the fuller,
+   *  authoritative source. The two are not expected to be passed together in
+   *  practice (the AI path passes `rules`; the apply path passes this), but
+   *  the priority is spelled out rather than left to argument order.
+   *
+   *  Sourced from `settings.orgTz`, never `settings.displayTz`/`.tz` — same
+   *  ruling `applyWindow` and `toVerifyConfig` (schedule.ts) already follow:
+   *  the org zone governs every temporal boundary (#397), a division's
+   *  display override must not move which calendar day a fixture is judged
+   *  on, and two divisions of one competition must agree on that day. */
+  tz?: string,
 ): VerifyConfig {
   const s = division.settings;
   return {
@@ -1387,7 +1412,9 @@ export function verifyConfigFor(
           ruleFixtures: rules.ruleFixtures,
           restByDivision: rules.restByDivision,
         }
-      : {}),
+      : tz !== undefined
+        ? { tz }
+        : {}),
     perEntrantMinRest: s.perEntrantMinRest,
     matchMinutes: s.matchMinutes,
     // Through the ONE builder (#458) the board path and the single-division AI

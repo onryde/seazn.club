@@ -34,7 +34,7 @@ import {
 } from "../competition-schedule-ai";
 import { isBlocking, planIsAcceptable, type PackConstraints, type PackSettings } from "../schedule-ai";
 import type { AiSchedulePlan } from "../schedule-ai-prompt";
-import type { Conflict } from "@seazn/engine/scheduling";
+import { validateAssignments, type Conflict, type HardConstraint } from "@seazn/engine/scheduling";
 
 // --- Fixed ids -------------------------------------------------------------
 const D1 = "d1111111-1111-4111-8111-111111111111"; // "Alpha"
@@ -1148,6 +1148,95 @@ describe("verifyConfigFor (#350)", () => {
     } finally {
       delete process.env.SCHEDULING_AI_ESCALATE_WARN_RATIO;
     }
+  });
+});
+
+// ===========================================================================
+// verifyConfigFor's 4th parameter — C1 gap A
+//
+// `competition-schedule-apply.ts`'s joint apply calls `verifyConfigFor` with no
+// `rules` bundle at all, by design (#399: apply-time blocking must not extend
+// to the typed-rule families — see the `rules` param's own doc comment a few
+// hundred lines up in competition-schedule-ai.ts). That left the round-order
+// scan permanently inert there too, since it needs `config.tz` and the apply
+// path never supplied one. This 4th parameter closes that gap by carrying
+// `tz` ALONE, independent of `rules` — mirroring the existing `window`
+// parameter's shape exactly (also apply-only, also deliberately excluded from
+// `rules`).
+//
+// What makes this safe rather than a re-opening of #399 in disguise:
+// `effectiveHard` (calendar.ts) merges `config.hard` with
+// `config.constraints?.hard`, and `buildEngineConstraints` — the ONE builder
+// this function feeds `constraints` through, unconditionally, `rules` or not —
+// NEVER populates `.hard` under `AI_VERIFY_POLICY` (`hard: false`,
+// engine-constraints.ts:123). So `effectiveHard(config)` is provably `[]` at
+// every call site that reaches `verifyConfigFor` without an explicit `rules`
+// bundle, REGARDLESS of this parameter — `validateInstructionRules`'s entire
+// typed-rule block (calendar.ts ~1043) loops over that empty array and does
+// nothing. The round-order scan (calendar.ts ~1535) is the ONLY consumer of
+// `config.tz` that reads no other `VerifyConfig` field, which is exactly why
+// it is the one thing this parameter can switch on.
+// ===========================================================================
+
+describe("verifyConfigFor's 4th parameter — tz alone, apply-only (#399, C1 gap A)", () => {
+  it("a bare tz sets ONLY tz — hard/ruleFixtures/restByDivision stay unset", () => {
+    const d = division(D1, "Alpha");
+    const cfg = verifyConfigFor(d, undefined, undefined, "Europe/London");
+    expect(cfg.tz).toBe("Europe/London");
+    expect(cfg.hard).toBeUndefined();
+    expect(cfg.ruleFixtures).toBeUndefined();
+    expect(cfg.restByDivision).toBeUndefined();
+  });
+
+  it("omits tz entirely when neither rules nor the bare param is given — today's apply behaviour, unchanged", () => {
+    const d = division(D1, "Alpha");
+    const cfg = verifyConfigFor(d);
+    expect(cfg.tz).toBeUndefined();
+  });
+
+  it("still carries the FULL bundle when `rules` is supplied — this seam does not defang the AI path", () => {
+    const d = division(D1, "Alpha");
+    const hard: HardConstraint[] = [
+      { type: "max_fixtures_per_day", count: 2, scope: { kind: "competition" } },
+    ];
+    const cfg = verifyConfigFor(d, undefined, {
+      tz: "UTC",
+      hard,
+      ruleFixtures: [],
+      restByDivision: { [D1]: 30 },
+    });
+    expect(cfg.tz).toBe("UTC");
+    expect(cfg.hard).toBe(hard);
+    expect(cfg.ruleFixtures).toEqual([]);
+    expect(cfg.restByDivision).toEqual({ [D1]: 30 });
+  });
+
+  it("rules wins over the bare tz param when (hypothetically) both are passed", () => {
+    const d = division(D1, "Alpha");
+    const cfg = verifyConfigFor(
+      d,
+      undefined,
+      { tz: "UTC", hard: [], ruleFixtures: [], restByDivision: {} },
+      "Europe/London",
+    );
+    expect(cfg.tz).toBe("UTC");
+  });
+
+  it("a round-order violation is detected end to end through the bare-tz config, with no ruleFixtures/hard in play", () => {
+    // Not just the config shape in isolation — the SAME seam wired into a real
+    // `validateAssignments` call, the way `competition-schedule-apply.ts` uses
+    // it. Two round-robin fixtures in one division/stage/pool, later round
+    // scheduled before the earlier one on the same day.
+    const d = division(D1, "Alpha");
+    const cfg = verifyConfigFor(d, undefined, undefined, "Europe/London");
+    const out = validateAssignments(
+      [
+        { fixtureId: F1, court: "Court 1", startAt: Date.parse(at("10:00")), endAt: Date.parse(at("10:30")), entrants: [], people: [], divisionId: D1, stageId: "stage-1", roundNo: 1 },
+        { fixtureId: F2, court: "Court 2", startAt: Date.parse(at("09:00")), endAt: Date.parse(at("09:30")), entrants: [], people: [], divisionId: D1, stageId: "stage-1", roundNo: 2 },
+      ],
+      cfg,
+    );
+    expect(out.some((c) => c.reason === "order")).toBe(true);
   });
 });
 
