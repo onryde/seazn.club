@@ -87,6 +87,7 @@ export default async function FixturePage({
     return {
       id: entrant.id,
       name: entrant.display_name,
+      kind: entrant.kind,
       members: entrant.members as SideInfo["members"],
       lineup: lineup.slots as LineupSlotIn[],
     };

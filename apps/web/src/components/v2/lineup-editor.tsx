@@ -117,28 +117,26 @@ export function draftFromSavedLineup(lineup: LineupSlotIn[]): SlotDraft[] {
 }
 
 /**
- * Is this side's entrant pair-shaped (tennis/badminton/tabletennis doubles,
- * or any other sport whose entrant model allows a "pair")? `pair_order`
- * (which of the two partners serves/plays first) only means something then.
+ * Is this side's entrant pair-shaped (tennis/badminton/tabletennis/carrom
+ * doubles, volleyball beach pairs, or any other sport whose entrant model
+ * allows a "pair")? `pair_order` (which of the two partners serves/plays
+ * first) only means something then.
  *
- * This component has no direct channel to the sport key or its
- * entrantModel — fixture-console.tsx (S12/#421's file-ownership split for
- * this pass) hands it only positionGroups/roles/lineupSize/side, never
- * `sport.key` or `sport.config` — so the shape is inferred structurally
- * from what IS already in scope. A sport with a "pair" entrant option
- * declares NO position catalog (there is nothing to assign a position to:
- * tennis.ts/badminton.ts/tabletennis.ts/carrom.ts all declare
- * `positions.groups: []`, unlike every team sport), and a "pair" entrant's
- * roster is EXACTLY its two permanently-bound members — registration binds
- * them together, never more, never fewer. Both conditions together rule out
- * every team sport (non-empty position catalog) and every individual
- * entrant (one member) while catching every real pair.
+ * S12/#421 pass E review, Finding 1: this used to be inferred structurally
+ * (empty position catalog + memberCount === 2), which was wrong for 2/11
+ * sports — a generic TEAM entrant with exactly 2 members false-positived
+ * (generic declares no entrantModel and no position catalog), and a real
+ * volleyball pair false-negatived (its catalog is a genuine non-empty
+ * 5-group list). The fix reads the entrant's OWN declared `kind` instead —
+ * `SideInfo.kind`, sourced from `entrants.kind` (set once at registration
+ * and validated against the division's effective entrant model;
+ * server/usecases/entrants.ts) — because that is the one fact that is
+ * actually about THIS entrant rather than about its sport's catalog shape or
+ * its current roster size. It needs no sport-specific list: any sport that
+ * ever declares a "pair" kind is handled without another edit here.
  */
-export function isPairShaped(
-  positionGroups: readonly { key: string }[],
-  memberCount: number,
-): boolean {
-  return positionGroups.length === 0 && memberCount === 2;
+export function isPairShaped(kind: string | null | undefined): boolean {
+  return kind === "pair";
 }
 
 /**
@@ -147,10 +145,22 @@ export function isPairShaped(
  * lineup UI used to silently drop `role` (and had nowhere to carry
  * `pair_order` at all) — a coach saved through the editor was written back
  * as a plain player regardless of what the row showed.
+ *
+ * `pairShaped` is required, not defaulted, deliberately (S12/#421 pass E
+ * review, Finding 2): a caller must say explicitly whether THIS side is
+ * pair-shaped right now, and a non-pair-shaped side always sends
+ * `pair_order: null` regardless of what the draft still holds. Before this,
+ * both `draftFromSavedLineup` and this function carried a slot's saved
+ * `pair_order` unconditionally, so an entrant that hit Finding 1's false
+ * positive and saved one, then was re-read under the corrected
+ * `isPairShaped`, kept re-sending that stale value on every future PUT —
+ * the editor replaces the whole lineup on save, so gating here is the only
+ * place a stale value can ever be cleared; there is no separate "clear" UI.
  */
 export function toPutSlot(
   s: SlotDraft,
   index: number,
+  pairShaped: boolean,
 ): {
   person_id: string;
   slot: "starting" | "bench";
@@ -167,7 +177,7 @@ export function toPutSlot(
     order_no: index + 1,
     roles: s.roles,
     role: s.role,
-    pair_order: s.pair_order,
+    pair_order: pairShaped ? s.pair_order : null,
   };
 }
 
@@ -202,9 +212,10 @@ export function LineupEditor({
       pair_order: null,
     }));
   });
-  // Pair-shaped once, from data already in scope (see isPairShaped's own
-  // doc comment) — not per-slot, since it describes the ENTRANT, not a row.
-  const pairShaped = isPairShaped(positionGroups, side.members.length);
+  // Pair-shaped once, from the entrant's own declared kind (see
+  // isPairShaped's own doc comment) — not per-slot, since it describes the
+  // ENTRANT, not a row.
+  const pairShaped = isPairShaped(side.kind);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -235,7 +246,7 @@ export function LineupEditor({
     try {
       await apiV1(`/api/v1/fixtures/${fixtureId}/lineups/${side.id}`, {
         method: "PUT",
-        json: { slots: slots.map(toPutSlot) },
+        json: { slots: slots.map((s, i) => toPutSlot(s, i, pairShaped)) },
       });
       setSaved(true);
       onSaved();
@@ -277,7 +288,7 @@ export function LineupEditor({
                 setSlots((prev) => prev.map((x, j) => (j === i ? { ...x, slot: v } : x)));
                 setSaved(false);
               }}
-              className="select w-24 px-2 py-1 text-xs"
+              className="select min-h-11 w-24 px-2 py-1 text-xs sm:min-h-0"
               aria-label={msg("lineup.slotAria", { name: s.full_name })}
             >
               <option value="starting">{msg("lineup.slotStarting")}</option>
@@ -294,7 +305,7 @@ export function LineupEditor({
                   );
                   setSaved(false);
                 }}
-                className="select w-32 px-2 py-1 text-xs"
+                className="select min-h-11 w-32 px-2 py-1 text-xs sm:min-h-0"
                 aria-label={msg("lineup.positionAria", { name: s.full_name })}
               >
                 <option value="">{msg("lineup.positionPlaceholder")}</option>
@@ -313,8 +324,9 @@ export function LineupEditor({
                 setSlots((prev) => prev.map((x, j) => (j === i ? { ...x, role: v } : x)));
                 setSaved(false);
               }}
-              className="select w-24 px-2 py-1 text-xs"
+              className="select min-h-11 w-24 px-2 py-1 text-xs sm:min-h-0"
               aria-label={msg("lineup.roleAria", { name: s.full_name })}
+              data-testid="lineup-role-select"
             >
               <option value="player">{msg("lineup.role.player")}</option>
               <option value="coach">{msg("lineup.role.coach")}</option>
@@ -331,8 +343,9 @@ export function LineupEditor({
                   );
                   setSaved(false);
                 }}
-                className="select w-32 px-2 py-1 text-xs"
+                className="select min-h-11 w-32 px-2 py-1 text-xs sm:min-h-0"
                 aria-label={msg("lineup.pairOrderAria", { name: s.full_name })}
+                data-testid="lineup-pairorder-select"
               >
                 <option value="">{msg("lineup.pairOrderPlaceholder")}</option>
                 <option value="1">{msg("lineup.pairOrder.first")}</option>

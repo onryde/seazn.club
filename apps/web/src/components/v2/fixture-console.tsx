@@ -137,6 +137,17 @@ export interface LineupSlotIn {
 export interface SideInfo {
   id: string;
   name: string;
+  /** The entrant's own declared kind — "team" | "individual" | "pair"
+   *  (`entrants.kind`, spec 2026-07-18's entrantModel). Set once at
+   *  registration and validated against the division's effective entrant
+   *  model (server/usecases/entrants.ts's ENTRANT_KIND_NOT_ALLOWED /
+   *  ENTRANT_ROSTER_TOO_BIG checks); not patchable afterward. This is the
+   *  authoritative answer to "is this entrant a pair" — lineup-editor.tsx's
+   *  `isPairShaped` reads it directly instead of inferring pair-shapedness
+   *  from position-catalog shape + member count (S12/#421 pass E, Finding 1).
+   *  Optional: existing test fixtures and callers that never render
+   *  `LineupEditor` predate this field. */
+  kind?: string;
   members: MemberIn[];
   lineup: LineupSlotIn[];
 }

@@ -9,6 +9,8 @@ import {
   createStageAndGenerate,
   competitionPath,
   divisionPath,
+  fixturePath,
+  seedRosteredFixture,
   loginUi,
   claimProfileBySql,
 } from "./helpers";
@@ -501,6 +503,58 @@ test("the publish gate's confirm sheet holds at phone width", async ({ page, req
   await expect(dialog).toBeHidden({ timeout: 30_000 });
   const after = await apiJson<{ status: string }>(request, `/api/v1/divisions/${gateDivisionId}`);
   expect(after.data!.status).toBe("scheduled");
+  await expectNoHorizontalScroll(page);
+});
+
+/**
+ * T14b — the lineup editor's role/pair-order selects at phone width.
+ *
+ * S12/#421 pass E review, Finding 3: both `<select>`s reused the existing
+ * `w-24`/`w-32 px-2 py-1 text-xs` recipe, which Tailwind's utilities layer
+ * shrinks well under this repo's 44px touch-target floor — and this file had
+ * zero references to the lineup editor at all despite already owning the
+ * exact assertion pattern this test reuses (`toBeGreaterThanOrEqual(44)`,
+ * see T15 below). `min-h-11 sm:min-h-0` is now on both selects, mobile-only,
+ * same recipe as every other control this file already holds to the floor.
+ *
+ * A pair-kind entrant (`entrantKind: "pair"`, not a sport-specific position
+ * catalog — S12/#421 pass E Finding 1 made the pair-order control read the
+ * entrant's own declared kind instead) is what puts the pair-order select on
+ * the page at all; the role select renders for every lineup row regardless
+ * of shape, so one seeded fixture proves both controls.
+ *
+ * Self-contained, like T15 below: its own competition/division/fixture.
+ */
+test("lineup editor role/pair-order selects hold at phone width", async ({ page, request }) => {
+  const fx = await seedRosteredFixture(request, {
+    label: `Mobile Lineup ${TAG}`,
+    sportKey: "generic",
+    variantKey: "score",
+    entrantKind: "pair",
+    home: [{ fullName: "Home One" }, { fullName: "Home Two" }],
+    away: [{ fullName: "Away One" }, { fullName: "Away Two" }],
+  });
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+
+  const roleSelects = page.getByTestId("lineup-role-select");
+  await expect(roleSelects.first(), "no role select rendered").toBeVisible({ timeout: 30_000 });
+  for (const select of await roleSelects.all()) {
+    const box = await select.boundingBox();
+    expect(box, "role select has no box").not.toBeNull();
+    expect(box!.height, `role select touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
+  }
+
+  const pairOrderSelects = page.getByTestId("lineup-pairorder-select");
+  await expect(pairOrderSelects.first(), "no pair-order select rendered — entrant.kind did not reach isPairShaped").toBeVisible({
+    timeout: 30_000,
+  });
+  for (const select of await pairOrderSelects.all()) {
+    const box = await select.boundingBox();
+    expect(box, "pair-order select has no box").not.toBeNull();
+    expect(box!.height, `pair-order select touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
+  }
+
   await expectNoHorizontalScroll(page);
 });
 
