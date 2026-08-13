@@ -1977,6 +1977,51 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   checked, `i18n:gen-keys` rerun), and every dispatch brief forbids touching a
   dictionary and requires unmet copy needs to be reported back instead. A
   general rule for any future parallel UI wave in this programme.
+- 2026-08-13 — S11/#420 — **THREE of the five skin implementers independently
+  reported the same missing channel, which is what made it a contract bug
+  rather than five style complaints.** `SkinProps`/`SkinLayoutCtx` carried no
+  `personNames`/`lineups`, so every person picker in every skin drew a RAW
+  PERSON ID — a scorer crediting a fielder, an assist or a `servedBy` would
+  pick between UUIDs. `PadRenderer` already held both (it feeds
+  `AttributionPicker`), so nothing needed fetching; the contract simply did not
+  pass them on. Fixed centrally on `SkinLayoutCtx` (optional, because the pure
+  coverage sweep has no roster to hand in and a skin must stay total without
+  one). Worth naming as a pattern: when parallel agents working from disjoint
+  briefs report the SAME gap, it is a defect in the shared contract they were
+  handed, and fixing it in one place beats five workarounds.
+- 2026-08-13 — S11/#420 — **two chassis controls failed the 44px touch bar on
+  every skin, and no unit test could ever have seen it.** Measured in a real
+  browser at 320/375/768/1280: S10's phase tabs draw at **28px** high and its
+  fidelity switcher at **34px**. Both are chassis, both appear on all five skin
+  screens, so five correct skins each inherited a failing screen. Fixed with
+  `min-h-11` on both (horizontal padding already cleared). This is the same
+  family as S9's three rendering-only defects and S10's inert picker: a
+  computed box is invisible to a node-environment test by construction, so the
+  screenshot pass is not decoration, it is the only instrument that reads it.
+  Numbers after the fix, all 20 shots: `OVERFLOWING=0 SMALL_TAP=0 minTap=44px`.
+  The only sub-44px control left on the page is the GLOBAL cookie banner
+  (34px), which is not this programme's component — recorded so the next
+  session's screenshot pass does not re-open it as a skin defect.
+- 2026-08-13 — S11/#420 — **tap counts, counted rather than estimated** (the
+  brief made this an acceptance criterion; each is traced through the committed
+  code against the v1 pad's own flow):
+  cricket full over incl. one extra **7 vs 9**; cricket dismissal credited to a
+  fielder **3 vs 5**; football goal with assist **3 vs 6**; football card
+  **3 vs 4**; football substitution **3 vs 6**. Every headline flow sits at or
+  under the v1 pad, which was the bar.
+- 2026-08-13 — S11/#420 — **`PadRenderer.skin` has THREE states, and the
+  distinction is load-bearing.** `undefined` consults the registry (every real
+  caller), `null` forces the universal path, a `SkinDef` draws that one. `null`
+  exists because cricket is the ONLY module declaring pre/live/post and it is
+  now skinned — without an opt-out, S10's phase/band tests would have had to
+  assert panel structure against a hand-crafted layout that deliberately draws
+  no `Panel`s. Note the default is the REGISTRY, never "no skin": a seam whose
+  default is off is how S10's picker shipped inert.
+- 2026-08-13 — S11/#420 — **small brief correction for future sessions:** the
+  kernels live at `packages/engine/src/sports/{setbased,nested,period}/kernel.ts`
+  (`sports`, plural), not `src/sport/…`. Two implementers reported it
+  independently; the S11 prompt and this session's dispatch briefs both had it
+  wrong, harmlessly.
 - _(append below)_
 
 ## Open questions for the owner
