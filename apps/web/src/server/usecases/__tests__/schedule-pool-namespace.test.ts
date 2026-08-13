@@ -165,6 +165,9 @@ function pack(poolRef: string): SchedulePack {
     // only the server sees it. `toModelPayload` omits this field for the same
     // reason it omits `participants`.
     poolIds: { [F1]: POOL_A_ID, [F2]: POOL_A_ID },
+    // C1 gap B: no round-robin fixtures in this pack, so nothing to gate.
+    stageIds: {},
+    roundNos: {},
     assumptions: [],
     parsed: { hard: [], soft: [], unparsed: [] },
     fixtures: {

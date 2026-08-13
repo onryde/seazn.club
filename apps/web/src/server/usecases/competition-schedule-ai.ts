@@ -303,6 +303,21 @@ export interface CompetitionPack {
    *  Keys inserted in `fixtures.movable` order, so the object serialises in a
    *  domain order rather than a per-seed one. */
   poolIds: Record<string, string>;
+  /** C1 gap B — the joint twin of {@link SchedulePack.stageIds}, unioned from
+   *  the source packs, server-side only for the same reason: `stageId` feeds
+   *  {@link toJointEngineAssignments}'s `Assignment.stageId`, which
+   *  `validateAssignments`'s round-order pair scan groups on. Total over
+   *  `fixtures.movable` — `fixtures.stage_id` is NOT NULL. Keys inserted in
+   *  `fixtures.movable` order, like `poolIds`. */
+  stageIds: Record<string, string>;
+  /** C1 gap B — the joint twin of {@link SchedulePack.roundNos}. ONLY the
+   *  fixtures whose stage is round-robin-kind, unioned from the source
+   *  packs' own gated maps (each built against ITS OWN division's
+   *  `roundRobinStageIds`) — never re-derived here from `f.round` (the
+   *  ungated, model-facing display value), or a bracket/swiss stage's
+   *  display round would be forwarded as round-robin order again. Keys
+   *  inserted in `fixtures.movable` order, like `poolIds`. */
+  roundNos: Record<string, number>;
   /** Deterministic preprocessing choices worth telling the organiser about:
    *  stripped bye feeders (from each source pack) and the run-wide same-name
    *  person grouping. Rendered at W5 (#400). */
@@ -343,7 +358,7 @@ export interface CompetitionPack {
  */
 export function toJointModelPayload(
   pack: CompetitionPack,
-): Omit<CompetitionPack, "participants" | "assumptions" | "poolIds"> {
+): Omit<CompetitionPack, "participants" | "assumptions" | "poolIds" | "stageIds" | "roundNos"> {
   return {
     mode: pack.mode,
     competition: pack.competition,
@@ -859,6 +874,28 @@ export async function buildCompetitionPack(
     if (id !== undefined) poolIds[f.id] = id;
   }
 
+  // C1 gap B: the joint twins of `poolIds` just above, unioned the same way.
+  // `stageIds` is total (each source pack's own map is total over ITS
+  // movable set, since `fixtures.stage_id` is NOT NULL). `roundNos` stays
+  // PARTIAL — each source pack already gated its own entries on that
+  // division's own `roundRobinStageIds` (`buildSchedulePack`'s hoisted
+  // `roundRobin`), so unioning the already-gated maps preserves the gate
+  // rather than re-deriving (and potentially un-gating) it here.
+  const stageIdBySourceFixture = new Map(
+    built.flatMap((b) => Object.entries(b.pack.stageIds)),
+  );
+  const roundNoBySourceFixture = new Map(
+    built.flatMap((b) => Object.entries(b.pack.roundNos)),
+  );
+  const stageIds: Record<string, string> = {};
+  const roundNos: Record<string, number> = {};
+  for (const f of movable) {
+    const stageId = stageIdBySourceFixture.get(f.id);
+    if (stageId !== undefined) stageIds[f.id] = stageId;
+    const roundNo = roundNoBySourceFixture.get(f.id);
+    if (roundNo !== undefined) roundNos[f.id] = roundNo;
+  }
+
   // Bye-strip assumptions come from the source packs, in the emitted division
   // order. Identity is reported once, jointly — see IDENTITY_ASSUMPTION.
   const assumptions = [
@@ -1046,6 +1083,8 @@ export async function buildCompetitionPack(
     people,
     participants,
     poolIds,
+    stageIds,
+    roundNos,
     assumptions,
     parsed: { hard: resolved.hard, soft: resolved.soft, unparsed: resolved.unparsed },
     fixtures: { movable, obstacles },
@@ -1210,6 +1249,20 @@ export function toJointEngineAssignments(plan: AiSchedulePlan, pack: Competition
       // divisions this pack spans.
       ...(pack.poolIds[a.fixture_id] !== undefined
         ? { poolId: pack.poolIds[a.fixture_id]! }
+        : {}),
+      // C1 gap B: `stageId` unconditional (`pack.stageIds` is total over
+      // `fixtures.movable`), `roundNo` gated on `pack.roundNos` (round-robin
+      // only — already filtered per-division at pack-build time, see its
+      // own doc comment). Same reasoning as the single-division
+      // `toEngineAssignments` (schedule-ai.ts) — without these, no joint
+      // AI-plan assignment ever entered `calendar.ts`'s round-order
+      // `bySequence` grouping, so the joint planning path could not
+      // evaluate round order at all.
+      ...(pack.stageIds[a.fixture_id] !== undefined
+        ? { stageId: pack.stageIds[a.fixture_id]! }
+        : {}),
+      ...(pack.roundNos[a.fixture_id] !== undefined
+        ? { roundNo: pack.roundNos[a.fixture_id]! }
         : {}),
     };
   });

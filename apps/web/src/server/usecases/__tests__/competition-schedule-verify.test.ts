@@ -193,6 +193,13 @@ function pack(
     people,
     participants,
     poolIds,
+    // C1 gap B. Unlike `poolIds`, `fixture()` has no field this helper can
+    // derive stage/round-robin identity from (that is a pack-level fact, not
+    // a per-fixture one a hand-built `CompetitionPackFixture` carries) — so
+    // this defaults to "nothing is round-robin" and the round-order describe
+    // block below passes real maps through `over`.
+    stageIds: {},
+    roundNos: {},
     assumptions: [],
     fixtures: { movable: labelled, obstacles: [] },
     draft: [],
@@ -896,6 +903,124 @@ describe("joint engine assignments (#350)", () => {
       { fixtureId: F2, dependsOn: F1, direct: true },
       { fixtureId: F3, dependsOn: F2, direct: true },
     ]);
+  });
+
+  // C1 gap B — the joint twin of the round-order coverage in
+  // `schedule-ai-round-order.test.ts` (single-division). Same shape as the
+  // `poolId` pair just above ("stamps the pool..." / "omits the pool..."):
+  // `pack()`'s helper has no per-fixture way to express stage/round-robin
+  // identity (that is a pack-level fact — see `CompetitionPack.roundNos`'s
+  // own doc comment), so these stamp `stageIds`/`roundNos` directly via
+  // `over`, the same way the pool tests above stamp `restByGroup` via `over`.
+  it("stamps stageId unconditionally and roundNo only when round-robin", () => {
+    const p = pack(
+      [division(D1, "Alpha", { settings: settings({ courts: ["Court 1", "Court 2"] }) })],
+      [
+        fixture(F1, D1, { round: 3, home: E1, away: E2 }),
+        fixture(F2, D1, { round: 3, seq: 1, home: E3, away: E4 }),
+      ],
+      { stageIds: { [F1]: "stage-rr", [F2]: "stage-bracket" }, roundNos: { [F1]: 3 } },
+    );
+    const out = toJointEngineAssignments(
+      plan([assign(F1, at("09:00"), "Court 1"), assign(F2, at("09:00"), "Court 2")]),
+      p,
+    );
+    const byId = new Map(out.map((a) => [a.fixtureId, a]));
+    expect(byId.get(F1)!.stageId).toBe("stage-rr");
+    expect(byId.get(F1)!.roundNo).toBe(3);
+    expect(byId.get(F2)!.stageId).toBe("stage-bracket");
+    // Absent, not `undefined` written explicitly — see the same assertion in
+    // `schedule-ai-round-order.test.ts` for why the distinction matters.
+    expect("roundNo" in byId.get(F2)!).toBe(false);
+  });
+
+  it("flags a joint AI plan that schedules a later round before an earlier one", () => {
+    const p = pack(
+      [division(D1, "Alpha", { settings: settings({ courts: ["Court 1", "Court 2"] }) })],
+      [
+        fixture(F1, D1, { round: 1, home: E1, away: E2 }),
+        fixture(F2, D1, { round: 2, seq: 1, home: E3, away: E4 }),
+      ],
+      { stageIds: { [F1]: "stage-rr", [F2]: "stage-rr" }, roundNos: { [F1]: 1, [F2]: 2 } },
+    );
+    // Round 2 (F2) at 09:00, round 1 (F1) an hour later — the later round
+    // scheduled first. Different entrants and courts, zero rest floor:
+    // nothing else here can produce a conflict.
+    const out = verifyJoint(
+      plan([assign(F1, at("10:00"), "Court 1"), assign(F2, at("09:00"), "Court 2")]),
+      p,
+    );
+    expect(out.map((c) => c.reason)).toContain("order");
+    // Blamed on the LATER round, calendar.ts's own convention.
+    expect(out.find((c) => c.reason === "order")?.fixtureId).toBe(F2);
+  });
+
+  it("does not flag a joint AI plan that respects round order", () => {
+    const p = pack(
+      [division(D1, "Alpha", { settings: settings({ courts: ["Court 1", "Court 2"] }) })],
+      [
+        fixture(F1, D1, { round: 1, home: E1, away: E2 }),
+        fixture(F2, D1, { round: 2, seq: 1, home: E3, away: E4 }),
+      ],
+      { stageIds: { [F1]: "stage-rr", [F2]: "stage-rr" }, roundNos: { [F1]: 1, [F2]: 2 } },
+    );
+    const out = verifyJoint(
+      plan([assign(F1, at("09:00"), "Court 1"), assign(F2, at("10:00"), "Court 2")]),
+      p,
+    );
+    expect(out.map((c) => c.reason)).not.toContain("order");
+  });
+
+  it("does not treat a non-round-robin stage's round_no as round-robin order", () => {
+    const p = pack(
+      [division(D1, "Alpha", { settings: settings({ courts: ["Court 1", "Court 2"] }) })],
+      [
+        fixture(F1, D1, { round: 1, home: E1, away: E2 }),
+        fixture(F2, D1, { round: 2, seq: 1, home: E3, away: E4 }),
+      ],
+      // stageIds stamped (unconditional, mirrors buildCompetitionPack), but
+      // NEITHER fixture is in roundNos — the bracket/swiss gate.
+      { stageIds: { [F1]: "stage-bracket", [F2]: "stage-bracket" }, roundNos: {} },
+    );
+    const out = verifyJoint(
+      plan([assign(F1, at("10:00"), "Court 1"), assign(F2, at("09:00"), "Court 2")]),
+      p,
+    );
+    expect(out.map((c) => c.reason)).not.toContain("order");
+  });
+
+  it("does not collide two independent round-robin stages in the same division", () => {
+    // Same construction as the single-division cross-stage test: two
+    // round-robin stages in ONE division, each clean internally, with stage
+    // B's round 1 sitting AFTER stage A's round 2 — a violation if the two
+    // stages were compared as one sequence (stageId dropped or ignored).
+    const p = pack(
+      [
+        division(D1, "Alpha", {
+          settings: settings({ courts: ["Court 1", "Court 2", "Court 3", "Court 4"] }),
+        }),
+      ],
+      [
+        fixture(F1, D1, { round: 1, home: E1, away: E2 }),
+        fixture(F2, D1, { round: 2, seq: 1, home: E3, away: E4 }),
+        fixture(F3, D1, { round: 1, seq: 2, home: E5, away: E6 }),
+        fixture("f-b2", D1, { round: 2, seq: 3, home: "e7", away: "e8" }),
+      ],
+      {
+        stageIds: { [F1]: "stage-rr-a", [F2]: "stage-rr-a", [F3]: "stage-rr-b", "f-b2": "stage-rr-b" },
+        roundNos: { [F1]: 1, [F2]: 2, [F3]: 1, "f-b2": 2 },
+      },
+    );
+    const out = verifyJoint(
+      plan([
+        assign(F1, at("09:00"), "Court 1"),
+        assign(F2, at("10:00"), "Court 2"),
+        assign(F3, at("15:00"), "Court 3"),
+        assign("f-b2", at("16:00"), "Court 4"),
+      ]),
+      p,
+    );
+    expect(out.map((c) => c.reason)).not.toContain("order");
   });
 });
 
