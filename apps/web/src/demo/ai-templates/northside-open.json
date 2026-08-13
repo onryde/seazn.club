@@ -6681,8 +6681,8 @@
       },
       {
         "fixture_id": "5cc3b1b6-41a4-44e8-a814-5e92e3ed18de",
-        "scheduled_at": "2026-09-19T16:30:00+01:00",
-        "court_label": "Court 1",
+        "scheduled_at": "2026-09-19T14:15:00+01:00",
+        "court_label": "Court 3",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
@@ -6753,86 +6753,86 @@
       },
       {
         "fixture_id": "13e7f81b-5b03-4501-a8df-d21776ff064e",
-        "scheduled_at": "2026-09-20T12:45:00+01:00",
-        "court_label": "Court 4",
+        "scheduled_at": "2026-09-20T09:45:00+01:00",
+        "court_label": "Court 1",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "6536364f-d365-4f2f-90c3-07271a349a7b",
-        "scheduled_at": "2026-09-20T14:15:00+01:00",
-        "court_label": "Court 3",
-        "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
-      },
-      {
-        "fixture_id": "1b42c8a9-f035-4fd4-bedb-f2678c1615f0",
-        "scheduled_at": "2026-09-20T13:30:00+01:00",
+        "scheduled_at": "2026-09-20T09:45:00+01:00",
         "court_label": "Court 2",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
+        "fixture_id": "1b42c8a9-f035-4fd4-bedb-f2678c1615f0",
+        "scheduled_at": "2026-09-19T16:30:00+01:00",
+        "court_label": "Court 1",
+        "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
+      },
+      {
         "fixture_id": "e1bc2c14-4910-47c8-a54e-86a71c779cbd",
-        "scheduled_at": "2026-09-20T16:30:00+01:00",
-        "court_label": "Court 3",
+        "scheduled_at": "2026-09-20T10:30:00+01:00",
+        "court_label": "Court 1",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "a25891b4-e28f-4fa7-a7bf-3bfaf0a5514b",
-        "scheduled_at": "2026-09-20T13:30:00+01:00",
-        "court_label": "Court 4",
+        "scheduled_at": "2026-09-20T09:00:00+01:00",
+        "court_label": "Court 2",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "83eec769-939f-41fb-be37-09413b095171",
-        "scheduled_at": "2026-09-20T13:30:00+01:00",
+        "scheduled_at": "2026-09-20T09:00:00+01:00",
         "court_label": "Court 1",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "907c1096-d3da-4f29-ae81-36c2cc4699c2",
-        "scheduled_at": "2026-09-20T15:00:00+01:00",
-        "court_label": "Court 2",
+        "scheduled_at": "2026-09-20T12:00:00+01:00",
+        "court_label": "Court 3",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "ced9e4b2-c57d-41ba-847d-399d3de52986",
-        "scheduled_at": "2026-09-20T15:45:00+01:00",
+        "scheduled_at": "2026-09-20T12:00:00+01:00",
         "court_label": "Court 4",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "1b96fb5e-7877-413e-a7de-feb4bc2b4753",
-        "scheduled_at": "2026-09-19T14:15:00+01:00",
-        "court_label": "Court 3",
+        "scheduled_at": "2026-09-20T10:30:00+01:00",
+        "court_label": "Court 2",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "abc8bc94-1678-465f-a43d-61f7d851b553",
-        "scheduled_at": "2026-09-20T15:00:00+01:00",
-        "court_label": "Court 4",
+        "scheduled_at": "2026-09-20T12:00:00+01:00",
+        "court_label": "Court 1",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "3a7a569b-e02a-456b-894a-5dfb8cc9639f",
-        "scheduled_at": "2026-09-20T14:15:00+01:00",
-        "court_label": "Court 4",
+        "scheduled_at": "2026-09-20T11:15:00+01:00",
+        "court_label": "Court 2",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "25badaad-f4b1-47e9-936f-b9f55021ff4d",
-        "scheduled_at": "2026-09-20T13:30:00+01:00",
-        "court_label": "Court 3",
+        "scheduled_at": "2026-09-20T11:15:00+01:00",
+        "court_label": "Court 1",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "f34451f0-509c-4204-b89d-e631339c8e19",
-        "scheduled_at": "2026-09-20T15:45:00+01:00",
-        "court_label": "Court 3",
+        "scheduled_at": "2026-09-20T12:45:00+01:00",
+        "court_label": "Court 4",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "9e37a8c1-7864-47ec-ae88-c0df30a85c9a",
-        "scheduled_at": "2026-09-20T12:45:00+01:00",
-        "court_label": "Court 1",
+        "scheduled_at": "2026-09-20T12:00:00+01:00",
+        "court_label": "Court 2",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
@@ -6843,20 +6843,20 @@
       },
       {
         "fixture_id": "ed601fa8-0b48-42bf-b622-ff075e8ffd26",
-        "scheduled_at": "2026-09-20T15:00:00+01:00",
+        "scheduled_at": "2026-09-20T14:15:00+01:00",
         "court_label": "Court 3",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "18ad53b8-99a4-4342-82b6-c6f2bb18a1ea",
-        "scheduled_at": "2026-09-20T09:00:00+01:00",
+        "scheduled_at": "2026-09-20T13:30:00+01:00",
         "court_label": "Court 1",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "d4310357-f563-4f3b-8e8a-4e906b8d3255",
-        "scheduled_at": "2026-09-20T09:00:00+01:00",
-        "court_label": "Court 2",
+        "scheduled_at": "2026-09-20T13:30:00+01:00",
+        "court_label": "Court 4",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
@@ -6897,14 +6897,14 @@
       },
       {
         "fixture_id": "b42361f1-8efc-43e6-9e7c-0ccebcefd6b5",
-        "scheduled_at": "2026-09-20T09:45:00+01:00",
-        "court_label": "Court 1",
+        "scheduled_at": "2026-09-20T15:00:00+01:00",
+        "court_label": "Court 2",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "b8daaf1b-5290-4c18-b0f8-e78a59170339",
-        "scheduled_at": "2026-09-20T09:45:00+01:00",
-        "court_label": "Court 2",
+        "scheduled_at": "2026-09-20T15:00:00+01:00",
+        "court_label": "Court 3",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
@@ -6927,14 +6927,14 @@
       },
       {
         "fixture_id": "804d7f70-b046-4f73-b0c4-4e7094fe5b64",
-        "scheduled_at": "2026-09-20T10:30:00+01:00",
-        "court_label": "Court 1",
+        "scheduled_at": "2026-09-20T15:00:00+01:00",
+        "court_label": "Court 4",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "f469933f-a774-4c9b-951b-b477108c5c7e",
-        "scheduled_at": "2026-09-20T10:30:00+01:00",
-        "court_label": "Court 2",
+        "scheduled_at": "2026-09-20T12:45:00+01:00",
+        "court_label": "Court 1",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
@@ -6975,14 +6975,14 @@
       },
       {
         "fixture_id": "608f8e26-845e-44d0-bfb0-2c687bb232a1",
-        "scheduled_at": "2026-09-20T11:15:00+01:00",
-        "court_label": "Court 1",
+        "scheduled_at": "2026-09-20T13:30:00+01:00",
+        "court_label": "Court 3",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "674d8217-a4a4-4a9d-9eae-0cb994695739",
-        "scheduled_at": "2026-09-20T11:15:00+01:00",
-        "court_label": "Court 2",
+        "scheduled_at": "2026-09-20T14:15:00+01:00",
+        "court_label": "Court 4",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
@@ -6999,25 +6999,25 @@
       },
       {
         "fixture_id": "40c3da5b-6528-473b-b93f-93f61b83e8f1",
-        "scheduled_at": "2026-09-20T12:00:00+01:00",
-        "court_label": "Court 1",
+        "scheduled_at": "2026-09-20T16:30:00+01:00",
+        "court_label": "Court 3",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "2897524b-343e-4e93-af4c-268ea0ed2d88",
-        "scheduled_at": "2026-09-20T12:00:00+01:00",
+        "scheduled_at": "2026-09-20T13:30:00+01:00",
         "court_label": "Court 2",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "0a0ea876-6515-43df-bd97-e4d76c9589ce",
-        "scheduled_at": "2026-09-20T12:00:00+01:00",
+        "scheduled_at": "2026-09-20T15:45:00+01:00",
         "court_label": "Court 3",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       },
       {
         "fixture_id": "d90b493f-6417-4b8c-8d08-1a2bdd67814a",
-        "scheduled_at": "2026-09-20T12:00:00+01:00",
+        "scheduled_at": "2026-09-20T15:45:00+01:00",
         "court_label": "Court 4",
         "division_id": "65fc11bc-6407-429c-864e-e6ca11625476"
       }
