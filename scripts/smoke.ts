@@ -800,6 +800,10 @@ async function main() {
   // move still succeeds (own fresh free session — not an entitlement gate).
   await scheduleRoundOrderDeltaGateSuite();
 
+  // --- C1 gap A: the JOINT multi-division apply's own round-order wiring,
+  // over real HTTP (own fresh pro session, for scheduling.multi_division).
+  await competitionScheduleApplyRoundOrderSuite();
+
   // --- design/v6 PROMPT-48..50: tennis rally set (nested kernel), icehockey
   // OT points in standings, PP goal + release with the public strength chip.
   // Before gapSuite — needs the org's pro entitlements for tier-3 scoring.
@@ -6848,6 +6852,187 @@ async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
   check(
     "round order: round 1, never moved, is still at its original slot after the refused sibling drag",
     (round1After.json.data as { scheduled_at: string }).scheduled_at === at(0),
+  );
+}
+
+/**
+ * C1 gap A — the JOINT multi-division apply's own round-order wiring, over
+ * real HTTP. `scheduleRoundOrderDeltaGateSuite` above proves the same
+ * property for the single-fixture PATCH path; `competition-schedule-apply
+ * .test.ts` (apps/web unit, DB-gated) already proves the mechanism in
+ * isolation. What only smoke can prove is that a real POST against a real
+ * running server, through real auth/routing/JSON, actually 409s on the
+ * JOINT endpoint specifically — `applyCompetitionSchedule`'s own
+ * `verifyConfigFor` calls were structurally unable to see round order at
+ * all before this fix (no `tz` ever reached them), a defect the
+ * single-fixture path's suite above cannot exercise.
+ *
+ * WIRE SHAPE TRAP (confirmed against server/api-v1/http.ts and
+ * `ApplyCompetitionScheduleResult`'s own doc comment, not assumed): this
+ * route's conflicts are the RAW engine `Conflict` shape — camelCase
+ * `fixtureId`/`reason`/`direct` — spread onto `error.conflicts` verbatim,
+ * NOT the snake_case `ScheduleConflict`/`code`/`blocking` shape the
+ * single-fixture PATCH route above uses. A `{code, blocking}` read here
+ * would silently see `undefined` on every field and pass or fail for the
+ * wrong reason.
+ */
+async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
+  const s = newSession();
+  const orgId = (await signIn(s, `dtx_jointroundorder_${tag}@example.com`)).org_id;
+  // scheduling.multi_division is Pro and above.
+  await setPlan(orgId, "pro", s);
+
+  const comp = v1data<{ id: string }>(
+    await v1(s, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `DTX Joint Round Order ${tag}`,
+    }),
+  );
+
+  const T0 = Date.UTC(2026, 10, 9, 9, 0);
+  const at = (minutes: number) => new Date(T0 + minutes * 60_000).toISOString();
+
+  async function seedRrDivision(
+    name: string,
+    entrantNames: string[],
+    court: string,
+  ): Promise<{ id: string; fixtureIds: string[] }> {
+    const div = v1data<{ id: string }>(
+      await v1(s, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+        name,
+        sport_key: "generic",
+        variant_key: "score",
+        config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      }),
+    );
+    await v1(
+      s,
+      `/api/v1/divisions/${div.id}/entrants`,
+      "POST",
+      entrantNames.map((n, i) => ({ kind: "individual", display_name: n, seed: i + 1 })),
+    );
+    const stage = v1data<{ id: string }>(
+      await v1(s, `/api/v1/divisions/${div.id}/stages`, "POST", {
+        seq: 1,
+        kind: "league",
+        name: "L",
+        config: {},
+      }),
+    );
+    const gen = v1data<{ fixtures: { id: string }[] }>(
+      await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"),
+    );
+    await v1(s, `/api/v1/divisions/${div.id}/schedule-settings`, "PUT", {
+      tz: "UTC",
+      config: {
+        startAt: at(0),
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: [court],
+        perEntrantMinRest: 0,
+        blackouts: [],
+        sessionWindows: [],
+      },
+    });
+    return { id: div.id, fixtureIds: gen.fixtures.map((f) => f.id) };
+  }
+
+  const alpha = await seedRrDivision("Alpha", ["A", "B", "C", "D"], "Court 1");
+  const bravo = await seedRrDivision("Bravo", ["X", "Y", "Z"], "Court 3");
+  check(
+    "joint round order: Alpha generated a 4-entrant round robin (6 fixtures)",
+    alpha.fixtureIds.length === 6,
+  );
+  check(
+    "joint round order: Bravo generated a 3-entrant round robin (3 fixtures)",
+    bravo.fixtureIds.length === 3,
+  );
+
+  // The violation: swap Alpha's round-1 (first id, generate's own
+  // round_no/seq_in_round order) and round-3 (last id) slots — a straight
+  // swap of two already-occupied times, so no court/rest conflict rides
+  // along to confound the assertion (perEntrantMinRest is 0 above).
+  const last = alpha.fixtureIds.length - 1;
+  const alphaViolating = alpha.fixtureIds.map((fixture_id, i) => ({
+    fixture_id,
+    scheduled_at: i === 0 ? at(last * 30) : i === last ? at(0) : at(i * 30),
+    court_label: "Court 1",
+  }));
+  const bravoClean = bravo.fixtureIds.map((fixture_id, i) => ({
+    fixture_id,
+    scheduled_at: at(i * 30),
+    court_label: "Court 3",
+  }));
+
+  const seqs1 = await divisionSeqs([alpha.id, bravo.id]);
+  const refused = await v1(s, `/api/v1/competitions/${comp.id}/schedule/apply`, "POST", {
+    divisions: [
+      { division_id: alpha.id, expected_seq: seqs1[alpha.id] ?? 0, assignments: alphaViolating },
+      { division_id: bravo.id, expected_seq: seqs1[bravo.id] ?? 0, assignments: bravoClean },
+    ],
+    // "ai" only — the wire schema (ApplyCompetitionScheduleRequest) rejects
+    // "manual" on this route; manual board edits stay on the per-stage
+    // endpoint by construction (one division). Confirmed against
+    // schemas.ts, not assumed.
+    source: "ai",
+  });
+  // `error.conflicts` is the raw engine shape here — see the file header.
+  const refusedConflicts =
+    (refused.json.error as { conflicts?: { fixtureId?: string; reason?: string; direct?: boolean }[] } | undefined)
+      ?.conflicts ?? [];
+  check(
+    "joint round order: a joint apply that INTRODUCES a round-order violation is refused (409, reason order, direct/blocking)",
+    refused.status === 409 &&
+      refusedConflicts.some((c) => c.reason === "order" && c.direct === true),
+  );
+  const afterRefusal = await scheduledCountsByDivision([alpha.id, bravo.id]);
+  check(
+    "joint round order: the refused write is ATOMIC — neither division got any slot, including the untouched Bravo",
+    (afterRefusal[alpha.id] ?? 0) === 0 && (afterRefusal[bravo.id] ?? 0) === 0,
+  );
+
+  // The delta property: a correct joint apply first, then the pre-existing
+  // violation planted straight into the rows (the only way to construct one
+  // now the gate is live), then a re-apply that must still succeed.
+  const alphaClean = alpha.fixtureIds.map((fixture_id, i) => ({
+    fixture_id,
+    scheduled_at: at(i * 30),
+    court_label: "Court 1",
+  }));
+  const seqs2 = await divisionSeqs([alpha.id, bravo.id]);
+  const cleanApply = await v1(s, `/api/v1/competitions/${comp.id}/schedule/apply`, "POST", {
+    divisions: [
+      { division_id: alpha.id, expected_seq: seqs2[alpha.id] ?? 0, assignments: alphaClean },
+      { division_id: bravo.id, expected_seq: seqs2[bravo.id] ?? 0, assignments: bravoClean },
+    ],
+    source: "ai",
+  });
+  check("joint round order: a correctly-ordered joint apply succeeds (200)", cleanApply.status === 200);
+
+  const sql = smokeDb();
+  try {
+    for (const a of alphaViolating) {
+      await sql`
+        update fixtures set scheduled_at = ${a.scheduled_at}, court_label = ${a.court_label}
+        where id = ${a.fixture_id}`;
+    }
+  } finally {
+    await sql.end();
+  }
+
+  const seqs3 = await divisionSeqs([alpha.id, bravo.id]);
+  const stillApplies = await v1(s, `/api/v1/competitions/${comp.id}/schedule/apply`, "POST", {
+    divisions: [
+      // Re-asserts the SAME (now-violating) positions for Alpha — a no-op.
+      { division_id: alpha.id, expected_seq: seqs3[alpha.id] ?? 0, assignments: alphaViolating },
+      { division_id: bravo.id, expected_seq: seqs3[bravo.id] ?? 0, assignments: bravoClean },
+    ],
+    source: "ai",
+  });
+  const stillConflicts = v1data<{ conflicts?: { reason?: string }[] }>(stillApplies)?.conflicts ?? [];
+  check(
+    "joint round order: still applies over a board that ALREADY holds a round-order violation — the delta property",
+    stillApplies.status === 200 && stillConflicts.some((c) => c.reason === "order"),
   );
 }
 

@@ -265,3 +265,253 @@ test("dragging a card into a round-order violation against an untouched sibling 
 
   await expectNoHorizontalScroll(page);
 });
+
+// ---------------------------------------------------------------------------
+// C1 gap A — the JOINT multi-division apply's own round-order wiring.
+//
+// The two tests above prove round order through a single-division board
+// (Auto-schedule's preview, and moveFixture's drag gate). Neither exercises
+// `/competitions/{id}/schedule/apply` (competition-schedule-apply.ts) at
+// all — a structurally separate builder/verify seam from the single-division
+// one (see this branch's own `reference_ai_plan_propose_vs_apply_verification
+// _split` note), and the one Gap A found completely unable to see round
+// order: `verifyConfigFor` there never received a `tz`.
+//
+// NO UI PATH constructs a round-order-VIOLATING joint apply to click through:
+// the competition board's only route to this endpoint is the AI joint
+// console's Apply button (ai-competition-console.tsx), which submits
+// whatever the AI proposed — and the AI's own proposal is verified clean by
+// this same branch's Gap B fix before the organiser ever sees a review step.
+// So both tests below post directly to the endpoint via the `request`
+// context, exactly the way a real API client (or a future manual-edit UI)
+// would, and then read the RENDERED BOARD — never just the HTTP response —
+// for the on-screen proof `round-order.spec.ts`'s own header commits this
+// file to.
+// ---------------------------------------------------------------------------
+
+/** One competition, two independent 4-entrant round-robin divisions (6
+ *  fixtures each), each on its own dedicated court so a cross-division time
+ *  coincidence can never read as a court clash and confound a round-order
+ *  assertion — the joint twin of `seedRoundRobinBoard` above. */
+async function seedJointRoundRobinBoard(request: Parameters<typeof apiJson>[0]): Promise<{
+  competitionId: string;
+  alpha: { divisionId: string; fixtureIds: string[] };
+  bravo: { divisionId: string; fixtureIds: string[] };
+}> {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Joint Round Order ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+    visibility: "private",
+  });
+  const competitionId = comp.data!.id;
+
+  async function seedDivision(name: string, court: string) {
+    const div = await apiJson<{ id: string }>(
+      request,
+      `/api/v1/competitions/${competitionId}/divisions`,
+      "POST",
+      {
+        name,
+        sport_key: "generic",
+        variant_key: "score",
+        config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      },
+    );
+    const divisionId = div.data!.id;
+    await addEntrantsViaApi(request, divisionId, ["Ash", "Brook", "Clay", "Dune"]);
+    const { fixtureIds } = await createStageAndGenerate(request, divisionId);
+    expect(fixtureIds.length).toBe(6);
+    const settings = await apiJson(
+      request,
+      `/api/v1/divisions/${divisionId}/schedule-settings`,
+      "PUT",
+      {
+        tz: "UTC",
+        config: {
+          startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
+          matchMinutes: 30,
+          gapMinutes: 0,
+          courts: [court],
+          perEntrantMinRest: 0,
+          blackouts: [],
+          sessionWindows: [],
+        },
+      },
+    );
+    expect(settings.status).toBe(200);
+    return { divisionId, fixtureIds };
+  }
+
+  const alpha = await seedDivision("Alpha", "Court A");
+  const bravo = await seedDivision("Bravo", "Court B");
+  return { competitionId, alpha, bravo };
+}
+
+const JOINT_T0 = Date.UTC(2026, 8, 21, 9, 0);
+const jointAt = (minutes: number): string => new Date(JOINT_T0 + minutes * 60_000).toISOString();
+
+/** Every fixture, round-ascending (`generate`'s own order), a court, and a
+ *  starting offset — the joint twin of the single-division tests' `lineUp`
+ *  idiom (schedule/apply request shape, not a UI action). */
+const lineUp = (fixtureIds: string[], court: string) =>
+  fixtureIds.map((fixture_id, i) => ({ fixture_id, scheduled_at: jointAt(i * 30), court_label: court }));
+
+/** #350's `expected_seq` has no GET endpoint, and a freshly-seeded division is
+ *  NOT reliably seq 0 — `divisions.seq` is a general-purpose event counter
+ *  (stages.ts bumps it on stage creation too, ahead of any scheduling),
+ *  confirmed directly rather than assumed (a `0` guess here 409s
+ *  SEQ_CONFLICT with `current_seq: 1` on this exact seed flow). Every real
+ *  client either tracks its own last write or learns the token from a
+ *  refused one — this probes with a guess certain to be wrong and reads the
+ *  true value back off the SEQ_CONFLICT body it provokes. Single-division
+ *  (the endpoint's `.min(1)`), so the probe's own verdict is unambiguous. */
+async function currentDivisionSeq(
+  request: Parameters<typeof apiJson>[0],
+  competitionId: string,
+  divisionId: string,
+  probeFixtureId: string,
+): Promise<number> {
+  const probe = await apiJson(request, `/api/v1/competitions/${competitionId}/schedule/apply`, "POST", {
+    divisions: [
+      {
+        division_id: divisionId,
+        expected_seq: 999_999_999,
+        assignments: [{ fixture_id: probeFixtureId, scheduled_at: jointAt(0), court_label: "Probe" }],
+      },
+    ],
+    source: "ai",
+  });
+  const err = probe.error as { code?: string; current_seq?: number } | undefined;
+  if (probe.status !== 409 || err?.code !== "SEQ_CONFLICT" || typeof err.current_seq !== "number") {
+    throw new Error(`currentDivisionSeq: expected a SEQ_CONFLICT probe, got ${JSON.stringify(probe)}`);
+  }
+  return err.current_seq;
+}
+
+test("a joint apply lands both divisions in round order the organiser SEES, through the joint endpoint", async ({
+  page,
+  request,
+}) => {
+  const { competitionId, alpha, bravo } = await seedJointRoundRobinBoard(request);
+
+  const alphaSeq = await currentDivisionSeq(request, competitionId, alpha.divisionId, alpha.fixtureIds[0]!);
+  const bravoSeq = await currentDivisionSeq(request, competitionId, bravo.divisionId, bravo.fixtureIds[0]!);
+  const res = await apiJson(request, `/api/v1/competitions/${competitionId}/schedule/apply`, "POST", {
+    divisions: [
+      { division_id: alpha.divisionId, expected_seq: alphaSeq, assignments: lineUp(alpha.fixtureIds, "Court A") },
+      { division_id: bravo.divisionId, expected_seq: bravoSeq, assignments: lineUp(bravo.fixtureIds, "Court B") },
+    ],
+    source: "ai",
+  });
+  expect(res.status, JSON.stringify(res)).toBe(200);
+
+  // THE CLAIM, on screen, for BOTH divisions — each has its own board route;
+  // a competition has no single combined board view. Same read as the
+  // Auto-schedule test above: DOM order == chronological order on Agenda
+  // (BoardAgenda's own sort), the round label is on every card verbatim.
+  for (const [label, div] of [
+    ["Alpha", alpha],
+    ["Bravo", bravo],
+  ] as const) {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto(await divisionPath(page.request, div.divisionId, "/schedule?tab=board"));
+    const cards = page.locator("[data-fixture-id]");
+    const count = await cards.count();
+    expect(count, `${label}: no fixture cards rendered after the joint apply`).toBe(6);
+    const rounds: number[] = [];
+    for (let i = 0; i < count; i++) {
+      const text = (await cards.nth(i).textContent()) ?? "";
+      const m = /R(\d+)/.exec(text);
+      expect(m, `${label}: card ${i} carries no R<n> label`).not.toBeNull();
+      rounds.push(Number(m![1]));
+    }
+    for (let i = 1; i < rounds.length; i++) {
+      expect(
+        rounds[i]!,
+        `${label}: round order broken ON SCREEN after the JOINT apply: card ${i - 1} shows ` +
+          `R${rounds[i - 1]}, card ${i} shows R${rounds[i]}`,
+      ).toBeGreaterThanOrEqual(rounds[i - 1]!);
+    }
+    expect(new Set(rounds).size, `${label}: only one distinct round appeared`).toBeGreaterThan(1);
+    await expectNoHorizontalScroll(page);
+  }
+  await page.screenshot({ path: "test-results/joint-round-order-375.png", fullPage: true });
+});
+
+test("a joint apply that INTRODUCES a round-order violation is refused, and NOTHING renders on either board", async ({
+  page,
+  request,
+}) => {
+  const { competitionId, alpha, bravo } = await seedJointRoundRobinBoard(request);
+  // Discovered ONCE: the violating attempt below is refused before it ever
+  // reaches the seq check (applyCompetitionSchedule throws SCHEDULE_CONFLICT
+  // ahead of the write loop `assertFreshSeq` lives in — see the module
+  // header), and nothing else writes to either division in this test, so the
+  // SAME tokens are still correct for the recovery retry further down.
+  const alphaSeq = await currentDivisionSeq(request, competitionId, alpha.divisionId, alpha.fixtureIds[0]!);
+  const bravoSeq = await currentDivisionSeq(request, competitionId, bravo.divisionId, bravo.fixtureIds[0]!);
+
+  // Alpha's round-1 (first id) and round-3 (last id) slots swapped — a
+  // straight swap of two already-occupied times, so no court/rest conflict
+  // rides along to confound the assertion (perEntrantMinRest is 0 above).
+  // Bravo stays entirely clean and correctly ordered.
+  const last = alpha.fixtureIds.length - 1;
+  const alphaViolating = alpha.fixtureIds.map((fixture_id, i) => ({
+    fixture_id,
+    scheduled_at: i === 0 ? jointAt(last * 30) : i === last ? jointAt(0) : jointAt(i * 30),
+    court_label: "Court A",
+  }));
+  const bravoClean = lineUp(bravo.fixtureIds, "Court B");
+
+  const refused = await apiJson(request, `/api/v1/competitions/${competitionId}/schedule/apply`, "POST", {
+    divisions: [
+      { division_id: alpha.divisionId, expected_seq: alphaSeq, assignments: alphaViolating },
+      { division_id: bravo.divisionId, expected_seq: bravoSeq, assignments: bravoClean },
+    ],
+    source: "ai",
+  });
+  // `error.conflicts` is the RAW engine `Conflict` shape on this route —
+  // camelCase `fixtureId`/`reason`/`direct`, NOT the snake_case
+  // `ScheduleConflict`/`code`/`blocking` the single-fixture PATCH route
+  // above uses (confirmed against server/api-v1/http.ts's errorResponse and
+  // ApplyCompetitionScheduleResult's own doc comment, not assumed).
+  const conflicts =
+    (refused.error as { conflicts?: { fixtureId?: string; reason?: string; direct?: boolean }[] } | undefined)
+      ?.conflicts ?? [];
+  expect(refused.status, JSON.stringify(refused)).toBe(409);
+  expect(conflicts.some((c) => c.reason === "order" && c.direct === true)).toBe(true);
+
+  // THE on-screen atomicity proof: `board-tray-mobile`'s OWN `data-count`
+  // (board-tray.tsx — built for exactly this: "'the board repainted after an
+  // apply' is exactly 'every card left this tray'"). Both divisions are
+  // brand new, so a write that genuinely did nothing leaves all 6 fixtures
+  // of EACH sitting in the tray, never a partially- or wrongly-scheduled one.
+  for (const [label, div] of [
+    ["Alpha", alpha],
+    ["Bravo", bravo],
+  ] as const) {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto(await divisionPath(page.request, div.divisionId, "/schedule?tab=board"));
+    await expect(
+      page.getByTestId("board-tray-mobile"),
+      `${label}: unscheduled tray missing/miscounted after a REFUSED joint apply — the write was not atomic`,
+    ).toHaveAttribute("data-count", "6");
+    await expectNoHorizontalScroll(page);
+  }
+  await page.screenshot({ path: "test-results/joint-round-order-refused-375.png", fullPage: true });
+
+  // THE RECOVERY, same shape as the single-division test's "control": the
+  // block is about THIS write, not a permanent lockout. Nothing was written
+  // by the refused attempt, so the SAME expected_seq tokens are still
+  // correct, and a correctly-ordered retry with them must succeed and render.
+  const retried = await apiJson(request, `/api/v1/competitions/${competitionId}/schedule/apply`, "POST", {
+    divisions: [
+      { division_id: alpha.divisionId, expected_seq: alphaSeq, assignments: lineUp(alpha.fixtureIds, "Court A") },
+      { division_id: bravo.divisionId, expected_seq: bravoSeq, assignments: bravoClean },
+    ],
+    source: "ai",
+  });
+  expect(retried.status, JSON.stringify(retried)).toBe(200);
+  await page.goto(await divisionPath(page.request, alpha.divisionId, "/schedule?tab=board"));
+  await expect(page.locator("[data-fixture-id]")).toHaveCount(6);
+});
