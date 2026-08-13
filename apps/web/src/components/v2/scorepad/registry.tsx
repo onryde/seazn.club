@@ -20,6 +20,7 @@ import { useMemo } from "react";
 import type { EventEnvelope, Lineup, LineupPair, LineupSlot } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand } from "@seazn/engine/sport";
 import type { MemberIn, SideInfo, LineupSlotIn } from "@/components/v2/fixture-console";
+import { useMsg } from "@/components/i18n/dict-provider";
 import { resolveModuleClient } from "./module-client";
 import { deviceLinkTransport, sessionTransport, type PadAuthMode } from "./transport";
 import type { OwnIdentity } from "./types";
@@ -221,6 +222,7 @@ type ModuleResolution = { ok: true; module: AnySportModule } | { ok: false; mess
  * never `undefined`).
  */
 export function ScorePad(props: ScorePadProps) {
+  const msg = useMsg();
   const resolution = useMemo((): ModuleResolution => {
     try {
       return { ok: true, module: resolveModuleClient(props.sportKey, props.moduleVersion) };
@@ -237,14 +239,14 @@ export function ScorePad(props: ScorePadProps) {
   );
 
   if (!resolution.ok) {
-    // Readable fallback rather than a blank page. Plain English, not a
-    // dictionary key: this session is forbidden from touching a locale file
-    // (five parallel agents cannot share four dictionaries, S11/#420's
-    // ruling) — a "scorepad.v2.moduleUnavailable"-shaped key is owed and
-    // reported back to the dispatching session rather than added here.
+    // Readable fallback rather than a blank page. The engine's own failure
+    // text rides along as `reason` deliberately: a scorer courtside cannot
+    // act on it, but the organiser they phone can, and it is the difference
+    // between "the pad is broken" and "this division pins a module version
+    // that no longer resolves".
     return (
       <div className="card p-4 text-sm text-red-700" role="alert">
-        Scoring is temporarily unavailable for this fixture ({resolution.message}).
+        {msg("scorepad.v2.moduleUnavailable", { reason: resolution.message })}
       </div>
     );
   }

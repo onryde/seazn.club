@@ -3699,6 +3699,7 @@
   "scorepad.phase.live": "En direct",
   "scorepad.phase.post": "Après-match",
   "scorepad.emptyPhase": "Rien à enregistrer ici pour l'instant.",
+  "scorepad.v2.moduleUnavailable": "La saisie des scores est temporairement indisponible pour ce match ({reason}).",
   "scorepad.queue.pending": "{count} en attente",
   "scorepad.queue.offline": "Hors ligne — les actions sont enregistrées et seront envoyées dès le retour du réseau.",
   "scorepad.queue.synced": "Tout est synchronisé",

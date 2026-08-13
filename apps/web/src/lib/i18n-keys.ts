@@ -3776,6 +3776,7 @@ export type DictionaryKey =
   | "scorepad.timeline.unknownRecorder"
   | "scorepad.timeline.void"
   | "scorepad.timeline.voided"
+  | "scorepad.v2.moduleUnavailable"
   | "scorepad.validity.missingFields"
   | "scoring.position.board"
   | "scoring.position.clock"

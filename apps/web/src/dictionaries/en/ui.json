@@ -3699,6 +3699,7 @@
   "scorepad.phase.live": "Live",
   "scorepad.phase.post": "Post-match",
   "scorepad.emptyPhase": "Nothing to record here yet.",
+  "scorepad.v2.moduleUnavailable": "Scoring is temporarily unavailable for this fixture ({reason}).",
   "scorepad.queue.pending": "{count} queued",
   "scorepad.queue.offline": "Offline — actions are saved and will send once you're back online.",
   "scorepad.queue.synced": "All synced",

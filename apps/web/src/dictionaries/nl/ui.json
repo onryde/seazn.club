@@ -3699,6 +3699,7 @@
   "scorepad.phase.live": "Live",
   "scorepad.phase.post": "Na de wedstrijd",
   "scorepad.emptyPhase": "Hier is nog niets om vast te leggen.",
+  "scorepad.v2.moduleUnavailable": "Scoren is tijdelijk niet beschikbaar voor deze wedstrijd ({reason}).",
   "scorepad.queue.pending": "{count} in wachtrij",
   "scorepad.queue.offline": "Offline — acties worden opgeslagen en verzonden zodra je weer online bent.",
   "scorepad.queue.synced": "Alles gesynchroniseerd",

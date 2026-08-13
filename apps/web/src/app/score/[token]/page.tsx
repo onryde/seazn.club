@@ -20,7 +20,7 @@ import {
 // S12/#421 W10 — the v2 scoring pad, resolved server-side only inside the
 // scorepad-v2 flag-on branch (never on the v1 path, so a resolution failure
 // can never red a flag-off page — see resolveScorePadBootstrap's own doc).
-import { isServerFeatureEnabled } from "@/lib/posthog-server";
+import { scorepadV2Enabled } from "@/lib/scorepad-flag";
 import { hasFeature } from "@/lib/entitlements";
 import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/registry";
@@ -128,10 +128,7 @@ export default async function ScorePadPage({
   // specific link's own id, distinct from any other link the same issuer may
   // have handed out — see registry.tsx's `ScorePadBootstrap` doc for why
   // that distinction matters to the timeline's own "undo only mine" rule.
-  const scorePadV2Flag = await isServerFeatureEnabled("scorepad-v2", link.issued_by, {
-    orgId: link.org_id,
-    fallback: false,
-  });
+  const scorePadV2Flag = await scorepadV2Enabled(link.issued_by, link.org_id);
   const scorePadV2 = scorePadV2Flag
     ? await resolveScorePadBootstrap({
         sportModule,

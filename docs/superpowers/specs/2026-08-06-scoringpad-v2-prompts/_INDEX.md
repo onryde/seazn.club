@@ -2089,6 +2089,95 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   run locally with `git status --porcelain` empty. Screenshots: 20 captures, 5
   skins × 320/375/768/1280, `OVERFLOWING=0 SMALL_TAP=0`.
   Smoke remains **deferred to S13**, as the prompt directs.
+- 2026-08-13 — S12/#421 — **the deferred-e2e debt, resolved to a concrete list.**
+  `_INDEX.md`'s summary line says "S1, S3–S8", which over-counts by two. Read
+  from each prompt's own `Test types` block (the authoritative per-session
+  mapping `_RULES.md` §5 requires): **S1/#429** (`:92`), **S3/#426** (`:123`),
+  **S4/#428** (`:99`), **S5/#431** (`:91`) and **S6/#416** (`:159`) each say
+  "E2E + smoke deferred to S12/S13" and are genuinely outstanding. **S7/#427
+  and S8/#417 are NOT** — S7 shipped a real e2e and verified it twice, and
+  S8's own deferral was to "S9 and S12/S13", discharged in the S8b follow-up
+  (`apps/web/e2e/stats.spec.ts` + `scripts/smoke.ts` `playerStatsSuite`).
+  Recorded because chasing the summary line rather than the prompts would have
+  spent this session re-covering two sessions that already paid.
+- 2026-08-13 — S12/#421 — **a live v1 defect: carrom is unscoreable over a
+  device link, and has been.** `fixture-console.tsx:473-477` has a `carrom`
+  branch whose own comment states the reason — "the generic 1-result pad would
+  send `generic.result`, which the module rejects as an unknown event type" —
+  and `device-score-pad.tsx:277-291` **has no carrom branch at all**, so a
+  carrom fixture on `/score/[token]` falls through to `GenericPad` and 422s on
+  every submit. The two dispatchers were described in this programme's design
+  as "near-duplicate"; they are not duplicates, they are a duplicate with one
+  arm missing, which is exactly the drift the S12 registry exists to make
+  impossible. NOT fixed on the v1 path: flag-off byte-identity is this
+  session's review bar and a v1 fix would breach it. Flag-on it is fixed for
+  free — one registry, both entry points — and the drift guard prevents the
+  next one. S13's cutover closes it permanently.
+- 2026-08-13 — S12/#421 — **`divisions.config` IS the resolved, schema-parsed
+  variant cfg — with one field that is not.** `usecases/divisions.ts:568-570`
+  merges `{...variant.config, ...patch.config}` and runs
+  `sportModule.configSchema.safeParse(merged)`, storing the parsed output
+  (`:580-606`), so every `.default()` is already materialised and a client
+  `configSchema.parse(sport.config)` is safe. The exception: `config.entrants`
+  is re-added AFTER the parse and is not declared in any `configSchema`, so a
+  naive client re-parse silently STRIPS it. Harmless for the pad specifically —
+  a module cannot read a key its own schema does not declare — but it means
+  `divisions.config` is not a fixpoint of `configSchema.parse`, which is the
+  kind of thing a later session will assume. The cfg is therefore resolved
+  **server-side inside the flag-on branch only**, never on the v1 path, so a
+  parse failure on some future malformed row cannot red a flag-off page.
+- 2026-08-13 — S12/#421 — **RULING (owner): `timeline.tsx` is wired in here,
+  accepting an edit to two S10 files outside the prompt's stated set
+  (`pad-renderer.tsx`, `use-pad-pipeline.ts`).** SIXTH instance of this
+  programme's signature defect, and the worst-formed one yet: `timeline.tsx`
+  is imported by **nothing** in `apps/web/src` outside its own test, and it
+  could not be wired by any caller even in principle — `PadRenderer.timelineSlot`
+  is a bare `ReactNode` while `Timeline` needs `onVoid` → `submit`, and
+  `UsePadPipelineResult` exposes neither `submit` upward nor its event list.
+  A seam that no caller can reach is not "left for later", it is unreachable.
+  Fixed on the file's own established pattern: `PadRenderer` renders `Timeline`
+  BY DEFAULT from the pipeline's events with `onVoid` →
+  `submit("core.void", {event_id})`, exactly as it already renders
+  `AttributionPicker` by default, and `timelineSlot` is demoted to the
+  override seam `renderAttribution` already is. `usePadPipeline` exposes the
+  events it already tracks.
+  Why it was not deferred to S13 despite not blocking S12's acceptance: the v1
+  chrome's own "Undo last" button sits OUTSIDE the pad section in both
+  dispatchers, so flag-on it still fires `core.void` over the synchronous v1
+  `apiV1` path — which means **undo fails offline**, on the one entry point
+  whose headline acceptance criterion is scoring offline. And S13 deletes that
+  chrome, so deferring would hand the cutover a pad with no undo at all.
+  Recorded in the PR body under `Unplanned fixes`.
+- 2026-08-13 — S12/#421 — **the flag as S10 declared it is UNDRIVABLE by any
+  e2e, which would have made every flag-on acceptance criterion untestable.**
+  `posthog-server.ts:70-71`: `isServerFeatureEnabled` calls `getClient()` and
+  returns `opts.fallback ?? false` when PostHog is unconfigured. No e2e run
+  configures PostHog, so with the required `fallback: false` the flag is
+  **always off** in a local or CI browser run — the v2 pad could never be
+  reached, and a spec written against it would have failed for the environment
+  rather than the code. Not a defect in S10's choice (a product flag SHOULD
+  default off with no provider); a gap in what S12 needs to test it.
+  Fix: one server-read wrapper owning the whole flag decision, with
+  `SCOREPAD_V2_FORCE` as a three-state override — `"1"` on, `"0"` off, unset
+  ⇒ ask PostHog. Server-read and NOT `NEXT_PUBLIC_*`, so it is absent from
+  every real deploy for the same reason S10 gave for `SCOREPAD_V2_HARNESS`
+  (a `NEXT_PUBLIC_*` value is baked into the client bundle at build time and
+  would ship the gate's answer to production). One home for the decision means
+  the two entry points cannot drift on it — which is the same failure this
+  session's registry exists to prevent, one level up.
+  **What the override makes unobservable, named per the `grant-all` rule:** the
+  PostHog branch itself. No browser run ever exercises `c.isFeatureEnabled`,
+  so that path is covered by unit tests with an injected client instead —
+  on, off, and throw-degrades-to-fallback.
+- 2026-08-13 — S12/#421 — **flag-off and flag-on need TWO servers in one e2e
+  phase, and that is a feature.** A process-wide override cannot be both states
+  at once, so the run is structured as two `node server.js` processes off the
+  SAME prod build: `:3100` with the flag off (v1's own specs re-run as the
+  regression half of the byte-identity bar) and `:3101` with it on (this
+  session's v2 specs). Two Playwright invocations, one per base URL. Worth
+  keeping rather than working around: it means the v1 regression genuinely runs
+  against a server configured the way production is, instead of against a
+  server that merely has not been asked to turn v2 on.
 - _(append below)_
 
 ## Open questions for the owner
