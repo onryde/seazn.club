@@ -253,9 +253,10 @@ describe("competition ends_on >= starts_on (#376)", () => {
 // action). The acceptance line asks that client validation accept it.
 //
 // FINDING: no client-side or api-v1 payload validation exists to relax.
-// `AppendEventRequest.payload` is `z.unknown()` and the pads post the raw
-// object (`components/v2/pads/generic-pad.tsx`), so the engine is the only
-// validator — the payload shape crosses this boundary untouched. That is the
+// `AppendEventRequest.payload` is `z.unknown()` and the v2 pad chassis posts
+// the raw object (`components/v2/scorepad/use-pad-pipeline.ts`'s `submit`,
+// via `transport.ts`), so the engine is the only validator — the payload
+// shape crosses this boundary untouched. That is the
 // right design here (one validator, in the engine, that the fold and the API
 // cannot disagree about) and nothing was changed.
 //

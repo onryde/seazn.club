@@ -8,8 +8,11 @@ import {
   type RosteredFixture,
 } from "./helpers";
 
-// S12/#421 W10 — the v2 scoring pad driven through the REAL entry points,
-// with the `scorepad-v2` flag on, against REAL rosters.
+// S12/#421 W10, and the only pad since S13/#422 W11's cutover removed the
+// flag and v1 entirely — the v2 scoring pad driven through the REAL entry
+// points, against REAL rosters. Runs in the ordinary `parallel` Playwright
+// project now (playwright.config.ts) — it used to need its own project
+// against a second, flag-forced server, back when a flag existed to force.
 //
 // WHY THIS FILE EXISTS SEPARATELY FROM scorepad-skins.spec.ts: that file
 // drives S10's dev-only harness route, whose client lineups are permanently
@@ -18,16 +21,7 @@ import {
 // server folds those against the fixture's REAL lineup and 422s on a person it
 // cannot find on the pitch — so cricket had no browser coverage at all and
 // football's goal could only ever be driven side-only. S11 recorded both as
-// owed to this session. S13 deletes the harness, so this is the last session
-// in which the two can be compared at all.
-//
-// HOW THE FLAG IS ON: the server under test is started with
-// `SCOREPAD_V2_FORCE=1` (lib/scorepad-flag.ts). PostHog is unconfigured in
-// every local and CI browser run, so `isServerFeatureEnabled` returns its
-// `fallback` — which must be `false` — and without the override the v2 pad is
-// unreachable from any e2e. The flag-OFF half of the byte-identity bar runs
-// the v1 specs against a SECOND server on another port with
-// `SCOREPAD_V2_FORCE=0`; see the session's PR body for both invocations.
+// owed to this session.
 
 // Deliberately NOT serial. Each test seeds its OWN competition/division, so
 // there is no shared-org race, and a serial file stops at the first failure —
@@ -648,7 +642,9 @@ test("device link: score offline on the universal renderer, reconnect, drain, co
       await page.waitForTimeout(200);
     }
 
-    const dbName = `scorepad-v2-${fx.fixtureId}`;
+    // Must match registry.tsx's own `queueDbName` literal exactly — this
+    // reads the browser's real IndexedDB by name.
+    const dbName = `scorepad-${fx.fixtureId}`;
     await expect
       .poll(() => queueDepth(page, dbName), { timeout: 15_000 })
       .toBe(3);

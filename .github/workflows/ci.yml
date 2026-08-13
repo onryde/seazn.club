@@ -136,9 +136,12 @@ jobs:
       # is a separate piece of work, and failing on them today would mean either
       # a mass rewrite in this PR or a gate nobody can keep green.
       #
-      # Exactly ONE suppression exists in the tree (period-pad.tsx, a ref read
-      # during render on a live-scoring countdown with no test coverage) and it
-      # names the issue that will remove it: #355. Nothing else may join it.
+      # This comment used to name the tree's one react-hooks/exhaustive-deps
+      # suppression tied to #355 (a ref read during render on a live-scoring
+      # countdown) — it lived in cricket-pad.tsx, not period-pad.tsx as
+      # written here, and both were deleted in the S13/#422 cutover along
+      # with the rest of the v1 pads. A suppression should still be rare and
+      # should still name the issue it exists for.
       - name: eslint
         run: npx turbo run lint
 

@@ -1,9 +1,20 @@
 import { test, expect } from "@playwright/test";
 import { TAG, apiJson, activeOrg, expectNoHorizontalScroll } from "./helpers";
 
-// Regression: carrom had no pad, fell through to GenericPad, and every score
-// attempt died with `unknown event type "generic.result"` (organiser report
-// 2026-07-10). The carrom pad records boards via carrom.board.summary.
+// Regression: carrom had no pad, fell through to v1's GenericPad, and every
+// score attempt died with `unknown event type "generic.result"` (organiser
+// report 2026-07-10). Boards record via carrom.board.summary.
+//
+// S13/#422 W11 cutover FINDING, not yet fixed here: v1's CarromPad (and
+// GenericPad) are deleted, and there is no carrom-specific v2 skin
+// (scorepad/skins/registry.ts's own comment: carrom stays on the universal
+// PadRenderer). Every assertion below — "Board won by", "Opponent coins
+// left", "Queen covered by", "Record board", the "Games" table — is v1
+// CarromPad's OWN copy, which the universal renderer does not produce. This
+// test needs real re-anchoring against whatever the universal renderer
+// actually shows for carrom.board.summary, verified in a real browser — out
+// of scope for the session that made this comment true (no e2e/Playwright
+// run), flagged rather than guessed at.
 test("carrom fixture scores board-by-board through its own pad", async ({ page, request }) => {
   const org = await activeOrg(page);
   const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",

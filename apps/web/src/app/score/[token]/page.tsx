@@ -17,10 +17,9 @@ import {
   DeviceScorePad,
   type PadSideInfo,
 } from "@/components/v2/device-score-pad";
-// S12/#421 W10 — the v2 scoring pad, resolved server-side only inside the
-// scorepad-v2 flag-on branch (never on the v1 path, so a resolution failure
-// can never red a flag-off page — see resolveScorePadBootstrap's own doc).
-import { scorepadV2Enabled } from "@/lib/scorepad-flag";
+// S13/#422 W11 — the v2 scoring pad, resolved server-side unconditionally
+// (S12/#421's flag has been removed entirely — see resolveScorePadBootstrap's
+// own doc for what a resolution failure does instead of gating on a flag).
 import { hasFeature } from "@/lib/entitlements";
 import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
@@ -122,22 +121,22 @@ export default async function ScorePadPage({
     side(fixture.away_entrant_id),
   ]);
 
-  // S12/#421 — `scorepad-v2`, off by default. distinctId is the ISSUING
-  // human (`link.issued_by` — doc 13 §7 attribution, the same value
-  // `read.userId` above already carries); identity's `deviceLinkId` is this
-  // specific link's own id, distinct from any other link the same issuer may
-  // have handed out — see registry.tsx's `ScorePadBootstrap` doc for why
-  // that distinction matters to the timeline's own "undo only mine" rule.
-  const scorePadV2Flag = await scorepadV2Enabled(link.issued_by, link.org_id);
-  const scorePadV2 = scorePadV2Flag
-    ? await resolveScorePadBootstrap({
-        sportModule,
-        rawConfig: fixture.config,
-        hasFeatureFn: (key) => hasFeature(link.org_id, key, fixture.competition_id),
-        initialEvents: events.map((e) => eventOutToEnvelope(fixture.id, e)),
-        identity: { recordedBy: link.issued_by, deviceLinkId: link.id },
-      })
-    : null;
+  // S13/#422 — the v2 pad's bootstrap, resolved unconditionally now that the
+  // feature flag that used to gate it is gone. `recordedBy` is the ISSUING human
+  // (`link.issued_by` — doc 13 §7 attribution, the same value `read.userId`
+  // above already carries); `deviceLinkId` is this specific link's own id,
+  // distinct from any other link the same issuer may have handed out — see
+  // registry.tsx's `ScorePadBootstrap` doc for why that distinction matters
+  // to the timeline's own "undo only mine" rule. `null` only on a resolution
+  // failure (resolveScorePadBootstrap's own doc) — DeviceScorePad renders no
+  // pad section in that case, since there is no v1 fallback left.
+  const scorePadV2 = await resolveScorePadBootstrap({
+    sportModule,
+    rawConfig: fixture.config,
+    hasFeatureFn: (key) => hasFeature(link.org_id, key, fixture.competition_id),
+    initialEvents: events.map((e) => eventOutToEnvelope(fixture.id, e)),
+    identity: { recordedBy: link.issued_by, deviceLinkId: link.id },
+  });
 
   return (
     <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">

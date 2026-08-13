@@ -31,10 +31,6 @@ const AUTH_STATE = "e2e/.auth/pro.json";
 const SERIAL_SPECS =
   /(journey-pro|journey-community|org-management|billing|billing-states|billing-groups|billing-groups-journey|members-roles|scorer|device-links|division-delete|pricing-v3|player-accounts|fixture-config-snapshot)\.spec\.ts/;
 
-/** S12/#421 — the one spec that needs a `SCOREPAD_V2_FORCE=1` server. See the
- *  `scorepad-v2` project below for why it cannot share a server with the rest. */
-const SCOREPAD_V2_SPEC = /scorepad-v2\.spec\.ts/;
-
 export default defineConfig({
   testDir: "./e2e",
   // Runs before EVERY project, `setup` included: proves the server on BASE is a
@@ -55,27 +51,13 @@ export default defineConfig({
     { name: "setup", testMatch: /auth\.setup\.ts/ },
     {
       name: "parallel",
-      testIgnore: [SERIAL_SPECS, /mobile\.spec\.ts/, SCOREPAD_V2_SPEC],
-      use: { ...devices["Desktop Chrome"], storageState: AUTH_STATE },
-      dependencies: ["setup"],
-    },
-    // S12/#421 — its OWN project, because it needs a server the other projects
-    // must NOT have: one started with `SCOREPAD_V2_FORCE=1`.
-    //
-    // The flag cannot simply be switched on for the whole e2e run. The v1 pad
-    // specs (`carrom-pad`, `scorepad-skins`, `scorepad-offline`) are the
-    // flag-OFF half of this session's byte-identity bar — they exist to prove
-    // v1 still behaves exactly as before — so a server with the flag on would
-    // hand them the v2 pad and they would fail for the right reason. The two
-    // halves genuinely need two servers, which is how they were verified
-    // locally, and `e2e.yml`'s `e2e-scorepad-v2` job is that second server.
-    //
-    // Excluded from `parallel` above rather than merely added here: a spec
-    // matched by both projects runs twice, and the flag-off copy fails every
-    // test in the file. That is exactly how this landed red the first time.
-    {
-      name: "scorepad-v2",
-      testMatch: SCOREPAD_V2_SPEC,
+      // S13/#422 — the v2 scoring-pad e2e spec used to run in its own
+      // Playwright project, against a second, flag-forced server (a project
+      // this comment used to sit above). The feature flag that used to gate
+      // the v2 pad has been removed entirely — v2 is the only pad — so that
+      // spec runs here like any other now, against the one server every
+      // other parallel spec already uses.
+      testIgnore: [SERIAL_SPECS, /mobile\.spec\.ts/],
       use: { ...devices["Desktop Chrome"], storageState: AUTH_STATE },
       dependencies: ["setup"],
     },

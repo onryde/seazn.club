@@ -29,10 +29,9 @@ import { AuditStrip } from "@/components/v2/audit-strip";
 import { hasFeature } from "@/lib/entitlements";
 import { suspensionsForFixture } from "@/server/usecases/discipline";
 import { sql } from "@/lib/db";
-// S12/#421 W10 — the v2 scoring pad, resolved server-side only inside the
-// scorepad-v2 flag-on branch (never on the v1 path, so a resolution failure
-// can never red a flag-off page — see resolveScorePadBootstrap's own doc).
-import { scorepadV2Enabled } from "@/lib/scorepad-flag";
+// S13/#422 W11 — the v2 scoring pad, resolved server-side unconditionally
+// (S12/#421's flag has been removed entirely — see resolveScorePadBootstrap's
+// own doc for what a resolution failure does instead of gating on a flag).
 import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
 
@@ -103,23 +102,17 @@ export default async function FixturePage({
     fixture.away_entrant_id,
   ]);
 
-  // S12/#421 — `scorepad-v2`, off by default. `auth.userId` is a real string
-  // for every page reached here (requireFixturePage redirects to /login
-  // otherwise); the `org:` fallback only exists to satisfy distinctId's
-  // `string` type, matching CaptureArgs's own established convention.
-  const scorePadV2Flag = await scorepadV2Enabled(
-    auth.userId ?? `org:${auth.orgId}`,
-    auth.orgId,
-  );
-  const scorePadV2 = scorePadV2Flag
-    ? await resolveScorePadBootstrap({
-        sportModule,
-        rawConfig: division.config,
-        hasFeatureFn: (key) => hasFeature(auth.orgId, key, division.competition_id),
-        initialEvents: events.map((e) => eventOutToEnvelope(fixture.id, e)),
-        identity: { recordedBy: auth.userId, deviceLinkId: null },
-      })
-    : null;
+  // S13/#422 — the v2 pad's bootstrap, resolved unconditionally now that the
+  // feature flag that used to gate it is gone. `null` only on a resolution failure
+  // (resolveScorePadBootstrap's own doc) — FixtureConsole renders no pad
+  // section in that case, since there is no v1 fallback left.
+  const scorePadV2 = await resolveScorePadBootstrap({
+    sportModule,
+    rawConfig: division.config,
+    hasFeatureFn: (key) => hasFeature(auth.orgId, key, division.competition_id),
+    initialEvents: events.map((e) => eventOutToEnvelope(fixture.id, e)),
+    identity: { recordedBy: auth.userId, deviceLinkId: null },
+  });
 
   return (
     <>
