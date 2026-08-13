@@ -2022,6 +2022,38 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   (`sports`, plural), not `src/sport/…`. Two implementers reported it
   independently; the S11 prompt and this session's dispatch briefs both had it
   wrong, harmlessly.
+- 2026-08-13 — S11/#420 — **`grantAllEntitlements` makes the ENTIRE scorepad
+  suite blind to the `locked` availability state, and that blindness hid a real
+  defect in 5 of 8 skinned sports.** Both coverage sweeps grant every
+  entitlement before measuring (`_cfg-space.ts`), which is correct for their
+  own question — "does the skin reach every action the sport DECLARES" must not
+  depend on what an org happens to have bought. The cost is that
+  `availability.kind` is never `"locked"` anywhere in the suite, so nothing
+  tested what a skin does with a gated action. Review found `racquet-skin` and
+  `period-skin` had no `availability` check at all: volleyball, badminton,
+  tabletennis, hockey and icehockey rendered a paid-gated action as a working,
+  tappable control that the server would refuse. cricket/tennis/football
+  happened to handle it, which is exactly why a sweep-style gate cannot be the
+  only coverage — three correct implementations made the class look covered.
+  Closed by a dedicated `skin-locked.test.tsx` that drives every skin's
+  Component with a locked action through the node-only hook harness, with the
+  three already-correct skins as the control group. **General rule this
+  suggests: any test helper that normalises inputs to make one question
+  answerable (grant-all, seed-all, stub-all) defines a blind spot exactly the
+  size of what it normalised — name it, and cover it somewhere else.**
+- 2026-08-13 — S11/#420 — **two more "the gate checks a document nobody reads"
+  gaps, both found by reading rather than running.** (a) `football-skin`'s
+  Component gated primary/secondary rendering on five HARDCODED action-id
+  literals while only its drawer mapped `layout.groups` generically — a new
+  group at those prominences would satisfy the coverage gate's flattened-set
+  check and render nothing. (b) `tennis-skin` paired layout groups to view
+  panels BY INDEX and then rendered from `view.panels[i]`, not
+  `layout.groups[i]` — correct only by the accident that its layout maps 1:1
+  and unfiltered, with nothing asserting it. Both break the same contract the
+  pure-layout split exists to buy: the gate can only assert on `layout()`'s
+  data, so a Component that draws from anything else voids the guarantee. Worth
+  restating in S12's brief: when a skin's render source and its layout diverge,
+  every green number in this suite is measuring the wrong artifact.
 - _(append below)_
 
 ## Open questions for the owner
