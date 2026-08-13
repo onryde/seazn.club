@@ -21,6 +21,7 @@ caller would send after this round.
 
 import logging
 import os
+from math import gcd
 
 import pytest
 import structlog
@@ -1995,3 +1996,98 @@ def test_free_solve_of_a_two_round_division_respects_order_on_one_day():
     assert start_by_fixture[1] <= start_by_fixture[0], (
         f"round 1 (fixture 1) must not start after round 2 (fixture 0): {outcome.assignments}"
     )
+
+
+# --- T2's unit: the idle-gap variables are DURATIONS on the tick lattice ----
+#
+# Both assertions below fail on the millisecond/epoch encoding this replaced,
+# and neither is about speed — the speedup it bought (det 13.1 -> 11.1 on the
+# production board, ~16%) is real but sits inside the run-to-run spread of
+# `deterministic_time` at eight search workers, so it is reported in the PR
+# body and deliberately NOT asserted here. What IS assertable is the encoding
+# defect itself, and it is assertable exactly.
+#
+# The value these variables carry is pinned elsewhere and must not move:
+# `test_objective.py` asserts `idle_gap == 170_400_000` with `==`. That is the
+# semantic guard for this change; these two are the structural one.
+
+
+def test_gap_lattice_is_derived_from_the_data_never_assumed():
+    """`_gap_lattice_ms` must read the grid rather than trust a step size.
+
+    The unit is only safe because it is a gcd of the ticks the board actually
+    offers. A caller whose ticks share no lattice must fall back to 1, which
+    is byte-for-byte the millisecond encoding — there is no board this can be
+    wrong on, only boards it does not help.
+    """
+    from placement.model import _gap_lattice_ms
+
+    ten_min = 10 * MIN_MS
+    base = 1_767_254_400_000
+    uniform = [base + k * ten_min for k in range(20)]
+    # dur_ms a multiple of the tick lattice: the lattice survives the fold.
+    assert _gap_lattice_ms(uniform, 50 * MIN_MS) == ten_min
+    # dur_ms NOT a multiple: the fold takes the gcd down with it, because the
+    # gap is `|delta| - dur_ms` and both halves have to land on the unit.
+    assert _gap_lattice_ms(uniform, 7 * MIN_MS) == MIN_MS
+
+    # Irregular ticks — two stitched session windows, no shared step. Degrades
+    # to 1 rather than inventing a unit that would round a gap UP.
+    assert _gap_lattice_ms([base, base + ten_min, base + ten_min + 1], 50 * MIN_MS) == 1
+
+    # Degenerate inputs still return something divisible-by, never 0.
+    assert _gap_lattice_ms([], 50 * MIN_MS) == 50 * MIN_MS
+    assert _gap_lattice_ms([base], 50 * MIN_MS) == 50 * MIN_MS
+
+
+def test_idle_gap_variables_are_bounded_by_a_duration_not_an_epoch():
+    """T2's variables hold a DIFFERENCE of two timestamps, so an epoch-sized
+    domain is 805x wider than anything reachable.
+
+    They were `NewIntVar(0, max_end, ...)` until 2026-08-13, sharing the bound
+    with `day_hi` — which is correct there, because `day_hi` holds a timestamp.
+    A gap does not. This test fails on that encoding: `max_end` on the
+    production board is 1 769 454 600 000 against a reachable range of
+    2 197 800 000.
+    """
+    board = _production_board()
+    fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps, rule_groups = board
+    model = build_model(
+        fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps,
+        rule_groups=rule_groups,
+    )
+
+    ticks = sorted({start_ms for _court, start_ms, _day in grid_slots})
+    # `match_minutes` ALONE — `model.py:669` is `dur_ms = match_minutes * MIN_MS`,
+    # and the gap minutes are not part of it. Recomputed here rather than
+    # imported, so this stays an independent statement of the property; the
+    # first version of this test folded `gap_minutes` in and agreed with the
+    # module only by coincidence on this fixture (both gcd to 600 000).
+    dur_ms = constraints["match_minutes"] * MIN_MS
+    horizon_ms = ticks[-1] - ticks[0] + dur_ms
+
+    gap_vars = [
+        v
+        for v in model.Proto().variables
+        if v.name.startswith("gap_") or v.name.startswith("worst_gap")
+    ]
+    assert gap_vars, "T2 built no gap variables at all — the term is inert"
+
+    # The unit is recomputed HERE from the board rather than imported from
+    # `placement.model`, deliberately. Asking the module for the number and
+    # then checking the module against it is a tautology — it would pass for
+    # any unit the module chose, including the 1 ms this test exists to
+    # refuse. This is the same property stated independently.
+    lattice = 0
+    for tick in ticks:
+        lattice = gcd(lattice, tick - ticks[0])
+    unit = gcd(lattice, dur_ms) or 1
+    assert unit > 1, "production board's ticks share a lattice; a unit of 1 means the gcd broke"
+
+    for v in gap_vars:
+        # Domain is a flat [lo, hi, lo, hi, ...] list.
+        reachable_ms = max(v.domain) * unit
+        assert reachable_ms <= horizon_ms, (
+            f"{v.name} can reach {reachable_ms} ms, past the board's own horizon "
+            f"{horizon_ms} — an epoch-sized domain on a quantity that is a duration"
+        )

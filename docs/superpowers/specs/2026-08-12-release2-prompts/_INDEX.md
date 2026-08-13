@@ -550,3 +550,72 @@ solver's floor: every board starts at midnight, never the configured 09:00.
 The pinned-anchor spec lower in that file also uses `at(600)`, and is
 deliberately NOT changed: it parks onto an EMPTY board, so there is no board to
 read a slot from, and it is not failing.
+#### C2 follow-up — `idle_gap`'s dual bound (2026-08-13): PARTLY CLOSED
+
+The wall follow-up C2 deferred ("give `idle_gap` a dual bound the way
+`day_span` just got one"). **The premise was wrong and the measurement says
+so** — but the rung got materially cheaper anyway, by a different lever.
+
+**`day_span`'s lever does NOT transfer, and the reason is the board.** A
+redundant floor of that kind needs a counting relation between the metric and
+how many fixtures must fit it. On `production_board()` every entrant plays
+exactly TWO fixtures, so the chain argument degenerates to a single rest
+period: 4 800 000 ms against a 170 400 000 optimum — 2.8% of the gap. Do not
+re-derive this; it was computed off the board, not guessed.
+
+**Root cause, from CP-SAT's own search log rather than inference.** The
+optimum is FOUND at 4.2 s and everything after is PROOF, at `conflicts: 0`,
+`branches: 265`, `lp_iterations: 0` — there is no tree search to speed up.
+Reduced-cost fixing ratchets the lower bound up one unit per LP round from
+1 200 000 toward 170 400 000.
+
+**What shipped instead: T2 counts in tick-lattice units.** Two real defects,
+both in `model.py`'s T2 block:
+- the gap vars were `NewIntVar(0, max_end, ...)` where `max_end` is an
+  absolute EPOCH (1.77e12). They hold DURATIONS, reachable max 2.2e9 — 805x
+  oversized. `day_hi` shares that bound correctly; a gap does not.
+- they counted in 1-ms units when every reachable gap is a multiple of
+  600 000 ms (gcd of grid-tick offsets folded with `dur_ms`, derived from the
+  data by `_gap_lattice_ms`, never assumed — an unaligned grid collapses the
+  gcd to 1, which is byte-for-byte the old encoding).
+
+Same instrument T3 already uses ("counted in matches and scaled to ms once").
+
+**Measured, 6 runs per arm, back to back on one box:**
+
+| | before | after |
+|---|---|---|
+| 8 s PRODUCTION wall | 4/6 rungs on **all 6** runs | **6/6 rungs on 3 of 6** |
+| `idle_gap` wall (load 3-6) | 10 692-16 159 ms | 4 282-6 381 ms |
+| whole chain | 12 135 ms | 5 997-8 083 ms |
+| `deterministic_time` | 13.1 | 11.1 |
+| objective values | `170 400 000` | `170 400 000`, identical |
+
+So the wall now sometimes proves the whole ladder and previously never did.
+It is NOT a guarantee at 8 s and nothing asserts one.
+
+**Measure det_time, not wall-clock.** This box ran `load1` between 3 and 213
+inside a single 6-run bench, and at load ~50 the BASELINE proved only 2/6 at
+the 8 s wall. Every wall number above is paired with its load.
+
+**Dead ends, measured so nobody repeats them.** `optimize_with_core` is 6x
+WORSE (det 65.3 vs 10.9) and ships unproved, worse boards (`idle_gap`
+256 800 000); `core + use_lb_relax_lns` worse still (83.7); `use_lb_relax_lns`
+alone is neutral (10.7). Solver knobs are not the lever.
+
+**What is left, and it is not cheap.** The true bound is graph-shaped: cap
+1/day forces a group's 19 fixtures onto 19 distinct days, every entrant plays
+2, so the binding argument is that a 2-regular graph is a union of cycles and
+laying a cycle's edges on distinct days forces some vertex's two edges >= 2
+days apart (170 400 000 ms = 2 days minus 40 min). The LP cannot see that, and
+a floor derived only from "different days" reaches one inter-day separation
+and stops short.
+
+**Fallout worth knowing about, because it caught a latent defect.** Two
+cut-short tests in `test_objective.py` raced a FIXED 8 s wall against
+`idle_gap`'s proof time. With the rung 5x faster that wall stopped cutting
+anything, and only ONE of the two went red for it — green by lottery. They now
+time the four rungs above `idle_gap` and derive the wall as `2 x elapsed +
+slice`; doubling widens the four-rung side without narrowing the other,
+because `idle_gap`'s cost scales with the same load (it needs ~4x their time).
+Verified 6/6 green at loads 9.8-22.4, the exact band that had been failing.

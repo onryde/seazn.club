@@ -335,6 +335,7 @@ of this task's scope for the identical reason.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from math import gcd
 from typing import Any
 
 import structlog
@@ -501,6 +502,43 @@ def _day_of_pin(start_ms: int, day_bounds: dict[int, tuple[int, int]]) -> int | 
         if lo <= start_ms <= hi:
             return day_index
     return None
+
+
+def _gap_lattice_ms(admissible_starts: list[int], dur_ms: int) -> int:
+    """The coarsest unit every T2 idle gap is exactly a multiple of.
+
+    T2's gap between two of one entrant's MOVABLE fixtures is
+    `|start_i - start_j| - dur_ms`, and both starts come from
+    `admissible_starts` — the grid's own ticks, which is what makes this
+    derivable rather than assumed. If every tick is congruent modulo `L`
+    (`L` = the gcd of their offsets from the first one) then every
+    difference is a multiple of `L`; folding `dur_ms` in as well gives a
+    unit that divides the whole expression.
+
+    DERIVED FROM THE DATA, never assumed. A caller whose ticks do not share
+    a lattice — irregular session windows, a grid stitched from two
+    step sizes — makes the gcd collapse toward 1, and a unit of 1 is
+    byte-for-byte the millisecond encoding this replaced. So there is no
+    board this can be wrong on; there are only boards it does not help.
+
+    Pins are deliberately not consulted: a pin is allowed to sit OFF the
+    lattice (see `_day_of_pin`), but `by_entrant` — the only thing T2's
+    pairs are built from — holds movable fixture positions alone, so no
+    pinned start ever reaches a gap variable.
+
+    Returns at least 1, so the caller can divide by it unconditionally.
+    """
+    if not admissible_starts:
+        # No grid to derive a lattice from. `dur_ms` is the only real unit
+        # left, and `build_model`'s own guard keeps it positive.
+        return max(1, dur_ms)
+    base = admissible_starts[0]
+    lattice = 0
+    for tick in admissible_starts:
+        lattice = gcd(lattice, tick - base)
+    # `gcd(0, dur_ms) == dur_ms` — the single-tick board, where every gap is
+    # 0 anyway and any unit is exact.
+    return gcd(lattice, dur_ms) or 1
 
 
 def build_model(
@@ -1266,6 +1304,57 @@ def build_model(
     # not just consecutive ones), which errs toward a WORSE reported gap, never
     # a better one. See the bench module docstring for why z3's exact
     # bound-parameterized clause family is not ported verbatim.
+    # COUNTED IN LATTICE UNITS AND SCALED TO ms ONCE, exactly as T3 above counts
+    # in matches, for the identical reason and on the same production board.
+    # This is a propagation change, not a semantic one: `gap_unit` divides every
+    # reachable gap exactly (`_gap_lattice_ms`), so the minimum feasible
+    # `d * gap_unit` is the same integer the millisecond encoding produced.
+    # `test_objective.py`'s `==` assertions on 170 400 000 are what hold that.
+    #
+    # WHY, because the old encoding looks perfectly reasonable and its cost is
+    # invisible without asking CP-SAT directly. T2 was 92% of the chain's whole
+    # deterministic cost (det 13.1 of ~14.3; every other rung together is ~1.2)
+    # while doing NO search worth the name — 0 conflicts, 265 branches, 0 LP
+    # iterations. The search log says where it actually went:
+    #
+    #     #8       4.22s best:170400000 next:[1200001,170399999] fixed
+    #     #Bound   6.20s best:170400000 next:[1200002,170399999] reduced_costs
+    #     #Bound   6.23s best:170400000 next:[1200003,170399999] reduced_costs
+    #     #Bound   6.24s best:170400000 next:[1200004,170399999] reduced_costs
+    #
+    # The optimum is FOUND in four seconds. The rest of the wall is spent
+    # PROVING it, and reduced-cost fixing walks the lower bound up ONE
+    # MILLISECOND at a time — 169 200 000 increments to close a gap whose
+    # every reachable value is 600 000 ms apart. In lattice units the same
+    # walk is 282 steps.
+    #
+    # Same lesson the module has now learned three times, and the third one
+    # says the instrument is not always the same: T1's fix was a redundant
+    # per-day FLOOR and T3's was a max/min EQUALITY, but neither transfers
+    # here. A floor of the `day_span` kind needs a counting relation between
+    # the metric and how many fixtures must fit it, and on this board every
+    # entrant plays exactly TWO fixtures — the chain argument degenerates to
+    # one rest period, 4 800 000 ms against a true optimum of 170 400 000, so
+    # it would have bought 2.8% of the gap. What was wrong here was never the
+    # strength of the bound. It was the UNIT the bound had to be walked in.
+    gap_unit = _gap_lattice_ms(admissible_starts, dur_ms)
+    # A DURATION, where these variables were bounded by `max_end` — an absolute
+    # EPOCH — until this change. Correct for `day_hi`, which holds a timestamp;
+    # 805x oversized for a gap, which holds a difference of two. Narrowing a
+    # domain is not what made this rung tractable (see T1's note, where exactly
+    # that hope was measured and disappointed) but publishing a variable whose
+    # domain admits 1.77e12 for a quantity that cannot exceed the board's own
+    # horizon is a claim the model should not be making either way.
+    gap_span_ms = max_end - (admissible_starts[0] if admissible_starts else 0)
+    # CEILING division, not `// + 1`. Both are valid upper bounds, but the
+    # spare unit is a claim the model does not need to make: on the production
+    # board `gap_unit` divides `gap_span_ms` exactly (3 667 units), so `+ 1`
+    # declares a domain one whole unit past the board's own horizon — the same
+    # kind of unreachable slack this change exists to remove, just 805x smaller.
+    # `test_idle_gap_variables_are_bounded_by_a_duration_not_an_epoch` asserts
+    # against the horizon exactly, and caught this.
+    gap_units_max = -(-gap_span_ms // gap_unit)
+
     diff_vars: list[Any] = []
     for group in by_entrant.values():
         if len(group) < 2:
@@ -1273,15 +1362,24 @@ def build_model(
         for x in range(len(group)):
             for y in range(x + 1, len(group)):
                 i, j = group[x], group[y]
-                d = model.NewIntVar(0, max_end, f"gap_{i}_{j}")
-                model.Add(d >= start[i] - start[j] - dur_ms).OnlyEnforceIf([placed[i], placed[j]])
-                model.Add(d >= start[j] - start[i] - dur_ms).OnlyEnforceIf([placed[i], placed[j]])
+                d = model.NewIntVar(0, gap_units_max, f"gap_{i}_{j}")
+                model.Add(d * gap_unit >= start[i] - start[j] - dur_ms).OnlyEnforceIf(
+                    [placed[i], placed[j]]
+                )
+                model.Add(d * gap_unit >= start[j] - start[i] - dur_ms).OnlyEnforceIf(
+                    [placed[i], placed[j]]
+                )
                 diff_vars.append(d)
-    worst_gap = model.NewIntVar(0, max_end, "worst_gap")
+    worst_gap_units = model.NewIntVar(0, gap_units_max, "worst_gap_units")
     if diff_vars:
-        model.AddMaxEquality(worst_gap, diff_vars)
+        model.AddMaxEquality(worst_gap_units, diff_vars)
     else:
-        model.Add(worst_gap == 0)
+        model.Add(worst_gap_units == 0)
+    # Scaled once, here — the same shape `imbalance` above already ships, and
+    # the reason `FixtureVars.worst_gap` is typed `Any`: the tier chain only
+    # ever hands it to `Minimize` and `solver.Value`, both of which take a
+    # linear expression.
+    worst_gap = worst_gap_units * gap_unit
 
     model.fixture_vars = FixtureVars(
         placed=placed,
