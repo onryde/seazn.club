@@ -137,20 +137,54 @@ async function buildRig(request: APIRequestContext, page: Page): Promise<Rig> {
     // 3 days × ceil(66/3) hourly slots × 2 courts as before, just a
     // different assignment of fixture → slot, so the day/court RANGE the
     // comment above is about is unchanged.
+    //
+    // Written as ONE apply per division, not 66 PATCHes. Same timetable,
+    // same write gate — `applySchedule` is where round order is actually
+    // refused (schedule.ts, "this IS the write gate"), so the ordering
+    // built above is still what makes the seed legal. Two things change:
+    //
+    //   1. Cost. 5 divisions × 66 PATCHes was 330 sequential round trips,
+    //      ~75s of the seed test's ~80s, and each one re-validated the
+    //      whole division. Five transactional applies do that validation
+    //      five times instead of 330. That headroom is the point: this
+    //      test shares a CI runner with ai-architect.spec.ts (both are
+    //      serial-mode files, both land in shard 1 by alphabetical order),
+    //      and under contention the old loop had a stall budget it could
+    //      not afford.
+    //   2. A 409 is now LOUD. The comment above records 40 of every
+    //      division's 66 PATCHes silently 409'ing because the loop never
+    //      read its own result — the ordering fix cured the cause, but
+    //      nothing stopped it recurring. `expect` below does.
+    //
+    // `source: "auto"` deliberately: "manual" additionally requires the
+    // `scheduling.board` entitlement, and this org's plan was just flipped
+    // by SQL, so a primed entitlement cache could refuse a seed that has
+    // nothing to do with what the test asserts. The PATCH path this
+    // replaces gated on no such feature either.
     const byRound = [...gen.data!.fixtures].sort((a, b) => a.round_no - b.round_no);
     const slotsPerDay = Math.ceil(byRound.length / 3);
     const atMs = new Map<string, number>();
-    for (let i = 0; i < byRound.length; i++) {
-      const fixtureId = byRound[i]!.id;
+    const assignments = byRound.map((f, i) => {
       const day = Math.floor(i / slotsPerDay);
       const slot = i % slotsPerDay;
       const at = base + day * 24 * 60 * 60_000 + slot * 60 * 60_000;
-      atMs.set(fixtureId, at);
-      await apiJson(request, `/api/v1/fixtures/${fixtureId}`, "PATCH", {
+      atMs.set(f.id, at);
+      return {
+        fixture_id: f.id,
         scheduled_at: new Date(at).toISOString(),
         court_label: courtsOf(di)[i % 2],
-      });
-    }
+      };
+    });
+    const applied = await apiJson(
+      request,
+      `/api/v1/stages/${stage.data!.id}/schedule/apply`,
+      "POST",
+      { assignments, source: "auto" },
+    );
+    expect(
+      applied.status,
+      `seeding ${name}: ${applied.error?.code ?? ""} ${applied.error?.message ?? ""}`,
+    ).toBeLessThan(300);
 
     // Rest bait in the first division: two fixtures sharing an entrant, one
     // from the LAST round and one from an EARLIER round — picked so moving
