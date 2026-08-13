@@ -216,6 +216,12 @@ function restSpreadMetric(fixtures: readonly HealthFixture[]): HealthMetric {
     penalties.push({ id, p, worstGapMin: Math.min(...gaps) / MS_PER_MIN });
   }
   const meanP = penalties.length > 0 ? penalties.reduce((s, x) => s + x.p, 0) / penalties.length : 0;
+  // The TRUE count of affected entrants (p_e > 0) — review finding #2:
+  // `offenders.length` is truncated by `topOffenders(...,3)` below, so on a
+  // board with more than 3 affected entrants it under-reports (e.g. "3
+  // entrants..." on a board where 9 actually have compressed rest). Counted
+  // BEFORE truncation, never derived from the capped list.
+  const affectedCount = penalties.filter((x) => x.p > 0).length;
   const offenders: HealthOffender[] = topOffenders(penalties, (x) => x.id, (a, b) => b.p - a.p, 3).map((x) => ({
     kind: "entrant",
     id: x.id,
@@ -225,7 +231,7 @@ function restSpreadMetric(fixtures: readonly HealthFixture[]): HealthMetric {
   return {
     key: "restSpread",
     score: roundScore(100 * (1 - meanP)),
-    explanation: { key: "schedule.health.explain.restSpread", params: { count: offenders.length } },
+    explanation: { key: "schedule.health.explain.restSpread", params: { count: affectedCount } },
     offenders,
   };
 }
@@ -258,6 +264,10 @@ function courtBalanceMetric(fixtures: readonly HealthFixture[]): HealthMetric {
     ratios.push({ id, ratio, distinctCourts: counts.size });
   }
   const mean = ratios.length > 0 ? ratios.reduce((s, x) => s + x.ratio, 0) / ratios.length : 1;
+  // TRUE count of affected entrants (ratio < 1, i.e. not perfectly uniform)
+  // — see restSpread's identical note (review finding #2). Counted before
+  // `topOffenders(...,3)` truncates the list below.
+  const affectedCount = ratios.filter((x) => x.ratio < 1).length;
   const offenders: HealthOffender[] = topOffenders(ratios, (x) => x.id, (a, b) => a.ratio - b.ratio, 3).map((x) => ({
     kind: "entrant",
     id: x.id,
@@ -267,7 +277,7 @@ function courtBalanceMetric(fixtures: readonly HealthFixture[]): HealthMetric {
   return {
     key: "courtBalance",
     score: roundScore(100 * mean),
-    explanation: { key: "schedule.health.explain.courtBalance", params: { count: offenders.length } },
+    explanation: { key: "schedule.health.explain.courtBalance", params: { count: affectedCount } },
     offenders,
   };
 }
@@ -319,6 +329,10 @@ function gapDispersionMetric(fixtures: readonly HealthFixture[], config: HealthC
     frags.push({ id: key, f, largestHoleMin: largestHole / MS_PER_MIN });
   }
   const mean = frags.length > 0 ? frags.reduce((s, x) => s + x.f, 0) / frags.length : 0;
+  // TRUE count of affected court-days (f > 0, i.e. some fragmentation) —
+  // see restSpread's identical note (review finding #2). Counted before
+  // `topOffenders(...,3)` truncates the list below.
+  const affectedCount = frags.filter((x) => x.f > 0).length;
   const offenders: HealthOffender[] = topOffenders(frags, (x) => x.id, (a, b) => b.f - a.f, 3).map((x) => {
     const [court, dayKey] = x.id.split("::");
     return { kind: "courtDay", id: x.id, label: `${court} ${dayKey}`, value: round2(x.largestHoleMin) };
@@ -326,7 +340,7 @@ function gapDispersionMetric(fixtures: readonly HealthFixture[], config: HealthC
   return {
     key: "gapDispersion",
     score: roundScore(100 * (1 - mean)),
-    explanation: { key: "schedule.health.explain.gapDispersion", params: { count: offenders.length } },
+    explanation: { key: "schedule.health.explain.gapDispersion", params: { count: affectedCount } },
     offenders,
   };
 }
@@ -400,6 +414,10 @@ function primeSlotFairnessMetric(fixtures: readonly HealthFixture[]): HealthMetr
     devs.push({ id, d, signed: actual - expected });
   }
   const meanD = devs.length > 0 ? devs.reduce((s, x) => s + Math.min(x.d, 1), 0) / devs.length : 0;
+  // TRUE count of affected entrants (d > 0, i.e. any deviation from their
+  // expected prime share) — see restSpread's identical note (review finding
+  // #2). Counted before `topOffenders(...,3)` truncates the list below.
+  const affectedCount = devs.filter((x) => x.d > 0).length;
   const offenders: HealthOffender[] = topOffenders(devs, (x) => x.id, (a, b) => b.d - a.d, 3).map((x) => ({
     kind: "entrant",
     id: x.id,
@@ -409,7 +427,7 @@ function primeSlotFairnessMetric(fixtures: readonly HealthFixture[]): HealthMetr
   return {
     key: "primeSlotFairness",
     score: roundScore(100 * (1 - meanD)),
-    explanation: { key: "schedule.health.explain.primeSlotFairness", params: { count: offenders.length } },
+    explanation: { key: "schedule.health.explain.primeSlotFairness", params: { count: affectedCount } },
     offenders,
   };
 }

@@ -135,6 +135,31 @@ describe("assessHealth — restSpread", () => {
     const m = metric(report, "restSpread")!;
     expect(m.score).toBe(100);
   });
+
+  it("explanation.params.count is the TRUE affected-entrant total, not the capped offender-list length (review finding #2)", () => {
+    // 4 entrants, each independently shaped [0,0,240] like the adversarial
+    // board above (p=2/3 each, all > 0 -> all 4 "affected"). offenders is
+    // capped at top-3 by topOffenders; count must still read 4.
+    const opp = (n: number) => `O${n}`;
+    const entrant = (id: string, court: string, oBase: number): HealthFixture[] => [
+      fx(`${id}f1`, id, opp(oBase), 0, 60, { court }),
+      fx(`${id}f2`, id, opp(oBase + 1), 60, 60, { court }),
+      fx(`${id}f3`, id, opp(oBase + 2), 120, 60, { court }),
+      fx(`${id}f4`, id, opp(oBase + 3), 420, 60, { court }),
+    ];
+    const fixtures: HealthFixture[] = [
+      ...entrant("P1", "Court 1", 1),
+      ...entrant("P2", "Court 2", 5),
+      ...entrant("P3", "Court 3", 9),
+      ...entrant("P4", "Court 4", 13),
+    ];
+    const report = assessHealth(fixtures, RR);
+    const m = metric(report, "restSpread")!;
+    expect(m.score).toBe(33); // identical p=2/3 for all 4 -> same as the single-entrant adversarial board
+    expect(m.offenders).toHaveLength(3); // list stays capped
+    expect(m.explanation.params?.count).toBe(4); // but the true total is reported
+    expect(m.explanation.params!.count).toBeGreaterThan(m.offenders.length);
+  });
 });
 
 describe("assessHealth — courtBalance", () => {
@@ -190,6 +215,31 @@ describe("assessHealth — courtBalance", () => {
     expect(m.score).toBe(100);
     expect(Number.isNaN(m.score)).toBe(false);
   });
+
+  it("explanation.params.count is the TRUE affected-entrant total, not the capped offender-list length (review finding #2)", () => {
+    // 4 entrants, each 3 fixtures split 2:1 across the SAME 2 courts — the
+    // best possible split for 3 fixtures over 2 courts, yet still ratio<1
+    // (perfectly uniform needs equal counts, 2:1 is not equal) -> all 4
+    // "affected". offenders is capped at top-3.
+    const opp = (n: number) => `O${n}`;
+    const entrant = (id: string, oBase: number): HealthFixture[] => [
+      fx(`${id}f1`, id, opp(oBase), 0, 60, { court: "Court 1" }),
+      fx(`${id}f2`, id, opp(oBase + 1), 100, 60, { court: "Court 1" }),
+      fx(`${id}f3`, id, opp(oBase + 2), 200, 60, { court: "Court 2" }),
+    ];
+    const fixtures: HealthFixture[] = [
+      ...entrant("Q1", 1),
+      ...entrant("Q2", 4),
+      ...entrant("Q3", 7),
+      ...entrant("Q4", 10),
+    ];
+    const report = assessHealth(fixtures, RR);
+    const m = metric(report, "courtBalance")!;
+    expect(m.score).toBe(92); // identical ratio for all 4 (verified via node -e)
+    expect(m.offenders).toHaveLength(3);
+    expect(m.explanation.params?.count).toBe(4);
+    expect(m.explanation.params!.count).toBeGreaterThan(m.offenders.length);
+  });
 });
 
 describe("assessHealth — gapDispersion", () => {
@@ -244,6 +294,28 @@ describe("assessHealth — gapDispersion", () => {
     const m = metric(report, "gapDispersion")!;
     expect(m.score).toBe(100); // nothing eligible -> nothing to penalise
     expect(m.offenders).toEqual([]);
+  });
+
+  it("explanation.params.count is the TRUE affected-court-day total, not the capped offender-list length (review finding #2)", () => {
+    // 4 court-days, each 2 fixtures with a real gap, no configured window ->
+    // f=1 for every one of them (the fallback rule: any internal gap makes
+    // f=1 with no wider window to be idle against) -> all 4 "affected".
+    const fixtures: HealthFixture[] = [
+      fx("g1a", "A", "X1", 0, 60, { court: "Court 1", dayKey: "2026-10-19" }),
+      fx("g1b", "A", "X2", 100, 60, { court: "Court 1", dayKey: "2026-10-19" }),
+      fx("g2a", "B", "X3", 0, 60, { court: "Court 2", dayKey: "2026-10-19" }),
+      fx("g2b", "B", "X4", 100, 60, { court: "Court 2", dayKey: "2026-10-19" }),
+      fx("g3a", "C", "X5", 0, 60, { court: "Court 1", dayKey: "2026-10-20" }),
+      fx("g3b", "C", "X6", 100, 60, { court: "Court 1", dayKey: "2026-10-20" }),
+      fx("g4a", "D", "X7", 0, 60, { court: "Court 2", dayKey: "2026-10-20" }),
+      fx("g4b", "D", "X8", 100, 60, { court: "Court 2", dayKey: "2026-10-20" }),
+    ];
+    const report = assessHealth(fixtures, RR); // no courtWindows configured
+    const m = metric(report, "gapDispersion")!;
+    expect(m.score).toBe(0); // f=1 for all 4 -> mean=1 -> score=0
+    expect(m.offenders).toHaveLength(3);
+    expect(m.explanation.params?.count).toBe(4);
+    expect(m.explanation.params!.count).toBeGreaterThan(m.offenders.length);
   });
 });
 
@@ -331,6 +403,12 @@ describe("assessHealth — primeSlotFairness", () => {
       { kind: "entrant", id: "B", label: "B", value: -1.33 },
       { kind: "entrant", id: "C", label: "C", value: 0.67 },
     ]);
+    // Review finding #2: all SIX entrants on this board have d_e > 0 (A/B
+    // starved at d=1, C/D/E/F hogging at d=0.5) — count must report the true
+    // total, not the capped 3-entry offenders list.
+    expect(m.offenders).toHaveLength(3);
+    expect(m.explanation.params?.count).toBe(6);
+    expect(m.explanation.params!.count).toBeGreaterThan(m.offenders.length);
   });
 
   it("a court-day with fewer than PRIME_N fixtures treats ALL of them as prime (min(PRIME_N, count))", () => {
@@ -393,7 +471,11 @@ describe("assessHealth — regression: full report pinned for one fixed board", 
         {
           key: "restSpread",
           score: 64,
-          explanation: { key: "schedule.health.explain.restSpread", params: { count: 3 } },
+          // count=4, not 3: A/C/D/E all have p_e>0 (B is excluded from the
+          // metric entirely, |F_e|=2). Independently recomputed via node -e
+          // against this exact board after review finding #2's fix — never
+          // copied from a first run.
+          explanation: { key: "schedule.health.explain.restSpread", params: { count: 4 } },
           offenders: [
             { kind: "entrant", id: "A", label: "A", value: 30 },
             { kind: "entrant", id: "C", label: "C", value: 30 },
@@ -403,7 +485,9 @@ describe("assessHealth — regression: full report pinned for one fixed board", 
         {
           key: "courtBalance",
           score: 46,
-          explanation: { key: "schedule.health.explain.courtBalance", params: { count: 3 } },
+          // count=4: all 4 eligible entrants (A/C/D/E, each |F_e|>=3) have
+          // ratio<1 — none is perfectly uniform on this board.
+          explanation: { key: "schedule.health.explain.courtBalance", params: { count: 4 } },
           offenders: [
             { kind: "entrant", id: "A", label: "A", value: 1 },
             { kind: "entrant", id: "E", label: "E", value: 1 },
@@ -413,6 +497,9 @@ describe("assessHealth — regression: full report pinned for one fixed board", 
         {
           key: "gapDispersion",
           score: 43,
+          // count stays 2 — exactly 2 court-days qualify (>=2 fixtures) on
+          // this board, and both have f>0, so the true total already equals
+          // the (unfilled) offender list length here; unaffected by the fix.
           explanation: { key: "schedule.health.explain.gapDispersion", params: { count: 2 } },
           offenders: [
             { kind: "courtDay", id: "Court B::2026-11-02", label: "Court B 2026-11-02", value: 50 },
@@ -428,7 +515,9 @@ describe("assessHealth — regression: full report pinned for one fixed board", 
         {
           key: "primeSlotFairness",
           score: 81,
-          explanation: { key: "schedule.health.explain.primeSlotFairness", params: { count: 3 } },
+          // count=5, not 3: EVERY entrant on this board (A/B/C/D/E) has
+          // d_e>0 — none lands exactly on their expected prime share.
+          explanation: { key: "schedule.health.explain.primeSlotFairness", params: { count: 5 } },
           offenders: [
             { kind: "entrant", id: "C", label: "C", value: -0.57 },
             { kind: "entrant", id: "D", label: "D", value: -0.57 },
