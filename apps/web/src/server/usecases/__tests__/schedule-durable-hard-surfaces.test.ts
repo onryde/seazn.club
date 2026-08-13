@@ -278,11 +278,20 @@ describe.skipIf(!HAS_DB)("a durable constraints.hard rule on the board paths (#4
     seen.configs.length = 0;
     const [card] = await sql<{ id: string }[]>`
       select id from fixtures where stage_id = ${groups!.id} order by round_no, seq_in_round limit 1`;
-    // 11:00 on an empty court: the applied board runs 09:00–10:30, so nothing
-    // physical is in the way and the ONLY thing wrong with the destination is
-    // the stored rule. Warn-only, so the move is accepted — and the config it
-    // was judged against is the only thing that can show the rule was in force.
-    const moved = await moveFixture(auth, card!.id, { scheduled_at: at(120), court_label: "Court 2" });
+    // `card` is round 1 (`order by round_no, seq_in_round limit 1`). Moved to
+    // 08:00 on an empty court, BEFORE the applied board's own 09:00–10:30
+    // span, not 11:00 (after it, the original choice here) — an hour past
+    // the board WAS "physically in the way of nothing", but round 1 landing
+    // after rounds 2 (09:30) and 3 (10:00) is a genuine round-order
+    // violation (H6, blocking): a leapfrog this test was unknowingly
+    // creating, invisible only because the delta gate's own round-robin
+    // blind spot (this task's fix) couldn't see it before — it would now
+    // 409 instead of returning the warn-only report this section is about.
+    // Round 1 moving EARLIER can never breach round order, however far
+    // (`roundRobinSequenceSiblings`'s own comment), so 08:00 is safe
+    // regardless of magnitude; still before noon, so `NOT_BEFORE_NOON`
+    // fires exactly as before, and still on an empty court/time.
+    const moved = await moveFixture(auth, card!.id, { scheduled_at: at(-60), court_label: "Court 2" });
     expectRuleReachedTheVerifier("moveFixture");
 
     // #461: the drag path hands its own report back rather than dropping it, so

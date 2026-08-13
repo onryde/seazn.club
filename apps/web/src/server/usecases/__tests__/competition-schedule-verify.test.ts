@@ -34,7 +34,7 @@ import {
 } from "../competition-schedule-ai";
 import { isBlocking, planIsAcceptable, type PackConstraints, type PackSettings } from "../schedule-ai";
 import type { AiSchedulePlan } from "../schedule-ai-prompt";
-import type { Conflict } from "@seazn/engine/scheduling";
+import { validateAssignments, type Conflict, type HardConstraint } from "@seazn/engine/scheduling";
 
 // --- Fixed ids -------------------------------------------------------------
 const D1 = "d1111111-1111-4111-8111-111111111111"; // "Alpha"
@@ -193,6 +193,13 @@ function pack(
     people,
     participants,
     poolIds,
+    // C1 gap B. Unlike `poolIds`, `fixture()` has no field this helper can
+    // derive stage/round-robin identity from (that is a pack-level fact, not
+    // a per-fixture one a hand-built `CompetitionPackFixture` carries) — so
+    // this defaults to "nothing is round-robin" and the round-order describe
+    // block below passes real maps through `over`.
+    stageIds: {},
+    roundNos: {},
     assumptions: [],
     fixtures: { movable: labelled, obstacles: [] },
     draft: [],
@@ -897,6 +904,124 @@ describe("joint engine assignments (#350)", () => {
       { fixtureId: F3, dependsOn: F2, direct: true },
     ]);
   });
+
+  // C1 gap B — the joint twin of the round-order coverage in
+  // `schedule-ai-round-order.test.ts` (single-division). Same shape as the
+  // `poolId` pair just above ("stamps the pool..." / "omits the pool..."):
+  // `pack()`'s helper has no per-fixture way to express stage/round-robin
+  // identity (that is a pack-level fact — see `CompetitionPack.roundNos`'s
+  // own doc comment), so these stamp `stageIds`/`roundNos` directly via
+  // `over`, the same way the pool tests above stamp `restByGroup` via `over`.
+  it("stamps stageId unconditionally and roundNo only when round-robin", () => {
+    const p = pack(
+      [division(D1, "Alpha", { settings: settings({ courts: ["Court 1", "Court 2"] }) })],
+      [
+        fixture(F1, D1, { round: 3, home: E1, away: E2 }),
+        fixture(F2, D1, { round: 3, seq: 1, home: E3, away: E4 }),
+      ],
+      { stageIds: { [F1]: "stage-rr", [F2]: "stage-bracket" }, roundNos: { [F1]: 3 } },
+    );
+    const out = toJointEngineAssignments(
+      plan([assign(F1, at("09:00"), "Court 1"), assign(F2, at("09:00"), "Court 2")]),
+      p,
+    );
+    const byId = new Map(out.map((a) => [a.fixtureId, a]));
+    expect(byId.get(F1)!.stageId).toBe("stage-rr");
+    expect(byId.get(F1)!.roundNo).toBe(3);
+    expect(byId.get(F2)!.stageId).toBe("stage-bracket");
+    // Absent, not `undefined` written explicitly — see the same assertion in
+    // `schedule-ai-round-order.test.ts` for why the distinction matters.
+    expect("roundNo" in byId.get(F2)!).toBe(false);
+  });
+
+  it("flags a joint AI plan that schedules a later round before an earlier one", () => {
+    const p = pack(
+      [division(D1, "Alpha", { settings: settings({ courts: ["Court 1", "Court 2"] }) })],
+      [
+        fixture(F1, D1, { round: 1, home: E1, away: E2 }),
+        fixture(F2, D1, { round: 2, seq: 1, home: E3, away: E4 }),
+      ],
+      { stageIds: { [F1]: "stage-rr", [F2]: "stage-rr" }, roundNos: { [F1]: 1, [F2]: 2 } },
+    );
+    // Round 2 (F2) at 09:00, round 1 (F1) an hour later — the later round
+    // scheduled first. Different entrants and courts, zero rest floor:
+    // nothing else here can produce a conflict.
+    const out = verifyJoint(
+      plan([assign(F1, at("10:00"), "Court 1"), assign(F2, at("09:00"), "Court 2")]),
+      p,
+    );
+    expect(out.map((c) => c.reason)).toContain("order");
+    // Blamed on the LATER round, calendar.ts's own convention.
+    expect(out.find((c) => c.reason === "order")?.fixtureId).toBe(F2);
+  });
+
+  it("does not flag a joint AI plan that respects round order", () => {
+    const p = pack(
+      [division(D1, "Alpha", { settings: settings({ courts: ["Court 1", "Court 2"] }) })],
+      [
+        fixture(F1, D1, { round: 1, home: E1, away: E2 }),
+        fixture(F2, D1, { round: 2, seq: 1, home: E3, away: E4 }),
+      ],
+      { stageIds: { [F1]: "stage-rr", [F2]: "stage-rr" }, roundNos: { [F1]: 1, [F2]: 2 } },
+    );
+    const out = verifyJoint(
+      plan([assign(F1, at("09:00"), "Court 1"), assign(F2, at("10:00"), "Court 2")]),
+      p,
+    );
+    expect(out.map((c) => c.reason)).not.toContain("order");
+  });
+
+  it("does not treat a non-round-robin stage's round_no as round-robin order", () => {
+    const p = pack(
+      [division(D1, "Alpha", { settings: settings({ courts: ["Court 1", "Court 2"] }) })],
+      [
+        fixture(F1, D1, { round: 1, home: E1, away: E2 }),
+        fixture(F2, D1, { round: 2, seq: 1, home: E3, away: E4 }),
+      ],
+      // stageIds stamped (unconditional, mirrors buildCompetitionPack), but
+      // NEITHER fixture is in roundNos — the bracket/swiss gate.
+      { stageIds: { [F1]: "stage-bracket", [F2]: "stage-bracket" }, roundNos: {} },
+    );
+    const out = verifyJoint(
+      plan([assign(F1, at("10:00"), "Court 1"), assign(F2, at("09:00"), "Court 2")]),
+      p,
+    );
+    expect(out.map((c) => c.reason)).not.toContain("order");
+  });
+
+  it("does not collide two independent round-robin stages in the same division", () => {
+    // Same construction as the single-division cross-stage test: two
+    // round-robin stages in ONE division, each clean internally, with stage
+    // B's round 1 sitting AFTER stage A's round 2 — a violation if the two
+    // stages were compared as one sequence (stageId dropped or ignored).
+    const p = pack(
+      [
+        division(D1, "Alpha", {
+          settings: settings({ courts: ["Court 1", "Court 2", "Court 3", "Court 4"] }),
+        }),
+      ],
+      [
+        fixture(F1, D1, { round: 1, home: E1, away: E2 }),
+        fixture(F2, D1, { round: 2, seq: 1, home: E3, away: E4 }),
+        fixture(F3, D1, { round: 1, seq: 2, home: E5, away: E6 }),
+        fixture("f-b2", D1, { round: 2, seq: 3, home: "e7", away: "e8" }),
+      ],
+      {
+        stageIds: { [F1]: "stage-rr-a", [F2]: "stage-rr-a", [F3]: "stage-rr-b", "f-b2": "stage-rr-b" },
+        roundNos: { [F1]: 1, [F2]: 2, [F3]: 1, "f-b2": 2 },
+      },
+    );
+    const out = verifyJoint(
+      plan([
+        assign(F1, at("09:00"), "Court 1"),
+        assign(F2, at("10:00"), "Court 2"),
+        assign(F3, at("15:00"), "Court 3"),
+        assign("f-b2", at("16:00"), "Court 4"),
+      ]),
+      p,
+    );
+    expect(out.map((c) => c.reason)).not.toContain("order");
+  });
 });
 
 // ===========================================================================
@@ -1023,6 +1148,95 @@ describe("verifyConfigFor (#350)", () => {
     } finally {
       delete process.env.SCHEDULING_AI_ESCALATE_WARN_RATIO;
     }
+  });
+});
+
+// ===========================================================================
+// verifyConfigFor's 4th parameter — C1 gap A
+//
+// `competition-schedule-apply.ts`'s joint apply calls `verifyConfigFor` with no
+// `rules` bundle at all, by design (#399: apply-time blocking must not extend
+// to the typed-rule families — see the `rules` param's own doc comment a few
+// hundred lines up in competition-schedule-ai.ts). That left the round-order
+// scan permanently inert there too, since it needs `config.tz` and the apply
+// path never supplied one. This 4th parameter closes that gap by carrying
+// `tz` ALONE, independent of `rules` — mirroring the existing `window`
+// parameter's shape exactly (also apply-only, also deliberately excluded from
+// `rules`).
+//
+// What makes this safe rather than a re-opening of #399 in disguise:
+// `effectiveHard` (calendar.ts) merges `config.hard` with
+// `config.constraints?.hard`, and `buildEngineConstraints` — the ONE builder
+// this function feeds `constraints` through, unconditionally, `rules` or not —
+// NEVER populates `.hard` under `AI_VERIFY_POLICY` (`hard: false`,
+// engine-constraints.ts:123). So `effectiveHard(config)` is provably `[]` at
+// every call site that reaches `verifyConfigFor` without an explicit `rules`
+// bundle, REGARDLESS of this parameter — `validateInstructionRules`'s entire
+// typed-rule block (calendar.ts ~1043) loops over that empty array and does
+// nothing. The round-order scan (calendar.ts ~1535) is the ONLY consumer of
+// `config.tz` that reads no other `VerifyConfig` field, which is exactly why
+// it is the one thing this parameter can switch on.
+// ===========================================================================
+
+describe("verifyConfigFor's 4th parameter — tz alone, apply-only (#399, C1 gap A)", () => {
+  it("a bare tz sets ONLY tz — hard/ruleFixtures/restByDivision stay unset", () => {
+    const d = division(D1, "Alpha");
+    const cfg = verifyConfigFor(d, undefined, undefined, "Europe/London");
+    expect(cfg.tz).toBe("Europe/London");
+    expect(cfg.hard).toBeUndefined();
+    expect(cfg.ruleFixtures).toBeUndefined();
+    expect(cfg.restByDivision).toBeUndefined();
+  });
+
+  it("omits tz entirely when neither rules nor the bare param is given — today's apply behaviour, unchanged", () => {
+    const d = division(D1, "Alpha");
+    const cfg = verifyConfigFor(d);
+    expect(cfg.tz).toBeUndefined();
+  });
+
+  it("still carries the FULL bundle when `rules` is supplied — this seam does not defang the AI path", () => {
+    const d = division(D1, "Alpha");
+    const hard: HardConstraint[] = [
+      { type: "max_fixtures_per_day", count: 2, scope: { kind: "competition" } },
+    ];
+    const cfg = verifyConfigFor(d, undefined, {
+      tz: "UTC",
+      hard,
+      ruleFixtures: [],
+      restByDivision: { [D1]: 30 },
+    });
+    expect(cfg.tz).toBe("UTC");
+    expect(cfg.hard).toBe(hard);
+    expect(cfg.ruleFixtures).toEqual([]);
+    expect(cfg.restByDivision).toEqual({ [D1]: 30 });
+  });
+
+  it("rules wins over the bare tz param when (hypothetically) both are passed", () => {
+    const d = division(D1, "Alpha");
+    const cfg = verifyConfigFor(
+      d,
+      undefined,
+      { tz: "UTC", hard: [], ruleFixtures: [], restByDivision: {} },
+      "Europe/London",
+    );
+    expect(cfg.tz).toBe("UTC");
+  });
+
+  it("a round-order violation is detected end to end through the bare-tz config, with no ruleFixtures/hard in play", () => {
+    // Not just the config shape in isolation — the SAME seam wired into a real
+    // `validateAssignments` call, the way `competition-schedule-apply.ts` uses
+    // it. Two round-robin fixtures in one division/stage/pool, later round
+    // scheduled before the earlier one on the same day.
+    const d = division(D1, "Alpha");
+    const cfg = verifyConfigFor(d, undefined, undefined, "Europe/London");
+    const out = validateAssignments(
+      [
+        { fixtureId: F1, court: "Court 1", startAt: Date.parse(at("10:00")), endAt: Date.parse(at("10:30")), entrants: [], people: [], divisionId: D1, stageId: "stage-1", roundNo: 1 },
+        { fixtureId: F2, court: "Court 2", startAt: Date.parse(at("09:00")), endAt: Date.parse(at("09:30")), entrants: [], people: [], divisionId: D1, stageId: "stage-1", roundNo: 2 },
+      ],
+      cfg,
+    );
+    expect(out.some((c) => c.reason === "order")).toBe(true);
   });
 });
 

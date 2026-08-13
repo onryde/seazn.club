@@ -105,6 +105,7 @@ import type { AiApplyMeta, ScheduleConfig } from "@/server/api-v1/schemas";
 import {
   conflictKey,
   deltaConflicts,
+  roundOrderConflicts,
   validateAssignments,
   type Assignment,
   type Conflict,
@@ -119,6 +120,9 @@ import {
   feedDependencies,
   loadSettings,
   peopleByEntrant,
+  roundRobinSequenceKey,
+  roundRobinSequenceSiblings,
+  roundRobinStageIds,
   scopeLocked,
   siblingAssignments,
   toAssignment,
@@ -443,6 +447,23 @@ export async function applyCompetitionSchedule(
     // decoration. Never the UUID — that is reserved for lock acquisition.
     const order = [...loaded].sort((a, b) => cmp(a.name, b.name) || cmp(a.slug, b.slug));
 
+    // C1 follow-up (2026-08-12, task 2 item 1). ONE call PER DIVISION, not one
+    // call over the whole run: `roundRobinStageIds` answers "which stages of
+    // THIS division are round-robin-generated", and a joint apply spans
+    // multiple, independent divisions — passing a single division id here
+    // would silently answer the question for one division and apply that
+    // answer to every other one in the run, which is exactly the
+    // "compared as one sequence" defect C1's own design exists to prevent,
+    // just at the DIVISION granularity instead of the stage/pool one.
+    // Resolved once, up front, and looked up per fixture below (mirrors
+    // `applySchedule`'s single-division `roundRobin` binding — see
+    // `schedule.ts`, the reference implementation for this wiring).
+    const roundRobinByDivision = new Map<string, ReadonlySet<string>>(
+      await Promise.all(
+        order.map(async (d) => [d.id, await roundRobinStageIds(tx, d.id)] as const),
+      ),
+    );
+
     // ---- the merged board -------------------------------------------------
     const people = await peopleByEntrant(
       tx,
@@ -476,6 +497,16 @@ export async function applyCompetitionSchedule(
           // half was ever stamped, so a pool-targeted rule bound in the placer
           // and evaporated here.
           ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
+          // C1 follow-up (task 2 item 1). stageId unconditional, same as
+          // divisionId — `fixtures.stage_id` is NOT NULL. roundNo gated on
+          // `roundRobinByDivision`, same reasoning as `toAssignment`'s own
+          // gate: `fixtures.round_no` is one shared column populated for
+          // every stage kind, and forwarding it for a non-round-robin stage
+          // would compare two independent round sequences as if they were
+          // one — same defect this whole field exists to prevent, one level
+          // up.
+          stageId: f.stage_id,
+          ...(roundRobinByDivision.get(d.id)?.has(f.stage_id) ? { roundNo: f.round_no } : {}),
         };
       }),
     );
@@ -485,7 +516,7 @@ export async function applyCompetitionSchedule(
     const untouched: Assignment[] = order.flatMap((d) =>
       d.fixtures
         .filter((f) => !seenFixture.has(f.id) && f.scheduled_at !== null && f.court_label !== null)
-        .map((f) => toAssignment(f, d.settings.config.matchMinutes, people)),
+        .map((f) => toAssignment(f, d.settings.config.matchMinutes, people, roundRobinByDivision.get(d.id))),
     );
     // Divisions of this competition that are NOT in the run. One call: passing
     // every run division as `excludeDivisionIds` leaves exactly the outsiders,
@@ -510,6 +541,16 @@ export async function applyCompetitionSchedule(
     // dependency against the whole board, so it is built over the whole board.
     const deps = feedDependencies(order.flatMap((d) => d.fixtures));
 
+    // C1 gap A. The org zone alone — see `verifyConfigFor`'s 4th parameter for
+    // the full argument for why this is safe under #399 (never widens what
+    // the two calls below check to `hard`/`ruleFixtures`/`restByDivision`).
+    // ONE value for the whole run, from `order[0]!` exactly like
+    // `siblingAssignments` above: #397/design §2.1 requires every division of
+    // one competition to agree on which calendar day a fixture is on, and
+    // `settings.orgTz` (never `.displayTz`) is the field that ruling governs —
+    // a division's own display override must not move it.
+    const orgTz = order[0]!.settings.orgTz;
+
     // The listed fixtures WHERE THEY SIT NOW — the merged board before this
     // apply touches it (#399). Built exactly like `proposed` so the two passes
     // are comparable key for key; a fixture with no slot yet contributes
@@ -522,8 +563,10 @@ export async function applyCompetitionSchedule(
         // `division_id` (#446), so this pass does NOT re-write it from `d.id`.
         // The two agree — `d.byId` only holds that division's fixtures — and
         // one field with one source is the whole point of the fix this file
-        // is part of.
-        .map((f) => toAssignment(f, d.settings.config.matchMinutes, people)),
+        // is part of. Same reasoning extends to `roundRobinByDivision.get(d.id)`
+        // (task 2 item 1): the fixture's own `stage_id` decides whether its
+        // round is round-robin-generated, never `d.id` alone.
+        .map((f) => toAssignment(f, d.settings.config.matchMinutes, people, roundRobinByDivision.get(d.id))),
     );
 
     // ---- one pass per division, over the merged board ---------------------
@@ -531,24 +574,74 @@ export async function applyCompetitionSchedule(
     const blockingKeys = new Set<string>();
     const found: Conflict[] = [];
     const before: Conflict[] = [];
+    // C1 final-review (4th instance of the delta-gate partial-apply
+    // round-order blind spot — `schedule.ts`'s `roundRobinSequenceSiblings`
+    // carries the full mechanism; `applySchedule`'s partial path and
+    // `moveFixture` are the reference implementations this generalizes from
+    // one division to N independent ones). Accumulated across the whole loop
+    // so the RETURNED `conflicts` can be filtered once, after every
+    // division's own pass has run — see its use below the write gate.
+    const allSiblingIds = new Set<string>();
     for (const d of order) {
       const mine = proposed.filter((a) => a.divisionId === d.id);
       if (mine.length === 0) continue;
       const others = proposed.filter((a) => a.divisionId !== d.id);
+      // This apply's own round-robin siblings for division `d` — same
+      // (division, stage, pool) sequence as one of `d`'s LISTED fixtures,
+      // already placed, not itself listed. `mine` only holds fixtures THIS
+      // apply explicitly named for `d`; an unlisted same-sequence sibling
+      // sits in `untouched`, out of `roundOrderConflicts`' pair scan (scoped
+      // to the set it's handed, by design). Pulled into round order's OWN
+      // checked set on BOTH delta sides below, symmetrically, or a
+      // pre-existing violation among the siblings reads as newly introduced
+      // and blocks a partial apply that never touched them — the property
+      // the "stays editable over a PRE-EXISTING round-order violation" test
+      // (competition-schedule-apply.test.ts) exists to pin.
+      //
+      // C1 fix-loop (round-order-widening fix-loop): they deliberately do NOT
+      // move into `mine`/`current-for-d` or out of `untouched` for the CORE
+      // gate below (rest/court/person/window/feed-order) — that was the
+      // original, too-blunt fix, pulling a sibling out of context and making
+      // it FOCAL for every rule family a division's pass checks, not just
+      // round order. `untouched` stays UNMODIFIED for every division's pass,
+      // this one included — round order is judged separately, below.
+      const listedIds = new Set(d.input.assignments.map((a) => a.fixture_id));
+      const widenKeys = new Set(
+        d.input.assignments
+          .map((a) => d.byId.get(a.fixture_id)!)
+          .filter((f) => roundRobinByDivision.get(d.id)?.has(f.stage_id))
+          .map(roundRobinSequenceKey),
+      );
+      const roundRobinSiblings = roundRobinSequenceSiblings(d.fixtures, widenKeys, listedIds);
+      const siblingIds = new Set(roundRobinSiblings.map((f) => f.id));
+      for (const id of siblingIds) allSiblingIds.add(id);
+      // Same representation on both delta sides — these fixtures move in
+      // NEITHER pass, so their own conflicts land identically in `before`
+      // and this division's found-pass, and the (before, found) delta below
+      // the write gate correctly reads them as pre-existing.
+      const widenedSiblings = roundRobinSiblings.map((f) =>
+        toAssignment(f, d.settings.config.matchMinutes, people, roundRobinByDivision.get(d.id)),
+      );
+      const currentForD = current.filter((a) => a.divisionId === d.id);
+      // `untouched` UNMODIFIED (ORIGINAL composition, byte-identical to
+      // origin/main) — every division's pass, including `d`'s own, sees every
+      // OTHER division's untouched fixtures AND `d`'s own, exactly as it did
+      // before round order existed.
+      const config = verifyConfigFor(packDivisionOf(d), applyWindow(d.settings), undefined, orgTz);
       // The identical pass over the pre-apply board. Same division, same config,
       // same "everyone else" — so a conflict that survives this comparison is
-      // one this apply is responsible for.
+      // one this apply is responsible for. CORE families via
+      // `includeRoundOrder=false` (byte-identical in shape to the
+      // pre-round-order gate); round order separately, over the widened set.
       before.push(
         ...validateAssignments(
-          current.filter((a) => a.divisionId === d.id),
-          verifyConfigFor(packDivisionOf(d), applyWindow(d.settings)),
-          [
-            ...current.filter((a) => a.divisionId !== d.id),
-            ...untouched,
-            ...siblings,
-          ],
+          currentForD,
+          config,
+          [...current.filter((a) => a.divisionId !== d.id), ...untouched, ...siblings],
           deps,
+          false,
         ),
+        ...roundOrderConflicts([...currentForD, ...widenedSiblings], orgTz),
       );
       // #399 retired this pass's per-division `crossPersonClash` branch. A human
       // on two courts at once is impossible whoever put them there, so
@@ -558,12 +651,10 @@ export async function applyCompetitionSchedule(
       // decides what may be written. What replaces it is the delta below, which
       // is the thing that actually needed deciding: a board that ALREADY holds
       // an overlap has to stay editable.
-      for (const c of validateAssignments(
-        mine,
-        verifyConfigFor(packDivisionOf(d), applyWindow(d.settings)),
-        [...others, ...untouched, ...siblings],
-        deps,
-      )) {
+      for (const c of [
+        ...validateAssignments(mine, config, [...others, ...untouched, ...siblings], deps, false),
+        ...roundOrderConflicts([...mine, ...widenedSiblings], orgTz),
+      ]) {
         // Keyed on (fixtureId, reason, detail) like `verifyJoint`: the engine
         // resolves feed order against the whole board, so a within-division
         // order violation is re-reported verbatim by every other division's
@@ -674,7 +765,19 @@ export async function applyCompetitionSchedule(
                 ...(ai !== undefined ? { ai } : {}),
               } as never)}, ${auth.userId})`;
 
-    return { applied, conflicts, divisionIds: order.map((d) => d.id) };
+    return {
+      applied,
+      // #461's contract (schedule.ts's `applySchedule`/`moveFixture`),
+      // generalized to N divisions: a widened sibling exists so the GATE
+      // above can see it, not so its own — possibly pre-existing and
+      // entirely unrelated — conflicts leak into a response about a fixture
+      // no division in this run actually listed. A conflict that DID block
+      // the apply is never filtered — the throw above fires from the
+      // unfiltered `conflicts`/`blockingKeys` pair, before this line is ever
+      // reached.
+      conflicts: conflicts.filter((c) => !allSiblingIds.has(c.fixtureId)),
+      divisionIds: order.map((d) => d.id),
+    };
   });
 
   // Cache invalidation + realtime, once per written division, AFTER the commit.

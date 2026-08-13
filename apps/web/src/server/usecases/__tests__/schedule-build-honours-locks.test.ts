@@ -133,18 +133,43 @@ async function seedStage(
 }
 
 /**
- * Moves one fixture to a slot no compacting solver would choose on its own —
- * ten hours out, on the second court — then locks it. A re-solve that ignores
- * the lock relocates the card back into the compact region the rest of the
- * board occupies; one that honours it must not move it AT ALL. Mirrors the
- * exact technique `schedule-solver-telemetry.test.ts`'s parked-card specs use,
- * for the same reason: two runs of the same solver over the same input can
- * otherwise coincide by construction, which would make "unchanged" true
- * whether or not the lock was ever read.
+ * C1 fix-loop (G2/3rd instance). `seedStage`'s board (4 entrants, 2 courts,
+ * `perEntrantMinRest` equal to `matchMinutes`) is the same ZERO-SLACK shape
+ * `schedule-delta-blocking.test.ts`'s round-order suite documents: every
+ * round packs back to back with nothing free anywhere, so displacing a
+ * fixture to an atypical slot is only UNCONDITIONALLY safe in one direction
+ * — a round-1 fixture, moved BACKWARD, has no earlier round to violate H6
+ * (round order) against, whatever the rest of the board looks like. This
+ * used to hand `parkAndLock`/`parkAndScopeLock` `first.assignments[0]` —
+ * solver output order is not round-sorted, so it could already park a
+ * round-2/3 fixture ahead of an untouched round-1 sibling, a genuine
+ * round-order violation invisible only because the delta gate's own
+ * round-robin blind spot (this task's fix) could not see it before.
+ * `round_no` is a fixture-generation-time fact (`generateStageFixtures`,
+ * inside `seedStage`), so it can be read straight off the row regardless of
+ * where the solver's own proposal happened to place it.
+ */
+async function round1FixtureId(stageId: string): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    select id from fixtures where stage_id = ${stageId} and round_no = 1 limit 1`;
+  return row!.id;
+}
+
+/**
+ * Moves a round-1 fixture to a slot no compacting solver would choose on its
+ * own — 8 hours before the board's own `startAt` (same calendar day, so
+ * nothing else about the window changes), on the second court — then locks
+ * it. A re-solve that ignores the lock relocates the card back into the
+ * compact region the rest of the board occupies; one that honours it must
+ * not move it AT ALL. Mirrors the exact technique
+ * `schedule-solver-telemetry.test.ts`'s parked-card specs use, for the same
+ * reason: two runs of the same solver over the same input can otherwise
+ * coincide by construction, which would make "unchanged" true whether or not
+ * the lock was ever read.
  */
 async function parkAndLock(auth: AuthCtx, stageId: string, fixtureId: string): Promise<void> {
   await applySchedule(auth, stageId, {
-    assignments: [{ fixture_id: fixtureId, scheduled_at: at(600), court_label: "C2" }],
+    assignments: [{ fixture_id: fixtureId, scheduled_at: at(-480), court_label: "C2" }],
     source: "manual",
   });
   await patchFixture(auth, fixtureId, { schedule_locked: true });
@@ -166,7 +191,7 @@ async function parkAndScopeLock(
   fixtureId: string,
 ): Promise<void> {
   await applySchedule(auth, stageId, {
-    assignments: [{ fixture_id: fixtureId, scheduled_at: at(600), court_label: "C2" }],
+    assignments: [{ fixture_id: fixtureId, scheduled_at: at(-480), court_label: "C2" }],
     source: "manual",
   });
   await setDivisionLocks(auth, divisionId, { locked_scopes: [{ courts: ["C2"] }] });
@@ -193,17 +218,17 @@ describe.skipIf(!HAS_DB)("BUILD honours a lock (owner report, 2026-08-12)", () =
     });
 
     // Pin one fixture via the lock toggle, at a deliberately atypical slot.
-    const target = first.assignments[0]!;
-    await parkAndLock(auth, stageId, target.fixture_id);
+    const targetId = await round1FixtureId(stageId);
+    await parkAndLock(auth, stageId, targetId);
 
     // Click 2: "Auto-schedule" again — the owner's exact reported sequence,
     // same body as click 1.
     const second = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
 
-    const proposed = second.assignments.find((a) => a.fixture_id === target.fixture_id);
+    const proposed = second.assignments.find((a) => a.fixture_id === targetId);
     // BOTH time and court, matching the owner's report precisely ("Its time
     // AND court both changed").
-    expect(proposed?.scheduled_at).toBe(at(600));
+    expect(proposed?.scheduled_at).toBe(at(-480));
     expect(proposed?.court_label).toBe("C2");
   }, 180_000);
 });
@@ -224,21 +249,21 @@ describe.skipIf(!HAS_DB)("REFLOW and POLISH keep honouring a lock, unchanged by 
       source: "auto",
     });
 
-    const target = first.assignments[0]!;
-    await parkAndLock(auth, stageId, target.fixture_id);
+    const targetId = await round1FixtureId(stageId);
+    await parkAndLock(auth, stageId, targetId);
 
     // REFLOW: the exact shape the Re-flow button sends
     // (`only_unlocked: true`, no explicit mode — the default derivation).
     const reflow = await autoSchedule(auth, stageId, { only_unlocked: true, mode: "reflow" });
-    const reflowed = reflow.assignments.find((a) => a.fixture_id === target.fixture_id);
-    expect(reflowed?.scheduled_at).toBe(at(600));
+    const reflowed = reflow.assignments.find((a) => a.fixture_id === targetId);
+    expect(reflowed?.scheduled_at).toBe(at(-480));
     expect(reflowed?.court_label).toBe("C2");
 
     // POLISH: the exact shape the Polish button sends
     // (`only_unlocked: true, mode: "polish"`, per schedule-board-polish.test.tsx).
     const polish = await autoSchedule(auth, stageId, { only_unlocked: true, mode: "polish" });
-    const polished = polish.assignments.find((a) => a.fixture_id === target.fixture_id);
-    expect(polished?.scheduled_at).toBe(at(600));
+    const polished = polish.assignments.find((a) => a.fixture_id === targetId);
+    expect(polished?.scheduled_at).toBe(at(-480));
     expect(polished?.court_label).toBe("C2");
   }, 180_000);
 });
@@ -259,14 +284,14 @@ describe.skipIf(!HAS_DB)("ignore_locks is the explicit escape hatch", () => {
       source: "auto",
     });
 
-    const target = first.assignments[0]!;
-    await parkAndLock(auth, stageId, target.fixture_id);
+    const targetId = await round1FixtureId(stageId);
+    await parkAndLock(auth, stageId, targetId);
 
     // Without the escape hatch: the fix under test — stays put, and the
     // response says exactly one fixture was held for being locked.
     const kept = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
-    const keptCard = kept.assignments.find((a) => a.fixture_id === target.fixture_id);
-    expect(keptCard?.scheduled_at).toBe(at(600));
+    const keptCard = kept.assignments.find((a) => a.fixture_id === targetId);
+    expect(keptCard?.scheduled_at).toBe(at(-480));
     expect(keptCard?.court_label).toBe("C2");
     expect(kept.solver.locked_kept).toBe(1);
 
@@ -277,8 +302,8 @@ describe.skipIf(!HAS_DB)("ignore_locks is the explicit escape hatch", () => {
       mode: "build",
       ignore_locks: true,
     });
-    const movedCard = moved.assignments.find((a) => a.fixture_id === target.fixture_id);
-    expect(movedCard?.scheduled_at).not.toBe(at(600));
+    const movedCard = moved.assignments.find((a) => a.fixture_id === targetId);
+    expect(movedCard?.scheduled_at).not.toBe(at(-480));
     expect(moved.solver.locked_kept).toBe(0);
   }, 180_000);
 });
@@ -301,16 +326,16 @@ describe.skipIf(!HAS_DB)(
         source: "auto",
       });
 
-      const target = first.assignments[0]!;
-      await parkAndScopeLock(auth, stageId, divisionId, target.fixture_id);
+      const targetId = await round1FixtureId(stageId);
+      await parkAndScopeLock(auth, stageId, divisionId, targetId);
 
       // Same click the owner's report reproduced — `only_unlocked: false`,
       // `mode: "build"` — but this time the lock comes ONLY from the
-      // division's `locked_scopes`; `target`'s own `schedule_locked` stays
-      // false throughout.
+      // division's `locked_scopes`; the fixture's own `schedule_locked`
+      // stays false throughout.
       const second = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
-      const proposed = second.assignments.find((a) => a.fixture_id === target.fixture_id);
-      expect(proposed?.scheduled_at).toBe(at(600));
+      const proposed = second.assignments.find((a) => a.fixture_id === targetId);
+      expect(proposed?.scheduled_at).toBe(at(-480));
       expect(proposed?.court_label).toBe("C2");
     }, 180_000);
   },
@@ -334,31 +359,31 @@ describe.skipIf(!HAS_DB)(
         source: "auto",
       });
 
-      const target = first.assignments[0]!;
-      await parkAndScopeLock(auth, stageId, divisionId, target.fixture_id);
+      const targetId = await round1FixtureId(stageId);
+      await parkAndScopeLock(auth, stageId, divisionId, targetId);
 
       const { pack } = await buildSchedulePack(auth, divisionId, {
         now: Date.parse(T0),
         mode: "generate",
         instruction: "Schedule the remaining fixtures.",
       });
-      const drafted = pack.draft.find((d) => d.fixture_id === target.fixture_id);
-      expect(drafted, `draft is missing fixture ${target.fixture_id}`).toBeDefined();
+      const drafted = pack.draft.find((d) => d.fixture_id === targetId);
+      expect(drafted, `draft is missing fixture ${targetId}`).toBeDefined();
       expect(drafted!.scheduled_at).not.toBeNull();
       // Compared on the instant, not the rendered string: the pack renders
       // in the ORG zone (`zonedIso`), which may not spell the same offset
       // `at()` does even when it names the same instant.
-      expect(Date.parse(drafted!.scheduled_at as string)).toBe(Date.parse(at(600)));
+      expect(Date.parse(drafted!.scheduled_at as string)).toBe(Date.parse(at(-480)));
       expect(drafted!.court_label).toBe("C2");
 
       // Task 4: `PackFixture.pinned` (feeds `structuralCheck` and
       // `toEngineAssignments`'s `pinnedIds`) used to be `f.schedule_locked`
       // alone — a scope-locked-only fixture read as NOT pinned there even
       // though the draft anchor above already held it. Not `.toBe(true)` by
-      // accident: `target.fixture_id` is asserted absent from `schedule_locked`
+      // accident: `targetId` is asserted absent from `schedule_locked`
       // via `parkAndScopeLock`, which never touches the fixture's own flag.
-      const pinnedFixture = pack.fixtures.movable.find((f) => f.id === target.fixture_id);
-      expect(pinnedFixture, `movable is missing fixture ${target.fixture_id}`).toBeDefined();
+      const pinnedFixture = pack.fixtures.movable.find((f) => f.id === targetId);
+      expect(pinnedFixture, `movable is missing fixture ${targetId}`).toBeDefined();
       expect(pinnedFixture!.pinned).toBe(true);
     }, 180_000);
   },

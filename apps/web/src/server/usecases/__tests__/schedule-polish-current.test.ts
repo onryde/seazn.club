@@ -137,6 +137,22 @@ const slot = (isoOrDate: string | Date, court: string | null) =>
  * is preserved, only the absolute times differ — which matters because a board
  * that arrived carrying blocking conflicts would change what the run does for
  * reasons that have nothing to do with `current`.
+ *
+ * C1 fix-loop (G2/3rd instance). The per-fixture loop below moves ONE card at
+ * a time (`patchFixture` → `moveFixture`), so mid-loop the board is a MIX of
+ * shifted and not-yet-shifted cards — a real, if transient, board state, not
+ * a fiction. Processed in DESCENDING original-time order (latest first) so
+ * every intermediate state stays chronologically consistent with the final
+ * one: the card being shifted right now is, by construction, at or after
+ * every not-yet-shifted (still-original-position) card and, after its own
+ * `+minutes` move, still at or after every already-shifted one (the same
+ * constant added to both sides of an already-true `<=` preserves it). Shifted
+ * in `built.assignments`' own (solver) order instead, a round-1 card could
+ * jump `minutes` STRAIGHT PAST a not-yet-shifted round-2/3 sibling still
+ * sitting at its original, much-earlier position — a genuine, if short-lived,
+ * round-order violation the delta gate's own round-robin blind spot (this
+ * task's fix) could not see before. Only proven for a FORWARD shift (this
+ * file's only direction); a backward one would need ASCENDING order instead.
  */
 async function publishedBoardShifted(
   auth: AuthCtx,
@@ -155,7 +171,10 @@ async function publishedBoardShifted(
     })),
     source: "auto",
   });
-  for (const a of built.assignments) {
+  const descending = [...built.assignments].sort(
+    (a, b) => Date.parse(b.scheduled_at) - Date.parse(a.scheduled_at),
+  );
+  for (const a of descending) {
     await patchFixture(auth, a.fixture_id, {
       scheduled_at: new Date(
         Date.parse(a.scheduled_at) + minutes * MIN,

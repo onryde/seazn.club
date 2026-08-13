@@ -9,6 +9,7 @@ import postgres from "postgres";
 import {
   startAiFixtureServer,
   FIXTURE_COMPILE_BRIEF,
+  FIXTURE_ROUND_ORDER,
   type AiFixtureServer,
 } from "../apps/web/e2e/ai-fixture-server.ts";
 // The SAME resolver `RestFloorNote` (apps/web) and the solver/verifier
@@ -708,6 +709,12 @@ async function main() {
   // SCHEDULING_AI_BASE_URL); the wallet 402 is keyless-safe and always runs.
   await v4AiSuite(admin, org2.id, renamed.slug);
 
+  // --- C1 gap B: the AI planning path's round-order blind spot, over real
+  // HTTP (own fresh Pro Plus session — not an entitlement gate). Needs the
+  // same T17 fixture server as v4AiSuite; skips the same way when
+  // SCHEDULING_AI_BASE_URL is unset.
+  await scheduleAiRoundOrderSuite();
+
   // --- #350 multi-division JOINT AI scheduling: the batch-discount price
   // (rungs 2+3 → 4 credits, budget sized from the undiscounted 5) and the
   // atomic apply on a fresh Pro Plus org, plus the two refusals that must
@@ -795,6 +802,16 @@ async function main() {
   // --- D4a/P5: stage progression — seed -> complete -> propose -> confirm ->
   // next stage playable (own fresh free session — not an entitlement gate).
   await stageProgressionSuite();
+
+  // --- C1 fix-loop (G2/3rd instance): the drag path's round-robin delta-gate
+  // blind spot, over real HTTP — a round-order violation against an
+  // untouched sibling 409s, writes nothing, and an identically-shaped legal
+  // move still succeeds (own fresh free session — not an entitlement gate).
+  await scheduleRoundOrderDeltaGateSuite();
+
+  // --- C1 gap A: the JOINT multi-division apply's own round-order wiring,
+  // over real HTTP (own fresh pro session, for scheduling.multi_division).
+  await competitionScheduleApplyRoundOrderSuite();
 
   // --- design/v6 PROMPT-48..50: tennis rally set (nested kernel), icehockey
   // OT points in standings, PP goal + release with the public strength chip.
@@ -6879,6 +6896,371 @@ async function scheduleRestFloorSuite(): Promise<void> {
   );
 }
 
+/**
+ * C1 fix-loop (G2/3rd instance) — the drag/keyboard move path's round-robin
+ * blind spot, over REAL HTTP. The unit suite (schedule-delta-blocking.test.ts)
+ * already proves `moveFixture`'s delta gate detects a round-order violation
+ * against an untouched sibling in isolation; what only smoke can prove is the
+ * WIRING — that a real PATCH against a real running server, through real
+ * auth/routing/JSON, actually 409s and actually writes nothing, and that the
+ * identically-shaped legal PATCH actually succeeds.
+ *
+ * Round-robin (`kind: "league"`) over 4 entrants — 6 fixtures, 3 rounds of 2
+ * — applied in explicit, round-ascending, hourly slots via a single manual
+ * `schedule/apply` (deterministic; no solver involved, so this suite cannot
+ * flake on `solver_busy`). `generate`'s own fixture order is round-ascending
+ * (`generateStageFixtures`'s `order by round_no, seq_in_round`), so the
+ * first two ids are round 1 and the last two are round 3 — matching the
+ * convention the unit suite and the e2e spec both rely on.
+ */
+async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
+  const free = newSession();
+  await signIn(free, `dtx_roundorder_${tag}@example.com`);
+  const comp = v1data<{ id: string }>(
+    await v1(free, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `DTX Round Order ${tag}`,
+    }),
+  );
+  const div = v1data<{ id: string }>(
+    await v1(free, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Round Order",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  await v1(free, `/api/v1/divisions/${div.id}/entrants`, "POST", [
+    { kind: "individual", display_name: "A", seed: 1 },
+    { kind: "individual", display_name: "B", seed: 2 },
+    { kind: "individual", display_name: "C", seed: 3 },
+    { kind: "individual", display_name: "D", seed: 4 },
+  ]);
+  const stage = v1data<{ id: string }>(
+    await v1(free, `/api/v1/divisions/${div.id}/stages`, "POST", {
+      seq: 1,
+      kind: "league",
+      name: "L",
+      config: {},
+    }),
+  );
+  const gen = v1data<{ fixtures: { id: string }[] }>(
+    await v1(free, `/api/v1/stages/${stage.id}/generate`, "POST"),
+  );
+  check("round order: generate produced a 4-entrant round robin (6 fixtures)", gen.fixtures.length === 6);
+  const round1Id = gen.fixtures[0]!.id;
+  const laterRoundId = gen.fixtures[gen.fixtures.length - 1]!.id;
+
+  const T0 = Date.UTC(2026, 10, 2, 9, 0);
+  const at = (minutes: number) => new Date(T0 + minutes * 60_000).toISOString();
+  await v1(free, `/api/v1/divisions/${div.id}/schedule-settings`, "PUT", {
+    tz: "UTC",
+    config: {
+      startAt: at(0),
+      matchMinutes: 30,
+      gapMinutes: 0,
+      courts: ["Court 1", "Court 2", "Court 3"],
+      perEntrantMinRest: 0,
+      blackouts: [],
+      sessionWindows: [],
+    },
+  });
+  // Applied in explicit, already-correct round-ascending slots — one card
+  // per fixture, an hour apart, matching gen.fixtures' own round order.
+  const applied = await v1(free, `/api/v1/stages/${stage.id}/schedule/apply`, "POST", {
+    assignments: gen.fixtures.map((f, i) => ({
+      fixture_id: f.id,
+      scheduled_at: at(i * 60),
+      court_label: "Court 1",
+    })),
+    source: "manual",
+  });
+  check("round order: the initial round-ascending board applies cleanly (200)", applied.status === 200);
+
+  // THE REFUSAL. The later round moved to an hour before round 1 on a
+  // court nobody else uses — no court/person overlap possible, so a 409
+  // here can only be the round-order gate.
+  const before = await v1(free, `/api/v1/fixtures/${laterRoundId}`);
+  const beforeAt = (before.json.data as { scheduled_at: string }).scheduled_at;
+  const refused = await v1(free, `/api/v1/fixtures/${laterRoundId}`, "PATCH", {
+    scheduled_at: at(-60),
+    court_label: "Court 3",
+  });
+  // `/api/v1`'s error envelope (server/api-v1/http.ts) spreads `extra`
+  // straight onto `error` — `error: { code, message, ...extra }` — not
+  // nested under an `.extra` key, so `conflicts` sits at `error.conflicts`.
+  const refusedConflicts =
+    (refused.json.error as { conflicts?: { code?: string; blocking?: boolean }[] } | undefined)
+      ?.conflicts ?? [];
+  check(
+    "round order: dragging the later round before an untouched round-1 sibling is REFUSED (409, warn.order, blocking)",
+    refused.status === 409 &&
+      refusedConflicts.some((c) => c.code === "warn.order" && c.blocking === true),
+  );
+  const afterRefusal = await v1(free, `/api/v1/fixtures/${laterRoundId}`);
+  check(
+    "round order: the refused write actually wrote nothing — the fixture is still at its original slot",
+    (afterRefusal.json.data as { scheduled_at: string }).scheduled_at === beforeAt,
+  );
+
+  // THE CONTROL. The identically-shaped move, legal because it stays inside
+  // round order (still after round 1, still before the whole board's own
+  // span otherwise) — must not be caught by the same gate that just refused
+  // the illegal one, proving the 409 above was about round order and not
+  // some incidental clash on Court 3.
+  const allowed = await v1(free, `/api/v1/fixtures/${laterRoundId}`, "PATCH", {
+    scheduled_at: at(600),
+    court_label: "Court 3",
+  });
+  check("round order: the identically-shaped legal move is allowed (200)", allowed.status === 200);
+
+  // Round 1 itself — never touched by any move above — is still exactly
+  // where the initial apply put it: the refused write's own siblings did
+  // not get silently nudged as a side effect of the widened checked set.
+  const round1After = await v1(free, `/api/v1/fixtures/${round1Id}`);
+  check(
+    "round order: round 1, never moved, is still at its original slot after the refused sibling drag",
+    (round1After.json.data as { scheduled_at: string }).scheduled_at === at(0),
+  );
+}
+
+/**
+ * C1 gap A — the JOINT multi-division apply's own round-order wiring, over
+ * real HTTP. `scheduleRoundOrderDeltaGateSuite` above proves the same
+ * property for the single-fixture PATCH path; `competition-schedule-apply
+ * .test.ts` (apps/web unit, DB-gated) already proves the mechanism in
+ * isolation. What only smoke can prove is that a real POST against a real
+ * running server, through real auth/routing/JSON, actually 409s on the
+ * JOINT endpoint specifically — `applyCompetitionSchedule`'s own
+ * `verifyConfigFor` calls were structurally unable to see round order at
+ * all before this fix (no `tz` ever reached them), a defect the
+ * single-fixture path's suite above cannot exercise.
+ *
+ * WIRE SHAPE TRAP (confirmed against server/api-v1/http.ts and
+ * `ApplyCompetitionScheduleResult`'s own doc comment, not assumed): this
+ * route's conflicts are the RAW engine `Conflict` shape — camelCase
+ * `fixtureId`/`reason`/`direct` — spread onto `error.conflicts` verbatim,
+ * NOT the snake_case `ScheduleConflict`/`code`/`blocking` shape the
+ * single-fixture PATCH route above uses. A `{code, blocking}` read here
+ * would silently see `undefined` on every field and pass or fail for the
+ * wrong reason.
+ */
+async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
+  const s = newSession();
+  const orgId = (await signIn(s, `dtx_jointroundorder_${tag}@example.com`)).org_id;
+  // scheduling.multi_division is Pro and above.
+  await setPlan(orgId, "pro", s);
+
+  const comp = v1data<{ id: string }>(
+    await v1(s, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `DTX Joint Round Order ${tag}`,
+    }),
+  );
+
+  const T0 = Date.UTC(2026, 10, 9, 9, 0);
+  const at = (minutes: number) => new Date(T0 + minutes * 60_000).toISOString();
+
+  async function seedRrDivision(
+    name: string,
+    entrantNames: string[],
+    court: string,
+  ): Promise<{ id: string; fixtureIds: string[] }> {
+    const div = v1data<{ id: string }>(
+      await v1(s, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+        name,
+        sport_key: "generic",
+        variant_key: "score",
+        config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      }),
+    );
+    await v1(
+      s,
+      `/api/v1/divisions/${div.id}/entrants`,
+      "POST",
+      entrantNames.map((n, i) => ({ kind: "individual", display_name: n, seed: i + 1 })),
+    );
+    const stage = v1data<{ id: string }>(
+      await v1(s, `/api/v1/divisions/${div.id}/stages`, "POST", {
+        seq: 1,
+        kind: "league",
+        name: "L",
+        config: {},
+      }),
+    );
+    const gen = v1data<{ fixtures: { id: string }[] }>(
+      await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"),
+    );
+    await v1(s, `/api/v1/divisions/${div.id}/schedule-settings`, "PUT", {
+      tz: "UTC",
+      config: {
+        startAt: at(0),
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: [court],
+        perEntrantMinRest: 0,
+        blackouts: [],
+        sessionWindows: [],
+      },
+    });
+    return { id: div.id, fixtureIds: gen.fixtures.map((f) => f.id) };
+  }
+
+  const alpha = await seedRrDivision("Alpha", ["A", "B", "C", "D"], "Court 1");
+  const bravo = await seedRrDivision("Bravo", ["X", "Y", "Z"], "Court 3");
+  check(
+    "joint round order: Alpha generated a 4-entrant round robin (6 fixtures)",
+    alpha.fixtureIds.length === 6,
+  );
+  check(
+    "joint round order: Bravo generated a 3-entrant round robin (3 fixtures)",
+    bravo.fixtureIds.length === 3,
+  );
+
+  // The violation: swap Alpha's round-1 (first id, generate's own
+  // round_no/seq_in_round order) and round-3 (last id) slots — a straight
+  // swap of two already-occupied times, so no court/rest conflict rides
+  // along to confound the assertion (perEntrantMinRest is 0 above).
+  const last = alpha.fixtureIds.length - 1;
+  const alphaViolating = alpha.fixtureIds.map((fixture_id, i) => ({
+    fixture_id,
+    scheduled_at: i === 0 ? at(last * 30) : i === last ? at(0) : at(i * 30),
+    court_label: "Court 1",
+  }));
+  const bravoClean = bravo.fixtureIds.map((fixture_id, i) => ({
+    fixture_id,
+    scheduled_at: at(i * 30),
+    court_label: "Court 3",
+  }));
+
+  const seqs1 = await divisionSeqs([alpha.id, bravo.id]);
+  const refused = await v1(s, `/api/v1/competitions/${comp.id}/schedule/apply`, "POST", {
+    divisions: [
+      { division_id: alpha.id, expected_seq: seqs1[alpha.id] ?? 0, assignments: alphaViolating },
+      { division_id: bravo.id, expected_seq: seqs1[bravo.id] ?? 0, assignments: bravoClean },
+    ],
+    // "ai" only — the wire schema (ApplyCompetitionScheduleRequest) rejects
+    // "manual" on this route; manual board edits stay on the per-stage
+    // endpoint by construction (one division). Confirmed against
+    // schemas.ts, not assumed.
+    source: "ai",
+  });
+  // `error.conflicts` is the raw engine shape here — see the file header.
+  const refusedConflicts =
+    (refused.json.error as { conflicts?: { fixtureId?: string; reason?: string; direct?: boolean }[] } | undefined)
+      ?.conflicts ?? [];
+  check(
+    "joint round order: a joint apply that INTRODUCES a round-order violation is refused (409, reason order, direct/blocking)",
+    refused.status === 409 &&
+      refusedConflicts.some((c) => c.reason === "order" && c.direct === true),
+  );
+  const afterRefusal = await scheduledCountsByDivision([alpha.id, bravo.id]);
+  check(
+    "joint round order: the refused write is ATOMIC — neither division got any slot, including the untouched Bravo",
+    (afterRefusal[alpha.id] ?? 0) === 0 && (afterRefusal[bravo.id] ?? 0) === 0,
+  );
+
+  // The delta property: a correct joint apply first, then the pre-existing
+  // violation planted straight into the rows (the only way to construct one
+  // now the gate is live), then a re-apply that must still succeed.
+  const alphaClean = alpha.fixtureIds.map((fixture_id, i) => ({
+    fixture_id,
+    scheduled_at: at(i * 30),
+    court_label: "Court 1",
+  }));
+  const seqs2 = await divisionSeqs([alpha.id, bravo.id]);
+  const cleanApply = await v1(s, `/api/v1/competitions/${comp.id}/schedule/apply`, "POST", {
+    divisions: [
+      { division_id: alpha.id, expected_seq: seqs2[alpha.id] ?? 0, assignments: alphaClean },
+      { division_id: bravo.id, expected_seq: seqs2[bravo.id] ?? 0, assignments: bravoClean },
+    ],
+    source: "ai",
+  });
+  check("joint round order: a correctly-ordered joint apply succeeds (200)", cleanApply.status === 200);
+
+  const sql = smokeDb();
+  try {
+    for (const a of alphaViolating) {
+      await sql`
+        update fixtures set scheduled_at = ${a.scheduled_at}, court_label = ${a.court_label}
+        where id = ${a.fixture_id}`;
+    }
+  } finally {
+    await sql.end();
+  }
+
+  const seqs3 = await divisionSeqs([alpha.id, bravo.id]);
+  const stillApplies = await v1(s, `/api/v1/competitions/${comp.id}/schedule/apply`, "POST", {
+    divisions: [
+      // Re-asserts the SAME (now-violating) positions for Alpha — a no-op.
+      { division_id: alpha.id, expected_seq: seqs3[alpha.id] ?? 0, assignments: alphaViolating },
+      { division_id: bravo.id, expected_seq: seqs3[bravo.id] ?? 0, assignments: bravoClean },
+    ],
+    source: "ai",
+  });
+  const stillConflicts = v1data<{ conflicts?: { reason?: string }[] }>(stillApplies)?.conflicts ?? [];
+  check(
+    "joint round order: still applies over a board that ALREADY holds a round-order violation — the delta property",
+    stillApplies.status === 200 && stillConflicts.some((c) => c.reason === "order"),
+  );
+
+  // C1 final-review — the SAME endpoint, but with a PARTIAL per-division
+  // listing: only the moved fixture is named, and the round-robin sibling
+  // its new position collides with is left OUT of `assignments` entirely,
+  // sitting wherever the clean apply below placed it. The delta gate used
+  // to compare `assignments` against itself only (calendar.ts's round-order
+  // pair scan, by design) — an unlisted sibling could never be paired
+  // against anything, so this exact shape was invisible before the fix
+  // this suite is now pinned to. `competition-schedule-apply.test.ts`
+  // (apps/web unit, DB-gated) proves the mechanism in isolation; what only
+  // smoke can prove is that a real POST against a real running server still
+  // refuses it once a PARTIAL listing is in play, not just a full one.
+  const seqs4 = await divisionSeqs([alpha.id, bravo.id]);
+  const reClean = await v1(s, `/api/v1/competitions/${comp.id}/schedule/apply`, "POST", {
+    divisions: [
+      { division_id: alpha.id, expected_seq: seqs4[alpha.id] ?? 0, assignments: alphaClean },
+      { division_id: bravo.id, expected_seq: seqs4[bravo.id] ?? 0, assignments: bravoClean },
+    ],
+    source: "ai",
+  });
+  check("joint round order (partial): re-established a clean baseline (200)", reClean.status === 200);
+
+  const seqs5 = await divisionSeqs([alpha.id]);
+  const partial = await v1(s, `/api/v1/competitions/${comp.id}/schedule/apply`, "POST", {
+    divisions: [
+      {
+        division_id: alpha.id,
+        expected_seq: seqs5[alpha.id] ?? 0,
+        // Round 1's fixture ALONE, pushed a full day past everything —
+        // every other Alpha fixture, including round 3's (still at
+        // `at(last*30)` from `alphaClean` above), stays right where it is
+        // and is never named here.
+        assignments: [{ fixture_id: alpha.fixtureIds[0]!, scheduled_at: at(24 * 60), court_label: "Court 1" }],
+      },
+    ],
+    source: "ai",
+  });
+  const partialConflicts =
+    (partial.json.error as { conflicts?: { fixtureId?: string; reason?: string; direct?: boolean }[] } | undefined)
+      ?.conflicts ?? [];
+  check(
+    "joint round order (partial): a PARTIAL apply introducing a violation against an UNLISTED sibling is refused (409, reason order)",
+    partial.status === 409 && partialConflicts.some((c) => c.reason === "order"),
+  );
+
+  const sql2 = smokeDb();
+  try {
+    const [row] = await sql2<{ scheduled_at: Date }[]>`
+      select scheduled_at from fixtures where id = ${alpha.fixtureIds[0]}`;
+    check(
+      "joint round order (partial): the refused move wrote nothing — round 1 is still at its clean slot",
+      row !== undefined && new Date(row.scheduled_at).toISOString() === at(0),
+    );
+  } finally {
+    await sql2.end();
+  }
+}
+
 /** Flip Stripe Connect readiness (spec 2026-07-12) — Express onboarding can't
  *  run headless; a fake acct id satisfies account-exists checks. Same SQL-flip
  *  convention as setPlan/grantPass.
@@ -9289,6 +9671,85 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
         undatedTimes.length > 0 && undatedTimes.every((t) => t.slice(0, 10) >= yesterdayUtcYmd()),
       );
     }
+  } finally {
+    await fixture?.close();
+  }
+}
+
+/**
+ * C1 gap B — the AI planning path's round-order blind spot, over REAL HTTP.
+ *
+ * apps/web's schedule-ai-round-order.test.ts already proves
+ * `toEngineAssignments` detects a round-order violation in isolation; what
+ * only smoke can prove is the WIRING — that a real `POST .../schedule/
+ * ai-plan`, through a real model round trip (the AI fixture server,
+ * deterministic and free), a real `buildSchedulePack` and a real verify
+ * pass, actually reports one.
+ *
+ * `FIXTURE_ROUND_ORDER` swaps the canned plan's first and last draft cards
+ * — a genuine round-order violation on the SAME 4-entrant/6-fixture
+ * round-robin division `v4AiSuite`'s own happy path uses
+ * (`seedPlannableAiDivision`), built from a straight swap so no court
+ * conflict rides along to confound the assertion. See the sentinel's own
+ * doc comment (ai-fixture-server.ts) for why this suite asserts DETECTION
+ * rather than a specific repair outcome: whether a repair round resolves
+ * the violation is a `repair.ts`/z3 question this branch's C1 work does
+ * not touch — `plan.repair?.solver_ran` and `plan.usage.repair_rounds`
+ * only tell us the solver/model were ENGAGED because of it, never whether
+ * either succeeded.
+ *
+ * Self-contained (its own fixture server, like `v4AiSuite`) rather than
+ * folded into it, so a failure here reads as exactly what it is instead of
+ * one more check inside an already-large suite.
+ */
+async function scheduleAiRoundOrderSuite(): Promise<void> {
+  if (!process.env.SCHEDULING_AI_BASE_URL) {
+    console.log(
+      "v4 AI/round-order: SCHEDULING_AI_BASE_URL unset — round-order detection check skipped",
+    );
+    return;
+  }
+  let fixture: AiFixtureServer | null = null;
+  try {
+    fixture = await startAiFixtureServer();
+  } catch (e) {
+    console.log(
+      `v4 AI/round-order: fixture server failed to start (${(e as Error).message}); skipped`,
+    );
+    return;
+  }
+  try {
+    const plus = newSession();
+    const plusOrg = (await signIn(plus, `smoke-ai-roundorder-${tag}@example.com`)).org_id;
+    await setPlan(plusOrg, "pro_plus", plus);
+    const { divId } = await seedPlannableAiDivision(plus, "AI Round Order");
+
+    const planRes = await v1(plus, `/api/v1/divisions/${divId}/schedule/ai-plan`, "POST", {
+      instruction: `${FIXTURE_ROUND_ORDER} — spread the fixtures across both courts.`,
+      mode: "generate",
+    });
+    const plan = v1data<AiPlanResponseLite>(planRes);
+    check(
+      "v4 AI/round-order: schedule ai-plan returns 200 even when the canned draft violates round order",
+      planRes.status === 200,
+    );
+    check(
+      "v4 AI/round-order: the fixture server actually received the schedule call (proof this reached the real model round trip)",
+      fixture.calls.some((c) => c.phase === "schedule"),
+    );
+    // DETECTION. Before this branch's fix (953fbdaf), toEngineAssignments
+    // carried no roundNo/stageId at all, so an "order" conflict could never
+    // appear in either list and no repair round would ever be engaged by
+    // one — the canned violation would have gone straight through as a
+    // false CLEAN, zero blocking, zero warnings, no solver call.
+    const reportedOrder =
+      plan.blocking.some((c) => c.reason === "order") ||
+      plan.warnings.some((c) => c.reason === "order");
+    const repairEngaged = plan.repair?.solver_ran === true || plan.usage.repair_rounds > 0;
+    check(
+      "v4 AI/round-order: a round-order violation in the canned plan is detected — reported directly, or a repair round was visibly engaged because of it",
+      reportedOrder || repairEngaged,
+    );
   } finally {
     await fixture?.close();
   }

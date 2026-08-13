@@ -29,15 +29,70 @@ C6 (prose) is safe whenever.
 
 | Session | Prompt file | Spec | Depends on | Status |
 |---|---|---|---|---|
-| C0 | `C0-division-rules-retirement.md` | division_rules | — | **PR #537 open** |
-| C1 | `C1-round-ordering.md` | round ordering | C0 (same proto/build.ts region) | TODO |
+| C0 | `C0-division-rules-retirement.md` | division_rules | — | **MERGED** #537 → `f0f83939` |
+| C1 | `C1-round-ordering.md` | round ordering | C0 (same proto/build.ts region) | **MERGED** #546 → `78db2f1f` |
 | C2 | `C2-day-start-rung.md` | day_start | C1 (model.py overlap; rebase either way) | TODO |
 | C3 | `C3-conflict-detail-names.md` | conflict details | not concurrent with C1 (schedule.ts) | TODO |
 | C4 | `C4-z3-reflow-cpsat.md` | z3 stage A | C1 (reflow inherits round rule) | TODO |
 | C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | TODO |
-| C6 | `C6-z3-prose-identifiers.md` | z3 stage C | — (anytime) | TODO |
+| C6 | `C6-z3-prose-identifiers.md` | z3 stage C | ~~anytime~~ → **after C4+C5** | **NO-OP today** (see below) |
 | C7 | `C7-z3-public-contract.md` | z3 stage D | C4+C5 **deployed** (nothing writes z3) | TODO |
 | C8 | `C8-z3-delete-solver.md` | z3 stage E | C7 | TODO |
+
+### C1 — round ordering (2026-08-12/13, DONE)
+
+Branch `feat/c1-round-ordering`, 30 commits, rebased onto `03c3c2d0`.
+
+**Prompt/spec drift found by scout re-pin (7 of 11 citations exact, 4 wrong):**
+the prompt's "C0 already reserved field 10" reads as if on `Fixture`, but the
+`reserved 10` is on `SolveBuildRequest`; `build.ts`'s emission is 1627-1633,
+not 1649-1653; `model.py`'s `on_day` is 863-871 and its day derivation
+824-837, not 875/842-870; `roundrobin.ts`'s `roundNo` is computed at :103,
+not :41. The spec never named the TS verifier — it is `validateAssignments`
+(`calendar.ts`), with `Assignment` at :79-88.
+
+**Ruling — the spec's "same-division pair" was UNDERSTATED.** The comparable
+unit is one round SEQUENCE, keyed `(division, stage, pool)`. A `group` stage
+calls `generateRoundRobin` once per POOL, and entitlements permit several
+league/group STAGES per division; each restarts at round 1. Both cases were
+hit by real boards, not hypothesised. Spec amended in this PR.
+
+**Six enforcement seams, five of them found only because someone swept.** The
+prompt named one. Round order is now enforced at: `autoSchedule` preview,
+`applySchedule` write gate, `validateScheduleIn` (publish / `startDivision` /
+live conflict report), `moveFixture` + `applySchedule`'s partial path (the
+delta gate compared ONE fixture against `existing`, so a one-element set could
+never contain a pair — structural, not a missing parameter), the AI planning
+path (`SchedulePack`/`CompetitionPack` now carry stage identity), and joint
+multi-division apply.
+
+**Ruling — joint apply gets `tz` WITHOUT the `rules` bundle.** `verifyConfigFor`
+withholds typed-rule inputs from the apply path deliberately (#399: apply-time
+blocking is W4). `tz` is merely bundled with them. It now takes an independent
+`tz?: string` 4th param, mirroring `window`. `AI_VERIFY_POLICY.hard = false`
+structurally keeps `effectiveHard` at `[]` for any caller omitting `rules`, so
+#399 cannot leak through the new seam.
+
+**Accepted, unchanged:** z3 REFLOW/AI-repair can still emit round-violating
+boards — the verifier catches them and REFLOW degrades gracefully instead of
+500ing (`RepairVerificationError` is caught). Closing it is C4/C5's job.
+Owner ruled 2026-08-13 that C1 ships without waiting (greenfield, no prod
+users). z3 benchmarks ruled out of scope entirely.
+
+**Lesson for C2–C8:** two of the six seams were missed by trusting an
+inherited call-site list (a doc comment, then a report). Sweep with
+`git grep -n "toAssignment("` — never inherit an enumeration.
+
+### C6 — z3 prose (2026-08-13): NO-OP today, ordering was wrong
+
+Classified every z3 reference (~1554 hits, ~140 files): ~70 are C7's
+persisted/public values, ~835 are C8's solver/tests/WASM/env, ~649 are
+history. **Zero are C6's.** Stage C renames prose that says z3 "where the code
+no longer means z3", but REFLOW and AI repair still genuinely call z3, so every
+surviving identifier is accurate; `build.ts:300-306` already carries an earlier
+session's comment pre-empting this rename. C6 must run AFTER C4+C5.
+`content/help/**` has zero z3 hits and never owed an edit. Finding recorded on
+branch `feat/c6-z3-prose` (`b5ade286`), parked.
 
 ## Decisions already made (do not re-open)
 

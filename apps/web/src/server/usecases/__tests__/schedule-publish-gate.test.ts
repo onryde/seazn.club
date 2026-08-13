@@ -71,6 +71,9 @@ interface Slot {
   away: number;
   hhmm: string;
   court: string;
+  /** Round-robin round number (C1). Defaults to 1 — every board here was a
+   *  single round until the round-order test below needed two. */
+  round?: number;
 }
 
 interface Board {
@@ -124,7 +127,7 @@ async function seedBoard(slots: Slot[], config: ConfigOpts): Promise<Board> {
     const [f] = await sql<{ id: string }[]>`
       insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key,
                             status, home_entrant_id, away_entrant_id, scheduled_at, court_label)
-      values (${stage!.id}, ${division.id}, ${auth.orgId}, 1, ${i}, ${`f${i}`},
+      values (${stage!.id}, ${division.id}, ${auth.orgId}, ${s.round ?? 1}, ${i}, ${`f${i}`},
               'scheduled', ${byName.get(`E${s.home}`)!}, ${byName.get(`E${s.away}`)!},
               ${at(DAY, s.hhmm)}, ${s.court})
       returning id`;
@@ -151,6 +154,18 @@ const COURT_CLASH: Slot[] = [
 const REST_WARNING: Slot[] = [
   { home: 1, away: 2, hhmm: "09:00", court: "Court 1" },
   { home: 1, away: 3, hhmm: "10:00", court: "Court 2" },
+];
+
+/** C1 (task 3 / G1). Round 2 (E3 vs E4) starts an hour before round 1 (E1 vs
+ *  E2) on the same day — a direct H6 breach (`isBlockingConflict`: `order`
+ *  with `direct: true`). Disjoint entrants and different courts so no
+ *  incidental `court`/`person_overlap` conflict rides along and the refusal
+ *  can only be about round order. `seedBoard`'s `RR`/`league` stage is
+ *  round-robin by `roundRobinStageIds`'s own definition (`kind = 'league'`),
+ *  so this is a genuine round-robin sequence, not a bracket's display round. */
+const ROUND_ORDER_VIOLATION: Slot[] = [
+  { home: 1, away: 2, hhmm: "09:00", court: "Court 1", round: 1 },
+  { home: 3, away: 4, hhmm: "08:00", court: "Court 2", round: 2 },
 ];
 
 async function publishedEvents(divisionId: string): Promise<{ payload: Record<string, unknown> }[]> {
@@ -306,6 +321,38 @@ describe.skipIf(!HAS_DB)("publish validates the board it is about to publish (#2
     expect(thrownConflicts(thrown).every((c) => c.code === "warn.window" && c.blocking)).toBe(true);
     // Still exactly the one event from the first, legitimate publish.
     expect(await publishedEvents(board.divisionId)).toHaveLength(1);
+  }, 120_000);
+
+  // C1 follow-up (2026-08-12, task 3 / G1). `validateScheduleIn`'s own
+  // `toAssignment` call used to run with no `roundRobinStageIds` 4th
+  // argument, so `roundNo` never reached the `Assignment`s this function
+  // hands `validateAssignments` — round order was structurally invisible to
+  // BOTH the panel's live report and the publish/start gate. A round-robin
+  // division could publish (or start) with a genuine round-order violation
+  // and the board's badges would never show one.
+  it("refuses a round-robin board with an out-of-order round, and the panel sees the same conflict", async () => {
+    const board = await seedBoard(ROUND_ORDER_VIOLATION, {});
+
+    // The live report (the board's conflict badges) — reached the same
+    // gate-free path `validateSchedule` always has.
+    const panel = await validateSchedule(board.auth, board.divisionId);
+    const order = panel.conflicts.filter((c) => c.code === "warn.order");
+    expect(order.length, "no warn.order in the panel report — roundNo did not reach validateAssignments").toBeGreaterThan(0);
+    expect(order.every((c) => c.blocking)).toBe(true);
+    // Blamed on round 2's fixture (the LATER round, `board.fixtureIds[1]`) —
+    // matching `calendar.ts`'s own "blamed on the later round" convention.
+    expect(order.some((c) => c.fixture_id === board.fixtureIds[1])).toBe(true);
+
+    // The write gate.
+    let thrown: unknown;
+    await publishSchedule(board.auth, board.divisionId).catch((err: unknown) => {
+      thrown = err;
+    });
+    expect(thrown).toMatchObject({ status: 422, code: "SCHEDULE_BLOCKING_CONFLICTS" });
+    const refused = thrownConflicts(thrown);
+    expect(refused.some((c) => c.code === "warn.order" && c.blocking)).toBe(true);
+    expect(await divisionStatus(board.divisionId)).toBe("setup");
+    expect(await publishedEvents(board.divisionId)).toHaveLength(0);
   }, 120_000);
 
   it("reports exactly what the standalone validator reports", async () => {

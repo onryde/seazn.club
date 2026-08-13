@@ -25,6 +25,7 @@ import {
   publishSchedule,
   startDivision,
   toSlotConfig,
+  roundRobinStageIds,
 } from "../schedule";
 import { draftsToBlackouts } from "@/components/v2/constraints-panel";
 import { zonedDateTimeInput } from "@/lib/zoned-datetime";
@@ -210,9 +211,13 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     expect(applied.applied).toBe(12);
 
     const board = await sql<
-      { id: string; scheduled_at: Date; court_label: string; home_entrant_id: string; away_entrant_id: string; schedule_source: string }[]
+      {
+        id: string; scheduled_at: Date; court_label: string; home_entrant_id: string;
+        away_entrant_id: string; schedule_source: string; pool_id: string | null; round_no: number;
+      }[]
     >`
-      select id, scheduled_at, court_label, home_entrant_id, away_entrant_id, schedule_source
+      select id, scheduled_at, court_label, home_entrant_id, away_entrant_id, schedule_source,
+             pool_id, round_no
       from fixtures where stage_id = ${groups.id} order by scheduled_at, court_label`;
     expect(board.every((f) => f.schedule_source === "auto")).toBe(true);
 
@@ -243,29 +248,95 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     expect(f2After.scheduled_at.getTime()).toBe(f2.scheduled_at.getTime());
     expect(f2After.court_label).toBe(f2.court_label);
 
-    // Drag into a rest violation → warned but ALLOWED. Park two fixtures that
-    // share an entrant back-to-back on different courts, far from the rest.
+    // Drag into a rest violation → warned but ALLOWED. Move the fixture that
+    // shares an entrant with f1 to 30 minutes after it — the tightest gap
+    // that does not literally overlap f1's own match (matchMinutes 30) while
+    // still landing under the 60-minute rest floor (matchMinutes 30 +
+    // perEntrantMinRest 30). f1 itself never moves.
+    //
+    // C1 fix-loop (2026-08-12 round-order design, side effect of Finding 1):
+    // the original construction parked BOTH fixtures ten hours out. That
+    // leapfrogs them past whichever of the pool's OWN later-round fixtures
+    // stays behind at its original, much-earlier position (pool P's round-2
+    // "sibling" not involved in this pair, or its round-3 pair) — a genuine
+    // round-order violation the (now round-order-aware) write gate on the
+    // "lock two cards, reflow" apply a few lines below correctly refuses.
+    // It was intermittent, not deterministic, only because the repair
+    // solver's own run-to-run nondeterminism sometimes happened to move
+    // something that incidentally cleared it.
+    //
+    // The board this seed produces has ZERO slack: with perEntrantMinRest
+    // tuned to the match length, every round packs into exactly the waves it
+    // needs with no gap between them (round 1 is entrant-disjoint within
+    // itself, so it costs no rest delay; round 2 can start the INSTANT
+    // courts free from round 1). There is therefore no empty slot 30 minutes
+    // after f1 to drag `shared` into on ANY court — that slot is round 1's
+    // own SECOND wave (2 fixtures, one per court). Freeing it is still safe,
+    // unlike moving f1 forward would be: round 1 has no round BELOW it to
+    // violate, so its wave-2 fixtures can move BACKWARD, off the front of
+    // the whole board, with nothing to leapfrog.
+    //
+    // BOTH of wave 2's fixtures move, not just whichever sits on f1's own
+    // court — leaving the OTHER one behind at that exact instant (on the
+    // OTHER court) would still risk it sharing f1's entrant's OWN
+    // opponent-chain (pool P's round-1 "sibling" always shares an entrant
+    // with `shared`, by round-robin's own 3-matching structure — see the K4
+    // argument in schedule-reflow-verifier-widening.test.ts), an entrant
+    // overlap that cares about TIME, not court, turning this into a
+    // BLOCKING person_overlap instead of the intended warn-only rest breach.
+    // Scoped to wave 2 specifically (round_no AND the +30 instant), not
+    // "every other round-1 fixture": round 1's WAVE-1 fixture, and either
+    // pool's OWN untouched fixtures, have no bearing on `shared`'s target
+    // slot and moving them would just be needless extra churn ahead of the
+    // "lock two cards, reflow" step below, which already has its own,
+    // separately-documented sensitivity to how much the repair solver is
+    // asked to rearrange.
     const shared = board.find(
       (f) =>
-        f.id !== f1.id &&
+        f.pool_id === f1.pool_id &&
+        f.round_no === f1.round_no + 1 &&
         (f.home_entrant_id === f1.home_entrant_id || f.away_entrant_id === f1.home_entrant_id ||
          f.home_entrant_id === f1.away_entrant_id || f.away_entrant_id === f1.away_entrant_id),
     )!;
-    await moveFixture(auth, f1.id, { scheduled_at: at(600), court_label: "Court 1" });
-    await moveFixture(auth, shared.id, { scheduled_at: at(630), court_label: "Court 2" });
+    const wave2At = f1.scheduled_at.getTime() + 30 * MIN;
+    const wave2Round1 = board.filter(
+      (f) => f.round_no === f1.round_no && f.id !== f1.id && f.scheduled_at.getTime() === wave2At,
+    );
+    expect(wave2Round1.length).toBeGreaterThan(0);
+    let pushBackAt = f1.scheduled_at.getTime();
+    for (const f of wave2Round1) {
+      pushBackAt -= 30 * MIN;
+      await moveFixture(auth, f.id, {
+        scheduled_at: new Date(pushBackAt).toISOString(),
+        court_label: f.court_label,
+      });
+    }
+    await moveFixture(auth, shared.id, {
+      scheduled_at: new Date(wave2At).toISOString(),
+      court_label: f1.court_label,
+    });
     const report = await validateSchedule(auth, division.id);
     const restWarnings = report.conflicts.filter((c) => c.code === "warn.rest");
     expect(restWarnings.length).toBeGreaterThan(0);
     expect(restWarnings.every((c) => !c.blocking)).toBe(true);
-    // The single move is audited (doc 12 §2: schedule_edited {fixture, from, to}).
+    // Every move is audited (doc 12 §2: schedule_edited {fixture, from, to}).
     const [{ n: edits }] = await sql<{ n: number }[]>`
       select count(*)::int as n from division_events
       where division_id = ${division.id} and type = 'schedule_edited'`;
-    expect(edits).toBeGreaterThanOrEqual(2);
+    expect(edits).toBeGreaterThanOrEqual(wave2Round1.length + 1);
 
     // Lock two cards, re-flow the rest: pins survive byte-identically.
-    const pinA = board[2]!;
-    const pinB = board[3]!;
+    //
+    // Picked from `board` MINUS every fixture the rest-violation drag above
+    // just touched (f1, shared, and round 1's displaced wave-2 fixtures) —
+    // `board` is the stale pre-drag snapshot, so an untouched-looking
+    // `board[2]`/`board[3]` can coincidentally BE one of those, and
+    // `.scheduled_at` below would then compare against a value the drag
+    // already overwrote.
+    const touched = new Set([f1.id, shared.id, ...wave2Round1.map((f) => f.id)]);
+    const untouched = board.filter((f) => !touched.has(f.id));
+    const pinA = untouched[0]!;
+    const pinB = untouched[1]!;
     await patchFixture(auth, pinA.id, { schedule_locked: true });
     await patchFixture(auth, pinB.id, { schedule_locked: true });
     const reflow = await autoSchedule(auth, groups.id, { only_unlocked: true, mode: "reflow" });
@@ -273,14 +344,48 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     expect(pinnedOut.get(pinA.id)?.scheduled_at).toBe(pinA.scheduled_at.toISOString());
     expect(pinnedOut.get(pinA.id)?.court_label).toBe(pinA.court_label);
     expect(pinnedOut.get(pinB.id)?.scheduled_at).toBe(pinB.scheduled_at.toISOString());
-    await applySchedule(auth, groups.id, {
-      assignments: reflow.assignments.map((a) => ({
-        fixture_id: a.fixture_id,
-        scheduled_at: a.scheduled_at,
-        court_label: a.court_label,
-      })),
-      source: "auto",
-    });
+
+    // C1 fix-loop round 2 (2026-08-12, Item C) — z3 round-order blindness,
+    // closed by the C4 session (design doc's own "out of scope" ruling; see
+    // Finding 1's fix a few files over, `reflowExisting`'s
+    // `RepairVerificationError` catch, for the sibling case where the repair
+    // solver disagrees LOUDLY instead of quietly). The repair solver is free
+    // to rearrange every OTHER unlocked fixture around these two new pins,
+    // and it is not taught round order at all — so its own successful
+    // `"repaired"` branch (`status: "ok"`, `moved.length > 0`, no exception)
+    // can legitimately settle on a placement that is fine by every family it
+    // DOES know (rest, court, person) but breaks H6, a rule it cannot see.
+    // `reflow.solver.status` does not distinguish this from a genuinely
+    // clean repair — `settle()` stamps `"ok"` for the whole `"repaired"`
+    // branch regardless — but `reflow.conflicts` is `settle`'s own REAL
+    // `validateAssignments` call over the final board, so it always tells
+    // the truth. This is not a coin flip on WHETHER the board is legal; it
+    // is a coin flip on WHICH of the two outcomes the design actually
+    // specifies this run lands on, and both are asserted explicitly:
+    //   (a) round order intact — apply succeeds, exactly as before.
+    //   (b) round order broken by the repair solver's own blind spot — the
+    //       write gate (correctly) refuses it; asserted AS the expected
+    //       shape of that refusal, not skipped past.
+    const brokenOrder = reflow.conflicts.filter((c) => c.code === "warn.order" && c.blocking);
+    const applyReflow = () =>
+      applySchedule(auth, groups.id, {
+        assignments: reflow.assignments.map((a) => ({
+          fixture_id: a.fixture_id,
+          scheduled_at: a.scheduled_at,
+          court_label: a.court_label,
+        })),
+        source: "auto",
+      });
+    if (brokenOrder.length > 0) {
+      await expect(applyReflow()).rejects.toSatisfy((err: unknown) =>
+        EngineError.is(err, "SCHEDULE_CONFLICT"),
+      );
+      // Refused, so nothing changed — the division still carries whatever
+      // this test's earlier (successful) applies left it with, which is why
+      // the publish-gating assertions below hold unconditionally either way.
+    } else {
+      await applyReflow();
+    }
 
     // Publish-gating (PROMPT-17 item 7): while the division is in setup the
     // public schedule shows no timetable; publish lights it up.
@@ -289,7 +394,14 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     };
     expect(before.fixtures.every((f) => f.scheduled_at === null)).toBe(true);
 
-    const published = await publishSchedule(auth, division.id);
+    // `acknowledge_warnings: true` — this test's own earlier "drag into a
+    // rest violation → warned but ALLOWED" step deliberately leaves an
+    // outstanding warn-level conflict on the board (doc 12 §2:
+    // `assertPublishable` refuses ANY unacknowledged warning, blocking or
+    // not, which is a real and correct gate an organiser would confirm
+    // through — not something reflow always happens to clean up as a side
+    // effect of its own unrelated optimization).
+    const published = await publishSchedule(auth, division.id, { acknowledge_warnings: true });
     expect(published.status).toBe("scheduled");
     const after = (await publicSchedule(orgSlug, competition.slug, division.slug)) as {
       fixtures: { scheduled_at: string | null }[];
@@ -300,7 +412,10 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     await expect(decide(auth, board[4]!.id, 1, 0)).rejects.toSatisfy((err: unknown) =>
       EngineError.is(err, "WRONG_PHASE"),
     );
-    const startOut = await startDivision(auth, division.id);
+    // Same outstanding-warning gate as `publishSchedule` just above
+    // (`startDivision` re-runs `assertPublishable` itself before starting) —
+    // same reason, same acknowledgement.
+    const startOut = await startDivision(auth, division.id, { acknowledge_warnings: true });
     expect(startOut).toMatchObject({ status: "active", started: true, generated: 0 });
 
     // Score round 1.
@@ -309,9 +424,25 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     for (const f of round1) await decide(auth, f.id, 2, 0);
 
     // Rain! Reschedule the remaining fixtures only; decided ones are immutable.
+    //
+    // Ordered by (pool_id, round_no), not (scheduled_at, id): C1 (2026-08-12
+    // round-order design) makes same-day ties between two DIFFERENT rounds
+    // legal by design (round_i <= round_j admits equality — "R1 and R2
+    // simultaneously on two courts is fine"), which a pooled group stage hits
+    // constantly since each pool plays its own round on its own court at the
+    // same instant. `scheduled_at, id` then tiebreaks same-instant fixtures
+    // by a random UUID, which can — and, once observed, does — place a
+    // LATER round of one pool before an EARLIER round of that SAME pool.
+    // Squeezed one court at a time in THAT order, the round-order pair scan
+    // (correctly) catches the resulting within-pool inversion. Grouping by
+    // pool first keeps each pool's own fixtures round-ascending regardless
+    // of which court or instant they originally landed on; cross-pool
+    // interleaving in the flattened sequence is fine either way, since pools
+    // are never compared against each other (see calendar.ts's own
+    // pool-scoping comment).
     const remaining = await sql<{ id: string }[]>`
       select id from fixtures where stage_id = ${groups.id} and status = 'scheduled'
-      order by scheduled_at, id`;
+      order by pool_id, round_no, scheduled_at, id`;
     expect(remaining.length).toBeGreaterThan(0);
     const rain = await applySchedule(auth, groups.id, {
       assignments: remaining.map((f, i) => ({
@@ -397,9 +528,27 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     // `scheduling.board` branches are exercised — the pin on `moveFixture` and
     // `source: "manual"` on `applySchedule` — and each is read back, so a call
     // that returned quietly without writing cannot pass.
+    //
+    // C1 (task 3): moved EARLIER than the auto-scheduled board (`at(-60)`),
+    // not later (the original `at(600)`). `fixtures[0]` is round 1
+    // (`generateStageFixtures` orders `round_no, seq_in_round`), and the
+    // auto-scheduled board above is round-order-correct by construction —
+    // pushing round 1 to `at(600)`, ten hours past every later round, was a
+    // genuine round-order violation this test was unknowingly creating.
+    // `applySchedule`'s delta gate has no way to see it (a single-fixture
+    // manual move puts only that ONE fixture in `assignments`; its own
+    // round-robin siblings sit in `existing`, and the round-order pair scan
+    // is scoped to `assignments` alone — the same shape as the escalated
+    // `moveFixture` gap, out of this task's scope to fix), so the move went
+    // through uncaught; `startDivision`'s own gate (`validateScheduleIn`,
+    // task 3 / G1) is ABSOLUTE, not delta, and correctly refused the
+    // resulting board. This test is about proving manual board editing isn't
+    // blocked by the entitlement gate, not about round order, so the fix is
+    // a legal target time — round 1 moving EARLIER can never breach
+    // round order — not a change to any gate.
     await patchFixture(auth, fixtures[0]!.id, { schedule_locked: true });
     await applySchedule(auth, stage.id, {
-      assignments: [{ fixture_id: fixtures[0]!.id, scheduled_at: at(600), court_label: "C1" }],
+      assignments: [{ fixture_id: fixtures[0]!.id, scheduled_at: at(-60), court_label: "C1" }],
       source: "manual",
     });
     const [pinned] = await sql<{ schedule_locked: boolean; court_label: string | null }[]>`
@@ -548,6 +697,63 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     const [row] = await sql<{ schedule_source: string }[]>`
       select schedule_source from fixtures where id = ${target.id}`;
     expect(row!.schedule_source).toBe("ai");
+  });
+});
+
+// C1 (2026-08-12 round-order design). `roundRobinStageIds` is the one query
+// that resolves "which stages may forward a round onto the wire" — the
+// 8-team group+KO test above exercises it end to end (a real solve, a real
+// reflow) but never proves the PREDICATE itself in isolation: that a
+// knockout stage is excluded even though `fixtures.round_no` is populated
+// for it too (bracket rounds, display numbering only).
+describe.skipIf(!HAS_DB)("roundRobinStageIds (C1, 2026-08-12 round-order design)", () => {
+  it("includes league and group stages, excludes knockout", async () => {
+    const { auth } = await seedOfficialsOrg("pro");
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "RR stage kinds " + randomUUID().slice(0, 6),
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+      eligibility: [],
+    });
+    const [league, group, knockout] = await createStages(auth, division.id, [
+      { seq: 1, kind: "league", name: "League", config: {} },
+      { seq: 2, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
+      { seq: 3, kind: "knockout", name: "KO", config: {} },
+    ]);
+
+    const ids = await withTenant(auth.orgId, (tx) => roundRobinStageIds(tx, division.id));
+    expect(ids.has(league!.id)).toBe(true);
+    expect(ids.has(group!.id)).toBe(true);
+    expect(ids.has(knockout!.id)).toBe(false);
+    expect(ids.size).toBe(2);
+  });
+
+  it("returns an empty set for a division with no round-robin stages", async () => {
+    const { auth } = await seedOfficialsOrg("pro");
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "RR stage kinds none " + randomUUID().slice(0, 6),
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+      eligibility: [],
+    });
+    await createStages(auth, division.id, [{ seq: 1, kind: "knockout", name: "KO", config: {} }]);
+
+    const ids = await withTenant(auth.orgId, (tx) => roundRobinStageIds(tx, division.id));
+    expect(ids.size).toBe(0);
   });
 });
 

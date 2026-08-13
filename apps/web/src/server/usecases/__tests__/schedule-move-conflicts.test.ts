@@ -25,7 +25,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages } from "../stages";
-import { moveFixture } from "../schedule";
+import { applySchedule, moveFixture } from "../schedule";
 import { patchFixture } from "../fixtures";
 import { seedOrg } from "./_seed";
 
@@ -240,5 +240,28 @@ describe.skipIf(!HAS_DB)("a move returns the conflicts it computes (#461)", () =
     // zod STRIPS unknown keys, so an equality against the parse result fails on
     // an undocumented extra field as well as on a missing declared one.
     expect(PatchedFixture.parse(wire)).toEqual(wire);
+  }, 120_000);
+
+  // C1 fix-loop (G2/3rd instance). `applySchedule`'s partial-apply path now
+  // widens `mover`'s round-robin siblings (here, `a-f1` — same `planned`
+  // stage, `kind: "league"`, already placed) into the delta gate's checked
+  // set too, so it can detect a round-order violation the old code could
+  // not. That widening must NOT leak `a-f1`'s own (now newly-visible) day-cap
+  // conflict into the RETURNED list — `applySchedule`'s conflicts stay
+  // "this apply's own listed fixtures" only, the same contract `moveFixture`
+  // keeps above. The falsifier is the SAME shape as the first test in this
+  // file: THREE on the tally (mover + a-f1 + the sibling division's card),
+  // but ONE row back, named `mover` — not `a-f1`, and not two rows.
+  it("applySchedule's partial-apply path keeps the same scoping: a widened sibling's own conflict is not returned", async () => {
+    const { auth, planned, mover } = await seedBoard();
+    const out = await applySchedule(auth, planned.stageId, {
+      assignments: [{ fixture_id: mover, scheduled_at: at(DAY, "11:00"), court_label: "Court 2" }],
+      source: "manual",
+    });
+    expect(out.conflicts).toHaveLength(1);
+    expect(out.conflicts[0]!.blocking).toBe(false);
+    expect(out.conflicts[0]!.code).toBe("warn.instruction");
+    expect(out.conflicts[0]!.fixture_id).toBe(mover);
+    expect(out.conflicts[0]!.detail).toContain(`3 fixtures on ${DAY}`);
   }, 120_000);
 });

@@ -303,6 +303,21 @@ export interface CompetitionPack {
    *  Keys inserted in `fixtures.movable` order, so the object serialises in a
    *  domain order rather than a per-seed one. */
   poolIds: Record<string, string>;
+  /** C1 gap B — the joint twin of {@link SchedulePack.stageIds}, unioned from
+   *  the source packs, server-side only for the same reason: `stageId` feeds
+   *  {@link toJointEngineAssignments}'s `Assignment.stageId`, which
+   *  `validateAssignments`'s round-order pair scan groups on. Total over
+   *  `fixtures.movable` — `fixtures.stage_id` is NOT NULL. Keys inserted in
+   *  `fixtures.movable` order, like `poolIds`. */
+  stageIds: Record<string, string>;
+  /** C1 gap B — the joint twin of {@link SchedulePack.roundNos}. ONLY the
+   *  fixtures whose stage is round-robin-kind, unioned from the source
+   *  packs' own gated maps (each built against ITS OWN division's
+   *  `roundRobinStageIds`) — never re-derived here from `f.round` (the
+   *  ungated, model-facing display value), or a bracket/swiss stage's
+   *  display round would be forwarded as round-robin order again. Keys
+   *  inserted in `fixtures.movable` order, like `poolIds`. */
+  roundNos: Record<string, number>;
   /** Deterministic preprocessing choices worth telling the organiser about:
    *  stripped bye feeders (from each source pack) and the run-wide same-name
    *  person grouping. Rendered at W5 (#400). */
@@ -343,7 +358,7 @@ export interface CompetitionPack {
  */
 export function toJointModelPayload(
   pack: CompetitionPack,
-): Omit<CompetitionPack, "participants" | "assumptions" | "poolIds"> {
+): Omit<CompetitionPack, "participants" | "assumptions" | "poolIds" | "stageIds" | "roundNos"> {
   return {
     mode: pack.mode,
     competition: pack.competition,
@@ -859,6 +874,28 @@ export async function buildCompetitionPack(
     if (id !== undefined) poolIds[f.id] = id;
   }
 
+  // C1 gap B: the joint twins of `poolIds` just above, unioned the same way.
+  // `stageIds` is total (each source pack's own map is total over ITS
+  // movable set, since `fixtures.stage_id` is NOT NULL). `roundNos` stays
+  // PARTIAL — each source pack already gated its own entries on that
+  // division's own `roundRobinStageIds` (`buildSchedulePack`'s hoisted
+  // `roundRobin`), so unioning the already-gated maps preserves the gate
+  // rather than re-deriving (and potentially un-gating) it here.
+  const stageIdBySourceFixture = new Map(
+    built.flatMap((b) => Object.entries(b.pack.stageIds)),
+  );
+  const roundNoBySourceFixture = new Map(
+    built.flatMap((b) => Object.entries(b.pack.roundNos)),
+  );
+  const stageIds: Record<string, string> = {};
+  const roundNos: Record<string, number> = {};
+  for (const f of movable) {
+    const stageId = stageIdBySourceFixture.get(f.id);
+    if (stageId !== undefined) stageIds[f.id] = stageId;
+    const roundNo = roundNoBySourceFixture.get(f.id);
+    if (roundNo !== undefined) roundNos[f.id] = roundNo;
+  }
+
   // Bye-strip assumptions come from the source packs, in the emitted division
   // order. Identity is reported once, jointly — see IDENTITY_ASSUMPTION.
   const assumptions = [
@@ -1046,6 +1083,8 @@ export async function buildCompetitionPack(
     people,
     participants,
     poolIds,
+    stageIds,
+    roundNos,
     assumptions,
     parsed: { hard: resolved.hard, soft: resolved.soft, unparsed: resolved.unparsed },
     fixtures: { movable, obstacles },
@@ -1211,6 +1250,20 @@ export function toJointEngineAssignments(plan: AiSchedulePlan, pack: Competition
       ...(pack.poolIds[a.fixture_id] !== undefined
         ? { poolId: pack.poolIds[a.fixture_id]! }
         : {}),
+      // C1 gap B: `stageId` unconditional (`pack.stageIds` is total over
+      // `fixtures.movable`), `roundNo` gated on `pack.roundNos` (round-robin
+      // only — already filtered per-division at pack-build time, see its
+      // own doc comment). Same reasoning as the single-division
+      // `toEngineAssignments` (schedule-ai.ts) — without these, no joint
+      // AI-plan assignment ever entered `calendar.ts`'s round-order
+      // `bySequence` grouping, so the joint planning path could not
+      // evaluate round order at all.
+      ...(pack.stageIds[a.fixture_id] !== undefined
+        ? { stageId: pack.stageIds[a.fixture_id]! }
+        : {}),
+      ...(pack.roundNos[a.fixture_id] !== undefined
+        ? { roundNo: pack.roundNos[a.fixture_id]! }
+        : {}),
     };
   });
 }
@@ -1324,6 +1377,31 @@ export function verifyConfigFor(
     ruleFixtures: readonly RuleFixture[];
     restByDivision: Readonly<Record<string, number>>;
   },
+  /** The ORG zone ALONE, for the apply path (#399 follow-up, C1 gap A).
+   *  Mirrors `window` exactly, for the identical reason: the round-order scan
+   *  (`validateAssignments`, calendar.ts ~1535) is gated on `config.tz` alone
+   *  and reads no other field `rules` carries, so this switches on THAT and
+   *  nothing else — never `hard`/`ruleFixtures`/`restByDivision`, which stay
+   *  `undefined` whenever `rules` is not also given. Provably so, not just by
+   *  convention: `effectiveHard` (calendar.ts) merges `config.hard` with
+   *  `config.constraints?.hard`, and `buildEngineConstraints` — the ONE
+   *  builder `constraints` above goes through, `rules` or not — never
+   *  populates `.hard` under `AI_VERIFY_POLICY` (`hard: false`). So
+   *  `effectiveHard(config)` is `[]` at any call site that omits `rules`,
+   *  this parameter included, and `validateInstructionRules`'s entire typed-
+   *  rule block (gated on that same `tz`) loops over nothing regardless.
+   *
+   *  Ignored when `rules` is also supplied — `rules.tz` wins, the fuller,
+   *  authoritative source. The two are not expected to be passed together in
+   *  practice (the AI path passes `rules`; the apply path passes this), but
+   *  the priority is spelled out rather than left to argument order.
+   *
+   *  Sourced from `settings.orgTz`, never `settings.displayTz`/`.tz` — same
+   *  ruling `applyWindow` and `toVerifyConfig` (schedule.ts) already follow:
+   *  the org zone governs every temporal boundary (#397), a division's
+   *  display override must not move which calendar day a fixture is judged
+   *  on, and two divisions of one competition must agree on that day. */
+  tz?: string,
 ): VerifyConfig {
   const s = division.settings;
   return {
@@ -1334,7 +1412,9 @@ export function verifyConfigFor(
           ruleFixtures: rules.ruleFixtures,
           restByDivision: rules.restByDivision,
         }
-      : {}),
+      : tz !== undefined
+        ? { tz }
+        : {}),
     perEntrantMinRest: s.perEntrantMinRest,
     matchMinutes: s.matchMinutes,
     // Through the ONE builder (#458) the board path and the single-division AI

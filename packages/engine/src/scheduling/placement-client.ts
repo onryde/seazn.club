@@ -47,7 +47,16 @@ function cancelCall(call: unknown): void {
 
 export interface SolveBuildInput {
   courts: string[];
-  fixtures: { fixtureId: string; entrantIds: string[]; divisionId: string }[];
+  fixtures: {
+    fixtureId: string;
+    entrantIds: string[];
+    divisionId: string;
+    /** C1 (2026-08-12 round-order design). Round-robin-generated fixtures
+     *  only — `build.ts` is the one place that decides whether to set this,
+     *  never forwarding it for a bracket/stepladder fixture. Absent means
+     *  unconstrained by round order on the service side, not round 0. */
+    roundNo?: number;
+  }[];
   /**
    * `dayIndex` is the CALLER's calendar day for the slot, resolved in the
    * ORG's timezone — not a UTC day, and not optional. The solver groups the
@@ -93,6 +102,16 @@ export interface SolveBuildInput {
      * `PinnedRow.rule_group_indices`'s own comment in the proto.
      */
     ruleGroupIndices?: number[];
+    /**
+     * C1 (2026-08-12 round-order design) — this pin's round, in the SAME
+     * sequence as a movable `fixtures[].roundNo`, so a pin-movable pair can
+     * be ordered even though the pin never moves. Absent is the common case.
+     * `build.ts` is documented (see its own `existing`-map comment) to only
+     * ever set this when the pin's division match against the movable
+     * round-robin sequence is unambiguous — `PinnedRow` carries no division
+     * index on the wire for the service to re-verify it against.
+     */
+    roundNo?: number;
   }[];
   dependencies: { beforeFixtureId: string; afterFixtureId: string }[];
   /**
@@ -254,9 +273,12 @@ function toRequest(input: SolveBuildInput, requestId: string, indices: IndexSpac
     courtNames: indices.courtNames,
     entrantCount: indices.entrantCount,
     divisionCount: indices.divisionCount,
-    fixtures: input.fixtures.map(({ entrantIds, divisionId }) => ({
+    fixtures: input.fixtures.map(({ entrantIds, divisionId, roundNo }) => ({
       entrantIndices: entrantIds.map((entrantId) => indices.entrantIndexOf(entrantId)),
       divisionIndex: indices.divisionIndexOf(divisionId),
+      // C1. Straight passthrough — `round` is an opaque ordering key, not an
+      // index into anything `indices` resolves.
+      round: roundNo,
     })),
     slots: input.grid.slots.map(({ court, startAtMs, dayIndex }) => ({
       courtIndex: indices.courtIndexOf(court),
@@ -279,11 +301,14 @@ function toRequest(input: SolveBuildInput, requestId: string, indices: IndexSpac
     // every other id on this type, and `entrantIndexOf` resolves them exactly
     // as `fixtures[].entrantIds` are resolved above (see `buildIndexSpace`,
     // which registers `existing[].entrantIds` into the same total map).
-    existing: input.existing.map(({ court, startAtMs, entrantIds, ruleGroupIndices }) => ({
+    existing: input.existing.map(({ court, startAtMs, entrantIds, ruleGroupIndices, roundNo }) => ({
       courtIndex: indices.courtIndexOf(court),
       startAtMs,
       ruleGroupIndices: [...(ruleGroupIndices ?? [])],
       entrantIndices: (entrantIds ?? []).map((entrantId) => indices.entrantIndexOf(entrantId)),
+      // C1 (2026-08-12 round-order design). Straight passthrough, same as
+      // `fixtures[].round` above.
+      round: roundNo,
     })),
     dependencies: input.dependencies.map(({ beforeFixtureId, afterFixtureId }) => ({
       beforeIndex: indices.fixtureIndexOf(beforeFixtureId),

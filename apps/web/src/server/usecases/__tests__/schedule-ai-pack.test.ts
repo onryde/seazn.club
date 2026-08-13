@@ -4,7 +4,7 @@
 // byte-for-byte deterministic, matches the §2 shape, carries officials
 // availability, scopes repair rounds, and stays within the token budget.
 // Real Postgres required; skipped without DATABASE_URL.
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -13,7 +13,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { validateAssignments } from "@seazn/engine/scheduling";
-import { buildSchedulePack, isBlocking, toModelPayload, verifyConfig } from "../schedule-ai";
+import { buildSchedulePack, isBlocking, toEngineAssignments, toModelPayload, verifyConfig } from "../schedule-ai";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -495,6 +495,63 @@ async function seedSmallBracket(fixtureIds?: {
     divisionId,
     ids: { personIds, fixtureIds: { semi1: semis[0]!, semi2: semis[1]!, final: final!.id } },
   };
+}
+
+/**
+ * C1 follow-up (2026-08-12, task 2 item 1). The SAME 4-entrant bracket shape
+ * as `seedSmallBracket`, but on a stage whose `kind` is actually
+ * `"knockout"` — `seedKoDivision` (which `seedSmallBracket` builds on)
+ * creates a `kind: "league"` stage despite its name, which makes it
+ * ROUND-ROBIN by `roundRobinStageIds`'s own definition and therefore the
+ * WRONG fixture for proving `schedulable`'s `roundNo` gate does anything:
+ * a league-kind stage's round_no is SUPPOSED to ride along, gated or not,
+ * so reusing it here would show no difference between the fixed and the
+ * broken code. */
+async function seedSmallKnockoutBracket(): Promise<{
+  auth: AuthCtx;
+  divisionId: string;
+  stageId: string;
+  fixtureIds: { semi1: string; semi2: string; final: string };
+}> {
+  const { auth } = await seedOrg("pro");
+  const tag = randomUUID().slice(0, 6);
+  const comp = await createCompetition(auth, {
+    ends_on: "2030-12-31", name: `KO Bracket ${tag}`, visibility: "public", branding: {},
+  });
+  const division = await createDivision(auth, comp.id, {
+    name: "KO", slug: `ko-${tag}`, sport_key: "generic",
+    variant_key: "score", config: GENERIC_CONFIG, eligibility: [],
+  });
+  await setSettings(division.id);
+  const [stage] = await createStages(auth, division.id, {
+    seq: 1, kind: "knockout", name: "KO", config: {},
+  });
+  const divisionId = division.id;
+  const stageId = stage!.id;
+  await createEntrants(
+    auth,
+    divisionId,
+    Array.from({ length: 4 }, (_, i) => ({
+      kind: "individual" as const, display_name: `K${i + 1}`, seed: i + 1, members: [],
+    })),
+  );
+  const ents = await sql<{ id: string }[]>`
+    select id from entrants where division_id = ${divisionId} order by seed`;
+  const [final] = await sql<{ id: string }[]>`
+    insert into fixtures (id, stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
+    values (${randomUUID()}, ${stageId}, ${divisionId}, ${auth.orgId}, 2, 0, 'final', 'scheduled')
+    returning id`;
+  const semis: string[] = [];
+  for (let i = 0; i < 2; i++) {
+    const [s] = await sql<{ id: string }[]>`
+      insert into fixtures (id, stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
+                            home_entrant_id, away_entrant_id, winner_to_fixture, winner_to_slot)
+      values (${randomUUID()}, ${stageId}, ${divisionId}, ${auth.orgId}, 1, ${i}, ${`semi-${i + 1}`},
+              'scheduled', ${ents[i * 2]!.id}, ${ents[i * 2 + 1]!.id}, ${final!.id}, ${i + 1})
+      returning id`;
+    semis.push(s!.id);
+  }
+  return { auth, divisionId, stageId, fixtureIds: { semi1: semis[0]!, semi2: semis[1]!, final: final!.id } };
 }
 
 /** The same board with one semi already played — it leaves the movable set and
@@ -1028,13 +1085,133 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
     // `poolIds` (#449) is stripped for the same reason: the model schedules by
     // pool LABEL, which `fixtures.movable[].pool` still carries.
     expect("poolIds" in payload).toBe(false);
+    // `stageIds`/`roundNos` (C1 gap B) are stripped for the same reason: they
+    // are the verification-only twins `toEngineAssignments` reads to stamp
+    // `Assignment.stageId`/`roundNo`, and the model has no use for a stage
+    // uuid or a gated round number — `fixtures.movable[].round` is what it
+    // reads instead.
+    expect("stageIds" in payload).toBe(false);
+    expect("roundNos" in payload).toBe(false);
     // Everything else survives the trim byte-for-byte.
     const trimmed = Object.fromEntries(
       Object.entries(pack).filter(
-        ([k]) => k !== "participants" && k !== "assumptions" && k !== "poolIds",
+        ([k]) =>
+          k !== "participants" && k !== "assumptions" && k !== "poolIds" &&
+          k !== "stageIds" && k !== "roundNos",
       ),
     );
     expect(payload).toEqual(trimmed);
+  });
+
+  // C1 follow-up (2026-08-12, task 2 item 1). `buildSchedulePack`'s own
+  // `schedulable` builder (the DRAFT greedy placer's input) used to stamp
+  // `roundNo: f.round_no` unconditionally — `fixtures.round_no` is one
+  // shared column populated for EVERY stage kind (bracket rounds, swiss
+  // rounds, stepladder legs all reuse it for display; see `stages.ts`'s
+  // `roundTitle`), so a knockout stage's own bracket-round numbering rode
+  // along as if it meant round-robin order, the design doc's own
+  // motivating symptom, reachable from the AI-plan path even after
+  // `toAssignment`'s own callers were gated in task 1 (schedule.ts). Spies
+  // on the engine's own `slotFixtures` — the one function `schedulable`
+  // is built for — to inspect exactly what this caller hands it, the
+  // most direct proof available that the gate is wired here and not just
+  // present somewhere else in the file.
+  it("omits roundNo from the draft placer's input for a knockout stage, but stamps its stageId", async () => {
+    const { auth, divisionId, stageId } = await seedSmallKnockoutBracket();
+    const calendarModule = await import("@seazn/engine/scheduling");
+    const spy = vi.spyOn(calendarModule, "slotFixtures");
+    // Captured BEFORE `mockRestore()`, which clears `spy.mock.calls` — reading
+    // the call history after restoring would show zero regardless of what
+    // `buildSchedulePack` actually did.
+    let schedulable: readonly { roundNo?: number; stageId?: string }[] | undefined;
+    let callCount = 0;
+    try {
+      await buildSchedulePack(auth, divisionId, { now: NOW_W2, mode: "generate", instruction: "x" });
+      callCount = spy.mock.calls.length;
+      schedulable = spy.mock.calls[0]?.[0]?.fixtures;
+    } finally {
+      spy.mockRestore();
+    }
+    expect(callCount).toBe(1);
+    // `schedulable[].id` is `rankById`'s domain-ranked stand-in, not the real
+    // fixture uuid (see the comment on the field itself), so this division's
+    // every-fixture-is-this-one-knockout-stage shape is what makes a bare
+    // "check every entry" assertion exact here rather than merely permissive.
+    expect(schedulable!.length).toBe(3); // 2 semis + 1 final
+    for (const f of schedulable!) {
+      expect(f.roundNo, `roundNo present for a knockout fixture — the gate is not wired`).toBeUndefined();
+      expect(f.stageId).toBe(stageId);
+    }
+  });
+
+  // C1 gap B — the pack round-trip. The test above proves the DRAFT PLACER's
+  // input is gated; this proves the PACK's own `stageIds`/`roundNos` (feeding
+  // `toEngineAssignments`, the AI-plan VERIFY seam — a completely separate
+  // code path from the draft placer, and the one this gap was actually
+  // about) carry the same gate, built off a real division's real fixture
+  // rows through a real `roundRobinStageIds` lookup — not a hand-stamped
+  // pack literal, which is what every other round-order test in this
+  // codebase uses (see `schedule-ai-round-order.test.ts`).
+  it("gates pack.roundNos on round-robin for a real division, and carries it through toModelPayload and back", async () => {
+    const { auth, divisionId } = await seedRrBoard();
+    const { pack } = await buildSchedulePack(auth, divisionId, {
+      now: NOW_W2, mode: "generate", instruction: "x",
+    });
+    // seedRrBoard is a single `kind: "league"` stage, 8 entrants, 28
+    // fixtures (8*7/2) — every one of them round-robin, so `roundNos` is
+    // total over `fixtures.movable` here and every value equals the
+    // fixture's own (ungated) `round` — the two only ever diverge for a
+    // NON-round-robin stage, covered by the knockout test below.
+    expect(pack.fixtures.movable.length).toBe(28);
+    expect(Object.keys(pack.roundNos).sort()).toEqual(
+      pack.fixtures.movable.map((f) => f.id).sort(),
+    );
+    for (const f of pack.fixtures.movable) expect(pack.roundNos[f.id]).toBe(f.round);
+    // `stageIds` unconditional, and every fixture in ONE stage shares one id.
+    const stageIdValues = new Set(pack.fixtures.movable.map((f) => pack.stageIds[f.id]));
+    expect(stageIdValues.size).toBe(1);
+    expect([...stageIdValues][0]).toBeTruthy();
+
+    // Through the LLM shape: neither field reaches the model.
+    const payload = toModelPayload(pack) as Record<string, unknown>;
+    expect("roundNos" in payload).toBe(false);
+    expect("stageIds" in payload).toBe(false);
+
+    // …and back: `toEngineAssignments` recovers both from the pack (not the
+    // model's response) onto the Assignment the referee actually checks —
+    // the whole point being that the model never had to carry this, and the
+    // referee does not need it to.
+    const first = pack.fixtures.movable[0]!;
+    const [assignment] = toEngineAssignments(
+      {
+        assignments: [
+          { fixture_id: first.id, scheduled_at: first.current.at ?? new Date(T0).toISOString(), court_label: "Court 1" },
+        ],
+        unschedulable: [],
+        explanations: [],
+        summary: "",
+      },
+      pack,
+    );
+    expect(assignment!.stageId).toBe(pack.stageIds[first.id]);
+    expect(assignment!.roundNo).toBe(pack.roundNos[first.id]);
+  });
+
+  it("gates pack.roundNos to EMPTY for a knockout division, despite every fixture carrying a display round", async () => {
+    const { auth, divisionId, stageId } = await seedSmallKnockoutBracket();
+    const { pack } = await buildSchedulePack(auth, divisionId, {
+      now: NOW_W2, mode: "generate", instruction: "x",
+    });
+    expect(pack.fixtures.movable.length).toBe(3); // 2 semis + 1 final
+    // `PackFixture.round` (the ungated, model-facing display value) IS
+    // present on every fixture — bracket rounds reuse the same column. The
+    // gate is that NONE of them earn a `pack.roundNos` entry.
+    for (const f of pack.fixtures.movable) {
+      expect(f.round).toBeGreaterThan(0);
+      expect(pack.roundNos[f.id], `roundNos entry for a knockout fixture — the gate is not wired`).toBeUndefined();
+      // stageId still unconditional even though round-robin is gated out.
+      expect(pack.stageIds[f.id]).toBe(stageId);
+    }
   });
 });
 

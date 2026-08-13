@@ -302,6 +302,50 @@ describe("solveBuild", () => {
     expect(decoded.wallSeconds).toBe(8);
   });
 
+  // C1 (2026-08-12 round-order design). `round` is presence-tracked exactly
+  // like `divisionIndex`/`courtIndex`/`dayIndex` above — proto3 `optional`,
+  // through the REAL binary codec, because 0 is round 1's neighbour, not
+  // "unset". One fixture and one pinned row each declare a round; a second
+  // of each does not, so a bug that defaulted absence to 0 shows up as a
+  // false match rather than an undetected gap.
+  it("round-trips round presence on Fixture and PinnedRow — set survives, absent is not 0", async () => {
+    const mockClient = respondingClient();
+
+    await solveBuild(
+      {
+        ...INPUT,
+        fixtures: [
+          { fixtureId: "f1", entrantIds: ["e1", "e2"], divisionId: "div-a", roundNo: 3 },
+          { fixtureId: "f2", entrantIds: ["e3", "e4"], divisionId: "div-a" },
+        ],
+        existing: [
+          { fixtureId: "p1", court: "Court 1", startAtMs: 1_700_000_000_000, roundNo: 2 },
+          { fixtureId: "p2", court: "Court 1", startAtMs: 1_700_000_100_000 },
+        ],
+        grid: {
+          slots: [{ court: "Court 1", startAtMs: 1_700_000_000_000, dayIndex: 0 }],
+          stepMinutes: 10,
+        },
+        constraints: { matchMinutes: 30, gapMinutes: 10 },
+      },
+      { secret: "s3cr3t" },
+      mockClient,
+    );
+
+    const [request] = mockClient.solveBuild.mock.calls[0]!;
+    const decoded = SolveBuildRequest.decode(SolveBuildRequest.encode(request).finish());
+
+    expect(decoded.fixtures).toEqual([
+      { entrantIndices: [0, 1], divisionIndex: 0, round: 3 },
+      { entrantIndices: [2, 3], divisionIndex: 0, round: undefined },
+    ]);
+    expect(decoded.existing[0]).toMatchObject({ round: 2 });
+    expect(decoded.existing[1]?.round).toBeUndefined();
+    // The whole point of `optional`: absence must never read back as 0.
+    expect(decoded.fixtures[1]?.round).not.toBe(0);
+    expect(decoded.existing[1]?.round).not.toBe(0);
+  });
+
   // proto3 gives every enum a zero value the sender never means to set, and
   // ts-proto adds `UNRECOGNIZED = -1` for a status added to the service but not
   // yet regenerated here. Neither is a status the solver claimed. Reporting them

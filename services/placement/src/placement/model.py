@@ -507,6 +507,8 @@ def build_model(
     rule_groups: list[tuple[list[int], int | None, int | None]] | None = None,
     pinned_rule_group_indices: list[list[int]] | None = None,
     pinned_entrant_indices: list[list[int]] | None = None,
+    fixture_rounds: list[int | None] | None = None,
+    existing_rounds: list[int | None] | None = None,
 ) -> cp_model.CpModel:
     """Build the full constraint model. No objective is set — `solve()` owns
     that, so the tier chain (Prompt 03) can drive one model through several
@@ -562,11 +564,27 @@ def build_model(
             (`pinned_rule_group_indices[k]`), 0 if none. Read only when
             `rule_groups` is non-empty — see the module docstring, "A SIXTH
             is CLOSED as of task C6".
+        fixture_rounds: C1 (2026-08-12 round-order design) — parallel to
+            `fixtures`, `fixture_rounds[i]` is `fixtures[i]`'s round, or
+            `None` when the caller left it unset (most fixtures: only
+            round-robin-generated ones carry one). Section 10 below is the
+            only place this is read.
+        existing_rounds: parallel to `existing` the same way —
+            `existing_rounds[k]` is `existing[k]`'s (a pin's) round, or
+            `None`. TRUSTED, not verified: `PinnedRow` carries no division
+            index on the wire (its own proto comment explains why), so this
+            module cannot confirm a pin's round belongs to the same division
+            as the movable fixtures it gets compared against — the caller
+            (`build.ts`) is documented to only ever forward a pin's round
+            when that division match is unambiguous. See section 10's own
+            comment for the full reasoning and its consequence.
     """
     del step_minutes  # see the docstring: contractual, not load-bearing.
     rule_groups = rule_groups or []
     pinned_rule_group_indices = pinned_rule_group_indices or []
     pinned_entrant_indices = pinned_entrant_indices or []
+    fixture_rounds = fixture_rounds or []
+    existing_rounds = existing_rounds or []
 
     # --- degenerate values that would otherwise produce a confidently WRONG
     # --- board reported as OPTIMAL. See "proto3 scalars are non-optional".
@@ -917,6 +935,111 @@ def build_model(
     # and the field feeding it are both retired, so there is no fallback left
     # to keep permissive; `rule_groups` is the only way a day cap reaches this
     # model now.
+
+    # section 10: round order (C1, 2026-08-12 round-order design). For every
+    # same-division pair (i, j) with round_i < round_j and at least one
+    # movable side: day_i <= day_j (linear, unconditional -- this is what
+    # fixes a whole round sitting on an earlier day than the one before it)
+    # and, when they land on the same day, start_i <= start_j (reified; ties
+    # are legal -- two rounds simultaneously on different courts is fine,
+    # participant rest already prevents a real entrant overlap). The pair set
+    # is FULL (all r < r', not adjacent-only): the conditional start half does
+    # not chain through a round with no fixture on that day.
+    #
+    # "At least one movable side" falls out of the fixtures/existing split
+    # for free, with no separate check needed: `fixtures` IS the movable side
+    # and `existing` IS the pinned side, by construction (build.ts never
+    # sends a pinned/locked fixture through `fixtures` — see
+    # `placement-client.ts`'s own `SolveBuildInput.existing` doc comment). So
+    # fixture-fixture pairs are movable-movable (enforce), fixture-existing
+    # pairs are movable-pinned (enforce, pin contributes CONSTANTS not
+    # variables), and existing-existing pairs are pin-pin — EXEMPT, simply by
+    # never being visited below: two immovable rows out of order cannot be
+    # fixed by this solve, and constraining them would turn caller data into
+    # INFEASIBLE for no one's benefit (design doc, "precedent tension,
+    # accepted knowingly").
+    #
+    # Division scope: `fixtures` carries `division_index` on the wire, so
+    # movable-movable pairs are grouped by it directly, same as every other
+    # per-division rule in this model. `existing` carries NO division index
+    # at all — `PinnedRow`'s own proto comment explains why (a division index
+    # there would have carved a division-only accident into a contract that
+    # deliberately generalised past it) — so a pin's division is a fact only
+    # the CALLER has, and `existing_rounds`/`fixture_rounds`' own doc comments
+    # record that this module TRUSTS the caller to have already resolved that
+    # ambiguity before forwarding a pin's round at all. Every round-bearing
+    # pin here is therefore paired against every round-bearing movable
+    # fixture with no further scoping — there is nothing on the wire left to
+    # scope it by.
+    if any(r is not None for r in fixture_rounds) or any(r is not None for r in existing_rounds):
+        # One day-index IntVar per ROUND-BEARING movable fixture, channelled
+        # from `on_day` exactly as the design doc directs — no new
+        # reification for the day half, just a linear sum of the SAME
+        # booleans section 9 already built. The channelling equation is
+        # gated `OnlyEnforceIf(placed[i])`, matching how `mk_lo`/`mk_hi`
+        # treat an unplaced fixture above: `on_day[i][d]` sums to 0 when
+        # `placed[i]` is 0, which is outside `round_day[i]`'s declared
+        # domain for any board whose day indices do not include 0, and every
+        # USE of `round_day` below is separately gated on `placed[i]` too, so
+        # an unconstrained value here never leaks into a real constraint.
+        round_day: dict[int, Any] = {}
+        for i in range(n):
+            if i < len(fixture_rounds) and fixture_rounds[i] is not None:
+                var = model.NewIntVar(0, max(day_ids, default=0), f"round_day_{i}")
+                model.Add(var == sum(d * on_day[i][d] for d in day_ids)).OnlyEnforceIf(placed[i])
+                round_day[i] = var
+
+        def _round_order_pair(
+            day_a: Any, start_a: Any, day_b: Any, start_b: Any, enforce_if: list[Any], tag: str
+        ) -> None:
+            """day_a <= day_b unconditionally (within `enforce_if`); same-day
+            => start_a <= start_b (reified). `enforce_if` is the movable
+            side(s)' presence — `[placed[i], placed[j]]` for a movable-movable
+            pair, `[placed[i]]` for a pin-movable pair (the pin needs no
+            presence literal; it is on the board unconditionally, same as
+            section 8's dependency handling)."""
+            model.Add(day_a <= day_b).OnlyEnforceIf(enforce_if)
+            same_day = model.NewBoolVar(f"round_sameday_{tag}")
+            model.Add(day_a == day_b).OnlyEnforceIf(same_day)
+            model.Add(day_a != day_b).OnlyEnforceIf(same_day.Not())
+            model.Add(start_a <= start_b).OnlyEnforceIf([*enforce_if, same_day])
+
+        # --- movable-movable, scoped per division ----------------------------
+        by_division: dict[int, list[int]] = {}
+        for i, (_entrant_indices, division_index) in enumerate(fixtures):
+            by_division.setdefault(division_index, []).append(i)
+
+        for members in by_division.values():
+            rounds = [(i, fixture_rounds[i]) for i in members if i in round_day]
+            for i, ri in rounds:
+                for j, rj in rounds:
+                    if ri is not None and rj is not None and ri < rj:
+                        _round_order_pair(
+                            round_day[i], start[i], round_day[j], start[j],
+                            [placed[i], placed[j]], f"{i}_{j}",
+                        )
+
+        # --- pin-movable: the pin contributes CONSTANTS, not variables ------
+        for k, (_existing_court, existing_start) in enumerate(existing):
+            pin_round = existing_rounds[k] if k < len(existing_rounds) else None
+            if pin_round is None:
+                continue
+            pin_day = _day_of_pin(existing_start, day_bounds)
+            if pin_day is None:
+                continue  # off-lattice: see _day_of_pin -- counts against nothing
+            for i in range(n):
+                if i not in round_day:
+                    continue
+                ri = fixture_rounds[i]
+                if pin_round < ri:
+                    _round_order_pair(
+                        pin_day, existing_start, round_day[i], start[i], [placed[i]], f"pin{k}_{i}"
+                    )
+                elif ri < pin_round:
+                    _round_order_pair(
+                        round_day[i], start[i], pin_day, existing_start, [placed[i]], f"{i}_pin{k}"
+                    )
+                # ri == pin_round: never compared, same as the movable-movable tie.
 
     placed_sum = sum(placed)
     # The horizon `mk_lo`/`mk_hi` (and T2's gap vars) live on. It must cover

@@ -1673,3 +1673,278 @@ def test_a_pin_past_the_last_admissible_tick_does_not_brick_the_whole_solve():
         f"the one movable fixture is placeable and shares nothing with the pin, so it must "
         f"still be placed: {outcome.assignments!r}"
     )
+
+
+# --- C1: round order (2026-08-12 round-order design) ------------------------
+#
+# For every same-division pair (i, j) with round_i < round_j and at least one
+# movable side: day_i <= day_j (unconditional) and, when they land on the
+# same day, start_i <= start_j (ties legal -- the pair set is all r < r',
+# never r <= r'). Pin-pin pairs are exempt; a movable side lets the solver
+# act, so pin-movable is enforced -- an honest INFEASIBLE is accepted when
+# the board cannot take it (design doc, "precedent tension, accepted
+# knowingly").
+#
+# `fixtures`/`existing` are the movable/pinned split already -- see
+# `build_model`'s own module docstring addition for "at least one movable
+# side" -- so these tests drive it directly via the two new parallel lists,
+# `fixture_rounds`/`existing_rounds`.
+#
+# Forcing court+start and checking feasibility (rather than a free solve) is
+# the deterministic form of "is this combination legal" on a board this
+# symmetric otherwise -- see `test_a_fixture_cannot_be_forced_onto_a_court_
+# at_a_tick_it_does_not_offer`'s own docstring for why. Each forced-INFEASIBLE
+# test is paired with the identical board in the opposite (legal) direction,
+# so a test cannot be passing because the model rejects everything.
+
+_ROUND_DAY0_T0 = 1_900_000_000_000  # arbitrary anchor, well above INT32_MAX
+_ROUND_DAY0_T1 = _ROUND_DAY0_T0 + 40 * MIN_MS
+_ROUND_DAY1_T0 = _ROUND_DAY0_T0 + DAY_MS
+
+
+def _round_constraints():
+    return {"match_minutes": 30, "gap_minutes": 0}
+
+
+def test_same_day_round_order_is_enforced_between_two_movable_fixtures():
+    """Both fixtures forced onto the SAME day (only one day's ticks are on
+    offer), disjoint entrants so nothing else differentiates them. Forcing
+    the LATER round (fixture 0, round 2) onto the EARLIER of the two ticks
+    -- ahead of fixture 1's round 1 -- must be INFEASIBLE."""
+    grid_slots = [(0, _ROUND_DAY0_T0, 0), (0, _ROUND_DAY0_T1, 0)]
+    fixtures = [([0, 1], 0), ([2, 3], 0)]  # disjoint entrants
+    fixture_rounds = [2, 1]  # fixture 0 = round 2, fixture 1 = round 1
+    model = build_model(
+        fixtures, 1, grid_slots, 30, _round_constraints(), [], [],
+        fixture_rounds=fixture_rounds,
+    )
+    fv = model.fixture_vars
+    model.Add(fv.placed[0] == 1)
+    model.Add(fv.placed[1] == 1)
+    model.Add(fv.start[0] == _ROUND_DAY0_T0)  # round 2 forced onto the EARLIER tick
+    model.Add(fv.start[1] == _ROUND_DAY0_T1)  # round 1 forced onto the LATER tick
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+    assert status == cp_model.INFEASIBLE, (
+        f"round 2 was forced ahead of round 1 on the same day; status={solver.StatusName(status)}"
+    )
+
+
+def test_same_day_round_order_permits_the_correct_direction():
+    """The converse of the test above, on the identical board."""
+    grid_slots = [(0, _ROUND_DAY0_T0, 0), (0, _ROUND_DAY0_T1, 0)]
+    fixtures = [([0, 1], 0), ([2, 3], 0)]
+    fixture_rounds = [2, 1]
+    model = build_model(
+        fixtures, 1, grid_slots, 30, _round_constraints(), [], [],
+        fixture_rounds=fixture_rounds,
+    )
+    fv = model.fixture_vars
+    model.Add(fv.placed[0] == 1)
+    model.Add(fv.placed[1] == 1)
+    model.Add(fv.start[0] == _ROUND_DAY0_T1)  # round 2 on the LATER tick
+    model.Add(fv.start[1] == _ROUND_DAY0_T0)  # round 1 on the EARLIER tick
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE), (
+        f"round 1 before round 2 on the same day must be feasible; status={solver.StatusName(status)}"
+    )
+
+
+def test_cross_day_round_disorder_is_rejected():
+    """The day-level rung, isolated from the start rung: two ticks a whole
+    day apart, one court each. Forcing round 2 onto day 0 while round 1 sits
+    on day 1 must be INFEASIBLE -- this is the R8-on-day-1 symptom itself,
+    the design doc's own motivating case."""
+    grid_slots = [(0, _ROUND_DAY0_T0, 0), (1, _ROUND_DAY1_T0, 1)]
+    fixtures = [([0, 1], 0), ([2, 3], 0)]
+    fixture_rounds = [2, 1]  # fixture 0 = round 2, fixture 1 = round 1
+    model = build_model(
+        fixtures, 2, grid_slots, 30, _round_constraints(), [], [],
+        fixture_rounds=fixture_rounds,
+    )
+    fv = model.fixture_vars
+    model.Add(fv.placed[0] == 1)
+    model.Add(fv.placed[1] == 1)
+    model.Add(fv.start[0] == _ROUND_DAY0_T0)  # round 2 on day 0
+    model.Add(fv.start[1] == _ROUND_DAY1_T0)  # round 1 on day 1
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+    assert status == cp_model.INFEASIBLE, (
+        f"round 2 was forced onto an earlier day than round 1; status={solver.StatusName(status)}"
+    )
+
+
+def test_cross_day_round_order_permits_the_correct_direction():
+    grid_slots = [(0, _ROUND_DAY0_T0, 0), (1, _ROUND_DAY1_T0, 1)]
+    fixtures = [([0, 1], 0), ([2, 3], 0)]
+    fixture_rounds = [2, 1]
+    model = build_model(
+        fixtures, 2, grid_slots, 30, _round_constraints(), [], [],
+        fixture_rounds=fixture_rounds,
+    )
+    fv = model.fixture_vars
+    model.Add(fv.placed[0] == 1)
+    model.Add(fv.placed[1] == 1)
+    model.Add(fv.start[0] == _ROUND_DAY1_T0)  # round 2 on day 1
+    model.Add(fv.start[1] == _ROUND_DAY0_T0)  # round 1 on day 0
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE), (
+        f"round 1 on the earlier day, round 2 on the later day must be feasible; "
+        f"status={solver.StatusName(status)}"
+    )
+
+
+def test_pin_movable_round_order_is_enforced():
+    """A late-round PIN on an early day squeezes an early-round movable
+    fixture onto that day or earlier -- accepted knowingly (design doc,
+    "precedent tension"): the solver can act on the movable side, so an
+    honest INFEASIBLE surfaces rather than a silently disordered board. One
+    movable fixture (round 1), one pin (round 2) on day 0; forcing the
+    movable round-1 fixture onto day 1 -- after the round-2 pin -- must be
+    INFEASIBLE."""
+    grid_slots = [(0, _ROUND_DAY0_T0, 0), (0, _ROUND_DAY1_T0, 1)]
+    fixtures = [([0, 1], 0)]  # round 1, movable
+    existing = [(0, _ROUND_DAY0_T0)]  # round 2, pinned, on day 0
+    model = build_model(
+        fixtures, 1, grid_slots, 30, _round_constraints(), existing, [],
+        fixture_rounds=[1], existing_rounds=[2],
+    )
+    fv = model.fixture_vars
+    model.Add(fv.placed[0] == 1)
+    model.Add(fv.start[0] == _ROUND_DAY1_T0)  # round 1 forced onto day 1
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+    assert status == cp_model.INFEASIBLE, (
+        f"the movable round-1 fixture was forced onto a later day than the round-2 pin; "
+        f"status={solver.StatusName(status)}"
+    )
+
+
+def test_pin_movable_round_order_permits_the_correct_direction():
+    """A second court at the pin's own tick, so the movable fixture can sit
+    alongside the pin (same day, same start -- a tie, legal either way)
+    without the two clashing on ONE court, which would be infeasible for an
+    unrelated reason (section 7's court NoOverlap) and prove nothing about
+    round order specifically."""
+    grid_slots = [(0, _ROUND_DAY0_T0, 0), (1, _ROUND_DAY0_T0, 0), (0, _ROUND_DAY1_T0, 1)]
+    fixtures = [([0, 1], 0)]
+    existing = [(0, _ROUND_DAY0_T0)]  # round 2 pin, court 0, day 0
+    model = build_model(
+        fixtures, 2, grid_slots, 30, _round_constraints(), existing, [],
+        fixture_rounds=[1], existing_rounds=[2],
+    )
+    fv = model.fixture_vars
+    model.Add(fv.placed[0] == 1)
+    model.Add(fv.start[0] == _ROUND_DAY0_T0)  # placed on the pin's own day/tick, court free (must pick court 1)
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE), (
+        f"the round-1 movable fixture placed on the pin's own day must be feasible; "
+        f"status={solver.StatusName(status)}"
+    )
+
+
+def test_pin_pin_round_disorder_is_tolerated():
+    """Two PINS, genuinely out of round order (round 2 on the EARLIER day,
+    round 1 on the LATER day) -- both immovable, so constraining them would
+    turn caller data into INFEASIBLE for no one's benefit. A round-less
+    movable fixture rides along so the board is not a degenerate zero-fixture
+    case; it shares no entrant/court with either pin, so it cannot be why the
+    solve succeeds."""
+    grid_slots = [(0, _ROUND_DAY0_T0, 0), (1, _ROUND_DAY1_T0, 1)]
+    fixtures = [([2], 0)]  # round-less, disjoint entrant, disjoint court
+    existing = [(0, _ROUND_DAY0_T0), (1, _ROUND_DAY1_T0)]  # pin A: day0/round2, pin B: day1/round1
+    model = build_model(
+        fixtures, 2, grid_slots, 30, _round_constraints(), existing, [],
+        fixture_rounds=[None], existing_rounds=[2, 1],
+    )
+    outcome = solve(model, wall_seconds=3.0)
+    assert outcome.status in ("OPTIMAL", "FEASIBLE"), (
+        f"two pins out of round order must not make the board infeasible: "
+        f"status={outcome.status} assignments={outcome.assignments}"
+    )
+
+
+def test_round_less_fixtures_are_unconstrained():
+    """Absent round -> no constraint (design doc). Two fixtures carrying NO
+    round at all (`fixture_rounds` omitted -- the default every pre-C1 caller
+    gets) may be forced into any order/day, proving the feature is inert
+    unless a round is actually declared."""
+    grid_slots = [(0, _ROUND_DAY0_T0, 0), (1, _ROUND_DAY1_T0, 1)]
+    fixtures = [([0, 1], 0), ([2, 3], 0)]
+    model = build_model(fixtures, 2, grid_slots, 30, _round_constraints(), [], [])
+    fv = model.fixture_vars
+    model.Add(fv.placed[0] == 1)
+    model.Add(fv.placed[1] == 1)
+    # Fixture 0 forced onto the EARLIER day than fixture 1 -- would be a
+    # round violation if they declared rounds 2 and 1 respectively (as in
+    # the tests above), but neither declares one here.
+    model.Add(fv.start[0] == _ROUND_DAY0_T0)
+    model.Add(fv.start[1] == _ROUND_DAY1_T0)
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE), (
+        f"round-less fixtures must never be constrained by round order; "
+        f"status={solver.StatusName(status)}"
+    )
+
+
+def test_round_order_is_scoped_per_division():
+    """Two divisions, each running its OWN round-robin sequence. Division 0's
+    round 2 sitting on an earlier day than division 1's round 1 would be a
+    violation WITHIN one division; the identical shape ACROSS two different
+    divisions must not be -- round numbers are not comparable across
+    divisions, the same way every other per-division rule in this model
+    (rule groups, participant rest) is already scoped."""
+    grid_slots = [(0, _ROUND_DAY0_T0, 0), (1, _ROUND_DAY1_T0, 1)]
+    fixtures = [([0, 1], 0), ([2, 3], 1)]  # division 0, division 1
+    fixture_rounds = [2, 1]  # division 0's round 2; division 1's round 1
+    model = build_model(
+        fixtures, 2, grid_slots, 30, _round_constraints(), [], [],
+        fixture_rounds=fixture_rounds,
+    )
+    fv = model.fixture_vars
+    model.Add(fv.placed[0] == 1)
+    model.Add(fv.placed[1] == 1)
+    # Division 0's round-2 fixture on the earlier day than division 1's
+    # round-1 fixture -- disordered if they were the same division; they are
+    # not, so this must be feasible.
+    model.Add(fv.start[0] == _ROUND_DAY0_T0)
+    model.Add(fv.start[1] == _ROUND_DAY1_T0)
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE), (
+        f"round order must not cross a division boundary; status={solver.StatusName(status)}"
+    )
+
+
+def test_free_solve_of_a_two_round_division_respects_order_on_one_day():
+    """The natural-usage form of the forced-probe tests above: a genuinely
+    free solve (through the real tier chain, not a forced probe) of two
+    round-robin fixtures sharing one day's lattice comes back with round 1
+    not later than round 2. The objective is indifferent between the two
+    fixtures (identical makespan either way on this board), so this is a
+    direct proof the HARD constraint -- not a lucky tie-break -- decided it."""
+    grid_slots = [(0, _ROUND_DAY0_T0, 0), (0, _ROUND_DAY0_T1, 0)]
+    fixtures = [([0, 1], 0), ([2, 3], 0)]
+    fixture_rounds = [2, 1]  # fixture 0 = round 2, fixture 1 = round 1
+    model = build_model(
+        fixtures, 1, grid_slots, 30, _round_constraints(), [], [],
+        fixture_rounds=fixture_rounds,
+    )
+    outcome = solve(model, wall_seconds=5.0)
+    assert len(outcome.assignments) == 2, outcome.assignments
+    start_by_fixture = {fi: start for fi, _court, start in outcome.assignments}
+    assert start_by_fixture[1] <= start_by_fixture[0], (
+        f"round 1 (fixture 1) must not start after round 2 (fixture 0): {outcome.assignments}"
+    )

@@ -10,6 +10,21 @@ zero dependencies.
 
 ## Semantics (approved)
 
+> **Amendment, 2026-08-12 (during C1 implementation).** "Same-division" below
+> is **understated** and was corrected in implementation: the comparable unit
+> is one **round sequence**, scoped `(division, stage, pool)`, not a division.
+> `generateRoundRobin` restarts `roundNo` at 1 for every invocation, and one
+> division can hold several independent sequences: a `kind: "group"` stage
+> calls it once **per pool**, and the product's own entitlements
+> (`stages.per_division.max`, with no kind-uniqueness check) permit **several
+> league/group stages** in one division. Comparing pool A's round 3 against
+> pool B's round 1 — or stage 1's against stage 3's — is exactly as wrong as
+> comparing two divisions, and both were hit by real boards during C1, not
+> hypothesised. Read every "same-division pair" below as "same-sequence pair",
+> keyed `(divisionId, stageId, poolId)`. This is a correction consistent with
+> the ruling already stated further down ("rounds are NOT comparable across
+> stages"), not a new decision.
+
 For every same-division pair (i, j) with `round_i < round_j` and **at least one
 movable side**:
 
@@ -77,6 +92,14 @@ inequality, a reified same-day equality, and the conditional start inequality.
 Pins contribute constants (their day and start are fixed), not variables.
 
 ## Verifier parity (the recurring placer/verifier fork)
+
+(Per the amendment above, the verifier's grouping key is
+`${divisionId}|${stageId}|${poolId}`, and the wire-side contamination guards in
+`build.ts` strip rounds for a division whose round-bearing free fixtures span
+more than one `(stage, pool)`. `build.ts`'s own encoder-vs-verifier self-check
+must carry `stageId` too — it reads `roundNo` off the unstripped fixture map,
+so omitting it re-collapses the sequences after the wire correctly separated
+them.)
 
 The TS verifier operates on `Assignment` objects, which carry no round today.
 `toAssignment` (`schedule.ts:484-495`) gains `roundNo` and a movable flag from
