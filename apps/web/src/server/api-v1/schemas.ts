@@ -1268,6 +1268,47 @@ export const CapacityReport = z.object({
 });
 export type CapacityReport = z.infer<typeof CapacityReport>;
 
+// ---------------------------------------------------------------------------
+// Schedule health score (D3, docs/superpowers/specs/bench-product-value/
+// designs/2026-08-13-schedule-health-design.md) — GET /stages/{id}/schedule/
+// health's 200 body. camelCase, same deliberate break from this file's
+// snake_case wire convention CapacityReport takes above, and for the same
+// reason: mirrors the engine's HealthMetric/HealthReport field for field
+// (packages/engine/src/scheduling/health.ts's assessHealth) so the panel can
+// render the wire response with the same renderer a client-side recompute
+// would use, no mapping step.
+export const HealthOffender = z.object({
+  kind: z.enum(["entrant", "court", "courtDay"]),
+  id: z.string(),
+  label: z.string(),
+  value: z.number(),
+});
+
+export const HealthMetric = z.object({
+  key: z.enum(["restSpread", "courtBalance", "gapDispersion", "homeAwayAlternation", "primeSlotFairness"]),
+  score: z.number().int().min(0).max(100),
+  // Structured, never literal prose — the engine lib emits an i18n KEY, not
+  // English (standing i18n rule; see health.ts's HealthExplanation doc
+  // comment). The panel resolves `key` against the active locale's
+  // `schedule.health.explain.*` dictionary entry, interpolating `params`.
+  explanation: z.object({
+    key: z.string(),
+    params: z.record(z.string(), z.number()).optional(),
+  }),
+  offenders: z.array(HealthOffender),
+});
+export type HealthMetric = z.infer<typeof HealthMetric>;
+
+/** 5 entries, or 4 when the stage is not table-shaped (league/group/swiss/
+ *  americano) — homeAwayAlternation is ABSENT then, never a present entry
+ *  scored 0 (design doc, verbatim; see schedule-health.ts's TABLE_KINDS). */
+export const ScheduleHealthReport = z.object({
+  stageId: Uuid,
+  computedAt: z.iso.datetime({ offset: true }),
+  metrics: z.array(HealthMetric).min(4).max(5),
+});
+export type ScheduleHealthReport = z.infer<typeof ScheduleHealthReport>;
+
 export const AutoScheduleResult = z.object({
   assignments: z.array(ScheduleAssignment),
   conflicts: z.array(ScheduleConflict),
