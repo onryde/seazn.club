@@ -24,6 +24,7 @@
 // exactly this reason and are declared in `packages/engine/package.json`:
 //
 //     @seazn/engine/scheduling/bracket-layout   geometry, zero imports
+//     @seazn/engine/scheduling/capacity         D2 precheck; imports only rest-floor
 //     @seazn/engine/scheduling/grid-step
 //     @seazn/engine/scheduling/rest-floor
 //     @seazn/engine/scheduling/tz
@@ -48,6 +49,10 @@ export * from "./feedgraph.ts";
 export * from "./bracket-layout.ts";
 export * from "./participants.ts";
 export * from "./tz.ts";
+// D2 capacity pre-check. Also reachable as `@seazn/engine/scheduling/capacity`,
+// a leaf (imports only rest-floor.ts), for the same bundle reason as
+// `grid-step`/`rest-floor` above — the setup card computes this client-side.
+export * from "./capacity.ts";
 // The build solver (this plan). Pure metrics first — no z3 anywhere in here.
 export * from "./build-objectives.ts";
 // The grid step both the solver and the BOARD are built from. Also reachable

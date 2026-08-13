@@ -5,7 +5,7 @@
 // unscheduled section with an auto-schedule CTA, "Now playing" strip, inline
 // reschedule with undo, bye/void ghost rows, sticky round headers on mobile,
 // print via the DocModel timetable export. Scoring lives on the fixture page.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
@@ -24,6 +24,12 @@ import { windowsToDailyHours } from "@/lib/schedule-board";
 import type { BoardConfig } from "@/components/v2/board/types";
 import { zonedTimeInput } from "@/lib/zoned-datetime";
 import type { ScheduleMetrics, ScheduleSolverInfo } from "@/server/api-v1/schemas";
+// D2 capacity pre-check — client-safe leaves only, see capacity-input.ts's
+// header for why this file must never reach @seazn/engine/scheduling (the
+// solver barrel) or capacity-guard.ts (server-only).
+import { dayKeyInTz, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
+import { assessCapacity } from "@seazn/engine/scheduling/capacity";
+import { capacityInputForFixtures } from "@/lib/capacity-input";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -130,6 +136,14 @@ interface DivisionScheduleSettings {
      *  division actually plays — without it the list walks to midnight and
      *  offers slots after the day is over. */
     sessionWindows?: BoardConfig["sessionWindows"];
+    /** D2 capacity pre-check (widened, not a new fetch — the endpoint already
+     *  serves the whole config; this panel just reads more of what it gets
+     *  back). `endAt` is the one field that decides whether there is a
+     *  bounded window to assess at all. */
+    endAt?: string | null;
+    courts?: string[];
+    perEntrantMinRest?: number;
+    blackouts?: BoardConfig["blackouts"];
   };
   tz: string;
 }
@@ -177,6 +191,61 @@ export function boardSlotOptionsFor(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * D2 capacity pre-check for ONE stage — pure, exported so it can be tested
+ * with hand-built inputs directly. `scheduleSettings.config` arrives via a
+ * `useEffect` fetch (`renderToStaticMarkup` never fires effects — see
+ * component-ui-i18n memory), so a render-level test cannot exercise this;
+ * this split is what makes the arithmetic itself checkable without one.
+ * `null` covers both "nothing to assess" (no bounded window) and "settings
+ * haven't loaded yet" — the button stays enabled either way, matching the
+ * design's "client hint, server authority": an unloaded precheck must never
+ * read as a false "impossible".
+ */
+export function capacityForStage(
+  stageId: string,
+  fixtures: readonly Pick<FixtureRow, "stage_id" | "status" | "home_entrant_id" | "away_entrant_id" | "pool_id">[],
+  config: DivisionScheduleSettings["config"] | undefined,
+  orgTz: string,
+  divisionId: string,
+): ReturnType<typeof assessCapacity> | null {
+  if (config === undefined || config.matchMinutes === undefined || config.gapMinutes === undefined) return null;
+  const movable = fixtures.filter((f) => f.stage_id === stageId && f.status === "scheduled");
+  const input = capacityInputForFixtures(
+    movable.map((f) => ({
+      home: f.home_entrant_id ?? undefined,
+      away: f.away_entrant_id ?? undefined,
+      poolId: f.pool_id ?? undefined,
+    })),
+    {
+      courts: config.courts ?? ["Court 1"],
+      sessionWindows: (config.sessionWindows ?? []).map((w) => ({ from: Date.parse(w.from), to: Date.parse(w.to) })),
+      blackouts: (config.blackouts ?? []).map((b) => ({
+        ...(b.court !== undefined ? { court: b.court } : {}),
+        from: Date.parse(b.from),
+        to: Date.parse(b.to),
+      })),
+      matchMinutes: config.matchMinutes,
+      gapMinutes: config.gapMinutes,
+      perEntrantMinRest: config.perEntrantMinRest ?? 0,
+      window:
+        config.startAt || config.endAt
+          ? {
+              from: config.startAt
+                ? zonedTimeToUtc(dayKeyInTz(Date.parse(config.startAt), orgTz), "00:00", orgTz)
+                : -Infinity,
+              to: config.endAt
+                ? zonedTimeToUtc(ymdAddDays(dayKeyInTz(Date.parse(config.endAt), orgTz), 1), "00:00", orgTz)
+                : Infinity,
+            }
+          : undefined,
+      tz: orgTz,
+    },
+    divisionId,
+  );
+  return input === null ? null : assessCapacity(input);
 }
 
 export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, canEdit, tz, orgTz, canExport }: Props) {
@@ -240,6 +309,17 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
     };
   }, [divisionId, canEdit]);
   const boardSlotOptions = boardSlotOptionsFor(scheduleSettings, orgTz);
+
+  // D2 capacity pre-check: per STAGE (matching the scope of the button below
+  // and of the server guard on /stages/{id}/schedule/auto), from whatever
+  // `scheduleSettings` the effect above already fetched — no second fetch.
+  const capacityByStage = useMemo(() => {
+    const byStage = new Map<string, ReturnType<typeof assessCapacity> | null>();
+    for (const stage of stages) {
+      byStage.set(stage.id, capacityForStage(stage.id, fixtures, scheduleSettings?.config, orgTz, divisionId));
+    }
+    return byStage;
+  }, [scheduleSettings, stages, fixtures, orgTz, divisionId]);
 
   async function undoLast() {
     setError(null);
@@ -627,7 +707,7 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                     <button
                       type="button"
                       data-testid="stage-auto-schedule"
-                      disabled={busy !== null}
+                      disabled={busy !== null || capacityByStage.get(stage.id)?.verdict === "impossible"}
                       onClick={() => void autoScheduleStage(stage.id)}
                       className="btn btn-primary min-h-11 px-3 py-1 text-xs sm:min-h-0"
                     >
@@ -635,6 +715,16 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                     </button>
                   )}
                 </div>
+                {/* D2 capacity pre-check (owner ruling: Solve hard-blocked
+                    ONLY on "impossible" — "tight" is advisory and never
+                    blocks). The full card with bars/suggestions lives on the
+                    Settings tab; this is just the reason the button here is
+                    disabled. */}
+                {capacityByStage.get(stage.id)?.verdict === "impossible" && (
+                  <p data-testid="stage-auto-schedule-blocked" className="mt-1.5 text-xs text-red-600">
+                    {msg("schedule.capacity.blockedReason")}
+                  </p>
+                )}
                 <ul className="mt-2 divide-y divide-slate-100">
                   {unscheduled.map((f) => (
                     <FixtureLine

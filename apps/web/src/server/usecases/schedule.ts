@@ -55,6 +55,7 @@ import {
   type StartDivisionRequest,
 } from "@/server/api-v1/schemas";
 import { sendOfficialAssignmentChangedEmail } from "@/lib/email";
+import { capacityInputForFixtures, guardCapacity } from "./capacity-guard";
 import { buildEngineConstraints } from "./engine-constraints";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { generateStageFixtures } from "./stages";
@@ -840,6 +841,16 @@ interface AutoSchedulePlan {
   schedulable: SchedulableFixture[];
   config: SlotConfig & VerifyConfig & { courts: string[] };
   board: Assignment[];
+  /** D2 capacity guard inputs — carried out of the transaction alongside
+   *  everything else `capacityInputForFixtures` needs, so phase 2 does not
+   *  have to re-open a connection to ask for them. */
+  divisionId: string;
+  orgTz: string;
+  /** The ORGANISER-DECLARED config (`declaredConfig`) — neither
+   *  `boundSolverWindow`'s synthetic window-fill nor
+   *  `withDefaultDaySpread`'s synthetic cap. See the guard call site's
+   *  comment for why this is deliberately NOT the same object as `config`. */
+  capacityConfig: SlotConfig & VerifyConfig & { courts: string[] };
   /**
    * The direct winner/loser feed edges of the whole division (#452).
    *
@@ -1016,7 +1027,26 @@ export async function autoSchedule(
     return {
       schedulable,
       config,
+      // D2 capacity guard reads THIS, not `config` or even `windowedConfig`:
+      // both carry SOLVER-CONVENIENCE machinery the organiser never
+      // configured. `withDefaultDaySpread`'s injected max_fixtures_per_day
+      // is a makespan-distribution NUDGE the solver/greedy already treat as
+      // best-effort (a breach reports as a CAP conflict, never a refusal —
+      // honoring it as a hard arithmetic bound is the placer/verifier fork
+      // this codebase keeps naming as its recurring defect). And
+      // `boundSolverWindow` FILLS IN a finite window from wherever the
+      // greedy seed's fixtures happen to land when the organiser set no
+      // `endAt` at all (its own doc comment, a few lines below) — feeding
+      // THAT synthetic span into a precheck would refuse boards an
+      // organiser never gave an end date to assess against in the first
+      // place. `declaredConfig` is the one config built directly from
+      // `settings.config` with neither adjustment — exactly what the
+      // organiser configured, still carrying every rule they actually set
+      // (constraints.hard from the Constraints tab).
+      capacityConfig: declaredConfig,
       board,
+      divisionId: stage.division_id,
+      orgTz: settings.orgTz,
       // Over `all`, not over `movable`: `feedDependencies` keeps only edges whose
       // BOTH ends are in the list it is given, and a semi already decided (so not
       // movable) still constrains the final it feeds. The same argument every
@@ -1041,6 +1071,16 @@ export async function autoSchedule(
   // re-places every unlocked card even when nothing is wrong, which is the
   // defect this mode replaces.
   const { schedulable, config, board, dependencies, total } = plan;
+  // D2 capacity pre-check: arithmetic-provable impossibility refuses with a
+  // typed 422 BEFORE either solver is reached — no db connection is held
+  // here (phase 1 already closed), so this costs nothing a real solve
+  // wouldn't have paid anyway. `guardCapacity` returns null and does
+  // nothing when the config has no bounded window to assess.
+  guardCapacity(capacityInputForFixtures(schedulable, plan.capacityConfig, plan.divisionId), {
+    scope: "stage",
+    divisionId: plan.divisionId,
+    stageId,
+  });
   /**
    * The organiser's board as it stands — every movable card that currently has a
    * time, whether or not this run may move it.

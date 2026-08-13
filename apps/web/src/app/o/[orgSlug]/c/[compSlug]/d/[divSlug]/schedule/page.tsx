@@ -320,6 +320,10 @@ export default async function DivisionSchedulePage({
             constraintsAllowed={constraints}
             venueCap={venueLabel(division.sport_key)}
             orgTz={orgTz}
+            // D2 capacity pre-check card: `fixtures` is already fetched
+            // unconditionally above (every tab, not gated like the
+            // officials-only reads) — no new query for this.
+            fixtures={fixtures}
           />
         )}
 

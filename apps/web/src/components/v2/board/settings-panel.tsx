@@ -12,7 +12,7 @@
 // `toLocalInput(iso)`, i.e. the organiser's own zone — self-consistent on
 // screen, so the mistake was invisible, and off by the whole offset in the
 // instant the solver actually reads.
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { RestFloorNote, restFloorNoteShown } from "@/components/v2/rest-floor-note";
 import { apiV1 } from "@/lib/client-v1";
@@ -29,6 +29,15 @@ import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { Tip } from "@/components/ui/tip";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { pluralizeVenue } from "@/lib/venue";
+// D2 capacity pre-check (design doc bench-product-value/designs/2026-08-13-
+// capacity-precheck-design.md): both imports are CLIENT-SAFE leaves — see
+// capacity-input.ts's header for why this file must never reach
+// `@seazn/engine/scheduling` (the barrel) or `capacity-guard.ts`
+// (server-only).
+import { dayKeyInTz, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
+import { assessCapacity } from "@seazn/engine/scheduling/capacity";
+import { capacityInputForFixtures, type CapacityFixtureInput } from "@/lib/capacity-input";
+import { CapacityCard } from "@/components/v2/board/capacity-card";
 
 /** The end DATE field bounds a whole day, so it is stored as that day's last
  *  minute. One definition, used by the PUT and by the play-hours expansion. */
@@ -45,6 +54,18 @@ export function StandaloneScheduleSettings(props: {
   venueCap?: string;
   /** The VENUE clock (`settings.orgTz`, #448). See {@link SettingsPanel}. */
   orgTz: string;
+  /** D2 capacity pre-check: the division's own fixtures, EVERY status — this
+   *  panel filters to movable itself (see {@link SettingsPanel}'s doc
+   *  comment). Optional so no OTHER caller of this wrapper breaks; omitted,
+   *  the capacity card simply never renders (report is always null with
+   *  zero fixtures). Structural, matching `FixtureRow` (stages.ts), so the
+   *  page's already-fetched list passes straight through with no mapping. */
+  fixtures?: readonly {
+    status: string;
+    home_entrant_id: string | null;
+    away_entrant_id: string | null;
+    pool_id: string | null;
+  }[];
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -81,12 +102,19 @@ export function SettingsPanel({
   defaultOpen = false,
   onSaved,
   onError,
+  fixtures = [],
 }: {
   divisionId: string;
   config: BoardConfig;
   canEdit: boolean;
   constraintsAllowed: boolean;
   venueCap?: string;
+  fixtures?: readonly {
+    status: string;
+    home_entrant_id: string | null;
+    away_entrant_id: string | null;
+    pool_id: string | null;
+  }[];
   /** The VENUE clock every absolute time on this panel is read and written on
    *  (`settings.orgTz`, #448 — NOT `settings.tz`, the display lane a division
    *  may override). Required rather than defaulted: a wrong zone here stores the
@@ -132,6 +160,57 @@ export function SettingsPanel({
     matchMinutes,
     gapMinutes,
     ...(config.constraints !== undefined ? { constraints: config.constraints } : {}),
+  };
+
+  // D2 capacity pre-check: LIVE for startAt/endAt/matchMinutes/gapMinutes/
+  // rest/courts (this panel's own draft state, recomputed as the organiser
+  // types — same reasoning as restNoteConfig above), but sessionWindows/
+  // blackouts/constraints come off `config` UNCHANGED (last-saved) — this
+  // panel's play-hours fields expand into sessionWindows only on Save
+  // (`dailyHoursToWindows`), and live-previewing that expansion too is out
+  // of scope here. "Client hint, server authority" (design doc): the SAVED
+  // config is what the server actually guards on regardless.
+  const capacityReport = useMemo(() => {
+    const startIso = startAt === "" ? null : (isoFromZonedDateTime(startAt, orgTz) ?? config.startAt ?? null);
+    const endIso = endAt === "" ? null : (isoFromZonedParts(endAt, DAY_END_HHMM, orgTz) ?? config.endAt ?? null);
+    const window =
+      startIso === null && endIso === null
+        ? undefined
+        : {
+            from: startIso ? zonedTimeToUtc(dayKeyInTz(Date.parse(startIso), orgTz), "00:00", orgTz) : -Infinity,
+            to: endIso ? zonedTimeToUtc(ymdAddDays(dayKeyInTz(Date.parse(endIso), orgTz), 1), "00:00", orgTz) : Infinity,
+          };
+    const movable = fixtures.filter((f) => f.status === "scheduled"); // MOVABLE_STATUS (schedule.ts) — a client component can't import it (server-only)
+    const input = capacityInputForFixtures(
+      movable.map((f) => ({
+        home: f.home_entrant_id ?? undefined,
+        away: f.away_entrant_id ?? undefined,
+        poolId: f.pool_id ?? undefined,
+      })),
+      {
+        courts,
+        sessionWindows: config.sessionWindows.map((w) => ({ from: Date.parse(w.from), to: Date.parse(w.to) })),
+        blackouts: config.blackouts.map((b) => ({ ...(b.court !== undefined ? { court: b.court } : {}), from: Date.parse(b.from), to: Date.parse(b.to) })),
+        matchMinutes,
+        gapMinutes,
+        perEntrantMinRest: rest,
+        window,
+        tz: orgTz,
+        ...(config.constraints !== undefined ? { constraints: config.constraints } : {}),
+      },
+      divisionId,
+    );
+    return input === null ? null : assessCapacity(input);
+  }, [startAt, endAt, matchMinutes, gapMinutes, rest, courts, fixtures, config, orgTz, divisionId]);
+
+  const applyCapacitySuggestion = {
+    add_day: () => setEndAt((e) => (e === "" ? e : ymdAddDays(e, 1))),
+    add_court: () => setCourts((cs) => (cs.length < 50 ? [...cs, `${venueCap} ${cs.length + 1}`] : cs)),
+    shorten_match: (s: { amount: number }) => setMatchMinutes((m) => Math.max(1, m - s.amount)),
+    shrink_gap: (s: { amount: number }) => setGapMinutes((g) => Math.max(0, g - s.amount)),
+    // No `raise_cap`: that knob is a durable division rule on the
+    // Constraints tab, not local draft state on this panel (see
+    // CapacityCard's onApply doc comment).
   };
 
   if (!open) {
@@ -246,6 +325,9 @@ export function SettingsPanel({
             already shows over fixture times — already translated everywhere. */}
         <p className="mt-0.5 text-xs text-slate-400">{msg("schedule.tz.caption", { tz: orgTz })}</p>
       </div>
+
+      <CapacityCard report={capacityReport} onApply={applyCapacitySuggestion} venueLabel={venue} />
+
       {constrained && <UpgradeGate feature="scheduling.constraints" compact />}
 
       <div className="grid gap-4 sm:grid-cols-2">

@@ -737,6 +737,19 @@ export const CompleteResult = z.object({
 // Scheduling console (doc 12, PROMPT-17)
 // ---------------------------------------------------------------------------
 
+/** The wire key CAPACITY_IMPOSSIBLE's 422 carries its report under
+ *  (`HttpError.extra`, spread verbatim onto `error.*` by api-v1/http.ts —
+ *  no rename). Lives here, not in the server-only capacity-guard.ts,
+ *  because openapi.ts documents it too and openapi.ts is NOT server-only
+ *  (it's imported by /api/v1/openapi.json/route.ts, a live bundled route,
+ *  as well as the CI drift script) — schemas.ts is the one home both
+ *  capacity-guard.ts and openapi.ts can import without crossing that
+ *  boundary. A P1 review finding: the throw site, the OpenAPI doc and
+ *  smoke.ts's assertion had each spelled this differently (`report` vs
+ *  `capacity_report`), so the smoke check could never pass. Import this,
+ *  never retype the string. */
+export const CAPACITY_REPORT_KEY = "capacity_report";
+
 const IsoDateTime = z.iso.datetime({ offset: true });
 
 /** Doc 12 §3 schedule_settings.config — the calendar pass inputs (05 §2.6). */
@@ -1211,6 +1224,49 @@ export const ScheduleSolverInfo = z.object({
   locked_kept: z.number().int().optional(),
 });
 export type ScheduleSolverInfo = z.infer<typeof ScheduleSolverInfo>;
+
+// ---------------------------------------------------------------------------
+// Capacity pre-check (D2, docs/superpowers/specs/bench-product-value/designs/
+// 2026-08-13-capacity-precheck-design.md) — the 422 CAPACITY_IMPOSSIBLE
+// report on /stages/{id}/schedule/auto and /competitions/{id}/schedule/
+// ai-plan, and the shape the setup card's live client-side recompute
+// produces (packages/engine/src/scheduling/capacity.ts's assessCapacity —
+// an engine lib import, no fetch, for that path).
+//
+// camelCase, DELIBERATELY breaking this file's snake_case wire convention:
+// mirrors the engine's CapacityReport field for field so the client can hand
+// a 422's `report` extra straight to the SAME renderer the live card uses,
+// with no mapping step — the design doc states this explicitly ("the card
+// consumes the identical type client-side"), unlike ScheduleConflict, whose
+// `Conflict.reason` union genuinely needs `REASON_CODE` at the boundary.
+export const CapacityReport = z.object({
+  verdict: z.enum(["impossible", "tight", "ok"]),
+  slotSupply: z.number().int().nonnegative(),
+  slotDemand: z.number().int().nonnegative(),
+  perDay: z.array(
+    z.object({
+      date: z.string(),
+      supply: z.number().int().nonnegative(),
+      demandCeiling: z.number().int().nonnegative(),
+    }),
+  ),
+  restBound: z.array(
+    z.object({
+      entrantId: z.string(),
+      need: z.number().nonnegative(),
+      available: z.number().nonnegative(),
+      violated: z.boolean(),
+    }),
+  ),
+  suggestions: z.array(
+    z.object({
+      kind: z.enum(["add_day", "add_court", "shorten_match", "shrink_gap", "raise_cap"]),
+      amount: z.number(),
+      flipsVerdict: z.boolean(),
+    }),
+  ),
+});
+export type CapacityReport = z.infer<typeof CapacityReport>;
 
 export const AutoScheduleResult = z.object({
   assignments: z.array(ScheduleAssignment),

@@ -3655,5 +3655,19 @@
   "scorepad.timeline.voided": "deshecho",
   "scorepad.timeline.unknownRecorder": "Anotador",
   "scorepad.timeline.devicePad": "Registrado desde un dispositivo vinculado",
-  "scorepad.header.score": "Marcador"
+  "scorepad.header.score": "Marcador",
+  "schedule.capacity.title": "Comprobación de capacidad",
+  "schedule.capacity.verdict.ok": "Cómodo",
+  "schedule.capacity.verdict.tight": "Ajustado",
+  "schedule.capacity.verdict.impossible": "No encaja",
+  "schedule.capacity.summary": "{demand} por colocar frente a {supply} espacios disponibles",
+  "schedule.capacity.restViolations": "Participantes con descanso insuficiente: {n}",
+  "schedule.capacity.suggestions.title": "Formas de solucionarlo",
+  "schedule.capacity.suggestion.addDay": "Añadir 1 día",
+  "schedule.capacity.suggestion.addCourt": "Añadir 1 {venue}",
+  "schedule.capacity.suggestion.shortenMatch": "Acortar los partidos {n} min",
+  "schedule.capacity.suggestion.shrinkGap": "Reducir el intervalo {n} min",
+  "schedule.capacity.suggestion.raiseCap": "Aumentar el límite diario de partidos en 1",
+  "schedule.capacity.apply": "Aplicar",
+  "schedule.capacity.blockedReason": "La resolución está bloqueada hasta que esto encaje. Consulta la comprobación de capacidad en la pestaña Configuración"
 }

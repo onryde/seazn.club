@@ -1,0 +1,137 @@
+import { test, expect } from "@playwright/test";
+import { apiJson, TAG, divisionPath } from "./helpers";
+
+// D2 capacity pre-check (design doc bench-product-value/designs/2026-08-13-
+// capacity-precheck-design.md). Two things a unit/integration test cannot
+// pin: the Settings-tab card actually renders in a real browser off a real
+// GET, and the "Solve disabled" state a user hits lives on a DIFFERENT page
+// (the fixtures/stages console) from the card that explains it — this spec
+// is the one place that crosses both surfaces in one flow.
+//
+// AUTHORED, NOT RUN in this session (operating limit: no subagent may run
+// the full e2e suite — 600s watchdog). The orchestrator runs it at the wave
+// boundary; see the implementer's final report for what to verify first if
+// it reds.
+//
+// Deliberately avoids `constraints`/`sessionWindows`/multi-court knobs, all
+// of which flip `usesConstraints()` (schedule.ts) and gate the PUT behind
+// Pro — this spec stays on the free tier by making 1 court + a single
+// UNRESTRICTED day (no sessionWindows: "empty = unrestricted", the same
+// rule the placer applies) arithmetically too small for an 8-entrant round
+// robin: 28 fixtures, 1 court, 60-minute matches, one day = 24 raw slots.
+// 28 > 24 is impossible without touching a single Pro-gated field.
+const ENTRANTS = 8; // round robin -> C(8,2) = 28 fixtures
+const DAY_ISO = "2026-09-12"; // arbitrary Saturday, no other fixture in this org touches it
+const START_AT = `${DAY_ISO}T00:00:00.000Z`;
+const END_AT = `${DAY_ISO}T23:59:00.000Z`; // ONE calendar day (org tz UTC by default)
+
+async function seedTightRoundRobin(request: import("@playwright/test").APIRequestContext) {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Capacity E2E ${TAG}`,
+    visibility: "private",
+  });
+  const compId = comp.data!.id;
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${compId}/divisions`, "POST", {
+    name: "Capacity",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const divisionId = div.data!.id;
+  await apiJson(
+    request,
+    `/api/v1/divisions/${divisionId}/entrants`,
+    "POST",
+    Array.from({ length: ENTRANTS }, (_, i) => ({
+      kind: "individual",
+      display_name: `E${i + 1}`,
+      seed: i + 1,
+    })),
+  );
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+    seq: 1,
+    kind: "league",
+    name: "League",
+  });
+  const gen = await apiJson<{ fixtures: { id: string }[] }>(
+    request,
+    `/api/v1/stages/${stage.data!.id}/generate`,
+    "POST",
+  );
+  expect(gen.data!.fixtures.length).toBe(28);
+  const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
+    config: {
+      startAt: START_AT,
+      endAt: END_AT,
+      matchMinutes: 60,
+      gapMinutes: 0,
+      courts: ["Court 1"],
+      perEntrantMinRest: 0,
+    },
+  });
+  expect(settings.status).toBeLessThan(300);
+  return { divisionId, stageId: stage.data!.id };
+}
+
+test("capacity precheck: impossible config shows the card + disabled Solve + a reason", async ({ page, request }) => {
+  const { divisionId, stageId } = await seedTightRoundRobin(request);
+
+  // The card + verdict chip on the Settings tab.
+  await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=settings"));
+  const card = page.locator('[data-capacity-verdict="impossible"]');
+  await expect(card).toBeVisible({ timeout: 20_000 });
+  await expect(card.getByText("Won't fit")).toBeVisible();
+  // At least one quantified suggestion row (design doc: "the cheapest fixes,
+  // quantified" — never a bare "it's broken"). `.first()` because the card
+  // emits SEVERAL suggestions sorted verdict-flippers-first; matching more
+  // than one is the expected shape, and a bare locator trips strict mode.
+  await expect(card.getByText(/Add 1 day|Add 1 Court|Shorten matches/).first()).toBeVisible();
+
+  // The disabled Solve button + reason lives on the OTHER page — the
+  // fixtures/stages console, not the Settings tab. The tab MUST be named:
+  // the bare division path renders Entrants, where this button does not
+  // exist at all, which reads as "disabled" but is really "not found".
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
+  const solveButton = page.getByTestId("stage-auto-schedule");
+  await expect(solveButton).toBeVisible({ timeout: 20_000 });
+  await expect(solveButton).toBeDisabled();
+  await expect(page.getByTestId("stage-auto-schedule-blocked")).toBeVisible();
+
+  // Server is the authority, not just the UI (acceptance criteria) — the
+  // SAME impossibility is refused at the API even if a client bypassed the
+  // disabled button.
+  const refused = await apiJson(request, `/api/v1/stages/${stageId}/schedule/auto`, "POST", {
+    only_unlocked: true,
+  });
+  expect(refused.status).toBe(422);
+  expect(refused.error?.code).toBe("CAPACITY_IMPOSSIBLE");
+});
+
+test("capacity precheck: applying a suggestion clears the block and enables Solve", async ({ page, request }) => {
+  const { divisionId } = await seedTightRoundRobin(request);
+
+  await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=settings"));
+  const card = page.locator('[data-capacity-verdict="impossible"]');
+  await expect(card).toBeVisible({ timeout: 20_000 });
+
+  // "Add 1 day" is a verdict-flipper for this exact fixture (28 fixtures,
+  // 24 slots/day -> 2 days comfortably clears it) and its knob (`endAt`) is
+  // local to this panel — apply it, then Save.
+  await card.getByRole("button", { name: "Apply" }).first().click();
+  // "Save settings" (boardset.save), not "Save" — verified against en/ui.json
+  // rather than guessed, after an earlier draft of this spec got it wrong.
+  await page.getByRole("button", { name: "Save settings" }).click();
+  await expect(page.getByText(/saved/i)).toBeVisible({ timeout: 20_000 });
+
+  // The card itself should no longer read impossible after the save+refresh
+  // round trip (router.refresh() re-seeds this panel's draft state from the
+  // new stored config).
+  await expect(page.locator('[data-capacity-verdict="impossible"]')).toHaveCount(0, { timeout: 20_000 });
+
+  // And the OTHER page's Solve button is enabled again. Same tab caveat as
+  // the first test — without ?tab=fixtures this lands on Entrants.
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
+  await expect(page.getByTestId("stage-auto-schedule")).toBeEnabled({ timeout: 20_000 });
+  await expect(page.getByTestId("stage-auto-schedule-blocked")).toHaveCount(0);
+});

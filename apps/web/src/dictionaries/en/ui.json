@@ -3655,5 +3655,19 @@
   "scorepad.timeline.voided": "undone",
   "scorepad.timeline.unknownRecorder": "Scorer",
   "scorepad.timeline.devicePad": "Recorded from a linked device",
-  "scorepad.header.score": "Score"
+  "scorepad.header.score": "Score",
+  "schedule.capacity.title": "Capacity check",
+  "schedule.capacity.verdict.ok": "Comfortable",
+  "schedule.capacity.verdict.tight": "Tight",
+  "schedule.capacity.verdict.impossible": "Won't fit",
+  "schedule.capacity.summary": "{demand} to place vs {supply} available slots",
+  "schedule.capacity.restViolations": "Entrants short on rest: {n}",
+  "schedule.capacity.suggestions.title": "Ways to fix it",
+  "schedule.capacity.suggestion.addDay": "Add 1 day",
+  "schedule.capacity.suggestion.addCourt": "Add 1 {venue}",
+  "schedule.capacity.suggestion.shortenMatch": "Shorten matches by {n} min",
+  "schedule.capacity.suggestion.shrinkGap": "Reduce the gap by {n} min",
+  "schedule.capacity.suggestion.raiseCap": "Raise the daily match cap by 1",
+  "schedule.capacity.apply": "Apply",
+  "schedule.capacity.blockedReason": "Solve is blocked until this fits — see the Capacity check on the Settings tab"
 }

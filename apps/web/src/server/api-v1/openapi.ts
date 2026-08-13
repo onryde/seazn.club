@@ -103,7 +103,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/format-preview", method: "post", summary: "Example fixtures for a stage graph (placeholder entrants; no persistence)", tag: "scheduling", request: z.object({ count: z.number().int().min(2).max(64).default(8), stages: z.array(z.object({ kind: z.string(), name: z.string(), config: z.record(z.string(), z.unknown()), qualification: z.unknown().nullable() })) }), response: z.object({ phases: z.array(z.object({ title: z.string(), note: z.string().optional(), sections: z.array(z.object({ title: z.string(), matches: z.array(z.object({ home: z.string(), away: z.string() })) })) })) }) },
   { path: "/divisions/{id}/schedule-settings", method: "get", summary: "Get scheduling settings (defaults when unset)", tag: "scheduling", response: S.ScheduleSettings },
   { path: "/divisions/{id}/schedule-settings", method: "put", summary: "Upsert scheduling settings (constraint fields are Pro)", tag: "scheduling", request: S.PutScheduleSettings, response: S.ScheduleSettings, errors: [402] },
-  { path: "/stages/{id}/schedule/auto", method: "post", summary: "Run the pure calendar pass — propose only, nothing persisted", tag: "scheduling", request: S.AutoScheduleRequest, response: S.AutoScheduleResult },
+  { path: "/stages/{id}/schedule/auto", method: "post", summary: "Run the pure calendar pass — propose only, nothing persisted. 422 CAPACITY_IMPOSSIBLE (D2 pre-check, `error.capacity_report` attached) when the configured courts/dates/rest rules cannot arithmetically fit the movable fixtures, BEFORE either solver is reached", tag: "scheduling", request: S.AutoScheduleRequest, response: S.AutoScheduleResult, errors: [422] },
   { path: "/stages/{id}/schedule/apply", method: "post", summary: "Persist an assignment set; blocking conflicts → 409", tag: "scheduling", request: S.ApplyScheduleRequest, response: S.ApplyScheduleResult, errors: [402, 409, 422] },
   { path: "/divisions/{id}/schedule/validate", method: "post", summary: "Full board conflict report (doc 12 §2 taxonomy)", tag: "scheduling", response: S.ValidateScheduleResult },
   { path: "/divisions/{id}/publish-schedule", method: "post", summary: "Publish the timetable (division → scheduled), validated server-side: blocking conflicts 422 SCHEDULE_BLOCKING_CONFLICTS; warnings 422 SCHEDULE_UNACKNOWLEDGED_WARNINGS until acknowledge_warnings", tag: "scheduling", request: S.PublishScheduleRequest, response: S.PublishScheduleResult, errors: [422] },
@@ -236,7 +236,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/divisions/{id}/schedule/ai-last", method: "get", summary: "Recall the division's most recent AI-sourced schedule apply (instruction + summary + timestamp), or null; all plans", tag: "scheduling", response: S.AiLastResult },
   // Multi-division joint AI scheduling (#350) — one model call over >= 2
   // divisions of one competition, priced as a batch.
-  { path: "/competitions/{id}/schedule/ai-plan", method: "post", summary: "Joint AI Schedule Architect: plan 2-20 divisions of one competition in ONE engine-verified run, so cross-division court and player clashes are solved rather than discovered later. Propose-only. Needs `scheduling.ai` + `scheduling.multi_division` (Pro), metered by the AI credit wallet at max(1, sum of per-division rungs - 1) credits (402 when empty). Fewer than two solvable divisions -> 400 `AI_PLAN_SINGLE_DIVISION`; more than 500 movable fixtures in total -> 409 `AI_PLAN_TOO_LARGE`; a division with no courts or unusable settings -> 422 `AI_PLAN_DIVISION_UNPLANNABLE`; a division emptied mid-run -> retryable 409 `AI_PLAN_SCOPE_CHANGED`. 3 runs/hour per competition", tag: "scheduling", request: S.AiCompetitionPlanRequest, response: S.AiCompetitionPlanResponse, errors: [400, 402, 403, 404, 409, 422, 429, 503] },
+  { path: "/competitions/{id}/schedule/ai-plan", method: "post", summary: "Joint AI Schedule Architect: plan 2-20 divisions of one competition in ONE engine-verified run, so cross-division court and player clashes are solved rather than discovered later. Propose-only. Needs `scheduling.ai` + `scheduling.multi_division` (Pro), metered by the AI credit wallet at max(1, sum of per-division rungs - 1) credits (402 when empty). Fewer than two solvable divisions -> 400 `AI_PLAN_SINGLE_DIVISION`; more than 500 movable fixtures in total -> 409 `AI_PLAN_TOO_LARGE`; a division with no courts or unusable settings -> 422 `AI_PLAN_DIVISION_UNPLANNABLE`; any kept division arithmetically unable to fit its courts/dates/rest rules (D2 pre-check, before the wallet is touched) -> 422 `CAPACITY_IMPOSSIBLE` naming every impossible division; a division emptied mid-run -> retryable 409 `AI_PLAN_SCOPE_CHANGED`. 3 runs/hour per competition", tag: "scheduling", request: S.AiCompetitionPlanRequest, response: S.AiCompetitionPlanResponse, errors: [400, 402, 403, 404, 409, 422, 429, 503] },
   { path: "/competitions/{id}/schedule/ai-last", method: "get", summary: "Recall the competition's most recent AI-sourced JOINT schedule apply (instruction + summary + timestamp), or null, plus how many joint runs the competition has had. The joint twin of the division endpoint: an AI plan is propose-only, so only an APPLIED plan is recalled; all plans", tag: "scheduling", response: S.AiCompetitionLastResult },
   { path: "/competitions/{id}/schedule/apply", method: "post", summary: "Apply a joint plan across several divisions ATOMICALLY: ONE transaction writes every listed division's board or none of it, so a failure part-way through can never leave half a schedule written (the per-stage apply, called in a loop, can). Every division's advisory lock is taken in a fixed order, every `expected_seq` is checked (a stale one on any division -> 409 `SEQ_CONFLICT` and nothing is written), and the MERGED board is verified so a cross-division court clash is a 409 `SCHEDULE_CONFLICT` rather than a silent double-book. Non-blocking warnings (rest, blackout, session window, start window, person overlap) come back in full — except that a division whose `constraints.crossPersonClash` is `hard` blocks on its own person overlaps, exactly as the per-stage apply does. A locked division or a fixture that is not in the division it was listed under -> 422; more than 500 assignments in one call -> 409 `SCHEDULE_APPLY_TOO_LARGE`. Needs `scheduling.multi_division` (Pro): the request carries client-supplied assignments, so this is a multi-division bulk write in its own right, not merely the tail of a paid plan run. Free otherwise — the plan run was already charged", tag: "scheduling", request: S.ApplyCompetitionScheduleRequest, response: S.ApplyCompetitionScheduleResult, errors: [400, 402, 403, 404, 409, 422] },
   { path: "/competitions/{id}/schedule/restore", method: "post", summary: "Undo one joint apply — restores every division that apply wrote (confirm: true). The body carries the per-division checkpoint anchors, since the apply event records only `division_ids`, and the division set must EXACTLY equal that list: a subset is a 422, not a partial restore. NOT one transaction — each division rewinds through its own single-writer appends, exactly as the per-division restore does — so a division that refuses is REPORTED in `failed` while the rest still restore, and `ok` is false. The newest apply event is read once as an ANCHOR and re-read before each division, so a joint apply that lands mid-rewind is DETECTED rather than overwritten: the loop stops there, every division it did not reach comes back in `failed` saying a newer apply superseded the undo, the divisions already rewound keep their real `steps` in `restored`, and `ok` is false. Nothing here waits on a lock, so there is no 409 — a second undo of the same apply is idempotent (it rewinds 0 steps), and the console disables its own undo button while one is running. No joint apply on the competition -> 404", tag: "history", request: S.RestoreCompetitionScheduleRequest, response: S.RestoreCompetitionScheduleResult, errors: [404, 422] },
@@ -305,6 +305,22 @@ function envelope(data?: ZodType): Record<string, unknown> {
   };
 }
 
+// Shared by ERROR_ENVELOPE (below) and CAPACITY_ERROR_ENVELOPE (further
+// down): every property a refusal MIGHT carry, regardless of which route
+// threw it. Kept small on purpose — this is the base every response x
+// status in the whole API is built from (`operation()`'s `responses[...]`
+// loop inlines it verbatim, not by $ref), so anything added here is added
+// EVERYWHERE. A route-specific extra (like the capacity precheck's report)
+// belongs on a SCOPED variant instead — see the P1 review finding this
+// comment exists because of: `capacity_report` landed here first and
+// roughly doubled both openapi/v1*.json (776 inlined copies, one per
+// route x error status in the entire API, not just the two guarded routes).
+const BASE_ERROR_PROPERTIES = {
+  code: { type: "string" },
+  message: { type: "string" },
+  current_seq: { type: "integer", description: "On SEQ_CONFLICT (409): the ledger tip to resync from" },
+} as const;
+
 const ERROR_ENVELOPE = {
   type: "object",
   required: ["ok", "error", "requestId"],
@@ -313,16 +329,49 @@ const ERROR_ENVELOPE = {
     error: {
       type: "object",
       required: ["code", "message"],
+      properties: BASE_ERROR_PROPERTIES,
+      additionalProperties: true,
+    },
+    requestId: { type: "string", format: "uuid" },
+  },
+} as const;
+
+// SCOPED to the capacity-guarded routes' 422 only (ERROR_SCHEMA_OVERRIDES,
+// consulted from `operation()`) — never embedded in the shared
+// ERROR_ENVELOPE above. `capacity_report` is the SAME literal
+// `CAPACITY_REPORT_KEY` the throw site (capacity-guard.ts) and smoke.ts's
+// assertion use — imported, not retyped, after those three disagreeing was
+// itself a review finding (the wire key was actually `report`, silently
+// spread from `HttpError.extra` with no rename, while this schema and
+// smoke.ts both said `capacity_report`).
+const CAPACITY_ERROR_ENVELOPE = {
+  type: "object",
+  required: ["ok", "error", "requestId"],
+  properties: {
+    ok: { const: false },
+    error: {
+      type: "object",
+      required: ["code", "message"],
       properties: {
-        code: { type: "string" },
-        message: { type: "string" },
-        current_seq: { type: "integer", description: "On SEQ_CONFLICT (409): the ledger tip to resync from" },
+        ...BASE_ERROR_PROPERTIES,
+        [S.CAPACITY_REPORT_KEY]: {
+          ...toSchema(S.CapacityReport),
+          description: "On CAPACITY_IMPOSSIBLE (422): the D2 arithmetic pre-check report",
+        },
       },
       additionalProperties: true,
     },
     requestId: { type: "string", format: "uuid" },
   },
 } as const;
+
+// `"METHOD /path"` (the literal `RouteSpec.path`, `{id}` un-substituted) ->
+// status -> the envelope THAT route x status uses instead of the plain
+// ERROR_ENVELOPE. Consulted once, inside `operation()`'s `route.errors`
+// loop, so a route not listed here is completely unaffected.
+const ERROR_SCHEMA_OVERRIDES: Record<string, Partial<Record<number, unknown>>> = {
+  "POST /stages/{id}/schedule/auto": { 422: CAPACITY_ERROR_ENVELOPE },
+};
 
 function pathParams(path: string): object[] {
   const params = [...path.matchAll(/\{([^}]+)\}/g)].map((m) => m[1]);
@@ -406,10 +455,11 @@ function operation(route: RouteSpec): Record<string, unknown> {
     responses["401"] = { description: "Not authenticated", content: { "application/json": { schema: ERROR_ENVELOPE } } };
   }
   responses["404"] = { description: "Not found", content: { "application/json": { schema: ERROR_ENVELOPE } } };
+  const overrides = ERROR_SCHEMA_OVERRIDES[`${route.method.toUpperCase()} ${route.path}`];
   for (const status of route.errors ?? []) {
     responses[String(status)] = {
       description: { 402: "Plan upgrade required", 409: "Conflict", 422: "Rejected by the engine", 429: "Rate limited" }[status] ?? "Error",
-      content: { "application/json": { schema: ERROR_ENVELOPE } },
+      content: { "application/json": { schema: overrides?.[status] ?? ERROR_ENVELOPE } },
     };
   }
   // Response example: success envelope around a data sample.

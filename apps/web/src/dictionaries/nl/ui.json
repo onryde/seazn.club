@@ -3655,5 +3655,19 @@
   "scorepad.timeline.voided": "ongedaan gemaakt",
   "scorepad.timeline.unknownRecorder": "Scorer",
   "scorepad.timeline.devicePad": "Geregistreerd vanaf een gekoppeld apparaat",
-  "scorepad.header.score": "Score"
+  "scorepad.header.score": "Score",
+  "schedule.capacity.title": "Capaciteitscontrole",
+  "schedule.capacity.verdict.ok": "Ruim voldoende",
+  "schedule.capacity.verdict.tight": "Krap",
+  "schedule.capacity.verdict.impossible": "Past niet",
+  "schedule.capacity.summary": "{demand} te plaatsen tegenover {supply} beschikbare plekken",
+  "schedule.capacity.restViolations": "Deelnemers met te weinig rust: {n}",
+  "schedule.capacity.suggestions.title": "Manieren om dit op te lossen",
+  "schedule.capacity.suggestion.addDay": "1 dag toevoegen",
+  "schedule.capacity.suggestion.addCourt": "1 {venue} toevoegen",
+  "schedule.capacity.suggestion.shortenMatch": "Wedstrijden {n} min inkorten",
+  "schedule.capacity.suggestion.shrinkGap": "Pauze met {n} min verkorten",
+  "schedule.capacity.suggestion.raiseCap": "Dagelijkse wedstrijdlimiet met 1 verhogen",
+  "schedule.capacity.apply": "Toepassen",
+  "schedule.capacity.blockedReason": "Oplossen is geblokkeerd totdat dit past. Zie de capaciteitscontrole op het tabblad Instellingen"
 }
