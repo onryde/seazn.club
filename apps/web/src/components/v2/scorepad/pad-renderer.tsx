@@ -28,6 +28,8 @@ import type { ActionValues } from "./action-form";
 import { Panel } from "./panel";
 import { FidelitySwitcher } from "./fidelity-switcher";
 import { AttributionPicker } from "./attribution-picker";
+import { skinFor } from "./skins/registry";
+import { createSkinDispatch, type SkinDef } from "./skins/types";
 
 const EMPTY_SPEC: PadSpec = { panels: [], fidelity: {}, fidelityEntitlements: {} };
 
@@ -68,6 +70,19 @@ export interface PadRendererProps {
    *  this component decides a persistent slot belongs. Neither built nor
    *  interpreted here. */
   timelineSlot?: ReactNode;
+  /** Skin selection. THREE distinct states, and the difference matters:
+   *   - `undefined` (the default): consult the registry — a sport with a
+   *     hand-crafted layout gets it, everything else gets the universal panel
+   *     walk. This is what every real caller wants.
+   *   - `null`: force the universal renderer even for a skinned sport. Exists
+   *     so the universal path stays testable against a multi-phase spec
+   *     (cricket is the only module declaring pre/live/post, and it is
+   *     skinned), and so S12 can fall back deliberately.
+   *   - a `SkinDef`: draw this skin regardless of sport.
+   *  Note the default is registry lookup, NOT "no skin" — a seam that only
+   *  works when a caller remembers to pass something is how S10's attribution
+   *  picker shipped inert. */
+  skin?: SkinDef | null;
   /** Fires whenever the pipeline's own fold advances — e.g. for a persistent
    *  score header mounted alongside this component. Never drives anything
    *  inside this file itself. */
@@ -149,6 +164,34 @@ export function PadRenderer(props: PadRendererProps) {
   // anything: PadRenderer already re-renders on every `pipeline.summary`
   // change via the onStateChange effect above.
   const headline = summaryHeadline(pipeline.summary);
+
+  // S11/#420 W9 — the sport's hand-crafted layout, if it has one. Keyed on the
+  // module's own key, so a module added later with no skin simply keeps the
+  // universal renderer with no change here.
+  const skin = useMemo(
+    () => (props.skin === undefined ? skinFor(props.module.key) : props.skin),
+    [props.skin, props.module.key],
+  );
+  const skinCtx = useMemo(
+    () => ({
+      cfg: props.cfg,
+      state: pipeline.state,
+      summary: pipeline.summary,
+      band,
+      personNames: props.personNames,
+      lineups: props.lineups,
+    }),
+    [props.cfg, pipeline.state, pipeline.summary, band, props.personNames, props.lineups],
+  );
+  // A skin never receives `pipeline.submit`. It gets a dispatch that refuses
+  // any type the CURRENT view does not declare, so "a skin invented an event"
+  // fails at the call site rather than 422-ing server-side. Submit-state
+  // tracking stays identical to the universal path (`handleSubmit`).
+  const skinDispatch = useMemo(
+    () => createSkinDispatch(view, (type, payload) => handleSubmit(type, payload as Record<string, unknown>)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [view],
+  );
 
   // Default attribution rendering — see the note at the render site below.
   const renderAttribution = useMemo(
@@ -237,6 +280,23 @@ export function PadRenderer(props: PadRendererProps) {
 
       {view.panels.length === 0 ? (
         <p className="card p-4 text-center text-sm text-purple-400">{msg("scorepad.emptyPhase")}</p>
+      ) : skin ? (
+        /* S11/#420 W9 — a sport with a hand-crafted layout draws through it
+         *  instead of the universal panel walk. Consulted HERE rather than
+         *  left for S12 to wire (owner ruling 2026-08-13): a registry nothing
+         *  calls is the same defect as S10's picker, which shipped reachable
+         *  only if a caller remembered to pass it. Every unskinned sport falls
+         *  through to the panel walk below, unchanged. */
+        <skin.Component
+          view={view}
+          spec={spec}
+          ctx={skinCtx}
+          layout={skin.layout(view, skinCtx)}
+          dispatch={skinDispatch}
+          queueDepth={pipeline.queueDepth}
+          offline={pipeline.offline}
+          submittingType={submittingType}
+        />
       ) : (
         view.panels.map((panel) => (
           <Panel

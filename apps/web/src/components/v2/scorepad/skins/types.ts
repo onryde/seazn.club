@@ -22,6 +22,7 @@
 // `skinFor()` is consulted by PadRenderer itself (registry.ts), not left for
 // S12 to wire.
 import type { ComponentType } from "react";
+import type { LineupPair } from "@seazn/engine/core";
 import type { FidelityBand, PadSpec } from "@seazn/engine/sport";
 import type { PadActionView, PadView } from "../view-model";
 
@@ -68,6 +69,21 @@ export interface SkinHeader {
 }
 
 export interface SkinLayoutCtx {
+  /** personId -> display name. Optional because the pure sweep in
+   *  `skin-coverage.test.ts` has no roster to hand in, and a skin must stay
+   *  total without one. Absent (or a missing id) means the skin shows whatever
+   *  it can — never a crash, never a blank.
+   *
+   *  This channel exists because THREE skin implementers independently
+   *  reported the same gap in the first pass: without it every person picker
+   *  renders a raw person id, so a scorer picking a fielder or an assist sees
+   *  a UUID. That is this programme's recurring shape — a surface that is
+   *  built, tested and technically reachable, but not actually usable — so it
+   *  is fixed centrally here rather than worked around five times. */
+  personNames?: Readonly<Record<string, string>>;
+  /** The fixture's two entrants and their members, as the chassis already
+   *  holds them (`PadRendererProps.lineups`). Optional for the same reason. */
+  lineups?: LineupPair;
   /** The module's cfg. Several facts a skin needs are cfg-ONLY and never
    *  surface in PadSpec -- cricket's `ballsPerOver` (5 for the hundred, 6
    *  otherwise) is the measured example: t20/odi/hundred produce byte-identical

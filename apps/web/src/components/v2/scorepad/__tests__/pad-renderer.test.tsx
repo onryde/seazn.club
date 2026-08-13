@@ -23,6 +23,7 @@ import { Panel } from "../panel";
 import { FidelitySwitcher } from "../fidelity-switcher";
 import { AttributionPicker } from "@/components/v2/scorepad/attribution-picker";
 import { PadRenderer } from "../pad-renderer";
+import { skinFor } from "../skins/registry";
 
 function find(tree: ReactElement[], pred: (el: ReactElement) => boolean): ReactElement {
   const el = tree.find(pred);
@@ -471,6 +472,11 @@ const CRICKET_CFG = cricket.configSchema.parse({});
 const CRICKET_LINEUPS = defaultLineupPair(cricket.positions);
 
 describe("PadRenderer — phase navigation", () => {
+  // `skin: null` forces the UNIVERSAL path. Cricket is the only module that
+  // declares all three phases, and since S11/#420 it is also skinned — so
+  // without the opt-out these tests would assert panel structure against a
+  // hand-crafted layout that deliberately does not draw Panels. The skin's own
+  // routing is asserted separately below.
   function mountCricket() {
     return renderIsland(PadRenderer, {
       module: resolveModuleClient("cricket", "1.0.0"),
@@ -481,6 +487,7 @@ describe("PadRenderer — phase navigation", () => {
       transport: fakeTransport({ appendResults: [] }),
       band: 3 as const,
       entitlements: { "stats.player": true, "scoring.ball_by_ball": true },
+      skin: null,
     });
   }
 
@@ -587,6 +594,7 @@ describe("PadRenderer — fidelity band integration: reveals actions, never rese
       band: 1 as const,
       entitlements: { "stats.player": true, "scoring.ball_by_ball": true },
       onStateChange: (state) => seenStates.push(state),
+      skin: null, // universal path — see the note on mountCricket above
     });
     await tick();
 
@@ -774,5 +782,47 @@ describe("PadRenderer — the attribution picker is the DEFAULT, not an opt-in",
     const marker = { type: "custom" } as unknown as ReactElement;
     const forwarded = forwardedRenderer({ renderAttribution: () => marker });
     expect(forwarded!(attributedAction, {}, () => undefined)).toBe(marker);
+  });
+});
+
+describe("PadRenderer — skin routing (S11/#420 W9)", () => {
+  // The reachability proof. S10's attribution picker shipped written, tested
+  // and reachable ONLY IF a caller remembered to pass it, and no unit test
+  // could see it — "fifth instance of this programme's signature defect".
+  // A skin registry that PadRenderer never consults would be the sixth. These
+  // two tests fail the moment the consult is removed.
+  it("routes a skinned sport to its skin by DEFAULT — no prop passed", () => {
+    const skin = skinFor("cricket");
+    expect(skin).not.toBeNull();
+    const island = renderIsland(PadRenderer, {
+      module: resolveModuleClient("cricket", "1.0.0"),
+      cfg: CRICKET_CFG,
+      fixtureId: "fx-1",
+      lineups: CRICKET_LINEUPS,
+      identity: ME,
+      transport: fakeTransport({ appendResults: [] }),
+      band: 3 as const,
+      entitlements: { "stats.player": true, "scoring.ball_by_ball": true },
+    });
+    const tree = island.tree();
+    expect(findAll(tree, isType(skin!.Component)).length).toBe(1);
+    // and the universal panel walk is NOT also drawn — one or the other
+    expect(findAll(tree, isType(Panel)).length).toBe(0);
+  });
+
+  it("leaves an unskinned sport on the universal panel walk", () => {
+    const generic = resolveModuleClient("generic", "1.0.0");
+    expect(skinFor("generic")).toBeNull();
+    const island = renderIsland(PadRenderer, {
+      module: generic,
+      cfg: { resultMode: "score" as const, allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      fixtureId: "fx-1",
+      lineups: defaultLineupPair(generic.positions),
+      identity: ME,
+      transport: fakeTransport({ appendResults: [] }),
+      band: 3 as const,
+      entitlements: {},
+    });
+    expect(findAll(island.tree(), isType(Panel)).length).toBeGreaterThan(0);
   });
 });
