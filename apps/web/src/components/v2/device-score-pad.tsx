@@ -8,13 +8,6 @@
 import { useCallback, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
-import { GenericPad } from "@/components/v2/pads/generic-pad";
-import { BoardgamePad } from "@/components/v2/pads/boardgame-pad";
-import { SetbasedPad } from "@/components/v2/pads/setbased-pad";
-import { TennisPad } from "@/components/v2/pads/tennis-pad";
-import { PeriodPad } from "@/components/v2/pads/period-pad";
-import { FootballPad } from "@/components/v2/pads/football-pad";
-import { CricketPad } from "@/components/v2/pads/cricket-pad";
 import type {
   LiveState,
   SendEvent,
@@ -24,9 +17,13 @@ import type {
 import { useMsg } from "@/components/i18n/dict-provider";
 import { scoringErrorText } from "@/lib/scoring-vocab";
 import type { MessageKey } from "@/lib/messages";
-// S12/#421 W10 — the v2 scoring pad, behind the `scorepad-v2` flag. Additive:
-// `scorePadV2` is optional and defaults to null, so every existing caller
-// (and every test that does not pass it) keeps the v1 chain below untouched.
+// S13/#422 W11 — the v2 scoring pad is now the only pad this dispatcher
+// renders (S12/#421's flag has been removed entirely, along with the seven
+// v1 pad components it used to choose between — this dispatcher never had a
+// carrom branch at all, so carrom is scoreable over a device link for the
+// first time as of this cutover). `scorePadV2` stays nullable: a server-side
+// bootstrap-resolution failure (fidelity.ts's own doc) means "no pad
+// renders", never a fallback to a v1 chain that no longer exists.
 import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/registry";
 
 export type PadSideInfo = SideInfo;
@@ -59,20 +56,14 @@ interface Props {
   away: PadSideInfo | null;
   initialState: LiveState;
   initialEvents: PadEventIn[];
-  /** S12/#421 — the `scorepad-v2` flag's verdict for THIS fixture, resolved
-   *  server-side, plus everything `<ScorePad/>` needs beyond what this
-   *  component already has. Presence IS the flag: null/omitted (the
-   *  default) renders the v1 chain below exactly as before; present renders
-   *  `<ScorePad/>` instead — including for carrom, which this dispatcher's
-   *  v1 chain has never been able to score (no carrom branch at all here). */
+  /** Everything `<ScorePad/>` needs beyond what this component already has,
+   *  resolved server-side (`resolveScorePadBootstrap`,
+   *  server/usecases/fidelity.ts). Null only on a resolution failure — the
+   *  pad section then renders nothing rather than a fallback, since
+   *  S13/#422 removed the v1 pad it used to fall back to. */
   scorePadV2?: ScorePadBootstrap | null;
 }
 
-const SETBASED = new Set(["volleyball", "badminton", "tabletennis"]);
-// Nested-kernel sports (points → games → sets) — TennisPad, not SetbasedPad.
-const NESTED = new Set(["tennis"]);
-// Period-kernel sports — PeriodPad (football stays on FootballPad this wave).
-const PERIOD = new Set(["icehockey", "hockey"]);
 const DEAD_CODES = new Set(["LINK_EXPIRED", "LINK_REVOKED", "LINK_INVALID", "UNAUTHENTICATED"]);
 
 export function DeviceScorePad({
@@ -283,11 +274,11 @@ export function DeviceScorePad({
         </div>
       )}
 
-      {/* Sport pad (v2) — S12/#421. A fully separate, mutually-exclusive
-          block from the v1 one below (never `scorePadV2 &&` nested inside
-          it), so the v1 ternary chain's own lines stay byte-identical; only
-          its guard condition below gains a `!scorePadV2 &&` to keep the two
-          from ever rendering at once. */}
+      {/* Sport pad — S13/#422: the v2 registry, unconditionally (the flag and
+          the seven v1 pads it used to choose between are gone). `scorePadV2`
+          stays a null-guard, not a flag check: it is null only when
+          server-side bootstrap resolution failed, in which case there is no
+          v1 chain left to fall back to and the section renders nothing. */}
       {scorePadV2 && scoring && !decided && home && away && (
         <section className="card p-4">
           <ScoringErrorBoundary>
@@ -304,28 +295,6 @@ export function DeviceScorePad({
               entitlements={scorePadV2.entitlements}
               band={scorePadV2.band}
             />
-          </ScoringErrorBoundary>
-        </section>
-      )}
-
-      {!scorePadV2 && scoring && !decided && home && away && (
-        <section className="card p-4">
-          <ScoringErrorBoundary>
-            {sport.key === "cricket" ? (
-              <CricketPad sport={sport} home={home} away={away} live={live} send={send} busy={busy} />
-            ) : sport.key === "football" ? (
-              <FootballPad sport={sport} home={home} away={away} live={live} send={send} busy={busy} />
-            ) : SETBASED.has(sport.key) ? (
-              <SetbasedPad sport={sport} home={home} away={away} live={live} send={send} busy={busy} />
-            ) : NESTED.has(sport.key) ? (
-              <TennisPad sport={sport} home={home} away={away} live={live} send={send} busy={busy} />
-            ) : PERIOD.has(sport.key) ? (
-              <PeriodPad sport={sport} home={home} away={away} live={live} send={send} busy={busy} />
-            ) : sport.key === "boardgame" ? (
-              <BoardgamePad home={home} away={away} send={send} busy={busy} started={started} />
-            ) : (
-              <GenericPad sport={sport} home={home} away={away} send={send} busy={busy} />
-            )}
           </ScoringErrorBoundary>
         </section>
       )}
