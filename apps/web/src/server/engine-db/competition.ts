@@ -221,6 +221,16 @@ function toTableStage(inputs: StageInputs): TableStage {
   };
 }
 
+/**
+ * V358 (P3 / D7 weekly digest) — one step of standings history. `rows` rolls
+ * into `previous_rows` ONLY when the write actually changes the table (`is
+ * distinct from`): `recomputeStandings` is idempotent and reruns on every
+ * decided/void write, so an unguarded assignment would let a same-answer
+ * rerun overwrite `previous_rows` with the CURRENT rows and erase the real
+ * delta before the digest's "biggest climber" line ever reads it. A stage
+ * snapshotted for the first time has nothing to roll — `previous_rows` stays
+ * null, which the digest treats as "no history yet", not an error.
+ */
 async function writeSnapshot(
   tx: Tx,
   stageId: string,
@@ -232,6 +242,11 @@ async function writeSnapshot(
     insert into standings_snapshots (stage_id, pool_id, rows, computed_through_seq)
     values (${stageId}, ${poolId}, ${tx.json(rows as never)}, ${through})
     on conflict on constraint standings_snapshots_pkey do update set
+      previous_rows = case
+        when standings_snapshots.rows is distinct from excluded.rows
+        then standings_snapshots.rows
+        else standings_snapshots.previous_rows
+      end,
       rows = excluded.rows, computed_through_seq = excluded.computed_through_seq, updated_at = now()
   `;
 }

@@ -224,6 +224,61 @@ describe.skipIf(!HAS_DB)("engine-db persistence adapter", () => {
     expect(snap.rows).toHaveLength(2);
   });
 
+  // V358 / P3 (D7 weekly digest) — `previous_rows` preserves ONE step of
+  // standings history so the digest's "biggest climber" line has something to
+  // diff against. `recomputeStandings` is idempotent and reruns on every
+  // decided/void write, so the write must only roll `rows` into
+  // `previous_rows` when the recompute actually CHANGED the table — an
+  // unguarded assignment would let a same-answer rerun overwrite
+  // `previous_rows` with the current rows and erase the real delta before the
+  // digest ever reads it.
+  it("previous_rows captures the prior table and survives an idempotent rerun (V358)", async () => {
+    const s = await seed();
+
+    // First-ever snapshot: no fixture decided yet, both entrants at zero.
+    const zeroed = await recomputeStandings(s.orgId, s.stageId);
+    expect(zeroed.every((r) => r.points === 0)).toBe(true);
+    const [afterFirst] = await sql<{ rows: { entrantId: string; points: number }[]; previous_rows: unknown }[]>`
+      select rows, previous_rows from standings_snapshots
+      where stage_id = ${s.stageId} and pool_id is null
+    `;
+    expect(afterFirst.previous_rows).toBeNull(); // nothing to diff against yet
+
+    // Decide the fixture — the recompute now produces a DIFFERENT table.
+    await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
+    await appendEvent(s.orgId, s.fixtureId, 1, {
+      type: "generic.result",
+      payload: { p1Score: 2, p2Score: 1 },
+    });
+    const decided = await recomputeStandings(s.orgId, s.stageId);
+    expect(decided.find((r) => r.entrantId === s.home)?.points).toBe(3);
+    const [afterDecided] = await sql<{
+      rows: { entrantId: string; points: number }[];
+      previous_rows: { entrantId: string; points: number }[] | null;
+    }[]>`
+      select rows, previous_rows from standings_snapshots
+      where stage_id = ${s.stageId} and pool_id is null
+    `;
+    // previous_rows now holds the PRE-decision (all-zero) table.
+    expect(afterDecided.previous_rows).not.toBeNull();
+    expect(afterDecided.previous_rows!.every((r) => r.points === 0)).toBe(true);
+
+    // Recompute AGAIN with no scoring change — rows are byte-identical to the
+    // last write, so the `is distinct from` guard must hold previous_rows at
+    // the zeroed table rather than clobbering it with the current (already
+    // decided) rows.
+    await recomputeStandings(s.orgId, s.stageId);
+    const [afterRerun] = await sql<{
+      rows: { entrantId: string; points: number }[];
+      previous_rows: { entrantId: string; points: number }[] | null;
+    }[]>`
+      select rows, previous_rows from standings_snapshots
+      where stage_id = ${s.stageId} and pool_id is null
+    `;
+    expect(afterRerun.previous_rows!.every((r) => r.points === 0)).toBe(true);
+    expect(afterRerun.rows.find((r) => r.entrantId === s.home)?.points).toBe(3);
+  });
+
   it("completeStageIfReady marks a finished league complete + records the ledger", async () => {
     const s = await seed();
     await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
