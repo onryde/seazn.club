@@ -10,6 +10,7 @@ const ORG_TZ = "UTC";
 const DIV = "div-1";
 
 interface FxRow {
+  id: string;
   stage_id: string;
   home_entrant_id: string | null;
   away_entrant_id: string | null;
@@ -17,7 +18,13 @@ interface FxRow {
   status: string;
 }
 
+// Auto-incrementing rather than a parameter: `id` is a new field on every
+// existing call site here (capacityForStage now reads it, stages-panel.tsx —
+// forcedDemand wiring), and none of these tests care WHICH id a fixture
+// gets, only that each is distinct.
+let fxCounter = 0;
 const fx = (stageId: string, status: string, home: string | null, away: string | null): FxRow => ({
+  id: `fx-${++fxCounter}`,
   stage_id: stageId,
   status,
   home_entrant_id: home,

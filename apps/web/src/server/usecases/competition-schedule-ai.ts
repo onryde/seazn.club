@@ -2550,10 +2550,23 @@ async function planForCompetition(
   await withTenant(auth.orgId, async (tx) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const orgTz = resolveVenueTz(null, org?.timezone ?? null);
+    // id/ext_key/winner_to_fixture (same three columns rowToRuleFixture
+    // renames, schedule.ts) are what let this guard's forcedDemand floor
+    // (fixture_on_date/fixture_on_weekday) resolve at all — without them
+    // capacityInputForFixtures still runs, just with no fixture identity to
+    // resolve a selector against (see CapacityFixtureInput's own comment).
     const fixtureRows = await tx<
-      { division_id: string; home_entrant_id: string | null; away_entrant_id: string | null; pool_id: string | null }[]
+      {
+        id: string;
+        division_id: string;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
+        pool_id: string | null;
+        ext_key: string | null;
+        winner_to_fixture: string | null;
+      }[]
     >`
-      select division_id, home_entrant_id, away_entrant_id, pool_id from fixtures
+      select id, division_id, home_entrant_id, away_entrant_id, pool_id, ext_key, winner_to_fixture from fixtures
       where division_id in ${tx(kept)} and status = ${MOVABLE_STATUS}`;
     for (const id of kept) {
       const row = byId.get(id)!;
@@ -2573,6 +2586,9 @@ async function planForCompetition(
           home: f.home_entrant_id ?? undefined,
           away: f.away_entrant_id ?? undefined,
           poolId: f.pool_id ?? undefined,
+          id: f.id,
+          extKey: f.ext_key,
+          winnerTo: f.winner_to_fixture,
         }));
       const input = capacityInputForFixtures(fixtures, slotConfig, id);
       if (process.env.DEBUG_CAPACITY === "1") {
