@@ -14,7 +14,7 @@
 // byte-identical, and `budgetExpired: false` on both is what proves the cap
 // never fired and the comparison is not two truncated runs agreeing by luck.
 import { describe, expect, it } from "vitest";
-import { buildSchedule } from "./build.ts";
+import { buildSchedule, TIER_COUNT } from "./build.ts";
 import { resetZ3 } from "./z3-load.ts";
 import type { SchedulableFixture, SlotConfig } from "./calendar.ts";
 
@@ -59,7 +59,7 @@ describe.skip("buildSchedule determinism", () => {
     expect(a.assignments).toEqual(b.assignments);
     expect(a.metrics).toEqual(b.metrics);
     // Not vacuous: a run that stopped before T0 would also match itself.
-    expect(a.tiersCompleted).toBe(4);
+    expect(a.tiersCompleted).toBe(TIER_COUNT);
     expect(a.budgetExpired).toBe(false);
     await resetZ3();
   }, 180_000);
@@ -70,7 +70,7 @@ describe.skip("buildSchedule determinism", () => {
     expect(a.assignments).toEqual(b.assignments);
     expect(a.metrics).toEqual(b.metrics);
     expect(a.tiersCompleted).toBe(b.tiersCompleted);
-    expect(a.tiersCompleted).toBe(4);
+    expect(a.tiersCompleted).toBe(TIER_COUNT);
     expect(a.budgetExpired).toBe(false);
     expect(b.budgetExpired).toBe(false);
     await resetZ3();

@@ -534,7 +534,16 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
    * case in this file asserts `infeasible`, which proves the pins were READ but
    * not that a board was built around them.
    */
-  it("build honours a locked anchor and schedules the rest around it", async () => {
+  // GATED as of 2026-08-13, and it always should have been: the block comment
+  // above says "NEEDS A REAL SOLVER (`HAS_SOLVER`)" and then the test was
+  // declared with a bare `it(`. Without a reachable placement service it runs
+  // the greedy fallback, which that comment itself records as not
+  // round-order-aware at the placement level, so it places 5 of 6 and reds on
+  // `placed` — a local failure that says nothing about the code under test.
+  // Verified pre-existing: the identical `expected 5 to be 6` reproduces on
+  // `main` with no solver. CI runs the placement container, so `HAS_SOLVER` is
+  // true there and this loses no coverage.
+  it.skipIf(!HAS_SOLVER)("build honours a locked anchor and schedules the rest around it", async () => {
     const auth = await seedOrg();
     const { stageId, created } = await seedStage(auth, 4);
     expect(created).toBe(6);

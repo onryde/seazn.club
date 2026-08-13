@@ -28,6 +28,7 @@ from ortools.sat.python import cp_model
 
 from _board_positional import rule_groups_for, to_positional
 from placement.model import DAY_MS, MIN_MS, build_model, solve
+from placement.objective import TIER_COUNT
 
 #: The production budget from the design spec, and the wall the acceptance
 #: criterion is stated at.
@@ -73,29 +74,49 @@ def _production_board():
 
 
 def test_production_board_meets_the_stated_acceptance_criterion():
-    """Prompt 02's acceptance criterion, asserted as written, for the first time.
+    """Prompt 02's acceptance criterion — RESTATED 2026-08-13, and the restating
+    is the point of this docstring. Read it before treating the assertions
+    below as the original ones.
 
-    *"the production board solves to OPTIMAL with 35-37 assignments in under 8
-    seconds, verified by an automated test."* Both halves existed in the suite;
-    neither was asserted against the other. `test_production_board_solves_under_budget`
-    accepts FEASIBLE and `tiers_completed >= 1` at the 8 s wall, and the OPTIMAL
-    half is proved in `test_objective.py` at a THIRTY second wall. Measured at
-    8 s under load 11: `FEASIBLE, 37 placed, tiers=2, elapsed_ms=8044` — the
-    criterion not met, the suite green.
+    THE ORIGINAL CRITERION NO LONGER HOLDS AND IS NOT BEING QUIETLY DROPPED.
+    It read: *"the production board solves to OPTIMAL with 35-37 assignments in
+    under 8 seconds, verified by an automated test."* At four rungs that was
+    true with ~40% margin (~4 940 ms idle). The day-aware T1 rungs took the
+    chain to six, and measured over 6 runs at a wall that lets it finish, the
+    full chain now costs 7 739 - 19 485 ms (median 17 657). At the 8 s
+    production wall it therefore returns FEASIBLE with four of six rungs
+    proved, not OPTIMAL.
 
-    Note what OPTIMAL means for this chain and why the count is asserted beside
-    it: `status` is OPTIMAL only when every requested tier was PROVED, so it
-    carries the four-tier claim; and a model with no objective at all also
-    returns OPTIMAL, with ZERO placed, so status alone is vacuous. Both
-    assertions are load-bearing.
+    WHERE THE COST IS, because it is not where it looks. The three new rungs
+    are cheap — `days` ~370 ms, `day_span` ~1 240 ms, `day_start` ~400 ms at
+    the median. `idle_gap` went from a 1 348 ms median to 14 931 ms. The
+    control run that explains it: `placed` + `idle_gap` alone, with no day
+    rungs in the chain at all, costs 12 439 ms. So the retired whole-board
+    `makespan` freeze had been doing `idle_gap`'s pruning for it as a side
+    effect, and what the wall is paying for is the removal of that term — not
+    the arrival of the new ones. `day_span` itself would not prove at all
+    (still FEASIBLE at 180 s) until its redundant per-day floor was added; see
+    `placement.model`'s T1 section.
 
-    THIS TEST IS LOAD-SENSITIVE ON PURPOSE. The same board measures ~4 940 ms
-    OPTIMAL idle and 8 044 ms FEASIBLE at load 11, on eight search workers over
-    six physical cores. That is the acceptance criterion being genuinely
-    marginal on a contended box, not a defect in the tier code, and weakening
-    the assertion would hide the one thing this test exists to say. The load
-    average is reported in the failure message so a red can be triaged rather
-    than guessed at; re-run alone before calling it a regression.
+    Owner ruling 2026-08-13, recorded rather than assumed: ship and report the
+    numbers, the production wall is a separate decision. So this test asserts
+    what the chain DOES now guarantee at 8 s, and says out loud what it no
+    longer does. What it guarantees:
+
+      * a COMPLETE board — every rung below `placed` only rearranges it;
+      * the whole of T1 PROVED. Four rungs (`placed`, `days`, `day_span`,
+        `day_start`) cost ~2.3 s at the median and have never exceeded 3.5 s in
+        any measured run, so the day-aware objective — the part this change is
+        for — finishes inside the production wall with margin. That is a
+        stronger statement than the old `>= 1`.
+
+    `test_objective.py::test_every_tier_completes_on_production_board` owns the
+    six-rung claim, at a wall that lets it finish.
+
+    THIS TEST IS LOAD-SENSITIVE ON PURPOSE and CI runs it advisory
+    (`continue-on-error`) for that reason. The load average is reported in the
+    failure message so a red can be triaged rather than guessed at; re-run
+    alone before calling it a regression.
     """
     fixtures, num_courts, grid_slots, step_minutes, constraints, existing, deps, rule_groups = (
         _production_board()
@@ -109,10 +130,16 @@ def test_production_board_meets_the_stated_acceptance_criterion():
     detail = (
         f"status={outcome.status} placed={len(outcome.assignments)} "
         f"tiers_completed={outcome.tiers_completed} elapsed_ms={outcome.elapsed_ms} "
-        f"wall={PRODUCTION_WALL_SECONDS}s load1={load:.2f}"
+        f"wall={PRODUCTION_WALL_SECONDS}s load1={load:.2f} values={outcome.objective_values}"
     )
     assert 35 <= len(outcome.assignments) <= 37, detail
-    assert outcome.status == "OPTIMAL", detail
+    # The wall is a cap, not a target.
+    assert outcome.elapsed_ms <= PRODUCTION_WALL_SECONDS * 1000 + 250, detail
+    # The whole day-aware objective proves inside the production wall.
+    assert outcome.tiers_completed >= 4, detail
+    reported = dict(outcome.objective_values)
+    for tier in ("days", "day_span", "day_start"):
+        assert tier in reported, detail
 
 
 def test_production_board_solves_under_budget():
@@ -352,7 +379,11 @@ def test_pinned_rows_are_not_overwritten_when_a_fixture_wants_the_slot():
     outcome = solve(model, wall_seconds=5.0)
     detail = f"status={outcome.status} tiers={outcome.tiers_completed} board={sorted(outcome.assignments)}"
 
-    assert outcome.tiers_completed == 4, detail  # tiny board; anything less means it did not run
+    # Tiny board; anything less means the chain did not run. Against
+    # `TIER_COUNT` rather than a literal, because the literal is what drifted:
+    # the chain went from four rungs to six on 2026-08-13 and a hardcoded 4
+    # here is a red that says nothing about pinned rows.
+    assert outcome.tiers_completed == TIER_COUNT, detail
     assert len(outcome.assignments) == PIN_BOARD_FREE_SLOTS, (
         "a movable fixture was placed into a pinned slot — the pinned-row fold in build_model "
         f"is not binding. {detail}"
@@ -504,28 +535,32 @@ def test_participant_rest_is_binding():
         )
 
 
-# --- an unplaceable board must not report a NEGATIVE makespan ---------------
+# --- an unplaceable board must not report a NEGATIVE day term ---------------
 
 
-def test_an_empty_board_reports_a_non_negative_makespan():
-    """`mk_hi - mk_lo` is unpinned when nothing is placed, and T1 MINIMISES it.
+def test_an_empty_board_reports_no_negative_day_term():
+    """The negative-epoch trap, carried forward from the term that is gone.
 
-    Both squeeze constraints are `OnlyEnforceIf(placed[i])`, so with an empty
-    board `mk_lo` and `mk_hi` float freely over `[0, max_end]` and minimising
-    their difference drives `mk_hi` to 0 and `mk_lo` to `max_end`. The chain
-    then proves that optimal and publishes it. Measured 6/6, one fixture made
-    unplaceable by a self-dependency:
+    HISTORY, because the trap is the reason the clamps exist and the code no
+    longer shows it. T1 used to be one whole-board span, `mk_hi - mk_lo`, and
+    both of its squeeze constraints were `OnlyEnforceIf(placed[i])` — so with
+    an empty board they floated over `[0, max_end]` and a MINIMISING tier drove
+    `mk_hi` to 0 and `mk_lo` to `max_end`. The chain proved that optimal and
+    published it. Measured 6/6, one fixture made unplaceable by a
+    self-dependency:
 
         OPTIMAL, placed=0, error unset,
         objective_values=[('placed', 0), ('makespan', -1767258600000), ...]
 
     A negative epoch-shaped number on the wire, presented as a proved optimum.
-    `build.ts` compares tier values against its own board metrics, and no
-    caller has any reason to defend against a negative duration.
 
-    Fixed in the model rather than at the ACL: a duration cannot be negative is
-    an invariant of the term, so every consumer — the bench, the tier chain,
-    the wire — gets the same answer. An empty board has a makespan of zero.
+    The 2026-08-13 day-aware rungs replaced that term with per-day ones, which
+    is the SAME trap once per day plus a new one: `day_start` subtracts a
+    constant epoch (`day_lo[d] - day_open[d]`), so an unconstrained `day_lo`
+    publishes a number of that shape too. All three are foreclosed the same
+    way — a `day_used[d].Not()` branch clamping the term to 0, and a
+    non-negative DOMAIN on the term itself so no unclamped path can publish one
+    either.
 
     Self-dependency is DELIBERATELY still accepted (an unplaceable fixture
     shows up as a lower `placed`, which is visible); it is only the negative
@@ -547,17 +582,19 @@ def test_an_empty_board_reports_a_non_negative_makespan():
     assert outcome.assignments == [], "the self-dependency should make fixture 0 unplaceable"
     reported = dict(outcome.objective_values)
     assert reported["placed"] == 0
-    assert reported["makespan"] >= 0, (
-        f"a negative duration reached the objective values: {outcome.objective_values}"
-    )
-    assert reported["makespan"] == 0, (
-        f"an empty board has no makespan at all, got {reported['makespan']}"
-    )
+    for tier in ("days", "day_span", "day_start"):
+        assert reported[tier] >= 0, (
+            f"a negative value reached the objective values: {outcome.objective_values}"
+        )
+        assert reported[tier] == 0, (
+            f"an empty board uses no days at all, so {tier} must be 0; "
+            f"got {reported[tier]} in {outcome.objective_values}"
+        )
 
 
-def test_a_placed_board_still_reports_its_real_makespan():
+def test_a_placed_board_still_reports_its_real_day_span():
     """The clamp must not have flattened the term. Two fixtures forced onto two
-    different ticks by a single court give a makespan of exactly one tick gap
+    different ticks by a single court, on one day, span exactly one tick gap
     plus one match."""
     num_courts = 1
     step = 40 * MIN_MS
@@ -573,7 +610,9 @@ def test_a_placed_board_still_reports_its_real_makespan():
     outcome = solve(model, wall_seconds=5.0)
 
     assert len(outcome.assignments) == 2
-    assert dict(outcome.objective_values)["makespan"] == step + 30 * MIN_MS
+    reported = dict(outcome.objective_values)
+    assert reported["days"] == 1
+    assert reported["day_span"] == step + 30 * MIN_MS
 
 
 def test_model_built_debug_event_reports_fixture_and_court_counts():
@@ -619,27 +658,38 @@ def test_model_built_debug_event_reports_fixture_and_court_counts():
     assert entry["rule_groups"] == 0
 
 
-# --- T1's span now includes pinned rows (#511) -------------------------------
+# --- T1 sees pinned rows (#511, ported to the day rungs 2026-08-13) ----------
 
 _T1_PIN_ANCHOR = 1_800_000_000_000  # arbitrary positive ms epoch, see _GROUP_ANCHOR below
 
 
-def test_pins_join_the_makespan_span_so_the_solver_places_near_them():
-    """THE LOAD-BEARING TEST for #511. A naive "pin on day 0, assert movables
-    land on day 0" board is a TIE without the fix -- the movable-only span is
-    identical either way, and CP-SAT is nondeterministic, so it would pass by
-    luck roughly half the time even with the fix reverted. This board is
-    built so the two arms are STRICTLY ordered in BOTH directions instead.
+def test_pins_join_their_day_so_the_solver_places_near_them():
+    """THE LOAD-BEARING TEST for #511, still load-bearing under the day rungs.
+
+    #511's defect was that pins were invisible to T1. The day-aware rungs
+    (2026-08-13) retired the whole-board span T1 used to be, so the MECHANISM
+    that makes this board work has changed and the arithmetic below is kept as
+    history rather than as the live explanation. What has NOT changed is the
+    defect: a pin invisible to T1 is now a pin whose DAY reads as unused, which
+    is #512 §6a, and this board still separates the two arms strictly.
 
     One pin, two movable fixtures, two candidate placements:
       * "day 0": the pin's own instant, plus a second admissible tick 6 hours
-        later on a different court -- FAR APART, so the movable-only span
-        there is wide even before the pin is considered at all.
+        later on a different court.
       * "day 1": a single admissible instant, offered on BOTH courts, a full
-        day after the pin -- ADJACENT (colocated), so the movable-only span
-        there is the narrowest one can be: one match duration.
+        day after the pin.
 
-    Computed spans (dur_ms = 1_800_000, one match, checkable by eye):
+    UNDER THE DAY RUNGS (live): the pin forces `day_used[0] == 1` whatever the
+    movables do, so putting them on day 1 costs a second day — `days` is 1 for
+    the day-0 arm and 2 for the day-1 arm. Strictly ordered, and the rung that
+    decides is the FIRST one below `placed`, so nothing further down can trade
+    it away. Without the pin-forcing bounds the pinned day is invisible, both
+    arms score `days == 1`, and the tie is broken by `day_span`, which prefers
+    day 1 (two colocated matches span one duration; day 0's two ticks are 6 h
+    apart) — so the revert is a strict red, not a coin flip.
+
+    UNDER THE OLD WHOLE-BOARD SPAN (history, for the record). Spans, dur_ms =
+    1_800_000:
       WITHOUT the fix (movable-only, pin excluded):
         day 0: A0_2 + dur - A0_1 = 6h + dur  = 23_400_000 ms
         day 1: dur                           =  1_800_000 ms  <- narrower, wins
@@ -647,12 +697,7 @@ def test_pins_join_the_makespan_span_so_the_solver_places_near_them():
         day 0: unchanged -- the pin coincides with A0_1, adding nothing
                                               = 23_400_000 ms  <- now the winner
         day 1: (B + dur) - P = DAY_MS + dur  = 88_200_000 ms  <- a whole day worse
-
-    T0 ties either way (both movables fit on either day), so T1 alone decides
-    -- and T1 (minimised) strictly prefers day 1 without the fix and strictly
-    prefers day 0 with it. Neither arm is a tie, so this cannot pass by
-    nondeterministic luck the way a "pin on day 0, assert day 0" board would.
-    Measured 6/6 red with the fix reverted (see task report).
+    Measured 6/6 red with the #511 fix reverted (see that task's report).
     """
     dur_ms = 30 * MIN_MS
     six_hours = 6 * 60 * MIN_MS
@@ -687,27 +732,25 @@ def test_pins_join_the_makespan_span_so_the_solver_places_near_them():
     )
 
 
-def test_a_lone_pin_stops_the_makespan_from_collapsing_to_zero():
-    """The hunk's own comment claims the pin bounds "strengthen the `mk_hi >=
-    mk_lo` clamp below on any board with a pin -- `mk_lo` and `mk_hi` can no
-    longer both float when nothing movable is placed." Verified directly: no
-    movable fixtures at all (fixtures=[]), one pin.
+def test_a_lone_pin_is_still_seen_by_the_day_terms():
+    """A board with NO movable fixtures at all (fixtures=[]) and one pin.
 
-    Without the fix this is `test_an_empty_board_reports_a_non_negative_makespan`'s
-    scenario restated with a pin present: nothing constrains `mk_lo`/`mk_hi`
-    beyond the `mk_hi >= mk_lo` clamp (Task 05c), so T1 collapses them to the
-    same point and the reported span is 0 -- degenerate, and a pin sitting
-    right there does nothing to stop it, because nothing reads `existing` in
-    the T1 section at all yet.
+    #511's version of this asserted the pin kept the whole-board span from
+    collapsing to zero. The day rungs (2026-08-13) make the same claim per day,
+    and it is the degenerate end of #512 §6a: `on_day` covers movable fixtures
+    only, so with nothing movable NOTHING would drive `day_used`, the pinned
+    day would read as unused, and all three day terms would report 0 for a
+    board that has a match on it.
 
-    With the fix, `mk_lo <= P` and `mk_hi >= P + dur_ms` are hard bounds
-    regardless of placement. The sole grid slot sits AT `P`, so
-    `max_end == P + dur_ms` -- `mk_hi`'s own domain upper bound forces it to
-    exactly `P + dur_ms`, and minimising `mk_hi - mk_lo` then pushes `mk_lo`
-    up to its only upper bound, `P`. The span is therefore provably exactly
-    `dur_ms`, not just "at least" it (verified: 1_800_000 both times run), but
-    the assertion below only claims the non-degenerate half, matching what
-    the comment actually promises rather than over-claiming from one board.
+    With the pin bounds in place every value here is forced exactly, not merely
+    bounded:
+
+      * `days == 1` — the pin forces its day used.
+      * `day_span == dur_ms` — the sole grid slot sits AT `P`, so the day's
+        window is the single instant `P`; `day_lo` is pinned to `P` by its own
+        domain floor and `day_hi` to `P + dur_ms` by its ceiling.
+      * `day_start == 0` — the pin is ON the day's first admissible tick, so
+        there is no offset to report.
     """
     num_courts = 1
     dur_ms = 30 * MIN_MS
@@ -727,9 +770,13 @@ def test_a_lone_pin_stops_the_makespan_from_collapsing_to_zero():
 
     reported = dict(outcome.objective_values)
     assert reported["placed"] == 0
-    assert reported["makespan"] >= dur_ms, (
+    assert reported["days"] == 1, (
+        f"a lone pin should have forced its day to count as used, got {outcome.objective_values}"
+    )
+    assert reported["day_span"] == dur_ms, (
         f"a lone pin should have forced a non-degenerate span, got {outcome.objective_values}"
     )
+    assert reported["day_start"] == 0, outcome.objective_values
 
 
 def test_an_in_range_pin_does_not_cost_a_movable_its_placement():

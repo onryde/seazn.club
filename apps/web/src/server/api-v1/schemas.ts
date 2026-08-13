@@ -1140,14 +1140,14 @@ export const ScheduleSolverInfo = z.object({
    *  NOT redundant with `engine`, which names what actually produced the board:
    *  a REFLOW that timed out and a BUILD that expired before finishing its first
    *  tier both come back `engine: "greedy"`, `budget_expired: true`,
-   *  `tiers_completed: 0`, `tiers_total: 4` — byte for byte the same payload,
+   *  `tiers_completed: 0`, `tiers_total: 6` — byte for byte the same payload,
    *  describing two different events.
    *
    *  It matters because only the BUILD path has a tier ladder. `reflowExisting`
    *  keeps `tiersCompleted` at 0 deliberately (reporting a number from a ladder
    *  it never walked would make an optimality claim nothing proved) while
    *  `tiers_total` stays the build ladder's size, so a reader with only those two
-   *  numbers renders "0 of 4 targets improved" about a run that was never on that
+   *  numbers renders "0 of 6 targets improved" about a run that was never on that
    *  scale. This is the field that lets it say something true instead.
    *
    *  Optional and additive: absent, a reader keeps the tier sentence, which is

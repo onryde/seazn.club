@@ -46,7 +46,7 @@ import type { SolveBuildOutcome } from "./placement-client.ts";
 const okOutcome = (assignments: SolveBuildOutcome["assignments"]): SolveBuildOutcome => ({
   assignments,
   status: "OPTIMAL",
-  tiersCompleted: 4,
+  tiersCompleted: TIER_COUNT,
   objectiveValues: [],
   elapsedMs: 5,
   wallExhausted: false,

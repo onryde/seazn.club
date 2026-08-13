@@ -378,9 +378,103 @@ only e2e helpers. The job writes its result to a JSON the log never
 echoes, so the failure detail was never recoverable. If it recurs, get
 that JSON out before calling it flake again.
 
-### Wave 3 — P5 alone (D4a stage progression)
+### Wave 3 — P5 (D4a stage progression) — PR #554 OPEN, not merged
 
-P5 carries the remaining migration, and two migrations must never be in
-flight together, so it runs on its own. Waves 1 and 2 both produced
-defects invisible to a green suite; the briefs for this one restate the
-rulings above inline.
+Branch `feat/p5-stage-progression`, migration **V360**, own Postgres
+`:54421`. Boundary gate green apart from two reds that are NOT P5's (see
+"Two reds that are not yours" below). **A new session must re-merge
+`origin/main` and re-gate before merging: C2 (#555) landed after P5's
+last push.**
+
+**Both of the prompt's premises were false**, verified against the live
+schema, not the docs:
+
+1. `fixtures.home/away_entrant_id` were ALREADY nullable (V214, comment
+   `-- null = TBD/bye`). The migration the prompt asked for did not exist
+   as work.
+2. A second cross-stage fill path already existed — `seedNextStage` +
+   `generateStageFixtures` baked entrants straight into the INSERT and
+   never called `fillSlot`. "One pathway, not two" was a UNIFICATION of
+   existing code. It is done: the INSERT bakes only when
+   `bakeDirect(g)` = `!viaFillSlot || g.award !== undefined`.
+
+**The critical defect a reviewer found, now fixed (`8217677d`).** A bye
+seed owns TWO slots — `awardLabel` inherits the bye fixture's own `seed`
+and is then written onto the winner-feed target — but
+`destinationSlotsBySeed` read them with NO `ORDER BY` into a plain
+`Map.set`. Last write won, arbitrarily; confirm filled one slot and
+stranded the other at TBD **permanently, silently, reporting success**.
+Reachable on any non-power-of-two qualifier count, which is the design
+doc's own headline `bestNth` case. Now `Map<number, string[]>` with
+`order by id`, and confirm fills every sibling. Mutation-verified:
+31/31 → 29/31 with the old behaviour restored.
+
+**Reviewer findings still OPEN on #554** — accepted, not fixed:
+
+1. `bestNth` on unequal pools ranks non-normalised stats and ships a
+   silently WRONG order. Declared as deviation "not implemented", which
+   undersells it: it does not refuse.
+2. `SEEDING_SLOT_DOUBLE_ASSIGNED` covers three distinct faults (unknown
+   slot, real double-assignment, foreign fixture) — a client cannot tell
+   a typo from a conflict.
+3. Stale-marking fires only from `overrideStandings`; correcting a
+   decided fixture in a completed stage leaves a dependent draft reading
+   "draft" when it is not. Not a safety hole (confirm's `standingsHash`
+   re-check still 409s) — a visibility gap.
+4. A fourth `home_entrant_id` writer exists in untouched
+   `generateStageFixtures` code, bypassing `fillSlot`. Inert today only
+   because those fixtures never carry a `slot_label`; nothing enforces
+   that going forward.
+
+### Two reds that are NOT yours — check before attributing
+
+- **`schedule-solver-telemetry.test.ts` "build honours a locked anchor",
+  `expected 5 to be 6`.** MIS-GATED, not environmental: the test's own
+  block comment says it NEEDS A REAL SOLVER and it was then declared with
+  a bare `it(`. C2's follow-up adds the `skipIf(!HAS_SOLVER)` it always
+  needed. Reproduces on a detached `origin/main` (15 total / 11 passed /
+  1 failed). **The old signature `expected 'solver_unavailable' to be
+  'infeasible'` no longer identifies this** — C1 rewrote that file.
+- **`repair-scale.test.ts`** — wall-clock budget, red under machine load,
+  33/33 in isolation at load average 20.8. Run it alone before chasing.
+
+### The lesson of the day, and it is not about any one PR
+
+**Four separate defects shipped or nearly shipped on paths that no test
+drove, so CI could only ever have been green:**
+
+- the joint health report kept rendering raw uuids — smoke and e2e both
+  type `combined.metrics` as `{key, score}` and never read `offenders`;
+- three lanes' UI panels had no width coverage — every width project is
+  `testMatch:/mobile\.spec\.ts/`, so a new spec file runs at desktop only;
+- a bye seed stranded forever — every test used power-of-two counts;
+- C2's acceptance gate ranked on the old tier ladder — no test on that
+  branch drove the path at all (found by review after 12/12 green).
+
+Green is evidence about the paths that ARE driven and nothing more. When
+a change adds a shape (a new metric kind, a new count parity, a new
+ladder rung), ask what test drives THAT shape before trusting the suite.
+
+### Sequencing for the next session
+
+- **P6 (D4b)** — progression UI, depends on P5 merging.
+- **P7 (D1b)** — multi-stage templates. **Owner has chosen
+  `league-playoff` (league → top-4 knockout, seeded from the standings)
+  over a standalone playoff template.** It needs `TemplateStage.seeding`,
+  which reads `stages.seeding` — P5's V360. So P7 is unblocked the moment
+  P5 lands. The other two held-back templates (`euro24`, `t20-super8`)
+  are P7's too.
+- **P8–P10 (D5 venues)** — still gated on the release-2 C-chain.
+- **P11 (D6)** — still gated on ScoringPad S13.
+
+### Also open, outside the P-chain
+
+- `fix/capacity-forced-demand` — 7 commits, rebased onto main, gated
+  green, **no PR yet**. Adds `CapacityDay.forcedDemand`, the per-day
+  FLOOR that makes `fixture_on_date`/`fixture_on_weekday` count against a
+  day's capacity. Before it: the precheck could report a board "fits"
+  while rules nailed more fixtures to one day than it holds.
+- C2's acceptance-gate fix (the other session's) — main currently carries
+  a defect where a solver-proved-optimal board can be discarded for the
+  greedy seed and reported `already_optimal`. Owner ruled: take the fix
+  forward rather than revert.

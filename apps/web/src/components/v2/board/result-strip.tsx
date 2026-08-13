@@ -359,8 +359,9 @@ export function ScheduleResultStrip({
         // …but the ladder is the BUILD path's, and REFLOW runs the repair solver,
         // which has no tiers at all. It reports `tiersCompleted: 0` deliberately
         // — a number from a ladder it never walked would make an optimality
-        // claim nothing proved — while `tiers_total` stays 4, so the tier
-        // sentence renders "0 of 4 targets improved" about a run that was never
+        // claim nothing proved — while `tiers_total` stays the build ladder's
+        // size, so the tier sentence renders "0 of 6 targets improved" (6 as of
+        // 2026-08-13; it was 4) about a run that was never
         // on that scale. True, and useless. `mode` is the only thing in the
         // payload that can tell the two apart: an expired build and an expired
         // reflow are otherwise byte-identical here.

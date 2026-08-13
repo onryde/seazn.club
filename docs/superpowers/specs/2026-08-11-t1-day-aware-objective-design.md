@@ -1,7 +1,25 @@
 # T1: a day-aware objective for multi-day boards (#512)
 
-**Status:** design, approved in outline 2026-08-11 (owner chose the two-rung
-form over span-only and over deferring). Not implemented.
+**Status:** **IMPLEMENTED 2026-08-13**, alongside the `day_start` rung, in
+release-2 C2 (branch `feat/c2-day-start-rung`). Approved in outline 2026-08-11
+(owner chose the two-rung form over span-only and over deferring).
+
+> **PR #531 merged this DOCUMENT, not the code** — a distinction that cost the
+> C2 session its scope, because the C2 prompt, the day_start spec header and
+> the release-2 index all read as though the rungs existed. They did not.
+> Check with `git log --grep` plus one `git grep` for a symbol the work would
+> have created.
+>
+> Resolutions of the open questions this document left, all as recommended:
+> **§6b → option (1)**, accept and document (an off-lattice pin belongs to no
+> day and is invisible to T1; consistent with C4's day caps), pinned by
+> `test_day_objective.py::test_an_off_lattice_pin_belongs_to_no_day_at_all`.
+> **§5.2** honoured: `makespan` retired, not reused. **§7's wall risk was
+> real** — measured, reported, and NOT what this document predicted: the three
+> day rungs cost ~2 s of a 17.7 s median chain, and the blow-up is `idle_gap`
+> (1.3 s → 14.9 s), because the retired whole-board freeze had been doing that
+> tier's pruning for it. Numbers and the control run: the C2 entry in
+> `2026-08-12-release2-prompts/_INDEX.md`.
 
 **Depends on:** #511 (pins join the makespan span) — merged. Read its
 rationale before this: the defect it fixed reappears in a new coat here, and

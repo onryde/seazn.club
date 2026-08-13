@@ -605,8 +605,15 @@ PROBE_FIXTURES = 4
 #: spread of two — `PROBE_WORST_IMBALANCE_MS`.
 PROBE_OPTIMAL_IMBALANCE_MS = 1 * PROBE_MATCH_MIN * MIN_MS
 PROBE_WORST_IMBALANCE_MS = 2 * PROBE_MATCH_MIN * MIN_MS
-#: T1's proved optimum here: two rows, so one tick-width plus one match.
-PROBE_OPTIMAL_MAKESPAN_MS = (PROBE_MATCH_MIN + PROBE_GAP_MIN) * MIN_MS + PROBE_MATCH_MIN * MIN_MS
+#: T1b's proved optimum here: two rows, so one tick-width plus one match.
+#:
+#: Named `MAKESPAN` until 2026-08-13, when the service's whole-board span term
+#: was retired for the day-aware rungs. The NUMBER is unchanged and needs no
+#: re-baseline — this board's two ticks are on one calendar day, so its summed
+#: per-day span and its whole-board span are the same quantity. Renamed anyway,
+#: because a constant that keeps a retired term's name is how a stale number
+#: gets asserted against a tier that no longer means what it says.
+PROBE_OPTIMAL_DAY_SPAN_MS = (PROBE_MATCH_MIN + PROBE_GAP_MIN) * MIN_MS + PROBE_MATCH_MIN * MIN_MS
 
 
 def imbalance_probe_board():

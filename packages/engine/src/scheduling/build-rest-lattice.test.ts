@@ -38,7 +38,7 @@
 // solver unable to search, and the fix there is to say so
 // (`status: "not_searched"`) rather than to claim a proof.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSchedule, seedPinsOf, solveBuildForTests } from "./build.ts";
+import { buildSchedule, seedPinsOf, solveBuildForTests, TIER_COUNT } from "./build.ts";
 import { buildGrid } from "./build-grid.ts";
 // `gridStepMinutes` moved out of `build-grid.ts` into its own module on main
 // while this branch was in flight; the rebase conflict here was that move
@@ -55,7 +55,7 @@ import type { SolveBuildOutcome } from "./placement-client.ts";
 const okOutcome = (assignments: SolveBuildOutcome["assignments"]): SolveBuildOutcome => ({
   assignments,
   status: "OPTIMAL",
-  tiersCompleted: 4,
+  tiersCompleted: TIER_COUNT,
   objectiveValues: [],
   elapsedMs: 5,
   wallExhausted: false,
@@ -256,7 +256,7 @@ describe("a rest-configured board is actually searched", () => {
     // search happened; `engine: "optimized"` and `tiersCompleted` are.
     expect(out.engine).toBe("optimized");
     expect(out.status).toBe("ok");
-    expect(out.tiersCompleted).toBe(4);
+    expect(out.tiersCompleted).toBe(TIER_COUNT);
     await resetZ3();
   }, 120_000);
 
@@ -275,7 +275,7 @@ describe("a rest-configured board is actually searched", () => {
     const out = await buildSchedule({ fixtures: chainFixtures, config: chainConfig });
     expect({ status: out.status, tiers: out.tiersCompleted, placed: out.metrics.placed }).toEqual({
       status: "already_optimal",
-      tiers: 4,
+      tiers: TIER_COUNT,
       placed: 3,
     });
     expect(out.assignments.map((a) => (a.startAt - T0) / MIN)).toEqual([0, 65, 130]);
@@ -325,7 +325,7 @@ describe("a rest-configured board is actually searched", () => {
     const out = await buildSchedule({ fixtures, config });
     expect({ status: out.status, tiers: out.tiersCompleted }).toEqual({
       status: "already_optimal",
-      tiers: 4,
+      tiers: TIER_COUNT,
     });
     expect(out.assignments).toEqual(seed.assignments);
     await resetZ3();
