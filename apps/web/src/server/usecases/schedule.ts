@@ -470,8 +470,16 @@ export async function roundRobinStageIds(tx: Tx, divisionId: string): Promise<Se
  *  fixture(s) for THIS gate call), not a comparison rule; `calendar.ts`'s own
  *  logic is untouched. Every caller of `roundRobinSequenceSiblings` below
  *  must build its `keys` set with this same function, or the two silently
- *  drift the way `poolId`-only once did. */
-function roundRobinSequenceKey(f: Pick<FixtureLite, "division_id" | "stage_id" | "pool_id">): string {
+ *  drift the way `poolId`-only once did.
+ *
+ *  EXPORTED (C1 final-review, 4th instance of this exact bug class):
+ *  `competition-schedule-apply.ts`'s joint per-division loop is a THIRD
+ *  caller with the identical shape (a caller-scoped `mine`/`proposed` subset
+ *  checked pairwise, an `untouched` sibling pool outside it) — reusing this
+ *  function rather than re-deriving the key locally is deliberate, because a
+ *  forked key is this codebase's own recurring bug (see the drift warning
+ *  above, now three call sites strong). */
+export function roundRobinSequenceKey(f: Pick<FixtureLite, "division_id" | "stage_id" | "pool_id">): string {
   return `${f.division_id}|${f.stage_id}|${f.pool_id ?? ""}`;
 }
 
@@ -479,23 +487,25 @@ function roundRobinSequenceKey(f: Pick<FixtureLite, "division_id" | "stage_id" |
  *  identity, excluding `exclude` (the fixture(s) a caller already lists
  *  explicitly in its own `assignments`/`proposed`).
  *
- *  This is the fix for `moveFixture` and `applySchedule`'s partial-apply
- *  gate: both compare `assignments` PAIRWISE for round order
- *  (`validateAssignments`, scoped to `assignments` alone by design — see its
- *  own comment on the grouping key), and the checked side used to be only the
- *  fixture(s) a caller explicitly named. A fixture sitting only in `existing`
- *  can never be paired against anything, so a one- or few-fixture write could
- *  never detect a round-order violation against an untouched, already-placed
- *  round-robin sibling.
+ *  This is the fix for `moveFixture`, `applySchedule`'s partial-apply gate,
+ *  and (C1 final-review) `applyCompetitionSchedule`'s own per-division loop:
+ *  all three compare their checked set PAIRWISE for round order
+ *  (`validateAssignments`, scoped to its `assignments` parameter alone by
+ *  design — see its own comment on the grouping key), and the checked side
+ *  used to be only the fixture(s) a caller explicitly named. A fixture
+ *  sitting only in `existing`/`untouched` can never be paired against
+ *  anything, so a one- or few-fixture write could never detect a
+ *  round-order violation against an untouched, already-placed round-robin
+ *  sibling.
  *
- *  Both call sites must pull this SAME result into `assignments` on BOTH
- *  sides of their delta comparison (the current-position side and the
+ *  Every call site must pull this SAME result into its checked set on BOTH
+ *  sides of its delta comparison (the current-position side and the
  *  proposed side) — the set composition has to be identical on both sides or
- *  `assertNoNewBlocking` reads every pre-existing violation among the
- *  siblings as newly introduced and blocks a move that never touched them
- *  (see each call site's own comment). `keys` empty (a non-round-robin move)
- *  short-circuits to no widening at all, matching prior behaviour exactly. */
-function roundRobinSequenceSiblings(
+ *  the write gate reads every pre-existing violation among the siblings as
+ *  newly introduced and blocks a move that never touched them (see each call
+ *  site's own comment). `keys` empty (a non-round-robin move) short-circuits
+ *  to no widening at all, matching prior behaviour exactly. */
+export function roundRobinSequenceSiblings(
   all: readonly FixtureLite[],
   keys: ReadonlySet<string>,
   exclude: ReadonlySet<string>,

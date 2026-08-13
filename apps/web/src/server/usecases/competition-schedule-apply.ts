@@ -119,6 +119,8 @@ import {
   feedDependencies,
   loadSettings,
   peopleByEntrant,
+  roundRobinSequenceKey,
+  roundRobinSequenceSiblings,
   roundRobinStageIds,
   scopeLocked,
   siblingAssignments,
@@ -571,20 +573,62 @@ export async function applyCompetitionSchedule(
     const blockingKeys = new Set<string>();
     const found: Conflict[] = [];
     const before: Conflict[] = [];
+    // C1 final-review (4th instance of the delta-gate partial-apply
+    // round-order blind spot — `schedule.ts`'s `roundRobinSequenceSiblings`
+    // carries the full mechanism; `applySchedule`'s partial path and
+    // `moveFixture` are the reference implementations this generalizes from
+    // one division to N independent ones). Accumulated across the whole loop
+    // so the RETURNED `conflicts` can be filtered once, after every
+    // division's own pass has run — see its use below the write gate.
+    const allSiblingIds = new Set<string>();
     for (const d of order) {
       const mine = proposed.filter((a) => a.divisionId === d.id);
       if (mine.length === 0) continue;
       const others = proposed.filter((a) => a.divisionId !== d.id);
+      // This apply's own round-robin siblings for division `d` — same
+      // (division, stage, pool) sequence as one of `d`'s LISTED fixtures,
+      // already placed, not itself listed. `mine` only holds fixtures THIS
+      // apply explicitly named for `d`; an unlisted same-sequence sibling
+      // sits in `untouched`, out of `validateAssignments`' round-order pair
+      // scan (calendar.ts, scoped to its `assignments` parameter alone, by
+      // design). Pulled into the CHECKED set on BOTH delta sides below,
+      // symmetrically, or a pre-existing violation among the siblings reads
+      // as newly introduced and blocks a partial apply that never touched
+      // them — the property the "stays editable over a PRE-EXISTING
+      // round-order violation" test (competition-schedule-apply.test.ts)
+      // exists to pin.
+      const listedIds = new Set(d.input.assignments.map((a) => a.fixture_id));
+      const widenKeys = new Set(
+        d.input.assignments
+          .map((a) => d.byId.get(a.fixture_id)!)
+          .filter((f) => roundRobinByDivision.get(d.id)?.has(f.stage_id))
+          .map(roundRobinSequenceKey),
+      );
+      const roundRobinSiblings = roundRobinSequenceSiblings(d.fixtures, widenKeys, listedIds);
+      const siblingIds = new Set(roundRobinSiblings.map((f) => f.id));
+      for (const id of siblingIds) allSiblingIds.add(id);
+      // Same representation on both delta sides — these fixtures move in
+      // NEITHER pass, so their own conflicts land identically in `before`
+      // and this division's found-pass, and the (before, found) delta below
+      // the write gate correctly reads them as pre-existing.
+      const widenedSiblings = roundRobinSiblings.map((f) =>
+        toAssignment(f, d.settings.config.matchMinutes, people, roundRobinByDivision.get(d.id)),
+      );
+      // Pulled OUT of `untouched` for division `d`'s own two passes below —
+      // left IN `untouched` for every OTHER division's pass, which still
+      // needs to see `d`'s siblings as court/time occupancy for its own
+      // cross-division checks.
+      const untouchedForD = untouched.filter((a) => !siblingIds.has(a.fixtureId));
       // The identical pass over the pre-apply board. Same division, same config,
       // same "everyone else" — so a conflict that survives this comparison is
       // one this apply is responsible for.
       before.push(
         ...validateAssignments(
-          current.filter((a) => a.divisionId === d.id),
+          [...current.filter((a) => a.divisionId === d.id), ...widenedSiblings],
           verifyConfigFor(packDivisionOf(d), applyWindow(d.settings), undefined, orgTz),
           [
             ...current.filter((a) => a.divisionId !== d.id),
-            ...untouched,
+            ...untouchedForD,
             ...siblings,
           ],
           deps,
@@ -599,9 +643,9 @@ export async function applyCompetitionSchedule(
       // is the thing that actually needed deciding: a board that ALREADY holds
       // an overlap has to stay editable.
       for (const c of validateAssignments(
-        mine,
+        [...mine, ...widenedSiblings],
         verifyConfigFor(packDivisionOf(d), applyWindow(d.settings), undefined, orgTz),
-        [...others, ...untouched, ...siblings],
+        [...others, ...untouchedForD, ...siblings],
         deps,
       )) {
         // Keyed on (fixtureId, reason, detail) like `verifyJoint`: the engine
@@ -714,7 +758,19 @@ export async function applyCompetitionSchedule(
                 ...(ai !== undefined ? { ai } : {}),
               } as never)}, ${auth.userId})`;
 
-    return { applied, conflicts, divisionIds: order.map((d) => d.id) };
+    return {
+      applied,
+      // #461's contract (schedule.ts's `applySchedule`/`moveFixture`),
+      // generalized to N divisions: a widened sibling exists so the GATE
+      // above can see it, not so its own — possibly pre-existing and
+      // entirely unrelated — conflicts leak into a response about a fixture
+      // no division in this run actually listed. A conflict that DID block
+      // the apply is never filtered — the throw above fires from the
+      // unfiltered `conflicts`/`blockingKeys` pair, before this line is ever
+      // reached.
+      conflicts: conflicts.filter((c) => !allSiblingIds.has(c.fixtureId)),
+      divisionIds: order.map((d) => d.id),
+    };
   });
 
   // Cache invalidation + realtime, once per written division, AFTER the commit.

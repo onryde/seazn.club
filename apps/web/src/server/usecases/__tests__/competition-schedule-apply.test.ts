@@ -1399,4 +1399,151 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // floor for this pair, i.e. restByDivision reached this call.
     expect(restConflicts.some((c) => c.fixtureId === board.bravo.fixtureIds[0])).toBe(false);
   }, 60_000);
+
+  // ---------------------------------------------------------------------
+  // Final-review fix (4th instance of the same bug class G2/moveFixture and
+  // G2/applySchedule already fixed — see schedule.ts's
+  // `roundRobinSequenceSiblings`). Every test above submits the FULL
+  // per-division fixture list, so `mine` (the checked side of the delta)
+  // always already contains every round-robin sibling and the pairwise scan
+  // (calendar.ts, scoped to its `assignments` param by design) always had
+  // both halves of any pair in front of it. These three exercise a PARTIAL
+  // per-division listing — `d.input.assignments` naming fewer fixtures than
+  // the division has — against an UNLISTED same-sequence sibling sitting in
+  // `untouched`, which is a real, shipped, documented shape
+  // (`excludedFixtureIds`, this file's own header §58-66).
+  // ---------------------------------------------------------------------
+
+  it("REFUSES a partial per-division apply that breaks round order against an unlisted same-sequence sibling (C1 final-review)", async () => {
+    const { alpha, bravo } = await clean();
+    await applyCompetitionSchedule(auth, board.competitionId, {
+      divisions: [alpha, bravo],
+      source: "ai",
+      ai: AI,
+    });
+    const alphaIds = board.alpha.fixtureIds;
+    // Alpha's round-1 fixture ALONE, pushed past round 3 (still sitting,
+    // UNLISTED, at the position `clean()` gave it above). Court 2 — Alpha's
+    // other court, otherwise empty — so the only possible conflict is round
+    // order, never a court clash.
+    const partialAlpha: CompetitionApplyDivision = {
+      division_id: board.alpha.id,
+      expected_seq: await divisionSeq(board.alpha.id),
+      assignments: [{ fixture_id: alphaIds[0]!, scheduled_at: at(999), court_label: "Court 2" }],
+    };
+    const freshBravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0);
+    let caught: unknown;
+    try {
+      await applyCompetitionSchedule(auth, board.competitionId, {
+        divisions: [partialAlpha, freshBravo],
+        source: "ai",
+        ai: AI,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(EngineError.is(caught)).toBe(true);
+    expect((caught as EngineError).code).toBe("SCHEDULE_CONFLICT");
+    const conflicts = (caught as EngineError).data as { conflicts: Conflict[] };
+    const orderConflicts = conflicts.conflicts.filter((c) => c.reason === "order");
+    expect(orderConflicts.length).toBeGreaterThan(0);
+    // `calendar.ts` blames the LATER round — here that is round 3's
+    // (unlisted) fixture, not the one this apply actually named. Either way
+    // it must be an ALPHA fixture; Bravo must never be dragged in.
+    expect(orderConflicts.every((c) => alphaIds.includes(c.fixtureId))).toBe(true);
+    // Atomic: the attempted move never landed — fixture[0] is still exactly
+    // where the first (valid) apply above left it.
+    const alphaSlots = await slots(board.alpha.id);
+    expect(alphaSlots.find((s) => s.id === alphaIds[0])).toMatchObject({ at: at(0), court: "Court 1" });
+  }, 60_000);
+
+  it("a partial apply stays editable over a PRE-EXISTING round-order violation among its own unlisted siblings — the symmetry regression (C1 final-review)", async () => {
+    const { alpha, bravo } = await clean();
+    await applyCompetitionSchedule(auth, board.competitionId, {
+      divisions: [alpha, bravo],
+      source: "ai",
+      ai: AI,
+    });
+    const alphaIds = board.alpha.fixtureIds;
+    // Corrupt round 1 (fixtureIds[1]) and round 2 (fixtureIds[2]) AGAINST
+    // EACH OTHER, straight into the rows — bypassing the gate, the only way
+    // to construct this now it is live (same technique as "still applies
+    // over a board that ALREADY holds a round-order violation" above).
+    // NEITHER fixture is listed in the apply below.
+    await sql`update fixtures set scheduled_at = ${at(60)} where id = ${alphaIds[1]}`;
+    await sql`update fixtures set scheduled_at = ${at(30)} where id = ${alphaIds[2]}`;
+
+    const partialAlpha: CompetitionApplyDivision = {
+      division_id: board.alpha.id,
+      expected_seq: await divisionSeq(board.alpha.id),
+      // Round 3's fixtureIds[4], moved a full day past everything —
+      // unambiguously after both the healthy AND the corrupted fixtures
+      // above, so THIS move introduces no violation of its own. Only
+      // whether the PRE-EXISTING one wrongly blocks it is in play.
+      assignments: [{ fixture_id: alphaIds[4]!, scheduled_at: at(999), court_label: "Court 2" }],
+    };
+    const freshBravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0);
+    const out = await applyCompetitionSchedule(auth, board.competitionId, {
+      divisions: [partialAlpha, freshBravo],
+      source: "ai",
+      ai: AI,
+    });
+    expect(out.applied).toBe(4); // 1 (Alpha, partial) + 3 (Bravo, full)
+    const alphaSlots = await slots(board.alpha.id);
+    // The corrupted pair is untouched by this apply — neither fixed nor
+    // worsened, exactly #399's "a dirty board stays editable" contract.
+    expect(alphaSlots.find((s) => s.id === alphaIds[1])).toMatchObject({ at: at(60), court: "Court 1" });
+    expect(alphaSlots.find((s) => s.id === alphaIds[2])).toMatchObject({ at: at(30), court: "Court 1" });
+    // The actually-listed fixture DID move.
+    expect(alphaSlots.find((s) => s.id === alphaIds[4])).toMatchObject({ at: at(999), court: "Court 2" });
+  }, 60_000);
+
+  it("cross-division independence: each division's own widened-sibling check never leaks into the other's (C1 final-review)", async () => {
+    const { alpha, bravo } = await clean();
+    await applyCompetitionSchedule(auth, board.competitionId, {
+      divisions: [alpha, bravo],
+      source: "ai",
+      ai: AI,
+    });
+    const alphaIds = board.alpha.fixtureIds;
+    const bravoIds = board.bravo.fixtureIds;
+    // BOTH divisions get a partial apply that breaks round order against an
+    // unlisted sibling of THEIR OWN, independently, in the SAME call.
+    const partialAlpha: CompetitionApplyDivision = {
+      division_id: board.alpha.id,
+      expected_seq: await divisionSeq(board.alpha.id),
+      assignments: [{ fixture_id: alphaIds[0]!, scheduled_at: at(999), court_label: "Court 2" }],
+    };
+    const partialBravo: CompetitionApplyDivision = {
+      division_id: board.bravo.id,
+      expected_seq: await divisionSeq(board.bravo.id),
+      assignments: [{ fixture_id: bravoIds[0]!, scheduled_at: at(999), court_label: "Court 3" }],
+    };
+    let caught: unknown;
+    try {
+      await applyCompetitionSchedule(auth, board.competitionId, {
+        divisions: [partialAlpha, partialBravo],
+        source: "ai",
+        ai: AI,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(EngineError.is(caught)).toBe(true);
+    expect((caught as EngineError).code).toBe("SCHEDULE_CONFLICT");
+    const conflicts = (caught as EngineError).data as { conflicts: Conflict[] };
+    const orderConflicts = conflicts.conflicts.filter((c) => c.reason === "order");
+    const alphaOrder = orderConflicts.filter((c) => alphaIds.includes(c.fixtureId));
+    const bravoOrder = orderConflicts.filter((c) => bravoIds.includes(c.fixtureId));
+    expect(alphaOrder.length, "Alpha's own violation was not detected").toBeGreaterThan(0);
+    expect(bravoOrder.length, "Bravo's own violation was not detected").toBeGreaterThan(0);
+    // No cross-contamination: every order conflict belongs to exactly one
+    // division's own fixture set — never a third, unaccounted-for one.
+    expect(alphaOrder.length + bravoOrder.length).toBe(orderConflicts.length);
+    // Atomic — neither division's board moved from the clean baseline.
+    const alphaSlots = await slots(board.alpha.id);
+    const bravoSlots = await slots(board.bravo.id);
+    expect(alphaSlots.find((s) => s.id === alphaIds[0])).toMatchObject({ at: at(0), court: "Court 1" });
+    expect(bravoSlots.find((s) => s.id === bravoIds[0])).toMatchObject({ at: at(0), court: "Court 3" });
+  }, 60_000);
 });
