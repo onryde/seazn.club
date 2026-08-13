@@ -566,13 +566,22 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                   className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-800 hover:border-amber-400"
                 >
                   <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
-                  {f.home_entrant_id
-                    ? (entrantNames[f.home_entrant_id] ?? "?")
-                    : resolveSlotLabel(f.home_slot_label ?? null, msg, "schedule.tbd")}{" "}
+                  {/* max-w + truncate (P6/D4b): a slot label ("Best 3 of the
+                      3rd-place teams") runs far longer than a team name — an
+                      in_play fixture always has both entrants filled in
+                      practice (scoring an unfilled fixture 422s), so this is
+                      a defensive floor, not the common case. */}
+                  <span className="inline-block max-w-[9rem] truncate align-bottom">
+                    {f.home_entrant_id
+                      ? (entrantNames[f.home_entrant_id] ?? "?")
+                      : resolveSlotLabel(f.home_slot_label ?? null, msg, "schedule.tbd")}
+                  </span>{" "}
                   {msg("schedule.vs")}{" "}
-                  {f.away_entrant_id
-                    ? (entrantNames[f.away_entrant_id] ?? "?")
-                    : resolveSlotLabel(f.away_slot_label ?? null, msg, "schedule.tbd")}
+                  <span className="inline-block max-w-[9rem] truncate align-bottom">
+                    {f.away_entrant_id
+                      ? (entrantNames[f.away_entrant_id] ?? "?")
+                      : resolveSlotLabel(f.away_slot_label ?? null, msg, "schedule.tbd")}
+                  </span>
                   {f.court_label ? <span className="text-slate-500">· {f.court_label}</span> : null}
                 </Link>
               </li>
