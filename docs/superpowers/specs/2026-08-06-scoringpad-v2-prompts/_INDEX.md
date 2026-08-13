@@ -23,7 +23,7 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 | S8 | #417 | `S08-417-w6-player-stats.md` | S6 | **DONE, e2e+smoke discharged** — 3 prompt premises false (all 11 modules already declared `playerStats`, dot-paths already shipped, no kernel default existed to copy); the real defect was models declared against OPTIONAL person fields on entrant-attributed payloads, i.e. inert. Owner ruled to widen into `apps/web` so the entrant→person fallback is reachable. Goalkeeper stats shipped INCLUDING shots-on-goal/saves (owner amended the S2/#430 parking — table row above is stale on this point, kept for history per the decision log below). W6 review closed 6+3+1 gaps across three rounds. E2E (`apps/web/e2e/stats.spec.ts`) + smoke (`scripts/smoke.ts` `playerStatsSuite`) landed in the S8b follow-up session — real HTTP, real numbers, mutation-proved. S9 still owes its OWN e2e once the `/me` page exists; that is not this row |
 | S9 | #418 | `S09-418-w7-career-rollup.md` | S3, S8 | **DONE** — scope 1 (the `personsOf`/`cfg` plumbing) was ALREADY SHIPPED by S8/#417, so the prompt's central "Why" premise is false; the real work was the rollup, the route, the two surfaces and the e2e S8 owed forward. First session in the programme with a real user-facing surface, so all four test types landed here with no deferrals. Three defects found by RENDERING it that no unit test could see (see the decision log) |
 | S10 | #419 | `S10-419-w8-chassis-renderer.md` | S6 | **DONE, MERGED `cc907a0b` (PR #542)** — 4 prompt premises false (server idempotency is a fail-open Redis cache with NO ledger column, no pad subscribes to realtime, the client cannot import the engine as the brief assumed, the 409 already carries `current_seq`); the replay ruling was rewritten around ledger-slot inspection because blind `expected_seq` renegotiation — which the brief calls "the correctness heart" — IS the duplicate bug given that. Chassis + renderer + picker + timeline shipped; **the picker was found INERT by the e2e** (written, tested, wired to nothing — fifth instance of this programme's signature defect) and is now the pad's default. E2E covers tab death / offline / 409-mid-drain against the real API and RUNS IN CI (`SCOREPAD_V2_HARNESS=1` in the three e2e jobs). Smoke deferred to S13 (verified: `scripts/smoke.ts` has zero references). Contract S11 consumes: `PadRenderer` props + the `renderAttribution` / `timelineSlot` override seams. Flag `scorepad-v2` (PostHog) declared, wired to nothing, flipped in S12 |
-| S11 | #420 | `S11-420-w9-skins.md` | S7, S10 | **IN FLIGHT** — five skins, not three: the prompt's sport groupings were disproved by measurement (see the decision log). Coverage gate landed RED first |
+| S11 | #420 | `S11-420-w9-skins.md` | S7, S10 | **DONE** — **five** skins, not three: the prompt's two sport groupings were disproved by building the real specs (tennis is a different kernel from the setbased three; football cannot share with the period pair, but hockey/icehockey are byte-identical to each other). Coverage gate landed RED first and is mutation-proved. Renderer now consults the registry by default — owner ruling, taken because a registry nothing calls is S10's inert-picker defect again. Review caught 5 gaps, 2 of them real: `racquet`/`period` rendered PAID-GATED actions as live controls for 5 of 8 sports (the sweeps could not see it — `grantAllEntitlements` means `locked` never occurs in the suite), and cricket's batter/bowler pickers never resynced to the fold, so a scorer could score against the wrong end. Cricket has NO browser coverage: the harness's lineups are synthetic and every `cricket.ball` needs real roster members — S12 owes it, along with football's goal-with-assist |
 | S12 | #421 | `S12-421-w10-integration-flag.md` | S11 | TODO |
 | S13 | #422 | `S13-422-w11-cutover.md` | S12 | TODO |
 | L1 | #412 | `L1-412-w1-eligibility.md` | — | TODO |
@@ -2054,6 +2054,41 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   data, so a Component that draws from anything else voids the guarantee. Worth
   restating in S12's brief: when a skin's render source and its layout diverge,
   every green number in this suite is measuring the wrong artifact.
+- 2026-08-13 — S11/#420 — **the harness cannot drive any action that needs a
+  REAL roster member, which is why cricket has no browser coverage this
+  session.** Every `cricket.ball` carries striker/nonStriker/bowler, and
+  football's goal carries scorer/assist; the harness route's client lineups are
+  permanently SYNTHETIC, so those payloads 422 against the real API in either
+  harness mode. Consequences, recorded rather than papered over: cricket's
+  headline flow (an over with an extra, a fielder-credited dismissal) is proved
+  at unit level and by tap-count trace but NOT in a browser, and football's e2e
+  drives a side-only goal rather than the goal-with-assist the brief names. Both
+  dissolve in S12, where the real entry points supply real rosters — so S12's
+  prompt should carry these two flows explicitly rather than assume S11 covered
+  them. A second harness limit found the same way: with no `?fixture=`, every
+  sport except `generic` is stuck in the `pre` phase forever, because nothing
+  emits `core.start` — so the skin e2e uses `?fixture=` mode, unlike S10's.
+- 2026-08-13 — S11/#420 — **`next build` WORKS on this tree; a session-local
+  report that it still fails on `/help/*` was wrong.** Measured on the S11
+  worktree at the close of the session: `✓ Compiled successfully in 103s`,
+  237/237 static pages, `BUILD_EXIT=0`, standalone emitted. This matters beyond
+  bookkeeping: a prod build is the only gate that catches a client-bundle leak
+  (tsc and unit tests both pass while broken), so the skin e2e was re-verified
+  against the standalone server rather than `next dev`. Anyone reading an older
+  note that says "use `next dev`, the build is broken" should re-measure before
+  believing it.
+- 2026-08-13 — S11/#420 — **DONE. Final verification, all run inline by the main
+  thread, never taken from an agent's report:**
+  unit/component `397 tests, 395 passed, 0 failed, success:true` (JSON
+  reporter); skin e2e against a **prod standalone build** on a fresh DB proved
+  to be this session's own (`show data_directory`) — `6 passed, 0 failed, 1
+  skipped (cricket), 0 flaky`; S10's own pad e2e re-run as a regression on the
+  same server — `5 passed, 0 failed`, confirming the universal path still works
+  for unskinned sports; `tsc --noEmit EXIT=0`; lint `0 errors` and zero problems
+  under `skins/`; drift gates (`openapi:gen`, `i18n:gen-keys`, `i18n:check`)
+  run locally with `git status --porcelain` empty. Screenshots: 20 captures, 5
+  skins × 320/375/768/1280, `OVERFLOWING=0 SMALL_TAP=0`.
+  Smoke remains **deferred to S13**, as the prompt directs.
 - _(append below)_
 
 ## Open questions for the owner
