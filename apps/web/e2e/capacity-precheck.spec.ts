@@ -83,12 +83,16 @@ test("capacity precheck: impossible config shows the card + disabled Solve + a r
   await expect(card).toBeVisible({ timeout: 20_000 });
   await expect(card.getByText("Won't fit")).toBeVisible();
   // At least one quantified suggestion row (design doc: "the cheapest fixes,
-  // quantified" — never a bare "it's broken").
-  await expect(card.getByText(/Add 1 day|Add 1 Court|Shorten matches/)).toBeVisible();
+  // quantified" — never a bare "it's broken"). `.first()` because the card
+  // emits SEVERAL suggestions sorted verdict-flippers-first; matching more
+  // than one is the expected shape, and a bare locator trips strict mode.
+  await expect(card.getByText(/Add 1 day|Add 1 Court|Shorten matches/).first()).toBeVisible();
 
   // The disabled Solve button + reason lives on the OTHER page — the
-  // fixtures/stages console, not the Settings tab.
-  await page.goto(await divisionPath(page.request, divisionId));
+  // fixtures/stages console, not the Settings tab. The tab MUST be named:
+  // the bare division path renders Entrants, where this button does not
+  // exist at all, which reads as "disabled" but is really "not found".
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
   const solveButton = page.getByTestId("stage-auto-schedule");
   await expect(solveButton).toBeVisible({ timeout: 20_000 });
   await expect(solveButton).toBeDisabled();
@@ -125,8 +129,9 @@ test("capacity precheck: applying a suggestion clears the block and enables Solv
   // new stored config).
   await expect(page.locator('[data-capacity-verdict="impossible"]')).toHaveCount(0, { timeout: 20_000 });
 
-  // And the OTHER page's Solve button is enabled again.
-  await page.goto(await divisionPath(page.request, divisionId));
+  // And the OTHER page's Solve button is enabled again. Same tab caveat as
+  // the first test — without ?tab=fixtures this lands on Entrants.
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
   await expect(page.getByTestId("stage-auto-schedule")).toBeEnabled({ timeout: 20_000 });
   await expect(page.getByTestId("stage-auto-schedule-blocked")).toHaveCount(0);
 });
