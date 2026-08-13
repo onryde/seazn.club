@@ -590,3 +590,58 @@ describe("ThisOverGroup: the picker resyncs to the fold (S11 review finding)", (
     expect(selectValues(island.tree()).striker, "a real fold change must win over a stale manual override").toBe(S0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// S12/#421 pass B (owner-approved widening into skins/**, review pass + a real
+// browser): the striker/non-striker/bowler pickers rendered the raw person id
+// as their OPTION TEXT. `ctx.personNames` (S11's SkinLayoutCtx) has existed
+// since S11 but no skin consumed it -- fixed here for cricket. Driven through
+// the same real-fold + `ThisOverGroup` + hook-harness technique as the resync
+// tests above, reading the rendered <option> TEXT this time, not the
+// <select>'s value.
+// ---------------------------------------------------------------------------
+describe("ThisOverGroup: person picker options show ctx.personNames, not a raw id (S12/#421 pass B)", () => {
+  type MsgFn = (key: MessageKey, vars?: Record<string, string | number>) => string;
+  const msg: MsgFn = (key, vars) => tRuntime(messages, key, vars);
+
+  const NAME_LINEUPS = defaultLineupPair(cricketEngine.positions);
+  const NAME_CFG: CricketCfg = cricketEngine.configSchema.parse(cricketEngine.variants.t20);
+  const NAME_STRIKER = NAME_LINEUPS.home.slots[0]!.personId;
+
+  function foldFresh(): CricketState {
+    const events: EventEnvelope[] = [makeEnvelope(0, { type: "core.start", payload: {} })];
+    return foldMatch(cricketEngine, NAME_CFG, NAME_LINEUPS, events, { strictFromSeq: 0 });
+  }
+
+  function findOption(tree: ReactElement[], value: string): ReactElement {
+    const el = tree.find((e) => e.type === "option" && propsOf(e).value === value);
+    if (!el) throw new Error(`no <option value="${value}"> found in rendered tree`);
+    return el;
+  }
+
+  function renderWithNames(personNames: Readonly<Record<string, string>> | undefined) {
+    const state = foldFresh();
+    const view = viewFor(NAME_CFG, "live", state);
+    return renderIsland(ThisOverGroup, {
+      msg,
+      view,
+      state,
+      bpo: NAME_CFG.ballsPerOver,
+      submittingType: null,
+      dispatch: async () => {},
+      personNames,
+    });
+  }
+
+  it("renders the resolved name from ctx.personNames as the option text, not the raw id", () => {
+    const island = renderWithNames({ [NAME_STRIKER]: "Priya Opener" });
+    const option = findOption(island.tree(), NAME_STRIKER);
+    expect(propsOf(option).children).toBe("Priya Opener");
+  });
+
+  it("still renders (falls back to the raw id) when ctx carries no personNames -- total without a roster", () => {
+    const island = renderWithNames(undefined);
+    const option = findOption(island.tree(), NAME_STRIKER);
+    expect(propsOf(option).children).toBe(NAME_STRIKER);
+  });
+});

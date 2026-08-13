@@ -37,12 +37,15 @@
 // treatment); groups are ordered by what a rinkside scorer actually reaches
 // for (goal first, period control always visible beside it, discipline/set-
 // piece next, shot detail tucked in a drawer); and person attribution — for
-// which this file gets no roster prop at all (see SkinProps) — reads the
+// which this file gets no `lineups` prop at all (see SkinProps) — reads the
 // module's OWN folded state the same structural way attribution-picker.tsx
 // already does (`isSquadState`), degrading to a captioned text field rather
 // than a picker only when no roster has folded yet, and offering a jersey
-// NUMBER as the chip label once one has: a scorer identifies a player by
-// number, not by a personId no surface here ever shows a name for.
+// NUMBER as the chip label once one has, deliberately ahead of a resolved
+// name (S12/#421 pass B): a scorer identifies a player by number first. Only
+// when NO number is declared does the chip fall back to `ctx.personNames`
+// (S11's SkinLayoutCtx, added but unconsumed here until now), and only past
+// that to a short id fragment — see `memberLabel`'s own comment.
 import { useMemo, type ReactNode } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { padLabel } from "@/lib/scoring-vocab";
@@ -267,24 +270,29 @@ function capMsg(msg: MsgFn, key: string | null): string {
   return key ? msg(key as MessageKey) : "";
 }
 
-/** A scorer's own vocabulary: a squad member is a NUMBER, never a personId —
- *  see the module header. Falls back to a short id fragment only for the
- *  (legal, per SquadMember) case of a roster entry with no declared number. */
-function memberLabel(member: SquadMember): string {
-  return member.squadNumber !== undefined ? `#${member.squadNumber}` : member.personId.slice(0, 6);
+/** A scorer's own vocabulary: a squad member is a NUMBER first, never a
+ *  personId — see the module header. Falls back to `personNames[personId]`
+ *  (S12/#421 pass B) for the (legal, per SquadMember) case of a roster entry
+ *  with no declared number, and only past that to a short id fragment — the
+ *  honest last resort when no name is known either. */
+function memberLabel(member: SquadMember, personNames: Readonly<Record<string, string>> | undefined): string {
+  if (member.squadNumber !== undefined) return `#${member.squadNumber}`;
+  return personNames?.[member.personId] ?? member.personId.slice(0, 6);
 }
 
 /**
  * One attribution item, resolved against whatever roster facts THIS skin can
  * actually read off the module's own folded state (see `readEntrants`/
- * `readSquads` above — SkinProps carries no `lineups`/`personNames` prop at
- * all, unlike PadRenderer). Three tiers, each an honest reflection of what is
- * actually known right now, never a fabricated one:
+ * `readSquads` above) plus `ctx.personNames` (S11's SkinLayoutCtx — SkinProps
+ * still carries no `lineups` prop, unlike PadRenderer). Three tiers, each an
+ * honest reflection of what is actually known right now, never a fabricated
+ * one:
  *   - "side": real Home/Away chips keyed on `state.entrants` (always known
  *     once a fixture exists) — never a bare "home"/"away" literal, which the
  *     engine's own `EntrantId` schema would reject.
  *   - "person" WITH a folded squad: number chips, exactly the vocabulary a
- *     scorer already uses.
+ *     scorer already uses (`memberLabel`'s own comment on why number beats a
+ *     resolved name here, not just id-vs-name).
  *   - "person" with NO folded squad yet (the common case before any
  *     `core.lineup.*` event — see `readSquads`): a captioned text field. Not
  *     a picker pretending to have data it does not — but still a real,
@@ -298,6 +306,7 @@ function renderAttributionItem(
   onSelect: (v: PadFieldValue | undefined) => void,
   entrants: { home: string; away: string } | null,
   squads: SquadState | null,
+  personNames: Readonly<Record<string, string>> | undefined,
   msg: MsgFn,
 ): ReactNode {
   const caption = attributionItemCaption(item, index, msg, actionLabel);
@@ -357,7 +366,7 @@ function renderAttributionItem(
                 onClick={() => onSelect(pressed ? undefined : member.personId)}
                 className={chipClass(pressed)}
               >
-                {memberLabel(member)}
+                {memberLabel(member, personNames)}
               </button>
             );
           })}
@@ -396,6 +405,7 @@ export function buildAttributionRenderer(
 ): (action: PadActionView, values: ActionValues, setValue: (path: string, value: PadFieldValue | undefined) => void) => ReactNode {
   const entrants = readEntrants(ctx.state);
   const squads = readSquads(ctx.state);
+  const personNames = ctx.personNames;
   // Named, not an anonymous arrow: it returns JSX, so eslint's react/display-name
   // treats it as a component definition. It is really a render prop, but a name
   // costs nothing and keeps `apps/web`'s own lint (the one CI runs) clean.
@@ -405,7 +415,7 @@ export function buildAttributionRenderer(
     return (
       <div className="space-y-3" data-role="skin-attribution">
         {action.attribution.map((item, index) =>
-          renderAttributionItem(item, index, actionLabel, values[item.path], (v) => setValue(item.path, v), entrants, squads, msg),
+          renderAttributionItem(item, index, actionLabel, values[item.path], (v) => setValue(item.path, v), entrants, squads, personNames, msg),
         )}
       </div>
     );

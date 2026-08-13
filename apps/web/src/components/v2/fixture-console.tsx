@@ -120,6 +120,13 @@ export interface LineupSlotIn {
   position_key: string | null;
   order_no: number | null;
   roles: string[];
+  /** player/coach/staff (S3/#426 ruling). Optional: `readLineup`'s SQL
+   *  (server/usecases/fixtures.ts) already selects the DB column into every
+   *  row, but this wire type is also hand-built in test fixtures and other
+   *  call sites that predate the column, so it stays optional rather than
+   *  required. Absent means "player", the same default the engine's own
+   *  `LineupSlot.role` applies (S12/#421 pass B, Fix 2). */
+  role?: "player" | "coach" | "staff";
 }
 export interface SideInfo {
   id: string;

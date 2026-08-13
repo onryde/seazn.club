@@ -22,14 +22,13 @@
 // entries (a SkinGroup with its own action entry for either would duplicate
 // "cricket.ball" and fail the shared gate).
 //
-// KNOWN GAP, reported rather than fixed here (out of this file's ownership):
-// SkinProps carries no lineup/personNames channel — neither SkinLayoutCtx nor
-// SkinProps (./types.ts) names one, and the engine's own SquadMember /
-// CricketState carry `personId` strings only, never a display name (names
-// are DB-joined at the app layer, which this pure/typed boundary never sees).
-// Every person picker below therefore falls back to the raw id. Fixing this
-// needs a field added to SkinProps/SkinLayoutCtx, which this file does not
-// own.
+// PERSON NAMES (S12/#421 pass B — this comment was stale): S11 added
+// `personNames?: Readonly<Record<string, string>>` to `SkinLayoutCtx`
+// (./types.ts), but no skin actually read it — this file included, until now.
+// Every person picker below resolves through `displayPerson`, which prefers
+// `ctx.personNames[id]` and falls back to the raw id — `personNames` is
+// optional precisely because `skin-coverage.test.ts`'s sweep hands `layout()`
+// no roster at all, and a skin must stay total without one.
 import { useState, type ReactNode } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { padLabel, wicketLabel, extraLabel } from "@/lib/scoring-vocab";
@@ -340,10 +339,11 @@ export function buildBallPayload(batRuns: number, entry: BallEntry): Record<stri
 // See `ThisOverGroup`'s own export comment and cricket-skin.test.ts.
 // ---------------------------------------------------------------------------
 
-/** SkinProps carries no lineup/personNames channel (file header) — the
- *  single, honest fallback: the person's own id, verbatim. */
-function displayPerson(id: string): string {
-  return id;
+/** Resolves a person id through `ctx.personNames` (file header) — the raw id
+ *  is the last-resort fallback, never a crash or a blank, so this stays total
+ *  for the coverage sweep's no-roster case. */
+function displayPerson(id: string, personNames: Readonly<Record<string, string>> | undefined): string {
+  return personNames?.[id] ?? id;
 }
 
 function ScoreHeader({ header, msg }: { header: SkinHeader; msg: MsgFn }) {
@@ -393,11 +393,15 @@ function attributionCaption(item: PadAttributionItem, msg: MsgFn): string {
 
 /** Generic attribution for the actions this skin reuses `ActionForm` for
  *  (toss, review, player-line, and any admin action that ever grows one).
- *  Both "side" (entrant ids) and "person" (person ids) fall back to the raw
- *  id — see the file-header gap note: SkinProps has no name-resolution
- *  channel for either one, so treating them differently here would invent a
- *  distinction the data does not support. */
-function renderSkinAttribution(state: CricketStateShape, msg: MsgFn) {
+ *  "person" ids resolve through `ctx.personNames`; "side" ids (entrant ids)
+ *  fall back to the raw id regardless — `personNames` is keyed by PERSON id
+ *  only, so an entrant id is never found there, exactly as intended (an
+ *  entrant is not a person). */
+function renderSkinAttribution(
+  state: CricketStateShape,
+  msg: MsgFn,
+  personNames: Readonly<Record<string, string>> | undefined,
+) {
   const people = [...(state.orders?.home ?? []), ...(state.orders?.away ?? [])];
   const sides = [state.entrants?.home, state.entrants?.away].filter((id): id is string => Boolean(id));
   return function renderAttribution(
@@ -425,7 +429,7 @@ function renderSkinAttribution(state: CricketStateShape, msg: MsgFn) {
                 </option>
                 {ids.map((id) => (
                   <option key={id} value={id}>
-                    {displayPerson(id)}
+                    {displayPerson(id, personNames)}
                   </option>
                 ))}
               </select>
@@ -444,6 +448,10 @@ export interface ThisOverProps {
   bpo: number;
   submittingType: string | null;
   dispatch: (type: string, payload: unknown) => Promise<void>;
+  /** personId -> display name (SkinLayoutCtx.personNames, S11). Optional —
+   *  `skin-coverage.test.ts`'s sweep never hands one in, and this component
+   *  must stay total without it (see `displayPerson`). */
+  personNames?: Readonly<Record<string, string>>;
 }
 
 /** The primary surface (dispatch criterion 2): run pad always visible;
@@ -457,7 +465,7 @@ export interface ThisOverProps {
  *  of the Component with its own hook state (the batter/bowler picker), so
  *  it is the one part that needs more than a pure `layout()` comparison or a
  *  screenshot to prove correct. See that file's own header. */
-export function ThisOverGroup({ msg, view, state, bpo, submittingType, dispatch }: ThisOverProps) {
+export function ThisOverGroup({ msg, view, state, bpo, submittingType, dispatch, personNames }: ThisOverProps) {
   const open = currentInnings(state);
   const battingSide = open?.battingSide ?? "home";
   const bowlingSide = opponentSide(battingSide);
@@ -615,7 +623,7 @@ export function ThisOverGroup({ msg, view, state, bpo, submittingType, dispatch 
                 <option value="">—</option>
                 {pool.map((id) => (
                   <option key={id} value={id}>
-                    {displayPerson(id)}
+                    {displayPerson(id, personNames)}
                   </option>
                 ))}
               </select>
@@ -702,7 +710,7 @@ export function ThisOverGroup({ msg, view, state, bpo, submittingType, dispatch 
                     onClick={() => pickOut(who)}
                     className="btn btn-ghost h-11 px-2.5 text-xs"
                   >
-                    {displayPerson(who)}
+                    {displayPerson(who, personNames)}
                   </button>
                 ))}
               </div>
@@ -716,7 +724,7 @@ export function ThisOverGroup({ msg, view, state, bpo, submittingType, dispatch 
                     onClick={() => pickFielder(id)}
                     className="btn btn-ghost h-11 px-2.5 text-xs disabled:opacity-40"
                   >
-                    {displayPerson(id)}
+                    {displayPerson(id, personNames)}
                   </button>
                 ))}
                 <button
@@ -751,6 +759,7 @@ function AdminGroup({
   submittingType,
   dispatch,
   drawer,
+  personNames,
 }: {
   group: SkinGroup;
   view: PadView;
@@ -759,9 +768,10 @@ function AdminGroup({
   submittingType: string | null;
   dispatch: (type: string, payload: unknown) => Promise<void>;
   drawer: boolean;
+  personNames: Readonly<Record<string, string>> | undefined;
 }) {
   const caption = msg(GROUP_CAPTION_KEY[group.id as GroupId] ?? "scorepad.skin.more");
-  const renderAttribution = renderSkinAttribution(state, msg);
+  const renderAttribution = renderSkinAttribution(state, msg, personNames);
 
   const body = (
     <div className="flex flex-col gap-2">
@@ -858,6 +868,7 @@ export function CricketSkin(props: SkinProps) {
             bpo={bpo}
             submittingType={submittingType}
             dispatch={dispatch}
+            personNames={ctx.personNames}
           />
         ) : (
           <AdminGroup
@@ -869,6 +880,7 @@ export function CricketSkin(props: SkinProps) {
             submittingType={submittingType}
             dispatch={dispatch}
             drawer={group.prominence === "drawer"}
+            personNames={ctx.personNames}
           />
         ),
       )}

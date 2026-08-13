@@ -108,14 +108,33 @@ function toLineupSlot(s: LineupSlotIn, index: number): LineupSlot {
     orderNo: s.order_no ?? index + 1,
     ...(s.position_key ? { positionKey: s.position_key } : {}),
     ...(s.roles.length > 0 ? { roles: s.roles } : {}),
-    // NOTE: `role` (player/coach/staff, S3/#426 ruling) and `pairOrder` are
-    // not part of `LineupSlotIn`'s wire shape (`getLineup`,
-    // server/usecases/fixtures.ts) — a pre-existing gap in the v1 read path,
-    // not introduced here and outside this session's file set (fixing it
-    // touches server/usecases/fixtures.ts, which is not in scope). A
-    // coach/staff slot folds client-side as the schema's own "absent ->
-    // player" default until usePadPipeline's post-ack reconciliation adopts
-    // the server's real fold, which does read the real DB column.
+    // `role` (player/coach/staff, S3/#426 ruling) — S12/#421 pass B, Fix 2.
+    // `readLineup`'s SQL (server/usecases/fixtures.ts) already selects the
+    // real DB column into every row; the gap was purely `LineupSlotIn` never
+    // declaring the field, so the client fold defaulted every slot to
+    // "player" regardless of what was actually recorded. Verified end-to-end
+    // (registry.test.tsx): this closes it for football's own scorer/assist
+    // pool, which already filters by role via the kernel's `playingSquad`.
+    // CRICKET IS NOT FULLY CLOSED BY THIS FIX: `orderFromLineup`
+    // (packages/engine/src/sports/cricket/cricket.ts) builds `state.orders`
+    // (battingOrder/bowlingOrder) straight off `lineup.slots` filtered only
+    // on `slot === "starting"`, never on `role` — measured live, a
+    // role:"coach" starting slot still lands in the batting order even with
+    // role now wired correctly. That is a separate, engine-level gap outside
+    // this fix's file set (packages/engine, not fixtures.ts/registry.tsx/the
+    // api-v1 schema); flagged to the dispatcher rather than fixed here.
+    // Omitted for "player" itself, mirroring server/engine-db/lineups.ts's
+    // own `buildLineup` convention — the engine's own `LineupSlot.role`
+    // already defaults absent to "player" (core/lineup.ts), so this is a
+    // wire-size choice, not a behaviour one.
+    //
+    // `pairOrder` (doubles serve order) is NOT included here: unlike `role`,
+    // it has no DB column at all today (no caller ever writes one, and
+    // `lineup-editor.tsx` has no UI for it either) — carrying it through
+    // this function would be a dead, always-undefined field, not a fix.
+    // Flagged to the dispatcher rather than expanded into a new migration +
+    // write path, which is well outside this fix's file set.
+    ...(s.role && s.role !== "player" ? { role: s.role } : {}),
   };
 }
 

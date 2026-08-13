@@ -7,11 +7,14 @@
 // silently render on the universal path with nobody having decided that was
 // right. See registry.tsx's own header for the full reasoning.
 import { describe, expect, it } from "vitest";
+import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { makeEnvelope } from "@seazn/engine/testkit";
 import type { SideInfo } from "@/components/v2/fixture-console";
 import { skinFor } from "../skins/registry";
 import { RESOLUTION_KIND, lineupPairFrom, personNamesFrom, resolveScorePad } from "../registry";
 import { eventOutToEnvelope } from "../wire";
+import { foldClient } from "../module-client";
 
 describe("resolveScorePad — drift guard over every builtinModules key", () => {
   it("assertion 1: every builtinModules key has a table row", () => {
@@ -49,6 +52,23 @@ describe("resolveScorePad — drift guard over every builtinModules key", () => 
         expect(resolution.skin.sports).toContain(m.key);
       }
     }
+  });
+
+  // S12/#421 pass B — Fix 3: `padSpec` is an OPTIONAL hook on `SportModule`
+  // (packages/engine/src/sport/module.ts:388). `resolveScorePadBootstrap`
+  // (server/usecases/fidelity.ts:117) falls back to `EMPTY_SPEC` when a
+  // module has none — no declared `fidelityEntitlements`, so no gates, so
+  // band 3 and the full v2 UI regardless of what the org actually bought.
+  // Dead today because all 11 `builtinModules` happen to implement it, and
+  // the real write path still refuses the append at the scoring door
+  // (`scoring.ts`'s `requiredFeatureForEvent`) — so today's worst case is
+  // misleading UI, not a billing bypass. This assertion is what turns "a
+  // 12th sport forgets padSpec" into a CI failure instead of a silent,
+  // ungated pad shipping — the same "written decision, not a fallthrough"
+  // posture assertions 1-4 above already hold this table to.
+  it("assertion 5: every builtinModules entry implements padSpec (no module ships an ungated pad)", () => {
+    const missing = builtinModules.filter((m) => typeof m.padSpec !== "function").map((m) => m.key);
+    expect(missing, "a module with no padSpec has no fidelityEntitlements, so no gate at all — see fidelity.ts's EMPTY_SPEC fallback").toEqual([]);
   });
 
   it("every 'universal' row resolves to {kind:'universal'}, with no skin attached", () => {
@@ -201,5 +221,68 @@ describe("personNamesFrom", () => {
   it("no members on either side -> an empty map, never a crash", () => {
     const empty: SideInfo = { id: "ent-h", name: "Home", lineup: [], members: [] };
     expect(personNamesFrom(empty, { ...empty, id: "ent-a" })).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S12/#421 pass B — Fix 2: `role` (player/coach/staff, S3/#426 ruling) never
+// reached `toLineupSlot`'s wire shape, per registry.tsx's own (now corrected)
+// comment, so `LineupSlot.role` defaulted to "player" for every client-side
+// slot regardless of what was actually recorded. The DB already carries the
+// real column, and `server/usecases/fixtures.ts`'s `readLineup` SQL already
+// selects it — the gap was purely `LineupSlotIn` (fixture-console.tsx) never
+// declaring the field, so `toLineupSlot` had nothing typed to read even
+// though the runtime row already carried it.
+// ---------------------------------------------------------------------------
+describe("lineupPairFrom: role reaches the client LineupSlot (S12/#421 pass B, Fix 2)", () => {
+  it("carries a non-player role through to the built LineupSlot", () => {
+    const home: SideInfo = {
+      id: "ent-h",
+      name: "Home",
+      members: [],
+      lineup: [
+        { person_id: "p-coach", full_name: "Coach One", slot: "starting", position_key: null, order_no: 1, roles: [], role: "coach" },
+      ],
+    };
+    const pair = lineupPairFrom(home, { id: "ent-a", name: "Away", members: [], lineup: [] });
+    expect(pair.home.slots[0]).toMatchObject({ personId: "p-coach", role: "coach" });
+  });
+
+  it("a player role (or an absent role) carries no `role` key at all -- mirrors server/engine-db/lineups.ts's own buildLineup convention", () => {
+    const home: SideInfo = {
+      id: "ent-h",
+      name: "Home",
+      members: [],
+      lineup: [
+        { person_id: "p1", full_name: "A", slot: "starting", position_key: null, order_no: 1, roles: [], role: "player" },
+        { person_id: "p2", full_name: "B", slot: "starting", position_key: null, order_no: 2, roles: [] },
+      ],
+    };
+    const pair = lineupPairFrom(home, { id: "ent-a", name: "Away", members: [], lineup: [] });
+    expect(pair.home.slots[0]).not.toHaveProperty("role");
+    expect(pair.home.slots[1]).not.toHaveProperty("role");
+  });
+
+  it("end-to-end: a coach-role lineup slot is excluded from football's onPitch/bench pool once the client engine folds it (the picker-pool bug this fix closes)", () => {
+    const footballModule = (builtinModules as readonly AnySportModule[]).find((m) => m.key === "football")!;
+    const cfg = footballModule.configSchema.parse({});
+    const home: SideInfo = {
+      id: "ent-h",
+      name: "Home",
+      members: [],
+      lineup: [
+        { person_id: "p-player-1", full_name: "Player One", slot: "starting", position_key: "GK", order_no: 1, roles: [], role: "player" },
+        { person_id: "p-coach-1", full_name: "Coach One", slot: "starting", position_key: null, order_no: 2, roles: [], role: "coach" },
+      ],
+    };
+    const away: SideInfo = { id: "ent-a", name: "Away", members: [], lineup: [] };
+    const lineups = lineupPairFrom(home, away);
+
+    const state = foldClient(footballModule, cfg, lineups, [makeEnvelope(0, { type: "core.start", payload: {} })]) as {
+      squads: { home: { onPitch: readonly string[]; bench: readonly string[] } };
+    };
+    expect(state.squads.home.onPitch).toContain("p-player-1");
+    expect(state.squads.home.onPitch).not.toContain("p-coach-1");
+    expect(state.squads.home.bench).not.toContain("p-coach-1");
   });
 });

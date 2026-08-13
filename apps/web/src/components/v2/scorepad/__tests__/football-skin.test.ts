@@ -378,3 +378,64 @@ describe("football skin: Component draws every primary/secondary group the layou
     expect(actionFormTypes(island.tree())).toContain("football.mystery");
   });
 });
+
+// ---------------------------------------------------------------------------
+// S12/#421 pass B (owner-approved widening into skins/**): the goal scorer/
+// assist chip options rendered the raw person id as their label.
+// `ctx.personNames` (S11's SkinLayoutCtx) has existed since S11 but this skin
+// never consumed it. `personOptions()` (a plain function, not a component)
+// runs as part of FootballSkin's own render pass -- it is called while
+// building the `slots` PROP handed to the (uninvoked, nested)
+// <QuickActionCard/> element, so its resolved output is already sitting on
+// that element's props by the time the harness walks the tree; no click to
+// open the tile is needed to read it.
+// ---------------------------------------------------------------------------
+describe("football skin: goal scorer/assist chip options show ctx.personNames, not a raw id (S12/#421 pass B)", () => {
+  const SCORER = "p-scorer-1";
+
+  interface QuickSlotLike {
+    path: string;
+    options: readonly { value: string; label: string }[];
+  }
+
+  function quickSlotsOf(tree: ReactElement[]): QuickSlotLike[] {
+    const withSlots = tree.filter((el) => Array.isArray((propsOf(el) as { slots?: unknown }).slots));
+    return withSlots.flatMap((el) => (propsOf(el) as unknown as { slots: QuickSlotLike[] }).slots);
+  }
+
+  function renderGoalsWithRoster(personNames: Readonly<Record<string, string>> | undefined) {
+    const { cfg, spec } = footballCfgSpace()[0]!;
+    const ctx0 = { band: FULL_BAND, entitlements: grantAllEntitlements(spec) };
+    const view = fullView(spec, ctx0);
+    const state = { squads: { home: { onPitch: [SCORER], bench: [] }, away: { onPitch: [], bench: [] } } };
+    const layout = footballSkin.layout(view, { cfg, state, summary: {}, band: FULL_BAND });
+    const props: SkinProps = {
+      view,
+      spec,
+      ctx: { cfg, state, summary: {}, band: FULL_BAND, personNames },
+      layout,
+      dispatch: async () => {},
+      queueDepth: 0,
+      offline: false,
+      submittingType: null,
+    };
+    return renderIsland(FootballSkin, props);
+  }
+
+  it("shows the resolved name in the scorer chip options, not the raw id", () => {
+    const island = renderGoalsWithRoster({ [SCORER]: "Amara Scorer" });
+    const labels = quickSlotsOf(island.tree())
+      .filter((s) => s.path === "scorer")
+      .flatMap((s) => s.options.map((o) => o.label));
+    expect(labels).toContain("Amara Scorer");
+    expect(labels).not.toContain(SCORER);
+  });
+
+  it("falls back to the raw id when ctx carries no personNames -- total without a roster", () => {
+    const island = renderGoalsWithRoster(undefined);
+    const labels = quickSlotsOf(island.tree())
+      .filter((s) => s.path === "scorer")
+      .flatMap((s) => s.options.map((o) => o.label));
+    expect(labels).toContain(SCORER);
+  });
+});
