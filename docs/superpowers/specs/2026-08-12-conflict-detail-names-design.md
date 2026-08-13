@@ -126,6 +126,35 @@ is the entrant or person, so `board.find(x => x.id === …)` misses and the
 enrichment silently degrades to "another match". Structured details fix
 that as a side effect; it reads `details.otherFixtureId` instead.
 
+### The prose reaches the MODEL, not just the screen
+
+The design treats `detail` as a display string. It is also **model input**.
+`schedule-ai.ts:2189` and `competition-schedule-ai.ts:2130` put the raw
+engine `Conflict[]` on the repair-round conversation as `verifier_conflicts`
+— no mapper, no field stripping, `JSON.stringify` straight into
+`callModel` / `callJointModel`. Both import the engine `Conflict` type
+directly. So "the engine stops building prose" would, unnoticed, change
+what the AI repair round reads.
+
+**Ruling (C3 session, 2026-08-13): the model's input stays byte-identical.**
+`verifier_conflicts` carries the derived legacy English, produced by the
+same deprecated deriver the API layer uses for the wire's `detail`. Not
+because prose is better for the model — structured `kind` tokens plausibly
+are, and #399 already moved the repair round toward citing `rule` — but
+because nothing in this task measures repair quality, and an unmeasured
+change to what a paid model sees is not a rendering fix. It also keeps the
+request's token weight unchanged, which the AI-credit accounting depends on.
+
+Sending `details` instead of (or beside) the prose is a real follow-up, and
+it should be taken with a repair-quality measurement attached. Recorded, not
+done.
+
+Consequence for the deriver's home: it cannot be a client-side formatter.
+It must live server-side where both the API mappers and the two AI usecases
+can import it.
+
+### Officials
+
 Officials conflicts (`packages/engine/src/officials/assign.ts:157`,
 `:274`, `:293`, `:326`) are a **different producer and a different type**
 (`OfficialConflict` / `AiOfficialsConflict`), and `:157` embeds a fixture
