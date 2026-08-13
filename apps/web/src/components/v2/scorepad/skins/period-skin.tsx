@@ -46,7 +46,7 @@
 // when NO number is declared does the chip fall back to `ctx.personNames`
 // (S11's SkinLayoutCtx, added but unconsumed here until now), and only past
 // that to a short id fragment — see `memberLabel`'s own comment.
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { padLabel } from "@/lib/scoring-vocab";
 import type { MessageKey } from "@/lib/messages";
@@ -119,6 +119,63 @@ function readPhase(state: unknown): string | null {
   if (!isRecord(state)) return null;
   const phase = state.phase;
   return typeof phase === "string" && phase.length > 0 ? phase : null;
+}
+
+/** One entry of `PeriodState.suspensions` (period/kernel.ts's own
+ *  `ActiveSuspension`, ./suspensions.ts) — read defensively and structurally,
+ *  same posture as `readEntrants`/`readSquads` above, since `ctx.state` is
+ *  `unknown` by contract. Only the fields the countdown hint below actually
+ *  needs; `person`/`reason`/`servedBy`/`startedAt`/`expiresAt` are the
+ *  engine's own scoresheet detail and stay out of scope here (S12/#421
+ *  cutover: `period-pad.tsx`'s wall-clock countdown, restored on this skin —
+ *  see `SuspensionCountdownList`'s own doc comment for why it is a real
+ *  component rather than one more plain render helper). */
+interface SuspensionView {
+  side: "home" | "away";
+  classKey: string;
+  permanent: boolean;
+  /** The duration the official actually awarded, when recorded — preferred
+   *  over the class nominal (suspensions.ts's own `SuspensionDetail.minutes`
+   *  doc: "Pads count down from here in preference to the class"). */
+  minutes?: number;
+}
+
+function readSuspensions(state: unknown): readonly SuspensionView[] {
+  if (!isRecord(state)) return [];
+  const raw = state.suspensions;
+  if (!Array.isArray(raw)) return [];
+  const out: SuspensionView[] = [];
+  for (const item of raw) {
+    if (!isRecord(item)) continue;
+    const side = item.side;
+    const classKey = item.classKey;
+    if ((side !== "home" && side !== "away") || typeof classKey !== "string") continue;
+    out.push({
+      side,
+      classKey,
+      permanent: item.permanent === true,
+      minutes: typeof item.minutes === "number" ? item.minutes : undefined,
+    });
+  }
+  return out;
+}
+
+/** The class's NOMINAL duration from cfg (`Cfg.suspensions.classes[key]
+ *  .minutes` — period/kernel.ts's own `SuspensionClassCfg`), the fallback
+ *  when no per-suspension `minutes` was awarded. `null` for both an unknown
+ *  class and a class with no fixed duration (`minutes: null` — a permanent
+ *  exclusion, e.g. hockey's `red`), which is deliberately the same return
+ *  value: either way there is nothing to count down from. */
+function classMinutesOf(cfg: unknown, classKey: string): number | null {
+  if (!isRecord(cfg)) return null;
+  const suspensions = cfg.suspensions;
+  if (!isRecord(suspensions)) return null;
+  const classes = suspensions.classes;
+  if (!isRecord(classes)) return null;
+  const cls = classes[classKey];
+  if (!isRecord(cls)) return null;
+  const minutes = cls.minutes;
+  return typeof minutes === "number" ? minutes : null;
 }
 
 /** "pre"/"done"/"final"/"abandoned" are lifecycle tokens worth a capital
@@ -422,6 +479,117 @@ export function buildAttributionRenderer(
   };
 }
 
+/**
+ * Wall-clock countdown sugar for the suspensions currently running — display
+ * only, restored here at the S13/#422 cutover from `period-pad.tsx` (v1,
+ * deleted this session), which had it and which this skin never did. The
+ * engine's own `ActiveSuspension` doc (period/suspensions.ts) names exactly
+ * this split: "the fold sweeps against this LAZILY ... between an expiry and
+ * the next event the pad and the fold legitimately disagree — the pad is
+ * counting down, the fold is a record of facts." So this stamps each
+ * suspension's remaining time the FIRST RENDER it is observed and ticks a
+ * LOCAL clock once a second; release is always the scorer's own explicit
+ * action through the discipline group's own `${key}.suspension.end` form
+ * rendered alongside it (never this component — it is read-only).
+ *
+ * A REAL component, JSX-instantiated (`<SuspensionCountdownList/>` in
+ * `PeriodSkin` below), not one more plain render function like its siblings
+ * in this file — see the module header for why that split is deliberate:
+ * this is the one other piece of the skin (besides `ActionForm`) that owns
+ * real per-instance hook state (the stamps, the tick), so it must stay a
+ * true component for `_hook-harness`'s `renderIsland` to see it tick at all
+ * — a plain function's `useState`/`useEffect` would run inside `PeriodSkin`
+ * itself and be untestable in isolation.
+ *
+ * Keyed on ARRAY INDEX, exactly as v1's did (period-pad.tsx, deleted) — the
+ * engine gives no stable suspension id, and `state.suspensions` is a small,
+ * append/remove-in-place list the fold itself owns, so index identity is the
+ * same assumption the fold's own array already makes.
+ */
+export function SuspensionCountdownList({
+  suspensions,
+  cfg,
+  msg,
+}: {
+  suspensions: readonly SuspensionView[];
+  cfg: unknown;
+  msg: MsgFn;
+}): ReactNode {
+  const [stamps, setStamps] = useState<Map<number, number>>(() => new Map());
+  const [, forceTick] = useState(0);
+
+  // Stamp newly-seen suspensions with "now"; drop stamps for indices that no
+  // longer exist (released, or the innings/period moved on) — same shape as
+  // v1's own effect, kept in state (not a ref) so a read during render is
+  // never stale.
+  useEffect(() => {
+    setStamps((prev) => {
+      let next: Map<number, number> | null = null;
+      suspensions.forEach((_, i) => {
+        if (!prev.has(i)) {
+          next ??= new Map(prev);
+          next.set(i, Date.now());
+        }
+      });
+      for (const key of prev.keys()) {
+        if (key >= suspensions.length) {
+          next ??= new Map(prev);
+          next.delete(key);
+        }
+      }
+      return next ?? prev;
+    });
+  }, [suspensions]);
+
+  // Ticks once a second only while at least one suspension is running —
+  // cleaned up (clearInterval) the moment none remain, so this never leaves
+  // a stray timer running against an empty list.
+  useEffect(() => {
+    if (suspensions.length === 0) return;
+    const id = setInterval(() => forceTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [suspensions.length]);
+
+  if (suspensions.length === 0) return null;
+
+  function countdown(index: number, susp: SuspensionView): string | null {
+    if (susp.permanent) return msg("pad.pp.matchCountdown");
+    const total = susp.minutes ?? classMinutesOf(cfg, susp.classKey);
+    if (total === null) return null;
+    const started = stamps.get(index);
+    if (started === undefined) return `${total}:00`;
+    const left = Math.max(0, total * 60 - Math.floor((Date.now() - started) / 1000));
+    const mm = Math.floor(left / 60);
+    const ss = String(left % 60).padStart(2, "0");
+    return `${mm}:${ss}`;
+  }
+
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 p-2" data-role="suspension-countdown">
+      <p className="mb-1.5 text-xs font-medium text-amber-800">{msg("pad.pp.runningPenalties")}</p>
+      <ul className="space-y-1">
+        {suspensions.map((susp, i) => {
+          const hint = countdown(i, susp);
+          return (
+            <li key={i} className="flex flex-wrap items-center gap-2 text-xs text-slate-700" data-role="suspension-row">
+              <span className="font-medium">
+                {msg(susp.side === "home" ? "scorepad.attribution.home" : "scorepad.attribution.away")}
+              </span>
+              <span>{susp.classKey}</span>
+              {hint && (
+                <span data-testid="suspension-countdown-hint" className="font-mono text-amber-700">
+                  {hint}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-1 text-[10px] text-amber-800">{msg("pad.pp.timersHint")}</p>
+    </div>
+  );
+}
+
 function fieldValueClass(field: SkinHeaderField): string {
   return field.emphasis
     ? "font-mono text-[clamp(1.5rem,8.5vw,3rem)] font-bold leading-tight tabular-nums tracking-tight text-emerald-300 [text-shadow:0_0_24px_rgba(52,211,153,0.35)]"
@@ -534,6 +702,7 @@ export function PeriodSkin(props: SkinProps): ReactNode {
   // `renderAttribution` memo one level up (module-client.ts's `foldClient`
   // gives a fresh `state` identity on every fold advance).
   const renderAttribution = useMemo(() => buildAttributionRenderer(props.ctx, msg), [props.ctx, msg]);
+  const suspensions = useMemo(() => readSuspensions(props.ctx.state), [props.ctx.state]);
 
   const primary = layout.groups.filter((g) => g.prominence === "primary");
   const secondary = layout.groups.filter((g) => g.prominence === "secondary");
@@ -567,6 +736,11 @@ export function PeriodSkin(props: SkinProps): ReactNode {
                 data-role={`group-${group.id}`}
               >
                 <h3 className="label !mb-2">{msg(GROUP_TITLE_KEY[group.id] ?? "scorepad.skin.period.group.period")}</h3>
+                {group.id === "discipline" && (
+                  <div className="mb-2">
+                    <SuspensionCountdownList suspensions={suspensions} cfg={props.ctx.cfg} msg={msg} />
+                  </div>
+                )}
                 <div className={secondaryActionsClass(group.actions.length)}>
                   {renderActionForms(group.actions, view, dispatch, submittingType, renderAttribution, msg)}
                 </div>
