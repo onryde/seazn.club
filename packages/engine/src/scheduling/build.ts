@@ -673,12 +673,58 @@ export interface BuildResult {
  * unchanged sibling conflict is already matched away — which is why it is
  * exercised here rather than through `buildSchedule`.
  */
+/**
+ * Blocking AT THIS GATE, which is deliberately a WIDER set than
+ * `isBlockingConflict`'s — the shared predicate plus `instruction`.
+ *
+ * WHY THE BUILD GATE NEEDS ITS OWN. `isBlockingConflict` answers "may this be
+ * WRITTEN", and it is shared by the apply gate, the drag path and the AI
+ * pipeline precisely so those cannot drift into two vocabularies (#399 gap 5).
+ * A durable typed rule is correctly warn-only THERE: an organiser must be able
+ * to keep editing a board that already breaches one, which is the only way they
+ * can ever fix it.
+ *
+ * This gate asks a different question — "did the SOLVER's board introduce it" —
+ * and for that family the answer has to be no, because of an asymmetry the
+ * placement service cannot fix from its side:
+ *
+ *   * The typed rules ARE NOT ON THE WIRE. `constraints` carries `matchMinutes`
+ *     and `gapMinutes` and nothing else; `division_rules` (proto field 10) was
+ *     retired, and `constraints.startWindows` was never sent. The service
+ *     therefore cannot honour a `not_before` — it is not ignoring the rule, it
+ *     has never been told about it.
+ *   * GREEDY, by contrast, honours it natively: its cursor is
+ *     `ready = max(config.startAt, window.notBefore)` (`calendar.ts:759`), so
+ *     the seed respects a start window without being asked to.
+ *
+ * So the two producers are not equally capable here, and leaving `instruction`
+ * out of this filter means the only thing standing between an organiser and a
+ * board that breaks their own stated rule is `isStrictlyBetter` happening to
+ * prefer greedy's — incidental, not a guarantee. Measured 2026-08-13: with the
+ * gate changed to trust the solver's proof, a division whose durable rule says
+ * nothing may start before noon got six cards at 00:00.
+ *
+ * THE DELTA STILL PROTECTS THE ORGANISER. `before` is the RAW greedy board, and
+ * because greedy respects start windows that board carries no `instruction`
+ * rows for a rule it can satisfy — so this refuses what the SOLVER introduced,
+ * not what the organiser already had. A rule greedy also cannot satisfy appears
+ * on both sides and cancels, which is the correct outcome: refusing there would
+ * be a lock-out with no fix, exactly as the `ours` scoping avoids below.
+ *
+ * NOT widened by editing `isBlockingConflict` itself, deliberately — that would
+ * change the apply gate's delta check and every surface sharing the predicate,
+ * a blast radius far past what this gate needs.
+ */
+function isBlockingForBuild(c: Conflict): boolean {
+  return isBlockingConflict(c) || c.reason === "instruction";
+}
+
 export function rejectedBlockingConflicts(
   before: readonly Conflict[],
   after: readonly Conflict[],
   ours: ReadonlySet<string>,
 ): Conflict[] {
-  return deltaConflicts(before.filter(isBlockingConflict), after.filter(isBlockingConflict)).filter(
+  return deltaConflicts(before.filter(isBlockingForBuild), after.filter(isBlockingForBuild)).filter(
     (c) => ours.has(c.fixtureId),
   );
 }
