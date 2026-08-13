@@ -75,6 +75,13 @@ export async function listCompetitionCardStats(
         left join entrants ae on ae.id = f.away_entrant_id
         where d.competition_id = c.id and d.archived_at is null
           and f.status in ('scheduled','in_play')
+          -- D4a (P5): a TBD/seeded fixture (either slot still unfilled) is
+          -- not a real "what's next" answer — it can't be played yet, and
+          -- LEFT JOINing entrant names alone let it silently surface with a
+          -- blank home/away when its scheduled_at happened to sort first
+          -- (e.g. a final pinned on day one). Same precondition scoring
+          -- already enforces (append-event.ts's WRONG_PHASE guard).
+          and f.home_entrant_id is not null and f.away_entrant_id is not null
         order by (f.status = 'in_play') desc,
                  f.scheduled_at asc nulls last, f.round_no, f.seq_in_round
         limit 1
@@ -115,6 +122,9 @@ export async function listDivisionCardStats(
         left join entrants he on he.id = f.home_entrant_id
         left join entrants ae on ae.id = f.away_entrant_id
         where f.division_id = d.id and f.status in ('scheduled','in_play')
+          -- D4a (P5): see listCompetitionCardStats above — a TBD/seeded slot
+          -- is never a real "next" answer.
+          and f.home_entrant_id is not null and f.away_entrant_id is not null
         order by (f.status = 'in_play') desc,
                  f.scheduled_at asc nulls last, f.round_no, f.seq_in_round
         limit 1

@@ -1,6 +1,7 @@
 import "server-only";
 import type postgres from "postgres";
 import {
+  EngineError,
   foldMatch,
   resolveVoids,
   type EventEnvelope,
@@ -72,8 +73,14 @@ export async function foldFixture(tx: Tx, fixtureId: string): Promise<FoldedFixt
   `;
   if (!division) return null;
 
+  // D4a (P5) — reachable now that entrant slots can be null (TBD/bye, or an
+  // entrant deleted after scoring via the FK's `on delete set null`): a bare
+  // `Error` here 500s where the sibling guard in append-event.ts (the write
+  // path, same precondition) 422s via EngineError. Match it — a read that
+  // can't fold a fixture with an unassigned entrant is the same "wrong
+  // phase" as a write that can't append to one.
   if (!fixture.home_entrant_id || !fixture.away_entrant_id) {
-    throw new Error(`fixture ${fixtureId} has events but an unassigned entrant`);
+    throw new EngineError("WRONG_PHASE", "fixture has an unassigned entrant (bye/TBD)", { fixtureId });
   }
 
   const sportModule = resolveModule(division.sport_key, division.module_version);
