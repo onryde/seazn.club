@@ -8,7 +8,8 @@
 import type { Locale } from "@/lib/i18n-constants";
 
 // En dash between the two scores (SPEC-2 title: "Riverside 3–1 Northside").
-const DASH = "–";
+// Exported so enrichment.ts's biggestMargin label uses the same glyph.
+export const DASH = "–";
 
 // BCP-47 tag per app locale for Intl date formatting (venue-tz date line).
 const BCP47: Record<Locale, string> = {
