@@ -66,13 +66,38 @@ export interface OwnIdentity {
 /**
  * One row of the ledger read back for 409 slot-inspection
  * (`GET /api/v1/fixtures/{id}/events?since_seq=N` —
- * server/usecases/fixtures.ts:182-192 `EventOut`), narrowed to exactly the
- * fields the replay ruling compares.
+ * server/usecases/fixtures.ts:182-192 `EventOut`), narrowed to the fields
+ * the replay ruling compares PLUS (S12/#421) the two fields that let a row
+ * be widened into a foldable `EventEnvelope`: use-fixture-stream.ts's
+ * poll/realtime path hands rows straight to this same type, and
+ * use-pad-pipeline.ts now merges them into its own ledger (previously it
+ * discarded them outright — the root cause of a foreign `core.start` never
+ * reaching the pad's own optimistic fold).
+ *
+ * `id`/`recorded_at` are OPTIONAL here, deliberately, even though
+ * score_events.id/.recorded_at are both NOT NULL columns (db/migration/
+ * v2-engine/tables/V216__score_events.sql) and transport.ts's
+ * `ledgerSlotEventSchema` always requires and populates them from a real
+ * server response. Making them required on this TYPE would also force
+ * every hand-rolled `LedgerSlotEvent` test double across the tree — several
+ * pre-date this addition and only ever exercised the 409-slot path above,
+ * which never needed either field — to grow two throwaway values for zero
+ * behavioural gain in those suites. use-pad-pipeline.ts's own
+ * `ledgerSlotToEnvelope` treats an ABSENT id/recorded_at as "cannot fold
+ * this row" and skips it (falling back to its pre-existing
+ * reconcile-and-override behaviour), the same non-guessing posture
+ * `recorded_by`/`device_link_id` below already keep at the wire boundary.
  */
 export interface LedgerSlotEvent {
+  /** score_events.id (uuid primary key) — see the class doc above for why
+   *  this is optional on the TYPE despite never being null on a real row. */
+  id?: string;
   seq: number;
   type: string;
   payload: unknown;
+  /** score_events.recorded_at (timestamptz not null default now()) — same
+   *  optionality reasoning as `id` above. */
+  recorded_at?: string;
   recorded_by: string | null;
   device_link_id: string | null;
 }

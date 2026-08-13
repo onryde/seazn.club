@@ -19,21 +19,39 @@
 // end"), so it calls the SAME `sendOne()` `drainQueue` itself calls, one
 // event at a time, updating React state after each.
 //
-// SCOPE BOUNDARY (documented, not an oversight): on a genuine divergence —
-// a concurrent second scorer, or an optimistic-fold guess that turns out
-// wrong — this hook adopts the server's fold as-is (server wins) but does
-// NOT reconstruct the true event list that produced it. The queue's own
-// ledger read (`ScoringTransport.listEventsSince`) is deliberately narrowed
-// (drops `id`/`recordedAt` — see its own JSDoc in pipeline.ts) and cannot
-// rebuild a foldable `EventEnvelope[]`, so a real concurrent-write
-// divergence displays the server's state correctly but this hook's
-// bookkeeping only re-syncs fully on the next mount (fresh `initialEvents`).
-// Detecting and displaying the winning state — which the acceptance
-// criteria requires — is fully covered; long-run incremental consistency
-// after a real concurrent write is not, and is out of this pass's stated
-// scope (no renderer, no routes this pass).
+// SCOPE BOUNDARY, S12/#421 UPDATE: this used to read "a real concurrent-
+// write divergence displays the server's state correctly but this hook's
+// bookkeeping only re-syncs fully on the next mount" — true through S10/S11,
+// false now for the traced defect that motivated this pass. The console
+// chrome's own "Start match" button is a FOREIGN write from this pad's point
+// of view (it lives outside the pad section in both dispatchers), so
+// `core.start` landing on the server without ever reaching THIS hook's own
+// ledger meant every optimistic fold after it still validated against
+// `phase: "pre"` and threw — no sport was scoreable through the v2 console
+// once a match started. Root cause was a TYPE: `LedgerSlotEvent` (types.ts)
+// could not be widened into a foldable `EventEnvelope` (no `id`/
+// `recordedAt`). Now that it can (types.ts, transport.ts), `onStreamEvents`
+// below MERGES a poll/realtime batch into `ledgerEvents` by seq — deduped,
+// ascending, `pendingEnvelopes` (the offline queue) never touched — and
+// reconciles over the MERGED list, so `serverOverride` fires only on a
+// GENUINE divergence rather than on this pad simply being behind.
+//
+// The boundary that remains: `LedgerSlotEvent` still drops
+// `voids_event_id` (its own documented scope, transport.ts), so a FOREIGN
+// core.void merges as an event `resolveVoids` cannot resolve (it requires
+// `.voids`) and the fold throws on every replay from that point on.
+// `foldedState` below never lets that escape into render (degrades to the
+// last good state plus a surfaced `lastRejection`), but the void's actual
+// effect will not display correctly until the next full reconciliation —
+// out of this pass's traced scope (core.start/phase-class foreign events),
+// not an oversight.
+//
+// A genuine optimistic-fold-guess-turns-out-wrong divergence (this hook's
+// own guess wrong, not a foreign-event gap) still adopts the server's fold
+// as-is without reconstructing the exact event list that produced it — nothing
+// in this pass changes that half of the original boundary.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { EventEnvelope, LineupPair } from "@seazn/engine/core";
+import { EngineError, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { foldClient } from "./module-client";
 import { indexedDbQueueStore } from "./queue-store";
@@ -201,6 +219,58 @@ export function pendingToEnvelope(
   };
 }
 
+/**
+ * S12/#421 — widen a polled/realtime ledger ROW into a foldable
+ * `EventEnvelope`, now that `LedgerSlotEvent` carries `id`/`recorded_at`
+ * (types.ts). Returns `null` — never a guessed id — for a row missing
+ * either: types.ts's own JSDoc explains why they are optional on that
+ * TYPE despite the real transport always populating them, so an absent
+ * value here can only be a hand-rolled test double that predates this
+ * widening, never a real server response. Still drops `voids_event_id`
+ * (LedgerSlotEvent does not carry it) — see the SCOPE BOUNDARY comment at
+ * the top of this file for what that means for a foreign `core.void`.
+ */
+function ledgerSlotToEnvelope(fixtureId: string, row: LedgerSlotEvent): EventEnvelope | null {
+  if (row.id === undefined || row.recorded_at === undefined) return null;
+  return {
+    id: row.id,
+    fixtureId,
+    seq: row.seq,
+    type: row.type,
+    payload: row.payload,
+    recordedAt: row.recorded_at,
+    recordedBy: row.recorded_by,
+  };
+}
+
+/**
+ * Merge a polled/realtime batch of ledger rows into the known ledger, by
+ * seq, deduplicated, kept ascending — S12/#421. A batch may overlap what
+ * this hook already knows (its own just-acked events from `runDrain`, or a
+ * previous poll's rows): on a seq collision the EXISTING entry always wins,
+ * never the incoming row, so this can never regress a richer envelope this
+ * hook already built itself — `runDrain`'s own `pendingToEnvelope` sets
+ * `voids` for a core.void THIS device recorded, which `ledgerSlotToEnvelope`
+ * above can never reconstruct from a bare ledger row. Touches only the
+ * ledger list; `pendingEnvelopes` (the offline queue) is untouched by
+ * construction, so a poll tick can never drop or reorder a still-queued
+ * local write.
+ */
+function mergeLedgerEvents(
+  fixtureId: string,
+  current: readonly EventEnvelope[],
+  incoming: readonly LedgerSlotEvent[],
+): EventEnvelope[] {
+  const bySeq = new Map<number, EventEnvelope>();
+  for (const event of current) bySeq.set(event.seq, event);
+  for (const row of incoming) {
+    if (bySeq.has(row.seq)) continue;
+    const envelope = ledgerSlotToEnvelope(fixtureId, row);
+    if (envelope !== null) bySeq.set(row.seq, envelope);
+  }
+  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+}
+
 export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResult {
   const { fixtureId, module: sportModule, cfg, lineups, identity, transport } = params;
   const dbName = params.queueDbName ?? `scorepad-queue-${fixtureId}`;
@@ -276,11 +346,47 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   const submitInFlight = useRef<{ type: string; payload: unknown } | null>(null);
   const lastAccepted = useRef<{ type: string; payload: unknown; at: number } | null>(null);
 
+  // S12/#421 — the last successfully computed fold, the "last good state" a
+  // violating optimistic guess degrades to below rather than ever throwing
+  // into render. `undefined` only until the very first fold ever succeeds
+  // (or forever, if even THAT throws — see the `??` fallback below).
+  const lastGoodStateRef = useRef<unknown>(undefined);
+
   const foldedState = useMemo(() => {
     if (serverOverride !== undefined) return serverOverride;
     const events = [...ledgerEvents, ...pendingEnvelopes.values()];
-    return foldClient(sportModule, cfg, lineups, events);
-  }, [sportModule, cfg, lineups, ledgerEvents, pendingEnvelopes, serverOverride]);
+    try {
+      const state = foldClient(sportModule, cfg, lineups, events);
+      lastGoodStateRef.current = state;
+      return state;
+    } catch (err) {
+      // A violating OPTIMISTIC guess — e.g. this hook's own local knowledge
+      // is momentarily stale (the exact S12/#421 class: a foreign event not
+      // yet merged makes this hook's OWN next action look illegal), or a
+      // genuinely invalid action. Either way the real server round trip
+      // (already in flight via runDrain, or about to be) is the actual
+      // authority and will correct this either way — S3/#426 OWNER RULING
+      // 2: "a violating re-entry returns a rejection, never throws — a
+      // cfg-derived throw inside a fold permanently bricks recorded
+      // fixtures." Never let this crash the pad over its own best guess
+      // being wrong: degrade to the last good state and surface the
+      // rejection instead.
+      //
+      // A RENDER-PHASE state update (React's own sanctioned "adjust state
+      // during render" pattern — see components/__tests__/_hook-harness.tsx
+      // for the equivalent test-harness mechanics) — guarded so it fires
+      // ONLY when the rejection's content actually changed, or a poisoned
+      // event that never resolves (e.g. still sitting in `pendingEnvelopes`
+      // because the real ack/reject is still in flight) would re-set an
+      // equal-content object every render forever and never converge.
+      const code = err instanceof EngineError ? err.code : "UNKNOWN";
+      const message = err instanceof Error ? err.message : "optimistic fold failed";
+      if (lastRejection === null || lastRejection.code !== code || lastRejection.message !== message) {
+        setLastRejection({ code, message });
+      }
+      return lastGoodStateRef.current ?? sportModule.init(cfg, lineups);
+    }
+  }, [sportModule, cfg, lineups, ledgerEvents, pendingEnvelopes, serverOverride, lastRejection]);
 
   const summary = useMemo(() => sportModule.summary(foldedState), [sportModule, foldedState]);
 
@@ -311,21 +417,27 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     [transport, fixtureId, sportModule, cfg, lineups],
   );
 
-  // Review finding 3: wires use-fixture-stream.ts in. `LedgerSlotEvent[]` is
-  // deliberately narrow (see the SCOPE BOUNDARY comment at the top of this
-  // file) and cannot be folded directly, so an inbound signal — realtime or
-  // polling, `onEvents` does not distinguish — is treated as "go verify the
-  // true state" rather than data to fold ourselves: it reuses the SAME
-  // reconcileAfterAck a normal ack already uses, over the ledger events this
-  // hook currently knows about (it has no better local list to offer). An
-  // empty batch (every tick reports one, per use-fixture-stream.ts's own
-  // `fetchOnce`) is a no-op, not a wasted fetchState round trip.
+  // Review finding 3, S12/#421 UPDATE: wires use-fixture-stream.ts in. An
+  // inbound signal — realtime or polling, `onEvents` does not distinguish —
+  // used to be treated as "go verify the true state" rather than data to
+  // fold ourselves, because `LedgerSlotEvent[]` could not be widened into a
+  // foldable `EventEnvelope[]` (see the SCOPE BOUNDARY comment at the top
+  // of this file for the traced defect that came from exactly that gap).
+  // Now that it can, this MERGES the batch into `ledgerEvents` (by seq,
+  // deduplicated, ascending — `mergeLedgerEvents` above; `pendingEnvelopes`,
+  // the offline queue, is never touched) and reconciles over the MERGED
+  // list, not the stale pre-merge one — so `serverOverride` fires only on a
+  // GENUINE divergence rather than on this pad simply having been behind.
+  // An empty batch (every tick reports one, per use-fixture-stream.ts's own
+  // `fetchOnce`) is still a no-op, not a wasted merge/fetchState round trip.
   const onStreamEvents = useCallback(
     (events: LedgerSlotEvent[]) => {
       if (events.length === 0) return;
-      void reconcileAfterAck(ledgerEventsRef.current);
+      const merged = mergeLedgerEvents(fixtureId, ledgerEventsRef.current, events);
+      commitLedgerEvents(merged);
+      void reconcileAfterAck(merged);
     },
-    [reconcileAfterAck],
+    [fixtureId, commitLedgerEvents, reconcileAfterAck],
   );
   const skipPollWhileDraining = useCallback(() => drainInFlight.current !== null, []);
   useFixtureStream({

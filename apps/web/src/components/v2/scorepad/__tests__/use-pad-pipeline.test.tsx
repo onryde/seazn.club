@@ -752,3 +752,160 @@ describe("usePadPipeline — ownEventIds (S12/#421 timeline seam: device-link 'u
     expect(pad.current.ownEventIds.has("e-1")).toBe(false);
   });
 });
+
+// S12/#421 — the traced console-integration defect: the console chrome's own
+// "Start match" button lives OUTSIDE the pad section in both dispatchers, so
+// `core.start` is a FOREIGN write from this hook's point of view. Before this
+// fix, onStreamEvents (above) discarded the polled/realtime batch outright
+// and only re-verified the DISPLAY via reconcileAfterAck's serverOverride —
+// so the fold BASE (what a subsequent submit() validates against) never
+// learned about it, and the first scoring tap after a real match start threw
+// `EngineError: ball in phase "pre"` out of the client fold. No sport was
+// scoreable through the v2 console once a match started.
+describe("usePadPipeline — foreign events merge into the fold base (S12/#421)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("MUTATION TARGET: a FOREIGN core.start delivered by a poll tick enters ledgerEvents/events and the OPTIMISTIC fold, not merely the display", async () => {
+    const foreignRow: LedgerSlotEvent = {
+      id: "foreign-start-1",
+      seq: 1,
+      type: "core.start",
+      payload: {},
+      recorded_at: "2026-08-13T00:00:00.000Z",
+      recorded_by: "console-chrome-user", // the OTHER writer — never this hook's own submit()
+      device_link_id: null,
+    };
+    const listEventsSince = vi.fn(async (): Promise<LedgerSlotEvent[]> => [foreignRow]);
+    const transport: PadTransport = {
+      async appendEvent() {
+        throw new Error("not used by this test");
+      },
+      listEventsSince,
+      async getLastSeq() {
+        return 0;
+      },
+      // `state: null` — reconcileAfterAck's own documented no-op guard — so
+      // `serverOverride` can NEVER fire in this test. Any `state.phase`
+      // observed below is therefore necessarily the OPTIMISTIC fold's own
+      // computation over ledgerEvents — proof the fold BASE changed, not
+      // merely what a display-only override shows (the bug's own "the
+      // DISPLAY becomes correct" description, which was already true
+      // pre-fix and is deliberately NOT what this test exercises).
+      async fetchState() {
+        return { status: "in_play", last_seq: 1, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(
+      baseParams({ transport, streamConnector: neverConfirmConnector(), streamPollMs: 1_000 }),
+    );
+    expect(pad.current.events).toHaveLength(0); // nothing known yet
+    expect((pad.current.state as { phase: string }).phase).toBe("pre");
+
+    await vi.advanceTimersByTimeAsync(0); // settle into polling
+    await vi.advanceTimersByTimeAsync(1_000); // first poll tick reports the foreign core.start
+    await vi.advanceTimersByTimeAsync(0); // let onStreamEvents' own reconcileAfterAck resolve
+
+    expect(pad.current.events.map((e) => e.id)).toEqual(["foreign-start-1"]); // entered the fold base
+    expect((pad.current.state as { phase: string }).phase).toBe("live"); // …and the OPTIMISTIC fold reflects it
+  });
+});
+
+describe("usePadPipeline — offline queue survives a poll merge (S12/#421)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a still-queued LOCAL event is untouched — never dropped, never reordered — by a poll tick that merges a foreign ledger row", async () => {
+    let appendShouldFail = true;
+    let ackSeq = 1;
+    const listEventsSince = vi.fn(
+      async (): Promise<LedgerSlotEvent[]> => [
+        {
+          id: "foreign-1",
+          seq: 1,
+          type: "core.note",
+          payload: { text: "concurrent" },
+          recorded_at: "2026-08-13T00:00:00.000Z",
+          recorded_by: "user-2",
+          device_link_id: null,
+        },
+      ],
+    );
+    const transport: PadTransport = {
+      async appendEvent() {
+        if (appendShouldFail) return { kind: "network-error", message: "offline" };
+        const seq = ackSeq;
+        ackSeq += 1;
+        return success(seq);
+      },
+      listEventsSince,
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport, streamConnector: neverConfirmConnector(), streamPollMs: 1_000 }));
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 }); // stays queued — network error
+    expect(pad.current.queueDepth).toBe(1);
+    const pendingIdBefore = pad.current.events.find((e) => e.type === "generic.score")!.id;
+
+    // The drain already STOPPED (a network error, not an in-flight send —
+    // sendOne returns "stayed-queued" and runDrain's own `.finally` clears
+    // `drainInFlight`), so skipPollWhile does NOT suppress this poll tick.
+    await vi.advanceTimersByTimeAsync(0); // settle into polling
+    await vi.advanceTimersByTimeAsync(1_000); // a poll tick merges the foreign core.note
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(listEventsSince).toHaveBeenCalled(); // the merge actually ran
+    expect(pad.current.queueDepth).toBe(1); // still queued — untouched by the merge
+    // ledgerEvents (the merged foreign row) first, then the still-pending
+    // local write, under the SAME id — never dropped, never reordered.
+    expect(pad.current.events.map((e) => e.id)).toEqual(["foreign-1", pendingIdBefore]);
+
+    appendShouldFail = false;
+    await pad.current.submit("generic.score", { by: "A", points: 1 }); // retries the whole queue
+    expect(pad.current.queueDepth).toBe(0);
+    expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({ home: 1, away: 1 });
+  });
+});
+
+describe("usePadPipeline — a throwing optimistic fold degrades instead of crashing (S12/#421)", () => {
+  it("MUTATION TARGET: submit() of an action the local fold rejects surfaces lastRejection and resolves normally — never a crashed pad", async () => {
+    const { transport } = fakeTransport({
+      appendResults: [
+        { kind: "rejected", code: "WRONG_PHASE", message: "not decided" }, // what a real server says too
+        success(1),
+      ],
+    });
+    const pad = mountPipeline(baseParams({ transport })); // fresh mount, phase "pre", no initialEvents
+
+    // core.finalize requires phase === "done" (generic.ts) — throws
+    // WRONG_PHASE on a fresh match. Without the fix, this throw escapes
+    // foldedState's useMemo during the SYNCHRONOUS render
+    // commitPendingEnvelopes triggers inside submit() (before its first
+    // await) — propagating out of submit() as a REJECTED promise instead of
+    // a resolved one, and permanently wedging the pad (the poisoned pending
+    // event never leaves state, so every later render re-throws too).
+    await expect(pad.current.submit("core.finalize", {})).resolves.toBeUndefined();
+
+    expect(pad.current.lastRejection).toEqual({ code: "WRONG_PHASE", message: "not decided" });
+    expect((pad.current.state as { phase: string }).phase).toBe("pre"); // degraded to the last good state
+    expect(pad.current.queueDepth).toBe(0); // resolved (dropped as a permanent rejection), not stuck
+
+    // Not bricked: a legitimate action submitted right after still works.
+    await pad.current.submit("generic.score", { by: "H", points: 2 });
+    expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({ home: 2, away: 0 });
+    expect(pad.current.lastRejection).toBeNull(); // cleared by the fresh submit
+  });
+});

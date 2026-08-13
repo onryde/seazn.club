@@ -105,11 +105,12 @@ describe("appendEvent — outcome mapping", () => {
 });
 
 describe("listEventsSince / getLastSeq / fetchState", () => {
-  it("listEventsSince returns the ledger rows, NARROWED to LedgerSlotEvent's own fields, and hits the right URL", async () => {
+  it("listEventsSince returns the ledger rows, KEEPING id/recorded_at (S12/#421) but still dropping voids_event_id, and hits the right URL", async () => {
     // The server's real EventOut carries more columns than LedgerSlotEvent
-    // declares (types.ts: "narrowed to exactly the fields the replay ruling
-    // compares") — id/recorded_at/voids_event_id are validated but DROPPED
-    // by the zod boundary (review finding 1), not silently forwarded.
+    // declares (types.ts) — voids_event_id is validated but DROPPED by the
+    // zod boundary (review finding 1), not silently forwarded. id/
+    // recorded_at used to be dropped the same way; S12/#421 widened the
+    // schema to keep them (use-pad-pipeline.ts needs both to fold a row).
     const rawRow = {
       id: "e1",
       seq: 5,
@@ -122,8 +123,20 @@ describe("listEventsSince / getLastSeq / fetchState", () => {
     };
     const { fn, calls } = fakeFetch(() => fakeResponse(200, { ok: true, data: [rawRow] }));
     const result = await sessionTransport({ fetchFn: fn }).listEventsSince("fx-1", 4);
-    expect(result).toEqual([{ seq: 5, type: "core.start", payload: {}, recorded_by: "u1", device_link_id: null }]);
+    expect(result).toEqual([
+      { id: "e1", seq: 5, type: "core.start", payload: {}, recorded_at: "t", recorded_by: "u1", device_link_id: null },
+    ]);
     expect(calls[0]!.url).toBe("/api/v1/fixtures/fx-1/events?since_seq=4");
+  });
+
+  it("MUTATION TARGET (S12/#421): a row missing id or recorded_at rejects with a parse error — both are NOT NULL server columns, never guessed", async () => {
+    const missingId = { seq: 5, type: "core.start", payload: {}, recorded_at: "t", recorded_by: "u1", device_link_id: null };
+    const { fn: fnA } = fakeFetch(() => fakeResponse(200, { ok: true, data: [missingId] }));
+    await expect(sessionTransport({ fetchFn: fnA }).listEventsSince("fx-1", 0)).rejects.toThrow();
+
+    const missingRecordedAt = { id: "e1", seq: 5, type: "core.start", payload: {}, recorded_by: "u1", device_link_id: null };
+    const { fn: fnB } = fakeFetch(() => fakeResponse(200, { ok: true, data: [missingRecordedAt] }));
+    await expect(sessionTransport({ fetchFn: fnB }).listEventsSince("fx-1", 0)).rejects.toThrow();
   });
 
   it("listEventsSince rejects on a thrown fetch — 'may reject', per ScoringTransport's own contract", async () => {
@@ -173,10 +186,12 @@ describe("listEventsSince / getLastSeq / fetchState", () => {
 
 describe("listEventsSince — ledger row validation at the wire boundary (review finding 1)", () => {
   it("normalises an OMITTED recorded_by/device_link_id key to a real null, not undefined", async () => {
-    const rawRow = { seq: 5, type: "core.note", payload: { text: "x" } }; // both keys OMITTED entirely
+    const rawRow = { id: "e1", seq: 5, type: "core.note", payload: { text: "x" }, recorded_at: "t" }; // both identity keys OMITTED entirely
     const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: [rawRow] }));
     const result = await sessionTransport({ fetchFn: fn }).listEventsSince("fx-1", 4);
-    expect(result).toEqual([{ seq: 5, type: "core.note", payload: { text: "x" }, recorded_by: null, device_link_id: null }]);
+    expect(result).toEqual([
+      { id: "e1", seq: 5, type: "core.note", payload: { text: "x" }, recorded_at: "t", recorded_by: null, device_link_id: null },
+    ]);
     // A GENUINE own key holding `null`, not merely absent from the object —
     // pipeline.ts's resolveConflict compares this against OwnIdentity's own
     // `string | null` fields, so "present and null" vs "absent" must not
@@ -186,14 +201,16 @@ describe("listEventsSince — ledger row validation at the wire boundary (review
   });
 
   it("an explicit null on both identity fields round-trips as null (not just the omitted-key case)", async () => {
-    const rawRow = { seq: 5, type: "core.note", payload: {}, recorded_by: null, device_link_id: null };
+    const rawRow = { id: "e1", seq: 5, type: "core.note", payload: {}, recorded_at: "t", recorded_by: null, device_link_id: null };
     const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: [rawRow] }));
     const result = await sessionTransport({ fetchFn: fn }).listEventsSince("fx-1", 4);
-    expect(result).toEqual([{ seq: 5, type: "core.note", payload: {}, recorded_by: null, device_link_id: null }]);
+    expect(result).toEqual([
+      { id: "e1", seq: 5, type: "core.note", payload: {}, recorded_at: "t", recorded_by: null, device_link_id: null },
+    ]);
   });
 
   it("a malformed row (wrong TYPE, not just a missing optional key) rejects with a parse error, not a silent pass-through", async () => {
-    const badRow = { seq: "not-a-number", type: "core.note", payload: {}, recorded_by: null, device_link_id: null };
+    const badRow = { id: "e1", seq: "not-a-number", type: "core.note", payload: {}, recorded_at: "t", recorded_by: null, device_link_id: null };
     const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: [badRow] }));
     await expect(sessionTransport({ fetchFn: fn }).listEventsSince("fx-1", 0)).rejects.toThrow();
   });
