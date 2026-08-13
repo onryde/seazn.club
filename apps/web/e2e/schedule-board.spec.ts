@@ -184,36 +184,50 @@ test.describe.serial("schedule board", () => {
     // Two fixtures sharing an entrant, back-to-back on different courts —
     // violates perEntrantMinRest (30') but must apply and only warn.
     const fixtures = await Promise.all(fixtureIds.map((id) => getFixture(request, id)));
-    const byEntrant = new Map<string, FixtureRow[]>();
-    for (const f of fixtures) {
-      for (const e of [f.home_entrant_id, f.away_entrant_id]) {
-        if (!e) continue;
-        byEntrant.set(e, [...(byEntrant.get(e) ?? []), f]);
-      }
-    }
-    // C1: two fixtures sharing an entrant are NECESSARILY in different rounds
-    // (an entrant plays at most once per round in a round robin) — take the
-    // entrant's two HIGHEST rounds, earlier-first.
-    const pair = [...byEntrant.values()]
-      .find((v) => v.length >= 2)!
-      .sort((a, b) => b.round_no - a.round_no)
-      .slice(0, 2)
-      .sort((a, b) => a.round_no - b.round_no);
-    // `pair[0]` (round N) is left EXACTLY where the auto-schedule already put
-    // it — the whole board just applied cleanly as one call (H6 checked
-    // pairwise among all 6), so it is provably round-order-consistent
-    // already, and moving `pair[0]` at all risks landing it after whatever
-    // untouched sibling shares its OWN round with `pair[1]` (round N+1, only
-    // exempt from H6 against `pair[0]` because a same-round pair is skipped
-    // outright). Only `pair[1]` moves, to immediately after `pair[0]` ends
-    // plus the court gap (matchMinutes 45 + gapMinutes 5 = 50) — short of the
+    // C1 fix-loop: courts >= fixtures-per-round does NOT guarantee greedy
+    // actually PACKS a round into one simultaneous wave — it is a valid,
+    // legal (if suboptimal) board for round 2's other fixture to land in a
+    // later wave than the one this test picks. "Leave the lower one
+    // unmoved, add matchMinutes" is only safe when that lower one is
+    // PROVABLY the latest thing at or below its own round, not merely "a
+    // round 2 fixture" — confirmed flaky (~2/3 runs) the naive way. Use the
+    // same construction as board-v3.spec.ts: the entrant doesn't matter,
+    // only that `lower` is the temporally latest fixture below the max
+    // round, and `upper` is that entrant's max-round fixture.
+    const maxRound = Math.max(...fixtures.map((f) => f.round_no));
+    const lower = fixtures
+      .filter((f) => f.round_no < maxRound)
+      .reduce((best, f) => (Date.parse(f.scheduled_at!) > Date.parse(best.scheduled_at!) ? f : best));
+    const upper = fixtures.find(
+      (f) =>
+        f.round_no === maxRound &&
+        (f.home_entrant_id === lower.home_entrant_id ||
+          f.home_entrant_id === lower.away_entrant_id ||
+          f.away_entrant_id === lower.home_entrant_id ||
+          f.away_entrant_id === lower.away_entrant_id),
+    )!;
+    // `lower` stays EXACTLY where the auto-schedule already put it — the
+    // whole board just applied cleanly as one call (H6 checked pairwise
+    // among all 6), so it is provably round-order-consistent already, and
+    // by construction nothing below the max round sits any later than
+    // `lower`. Only `upper` moves, to immediately after `lower` ends plus
+    // the court gap (matchMinutes 45 + gapMinutes 5 = 50) — short of the
     // 30' rest floor, so still a warning, and safe for H6 both ways: it can
-    // only be COMPARED against round N (pair[0], `pair[1]` moving later only
-    // helps that) and earlier rounds (already well behind), never against its
-    // own round N+1 (same-round pairs are exempt from the scan entirely).
-    const pair0Start = Date.parse(pair[0]!.scheduled_at!);
-    const pair1Start = pair0Start + (45 + 5) * 60_000;
-    const pair1Court = pair[0]!.court_label === "Court A" ? "Court B" : "Court A";
+    // only be COMPARED against rounds below the max (moving `upper` later
+    // only helps those), never against its own round (same-round pairs are
+    // exempt from the scan entirely).
+    //
+    // Court: keep `upper` on its OWN current court rather than guessing
+    // "whichever isn't `lower`'s" — confirmed flaky (~1/5 runs): the max
+    // round's OTHER fixture can legitimately already be sitting on that
+    // other court at its own (unmoved, later) natural time, and moving
+    // `upper` earlier into a blind guess landed it on top of that fixture
+    // (a genuine, correctly-blocked `conflict.court`, not H6). `upper`'s
+    // own court was never assigned to anyone else in this narrower window —
+    // it is only vacating ITS OWN later slot to move earlier.
+    const lowerStart = Date.parse(lower.scheduled_at!);
+    const upperStart = lowerStart + (45 + 5) * 60_000;
+    const upperCourt = upper.court_label!;
     const tight = await apiJson<{ applied: number; conflicts: { code: string; blocking: boolean }[] }>(
       request,
       `/api/v1/stages/${stageId}/schedule/apply`,
@@ -221,9 +235,9 @@ test.describe.serial("schedule board", () => {
       {
         assignments: [
           {
-            fixture_id: pair[1]!.id,
-            scheduled_at: new Date(pair1Start).toISOString(), // 5' rest — below the 30' floor
-            court_label: pair1Court,
+            fixture_id: upper.id,
+            scheduled_at: new Date(upperStart).toISOString(), // 5' rest — below the 30' floor
+            court_label: upperCourt,
           },
         ],
         source: "manual",
@@ -238,9 +252,10 @@ test.describe.serial("schedule board", () => {
     const rest = validated.data!.conflicts.find((c) => c.code === "warn.rest");
     expect(rest).toBeTruthy();
     expect(rest!.blocking).toBe(false);
-    // Restore the auto slots so later tests see a clean board.
+    // Restore the auto slot so later tests see a clean board — only `upper`
+    // moved; `lower` was never touched.
     await apiJson(request, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
-      assignments: pair.map((f) => ({ fixture_id: f.id, ...slotOf.get(f.id)! })),
+      assignments: [{ fixture_id: upper.id, ...slotOf.get(upper.id)! }],
       source: "manual",
     });
   });

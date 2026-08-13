@@ -287,15 +287,38 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
       `/api/v1/fixtures/${fa}`,
     );
     const faStart = Date.parse(faRow.data!.scheduled_at);
-    // Different court from `fa`'s own (whichever that actually is) — same
-    // time + court would 409 as a court clash, which is not what this test
-    // means to exercise.
+    const fbStart = faStart + 30 * 60_000; // matchMinutes is 30 under the
+    // tightened settings just above; 0 gap between fa ending and fb starting
+    // is 0' rest against a 60' floor.
+    //
+    // C1 fix-loop: "whichever court isn't fa's" is NOT provably free at
+    // fb's NEW time — confirmed flaky in schedule-board.spec.ts's identical
+    // pattern: the naive per-index seeding can legitimately have put a
+    // THIRD, untouched fixture on that other court at this exact hour, and
+    // guessing landed a real (correctly blocked) `conflict.court` there
+    // instead of the rest warning this test means to exercise. Check both
+    // courts against every OTHER division-0 fixture's actual current slot
+    // and pick one that is genuinely free.
+    const allFixtureRows = await Promise.all(
+      rig.fixtures[d0.id]!.filter((id) => id !== fa && id !== fb).map((id) =>
+        apiJson<{ scheduled_at: string | null; court_label: string | null }>(
+          request,
+          `/api/v1/fixtures/${id}`,
+        ),
+      ),
+    );
+    const fbEnd = fbStart + 30 * 60_000;
     const [courtA, courtB] = courtsOf(0);
-    const fbCourt = faRow.data!.court_label === courtA ? courtB : courtA;
+    const courtFree = (court: string) =>
+      !allFixtureRows.some((r) => {
+        if (r.data!.court_label !== court || r.data!.scheduled_at === null) return false;
+        const otherStart = Date.parse(r.data!.scheduled_at);
+        const otherEnd = otherStart + 30 * 60_000;
+        return fbStart < otherEnd && otherStart < fbEnd;
+      });
+    const fbCourt = courtFree(courtA) ? courtA : courtB;
     await apiJson(request, `/api/v1/fixtures/${fb}`, "PATCH", {
-      // matchMinutes is 30 under the tightened settings just above; 0 gap
-      // between fa ending and fb starting is 0' rest against a 60' floor.
-      scheduled_at: new Date(faStart + 30 * 60_000).toISOString(),
+      scheduled_at: new Date(fbStart).toISOString(),
       court_label: fbCourt,
     });
 
