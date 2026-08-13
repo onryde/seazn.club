@@ -1171,14 +1171,15 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
   // `stageId` matching its OWN division's league stage — never the OTHER
   // division's.
   //
-  // Round order itself stays STRUCTURALLY INERT on this path regardless
-  // (`verifyConfigFor` only sets `tz` when its optional `rules` argument is
-  // passed, and the joint apply's own calls never pass one — ruling #399,
-  // "apply-time blocking is W4", predates and is out of scope for this
-  // follow-up) — so this test is deliberately a DATA-level proof (the
-  // Assignment objects carry the right fields) rather than a
-  // conflict-level one (a violation would actually be flagged), which
-  // would be a false claim about behaviour this path does not have.
+  // Round order itself was STRUCTURALLY INERT on this path at the time this
+  // test was written (`verifyConfigFor` only set `tz` when its optional
+  // `rules` argument was passed, and the joint apply's own calls never
+  // passed one — ruling #399, "apply-time blocking is W4"). C1 gap A closed
+  // that: `verifyConfigFor` now also accepts a bare `tz`, independent of
+  // `rules`, and these two call sites supply the run's org zone. This test
+  // stays a DATA-level proof (the Assignment objects carry the right
+  // fields, per division) rather than a conflict-level one on purpose —
+  // that half now has its own dedicated tests below ("C1 gap A").
   it("threads roundNo/stageId per division, not once for the whole run", async () => {
     const { alpha, bravo } = await clean();
     const [alphaStageRow] = await sql<{ stage_id: string }[]>`
@@ -1222,5 +1223,180 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // above would pass vacuously even with `roundRobinByDivision` collapsed
     // to a single shared set.
     expect(alphaStageRow!.stage_id).not.toBe(bravoStageRow!.stage_id);
+  }, 60_000);
+
+  // ---------------------------------------------------------------------
+  // C1 gap A — round order was DATA-complete (roundNo/stageId threaded, see
+  // the test above) but STRUCTURALLY INERT: `verifyConfigFor` only sets
+  // `tz` when its `rules` argument is passed, and these two call sites
+  // never passed one (ruling #399 — apply-time blocking must not extend
+  // to the typed-rule families). `verifyConfigFor` now also accepts a
+  // bare `tz`, independent of `rules`, and these call sites supply the
+  // competition's own org zone. See competition-schedule-ai.ts's
+  // `verifyConfigFor` for the full argument.
+  // ---------------------------------------------------------------------
+
+  it("a round-robin sequence violation the apply introduces is a 409, blocking (C1 gap A)", async () => {
+    // Alpha's round 3 fixture (the LAST id, by seedDivision's own round_no/
+    // seq_in_round sort) takes round 1's slot and vice versa — a straight
+    // swap of two already-occupied times, the same construction the smoke
+    // suite and the e2e fixture-server sentinel both use, so no court/rest
+    // conflict rides along to confound the assertion (perEntrantMinRest is
+    // 0 on the seed board, and every slot is reused, just reassigned).
+    const alphaIds = board.alpha.fixtureIds;
+    const last = alphaIds.length - 1;
+    const alphaAssignments = alphaIds.map((fixture_id, i) => ({
+      fixture_id,
+      scheduled_at: i === 0 ? at(last * 30) : i === last ? at(0) : at(i * 30),
+      court_label: "Court 1",
+    }));
+    const alpha: CompetitionApplyDivision = {
+      division_id: board.alpha.id,
+      expected_seq: await divisionSeq(board.alpha.id),
+      assignments: alphaAssignments,
+    };
+    const bravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0);
+    let caught: unknown;
+    try {
+      await applyCompetitionSchedule(auth, board.competitionId, {
+        divisions: [alpha, bravo],
+        source: "ai",
+        ai: AI,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(EngineError.is(caught)).toBe(true);
+    expect((caught as EngineError).code).toBe("SCHEDULE_CONFLICT");
+    const conflicts = (caught as EngineError).data as { conflicts: Conflict[] };
+    const orderConflicts = conflicts.conflicts.filter((c) => c.reason === "order");
+    expect(orderConflicts.length).toBeGreaterThan(0);
+    expect(orderConflicts.every((c) => alphaIds.includes(c.fixtureId))).toBe(true);
+    // Atomic: NEITHER division was written, including the untouched Bravo.
+    expect(unplaced(await slots(board.alpha.id))).toBe(true);
+    expect(unplaced(await slots(board.bravo.id))).toBe(true);
+  }, 60_000);
+
+  it("still applies over a board that ALREADY holds a round-order violation — the delta property (C1 gap A)", async () => {
+    // THE CASE THE DELTA EXISTS FOR (#399), same shape as the person-overlap
+    // version of this test above. A board can already be sitting on a
+    // round-order violation (planted here straight into the rows, bypassing
+    // every gate — the only way to construct it now that the gate is live);
+    // the next joint apply must not become permanently unfixable for the
+    // dirt it did not introduce.
+    const alphaIds = board.alpha.fixtureIds;
+    const last = alphaIds.length - 1;
+    const alphaAssignments = alphaIds.map((fixture_id, i) => ({
+      fixture_id,
+      scheduled_at: i === 0 ? at(last * 30) : i === last ? at(0) : at(i * 30),
+      court_label: "Court 1",
+    }));
+    for (const a of alphaAssignments) {
+      await sql`
+        update fixtures set scheduled_at = ${a.scheduled_at}, court_label = ${a.court_label}
+        where id = ${a.fixture_id}`;
+    }
+    const out = await applyCompetitionSchedule(auth, board.competitionId, {
+      divisions: [
+        {
+          division_id: board.alpha.id,
+          expected_seq: await divisionSeq(board.alpha.id),
+          // Re-asserts the SAME (already-violating) positions — a no-op for
+          // Alpha, exactly like the fixtures already sitting there.
+          assignments: alphaAssignments,
+        },
+        // Bravo gets a REAL apply in the same call — the joint write must
+        // not be refused for Alpha's pre-existing dirt.
+        lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0),
+      ],
+      source: "ai",
+      ai: AI,
+    });
+    expect(out.applied).toBe(9);
+    // Reported in full — a badge, never a wall.
+    const orderConflicts = out.conflicts.filter((c) => c.reason === "order");
+    expect(orderConflicts.length).toBeGreaterThan(0);
+    expect(unplaced(await slots(board.alpha.id))).toBe(false);
+    expect(unplaced(await slots(board.bravo.id))).toBe(false);
+  }, 60_000);
+
+  it("two divisions' round-robin sequences are not compared against each other (C1 gap A)", async () => {
+    // Alpha entirely AFTER Bravo, chronologically, same day: if the sequence
+    // key ever collapsed across divisions (e.g. (stageId, poolId) without
+    // divisionId), Alpha's round 1 landing after Bravo's round 3 would read
+    // exactly like a same-sequence violation. Different courts throughout,
+    // so the only thing this apply could possibly report is round order.
+    const alpha = lineUp(board.alpha, await divisionSeq(board.alpha.id), "Court 1", 400);
+    const bravo = lineUp(board.bravo, await divisionSeq(board.bravo.id), "Court 3", 0);
+    const out = await applyCompetitionSchedule(auth, board.competitionId, {
+      divisions: [alpha, bravo],
+      source: "ai",
+      ai: AI,
+    });
+    expect(out.applied).toBe(9);
+    expect(out.conflicts.filter((c) => c.reason === "order")).toEqual([]);
+  }, 60_000);
+
+  it("restByDivision stays unset at apply time — a cross-division rest gap under only the STRICTER division's own floor is not raised to it (C1 gap A, #399)", async () => {
+    // #398's restByDivision is what would make a cross-division pair rest at
+    // the MAX of both divisions' floors rather than at whichever pass's OWN
+    // config happens to be checking it — exactly the field `rules` carries,
+    // and the one #399 requires the apply path never populate. Alpha's own
+    // floor is raised to 45 minutes; Bravo's stays the seed's default 0. A
+    // 20-minute gap between one fixture in each, sharing one person, breaches
+    // ONLY Alpha's own floor. If restByDivision ever reached this call site,
+    // Bravo's OWN pass would also see 45 (raised from its own 0) and report a
+    // SECOND conflict, naming the Bravo fixture — this is `hard`/
+    // `ruleFixtures`'s sibling field, and the one of the three #399 withholds
+    // that a real apply call can dynamically exercise (`hard`/`ruleFixtures`
+    // are proven unreachable at this call site structurally, in the pure
+    // `verifyConfigFor` tests — there is no live source for them here to
+    // dynamically switch on even if this fix were wrong).
+    await sql`
+      update schedule_settings
+      set config = jsonb_set(config, '{perEntrantMinRest}', '45')
+      where division_id = ${board.alpha.id}`;
+    await sharePerson(auth.orgId, [board.alpha.fixtureIds[0]!, board.bravo.fixtureIds[0]!]);
+    const alphaAssignments = board.alpha.fixtureIds.map((fixture_id, i) => ({
+      fixture_id,
+      // fixture[0]: 0-30. Every other pair >=70 min clear, well past
+      // Alpha's own 45-min floor, so no INTERNAL rest conflict rides along.
+      scheduled_at: at(i * 100),
+      court_label: "Court 1",
+    }));
+    const bravoAssignments = board.bravo.fixtureIds.map((fixture_id, i) => ({
+      fixture_id,
+      // fixture[0]: 50-80 — a 20-minute gap after Alpha's fixture[0] ends
+      // at 30. Below Alpha's 45-min floor; comfortably above Bravo's own 0.
+      scheduled_at: i === 0 ? at(50) : at(300 + i * 180),
+      court_label: "Court 3",
+    }));
+    const out = await applyCompetitionSchedule(auth, board.competitionId, {
+      divisions: [
+        {
+          division_id: board.alpha.id,
+          expected_seq: await divisionSeq(board.alpha.id),
+          assignments: alphaAssignments,
+        },
+        {
+          division_id: board.bravo.id,
+          expected_seq: await divisionSeq(board.bravo.id),
+          assignments: bravoAssignments,
+        },
+      ],
+      source: "ai",
+      ai: AI,
+    });
+    // "rest" is warn-only (not in isBlockingConflict) either way, so this
+    // must succeed regardless of which behaviour is live — the difference
+    // under test is WHICH fixtures the rest conflict names, not whether the
+    // call itself succeeds.
+    expect(out.applied).toBe(9);
+    const restConflicts = out.conflicts.filter((c) => c.reason === "rest");
+    expect(restConflicts.some((c) => c.fixtureId === board.alpha.fixtureIds[0])).toBe(true);
+    // THE ASSERTION. The Bravo fixture must never itself be named by a "rest"
+    // conflict — that only happens if Bravo's OWN pass also saw a 45-minute
+    // floor for this pair, i.e. restByDivision reached this call.
+    expect(restConflicts.some((c) => c.fixtureId === board.bravo.fixtureIds[0])).toBe(false);
   }, 60_000);
 });

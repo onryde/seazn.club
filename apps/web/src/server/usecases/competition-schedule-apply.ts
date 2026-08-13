@@ -538,6 +538,16 @@ export async function applyCompetitionSchedule(
     // dependency against the whole board, so it is built over the whole board.
     const deps = feedDependencies(order.flatMap((d) => d.fixtures));
 
+    // C1 gap A. The org zone alone — see `verifyConfigFor`'s 4th parameter for
+    // the full argument for why this is safe under #399 (never widens what
+    // the two calls below check to `hard`/`ruleFixtures`/`restByDivision`).
+    // ONE value for the whole run, from `order[0]!` exactly like
+    // `siblingAssignments` above: #397/design §2.1 requires every division of
+    // one competition to agree on which calendar day a fixture is on, and
+    // `settings.orgTz` (never `.displayTz`) is the field that ruling governs —
+    // a division's own display override must not move it.
+    const orgTz = order[0]!.settings.orgTz;
+
     // The listed fixtures WHERE THEY SIT NOW — the merged board before this
     // apply touches it (#399). Built exactly like `proposed` so the two passes
     // are comparable key for key; a fixture with no slot yet contributes
@@ -571,7 +581,7 @@ export async function applyCompetitionSchedule(
       before.push(
         ...validateAssignments(
           current.filter((a) => a.divisionId === d.id),
-          verifyConfigFor(packDivisionOf(d), applyWindow(d.settings)),
+          verifyConfigFor(packDivisionOf(d), applyWindow(d.settings), undefined, orgTz),
           [
             ...current.filter((a) => a.divisionId !== d.id),
             ...untouched,
@@ -590,7 +600,7 @@ export async function applyCompetitionSchedule(
       // an overlap has to stay editable.
       for (const c of validateAssignments(
         mine,
-        verifyConfigFor(packDivisionOf(d), applyWindow(d.settings)),
+        verifyConfigFor(packDivisionOf(d), applyWindow(d.settings), undefined, orgTz),
         [...others, ...untouched, ...siblings],
         deps,
       )) {
