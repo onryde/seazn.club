@@ -346,7 +346,21 @@ export async function getCompetitionScheduleHealth(
     // real classification of a fixture set that may span several stage
     // kinds at once.
     const combinedAssessed = assessHealth(combinedFixtures, { isRoundRobin: false });
-    const combined = { metrics: combinedAssessed.metrics.filter((m) => COMBINED_METRIC_KEYS.has(m.key)) };
+    // The combined block calls `assessHealth` DIRECTLY rather than going
+    // through `computeStageHealth`, because it scores the union of every
+    // stage's fixtures and there is no single stage to compute. That means
+    // it does not inherit the entrant-name resolution either, and it must
+    // ask for it explicitly: `primeSlotFairness` is one of the two metrics
+    // COMBINED keeps and it emits `kind: "entrant"` offenders, so without
+    // this the joint report still rendered `Entrant · <uuid>` — the same
+    // bug the per-stage path fixed, left open one caller away because the
+    // first fix stopped at the emitter the report named.
+    const combined = {
+      metrics: await withEntrantNames(
+        tx,
+        combinedAssessed.metrics.filter((m) => COMBINED_METRIC_KEYS.has(m.key)),
+      ),
+    };
 
     const report: CompetitionScheduleHealthReport = {
       competitionId,

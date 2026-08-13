@@ -747,21 +747,20 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
     { kind: "individual", display_name: "Cal H", seed: 3 },
     { kind: "individual", display_name: "Dev H", seed: 4 },
   ]);
-  const [h1, h2, h3, h4] = hEntrants.data!.map((e) => e.id);
+  const [h1] = hEntrants.data!.map((e) => e.id);
   const hStage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${hDivisionId}/stages`, "POST", {
     seq: 1,
     kind: "league",
     name: "League",
   });
   const hStageId = hStage.data!.id;
-  type HFixture = { id: string; home_entrant_id: string | null; away_entrant_id: string | null };
+  type HFixture = {
+    id: string;
+    home_entrant_id: string | null;
+    away_entrant_id: string | null;
+    round_no: number;
+  };
   const hGen = await apiJson<{ fixtures: HFixture[] }>(request, `/api/v1/stages/${hStageId}/generate`, "POST");
-  const pick = (a: string, b: string) =>
-    hGen.data!.fixtures.find(
-      (f) =>
-        (f.home_entrant_id === a && f.away_entrant_id === b) ||
-        (f.home_entrant_id === b && f.away_entrant_id === a),
-    )!;
   await apiJson(request, `/api/v1/divisions/${hDivisionId}/schedule-settings`, "PUT", {
     tz: "UTC",
     config: {
@@ -774,17 +773,40 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
       sessionWindows: [{ from: `${DAY}T09:00:00.000Z`, to: `${DAY}T21:00:00.000Z` }],
     },
   });
+  // C1 ("hard lexicographic round ordering", #546) now rejects an applied
+  // board where a later round starts before an earlier one, across the
+  // solver, verifier AND this apply call. This board used to come from a
+  // hand-written pair list (pick(h1,h2)@09:00, pick(h1,h3)@10:15, ...) that
+  // assumed its pairing order matched the generator's round assignment — an
+  // assumption C1 is not obliged to honour. Derive slot order from each
+  // fixture's own round_no instead. If you're about to hand-write a pair
+  // list here again, this comment is why it will 409.
+  const roundNos = Array.from(new Set(hGen.data!.fixtures.map((f) => f.round_no))).sort((a, b) => a - b);
+  // Anchor times keep the original board's shape — an even 75-minute
+  // cadence, then a big jump for the last round so gapDispersion still sees
+  // a real, non-uniform gap. A round beyond the third keeps stepping by 75
+  // minutes rather than assuming there are only three.
+  const anchorTimes = ["09:00", "10:15", "15:00"];
+  const slotTime = (i: number): string => {
+    if (i < anchorTimes.length) return anchorTimes[i]!;
+    const [h, m] = anchorTimes[anchorTimes.length - 1]!.split(":").map(Number);
+    const minutes = h! * 60 + m! + 75 * (i - anchorTimes.length + 1);
+    return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+  };
   // Deliberately lopsided (every one of H1's matches on Court 1) so the cards
   // carry real offender counts and "Show details" rows, not a uniform 100.
+  const assignments = roundNos.flatMap((roundNo, i) => {
+    const t = slotTime(i);
+    return hGen.data!.fixtures
+      .filter((f) => f.round_no === roundNo)
+      .map((f) => ({
+        fixture_id: f.id,
+        scheduled_at: at(t),
+        court_label: f.home_entrant_id === h1! || f.away_entrant_id === h1! ? "Court 1" : "Court 2",
+      }));
+  });
   const applied = await apiJson(request, `/api/v1/stages/${hStageId}/schedule/apply`, "POST", {
-    assignments: [
-      { f: pick(h1!, h2!), t: "09:00", c: "Court 1" },
-      { f: pick(h3!, h4!), t: "09:00", c: "Court 2" },
-      { f: pick(h1!, h3!), t: "10:15", c: "Court 1" },
-      { f: pick(h2!, h4!), t: "10:15", c: "Court 2" },
-      { f: pick(h1!, h4!), t: "15:00", c: "Court 1" },
-      { f: pick(h2!, h3!), t: "15:00", c: "Court 2" },
-    ].map(({ f, t, c }) => ({ fixture_id: f.id, scheduled_at: at(t), court_label: c })),
+    assignments,
     source: "manual",
   });
   expect(applied.status).toBeLessThan(300);
