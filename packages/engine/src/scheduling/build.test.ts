@@ -22,6 +22,7 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_SOLVER_QUEUE,
+  TIER_COUNT,
   buildSchedule,
   rejectedBlockingConflicts,
   type BuildInput,
@@ -221,7 +222,7 @@ describe("buildSchedule", () => {
         { fixtureId: "b", court: "C1", startAtMs: T0 + 30 * MIN },
       ],
       status: "OPTIMAL",
-      tiersCompleted: 4,
+      tiersCompleted: TIER_COUNT,
       objectiveValues: [],
       elapsedMs: 5,
       wallExhausted: false,
@@ -251,7 +252,7 @@ describe("buildSchedule", () => {
         { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
       ],
       status: "OPTIMAL",
-      tiersCompleted: 4,
+      tiersCompleted: TIER_COUNT,
       objectiveValues: [],
       elapsedMs: 5,
       wallExhausted: false,
@@ -260,7 +261,7 @@ describe("buildSchedule", () => {
     expect(built.metrics.placed).toBe(2);
     expect(built.engine).toBe("optimized");
     expect(built.status).toBe("ok");
-    expect(built.tiersCompleted).toBe(4);
+    expect(built.tiersCompleted).toBe(TIER_COUNT);
     expect(built.budgetExpired).toBe(false);
     // Non-vacuous only because `buildSchedule` synthesises a row for every
     // fixture it did not place: `validateAssignments` alone never emits a
@@ -284,7 +285,7 @@ describe("buildSchedule", () => {
         { fixtureId: "c", court: "C1", startAtMs: T0 + 150 * MIN },
       ],
       status: "OPTIMAL",
-      tiersCompleted: 4,
+      tiersCompleted: TIER_COUNT,
       objectiveValues: [],
       elapsedMs: 5,
       wallExhausted: false,
@@ -334,7 +335,7 @@ describe("buildSchedule", () => {
         startAtMs: a.startAt,
       })),
       status: "OPTIMAL",
-      tiersCompleted: 4,
+      tiersCompleted: TIER_COUNT,
       objectiveValues: [],
       elapsedMs: 5,
       wallExhausted: false,
@@ -345,7 +346,7 @@ describe("buildSchedule", () => {
     // and came back unsat, which is a proof. That difference is the whole
     // reason the tier exists, and `already_optimal` is where it surfaces.
     expect(built.status).toBe("already_optimal");
-    expect(built.tiersCompleted).toBe(4);
+    expect(built.tiersCompleted).toBe(TIER_COUNT);
     const unplaced = built.conflicts.filter((c) => c.reason === "no_slot");
     expect(unplaced.map((c) => c.fixtureId)).toEqual(["c"]);
     expect(unplaced[0]?.rule).toBe("CAP");
@@ -521,7 +522,7 @@ describe("buildSchedule", () => {
     vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
       assignments: [],
       status: "OPTIMAL",
-      tiersCompleted: 4,
+      tiersCompleted: TIER_COUNT,
       objectiveValues: [],
       elapsedMs: 5,
       wallExhausted: false,
@@ -532,7 +533,7 @@ describe("buildSchedule", () => {
     expect(built.contradictoryPins).toBeUndefined();
     // Every tier ran to a verdict on the empty board — each is already at its
     // own floor — which is what makes the status a proof rather than a stop.
-    expect(built.tiersCompleted).toBe(4);
+    expect(built.tiersCompleted).toBe(TIER_COUNT);
   }, 180_000);
 
   it("does not cry infeasible over a pin that is merely legal", async () => {
@@ -572,7 +573,7 @@ describe("buildSchedule", () => {
         { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
       ],
       status: "OPTIMAL",
-      tiersCompleted: 4,
+      tiersCompleted: TIER_COUNT,
       objectiveValues: [],
       elapsedMs: 5,
       wallExhausted: false,
@@ -584,7 +585,7 @@ describe("buildSchedule", () => {
     vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
       assignments: [],
       status: "OPTIMAL",
-      tiersCompleted: 4,
+      tiersCompleted: TIER_COUNT,
       objectiveValues: [],
       elapsedMs: 5,
       wallExhausted: false,
@@ -640,7 +641,7 @@ describe("buildSchedule", () => {
         { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
       ],
       status: "OPTIMAL",
-      tiersCompleted: 4,
+      tiersCompleted: TIER_COUNT,
       objectiveValues: [],
       elapsedMs: 5,
       wallExhausted: false,
@@ -654,7 +655,7 @@ describe("buildSchedule", () => {
     vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
       assignments: [],
       status: "OPTIMAL",
-      tiersCompleted: 4,
+      tiersCompleted: TIER_COUNT,
       objectiveValues: [],
       elapsedMs: 5,
       wallExhausted: false,
@@ -698,7 +699,7 @@ describe("buildSchedule", () => {
       vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
         assignments: [{ fixtureId: "b", court: "C1", startAtMs: T0 }],
         status: "OPTIMAL",
-        tiersCompleted: 4,
+        tiersCompleted: TIER_COUNT,
         objectiveValues: [],
         elapsedMs: 5,
         wallExhausted: false,
@@ -746,7 +747,7 @@ describe("buildSchedule", () => {
             { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
           ],
           status: "OPTIMAL",
-          tiersCompleted: 4,
+          tiersCompleted: TIER_COUNT,
           objectiveValues: [],
           elapsedMs: 5,
           wallExhausted: false,
@@ -945,13 +946,13 @@ describe("buildSchedule — lexicographic tiers", () => {
         { fixtureId: "b", court: "C2", startAtMs: T0 + 30 * MIN },
       ],
       status: "OPTIMAL",
-      tiersCompleted: 4,
+      tiersCompleted: TIER_COUNT,
       objectiveValues: [],
       elapsedMs: 5,
       wallExhausted: false,
     });
     const built = await buildSchedule({ fixtures: balanceFixtures, config: balanceConfig });
-    expect(built.tiersCompleted).toBe(4);
+    expect(built.tiersCompleted).toBe(TIER_COUNT);
     expect(built.budgetExpired).toBe(false);
     expect(built.metrics.placed).toBe(2);
     // T1 and T2 had nothing to give — both are already at their optimum on the
@@ -989,7 +990,7 @@ describe("buildSchedule — lexicographic tiers", () => {
         { fixtureId: "a", court: "C1", startAtMs: T0 + 60 * MIN },
       ],
       status: "OPTIMAL",
-      tiersCompleted: 4,
+      tiersCompleted: TIER_COUNT,
       objectiveValues: [],
       elapsedMs: 5,
       wallExhausted: false,
@@ -1015,7 +1016,7 @@ describe("buildSchedule — lexicographic tiers", () => {
     // what the comment above actually argues.
     const starts = [...built.assignments].map((x) => x.startAt).sort((p, q) => p - q);
     expect(built.assignments.find((x) => x.fixtureId === "a")?.startAt).toBe(starts[2]);
-    expect(built.tiersCompleted).toBe(4);
+    expect(built.tiersCompleted).toBe(TIER_COUNT);
   }, 180_000);
 
   it("closes an idle gap greedy left open, without lengthening the board", async () => {
@@ -1054,7 +1055,7 @@ describe("buildSchedule — lexicographic tiers", () => {
         { fixtureId: "c", court: "C1", startAtMs: T0 + 60 * MIN },
       ],
       status: "OPTIMAL",
-      tiersCompleted: 4,
+      tiersCompleted: TIER_COUNT,
       objectiveValues: [],
       elapsedMs: 5,
       wallExhausted: false,
@@ -1063,7 +1064,7 @@ describe("buildSchedule — lexicographic tiers", () => {
     expect(built.metrics.placed).toBe(3);
     expect(built.metrics.worstIdleGapMinutes).toBe(0);
     expect(built.metrics.makespanMinutes).toBe(90);
-    expect(built.tiersCompleted).toBe(4);
+    expect(built.tiersCompleted).toBe(TIER_COUNT);
   }, 180_000);
 
   // UN-SKIPPED (task C2). This was blocked by a STRUCTURAL conflict between
@@ -1119,7 +1120,7 @@ describe("buildSchedule — lexicographic tiers", () => {
         { fixtureId: "b", court: "C1", startAtMs: T0 + 30 * MIN },
       ],
       status: "OPTIMAL",
-      tiersCompleted: 4,
+      tiersCompleted: TIER_COUNT,
       objectiveValues: [],
       elapsedMs: 5,
       wallExhausted: false,
@@ -1131,7 +1132,7 @@ describe("buildSchedule — lexicographic tiers", () => {
     // All four, and that is the assertion the freeze actually holds up: without
     // it T3 finds the balanced board, `isStrictlyBetter` refuses it because the
     // makespan regressed, and the tier ends without a verdict.
-    expect(built.tiersCompleted).toBe(4);
+    expect(built.tiersCompleted).toBe(TIER_COUNT);
     expect(built.status).toBe("already_optimal");
   }, 180_000);
 
@@ -1354,7 +1355,7 @@ describe("buildSchedule — Placement path", () => {
   const okOutcome = (assignments: SolveBuildOutcome["assignments"] = []): SolveBuildOutcome => ({
     assignments,
     status: "OPTIMAL",
-    tiersCompleted: 4,
+    tiersCompleted: TIER_COUNT,
     objectiveValues: [],
     elapsedMs: 1200,
     wallExhausted: false,

@@ -341,7 +341,18 @@ describe("buildSchedule — z3 teardown (R17)", () => {
                 { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
               ],
               status: "OPTIMAL",
-              tiersCompleted: 4,
+              // A fully-proved ladder. A LITERAL, where every other stub in
+              // this directory now says `TIER_COUNT` — deliberately, and not
+              // an oversight: importing it means a static `import ... from
+              // "./build.ts"` in a file whose whole method is `vi.doMock`
+              // against that module graph, and a statically imported module is
+              // already loaded when the doMock registers, which would make the
+              // mock inert and this test silently stop covering the lock it
+              // exists for. Nothing here asserts on the number (the assertions
+              // are `engine` and the assignment set), so the literal drifting
+              // cannot produce a false green — but keep it equal to
+              // `TIER_COUNT` (6 as of 2026-08-13) all the same.
+              tiersCompleted: 6,
               objectiveValues: [],
               elapsedMs: 5,
               wallExhausted: false,

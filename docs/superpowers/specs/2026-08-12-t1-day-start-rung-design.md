@@ -1,8 +1,24 @@
 # T1 `day_start` rung — anchoring each day to its first slot (#512 follow-up)
 
-**Date:** 2026-08-12 · **Status:** approved design, not implemented ·
-**Amends:** `2026-08-11-t1-day-aware-objective-design.md` (merged, #531) — that
-doc gets a one-line addendum pointing here; its approved rungs are unchanged.
+**Date:** 2026-08-12 · **Status:** **IMPLEMENTED 2026-08-13** (release-2 C2,
+branch `feat/c2-day-start-rung`) · **Amends:**
+`2026-08-11-t1-day-aware-objective-design.md` — that doc gets a one-line
+addendum pointing here; its approved rungs are unchanged.
+
+> **"Merged, #531" meant the DOC, not the code.** #512's two rungs had never
+> been implemented when this rung was picked up, so C2 shipped all three
+> together (`TIER_COUNT` 4 → 6, `makespan` retired) rather than the 5 → 6 this
+> document assumed. The "if this lands with it" in §Decision is what actually
+> happened. Full account, including the bench numbers and the wall regression:
+> `2026-08-12-release2-prompts/_INDEX.md`, the C2 entry.
+>
+> **One thing this design did not anticipate, and it decided whether the rung
+> was shippable at all:** `day_span` cannot be proved on the production board
+> without a REDUNDANT per-day floor (`span[d] >= dur_ms` when the day is used).
+> Measured: FEASIBLE at 180 s without it, OPTIMAL in 1.0 s with it, same value.
+> `day_used[d]` is implied by `on_day` one-directionally and never implies an
+> occupant back, so the LP may hold a day "used" with a span of nothing and the
+> dual bound starts at 0. See `placement.model`'s T1 section.
 
 ## Why a third term
 

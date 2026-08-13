@@ -31,7 +31,7 @@ C6 (prose) is safe whenever.
 |---|---|---|---|---|
 | C0 | `C0-division-rules-retirement.md` | division_rules | — | **MERGED** #537 → `f0f83939` |
 | C1 | `C1-round-ordering.md` | round ordering | C0 (same proto/build.ts region) | **MERGED** #546 → `78db2f1f` |
-| C2 | `C2-day-start-rung.md` | day_start | C1 (model.py overlap; rebase either way) | TODO |
+| C2 | `C2-day-start-rung.md` | day_start | C1 (model.py overlap; rebase either way) | **IN REVIEW** — branch `feat/c2-day-start-rung`; shipped #512's two rungs too (see below) |
 | C3 | `C3-conflict-detail-names.md` | conflict details | not concurrent with C1 (schedule.ts) | TODO |
 | C4 | `C4-z3-reflow-cpsat.md` | z3 stage A | C1 (reflow inherits round rule) | TODO |
 | C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | TODO |
@@ -212,3 +212,118 @@ Golden
 corpus: 474/474 `testkit/golden*.test.ts` passed, and `git status --porcelain`
 on all 11 `*.golden.json` fixtures is empty — byte-identical (scheduling code
 is outside the corpus's scope entirely). `openapi:gen` produced zero diff.
+
+### C2 — T1 `day_start` rung (2026-08-13)
+
+Branch `feat/c2-day-start-rung`, worktree `.claude/worktrees/c2-day-start`,
+off `3d64222a`.
+
+**False premise, and it changed the scope: #512 WAS NEVER IMPLEMENTED.** The
+C2 prompt reads as if the two day rungs already exist ("reusing #512's
+`day_lo`", "TIER_COUNT → 6"). They do not. `f687c7d5 docs: design for the
+day-aware T1 objective (#512) (#531)` is a **docs** commit — the design doc
+merged, the code never landed. Ground truth on `main` before this session:
+`objective.py:166` had `TIER_ORDER = (placed, makespan, idle_gap, imbalance)`,
+`build.ts:194` had `TIER_COUNT = 4`, and `model.py` had no `day_used`/`day_lo`/
+`day_hi`/`span` at all. `day_start` is therefore not buildable alone: its input
+`day_lo` is `day_span`'s variable and its chain slot is directly below it. The
+day_start design anticipated exactly this — "#512's 4→5 becomes 4→6 **if this
+lands with it**".
+
+**Owner ruling (asked before exceeding the file set, per §1):** one PR, both
+specs, `TIER_COUNT` 4 → 6, `makespan` retired. And on the wall: ship, report
+the numbers, the production wall is a separate decision.
+
+**Prompt/spec drift found by re-pin (before writing any code):** `model.py`'s
+day derivation is 833-871 and `on_day` 876-889 (prompt said ~842-870); the
+proto `Tier` name list is `scheduler.proto:199` inside 197-208 (prompt said
+192-198). The prompt's "the TS caller's tier list" does not exist — **TS never
+keys on tier names at all**, only on the tier COUNT (`build.ts:194`,
+`schedule.ts`'s `TIERS_TOTAL`, and a mirrored comment in
+`generated/scheduler.ts`). So the "same string both sides" requirement is
+satisfied by the proto comment plus the count, and there is no TS name table to
+edit.
+
+**Ruling — the redundant per-day floor is the whole reason T1 proves.**
+`model.Add(span >= dur_ms).OnlyEnforceIf(day_used[d])` is redundant about any
+real board (`day_hi >= s + dur` and `day_lo <= s` already imply it) and is
+load-bearing for the DUAL bound: `day_used[d]` is implied BY `on_day`
+one-directionally and never implies an occupant back, so the relaxation may
+hold a day "used" with a span of nothing and `sum(span)`'s lower bound starts
+at 0. Measured on the production board: **without it `day_span` was still
+FEASIBLE at 180 s and never proved; with it, OPTIMAL in 1.0 s at the same
+value (69 600 000)** — the incumbent had been optimal all along and could not
+be proved. Same lever as T3's max/min equality: fix the dual bound, not the
+search. Narrowing each day's variable domains to that day's own window was
+tried first and did nothing measurable on its own (kept anyway — exact, and
+cheap).
+
+**Ruling — #512 §6b resolved as option (1), accept and document.** An
+off-lattice pin belongs to no day, so under a per-day objective it is invisible
+to T1 entirely. Consistent with C4, which already exempts it from day caps.
+Pinned by `test_day_objective.py::test_an_off_lattice_pin_belongs_to_no_day_at_all`
+so a future reader finds a decision rather than an accident.
+
+**Wall: a real regression, reported not hidden.** Production board, N=6 per
+side, same box, same board, 30 s wall:
+
+| | before (4 rungs) | after (6 rungs) |
+|---|---|---|
+| total, min/median/max | 1131 / 1730 / 2073 ms | 7739 / 17657 / 19485 ms |
+| `days` | — | 215 / 367 / 469 ms |
+| `day_span` | — | 631 / 1237 / 1813 ms |
+| `day_start` | — | 208 / 396 / 458 ms |
+| `idle_gap` | 741 / **1348** / 1672 ms | 6337 / **14931** / 17665 ms |
+| tiers proved | 4/4, 6 runs | 6/6, 6 runs |
+
+**The new rungs are not the cost — they are ~2 s of it.** `idle_gap` is, and
+the control run says why: `placed` + `idle_gap` alone, **no day rungs in the
+chain at all**, costs 12 439 ms. The retired whole-board `makespan` freeze had
+been doing `idle_gap`'s pruning as a side effect, so what the wall pays for is
+removing that term, not adding these. Arm B (day rungs but no `day_start`) is
+the SLOWEST of all at 30 704 ms, so `day_start` is not the culprit either.
+
+Consequence at the 8 s production wall: the chain returns FEASIBLE with **four
+of six** rungs proved — `placed` + all three day rungs, ~2.3 s median, never
+above 3.5 s measured — and cuts `idle_gap` short. The day-aware objective
+itself fits the wall comfortably; `tiersCompleted === TIER_COUNT` (TS's
+`already_optimal` gate) will now rarely fire at 8 s on a board this size.
+Follow-up candidate, NOT done here: give `idle_gap` a dual bound the way
+`day_span` just got one.
+
+**Re-baselines, all stated:** `T1_PROVED_MAKESPAN_MS` / `_PIN_FREE_MS` retired
+with their term; `T2_PROVED_IDLE_GAP_MS` 132 600 000 → 170 400 000 (a
+day-anchored board spreads one entrant's matches further apart — the
+`day_start`-over-`idle_gap` trade, asserted directly);
+`T3_PROVED_IMBALANCE_MS` unchanged. New: `days` 19, `day_span` 69 600 000,
+`day_start` 0. `test_bench_contract.py` untouched and green — the BOARD did
+not move. `PROBE_OPTIMAL_MAKESPAN_MS` renamed `PROBE_OPTIMAL_DAY_SPAN_MS`,
+value unchanged (that board is one day, so the two quantities coincide).
+
+**Unplanned fixes (in scope, recorded per §1):**
+- `schedule.ts`'s `TIERS_TOTAL` was still a hand-written `4` whose own comment
+  claimed it "MIRRORS `TIER_COUNT` ... which is module-private there" —
+  already false when written (`build.ts` exports it precisely so this layer
+  needs no copy, ruling R17). It now imports the constant. This is the exact
+  drift the export existed to prevent, and it had already happened.
+- Nine engine test stubs hardcoded `tiersCompleted: 4` meaning "a fully proved
+  ladder", plus ten assertions on the literal `4`. All now `TIER_COUNT`. The
+  one exception is `build-teardown.test.ts`, which `vi.doMock`s that very
+  module graph — a static import there would load the module before the mock
+  registers and silently make it inert — so it keeps a literal with the reason
+  written next to it.
+
+**Lesson for C3-C8, and it is the same one C1 recorded.** C1's was "never
+inherit an enumeration". C2's is **never inherit a status**: this prompt, the
+index row, and the spec header all read as though #512 had shipped, because a
+DESIGN doc had merged under a PR number. `git log --oneline --grep` on the
+issue number, and one `git grep` for a symbol the work would have created, is
+the whole check.
+
+**Bench script untouched, deliberately.** `bench/placement_bench.py` carries a
+divergent copy of the model (its own `build_model`, its own tier vocabulary —
+`idlegap`, not `idle_gap`) and #512 §9 puts de-duplicating it out of scope. The
+C2 prompt's "`bench/` copy of the model **if** the #512 work duplicated the
+chain there" is conditional and the condition is false: this change duplicated
+nothing into it. The bench numbers above were measured against the SERVICE's
+model and chain, which is what ships.

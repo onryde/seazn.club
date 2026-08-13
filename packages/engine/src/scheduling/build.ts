@@ -184,14 +184,20 @@ export const DEFAULT_BUILD_RLIMIT = 30_000_000;
 export const BUILD_MAIN_RLIMIT_SHARE = 0.75;
 /** The outer safety cap. Not the stopping rule; see the header. */
 export const DEFAULT_BUILD_WALL_MS = 30_000;
-/** T0 plus the three lexicographic tiers. `tiersCompleted` reaching this is
- *  what "the board is lexicographically optimal" means.
+/** T0 plus the five lexicographic tiers
+ *  (`placed → days → day_span → day_start → idle_gap → imbalance`).
+ *  `tiersCompleted` reaching this is what "the board is lexicographically
+ *  optimal" means.
  *
  *  EXPORTED for the web layer (ruling R17), which was carrying its own
  *  `TIERS_TOTAL = 4`. Two copies of a number that means "the solver proved
  *  every tier" drift the moment a tier is added, and the copy that drifts is
- *  the one deciding what an organiser is told. */
-export const TIER_COUNT = 4;
+ *  the one deciding what an organiser is told.
+ *
+ *  4 → 6 on 2026-08-13, and the warning above turned out to be exactly right:
+ *  the web layer's copy was STILL a hand-written literal, not this export, so
+ *  it had to be found and moved by hand. It now imports this constant. */
+export const TIER_COUNT = 6;
 
 /**
  * The R18 size gate, in fixture-slots (`fixtures.length x grid.slots.length`).
