@@ -1683,7 +1683,13 @@ export function roundOrderConflicts(
           conflicts.push({
             fixtureId: b.fixtureId,
             reason: "order",
-            details: { kind: "round_order_day", roundNo: b.roundNo, otherRoundNo: a.roundNo, day: dayB, otherDay: dayA },
+            details: {
+              kind: "round_order_day",
+              roundNo: b.roundNo,
+              otherRoundNo: a.roundNo,
+              day: dayB,
+              otherDay: dayA,
+            },
             direct: true,
           });
         } else if (dayA === dayB && a.startAt > b.startAt) {
