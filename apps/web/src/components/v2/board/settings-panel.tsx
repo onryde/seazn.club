@@ -36,7 +36,7 @@ import { pluralizeVenue } from "@/lib/venue";
 // (server-only).
 import { dayKeyInTz, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
 import { assessCapacity } from "@seazn/engine/scheduling/capacity";
-import { capacityInputForFixtures, type CapacityFixtureInput } from "@/lib/capacity-input";
+import { capacityInputForFixtures } from "@/lib/capacity-input";
 import { CapacityCard } from "@/components/v2/board/capacity-card";
 
 /** The end DATE field bounds a whole day, so it is stored as that day's last
