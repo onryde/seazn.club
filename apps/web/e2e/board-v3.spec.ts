@@ -91,36 +91,66 @@ async function buildRig(request: APIRequestContext, page: Page): Promise<Rig> {
       },
       tz: "UTC",
     });
-    const gen = await apiJson<{ fixtures: { id: string; home_entrant_id: string }[] }>(
-      request,
-      `/api/v1/stages/${stage.data!.id}/generate`,
-      "POST",
-    );
+    const gen = await apiJson<{
+      fixtures: { id: string; round_no: number; home_entrant_id: string; away_entrant_id: string }[];
+    }>(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
     const ids = gen.data!.fixtures.map((f) => f.id);
     fixtures[d.id] = ids;
 
     // Timetable: spread every fixture over the three days, two courts, no
     // shared-entrant adjacency (league rounds already alternate players).
     const base = Date.UTC(2026, 8, 15, 9, 0, 0);
+    // C1: this division runs 6 fixtures/round over only 2 courts, so a round
+    // spans THREE waves, not one simultaneous slot — round N's own fixtures
+    // are not all at the same time the way a smaller (courts >= per-round
+    // matches) board's would be. Recorded here (id → computed time) so the
+    // bait below can be derived from what was ACTUALLY assigned, not assumed
+    // from a wave-per-round shape that does not hold at this size.
+    // C1 fix-loop: the board is a DAY-TABBED view (schedule-board.tsx),
+    // defaulting to its earliest day — `days` itself extends to cover
+    // "the scheduled fixtures' range", so a fixture landing beyond the
+    // competition's own `ends_on` still gets a tab, just not the DEFAULT
+    // one. The rest-violation bait below navigates to it explicitly
+    // ("Next day", bounded) rather than needing every fixture on-screen
+    // by default — so the ORIGINAL spread stays untouched here (a tighter
+    // one inflated this division's pre-existing rest-floor violations
+    // from ~2 to ~34 once the bait test raises `perEntrantMinRest`, which
+    // then visually clutters an unrelated later mobile test).
+    const atMs = new Map<string, number>();
     for (let i = 0; i < ids.length; i++) {
       const day = i % 3;
       const slot = Math.floor(i / 3);
+      const at = base + day * 24 * 60 * 60_000 + slot * 60 * 60_000;
+      atMs.set(ids[i]!, at);
       await apiJson(request, `/api/v1/fixtures/${ids[i]!}`, "PATCH", {
-        scheduled_at: new Date(base + day * 24 * 60 * 60_000 + slot * 60 * 60_000).toISOString(),
+        scheduled_at: new Date(at).toISOString(),
         court_label: courtsOf(di)[i % 2],
       });
     }
 
-    // Rest bait in the first division: two fixtures sharing a home entrant.
+    // Rest bait in the first division: two fixtures sharing an entrant, one
+    // from the LAST round and one from an EARLIER round — picked so moving
+    // the pair is provably safe under H6 regardless of the multi-wave shape
+    // above (see this function's own comment on the seeding loop).
     if (!sharedEntrantFixtures) {
-      const byEntrant = new Map<string, string[]>();
-      for (const f of gen.data!.fixtures) {
-        const list = byEntrant.get(f.home_entrant_id) ?? [];
-        list.push(f.id);
-        byEntrant.set(f.home_entrant_id, list);
-      }
-      const pairList = [...byEntrant.values()].find((l) => l.length >= 2);
-      if (pairList) sharedEntrantFixtures = [pairList[0]!, pairList[1]!];
+      const maxRound = Math.max(...gen.data!.fixtures.map((f) => f.round_no));
+      // The temporally LATEST fixture among every round BELOW the max. Round
+      // order only requires it to precede every round-max fixture, and by
+      // construction nothing scheduled below the max round sits any later —
+      // moving ITS entrant's round-max fixture to right after it can never
+      // leapfrog a third, untouched fixture, at any round.
+      const latestBelowMax = gen.data!.fixtures
+        .filter((f) => f.round_no < maxRound)
+        .reduce((best, f) => (atMs.get(f.id)! > atMs.get(best.id)! ? f : best));
+      const partnerRoundMax = gen.data!.fixtures.find(
+        (f) =>
+          f.round_no === maxRound &&
+          (f.home_entrant_id === latestBelowMax.home_entrant_id ||
+            f.home_entrant_id === latestBelowMax.away_entrant_id ||
+            f.away_entrant_id === latestBelowMax.home_entrant_id ||
+            f.away_entrant_id === latestBelowMax.away_entrant_id),
+      );
+      if (partnerRoundMax) sharedEntrantFixtures = [latestBelowMax.id, partnerRoundMax.id];
     }
   }
 
@@ -242,13 +272,31 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
       tz: "UTC",
     });
     const [fa, fb] = rig.sharedEntrantFixtures;
-    await apiJson(request, `/api/v1/fixtures/${fa}`, "PATCH", {
-      scheduled_at: "2026-09-15T09:00:00.000Z",
-      court_label: "P0A",
-    });
+    // C1: `fa` (the lower round) is left EXACTLY where the seeding loop put
+    // it — that whole 66-fixture sequence applied one PATCH at a time without
+    // ever hitting an H6 block (the "seed" test above), so it is provably
+    // round-order-consistent already, and relocating `fa` to a fixed absolute
+    // time (the original "2026-09-15T09:00") risks landing it after some
+    // untouched round-1 sibling the naive day/court spread put on day two or
+    // three. Only `fb` (the higher round) moves, to immediately after `fa`
+    // ends — safe both ways: comparable against `fa`'s round only helps
+    // (moving later), and `fb`'s own round is exempt from the scan against
+    // its OWN untouched same-round siblings.
+    const faRow = await apiJson<{ scheduled_at: string; court_label: string }>(
+      request,
+      `/api/v1/fixtures/${fa}`,
+    );
+    const faStart = Date.parse(faRow.data!.scheduled_at);
+    // Different court from `fa`'s own (whichever that actually is) — same
+    // time + court would 409 as a court clash, which is not what this test
+    // means to exercise.
+    const [courtA, courtB] = courtsOf(0);
+    const fbCourt = faRow.data!.court_label === courtA ? courtB : courtA;
     await apiJson(request, `/api/v1/fixtures/${fb}`, "PATCH", {
-      scheduled_at: "2026-09-15T09:30:00.000Z",
-      court_label: "P0B",
+      // matchMinutes is 30 under the tightened settings just above; 0 gap
+      // between fa ending and fb starting is 0' rest against a 60' floor.
+      scheduled_at: new Date(faStart + 30 * 60_000).toISOString(),
+      court_label: fbCourt,
     });
 
     await page.goto(boardUrl);
@@ -259,10 +307,22 @@ test.describe.serial("board v3 (PROMPT-33)", () => {
     const panel = page.getByRole("region", { name: "Schedule conflicts" });
     await expect(panel).toBeVisible();
     await expect(panel.getByText("rest", { exact: true }).first()).toBeVisible();
+    // The board is a DAY-TABBED view (schedule-board.tsx's `day`/`days`
+    // state) defaulting to `days[0]` — the earliest day with fixtures, not
+    // every fixture at once. `fa`'s card is provably safe under H6 (see this
+    // block's own comments above) precisely because it sits late in the
+    // board, which means it is very likely on a LATER day tab than the
+    // default. Step forward with the "Next day" control until its card
+    // exists, rather than assume which day it landed on.
+    const card = page.locator(`[data-fixture-id="${fa}"]`);
+    const nextDay = page.getByRole("button", { name: "Next day" });
+    for (let hop = 0; hop < 7 && (await card.count()) === 0; hop++) {
+      await nextDay.click();
+    }
+    await expect(card).toHaveCount(1);
     // The card itself must show ONE merged "rest" badge, not two (the
     // original bug: two warn.rest entries — one per entrant — rendered as
     // two identical, indistinguishable badges).
-    const card = page.locator(`[data-fixture-id="${fa}"]`);
     await expect(card.getByText("rest", { exact: true })).toHaveCount(1);
     // No raw pin/lock emoji anywhere on the board — real icons only. Absence
     // of the emoji alone doesn't prove an icon replaced it (a silently empty
