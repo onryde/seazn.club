@@ -101,6 +101,40 @@ describe("assessHealth — restSpread", () => {
     expect(m.score).toBe(100);
     expect(m.offenders).toEqual([]);
   });
+
+  it("an OVERLAPPING/double-booked entrant (a negative gap) scores the WORST possible penalty, not a perfect one (review finding #3)", () => {
+    // OVR plays two fixtures where the second STARTS 30 minutes before the
+    // first ENDS — a genuine double-booking. idealGap (= mean of the single
+    // gap, by the telescoping identity every other test in this file relies
+    // on) is therefore -30 minutes: non-positive, the same branch a
+    // legitimately-perfect back-to-back board also lands in (see the next
+    // test) — but this is the WORST case a board can produce for an
+    // entrant, not the best, and must not be scored p_e=0.
+    const fixtures: HealthFixture[] = [
+      fx("v1", "OVR", "P1", 0, 60), // 0-60
+      fx("v2", "OVR", "P2", 30, 60), // 30-90: starts 30min before v1 ends
+    ];
+    const report = assessHealth(fixtures, RR);
+    const m = metric(report, "restSpread")!;
+    // The only eligible entrant scores the maximum penalty (p_e=1) ->
+    // meanP=1 -> score=100*(1-1)=0. NOT 100.
+    expect(m.score).toBe(0);
+    // worstGapMin surfaces the actual (negative) overlap amount, not a
+    // clamped-to-zero value — an organiser looking at "-30 min" is exactly
+    // the information "you have a double-booking" needs to convey.
+    expect(m.offenders).toEqual([{ kind: "entrant", id: "OVR", label: "OVR", value: -30 }]);
+  });
+
+  it("a fully back-to-back board with ZERO waste (no overlap, idealGap=0 exactly) is legitimately perfect — distinguishes the overlap fix from this pre-existing-correct case", () => {
+    const fixtures: HealthFixture[] = [
+      fx("z1", "Z", "P1", 0, 60), // 0-60
+      fx("z2", "Z", "P2", 60, 60), // 60-120, touches exactly, gap=0
+      fx("z3", "Z", "P3", 120, 60), // 120-180, touches exactly, gap=0
+    ];
+    const report = assessHealth(fixtures, RR);
+    const m = metric(report, "restSpread")!;
+    expect(m.score).toBe(100);
+  });
 });
 
 describe("assessHealth — courtBalance", () => {

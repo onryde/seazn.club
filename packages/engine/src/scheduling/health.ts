@@ -176,10 +176,14 @@ function topOffenders<T>(items: readonly T[], id: (t: T) => string, cmpDesc: (a:
  * exactly into Σ durations_e + Σ g_i (fixtures tile the entrant's own span
  * with no other idle time in between, by construction of "span"), so ḡ*_e is
  * ALGEBRAICALLY the mean of the entrant's own gaps. That is why an entrant
- * with exactly 2 fixtures (one gap) always scores p_e = 0 here regardless of
- * how tight that single gap is: the "ideal" IS that one gap. Only 3+
- * fixtures (2+ gaps) can show any dispersion at all — health.test.ts asserts
- * this explicitly so it reads as intended, not as an accident.
+ * with exactly 2 NON-OVERLAPPING fixtures (one non-negative gap) always
+ * scores p_e = 0 here regardless of how tight that single gap is: the
+ * "ideal" IS that one gap. Only 3+ fixtures (2+ gaps) can show any
+ * dispersion at all — health.test.ts asserts this explicitly so it reads as
+ * intended, not as an accident. A genuinely OVERLAPPING pair (a negative
+ * gap — this entrant double-booked) is the one exception, at any fixture
+ * count: see the `hasOverlap` branch below (review finding #3) — it scores
+ * the worst penalty, never the "only one gap, always perfect" shortcut.
  */
 function restSpreadMetric(fixtures: readonly HealthFixture[]): HealthMetric {
   const byEntrant = entrantFixtures(fixtures);
@@ -191,12 +195,22 @@ function restSpreadMetric(fixtures: readonly HealthFixture[]): HealthMetric {
     const idealGap = (span - durSum) / (list.length - 1);
     const gaps: number[] = [];
     for (let i = 0; i < list.length - 1; i++) gaps.push(list[i + 1]!.start - list[i]!.end);
-    // idealGap <= 0: by the telescoping identity above, every gap is also
-    // <= 0 then (their mean IS idealGap) — nothing can fall SHORT of a
-    // non-positive ideal, so there is no well-defined penalty to charge
-    // rather than dividing by a non-positive number.
-    const p =
-      idealGap > 0
+    // A non-positive idealGap has TWO distinct causes, and they score
+    // oppositely — review finding #3, an earlier version of this comment
+    // claimed "every gap is also <= 0 then", which is false in general (a
+    // non-positive MEAN does not imply every term is non-positive: e.g.
+    // gaps=[-10, 10] means idealGap=0 while one gap is genuinely negative).
+    // So the two causes are told apart directly, not inferred from
+    // idealGap's sign:
+    //  - hasOverlap (some gap < 0): this entrant is double-booked somewhere
+    //    — the WORST case a board can produce, never scored as perfect.
+    //  - no overlap, idealGap === 0: every gap is EXACTLY 0 (a sum of
+    //    non-negative numbers is 0 only if each term is 0) — a legitimately
+    //    perfect, fully back-to-back board with zero wasted time.
+    const hasOverlap = gaps.some((g) => g < 0);
+    const p = hasOverlap
+      ? 1
+      : idealGap > 0
         ? gaps.reduce((s, g) => s + Math.max(0, (idealGap - g) / idealGap), 0) / gaps.length
         : 0;
     penalties.push({ id, p, worstGapMin: Math.min(...gaps) / MS_PER_MIN });
