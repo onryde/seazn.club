@@ -51,6 +51,32 @@
 // as-is without reconstructing the exact event list that produced it — nothing
 // in this pass changes that half of the original boundary.
 //
+// SCOPE BOUNDARY, S12/#421 PASS G UPDATE (undo-before-reload — _INDEX.md
+// decision log, "the pad's own undo silently does nothing for an event you
+// just scored"): pendingToEnvelope (below) stamps `id: pending.idempotencyKey`
+// on EVERY envelope this hook builds — pre-ack for the optimistic fold, and
+// (pass F) again at ack, forever, since AppendSuccess carries no row id at
+// all. So the row timeline.tsx renders for a pad-submitted event always
+// carried the client-fabricated idempotencyKey as its `.id`, and
+// append-event.ts always assigns a fresh server-random uuid as the REAL row
+// id — the two never coincide. handleVoid (pad-renderer.tsx) submits
+// `core.void {event_id: <that id>}` verbatim, so the request always named an
+// id the server had never seen: `assertUndoTarget` (scoring.ts) 409s "Nothing
+// to undo", `transport.ts` maps ANY 409 to a SEQ_CONFLICT-shaped `conflict`,
+// and the ledger-slot read that follows finds nothing at that seq (the void
+// never landed, so nothing occupies it) — `resolveConflict` calls that
+// `indeterminate`, and `runDrain` leaves it `stayed-queued` forever with no
+// `lastRejection` ever set. Silent by construction, not by omission.
+// Fixed at the ONE seam every core.void send passes through — `runDrain`'s
+// loop, just below — by resolving the target's LOCAL id to the server's REAL
+// row id (by seq, via a targeted `listEventsSince`) before it is ever handed
+// to `sendOne`, whenever the target is one THIS hook itself fabricated
+// (`ownEventIds`). A row loaded from `initialEvents`/poll already carries the
+// server's real id and needs no translation — see `resolveVoidTargetId`'s own
+// doc for the full boundary, including the two ways resolution can fail and
+// why they are handled differently (a target this hook has no record of at
+// all vs. a read that merely didn't succeed yet).
+//
 // SCOPE BOUNDARY, S12/#421 PASS E UPDATE: pass C's fix above covers a
 // FOREIGN write arriving via the POLL/realtime path. It left a second,
 // narrower gap open: `ledgerEvents` seeds from `params.initialEvents` ONLY
@@ -101,7 +127,7 @@ import { EngineError, type EventEnvelope, type LineupPair } from "@seazn/engine/
 import type { AnySportModule } from "@seazn/engine/sport";
 import { foldClient } from "./module-client";
 import { indexedDbQueueStore } from "./queue-store";
-import { depth, enqueue, peekInOrder } from "./queue";
+import { depth, enqueue, markDropped, peekInOrder, recordAttempt } from "./queue";
 import { deepEqual, reconcile, sendOne } from "./pipeline";
 import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "./types";
 import type { PadAuthMode, PadTransport } from "./transport";
@@ -218,6 +244,15 @@ function newId(): string {
     : `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+/** `core.void`'s payload shape is `{event_id: string}` at every seam that
+ *  reads it — the optimistic-fold translation below AND (S12/#421 pass G)
+ *  the wire-target resolution in `runDrain`. One extractor so both parse the
+ *  identical shape rather than two copies that can drift. */
+function extractVoidEventId(payload: unknown): string | null {
+  const eventId = (payload as { event_id?: unknown } | null)?.event_id;
+  return typeof eventId === "string" ? eventId : null;
+}
+
 /** The one seam where a submitted action's WIRE payload can differ from the
  *  ENGINE envelope it folds as. Today that is exactly `core.void`:
  *  server/usecases/scoring.ts's own `scoreEvent()` extracts
@@ -229,8 +264,8 @@ function newId(): string {
  *  from the same submitted action. */
 function toEnvelopeFields(type: string, payload: unknown): { payload: unknown; voids?: string } {
   if (type === "core.void") {
-    const eventId = (payload as { event_id?: unknown } | null)?.event_id;
-    if (typeof eventId === "string") return { payload: {}, voids: eventId };
+    const eventId = extractVoidEventId(payload);
+    if (eventId !== null) return { payload: {}, voids: eventId };
   }
   return { payload };
 }
@@ -354,6 +389,84 @@ function mergeLedgerEvents(
   return mergeEnvelopesIntoLedger(current, widened);
 }
 
+/** S12/#421 pass G — see the file header's own PASS G UPDATE for the full
+ *  trace this fixes. Every `core.void` a caller ever submits names its
+ *  target by whatever `.id` the timeline showed it, and that id came from
+ *  exactly one of two places:
+ *   - `initialEvents`/a poll (`ledgerSlotToEnvelope`) — already the server's
+ *     real row id, so `event_id` needs no translation at all.
+ *   - THIS hook's own `pendingToEnvelope` — the client-fabricated
+ *     idempotency key, which append-event.ts NEVER assigns as a persisted
+ *     row's id (that is always a fresh `randomUUID()`, and scoring.ts never
+ *     forwards the client's own id — see the pass F comment on `runDrain`'s
+ *     ack branch for the same fact, found independently while fixing a
+ *     different bug). Submitting that id verbatim can never resolve.
+ *  `ownEventIds` is exactly that boundary: populated ONLY by `markOwn`, for
+ *  an id THIS hook instance itself minted (`submit()`, or a resumed leftover
+ *  queue entry) — never for a row adopted from `initialEvents`/a poll (see
+ *  `UsePadPipelineResult.ownEventIds`'s own JSDoc). So a target NOT in
+ *  `ownEventIds` needs no lookup at all (`kind: "same"`) — the fast, common
+ *  path, unchanged from before this pass.
+ *
+ *  For an own target, resolution is by SEQ, never a second guess at the id:
+ *  once the target's own envelope sits in `ledgerEvents` (acked, or merged
+ *  in from elsewhere), its `.seq` IS the server's row position, and
+ *  `listEventsSince(seq - 1)` reads that exact row back with its real id —
+ *  the SAME read a 409 ledger-slot inspection already trusts in pipeline.ts's
+ *  `findLedgerSlot`. Cached by `cache` (owned by the caller, one per hook
+ *  instance) so a retried/renegotiated resend of the SAME void keeps sending
+ *  an IDENTICAL payload — required for `sendOne`'s own 409 "already-applied"
+ *  comparison (pipeline.ts `resolveConflict`: `deepEqual` on `payload`) to
+ *  ever be able to match a prior attempt.
+ *
+ *  `ledgerEvents` is checked, never `pendingEnvelopes`: `runDrain`'s queue is
+ *  strict FIFO — one event is fully resolved (acked/already-applied/
+ *  permanently rejected) before the next one's send is even attempted
+ *  (pipeline.ts `drainQueue`'s own documented contract, mirrored by this
+ *  hook's hand-rolled loop below) — and a void can only ever be enqueued
+ *  AFTER its target (nothing to undo before it exists). So by the time
+ *  THIS event's own turn in the loop comes, the target has necessarily
+ *  reached a final state: acked (now in `ledgerEvents`) or permanently
+ *  rejected (removed from both `pendingEnvelopes` and `ledgerEvents` — never
+ *  "still pending"). A target absent from `ledgerEvents` at this point is
+ *  not a timing accident worth retrying; it never landed and never will —
+ *  `kind: "unresolvable-permanent"`. A target genuinely present but whose
+ *  OWN read just failed (a thrown `listEventsSince`, or an empty/non-
+ *  matching result — indistinguishable from here, and this repo's own stated
+ *  posture is that flaky courtside wifi is the normal case, not an edge
+ *  case) gets another attempt on the next drain — `kind:
+ *  "unresolvable-transient"`, deliberately NOT treated as permanent so a
+ *  genuinely valid undo is never killed by one bad read. */
+export type VoidTargetResolution =
+  | { kind: "same"; eventId: string }
+  | { kind: "resolved"; eventId: string }
+  | { kind: "unresolvable-permanent" }
+  | { kind: "unresolvable-transient" };
+
+export async function resolveVoidTargetId(
+  transport: Pick<PadTransport, "listEventsSince">,
+  fixtureId: string,
+  targetId: string,
+  ownEventIds: ReadonlySet<string>,
+  ledgerEvents: readonly EventEnvelope[],
+  cache: Map<string, string>,
+): Promise<VoidTargetResolution> {
+  if (!ownEventIds.has(targetId)) return { kind: "same", eventId: targetId };
+  const cached = cache.get(targetId);
+  if (cached !== undefined) return { kind: "resolved", eventId: cached };
+  const target = ledgerEvents.find((e) => e.id === targetId);
+  if (target === undefined) return { kind: "unresolvable-permanent" };
+  try {
+    const rows = await transport.listEventsSince(fixtureId, target.seq - 1);
+    const row = rows.find((r) => r.seq === target.seq);
+    if (row === undefined || row.id === undefined) return { kind: "unresolvable-transient" };
+    cache.set(targetId, row.id);
+    return { kind: "resolved", eventId: row.id };
+  } catch {
+    return { kind: "unresolvable-transient" };
+  }
+}
+
 export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResult {
   const { fixtureId, module: sportModule, cfg, lineups, identity, transport } = params;
   const dbName = params.queueDbName ?? `scorepad-queue-${fixtureId}`;
@@ -387,14 +500,31 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   }, []);
 
   // S12/#421 — see UsePadPipelineResult.ownEventIds's own JSDoc for why this
-  // exists. Plain state (not a ref): nothing inside this hook needs a
-  // synchronous read of it, and a caller's own `useMemo` keyed on
+  // exists. State (not ONLY a ref): a caller's own `useMemo` keyed on
   // `pipeline.ownEventIds` must see a NEW Set identity whenever membership
   // actually changes, which a mutated-in-place ref would defeat.
+  // S12/#421 pass G — ALSO mirrored into a ref: `runDrain` (below) needs a
+  // synchronous read of the LATEST membership to decide whether a
+  // `core.void`'s target needs id resolution at all, and it is a stable
+  // `useCallback` that must not be recreated (and thereby churn `submit`'s
+  // own identity) on every `markOwn` call — same reasoning as
+  // `ledgerEventsRef`/`pendingEnvelopesRef` above.
   const [ownEventIds, setOwnEventIds] = useState<ReadonlySet<string>>(() => new Set());
+  const ownEventIdsRef = useRef(ownEventIds);
   const markOwn = useCallback((id: string) => {
-    setOwnEventIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+    setOwnEventIds((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev).add(id);
+      ownEventIdsRef.current = next;
+      return next;
+    });
   }, []);
+
+  // S12/#421 pass G — local id -> server id, for a core.void whose target is
+  // one of THIS hook's own submissions. See resolveVoidTargetId's own doc.
+  // A plain ref: purely internal bookkeeping, never read by a caller, and a
+  // cache write must never itself trigger a render.
+  const voidTargetServerIdRef = useRef<Map<string, string>>(new Map());
 
   const [queueDepth, setQueueDepth] = useState(0);
   const [offline, setOffline] = useState(false);
@@ -586,7 +716,63 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
         const queued = await peekInOrder(store);
         if (queued.length === 0) break;
         const next = queued[0]!;
-        const outcome = await sendOne(transport, store, fixtureId, next, identity);
+
+        // S12/#421 pass G — undo-before-reload (file header PASS G UPDATE,
+        // _INDEX.md decision log). `next` itself is NEVER reassigned below:
+        // pendingToEnvelope's LOCAL fold envelope (the acked branch, further
+        // down) must keep reading the LOCAL target id, consistent with
+        // ledgerEvents' own `.id` fields — only the WIRE-BOUND copy
+        // (`eventToSend`) carries the translated one, if any.
+        let eventToSend = next;
+        if (next.type === "core.void") {
+          const targetId = extractVoidEventId(next.payload);
+          if (targetId !== null) {
+            const resolution = await resolveVoidTargetId(
+              transport,
+              fixtureId,
+              targetId,
+              ownEventIdsRef.current,
+              ledgerEventsRef.current,
+              voidTargetServerIdRef.current,
+            );
+            if (resolution.kind === "unresolvable-permanent") {
+              // Never silently dropped — the exact defect this pass fixes.
+              // Surfaced exactly like any other permanent rejection, and
+              // removed so it is not retried forever against a target that
+              // will never exist.
+              await markDropped(store, next.idempotencyKey);
+              const remaining = new Map(pendingEnvelopesRef.current);
+              remaining.delete(next.idempotencyKey);
+              commitPendingEnvelopes(remaining);
+              await refreshDepth();
+              // No specific ENGINE_ERROR_KEY entry exists for a client-only
+              // code like this — an empty message lets scoringErrorText
+              // (scoring-vocab.ts) fall back to its own already-localized
+              // `scorepad.rejection.fallback` copy rather than showing raw,
+              // untranslated English.
+              setLastRejection({ code: "VOID_TARGET_UNKNOWN", message: "" });
+              continue;
+            }
+            if (resolution.kind === "unresolvable-transient") {
+              // A READ failure, not a write failure — handled the same as
+              // any other network hiccup: stays queued, retried whole on the
+              // next drain (the target's own row does not move in the
+              // meantime, so nothing here can go stale).
+              await recordAttempt(store, next.idempotencyKey, {
+                attempts: next.attempts + 1,
+                lastError: "could not resolve the undo target's server id",
+              });
+              await refreshDepth();
+              setOffline(true);
+              break;
+            }
+            if (resolution.eventId !== targetId) {
+              eventToSend = { ...next, payload: { event_id: resolution.eventId } };
+            }
+          }
+        }
+
+        const outcome = await sendOne(transport, store, fixtureId, eventToSend, identity);
         await refreshDepth();
 
         if (outcome.kind === "acked" || outcome.kind === "already-applied") {

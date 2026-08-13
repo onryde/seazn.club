@@ -1270,3 +1270,191 @@ describe("usePadPipeline — the ack append shares the ledger merge primitive (S
     expect((pad.current.state as { running: unknown }).running).toBeUndefined();
   });
 });
+
+// S12/#421 pass G — undo-before-reload (_INDEX.md decision log, "the pad's
+// own undo silently does nothing for an event you just scored"). A row THIS
+// hook submitted keeps the client-fabricated idempotencyKey as its `id`
+// forever (pendingToEnvelope, even after ack — AppendSuccess carries no row
+// id at all, types.ts), and the server never recognises that string as a
+// real row (append-event.ts: a persisted row's id is always randomUUID(),
+// scoring.ts never forwards the client's own id — see pass F's own comment
+// above for the same fact, found while fixing a different bug). Submitting
+// it verbatim as core.void's event_id can therefore never resolve. Fixed by
+// translating the target's LOCAL id to the server's REAL row id — by seq,
+// via a targeted listEventsSince — before the void ever reaches the wire.
+describe("usePadPipeline — undo a pad-submitted event with no reload (S12/#421 pass G)", () => {
+  it("MUTATION TARGET: a void of a PAD-SUBMITTED event's own id resolves to the server's real row id before it hits the wire", async () => {
+    const REAL_SERVER_ID = "server-real-goal-id";
+    const appendCalls: AppendEventBody[] = [];
+    const listEventsSinceCalls: number[] = [];
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        return success(appendCalls.length);
+      },
+      async listEventsSince(_fixtureId, sinceSeq): Promise<LedgerSlotEvent[]> {
+        listEventsSinceCalls.push(sinceSeq);
+        return [
+          {
+            id: REAL_SERVER_ID,
+            seq: 1,
+            type: "generic.score",
+            payload: { by: "H", points: 3 },
+            recorded_at: "2026-08-13T00:00:01.000Z",
+            recorded_by: "user-1",
+            device_link_id: null,
+          },
+        ];
+      },
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 1, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport }));
+
+    await pad.current.submit("generic.score", { by: "H", points: 3 });
+    const submittedId = pad.current.events.find((e) => e.type === "generic.score")!.id;
+    // Pins the bug's own precondition — without the fix this IS the id
+    // handleVoid would submit verbatim: the client's own idempotency key,
+    // which the server has never seen as a row id.
+    expect(pad.current.ownEventIds.has(submittedId)).toBe(true);
+
+    await pad.current.submit("core.void", { event_id: submittedId });
+
+    const voidCall = appendCalls.find((c) => c.type === "core.void");
+    expect(voidCall, "the undo must reach the transport, not vanish silently").toBeTruthy();
+    // THE regression: the wire payload must carry the server's real row id,
+    // never the client-fabricated one the timeline happens to expose.
+    expect(voidCall!.payload).toEqual({ event_id: REAL_SERVER_ID });
+    expect(voidCall!.payload).not.toEqual({ event_id: submittedId });
+    expect(listEventsSinceCalls.length).toBeGreaterThan(0);
+
+    // And the fold actually reflects it — not just a well-formed but inert
+    // wire call.
+    expect((pad.current.state as { running: unknown }).running).toBeUndefined();
+    expect(pad.current.lastRejection).toBeNull();
+    expect(pad.current.queueDepth).toBe(0);
+  });
+
+  it("a void targeting a SERVER-KNOWN event (loaded from initialEvents) needs no resolution and is unaffected", async () => {
+    // Guards the pre-existing 'core.void envelope translation' test's own
+    // case: a foreign/history id must go straight to the wire exactly as it
+    // always has, with no extra listEventsSince round trip.
+    const initialEvents = [
+      { id: "e-1", fixtureId: "fx-1", seq: 1, type: "core.start", payload: {}, recordedAt: "2026-08-13T00:00:00.000Z", recordedBy: "user-1" },
+      { id: "e-2", fixtureId: "fx-1", seq: 2, type: "generic.score", payload: { by: "H", points: 3 }, recordedAt: "2026-08-13T00:00:01.000Z", recordedBy: "user-1" },
+    ];
+    const listEventsSince = vi.fn(async (): Promise<LedgerSlotEvent[]> => []);
+    const appendCalls: AppendEventBody[] = [];
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        return success(3);
+      },
+      listEventsSince,
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 2, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport, initialEvents }));
+
+    await pad.current.submit("core.void", { event_id: "e-2" });
+
+    expect(appendCalls[0]?.payload).toEqual({ event_id: "e-2" });
+    expect(listEventsSince).not.toHaveBeenCalled();
+  });
+
+  it("MUTATION TARGET: a void whose target was never durably recorded (permanently rejected) surfaces via lastRejection instead of vanishing", async () => {
+    const { transport, appendCalls } = fakeTransport({
+      appendResults: [{ kind: "rejected", code: "WRONG_PHASE", message: "not decided" }],
+    });
+    const pad = mountPipeline(baseParams({ transport })); // core.finalize rejects on a fresh "pre" fold
+
+    const submitPromise = pad.current.submit("core.finalize", {});
+    // Synchronous optimistic id, before the network settles — the ONLY
+    // window in which this id is still readable at all.
+    const rejectedId = pad.current.events.find((e) => e.type === "core.finalize")!.id;
+    await submitPromise;
+    expect(pad.current.events.some((e) => e.id === rejectedId)).toBe(false); // dropped, never landed
+    expect(pad.current.ownEventIds.has(rejectedId)).toBe(true); // but still "ours" forever
+
+    await pad.current.submit("core.void", { event_id: rejectedId });
+
+    expect(pad.current.lastRejection).not.toBeNull();
+    expect(pad.current.queueDepth).toBe(0); // dropped, not stuck retrying forever
+    expect(appendCalls.filter((c) => c.body.type === "core.void")).toHaveLength(0); // never reached the wire
+  });
+
+  it("undo still queues while OFFLINE and drains correctly once back online", async () => {
+    const REAL_SERVER_ID = "server-real-goal-id-2";
+    let appendMode: "ok" | "fail" = "ok";
+    let listMode: "ok" | "fail" = "ok";
+    let ackSeq = 1;
+    const appendCalls: AppendEventBody[] = [];
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        if (appendMode === "fail") return { kind: "network-error", message: "offline" };
+        const seq = ackSeq;
+        ackSeq += 1;
+        return success(seq);
+      },
+      async listEventsSince(): Promise<LedgerSlotEvent[]> {
+        if (listMode === "fail") throw new Error("offline");
+        return [
+          {
+            id: REAL_SERVER_ID,
+            seq: 1,
+            type: "generic.score",
+            payload: { by: "H", points: 3 },
+            recorded_at: "2026-08-13T00:00:01.000Z",
+            recorded_by: "user-1",
+            device_link_id: null,
+          },
+        ];
+      },
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 1, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport }));
+
+    // Score ONLINE first, so there is a real, already-acked target to undo.
+    await pad.current.submit("generic.score", { by: "H", points: 3 });
+    const scoredId = pad.current.events.find((e) => e.type === "generic.score")!.id;
+    expect(pad.current.queueDepth).toBe(0);
+
+    // Go offline — both the send AND the resolution read fail, matching a
+    // real "no network at all" state.
+    appendMode = "fail";
+    listMode = "fail";
+
+    await pad.current.submit("core.void", { event_id: scoredId });
+    expect(pad.current.queueDepth).toBe(1); // queued, not silently dropped
+    expect(pad.current.offline).toBe(true);
+    expect(pad.current.lastRejection).toBeNull(); // offline, not a permanent refusal
+    expect(appendCalls.some((c) => c.type === "core.void")).toBe(false); // never even attempted the wire
+
+    // Back online — a harmless follow-up submit retries the whole queue,
+    // matching this file's own established "offline flag" test idiom (no
+    // real timers/online event in this node-only harness).
+    appendMode = "ok";
+    listMode = "ok";
+    await pad.current.submit("generic.score", { by: "A", points: 1 });
+
+    expect(pad.current.queueDepth).toBe(0);
+    expect(pad.current.offline).toBe(false);
+    const voidCall = appendCalls.find((c) => c.type === "core.void");
+    expect(voidCall, "the queued void must eventually drain, not stay stuck forever").toBeTruthy();
+    expect(voidCall!.payload).toEqual({ event_id: REAL_SERVER_ID });
+  });
+});

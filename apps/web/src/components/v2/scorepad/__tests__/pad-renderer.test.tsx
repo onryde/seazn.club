@@ -747,6 +747,77 @@ describe("PadRenderer — Timeline is the DEFAULT (S12/#421), not an opt-in", ()
     expect(receivedEvents!.some((e) => e.id === "e-1")).toBe(true);
     expect(typeof receivedOnVoid).toBe("function");
   });
+
+  // S12/#421 pass G (_INDEX.md decision log, "the pad's own undo silently
+  // does nothing for an event you just scored"). Every OTHER void test in
+  // this block targets "e-1" from initialEvents — a server-known id that
+  // never exposed the bug. This one scores through a REAL rendered action
+  // tile first, so the row Timeline exposes carries the client-fabricated id
+  // pendingToEnvelope stamps (use-pad-pipeline.ts), exactly like a scorer
+  // tapping Undo on the goal they just entered — no reload, no poll tick in
+  // between.
+  it("a PAD-SUBMITTED event's own Undo control voids it with no reload and no intervening poll", async () => {
+    const REAL_SERVER_ID = "server-real-score-row-id";
+    const appendCalls: { fixtureId: string; body: AppendEventBody }[] = [];
+    const transport: PadTransport = {
+      async appendEvent(fixtureId, body) {
+        appendCalls.push({ fixtureId, body });
+        return { kind: "ok", data: { seq: appendCalls.length + 1, state_summary: null, outcome: null, status: "in_play" } };
+      },
+      async listEventsSince(): Promise<LedgerSlotEvent[]> {
+        // The only row the resolution step ever asks about: the pad-
+        // submitted score, at seq 2 (seq 1 is mountWithHistory's core.start).
+        return [
+          {
+            id: REAL_SERVER_ID,
+            seq: 2,
+            type: "generic.score",
+            payload: { points: 3 },
+            recorded_at: "2026-08-13T00:00:01.000Z",
+            recorded_by: "user-1",
+            device_link_id: null,
+          },
+        ];
+      },
+      async getLastSeq(): Promise<number> {
+        throw new Error("fakeTransport: getLastSeq not used by this suite");
+      },
+      async fetchState(): Promise<FixtureStateResult> {
+        return { status: "in_play", last_seq: 2, state: null, summary: null, outcome: null };
+      },
+    };
+    const island = mountWithHistory(transport);
+    await tick();
+
+    // Score through the REAL rendered Tally panel's own onSubmit prop —
+    // this file's established boundary for a stateful nested child
+    // (panel.tsx's own header: "children are elements, not markup" — the
+    // SAME pattern the fidelity-switcher tests above use via panelByKey,
+    // and Timeline's onVoid prop is exercised the identical way below).
+    // ActionForm's OWN expand/validate/confirm interaction is that file's
+    // separately-owned test surface, not this one's.
+    const tallyPanel = panelByKey(island.tree(), "pad.generic.panel.tally");
+    const submitAction = propsOf(tallyPanel).onSubmit as (type: string, payload: Record<string, unknown>) => void;
+    submitAction("generic.score", { points: 3 });
+    await tick();
+    await tick();
+    expect(appendCalls.some((c) => c.body.type === "generic.score")).toBe(true);
+
+    // The row the pad itself just submitted — read off the REAL rendered
+    // Timeline, exactly as a scorer would see it, not off the pipeline
+    // directly.
+    const timelineEl = find(island.tree(), isType(Timeline));
+    const scoreRow = (propsOf(timelineEl).events as TimelineEvent[]).find((e) => e.type === "generic.score")!;
+    const onVoid = propsOf(timelineEl).onVoid as (eventId: string) => Promise<void> | void;
+    await onVoid(scoreRow.id);
+
+    const voidCall = appendCalls.find((c) => c.body.type === "core.void");
+    expect(voidCall, "the undo must reach the transport, not vanish silently").toBeTruthy();
+    // THE regression: the wire payload must carry the server's real row id,
+    // never the client-fabricated one Timeline happened to expose.
+    expect(voidCall!.body.payload).toEqual({ event_id: REAL_SERVER_ID });
+    expect(voidCall!.body.payload).not.toEqual({ event_id: scoreRow.id });
+  });
 });
 
 describe("PadRenderer — score header (S10/#419 W8 fix 3)", () => {
