@@ -12,11 +12,14 @@
 // ARE exported by `_cfg-space.ts` for exactly this kind of per-skin reuse
 // (its own header: "extracted... so both suites import it").
 import { describe, expect, it } from "vitest";
+import type { ReactElement } from "react";
 import type { AnySportModule, PadSpec } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { allActionViews, buildPadView, type PadView } from "../view-model";
-import { footballSkin } from "../skins/football-skin";
-import { createSkinDispatch, layoutActionTypes, layoutActionTypesAt } from "../skins/types";
+import { allActionViews, buildPadView, type PadActionView, type PadView } from "../view-model";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { ActionForm } from "../action-form";
+import { FootballSkin, footballSkin } from "../skins/football-skin";
+import { createSkinDispatch, layoutActionTypes, layoutActionTypesAt, type SkinLayout, type SkinProps } from "../skins/types";
 import { cfgSpace, grantAllEntitlements } from "./_cfg-space";
 
 const FULL_BAND = 3 as const;
@@ -288,5 +291,90 @@ describe("football skin: dispatch safety against a real football view", () => {
     const dispatch = createSkinDispatch(realView(), async (type, payload) => void sent.push({ type, payload }));
     await dispatch("football.goal", { by: "home-1", scorer: "p1", assist: "p2" });
     expect(sent).toEqual([{ type: "football.goal", payload: { by: "home-1", scorer: "p1", assist: "p2" } }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Component rendering (S11 review gap 1). `footballLayout` above places every
+// group generically (KNOWN_GROUPS + the leftover net), and every test above
+// this point only exercises that pure function — the one thing this repo's
+// node-only vitest can call directly (skins/types.ts's own header). But the
+// COMPONENT, before this fix, gated its primary/secondary sections on FIVE
+// HARDCODED literal checks (`primary.has("football.goal")` etc.) — only the
+// drawer section walked `layout.groups` generically. A KNOWN_GROUPS entry
+// added at primary/secondary prominence under any other id would satisfy
+// every test above AND the shared skin-coverage.test.ts gate (both assert on
+// layout() data alone) while rendering NOTHING on screen.
+//
+// These tests drive the real `FootballSkin` Component through this repo's
+// node-only `_hook-harness` (`renderIsland` — no jsdom; see
+// pad-renderer.test.tsx, this workspace's worked example) against a
+// HAND-BUILT layout carrying exactly that shape, and assert on the rendered
+// ELEMENT (an `<ActionForm action=.../>`'s own props), not on markup —
+// same idiom pad-renderer.test.tsx's own Panel tests use.
+// ---------------------------------------------------------------------------
+
+function findAll(tree: ReactElement[], pred: (el: ReactElement) => boolean): ReactElement[] {
+  return tree.filter(pred);
+}
+const isType = (type: unknown) => (el: ReactElement) => el.type === type;
+
+function actionFormTypes(tree: ReactElement[]): string[] {
+  return findAll(tree, isType(ActionForm)).map((el) => (propsOf(el).action as PadActionView).type);
+}
+
+function mysteryActionView(): PadActionView {
+  return {
+    type: "football.mystery",
+    labelKey: { key: "pad.football.action.mystery", label: "Mystery Action" },
+    fields: [],
+    attribution: [],
+    availability: { kind: "available" },
+  };
+}
+
+/** A layout carrying ONE group at the given prominence, under an id
+ *  ("mystery") none of `FootballSkin`'s five hardcoded clauses name — the
+ *  exact shape a future `KNOWN_GROUPS` entry would produce. */
+function renderWithUnnamedGroup(prominence: "primary" | "secondary") {
+  const { cfg, spec } = footballCfgSpace()[0]!;
+  const view: PadView = {
+    phase: "live",
+    phases: ["live"],
+    panels: [
+      {
+        labelKey: { key: "pad.football.panel.mystery", label: "Mystery" },
+        phase: "live",
+        layout: "grid",
+        actions: [mysteryActionView()],
+      },
+    ],
+  };
+  const layout: SkinLayout = {
+    header: { fields: [{ id: "score", value: "0 - 0", captionKey: "scorepad.skin.football.header.score", emphasis: true }] },
+    groups: [{ id: "mystery", prominence, actions: ["football.mystery"] }],
+  };
+  const props: SkinProps = {
+    view,
+    spec,
+    ctx: { cfg, state: {}, summary: {}, band: FULL_BAND },
+    layout,
+    dispatch: async () => {},
+    queueDepth: 0,
+    offline: false,
+    submittingType: null,
+  };
+  return renderIsland(FootballSkin, props);
+}
+
+describe("football skin: Component draws every primary/secondary group the layout produces (S11 review gap 1)", () => {
+  it("renders an unnamed PRIMARY group's action, not just the five hardcoded ones", () => {
+    const island = renderWithUnnamedGroup("primary");
+    expect(actionFormTypes(island.tree())).toContain("football.mystery");
+  });
+
+  it("renders an unnamed SECONDARY group's action, not just the five hardcoded ones", () => {
+    const island = renderWithUnnamedGroup("secondary");
+    expect(actionFormTypes(island.tree())).toContain("football.mystery");
   });
 });

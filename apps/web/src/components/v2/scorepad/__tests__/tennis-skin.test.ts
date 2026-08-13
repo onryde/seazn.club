@@ -17,13 +17,16 @@
 // engine-internal test, not importable from here, so these are small
 // deliberate re-statements, not a copy of production logic.
 import { describe, expect, it } from "vitest";
+import type { ReactElement } from "react";
 import { tennis } from "@seazn/engine/sports/tennis";
 import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
 import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import type { ModuleEvent, PadSpec } from "@seazn/engine/sport";
-import { buildPadView, type PadView } from "../view-model";
-import { createSkinDispatch, layoutActionTypes, layoutActionTypesAt, type SkinLayout } from "../skins/types";
-import { tennisSkin } from "../skins/tennis-skin";
+import { buildPadView, type PadActionView, type PadView } from "../view-model";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { ActionForm } from "../action-form";
+import { createSkinDispatch, layoutActionTypes, layoutActionTypesAt, type SkinLayout, type SkinProps } from "../skins/types";
+import { TennisSkin, tennisSkin } from "../skins/tennis-skin";
 import { cfgSpace, grantAllEntitlements } from "./_cfg-space";
 
 const FULL_BAND = 3 as const;
@@ -375,5 +378,77 @@ describe("tennis skin — dispatch refuses an action the (real) view does not de
     const tbView = viewFor(spec, tbState);
     const dispatch = createSkinDispatch(tbView, async () => {});
     await expect(dispatch("tennis.game.award", { winner: H })).rejects.toThrow(/does not declare/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. Component rendering (S11 review gap 2). Every test above this point
+// exercises `tennisLayout` alone — the one thing this repo's node-only
+// vitest can call directly (skins/types.ts's own header) — and that function
+// really is correct: one SkinGroup per surviving panel, same order, every
+// time. But the COMPONENT, before this fix, exploited that invariant instead
+// of proving it: it zipped `layout.groups[i]` with `view.panels[i]` BY ARRAY
+// INDEX and rendered from `panel.actions` (the VIEW) rather than
+// `group.actions` (the LAYOUT). Nothing on the Component side enforced the
+// pairing — a layout/view pair built any other way (hand-built, like below,
+// or a future change to `tennisLayout` itself) would render the WRONG action
+// silently.
+//
+// This test builds exactly that disagreeing pair and drives the real
+// `TennisSkin` Component through this repo's node-only `_hook-harness`
+// (`renderIsland` — no jsdom; see pad-renderer.test.tsx, this workspace's
+// worked example), asserting on the rendered `<ActionForm action=.../>`
+// ELEMENT's own props — same idiom pad-renderer.test.tsx's own Panel tests
+// use — not on markup.
+// ---------------------------------------------------------------------------
+
+function findAll(tree: ReactElement[], pred: (el: ReactElement) => boolean): ReactElement[] {
+  return tree.filter(pred);
+}
+const isType = (type: unknown) => (el: ReactElement) => el.type === type;
+
+function actionFormTypes(tree: ReactElement[]): string[] {
+  return findAll(tree, isType(ActionForm)).map((el) => (propsOf(el).action as PadActionView).type);
+}
+
+function fakeAction(type: string, label: string): PadActionView {
+  return { type, labelKey: { key: `pad.tennis.action.${type}`, label }, fields: [], attribution: [], availability: { kind: "available" } };
+}
+
+describe("tennis skin — Component renders from the LAYOUT's type-keyed groups, not positional view.panels[i] pairing (S11 review gap 2)", () => {
+  it("draws the action the layout group NAMES, even when it sits at a different index in view.panels", () => {
+    const decoy = fakeAction("tennis.decoy", "Decoy");
+    const real = fakeAction("tennis.real", "Real");
+    const view: PadView = {
+      phase: "live",
+      phases: ["live"],
+      panels: [
+        { labelKey: { key: "pad.tennis.panel.a", label: "A" }, phase: "live", layout: "primary", actions: [decoy] },
+        { labelKey: { key: "pad.tennis.panel.b", label: "B" }, phase: "live", layout: "primary", actions: [real] },
+      ],
+    };
+    // ONE group, paired BY POSITION with panels[0] (decoy) if the Component
+    // still zips by index — but its OWN `actions` names "tennis.real", which
+    // actually lives on panels[1].
+    const layout: SkinLayout = {
+      header: { fields: [{ id: "sets", value: "0-0", captionKey: null, emphasis: true }] },
+      groups: [{ id: "mismatched", prominence: "primary", actions: ["tennis.real"] }],
+    };
+    const cfg = tennis.configSchema.parse({});
+    const spec = tennis.padSpec!(cfg);
+    const props: SkinProps = {
+      view,
+      spec,
+      ctx: { cfg, state: {}, summary: {}, band: FULL_BAND },
+      layout,
+      dispatch: async () => {},
+      queueDepth: 0,
+      offline: false,
+      submittingType: null,
+    };
+    const island = renderIsland(TennisSkin, props);
+    const types = actionFormTypes(island.tree());
+    expect(types).toContain("tennis.real"); // the layout group's OWN action
+    expect(types).not.toContain("tennis.decoy"); // never what position 0 happens to hold
   });
 });

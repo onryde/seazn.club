@@ -52,7 +52,6 @@ import { attributionItemCaption } from "../attribution-picker";
 import { deriveFieldPathLabel, type PadActionView, type PadView } from "../view-model";
 import {
   actionByType,
-  layoutActionTypesAt,
   type SkinDef,
   type SkinDispatch,
   type SkinGroup,
@@ -519,6 +518,116 @@ function renderGenericAction(
   return <ActionForm key={action.type + action.labelKey.key} action={action} submitting={submittingType === type} onSubmit={(payload) => void dispatch(type, payload)} renderAttribution={renderAttribution} />;
 }
 
+interface FootballGroupArgs {
+  view: PadView;
+  state: unknown;
+  dispatch: SkinDispatch;
+  submittingType: string | null;
+  msg: MsgFn;
+  renderAttribution: (action: PadActionView, values: ActionValues, setValue: (path: string, value: PadFieldValue | undefined) => void) => ReactNode;
+}
+
+function renderGoalsGroup(args: FootballGroupArgs): ReactNode {
+  return renderQuickSection({
+    view: args.view,
+    state: args.state,
+    type: "football.goal",
+    submittingType: args.submittingType,
+    dispatch: args.dispatch,
+    msg: args.msg,
+    buildSlots: (action, roster, actionLabel) => {
+      const options = personOptions(roster.onPitch);
+      const slots: QuickSlot[] = [];
+      const scorerItem = action.attribution.find((a) => a.path === "scorer");
+      const assistItem = action.attribution.find((a) => a.path === "assist");
+      if (scorerItem) slots.push({ path: "scorer", required: false, caption: attributionItemCaption(scorerItem, action.attribution.indexOf(scorerItem), args.msg, actionLabel), options });
+      if (assistItem) slots.push({ path: "assist", required: false, caption: attributionItemCaption(assistItem, action.attribution.indexOf(assistItem), args.msg, actionLabel), options });
+      return slots;
+    },
+  });
+}
+
+function renderPeriodGroup(args: FootballGroupArgs): ReactNode {
+  return renderPeriodStrip(args.view, args.dispatch, args.submittingType, args.msg);
+}
+
+function renderCardsGroup(args: FootballGroupArgs): ReactNode {
+  return renderQuickSection({
+    view: args.view,
+    state: args.state,
+    type: "football.card",
+    submittingType: args.submittingType,
+    dispatch: args.dispatch,
+    msg: args.msg,
+    buildSlots: (action, roster, actionLabel) => {
+      const slots: QuickSlot[] = [];
+      const colorField = action.fields.find((f): f is PadFieldEnum => f.kind === "enum" && f.path === "color");
+      if (colorField) {
+        const caption = colorField.labelKey ? padLabel(colorField.labelKey.key, args.msg, colorField.labelKey.label) : deriveFieldPathLabel("color");
+        slots.push({ path: "color", required: true, caption, options: colorField.values.map((v) => ({ value: v, label: enumLabel("color", v, args.msg) })) });
+      }
+      const personItem = action.attribution.find((a) => a.path === "person");
+      if (personItem) slots.push({ path: "person", required: false, caption: attributionItemCaption(personItem, action.attribution.indexOf(personItem), args.msg, actionLabel), options: personOptions(roster.onPitch) });
+      return slots;
+    },
+  });
+}
+
+function renderSubsGroup(args: FootballGroupArgs): ReactNode {
+  return renderQuickSection({
+    view: args.view,
+    state: args.state,
+    type: "football.sub",
+    submittingType: args.submittingType,
+    dispatch: args.dispatch,
+    msg: args.msg,
+    buildSlots: (action, roster, actionLabel) => {
+      const slots: QuickSlot[] = [];
+      const offItem = action.attribution.find((a) => a.path === "off");
+      const onItem = action.attribution.find((a) => a.path === "on");
+      if (offItem) slots.push({ path: "off", required: true, caption: attributionItemCaption(offItem, action.attribution.indexOf(offItem), args.msg, actionLabel), options: personOptions(roster.onPitch) });
+      if (onItem) slots.push({ path: "on", required: true, caption: attributionItemCaption(onItem, action.attribution.indexOf(onItem), args.msg, actionLabel), options: personOptions(roster.bench) });
+      return slots;
+    },
+  });
+}
+
+/** Any group that is not one of the four hand-tuned tiles above -- "shots"
+ *  (already generic pre-fix) and any FUTURE `KNOWN_GROUPS` entry this table
+ *  has not been taught a bespoke tile for. Same per-action `ActionForm`
+ *  render the drawer below has always used, so a new primary/secondary
+ *  group still reaches the screen instead of silently vanishing -- the S11
+ *  review gap this fix closes (see `renderFootballGroupContent`'s own
+ *  comment). */
+function renderGenericGroup(group: SkinGroup, args: FootballGroupArgs): ReactNode {
+  return <div className="space-y-2">{group.actions.map((type) => renderGenericAction(args.view, type, args.dispatch, args.submittingType, args.msg, args.renderAttribution))}</div>;
+}
+
+const GROUP_RENDERERS: Readonly<Record<string, (args: FootballGroupArgs) => ReactNode>> = {
+  goals: renderGoalsGroup,
+  period: renderPeriodGroup,
+  cards: renderCardsGroup,
+  subs: renderSubsGroup,
+};
+
+/**
+ * Primary/secondary group content, driven by `layout.groups` -- the fix for
+ * the S11 review gap. Before: the Component gated on five hardcoded literal
+ * `.has("football.X")` checks, so a `KNOWN_GROUPS` entry placed at primary
+ * or secondary prominence under any OTHER id satisfied the coverage gate
+ * (`layoutActionTypes` flattens every group) while rendering nothing at all
+ * -- the drawer below was the only section already walking `layout.groups`
+ * generically. Now every group this skin's `layout()` produces reaches a
+ * tile: a recognised id gets its tuned tap-optimised treatment (unchanged by
+ * this fix -- same `renderQuickSection`/`renderPeriodStrip` calls as
+ * before, same tap counts), anything else falls back to the same generic
+ * per-action render the drawer already used.
+ */
+function renderFootballGroupContent(group: SkinGroup, args: FootballGroupArgs): ReactNode {
+  const renderer = GROUP_RENDERERS[group.id];
+  return renderer ? renderer(args) : renderGenericGroup(group, args);
+}
+
 function renderSection(id: string, msg: MsgFn, content: ReactNode): ReactNode {
   return (
     <section key={id} className="card p-3">
@@ -563,89 +672,20 @@ export function FootballSkin(props: SkinProps) {
   const { view, layout, dispatch, submittingType, ctx, queueDepth, offline } = props;
   const state = ctx.state;
 
-  const primary = new Set(layoutActionTypesAt(layout, "primary"));
-  const secondary = new Set(layoutActionTypesAt(layout, "secondary"));
+  const primaryGroups = layout.groups.filter((g) => g.prominence === "primary");
+  const secondaryGroups = layout.groups.filter((g) => g.prominence === "secondary");
   const drawerGroups = layout.groups.filter((g) => g.prominence === "drawer");
 
   const renderAttribution = (action: PadActionView, values: ActionValues, setValue: (path: string, value: PadFieldValue | undefined) => void) => renderFootballAttribution(action, values, setValue, state, msg);
+  const groupArgs: FootballGroupArgs = { view, state, dispatch, submittingType, msg, renderAttribution };
 
   return (
     <div className="space-y-3" data-role="football-skin">
       {renderHeader(layout, queueDepth, offline, msg)}
 
-      {primary.has("football.goal") &&
-        renderSection(
-          "goals",
-          msg,
-          renderQuickSection({
-            view,
-            state,
-            type: "football.goal",
-            submittingType,
-            dispatch,
-            msg,
-            buildSlots: (action, roster, actionLabel) => {
-              const options = personOptions(roster.onPitch);
-              const slots: QuickSlot[] = [];
-              const scorerItem = action.attribution.find((a) => a.path === "scorer");
-              const assistItem = action.attribution.find((a) => a.path === "assist");
-              if (scorerItem) slots.push({ path: "scorer", required: false, caption: attributionItemCaption(scorerItem, action.attribution.indexOf(scorerItem), msg, actionLabel), options });
-              if (assistItem) slots.push({ path: "assist", required: false, caption: attributionItemCaption(assistItem, action.attribution.indexOf(assistItem), msg, actionLabel), options });
-              return slots;
-            },
-          }),
-        )}
+      {primaryGroups.map((group) => renderSection(group.id, msg, renderFootballGroupContent(group, groupArgs)))}
 
-      {primary.has("football.period") && renderSection("period", msg, renderPeriodStrip(view, dispatch, submittingType, msg))}
-
-      {secondary.has("football.card") &&
-        renderSection(
-          "cards",
-          msg,
-          renderQuickSection({
-            view,
-            state,
-            type: "football.card",
-            submittingType,
-            dispatch,
-            msg,
-            buildSlots: (action, roster, actionLabel) => {
-              const slots: QuickSlot[] = [];
-              const colorField = action.fields.find((f): f is PadFieldEnum => f.kind === "enum" && f.path === "color");
-              if (colorField) {
-                const caption = colorField.labelKey ? padLabel(colorField.labelKey.key, msg, colorField.labelKey.label) : deriveFieldPathLabel("color");
-                slots.push({ path: "color", required: true, caption, options: colorField.values.map((v) => ({ value: v, label: enumLabel("color", v, msg) })) });
-              }
-              const personItem = action.attribution.find((a) => a.path === "person");
-              if (personItem) slots.push({ path: "person", required: false, caption: attributionItemCaption(personItem, action.attribution.indexOf(personItem), msg, actionLabel), options: personOptions(roster.onPitch) });
-              return slots;
-            },
-          }),
-        )}
-
-      {secondary.has("football.sub") &&
-        renderSection(
-          "subs",
-          msg,
-          renderQuickSection({
-            view,
-            state,
-            type: "football.sub",
-            submittingType,
-            dispatch,
-            msg,
-            buildSlots: (action, roster, actionLabel) => {
-              const slots: QuickSlot[] = [];
-              const offItem = action.attribution.find((a) => a.path === "off");
-              const onItem = action.attribution.find((a) => a.path === "on");
-              if (offItem) slots.push({ path: "off", required: true, caption: attributionItemCaption(offItem, action.attribution.indexOf(offItem), msg, actionLabel), options: personOptions(roster.onPitch) });
-              if (onItem) slots.push({ path: "on", required: true, caption: attributionItemCaption(onItem, action.attribution.indexOf(onItem), msg, actionLabel), options: personOptions(roster.bench) });
-              return slots;
-            },
-          }),
-        )}
-
-      {secondary.has("football.shot") && renderSection("shots", msg, renderGenericAction(view, "football.shot", dispatch, submittingType, msg, renderAttribution))}
+      {secondaryGroups.map((group) => renderSection(group.id, msg, renderFootballGroupContent(group, groupArgs)))}
 
       {drawerGroups.map((group) => (
         <details key={group.id} className="card group p-3">

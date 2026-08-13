@@ -31,16 +31,17 @@ import type { LineupPair } from "@seazn/engine/core";
 import { ActionForm, type ActionFormProps } from "../action-form";
 import { AttributionPicker } from "../attribution-picker";
 import type { PadActionView, PadPanelView, PadView } from "../view-model";
-import type {
-  SkinDef,
-  SkinDispatch,
-  SkinGroup,
-  SkinHeader,
-  SkinHeaderField,
-  SkinLayout,
-  SkinLayoutCtx,
-  SkinProminence,
-  SkinProps,
+import {
+  actionByType,
+  type SkinDef,
+  type SkinDispatch,
+  type SkinGroup,
+  type SkinHeader,
+  type SkinHeaderField,
+  type SkinLayout,
+  type SkinLayoutCtx,
+  type SkinProminence,
+  type SkinProps,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -331,6 +332,27 @@ function renderPrimaryAction(
   );
 }
 
+/** Resolves a group's own bare type strings to the real `PadActionView`s via
+ *  the shared `actionByType` lookup (types.ts) -- the same type-keyed lookup
+ *  every sibling skin uses (racquet-skin.tsx's `GroupBody`, period-skin.tsx's
+ *  `renderActionForms`, football-skin.tsx's `renderGenericAction`), NOT an
+ *  array index into `view.panels`. This is the S11 review gap 2 fix: before,
+ *  `TennisSkin` zipped `layout.groups[i]` with `view.panels[i]` by position
+ *  and drew from `panel.actions` (the VIEW) -- correct only because
+ *  `tennisLayout` above happens to build one group per surviving panel,
+ *  unfiltered, in the same pass, an invariant nothing on the Component side
+ *  enforced. Rendering through the type lookup instead means the
+ *  Component's render source IS the layout the coverage gate checks. A type
+ *  a group names but that (defensively) cannot be found on `view` renders
+ *  nothing for that slot rather than crashing; the gate itself guarantees
+ *  this never fires against a real spec (skin-coverage.test.ts). */
+function renderGroupActions(group: SkinGroup, view: PadView, render: (action: PadActionView) => ReactNode): ReactNode[] {
+  return group.actions
+    .map((type) => actionByType(view, type))
+    .filter((action): action is PadActionView => action !== null)
+    .map(render);
+}
+
 const GROUP_CAPTION_KEY: Readonly<Record<string, MessageKey>> = {
   point: "scorepad.skin.tennis.group.point",
   setScore: "scorepad.skin.tennis.group.setScore",
@@ -349,14 +371,13 @@ export function TennisSkin(props: SkinProps) {
     <AttributionPicker action={action} values={values} setValue={setValue} state={ctx.state} lineups={lineups} />
   );
 
-  // `layout.groups[i]` <-> `view.panels[i]`: both built from `view.panels`
-  // in one pass by `tennisLayout` above, same order, same length — see this
-  // file's own header. A group's own `actions` are bare type strings; the
-  // REAL PadActionView objects to draw live on the paired panel.
-  const pairs = layout.groups.map((group, i) => ({ group, panel: view.panels[i] }));
-  const primary = pairs.filter((p) => p.group.prominence === "primary");
-  const secondary = pairs.filter((p) => p.group.prominence === "secondary");
-  const drawer = pairs.filter((p) => p.group.prominence === "drawer");
+  // Grouped by prominence alone -- each group's REAL PadActionView objects
+  // are resolved by TYPE via `renderGroupActions` below (`actionByType`),
+  // never by array index into `view.panels`. See `renderGroupActions`'s own
+  // comment for why (S11 review gap 2).
+  const primary = layout.groups.filter((g) => g.prominence === "primary");
+  const secondary = layout.groups.filter((g) => g.prominence === "secondary");
+  const drawer = layout.groups.filter((g) => g.prominence === "drawer");
 
   const queueLabel = offline
     ? msg("scorepad.queue.offline")
@@ -438,23 +459,23 @@ export function TennisSkin(props: SkinProps) {
         </div>
       </header>
 
-      {view.panels.length === 0 ? (
+      {layout.groups.length === 0 ? (
         <p className="card p-4 text-center text-sm text-purple-400">{msg("scorepad.emptyPhase")}</p>
       ) : (
         <>
-          {primary.map(({ group, panel }) => (
+          {primary.map((group) => (
             <div key={group.id} className="card space-y-3 p-3">
-              {panel.actions.map((action) =>
+              {renderGroupActions(group, view, (action) =>
                 renderPrimaryAction(action, entrants, dispatch, submittingType, renderAttribution, msg),
               )}
             </div>
           ))}
 
-          {secondary.map(({ group, panel }) => (
+          {secondary.map((group) => (
             <section key={group.id} className="card p-3">
               <h3 className="label !mb-2">{msg(GROUP_CAPTION_KEY[group.id] ?? "scorepad.skin.more")}</h3>
               <div className="grid grid-cols-2 gap-2">
-                {panel.actions.map((action) => renderActionTile(action, dispatch, submittingType, renderAttribution, msg))}
+                {renderGroupActions(group, view, (action) => renderActionTile(action, dispatch, submittingType, renderAttribution, msg))}
               </div>
             </section>
           ))}
@@ -468,11 +489,11 @@ export function TennisSkin(props: SkinProps) {
                 </span>
               </summary>
               <div className="mt-3 space-y-4">
-                {drawer.map(({ group, panel }) => (
+                {drawer.map((group) => (
                   <div key={group.id} className="space-y-2">
                     <h4 className="label !mb-0">{msg(GROUP_CAPTION_KEY[group.id] ?? "scorepad.skin.more")}</h4>
                     <div className="flex flex-col gap-2">
-                      {panel.actions.map((action) => renderActionTile(action, dispatch, submittingType, renderAttribution, msg))}
+                      {renderGroupActions(group, view, (action) => renderActionTile(action, dispatch, submittingType, renderAttribution, msg))}
                     </div>
                   </div>
                 ))}
