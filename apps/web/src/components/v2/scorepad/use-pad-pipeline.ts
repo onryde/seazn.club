@@ -184,6 +184,51 @@
 // that answers a genuinely different question (what the SERVER calls the
 // row, needed only for the wire) and would make this hook's OWN fold
 // consistency depend on a network read it does not otherwise need.
+//
+// SCOPE BOUNDARY, S12/#421 PASS J UPDATE (the wire's own confirmation never
+// reached the local ledger): a review of passes H and I found one more gap
+// in this same seam. `resolveVoidTargetId` performs a REAL network read to
+// confirm a void's target under the server's real row id, and used to cache
+// ONLY that id string, in `voidTargetServerIdRef` — nothing ever merged the
+// CONFIRMED ROW into `ledgerEvents` itself. `pendingWithLocalVoidTarget`
+// (pass I, above) only ever reads `ledgerEvents` — deliberately, per its own
+// doc, so the LOCAL fold's consistency never depends on a network read it
+// does not otherwise need. So whenever `ledgerEvents` had NOT also
+// independently caught up to the target (via a poll tick or an
+// `initialEvents` re-seed — neither guaranteed to happen before this void's
+// own ack) by the moment `runDrain` built the ack's local envelope,
+// `pendingWithLocalVoidTarget` correctly found nothing to retarget against
+// (its own documented "no row at that seq yet" no-op) and the UNTRANSLATED
+// client-fabricated `voids` id got baked into `ledgerEvents` forever at ack
+// time — even though the WIRE send, a few lines earlier in the SAME
+// iteration, had already used the correctly-resolved id. No later fixup
+// existed: once baked, that stale id never appears in `ledgerEvents` again
+// (it was never a real row), so the engine's own `resolveVoids`
+// (packages/engine/src/core/events.ts) permanently fails to find the
+// target and every fold from that point throws INVALID_EVENT — degrading to
+// the last good state exactly like pass I's own original bug, just reached
+// via a different path into the same symptom (a stale rejection banner over
+// an undo that, on the wire, had already succeeded).
+//
+// THE INVARIANT, and why it composes with pass I's rather than competing:
+// pass I's own invariant is "the LOCAL fold envelope references whatever id
+// `ledgerEvents` ITSELF currently holds for the target" — this pass does not
+// touch that read. It changes how fast `ledgerEvents` becomes correct: the
+// moment `resolveVoidTargetId` confirms a target via a FRESH network read
+// (never a cache hit — a cache hit never carries the row, only the id string
+// a PRIOR fresh read already saved; see that function's own doc), the
+// confirmed row is merged into `ledgerEvents` right there in `runDrain`,
+// through the SAME `mergeEnvelopesIntoLedger` primitive every other ledger
+// writer already uses (never a second, differently-shaped merge — this
+// file's own recurring caution, first stated at pass C/pass F above).
+// `pendingWithLocalVoidTarget` itself is completely unchanged; it simply now
+// finds what it is looking for sooner, because `ledgerEvents` caught up via
+// the wire confirmation itself rather than waiting on an unrelated poll that
+// might never come. The merged row is always the REAL widened envelope
+// `resolveVoidTargetId`'s own read just fetched (`ledgerSlotToEnvelope`),
+// never a fabricated placeholder — this file has no concept of injecting a
+// synthetic event into `ledgerEvents`, since anything merged there is folded
+// as if it really happened.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EngineError, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -513,10 +558,22 @@ function mergeLedgerEvents(
  *  question only (what the SERVER calls the row) and is never read for the
  *  LOCAL optimistic fold's own `voids` field — see `pendingWithLocalVoidTarget`
  *  (just below `voidTargetSeqAtSubmit`) for that separate, purely-local
- *  question and why it needs an independent answer. */
+ *  question and why it needs an independent answer.
+ *
+ *  S12/#421 PASS J — `"resolved"` now ALSO carries the widened row it just
+ *  fetched, as `envelope`, whenever the resolution came from a FRESH network
+ *  read (never a cache hit — see the `cache.get` branch below, which never
+ *  has the row itself, only the id string it already saved). This is NOT a
+ *  second way to answer `pendingWithLocalVoidTarget`'s own question — the
+ *  caller (`runDrain`) merges `envelope` into `ledgerEvents` itself, through
+ *  the SAME `mergeEnvelopesIntoLedger` every other ledger writer already
+ *  uses, so `pendingWithLocalVoidTarget` keeps reading ONLY `ledgerEvents`,
+ *  unchanged, and simply finds the answer sooner. See the file header's PASS
+ *  J UPDATE for the full trace and why this composes with pass I's
+ *  invariant rather than competing with it. */
 export type VoidTargetResolution =
   | { kind: "same"; eventId: string }
-  | { kind: "resolved"; eventId: string }
+  | { kind: "resolved"; eventId: string; envelope?: EventEnvelope }
   | { kind: "unresolvable-permanent" }
   | { kind: "unresolvable-transient" };
 
@@ -548,13 +605,27 @@ export async function resolveVoidTargetId(
     return { kind: "unresolvable-permanent" };
   }
   const cached = cache.get(targetId);
+  // A cache hit answers the WIRE question only (the id string, saved on a
+  // PRIOR fresh resolution) — it never carries the row, so it cannot widen
+  // an `envelope` here. That is fine: the prior resolution that populated
+  // this cache entry already merged its own `envelope` into `ledgerEvents`
+  // (runDrain, below) if one was available, and `ledgerEvents` only ever
+  // grows/merges from there, so a later cache hit has nothing new to add.
   if (cached !== undefined) return { kind: "resolved", eventId: cached };
   try {
     const rows = await transport.listEventsSince(fixtureId, seq - 1);
     const row = rows.find((r) => r.seq === seq);
     if (row === undefined || row.id === undefined) return { kind: "unresolvable-transient" };
     cache.set(targetId, row.id);
-    return { kind: "resolved", eventId: row.id };
+    // S12/#421 pass J — widen the SAME row this read just fetched into a
+    // real, foldable envelope (never a fabricated placeholder — see the file
+    // header's PASS J UPDATE for why that distinction matters), so the
+    // caller can merge it into `ledgerEvents`. `null` here means a hand-
+    // rolled test double missing `recorded_at` (ledgerSlotToEnvelope's own
+    // doc) — degrades to the pre-pass-J behavior for that caller, never a
+    // guess.
+    const envelope = ledgerSlotToEnvelope(fixtureId, row);
+    return envelope === null ? { kind: "resolved", eventId: row.id } : { kind: "resolved", eventId: row.id, envelope };
   } catch {
     return { kind: "unresolvable-transient" };
   }
@@ -640,12 +711,19 @@ function voidTargetSeqAtSubmit(
  *  durable `voidTargetSeq` (pre-pass-H record, or a target not yet acked at
  *  submit time — the pre-existing `ownEventIds`-only fallback territory,
  *  unaffected by this pass); `ledgerEvents` has no row at that seq yet
- *  (nothing to retarget to); or the row already sits under the SAME id the
- *  payload already names (the common case — this only ever changes anything
- *  post-reload). NOT applied at `submit()`'s own first-ever pre-send build:
- *  `voidTargetSeqAtSubmit` above only ever sets `voidTargetSeq` by finding
- *  the target in `ledgerEvents` BY THAT EXACT `targetId` in the first place,
- *  so at that one call site this would provably always be a no-op. */
+ *  (nothing to retarget to — S12/#421 pass J now merges a wire-confirmed row
+ *  into `ledgerEvents` as SOON as `resolveVoidTargetId` fetches it, so this
+ *  case no longer survives all the way to `runDrain`'s own ack build; it can
+ *  still be hit TRANSIENTLY, e.g. the mount-time resume effect's seed step
+ *  below, which runs before that resolution has even started); or the row
+ *  already sits under the SAME id the payload already names (the common
+ *  case — this only ever changes anything post-reload). NOT applied at
+ *  `submit()`'s own first-ever pre-send build: `voidTargetSeqAtSubmit` above
+ *  only ever sets `voidTargetSeq` by finding the target in `ledgerEvents` BY
+ *  THAT EXACT `targetId` in the first place, so at that one call site this
+ *  would provably always be a no-op — see that call site's own comment
+ *  (Q8) for why this is an assumption tied to `voidTargetSeqAtSubmit`'s
+ *  CURRENT implementation, not a standing guarantee. */
 function pendingWithLocalVoidTarget(pending: PendingEvent, ledgerEvents: readonly EventEnvelope[]): PendingEvent {
   if (pending.type !== "core.void" || pending.voidTargetSeq === undefined) return pending;
   const targetId = extractVoidEventId(pending.payload);
@@ -928,6 +1006,26 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
               ledgerEventsRef.current,
               voidTargetServerIdRef.current,
             );
+            // S12/#421 pass J — see the file header's PASS J UPDATE and
+            // resolveVoidTargetId's own doc for the full trace: a FRESH
+            // network resolution (never a cache hit) just confirmed a real
+            // row for real, so merge it into `ledgerEvents` NOW, through the
+            // SAME `mergeEnvelopesIntoLedger` primitive every other ledger
+            // writer already uses — rather than waiting on an independent
+            // poll/initialEvents catch-up that might never land before this
+            // void's own ack builds its local fold envelope, below.
+            // `pendingWithLocalVoidTarget` is UNCHANGED by this: it still
+            // reads ONLY `ledgerEvents` (pass I's own invariant), so this
+            // merely lets it find what it is looking for in THIS same drain
+            // pass instead of never at all. Default "existing wins"
+            // precedence (mergeEnvelopesIntoLedger's own doc) is correct
+            // here too: if `ledgerEvents` already somehow holds a richer
+            // entry at this seq, that entry must not be clobbered by this
+            // bare polled-style row.
+            if (resolution.kind === "resolved" && resolution.envelope !== undefined) {
+              const withTarget = mergeEnvelopesIntoLedger(ledgerEventsRef.current, [resolution.envelope]);
+              if (withTarget.length !== ledgerEventsRef.current.length) commitLedgerEvents(withTarget);
+            }
             if (resolution.kind === "unresolvable-permanent") {
               // Never silently dropped — the exact defect this pass fixes.
               // Surfaced exactly like any other permanent rejection, and
@@ -1142,6 +1240,30 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           attempts: 0,
           ...(voidTargetSeq === undefined ? {} : { voidTargetSeq }),
         };
+        // Review Q8 (S12/#421 pass J): deliberately NOT wrapped in
+        // `pendingWithLocalVoidTarget`, unlike every OTHER place a
+        // `PendingEvent` becomes a local fold envelope (runDrain's ack,
+        // AND the mount-time leftover-queue resume effect's own seed step).
+        // That is provably correct TODAY, not merely an oversight:
+        // `voidTargetSeqAtSubmit` (just above) only ever sets
+        // `pending.voidTargetSeq` by finding the target in `ledgerEvents` BY
+        // THAT EXACT `targetId` in the first place, so IF `pending` is a
+        // core.void with a `voidTargetSeq` here, `ledgerEvents` necessarily
+        // already holds an entry at that seq under `targetId` verbatim —
+        // `pendingWithLocalVoidTarget`'s own "already the same id" guard
+        // would always fire, a guaranteed no-op. This is an ASSUMPTION tied
+        // to `voidTargetSeqAtSubmit`'s CURRENT implementation, not an
+        // inherent property of `submit()` itself — a future edit that
+        // resolves `voidTargetSeq` from some OTHER source (e.g. an async
+        // lookup, or a value threaded in from a caller) could quietly
+        // invalidate it, and nothing here would fail loudly: this optimistic
+        // pending build would just start showing a momentarily-untranslated
+        // void locally, the same transient throw pendingWithLocalVoidTarget's
+        // own doc already describes for the resume-effect seed step. If you
+        // are changing how `voidTargetSeq` gets attached to a fresh
+        // `PendingEvent`, re-verify this no-op still holds before trusting
+        // it — do not just assume "everywhere else wraps it, so here should
+        // too" without re-checking WHY here doesn't.
         const withPending = new Map(pendingEnvelopesRef.current);
         withPending.set(pending.idempotencyKey, pendingToEnvelope(fixtureId, identity, pending));
         commitPendingEnvelopes(withPending); // optimistic fold shows immediately

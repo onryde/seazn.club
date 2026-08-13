@@ -12,10 +12,11 @@ import type { CricketBallEv, CricketCfg, CricketState } from "@seazn/engine/spor
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { foldClient, resolveModuleClient } from "../module-client";
 import type { AppendCallResult, AppendEventBody } from "../pipeline";
+import { enqueue } from "../queue";
 import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "../types";
 import type { FixtureStateResult, PadTransport } from "../transport";
 import type { RealtimeConnector } from "../use-fixture-stream";
-import type { QueueStore } from "../queue-store";
+import { indexedDbQueueStore, type QueueStore } from "../queue-store";
 import {
   DOUBLE_SUBMIT_WINDOW_MS,
   pendingToEnvelope,
@@ -1645,5 +1646,199 @@ describe("usePadPipeline — undo a pad-submitted event ACROSS a reload (S12/#42
     // reversed, exactly like the no-reload case (the "undo a pad-submitted
     // event with no reload" describe block above).
     expect((pad2.current.state as { running: unknown }).running).toBeUndefined();
+  });
+});
+
+// S12/#421 pass J — the WIRE's own confirmation never reached the LOCAL
+// ledger (a review of passes H and I found this residual open). Passes G/H
+// made the WIRE send correct across a reload; pass I made the LOCAL
+// optimistic fold agree with the wire WHEN `ledgerEvents` already happened to
+// know the target (via `initialEvents` — same as the pass H/I test above,
+// which seeds `initialEvents` with the target row from the very first
+// render). This describe block covers the gap that left open:
+// `resolveVoidTargetId` can confirm a target over the wire via its own
+// network read while `ledgerEvents` has NOT independently caught up to that
+// same target at all (no poll tick landed it, the bootstrap did not include
+// it) — `pendingWithLocalVoidTarget` correctly no-ops on its own documented
+// "nothing to retarget to" case, and nothing used to correct that
+// afterward, so the untranslated client-fabricated id got baked into
+// `ledgerEvents` forever at ack time. See use-pad-pipeline.ts's file header,
+// PASS J UPDATE, for the full trace and the invariant that composes with
+// pass I's rather than competing with it.
+describe("usePadPipeline — the wire's confirmed target id reaches the local ledger too (S12/#421 pass J)", () => {
+  it("MUTATION TARGET: a queued void's target resolves LOCALLY to the server id even when ledgerEvents never independently caught up", async () => {
+    const REAL_SERVER_ID = "server-real-goal-id-pass-j";
+    const DB_NAME = "pass-j-ledger-lag-repro";
+    let appendMode: "ok" | "fail" = "ok";
+    let listMode: "ok" | "fail" = "ok";
+    let ackSeq = 1;
+    const appendCalls: AppendEventBody[] = [];
+    const listEventsSinceCalls: number[] = [];
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        if (appendMode === "fail") return { kind: "network-error", message: "offline" };
+        const seq = ackSeq;
+        ackSeq += 1;
+        return success(seq);
+      },
+      async listEventsSince(_fixtureId, sinceSeq): Promise<LedgerSlotEvent[]> {
+        listEventsSinceCalls.push(sinceSeq);
+        if (listMode === "fail") throw new Error("offline");
+        return [
+          {
+            id: REAL_SERVER_ID,
+            seq: 1,
+            type: "generic.score",
+            payload: { by: "H", points: 3 },
+            recorded_at: "2026-08-13T00:00:01.000Z",
+            recorded_by: "user-1",
+            device_link_id: null,
+          },
+        ];
+      },
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 1, state: null, summary: null, outcome: null };
+      },
+    };
+
+    // Mount 1: score ONLINE, then go offline and undo it — identical setup to
+    // the pass H/I reload test above (a real, already-acked target; the void
+    // enqueues with a durable voidTargetSeq but cannot drain yet).
+    const pad1 = mountPipeline(baseParams({ transport, queueDbName: DB_NAME }));
+    await pad1.current.submit("generic.score", { by: "H", points: 3 });
+    const scoredId = pad1.current.events.find((e) => e.type === "generic.score")!.id;
+    expect(pad1.current.queueDepth).toBe(0);
+
+    appendMode = "fail";
+    listMode = "fail";
+    await pad1.current.submit("core.void", { event_id: scoredId });
+    expect(pad1.current.queueDepth).toBe(1); // queued, not dropped
+    expect(appendCalls.some((c) => c.type === "core.void")).toBe(false); // never reached the wire yet
+    pad1.unmount();
+
+    // Mount 2 — a genuine reload, back online. THE DIFFERENCE from the pass
+    // H/I test above: `initialEvents` is deliberately EMPTY. That test's
+    // bootstrap conveniently included the target row, which is exactly why
+    // pendingWithLocalVoidTarget could already translate it; this test
+    // reproduces the case the review found still open — the bootstrap (or a
+    // poll) has NOT caught up to the target at all, only the DURABLE
+    // voidTargetSeq survived the reload.
+    appendMode = "ok";
+    listMode = "ok";
+    const pad2 = mountPipeline(baseParams({ transport, queueDbName: DB_NAME, initialEvents: [] }));
+    expect(pad2.current.ownEventIds.has(scoredId)).toBe(false); // fresh mount, as pass H already established
+
+    for (let i = 0; i < 5; i += 1) {
+      await tick();
+    }
+
+    // The wire was already correct from pass H onward — sanity-check it
+    // still is, then assert the actual point of this test.
+    const voidCall = appendCalls.find((c) => c.type === "core.void");
+    expect(voidCall, "the queued void must still drain after the remount").toBeTruthy();
+    expect(voidCall!.payload).toEqual({ event_id: REAL_SERVER_ID });
+    expect(listEventsSinceCalls.length).toBeGreaterThan(0);
+    expect(pad2.current.queueDepth).toBe(0);
+
+    // THE regression: the wire-confirmed row must also have been merged into
+    // this hook's OWN ledgerEvents — proving `ledgerEvents` actually caught
+    // up, not merely that the wire call happened to carry the right id.
+    const targetInLedger = pad2.current.events.find((e) => e.id === REAL_SERVER_ID);
+    expect(targetInLedger, "the wire-confirmed target row must reach the local ledger, not just the wire").toBeTruthy();
+
+    // And the LOCAL void envelope's own `voids` field must have been
+    // translated too — the ledger must never end up holding the untranslated
+    // client-fabricated id once the wire has confirmed the real one.
+    const voidEnvelope = pad2.current.events.find((e) => e.type === "core.void");
+    expect(voidEnvelope).toBeTruthy();
+    expect(voidEnvelope!.voids).toBe(REAL_SERVER_ID);
+    expect(voidEnvelope!.voids).not.toBe(scoredId);
+  });
+});
+
+// S12/#421 pass J — backward compatibility for a PendingEvent already
+// sitting in a real user's IndexedDB from BEFORE pass H shipped, which never
+// wrote `voidTargetSeq` at all (types.ts's own field doc: "for any record
+// persisted by a build predating this field — reading it as `undefined` must
+// never throw, only degrade"). A review traced that this degrades cleanly
+// (pendingWithLocalVoidTarget's own first guard no-ops on the missing field;
+// queue.ts/queue-store.ts apply no schema validation, so an old record
+// round-trips exactly as written) but nothing exercised it end to end. This
+// hand-builds exactly that record — bypassing submit(), which always sets
+// the field today and so cannot produce this shape — and drains it through a
+// genuine fresh mount, matching a real reload.
+describe("usePadPipeline — a pre-pass-H PendingEvent (no voidTargetSeq) still degrades cleanly (S12/#421 pass J backward-compat)", () => {
+  it("a hand-built legacy void resolves via pass G's own ownEventIds fallback rather than crashing", async () => {
+    const DB_NAME = "pass-j-legacy-pending-event";
+    const STALE_ID = "client-fabricated-pre-pass-h-id";
+    const listEventsSince = vi.fn(async (): Promise<LedgerSlotEvent[]> => []);
+    const appendCalls: AppendEventBody[] = [];
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        return success(1);
+      },
+      listEventsSince,
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
+      },
+    };
+
+    // Seed the durable queue DIRECTLY — the one way to construct a record a
+    // real pre-pass-H build would have left behind (submit() always sets
+    // voidTargetSeq today, so it cannot produce this shape). `dbName` matches
+    // this mount's own `queueDbName` below via the module-level
+    // queueStoreRegistry mock (file header), so this is the SAME store the
+    // hook's own resume effect will read from.
+    const store = indexedDbQueueStore(DB_NAME);
+    const legacyVoid: PendingEvent = {
+      localId: "local-legacy-1",
+      idempotencyKey: "void-idem-legacy-1",
+      type: "core.void",
+      payload: { event_id: STALE_ID },
+      expectedSeq: 0,
+      createdAt: "2026-08-13T00:00:00.000Z",
+      attempts: 0,
+      // voidTargetSeq deliberately absent — the exact shape under test.
+    };
+    await enqueue(store, legacyVoid);
+
+    // A genuinely fresh mount — ownEventIds starts empty exactly like a real
+    // reload, and nothing here ever calls submit(), so voidTargetSeq is never
+    // set any other way either.
+    const pad = mountPipeline(baseParams({ transport, queueDbName: DB_NAME }));
+    for (let i = 0; i < 5; i += 1) {
+      await tick();
+    }
+
+    const voidCall = appendCalls.find((c) => c.type === "core.void");
+    expect(voidCall, "a legacy queued void must still reach the wire, not vanish or crash the mount").toBeTruthy();
+    // Pass G's own fallback for a target this fresh mount does not recognise
+    // as its own (empty ownEventIds, no durable seq either): the "same" fast
+    // path, sent verbatim — exactly what this record would have received had
+    // pass H's field never existed. A mangled payload here (e.g. `undefined`
+    // or a NaN-derived one) is exactly what "degrades cleanly" rules out.
+    expect(voidCall!.payload).toEqual({ event_id: STALE_ID });
+    // The "same" fast path never attempts a network resolution at all —
+    // proves this took the SAME branch as any id this mount has never heard
+    // of, not some voidTargetSeq-shaped code path that merely happens not to
+    // throw today.
+    expect(listEventsSince).not.toHaveBeenCalled();
+    expect(pad.current.queueDepth).toBe(0);
+    // pendingWithLocalVoidTarget's OWN no-op, directly: the LOCAL fold
+    // envelope must still carry the ORIGINAL, unmodified `voids` id — proof
+    // its "voidTargetSeq === undefined -> return pending unchanged" guard
+    // ran to completion rather than throwing while building either the
+    // resume effect's pre-send entry or runDrain's ack.
+    const localVoidEnvelope = pad.current.events.find((e) => e.type === "core.void");
+    expect(localVoidEnvelope, "the legacy void must still fold locally too, not vanish from the ledger").toBeTruthy();
+    expect(localVoidEnvelope!.voids).toBe(STALE_ID);
   });
 });
