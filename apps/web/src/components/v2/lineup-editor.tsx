@@ -79,13 +79,96 @@ function AvailabilityChip({
   );
 }
 
-interface SlotDraft {
+export interface SlotDraft {
   person_id: string;
   full_name: string;
   slot: "starting" | "bench";
   position_key: string | null;
   order_no: number;
   roles: string[];
+  /** player/coach/staff (S3/#426 ruling) — S12/#421 pass D. Defaults to
+   *  "player", mirroring the engine's own LineupSlot.role default. */
+  role: "player" | "coach" | "staff";
+  /** Doubles/pair serve order (S3/#426's engine LineupSlot.pairOrder) —
+   *  S12/#421 pass D, V361. null = no declared order. Only ever SET through
+   *  the pair-order control below, which only renders for a pair-shaped
+   *  side (see isPairShaped) — a non-pair side simply never gets a way to
+   *  set this away from null. */
+  pair_order: number | null;
+}
+
+/**
+ * `side.lineup` (the wire shape `readLineup` returns) -> the editor's own
+ * draft shape. Extracted so the mapping is unit-testable without rendering
+ * anything (this repo tests client components via static markup, not
+ * jsdom — see this file's own test for why).
+ */
+export function draftFromSavedLineup(lineup: LineupSlotIn[]): SlotDraft[] {
+  return lineup.map((s, i) => ({
+    person_id: s.person_id,
+    full_name: s.full_name,
+    slot: s.slot,
+    position_key: s.position_key,
+    order_no: s.order_no ?? i + 1,
+    roles: s.roles ?? [],
+    role: s.role ?? "player",
+    pair_order: s.pair_order ?? null,
+  }));
+}
+
+/**
+ * Is this side's entrant pair-shaped (tennis/badminton/tabletennis doubles,
+ * or any other sport whose entrant model allows a "pair")? `pair_order`
+ * (which of the two partners serves/plays first) only means something then.
+ *
+ * This component has no direct channel to the sport key or its
+ * entrantModel — fixture-console.tsx (S12/#421's file-ownership split for
+ * this pass) hands it only positionGroups/roles/lineupSize/side, never
+ * `sport.key` or `sport.config` — so the shape is inferred structurally
+ * from what IS already in scope. A sport with a "pair" entrant option
+ * declares NO position catalog (there is nothing to assign a position to:
+ * tennis.ts/badminton.ts/tabletennis.ts/carrom.ts all declare
+ * `positions.groups: []`, unlike every team sport), and a "pair" entrant's
+ * roster is EXACTLY its two permanently-bound members — registration binds
+ * them together, never more, never fewer. Both conditions together rule out
+ * every team sport (non-empty position catalog) and every individual
+ * entrant (one member) while catching every real pair.
+ */
+export function isPairShaped(
+  positionGroups: readonly { key: string }[],
+  memberCount: number,
+): boolean {
+  return positionGroups.length === 0 && memberCount === 2;
+}
+
+/**
+ * The draft -> PUT body mapping `save()` sends. Extracted for the same
+ * reason as `draftFromSavedLineup`: this is the exact spot the product's
+ * lineup UI used to silently drop `role` (and had nowhere to carry
+ * `pair_order` at all) — a coach saved through the editor was written back
+ * as a plain player regardless of what the row showed.
+ */
+export function toPutSlot(
+  s: SlotDraft,
+  index: number,
+): {
+  person_id: string;
+  slot: "starting" | "bench";
+  position_key: string | null;
+  order_no: number;
+  roles: string[];
+  role: "player" | "coach" | "staff";
+  pair_order: number | null;
+} {
+  return {
+    person_id: s.person_id,
+    slot: s.slot,
+    position_key: s.position_key,
+    order_no: index + 1,
+    roles: s.roles,
+    role: s.role,
+    pair_order: s.pair_order,
+  };
 }
 
 export function LineupEditor({
@@ -101,14 +184,7 @@ export function LineupEditor({
   const msg = useMsg();
   const [slots, setSlots] = useState<SlotDraft[]>(() => {
     if (side.lineup.length > 0) {
-      return side.lineup.map((s: LineupSlotIn, i) => ({
-        person_id: s.person_id,
-        full_name: s.full_name,
-        slot: s.slot,
-        position_key: s.position_key,
-        order_no: s.order_no ?? i + 1,
-        roles: s.roles ?? [],
-      }));
+      return draftFromSavedLineup(side.lineup);
     }
     // Nothing saved yet → auto-populate a DRAFT from the roster (first
     // `lineupSize` start, rest bench) so matchday is one Save, not N taps.
@@ -122,8 +198,13 @@ export function LineupEditor({
       position_key: m.default_position_key,
       order_no: i + 1,
       roles: m.roles ?? [],
+      role: "player" as const,
+      pair_order: null,
     }));
   });
+  // Pair-shaped once, from data already in scope (see isPairShaped's own
+  // doc comment) — not per-slot, since it describes the ENTRANT, not a row.
+  const pairShaped = isPairShaped(positionGroups, side.members.length);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -141,6 +222,8 @@ export function LineupEditor({
         position_key: member.default_position_key,
         order_no: prev.length + 1,
         roles: member.roles ?? [],
+        role: "player",
+        pair_order: null,
       },
     ]);
     setSaved(false);
@@ -152,15 +235,7 @@ export function LineupEditor({
     try {
       await apiV1(`/api/v1/fixtures/${fixtureId}/lineups/${side.id}`, {
         method: "PUT",
-        json: {
-          slots: slots.map((s, i) => ({
-            person_id: s.person_id,
-            slot: s.slot,
-            position_key: s.position_key,
-            order_no: i + 1,
-            roles: s.roles,
-          })),
-        },
+        json: { slots: slots.map(toPutSlot) },
       });
       setSaved(true);
       onSaved();
@@ -228,6 +303,40 @@ export function LineupEditor({
                     {g.name}
                   </option>
                 ))}
+              </select>
+            )}
+            <select
+              disabled={!canEdit}
+              value={s.role}
+              onChange={(e) => {
+                const v = e.target.value as "player" | "coach" | "staff";
+                setSlots((prev) => prev.map((x, j) => (j === i ? { ...x, role: v } : x)));
+                setSaved(false);
+              }}
+              className="select w-24 px-2 py-1 text-xs"
+              aria-label={msg("lineup.roleAria", { name: s.full_name })}
+            >
+              <option value="player">{msg("lineup.role.player")}</option>
+              <option value="coach">{msg("lineup.role.coach")}</option>
+              <option value="staff">{msg("lineup.role.staff")}</option>
+            </select>
+            {pairShaped && (
+              <select
+                disabled={!canEdit}
+                value={s.pair_order ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value ? Number(e.target.value) : null;
+                  setSlots((prev) =>
+                    prev.map((x, j) => (j === i ? { ...x, pair_order: v } : x)),
+                  );
+                  setSaved(false);
+                }}
+                className="select w-32 px-2 py-1 text-xs"
+                aria-label={msg("lineup.pairOrderAria", { name: s.full_name })}
+              >
+                <option value="">{msg("lineup.pairOrderPlaceholder")}</option>
+                <option value="1">{msg("lineup.pairOrder.first")}</option>
+                <option value="2">{msg("lineup.pairOrder.second")}</option>
               </select>
             )}
             {roles.map((r) => (
