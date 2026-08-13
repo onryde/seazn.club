@@ -1094,7 +1094,25 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
           fills[source.winner_to_slot].push({ fixture: source.winner_to_fixture, entrant: g.award! });
         }
       }
+      // Invariant guard (P5 review finding): this is the ONE other
+      // home/away_entrant_id writer in this file that bypasses fillSlot, so
+      // unlike every other entrant-write here it does NOT clear a matching
+      // *_slot_label. Verified harmless today only because a PLAIN
+      // (non-`.seeding`) stage's fixtures never carry a label to begin with
+      // — only generateSeededStageFixtures' own third pass (above) stamps
+      // one, and that path never reaches this bulk UPDATE. Nothing enforces
+      // that stays true, so refuse loudly if it ever stops holding, rather
+      // than silently filling the entrant and leaving the label stale
+      // (which would make a filled slot render as if it were still TBD).
       if (fills[1].length > 0) {
+        const stale = await tx<{ id: string }[]>`
+          select id from fixtures
+          where id in ${tx(fills[1].map((x) => x.fixture))} and home_slot_label is not null`;
+        if (stale.length > 0) {
+          throw new Error(
+            `generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label on fixture(s) ${stale.map((f) => f.id).join(",")} instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present`,
+          );
+        }
         await tx`
           update fixtures f
           set home_entrant_id = v.entrant_id
@@ -1103,6 +1121,14 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
           where f.id = v.fixture_id and f.home_entrant_id is null`;
       }
       if (fills[2].length > 0) {
+        const stale = await tx<{ id: string }[]>`
+          select id from fixtures
+          where id in ${tx(fills[2].map((x) => x.fixture))} and away_slot_label is not null`;
+        if (stale.length > 0) {
+          throw new Error(
+            `generateStageFixtures: bye-award bulk UPDATE would strand away_slot_label on fixture(s) ${stale.map((f) => f.id).join(",")} instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present`,
+          );
+        }
         await tx`
           update fixtures f
           set away_entrant_id = v.entrant_id

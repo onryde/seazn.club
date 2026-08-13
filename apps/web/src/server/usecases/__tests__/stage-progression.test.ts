@@ -539,6 +539,84 @@ describe.skipIf(!HAS_DB)("D4a/P5 — a bye seed owns TWO destination slots (#554
   });
 });
 
+describe.skipIf(!HAS_DB)("D4a/P5 — bye-award bulk UPDATE guards against stranding a slot_label", () => {
+  it("refuses rather than silently stranding a slot_label if a plain-stage bye-award winner-feed target ever carries one", async () => {
+    // Review finding: generateStageFixtures' bye-award-into-winner-feed pass
+    // (the PLAIN, non-`.seeding` path, unlike generateSeededStageFixtures'
+    // OWN third pass) writes home/away_entrant_id via a raw bulk UPDATE that
+    // bypasses fillSlot — the one other entrant-id writer in this file that
+    // doesn't also clear *_slot_label. Verified harmless today only because
+    // a plain-stage fixture never carries a label to begin with; nothing
+    // enforces that stays true, so this guards the invariant directly
+    // instead of trusting the assumption forever.
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "ByeGuard " + randomUUID().slice(0, 6),
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    // 3 entrants -> bracket of 4, ONE bye (same shape as integration.test.ts's
+    // "byes auto-advance" test) — the bye's award propagates straight into
+    // the final via the third pass this guards.
+    await createEntrants(auth, division.id, [
+      { kind: "individual" as const, display_name: "One", seed: 1, members: [] },
+      { kind: "individual" as const, display_name: "Two", seed: 2, members: [] },
+      { kind: "individual" as const, display_name: "Three", seed: 3, members: [] },
+    ]);
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "knockout", name: "KO", config: {} });
+    const gen = await generateStageFixtures(auth, stage!.id);
+
+    const finalRoundNo = Math.max(...gen.fixtures.map((x) => x.round_no));
+    const final = gen.fixtures.find(
+      (f) => f.round_no === finalRoundNo && (f.home_entrant_id !== null || f.away_entrant_id !== null),
+    );
+    expect(final).toBeDefined();
+    const side: "home" | "away" = final!.home_entrant_id !== null ? "home" : "away";
+    // Baseline premise the finding leans on: a plain-stage fixture never
+    // carries a label — confirmed, not assumed.
+    expect(side === "home" ? final!.home_slot_label : final!.away_slot_label).toBeNull();
+
+    // Simulate the ONLY way the invariant could break: something stamps a
+    // label on this slot while it's open (nothing in the plain path ever
+    // does — that's the point). Re-open the slot and stamp it, then re-run
+    // generation: the SAME third pass that fed the bye's award into this
+    // fixture the first time runs again on every regeneration.
+    if (side === "home") {
+      await sql`update fixtures set home_entrant_id = null,
+                home_slot_label = ${sql.json({ key: "slot.rank_range", params: { rank: 1 } } as never)}
+                where id = ${final!.id}`;
+    } else {
+      await sql`update fixtures set away_entrant_id = null,
+                away_slot_label = ${sql.json({ key: "slot.rank_range", params: { rank: 1 } } as never)}
+                where id = ${final!.id}`;
+    }
+
+    await expect(generateStageFixtures(auth, stage!.id)).rejects.toThrow(/slot_label/i);
+
+    // AND it refused BEFORE writing — label and null-entrant both still sit
+    // there, exactly the state that would otherwise go silently stale.
+    const [after] = await sql<
+      {
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
+        home_slot_label: unknown;
+        away_slot_label: unknown;
+      }[]
+    >`select home_entrant_id, away_entrant_id, home_slot_label, away_slot_label from fixtures where id = ${final!.id}`;
+    expect(side === "home" ? after.home_entrant_id : after.away_entrant_id).toBeNull();
+    expect(side === "home" ? after.home_slot_label : after.away_slot_label).not.toBeNull();
+  });
+});
+
 describe.skipIf(!HAS_DB)("D4a/P5 — standings override marks a draft stale", () => {
   it("overrideStandings on the source stage marks the dependent draft stale and recomputes", async () => {
     // A single-table (league) source: overrideStandings/recomputeStandings
