@@ -594,6 +594,31 @@ giving that spec a `current`-carrying arm; verified by re-mutating
 `test:coverage` 3928 passed / 22 pre-existing pendings; engine + `apps/web` lint
 0 errors; engine + `apps/web` tsc 0 errors.
 
+**A THIRD fixed-park-instant site, found by CI on this PR.**
+`schedule.test.ts` -> "Community org: constraints/board are open, quick-start
+unaffected (#382)" parks round 1 at `at(-60)`. That instant was chosen when the
+board was assumed to start at 09:00, so it read as "earlier than everything";
+against a board the solver compacts to the day's open it is LATER than every
+card, putting round 1 after round 3 — a direct `order` breach, and blocking.
+Same premise as the two sites above, same cause, and it only surfaced now
+because the gate stopped discarding the compacted board: **2 red in 3 with the
+fix, 0 red in 4 on `origin/main`, same DB and box.** So the gate change did not
+break it — it removed the accident that was hiding it, exactly as the locks
+suite's note predicted.
+
+Fixed by the established technique, not a new one: park FORWARD off the board's
+own last card, on the LAST-round fixture. Backward is unfixable here for the
+recorded reason (on the seed day the earliest card sits ON the window floor, so
+the park fails with `window`). 6 of 6 green after, and the manual SET is now
+read back so the spec still proves a write happened. Full DB-backed run
+(`src/server src/lib`, real Postgres, real placement service): **4594 passed /
+0 failed**, against CI's 4593/1 before the fix.
+
+**Anyone changing this gate again should expect a FOURTH site.** The search is
+`grep -n "at(-\?[0-9]" ` over the scheduling suites: any fixed instant handed to
+`applySchedule`/`moveFixture` is a latent instance, because nothing pins which
+day the solver picks.
+
 **Load warning for whoever runs the engine suite next.** On a contended box the
 full engine run produced a DIFFERENT red set every time (15, then 2, then 5,
 including `swiss` at 40 s and `golden` replay at 7.1 s against 59 ms isolated).
