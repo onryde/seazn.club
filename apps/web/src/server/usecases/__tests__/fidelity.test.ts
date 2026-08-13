@@ -1,9 +1,9 @@
 // PROMPT-13: the event-type → feature map must DERIVE from each module's
 // fidelityTiers declaration (doc 14 §4), not a hand-kept table. Pure — no DB.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule } from "@seazn/engine/sport";
-import { requiredFeatureForEvent } from "../fidelity";
+import { requiredFeatureForEvent, resolveFidelityBand, resolveFidelityEntitlements } from "../fidelity";
 
 const byKey = new Map(builtinModules.map((m) => [m.key, m]));
 const football = byKey.get("football")!;
@@ -66,5 +66,74 @@ describe("requiredFeatureForEvent (doc 14 §4 derivation)", () => {
         }
       }
     }
+  });
+});
+
+// S12/#421 — the band a real caller (both v2 entry-point loaders) resolves an
+// org into, and the entitlements map that feeds it. Both pure: the async
+// hasFeature resolution is a caller-supplied function, never a real DB call.
+describe("resolveFidelityEntitlements", () => {
+  it("resolves every feature key PadSpec.fidelityEntitlements names, and only those", async () => {
+    const hasFeatureFn = vi.fn(async (key: string) => key === "stats.player");
+    const result = await resolveFidelityEntitlements({ 2: "stats.player", 3: "scoring.ball_by_ball" }, hasFeatureFn);
+    expect(result).toEqual({ "stats.player": true, "scoring.ball_by_ball": false });
+  });
+
+  it("an empty fidelityEntitlements resolves to an empty map and never calls hasFeature", async () => {
+    const hasFeatureFn = vi.fn(async () => true);
+    const result = await resolveFidelityEntitlements({}, hasFeatureFn);
+    expect(result).toEqual({});
+    expect(hasFeatureFn).not.toHaveBeenCalled();
+  });
+
+  it("the SAME feature key named at two bands is resolved once, not twice", async () => {
+    // Real shape: football's tier 2 and tier 3 both name "scoring.match_timeline"
+    // (S2/#430's decision log — the "duplicate 2/3" finding).
+    const hasFeatureFn = vi.fn(async () => true);
+    const result = await resolveFidelityEntitlements(
+      { 2: "scoring.match_timeline", 3: "scoring.match_timeline" },
+      hasFeatureFn,
+    );
+    expect(result).toEqual({ "scoring.match_timeline": true });
+    expect(hasFeatureFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolveFidelityBand", () => {
+  it("no gated bands at all -> the ceiling, band 3 (nothing paywalled)", () => {
+    expect(resolveFidelityBand({}, {})).toBe(3);
+  });
+
+  it("bands 0/1 are always free -> band 1 when band 2's entitlement is missing", () => {
+    expect(resolveFidelityBand({ 2: "stats.player" }, { "stats.player": false })).toBe(1);
+    expect(resolveFidelityBand({ 2: "stats.player" }, {})).toBe(1); // absent key reads as false, never grants
+  });
+
+  it("holding every gated entitlement reaches band 3", () => {
+    expect(
+      resolveFidelityBand(
+        { 2: "stats.player", 3: "scoring.ball_by_ball" },
+        { "stats.player": true, "scoring.ball_by_ball": true },
+      ),
+    ).toBe(3);
+  });
+
+  it("a MID-band entitlement missing caps the band even though a HIGHER band's entitlement is held", () => {
+    // The exact case the brief calls out: band 2's gate is missing, so band
+    // 3 never gets evaluated even though its own entitlement is present.
+    expect(
+      resolveFidelityBand(
+        { 2: "stats.player", 3: "scoring.ball_by_ball" },
+        { "stats.player": false, "scoring.ball_by_ball": true },
+      ),
+    ).toBe(1);
+  });
+
+  it("bands are read in numeric order, not object key insertion order", () => {
+    // A caller building the object with 3 before 2 must not change the
+    // verdict — band 3's own entitlement must never be consulted before
+    // band 2's has been confirmed.
+    const fidelityEntitlements = { 3: "scoring.ball_by_ball", 2: "stats.player" };
+    expect(resolveFidelityBand(fidelityEntitlements, { "stats.player": false, "scoring.ball_by_ball": true })).toBe(1);
   });
 });
