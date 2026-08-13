@@ -163,3 +163,150 @@ describe("already_optimal requires OUR ladder, not merely a matching count", () 
     expect(out.tiersCompleted).toBe(TIER_COUNT);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The acceptance gate itself (2026-08-13). The defect this file's own header
+// PREDICTED, now driven.
+// ---------------------------------------------------------------------------
+
+/** `config.startAt` IS NOT THE SOLVER'S FLOOR, and that is the whole fixture.
+ *
+ *  The grid opens at `window.from`; greedy's cursor opens at
+ *  `max(config.startAt, window.notBefore)` (`calendar.ts:759`). Set the window
+ *  to midnight and `startAt` to 09:00 and the two producers legitimately see
+ *  different first ticks — which is exactly what production does, where
+ *  `applyWindow` floors the window at START-OF-DAY. Greedy's board then sits
+ *  nine hours past the day's opening slot and the solver's does not.
+ *
+ *  The two boards are then IDENTICAL on every term `isStrictlyBetter` ranks —
+ *  same `placed`, same 30-minute makespan, same zero idle gap, same zero court
+ *  imbalance — and differ only on `dayStartOffsetMinutes`, a rung the solver
+ *  optimises and that comparison cannot see. Measured on the real service in
+ *  `schedule-polish-current`: 0 against 540. */
+const dayOpenConfig: SlotConfig & { courts: string[] } = {
+  ...config,
+  tz: "UTC",
+  startAt: Date.UTC(2026, 7, 8, 9, 0),
+  window: { from: Date.UTC(2026, 7, 8, 0, 0), to: Date.UTC(2026, 7, 8, 23, 0) },
+};
+const DAY_OPEN = Date.UTC(2026, 7, 8, 0, 0);
+
+/** Four distinct entrants, so no participant plays twice and `worstIdleGap` is
+ *  0 on BOTH boards by construction rather than by luck — one fewer term that
+ *  could accidentally separate them. */
+const twoCards: SchedulableFixture[] = [
+  { id: "a", roundNo: 1, home: "E1", away: "E2" },
+  { id: "b", roundNo: 1, home: "E3", away: "E4" },
+];
+
+describe("the gate does not discard a board the service proved optimal", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("ships a proved board that beats the seed only on a rung isStrictlyBetter cannot see", async () => {
+    // THE REGRESSION. Before this change the gate ranked
+    // `placed → makespan → idleGap → imbalance`, so this reply — better on
+    // `day_start`, tied on all four of those — lost to the greedy seed and was
+    // thrown away. `engine` is the observable: "greedy" means the proved board
+    // was discarded.
+    await stub(
+      reply([
+        { fixtureId: "a", court: "C1", startAtMs: DAY_OPEN },
+        { fixtureId: "b", court: "C2", startAtMs: DAY_OPEN },
+      ]),
+    );
+
+    const out = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig });
+
+    expect(out.engine).toBe("optimized");
+    expect(out.status).toBe("ok");
+    expect(out.assignments.map((a) => a.startAt)).toEqual([DAY_OPEN, DAY_OPEN]);
+    // The board that shipped opens the day it is on — the rung it won.
+    expect(out.metrics.dayStartOffsetMinutes).toBe(0);
+  });
+
+  it("is a run the OLD ordering could not have separated", async () => {
+    // The premise of the spec above, asserted rather than assumed, so it cannot
+    // quietly become a test about a board that simply wins on makespan too.
+    // This run takes the greedy fallback, so `out.metrics` IS the seed's.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockRejectedValue(
+      new Error("no service"),
+    );
+
+    const seed = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig });
+
+    expect(seed.engine).toBe("greedy");
+    // Greedy opens at `startAt`, nine hours after the day's first slot.
+    expect(seed.metrics.dayStartOffsetMinutes).toBe(0); // no DayView on the seed's own metrics
+    expect(seed.assignments.map((a) => a.startAt)).toEqual([
+      dayOpenConfig.startAt,
+      dayOpenConfig.startAt,
+    ]);
+    // The four terms the retired comparison ranked, all tied against the
+    // proved board above — which is why it could only ever have kept the seed.
+    expect(seed.metrics.placed).toBe(2);
+    expect(seed.metrics.makespanMinutes).toBe(30);
+    expect(seed.metrics.worstIdleGapMinutes).toBe(0);
+    expect(seed.metrics.courtImbalanceMinutes).toBe(0);
+  });
+
+  it("keeps the seed when the proved board only rearranges it", async () => {
+    // THE OTHER DIRECTION, and it is not hypothetical: on
+    // `schedule-solver-telemetry`'s one-fixture board the service returns a
+    // bare COURT SWAP — same instant, every rung byte-identical. Trusting the
+    // proof must not mean shipping churn, so the tie is decided on the LADDER:
+    // nothing to gain, keep the board the organiser already had.
+    //
+    // Board IDENTITY is the wrong predicate here and this spec is what says so.
+    // These two boards are not the same board — `a` and `b` swap courts — so a
+    // gate comparing assignments ships this reply, reports `ok`, and moves
+    // every card on a board nothing improved.
+    await stub(
+      reply([
+        { fixtureId: "a", court: "C2", startAtMs: dayOpenConfig.startAt },
+        { fixtureId: "b", court: "C1", startAtMs: dayOpenConfig.startAt },
+      ]),
+    );
+
+    const out = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig });
+
+    expect(out.engine).toBe("greedy");
+    expect(out.status).toBe("already_optimal");
+    // Greedy's own courts, untouched — the swap did not ship.
+    expect(out.assignments.find((a) => a.fixtureId === "a")?.court).toBe("C1");
+  });
+
+  it("still refuses a proved board that places fewer than the seed", async () => {
+    // D6's floor, unchanged and checked before the proof in every arm: no
+    // amount of proof outranks placing fewer fixtures.
+    await stub(reply([{ fixtureId: "a", court: "C1", startAtMs: DAY_OPEN }]));
+
+    const out = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig });
+
+    expect(out.engine).toBe("greedy");
+    expect(out.metrics.placed).toBe(2);
+  });
+
+  it("reports moved 0 for a BUILD, even now that the solver's board ships", async () => {
+    // `moved`'s baseline used to be greedy's own seed, which read as zero only
+    // because every no-`current` exit RETURNED that seed. The spec above breaks
+    // that coincidence: the solver's board ships, and against an invented
+    // baseline this would report "2 matches moved" on a fresh full pass — the
+    // meaningless number R20 warns about, and the one
+    // `schedule-polish-current`'s "does not anchor a BUILD" spec exists to
+    // refuse. Nothing to have moved FROM is zero, exactly as `lost` already is.
+    await stub(
+      reply([
+        { fixtureId: "a", court: "C1", startAtMs: DAY_OPEN },
+        { fixtureId: "b", court: "C2", startAtMs: DAY_OPEN },
+      ]),
+    );
+
+    const out = await buildSchedule({ fixtures: twoCards, config: dayOpenConfig });
+
+    expect(out.engine).toBe("optimized");
+    expect(out.moved).toBe(0);
+    expect(out.lost).toBe(0);
+  });
+});
