@@ -31,13 +31,13 @@ import type { HardConstraint } from "@seazn/engine/scheduling";
  *  component builds from its own live form state (see capacity-card.tsx). */
 export interface CapacityConfigInput {
   courts: string[];
-  sessionWindows: readonly { from: number; to: number }[] | undefined;
-  blackouts: readonly { court?: string; from: number; to: number }[] | undefined;
+  sessionWindows?: readonly { from: number; to: number }[];
+  blackouts?: readonly { court?: string; from: number; to: number }[];
   matchMinutes: number;
   gapMinutes: number;
   perEntrantMinRest: number;
-  window: { from: number; to: number } | undefined;
-  tz: string | undefined;
+  window?: { from: number; to: number };
+  tz?: string;
   constraints?: {
     restMin?: number;
     restByGroup?: Record<string, number>;
