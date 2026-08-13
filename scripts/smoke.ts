@@ -782,6 +782,11 @@ async function main() {
   // gate).
   await capacityPrecheckSuite();
 
+  // --- P2/D3: schedule health — the real route, refusal before apply,
+  // homeAwayAlternation actually present for a table-shaped stage (own
+  // fresh free session — not an entitlement gate).
+  await scheduleHealthSuite();
+
   // --- design/v6 PROMPT-48..50: tennis rally set (nested kernel), icehockey
   // OT points in standings, PP goal + release with the public strength chip.
   // Before gapSuite — needs the org's pro entitlements for tier-3 scoring.
@@ -6398,6 +6403,94 @@ async function capacityPrecheckSuite(): Promise<void> {
   await putSettings([{ from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T21:00:00.000Z" }]); // 12h -> 12 slots
   const ok = await v1(free, `/api/v1/stages/${stage.id}/schedule/auto`, "POST", { only_unlocked: true });
   check("capacity precheck: a comfortable board proceeds through the real route (200, not refused)", ok.status === 200);
+}
+
+/**
+ * D3 schedule health (own fresh free session — not an entitlement gate):
+ * the real route returns a well-formed report AFTER a schedule is actually
+ * APPLIED (auto alone proposes only, nothing persisted — see
+ * capacityPrecheckSuite's own `/schedule/auto` calls above, none of which
+ * apply), and refuses 409 SCHEDULE_NOT_APPLIED BEFORE that. A league stage
+ * is table-shaped (TABLE_KINDS), so homeAwayAlternation must be PRESENT —
+ * this is the one smoke assertion unit tests cannot make: the real route's
+ * stage `kind` column actually reaches the gate, not just the pure lib's
+ * own `isRoundRobin` boolean the engine suite already proves in isolation.
+ */
+async function scheduleHealthSuite(): Promise<void> {
+  const free = newSession();
+  await signIn(free, `dtx_health_${tag}@example.com`);
+  const comp = v1data<{ id: string }>(
+    await v1(free, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `DTX Health ${tag}` }),
+  );
+  const div = v1data<{ id: string }>(
+    await v1(free, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Health",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  await v1(free, `/api/v1/divisions/${div.id}/entrants`, "POST", [
+    { kind: "individual", display_name: "A", seed: 1 },
+    { kind: "individual", display_name: "B", seed: 2 },
+    { kind: "individual", display_name: "C", seed: 3 },
+    { kind: "individual", display_name: "D", seed: 4 },
+  ]);
+  const stage = v1data<{ id: string }>(
+    await v1(free, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "L", config: {} }),
+  );
+  await v1(free, `/api/v1/stages/${stage.id}/generate`, "POST");
+
+  // BEFORE any schedule exists: 409, typed code.
+  const before = await v1(free, `/api/v1/stages/${stage.id}/schedule/health`, "GET");
+  const beforeErr = before.json.error as { code?: string } | undefined;
+  check(
+    "schedule health: refuses 409 SCHEDULE_NOT_APPLIED before any fixture is scheduled",
+    before.status === 409 && beforeErr?.code === "SCHEDULE_NOT_APPLIED",
+  );
+
+  await v1(free, `/api/v1/divisions/${div.id}/schedule-settings`, "PUT", {
+    tz: "UTC",
+    config: {
+      startAt: "2026-09-01T09:00:00.000Z",
+      endAt: "2026-09-01T23:59:00.000Z",
+      matchMinutes: 60,
+      gapMinutes: 0,
+      courts: ["Court 1", "Court 2"],
+      perEntrantMinRest: 0,
+      sessionWindows: [{ from: "2026-09-01T09:00:00.000Z", to: "2026-09-01T21:00:00.000Z" }],
+    },
+  });
+  const auto = v1data<{
+    assignments: { fixture_id: string; scheduled_at: string; court_label: string }[];
+  }>(await v1(free, `/api/v1/stages/${stage.id}/schedule/auto`, "POST", { only_unlocked: true }));
+  await v1(free, `/api/v1/stages/${stage.id}/schedule/apply`, "POST", {
+    assignments: auto.assignments.map((a) => ({
+      fixture_id: a.fixture_id,
+      scheduled_at: a.scheduled_at,
+      court_label: a.court_label,
+    })),
+    source: "auto",
+  });
+
+  const after = v1data<{
+    stageId: string;
+    computedAt: string;
+    metrics: { key: string; score: number; explanation: { key: string }; offenders: unknown[] }[];
+  }>(await v1(free, `/api/v1/stages/${stage.id}/schedule/health`, "GET"));
+  check("schedule health: 200 after apply, echoes the stage id", after.stageId === stage.id);
+  check(
+    // 5, not 4 — a league stage IS table-shaped, so homeAwayAlternation
+    // must be present, not merely tolerated as absent.
+    "schedule health: all 5 metrics present for a league (table-shaped) stage, scores in [0,100]",
+    after.metrics.length === 5 &&
+      after.metrics.every((m) => Number.isInteger(m.score) && m.score >= 0 && m.score <= 100) &&
+      after.metrics.every((m) => m.explanation.key.startsWith("schedule.health.explain.")),
+  );
+  check(
+    "schedule health: homeAwayAlternation is one of the 5 (present, not skipped) for this table-shaped stage",
+    after.metrics.some((m) => m.key === "homeAwayAlternation"),
+  );
 }
 
 /**
