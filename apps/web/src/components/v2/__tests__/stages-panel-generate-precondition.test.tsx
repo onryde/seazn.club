@@ -31,6 +31,25 @@ describe("generatePreconditionMessage — StagesPanel generate-click classifier"
     expect(text).not.toBe(msg("schedule.notice.nothingNew"));
   });
 
+  // F2a (P7 follow-up): the seeded-path analogue — a `.seeding` group stage
+  // whose placed qualifiers can't fill its configured pools
+  // (generateSeededStageFixtures) throws the same STAGE_NOT_READY shape with
+  // a distinct reason. Same actionable-banner treatment as the plain path.
+  it("returns an actionable message for a seeded group stage whose qualifiers can't fill its pools", () => {
+    const err = new ApiV1Error(
+      "not enough qualifiers to fill 4 groups — each group needs at least 2 (have 6, need 8); 2 would never receive a fixture",
+      422,
+      "STAGE_NOT_READY",
+      { reason: "seeded_pool_too_few_qualifiers", groups: 4, qualifiers: 6, required: 8, stranded: 2 },
+    );
+    const text = generatePreconditionMessage(err, msg);
+    expect(text).not.toBeNull();
+    expect(text).toContain("4");
+    expect(text).toContain("8");
+    expect(text).toContain("6");
+    expect(text).not.toBe(msg("schedule.notice.nothingNew"));
+  });
+
   it("returns null for an unrelated ApiV1Error (falls through to the generic error banner)", () => {
     const err = new ApiV1Error("boom", 500, "INTERNAL", {});
     expect(generatePreconditionMessage(err, msg)).toBeNull();

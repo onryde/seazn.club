@@ -1468,6 +1468,7 @@
   "schedule.notice.stageAddedLater": "Fase añadida: los enfrentamientos se generarán cuando se complete la fase anterior.",
   "schedule.error.tooFewGroupEntrants": "Aún no se pueden generar los partidos — {groups} grupos necesitan al menos {required} participantes en total (hay {have}). Añade más participantes o asígnalos primero a los grupos.",
   "schedule.error.tooFewEntrants": "Aún no se pueden generar los partidos — añade primero al menos 2 participantes a esta fase.",
+  "schedule.error.tooFewSeededQualifiers": "Aún no se pueden generar los partidos — {groups} grupos necesitan al menos {required} clasificados en total (hay {have}); {stranded} nunca recibirían un partido. Añade más clasificados o reduce primero el número de grupos.",
   "documents.title": "Documentos",
   "documents.orderOfPlay": "Orden de juego",
   "documents.matchSheets": "Hojas de partido",

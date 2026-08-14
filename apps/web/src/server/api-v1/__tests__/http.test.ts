@@ -110,6 +110,35 @@ describe("v1 envelope", () => {
     expect((json.error as { current_seq: number }).current_seq).toBe(7);
   });
 
+  // F2a (P7 follow-up, 2026-08-14): the seeded-path analogue of
+  // group_too_few_entrants (stages.ts generateSeededStageFixtures) — the
+  // detail carries groups/qualifiers/required/stranded, and it must flow
+  // through the JSON body's `error` object, not just live on the thrown
+  // EngineError's `.data`, or the client never sees it.
+  it("STAGE_NOT_READY reason=seeded_pool_too_few_qualifiers forwards groups/qualifiers/required/stranded (F2a)", async () => {
+    const res = await v1(async () => {
+      throw new EngineError(
+        "STAGE_NOT_READY",
+        "not enough qualifiers to fill 4 groups — each group needs at least 2 (have 6, need 8); 2 would never receive a fixture",
+        { stageId: "s1", reason: "seeded_pool_too_few_qualifiers", groups: 4, qualifiers: 6, required: 8, stranded: 2 },
+      );
+    });
+    expect(res.status).toBe(422);
+    const json = await body(res);
+    const err = json.error as {
+      reason?: string;
+      groups?: number;
+      qualifiers?: number;
+      required?: number;
+      stranded?: number;
+    };
+    expect(err.reason).toBe("seeded_pool_too_few_qualifiers");
+    expect(err.groups).toBe(4);
+    expect(err.qualifiers).toBe(6);
+    expect(err.required).toBe(8);
+    expect(err.stranded).toBe(2);
+  });
+
   it("maps PaymentRequiredError → 402 with the feature key", async () => {
     const res = await v1(async () => {
       throw new PaymentRequiredError("api.access");

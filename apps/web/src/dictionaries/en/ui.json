@@ -1468,6 +1468,7 @@
   "schedule.notice.stageAddedLater": "Stage added — fixtures will generate when the previous stage completes.",
   "schedule.error.tooFewGroupEntrants": "Can't generate matches yet — {groups} groups need at least {required} entrants in total (have {have}). Add more entrants or assign them to groups first.",
   "schedule.error.tooFewEntrants": "Can't generate matches yet — add at least 2 entrants to this stage first.",
+  "schedule.error.tooFewSeededQualifiers": "Can't generate matches yet — {groups} groups need at least {required} qualifiers in total (have {have}); {stranded} would never receive a match. Increase the qualifiers or reduce the group count first.",
   "documents.title": "Documents",
   "documents.orderOfPlay": "Order of play",
   "documents.matchSheets": "Match sheets",
