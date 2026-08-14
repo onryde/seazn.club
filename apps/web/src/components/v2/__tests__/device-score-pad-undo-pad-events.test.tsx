@@ -169,4 +169,38 @@ describe("DeviceScorePad — Undo mine after a pad-driven submit", () => {
       payload: { event_id: "ev-real-server-id" },
     });
   });
+
+  it("disables Undo mine while a pad-triggered resync is in flight, and re-enables it once settled", async () => {
+    const island = renderIsland(DeviceScorePad, baseProps());
+
+    const onEvents = propsOf(findScorePad(island.tree())).onEvents as (
+      events: readonly EventEnvelope[],
+    ) => void;
+
+    // Same reasoning as fixture-console's own case: handlePadEvents sets
+    // padSyncing(true) synchronously and kicks off resync() without being
+    // awaited here, so this assertion lands inside the real in-flight
+    // window rather than after it has already closed.
+    api.events = [SEEDED, PAD_SCORED];
+    onEvents([
+      {
+        id: "idem-client-fabricated",
+        fixtureId: "f1",
+        seq: 2,
+        type: "badminton.rally",
+        payload: {},
+        recordedAt: "2026-08-14T10:05:00.000Z",
+        recordedBy: null,
+      },
+    ]);
+
+    expect(api.calls.some((c) => c.url.includes("/events"))).toBe(true);
+    const midFlightUndo = findUndoMine(island.tree());
+    expect(propsOf(midFlightUndo).disabled).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const settledUndo = findUndoMine(island.tree());
+    expect(propsOf(settledUndo).disabled).toBe(false);
+  });
 });

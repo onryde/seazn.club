@@ -89,6 +89,16 @@ export function DeviceScorePad({
   const [error, setError] = useState<string | null>(null);
   const [dead, setDead] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** True while an opportunistic post-pad-event `resync()` is in flight.
+   *  Separate from `busy` on purpose: `busy` means "a send of MINE is
+   *  running" and its own `finally` clears it, so reusing it here would let a
+   *  resync that finishes mid-send clear the send's guard. Both gate the same
+   *  controls, because acting on a half-refreshed ledger is what this fix
+   *  exists to prevent: without it, Undo stayed clickable during the window
+   *  with a stale `expected_seq` and the server answered 409 SEQ_CONFLICT —
+   *  bounded (it never voids the wrong event) but an unearned error where a
+   *  clean undo was expected. Found in review (S13 follow-ups). */
+  const [padSyncing, setPadSyncing] = useState(false);
 
   const authed = useCallback(
     <T,>(url: string, options?: Parameters<typeof apiV1>[1]) =>
@@ -116,7 +126,10 @@ export function DeviceScorePad({
    *  already trusts) can tell this component the real id `lastOwnVoidable`
    *  needs. A failed opportunistic resync is swallowed. */
   const handlePadEvents = useCallback(() => {
-    void resync().catch(() => undefined);
+    setPadSyncing(true);
+    void resync()
+      .catch(() => undefined)
+      .finally(() => setPadSyncing(false));
   }, [resync]);
 
   const send: SendEvent = useCallback(
@@ -263,7 +276,7 @@ export function DeviceScorePad({
           {!started && (
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || padSyncing}
               onClick={() => send("core.start", {})}
               className="btn btn-primary h-12 flex-1 text-base"
             >
@@ -273,7 +286,7 @@ export function DeviceScorePad({
           {lastOwnVoidable && (
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || padSyncing}
               onClick={() => send("core.void", { event_id: lastOwnVoidable.id })}
               className="flex h-12 items-center justify-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-6 text-sm font-semibold text-amber-300 transition hover:border-amber-400/60 hover:bg-amber-500/20 active:scale-[0.98] disabled:opacity-50"
               title={msg("score.undoTitle", { type: lastOwnVoidable.type, seq: lastOwnVoidable.seq })}

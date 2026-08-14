@@ -186,4 +186,43 @@ describe("FixtureConsole — Undo last after a pad-driven submit", () => {
       payload: { event_id: "ev-real-server-id" },
     });
   });
+
+  it("disables Undo last while a pad-triggered resync is in flight, and re-enables it once settled", async () => {
+    const island = renderIsland(FixtureConsole, baseProps());
+
+    const onEvents = propsOf(findScorePad(island.tree())).onEvents as (
+      events: readonly EventEnvelope[],
+    ) => void;
+
+    // Fire the pad signal. handlePadEvents synchronously sets padSyncing(true)
+    // and kicks off resync() before returning — the mocked apiV1 resolves
+    // immediately, but Promise.all + its own await + .catch + .finally still
+    // need real microtask hops, so nothing here is awaited yet: this
+    // assertion deliberately lands INSIDE that window, before it closes.
+    api.events = [SEEDED, PAD_SCORED];
+    onEvents([
+      {
+        id: "idem-client-fabricated",
+        fixtureId: "f1",
+        seq: 2,
+        type: "football.goal",
+        payload: {},
+        recordedAt: "2026-08-14T10:05:00.000Z",
+        recordedBy: null,
+      },
+    ]);
+
+    // The resync's own GETs were issued synchronously (proves this is really
+    // mid-flight, not a no-op)...
+    expect(api.calls.some((c) => c.url.includes("/events"))).toBe(true);
+    // ...but neither has resolved yet, so Undo must already be disabled.
+    const midFlightUndo = findUndoLast(island.tree());
+    expect(propsOf(midFlightUndo).disabled).toBe(true);
+
+    // Let the resync settle.
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const settledUndo = findUndoLast(island.tree());
+    expect(propsOf(settledUndo).disabled).toBe(false);
+  });
 });
