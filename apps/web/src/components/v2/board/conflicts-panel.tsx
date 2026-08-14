@@ -173,7 +173,11 @@ export function ConflictsPanel({
               }`}
             >
               <p className="font-medium text-slate-800">
-                {f ? cardTitle(f, entrantNames, feedLabels) : msg("board.conflicts.removedFixture")}
+                {/* Fix round 3 (Important 3): `lookup` was left off — an
+                    unfilled slot's label fell through to cardTitle's
+                    client-safe English default instead of `msg` (useMsg(),
+                    line 116), regardless of this org's locale. */}
+                {f ? cardTitle(f, entrantNames, feedLabels, msg) : msg("board.conflicts.removedFixture")}
                 {f && divisionNames[f.division_id] ? (
                   <span className="ml-1 font-normal text-slate-500">
                     · {divisionNames[f.division_id]}

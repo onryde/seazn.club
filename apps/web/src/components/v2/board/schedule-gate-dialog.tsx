@@ -117,8 +117,12 @@ export function ScheduleGateDialog({
               }`}
             >
               <p className="font-medium text-slate-800">
+                {/* Fix round 3 (Important 3): `lookup` was left off — an
+                    unfilled slot's label fell through to cardTitle's
+                    client-safe English default instead of `msg` (useMsg(),
+                    line 62), regardless of this org's locale. */}
                 {f
-                  ? cardTitle(f, entrantNames, feedLabels)
+                  ? cardTitle(f, entrantNames, feedLabels, msg)
                   : msg("board.conflicts.removedFixture")}
               </p>
               <p className="mt-0.5 text-slate-600">

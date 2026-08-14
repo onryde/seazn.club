@@ -8,8 +8,13 @@
 // `move-panel.test.tsx` uses — never called directly as a plain function.
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import type { Dict } from "@/lib/i18n-constants";
+import es from "@/dictionaries/es/ui.json";
 import { FixtureBlock } from "../fixture-block";
 import type { BoardConflict, BoardFixture } from "../types";
+
+const esDict = es as unknown as Dict;
 
 const fixture: BoardFixture = {
   id: "fx-1",
@@ -94,6 +99,27 @@ describe("FixtureBlock", () => {
     expect(locked).not.toContain("\u{1F512}"); // 🔒
     expect(unlocked).toContain("lucide-pin");
     expect(unlocked).not.toContain("\u{1F4CC}"); // 📌
+  });
+
+  it("fix round 3 (Important 3): an unfilled slot's title resolves through this org's REAL locale, not the client-safe English default", () => {
+    // FixtureBlock's own `msg` (useMsg()) was left off cardTitle()'s 4th
+    // arg, so an unfilled slot fell through to cardTitle's hardcoded English
+    // default (board/types.ts) regardless of the DictProvider ancestor.
+    const tbd: BoardFixture = {
+      ...fixture,
+      home_entrant_id: null,
+      away_entrant_id: null,
+      home_slot_label: { key: "slot.winner_group", params: { g: "A" } },
+      away_slot_label: { key: "slot.winner_group", params: { g: "B" } },
+    };
+    const html = renderToStaticMarkup(
+      <DictProvider dict={esDict} locale="es">
+        <FixtureBlock {...baseProps} fixture={tbd} />
+      </DictProvider>,
+    );
+    expect(html).toContain("Ganador del Grupo A");
+    expect(html).toContain("Ganador del Grupo B");
+    expect(html).not.toContain("Winner of Group A");
   });
 
   it("the division chip stays legible on the new division-tinted card background", () => {

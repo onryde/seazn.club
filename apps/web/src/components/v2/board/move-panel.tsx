@@ -96,7 +96,11 @@ export function MovePanel({
   return (
     <div
       role="dialog"
-      aria-label={msg("board.moveAria", { title: cardTitle(fixture, entrantNames, feedLabels) })}
+      // Fix round 3 (Important 3): both call sites below were missing the
+      // `lookup` arg, so an unfilled slot's label fell through to cardTitle's
+      // client-safe English default instead of this org's real locale, even
+      // though `msg` (useMsg()) is right here.
+      aria-label={msg("board.moveAria", { title: cardTitle(fixture, entrantNames, feedLabels, msg) })}
       className="flex flex-wrap items-end gap-3 rounded-lg border border-purple-100 bg-white p-3 shadow-sm"
       onKeyDown={(e) => {
         if (e.key === "Escape") onClose();
@@ -104,7 +108,7 @@ export function MovePanel({
     >
       <div className="mr-1 flex flex-col gap-0.5">
         <span className="text-xs font-semibold text-purple-700">
-          {msg("board.moveLabel", { title: cardTitle(fixture, entrantNames, feedLabels) })}
+          {msg("board.moveLabel", { title: cardTitle(fixture, entrantNames, feedLabels, msg) })}
         </span>
         {/* 11px on white: slate-500 measures 4.35:1 here (below the 4.5:1 AA
             floor per the ai-diff-panel axe finding, 2026-08-09) — slate-600. */}
