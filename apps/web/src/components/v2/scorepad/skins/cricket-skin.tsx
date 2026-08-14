@@ -500,6 +500,19 @@ export function ThisOverGroup({ msg, view, state, bpo, submittingType, dispatch,
   const fine = open?.fine ?? null;
 
   const ballType = state.phase === "super_over" && actionByType(view, "cricket.superover.ball") ? "cricket.superover.ball" : "cricket.ball";
+  // S13/#422 W11 cutover audit ("a shared helper silently drops every
+  // duplicate-typed pad action"): `cricket.ball` is genuinely declared 3x
+  // (over/extras/wicket panels -- this file's own header), so `actionByType`
+  // below returns only the Over panel's plain-ball action, never the
+  // Extras/Wicket ones. That is safe HERE and only here, never a template
+  // for a new call site: `action` is read ONLY for `.availability` two lines
+  // down, and `resolveActionView` (view-model.ts) derives availability
+  // purely from `action.type` via `spec.fidelity`/`fidelityEntitlements` --
+  // so all three `cricket.ball` actions are availability-identical by
+  // construction, at every band/entitlement combination, pinned by
+  // cricket-skin.test.ts's own sweep. Nothing else about `action` (fields,
+  // attribution, labelKey) is read anywhere in this function -- the run pad/
+  // extras chips/wicket flow below are hand-built, not driven from it.
   const action = actionByType(view, ballType);
   // The card's own caption, not the action's ("Ball") -- this surface also
   // owns the extras and wicket sub-flows, so "This over" (the group caption

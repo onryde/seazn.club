@@ -13,11 +13,14 @@
 // builtinModules sweep, named-variant cfg reactivity, score bounds, the
 // expedite gate.
 import { describe, expect, it } from "vitest";
+import type { ReactElement, ReactNode } from "react";
 import type { AnySportModule, PadSpec } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
 import { allActionViews, buildPadView, type PadActionView, type PadPanelView, type PadView, type PadViewCtx } from "../view-model";
-import { createSkinDispatch, layoutActionTypes, layoutActionTypesAt, type SkinLayoutCtx } from "../skins/types";
-import { racquetSkin } from "../skins/racquet-skin";
+import { ActionForm } from "../action-form";
+import { createSkinDispatch, layoutActionTypes, layoutActionTypesAt, type SkinLayoutCtx, type SkinProps } from "../skins/types";
+import { racquetSkin, RacquetSkin, GroupBody } from "../skins/racquet-skin";
 import { cfgSpace, grantAllEntitlements } from "./_cfg-space";
 
 function action(type: string): PadActionView {
@@ -329,6 +332,86 @@ describe("racquet skin — tabletennis expedite is a RUNTIME state flag, not a c
     const layout = racquetSkin.layout(v, { cfg, state: {}, summary: {}, band: FULL_BAND });
     const placed = layoutActionTypes(layout);
     expect(placed.filter((t) => t === "tabletennis.rally")).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S13/#422 W11 cutover audit ("a shared helper silently drops every
+// duplicate-typed pad action"). The "collapses ... to ONE placement" test
+// directly above only pins that fact at the LAYOUT level
+// (`layoutActionTypes` — a bare TYPE STRING list): it never renders
+// `RacquetSkin`, so it cannot see whether the Component, given that one type
+// string, actually reaches every real control behind it. `GroupBody`'s own
+// `actionsForType` (racquet-skin.tsx) already resolves every PadActionView
+// sharing a type rather than just the first — unlike the shared
+// `actionByType` in ./types.ts — so nothing in racquet-skin.tsx needed to
+// change; these two tests close the untested gap directly against the
+// rendered Component, the same way tennis-skin.test.ts's own "Component
+// renders BOTH PadActionViews of a shared type" suite does for tennis.
+//
+// `GroupBody` is exported (racquet-skin.tsx, same reason cricket-skin.tsx's
+// `ThisOverGroup` is) specifically so `expandGroups` below can invoke it
+// directly — the harness renders only the ONE component `renderIsland` is
+// given, one level deep (_hook-harness.tsx's own doc comment on `expand`),
+// so `RacquetSkin`'s own tree shows an UNEXPANDED `<GroupBody/>` element per
+// group unless something re-invokes it. `GroupBody` is hookless, so calling
+// it directly outside the harness's dispatcher (the same thing
+// create-org-form.test.tsx's own `expandRows` does for `BillRow`) is safe.
+// ---------------------------------------------------------------------------
+describe("racquet skin — Component: GroupBody resolves the shared rally type to every real control, not just the first", () => {
+  const expandGroups = (node: ReactNode): ReactElement[] => {
+    const top = walk(node);
+    const bodies = top.filter((el) => el.type === GroupBody);
+    return [...top, ...bodies.flatMap((el) => walk(GroupBody(propsOf(el) as Parameters<typeof GroupBody>[0])))];
+  };
+
+  const sportModule = moduleFor("tabletennis");
+  const cfg = sportModule.configSchema.parse({});
+  const spec = sportModule.padSpec!(cfg);
+  const entitlements = grantAllEntitlements(spec);
+
+  function componentFor(state: unknown) {
+    const ctx: PadViewCtx = { state, summary: {}, phase: "live", band: FULL_BAND, entitlements };
+    const v = buildPadView(spec, ctx);
+    const layout = racquetSkin.layout(v, { cfg, state, summary: {}, band: FULL_BAND });
+    const props: SkinProps = {
+      view: v,
+      spec,
+      ctx: { cfg, state, summary: {}, band: FULL_BAND },
+      layout,
+      dispatch: async () => {},
+      queueDepth: 0,
+      offline: false,
+      submittingType: null,
+    };
+    return renderIsland(RacquetSkin, props, expandGroups);
+  }
+
+  function rallyControls(tree: ReactElement[]): ReactElement[] {
+    return tree.filter((el) => {
+      const p = propsOf(el);
+      return "action" in p && (p.action as PadActionView | undefined)?.type === "tabletennis.rally";
+    });
+  }
+
+  it("before expedite: exactly ONE control renders for the shared 'tabletennis.rally' type (the plain/attributed pair deliberately collapses to one tap control — GroupBody's own comment: both are zero-field Home/Away rows, and the richer shape's extra attribution is unreachable without roster data anyway)", () => {
+    const tree = componentFor({}).tree();
+    const controls = rallyControls(tree);
+    expect(controls.length).toBe(1);
+    expect(controls[0]!.type).not.toBe(ActionForm); // the collapsed one is the tap control, not a form
+  });
+
+  it("once expedite is live: the tap-control collapse is unaffected (still exactly one), AND the expedite (returns/serving) shape ALSO reaches the screen as its own ActionForm — the tile a naive swap from `actionsForType` onto the shared single-match `actionByType` would silently drop", () => {
+    const tree = componentFor({ expedite: true }).tree();
+    const controls = rallyControls(tree);
+    expect(controls.length, `expected 2 controls (1 tap + 1 expedite form), got ${controls.length}`).toBe(2);
+
+    const forms = controls.filter((el) => el.type === ActionForm);
+    expect(forms.length, "expedite's returns/serving control must reach the screen").toBe(1);
+    expect((propsOf(forms[0]!).action as PadActionView).fields.some((f) => f.path === "returns")).toBe(true);
+
+    const taps = controls.filter((el) => el.type !== ActionForm);
+    expect(taps.length).toBe(1);
   });
 });
 
