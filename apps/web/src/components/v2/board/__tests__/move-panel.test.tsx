@@ -10,9 +10,14 @@
 // uses for the one other stateful piece of this UX.
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import type { Dict } from "@/lib/i18n-constants";
+import es from "@/dictionaries/es/ui.json";
 import { MovePanel } from "../move-panel";
 import type { BoardConfig, BoardFixture } from "../types";
 import { quarterHours } from "../../shared/time-options";
+
+const esDict = es as unknown as Dict;
 
 const fixture: BoardFixture = {
   id: "fx-1",
@@ -126,6 +131,26 @@ describe("MovePanel", () => {
     );
     expect(html).toContain('value="05:00"');
     expect(html).not.toContain('value="09:00"');
+  });
+
+  it("fix round 3 (Important 3): an unfilled slot's title in the panel's own heading/aria-label resolves through this org's REAL locale, not the client-safe English default", () => {
+    // Both cardTitle() call sites in MovePanel (aria-label and the visible
+    // heading) were missing `msg` (useMsg()) as the 4th arg.
+    const tbd: BoardFixture = {
+      ...fixture,
+      home_entrant_id: null,
+      away_entrant_id: null,
+      home_slot_label: { key: "slot.winner_group", params: { g: "A" } },
+      away_slot_label: { key: "slot.winner_group", params: { g: "B" } },
+    };
+    const html = renderToStaticMarkup(
+      <DictProvider dict={esDict} locale="es">
+        <MovePanel {...baseProps} fixture={tbd} boardConfig={{ config: baseConfig, orgTz: "UTC" }} />
+      </DictProvider>,
+    );
+    expect(html).toContain("Ganador del Grupo A");
+    expect(html).toContain("Ganador del Grupo B");
+    expect(html).not.toContain("Winner of Group A");
   });
 
   it("wraps the When field in an explicit-width container so it cannot collapse", () => {

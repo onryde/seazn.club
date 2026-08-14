@@ -1,1 +1,15 @@
-{}
+{
+  "seeding.SEEDING_MAP_SLOT_INVALID": "El mapa de posiciones de esta fase tiene una posición no válida. Corrige las reglas de clasificación e inténtalo de nuevo.",
+  "seeding.SEEDING_MAP_SOURCE_INVALID": "El mapa de posiciones de esta fase apunta a un clasificado que no existe. Corrige las reglas de clasificación e inténtalo de nuevo.",
+  "seeding.SEEDING_RULES_MISSING": "Esta fase no tiene reglas de clasificación, o sus partidos generados ya no coinciden con ellas. Añade reglas de clasificación o vuelve a generar los partidos de esta fase.",
+  "seeding.SEEDING_SOURCE_INCOMPLETE": "La fase de origen todavía no ha terminado. Complétala antes de calcular esta propuesta.",
+  "seeding.SEEDING_BESTNTH_UNEQUAL_POOLS": "Estos grupos han jugado un número distinto de partidos, así que sus clasificaciones todavía no se pueden comparar.",
+  "seeding.SEEDING_ALREADY_CONFIRMED": "Las posiciones de esta fase ya están cubiertas por una propuesta confirmada.",
+  "seeding.SEEDING_PROPOSAL_STALE": "La clasificación cambió desde que se calculó esta propuesta. Vuelve a calcularla para ver los clasificados actuales.",
+  "seeding.SEEDING_EDIT_UNKNOWN_SLOT": "Una de tus ediciones hace referencia a una posición que esta propuesta no tiene. Vuelve a calcular la propuesta e inténtalo de nuevo.",
+  "seeding.SEEDING_TIE_UNRESOLVED": "Resuelve todos los empates antes de confirmar: elige qué participante ocupa cada posición.",
+  "seeding.SEEDING_SLOT_DOUBLE_ASSIGNED": "El mismo participante está asignado a más de una posición. Corrige tus ediciones e inténtalo de nuevo.",
+  "seeding.SEEDING_ENTRANT_FOREIGN": "Uno de los participantes clasificados ya no pertenece a esta división.",
+  "seeding.SEEDING_SLOT_FOREIGN_FIXTURE": "Una de las posiciones de destino pertenece a otra fase. Vuelve a calcular la propuesta e inténtalo de nuevo.",
+  "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "Una de las posiciones de destino ya está cubierta. Vuelve a calcular la propuesta para ver qué queda."
+}

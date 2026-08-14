@@ -18,6 +18,12 @@ import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { BracketSlideFixture, Slide } from "@/server/slideshow-data";
 import { slideAt, stepFor } from "@/components/v2/slideshow-rotation";
+import { msg } from "@/lib/messages";
+import { resolveSlotLabel } from "@/lib/slot-label";
+// No locale/<DictProvider> plumbing anywhere in this feature's tree (org or
+// public present routes) — client-safe English msg(), consistent with the
+// rest of this component's already-hardcoded-English copy ("In play" etc.,
+// built server-side in slideshow-data.ts).
 // Leaf import, not the barrel — see bracket-panel.tsx's comment: the barrel
 // now drags `build.ts` -> `placement-client.ts` -> `@grpc/grpc-js` (Node-only)
 // into this client component's browser bundle and breaks `next build` outright.
@@ -483,11 +489,11 @@ function BracketSlide({
             >
               <div className="flex h-full flex-col justify-center gap-0.5 font-display text-xl font-semibold leading-tight">
                 <span className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate">{f.home ?? "TBD"}</span>
+                  <span className="min-w-0 truncate">{f.home ?? resolveSlotLabel(f.home_slot_label, msg, "bracket.tbd")}</span>
                   {live && <span className="animate-live-pulse h-2 w-2 shrink-0 rounded-full bg-emerald-400" />}
                 </span>
                 <span className="flex items-center justify-between gap-2 text-white/80">
-                  <span className="min-w-0 truncate">{f.away ?? "TBD"}</span>
+                  <span className="min-w-0 truncate">{f.away ?? resolveSlotLabel(f.away_slot_label, msg, "bracket.tbd")}</span>
                   {f.line !== null && (
                     <span className="shrink-0 font-bold tabular-nums text-accent-line">{f.line}</span>
                   )}
@@ -516,11 +522,11 @@ function LadderSlide({ fixtures }: { fixtures: BracketSlideFixture[] }) {
             <div className={`rounded-lg px-5 py-3 ring-1 ring-inset ring-white/10 ${live ? "bg-white/[0.12]" : "bg-white/[0.05]"}`}>
               <div className="flex flex-col gap-1 font-display text-2xl font-semibold leading-tight">
                 <span className="flex items-center justify-between gap-3">
-                  <span className="min-w-0 truncate">{f.home ?? "TBD"}</span>
+                  <span className="min-w-0 truncate">{f.home ?? resolveSlotLabel(f.home_slot_label, msg, "bracket.tbd")}</span>
                   {live && <span className="animate-live-pulse h-2 w-2 shrink-0 rounded-full bg-emerald-400" />}
                 </span>
                 <span className="flex items-center justify-between gap-3 text-white/80">
-                  <span className="min-w-0 truncate">{f.away ?? "TBD"}</span>
+                  <span className="min-w-0 truncate">{f.away ?? resolveSlotLabel(f.away_slot_label, msg, "bracket.tbd")}</span>
                   {f.line !== null && <span className="shrink-0 font-bold tabular-nums text-accent-line">{f.line}</span>}
                 </span>
               </div>
@@ -566,11 +572,11 @@ function DoubleElimSlide({ fixtures }: { fixtures: BracketSlideFixture[] }) {
       >
         <div className="flex h-full flex-col justify-center gap-0.5 font-display text-xl font-semibold leading-tight">
           <span className="flex items-center justify-between gap-2">
-            <span className="min-w-0 truncate">{f.home ?? "TBD"}</span>
+            <span className="min-w-0 truncate">{f.home ?? resolveSlotLabel(f.home_slot_label, msg, "bracket.tbd")}</span>
             {live && <span className="animate-live-pulse h-2 w-2 shrink-0 rounded-full bg-emerald-400" />}
           </span>
           <span className="flex items-center justify-between gap-2 text-white/80">
-            <span className="min-w-0 truncate">{f.away ?? "TBD"}</span>
+            <span className="min-w-0 truncate">{f.away ?? resolveSlotLabel(f.away_slot_label, msg, "bracket.tbd")}</span>
             {f.line !== null && <span className="shrink-0 font-bold tabular-nums text-accent-line">{f.line}</span>}
           </span>
         </div>
@@ -660,11 +666,11 @@ function PagePlayoffSlide({ fixtures }: { fixtures: BracketSlideFixture[] }) {
               <div className={`absolute rounded-lg px-4 py-2 ring-1 ring-inset ring-white/10 ${live ? "bg-white/[0.12]" : "bg-white/[0.05]"}`} style={{ left: p.x, top: p.y, width: NODE_W, height: NODE_H }}>
                 <div className="flex h-full flex-col justify-center gap-0.5 font-display text-xl font-semibold leading-tight">
                   <span className="flex items-center justify-between gap-2">
-                    <span className="min-w-0 truncate">{f.home ?? "TBD"}</span>
+                    <span className="min-w-0 truncate">{f.home ?? resolveSlotLabel(f.home_slot_label, msg, "bracket.tbd")}</span>
                     {live && <span className="animate-live-pulse h-2 w-2 shrink-0 rounded-full bg-emerald-400" />}
                   </span>
                   <span className="flex items-center justify-between gap-2 text-white/80">
-                    <span className="min-w-0 truncate">{f.away ?? "TBD"}</span>
+                    <span className="min-w-0 truncate">{f.away ?? resolveSlotLabel(f.away_slot_label, msg, "bracket.tbd")}</span>
                     {f.line !== null && <span className="shrink-0 font-bold tabular-nums text-accent-line">{f.line}</span>}
                   </span>
                 </div>

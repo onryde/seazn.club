@@ -18,7 +18,15 @@ import type {
 } from "@/server/public-site/data";
 
 export interface EmbedPayload {
-  org: { id: string; slug: string; name: string };
+  org: {
+    id: string;
+    slug: string;
+    name: string;
+    /** P6 fix round 1, finding #2 — spectator-facing locale (v5 i18n §4),
+     *  same field PublicOrg.default_locale carries on every other public
+     *  read model; embeds are visitor-facing too and were missing it. */
+    default_locale: string;
+  };
   competition: PublicCompetition;
   division: PublicDivision;
   stages: PublicStage[];
@@ -65,8 +73,8 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
     return { ok: false, reason: "not_entitled" };
   }
 
-  const [org] = await sql<{ id: string; slug: string; name: string }[]>`
-    select id, slug, name from organizations where id = ${competition.org_id}`;
+  const [org] = await sql<{ id: string; slug: string; name: string; default_locale: string }[]>`
+    select id, slug, name, default_locale from organizations where id = ${competition.org_id}`;
   if (!org) return { ok: false, reason: "not_found" };
 
   const [stages, pools, fixtures, standings, entrants, ssRows] = await Promise.all([
@@ -80,7 +88,8 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
       where s.division_id = ${divisionId} order by p.key`,
     sql<PublicFixture[]>`
       select id, division_id, stage_id, pool_id, round_no, seq_in_round,
-             home_entrant_id, away_entrant_id, scheduled_at, venue, court_label,
+             home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
+             scheduled_at, venue, court_label,
              status, outcome, summary, last_seq
       from public_fixtures_v where division_id = ${divisionId}
       order by round_no, seq_in_round`.then((rows) => rows.map(iso)),

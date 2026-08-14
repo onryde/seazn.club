@@ -36,6 +36,18 @@ import {
 import { feedLabels, type FeedRow } from "@/lib/schedule-board";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { HealthTabLabel } from "@/components/v2/board/health-panel";
+import { resolveLocale } from "@/lib/resolve-locale";
+import { msgFor } from "@/lib/messages-i18n";
+import { DEFAULT_LOCALE } from "@/lib/i18n";
+import { resolveSlotLabel } from "@/lib/slot-label";
+// P6 fix round 2: resolveLocale() now falls back safely (resolve-locale.ts)
+// when there is no real Next.js request — the direct-invocation shape this
+// repo's own tests use for a server-component "page" function (see
+// officials-loads-deferred.test.tsx's `renderTab` helper, no jsdom). Only
+// AWAITED on the officials tab (matches wantsOfficials/marksEnabled just
+// below — same "don't pay for it on tabs that never show it" discipline
+// #230 item 4 established, and the one this file's own deferred-load test
+// guards).
 
 const TABS = ["board", "health", "settings", "constraints", "officials", "history"] as const;
 type Tab = (typeof TABS)[number];
@@ -127,6 +139,11 @@ export default async function DivisionSchedulePage({
   // surrogate ids (the cache jsonb doesn't carry them), existing marks (Pro
   // only), and submitted reports. Loaded only on the officials tab.
   const marksEnabled = tab === "officials" && (await hasFeature(auth.orgId, "officials.marks"));
+  // Fixture-picker labels below (finding #2, fix round 2) — the signed-in
+  // organiser's own locale (cookie -> users.locale -> header -> en), NOT
+  // org.default_locale: that fallback is documented as "for public league
+  // pages only" (resolve-locale.ts), and this page is org-authed.
+  const officialsLocale = tab === "officials" ? await resolveLocale() : DEFAULT_LOCALE;
   const officialsMeta =
     tab === "officials"
       ? await withTenant(auth.orgId, async (tx) => {
@@ -301,8 +318,14 @@ export default async function DivisionSchedulePage({
           }))}
           fixtures={fixtures.map((f) => {
             const names = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
-            const home = f.home_entrant_id ? names[f.home_entrant_id] ?? "TBD" : "TBD";
-            const away = f.away_entrant_id ? names[f.away_entrant_id] ?? "TBD" : "TBD";
+            const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
+              msgFor(officialsLocale, k, v);
+            const home = f.home_entrant_id
+              ? (names[f.home_entrant_id] ?? lookup("schedule.tbd"))
+              : resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd");
+            const away = f.away_entrant_id
+              ? (names[f.away_entrant_id] ?? lookup("schedule.tbd"))
+              : resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd");
             return {
               id: f.id,
               label: `${home} vs ${away}`,

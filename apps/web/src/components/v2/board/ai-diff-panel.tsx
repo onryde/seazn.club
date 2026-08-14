@@ -157,7 +157,7 @@ export function AiDiffPanel({
                     <p className="flex items-center gap-1 text-xs">
                       <span className="font-mono font-semibold text-slate-700">{l.code}</span>
                       {l.marker && <Marker kind={l.marker} />}
-                      <span className="min-w-0 truncate text-slate-600">{l.matchup}</span>
+                      <span title={l.matchup} className="min-w-0 truncate text-slate-600">{l.matchup}</span>
                     </p>
                     <p className="text-[11px] font-medium text-red-600">
                       {conflictLabel(c.reason)}
@@ -383,7 +383,7 @@ function DiffRow({
       <div className="flex items-center gap-1 text-xs">
         <span className="font-mono font-semibold text-slate-700">{code}</span>
         {marker && <Marker kind={marker} />}
-        <span className="min-w-0 flex-1 truncate text-slate-600">{matchup}</span>
+        <span title={matchup} className="min-w-0 flex-1 truncate text-slate-600">{matchup}</span>
       </div>
       <div className="mt-0.5 flex flex-wrap items-center gap-1.5 pl-0.5 text-[11px]">{children}</div>
       {note && <p className="mt-0.5 text-[11px] italic text-slate-600">{note}</p>}

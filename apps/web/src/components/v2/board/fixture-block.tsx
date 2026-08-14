@@ -41,7 +41,12 @@ export function FixtureBlock({
 }) {
   const msg = useMsg();
   const movable = canEdit && fixture.status === "scheduled";
-  const title = cardTitle(fixture, entrantNames, feedLabels);
+  // Fix round 3 (Important 3): `lookup` was left off, so an unfilled slot's
+  // label fell through to cardTitle's own client-safe English default
+  // (board/types.ts) regardless of this org's locale — even though `msg`
+  // (useMsg(), two lines up) is a real, locale-aware lookup right here.
+  // FixtureBlock is the board card in every density (grid/agenda/tray/lanes).
+  const title = cardTitle(fixture, entrantNames, feedLabels, msg);
   const statusLabel = (s: string) => {
     const key = `schedule.fstatus.${s}` as MessageKey;
     const label = msg(key);

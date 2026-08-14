@@ -5,6 +5,9 @@ import { sql } from "@/lib/db";
 import { getPublicDivision } from "@/server/public-site/data";
 import { fixtureCardModel } from "@/server/og/model";
 import { CardFrame, LivePill, OG_SIZE } from "@/server/og/card";
+import { resolveSlotLabel } from "@/lib/slot-label";
+import { toLocale } from "@/lib/i18n-constants";
+import { msgFor } from "@/lib/messages-i18n";
 
 export const size = OG_SIZE;
 export const contentType = "image/png";
@@ -29,6 +32,12 @@ export default async function Image({ params }: Props) {
 
   const names = Object.fromEntries((data?.entrants ?? []).map((e) => [e.id, e.display_name]));
   const summary = (fixture?.summary ?? null) as { headline?: string } | null;
+  // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, same
+  // pattern as data.ts:502-503; also threaded into fixtureCardModel's own
+  // `lookup` for the residual "fixture not found at all" fallback.
+  const orgLocale = toLocale(data?.org.default_locale);
+  const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
+    msgFor(orgLocale, k, v);
   const model = fixtureCardModel({
     orgName: data?.org.name ?? "seazn.club",
     competitionName: data?.competition.name ?? "",
@@ -37,10 +46,19 @@ export default async function Image({ params }: Props) {
     branding: [data?.competition.branding, data?.org.branding],
     youth: priv?.youth ?? false,
     entrantKind: data?.entrants[0]?.kind ?? null,
-    homeName: fixture?.home_entrant_id ? (names[fixture.home_entrant_id] ?? null) : null,
-    awayName: fixture?.away_entrant_id ? (names[fixture.away_entrant_id] ?? null) : null,
+    homeName: fixture?.home_entrant_id
+      ? (names[fixture.home_entrant_id] ?? null)
+      : fixture
+        ? resolveSlotLabel(fixture.home_slot_label, lookup, "schedule.tbd")
+        : null,
+    awayName: fixture?.away_entrant_id
+      ? (names[fixture.away_entrant_id] ?? null)
+      : fixture
+        ? resolveSlotLabel(fixture.away_slot_label, lookup, "schedule.tbd")
+        : null,
     headline: summary?.headline ?? null,
     fixtureStatus: fixture?.status ?? "scheduled",
+    lookup,
   });
   const theme = model.theme;
 

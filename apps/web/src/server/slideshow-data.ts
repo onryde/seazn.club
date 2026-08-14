@@ -12,6 +12,10 @@ import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
 import { BRACKET_SLIDE_KINDS, bracketSlideLaysOut } from "@/components/v2/slideshow-rotation";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
+import { toLocale } from "@/lib/i18n-constants";
+import { msgFor } from "@/lib/messages-i18n";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
@@ -46,6 +50,20 @@ export interface BracketSlideFixture {
   seq_in_round: number;
   home: string | null;
   away: string | null;
+  /** D4b (P6) — {key, params} i18n pattern ref, a defensive fallback: BOTH
+   *  server builders (buildDivisionSlides, buildPublicDivisionSlides) now
+   *  resolve a locale-aware `home`/`away` string for an unfilled slot before
+   *  a bracket slide ever reaches the client (`resolveSlotLabel` never
+   *  returns null), so this pair matters only for the client `<Slideshow>`
+   *  component's OWN fallback (`f.home ?? resolveSlotLabel(f.home_slot_label,
+   *  msg, …)`) — which genuinely has no locale/`<DictProvider>` anywhere in
+   *  ITS rendering tree (slideshow.tsx imports the client-safe English
+   *  `msg()` directly) and stays on it for that reason. That fallback is
+   *  unreachable from a resolved slot in practice; it is not dead code, only
+   *  no longer the common path (fix round 3, Important 4 — buildDivisionSlides
+   *  did not used to resolve locale-aware labels at all; see below). */
+  home_slot_label: SlotLabel | null;
+  away_slot_label: SlotLabel | null;
   line: string | null;
   status: string;
 }
@@ -99,7 +117,7 @@ export async function buildDivisionSlides(
   divisionId: string,
   divisionName: string,
 ): Promise<Slide[]> {
-  const [stages, fixtures, entrants, logos, priv] = await Promise.all([
+  const [stages, fixtures, entrants, logos, priv, org] = await Promise.all([
     listStages(auth, divisionId),
     listDivisionFixtures(auth, divisionId),
     listEntrants(auth, divisionId),
@@ -108,7 +126,25 @@ export async function buildDivisionSlides(
       tx<{ youth: boolean; player_name_display: string | null }[]>`
         select youth, player_name_display from divisions where id = ${divisionId}`,
     ),
+    // P6 fix round 3, Important 4 — mirrors PublicSlideInput.orgLocale: the
+    // doc comment this replaced claimed "no locale anywhere in this tree",
+    // which was false (the RSC callers hold `auth`/`org` and resolveLocale()
+    // is available) but also beside the point — this slideshow is already
+    // treated as a PUBLIC surface for name-display purposes (the comment two
+    // lines down), so its locale should be the org's own public default too,
+    // the same source the public twin uses, NOT the specific signed-in
+    // staff member's personal preference (that distinction is deliberate —
+    // see resolve-locale.ts's "orgDefault... for public league pages only").
+    // Self-fetched here (not threaded through as a caller-supplied param,
+    // unlike the pure public builder below) because this function already
+    // does its own ad hoc per-division queries and `auth.orgId` is on hand.
+    withTenant(auth.orgId, (tx) =>
+      tx<{ default_locale: string | null }[]>`
+        select default_locale from organizations where id = ${auth.orgId}`,
+    ),
   ]);
+  const locale = toLocale(org[0]?.default_locale);
+  const lookup: SlotLabelLookup = (k, v) => msgFor(locale, k, v);
   // Slideshow renders on venue screens — a public surface for name-display
   // purposes (v3/11 gap 8). Team names pass through; person names mask.
   const mode = resolveNameDisplay(priv[0]?.player_name_display ?? null, priv[0]?.youth ?? false);
@@ -171,9 +207,18 @@ export async function buildDivisionSlides(
         );
   const lineOf = new Map(summaries.map((s) => [s.fixture_id, s.summary?.headline ?? null]));
 
+  // Fix round 3 (Important 4): `lookup` (this org's REAL locale, resolved
+  // above from `orgLocale`) — was `msg` (client-safe English, always),
+  // regardless of the org's own locale, even though the RSC callers
+  // (slideshow/competitions/[id]/page.tsx, slideshow/divisions/[id]/page.tsx)
+  // hold `org` and could always pass it through.
   const item = (f: (typeof fixtures)[number]): FixtureSlideItem => ({
-    home: names[f.home_entrant_id ?? ""] ?? "TBD",
-    away: names[f.away_entrant_id ?? ""] ?? "TBD",
+    home: f.home_entrant_id
+      ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
+      : resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd"),
+    away: f.away_entrant_id
+      ? (names[f.away_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
+      : resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd"),
     homeLogo: logos[f.home_entrant_id ?? ""] ?? null,
     awayLogo: logos[f.away_entrant_id ?? ""] ?? null,
     line: lineOf.get(f.id) ?? null,
@@ -209,12 +254,28 @@ export async function buildDivisionSlides(
         division: divisionName,
         title: stage.name,
         stageKind: stage.kind as "knockout" | "double_elim" | "stepladder" | "page_playoff",
+        // Fix round 3 (Important 4): home/away are now fully resolved HERE
+        // (never left null for an unfilled slot with a real label), mirroring
+        // buildPublicDivisionSlides' fix round 1 finding #2 — so the client
+        // <Slideshow>'s own `f.home ?? resolveSlotLabel(f.home_slot_label,
+        // msg, …)` fallback (client-safe English, no DictProvider in that
+        // tree) is unreachable from a resolved label, same as the public
+        // path. The raw *_slot_label fields stay on the wire for that
+        // fallback's benefit (an org whose bracket predates this fix, or any
+        // caller this session didn't re-verify) — never removed, just no
+        // longer the common path.
         fixtures: stageFixtures.map((f) => ({
           id: f.id,
           round_no: f.round_no,
           seq_in_round: f.seq_in_round,
-          home: f.home_entrant_id ? (names[f.home_entrant_id] ?? null) : null,
-          away: f.away_entrant_id ? (names[f.away_entrant_id] ?? null) : null,
+          home: f.home_entrant_id
+            ? (names[f.home_entrant_id] ?? null)
+            : resolveSlotLabel(f.home_slot_label ?? null, lookup, "bracket.tbd"),
+          away: f.away_entrant_id
+            ? (names[f.away_entrant_id] ?? null)
+            : resolveSlotLabel(f.away_slot_label ?? null, lookup, "bracket.tbd"),
+          home_slot_label: f.home_slot_label,
+          away_slot_label: f.away_slot_label,
           line: lineOf.get(f.id) ?? null,
           status: f.status,
         })),
@@ -243,11 +304,21 @@ export interface PublicSlideInput {
     seq_in_round: number;
     home_entrant_id: string | null;
     away_entrant_id: string | null;
+    /** Optional: several existing unit tests construct this input by hand
+     *  without it — absent reads the same as null. */
+    home_slot_label?: SlotLabel | null;
+    away_slot_label?: SlotLabel | null;
     status: string;
     summary: { headline?: string } | null;
   }[];
   standings: { stage_id: string; pool_id: string | null; rows: StandingsSlideSnapshotRow[] }[];
   entrants: { id: string; display_name: string; badge_url?: string | null }[];
+  /** P6 fix round 1, finding #2 (CRITICAL) — spectator-facing locale (v5
+   *  i18n §4), `PublicOrg.default_locale` (same field data.ts:502-503
+   *  already resolves from). Optional and defaults to English so every
+   *  existing caller/test that predates this keeps its current behaviour;
+   *  every real /present page has an `org` in scope and should pass it. */
+  orgLocale?: string;
 }
 
 interface StandingsSlideSnapshotRow {
@@ -261,6 +332,8 @@ interface StandingsSlideSnapshotRow {
 }
 
 export function buildPublicDivisionSlides(data: PublicSlideInput): Slide[] {
+  const orgLocale = toLocale(data.orgLocale);
+  const lookup: SlotLabelLookup = (k, v) => msgFor(orgLocale, k, v);
   const names = Object.fromEntries(data.entrants.map((e) => [e.id, e.display_name]));
   const stageById = new Map(data.stages.map((s) => [s.id, s]));
   const poolById = new Map(data.pools.map((p) => [p.id, p]));
@@ -283,8 +356,12 @@ export function buildPublicDivisionSlides(data: PublicSlideInput): Slide[] {
   }
 
   const item = (f: PublicSlideInput["fixtures"][number]): FixtureSlideItem => ({
-    home: names[f.home_entrant_id ?? ""] ?? "TBD",
-    away: names[f.away_entrant_id ?? ""] ?? "TBD",
+    home: f.home_entrant_id
+      ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
+      : resolveSlotLabel(f.home_slot_label ?? null, lookup, "schedule.tbd"),
+    away: f.away_entrant_id
+      ? (names[f.away_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
+      : resolveSlotLabel(f.away_slot_label ?? null, lookup, "schedule.tbd"),
     homeLogo: null,
     awayLogo: null,
     line: f.summary?.headline ?? null,
@@ -312,10 +389,25 @@ export function buildPublicDivisionSlides(data: PublicSlideInput): Slide[] {
         division: data.division.name,
         title: stage.name,
         stageKind: stage.kind as "knockout" | "double_elim" | "stepladder" | "page_playoff",
+        // P6 fix round 1, finding #2: home/away are fully resolved HERE
+        // (never left null for an unfilled slot with a real label) so the
+        // shared client <Slideshow> — which has no locale/<DictProvider>
+        // plumbing anywhere in its tree and stays on the client-safe
+        // English msg() for that reason — never has to guess at this org's
+        // locale. Its own `f.home ?? resolveSlotLabel(f.home_slot_label,
+        // msg, …)` fallback is now unreachable from this (public) builder;
+        // it stays live for buildDivisionSlides's org-authed slides above,
+        // which are a DIFFERENT, out-of-scope surface (not a "visitor").
         fixtures: stageFixtures.map((f) => ({
           id: f.id, round_no: f.round_no, seq_in_round: f.seq_in_round,
-          home: f.home_entrant_id ? (names[f.home_entrant_id] ?? null) : null,
-          away: f.away_entrant_id ? (names[f.away_entrant_id] ?? null) : null,
+          home: f.home_entrant_id
+            ? (names[f.home_entrant_id] ?? null)
+            : resolveSlotLabel(f.home_slot_label ?? null, lookup, "bracket.tbd"),
+          away: f.away_entrant_id
+            ? (names[f.away_entrant_id] ?? null)
+            : resolveSlotLabel(f.away_slot_label ?? null, lookup, "bracket.tbd"),
+          home_slot_label: f.home_slot_label ?? null,
+          away_slot_label: f.away_slot_label ?? null,
           line: f.summary?.headline ?? null,
           status: f.status,
         })),

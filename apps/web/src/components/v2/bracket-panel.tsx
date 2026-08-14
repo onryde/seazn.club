@@ -19,6 +19,8 @@
 import Link from "@/components/ui/console-link";
 import { routes } from "@/lib/routes";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { resolveSlotLabel } from "@/lib/slot-label";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import {
   doubleElimBracket,
   lbRowUnit,
@@ -38,6 +40,12 @@ interface FixtureLike {
   fixture_no: number;
   home_entrant_id: string | null;
   away_entrant_id: string | null;
+  /** D4b (P6) — {key, params} i18n pattern ref while the matching
+   *  *_entrant_id is null (V360's fixtures.home/away_slot_label). Optional:
+   *  several test fixtures across this file's suite construct FixtureLike
+   *  objects by hand without it — absent reads the same as null. */
+  home_slot_label?: SlotLabel | null;
+  away_slot_label?: SlotLabel | null;
   status: string;
   outcome: unknown;
 }
@@ -150,8 +158,14 @@ export function BracketPanel({
   const nodeCenterY = (side: "L" | "R", col: number, row: number): number =>
     rowCenter(col, row) * SLOT_H;
 
-  const side = (entrantId: string | null, winner: string | null, live: boolean) => {
+  const side = (
+    entrantId: string | null,
+    slotLabel: SlotLabel | null | undefined,
+    winner: string | null,
+    live: boolean,
+  ) => {
     const name = entrantId ? (entrantNames[entrantId] ?? entrantId) : null;
+    const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd");
     const badge = entrantId ? entrantBadges?.[entrantId] : null;
     const isWinner = winner !== null && winner === entrantId;
     const muted = winner !== null && winner !== entrantId;
@@ -162,6 +176,7 @@ export function BracketPanel({
           <img src={badge} alt="" className="h-3.5 w-3.5 shrink-0 rounded-[3px] object-cover" />
         ) : null}
         <span
+          title={label}
           className={`truncate text-xs ${
             name === null
               ? "italic text-[color:var(--app-fg-muted,#94a3b8)]"
@@ -172,7 +187,7 @@ export function BracketPanel({
                   : "text-[color:var(--app-fg,#e2e8f0)]"
           }`}
         >
-          {name ?? msg("bracket.tbd")}
+          {label}
         </span>
         {live && <span className="animate-live-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />}
       </span>
@@ -243,8 +258,8 @@ export function BracketPanel({
                 }}
               >
                 <span className="flex h-full flex-col justify-center gap-0.5">
-                  {side(f.home_entrant_id, winner, live)}
-                  {side(f.away_entrant_id, winner, live)}
+                  {side(f.home_entrant_id, f.home_slot_label, winner, live)}
+                  {side(f.away_entrant_id, f.away_slot_label, winner, live)}
                 </span>
                 {headline !== undefined && (
                   <span className="absolute right-2 top-1.5 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">
@@ -303,8 +318,9 @@ function DoubleElimPanel({
     const winner = (f.outcome as { winner?: string } | null)?.winner ?? null;
     const live = f.status === "in_play";
     const headline = headlines?.[f.id];
-    const sideRow = (entrantId: string | null) => {
+    const sideRow = (entrantId: string | null, slotLabel: SlotLabel | null | undefined) => {
       const name = entrantId ? (entrantNames[entrantId] ?? entrantId) : null;
+      const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd");
       const badge = entrantId ? entrantBadges?.[entrantId] : null;
       const isWinner = winner !== null && winner === entrantId;
       const mutedRow = winner !== null && winner !== entrantId;
@@ -315,6 +331,7 @@ function DoubleElimPanel({
             <img src={badge} alt="" className="h-3.5 w-3.5 shrink-0 rounded-[3px] object-cover" />
           ) : null}
           <span
+            title={label}
             className={`truncate text-xs ${
               name === null
                 ? "italic text-[color:var(--app-fg-muted,#94a3b8)]"
@@ -325,7 +342,7 @@ function DoubleElimPanel({
                     : "text-[color:var(--app-fg,#e2e8f0)]"
             }`}
           >
-            {name ?? msg("bracket.tbd")}
+            {label}
           </span>
           {live && <span className="animate-live-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />}
         </span>
@@ -339,8 +356,8 @@ function DoubleElimPanel({
         style={{ left, top, width: NODE_W, height: NODE_H }}
       >
         <span className="flex h-full flex-col justify-center gap-0.5">
-          {sideRow(f.home_entrant_id)}
-          {sideRow(f.away_entrant_id)}
+          {sideRow(f.home_entrant_id, f.home_slot_label)}
+          {sideRow(f.away_entrant_id, f.away_slot_label)}
         </span>
         {headline !== undefined && (
           <span className="absolute right-2 top-1.5 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">
@@ -439,9 +456,10 @@ function StepladderPanel({
   const msg = useMsg();
   if (fixtures.length === 0) return null;
   const rungs = [...fixtures].sort((a, b) => a.round_no - b.round_no);
-  const row = (f: FixtureLike, entrantId: string | null) => {
+  const row = (f: FixtureLike, entrantId: string | null, slotLabel: SlotLabel | null | undefined) => {
     const winner = (f.outcome as { winner?: string } | null)?.winner ?? null;
     const name = entrantId ? (entrantNames[entrantId] ?? entrantId) : null;
+    const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd");
     const badge = entrantId ? entrantBadges?.[entrantId] : null;
     const isWinner = winner !== null && winner === entrantId;
     const muted = winner !== null && winner !== entrantId;
@@ -452,6 +470,7 @@ function StepladderPanel({
           <img src={badge} alt="" className="h-3.5 w-3.5 shrink-0 rounded-[3px] object-cover" />
         ) : null}
         <span
+          title={label}
           className={`truncate text-xs ${
             name === null
               ? "italic text-[color:var(--app-fg-muted,#94a3b8)]"
@@ -462,7 +481,7 @@ function StepladderPanel({
                   : "text-[color:var(--app-fg,#e2e8f0)]"
           }`}
         >
-          {name ?? msg("bracket.tbd")}
+          {label}
         </span>
         {f.status === "in_play" && (
           <span className="animate-live-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
@@ -486,8 +505,8 @@ function StepladderPanel({
               className="relative block max-w-md rounded-lg border border-[color:var(--app-hairline,#334155)] bg-[color:var(--app-card,#1e293b)] px-2.5 py-1.5 shadow-sm transition hover:-translate-y-0.5 hover:shadow"
             >
               <span className="flex flex-col gap-0.5">
-                {row(f, f.home_entrant_id)}
-                {row(f, f.away_entrant_id)}
+                {row(f, f.home_entrant_id, f.home_slot_label)}
+                {row(f, f.away_entrant_id, f.away_slot_label)}
               </span>
               {headlines?.[f.id] !== undefined && (
                 <span className="absolute right-2 top-1.5 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">
@@ -542,9 +561,10 @@ function PagePlayoffPanel({
     q2: msg("bracket.qualifier2"),
     final: msg("bracket.final"),
   };
-  const row = (f: FixtureLike, entrantId: string | null) => {
+  const row = (f: FixtureLike, entrantId: string | null, slotLabel: SlotLabel | null | undefined) => {
     const winner = (f.outcome as { winner?: string } | null)?.winner ?? null;
     const name = entrantId ? (entrantNames[entrantId] ?? entrantId) : null;
+    const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd");
     const badge = entrantId ? entrantBadges?.[entrantId] : null;
     const isWinner = winner !== null && winner === entrantId;
     const mutedRow = winner !== null && winner !== entrantId;
@@ -555,6 +575,7 @@ function PagePlayoffPanel({
           <img src={badge} alt="" className="h-3.5 w-3.5 shrink-0 rounded-[3px] object-cover" />
         ) : null}
         <span
+          title={label}
           className={`truncate text-xs ${
             name === null
               ? "italic text-[color:var(--app-fg-muted,#94a3b8)]"
@@ -565,7 +586,7 @@ function PagePlayoffPanel({
                   : "text-[color:var(--app-fg,#e2e8f0)]"
           }`}
         >
-          {name ?? msg("bracket.tbd")}
+          {label}
         </span>
         {f.status === "in_play" && <span className="animate-live-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />}
       </span>
@@ -599,8 +620,8 @@ function PagePlayoffPanel({
                   style={{ left: p.x, top: p.y, width: NODE_W, height: NODE_H }}
                 >
                   <span className={`flex h-full flex-col justify-center gap-0.5 ${headlines?.[f.id] !== undefined ? "pr-12" : ""}`}>
-                    {row(f, f.home_entrant_id)}
-                    {row(f, f.away_entrant_id)}
+                    {row(f, f.home_entrant_id, f.home_slot_label)}
+                    {row(f, f.away_entrant_id, f.away_slot_label)}
                   </span>
                   {headlines?.[f.id] !== undefined && (
                     <span className="absolute right-2 top-1/2 -translate-y-1/2 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">

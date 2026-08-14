@@ -12,6 +12,9 @@ import { StandingsTable } from "@/components/public-site/standings-table";
 import { Schedule } from "@/components/public-site/schedule";
 import { Bracket } from "@/components/public-site/bracket";
 import type { StandingsRow } from "@seazn/engine/competition";
+import { toLocale } from "@/lib/i18n-constants";
+import { msgFor } from "@/lib/messages-i18n";
+import { resolveSlotLabel } from "@/lib/slot-label";
 
 export const revalidate = 30;
 
@@ -59,10 +62,22 @@ export default async function EmbedWidgetPage({ params }: Props) {
   const poolName = new Map(pools.map((p) => [p.id, p.name]));
   const publicPath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
 
+  // P6 fix round 1, finding #2 (CRITICAL) — same treatment as the public
+  // division page: the org's own default_locale, never resolveLocale()
+  // (no per-viewer request scope; every embed viewer sees the same iframe).
+  const orgLocale = toLocale(org.default_locale);
+  const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
+    msgFor(orgLocale, k, v);
+  const slotLabels: Record<string, string> = {};
+  for (const f of fixtures) {
+    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd");
+    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd");
+  }
+
   let body: React.ReactNode;
   if (widget === "schedule") {
     body = (
-      <Schedule fixtures={fixtures} entrantNames={entrantNames} divisionPath={publicPath} tz={tz} />
+      <Schedule fixtures={fixtures} entrantNames={entrantNames} divisionPath={publicPath} tz={tz} slotLabels={slotLabels} />
     );
   } else if (widget === "bracket") {
     const stage = stages.find((s) => BRACKET_KINDS.has(s.kind));
@@ -73,6 +88,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
         entrantNames={entrantNames}
         entrantLogos={entrantLogos}
         fixtureHref={(fixtureId) => `${publicPath}/fixtures/${fixtureId}`}
+        lookup={lookup}
       />
     ) : (
       <p className="p-2 text-sm text-zinc-500">No bracket stage in this division.</p>

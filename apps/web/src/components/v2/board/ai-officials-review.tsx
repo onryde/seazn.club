@@ -323,7 +323,7 @@ export function AiOfficialsReview({
                   <div className="flex items-center gap-1 text-xs">
                     <span className="font-mono font-semibold text-slate-700">{row.code}</span>
                     {row.marker && <Marker kind={row.marker} />}
-                    <span className="min-w-0 flex-1 truncate text-slate-600">{row.matchup}</span>
+                    <span title={row.matchup} className="min-w-0 flex-1 truncate text-slate-600">{row.matchup}</span>
                     <span className="shrink-0 whitespace-nowrap font-mono text-[10px] text-slate-400">
                       {row.courtLabel ? `${row.courtLabel} · ${timeLabel(row.scheduledAt)}` : timeLabel(row.scheduledAt)}
                     </span>

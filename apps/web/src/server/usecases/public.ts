@@ -89,9 +89,14 @@ export async function publicSchedule(
 ): Promise<unknown> {
   const division = await findDivision(orgSlug, compSlug, divSlug);
   return cached(`pub:v1:div:${division.id}:schedule`, async () => {
+    // Fix round 3 (Gap 9): home_slot_label/away_slot_label were on
+    // public_fixtures_v since V362 but never selected here, so an API v1
+    // consumer saw nothing where the HTML schedule page (public-site/data.ts)
+    // already shows a label.
     const fixtures = await sql`
       select id, stage_id, pool_id, round_no, seq_in_round, home_entrant_id,
-             away_entrant_id, scheduled_at, venue, court_label, status, outcome, summary
+             away_entrant_id, home_slot_label, away_slot_label,
+             scheduled_at, venue, court_label, status, outcome, summary
       from public_fixtures_v where division_id = ${division.id}
       order by round_no, seq_in_round`;
     return { division_id: division.id, fixtures };
@@ -227,9 +232,11 @@ export async function discoveryList(
 export async function publicFixture(fixtureId: string): Promise<unknown> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) throw new HttpError(404, "fixture not found");
   return cached(`pub:v1:fixture:${fixtureId}`, async () => {
+    // Fix round 3 (Gap 9): same gap as publicSchedule above.
     const [row] = await sql`
       select id, division_id, stage_id, round_no, seq_in_round, home_entrant_id,
-             away_entrant_id, scheduled_at, venue, court_label, status, outcome,
+             away_entrant_id, home_slot_label, away_slot_label,
+             scheduled_at, venue, court_label, status, outcome,
              summary, last_seq
       from public_fixtures_v where id = ${fixtureId} limit 1`;
     if (!row) throw new HttpError(404, "fixture not found");

@@ -16,6 +16,8 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { TipCallout } from "@/components/ui/tip";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
+import { resolveSlotLabel } from "@/lib/slot-label";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { DocumentsMenu } from "@/components/v2/board/documents-menu";
 import { ScheduleResultStrip } from "@/components/v2/board/result-strip";
 import { DateTimeField } from "./shared/datetime-field";
@@ -51,6 +53,10 @@ interface FixtureRow {
   fixture_no: number;
   home_entrant_id: string | null;
   away_entrant_id: string | null;
+  /** D4b (P6) — {key, params} i18n pattern ref while the matching
+   *  *_entrant_id is null (V360's fixtures.home/away_slot_label). */
+  home_slot_label?: SlotLabel | null;
+  away_slot_label?: SlotLabel | null;
   scheduled_at: string | null;
   venue: string | null;
   court_label: string | null;
@@ -560,9 +566,22 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                   className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-800 hover:border-amber-400"
                 >
                   <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
-                  {f.home_entrant_id ? (entrantNames[f.home_entrant_id] ?? "?") : msg("schedule.tbd")}{" "}
+                  {/* max-w + truncate (P6/D4b): a slot label ("Best 3 of the
+                      3rd-place teams") runs far longer than a team name — an
+                      in_play fixture always has both entrants filled in
+                      practice (scoring an unfilled fixture 422s), so this is
+                      a defensive floor, not the common case. */}
+                  <span className="inline-block max-w-[9rem] truncate align-bottom">
+                    {f.home_entrant_id
+                      ? (entrantNames[f.home_entrant_id] ?? "?")
+                      : resolveSlotLabel(f.home_slot_label ?? null, msg, "schedule.tbd")}
+                  </span>{" "}
                   {msg("schedule.vs")}{" "}
-                  {f.away_entrant_id ? (entrantNames[f.away_entrant_id] ?? "?") : msg("schedule.tbd")}
+                  <span className="inline-block max-w-[9rem] truncate align-bottom">
+                    {f.away_entrant_id
+                      ? (entrantNames[f.away_entrant_id] ?? "?")
+                      : resolveSlotLabel(f.away_slot_label ?? null, msg, "schedule.tbd")}
+                  </span>
                   {f.court_label ? <span className="text-slate-500">· {f.court_label}</span> : null}
                 </Link>
               </li>
@@ -637,7 +656,40 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                   <button
                     type="button"
                     disabled={busy !== null}
-                    onClick={() => act(stage.id, "generate")}
+                    onClick={() => {
+                      // P6/D4b task B, scope item 2 — REVERSED (fix round 3,
+                      // Critical 1, whole-branch review): this click used to
+                      // be gated behind a "you'll lose N fixtures" confirm
+                      // dialog whenever stageFixtures.length > 0. That
+                      // premise was never checked against the code and is
+                      // false — generateStageFixtures (stages.ts) is
+                      // ADDITIVE ONLY. It builds `byKey` from the stage's
+                      // existing fixtures and inserts only the generated
+                      // rows missing from it (stages.ts:997-1031); any
+                      // existing fixture that no longer matches the current
+                      // rules is left in place, untouched, not discarded.
+                      // The repo's only `delete from fixtures` are
+                      // history.ts's checkpoint restore and a demo seed —
+                      // neither is this code path. So the dialog blocked a
+                      // routine, safe action (an organiser adding a late
+                      // entrant, then clicking Generate again) behind a
+                      // false data-loss warning.
+                      //
+                      // Deliberately NOT replaced with a truthful-but-vague
+                      // "this won't remove stale fixtures" disclaimer either:
+                      // there is no client-side way to tell whether any
+                      // existing fixture actually IS stale (that diff is
+                      // engine-only, server-side, out of this task's scope —
+                      // same reason the old dialog computed a client-side
+                      // "blast radius" instead of the real diff in the first
+                      // place). A disclaimer with no computed fact behind it
+                      // would just be new boilerplate to click through on
+                      // every regenerate, forever, in place of one that
+                      // named specific (if wrong) numbers. Regeneration is
+                      // simply a normal, unguarded action now, same as the
+                      // common first-generate case always was.
+                      void act(stage.id, "generate");
+                    }}
                     className="btn btn-ghost px-3 py-1.5 text-xs"
                   >
                     {busy === stage.id
@@ -1100,8 +1152,12 @@ function FixtureLine({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const home = fixture.home_entrant_id ? (entrantNames[fixture.home_entrant_id] ?? "?") : msg("schedule.tbd");
-  const away = fixture.away_entrant_id ? (entrantNames[fixture.away_entrant_id] ?? "?") : msg("schedule.tbd");
+  const home = fixture.home_entrant_id
+    ? (entrantNames[fixture.home_entrant_id] ?? "?")
+    : resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd");
+  const away = fixture.away_entrant_id
+    ? (entrantNames[fixture.away_entrant_id] ?? "?")
+    : resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd");
   const decided = outcomeText(msg, fixture.outcome, entrantNames);
 
   // Bye ghost row (item 6): structural, not schedulable, no actions.

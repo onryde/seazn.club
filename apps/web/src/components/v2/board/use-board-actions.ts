@@ -289,7 +289,11 @@ export function useBoardActions(
         const list = (err.extra.conflicts as BoardConflict[] | undefined) ?? [];
         const titleOf = (id: string) => {
           const f = board.find((x) => x.id === id);
-          return f ? cardTitle(f, entrantNames, feedLabels) : msg("board.action.anotherMatch");
+          // Fix round 3 (Important 3): `lookup` was left off — an unfilled
+          // slot's label fell through to cardTitle's client-safe English
+          // default instead of `msg` (useMsg(), line 159), regardless of
+          // this org's locale.
+          return f ? cardTitle(f, entrantNames, feedLabels, msg) : msg("board.action.anotherMatch");
         };
         const helpOf = (code: string) => {
           const k = `board.conflictHelp.${code}` as MessageKey;

@@ -1,6 +1,7 @@
 // buildPublicDivisionSlides (PROMPT-64 public /present) — pure, no DB.
 import { describe, expect, it } from "vitest";
 import { buildPublicDivisionSlides } from "../slideshow-data";
+import type { FixtureSlideItem } from "../slideshow-data";
 
 const input = {
   division: { id: "d1", name: "Open" },
@@ -56,5 +57,53 @@ describe("buildPublicDivisionSlides", () => {
       fixtures: input.fixtures.map((f) => ({ ...f, status: "scheduled", summary: null })),
     });
     expect(slides.every((s) => !("pinned" in s) || s.pinned !== true)).toBe(true);
+  });
+});
+
+// P6 fix round 1, finding #2 (CRITICAL): this is the public /present
+// slideshow — the ONLY thing standing between a visitor and English slot
+// labels regardless of the org's own default_locale. Both slide KINDS that
+// can show an unfilled slot (fixtures AND bracket) must resolve through it.
+describe("buildPublicDivisionSlides — orgLocale (P6 finding #2)", () => {
+  const withLabel = {
+    ...input,
+    fixtures: [
+      ...input.fixtures.slice(0, 2),
+      {
+        id: "kf", stage_id: "sk", round_no: 1, seq_in_round: 1,
+        home_entrant_id: null, away_entrant_id: null, status: "scheduled",
+        summary: null,
+        home_slot_label: { key: "slot.winner_group", params: { g: "A" } },
+        away_slot_label: { key: "slot.winner_group", params: { g: "B" } },
+      },
+    ],
+  };
+
+  it("a fixtures-kind slide resolves an unfilled slot in the org's own locale, not English", () => {
+    const slides = buildPublicDivisionSlides({ ...withLabel, orgLocale: "es" });
+    const upcoming = slides.find((s) => s.kind === "fixtures" && s.title === "Coming up");
+    expect(upcoming?.kind).toBe("fixtures");
+    const items = (upcoming as { items: FixtureSlideItem[] }).items;
+    const kf = items.find((i) => i.round === 1)!;
+    expect(kf.home).toBe("Ganador del Grupo A");
+    expect(kf.away).toBe("Ganador del Grupo B");
+  });
+
+  it("a bracket-kind slide ALSO resolves the unfilled slot (was left null for the client to guess at)", () => {
+    const slides = buildPublicDivisionSlides({ ...withLabel, orgLocale: "es" });
+    const bracket = slides.find((s) => s.kind === "bracket") as {
+      fixtures: { id: string; home: string | null; away: string | null }[];
+    };
+    const kf = bracket.fixtures.find((f) => f.id === "kf")!;
+    expect(kf.home).toBe("Ganador del Grupo A");
+    expect(kf.away).toBe("Ganador del Grupo B");
+  });
+
+  it("omitting orgLocale defaults to English — back-compat with every existing caller", () => {
+    const slides = buildPublicDivisionSlides(withLabel); // no orgLocale field at all
+    const upcoming = slides.find((s) => s.kind === "fixtures" && s.title === "Coming up");
+    const items = (upcoming as { items: FixtureSlideItem[] }).items;
+    const kf = items.find((i) => i.round === 1)!;
+    expect(kf.home).toBe("Winner of Group A");
   });
 });

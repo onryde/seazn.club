@@ -5,6 +5,8 @@ import "server-only";
 // the brand contrast guard (gap 7: failing accents → violet) are unit-tested
 // here, without rendering a pixel.
 import { resolvePublicTheme, publicBrandColor } from "@/lib/public-theme";
+import { msg } from "@/lib/messages";
+import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 
 export interface OgTheme {
   /** Card background (court slab). */
@@ -126,9 +128,18 @@ interface FixtureInput {
   awayName: string | null;
   headline: string | null;
   fixtureStatus: string;
+  /** P6 fix round 1, finding #2 — locale-aware fallback for the null/null
+   *  case below (`msgFor(orgLocale, …)`, built by the caller from
+   *  `PublicOrg.default_locale`). Optional and defaults to the client-safe
+   *  English msg() so every existing caller/test that predates this is
+   *  unchanged: the common case (a real entrant OR a resolved slot label)
+   *  never reaches this fallback at all — the caller resolves homeName/
+   *  awayName itself, already in the org's locale. */
+  lookup?: SlotLabelLookup;
 }
 
 export function fixtureCardModel(input: FixtureInput): FixtureCardModel {
+  const lookup = input.lookup ?? msg;
   const youthHide = input.youth && input.entrantKind !== "team";
   const status =
     input.fixtureStatus === "in_play"
@@ -143,8 +154,12 @@ export function fixtureCardModel(input: FixtureInput): FixtureCardModel {
     divisionName: input.divisionName,
     logo: input.logo,
     // Youth (gap 8): the matchup renders as the division, never the players.
-    home: youthHide ? input.divisionName : (input.homeName ?? "TBD"),
-    away: youthHide ? "Match centre" : (input.awayName ?? "TBD"),
+    // homeName/awayName arrive already resolved (real entrant name, or the
+    // caller's own slot-label resolution) — null here means neither an
+    // entrant nor a slot label was known, the same "nothing at all" case
+    // resolveSlotLabel(null, …) covers everywhere else.
+    home: youthHide ? input.divisionName : (input.homeName ?? resolveSlotLabel(null, lookup, "schedule.tbd")),
+    away: youthHide ? "Match centre" : (input.awayName ?? resolveSlotLabel(null, lookup, "schedule.tbd")),
     headline: youthHide ? null : input.headline,
     status,
   };

@@ -6529,13 +6529,33 @@ async function stageProgressionSuite(): Promise<void> {
 
   // "seed": TBD fixtures exist up front, before the group stage has even
   // been generated — the owner's "placeholders at setup time" ruling.
-  const koGen = v1data<{ created: number; fixtures: { home_entrant_id: string | null }[] }>(
-    await v1(free, `/api/v1/stages/${koId}/generate`, "POST"),
-  );
+  type SlotLabelWire = { key: string; params: Record<string, unknown> } | null;
+  const koGen = v1data<{
+    created: number;
+    fixtures: { home_entrant_id: string | null; home_slot_label: SlotLabelWire; away_slot_label: SlotLabelWire }[];
+  }>(await v1(free, `/api/v1/stages/${koId}/generate`, "POST"));
   check(
     "stage progression: .seeding KO generates 1 fully-TBD fixture before the group stage runs at all",
     koGen.created === 1 && koGen.fixtures[0]!.home_entrant_id === null,
   );
+  // P6 (D4b task A) fix round 1 — smoke coverage for the data contract every
+  // localized renderer this task wired depends on: a real server, real DB,
+  // real V360/V362 columns, real /generate response — not a mock. Both
+  // slots of the fully-TBD KO fixture must carry a real {key,params}
+  // descriptor (this seeding — 2 pools, top 1 each — always produces
+  // slot.winner_group), never null and never a hand-built string.
+  {
+    const home = koGen.fixtures[0]!.home_slot_label;
+    const away = koGen.fixtures[0]!.away_slot_label;
+    check(
+      "stage progression: the TBD KO fixture's home/away slot labels are real {key,params} descriptors (V360/V362, not a raw string)",
+      home?.key === "slot.winner_group" &&
+        away?.key === "slot.winner_group" &&
+        typeof home.params.g === "string" &&
+        typeof away.params.g === "string" &&
+        home.params.g !== away.params.g,
+    );
+  }
 
   const groupGen = v1data<{ fixtures: { id: string }[] }>(
     await v1(free, `/api/v1/stages/${groupId}/generate`, "POST"),
@@ -6568,22 +6588,66 @@ async function stageProgressionSuite(): Promise<void> {
   );
 
   // "propose": explicit recompute (the real endpoint an organiser's UI hits).
-  const proposal = v1data<{ id: string; computed: { qualifiers: unknown[] } }>(
-    await v1(free, `/api/v1/stages/${koId}/seed-proposal`, "POST"),
-  );
+  const proposal = v1data<{
+    id: string;
+    computed: { qualifiers: { entrantId: string; destinationSlot: string }[] };
+  }>(await v1(free, `/api/v1/stages/${koId}/seed-proposal`, "POST"));
   check("stage progression: proposal names both qualifiers", proposal.computed.qualifiers.length === 2);
 
+  // P6 (D4b task B) — the proposal panel's edit-in-place sends `edits[]`
+  // overriding the computed slate (buildEditsPayload). Prove the SAME
+  // confirm route the panel calls honours an organiser's override through
+  // real HTTP: swap the two qualifiers' destination slots rather than
+  // confirming the computed (unedited) assignment P5's own smoke coverage
+  // already exercised.
+  const [q0, q1] = proposal.computed.qualifiers;
+  const swapEdits = [
+    { destinationSlot: q0!.destinationSlot, entrantId: q1!.entrantId },
+    { destinationSlot: q1!.destinationSlot, entrantId: q0!.entrantId },
+  ];
+
   // "confirm": fills the TBD fixture through the same fillSlot pathway
-  // intra-bracket advancement uses.
+  // intra-bracket advancement uses — with the organiser's edit applied.
   const confirmed = v1data<{
     filled: number;
-    fixtures: { id: string; home_entrant_id: string | null; away_entrant_id: string | null }[];
-  }>(await v1(free, `/api/v1/stages/${koId}/seed-proposal/confirm`, "POST", { proposalId: proposal.id }));
+    fixtures: {
+      id: string;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      home_slot_label: SlotLabelWire;
+      away_slot_label: SlotLabelWire;
+    }[];
+  }>(
+    await v1(free, `/api/v1/stages/${koId}/seed-proposal/confirm`, "POST", {
+      proposalId: proposal.id,
+      edits: swapEdits,
+    }),
+  );
   check(
     "stage progression: confirm fills both KO slots",
     confirmed.filled === 2 &&
       confirmed.fixtures[0]!.home_entrant_id !== null &&
       confirmed.fixtures[0]!.away_entrant_id !== null,
+  );
+  // The panel's edit-in-place actually took effect — the SWAPPED entrant
+  // landed in each slot, not the engine's computed default.
+  {
+    const fixture = confirmed.fixtures[0]!;
+    const [side0, side1] = [q0!.destinationSlot.split(":")[1], q1!.destinationSlot.split(":")[1]];
+    const landedForQ0Slot = side0 === "home" ? fixture.home_entrant_id : fixture.away_entrant_id;
+    const landedForQ1Slot = side1 === "home" ? fixture.home_entrant_id : fixture.away_entrant_id;
+    check(
+      "stage progression: confirm honours the panel's edit-in-place override — the SWAPPED entrant lands, not the computed one",
+      landedForQ0Slot === q1!.entrantId && landedForQ1Slot === q0!.entrantId,
+    );
+  }
+  // P6 (D4b task A) fix round 1 — the schema comment's "Cleared on fill"
+  // contract (schemas.ts's Fixture.home_slot_label), proved end to end: a
+  // filled slot must not keep carrying stale descriptor text a renderer
+  // could show ALONGSIDE the real entrant name.
+  check(
+    "stage progression: filling a slot clears its label — never lingers next to the real entrant name",
+    confirmed.fixtures[0]!.home_slot_label === null && confirmed.fixtures[0]!.away_slot_label === null,
   );
 
   // "next stage playable": the now-real fixture accepts a score exactly like

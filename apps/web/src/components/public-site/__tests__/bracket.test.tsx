@@ -4,15 +4,25 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { Bracket } from "../bracket";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
+import { msgFor } from "@/lib/messages-i18n";
+// P6 fix round 2, coordinator item #2: `lookup` is now compile-mandatory
+// (matches Schedule's `slotLabels`) — every call below that wants the
+// plain English default now passes it explicitly, msg() being exactly
+// what the removed default value used to be.
+import { msg } from "@/lib/messages";
 
 const F = (
   id: string, round: number, seq: number,
   home: string | null, away: string | null,
   outcome: { kind?: string; winner?: string } | null,
   status = "scheduled",
+  homeSlotLabel: SlotLabel | null = null,
+  awaySlotLabel: SlotLabel | null = null,
 ) => ({
   id, division_id: "d", stage_id: "s", pool_id: null, round_no: round,
   seq_in_round: seq, home_entrant_id: home, away_entrant_id: away,
+  home_slot_label: homeSlotLabel, away_slot_label: awaySlotLabel,
   scheduled_at: null, venue: null, court_label: null, status, outcome,
   summary: outcome ? { headline: "2–0" } : null,
 });
@@ -28,7 +38,7 @@ describe("public Bracket", () => {
       F("f3", 1, 1, "a", null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(html).toContain("<svg");
     expect(html).toContain('data-bracket="two-sided"');
@@ -44,7 +54,7 @@ describe("public Bracket", () => {
       F("f3", 3, 1, null, "d", null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "stepladder", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "stepladder", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(html).not.toContain('data-bracket="two-sided"');
     expect(html).toContain("Rung 1");
@@ -53,7 +63,7 @@ describe("public Bracket", () => {
   it("falls back to columns when a knockout's shape isn't single-elim (partial data)", () => {
     const fixtures = [F("f1", 0, 1, "a", "b", null), F("f2", 0, 2, "c", "d", null), F("f3", 0, 3, "a", "c", null)];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(html).not.toContain('data-bracket="two-sided"');
   });
@@ -70,7 +80,7 @@ describe("public Bracket", () => {
       F("gf", 9, 1, null, null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(html).toContain('data-bracket="double-elim"');
     expect(html).toContain("Winners bracket");
@@ -85,7 +95,7 @@ describe("public Bracket", () => {
   it("keeps the column fallback for irregular double-elim shapes", () => {
     const fixtures = [F("f1", 1, 1, "a", "b", null), F("f2", 2, 1, "c", "d", null), F("f3", 2, 2, "a", "c", null)];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(html).not.toContain('data-bracket="double-elim"');
   });
@@ -100,14 +110,14 @@ describe("public Bracket", () => {
     const html = renderToStaticMarkup(
       createElement(Bracket, {
         kind: "knockout", fixtures: fixtures as never, entrantNames: names,
-        entrantLogos: logos, fixtureHref: href,
+        entrantLogos: logos, fixtureHref: href, lookup: msg,
       }),
     );
     expect(html).toContain('src="https://flags.example/a.png"');
     // b has no badge and d has no entry — exactly one img chip.
     expect(html.match(/<img/g)?.length).toBe(1);
     const without = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(without).not.toContain("<img");
   });
@@ -120,11 +130,108 @@ describe("public Bracket", () => {
       F("fin", 3, 1, "a", null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "page_playoff", fixtures: fixtures as never, entrantNames: names, fixtureHref: href }),
+      createElement(Bracket, { kind: "page_playoff", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
     );
     expect(html).toContain('data-bracket="page-playoff"');
     for (const cap of ["Qualifier 1", "Eliminator", "Qualifier 2", "Final"]) expect(html).toContain(cap);
     expect(html.match(/data-slot=/g)?.length).toBe(4);
     expect(html).toContain("<svg");
+  });
+
+  // P6/D4b task A — regression: a fixture list with a MIX of a filled
+  // (real-entrant) row and an unfilled row carrying a real V360 slot label
+  // must render BOTH correctly through the SAME shared resolver, against the
+  // REAL en dictionary (this file's Bracket never mocks msg()/useMsg() — it
+  // imports the client-safe msg() directly), not the raw "TBD" this surface
+  // printed before P6. Anchored on `="` per the RSC vacuous-assertion rule:
+  // a bare data-* probe would pass whether or not the label actually
+  // resolved (React serialises an omitted prop as the literal string
+  // "$undefined"), so every assertion below checks the actual rendered text
+  // between real tags, not merely that some attribute is present.
+  it("a MIX of filled and slot-labelled TBD rows both render — real dictionary, no raw \"TBD\"", () => {
+    const fixtures = [
+      // f1: fully decided, both sides real entrants — the "filled" row.
+      F("f1", 0, 1, "a", "b", { kind: "win", winner: "a" }, "decided"),
+      // f2: home real, away UNDECIDED but carries a real slot label — the
+      // "TBD with a label" row (V360's descriptorLabel() shape).
+      F("f2", 0, 2, "c", null, null, "scheduled", null, { key: "slot.winner_group", params: { g: "A" } }),
+      // f3 (round 1, the final): BOTH sides undecided, one with a label, one
+      // truly unknown — proves the null-label fallback stays distinct from
+      // a resolved label in the SAME render pass.
+      F("f3", 1, 1, null, null, null, "scheduled", { key: "slot.runner_up_group", params: { g: "B" } }, null),
+    ];
+    const html = renderToStaticMarkup(
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+    );
+    // Filled row: real entrant names, anchored as actual rendered text.
+    expect(html).toMatch(/>Ants<\/span>/);
+    expect(html).toMatch(/>Bees<\/span>/);
+    // TBD-with-label rows: the REAL interpolated English text from
+    // dictionaries/en/ui.json, not the bare key and not a hand-concatenated
+    // string — proves the label path is live end to end on this surface.
+    expect(html).toMatch(/>Winner of Group A<\/span>/);
+    expect(html).toMatch(/>Runner-up of Group B<\/span>/);
+    // The one truly-unknown side (f3's home) falls back to the existing
+    // localized "bracket.tbd" text — still not a hardcoded literal in THIS
+    // component, but genuinely equal to it in English.
+    expect(html).toMatch(/>TBD<\/span>/);
+    // No leaked pattern keys or unfilled {placeholder} tokens anywhere.
+    expect(html).not.toContain("slot.winner_group");
+    expect(html).not.toContain("slot.runner_up_group");
+    expect(html).not.toMatch(/\{[a-zA-Z]+\}/);
+  });
+
+  // Fix round 1, finding #5 (MINOR): "slot.best_nth" resolves to text like
+  // "Best 3 of the 3rd-place teams" — far wider than a team name — and this
+  // node truncates it. Every side needs a `title` with the SAME text that
+  // renders, so a pointer/keyboard user can still read the whole label.
+  it("every truncated side carries a title with its own resolved text (finding #5)", () => {
+    const fixtures = [
+      F("f1", 0, 1, "a", "d", { kind: "win", winner: "a" }, "decided"),
+      F("f2", 0, 2, "b", null, null, "scheduled", null, { key: "slot.best_nth", params: { rank: 2, nth: 3 } }),
+      F("f3", 1, 1, null, null, null),
+    ];
+    const html = renderToStaticMarkup(
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+    );
+    expect(html).toContain('title="Ants"');
+    expect(html).toContain('title="Dogs"');
+    expect(html).toContain('title="Bees"');
+    expect(html).toContain('title="Best 2 of the 3-place teams"');
+  });
+
+  // Fix round 1, finding #2 (CRITICAL): this component previously had NO way
+  // to reach a real locale at all — it always resolved slot labels through
+  // the client-safe English msg(), regardless of the org's own
+  // default_locale. Proves the new `lookup` prop actually drives the
+  // rendered text (not just accepted and ignored) — the caller (the public
+  // division/embed pages) builds it from msgFor(orgLocale, …), same pattern
+  // as data.ts:502-503.
+  it("resolves slot labels through the injected `lookup`, not always English (finding #2)", () => {
+    const fixtures = [
+      F("f1", 0, 1, "a", "d", { kind: "win", winner: "a" }, "decided"),
+      F("f2", 0, 2, "b", null, null, "scheduled", null, { key: "slot.winner_group", params: { g: "A" } }),
+      F("f3", 1, 1, null, null, null),
+    ];
+    const esLookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor("es", k, v);
+    const html = renderToStaticMarkup(
+      createElement(Bracket, {
+        kind: "knockout",
+        fixtures: fixtures as never,
+        entrantNames: names,
+        fixtureHref: href,
+        lookup: esLookup,
+      }),
+    );
+    expect(html).toMatch(/>Ganador del Grupo A</); // slot.winner_group, es
+    expect(html).not.toContain("Winner of Group A");
+    // The genuinely-unknown side (f3) falls back through the SAME lookup —
+    // es's bracket.tbd ("Por definir"), not the English default. (f3's OWN
+    // scheduled_at/headline area separately and correctly renders a literal
+    // "TBD" — that is FixtureCard's pre-existing, out-of-scope time-status
+    // fallback, not a slot label, so this checks the SLOT specifically via
+    // its title attribute rather than a blanket "no TBD anywhere" scan.)
+    expect(html).toMatch(/title="Por definir"/);
+    expect(html).not.toContain("bracket.tbd");
   });
 });

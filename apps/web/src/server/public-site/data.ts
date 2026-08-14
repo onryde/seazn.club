@@ -20,6 +20,7 @@ import { countMatchesByDivision } from "@/server/usecases/player-stats";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 /**
  * `{count}`-pluralized org-default-locale copy — the `public-site/data.ts`
@@ -112,6 +113,11 @@ export interface PublicFixture {
   seq_in_round: number;
   home_entrant_id: string | null;
   away_entrant_id: string | null;
+  /** D4b (P6) — {key, params} i18n pattern ref while the matching
+   *  *_entrant_id is null (V360's fixtures.home/away_slot_label, exposed on
+   *  public_fixtures_v by V362). */
+  home_slot_label: SlotLabel | null;
+  away_slot_label: SlotLabel | null;
   scheduled_at: string | null;
   venue: string | null;
   court_label: string | null;
@@ -282,6 +288,7 @@ export async function getPublicCompetition(
       const liveNow = await sql<PublicFixture[]>`
         select f.id, f.division_id, f.stage_id, f.pool_id, f.round_no,
                f.seq_in_round, f.home_entrant_id, f.away_entrant_id,
+               f.home_slot_label, f.away_slot_label,
                f.scheduled_at, f.venue, f.court_label, f.status, f.outcome,
                f.summary, f.last_seq
         from public_fixtures_v f
@@ -331,7 +338,8 @@ export async function getPublicDivision(
         where s.division_id = ${division.id} order by p.key`;
       const fixtures = await sql<PublicFixture[]>`
         select id, division_id, stage_id, pool_id, round_no, seq_in_round,
-               home_entrant_id, away_entrant_id, scheduled_at, venue, court_label,
+               home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
+               scheduled_at, venue, court_label,
                status, outcome, summary, last_seq
         from public_fixtures_v where division_id = ${division.id}
         order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixture));
@@ -391,7 +399,8 @@ export async function getPublicFixture(
     async () => {
       const [fixtureRow] = await sql<PublicFixture[]>`
         select id, division_id, stage_id, pool_id, round_no, seq_in_round,
-               home_entrant_id, away_entrant_id, scheduled_at, venue, court_label,
+               home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
+               scheduled_at, venue, court_label,
                status, outcome, summary, last_seq
         from public_fixtures_v
         where id = ${fixtureId} and division_id = ${division.id} limit 1`;

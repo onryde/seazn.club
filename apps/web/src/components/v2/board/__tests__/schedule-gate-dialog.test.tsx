@@ -26,6 +26,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import type { BoardConflict, BoardDivision, BoardFixture, BoardStage } from "../types";
 
@@ -219,6 +220,45 @@ describe("the gate dialog offers NO way through for blocking conflicts", () => {
 
   it("renders nothing at all when there is no refusal", () => {
     expect(dialogMarkup(null)).toBe("");
+  });
+});
+
+describe("fix round 3 (Important 3): an unfilled slot's conflict-row title resolves through this org's REAL locale", () => {
+  const esDict = es as unknown as Dict;
+  const TBD_BOARD: BoardFixture[] = [
+    {
+      id: "f1",
+      division_id: "d1",
+      home_entrant_id: null,
+      away_entrant_id: null,
+      home_slot_label: { key: "slot.winner_group", params: { g: "A" } },
+      away_slot_label: { key: "slot.winner_group", params: { g: "B" } },
+      scheduled_at: "2026-08-01T09:00:00.000Z",
+      court_label: "Court 1",
+      status: "scheduled",
+      schedule_locked: false,
+    } as unknown as BoardFixture,
+  ];
+
+  it("names the fixture in the ORG's locale, not cardTitle's client-safe English default", () => {
+    // The dialog's cardTitle() call was missing `msg` (useMsg(), line 62) as
+    // the 4th arg — an unfilled slot fell through to the English default
+    // regardless of the DictProvider ancestor below.
+    const html = renderToStaticMarkup(
+      <DictProvider locale={"es" as Locale} dict={esDict}>
+        <ScheduleGateDialog
+          gate={{ kind: "blocking", action: "publish", conflicts: [COURT_CLASH] }}
+          board={TBD_BOARD}
+          entrantNames={{}}
+          feedLabels={{}}
+          onConfirm={() => undefined}
+          onDismiss={() => undefined}
+        />
+      </DictProvider>,
+    );
+    expect(html).toContain("Ganador del Grupo A");
+    expect(html).toContain("Ganador del Grupo B");
+    expect(html).not.toContain("Winner of Group A");
   });
 });
 

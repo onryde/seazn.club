@@ -22,6 +22,9 @@ import { ResultsMatrix } from "@/components/public-site/results-matrix";
 import { SuspensionsStrip } from "@/components/public-site/suspensions-strip";
 import { publicSuspensions } from "@/server/usecases/discipline";
 import type { MetricSpecLike } from "@/lib/public-site";
+import { toLocale } from "@/lib/i18n-constants";
+import { msgFor } from "@/lib/messages-i18n";
+import { resolveSlotLabel } from "@/lib/slot-label";
 
 export const revalidate = 30;
 
@@ -86,6 +89,24 @@ export default async function DivisionHomePage({ params }: Props) {
   const basePath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
   const poolName = new Map(pools.map((p) => [p.id, p.name]));
   const stageById = new Map(stages.map((s) => [s.id, s]));
+
+  // P6 fix round 1, finding #2 (CRITICAL): slot-label copy for a spectator
+  // — the org's own default_locale (v5 i18n §4), same pattern as
+  // data.ts:502-503. Deliberately NOT resolveLocale(): this route has no
+  // request-scoped cookies()/headers() call to make and every visitor sees
+  // the SAME page regardless of who they are.
+  const orgLocale = toLocale(org.default_locale);
+  const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
+    msgFor(orgLocale, k, v);
+  // <Schedule> is a Client Component — it cannot call msgFor() itself
+  // (server-only), so every unfilled slot's text is pre-resolved HERE and
+  // handed down as a plain Record<string,string>, same shape as
+  // `entrantNames` above.
+  const slotLabels: Record<string, string> = {};
+  for (const f of fixtures) {
+    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd");
+    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd");
+  }
 
   // SPEC-1: active suspensions under the standings (consent-gated names). Public
   // read; a published ban is public information. Never throws the page down.
@@ -162,6 +183,7 @@ export default async function DivisionHomePage({ params }: Props) {
                 entrantNames={entrantNames}
                 entrantLogos={entrantLogos}
                 fixtureHref={(id) => `${basePath}/fixtures/${id}`}
+                lookup={lookup}
               />
             </section>
           );
@@ -347,6 +369,7 @@ export default async function DivisionHomePage({ params }: Props) {
             entrantNames={entrantNames}
             divisionPath={basePath}
             tz={tz}
+            slotLabels={slotLabels}
           />,
           standingsPanel,
           entrantsPanel,

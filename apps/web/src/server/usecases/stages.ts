@@ -45,6 +45,8 @@ import type { CreateStages, StageSeedingInput } from "@/server/api-v1/schemas";
 import { z } from "zod";
 import { CreateStage } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
+import { msg } from "@/lib/messages";
+import { resolveSlotLabel } from "@/lib/slot-label";
 import { validateSchedule } from "./schedule";
 import {
   descriptorKey,
@@ -786,15 +788,24 @@ export function previewDivisionFixtures(
       return { title: stage.name, note: "Preview isn't available for this format.", sections: [] };
     }
 
-    // id → label; and extKey → short ref so feeds read "Winner of R2 #1".
+    // id → label; and extKey → short ref so feeds read "Winner of R2 #1" — via
+    // the design's slot.winner_match/slot.loser_match ({ext}) pair, resolved
+    // through the same resolveSlotLabel() every real renderer uses (A1/A2),
+    // never a hand-built template. This preview has no locale in scope (it
+    // backs the marketing gallery + /help/formats, always English before and
+    // after), so it resolves through the client-safe English msg().
     const idLabel = new Map<string, string>();
     for (let i = 0; i < entrantCount; i++) idLabel.set(`e${i + 1}`, label(i));
     const refByExt = new Map(gen.map((f) => [f.extKey, `R${f.roundNo} #${f.seqInRound}`]));
 
     const slot = (id: string | null, from?: { extKey: string; side: "winner" | "loser" }): string => {
       if (id) return idLabel.get(id) ?? id;
-      if (from) return `${from.side === "loser" ? "Loser" : "Winner"} of ${refByExt.get(from.extKey) ?? "TBD"}`;
-      return "TBD";
+      if (from) {
+        const ext = refByExt.get(from.extKey) ?? "TBD";
+        const key = from.side === "loser" ? "slot.loser_match" : "slot.winner_match";
+        return resolveSlotLabel({ key, params: { ext } }, msg, "schedule.tbd");
+      }
+      return resolveSlotLabel(null, msg, "schedule.tbd");
     };
 
     // Group by pool (group stages) or by round (everything else).
@@ -2012,6 +2023,35 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
       returning id`;
 
     return { id: row!.id, stageId, status: "draft", computed };
+  });
+}
+
+/**
+ * Read-only: the latest seed proposal for `stageId` (any status —
+ * draft/confirmed/stale), or null if none has been computed yet (P6/D4b task
+ * B ruling — see docs/superpowers/plans/2026-08-13-p6-progression-ui-plan.md
+ * "There is no read path for a proposal"). `stage_seed_proposals` is
+ * otherwise touched only inside compute/confirm/stale-marking; a panel that
+ * renders on page load must not POST to discover its own state (recompute
+ * marks prior drafts stale and inserts a row — a real side effect). This
+ * function issues one `select`, nothing else — never call computeSeedProposal
+ * from here to paper over a null.
+ *
+ * Consumed by the division page (server component) and handed to
+ * ProgressionPanel as a prop; fresh state after a recompute or confirm comes
+ * from `router.refresh()`, not a re-call of this function reacting to state.
+ */
+export async function getSeedProposal(auth: AuthCtx, stageId: string): Promise<SeedProposalOut | null> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [row] = await tx<
+      { id: string; stage_id: string; status: SeedProposalOut["status"]; computed: SeedProposalOut["computed"] }[]
+    >`
+      select id, stage_id, status, computed from stage_seed_proposals
+      where stage_id = ${stageId}
+      order by created_at desc, id desc
+      limit 1`;
+    if (!row) return null;
+    return { id: row.id, stageId: row.stage_id, status: row.status, computed: row.computed };
   });
 }
 
