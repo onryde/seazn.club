@@ -234,6 +234,40 @@ describe("legacyVerifierConflict — the AI repair round's byte-identical copy",
     expect(out.detail).toBe("starts before feeder f0 ends");
   });
 
+  it("rebuilds the pre-C3 key order — `detail` sits where it always did, not wherever the destructure left it (review finding 4)", () => {
+    // Pre-C3 (git show d0cd9a25:packages/engine/src/scheduling/calendar.ts),
+    // every push site wrote `{ fixtureId, reason, detail, [direct],
+    // [shortfallMinutes] }` in that literal order, and `withRule` appended
+    // `rule` last (`{ ...c, rule: RULE_BY_REASON[c.reason] }` — `rule` is
+    // never already a key on `c`, so the spread always adds it at the end).
+    // `{ ...rest, detail: ... }` on a `rest` that still carries `direct`/
+    // `shortfallMinutes`/`rule` from the CURRENT (post-C3) object instead
+    // puts `detail` at the very end, after `rule` — same field SET, wrong
+    // BYTES, which is what licenses the "byte-identical model payload"
+    // claim behind the AI-credit token-weight argument.
+    const c = {
+      fixtureId: "f1",
+      reason: "order" as const,
+      direct: true,
+      rule: "H6" as const,
+      shortfallMinutes: 15,
+      details: { kind: "order_before_feeder" as const, otherFixtureId: "f0" },
+    };
+    const out = legacyVerifierConflict(c);
+    expect(Object.keys(out)).toEqual([
+      "fixtureId",
+      "reason",
+      "detail",
+      "direct",
+      "shortfallMinutes",
+      "rule",
+    ]);
+    // The same invariant as it actually reaches the model: JSON.stringify
+    // drops nothing here (every field is defined), so key order in the JS
+    // object IS the order the bytes serialize in.
+    expect(Object.keys(JSON.parse(JSON.stringify(out)))).toEqual(Object.keys(out));
+  });
+
   it("a conflict with no `details` at all gets no `detail` either — mirrors pre-C3 exactly", () => {
     const c = { fixtureId: "f1", reason: "instruction" as const };
     expect(legacyVerifierConflict(c)).toEqual({ fixtureId: "f1", reason: "instruction" });

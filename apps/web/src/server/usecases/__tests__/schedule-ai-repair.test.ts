@@ -292,6 +292,27 @@ describe("solver repair in runAiPlan (#401)", () => {
       expect(c).not.toHaveProperty("details");
     }
     expect(conflicts.some((c) => typeof c.detail === "string" && c.detail.length > 0)).toBe(true);
+
+    // Review finding 4: the field SET pinned above is not the field ORDER —
+    // a plain `{ ...rest, detail: ... }` keeps the same set while moving
+    // `detail` to the very end (after `rule`), which is NOT what the model
+    // read pre-C3 (git show d0cd9a25: every push site wrote `{ fixtureId,
+    // reason, detail, [direct], [shortfallMinutes] }`, and `withRule`
+    // always appended `rule` last). Same character count, same token
+    // weight, different BYTES — pin the order too, or this drifts silently
+    // again. Checked as "each present key's canonical index is
+    // non-decreasing" rather than a fixed array, since which optional
+    // fields (`direct`/`shortfallMinutes`) ride along varies per conflict.
+    const PRE_C3_KEY_ORDER = ["fixtureId", "reason", "detail", "direct", "shortfallMinutes", "rule"];
+    for (const c of conflicts) {
+      const indices = Object.keys(c).map((k) => PRE_C3_KEY_ORDER.indexOf(k));
+      expect(indices).toEqual([...indices].sort((a, b) => a - b));
+    }
+    // `rule` is always populated (RULE_BY_REASON is exhaustive over every
+    // ConflictReason), so at least one real conflict here exercises the
+    // "detail before rule" case this whole finding is about — an order
+    // check with nothing to order proves nothing.
+    expect(conflicts.some((c) => "rule" in c && "detail" in c)).toBe(true);
   });
 });
 

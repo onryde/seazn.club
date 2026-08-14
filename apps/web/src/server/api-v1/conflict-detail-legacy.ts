@@ -47,11 +47,24 @@ export function legacyConflictDetail(d: ConflictDetail): string {
  * never saw before would widen the request's token weight, which AI-credit
  * accounting depends on staying put) and derives `detail` from it instead,
  * so every other field (`fixtureId`, `reason`, `direct`, `rule`,
- * `shortfallMinutes`) rides through completely unchanged.
+ * `shortfallMinutes`) rides through completely unchanged — same set AND
+ * same byte order as pre-C3 (review finding 4): a plain `{ ...rest, detail
+ * }` puts `detail` wherever `rest`'s own insertion order left it (the very
+ * END, after `rule`), not where every pre-C3 push site wrote it (3rd,
+ * right after `reason`) — same field set, different bytes, which is what
+ * the "byte-identical model payload" claim behind the AI-credit token-
+ * weight argument actually needs to be true.
  */
 export function legacyVerifierConflict(c: Conflict): Omit<Conflict, "details"> & { detail?: string } {
-  const { details, ...rest } = c;
-  return details !== undefined ? { ...rest, detail: legacyConflictDetail(details) } : rest;
+  const { fixtureId, reason, details, direct, shortfallMinutes, rule } = c;
+  return {
+    fixtureId,
+    reason,
+    ...(details !== undefined ? { detail: legacyConflictDetail(details) } : {}),
+    ...(direct !== undefined ? { direct } : {}),
+    ...(shortfallMinutes !== undefined ? { shortfallMinutes } : {}),
+    ...(rule !== undefined ? { rule } : {}),
+  };
 }
 
 /**
