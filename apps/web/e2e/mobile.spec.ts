@@ -1296,16 +1296,14 @@ test("P6 task B: panel resolves the tie, confirms, bracket shows real entrants, 
   await expectNoHorizontalScroll(page);
 });
 
-test("P6 task B: destructive-edit dialog names the blast radius before regenerating a stage that already has fixtures", async ({
+test("P6 task B fix round 3 (Critical 1): regenerating a stage that already has fixtures is a plain, unguarded click — no destructive-edit warning", async ({
   page,
 }) => {
   test.skip(p6bDivisionId === "", "P6 task B setup did not run/complete");
   await loginUi(page, P6B_EMAIL());
 
   // A SEPARATE division/stage from the tie scenario — this path is generic
-  // to any stage with existing fixtures, not specific to `.seeding`. Reuses
-  // the same entrants; a plain 2-pool group stage keeps the fixture count
-  // small (2) and predictable for the dialog's named numbers.
+  // to any stage with existing fixtures, not specific to `.seeding`.
   const comp = await apiJson<{ id: string }>(page.request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `P6 TaskB Regen ${TAG}`,
@@ -1331,29 +1329,22 @@ test("P6 task B: destructive-edit dialog names the blast radius before regenerat
   const groupCard = page.locator("section.card", { hasText: "Groups" }).first();
   const generateBtn = groupCard.getByRole("button", { name: "Generate fixtures" });
   await expect(generateBtn).toBeVisible();
-  await generateBtn.click(); // stageFixtures.length > 0 already — must warn, not act immediately
 
-  const dialog = page.getByRole("alertdialog");
-  await expect(dialog).toBeVisible({ timeout: 10_000 });
-  await expect(dialog.getByText("Regenerate this stage's fixtures?", { exact: false })).toBeVisible();
-  await expect(dialog.getByText("2 total", { exact: false })).toBeVisible(); // names the discard count
+  // Regeneration is additive-only — generateStageFixtures never deletes, it
+  // only inserts fixtures missing from the stage's existing set (stages.ts)
+  // — so a re-click on a stage that ALREADY has fixtures (stageFixtures.length
+  // > 0) proceeds immediately: no "are you sure" gate, because there is
+  // nothing at stake to name. The old dialog claimed data loss that could
+  // never happen; it is gone, not replaced with different copy.
+  await generateBtn.click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.getByText(/error/i)).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 
-  // Cancel: the handler returns before calling act() at all (no fetch, no
-  // router.refresh() — proven at the unit layer in
-  // stages-panel-regenerate-blast-radius.test.ts's wiring; here the browser
-  // proof is that NO success/notice banner appears, since one only renders
-  // after a real generate response lands).
-  await dialog.getByRole("button", { name: "Cancel" }).click();
-  await expect(dialog).toBeHidden();
-  await expect(page.getByText("Nothing new", { exact: false })).toHaveCount(0);
-  await expect(page.getByText("already existed", { exact: false })).toHaveCount(0);
-
-  // Confirm: proceeds through the SAME unchanged regenerate route — rules
-  // didn't change, so this is idempotent (created: 0, existing: 2).
-  await generateBtn.click();
-  await expect(page.getByRole("alertdialog")).toBeVisible({ timeout: 10_000 });
-  await page.getByRole("alertdialog").getByRole("button", { name: "Regenerate anyway" }).click();
-  await expect(page.getByRole("alertdialog")).toBeHidden();
-  await expect(page.getByText(/error/i)).toHaveCount(0);
+  // Idempotent: rules didn't change since the API-driven generate above, so
+  // the real outcome is "nothing new" — proven via the notice text the
+  // component itself renders on a landed response (schedule.notice.nothingNew),
+  // which is only reachable once the request actually fired (no gate ate the
+  // click).
+  await expect(page.getByText("Nothing new to generate", { exact: false })).toBeVisible({ timeout: 10_000 });
 });

@@ -57,8 +57,8 @@ interface FixtureLabelRow {
 
 // ---------------------------------------------------------------------------
 // Pure logic — exported for direct unit testing, no DOM. Mirrors
-// stages-panel.tsx's generatePreconditionMessage/regenerationBlastRadius
-// convention in this same package.
+// stages-panel.tsx's generatePreconditionMessage convention in this same
+// package.
 // ---------------------------------------------------------------------------
 
 /** Every tie's every slot must carry an explicit edit before confirm is
