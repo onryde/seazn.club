@@ -47,7 +47,36 @@ describe("generatePreconditionMessage — StagesPanel generate-click classifier"
     expect(text).toContain("4");
     expect(text).toContain("8");
     expect(text).toContain("6");
+    // Minor 1 (P7 fix round, whole-branch review): `stranded` is the one
+    // datum this message adds over the plain-path copy — assert it actually
+    // reaches the rendered text, not just that it's present on `.extra`.
+    expect(text).toContain("2");
     expect(text).not.toBe(msg("schedule.notice.nothingNew"));
+  });
+
+  // Major (P7 fix round, whole-branch review): groups<=1 — an ungrouped
+  // seeded kind (knockout/page_playoff/double_elim/stepladder/league), or a
+  // group-kind stage left at pools.count's default of 1 — used to fall
+  // through to the PLAIN path's tooFewEntrants copy ("add at least 2
+  // entrants to this stage first"). That advice cannot be followed: a
+  // `.seeding` stage's entrants are synthetic slot:N seeds minted from
+  // seeding.take rules (stages.ts:1399-1403), not rows a user can add. This
+  // must render seeded-specific, actionable copy instead.
+  it("returns the seeded-specific message (not tooFewEntrants) for a seeded stage with groups <= 1", () => {
+    const err = new ApiV1Error("not enough qualifiers to generate any matches", 422, "STAGE_NOT_READY", {
+      reason: "seeded_pool_too_few_qualifiers",
+      groups: 1,
+      qualifiers: 3,
+      required: 2,
+      stranded: 1,
+    });
+    const text = generatePreconditionMessage(err, msg);
+    expect(text).not.toBeNull();
+    expect(text).not.toBe(msg("schedule.error.tooFewEntrants"));
+    expect(text).toBe(msg("schedule.error.tooFewQualifiers", { qualifiers: 3, stranded: 1 }));
+    // The stranded count is the datum this copy adds — confirm it renders.
+    expect(text).toContain("1");
+    expect(text).toContain("3");
   });
 
   it("returns null for an unrelated ApiV1Error (falls through to the generic error banner)", () => {

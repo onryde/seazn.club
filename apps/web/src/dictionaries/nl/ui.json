@@ -1469,6 +1469,7 @@
   "schedule.error.tooFewGroupEntrants": "Kan nog geen wedstrijden genereren — {groups} groepen hebben in totaal minstens {required} deelnemers nodig (nu {have}). Voeg deelnemers toe of wijs ze eerst aan groepen toe.",
   "schedule.error.tooFewEntrants": "Kan nog geen wedstrijden genereren — voeg eerst minstens 2 deelnemers toe aan deze fase.",
   "schedule.error.tooFewSeededQualifiers": "Kan nog geen wedstrijden genereren — {groups} groepen hebben in totaal minstens {required} gekwalificeerden nodig (nu {have}); {stranded} zouden nooit een wedstrijd krijgen. Voeg meer gekwalificeerden toe of verklein eerst het aantal groepen.",
+  "schedule.error.tooFewQualifiers": "Kan nog geen wedstrijden genereren — de plaatsingsregels voor deze fase leveren niet genoeg gekwalificeerden op om ook maar één wedstrijd te genereren ({stranded} van {qualifiers} zouden er nooit een krijgen). Verhoog het aantal gekwalificeerden in de plaatsingsregels of controleer eerst de resultaten van de bronfase.",
   "documents.title": "Documenten",
   "documents.orderOfPlay": "Speelschema",
   "documents.matchSheets": "Wedstrijdformulieren",

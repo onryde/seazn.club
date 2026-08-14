@@ -3427,6 +3427,7 @@ export type DictionaryKey =
   | "schedule.error.failed"
   | "schedule.error.tooFewEntrants"
   | "schedule.error.tooFewGroupEntrants"
+  | "schedule.error.tooFewQualifiers"
   | "schedule.error.tooFewSeededQualifiers"
   | "schedule.error.undoFailed"
   | "schedule.field.court"

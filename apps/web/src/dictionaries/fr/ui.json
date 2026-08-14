@@ -1469,6 +1469,7 @@
   "schedule.error.tooFewGroupEntrants": "Impossible de générer les matchs pour l'instant — {groups} groupes nécessitent au moins {required} participants au total (actuellement {have}). Ajoutez des participants ou répartissez-les d'abord dans les groupes.",
   "schedule.error.tooFewEntrants": "Impossible de générer les matchs pour l'instant — ajoutez d'abord au moins 2 participants à cette phase.",
   "schedule.error.tooFewSeededQualifiers": "Impossible de générer les matchs pour l'instant — {groups} groupes nécessitent au moins {required} qualifiés au total (actuellement {have}) ; {stranded} ne recevraient jamais de match. Ajoutez des qualifiés ou réduisez d'abord le nombre de groupes.",
+  "schedule.error.tooFewQualifiers": "Impossible de générer les matchs pour l'instant — les règles de qualification de cette phase ne produisent pas assez de qualifiés pour générer le moindre match ({stranded} sur {qualifiers} ne recevraient jamais de match). Augmentez le nombre de qualifiés dans les règles de qualification ou vérifiez d'abord les résultats de la phase source.",
   "documents.title": "Documents",
   "documents.orderOfPlay": "Ordre des matchs",
   "documents.matchSheets": "Feuilles de match",

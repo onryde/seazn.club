@@ -1469,6 +1469,7 @@
   "schedule.error.tooFewGroupEntrants": "Aún no se pueden generar los partidos — {groups} grupos necesitan al menos {required} participantes en total (hay {have}). Añade más participantes o asígnalos primero a los grupos.",
   "schedule.error.tooFewEntrants": "Aún no se pueden generar los partidos — añade primero al menos 2 participantes a esta fase.",
   "schedule.error.tooFewSeededQualifiers": "Aún no se pueden generar los partidos — {groups} grupos necesitan al menos {required} clasificados en total (hay {have}); {stranded} nunca recibirían un partido. Añade más clasificados o reduce primero el número de grupos.",
+  "schedule.error.tooFewQualifiers": "Aún no se pueden generar los partidos — las reglas de clasificación de esta fase no producen suficientes clasificados para generar ningún partido ({stranded} de {qualifiers} nunca recibirían uno). Aumenta los clasificados en las reglas de clasificación o revisa primero los resultados de la fase de origen.",
   "documents.title": "Documentos",
   "documents.orderOfPlay": "Orden de juego",
   "documents.matchSheets": "Hojas de partido",

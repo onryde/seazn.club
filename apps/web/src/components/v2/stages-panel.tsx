@@ -1054,6 +1054,14 @@ export function generatePreconditionMessage(err: unknown, msg: Msg): string | nu
   // QUALIFIERS the seeding rules produce, not in registered entrants.
   if (err.extra.reason === "seeded_pool_too_few_qualifiers") {
     const groups = Number(err.extra.groups ?? 1);
+    // P7 fix round (Major, whole-branch review): groups<=1 (an ungrouped
+    // seeded kind, or a group stage left at pools.count's default of 1)
+    // used to fall back to the PLAIN path's tooFewEntrants copy ("add at
+    // least 2 entrants to this stage first") — unactionable here, since a
+    // `.seeding` stage's entrants are synthetic slot:N seeds minted from
+    // seeding.take rules (stages.ts:1399-1403), not rows a user can add.
+    // The seeded path's real lever is the seeding rules or the source
+    // stage's qualifier count, so it gets its own copy, never tooFewEntrants.
     return groups > 1
       ? msg("schedule.error.tooFewSeededQualifiers", {
           required: Number(err.extra.required ?? groups * 2),
@@ -1061,7 +1069,10 @@ export function generatePreconditionMessage(err: unknown, msg: Msg): string | nu
           groups,
           stranded: Number(err.extra.stranded ?? 0),
         })
-      : msg("schedule.error.tooFewEntrants");
+      : msg("schedule.error.tooFewQualifiers", {
+          qualifiers: Number(err.extra.qualifiers ?? 0),
+          stranded: Number(err.extra.stranded ?? 0),
+        });
   }
   return null;
 }
