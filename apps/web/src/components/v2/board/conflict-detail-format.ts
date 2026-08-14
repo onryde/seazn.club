@@ -209,8 +209,20 @@ export function formatConflictDetail(d: ConflictDetail, ctx: ConflictDetailCtx):
     case "no_slot_budget":
       return msg("board.conflict.detail.no_slot_budget");
     default: {
-      const _never: never = d.kind;
-      return _never;
+      // Compile-time exhaustiveness only: this proves the switch covers
+      // every `ConflictDetailKind` THIS BUILD knows about. It cannot prove
+      // anything about a value that reaches here at runtime — and one can:
+      // `fromBoardConflictDetail` casts the wire's plain-`string` `kind`
+      // (`as ConflictDetailKind`), so an older client bundle or a cached
+      // conflict carrying a kind this build predates lands here for real, on
+      // version skew (review finding 5). `d.kind` is then a genuine unknown
+      // string, not the `never` its type claims — returning it would print
+      // raw engine vocabulary (e.g. "no_slot_budget") straight at an
+      // organiser. Never surface that: an empty string degrades silently,
+      // same as any other id this formatter cannot resolve.
+      const _exhaustive: never = d.kind;
+      void _exhaustive;
+      return "";
     }
   }
 }

@@ -240,3 +240,18 @@ describe("fromBoardConflictDetail / formatBoardConflictDetail — the snake_case
     expect(Object.keys(converted)).toEqual(["kind"]);
   });
 });
+
+describe("formatBoardConflictDetail — unknown kind (review finding 5, version skew)", () => {
+  it("never surfaces the raw engine kind to an organiser", () => {
+    // `fromBoardConflictDetail` casts the wire's plain-`string` `kind` to
+    // `ConflictDetailKind` (BoardConflictDetail.kind is deliberately untyped
+    // — see types.ts's own comment) so an older client bundle or a cached
+    // conflict carrying a kind this build's switch does not know about
+    // reaches `formatConflictDetail`'s `default` branch at runtime, past the
+    // `never` check that only proves exhaustiveness at COMPILE time over the
+    // kinds this build knows. Before the fix this returned the raw token
+    // ("no_slot_budget_v2") — engine vocabulary an organiser cannot act on.
+    const wire: BoardConflictDetail = { kind: "no_slot_budget_v2" };
+    expect(formatBoardConflictDetail(wire, baseCtx)).toBe("");
+  });
+});
