@@ -52,7 +52,10 @@ SUCCEEDS against someone else's server), then `db:apply` + `sync:sports`.
 with the same DB and the same services before calling any red yours. For the
 DB-backed suites that is
 `npm test --workspace apps/web -- src/server src/lib` with
-`PLACEMENT_SERVICE_HOST` set; main was 4518/0 on 2026-08-13. Several reds that
+`PLACEMENT_SERVICE_HOST` set; main was 4518/0 on 2026-08-13 and **4594/0/4643
+with 49 pending on 2026-08-14 at `d0cd9a25`** (re-measured by C3 — the number
+moves as main moves, so measure your OWN base arm rather than trusting either
+figure). Several reds that
 looked like C2's were main's, and one of them is INTERMITTENT at 1-in-3 — so
 run it more than once in each arm before believing either colour.
 

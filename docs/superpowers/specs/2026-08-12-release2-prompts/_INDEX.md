@@ -32,7 +32,7 @@ C6 (prose) is safe whenever.
 | C0 | `C0-division-rules-retirement.md` | division_rules | — | **MERGED** #537 → `f0f83939` |
 | C1 | `C1-round-ordering.md` | round ordering | C0 (same proto/build.ts region) | **MERGED** #546 → `78db2f1f` |
 | C2 | `C2-day-start-rung.md` | day_start | C1 (model.py overlap; rebase either way) | **MERGED** #555 → `40331cc2`, follow-up #557 → `4dc38a0e`. Shipped #512's two rungs too. **Leaves 3 open defects — see the C2 entries below before starting C3.** |
-| C3 | `C3-conflict-detail-names.md` | conflict details | not concurrent with C1 (schedule.ts) | TODO |
+| C3 | `C3-conflict-detail-names.md` | conflict details | not concurrent with C1 (schedule.ts) | **DONE, PR open** — see the C3 entry below. Family was 25 kinds, not 4; `conflictKey` and the AI repair round were both in the blast radius |
 | C4 | `C4-z3-reflow-cpsat.md` | z3 stage A | C1 (reflow inherits round rule) | TODO |
 | C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | TODO |
 | C6 | `C6-z3-prose-identifiers.md` | z3 stage C | ~~anytime~~ → **after C4+C5** | **NO-OP today** (see below) |
@@ -619,3 +619,106 @@ time the four rungs above `idle_gap` and derive the wall as `2 x elapsed +
 slice`; doubling widens the four-rung side without narrowing the other,
 because `idle_gap`'s cost scales with the same load (it needs ~4x their time).
 Verified 6/6 green at loads 9.8-22.4, the exact band that had been failing.
+
+### C3 — structured conflict details (2026-08-13/14, DONE)
+
+Branch `feat/c3-conflict-detail-names`, worktree `.claude/worktrees/c3-conflict-details`,
+off `d0cd9a25`. Three implementation phases (engine / server+wire / client),
+sequential because the file sets overlap.
+
+**Every `file:line` in the prompt had drifted — 0 of 11 exact.** C0 found two
+wrong, C1 four of eleven, C2 three. C3 found all of them. Treat the citation
+block in any remaining prompt as a hint, never as an address.
+
+**False premise, and it doubled the task: the family is 25 kinds, not 4.**
+The design names four (`below_rest` entrant+person, `entrant_overlap`,
+`person_overlap`, `person_double_booking`) and they cover five of the 23
+templates `calendar.ts` builds; `build.ts` carries two more. NINE templates
+leak a raw id, not four — the ones the design never named are
+`no_slot_person_bound`, `court_double_booking`, `order_before_feeder`,
+`order_inside_feeder_rest`. Owner ruled: convert all 25, because the badge
+`title` joins every detail with `"; "`, so a partial conversion renders a
+localized fragment beside an English one inside a single string. The design's
+own field shape was also insufficient — several templates interpolate scalars
+(court label, day key, weekday, minute counts, round numbers) that
+`{entrantIds, personIds, fixtureIds, otherFixtureId}` cannot carry. Full
+25-row table in the design doc's "AMENDED 2026-08-13" section.
+
+**The prose was in `conflictKey` DELIBERATELY, and that is the apply gate.**
+Three separate comments (`calendar.ts:829`, `:1364-1376`, `:1479-1495`) record
+that the counterparty id inside the string is what distinguishes a swapped
+court, an added collision, and a rest breach hiding behind an ordering
+violation. It feeds `deltaConflicts`, `repair-minimality.ts` and the joint
+apply gate (`competition-schedule-apply.ts`). So a task framed as "render names
+in a tooltip" reaches directly into which edits an organiser's apply REFUSES.
+Owner ruled: key on a canonical serialization, and PROVE the partition rather
+than assume it.
+
+**The prose also reached the MODEL.** `schedule-ai.ts:2189` and
+`competition-schedule-ai.ts:2130` put the raw engine `Conflict[]` on the
+repair-round conversation as `verifier_conflicts` — no mapper, no stripping.
+Deleting `detail` would have silently changed what a paid model reads. Ruling:
+the model's input stays byte-identical via the server-side legacy deriver, and
+it carries `detail` but NOT `details` (token weight feeds AI-credit
+accounting). Pinned by a field-set assertion on the captured request body.
+Sending structured kinds instead is a real follow-up — with a repair-quality
+measurement attached, which nothing in C3 had.
+
+**A vacuous falsifier, caught in review of our own work.** The first
+partition-parity test guarded non-vacuity with
+`groups.length < conflicts.length + 1` — which no partition can ever violate.
+Its own comment noticed the impossibility and shipped it anyway. Parity between
+two keyings proves nothing unless the corpus exercises what `details`
+discriminates: had every conflict owned a unique `(fixtureId, reason)`, both
+parity assertions would still pass against a `conflictKey` that had dropped the
+detail entirely. Replaced with the real falsifier — the degenerate
+`fixtureId|reason` key must be strictly COARSER. Same class as the repo's
+standing "union assertion closes nothing" finding: an assertion that cannot
+fail reads as protection while providing none.
+
+**Unplanned fix (customer-visible).** `use-board-actions.ts:303` regex-scraped
+a UUID out of the prose to title a card, taking the FIRST id — which for
+`entrant_overlap`/`person_overlap` is the entrant or person, not the
+counterparty fixture. So `board.find` missed and the "clashes with <match>"
+enrichment silently degraded to "another match". It now reads
+`details.other_fixture_id`; regression test ships with it, verified by
+hand-reverting the fix (3 of 4 tests went red).
+
+**The 8-char fallback is WRONG for person ids.** `schedule-ai.ts:202` mints
+synthetic collapsed-person keys shaped `name:${normalizedName}`, so the
+design's "shorten to 8 chars" prints `name:ali`. The formatter branches on the
+prefix — a synthetic id already carries its name.
+
+**Two of the four "surfaces" never rendered the detail at all.**
+`conflicts-panel.tsx:125` and `schedule-gate-dialog.tsx` resolve
+`board.conflictHelp.<code>` first and fall back to the prose only when that key
+is missing — and every live code has one. Five OTHER surfaces the design never
+named do render it. Enumerating consumers from a design doc, rather than from
+`git grep`, would have missed five and fixed two dead ones.
+
+**Baselines, measured both arms, same box, same solver, fresh DB each:**
+
+| | base `d0cd9a25` | branch |
+|---|---|---|
+| apps/web `src/server src/lib` | 4594 / 0 / 4643 / 49 pending | 4642 / 0 / 4691 / 49 |
+| engine | 3921 / 3 / 3946 / 22 | 3977 / 0 / 3999 / 22 |
+| `src/components` | — | 2037 / 0 / 2039 / 2 |
+
+`UNAUTHENTICATED` count 0 in both arms' logs — the solver was genuinely
+exercised, not silently falling back to greedy. The engine baseline's 3
+failures were 1 stable (`repair-scale`, a wall-clock budget that fails under
+full-suite parallelism on the UNCHANGED tree too) and 2 load-induced
+(`z3-load` WASM init; `z3-solver` IS installed here).
+
+**§2 is not decoration, and this session proved it the hard way.** A full run
+against a database already used for two prior runs produced ONE failure —
+`billing-pass-duplicate.test.ts`, `expected 503 to be 200`, a pass-checkout
+route with no connection to conflict details. Isolated it was 3/3 green, and
+7/7 on the base arm. Rebuilt from `initdb` per §2 and the same full run was
+4642/0. A brand-new DB per RUN, not per session.
+
+**Officials conflicts are a different producer and were left alone.**
+`packages/engine/src/officials/assign.ts:157` embeds a fixture id in
+`OfficialConflict.detail` exactly as the scheduling family did. Out of C3's
+scope by the design's own framing; recorded so the next reader finds a decision
+rather than a miss. It wants its own task.
