@@ -1459,7 +1459,14 @@ async function generateSeededStageFixtures(auth: AuthCtx, stageId: string): Prom
         "STAGE_NOT_READY",
         groups > 1
           ? `not enough qualifiers to fill ${groups} groups — each group needs at least 2 (have ${placed.length}, need ${required}); ${stranded.length} would never receive a fixture`
-          : "not enough qualifiers to generate any matches",
+          : // Reaching here means fixtures WERE generated and some qualifier
+            // still got none — a partial fill, never "no matches at all". Saying
+            // the latter would repeat the unactionable-advice defect this guard
+            // exists to remove. Unreachable today (with one pool stages.ts:655-656
+            // runs a full-field round robin that strands nobody, and every bracket
+            // generator places every seed or throws), so this is the shape a future
+            // generator regression would surface through, not live copy.
+            `${stranded.length} of ${placed.length} qualifiers would never receive a fixture`,
         {
           stageId,
           reason: "seeded_pool_too_few_qualifiers",

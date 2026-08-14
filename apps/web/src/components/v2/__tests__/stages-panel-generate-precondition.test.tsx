@@ -55,15 +55,21 @@ describe("generatePreconditionMessage — StagesPanel generate-click classifier"
   });
 
   // Major (P7 fix round, whole-branch review): groups<=1 — an ungrouped
-  // seeded kind (knockout/page_playoff/double_elim/stepladder/league), or a
-  // group-kind stage left at pools.count's default of 1 — used to fall
-  // through to the PLAIN path's tooFewEntrants copy ("add at least 2
+  // seeded kind (knockout/page_playoff/double_elim/stepladder/league) — used
+  // to fall through to the PLAIN path's tooFewEntrants copy ("add at least 2
   // entrants to this stage first"). That advice cannot be followed: a
   // `.seeding` stage's entrants are synthetic slot:N seeds minted from
   // seeding.take rules (stages.ts:1399-1403), not rows a user can add. This
   // must render seeded-specific, actionable copy instead.
+  //
+  // NOTE: an earlier version of this comment also claimed "a group-kind stage
+  // left at pools.count's default of 1" reaches this branch. That is FALSE and
+  // was disproven by reading the generators: with one pool stages.ts:655-656
+  // runs a full-field round robin, which strands nobody, so stranding requires
+  // count > 1 and that forces the groups > 1 branch. This case is a shape
+  // tripwire for a future generator regression, not a live user path.
   it("returns the seeded-specific message (not tooFewEntrants) for a seeded stage with groups <= 1", () => {
-    const err = new ApiV1Error("not enough qualifiers to generate any matches", 422, "STAGE_NOT_READY", {
+    const err = new ApiV1Error("1 of 3 qualifiers would never receive a fixture", 422, "STAGE_NOT_READY", {
       reason: "seeded_pool_too_few_qualifiers",
       groups: 1,
       qualifiers: 3,
