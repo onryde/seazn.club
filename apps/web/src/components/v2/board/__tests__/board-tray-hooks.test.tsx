@@ -47,6 +47,7 @@ const render = (unscheduled: BoardFixture[]) =>
         divisions={[DIVISION]}
         entrantNames={{ e1: "Alpha", e2: "Bravo" }}
         feedLabels={{}}
+        fixtureTitles={{}}
         conflictsByFixture={{}}
         canEdit
         pickedId={null}

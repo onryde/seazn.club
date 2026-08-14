@@ -361,7 +361,7 @@ describe("verifyJoint — cross-division occupancy (#350)", () => {
     expect(out).toHaveLength(1);
     expect(out[0]!.fixtureId).toBe(F1);
     expect(out[0]!.reason).toBe("blackout");
-    expect(out[0]!.detail).toContain("session windows");
+    expect(out[0]!.details?.kind).toBe("outside_session_windows");
   });
 
   it("a division's blackout does not blackout another division", () => {
@@ -448,7 +448,14 @@ describe("verifyJoint — cross-division occupancy (#350)", () => {
     );
     expect(out.map((c) => c.reason)).toEqual(["person_overlap", "person_overlap"]);
     expect(new Set(out.map((c) => c.fixtureId))).toEqual(new Set([F1, F2]));
-    expect(out.every((c) => c.detail?.includes(PERSON))).toBe(true);
+    expect(
+      out.every(
+        (c) =>
+          c.details?.kind === "person_overlap" &&
+          c.details.personIds?.includes(PERSON) &&
+          c.details.otherFixtureId === (c.fixtureId === F1 ? F2 : F1),
+      ),
+    ).toBe(true);
   });
 
   it("a division's parallelism:'block' never reaches the verifier, so the draft's asymmetry cannot become a verification asymmetry", () => {
@@ -1285,7 +1292,7 @@ describe("isBlocking (#399)", () => {
     // `planIsAcceptable`'s ratio, so promoting a reason changes what counts
     // toward SCHEDULING_AI_ESCALATE_WARN_RATIO and can bring
     // `stopped_on_budget` forward.
-    const overlap = c("person_overlap", { detail: "person p-fischer overlap" });
+    const overlap = c("person_overlap", { details: { kind: "person_overlap", personIds: ["p-fischer"] } });
     const part = partitionConflicts([overlap, c("rest")]);
     expect(part.blocking).toEqual([overlap]);
     expect(part.warnings).toEqual([c("rest")]);
@@ -1390,8 +1397,14 @@ describe("verifyJoint — compiled instruction (#398)", () => {
       ),
     );
     expect(found.length).toBeGreaterThan(0);
-    expect(found.every((c) => c.detail?.includes("2026-08-01"))).toBe(true);
-    expect(found.every((c) => c.detail?.includes("2/day"))).toBe(true);
+    expect(
+      found.every(
+        (c) =>
+          c.details?.kind === "instruction_day_cap" &&
+          c.details.day === "2026-08-01" &&
+          c.details.requiredCount === 2,
+      ),
+    ).toBe(true);
   });
 
   it("ACCEPTS the same three fixtures once they are spread over two days", () => {
@@ -1447,7 +1460,14 @@ describe("verifyJoint — compiled instruction (#398)", () => {
       ),
     );
     expect(found.length).toBeGreaterThan(0);
-    expect(found.every((c) => c.detail?.includes("2026-08-01"))).toBe(true);
+    expect(
+      found.every(
+        (c) =>
+          c.details?.kind === "instruction_day_cap" &&
+          c.details.day === "2026-08-01" &&
+          c.details.requiredCount === 1,
+      ),
+    ).toBe(true);
   });
 
   it("an unqualified 'final on Friday' binds EVERY division's terminal fixture", () => {
@@ -1543,7 +1563,10 @@ describe("verifyJoint — compiled instruction (#398)", () => {
     );
     const found = instrOf(verifyJoint(plan([assign(F1, at("09:00"), "Court 1")]), p));
     expect(found).toHaveLength(1);
-    expect(found[0]!.detail).toContain("not_before 10:00");
+    expect(found[0]!.details?.kind).toBe("instruction_time");
+    expect(found[0]!.details?.ruleType).toBe("not_before");
+    expect(found[0]!.details?.requiredTime).toBe("10:00");
+    expect(found[0]!.details?.time).toBe("09:00");
   });
 });
 
@@ -1616,5 +1639,63 @@ describe("verifyJoint — cross-division rest is the MAX (#398)", () => {
       p,
     );
     expect(found.some((c) => c.reason === "rest")).toBe(true);
+  });
+});
+
+// ===========================================================================
+// verifyJoint — conflict comparator (C3 review finding 6)
+// ===========================================================================
+
+describe("verifyJoint — conflict comparator regression", () => {
+  it("orders equal-rank, same-reason conflicts by their canonical detail, not by fixtureId", () => {
+    // F_LOW and F_HIGH sit in the SAME division at the SAME (round, seq) —
+    // `fixture()` defaults both to round:1/seq:0 — so their rank tuples are
+    // IDENTICAL and the comparator falls through rank and reason straight
+    // to the detail-suffix compare this test targets. Each clashes with a
+    // DIFFERENT counterparty on a DIFFERENT court, chosen so the
+    // counterparty (canon) order is the OPPOSITE of the fixtureId order —
+    // the only way to tell "sorted by canonical detail" apart from "sorted
+    // by fixtureId" (what comparing the whole `conflictKey` — LED by
+    // `fixtureId` — silently regresses to).
+    const F_LOW = "10000000-0000-4000-8000-000000000001";
+    const F_HIGH = "90000000-0000-4000-8000-000000000009";
+    const COUNTERPARTY_HIGH = "90000000-0000-4000-8000-000000000008"; // F_LOW's clash partner
+    const COUNTERPARTY_LOW = "10000000-0000-4000-8000-000000000002"; // F_HIGH's clash partner
+    const H1 = "a0000000-0000-4000-8000-000000000001";
+    const H2 = "a0000000-0000-4000-8000-000000000002";
+    const H3 = "a0000000-0000-4000-8000-000000000003";
+    const H4 = "a0000000-0000-4000-8000-000000000004";
+    const H5 = "a0000000-0000-4000-8000-000000000005";
+    const H6 = "a0000000-0000-4000-8000-000000000006";
+    const H7 = "a0000000-0000-4000-8000-000000000007";
+    const H8 = "a0000000-0000-4000-8000-000000000008";
+    const p = pack(
+      [division(D1, "Alpha", { settings: settings({ courts: ["Court 1", "Court 2"] }) })],
+      [
+        fixture(F_LOW, D1, { home: H1, away: H2 }),
+        fixture(COUNTERPARTY_HIGH, D1, { home: H3, away: H4 }),
+        fixture(F_HIGH, D1, { home: H5, away: H6 }),
+        fixture(COUNTERPARTY_LOW, D1, { home: H7, away: H8 }),
+      ],
+    );
+    const out = verifyJoint(
+      plan([
+        assign(F_LOW, at("09:00"), "Court 1"),
+        assign(COUNTERPARTY_HIGH, at("09:00"), "Court 1"),
+        assign(F_HIGH, at("09:00"), "Court 2"),
+        assign(COUNTERPARTY_LOW, at("09:00"), "Court 2"),
+      ]),
+      p,
+    );
+    const primary = out.filter((c) => c.fixtureId === F_LOW || c.fixtureId === F_HIGH);
+    expect(primary).toHaveLength(2);
+    expect(primary.every((c) => c.reason === "court")).toBe(true);
+    // Pre-C3 (and the fix): ordered by the counterparty each conflict
+    // names — F_HIGH's counterparty (COUNTERPARTY_LOW) sorts before
+    // F_LOW's (COUNTERPARTY_HIGH). The regression this guards: comparing
+    // `conflictKey` whole sorts by the LEADING fixtureId instead (F_LOW <
+    // F_HIGH), which emits these two rows in the opposite order.
+    expect(primary.map((c) => c.fixtureId)).toEqual([F_HIGH, F_LOW]);
+    expect(primary.map((c) => c.details?.otherFixtureId)).toEqual([COUNTERPARTY_LOW, COUNTERPARTY_HIGH]);
   });
 });

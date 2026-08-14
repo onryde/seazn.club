@@ -16,6 +16,7 @@ export function BoardLanes({
   fixtures,
   entrantNames,
   feedLabels,
+  fixtureTitles,
   conflictsByFixture,
   canEdit,
   pickedId,
@@ -29,6 +30,9 @@ export function BoardLanes({
   fixtures: BoardFixture[];
   entrantNames: Record<string, string>;
   feedLabels: Record<string, FeedLabelPair>;
+  /** Competition-wide fixture id -> title, for `FixtureBlock`'s conflict
+   *  detail text (C3, 2026-08-13 design amendment). */
+  fixtureTitles: Record<string, string>;
   conflictsByFixture: Record<string, BoardConflict[]>;
   canEdit: boolean;
   pickedId: string | null;
@@ -80,6 +84,7 @@ export function BoardLanes({
                       showDivision={false}
                       entrantNames={entrantNames}
                       feedLabels={feedLabels}
+                      fixtureTitles={fixtureTitles}
                       conflicts={conflictsByFixture[f.id] ?? []}
                       canEdit={canEdit}
                       picked={pickedId === f.id}

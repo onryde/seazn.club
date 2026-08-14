@@ -104,6 +104,7 @@ import {
 } from "./schedule-ai-parse";
 import { consumePreview, PREVIEW_STALE } from "./schedule-ai-preview";
 import { validateInstructionRules } from "@seazn/engine/scheduling";
+import { legacyVerifierConflict, withLegacyDetail } from "@/server/api-v1/conflict-detail-legacy";
 import type { HardConstraint, RuleCode, RuleFixture, VerifyConfig } from "@seazn/engine/scheduling";
 import { resolveProvider, selectProvider, type ProviderName } from "@/server/ai/select-provider";
 import {
@@ -134,6 +135,7 @@ import { assertCompetitionNotFrozen } from "./entitlement-freeze";
 import { maybeAlertExpensiveRun } from "./ai-runs-admin";
 import {
   computeParticipants,
+  conflictKey,
   validateAssignments,
   type Clock,
   type Assignment,
@@ -167,6 +169,20 @@ const tooLarge = (): HttpError =>
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const ms = (iso: string): number => Date.parse(iso);
+/** A conflict's canonical detail alone, with the `fixtureId|reason|` prefix
+ *  `conflictKey` (calendar.ts) leads with stripped off — NOT
+ *  `canonConflictDetail` itself: it is not part of the engine's public
+ *  barrel (only the `ConflictDetail`/`ConflictDetailKind` TYPES are
+ *  re-exported, from calendar.ts), so this reuses `conflictKey`'s own
+ *  computation rather than re-deriving canon locally, which would risk
+ *  drifting from the engine's own field-order rules (review finding 6).
+ *  Exact by construction: `conflictKey(c) === \`${c.fixtureId}|${c.reason}|\`
+ *  + <canon>`, so slicing off that literal prefix recovers <canon> exactly,
+ *  never an approximation. Same helper as competition-schedule-apply.ts's
+ *  `sortConflicts` — duplicated rather than shared, matching how `cmp`
+ *  itself is already duplicated per file here. */
+const conflictDetailSuffix = (c: Conflict): string =>
+  conflictKey(c).slice(`${c.fixtureId}|${c.reason}|`.length);
 
 /** A sub-pack's settings with every person scope moved into the RUN's identity
  *  namespace (#450). Returned by reference when there is nothing to resolve, so
@@ -1703,7 +1719,11 @@ export function verifyJoint(plan: AiSchedulePlan, pack: CompetitionPack): Confli
   // `obstacles` as the third argument: a per-day cap counts what is already on
   // the day, and an outside booking occupies a court just as surely as a fixture.
   for (const c of validateInstructionRules(all, { tz: pack.tz, hard, ruleFixtures }, obstacles)) {
-    const key = `${c.fixtureId}|${c.reason}|${c.detail ?? ""}`;
+    // The engine's own identity (calendar.ts's `conflictKey`, C3 2026-08-13:
+    // now folds `details` through `canonConflictDetail` rather than a raw
+    // prose string) — reused rather than reimplemented so this dedupe can
+    // never drift from what `deltaConflicts` and the joint apply gate key on.
+    const key = conflictKey(c);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(c);
@@ -1719,7 +1739,7 @@ export function verifyJoint(plan: AiSchedulePlan, pack: CompetitionPack): Confli
       [...others, ...obstacles],
       deps,
     )) {
-      const key = `${c.fixtureId}|${c.reason}|${c.detail ?? ""}`;
+      const key = conflictKey(c);
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(c);
@@ -1744,10 +1764,21 @@ export function verifyJoint(plan: AiSchedulePlan, pack: CompetitionPack): Confli
       ra[2] - rb[2] ||
       cmp(ra[3], rb[3]) ||
       cmp(a.reason, b.reason) ||
-      cmp(a.detail ?? "", b.detail ?? "") ||
-      // Last-resort only: two conflicts identical on every domain key. Reaching
-      // this means the seed has duplicate (round, seq, ext_key) within one
-      // division, which the fixture generator does not produce.
+      // The two conflicts' canonical detail SUFFIX (review finding 6) — NOT
+      // `conflictKey` whole, which a prior version of this comment claimed
+      // "reduces to" the same thing. It does not: `conflictKey` LEADS with
+      // `fixtureId`, so comparing it whole sorts primarily by fixtureId and
+      // never reaches the detail at all when the two fixtures differ,
+      // silently changing this order from pre-C3 (which compared the raw
+      // `detail` string — no fixtureId prefix, off its prose instead of the
+      // structured detail) and making the `cmp(a.fixtureId, b.fixtureId)`
+      // tie-break below unreachable (once the suffix comparison is 0, the
+      // fixtureId prefix that produced it must already be equal too).
+      cmp(conflictDetailSuffix(a), conflictDetailSuffix(b)) ||
+      // Last-resort only: two conflicts identical on every domain key AND
+      // the same canonical detail. Reaching this means the seed has
+      // duplicate (round, seq, ext_key) within one division, which the
+      // fixture generator does not produce.
       cmp(a.fixtureId, b.fixtureId)
     );
   });
@@ -2127,7 +2158,10 @@ export async function runCompetitionAiPlan(
     conversation.push({
       role: "user",
       content: JSON.stringify({
-        verifier_conflicts: conflicts,
+        // Byte-identical to pre-C3 (C3 2026-08-13 design doc ruling: "the
+        // prose reaches the model, not just the screen") — see the identical
+        // comment at schedule-ai.ts's own `verifier_conflicts`.
+        verifier_conflicts: conflicts.map(legacyVerifierConflict),
         ...(boardEngine === "z3" ? { repaired_assignments: chosen.assignments } : {}),
         ...(unresolved.length > 0 ? { focus_fixture_ids: [...unresolved] } : {}),
         note:
@@ -2971,8 +3005,12 @@ async function planForCompetition(
     // violations neither block nor trigger a repair round — the organiser
     // reviewing this response is the last automated-gate-free line of defence,
     // and the board cannot render what is not returned here.
-    warnings: result.warnings,
-    blocking: result.blocking,
+    // `AiPlanConflict` carries the engine `Conflict` verbatim (see its own
+    // comment in schemas.ts) — `details` already rides along unchanged;
+    // `withLegacyDetail` only restores the deprecated `detail` string the
+    // engine stopped producing (C3, 2026-08-13 design amendment).
+    warnings: result.warnings.map(withLegacyDetail),
+    blocking: result.blocking.map(withLegacyDetail),
     diff: result.diff,
     explanations: result.explanations,
     // constraint_suggestions is dropped on purpose — see the response type.

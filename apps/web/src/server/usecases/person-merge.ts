@@ -11,6 +11,7 @@ import "server-only";
 // a partial merge is worse than none.
 import type postgres from "postgres";
 import { validateAssignments, type Conflict } from "@seazn/engine/scheduling";
+import { withLegacyDetail } from "@/server/api-v1/conflict-detail-legacy";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -342,7 +343,12 @@ async function reverifyBoards(auth: AuthCtx, survivorId: string): Promise<Reveal
         siblings,
         feedDependencies(all),
       );
-      if (conflicts.length > 0) out.push({ division_id: board.id, conflicts });
+      // `withLegacyDetail` restores the deprecated `detail` string the engine
+      // stopped producing (C3, 2026-08-13 design amendment) — `MergeResult`
+      // carries `Conflict` verbatim otherwise, same as `AiPlanConflict`.
+      if (conflicts.length > 0) {
+        out.push({ division_id: board.id, conflicts: conflicts.map(withLegacyDetail) });
+      }
     }
     return out;
   });

@@ -6,7 +6,7 @@
 // Frozen against payload A (badminton double elimination): `wb-r0-i1` feeds
 // `wb-r1-i0` by a direct winner feed, which is the edge a real bracket walks.
 import { describe, expect, it } from "vitest";
-import { validateAssignments, type Conflict, type OrderDependency } from "./calendar";
+import { conflictKey, validateAssignments, type Conflict, type OrderDependency } from "./calendar";
 import { assign, at, BADMINTON, BASE_CONFIG, SOLO } from "./payload-fixtures";
 
 const MIN = 60_000;
@@ -41,10 +41,15 @@ describe("feeder rest (#399)", () => {
     expect(conflicts[0]!.fixtureId).toBe(DEPENDENT);
     expect(conflicts[0]!.direct).toBe(true);
     expect(conflicts[0]!.rule).toBe("H6");
-    expect(conflicts[0]!.detail).toContain("45 min rest");
-    // The measured size rides BESIDE the key, never inside it (#399): a detail
-    // carrying the gap would move the identity every time the card moved, and
-    // dragging this dependent later — an improvement — would read as new.
+    expect(conflicts[0]!.details).toEqual({
+      kind: "order_inside_feeder_rest",
+      otherFixtureId: FEEDER,
+      requiredMinutes: 45,
+    });
+    // The measured size rides BESIDE the key, never inside it (#399): a
+    // details field carrying the gap would move the identity every time the
+    // card moved, and dragging this dependent later — an improvement — would
+    // read as new.
     expect(conflicts[0]!.shortfallMinutes).toBe(45);
   });
 
@@ -66,15 +71,17 @@ describe("feeder rest (#399)", () => {
   it("still reports a genuine ordering violation as exactly one conflict", () => {
     const conflicts = orderConflicts(FEEDER_END_MS - 10 * MIN, 45);
     expect(conflicts).toHaveLength(1);
-    expect(conflicts[0]!.detail).toBe(`starts before feeder ${FEEDER} ends`);
+    expect(conflicts[0]!.details).toEqual({ kind: "order_before_feeder", otherFixtureId: FEEDER });
   });
 
   it("keys the rest breach apart from the ordering violation", () => {
     // The two are different failures and MUST carry different details, or the
-    // delta gate lets a rest breach hide behind a pre-existing ordering one.
+    // delta gate lets a rest breach hide behind a pre-existing ordering one —
+    // asserted the way the gate itself distinguishes them, via conflictKey.
     const late = orderConflicts(FEEDER_END_MS - 10 * MIN, 45)[0]!;
     const short = orderConflicts(FEEDER_END_MS, 45)[0]!;
-    expect(late.detail).not.toBe(short.detail);
+    expect(late.details).not.toEqual(short.details);
+    expect(conflictKey(late)).not.toBe(conflictKey(short));
   });
 
   it("takes the rest from the constraints tab too, not only the settings one", () => {
@@ -96,7 +103,11 @@ describe("feeder rest (#399)", () => {
       deps,
     ).filter((c) => c.reason === "order");
     expect(conflicts).toHaveLength(1);
-    expect(conflicts[0]!.detail).toContain("30 min rest");
+    expect(conflicts[0]!.details).toEqual({
+      kind: "order_inside_feeder_rest",
+      otherFixtureId: FEEDER,
+      requiredMinutes: 30,
+    });
     expect(conflicts[0]!.shortfallMinutes).toBe(10);
   });
 });

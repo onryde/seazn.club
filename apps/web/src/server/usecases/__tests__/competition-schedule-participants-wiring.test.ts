@@ -425,8 +425,18 @@ describe.skipIf(!HAS_DB)("CompetitionPack.participants is wired into both joint 
       onFinal.length,
       `expected a person_overlap on the TBD final; got ${JSON.stringify(conflicts)}`,
     ).toBeGreaterThan(0);
-    // It is the recursed human, named in the detail.
-    expect(onFinal.some((c) => (c.detail ?? "").includes(board.sharedPersonId))).toBe(true);
+    // It is the recursed human, named in `details` — kind, the person id AND
+    // the counterparty fixture, never kind alone (a kind-only check passes
+    // with the counterparty dropped, which is exactly the identity
+    // `conflictKey` cannot afford to lose).
+    expect(
+      onFinal.some(
+        (c) =>
+          c.details?.kind === "person_overlap" &&
+          c.details.personIds?.includes(board.sharedPersonId) &&
+          c.details.otherFixtureId === board.fixtureIds.other,
+      ),
+    ).toBe(true);
     // …and reported from the other side too, so either fixture can be the one
     // that moves.
     expect(
@@ -470,7 +480,15 @@ describe.skipIf(!HAS_DB)("CompetitionPack.participants is wired into both joint 
       new Set(overlapsFound.map((c) => c.fixtureId)),
       `expected person_overlap on both sides; got ${JSON.stringify(conflicts)}`,
     ).toEqual(new Set([board.fixtureIds.f1, board.fixtureIds.f2]));
-    expect(overlapsFound.every((c) => (c.detail ?? "").includes(KEY))).toBe(true);
+    expect(
+      overlapsFound.every(
+        (c) =>
+          c.details?.kind === "person_overlap" &&
+          c.details.personIds?.includes(KEY) &&
+          c.details.otherFixtureId ===
+            (c.fixtureId === board.fixtureIds.f1 ? board.fixtureIds.f2 : board.fixtureIds.f1),
+      ),
+    ).toBe(true);
 
     // The synthetic key is a scheduling-only device: it never reaches the model,
     // and nothing was merged in the database.

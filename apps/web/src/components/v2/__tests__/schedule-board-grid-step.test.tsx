@@ -277,6 +277,7 @@ describe("BoardGrid stays readable as the step gets finer", () => {
           divisionNames={{ d1: "Under 12s" }}
           entrantNames={{ e1: "Alpha", e2: "Bravo" }}
           feedLabels={{}}
+          fixtureTitles={{}}
           conflictsByFixture={{}}
           canEdit
           multi={false}

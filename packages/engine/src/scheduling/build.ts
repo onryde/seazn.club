@@ -805,9 +805,7 @@ export function conflictsFor(input: {
     out.push({
       fixtureId: f.id,
       reason: "no_slot",
-      detail: proved
-        ? "no legal slot in the lattice"
-        : "left unplaced when the solver's budget expired",
+      details: { kind: proved ? "no_slot_lattice" : "no_slot_budget" },
       rule: RULE_BY_REASON.no_slot,
     });
   }

@@ -304,8 +304,15 @@ export function useBoardActions(
           ...new Set(
             list.map((c) => {
               let m = helpOf(c.code);
-              const uuid = c.detail?.match(/[0-9a-f]{8}-[0-9a-f-]{27}/i)?.[0];
-              if (uuid) m += msg("board.action.withMatch", { title: titleOf(uuid) });
+              // Structured `details.other_fixture_id` (C3, 2026-08-13 design
+              // amendment) — never a regex scrape of the deprecated prose.
+              // The old regex took the FIRST UUID-shaped substring in
+              // `c.detail`, which for `entrant_overlap`/`person_overlap` is
+              // the ENTRANT/PERSON id, not the counterparty fixture — so
+              // `board.find` missed it and this silently degraded to
+              // "another match" instead of naming the real one.
+              const otherId = c.details?.other_fixture_id;
+              if (otherId) m += msg("board.action.withMatch", { title: titleOf(otherId) });
               return m;
             }),
           ),

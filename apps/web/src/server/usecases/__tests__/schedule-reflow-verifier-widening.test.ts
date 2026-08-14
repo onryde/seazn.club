@@ -228,16 +228,22 @@ describe.skipIf(!HAS_DB)(
       )!;
       const byId = (a: { fixture_id: string }, b: { fixture_id: string }) =>
         a.fixture_id.localeCompare(b.fixture_id);
+      // `detail` is stripped before the `toEqual` (C3, 2026-08-13): it is still
+      // populated — same legacy English, proven by the dedicated legacy-parity
+      // suite — but this test's job is the WIRE SHAPE, not the prose.
+      // Snake_case (`entrant_ids`) — `ScheduleConflict`'s house style, unlike
+      // the engine's own camelCase `ConflictDetail`.
+      const stripDetail = <T extends { detail?: string }>({ detail: _detail, ...rest }: T) => rest;
       const expected = [first.id, clashing.id]
         .map((id) => ({
           fixture_id: id,
           code: "warn.rest",
           rule: "H4",
           blocking: false,
-          detail: `entrant ${shared} below rest`,
+          details: { kind: "entrant_below_rest" as const, entrant_ids: [shared] },
         }))
         .sort(byId);
-      expect([...out.conflicts].sort(byId)).toEqual(expected);
+      expect([...out.conflicts].sort(byId).map(stripDetail)).toEqual(expected);
     }, 120_000);
 
     /**
@@ -487,6 +493,9 @@ describe.skipIf(!HAS_DB)(
         `${x.fixture_id}|${x.code}`;
       const byKey = (x: { fixture_id: string; code: string }, y: typeof x) =>
         key(x).localeCompare(key(y));
+      // `detail` is stripped before the `toEqual` (C3, 2026-08-13) — see the
+      // identical comment on the `entrant_below_rest` case above in this file.
+      const stripDetail = <T extends { detail?: string }>({ detail: _detail, ...rest }: T) => rest;
       const expected = [
         [a.id, b.id],
         [b.id, a.id],
@@ -497,18 +506,18 @@ describe.skipIf(!HAS_DB)(
             code: "conflict.court",
             rule: "H2",
             blocking: true,
-            detail: `court C1 double-booked with ${other}`,
+            details: { kind: "court_double_booking" as const, court: "C1", other_fixture_id: other! },
           },
           {
             fixture_id: self!,
             code: "warn.person_overlap",
             rule: "H4",
             blocking: true,
-            detail: `entrant ${shared} overlap with ${other}`,
+            details: { kind: "entrant_overlap" as const, entrant_ids: [shared], other_fixture_id: other! },
           },
         ])
         .sort(byKey);
-      expect([...out.conflicts].sort(byKey)).toEqual(expected);
+      expect([...out.conflicts].sort(byKey).map(stripDetail)).toEqual(expected);
     }, 120_000);
   },
 );

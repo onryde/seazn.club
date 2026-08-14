@@ -26,6 +26,7 @@ export function BoardGrid({
   divisionNames,
   entrantNames,
   feedLabels,
+  fixtureTitles,
   conflictsByFixture,
   canEdit,
   multi,
@@ -50,6 +51,9 @@ export function BoardGrid({
   divisionNames: Record<string, string>;
   entrantNames: Record<string, string>;
   feedLabels: Record<string, FeedLabelPair>;
+  /** Competition-wide fixture id -> title, for `FixtureBlock`'s conflict
+   *  detail text (C3, 2026-08-13 design amendment). */
+  fixtureTitles: Record<string, string>;
   conflictsByFixture: Record<string, BoardConflict[]>;
   canEdit: boolean;
   multi: boolean;
@@ -192,6 +196,7 @@ export function BoardGrid({
                               showDivision={multi}
                               entrantNames={entrantNames}
                               feedLabels={feedLabels}
+                              fixtureTitles={fixtureTitles}
                               conflicts={conflictsByFixture[f.id] ?? []}
                               canEdit={canEdit}
                               picked={pickedId === f.id}

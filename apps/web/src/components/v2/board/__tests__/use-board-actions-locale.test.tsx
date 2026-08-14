@@ -51,8 +51,14 @@ import type { BoardDivision, BoardFixture } from "../types";
 
 const DIV = { id: "d1", name: "Open", seq: 1 } as unknown as BoardDivision;
 
-// A real-shaped UUID so the `[0-9a-f]{8}-[0-9a-f-]{27}` extraction inside
-// fail()'s SCHEDULE_CONFLICT branch matches it out of the conflict detail.
+// A real-shaped UUID. It used to be shaped this way so a
+// `[0-9a-f]{8}-[0-9a-f-]{27}` regex inside fail()'s SCHEDULE_CONFLICT branch
+// could scrape it back out of the English prose; C3 deleted that scrape (it
+// took the FIRST id in the string, which for the overlap kinds is an entrant
+// or person rather than the counterparty fixture, so the lookup missed and
+// the enrichment silently degraded to "another match"). The id now travels
+// in the structured `details.other_fixture_id` instead, and the shape here
+// is merely realistic rather than load-bearing.
 const TBD_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const TBD_FIXTURE = {
   id: TBD_ID,
@@ -92,7 +98,20 @@ describe("useBoardActions — fail()'s SCHEDULE_CONFLICT reason list", () => {
     net.reject = () =>
       Promise.reject(
         new ApiV1Error("refused", 422, "SCHEDULE_CONFLICT", {
-          conflicts: [{ fixture_id: TBD_ID, code: "conflict.court", blocking: true, detail: `clash with ${TBD_ID}` }],
+          // C3: the counterparty travels in the STRUCTURED `details`, not in
+          // the deprecated prose. `detail` is kept alongside it exactly as the
+          // wire still sends it, so this fixture stays realistic — but it is
+          // no longer what `fail()` reads, and a test that supplied only the
+          // prose would silently stop exercising `titleOf()` at all.
+          conflicts: [
+            {
+              fixture_id: TBD_ID,
+              code: "conflict.court",
+              blocking: true,
+              detail: `clash with ${TBD_ID}`,
+              details: { kind: "court_double_booking", court: "Court 1", other_fixture_id: TBD_ID },
+            },
+          ],
         }),
       );
 

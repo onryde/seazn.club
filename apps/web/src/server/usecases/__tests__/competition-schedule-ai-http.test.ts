@@ -314,7 +314,13 @@ describe("AiCompetitionPlanResponse — the `divisions` collision", () => {
       },
     ],
     unschedulable: [{ fixture_id: "22222222-2222-2222-2222-222222222222", reason: "no slot", rule: "CAP" as const }],
-    warnings: [{ fixtureId: "33333333-3333-3333-3333-333333333333", reason: "rest", detail: "12m" }],
+    warnings: [
+      {
+        fixtureId: "33333333-3333-3333-3333-333333333333",
+        reason: "rest",
+        details: { kind: "entrant_below_rest", entrantIds: ["55555555-5555-5555-5555-555555555555"] },
+      },
+    ],
     blocking: [{ fixtureId: "44444444-4444-4444-4444-444444444444", reason: "order", direct: true }],
     diff: { moved: ["m1"], placed: ["p1"], unscheduled: ["u1"], unchanged: ["c1"] },
     explanations: [{ fixture_id: "11111111-1111-1111-1111-111111111111", note: "prime slot" }],

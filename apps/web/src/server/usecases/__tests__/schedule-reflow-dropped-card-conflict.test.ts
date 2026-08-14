@@ -91,13 +91,22 @@ vi.mock("@seazn/engine/scheduling", async (importOriginal) => {
           {
             fixtureId: a!.fixtureId,
             reason: "person_overlap" as const,
-            detail: PLACED_ROW_DETAIL,
+            // `person_double_booking` — the `commit` per-person overlap loop's
+            // own kind (calendar.ts), matching the field's OWN comment above:
+            // legacy prose reconstructs to PLACED_ROW_DETAIL byte for byte.
+            details: {
+              kind: "person_double_booking" as const,
+              personIds: ["mock-person-1"],
+              otherFixtureId: "some-other-card",
+            },
             rule: actual.RULE_BY_REASON.person_overlap,
           },
           {
             fixtureId: b!.fixtureId,
             reason: "start_window" as const,
-            detail: UNPLACED_ROW_DETAIL,
+            // `no_slot_start_window` — legacy prose reconstructs to
+            // UNPLACED_ROW_DETAIL byte for byte.
+            details: { kind: "no_slot_start_window" as const },
             rule: actual.RULE_BY_REASON.start_window,
           },
         ],
@@ -258,9 +267,12 @@ describe.skipIf(!HAS_DB)("REFLOW answers for a card with no slot", () => {
     // on their board.
     const forDropped = out.conflicts.filter((c) => c.fixture_id === dropped);
     expect(forDropped.map((c) => c.code)).toEqual(["warn.no_slot"]);
-    expect(forDropped.map((c) => c.detail)).toEqual(["no legal slot in the lattice"]);
+    expect(forDropped.map((c) => c.details?.kind)).toEqual(["no_slot_lattice"]);
     expect(forDropped.some((c) => c.blocking)).toBe(false);
+    // The dropped mock row's legacy prose (still derived from `details`, byte
+    // for byte) must not leak into the final report either.
     expect(JSON.stringify(out.conflicts)).not.toContain(PLACED_ROW_DETAIL);
+    expect(JSON.stringify(out.conflicts)).not.toContain("mock-person-1");
 
     // ---- THE GUARD (passes either way, and that is the point) ----
     // Greedy never placed this one and named the binding constraint. Narrowing
@@ -268,6 +280,7 @@ describe.skipIf(!HAS_DB)("REFLOW answers for a card with no slot", () => {
     // fact that tells the organiser what to change.
     const forUnplaced = out.conflicts.filter((c) => c.fixture_id === unplaced);
     expect(forUnplaced.map((c) => c.code)).toEqual(["conflict.start_window"]);
+    expect(forUnplaced.map((c) => c.details?.kind)).toEqual(["no_slot_start_window"]);
     expect(forUnplaced.map((c) => c.detail)).toEqual([UNPLACED_ROW_DETAIL]);
   }, 180_000);
 });

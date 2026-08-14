@@ -26,7 +26,17 @@ const F2 = "22222222-2222-2222-2222-222222222222";
 // rendered `row.reason` raw would satisfy a localization assertion made against
 // it. "person overlap" ≠ "person_overlap", so the assertion has teeth.
 const source: ReviewSource = {
-  warnings: [{ fixtureId: F1, reason: "person_overlap", detail: "18 min short of 45" }],
+  warnings: [
+    {
+      fixtureId: F1,
+      reason: "person_overlap",
+      // Deprecated raw prose, kept alongside `details` the way the real wire
+      // pairs the two (C3, 2026-08-13 design amendment) — the panel must
+      // render the FORMATTED `details`, never this string.
+      detail: "18 min short of 45",
+      details: { kind: "person_overlap", personIds: ["p1"], otherFixtureId: F2 },
+    },
+  ],
   unschedulable: [{ fixture_id: F2, reason: "no court free in the window", rule: "CAP" }],
   assumptions: ["Read 'the weekend' as Sat + Sun."],
 };
@@ -77,7 +87,10 @@ describe("AiReviewPanel", () => {
   it("renders every row category and states the count once", () => {
     const html = render(<AiReviewPanel rows={rows} fixtures={fixtures} />);
     expect(html).toContain('data-review-count="3"');
-    expect(html).toContain("18 min short of 45");
+    // The structured `details`, localized and name-resolved — never the
+    // deprecated raw `detail` string (C3, 2026-08-13 design amendment).
+    expect(html).toContain("is also playing in Castellano vs Devi at the same time");
+    expect(html).not.toContain("18 min short of 45");
     expect(html).toContain("no court free in the window");
     expect(html).toContain("Read &#x27;the weekend&#x27; as Sat + Sun.");
     // One count, stated once — the header number is the array length.

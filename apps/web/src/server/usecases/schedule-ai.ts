@@ -38,6 +38,7 @@ import {
 import { deferred } from "@/lib/deferred";
 import { recordQuoteMismatch } from "./ai-quote-mismatch";
 import { maybeAlertExpensiveRun } from "@/server/usecases/ai-runs-admin";
+import { legacyVerifierConflict, withLegacyDetail } from "@/server/api-v1/conflict-detail-legacy";
 import {
   computeParticipants,
   dayKeyInTz,
@@ -2186,7 +2187,12 @@ export async function runAiPlan(
     conversation.push({
       role: "user",
       content: JSON.stringify({
-        verifier_conflicts: conflicts,
+        // Byte-identical to pre-C3 (C3 2026-08-13 design doc ruling: "the
+        // prose reaches the model, not just the screen") — `detail`, derived,
+        // never the structured `details` the engine now emits. Nothing in
+        // this task measures repair quality, and the AI-credit meter already
+        // charged this run against the pre-C3 token weight.
+        verifier_conflicts: conflicts.map(legacyVerifierConflict),
         // When the solver moved fixtures, the model's own last turn is no longer
         // the board these conflicts were measured on. Send the board, or it
         // repairs a plan nobody holds and silently discards the solver's work.
@@ -3044,8 +3050,14 @@ async function planForDivision(
   return {
     proposal: result.proposal,
     unschedulable: result.unschedulable,
-    warnings: result.warnings,
-    blocking: result.blocking,
+    // `AiPlanConflict` carries the engine `Conflict` verbatim (see its own
+    // comment in schemas.ts) — `details` already rides along unchanged;
+    // `withLegacyDetail` only restores the deprecated `detail` string the
+    // engine stopped producing (C3, 2026-08-13 design amendment), so an
+    // existing client reading `.detail` off `warnings`/`blocking` keeps
+    // working.
+    warnings: result.warnings.map(withLegacyDetail),
+    blocking: result.blocking.map(withLegacyDetail),
     diff: result.diff,
     explanations: result.explanations,
     ...(result.constraint_suggestions !== undefined

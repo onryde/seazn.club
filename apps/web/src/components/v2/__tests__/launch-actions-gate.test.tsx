@@ -66,11 +66,15 @@ import { ScheduleGateDialog } from "../board/schedule-gate-dialog";
 
 const enDict = en as unknown as Dict;
 
+// Both carry the deprecated `detail` string ALONGSIDE the structured
+// `details` — the wire pairs the two, or sends neither (usecases/
+// schedule.ts `mapConflicts`, C3 2026-08-13 design amendment).
 const REST_WARNING = {
   fixture_id: "f1",
   code: "warn.rest",
   blocking: false,
   detail: "entrant e1 below rest",
+  details: { kind: "entrant_below_rest", entrant_ids: ["e1"] },
 } as unknown as BoardConflict;
 
 const COURT_CLASH = {
@@ -78,6 +82,7 @@ const COURT_CLASH = {
   code: "conflict.court",
   blocking: true,
   detail: "court Court 1 double-booked with f2",
+  details: { kind: "court_double_booking", court: "Court 1", other_fixture_id: "f2" },
 } as unknown as BoardConflict;
 
 const FIXTURES = [

@@ -269,6 +269,50 @@ describe("solver repair in runAiPlan (#401)", () => {
         .content,
     ) as { focus_fixture_ids?: string[]; verifier_conflicts: unknown[] };
     expect(repairTurn.focus_fixture_ids).toEqual(expect.arrayContaining([F1, F2]));
+
+    // C3 (2026-08-13 design amendment) — "the prose reaches the model, not
+    // just the screen": the model's own copy of a conflict must stay
+    // byte-identical to pre-C3, `detail` (derived legacy prose) and never the
+    // structured `details` the engine now emits, or this request's token
+    // weight silently widens out from under AI-credit accounting. Pinned on
+    // the FIELD SET, not just presence, so a future edit cannot widen it by
+    // adding a key nobody meant to send.
+    const conflicts = repairTurn.verifier_conflicts as Record<string, unknown>[];
+    expect(conflicts.length).toBeGreaterThan(0);
+    const ALLOWED_VERIFIER_CONFLICT_KEYS = new Set([
+      "fixtureId",
+      "reason",
+      "detail",
+      "direct",
+      "rule",
+      "shortfallMinutes",
+    ]);
+    for (const c of conflicts) {
+      expect(Object.keys(c).every((k) => ALLOWED_VERIFIER_CONFLICT_KEYS.has(k))).toBe(true);
+      expect(c).not.toHaveProperty("details");
+    }
+    expect(conflicts.some((c) => typeof c.detail === "string" && c.detail.length > 0)).toBe(true);
+
+    // Review finding 4: the field SET pinned above is not the field ORDER —
+    // a plain `{ ...rest, detail: ... }` keeps the same set while moving
+    // `detail` to the very end (after `rule`), which is NOT what the model
+    // read pre-C3 (git show d0cd9a25: every push site wrote `{ fixtureId,
+    // reason, detail, [direct], [shortfallMinutes] }`, and `withRule`
+    // always appended `rule` last). Same character count, same token
+    // weight, different BYTES — pin the order too, or this drifts silently
+    // again. Checked as "each present key's canonical index is
+    // non-decreasing" rather than a fixed array, since which optional
+    // fields (`direct`/`shortfallMinutes`) ride along varies per conflict.
+    const PRE_C3_KEY_ORDER = ["fixtureId", "reason", "detail", "direct", "shortfallMinutes", "rule"];
+    for (const c of conflicts) {
+      const indices = Object.keys(c).map((k) => PRE_C3_KEY_ORDER.indexOf(k));
+      expect(indices).toEqual([...indices].sort((a, b) => a - b));
+    }
+    // `rule` is always populated (RULE_BY_REASON is exhaustive over every
+    // ConflictReason), so at least one real conflict here exercises the
+    // "detail before rule" case this whole finding is about — an order
+    // check with nothing to order proves nothing.
+    expect(conflicts.some((c) => "rule" in c && "detail" in c)).toBe(true);
   });
 });
 

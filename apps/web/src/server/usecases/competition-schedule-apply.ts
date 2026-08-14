@@ -102,6 +102,7 @@ import { EngineError } from "@seazn/engine/core";
 import { appendDivisionEvent } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { AiApplyMeta, ScheduleConfig } from "@/server/api-v1/schemas";
+import { withLegacyDetail } from "@/server/api-v1/conflict-detail-legacy";
 import {
   conflictKey,
   deltaConflicts,
@@ -145,6 +146,18 @@ const MS_PER_MIN = 60_000;
 const ms = (v: string | Date): number => new Date(v).getTime();
 const iso = (t: number): string => new Date(t).toISOString();
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+/** A conflict's canonical detail alone, with the `fixtureId|reason|` prefix
+ *  `conflictKey` (calendar.ts) leads with stripped off — NOT
+ *  `canonConflictDetail` itself: it is not part of the engine's public
+ *  barrel (only the `ConflictDetail`/`ConflictDetailKind` TYPES are
+ *  re-exported, from calendar.ts), so this reuses `conflictKey`'s own
+ *  computation rather than re-deriving canon locally, which would risk
+ *  drifting from the engine's own field-order rules (review finding 6).
+ *  Exact by construction: `conflictKey(c) === \`${c.fixtureId}|${c.reason}|\`
+ *  + <canon>`, so slicing off that literal prefix recovers <canon> exactly,
+ *  never an approximation. */
+const conflictDetailSuffix = (c: Conflict): string =>
+  conflictKey(c).slice(`${c.fixtureId}|${c.reason}|`.length);
 
 // ---------------------------------------------------------------------------
 // Wire shapes
@@ -705,7 +718,11 @@ export async function applyCompetitionSchedule(
       // answers 409 with the conflict list attached and the board renders the
       // offending cards identically.
       throw new EngineError("SCHEDULE_CONFLICT", "schedule change hits a blocking conflict", {
-        conflicts: blocking,
+        // `withLegacyDetail` restores the deprecated `detail` string the
+        // engine stopped producing (C3, 2026-08-13 design amendment) — this
+        // list rides on the 409's `extra.conflicts` verbatim (http.ts), same
+        // "carries `Conflict` verbatim" contract `AiPlanConflict` documents.
+        conflicts: blocking.map(withLegacyDetail),
       });
     }
 
@@ -775,7 +792,10 @@ export async function applyCompetitionSchedule(
       // the apply is never filtered — the throw above fires from the
       // unfiltered `conflicts`/`blockingKeys` pair, before this line is ever
       // reached.
-      conflicts: conflicts.filter((c) => !allSiblingIds.has(c.fixtureId)),
+      // `withLegacyDetail` restores the deprecated `detail` string the engine
+      // stopped producing (C3, 2026-08-13 design amendment) — `CompetitionApplyOut`
+      // carries `Conflict` verbatim otherwise, same as `AiPlanConflict`.
+      conflicts: conflicts.filter((c) => !allSiblingIds.has(c.fixtureId)).map(withLegacyDetail),
       divisionIds: order.map((d) => d.id),
     };
   });
@@ -789,8 +809,10 @@ export async function applyCompetitionSchedule(
 
 /** Conflicts in reading order: division (domain order), then playing order
  *  within it. Never the fixture UUID except as a last-resort tie-break — the
- *  determinism contract (schedule-ai.ts:1-12). */
-function sortConflicts(conflicts: readonly Conflict[], order: readonly LoadedDivision[]): Conflict[] {
+ *  determinism contract (schedule-ai.ts:1-12). Exported for a direct,
+ *  pure-function regression test (C3 review finding 6) — no other module
+ *  imports it. */
+export function sortConflicts(conflicts: readonly Conflict[], order: readonly LoadedDivision[]): Conflict[] {
   const rank = new Map<string, [number, number, number, string]>();
   order.forEach((d, i) => {
     for (const f of d.fixtures) rank.set(f.id, [i, f.round_no, f.seq_in_round, f.ext_key ?? ""]);
@@ -805,7 +827,17 @@ function sortConflicts(conflicts: readonly Conflict[], order: readonly LoadedDiv
       ra[2] - rb[2] ||
       cmp(ra[3], rb[3]) ||
       cmp(a.reason, b.reason) ||
-      cmp(a.detail ?? "", b.detail ?? "") ||
+      // The two conflicts' canonical detail SUFFIX (review finding 6) — NOT
+      // `conflictKey` whole, which a prior version of this comment claimed
+      // "reduces to" the same thing. It does not: `conflictKey` LEADS with
+      // `fixtureId`, so comparing it whole sorts primarily by fixtureId and
+      // never reaches the detail at all when the two fixtures differ,
+      // silently changing this order from pre-C3 (which compared the raw
+      // `detail` string — no fixtureId prefix) and making the
+      // `cmp(a.fixtureId, b.fixtureId)` tie-break below unreachable (once
+      // the suffix comparison is 0, the fixtureId prefix that produced it
+      // must already be equal too).
+      cmp(conflictDetailSuffix(a), conflictDetailSuffix(b)) ||
       cmp(a.fixtureId, b.fixtureId)
     );
   });

@@ -88,7 +88,7 @@ describe("repairAndVerify", () => {
                 call++;
                 return call === 1
                   ? actual.validateAssignments(...args)
-                  : [{ fixtureId: "gf", reason: "court" as const, detail: "phantom" }];
+                  : [{ fixtureId: "gf", reason: "court" as const, details: { kind: "court_double_booking" as const, court: "phantom" } }];
               },
             };
           });
@@ -116,7 +116,7 @@ describe("repairAndVerify", () => {
             );
           expect(err).not.toBeNull();
           expect(err!.conflicts).toHaveLength(1);
-          expect(err!.conflicts[0]!.detail).toBe("phantom");
+          expect(err!.conflicts[0]!.details).toEqual({ kind: "court_double_booking", court: "phantom" });
           expect(err!.result.status).toBe("repaired");
         },
         () => {
@@ -129,7 +129,7 @@ describe("repairAndVerify", () => {
                 call++;
                 return call === 1
                   ? actual.validateAssignments(...args)
-                  : [{ fixtureId: "gf", reason: "court" as const, detail: "phantom" }];
+                  : [{ fixtureId: "gf", reason: "court" as const, details: { kind: "court_double_booking" as const, court: "phantom" } }];
               },
             };
           });
@@ -255,7 +255,7 @@ describe("repairAndVerify", () => {
           expect(err).toBeInstanceOf(repair.RepairVerificationError);
           expect(err!.kind).toBe("encoding_drift");
           expect(err!.conflicts).toHaveLength(1);
-          expect(err!.conflicts[0]!.detail).toBe("phantom");
+          expect(err!.conflicts[0]!.details).toEqual({ kind: "court_double_booking", court: "phantom" });
           // The result it refused is carried, so a caller can see exactly what
           // the solver was about to hand back.
           expect(err!.result.status).toBe("repaired");
@@ -273,7 +273,7 @@ describe("repairAndVerify", () => {
               // is the real verifier, so the solve is genuine.
               validateAssignments: (...args: Parameters<typeof actual.validateAssignments>) =>
                 ++call === 1
-                  ? [{ fixtureId: "gf", reason: "court" as const, detail: "phantom" }]
+                  ? [{ fixtureId: "gf", reason: "court" as const, details: { kind: "court_double_booking" as const, court: "phantom" } }]
                   : actual.validateAssignments(...args),
             };
           });

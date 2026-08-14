@@ -126,7 +126,7 @@ describe("slotFixtures — greedy placement (spec 05 §2.6)", () => {
     // `rule: "CAP"` since #399: nothing was placed because capacity ran out, and
     // no single rule was broken — CAP says exactly that.
     expect(conflicts).toEqual([
-      { fixtureId: "f2", reason: "no_slot", detail: expect.any(String), rule: "CAP" },
+      { fixtureId: "f2", reason: "no_slot", details: { kind: "no_slot_horizon" }, rule: "CAP" },
     ]);
   });
 });
@@ -205,7 +205,11 @@ describe("validateAssignments — board conflict report (doc 12 §2/§4)", () =>
       sessionWindows: [{ from: 0, to: 45 * MIN }],
     });
     expect(conflicts).toEqual([
-      expect.objectContaining({ fixtureId: "x", reason: "blackout", detail: "outside session windows" }),
+      expect.objectContaining({
+        fixtureId: "x",
+        reason: "blackout",
+        details: { kind: "outside_session_windows" },
+      }),
     ]);
   });
 

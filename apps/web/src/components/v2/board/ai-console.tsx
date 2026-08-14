@@ -366,6 +366,7 @@ export function AiConsole({
   onRefetch,
   onProposalChange,
   onPulse,
+  entrantNames = {},
 }: {
   divisionId: string;
   /** The division seq the board rendered at — the optimistic-concurrency token
@@ -387,6 +388,11 @@ export function AiConsole({
   /** This division's current fixtures (before any proposal) — powers the diff
    *  panel's from→to provenance and the grid ghosts. */
   fixtures: AiConsoleFixture[];
+  /** Entrant id -> display name, board-wide (C3 phase 4 — the gap found
+   *  reviewing phase 3). Optional and additive: absent (or a miss) falls
+   *  back to a shortened id, never a raw UUID — the pre-existing degrade,
+   *  unchanged for any caller that does not supply it. */
+  entrantNames?: Record<string, string>;
   /** A saved officials AssignPolicy, if the division has one — sent with the run
    *  for a dry coverage preview (§2). No persisted policy source exists today
    *  (the officials/auto flow composes it ad-hoc from unsaved UI state), so the
@@ -910,6 +916,7 @@ export function AiConsole({
           busy={busy}
           traceNonce={traceNonce}
           onPulse={(ids) => onPulseRef.current?.(ids)}
+          entrantNames={entrantNames}
         />
       )}
       {state.step === "officials" && (
@@ -1378,6 +1385,7 @@ export function ScheduleStep({
   busy,
   traceNonce,
   onPulse,
+  entrantNames = {},
 }: {
   state: AiConsoleState;
   dispatch: (a: Parameters<typeof aiConsoleReducer>[1]) => void;
@@ -1387,6 +1395,12 @@ export function ScheduleStep({
   busy: boolean;
   traceNonce: number;
   onPulse: (ids: string[]) => void;
+  /** Entrant id -> display name, for a blocking/warning row's
+   *  `details.entrantIds` (C3 phase 4 — the gap found reviewing phase 3).
+   *  Optional and additive: absent (or a miss) falls back to a shortened
+   *  id, never a raw UUID — the pre-existing degrade, unchanged for any
+   *  caller that does not supply it. */
+  entrantNames?: Record<string, string>;
 }) {
   const plan = state.schedulePlan;
   const { events, flaggedIds } = useMemo(
@@ -1416,6 +1430,7 @@ export function ScheduleStep({
         fixtures={fixtures}
         excluded={state.excludedFixtures}
         onToggleExclude={(fixtureId) => dispatch({ type: "TOGGLE_EXCLUDE", fixtureId })}
+        entrantNames={entrantNames}
       />
 
       {/* Everything the run flagged, could not place, or assumed — one card,
@@ -1427,6 +1442,7 @@ export function ScheduleStep({
         rows={reviewRows}
         fixtures={fixtures}
         onPulse={(ids) => onPulse(ids)}
+        entrantNames={entrantNames}
       />
 
       <p className="text-[11px] text-slate-500">{msg("board.ai.schedule.reviewNote")}</p>

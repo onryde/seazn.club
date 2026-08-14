@@ -15,6 +15,15 @@ import type {
 } from "./constraints.ts";
 import { restFloor } from "./rest-floor.ts";
 import { dayKeyInTz, hhmmInTz, weekdayOfYmd, ymdAddDays, zonedTimeToUtc } from "./tz.ts";
+import { canonConflictDetail, type ConflictDetail } from "./conflict-detail.ts";
+
+// Re-exported beside `Conflict` itself (below) so the many call sites that
+// already do `import { ..., type Conflict, ... } from "./calendar.ts"` can
+// add `type ConflictDetail` to that same list rather than a second import
+// statement — this file is the type's usual point of contact even though it
+// is DEFINED in `./conflict-detail.ts`, the same way `RuleFixture` and
+// `ScopeRow` live here despite describing something `Assignment`-adjacent.
+export type { ConflictDetail, ConflictDetailKind } from "./conflict-detail.ts";
 
 const MS_PER_MIN = 60_000;
 
@@ -192,7 +201,12 @@ export const RULE_BY_REASON: Record<ConflictReason, RuleCode> = {
 export interface Conflict {
   fixtureId: string;
   reason: ConflictReason;
-  detail?: string;
+  /** Structured, id-only (C3, 2026-08-13 design amendment) — the engine
+   *  builds no prose. `kind` names which of the 25 family templates produced
+   *  this row; the rest of `ConflictDetail`'s fields are whichever scalars
+   *  and ids that template needs. Resolving an id to a display name is a
+   *  client concern; the engine never sees a name to begin with. */
+  details?: ConflictDetail;
   /** `order` only: true when the dependency is a direct feed (blocks, doc 12 §2). */
   direct?: boolean;
   /** The rule the prompt taught for this reason (#399). Stamped at one choke
@@ -213,9 +227,24 @@ export interface Conflict {
 const withRule = (c: Conflict): Conflict => ({ ...c, rule: RULE_BY_REASON[c.reason] });
 
 /** Stable conflict identity — the key `verifyJoint`'s dedupe and the joint apply
- *  gate already use. `detail` is deliberately part of it: a worse breach writes a
- *  different detail string, so "worsened" needs no second comparison. */
-export const conflictKey = (c: Conflict): string => `${c.fixtureId}|${c.reason}|${c.detail ?? ""}`;
+ *  gate already use. `details` is deliberately part of it, folded through
+ *  `canonConflictDetail` rather than compared structurally: a worse breach
+ *  writes a different canon string, so "worsened" needs no second comparison.
+ *
+ *  This used to be a raw `detail` prose string (pre-C3); the prose is gone,
+ *  but the THREE REASONS the counterparty had to be part of the key have not
+ *  changed, and the canon carries every one of them exactly as the string
+ *  did: naming the court alone made a SWAP invisible (:829 — a card already
+ *  clashing with B, dragged onto C instead, must key differently); one row
+ *  per CARD is what makes an ADDED collision visible rather than one that
+ *  reads as pre-existing (:1364-1376); and two distinct kinds — never one
+ *  shared string — keep a rest breach from hiding behind a pre-existing
+ *  ordering violation (:1479-1495). `canonConflictDetail` is exhaustive over
+ *  every populated field (`conflict-detail.test.ts`'s per-kind sweep), so
+ *  none of those distinctions can be dropped silently the way an
+ *  under-interpolated template string once could. */
+export const conflictKey = (c: Conflict): string =>
+  `${c.fixtureId}|${c.reason}|${c.details ? canonConflictDetail(c.details) : ""}`;
 
 /**
  * A conflict that makes the schedule PHYSICALLY IMPOSSIBLE, as opposed to
@@ -732,7 +761,7 @@ export function slotFixtures(input: SlotInput): SlotResult {
           conflicts.push({
             fixtureId: f.id,
             reason: "person_overlap",
-            detail: `person ${person} also in ${other.fixtureId}`,
+            details: { kind: "person_double_booking", personIds: [person], otherFixtureId: other.fixtureId },
           });
         }
       }
@@ -745,7 +774,11 @@ export function slotFixtures(input: SlotInput): SlotResult {
     const lock = f.locked as { court: string; startAt: number };
     const clash = courtBlocked(lock.court, lock.startAt, durMs, gapMs, bookings, blackouts);
     if (clash !== null) {
-      conflicts.push({ fixtureId: f.id, reason: clash, detail: `locked slot clashes on ${lock.court}` });
+      conflicts.push({
+        fixtureId: f.id,
+        reason: clash,
+        details: { kind: "locked_slot_clash", court: lock.court },
+      });
     }
     commit(f, lock.court, lock.startAt);
   }
@@ -826,16 +859,21 @@ export function slotFixtures(input: SlotInput): SlotResult {
       // NOT `person_overlap`. Nothing was placed, so there is no overlap on the
       // board to report — and `person_overlap` is BLOCKING, so claiming one here
       // would make a card the placer declined to place refuse the organiser's
-      // apply. The person travels in `detail`, which is part of `conflictKey`
-      // and so already distinguishes this from an ordinary exhausted horizon.
+      // apply. The person travels in `details`, which `conflictKey` folds in
+      // (via `canonConflictDetail`), and so already distinguishes this from an
+      // ordinary exhausted horizon.
       conflicts.push({
         fixtureId: f.id,
         reason: windowBound ? "start_window" : "no_slot",
-        detail: windowBound
-          ? "no feasible slot before the start window's notAfter bound"
+        details: windowBound
+          ? { kind: "no_slot_start_window" }
           : personBound !== null
-            ? `no court/time within horizon free of person ${personBound.person} (also in ${personBound.other})`
-            : "no court/time within horizon",
+            ? {
+                kind: "no_slot_person_bound",
+                personIds: [personBound.person],
+                otherFixtureId: personBound.other,
+              }
+            : { kind: "no_slot_horizon" },
       });
       continue;
     }
@@ -1085,7 +1123,11 @@ if (tz !== undefined) {
             conflicts.push({
               fixtureId: d.id,
               reason: "instruction",
-              detail: `starts ${Math.round(gapMin)} min after its feeder, instruction requires ${h.minutes}`,
+              details: {
+                kind: "instruction_feeder_gap",
+                minutes: Math.round(gapMin),
+                requiredMinutes: h.minutes,
+              },
             });
           }
         }
@@ -1114,7 +1156,7 @@ if (tz !== undefined) {
           conflicts.push({
             fixtureId: a.fixtureId,
             reason: "instruction",
-            detail: `${total} fixtures on ${day} exceed the ${h.count}/day cap`,
+            details: { kind: "instruction_day_cap", count: total, day, requiredCount: h.count },
           });
         }
       }
@@ -1133,14 +1175,19 @@ if (tz !== undefined) {
           conflicts.push({
             fixtureId: f.id,
             reason: "instruction",
-            detail: `is on ${weekdayOfYmd(day)} ${day}, instruction requires ${h.weekday}`,
+            details: {
+              kind: "instruction_weekday",
+              weekday: weekdayOfYmd(day),
+              day,
+              requiredWeekday: h.weekday,
+            },
           });
         }
         if (h.type === "fixture_on_date" && day !== h.date) {
           conflicts.push({
             fixtureId: f.id,
             reason: "instruction",
-            detail: `is on ${day}, instruction requires ${h.date}`,
+            details: { kind: "instruction_date", day, requiredDate: h.date },
           });
         }
       }
@@ -1156,7 +1203,7 @@ if (tz !== undefined) {
         conflicts.push({
           fixtureId: a.fixtureId,
           reason: "instruction",
-          detail: `starts ${start}, violating ${h.type} ${h.time}`,
+          details: { kind: "instruction_time", time: start, ruleType: h.type, requiredTime: h.time },
         });
       }
     }
@@ -1346,7 +1393,7 @@ export function validateAssignments(
       conflicts.push({
         fixtureId: a.fixtureId,
         reason: "window",
-        detail: "outside the competition window",
+        details: { kind: "outside_competition_window" },
       });
     }
     // Bounds the START, matching the solver's `start > window.notAfter`.
@@ -1355,7 +1402,7 @@ export function validateAssignments(
       conflicts.push({
         fixtureId: a.fixtureId,
         reason: "start_window",
-        detail: "outside the target's start window",
+        details: { kind: "outside_start_window" },
       });
     }
     // Court clash / blackout — check against everything else on the board.
@@ -1380,25 +1427,36 @@ export function validateAssignments(
           overlaps(a.startAt - gapMs, a.endAt + gapMs, o.startAt, o.endAt),
       );
       // `courtBlocked` said "court", so at least one exists; the fallback keeps
-      // the reason reportable if the two predicates ever drift apart.
+      // the reason reportable if the two predicates ever drift apart. That
+      // fallback is a reportability guard, not a real counterparty: `hit` is
+      // the literal string `"another fixture"` when it fires, so
+      // `otherFixtureId` is omitted rather than set to a non-id.
       for (const hit of hits.length > 0 ? hits.map((h) => h.fixtureId) : ["another fixture"]) {
         conflicts.push({
           fixtureId: a.fixtureId,
           reason: "court",
-          detail: `court ${a.court} double-booked with ${hit}`,
+          details: {
+            kind: "court_double_booking",
+            court: a.court,
+            ...(hit === "another fixture" ? {} : { otherFixtureId: hit }),
+          },
         });
       }
     }
     for (const bo of blackouts) {
       if (bo.court !== undefined && bo.court !== a.court) continue;
       if (overlaps(a.startAt, a.endAt, bo.from, bo.to)) {
-        conflicts.push({ fixtureId: a.fixtureId, reason: "blackout", detail: "inside a blackout window" });
+        conflicts.push({ fixtureId: a.fixtureId, reason: "blackout", details: { kind: "inside_blackout" } });
         break;
       }
     }
     // Session windows: the match must sit fully inside one (doc 12 §2).
     if (windows.length > 0 && !windows.some((w) => a.startAt >= w.from && a.endAt <= w.to)) {
-      conflicts.push({ fixtureId: a.fixtureId, reason: "blackout", detail: "outside session windows" });
+      conflicts.push({
+        fixtureId: a.fixtureId,
+        reason: "blackout",
+        details: { kind: "outside_session_windows" },
+      });
     }
     // Rest & person overlap — against other matches sharing an entrant/person.
     for (const other of board) {
@@ -1409,7 +1467,7 @@ export function validateAssignments(
           conflicts.push({
             fixtureId: a.fixtureId,
             reason: "person_overlap",
-            detail: `entrant ${e} overlap with ${other.fixtureId}`,
+            details: { kind: "entrant_overlap", entrantIds: [e], otherFixtureId: other.fixtureId },
           });
         } else {
           // Resolved per PAIR: restByGroup can differ pool to pool, the other
@@ -1418,7 +1476,11 @@ export function validateAssignments(
           const restMs = pairRestMinutesWith(hard, fixtureById, config, a, other) * MS_PER_MIN;
           const gap = a.startAt >= other.endAt ? a.startAt - other.endAt : other.startAt - a.endAt;
           if (gap < restMs) {
-            conflicts.push({ fixtureId: a.fixtureId, reason: "rest", detail: `entrant ${e} below rest` });
+            conflicts.push({
+              fixtureId: a.fixtureId,
+              reason: "rest",
+              details: { kind: "entrant_below_rest", entrantIds: [e] },
+            });
           }
         }
       }
@@ -1429,7 +1491,7 @@ export function validateAssignments(
             conflicts.push({
               fixtureId: a.fixtureId,
               reason: "person_overlap",
-              detail: `person ${p} overlap with ${other.fixtureId}`,
+              details: { kind: "person_overlap", personIds: [p], otherFixtureId: other.fixtureId },
             });
           }
         } else if (!a.entrants.some((e) => other.entrants.includes(e))) {
@@ -1448,7 +1510,11 @@ export function validateAssignments(
             conflicts.push({
               fixtureId: a.fixtureId,
               reason: "rest",
-              detail: `person ${sharedPeople.join("/")} below rest`,
+              // `personIds` keeps `sharedPeople`'s BOARD order verbatim — the
+              // legacy `sharedPeople.join("/")` prose is reproducible from the
+              // array as given, per `canonConflictDetail`'s own contract that
+              // id-array order is meaningful, never re-sorted.
+              details: { kind: "person_below_rest", personIds: sharedPeople },
             });
           }
         }
@@ -1476,26 +1542,28 @@ export function validateAssignments(
     // luck. A rule should not depend on luck.
     const restMinutes = effectiveRestMinutes(config, target);
     if (target.startAt < source.endAt + restMinutes * MS_PER_MIN) {
-      // Two distinct details on purpose. They are different failures, and the
-      // delta gate keys on `detail`: one string for both would let a newly
-      // introduced rest breach hide behind a pre-existing ordering violation.
+      // Two distinct KINDS on purpose. They are different failures, and the
+      // delta gate keys on `details` (via `conflictKey`/`canonConflictDetail`):
+      // one kind for both would let a newly introduced rest breach hide behind
+      // a pre-existing ordering violation.
       const before = target.startAt < source.endAt;
       const gapMin = (target.startAt - source.endAt) / MS_PER_MIN;
       conflicts.push({
         fixtureId: dep.fixtureId,
         reason: "order",
-        // Two distinct details on purpose: they are different failures, and one
-        // string for both would let a newly introduced rest breach hide behind
-        // a pre-existing ordering violation.
+        // Two distinct kinds on purpose: they are different failures, and one
+        // kind for both would let a newly introduced rest breach hide behind a
+        // pre-existing ordering violation.
         //
-        // NEITHER carries the measured gap. `conflictKey` includes `detail`, so
-        // a number in here would move the identity every time the card moved —
-        // and dragging a dependent from 10 minutes short to 20 would read as a
-        // NEW conflict and be refused, which is the exact lock-out this wave
-        // exists to prevent. The size rides in `shortfallMinutes` instead.
-        detail: before
-          ? `starts before feeder ${dep.dependsOn} ends`
-          : `starts inside feeder ${dep.dependsOn}'s ${restMinutes} min rest`,
+        // NEITHER carries the measured gap. `conflictKey` folds `details` in,
+        // so a number in here would move the identity every time the card
+        // moved — and dragging a dependent from 10 minutes short to 20 would
+        // read as a NEW conflict and be refused, which is the exact lock-out
+        // this wave exists to prevent. The size rides in `shortfallMinutes`
+        // instead.
+        details: before
+          ? { kind: "order_before_feeder", otherFixtureId: dep.dependsOn }
+          : { kind: "order_inside_feeder_rest", otherFixtureId: dep.dependsOn, requiredMinutes: restMinutes },
         direct: dep.direct === true,
         shortfallMinutes: Math.max(0, Math.round(restMinutes - gapMin)),
       });
@@ -1615,14 +1683,20 @@ export function roundOrderConflicts(
           conflicts.push({
             fixtureId: b.fixtureId,
             reason: "order",
-            detail: `round ${b.roundNo} (day ${dayB}) starts before round ${a.roundNo} (day ${dayA})`,
+            details: {
+              kind: "round_order_day",
+              roundNo: b.roundNo,
+              otherRoundNo: a.roundNo,
+              day: dayB,
+              otherDay: dayA,
+            },
             direct: true,
           });
         } else if (dayA === dayB && a.startAt > b.startAt) {
           conflicts.push({
             fixtureId: b.fixtureId,
             reason: "order",
-            detail: `round ${b.roundNo} starts before round ${a.roundNo} on the same day (${dayA})`,
+            details: { kind: "round_order_same_day", roundNo: b.roundNo, otherRoundNo: a.roundNo, day: dayA },
             direct: true,
           });
         }

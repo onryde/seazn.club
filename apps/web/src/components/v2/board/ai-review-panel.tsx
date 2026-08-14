@@ -22,12 +22,14 @@ import { DivisionChip } from "./ai-division-chip";
 import { Marker } from "./ai-marker";
 import { reviewRowCount, reviewRowPulseIds, type ReviewRow } from "./ai-review";
 import { CONFLICT_LABEL } from "./types";
+import { formatConflictDetail } from "./conflict-detail-format";
 
 export function AiReviewPanel({
   rows,
   fixtures,
   divisionFor,
   onPulse,
+  entrantNames = {},
 }: {
   /** Built by `buildReviewRows` — the single source of both the list and the count. */
   rows: ReviewRow[];
@@ -38,10 +40,24 @@ export function AiReviewPanel({
   /** Highlight this card's PLACED fixtures on the grid. Offered only when the
    *  card holds at least one — see `reviewRowPulseIds`. */
   onPulse?: (fixtureIds: string[]) => void;
+  /** Entrant id -> display name, for a warning row's `details.entrantIds`
+   *  (C3 phase 4 — the gap found reviewing phase 3). Optional and additive:
+   *  the board is the only caller with a real map in scope today; every
+   *  other/direct-construction caller keeps today's degrade-to-short-id
+   *  behaviour unchanged. */
+  entrantNames?: Record<string, string>;
 }) {
   const msg = useMsg();
   const plural = usePlural();
   const byId = useMemo(() => new Map(fixtures.map((f) => [f.id, f])), [fixtures]);
+  // Fixture id -> matchup, for a warning row's `details.otherFixtureId` (C3,
+  // 2026-08-13 design amendment) — same reasoning as the diff panel's own
+  // `fixtureTitles`: no per-entrant name map on this surface, so an
+  // entrant-level kind degrades to a shortened id.
+  const fixtureTitles = useMemo(
+    () => Object.fromEntries(fixtures.map((f) => [f.id, f.matchup])),
+    [fixtures],
+  );
   // Read once, from the array below. Every number this card shows is this one,
   // so the header and the list cannot disagree (#388).
   const count = reviewRowCount(rows);
@@ -159,7 +175,11 @@ export function AiReviewPanel({
                     <p className="text-[11px] font-medium text-amber-700">
                       {conflictLabel(row.reason)}
                     </p>
-                    {row.detail && <p className="mt-0.5 text-[10px] text-slate-500">{row.detail}</p>}
+                    {row.details && (
+                      <p className="mt-0.5 text-[10px] text-slate-500">
+                        {formatConflictDetail(row.details, { msg, entrantNames, fixtureTitles })}
+                      </p>
+                    )}
                   </>
                 ) : (
                   <>

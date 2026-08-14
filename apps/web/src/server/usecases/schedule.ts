@@ -38,6 +38,7 @@ import {
   type BuildResult,
   type BuildStatus,
   type Conflict,
+  type ConflictDetail,
   type HardConstraint,
   type OrderDependency,
   type RepairResult,
@@ -47,6 +48,7 @@ import {
   type VerifyConfig,
 } from "@seazn/engine/scheduling";
 import { appendDivisionEvent } from "@/server/engine-db";
+import { legacyConflictDetail } from "@/server/api-v1/conflict-detail-legacy";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   ScheduleConfig,
@@ -881,6 +883,35 @@ export function toVerifyConfig(
  * report of an impossible board come back entirely in amber, because nothing in
  * a read-only report is ever newly introduced.
  */
+/** `ConflictDetail`'s camelCase fields, snake_cased for the wire — the same
+ *  casing `ScheduleConflict` uses throughout (`fixture_id`,
+ *  `shortfall_minutes`). A plain rename, nothing derived; conditional spreads
+ *  throughout so an absent field stays ABSENT rather than a present `undefined`
+ *  (`mapConflicts`' own established idiom, just below). */
+function toWireConflictDetail(d: ConflictDetail): NonNullable<ScheduleConflict["details"]> {
+  return {
+    kind: d.kind,
+    ...(d.entrantIds !== undefined ? { entrant_ids: d.entrantIds } : {}),
+    ...(d.personIds !== undefined ? { person_ids: d.personIds } : {}),
+    ...(d.otherFixtureId !== undefined ? { other_fixture_id: d.otherFixtureId } : {}),
+    ...(d.court !== undefined ? { court: d.court } : {}),
+    ...(d.day !== undefined ? { day: d.day } : {}),
+    ...(d.otherDay !== undefined ? { other_day: d.otherDay } : {}),
+    ...(d.weekday !== undefined ? { weekday: d.weekday } : {}),
+    ...(d.requiredWeekday !== undefined ? { required_weekday: d.requiredWeekday } : {}),
+    ...(d.requiredDate !== undefined ? { required_date: d.requiredDate } : {}),
+    ...(d.time !== undefined ? { time: d.time } : {}),
+    ...(d.requiredTime !== undefined ? { required_time: d.requiredTime } : {}),
+    ...(d.ruleType !== undefined ? { rule_type: d.ruleType } : {}),
+    ...(d.roundNo !== undefined ? { round_no: d.roundNo } : {}),
+    ...(d.otherRoundNo !== undefined ? { other_round_no: d.otherRoundNo } : {}),
+    ...(d.minutes !== undefined ? { minutes: d.minutes } : {}),
+    ...(d.requiredMinutes !== undefined ? { required_minutes: d.requiredMinutes } : {}),
+    ...(d.count !== undefined ? { count: d.count } : {}),
+    ...(d.requiredCount !== undefined ? { required_count: d.requiredCount } : {}),
+  };
+}
+
 function mapConflicts(conflicts: readonly Conflict[]): ScheduleConflict[] {
   return conflicts.map((c) => ({
     fixture_id: c.fixtureId,
@@ -890,7 +921,14 @@ function mapConflicts(conflicts: readonly Conflict[]): ScheduleConflict[] {
     ...(c.rule !== undefined ? { rule: c.rule } : {}),
     ...(c.shortfallMinutes !== undefined ? { shortfall_minutes: c.shortfallMinutes } : {}),
     blocking: isBlockingConflict(c),
-    ...(c.detail !== undefined ? { detail: c.detail } : {}),
+    // Structured (additive) and the deprecated derived English (back-compat,
+    // C3 2026-08-13 design amendment) — both from the SAME `details`, so they
+    // can never disagree. Omitted together: a `Conflict` the engine built
+    // without a `details` entry gets neither, same as it got no `detail`
+    // before this wave.
+    ...(c.details !== undefined
+      ? { details: toWireConflictDetail(c.details), detail: legacyConflictDetail(c.details) }
+      : {}),
   }));
 }
 
@@ -1869,7 +1907,11 @@ async function reflowExisting(args: {
       conflicts.push({
         fixtureId: f.id,
         reason: "no_slot",
-        detail: "no legal slot in the lattice",
+        // Structured (C3, 2026-08-13 design amendment) — this copy of
+        // build.ts's own REFLOW rule (see the comment above this loop) reports
+        // the same `no_slot_lattice` kind build.ts:809 does, with no fields
+        // beyond `kind` (design doc's per-kind table, row 24).
+        details: { kind: "no_slot_lattice" },
         rule: RULE_BY_REASON.no_slot,
       });
     }

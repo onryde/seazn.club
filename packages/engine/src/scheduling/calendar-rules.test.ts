@@ -16,9 +16,11 @@ import {
   RULE_BY_REASON,
   validateAssignments,
   type Conflict,
+  type ConflictDetail,
   type ConflictReason,
   type VerifyConfig,
 } from "./calendar";
+import { canonConflictDetail } from "./conflict-detail";
 
 // Written out rather than derived: a union member added without a rule code is
 // exactly the regression this asserts, and deriving the list from the map would
@@ -46,10 +48,10 @@ const cfg: VerifyConfig = {
   matchMinutes: 30,
 };
 
-const conflict = (fixtureId: string, reason: ConflictReason, detail?: string): Conflict => ({
+const conflict = (fixtureId: string, reason: ConflictReason, details?: ConflictDetail): Conflict => ({
   fixtureId,
   reason,
-  ...(detail !== undefined ? { detail } : {}),
+  ...(details !== undefined ? { details } : {}),
 });
 
 describe("rule codes (#399)", () => {
@@ -98,57 +100,83 @@ describe("rule codes (#399)", () => {
 });
 
 describe("conflictKey (#399)", () => {
-  it("is fixture, reason and detail", () => {
-    expect(conflictKey(conflict("f1", "court", "court C1 double-booked"))).toBe(
-      "f1|court|court C1 double-booked",
+  it("is fixture, reason and the canon of details", () => {
+    const details: ConflictDetail = { kind: "court_double_booking", court: "C1" };
+    // Literal, not derived from `canonConflictDetail` itself — this pins
+    // `conflictKey`'s OWN composition contract (`fixtureId|reason|canon`);
+    // `canonConflictDetail`'s correctness is conflict-detail.test.ts's job.
+    expect(conflictKey(conflict("f1", "court", details))).toBe(
+      'f1|court|kind=court_double_booking|court="C1"',
+    );
+    expect(conflictKey(conflict("f1", "court", details))).toBe(
+      `f1|court|${canonConflictDetail(details)}`,
     );
   });
 
-  it("keeps the empty-detail slot so a detail-less conflict still keys stably", () => {
+  it("keeps the empty-details slot so a details-less conflict still keys stably", () => {
     expect(conflictKey(conflict("f1", "court"))).toBe("f1|court|");
   });
 });
 
 describe("deltaConflicts (#399)", () => {
   it("does not report a conflict that was already there", () => {
-    const pre = conflict("f1", "person_overlap", "person p1 overlap");
+    const pre = conflict("f1", "person_overlap", { kind: "person_overlap", personIds: ["p1"] });
     expect(deltaConflicts([pre], [pre])).toEqual([]);
   });
 
   it("reports a conflict the change introduced", () => {
-    const fresh = conflict("f2", "person_overlap", "person p9 overlap");
-    expect(deltaConflicts([conflict("f1", "person_overlap", "person p1 overlap")], [fresh])).toEqual([
-      fresh,
-    ]);
+    const fresh = conflict("f2", "person_overlap", { kind: "person_overlap", personIds: ["p9"] });
+    expect(
+      deltaConflicts(
+        [conflict("f1", "person_overlap", { kind: "person_overlap", personIds: ["p1"] })],
+        [fresh],
+      ),
+    ).toEqual([fresh]);
   });
 
   it("reports a WORSENED conflict — same key, one more instance", () => {
-    const dup = conflict("f1", "person_overlap", "person p1 overlap");
+    const dup = conflict("f1", "person_overlap", { kind: "person_overlap", personIds: ["p1"] });
     expect(deltaConflicts([dup], [dup, dup])).toEqual([dup]);
   });
 
-  it("reports a bigger breach, because the detail differs", () => {
-    const worse = conflict("f1", "rest", "person p1/p2 below rest");
-    expect(deltaConflicts([conflict("f1", "rest", "person p1 below rest")], [worse])).toEqual([worse]);
+  it("reports a bigger breach, because the details differ", () => {
+    const worse = conflict("f1", "rest", { kind: "person_below_rest", personIds: ["p1", "p2"] });
+    expect(
+      deltaConflicts(
+        [conflict("f1", "rest", { kind: "person_below_rest", personIds: ["p1"] })],
+        [worse],
+      ),
+    ).toEqual([worse]);
   });
 
   it("does not resurrect a conflict the change REMOVED", () => {
-    expect(deltaConflicts([conflict("f1", "court", "court C1 double-booked")], [])).toEqual([]);
+    expect(
+      deltaConflicts([conflict("f1", "court", { kind: "court_double_booking", court: "C1" })], []),
+    ).toEqual([]);
   });
 
   it("is empty when nothing changed at all", () => {
-    const board = [conflict("f1", "rest", "entrant e1 below rest"), conflict("f2", "blackout", "x")];
+    const board = [
+      conflict("f1", "rest", { kind: "entrant_below_rest", entrantIds: ["e1"] }),
+      conflict("f2", "blackout", { kind: "inside_blackout" }),
+    ];
     expect(deltaConflicts(board, board)).toEqual([]);
   });
 
   // --- the two ways a stable key can lie -----------------------------------
 
+  const insideFeederRest: ConflictDetail = {
+    kind: "order_inside_feeder_rest",
+    otherFixtureId: "feeder1",
+    requiredMinutes: 40,
+  };
+
   it("reports a breach that got WORSE at the same key", () => {
     // Some conflicts are measured, not binary: a feeder rest breach is 10
     // minutes short before and 30 minutes short after. The key has to stay
     // stable (see the lock-out case below) so the SIZE travels beside it.
-    const before = { ...conflict("f1", "order", "inside the feeder rest"), shortfallMinutes: 10 };
-    const after = { ...conflict("f1", "order", "inside the feeder rest"), shortfallMinutes: 30 };
+    const before = { ...conflict("f1", "order", insideFeederRest), shortfallMinutes: 10 };
+    const after = { ...conflict("f1", "order", insideFeederRest), shortfallMinutes: 30 };
     expect(deltaConflicts([before], [after])).toEqual([after]);
   });
 
@@ -157,13 +185,13 @@ describe("deltaConflicts (#399)", () => {
     // card from 30 minutes short of the rest it owes to 10 minutes short is an
     // IMPROVEMENT. Reporting it as introduced would refuse the very edit that is
     // repairing the board.
-    const before = { ...conflict("f1", "order", "inside the feeder rest"), shortfallMinutes: 30 };
-    const after = { ...conflict("f1", "order", "inside the feeder rest"), shortfallMinutes: 10 };
+    const before = { ...conflict("f1", "order", insideFeederRest), shortfallMinutes: 30 };
+    const after = { ...conflict("f1", "order", insideFeederRest), shortfallMinutes: 10 };
     expect(deltaConflicts([before], [after])).toEqual([]);
   });
 
   it("treats an equal breach as unchanged", () => {
-    const same = { ...conflict("f1", "order", "inside the feeder rest"), shortfallMinutes: 10 };
+    const same = { ...conflict("f1", "order", insideFeederRest), shortfallMinutes: 10 };
     expect(deltaConflicts([same], [{ ...same }])).toEqual([]);
   });
 });

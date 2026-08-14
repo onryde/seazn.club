@@ -22,12 +22,12 @@
 // answer is reported as an upper bound and the caller is told why.
 //
 // WHICH FIXTURES A CONFLICT NAMES is the one thing this file must not guess. A
-// `court` row carries its counterparty in its detail; a `rest` row does not; a
-// per-day cap row names one card out of a whole day. Rather than parse strings
-// or re-derive the rule, every witness is obtained FROM THE VERIFIER: run
-// `validateAssignments` on the fixture alone, then on the fixture plus one
+// `court` row carries its counterparty in its details; a `rest` row does not;
+// a per-day cap row names one card out of a whole day. Rather than parse
+// strings or re-derive the rule, every witness is obtained FROM THE VERIFIER:
+// run `validateAssignments` on the fixture alone, then on the fixture plus one
 // neighbour, and attribute by `conflictKey`. A conflict no sub-board reproduces
-// — the per-day cap, whose detail carries the whole day's total — is left
+// — the per-day cap, whose details carry the whole day's total — is left
 // UNATTRIBUTED and simply does not enter the bound. That is the safe direction:
 // fewer certified conflicts is a weaker lower bound, never a wrong one.
 import {
@@ -39,6 +39,7 @@ import {
   type OrderDependency,
   type VerifyConfig,
 } from "./calendar.ts";
+import { canonConflictDetail } from "./conflict-detail.ts";
 import { maxSeparationMinutes, sharesParticipant } from "./repair-domain.ts";
 
 const MS_PER_MIN = 60_000;
@@ -198,7 +199,12 @@ export function disjointConflictBound(input: MinimalityBoundInput): MinimalityBo
     // A conflict with no movable fixture in it cannot be repaired by moving
     // anything, so it demands no move and proves no bound.
     if (ids.length === 0) continue;
-    candidates.set(key, { key, ids, reason: c.reason, detail: c.detail ?? "" });
+    candidates.set(key, {
+      key,
+      ids,
+      reason: c.reason,
+      detail: c.details ? canonConflictDetail(c.details) : "",
+    });
   }
 
   const degree = new Map<string, number>();

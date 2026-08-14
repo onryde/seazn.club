@@ -90,8 +90,8 @@ describe("the placer's own output satisfies the verifier (#463)", () => {
     // carries `tz` and `ruleFixtures`, which is the point — one object, one
     // clock, one rule list, handed to both sides.
     const verdict = validateAssignments(assignments, config);
-    // Mapped to `detail` so a failure names the day or the time that broke,
+    // Mapped to `details` so a failure names the day or the time that broke,
     // rather than printing five identical conflict objects.
-    expect(verdict.filter((c) => c.reason === "instruction").map((c) => c.detail)).toEqual([]);
+    expect(verdict.filter((c) => c.reason === "instruction").map((c) => c.details)).toEqual([]);
   });
 });
