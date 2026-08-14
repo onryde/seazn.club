@@ -340,7 +340,9 @@ export function RegistrationsPanel({
             onChange={(e) => setQuery(e.target.value)}
             placeholder={msg("reg.searchPlaceholder")}
             aria-label={msg("reg.searchAria")}
-            className="input w-48 px-2 py-1 text-xs"
+            // `.input`'s own padding loses to `px-2 py-1 text-xs` under
+            // Tailwind's utilities layer (S13/#422 W11). `min-h-11` survives it.
+            className="input min-h-11 w-48 px-2 py-1 text-xs"
             data-testid="reg-search"
           />
           <a

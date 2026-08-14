@@ -1164,7 +1164,9 @@ function EntrantTableRow({
                 const v = e.target.value ? Number(e.target.value) : null;
                 if (v !== entrant.seed) onPatch({ seed: v });
               }}
-              className="input w-16 px-2 py-1 text-xs"
+              // `.input`'s own padding loses to `px-2 py-1 text-xs` under
+              // Tailwind's utilities layer (S13/#422 W11). `min-h-11` survives it.
+              className="input min-h-11 w-16 px-2 py-1 text-xs"
               aria-label={`Seed for ${entrant.display_name}`}
             />
           ) : (
@@ -1220,7 +1222,7 @@ function EntrantTableRow({
                       setRosterVersion((v) => v + 1);
                     }
                   }}
-                  className="btn min-h-[44px] text-xs sm:min-h-0"
+                  className="btn min-h-[44px] text-xs"
                   title="Replace this entry's roster with the team's current squad"
                 >
                   Sync from team squad
@@ -1366,7 +1368,7 @@ export function RosterEditor({
               onChange={(e) =>
                 update(i, { squad_number: e.target.value ? Number(e.target.value) : null })
               }
-              className="input w-16 px-2 py-1 text-xs"
+              className="input min-h-11 w-16 px-2 py-1 text-xs"
               aria-label={`Squad number for ${m.full_name}`}
             />
           )}
@@ -1375,7 +1377,7 @@ export function RosterEditor({
               disabled={!canEdit}
               value={m.default_position_key ?? ""}
               onChange={(e) => update(i, { default_position_key: e.target.value || null })}
-              className="select w-36 px-2 py-1 text-xs"
+              className="select min-h-11 w-36 px-2 py-1 text-xs"
               aria-label={`Position for ${m.full_name}`}
             >
               <option value="">position…</option>
@@ -1446,7 +1448,7 @@ export function RosterEditor({
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Find player…"
-            className="input w-44 px-2 py-1 text-xs"
+            className="input min-h-11 w-44 px-2 py-1 text-xs"
           />
           {candidates.map((p) => {
             const onOther = conflictsFor(p.id);

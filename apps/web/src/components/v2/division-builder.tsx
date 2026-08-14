@@ -709,7 +709,9 @@ export function DivisionBuilder({
                     max={64}
                     value={previewCount}
                     onChange={(e) => setPreviewCount(Math.min(64, Math.max(2, Number(e.target.value) || 2)))}
-                    className="input w-16 px-2 py-1 text-sm"
+                    // `.input`'s own padding loses to `px-2 py-1 text-sm` under
+                    // Tailwind's utilities layer (S13/#422 W11). `min-h-11` survives it.
+                    className="input min-h-11 w-16 px-2 py-1 text-sm"
                   />
                 </label>
                 <button type="button" onClick={() => void runPreview()} disabled={previewBusy} className="btn btn-primary px-3 py-1 text-xs">

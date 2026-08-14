@@ -93,6 +93,19 @@ export interface PadRendererProps {
    *  score header mounted alongside this component. Never drives anything
    *  inside this file itself. */
   onStateChange?: (state: unknown, summary: unknown) => void;
+  /** Fires whenever the pipeline's reconciled ledger changes, oldest-first.
+   *
+   *  Exists because chrome mounted AROUND this pad keeps its own copy of the
+   *  event list and has no other way to learn about events the pad submits:
+   *  `fixture-console.tsx` and `device-score-pad.tsx` both derive their "Undo
+   *  last" target from a server-loaded snapshot that the pad's separate
+   *  pipeline never touches, so undo silently operated on a pre-pad state and
+   *  only worked after a reload. `onStateChange` above cannot serve this — it
+   *  carries the FOLD's outputs, not the raw events an undo needs an id from.
+   *
+   *  Keyed on the events themselves for the same reason as onStateChange: a
+   *  caller passing a fresh inline function each render must not loop. */
+  onEvents?: (events: readonly EventEnvelope[]) => void;
 }
 
 export function PadRenderer(props: PadRendererProps) {
@@ -115,6 +128,13 @@ export function PadRenderer(props: PadRendererProps) {
     // must not turn this into a loop or re-fire for no fold change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipeline.state, pipeline.summary]);
+
+  useEffect(() => {
+    props.onEvents?.(pipeline.events);
+    // Same rule as the effect above: keyed on the pipeline's own output, never
+    // on the callback identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipeline.events]);
 
   const spec = useMemo(() => props.module.padSpec?.(props.cfg) ?? EMPTY_SPEC, [props.module, props.cfg]);
 

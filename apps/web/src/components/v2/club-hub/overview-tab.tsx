@@ -500,7 +500,7 @@ function CrestCard({
             <div className="flex flex-wrap items-center gap-3">
               <button
                 type="button"
-                className="btn btn-primary min-h-[44px] text-sm sm:min-h-0"
+                className="btn btn-primary min-h-[44px] text-sm"
                 disabled={busy}
                 onClick={() => inputRef.current?.click()}
               >
@@ -523,7 +523,7 @@ function CrestCard({
               {logoPath && (
                 <button
                   type="button"
-                  className="btn min-h-[44px] text-sm sm:min-h-0"
+                  className="btn min-h-[44px] text-sm"
                   disabled={busy}
                   onClick={() => void remove()}
                 >

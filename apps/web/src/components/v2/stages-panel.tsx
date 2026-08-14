@@ -771,7 +771,7 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                       data-testid="stage-auto-schedule"
                       disabled={busy !== null || capacityByStage.get(stage.id)?.verdict === "impossible"}
                       onClick={() => void autoScheduleStage(stage.id)}
-                      className="btn btn-primary min-h-11 px-3 py-1 text-xs sm:min-h-0"
+                      className="btn btn-primary min-h-11 px-3 py-1 text-xs"
                     >
                       {busy === stage.id ? msg("schedule.working") : msg("schedule.unscheduled.cta")}
                     </button>
@@ -1307,7 +1307,9 @@ function FixtureLine({
             <input
               value={venue}
               onChange={(e) => setVenue(e.target.value)}
-              className="input w-40 px-2 py-1 text-xs"
+              // `.input`'s own padding loses to `px-2 py-1 text-xs` under
+              // Tailwind's utilities layer (S13/#422 W11). `min-h-11` survives it.
+              className="input min-h-11 w-40 px-2 py-1 text-xs"
             />
           </label>
           <label className="block">
@@ -1315,7 +1317,7 @@ function FixtureLine({
             <input
               value={court}
               onChange={(e) => setCourt(e.target.value)}
-              className="input w-28 px-2 py-1 text-xs"
+              className="input min-h-11 w-28 px-2 py-1 text-xs"
             />
           </label>
           <button
@@ -1391,7 +1393,7 @@ function AddMatchForm({
       <div className="flex flex-wrap items-end gap-3">
         <label className="label flex flex-col gap-1 text-xs">
           {msg("stage.addMatch.home")}
-          <select className="input py-1.5 text-sm" value={home} onChange={(e) => setHome(e.target.value)}>
+          <select className="input min-h-11 py-1.5 text-sm" value={home} onChange={(e) => setHome(e.target.value)}>
             <option value="" />
             {options.map(([id, name]) => (
               <option key={id} value={id} disabled={id === away}>
@@ -1402,7 +1404,7 @@ function AddMatchForm({
         </label>
         <label className="label flex flex-col gap-1 text-xs">
           {msg("stage.addMatch.away")}
-          <select className="input py-1.5 text-sm" value={away} onChange={(e) => setAway(e.target.value)}>
+          <select className="input min-h-11 py-1.5 text-sm" value={away} onChange={(e) => setAway(e.target.value)}>
             <option value="" />
             {options.map(([id, name]) => (
               <option key={id} value={id} disabled={id === home}>

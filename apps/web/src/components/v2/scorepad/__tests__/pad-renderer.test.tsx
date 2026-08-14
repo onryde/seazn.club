@@ -19,7 +19,7 @@ import type { FixtureStateResult, PadTransport } from "../transport";
 import type { LedgerSlotEvent, OwnIdentity } from "../types";
 import type { PadActionView, PadPanelView } from "../view-model";
 import { ActionForm } from "../action-form";
-import { Panel } from "../panel";
+import { actionKey, orderForTabSequence, Panel } from "../panel";
 import { FidelitySwitcher } from "../fidelity-switcher";
 import { AttributionPicker } from "@/components/v2/scorepad/attribution-picker";
 import { Timeline, type TimelineEvent } from "../timeline";
@@ -457,6 +457,201 @@ describe("Panel — single-action grid panel fills its row at md+ (S10/#419 W8 f
     const island = renderIsland(Panel, { panel, onSubmit: () => {} });
     const className = propsOf(actionsContainer(island.tree())).className as string;
     expect(className).toBe("flex flex-col gap-2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S13 W11 follow-up — the recorded a11y evidence's measured defect
+// (scorepad-a11y-evidence.spec.ts: 1-2 backward tab jumps per width,
+// deterministic). `orderForTabSequence`/`actionKey` are the fix's pure core:
+// exhaustively covered with no rendering below. The `Panel` suite after it
+// proves the WIRING — each ActionForm/locked tile gets an `order` pinned to
+// its ORIGINAL array position (so on-screen placement never moves) and an
+// `onExpandedChange` that reorders its row's DOM the instant a sibling
+// reports itself expanded. `ActionForm` stays a real per-instance-state
+// component this harness cannot click through a second component boundary
+// (this file's own header) — so, exactly like the "available action gets a
+// real ActionForm child" case above, this asserts on and calls the
+// `<ActionForm>` ELEMENT's own props rather than its rendered interior.
+// ---------------------------------------------------------------------------
+describe("orderForTabSequence / actionKey — the reorder core (pure, no rendering)", () => {
+  function action(type: string, label: string): PadActionView {
+    return { type, labelKey: { key: `pad.test.${label}`, label }, fields: [], attribution: [], availability: AVAILABLE };
+  }
+
+  it("actionKey combines type + labelKey.key — two actions sharing a type stay distinguishable (generic's real Tally shape)", () => {
+    const a = action("generic.score", "add");
+    const b = action("generic.score", "correct");
+    expect(actionKey(a)).not.toBe(actionKey(b));
+  });
+
+  it("an empty or single-action list is returned unchanged", () => {
+    expect(orderForTabSequence([], new Set())).toEqual([]);
+    const a = action("t", "a");
+    expect(orderForTabSequence([a], new Set([actionKey(a)]))).toEqual([a]);
+  });
+
+  it("neither expanded: order is unchanged", () => {
+    const a = action("t", "a");
+    const b = action("t", "b");
+    expect(orderForTabSequence([a, b], new Set())).toEqual([a, b]);
+  });
+
+  it("the FIRST of a pair expanded: swaps so the still-collapsed one comes first", () => {
+    const a = action("t", "a");
+    const b = action("t", "b");
+    expect(orderForTabSequence([a, b], new Set([actionKey(a)]))).toEqual([b, a]);
+  });
+
+  it("the SECOND of a pair expanded: already correct, no swap", () => {
+    const a = action("t", "a");
+    const b = action("t", "b");
+    expect(orderForTabSequence([a, b], new Set([actionKey(b)]))).toEqual([a, b]);
+  });
+
+  it("both expanded at once: left unchanged — no static ordering can fix this (panel.tsx's own header)", () => {
+    const a = action("t", "a");
+    const b = action("t", "b");
+    expect(orderForTabSequence([a, b], new Set([actionKey(a), actionKey(b)]))).toEqual([a, b]);
+  });
+
+  it("four actions (two rows): only the row containing the expanded action reorders; rows keep their own sequence", () => {
+    const a = action("t", "a");
+    const b = action("t", "b");
+    const c = action("t", "c");
+    const d = action("t", "d");
+    // Row 1 = [a,b], row 2 = [c,d] (CSS grid-cols-2's own row grouping) — c
+    // (row 2's first slot) expands. Row 1 must stay untouched, and row 2's
+    // pair reorders WITHOUT leaking past its own row.
+    expect(orderForTabSequence([a, b, c, d], new Set([actionKey(c)]))).toEqual([a, b, d, c]);
+  });
+});
+
+describe("Panel — grid/perSide rows keep DOM/tab order matching visual order when a sibling expands (S13 W11 follow-up)", () => {
+  // Mirrors generic's REAL Tally panel exactly (packages/engine/src/sports/
+  // generic/generic.ts): two actions sharing the SAME `type`
+  // ("generic.score") in one `grid` row — the concrete shape the recorded
+  // a11y evidence measured a backward tab jump on.
+  function tallyLikePanel(layout: PadPanelView["layout"]): PadPanelView {
+    const addPoints: PadActionView = {
+      type: "generic.score",
+      labelKey: { key: "pad.generic.action.addPoints", label: "Add points" },
+      fields: [{ kind: "number", path: "points", min: 1, max: 50 }],
+      attribution: [],
+      availability: AVAILABLE,
+    };
+    const correctPoints: PadActionView = {
+      type: "generic.score",
+      labelKey: { key: "pad.generic.action.correctPoints", label: "Correct (subtract)" },
+      fields: [{ kind: "number", path: "points", min: -50, max: -1 }],
+      attribution: [],
+      availability: AVAILABLE,
+    };
+    return { labelKey: { key: "pad.generic.panel.tally", label: "Tally" }, phase: "live", layout, actions: [addPoints, correctPoints] };
+  }
+
+  function actionFormFor(tree: ReactElement[], label: string): ReactElement {
+    return find(findAll(tree, isType(ActionForm)), (el) => (propsOf(el).action as PadActionView).labelKey.label === label);
+  }
+
+  function labelsInOrder(tree: ReactElement[]): string[] {
+    return findAll(tree, isType(ActionForm)).map((f) => (propsOf(f).action as PadActionView).labelKey.label);
+  }
+
+  it("at rest, both actions keep their original DOM order and an `order` matching their original index", () => {
+    const island = renderIsland(Panel, { panel: tallyLikePanel("grid"), onSubmit: () => {} });
+    const tree = island.tree();
+    expect(labelsInOrder(tree)).toEqual(["Add points", "Correct (subtract)"]);
+    expect(propsOf(actionFormFor(tree, "Add points")).order).toBe(0);
+    expect(propsOf(actionFormFor(tree, "Correct (subtract)")).order).toBe(1);
+  });
+
+  it("when the FIRST action reports itself expanded, its still-collapsed row-mate moves BEFORE it in DOM — order stays pinned", () => {
+    const island = renderIsland(Panel, { panel: tallyLikePanel("grid"), onSubmit: () => {} });
+    const addPointsForm = actionFormFor(island.tree(), "Add points");
+    (propsOf(addPointsForm).onExpandedChange as (expanded: boolean) => void)(true);
+
+    const tree = island.tree();
+    // DOM/tab order: the still-collapsed "Correct (subtract)" now comes
+    // FIRST, so a keyboard user reaches it before "Add points" grows tall —
+    // never the reverse, which is the measured defect.
+    expect(labelsInOrder(tree)).toEqual(["Correct (subtract)", "Add points"]);
+    // Visual position is UNCHANGED — `order` still ties each action to its
+    // ORIGINAL slot regardless of which one is DOM-first now.
+    expect(propsOf(actionFormFor(tree, "Add points")).order).toBe(0);
+    expect(propsOf(actionFormFor(tree, "Correct (subtract)")).order).toBe(1);
+  });
+
+  it("when the SECOND action expands instead, order is already correct — no DOM change", () => {
+    const island = renderIsland(Panel, { panel: tallyLikePanel("grid"), onSubmit: () => {} });
+    const correctForm = actionFormFor(island.tree(), "Correct (subtract)");
+    (propsOf(correctForm).onExpandedChange as (expanded: boolean) => void)(true);
+
+    expect(labelsInOrder(island.tree())).toEqual(["Add points", "Correct (subtract)"]);
+  });
+
+  it("collapsing again (onExpandedChange(false)) restores the original DOM order", () => {
+    const island = renderIsland(Panel, { panel: tallyLikePanel("grid"), onSubmit: () => {} });
+    (propsOf(actionFormFor(island.tree(), "Add points")).onExpandedChange as (expanded: boolean) => void)(true);
+    // Re-fetch: a fresh element from the post-reorder render, not the one
+    // captured before it.
+    (propsOf(actionFormFor(island.tree(), "Add points")).onExpandedChange as (expanded: boolean) => void)(false);
+
+    expect(labelsInOrder(island.tree())).toEqual(["Add points", "Correct (subtract)"]);
+  });
+
+  it("perSide behaves identically to grid — the same shared-row fix applies to both", () => {
+    const island = renderIsland(Panel, { panel: tallyLikePanel("perSide"), onSubmit: () => {} });
+    const addPointsForm = actionFormFor(island.tree(), "Add points");
+    (propsOf(addPointsForm).onExpandedChange as (expanded: boolean) => void)(true);
+
+    expect(labelsInOrder(island.tree())).toEqual(["Correct (subtract)", "Add points"]);
+  });
+
+  it("primary (single-column) panels are untouched — no order/onExpandedChange wiring at all", () => {
+    const island = renderIsland(Panel, { panel: tallyLikePanel("primary"), onSubmit: () => {} });
+    for (const f of findAll(island.tree(), isType(ActionForm))) {
+      expect(propsOf(f).order).toBeUndefined();
+      expect(propsOf(f).onExpandedChange).toBeUndefined();
+    }
+  });
+
+  it("drawer (single-column, inside <details>) panels are untouched too", () => {
+    const island = renderIsland(Panel, { panel: tallyLikePanel("drawer"), onSubmit: () => {} });
+    for (const f of findAll(island.tree(), isType(ActionForm))) {
+      expect(propsOf(f).order).toBeUndefined();
+      expect(propsOf(f).onExpandedChange).toBeUndefined();
+    }
+  });
+
+  it("a locked tile sharing a row with an expanding sibling also gets a pinned `order`", () => {
+    const base = tallyLikePanel("grid");
+    const panel: PadPanelView = {
+      ...base,
+      actions: [
+        base.actions[0]!,
+        {
+          ...base.actions[1]!,
+          availability: {
+            kind: "locked",
+            reason: { key: "scorepad.locked.reason", label: "Upgrade your plan to unlock this action." },
+          },
+        },
+      ],
+    };
+    const island = renderIsland(Panel, { panel, onSubmit: () => {} });
+    const addPointsForm = actionFormFor(island.tree(), "Add points");
+    (propsOf(addPointsForm).onExpandedChange as (expanded: boolean) => void)(true);
+
+    const tree = island.tree();
+    // The locked tile (a plain <div>, never an ActionForm — panel.tsx's own
+    // header) is now DOM-first, same reorder rule as a real collapsed
+    // sibling, and still pinned to its ORIGINAL (second) visual slot.
+    const lockedDiv = find(tree, (el) => el.type === "div" && propsOf(el)["aria-disabled"] === "true");
+    expect((propsOf(lockedDiv).style as { order?: number } | undefined)?.order).toBe(1);
+    const forms = findAll(tree, isType(ActionForm));
+    expect(forms.length).toBe(1);
+    expect(propsOf(forms[0]!).order).toBe(0);
   });
 });
 

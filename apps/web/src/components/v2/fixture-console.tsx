@@ -280,6 +280,16 @@ export function FixtureConsole({
   const [error, setError] = useState<string | null>(null);
   const [paywallFeature, setPaywallFeature] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** True while an opportunistic post-pad-event `resync()` is in flight.
+   *  Separate from `busy` on purpose: `busy` means "a send of MINE is
+   *  running" and its own `finally` clears it, so reusing it here would let a
+   *  resync that finishes mid-send clear the send's guard. Both gate the same
+   *  controls, because acting on a half-refreshed ledger is what this fix
+   *  exists to prevent: without it, Undo stayed clickable during the window
+   *  with a stale `expected_seq` and the server answered 409 SEQ_CONFLICT —
+   *  bounded (it never voids the wrong event) but an unearned error where a
+   *  clean undo was expected. Found in review (S13 follow-ups). */
+  const [padSyncing, setPadSyncing] = useState(false);
   const [abandonPrompt, setAbandonPrompt] = useState(false);
 
   const resync = useCallback(async () => {
@@ -290,6 +300,28 @@ export function FixtureConsole({
     setLive(state);
     setEvents(all);
   }, [fixture.id]);
+
+  /** Fired whenever `<ScorePad/>`'s own pipeline reports its reconciled
+   *  ledger changed (a new submit, an ack, or a foreign-write merge) — the
+   *  RAW event list it hands over is deliberately unused here. That
+   *  pipeline stamps a CLIENT-fabricated id (the idempotency key) on every
+   *  event it knows about and never learns the server's real row id —
+   *  `AppendSuccess` carries no row id at all, so the id survives forever
+   *  (`use-pad-pipeline.ts`'s own S12/#421 pass F/G history, fixed there via
+   *  a targeted re-read before the pad's OWN void send). Trusting the
+   *  pad-supplied id here directly would reintroduce that exact bug one
+   *  layer out: `send()` below has no id-resolution step, so it would void
+   *  an id the server has never seen. A real `resync()` — the same one
+   *  `send()` itself trusts — is the only way this component learns the
+   *  real id. A failed opportunistic resync is swallowed: nothing the user
+   *  directly did here should surface as an error, and the next pad event
+   *  (or an explicit action) catches up. */
+  const handlePadEvents = useCallback(() => {
+    setPadSyncing(true);
+    void resync()
+      .catch(() => undefined)
+      .finally(() => setPadSyncing(false));
+  }, [resync]);
 
   const send: SendEvent = useCallback(
     async (type, payload) => {
@@ -416,7 +448,7 @@ export function FixtureConsole({
           {!started && (
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || padSyncing}
               onClick={() => send("core.start", {})}
               className="btn btn-primary"
             >
@@ -427,7 +459,7 @@ export function FixtureConsole({
             <>
               <button
                 type="button"
-                disabled={busy}
+                disabled={busy || padSyncing}
                 onClick={() => send("core.finalize", {})}
                 className="btn btn-primary"
               >
@@ -446,10 +478,10 @@ export function FixtureConsole({
           )}
           {!decided && (
             <>
-              <ForfeitButton busy={busy} home={home} away={away} send={send} />
+              <ForfeitButton busy={busy} padSyncing={padSyncing} home={home} away={away} send={send} />
               <button
                 type="button"
-                disabled={busy}
+                disabled={busy || padSyncing}
                 onClick={() => setAbandonPrompt(true)}
                 className="btn btn-danger"
               >
@@ -472,7 +504,7 @@ export function FixtureConsole({
           {lastVoidable && (
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || padSyncing}
               onClick={() => send("core.void", { event_id: lastVoidable.id })}
               className="btn btn-ghost"
               title={msg("score.undoTitle", { type: lastVoidable.type, seq: lastVoidable.seq })}
@@ -504,6 +536,7 @@ export function FixtureConsole({
               identity={scorePadV2.identity}
               entitlements={scorePadV2.entitlements}
               band={scorePadV2.band}
+              onEvents={handlePadEvents}
             />
           </ScoringErrorBoundary>
         </section>
@@ -584,7 +617,7 @@ export function FixtureConsole({
                   {scoring && !voided && e.type !== "core.void" && !decidedLock(live.status) && (
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || padSyncing}
                       onClick={() => send("core.void", { event_id: e.id })}
                       className="shrink-0 text-red-500 hover:underline"
                     >
@@ -614,11 +647,13 @@ function scoreStatusLabel(msg: Msg, status: string): string {
 
 function ForfeitButton({
   busy,
+  padSyncing,
   home,
   away,
   send,
 }: {
   busy: boolean;
+  padSyncing: boolean;
   home: SideInfo;
   away: SideInfo;
   send: SendEvent;
@@ -639,7 +674,7 @@ function ForfeitButton({
     <div ref={ref} className="relative">
       <button
         type="button"
-        disabled={busy}
+        disabled={busy || padSyncing}
         onClick={() => setOpen(!open)}
         className="btn btn-ghost"
       >

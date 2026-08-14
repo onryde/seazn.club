@@ -232,7 +232,12 @@ export function HistoryPanel({
                   for; creating is setup, so it takes the quiet ghost styling and
                   the same 12px scale as everything around it. */}
               <input
-                className="input py-1.5 text-xs"
+                // `.input`'s own padding loses to `py-1.5 text-xs` under
+                // Tailwind's utilities layer (S13/#422 W11). `min-h-11`
+                // survives it and does not disturb the density recipe the
+                // sizing test above (history-panel-save-button.test.tsx)
+                // still checks for.
+                className="input min-h-11 py-1.5 text-xs"
                 placeholder="e.g. before rain reshuffle"
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}

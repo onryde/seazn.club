@@ -167,10 +167,87 @@ export function createSkinDispatch(
   };
 }
 
-/** Convenience for skins: the resolved action view for a type, or null. */
-export function actionByType(view: PadView, type: string): PadActionView | null {
+/**
+ * Every PadActionView sharing `type`, across every panel, in view order.
+ *
+ * A `SkinGroup.actions` entry (`layoutActionTypes`'s own doc comment above)
+ * is a bare TYPE STRING, deduped by every skin's `layout()` -- the shared
+ * gate's own "no skin places the same action twice" check
+ * (skin-coverage.test.ts) is a flattened, per-TYPE count, and would fail the
+ * moment a layout listed one type twice. That gate says nothing about how
+ * many REAL PadActionView objects back that one type string: a module may
+ * legitimately declare two (or three) actions sharing one wire type -- a
+ * plain vs. an attributed variant, a set-summary vs. its tie-break sibling
+ * -- and a Component that resolves a group's type through `actionByType`
+ * below (first match only) silently drops every sibling past the first.
+ *
+ * Found live (S13/#422 W11 cutover): tennis-skin.tsx's own `renderGroupActions`
+ * used to resolve through `actionByType`, so the tie-break-carrying "Set
+ * score" tile and the attributed point tile never rendered from ANY reachable
+ * UI state -- caught by v6-sports.spec.ts's tennis tie-break e2e, which had
+ * to drive the event through the API because no tile on the actual page
+ * could reach it. A whole-cfg-space sweep across every module's real padSpec
+ * (same session) found the identical SHAPE (one wire type, 2+ declared
+ * actions) in 7 more of this repo's 11 sport modules: cricket (`cricket.ball`
+ * -- over/extras/wicket, one action each), volleyball/badminton/tabletennis
+ * (`{sport}.rally` -- plain/attributed/expedite), and three sports with no
+ * bespoke skin at all (boardgame's `boardgame.result`; carrom's
+ * `carrom.board.summary` and `carrom.game.adjust`; generic's `generic.score`
+ * and `generic.result`) -- football/hockey/icehockey are the only three
+ * modules that never repeat a type. tennis-skin.tsx now imports this function
+ * rather than keeping its own copy; racquet-skin.tsx already had an
+ * equivalent (`actionsForType`, additionally dedup'd by declared shape, for a
+ * reason specific to that file -- see its own header) and needed no change;
+ * the three unskinned modules render through panel.tsx's own
+ * `panel.actions.map` walk, which is not type-keyed at all and so never had
+ * this defect.
+ */
+export function actionsByType(view: PadView, type: string): readonly PadActionView[] {
+  const found: PadActionView[] = [];
   for (const panel of view.panels) {
-    for (const action of panel.actions) if (action.type === type) return action;
+    for (const action of panel.actions) if (action.type === type) found.push(action);
   }
-  return null;
+  return found;
+}
+
+/**
+ * The FIRST PadActionView with `type`, or null -- SILENTLY DROPS every other
+ * action sharing that type (see `actionsByType`'s own doc comment above for
+ * the defect this shape produced in tennis-skin.tsx, found and fixed S13/
+ * #422 W11 cutover). Safe to call ONLY when one of these holds:
+ *
+ *   (a) `type` is never declared twice for the sport in view -- true for
+ *       every type football, hockey and icehockey declare (verified against
+ *       the real padSpec, whole cfg space, this session), or
+ *   (b) every action sharing `type` is PROVABLY interchangeable for
+ *       whatever property the caller actually reads off the result.
+ *
+ * Modules with at least one duplicate-typed action, so a NEW call site for
+ * one of THEIR types needs case (b) reasoned out before reaching for this
+ * function rather than `actionsByType`: cricket (`cricket.ball`), boardgame
+ * (`boardgame.result`), carrom (`carrom.board.summary`, `carrom.game.adjust`),
+ * generic (`generic.score`, `generic.result`), volleyball/badminton/
+ * tabletennis (`{sport}.rally`). tennis used to (`tennis.point`,
+ * `tennis.set_summary`) but is migrated onto `actionsByType` entirely now.
+ *
+ * The three live call sites left on this function are each audited case (b)
+ * or (a): cricket-skin.tsx's `ThisOverGroup` reads only `.availability` off
+ * its `cricket.ball` resolution, and `resolveActionView` (view-model.ts)
+ * derives availability purely from `action.type` via
+ * `spec.fidelity`/`fidelityEntitlements` -- so the over/extras/wicket panels'
+ * three `cricket.ball` actions are availability-identical by construction,
+ * pinned by cricket-skin.test.ts's own sweep. football-skin.tsx and
+ * period-skin.tsx use it only for types their sports never duplicate (a).
+ *
+ * Kept, rather than removed outright, because those three files' SEVEN call
+ * sites (period-skin.tsx:737; cricket-skin.tsx:502, :516, :856;
+ * football-skin.tsx:398, :430, :508) are each individually safe today, and a
+ * mechanical rewrite onto
+ * `actionsByType` would touch working code with no behaviour change and no
+ * failing test to justify the diff. `actionsByType` is the default choice for
+ * any NEW call site; reach for this one only after checking the module list
+ * above.
+ */
+export function actionByType(view: PadView, type: string): PadActionView | null {
+  return actionsByType(view, type)[0] ?? null;
 }

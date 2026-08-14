@@ -183,7 +183,9 @@ function MatchRow({
             aria-label={msg("americano.scoreAria", { label: match.team1.label })}
             type="number"
             min={0}
-            className="input w-14 px-2 py-1 text-right text-xs"
+            // `.input`'s own padding loses to `px-2 py-1 text-xs` under
+            // Tailwind's utilities layer (S13/#422 W11). `min-h-11` survives it.
+            className="input min-h-11 w-14 px-2 py-1 text-right text-xs"
             value={s1}
             onChange={(e) => setS1(e.target.value)}
           />
@@ -196,7 +198,7 @@ function MatchRow({
             aria-label={msg("americano.scoreAria", { label: match.team2.label })}
             type="number"
             min={0}
-            className="input w-14 px-2 py-1 text-xs"
+            className="input min-h-11 w-14 px-2 py-1 text-xs"
             value={s2}
             onChange={(e) => setS2(e.target.value)}
           />

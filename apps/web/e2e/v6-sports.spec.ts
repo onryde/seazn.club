@@ -225,19 +225,16 @@ test("tennis: console set-totals entry needs tie-break points for a 7–6 set", 
   const scorePad = pad(page);
   await expect(scorePad).toBeVisible({ timeout: 20_000 });
 
-  // v2's tennis skin exposes exactly one "Set score" tile for a totals
-  // entry — the closest analogue to v1's "Set totals". The engine
-  // (packages/engine/src/sports/nested/kernel.ts's `nestedPadSpec`) also
-  // declares a SEPARATE "Set score (tie-break)" action carrying
-  // `tb.home`/`tb.away`, but it shares the same event type
-  // (`tennis.set_summary`) as the plain one, and tennis-skin.tsx's
-  // type-deduped rendering (`dedupeTypes`/`actionByType`) only ever draws
-  // the FIRST of two same-typed actions — so the tie-break fields are not
-  // reachable from any tile today (confirmed live: the pad renders exactly
-  // one "Set score" button, with only Home/Away game fields, in every
-  // state). Entering games alone for a 7–6 set through this — the only
-  // reachable totals-entry surface — is exactly what this test proves the
-  // engine refuses.
+  // v2's tennis skin exposes TWO "Set score" tiles — the plain 2-field
+  // totals entry, and a tie-break-carrying variant (nested/kernel.ts's own
+  // `summaryTbAction`) that also collects `tb.home`/`tb.away`. Both declare
+  // the same event type (`tennis.set_summary`); tennis-skin.tsx used to
+  // resolve a group's shared type to only its FIRST PadActionView, which
+  // left the tie-break tile permanently unreachable from any UI state
+  // (fixed S13/#422 W11 cutover — `actionsByType` now resolves every
+  // PadActionView sharing a type, not just the first). Entering games alone
+  // for a 7–6 set through the PLAIN tile is exactly what this test proves
+  // the engine refuses.
   await scorePad.getByRole("button", { name: "Set score", exact: true }).click();
   await scorePad.getByLabel("Home", { exact: true }).fill("7");
   await scorePad.getByLabel("Away", { exact: true }).fill("6");
@@ -246,14 +243,24 @@ test("tennis: console set-totals entry needs tie-break points for a 7–6 set", 
   const afterRefusal = await ledger(request, fixtureId);
   expect(afterRefusal.some((e) => e.type === "tennis.set_summary")).toBe(false);
 
-  // With tie-break points supplied, the SAME 7–6 totals entry succeeds —
-  // proving the requirement is real rather than merely unenforced by a form
-  // that never asks for it. Sent directly (the "Set score (tie-break)" tile
-  // that would carry `tb` is unreachable in the UI today, per the comment
-  // above) with exactly the fields that action declares, then read back off
-  // the real console — this headline text is the engine's own
-  // (summary().headline), unchanged from v1.
-  await sendEvent(request, fixtureId, "tennis.set_summary", { home: 7, away: 6, tb: { home: 7, away: 5 } });
+  // With tie-break points supplied through the TIE-BREAK tile, the SAME
+  // 7–6 totals entry succeeds — proving the requirement is real rather than
+  // merely unenforced by a form that never asks for it, and proving the
+  // tile itself is now reachable (this used to be sent directly via the API
+  // because no control on the actual page could reach `tb`). This headline
+  // text is the engine's own (summary().headline), unchanged from v1.
+  await scorePad.getByRole("button", { name: "Set score (tie-break)", exact: true }).click();
+  await scorePad.getByLabel("Home", { exact: true }).fill("7");
+  await scorePad.getByLabel("Away", { exact: true }).fill("6");
+  await scorePad.getByLabel("Tb home", { exact: true }).fill("7");
+  await scorePad.getByLabel("Tb away", { exact: true }).fill("5");
+  await scorePad.locator('[data-role="confirm"]').click();
+  await expect
+    .poll(
+      async () => (await ledger(request, fixtureId)).filter((e) => e.type === "tennis.set_summary").length,
+      { timeout: 20_000 },
+    )
+    .toBe(1);
   await page.reload();
   await expect(page.getByText("1 — 0 · 7–6(5)").first()).toBeVisible({ timeout: 20_000 });
 });

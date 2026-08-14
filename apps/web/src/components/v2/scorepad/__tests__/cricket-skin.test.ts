@@ -42,7 +42,7 @@ import {
 import { messages, type MessageKey } from "@/lib/messages";
 import { t as tRuntime } from "@/lib/i18n-runtime";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
-import { buildPadView } from "../view-model";
+import { buildPadView, type PadView } from "../view-model";
 import { cricketSkin, buildBallPayload, ThisOverGroup } from "../skins/cricket-skin";
 import { createSkinDispatch, layoutActionTypes, layoutActionTypesAt, type SkinHeader } from "../skins/types";
 import { cfgSpace, grantAllEntitlements } from "./_cfg-space";
@@ -157,6 +157,45 @@ describe("cricket.ball sits at primary prominence", () => {
     const layout = cricketSkin.layout(view, { cfg, state, summary: {}, band: FULL_BAND });
     expect(layoutActionTypesAt(layout, "primary")).toContain("cricket.superover.ball");
     expect(layoutActionTypesAt(layout, "primary")).toContain("cricket.ball");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S13/#422 W11 cutover audit ("a shared helper silently drops every
+// duplicate-typed pad action"). cricket.ball is genuinely declared 3x (over/
+// extras/wicket panels -- this file's own header). `ThisOverGroup` (below)
+// resolves ONE of the three via the shared, first-match-only `actionByType`
+// (types.ts) rather than the type-plural `actionsByType` tennis-skin.tsx now
+// uses -- deliberately left as-is, not an oversight. This test pins the fact
+// that makes that safe: a future change to `resolveActionView`'s
+// availability rule (view-model.ts) that broke it would be caught here,
+// rather than discovered live the way tennis's drop was.
+// ---------------------------------------------------------------------------
+describe("cricket.ball's three panel-actions (over/extras/wicket) share identical availability at every band -- the invariant that makes ThisOverGroup's single-resolution actionByType(view, ballType) safe", () => {
+  it("locking/unlocking scoring.ball_by_ball locks/unlocks all three cricket.ball actions TOGETHER, never just one, across the whole cfg sweep", () => {
+    let checked = 0;
+    for (const raw of cfgSpace(cricket)) {
+      const cfg = cricket.configSchema.parse(raw);
+      const spec = padSpecFor(cfg);
+      const band = spec.fidelity["cricket.ball"];
+      const neededEntitlement = band !== undefined ? spec.fidelityEntitlements[band] : undefined;
+      if (!neededEntitlement) continue; // nothing to lock at this band -- stay defensive, not assumed
+      for (const granted of [false, true]) {
+        const view = viewFor(cfg, "live", {}, { [neededEntitlement]: granted });
+        const ballActions = view.panels.flatMap((p) => p.actions).filter((a) => a.type === "cricket.ball");
+        if (ballActions.length < 2) continue; // only meaningful once 2+ genuinely co-occur
+        checked += 1;
+        const kinds = new Set(ballActions.map((a) => a.availability.kind));
+        expect(
+          kinds.size,
+          `cfg ${JSON.stringify(cfg).slice(0, 80)} granted=${granted}: cricket.ball actions disagree on availability.kind (${[...kinds].join(",")})`,
+        ).toBe(1);
+      }
+    }
+    // Guards the sweep itself (this file's own established idiom, and
+    // skin-coverage.test.ts's) -- a walk that silently stopped finding
+    // multi-action cfgs would make the loop above vacuously green.
+    expect(checked).toBeGreaterThan(0);
   });
 });
 
@@ -791,5 +830,73 @@ describe("ThisOverGroup: the ball payload is valid against the engine's own sche
     expect((payload as { ballInOver: number }).ballInOver).toBe(1);
     const schema = cricketEngine.eventSchemas!["cricket.ball"]!;
     expect(schema.safeParse(payload).success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S13/#422 W11 cutover audit, continued: the ABOVE sweep proves the real
+// engine never lets cricket.ball's three panel-actions disagree on
+// availability. This block pins the OTHER half — which one ThisOverGroup
+// actually trusts when handed a view where they (hypothetically) DO disagree
+// -- a shape the real engine can never produce, but exactly what
+// `actionByType`'s own contract is (first match, view.panels order). A
+// synthetic view, not a real fold, is the right tool here for the same
+// reason the S11 review-gap-2 test above it in this file uses one: it lets
+// the test build the ONE disagreeing shape needed without depending on any
+// fixture ever producing it live.
+// ---------------------------------------------------------------------------
+describe("ThisOverGroup: trusts the FIRST cricket.ball action in view.panels order for availability, never a later one", () => {
+  type MsgFn = (key: MessageKey, vars?: Record<string, string | number>) => string;
+  const msg: MsgFn = (key, vars) => tRuntime(messages, key, vars);
+
+  /** A view shaped like the real one (Over panel, then Extras panel, both
+   *  carrying a `cricket.ball` action) but with DELIBERATELY OPPOSITE
+   *  availability on the two -- the real engine bands both identically (see
+   *  the sweep above), so this is a synthetic worst case, not a reachable
+   *  state, built purely to pin which one wins. */
+  function makeView(overLocked: boolean): PadView {
+    const locked = { kind: "locked" as const, reason: { key: "scorepad.locked.reason" as MessageKey, label: "Upgrade your plan to unlock this action." } };
+    const available = { kind: "available" as const };
+    return {
+      phase: "live",
+      phases: ["live"],
+      panels: [
+        {
+          labelKey: { key: "pad.cricket.panel.over", label: "Over" },
+          phase: "live",
+          layout: "primary",
+          actions: [{ type: "cricket.ball", labelKey: { key: "pad.cricket.action.ball", label: "Ball" }, fields: [], attribution: [], availability: overLocked ? locked : available }],
+        },
+        {
+          labelKey: { key: "pad.cricket.panel.extras", label: "Extras" },
+          phase: "live",
+          layout: "grid",
+          actions: [{ type: "cricket.ball", labelKey: { key: "pad.cricket.action.extra", label: "Extra" }, fields: [], attribution: [], availability: overLocked ? available : locked }],
+        },
+      ],
+    };
+  }
+
+  function runPadRendered(view: PadView): boolean {
+    const island = renderIsland(ThisOverGroup, {
+      msg,
+      view,
+      state: {},
+      bpo: 6,
+      submittingType: null,
+      dispatch: async () => {},
+      personNames: undefined,
+    });
+    // The run pad's "0" button only ever renders past the locked early-return
+    // -- absence proves the locked branch was taken, presence proves it was not.
+    return island.tree().some((e) => e.type === "button" && String(propsOf(e).children) === "0");
+  }
+
+  it("Over panel's action available (Extras panel's LOCKED): the run pad still renders", () => {
+    expect(runPadRendered(makeView(false))).toBe(true);
+  });
+
+  it("Over panel's action LOCKED (Extras panel's available): the run pad does NOT render, even though a later panel's cricket.ball action is available", () => {
+    expect(runPadRendered(makeView(true))).toBe(false);
   });
 });

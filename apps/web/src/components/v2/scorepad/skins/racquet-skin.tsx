@@ -361,7 +361,16 @@ function makeAttributionRenderer(state: unknown, msg: MsgFn) {
   };
 }
 
-function GroupBody(props: {
+/** Exported (S13/#422 W11 cutover audit — same reason cricket-skin.tsx's
+ *  `ThisOverGroup` is exported) so __tests__/racquet-skin.test.ts can expand
+ *  it directly through the node-only `_hook-harness`. Without this, a test
+ *  driving `RacquetSkin` only ever sees an unexpanded `<GroupBody/>` element
+ *  (the harness renders the ONE component it is given, one level deep — see
+ *  _hook-harness.tsx's own doc comment on `expand`), so the very thing this
+ *  file exists to prove — that a shared type resolves to every real control
+ *  behind it, not just the first — was unreachable from any Component-level
+ *  assertion. */
+export function GroupBody(props: {
   view: PadView;
   group: SkinGroup;
   ctx: SkinLayoutCtx;

@@ -100,7 +100,9 @@ export function RsvpControl({
           className={
             onDark
               ? "w-full rounded-md border border-cream/20 bg-white/5 px-3 py-1.5 text-sm text-cream placeholder:text-cream/40 focus:border-lime-400 focus:outline-none"
-              : "input py-1.5 text-sm"
+              // `.input`'s own padding loses to `py-1.5 text-sm` under
+              // Tailwind's utilities layer (S13/#422 W11). `min-h-11` survives it.
+              : "input min-h-11 py-1.5 text-sm"
           }
         />
       )}

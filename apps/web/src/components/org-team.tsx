@@ -198,7 +198,9 @@ export function OrgTeam({
                     onChange={(e) =>
                       changeRole(m.user_id, e.target.value as OrgRole)
                     }
-                    className="input py-1 text-xs"
+                    // `.select`'s own padding loses to `py-1 text-xs` under
+                    // Tailwind's utilities layer (S13/#422 W11). `min-h-11` survives it.
+                    className="input min-h-11 py-1 text-xs"
                   >
                     {ORG_ROLES.map((r) => (
                       <option key={r} value={r}>
@@ -253,7 +255,10 @@ export function OrgTeam({
               <select
                 value={emailRole}
                 onChange={(e) => setEmailRole(e.target.value as InviteRole)}
-                className="input mt-1 py-1.5"
+                // `.select`'s own padding loses to `py-1.5` under Tailwind's
+                // utilities layer (S13/#422 W11). `min-h-11` survives it.
+                className="input min-h-11 mt-1 py-1.5"
+                data-testid="team-invite-email-role"
               >
                 <RoleOptions />
               </select>
@@ -325,7 +330,8 @@ export function OrgTeam({
               <select
                 value={linkRole}
                 onChange={(e) => setLinkRole(e.target.value as InviteRole)}
-                className="input mt-1 py-1.5"
+                className="input min-h-11 mt-1 py-1.5"
+                data-testid="team-invite-link-role"
               >
                 <RoleOptions />
               </select>

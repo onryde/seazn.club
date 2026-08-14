@@ -336,7 +336,10 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
       {declining && (
         <div className="flex flex-wrap items-center gap-2">
           <input
-            className="input min-w-0 flex-1 py-1.5 text-sm"
+            // `.input` sets its own padding; `py-1.5 text-sm` beside it wins
+            // under Tailwind's utilities layer and drops this under the
+            // repo's 44px touch floor (S13/#422 W11). `min-h-11` survives it.
+            className="input min-h-11 min-w-0 flex-1 py-1.5 text-sm"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             placeholder={msg("me.off.reasonPlaceholder")}
@@ -450,13 +453,15 @@ function BlackoutEditor({ blackouts }: { blackouts: MyBlackout[] }) {
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="date"
-          className="input py-1.5 text-sm"
+          // Same override as the reason/note inputs below (S13/#422 W11):
+          // `.input`'s own padding loses to `py-1.5 text-sm`. `min-h-11` survives it.
+          className="input min-h-11 py-1.5 text-sm"
           value={date}
           onChange={(e) => setDate(e.target.value)}
           aria-label={msg("me.off.blackoutAdd")}
         />
         <input
-          className="input min-w-0 flex-1 py-1.5 text-sm"
+          className="input min-h-11 min-w-0 flex-1 py-1.5 text-sm"
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder={msg("me.off.blackoutNotePlaceholder")}

@@ -204,6 +204,10 @@ export interface ScorePadProps {
   home: SideInfo;
   away: SideInfo;
   initialEvents: readonly EventEnvelope[];
+  /** Forwarded straight to `PadRenderer.onEvents` — see its docstring. The
+   *  chrome around this pad (fixture console, device pad) keeps its own event
+   *  list for "Undo last" and cannot otherwise see what the pad submitted. */
+  onEvents?: (events: readonly EventEnvelope[]) => void;
   auth: PadAuthMode;
   identity: OwnIdentity;
   entitlements: Readonly<Record<string, boolean>>;
@@ -267,6 +271,7 @@ export function ScorePad(props: ScorePadProps) {
       band={props.band}
       entitlements={props.entitlements}
       initialEvents={props.initialEvents}
+      onEvents={props.onEvents}
       // S13/#422: dropped the "-v2-" a pad/flag distinction used to need —
       // this is the only pad now, so the queue db is namespaced on the
       // fixture alone (still distinct from the harness's own
