@@ -227,7 +227,11 @@ export const EVENT_TONE_STYLE: Record<EventDescription["tone"], string> = {
   score: "bg-emerald-100 text-emerald-700",
   card: "bg-amber-100 text-amber-700",
   period: "bg-purple-100 text-purple-700",
-  admin: "bg-red-50 text-red-600",
+  // red-600 on red-50 measures 4.36:1 — under the 4.5:1 AA floor for normal
+  // text, and this badge is 12px. red-700 takes it to 6.15:1. Found by the
+  // scorepad contrast sweep (S13/#422); the badge renders in the pad timeline
+  // and in fixture-console, so both surfaces gain it.
+  admin: "bg-red-50 text-red-700",
   void: "bg-amber-100 text-amber-700",
   note: "bg-slate-100 text-slate-600",
 };
