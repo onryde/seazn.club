@@ -13,7 +13,15 @@ import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { buildDivisionSlides, type FixtureSlideItem } from "../slideshow-data";
 
-describe("buildDivisionSlides — locale threading", () => {
+// The "Unit + typecheck" CI job is a DB-FREE gate: every DB-backed suite
+// self-skips there (~2300 skipped) and runs in the DB-backed job instead.
+// Without this guard the suite THROWS "DATABASE_URL is not set" rather than
+// skipping, which reds a job that is not supposed to touch a database — and
+// it passes locally, where DATABASE_URL is always set. Same pattern as
+// embed-data.test.ts:9,38 and locale-columns.test.ts:10.
+const HAS_DB = !!process.env.DATABASE_URL;
+
+describe.skipIf(!HAS_DB)("buildDivisionSlides — locale threading", () => {
   it("resolves an unfilled slot's label through the org's OWN default_locale, not the client-safe English default", async () => {
     const { auth } = await seedOrg();
     await sql`update organizations set default_locale = 'es' where id = ${auth.orgId}`;
