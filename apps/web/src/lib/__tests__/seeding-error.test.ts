@@ -51,10 +51,17 @@ describe("seedingErrorMessage — mechanics", () => {
 describe("seedingErrorMessage — real dictionaries, all 4 locales, every code", () => {
   for (const locale of LOCALES) {
     for (const code of SEEDING_ERROR_CODES) {
-      it(`${locale}: ${code} resolves to real copy — never the raw code, never empty, no leftover {placeholder}`, () => {
+      it(`${locale}: ${code} resolves to real copy — never the raw code, never the PREFIXED dictionary key, never empty, no leftover {placeholder}`, () => {
         const out = seedingErrorMessage(locale, code, "SHOULD_NOT_SEE_FALLBACK");
         expect(out).not.toBe("SHOULD_NOT_SEE_FALLBACK");
         expect(out).not.toBe(code);
+        // A genuinely missing dictionary entry does NOT fall back to the bare
+        // `code` — t()'s own missing-key fallback (i18n-runtime.ts) returns the
+        // full PREFIXED key it was asked to look up, i.e. `seeding.${code}`.
+        // `expect(out).not.toBe(code)` alone would miss that entirely (review
+        // finding 3, P6/D4b task B fix round 1): a real gap in any of the 52
+        // (13 codes x 4 locales) dictionary values would pass undetected.
+        expect(out.startsWith("seeding.")).toBe(false);
         expect(out.length).toBeGreaterThan(0);
         expect(out).not.toMatch(/\{[a-zA-Z]+\}/);
       });
