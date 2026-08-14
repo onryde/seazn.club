@@ -734,3 +734,181 @@ describe("period skin — header caption/status contrast against bg-slate-900 (W
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// S13/#422 W11 cutover — hockey's progressive-escalation discipline hint.
+// The engine already computes `summary.detail.escalate` (period/kernel.ts:2560,
+// `escalationHints(state.cardLog)`, gated `preset.key === "hockey"` -- see
+// hockey/DOMAIN.md's "Progressive escalation" row): the person ids already
+// carrying a green card this match, so a further offence suggests yellow. v1
+// (period-pad.tsx, deleted this session) surfaced it as a live warning while
+// the offender field of an in-progress suspension.start form named one of
+// those ids; the v2 skin never read the field at all -- no component read
+// `summary.detail.escalate` and no dictionary key existed for it in any
+// locale (both confirmed by grep/pickaxe search before writing this).
+//
+// `escalate` is deliberately absent from icehockey's summary -- not a gap,
+// an engine design choice (icehockey has no green/yellow/red card ladder at
+// all, only IIHF minutes-based classes) -- so these tests prove BOTH
+// directions: the hint fires for the right hockey offender and never fires
+// for anyone else or for icehockey, without this file hardcoding a
+// "hockey."/"icehockey." sport-key check anywhere (matching the module's own
+// standing rule at the top of this file).
+// ---------------------------------------------------------------------------
+describe("period skin — hockey's progressive-escalation hint (engine summary.detail.escalate, S13/#422 W11)", () => {
+  it("hockey: the hint appears only while the offender field names someone who already carries a green card this match", () => {
+    const cfg = hockey.configSchema.parse({});
+    const lineups = defaultLineupPair(hockey.positions);
+    const H = lineups.home.entrantId;
+    const OFFENDER = "H-p2";
+    const CLEAN = "H-p3";
+    const events = [
+      makeEnvelope(0, { type: "core.start", payload: {} }),
+      makeEnvelope(1, { type: "core.lineup.position", payload: { side: H, personId: OFFENDER, positionKey: "FW" } }),
+      makeEnvelope(2, { type: "core.lineup.position", payload: { side: H, personId: CLEAN, positionKey: "MF" } }),
+      // A first green card for OFFENDER -- the fact `escalationHints` reads
+      // (cardLog is an append-only record, so this stands regardless of
+      // whether the card has since expired or been released).
+      makeEnvelope(3, {
+        type: "hockey.suspension.start",
+        payload: { class: "green", by: H, person: OFFENDER, servedBy: OFFENDER },
+      }),
+    ];
+    const state = foldClient(hockey, cfg, lineups, events);
+    const summary = hockey.summary(state) as { detail?: { escalate?: unknown } };
+    // Sanity on the fixture, not on this file's own code: the engine really
+    // did compute what the rest of this test exercises.
+    expect(summary.detail?.escalate).toContain(OFFENDER);
+    expect(summary.detail?.escalate).not.toContain(CLEAN);
+
+    const spec = hockey.padSpec!(cfg);
+    const entitlements = grantAllEntitlements(spec);
+    const view = buildPadView(spec, { state, summary, phase: "live", band: FULL_BAND, entitlements });
+    const action = actionByType(view, "hockey.suspension.start");
+    expect(action).not.toBeNull();
+
+    const renderAttribution = buildAttributionRenderer({ cfg, state, summary, band: FULL_BAND }, msg);
+    const island = renderIsland(ActionForm, { action: action!, onSubmit: () => {}, renderAttribution });
+
+    // Tap -> expand, then fill class/reason/minutes -- this is a SECOND
+    // suspension being recorded, exactly the real scorer flow the hint
+    // exists for (a first green already sits in cardLog from the fixture).
+    (propsOf(find(island.tree(), isType("button"))).onClick as () => void)();
+    let tree = island.tree();
+    (propsOf(findAll(tree, isType("select"))[0]!).onChange as (e: unknown) => void)({ target: { value: "minor" } });
+    tree = island.tree();
+    (propsOf(findAll(tree, isType("select"))[1]!).onChange as (e: unknown) => void)({ target: { value: "tripping" } });
+    tree = island.tree();
+    (propsOf(find(tree, (el) => el.type === "input" && propsOf(el).type === "number")).onChange as (e: unknown) => void)({
+      target: { value: "2" },
+    });
+
+    // Name the CLEAN person first -- no hint.
+    tree = island.tree();
+    let personChips = chipsOf(byPath(tree, "person"));
+    let chip = find(personChips, (c) => propsOf(c)["data-value"] === CLEAN);
+    (propsOf(chip).onClick as () => void)();
+
+    tree = island.tree();
+    const attributionText = () => textOf(find(tree, (el) => propsOf(el)["data-role"] === "skin-attribution"));
+    expect(attributionText()).not.toContain(msg("pad.pp.escalation"));
+
+    // Switch to OFFENDER, who already carries a green this match -- the hint
+    // must now appear.
+    personChips = chipsOf(byPath(tree, "person"));
+    chip = find(personChips, (c) => propsOf(c)["data-value"] === OFFENDER);
+    (propsOf(chip).onClick as () => void)();
+
+    tree = island.tree();
+    expect(textOf(find(tree, (el) => propsOf(el)["data-role"] === "skin-attribution"))).toContain(msg("pad.pp.escalation"));
+  });
+
+  it("hockey: never shows the hint on a DIFFERENT action, even when that action's own \"person\" field names the same escalating offender -- e.g. picking them as the goal scorer", () => {
+    // hockey.goal declares the SAME attribution path ({kind:"person",
+    // path:"person"}, period/kernel.ts) as suspension.start's offender --
+    // the real reason this is gated on the action type SUFFIX rather than
+    // just "does the current form have a person field naming this id".
+    const cfg = hockey.configSchema.parse({});
+    const lineups = defaultLineupPair(hockey.positions);
+    const H = lineups.home.entrantId;
+    const OFFENDER = "H-p2";
+    const events = [
+      makeEnvelope(0, { type: "core.start", payload: {} }),
+      makeEnvelope(1, { type: "core.lineup.position", payload: { side: H, personId: OFFENDER, positionKey: "FW" } }),
+      makeEnvelope(2, {
+        type: "hockey.suspension.start",
+        payload: { class: "green", by: H, person: OFFENDER, servedBy: OFFENDER },
+      }),
+    ];
+    const state = foldClient(hockey, cfg, lineups, events);
+    const summary = hockey.summary(state) as { detail?: { escalate?: unknown } };
+    expect(summary.detail?.escalate).toContain(OFFENDER); // same sanity as above
+
+    const spec = hockey.padSpec!(cfg);
+    const entitlements = grantAllEntitlements(spec);
+    const view = buildPadView(spec, { state, summary, phase: "live", band: FULL_BAND, entitlements });
+    const action = actionByType(view, "hockey.goal");
+    expect(action).not.toBeNull();
+    expect(action!.attribution.some((item) => item.path === "person")).toBe(true); // the shared-path premise really holds
+
+    const renderAttribution = buildAttributionRenderer({ cfg, state, summary, band: FULL_BAND }, msg);
+    const island = renderIsland(ActionForm, { action: action!, onSubmit: () => {}, renderAttribution });
+
+    (propsOf(find(island.tree(), isType("button"))).onClick as () => void)();
+    let tree = island.tree();
+    const personChips = chipsOf(byPath(tree, "person"));
+    const offenderChip = find(personChips, (c) => propsOf(c)["data-value"] === OFFENDER);
+    (propsOf(offenderChip).onClick as () => void)();
+
+    tree = island.tree();
+    expect(textOf(find(tree, (el) => propsOf(el)["data-role"] === "skin-attribution"))).not.toContain(msg("pad.pp.escalation"));
+  });
+
+  it("icehockey: never shows the hint -- summary.detail.escalate is a hockey-only engine field and is absent here by design", () => {
+    const cfg = icehockey.configSchema.parse({});
+    const lineups = defaultLineupPair(icehockey.positions);
+    const H = lineups.home.entrantId;
+    const OFFENDER = "H-p2";
+    const events = [
+      makeEnvelope(0, { type: "core.start", payload: {} }),
+      makeEnvelope(1, { type: "core.lineup.position", payload: { side: H, personId: OFFENDER, positionKey: "FW" } }),
+      makeEnvelope(2, {
+        type: "icehockey.suspension.start",
+        payload: { class: "minor", by: H, person: OFFENDER, servedBy: OFFENDER },
+      }),
+    ];
+    const state = foldClient(icehockey, cfg, lineups, events);
+    const summary = icehockey.summary(state) as { detail?: { escalate?: unknown } };
+    // Confirms the premise: icehockey's own summary never carries this field.
+    expect(summary.detail?.escalate).toBeUndefined();
+
+    const spec = icehockey.padSpec!(cfg);
+    const entitlements = grantAllEntitlements(spec);
+    const view = buildPadView(spec, { state, summary, phase: "live", band: FULL_BAND, entitlements });
+    const action = actionByType(view, "icehockey.suspension.start");
+    expect(action).not.toBeNull();
+
+    const renderAttribution = buildAttributionRenderer({ cfg, state, summary, band: FULL_BAND }, msg);
+    const island = renderIsland(ActionForm, { action: action!, onSubmit: () => {}, renderAttribution });
+
+    (propsOf(find(island.tree(), isType("button"))).onClick as () => void)();
+    let tree = island.tree();
+    (propsOf(findAll(tree, isType("select"))[0]!).onChange as (e: unknown) => void)({ target: { value: "minor" } });
+    tree = island.tree();
+    (propsOf(findAll(tree, isType("select"))[1]!).onChange as (e: unknown) => void)({ target: { value: "tripping" } });
+    tree = island.tree();
+    (propsOf(find(tree, (el) => el.type === "input" && propsOf(el).type === "number")).onChange as (e: unknown) => void)({
+      target: { value: "2" },
+    });
+
+    // Name the SAME offender that would trigger the hint on hockey -- still
+    // no hint, because icehockey's summary carries no `escalate` at all.
+    tree = island.tree();
+    const personChips = chipsOf(byPath(tree, "person"));
+    const chip = find(personChips, (c) => propsOf(c)["data-value"] === OFFENDER);
+    (propsOf(chip).onClick as () => void)();
+
+    tree = island.tree();
+    expect(textOf(find(tree, (el) => propsOf(el)["data-role"] === "skin-attribution"))).not.toContain(msg("pad.pp.escalation"));
+  });
+});

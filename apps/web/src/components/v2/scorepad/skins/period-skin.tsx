@@ -190,6 +190,32 @@ function classMinutesOf(cfg: unknown, classKey: string): number | null {
   return typeof minutes === "number" ? minutes : null;
 }
 
+/** `summary.detail.escalate` -- HOCKEY-ONLY (period/kernel.ts:2560, gated on
+ *  `preset.key === "hockey"`; icehockey's own summary never carries this
+ *  field, by engine design -- see hockey/DOMAIN.md's "Progressive escalation"
+ *  row). The person ids already carrying a green card this match (cardLog is
+ *  a permanent record, so this holds even once that card has expired or been
+ *  released), i.e. a further offence against one of them suggests escalating
+ *  to yellow -- v1's own live warning (`period-pad.tsx`, deleted this
+ *  session) while a suspension.start form's offender field named one of
+ *  these ids. Read structurally like every other summary/state accessor in
+ *  this file: never throws on an absent or malformed field, so the coverage
+ *  sweep's `summary: {}` and every icehockey read pass straight through as
+ *  "no escalation known" rather than as an error -- this is what keeps the
+ *  hockey-only gate real without this file ever hardcoding a
+ *  `preset.key === "hockey"`/sport-prefix check of its own (the one mistake
+ *  the module header warns this file cannot afford).
+ */
+function readEscalateHints(summary: unknown): ReadonlySet<string> | null {
+  if (!isRecord(summary)) return null;
+  const detail = summary.detail;
+  if (!isRecord(detail)) return null;
+  const escalate = detail.escalate;
+  if (!Array.isArray(escalate)) return null;
+  const ids = escalate.filter((id): id is string => typeof id === "string");
+  return ids.length > 0 ? new Set(ids) : null;
+}
+
 /** "pre"/"done"/"final"/"abandoned" are lifecycle tokens worth a capital
  *  letter; "Q1"/"P2"/"OT"/"SHOOTOUT" are already the exact scoreboard-ready
  *  casing the kernel means to be displayed (period/kernel.ts's own
@@ -482,16 +508,37 @@ export function buildAttributionRenderer(
   // of this file's own unit tests (both keep the old state-only read).
   const squads = ctx.lineups ? resolveSquads(ctx.state, ctx.lineups) : readSquads(ctx.state);
   const personNames = ctx.personNames;
+  const escalateHints = readEscalateHints(ctx.summary);
   // Named, not an anonymous arrow: it returns JSX, so eslint's react/display-name
   // treats it as a component definition. It is really a render prop, but a name
   // costs nothing and keeps `apps/web`'s own lint (the one CI runs) clean.
   return function periodAttribution(action, values, setValue) {
     if (action.attribution.length === 0) return null;
     const actionLabel = padLabel(action.labelKey.key, msg, action.labelKey.label);
+    // Live, not on submit: `values` is the SAME in-progress map ActionForm
+    // re-renders on every keystroke/chip tap (action-form.tsx's own state),
+    // so this reads the offender the scorer has THIS INSTANT named -- v1's
+    // own `sheet === "penalty" && person !== "" && escalate.includes(person)`
+    // check, ported to this skin's own attribution path naming ("person" is
+    // the offender's path on every period-kernel suspension.start action,
+    // hockey and icehockey alike -- see the suspension-flow tests above).
+    // Gated on the action TYPE SUFFIX, never the sport prefix (the module's
+    // own standing rule): a scorer picking a goal-scorer who happens to
+    // share an id with an escalating offender must never see a discipline
+    // warning on the GOAL form, and `escalateHints` is already naturally
+    // null for icehockey (readEscalateHints' own header), so this needs no
+    // separate sport check to stay hockey-only.
+    const offenderId = action.type.endsWith(".suspension.start") ? values.person : undefined;
+    const escalating = typeof offenderId === "string" && (escalateHints?.has(offenderId) ?? false);
     return (
       <div className="space-y-3" data-role="skin-attribution">
         {action.attribution.map((item, index) =>
           renderAttributionItem(item, index, actionLabel, values[item.path], (v) => setValue(item.path, v), entrants, squads, personNames, msg),
+        )}
+        {escalating && (
+          <p className="text-[11px] font-medium text-amber-700" data-testid="discipline-escalation-hint">
+            {msg("pad.pp.escalation")}
+          </p>
         )}
       </div>
     );
