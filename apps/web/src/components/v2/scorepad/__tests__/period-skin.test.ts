@@ -628,3 +628,109 @@ describe("period skin — person attribution chips show ctx.personNames, not the
     expect(textOf(offenderChip)).toBe(OFFENDER.slice(0, 6));
   });
 });
+
+// ---------------------------------------------------------------------------
+// S13/#422 W11 cutover — WCAG AA contrast on the dark "scoreboard" header. An
+// axe scan (apps/web/e2e/v6-sports.spec.ts, icehockey penalties test) that
+// only started reaching this component this session (it previously died on a
+// deleted v1 locator before the scan ever ran) found text-slate-500 on
+// bg-slate-900 measuring ~3.74:1 -- below WCAG AA's 4.5:1 floor for normal
+// text, on a surface this programme's own design brief calls out for
+// rinkside/pitchside use in direct sunlight.
+//
+// Below is a REAL token-level contrast computation, not a class-name pin: it
+// converts Tailwind's own oklch() palette (values copied verbatim from
+// node_modules/.pnpm/tailwindcss@4.3.1/node_modules/tailwindcss/theme.css --
+// cited so a future Tailwind upgrade is easy to re-check) through the
+// standard OKLab -> linear-sRGB matrices (Bjorn Ottosson's published OKLab
+// conversion) into WCAG relative luminance, then the WCAG contrast-ratio
+// formula. A test that merely asserted `className.toContain("slate-400")`
+// would pin the LETTERS, not the contrast, and would stay green even if
+// Tailwind's slate-400 itself shifted shade under a version bump. This
+// recomputes the real number from the real rendered class every run.
+// ---------------------------------------------------------------------------
+describe("period skin — header caption/status contrast against bg-slate-900 (WCAG AA, S13/#422 W11)", () => {
+  // [L%, C, H] straight from tailwindcss@4.3.1's theme.css.
+  const OKLCH: Record<string, readonly [number, number, number]> = {
+    "slate-400": [70.4, 0.04, 256.788],
+    "slate-500": [55.4, 0.046, 257.417],
+    "slate-900": [20.8, 0.042, 265.755],
+  };
+
+  function relLuminance(step: string): number {
+    const entry = OKLCH[step];
+    if (!entry) throw new Error(`no reference oklch() value recorded for ${step}`);
+    const [Lpct, C, Hdeg] = entry;
+    const L = Lpct / 100;
+    const hRad = (Hdeg * Math.PI) / 180;
+    const a = C * Math.cos(hRad);
+    const b = C * Math.sin(hRad);
+    const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+    const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+    const s_ = L - 0.0894841775 * a - 1.2914855480 * b;
+    const l = l_ ** 3;
+    const m = m_ ** 3;
+    const s = s_ ** 3;
+    const r = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+    const g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+    const bl = -0.0041960863 * l - 0.7034186147 * m + 1.7076147 * s;
+    const clamp = (x: number) => Math.max(0, Math.min(1, x));
+    return 0.2126 * clamp(r) + 0.7152 * clamp(g) + 0.0722 * clamp(bl);
+  }
+
+  function contrastOf(fgStep: string, bgStep: string): number {
+    const l1 = relLuminance(fgStep);
+    const l2 = relLuminance(bgStep);
+    const hi = Math.max(l1, l2);
+    const lo = Math.min(l1, l2);
+    return (hi + 0.05) / (lo + 0.05);
+  }
+
+  function slateStepOf(className: string): string | null {
+    const m = /text-slate-(\d+)/.exec(className);
+    return m ? `slate-${m[1]}` : null;
+  }
+
+  it("documents the axe-caught failure: slate-500 on slate-900 measures ~3.74:1, below the 4.5:1 AA floor", () => {
+    expect(contrastOf("slate-500", "slate-900")).toBeCloseTo(3.74, 1);
+    expect(contrastOf("slate-500", "slate-900")).toBeLessThan(4.5);
+  });
+
+  it("the chosen replacement, slate-400 on slate-900, clears 4.5:1 with real headroom (courtside sunlight, not just the floor)", () => {
+    expect(contrastOf("slate-400", "slate-900")).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("the REAL rendered header captions and the default queue-status line meet 4.5:1 against bg-slate-900", () => {
+    const cfg = hockey.configSchema.parse({});
+    const lineups = defaultLineupPair(hockey.positions);
+    const state = foldClient(hockey, cfg, lineups, [makeEnvelope(0, { type: "core.start", payload: {} })]);
+    const summary = hockey.summary(state);
+    const spec = hockey.padSpec!(cfg);
+    const entitlements = grantAllEntitlements(spec);
+    const view = buildPadView(spec, { state, summary, phase: "live", band: FULL_BAND, entitlements });
+    const layout = periodSkin.layout(view, { cfg, state, summary, band: FULL_BAND });
+
+    const island = renderIsland(PeriodSkinComponent, {
+      view,
+      spec,
+      ctx: { cfg, state, summary, band: FULL_BAND },
+      layout,
+      dispatch: async () => {},
+      queueDepth: 0,
+      offline: false,
+      submittingType: null,
+    });
+    const tree = island.tree();
+
+    const periodCaption = find(tree, (el) => el.type === "span" && textOf(el) === msg("scorepad.skin.period.header.period"));
+    const scoreCaption = find(tree, (el) => el.type === "span" && textOf(el) === msg("scorepad.skin.period.header.score"));
+    const queueStatus = find(tree, (el) => el.type === "p" && textOf(el) === msg("scorepad.queue.synced"));
+
+    for (const el of [periodCaption, scoreCaption, queueStatus]) {
+      const className = String(propsOf(el).className ?? "");
+      const step = slateStepOf(className);
+      expect(step).not.toBeNull();
+      expect(contrastOf(step!, "slate-900")).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});

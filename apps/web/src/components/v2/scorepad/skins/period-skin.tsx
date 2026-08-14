@@ -386,7 +386,7 @@ function renderAttributionItem(
       return (
         <div key={item.path} className="space-y-1">
           <span className="label !mb-0">{caption}</span>
-          <p className="text-xs text-slate-400">{msg("scorepad.attribution.noRoster")}</p>
+          <p className="text-xs text-slate-600">{msg("scorepad.attribution.noRoster")}</p>
         </div>
       );
     }
@@ -644,7 +644,7 @@ function renderHeader(header: SkinHeader | null, queueDepth: number, offline: bo
           {chips.map((field) => (
             <span key={field.id} data-role={`header-${field.id}`} className="text-left">
               {field.captionKey && (
-                <span className="block text-[10px] uppercase tracking-widest text-slate-500">{capMsg(msg, field.captionKey)}</span>
+                <span className="block text-[10px] uppercase tracking-widest text-slate-400">{capMsg(msg, field.captionKey)}</span>
               )}
               <span className={fieldValueClass(field)}>{field.value}</span>
             </span>
@@ -656,7 +656,7 @@ function renderHeader(header: SkinHeader | null, queueDepth: number, offline: bo
             is), and a `shrink-0` sibling sharing a row with it clips mid-
             sentence at 320px instead of wrapping — caught by this skin's own
             screenshot pass. */}
-        <p className={`mt-1 text-[11px] uppercase tracking-widest ${queueAttention ? "text-amber-400" : "text-slate-500"}`}>
+        <p className={`mt-1 text-[11px] uppercase tracking-widest ${queueAttention ? "text-amber-400" : "text-slate-400"}`}>
           {queueLabel}
         </p>
       </div>
@@ -665,7 +665,7 @@ function renderHeader(header: SkinHeader | null, queueDepth: number, offline: bo
           {emphasis.map((field) => (
             <p key={field.id} data-role={`header-${field.id}`}>
               {field.captionKey && (
-                <span className="block text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                <span className="block text-[10px] font-semibold uppercase tracking-widest text-slate-400">
                   {capMsg(msg, field.captionKey)}
                 </span>
               )}
