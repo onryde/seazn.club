@@ -452,3 +452,61 @@ describe("tennis skin — Component renders from the LAYOUT's type-keyed groups,
     expect(types).not.toContain("tennis.decoy"); // never what position 0 happens to hold
   });
 });
+
+// ---------------------------------------------------------------------------
+// 9. Same-typed action PAIRS both reach the rendered Component. §6 above
+// proves `tennisLayout` places each shared type exactly ONCE (a coverage-
+// shaped, TYPE-list property `assertExactCoverage` — §1 — depends on staying
+// duplicate-free). That says nothing about how many of the (up to two) real
+// PadActionViews sharing a type the Component actually DRAWS: before this
+// fix, `renderGroupActions` resolved a group's type list through the shared
+// `actionByType` (types.ts), which returns only the FIRST match — so the
+// tie-break-carrying "Set score" tile, and the attributed point tile, never
+// rendered from ANY UI state. Found live via v6-sports.spec.ts's own tennis
+// tie-break test, which had to drive `tb` through the API because no tile on
+// the actual page could reach it. `actionsByType` (tennis-skin.tsx) now
+// resolves a named type back to EVERY PadActionView that shares it.
+// ---------------------------------------------------------------------------
+
+describe("tennis skin — Component renders BOTH PadActionViews of a shared type, not just the first", () => {
+  const cfg = tennis.configSchema.parse({});
+  const spec = tennis.padSpec!(cfg);
+  const state = tennis.init(cfg, lineups);
+  const view = viewFor(spec, state);
+  const layout = tennisSkin.layout(view, { cfg, state, summary: tennis.summary(state), band: FULL_BAND });
+  const props: SkinProps = {
+    view,
+    spec,
+    ctx: { cfg, state, summary: tennis.summary(state), band: FULL_BAND },
+    layout,
+    dispatch: async () => {},
+    queueDepth: 0,
+    offline: false,
+    submittingType: null,
+  };
+
+  it("renders an ActionForm for BOTH the plain and the tie-break-carrying tennis.set_summary action", () => {
+    const island = renderIsland(TennisSkin, props);
+    const summaryForms = findAll(island.tree(), isType(ActionForm)).filter(
+      (el) => (propsOf(el).action as PadActionView).type === "tennis.set_summary",
+    );
+    expect(summaryForms.length, "expected both the plain and tie-break Set score tiles").toBe(2);
+    const fieldCounts = summaryForms.map((el) => (propsOf(el).action as PadActionView).fields.length).sort();
+    expect(fieldCounts).toEqual([2, 4]); // plain (home/away) vs tie-break (+ tb.home/tb.away)
+    const labelKeys = summaryForms.map((el) => (propsOf(el).action as PadActionView).labelKey.key).sort();
+    expect(labelKeys).toEqual(["pad.tennis.action.setScore", "pad.tennis.action.setScoreTiebreak"]);
+  });
+
+  it("also renders an ActionForm for the attributed tennis.point action (same shared-type mechanism, not special-cased to set_summary)", () => {
+    const island = renderIsland(TennisSkin, props);
+    const pointForms = findAll(island.tree(), isType(ActionForm)).filter(
+      (el) => (propsOf(el).action as PadActionView).type === "tennis.point",
+    );
+    // The plain variant renders as tennisLayout's bespoke Home/Away button
+    // pair (renderPrimaryAction's `isPlainPoint` branch), never an
+    // ActionForm — so exactly one ActionForm (the attributed variant) is
+    // the right count here, not two.
+    expect(pointForms.length).toBe(1);
+    expect((propsOf(pointForms[0]!).action as PadActionView).labelKey.key).toBe("pad.tennis.action.pointAttributed");
+  });
+});

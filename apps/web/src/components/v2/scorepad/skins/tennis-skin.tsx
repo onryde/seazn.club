@@ -32,7 +32,6 @@ import { ActionForm, type ActionFormProps } from "../action-form";
 import { AttributionPicker } from "../attribution-picker";
 import type { PadActionView, PadPanelView, PadView } from "../view-model";
 import {
-  actionByType,
   type SkinDef,
   type SkinDispatch,
   type SkinGroup,
@@ -223,11 +222,19 @@ function dedupeTypes(types: readonly string[]): string[] {
 export function tennisLayout(view: PadView, ctx: SkinLayoutCtx): SkinLayout {
   const groups: SkinGroup[] = view.panels.map((panel) => {
     const { id, prominence } = groupFor(panel);
-    // Deduped: `points`/`setScore` each carry TWO PadActions of the SAME
-    // type (plain vs attributed point; plain vs tie-break set-summary — see
-    // nested/kernel.ts's own comment on that pattern), and a group's
-    // `actions` are TYPE strings, not action instances — see
-    // `layoutActionTypes`'s doc comment in ./types.ts.
+    // Deduped, deliberately: `points`/`setScore` each carry TWO PadActions
+    // of the SAME type (plain vs attributed point; plain vs tie-break
+    // set-summary — see nested/kernel.ts's own comment on that pattern), a
+    // group's `actions` are TYPE strings not action instances
+    // (`layoutActionTypes`'s doc comment in ./types.ts), and
+    // `assertExactCoverage` (tennis-skin.test.ts) asserts this list is
+    // duplicate-free. That does NOT mean only one instance of a shared type
+    // ever renders: `actionsByType` below resolves a named type back to
+    // EVERY PadActionView that shares it, which is what actually reaches
+    // the tie-break-carrying "Set score" tile and the attributed point tile
+    // (S13/#422 W11 cutover fix — both were unreachable from any UI state
+    // before, because the Component used to resolve a group's type through
+    // the shared, first-match-only `actionByType`).
     return { id, prominence, actions: dedupeTypes(panel.actions.map((a) => a.type)) };
   });
   return { header: buildHeader(ctx), groups };
@@ -314,25 +321,38 @@ function renderPrimaryAction(
   );
 }
 
-/** Resolves a group's own bare type strings to the real `PadActionView`s via
- *  the shared `actionByType` lookup (types.ts) -- the same type-keyed lookup
- *  every sibling skin uses (racquet-skin.tsx's `GroupBody`, period-skin.tsx's
- *  `renderActionForms`, football-skin.tsx's `renderGenericAction`), NOT an
- *  array index into `view.panels`. This is the S11 review gap 2 fix: before,
- *  `TennisSkin` zipped `layout.groups[i]` with `view.panels[i]` by position
- *  and drew from `panel.actions` (the VIEW) -- correct only because
- *  `tennisLayout` above happens to build one group per surviving panel,
- *  unfiltered, in the same pass, an invariant nothing on the Component side
- *  enforced. Rendering through the type lookup instead means the
- *  Component's render source IS the layout the coverage gate checks. A type
- *  a group names but that (defensively) cannot be found on `view` renders
- *  nothing for that slot rather than crashing; the gate itself guarantees
- *  this never fires against a real spec (skin-coverage.test.ts). */
+/** All PadActionViews sharing a type, across every panel, in view order.
+ *  Every sibling skin (racquet-skin.tsx's `GroupBody`, period-skin.tsx's
+ *  `renderActionForms`, football-skin.tsx's `renderGenericAction`) resolves
+ *  a group's own bare type strings via the shared `actionByType` (types.ts),
+ *  which returns only the FIRST match -- exactly right when a group's type
+ *  list has one action per type. Tennis's own `points`/`setScore` groups do
+ *  not (`tennisLayout`'s own comment above): each names ONE type that
+ *  covers TWO distinct PadActions, so resolving through `actionByType`
+ *  silently dropped the second one -- found live via v6-sports.spec.ts's
+ *  own tennis tie-break test, which had to drive `tb` through the API
+ *  because no tile on the actual page could reach it. This local,
+ *  type-PLURAL read is what `renderGroupActions` needs instead.
+ *
+ *  Still a search, never an array index into `view.panels` -- the S11
+ *  review gap 2 fix this pairing is about: before that fix, `TennisSkin`
+ *  zipped `layout.groups[i]` with `view.panels[i]` by position and drew
+ *  from `panel.actions` (the VIEW), correct only because `tennisLayout`
+ *  happens to build one group per surviving panel, unfiltered, in the same
+ *  pass -- an invariant nothing on the Component side enforced. A type a
+ *  group names but that (defensively) cannot be found on `view` still
+ *  resolves to an empty array rather than crashing; the gate itself
+ *  guarantees this never fires against a real spec (skin-coverage.test.ts). */
+function actionsByType(view: PadView, type: string): PadActionView[] {
+  const found: PadActionView[] = [];
+  for (const panel of view.panels) {
+    for (const action of panel.actions) if (action.type === type) found.push(action);
+  }
+  return found;
+}
+
 function renderGroupActions(group: SkinGroup, view: PadView, render: (action: PadActionView) => ReactNode): ReactNode[] {
-  return group.actions
-    .map((type) => actionByType(view, type))
-    .filter((action): action is PadActionView => action !== null)
-    .map(render);
+  return group.actions.flatMap((type) => actionsByType(view, type)).map(render);
 }
 
 const GROUP_CAPTION_KEY: Readonly<Record<string, MessageKey>> = {
