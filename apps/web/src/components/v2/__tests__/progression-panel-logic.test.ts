@@ -15,6 +15,10 @@ import {
   type TieOut,
 } from "@/components/v2/progression-panel";
 import type { MessageKey } from "@/lib/messages";
+import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
 
 describe("allTiesResolved — confirm gating", () => {
   it("no ties at all -> resolved (nothing to gate on)", () => {
@@ -146,4 +150,26 @@ describe("optionsForSlot — candidate entrants offered per row", () => {
     const edits = new Map([["f1:away", "e4"]]);
     expect(optionsForSlot("f1:home", qualifiers, [], edits, allEntrantIds)).toEqual(["e1", "e2", "e3"]);
   });
+});
+
+describe("dictionary hygiene — progression.tiedBadge is dead (review finding 4, P6/D4b task B fix round 1)", () => {
+  // Only `progression.tiedHint` is ever read (progression-panel.tsx:327,
+  // `{tied && <p ...>{msg("progression.tiedHint")}</p>}`) — `tiedBadge` was
+  // authored alongside it in all 4 dictionaries and the generated key union
+  // but never wired to a render. Proven per-locale, not just on en, so a
+  // partial cleanup (three locales fixed, one missed) still fails this.
+  const DICTS: Record<string, Record<string, unknown>> = { en, es, fr, nl };
+
+  for (const [locale, dict] of Object.entries(DICTS)) {
+    it(`${locale}: ui.json has no progression.tiedBadge entry`, () => {
+      expect(Object.prototype.hasOwnProperty.call(dict, "progression.tiedBadge")).toBe(false);
+    });
+
+    // Control: proves the assertion above isn't vacuous by construction (a
+    // typo'd key name would pass trivially) — its sibling, which the
+    // component DOES render, must still be present.
+    it(`${locale}: ui.json still has progression.tiedHint (the one actually rendered)`, () => {
+      expect(Object.prototype.hasOwnProperty.call(dict, "progression.tiedHint")).toBe(true);
+    });
+  }
 });

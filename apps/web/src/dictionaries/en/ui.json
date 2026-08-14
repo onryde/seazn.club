@@ -294,7 +294,6 @@
   "progression.entrantHeader": "Entrant",
   "progression.sourceHeader": "Source",
   "progression.destinationHeader": "Destination slot",
-  "progression.tiedBadge": "Tied",
   "progression.tiedHint": "Tied — choose who fills this slot",
   "progression.choosePlaceholder": "Choose an entrant…",
   "progression.confirmCta": "Confirm proposal",

@@ -3149,7 +3149,6 @@ export type DictionaryKey =
   | "progression.sourceHeader"
   | "progression.sourceRank"
   | "progression.staleBanner"
-  | "progression.tiedBadge"
   | "progression.tiedHint"
   | "reason.all_out"
   | "reason.boarding"

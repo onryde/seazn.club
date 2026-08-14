@@ -294,7 +294,6 @@
   "progression.entrantHeader": "Participant",
   "progression.sourceHeader": "Origine",
   "progression.destinationHeader": "Position de destination",
-  "progression.tiedBadge": "Égalité",
   "progression.tiedHint": "Égalité — choisissez qui occupe cette position",
   "progression.choosePlaceholder": "Choisissez un participant…",
   "progression.confirmCta": "Confirmer la proposition",
