@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import { apiJson, fixturePath, seedRosteredFixture, expectNoHorizontalScroll, TAG } from "./helpers";
 
 // S11/#420 W9 — one real-browser headline flow per shipped skin (cricket,
@@ -71,6 +72,45 @@ async function openLiveConsole(page: Page, fx: { fixtureId: string }): Promise<v
     .toContain("core.start");
 }
 
+/**
+ * S13/#422 W11 cutover — the WCAG AA color-contrast guard, extended to the
+ * four skins (and the chassis header they all share) the ONE pre-existing
+ * axe scan never reached: v6-sports.spec.ts's icehockey-penalties test is
+ * the only place this repo runs axe against the v2 scoring pad, so cricket,
+ * football, racquet and tennis (and pad-renderer.tsx's own dark header,
+ * which the icehockey test happens not to exercise either — it renders
+ * period-skin.tsx's OWN header instead) went unchecked. That gap is exactly
+ * how the text-slate-500-on-bg-slate-900 / text-slate-400-on-white /
+ * text-purple-400-on-white failures fixed this session (source files, this
+ * same commit set) went unnoticed across five files for as long as they
+ * did — a defect this deterministic needed only ONE real render to be
+ * caught, and four skins' worth of renders never happened under axe.
+ *
+ * Same invocation shape as v6-sports.spec.ts's own scan (the only existing
+ * precedent in this repo): scoped to `[data-testid="score-pad"]` — the
+ * SAME element `pad()` above already scopes every other assertion in this
+ * file to — so a pre-existing contrast debt on the WIDER fixture console
+ * chrome (out of this session's scope) can never fail this guard; only
+ * `wcag2a`/`wcag2aa` tags, and only `serious`/`critical` impact, matching
+ * the repo's one other precedent exactly rather than inventing a stricter
+ * or looser gate here.
+ *
+ * Placed at the END of each flow (immediately before the existing
+ * `expectNoHorizontalScroll` call every test below already has), after the
+ * real interaction has run — a scan against the pad's INITIAL render alone
+ * would miss whatever an expanded ActionForm, a chip row or a populated
+ * header value newly draws, which is exactly the kind of state a courtside
+ * scorer actually sees mid-match.
+ */
+async function expectPadAxeClean(page: Page): Promise<void> {
+  const axe = await new AxeBuilder({ page })
+    .include('[data-testid="score-pad"]')
+    .withTags(["wcag2a", "wcag2aa"])
+    .analyze();
+  const serious = axe.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, JSON.stringify(serious, null, 2)).toEqual([]);
+}
+
 test("cricket skin: real roster, a couple of balls scored", async ({ page, request }) => {
   test.setTimeout(120_000);
   const fx = await seedRosteredFixture(request, {
@@ -114,6 +154,10 @@ test("cricket skin: real roster, a couple of balls scored", async ({ page, reque
     expect([striker, nonStriker]).toContain(b.payload.striker);
     expect(b.payload.bowler).toBe(bowler);
   }
+  // S13/#422 W11 cutover — cricket's own scan (see expectPadAxeClean's
+  // header comment for why this file, not just v6-sports.spec.ts's single
+  // icehockey scan, needs one per skin).
+  await expectPadAxeClean(page);
   await expectNoHorizontalScroll(page);
 });
 
@@ -154,6 +198,8 @@ test("tennis skin: play points to deuce", async ({ page, request }) => {
   // (unlike football/racquet/period below).
   const pointsField = pad(page).getByText("Points", { exact: true }).locator("..");
   await expect(pointsField).toContainText("40–40");
+  // S13/#422 W11 cutover — tennis's own scan.
+  await expectPadAxeClean(page);
   await expectNoHorizontalScroll(page);
 
   const points = await ledger(request, fx.fixtureId);
@@ -209,6 +255,8 @@ test("racquet skin (volleyball): a set summary then a rally", async ({ page, req
   const pointsField = racquetHeader.getByText("Points", { exact: true }).locator("..");
   await expect(setsField).toContainText("1–0");
   await expect(pointsField).toContainText("1–0");
+  // S13/#422 W11 cutover — racquet's own scan.
+  await expectPadAxeClean(page);
   await expectNoHorizontalScroll(page);
 
   const rows = await ledger(request, fx.fixtureId);
@@ -250,6 +298,8 @@ test("football skin: a side-only goal", async ({ page, request }) => {
     .toBe(1);
 
   await expect(footballSkin.getByText("1 - 0", { exact: true })).toBeVisible();
+  // S13/#422 W11 cutover — football's own scan.
+  await expectPadAxeClean(page);
   await expectNoHorizontalScroll(page);
 
   const goal = (await ledger(request, fx.fixtureId)).find((e) => e.type === "football.goal")!;
@@ -299,6 +349,12 @@ test("period skin (icehockey): a goal and a period advance", async ({ page, requ
 
   await expect(scoreField).toContainText("1 – 0");
   await expect(periodField).toContainText("P2");
+  // S13/#422 W11 cutover — period's own scan (pad-renderer.tsx's own dark
+  // header, plus this file's own header/attribution/discipline chrome —
+  // the icehockey e2e in v6-sports.spec.ts scans a DIFFERENT icehockey
+  // fixture reaching the suspension flow, not this goal-scoring one, so
+  // this is genuinely additional coverage, not a duplicate scan).
+  await expectPadAxeClean(page);
   await expectNoHorizontalScroll(page);
 
   const goal = (await ledger(request, fx.fixtureId)).find((e) => e.type === "icehockey.goal")!;
