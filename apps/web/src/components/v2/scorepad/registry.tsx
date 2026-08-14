@@ -213,8 +213,9 @@ export interface ScorePadProps {
 type ModuleResolution = { ok: true; module: AnySportModule } | { ok: false; message: string };
 
 /**
- * The single mount both real entry points use behind the `scorepad-v2`
- * flag. Resolves the module client-side (module-client.ts — no server round
+ * The single mount both real entry points use (S13/#422: unconditionally —
+ * the feature flag that used to gate this has been removed entirely).
+ * Resolves the module client-side (module-client.ts — no server round
  * trip), builds the lineup/person data both loaders' `SideInfo` already
  * carries, and renders `PadRenderer` with an EXPLICIT skin decision from
  * `resolveScorePad` — never `PadRenderer`'s own default registry consult —
@@ -266,7 +267,11 @@ export function ScorePad(props: ScorePadProps) {
       band={props.band}
       entitlements={props.entitlements}
       initialEvents={props.initialEvents}
-      queueDbName={`scorepad-v2-${props.fixtureId}`}
+      // S13/#422: dropped the "-v2-" a pad/flag distinction used to need —
+      // this is the only pad now, so the queue db is namespaced on the
+      // fixture alone (still distinct from the harness's own
+      // `scorepad-harness-${sportKey}` naming, harness-client.tsx).
+      queueDbName={`scorepad-${props.fixtureId}`}
       personNames={personNames}
       skin={padResolution.kind === "universal" ? null : padResolution.skin}
     />

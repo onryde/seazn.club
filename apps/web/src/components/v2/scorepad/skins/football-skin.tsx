@@ -275,7 +275,10 @@ function renderChipRow(
     <div className="space-y-1">
       <span className="label !mb-0">{caption}</span>
       {options.length === 0 ? (
-        <p className="text-xs text-slate-400">{msg(emptyKey)}</p>
+        // S13/#422 W11 cutover — text-slate-400 on white ~2.63:1, below
+        // AA's 4.5:1; text-slate-600 clears it at ~7.56:1 (same fix as
+        // period-skin.tsx's own noRoster hint, dac2b6bb).
+        <p className="text-xs text-slate-600">{msg(emptyKey)}</p>
       ) : (
         <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
           {options.map((opt) => {
@@ -644,7 +647,10 @@ function renderHeader(layout: SkinLayout, queueDepth: number, offline: boolean, 
               // this file's own header). Safe here: `buildHeader` above is
               // this value's only producer, and it never writes anything but
               // a literal, hand-verified key.
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">{msg(field.captionKey as MessageKey)}</p>
+              // S13/#422 W11 cutover — text-slate-500 on bg-slate-900 ~3.74:1,
+              // below AA's 4.5:1 (same pattern as period-skin.tsx's header
+              // caption, dac2b6bb). text-slate-400 clears it at ~6.79:1.
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{msg(field.captionKey as MessageKey)}</p>
             )}
             <p className={field.emphasis ? "text-xl font-bold tabular-nums tracking-tight text-white sm:text-2xl" : "text-sm font-semibold tabular-nums text-slate-300"}>{field.value}</p>
           </div>
@@ -682,7 +688,11 @@ export function FootballSkin(props: SkinProps) {
         <details key={group.id} className="card group p-3">
           <summary className="btn btn-ghost w-full cursor-pointer list-none justify-between">
             <span>{msg(groupLabelKey(group.id))}</span>
-            <span aria-hidden className="text-xs text-purple-400 group-open:rotate-180">
+            {/* S13/#422 W11 cutover — text-purple-400 on white ~2.79:1,
+             *  below AA's 4.5:1; text-purple-700 clears it at ~7.07:1 and
+             *  matches the label beside it (.btn-ghost's own
+             *  text-purple-700). */}
+            <span aria-hidden className="text-xs text-purple-700 group-open:rotate-180">
               &#9662;
             </span>
           </summary>

@@ -1,15 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DeviceScorePad } from "@/components/v2/device-score-pad";
-import { SetbasedPad } from "@/components/v2/pads/setbased-pad";
-import { DictProvider } from "@/components/i18n/dict-provider";
-import frUi from "@/dictionaries/fr/ui.json";
-import type { Dict } from "@/lib/i18n-constants";
 import type { LiveState, SportInfo, SideInfo } from "@/components/v2/fixture-console";
 
 // Courtside-pad mobile fixes (user report, 12 Jul): set-score headlines used
 // to wrap mid-number at phone widths, and the rally target read as a text
 // link. These pin the render contract; interaction stays with e2e.
+//
+// S13/#422 W11 cutover: this file used to ALSO render v1's `SetbasedPad`
+// (deleted this session) directly to pin two of its own properties — a
+// 44px+ touch target on the rally card, and dictionary-driven (not
+// hardcoded English) chrome. Removed rather than re-pinned: v1's specific
+// implementation (a `touch-manipulation` class, `bg-purple-600`, a literal
+// "+ point" string, its own `pad.*` dictionary keys) has no v2 equivalent to
+// point at — the replacement is `racquet-skin.tsx`'s completely different
+// `ActionForm`-driven rendering, already covered by `racquet-skin.test.ts`.
+// The two PROPERTIES those tests were really guarding — a real tap target
+// and real i18n, not the specific class/key names — are structural
+// guarantees of the shared chassis now: `action-form.tsx`'s own primary
+// action button is `h-14` (56px, well past the 44px bar), and every skin
+// resolves its copy through `useMsg()` against the real dictionaries, which
+// this repo's `i18n:check` gate enforces independently of any one pad.
 
 const sport: SportInfo = {
   key: "badminton",
@@ -69,41 +80,5 @@ describe("device score pad on phones", () => {
     // bug — fluid clamp instead. (Rally cards keep a plain text-5xl numeral.)
     expect(html).not.toContain("text-5xl font-bold");
     expect(html).toContain("clamp(1.5rem,8.5vw,3rem)");
-  });
-
-  it("rally card is one big touch target with a button-shaped '+ point'", () => {
-    const html = renderToStaticMarkup(
-      <SetbasedPad
-        sport={sport}
-        home={side("h", "Nia & Marco")}
-        away={side("a", "Mira & Josh")}
-        live={live}
-        send={async () => true}
-        busy={false}
-      />,
-    );
-    expect(html).toContain("touch-manipulation");
-    expect(html).toContain("bg-purple-600");
-    expect(html).toContain("+ point");
-  });
-
-  // v5 i18n: score pads read chrome via useMsg(), so wrapping a pad in a
-  // <DictProvider> for a non-English locale localizes its labels (sport
-  // vocabulary stays canonical). Fails if a pad hardcodes an English string.
-  it("localizes pad chrome under a DictProvider (fr)", () => {
-    const html = renderToStaticMarkup(
-      <DictProvider dict={frUi as unknown as Dict} locale="fr">
-        <SetbasedPad
-          sport={sport}
-          home={side("h", "Nia & Marco")}
-          away={side("a", "Mira & Josh")}
-          live={live}
-          send={async () => true}
-          busy={false}
-        />
-      </DictProvider>,
-    );
-    expect(html).toContain("Échange par échange"); // pad.rallyByRally (fr)
-    expect(html).not.toContain("Rally-by-rally"); // no English leak
   });
 });

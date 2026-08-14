@@ -136,9 +136,17 @@ jobs:
       # is a separate piece of work, and failing on them today would mean either
       # a mass rewrite in this PR or a gate nobody can keep green.
       #
-      # Exactly ONE suppression exists in the tree (period-pad.tsx, a ref read
-      # during render on a live-scoring countdown with no test coverage) and it
-      # names the issue that will remove it: #355. Nothing else may join it.
+      # A react-hooks/exhaustive-deps suppression should be rare and should
+      # name the issue it exists for. This comment used to point at the
+      # tree's one such suppression by name (#355, a ref read during render
+      # on a v1 pad's live-scoring countdown) — that suppression was deleted
+      # along with the rest of the v1 pads in the S13/#422 cutover, and the
+      # v2 skin #355's own coverage moved onto (period-skin.tsx) needs none.
+      # Most remaining suppressions carry their own inline reasoning at their
+      # call site (pad-renderer.tsx:116, use-pad-pipeline.ts:1198). At least one
+      # does not — pad-renderer.tsx's `skinDispatch` useMemo — so read this as
+      # the standard we hold new ones to, not as a claim about every existing
+      # one. Pre-existing; not introduced by the S13/#422 cutover.
       - name: eslint
         run: npx turbo run lint
 

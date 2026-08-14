@@ -36,17 +36,29 @@
 // readouts, tabular-nums, exactly device-score-pad.tsx's established LED
 // treatment); groups are ordered by what a rinkside scorer actually reaches
 // for (goal first, period control always visible beside it, discipline/set-
-// piece next, shot detail tucked in a drawer); and person attribution — for
-// which this file gets no `lineups` prop at all (see SkinProps) — reads the
-// module's OWN folded state the same structural way attribution-picker.tsx
-// already does (`isSquadState`), degrading to a captioned text field rather
-// than a picker only when no roster has folded yet, and offering a jersey
-// NUMBER as the chip label once one has, deliberately ahead of a resolved
-// name (S12/#421 pass B): a scorer identifies a player by number first. Only
-// when NO number is declared does the chip fall back to `ctx.personNames`
-// (S11's SkinLayoutCtx, added but unconsumed here until now), and only past
-// that to a short id fragment — see `memberLabel`'s own comment.
-import { useMemo, type ReactNode } from "react";
+// piece next, shot detail tucked in a drawer); and person attribution reads
+// the module's OWN live folded state first (`readSquads`, the same
+// structural check attribution-picker.tsx's `isSquadState` uses), then falls
+// back to `ctx.lineups` — the kickoff team sheet, populated by
+// pad-renderer.tsx's own `skinCtx` (SkinLayoutCtx.lineups; PadRendererProps.
+// lineups is not even optional, so every real caller has it) — via the SAME
+// shared `resolveSquads` the unskinned render path already gets for free
+// through `<AttributionPicker>`. An earlier version of this comment claimed
+// the skin "gets no `lineups` prop at all"; that was true when this file was
+// first written (S11/#420 W9) but SkinLayoutCtx grew a `lineups` field
+// afterward and this skin never started reading it — every hockey/icehockey
+// suspension asked a scorer to hand-type a personId, since a suspension is
+// almost always the first discipline event of a match and no `core.lineup.*`
+// event has folded yet (S13/#422 W11, caught by a real-browser e2e). Now the
+// text-field degrade fires only when NEITHER route has a roster (the pure
+// coverage sweep's `state:{}` walk, which never reaches this code, or a
+// fixture with genuinely no saved lineup). Once a roster is known, by either
+// route, the chip label offers a jersey NUMBER first, deliberately ahead of
+// a resolved name (S12/#421 pass B): a scorer identifies a player by number
+// first. Only when NO number is declared does the chip fall back to
+// `ctx.personNames` (S11's SkinLayoutCtx), and only past that to a short id
+// fragment — see `memberLabel`'s own comment.
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { padLabel } from "@/lib/scoring-vocab";
 import type { MessageKey } from "@/lib/messages";
@@ -54,7 +66,7 @@ import { formatElapsed } from "@seazn/engine/core";
 import type { SquadState, SquadMember } from "@seazn/engine/core";
 import type { PadAttributionItem, PadFieldValue } from "@seazn/engine/sport";
 import { ActionForm, type ActionValues } from "../action-form";
-import { attributionItemCaption, isSquadState } from "../attribution-picker";
+import { attributionItemCaption, isSquadState, resolveSquads } from "../attribution-picker";
 import type { PadActionView, PadView } from "../view-model";
 import {
   actionByType,
@@ -119,6 +131,89 @@ function readPhase(state: unknown): string | null {
   if (!isRecord(state)) return null;
   const phase = state.phase;
   return typeof phase === "string" && phase.length > 0 ? phase : null;
+}
+
+/** One entry of `PeriodState.suspensions` (period/kernel.ts's own
+ *  `ActiveSuspension`, ./suspensions.ts) — read defensively and structurally,
+ *  same posture as `readEntrants`/`readSquads` above, since `ctx.state` is
+ *  `unknown` by contract. Only the fields the countdown hint below actually
+ *  needs; `person`/`reason`/`servedBy`/`startedAt`/`expiresAt` are the
+ *  engine's own scoresheet detail and stay out of scope here (S12/#421
+ *  cutover: `period-pad.tsx`'s wall-clock countdown, restored on this skin —
+ *  see `SuspensionCountdownList`'s own doc comment for why it is a real
+ *  component rather than one more plain render helper). */
+interface SuspensionView {
+  side: "home" | "away";
+  classKey: string;
+  permanent: boolean;
+  /** The duration the official actually awarded, when recorded — preferred
+   *  over the class nominal (suspensions.ts's own `SuspensionDetail.minutes`
+   *  doc: "Pads count down from here in preference to the class"). */
+  minutes?: number;
+}
+
+function readSuspensions(state: unknown): readonly SuspensionView[] {
+  if (!isRecord(state)) return [];
+  const raw = state.suspensions;
+  if (!Array.isArray(raw)) return [];
+  const out: SuspensionView[] = [];
+  for (const item of raw) {
+    if (!isRecord(item)) continue;
+    const side = item.side;
+    const classKey = item.classKey;
+    if ((side !== "home" && side !== "away") || typeof classKey !== "string") continue;
+    out.push({
+      side,
+      classKey,
+      permanent: item.permanent === true,
+      minutes: typeof item.minutes === "number" ? item.minutes : undefined,
+    });
+  }
+  return out;
+}
+
+/** The class's NOMINAL duration from cfg (`Cfg.suspensions.classes[key]
+ *  .minutes` — period/kernel.ts's own `SuspensionClassCfg`), the fallback
+ *  when no per-suspension `minutes` was awarded. `null` for both an unknown
+ *  class and a class with no fixed duration (`minutes: null` — a permanent
+ *  exclusion, e.g. hockey's `red`), which is deliberately the same return
+ *  value: either way there is nothing to count down from. */
+function classMinutesOf(cfg: unknown, classKey: string): number | null {
+  if (!isRecord(cfg)) return null;
+  const suspensions = cfg.suspensions;
+  if (!isRecord(suspensions)) return null;
+  const classes = suspensions.classes;
+  if (!isRecord(classes)) return null;
+  const cls = classes[classKey];
+  if (!isRecord(cls)) return null;
+  const minutes = cls.minutes;
+  return typeof minutes === "number" ? minutes : null;
+}
+
+/** `summary.detail.escalate` -- HOCKEY-ONLY (period/kernel.ts:2560, gated on
+ *  `preset.key === "hockey"`; icehockey's own summary never carries this
+ *  field, by engine design -- see hockey/DOMAIN.md's "Progressive escalation"
+ *  row). The person ids already carrying a green card this match (cardLog is
+ *  a permanent record, so this holds even once that card has expired or been
+ *  released), i.e. a further offence against one of them suggests escalating
+ *  to yellow -- v1's own live warning (`period-pad.tsx`, deleted this
+ *  session) while a suspension.start form's offender field named one of
+ *  these ids. Read structurally like every other summary/state accessor in
+ *  this file: never throws on an absent or malformed field, so the coverage
+ *  sweep's `summary: {}` and every icehockey read pass straight through as
+ *  "no escalation known" rather than as an error -- this is what keeps the
+ *  hockey-only gate real without this file ever hardcoding a
+ *  `preset.key === "hockey"`/sport-prefix check of its own (the one mistake
+ *  the module header warns this file cannot afford).
+ */
+function readEscalateHints(summary: unknown): ReadonlySet<string> | null {
+  if (!isRecord(summary)) return null;
+  const detail = summary.detail;
+  if (!isRecord(detail)) return null;
+  const escalate = detail.escalate;
+  if (!Array.isArray(escalate)) return null;
+  const ids = escalate.filter((id): id is string => typeof id === "string");
+  return ids.length > 0 ? new Set(ids) : null;
 }
 
 /** "pre"/"done"/"final"/"abandoned" are lifecycle tokens worth a capital
@@ -282,21 +377,22 @@ function memberLabel(member: SquadMember, personNames: Readonly<Record<string, s
 
 /**
  * One attribution item, resolved against whatever roster facts THIS skin can
- * actually read off the module's own folded state (see `readEntrants`/
- * `readSquads` above) plus `ctx.personNames` (S11's SkinLayoutCtx — SkinProps
- * still carries no `lineups` prop, unlike PadRenderer). Three tiers, each an
- * honest reflection of what is actually known right now, never a fabricated
- * one:
+ * actually read — the module's own LIVE folded state first (`readSquads`),
+ * `ctx.lineups` (the kickoff team sheet) next, via `resolveSquads` — plus
+ * `ctx.personNames` for the chip label. Three tiers, each an honest
+ * reflection of what is actually known right now, never a fabricated one:
  *   - "side": real Home/Away chips keyed on `state.entrants` (always known
  *     once a fixture exists) — never a bare "home"/"away" literal, which the
  *     engine's own `EntrantId` schema would reject.
- *   - "person" WITH a folded squad: number chips, exactly the vocabulary a
- *     scorer already uses (`memberLabel`'s own comment on why number beats a
- *     resolved name here, not just id-vs-name).
- *   - "person" with NO folded squad yet (the common case before any
- *     `core.lineup.*` event — see `readSquads`): a captioned text field. Not
- *     a picker pretending to have data it does not — but still a real,
- *     labelled control, never a bare unlabelled input.
+ *   - "person" WITH a roster, live-folded OR from the kickoff sheet: number
+ *     chips, exactly the vocabulary a scorer already uses (`memberLabel`'s
+ *     own comment on why number beats a resolved name here, not just
+ *     id-vs-name).
+ *   - "person" with NO roster known by EITHER route (`ctx.lineups` also
+ *     absent — the pure coverage sweep, or a fixture with no saved lineup at
+ *     all): a captioned text field. Not a picker pretending to have data it
+ *     does not — but still a real, labelled control, never a bare unlabelled
+ *     input.
  */
 function renderAttributionItem(
   item: PadAttributionItem,
@@ -316,7 +412,7 @@ function renderAttributionItem(
       return (
         <div key={item.path} className="space-y-1">
           <span className="label !mb-0">{caption}</span>
-          <p className="text-xs text-slate-400">{msg("scorepad.attribution.noRoster")}</p>
+          <p className="text-xs text-slate-600">{msg("scorepad.attribution.noRoster")}</p>
         </div>
       );
     }
@@ -380,7 +476,7 @@ function renderAttributionItem(
       <label className="block">
         <span className="label">{caption}</span>
         <input
-          className="input"
+          className="input min-h-11"
           type="text"
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onSelect(e.target.value === "" ? undefined : e.target.value)}
@@ -393,33 +489,171 @@ function renderAttributionItem(
 /**
  * Builds the `renderAttribution` callback `ActionForm` expects
  * (action-form.tsx's `ActionFormProps.renderAttribution`), closing over the
- * roster facts read once from `ctx.state`. Exported (not just an inline
- * closure inside `PeriodSkin`) so it is independently testable against a
- * REAL folded state without needing to drive the whole component through
- * the hook harness — the suspension flow is exactly the surface criterion 5
- * holds this skin to, and this is the one function that decides it.
+ * roster facts read once from `ctx.state` and `ctx.lineups`. Exported (not
+ * just an inline closure inside `PeriodSkin`) so it is independently
+ * testable against a REAL folded state without needing to drive the whole
+ * component through the hook harness — the suspension flow is exactly the
+ * surface criterion 5 holds this skin to, and this is the one function that
+ * decides it.
  */
 export function buildAttributionRenderer(
   ctx: SkinLayoutCtx,
   msg: MsgFn,
 ): (action: PadActionView, values: ActionValues, setValue: (path: string, value: PadFieldValue | undefined) => void) => ReactNode {
   const entrants = readEntrants(ctx.state);
-  const squads = readSquads(ctx.state);
+  // Live folded squad wins when one has folded (readSquads); otherwise fall
+  // back to the kickoff team sheet via the SAME resolveSquads the unskinned
+  // render path already gets through <AttributionPicker> — see the module
+  // header. `ctx.lineups` is absent only in the pure coverage sweep and one
+  // of this file's own unit tests (both keep the old state-only read).
+  const squads = ctx.lineups ? resolveSquads(ctx.state, ctx.lineups) : readSquads(ctx.state);
   const personNames = ctx.personNames;
+  const escalateHints = readEscalateHints(ctx.summary);
   // Named, not an anonymous arrow: it returns JSX, so eslint's react/display-name
   // treats it as a component definition. It is really a render prop, but a name
   // costs nothing and keeps `apps/web`'s own lint (the one CI runs) clean.
   return function periodAttribution(action, values, setValue) {
     if (action.attribution.length === 0) return null;
     const actionLabel = padLabel(action.labelKey.key, msg, action.labelKey.label);
+    // Live, not on submit: `values` is the SAME in-progress map ActionForm
+    // re-renders on every keystroke/chip tap (action-form.tsx's own state),
+    // so this reads the offender the scorer has THIS INSTANT named -- v1's
+    // own `sheet === "penalty" && person !== "" && escalate.includes(person)`
+    // check, ported to this skin's own attribution path naming ("person" is
+    // the offender's path on every period-kernel suspension.start action,
+    // hockey and icehockey alike -- see the suspension-flow tests above).
+    // Gated on the action TYPE SUFFIX, never the sport prefix (the module's
+    // own standing rule): a scorer picking a goal-scorer who happens to
+    // share an id with an escalating offender must never see a discipline
+    // warning on the GOAL form, and `escalateHints` is already naturally
+    // null for icehockey (readEscalateHints' own header), so this needs no
+    // separate sport check to stay hockey-only.
+    const offenderId = action.type.endsWith(".suspension.start") ? values.person : undefined;
+    const escalating = typeof offenderId === "string" && (escalateHints?.has(offenderId) ?? false);
     return (
       <div className="space-y-3" data-role="skin-attribution">
         {action.attribution.map((item, index) =>
           renderAttributionItem(item, index, actionLabel, values[item.path], (v) => setValue(item.path, v), entrants, squads, personNames, msg),
         )}
+        {escalating && (
+          <p className="text-[11px] font-medium text-amber-700" data-testid="discipline-escalation-hint">
+            {msg("pad.pp.escalation")}
+          </p>
+        )}
       </div>
     );
   };
+}
+
+/**
+ * Wall-clock countdown sugar for the suspensions currently running — display
+ * only, restored here at the S13/#422 cutover from `period-pad.tsx` (v1,
+ * deleted this session), which had it and which this skin never did. The
+ * engine's own `ActiveSuspension` doc (period/suspensions.ts) names exactly
+ * this split: "the fold sweeps against this LAZILY ... between an expiry and
+ * the next event the pad and the fold legitimately disagree — the pad is
+ * counting down, the fold is a record of facts." So this stamps each
+ * suspension's remaining time the FIRST RENDER it is observed and ticks a
+ * LOCAL clock once a second; release is always the scorer's own explicit
+ * action through the discipline group's own `${key}.suspension.end` form
+ * rendered alongside it (never this component — it is read-only).
+ *
+ * A REAL component, JSX-instantiated (`<SuspensionCountdownList/>` in
+ * `PeriodSkin` below), not one more plain render function like its siblings
+ * in this file — see the module header for why that split is deliberate:
+ * this is the one other piece of the skin (besides `ActionForm`) that owns
+ * real per-instance hook state (the stamps, the tick), so it must stay a
+ * true component for `_hook-harness`'s `renderIsland` to see it tick at all
+ * — a plain function's `useState`/`useEffect` would run inside `PeriodSkin`
+ * itself and be untestable in isolation.
+ *
+ * Keyed on ARRAY INDEX, exactly as v1's did (period-pad.tsx, deleted) — the
+ * engine gives no stable suspension id, and `state.suspensions` is a small,
+ * append/remove-in-place list the fold itself owns, so index identity is the
+ * same assumption the fold's own array already makes.
+ */
+export function SuspensionCountdownList({
+  suspensions,
+  cfg,
+  msg,
+}: {
+  suspensions: readonly SuspensionView[];
+  cfg: unknown;
+  msg: MsgFn;
+}): ReactNode {
+  const [stamps, setStamps] = useState<Map<number, number>>(() => new Map());
+  const [, forceTick] = useState(0);
+
+  // Stamp newly-seen suspensions with "now"; drop stamps for indices that no
+  // longer exist (released, or the innings/period moved on) — same shape as
+  // v1's own effect, kept in state (not a ref) so a read during render is
+  // never stale.
+  useEffect(() => {
+    setStamps((prev) => {
+      let next: Map<number, number> | null = null;
+      suspensions.forEach((_, i) => {
+        if (!prev.has(i)) {
+          next ??= new Map(prev);
+          next.set(i, Date.now());
+        }
+      });
+      for (const key of prev.keys()) {
+        if (key >= suspensions.length) {
+          next ??= new Map(prev);
+          next.delete(key);
+        }
+      }
+      return next ?? prev;
+    });
+  }, [suspensions]);
+
+  // Ticks once a second only while at least one suspension is running —
+  // cleaned up (clearInterval) the moment none remain, so this never leaves
+  // a stray timer running against an empty list.
+  useEffect(() => {
+    if (suspensions.length === 0) return;
+    const id = setInterval(() => forceTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [suspensions.length]);
+
+  if (suspensions.length === 0) return null;
+
+  function countdown(index: number, susp: SuspensionView): string | null {
+    if (susp.permanent) return msg("pad.pp.matchCountdown");
+    const total = susp.minutes ?? classMinutesOf(cfg, susp.classKey);
+    if (total === null) return null;
+    const started = stamps.get(index);
+    if (started === undefined) return `${total}:00`;
+    const left = Math.max(0, total * 60 - Math.floor((Date.now() - started) / 1000));
+    const mm = Math.floor(left / 60);
+    const ss = String(left % 60).padStart(2, "0");
+    return `${mm}:${ss}`;
+  }
+
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 p-2" data-role="suspension-countdown">
+      <p className="mb-1.5 text-xs font-medium text-amber-800">{msg("pad.pp.runningPenalties")}</p>
+      <ul className="space-y-1">
+        {suspensions.map((susp, i) => {
+          const hint = countdown(i, susp);
+          return (
+            <li key={i} className="flex flex-wrap items-center gap-2 text-xs text-slate-700" data-role="suspension-row">
+              <span className="font-medium">
+                {msg(susp.side === "home" ? "scorepad.attribution.home" : "scorepad.attribution.away")}
+              </span>
+              <span>{susp.classKey}</span>
+              {hint && (
+                <span data-testid="suspension-countdown-hint" className="font-mono text-amber-700">
+                  {hint}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-1 text-[10px] text-amber-800">{msg("pad.pp.timersHint")}</p>
+    </div>
+  );
 }
 
 function fieldValueClass(field: SkinHeaderField): string {
@@ -457,7 +691,7 @@ function renderHeader(header: SkinHeader | null, queueDepth: number, offline: bo
           {chips.map((field) => (
             <span key={field.id} data-role={`header-${field.id}`} className="text-left">
               {field.captionKey && (
-                <span className="block text-[10px] uppercase tracking-widest text-slate-500">{capMsg(msg, field.captionKey)}</span>
+                <span className="block text-[10px] uppercase tracking-widest text-slate-400">{capMsg(msg, field.captionKey)}</span>
               )}
               <span className={fieldValueClass(field)}>{field.value}</span>
             </span>
@@ -469,7 +703,7 @@ function renderHeader(header: SkinHeader | null, queueDepth: number, offline: bo
             is), and a `shrink-0` sibling sharing a row with it clips mid-
             sentence at 320px instead of wrapping — caught by this skin's own
             screenshot pass. */}
-        <p className={`mt-1 text-[11px] uppercase tracking-widest ${queueAttention ? "text-amber-400" : "text-slate-500"}`}>
+        <p className={`mt-1 text-[11px] uppercase tracking-widest ${queueAttention ? "text-amber-400" : "text-slate-400"}`}>
           {queueLabel}
         </p>
       </div>
@@ -478,7 +712,7 @@ function renderHeader(header: SkinHeader | null, queueDepth: number, offline: bo
           {emphasis.map((field) => (
             <p key={field.id} data-role={`header-${field.id}`}>
               {field.captionKey && (
-                <span className="block text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                <span className="block text-[10px] font-semibold uppercase tracking-widest text-slate-400">
                   {capMsg(msg, field.captionKey)}
                 </span>
               )}
@@ -534,6 +768,7 @@ export function PeriodSkin(props: SkinProps): ReactNode {
   // `renderAttribution` memo one level up (module-client.ts's `foldClient`
   // gives a fresh `state` identity on every fold advance).
   const renderAttribution = useMemo(() => buildAttributionRenderer(props.ctx, msg), [props.ctx, msg]);
+  const suspensions = useMemo(() => readSuspensions(props.ctx.state), [props.ctx.state]);
 
   const primary = layout.groups.filter((g) => g.prominence === "primary");
   const secondary = layout.groups.filter((g) => g.prominence === "secondary");
@@ -567,6 +802,11 @@ export function PeriodSkin(props: SkinProps): ReactNode {
                 data-role={`group-${group.id}`}
               >
                 <h3 className="label !mb-2">{msg(GROUP_TITLE_KEY[group.id] ?? "scorepad.skin.period.group.period")}</h3>
+                {group.id === "discipline" && (
+                  <div className="mb-2">
+                    <SuspensionCountdownList suspensions={suspensions} cfg={props.ctx.cfg} msg={msg} />
+                  </div>
+                )}
                 <div className={secondaryActionsClass(group.actions.length)}>
                   {renderActionForms(group.actions, view, dispatch, submittingType, renderAttribution, msg)}
                 </div>
@@ -580,7 +820,16 @@ export function PeriodSkin(props: SkinProps): ReactNode {
         <details className="card group p-3" data-role="drawer-groups">
           <summary className="btn btn-ghost w-full cursor-pointer list-none justify-between">
             <span>{msg("scorepad.skin.more")}</span>
-            <span aria-hidden className="text-xs text-purple-400 group-open:rotate-180">
+            {/* S13/#422 W11 cutover — a SEPARATE failure from this file's
+             *  dac2b6bb fix (that one addressed the dark-header captions and
+             *  the noRoster hint only): text-purple-400 on white ~2.79:1,
+             *  below AA's 4.5:1. aria-hidden does not exempt it from axe's
+             *  color-contrast rule (only screen-reader visibility, not
+             *  visual CSS visibility, per axe-core's own isVisible). Raised
+             *  to text-purple-700 (~7.07:1), matching the label beside it
+             *  (.btn-ghost's own text-purple-700) and every sibling skin's
+             *  own drawer-arrow fix this same session. */}
+            <span aria-hidden className="text-xs text-purple-700 group-open:rotate-180">
               ▾
             </span>
           </summary>

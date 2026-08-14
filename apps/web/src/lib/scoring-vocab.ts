@@ -14,6 +14,20 @@
 // they grow whenever the engine grows — so the compiler cannot force them.
 // `__tests__/scoring-vocab.test.ts` does instead, by DERIVING the expected sets
 // from the engine's own declarations at test time.
+//
+// #S13 — `SportKey` just below gets the same runtime discipline for a
+// different reason. It IS closed (like `WicketKind`/`ExtraKind`), so its
+// `SPORT_KEY` Record already forces every member to carry a label at compile
+// time; what the compiler cannot force is that the union's MEMBERSHIP stays
+// equal to the engine's own `builtinModules` keys. That equality can't be
+// pushed to the type level either — `SportModule.key` is declared plain
+// `string` (`packages/engine/src/sport/module.ts`), so every shipped module
+// widens back to `string` the moment it's typed against that interface, and
+// `(typeof builtinModules)[number]["key"]` buys nothing (proved by probe, not
+// assumed — see the S13 task notes). So `SportKey` stays hand-written and is
+// pinned instead: `__tests__/scoring-vocab.test.ts` derives the real key set
+// from `builtinModules` and reds if `SPORT_KEY` ever carries more, fewer, or
+// different keys than the engine ships.
 import type { MessageKey } from "@/lib/messages";
 import type { EngineErrorCode, SquadProvenance, SquadRole } from "@seazn/engine/core";
 import { swatchName } from "@/lib/brand-palette";
@@ -22,6 +36,10 @@ export type WicketKind =
   | "bowled" | "caught" | "lbw" | "runout" | "stumped"
   | "hitwicket" | "retired" | "obstructed" | "timedout" | "hitballtwice";
 export type ExtraKind = "wide" | "noball" | "bye" | "legbye" | "penalty";
+/**
+ * Every sport key the engine ships — see the #S13 note above for why this is
+ * hand-written rather than derived, and pinned rather than left to drift.
+ */
 export type SportKey =
   | "badminton" | "boardgame" | "carrom" | "cricket" | "football" | "generic"
   | "hockey" | "icehockey" | "tabletennis" | "tennis" | "volleyball";
@@ -41,7 +59,9 @@ const EXTRA_KEY: Record<ExtraKind, MessageKey> = {
   wide: "extra.wide", noball: "extra.noball", bye: "extra.bye",
   legbye: "extra.legbye", penalty: "extra.penalty",
 };
-const SPORT_KEY: Record<SportKey, MessageKey> = {
+/** Exported so `__tests__/scoring-vocab.test.ts` can pin its keys to the
+ *  engine's `builtinModules` at test time — see the #S13 note above. */
+export const SPORT_KEY: Record<SportKey, MessageKey> = {
   badminton: "sport.badminton", boardgame: "sport.boardgame", carrom: "sport.carrom",
   cricket: "sport.cricket", football: "sport.football", generic: "sport.generic",
   hockey: "sport.hockey", icehockey: "sport.icehockey", tabletennis: "sport.tabletennis",

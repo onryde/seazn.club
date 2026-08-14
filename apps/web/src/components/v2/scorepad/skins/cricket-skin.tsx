@@ -100,8 +100,8 @@ function ballsPerOverOf(cfg: unknown): number {
   return typeof bpo === "number" && bpo > 0 ? bpo : 6;
 }
 
-// spec §2.4 notation, mirrored from the engine's own oversText and v1's
-// (cricket-pad.tsx) — decimalised overs, always with the decimal point.
+// spec §2.4 notation, mirrored from the engine's own oversText — decimalised
+// overs, always with the decimal point.
 function oversText(balls: number, bpo: number): string {
   return `${Math.floor(balls / bpo)}.${balls % bpo}`;
 }
@@ -267,8 +267,7 @@ export const WICKET_KINDS: readonly WicketKind[] = [
 export const EXTRA_KINDS: readonly ExtraKind[] = ["wide", "noball", "bye", "legbye", "penalty"];
 
 const BOWLER_CREDITED_KINDS = new Set<WicketKind>(["bowled", "caught", "lbw", "stumped", "hitwicket"]);
-/** Dismissals where naming a fielder is meaningful — mirrors v1's own
- *  conditional fielder picker exactly (BallForm, cricket-pad.tsx:484). */
+/** Dismissals where naming a fielder is meaningful. */
 export const FIELDER_ELIGIBLE_KINDS = new Set<WicketKind>(["caught", "runout", "stumped"]);
 /** Of those, the one kind where the batter dismissed genuinely varies
  *  (a run-out can take either end) — every other kind always dismisses the
@@ -346,11 +345,33 @@ function displayPerson(id: string, personNames: Readonly<Record<string, string>>
   return personNames?.[id] ?? id;
 }
 
-function ScoreHeader({ header, msg }: { header: SkinHeader; msg: MsgFn }) {
+/** `field.id` is skin-local (`buildHeader` above is the only producer) — the
+ *  chase-value field is EITHER "dlsPar" or "target", never both at once
+ *  (mutually exclusive captions for the same number, see the header comment
+ *  above `chaseValue`). Both carry the SAME testid: this is the DLS-revised-
+ *  target surface e2e (`scoring.spec.ts`'s own `ck-revised-target` check,
+ *  re-anchored here at the S13/#422 cutover from v1's `cricket-pad.tsx`,
+ *  deleted this session) needs to find, regardless of which caption is
+ *  showing. The v2 scorepad rendered NO data-testid anywhere before this —
+ *  this is the first one added to this surface, not a move of an existing
+ *  one. */
+const CHASE_VALUE_FIELD_IDS = new Set(["dlsPar", "target"]);
+
+/** Exported (same reason as `ThisOverGroup` below) so
+ *  `__tests__/cricket-skin-revised-target.test.ts` can drive it directly
+ *  through the node-only `_hook-harness` — this file's only OTHER piece with
+ *  its own JSX-instantiated identity worth testing in isolation, even though
+ *  it owns no hook state itself (a plain `layout()` comparison cannot see
+ *  the rendered testid/caption text this component is responsible for). */
+export function ScoreHeader({ header, msg }: { header: SkinHeader; msg: MsgFn }) {
   return (
     <div className="grid grid-cols-3 gap-x-2 gap-y-1 px-3 pt-2.5 pb-3 text-center sm:grid-cols-5">
       {header.fields.map((field) => (
-        <div key={field.id} className="flex flex-col items-center">
+        <div
+          key={field.id}
+          className="flex flex-col items-center"
+          {...(CHASE_VALUE_FIELD_IDS.has(field.id) ? { "data-testid": "ck-revised-target" } : {})}
+        >
           <span
             className={
               field.emphasis
@@ -360,8 +381,13 @@ function ScoreHeader({ header, msg }: { header: SkinHeader; msg: MsgFn }) {
           >
             {field.value}
           </span>
+          {/* S13/#422 W11 cutover — text-slate-500 on bg-slate-900 measures
+           *  ~3.74:1, below AA's 4.5:1 floor (same byte-identical pattern
+           *  period-skin.tsx's header caption had, dac2b6bb). text-slate-400
+           *  clears it at ~6.79:1 — the same fix, reused rather than
+           *  reinvented. */}
           {field.captionKey && (
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">
               {msg(field.captionKey as MessageKey)}
             </span>
           )}
@@ -420,7 +446,7 @@ function renderSkinAttribution(
             <label key={item.path} className="block">
               <span className="label">{caption}</span>
               <select
-                className="select"
+                className="select min-h-11"
                 value={typeof current === "string" ? current : ""}
                 onChange={(e) => setValue(item.path, e.target.value === "" ? undefined : e.target.value)}
               >
@@ -838,7 +864,10 @@ function AdminGroup({
       <details className="card group p-3">
         <summary className="btn btn-ghost w-full cursor-pointer list-none justify-between">
           <span>{caption}</span>
-          <span aria-hidden="true" className="text-xs text-purple-400 group-open:rotate-180">
+          {/* S13/#422 W11 cutover — text-purple-400 on white ~2.79:1, below
+           *  AA's 4.5:1; text-purple-700 clears it at ~7.07:1 and matches
+           *  the label beside it (.btn-ghost's own text-purple-700). */}
+          <span aria-hidden="true" className="text-xs text-purple-700 group-open:rotate-180">
             ▾
           </span>
         </summary>

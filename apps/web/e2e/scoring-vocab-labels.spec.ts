@@ -118,20 +118,62 @@ test("cricket: the tenth dismissal is offered as words, not snake_case", async (
   });
 
   await page.goto(`/o/${org.slug}/c/${comp.data!.slug}/d/${div.data!.slug}/f/${fx.fixture_no}`);
-  await expect(page.getByTestId("score-pad")).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("button", { name: /Ball-by-ball/ }).click();
+  const pad = page.getByTestId("score-pad");
+  await expect(pad).toBeVisible({ timeout: 30_000 });
+
+  // S13/#422 W11 cutover — v1's per-ball "Wicket" <select> (aria-labelled
+  // "Wicket") and its "Ball-by-ball"/"Over-by-over" mode switch are both
+  // gone: the v2 cricket skin (cricket-skin.tsx's ThisOverGroup) scores
+  // ball-by-ball unconditionally, with no mode to switch into, and offers
+  // the ten WICKET_KINDS as a button LIST inside a collapsible "Wicket"
+  // drawer rather than a <select>.
+  //
+  // The striker/non-striker pickers are NOT set explicitly here (measured,
+  // not assumed): the server enforces that a ball's striker/non-striker
+  // must match the ledger's own idea of who is at the crease
+  // (INVALID_EVENT "striker/non-striker do not match the ledger") — after
+  // the seeded dismissal above, that is the fold's OWN resolved pair
+  // (Number three promoted in for the dismissed Striker, Non-striker
+  // unchanged), which is exactly what these pickers already default to.
+  // Forcing an arbitrary non-dismissed pair (e.g. nonStriker/incoming) is a
+  // VALID pool member each, but not the ledger's actual pair, and 422s.
+  const over = pad.locator('[data-role="cricket-this-over"]');
+  const selects = over.locator("select");
+  await expect(selects).toHaveCount(3);
+  await expect(selects.nth(0)).not.toHaveValue("", { timeout: 20_000 });
+  await expect(selects.nth(1)).not.toHaveValue("", { timeout: 20_000 });
+  await expect(selects.nth(2)).not.toHaveValue("", { timeout: 20_000 });
+  const dismissTarget = await selects.nth(0).inputValue();
+
+  await over.getByRole("button", { name: "Wicket", exact: true }).click();
 
   // The dismissal picker is the one place `wicketLabel` renders. Before
-  // e55e10b7 this select offered nine of the engine's ten CricketWicket.kind
-  // members and `hitballtwice` was unreachable from any UI.
-  const wicket = page.getByLabel("Wicket", { exact: true });
-  await expect(wicket).toBeVisible({ timeout: 10_000 });
-  await expect(wicket).toContainText("Hit the ball twice");
-  // Selectable, not just present — proves the option carries the engine's value.
-  await wicket.selectOption("hitballtwice");
-  await expect(wicket).toHaveValue("hitballtwice");
+  // e55e10b7 this button list offered nine of the engine's ten
+  // CricketWicket.kind members and `hitballtwice` was unreachable from any UI.
+  const hitTwice = over.getByRole("button", { name: "Hit the ball twice", exact: true });
+  await expect(hitTwice).toBeVisible({ timeout: 10_000 });
   // The raw enum member never reaches the scorer.
-  await expect(wicket).not.toContainText("hitballtwice");
+  await expect(over).not.toContainText("hitballtwice");
+
+  // Selectable, not just present — tapping it fires a real second
+  // `cricket.ball` dismissal, and the LEDGER (never merely the screen) is
+  // what must carry the engine's actual "hitballtwice" wire value. The
+  // pre-seeded dismissal above is ALSO a "hitballtwice" ball, so polling on
+  // kind alone would trivially match it before this tap even lands — poll
+  // on COUNT (only true once the new one actually arrives) instead, then
+  // read the newly-added second entry specifically.
+  await hitTwice.click();
+  const cricketBalls = async () => {
+    const res = await apiJson<{ type: string; payload: { wicket?: { kind?: string; out?: string } } }[]>(
+      request,
+      `/api/v1/fixtures/${fx.id}/events?since_seq=0`,
+    );
+    return (res.data ?? []).filter((e) => e.type === "cricket.ball");
+  };
+  await expect.poll(async () => (await cricketBalls()).length, { timeout: 20_000 }).toBe(2);
+  const balls = await cricketBalls();
+  expect(balls[1]?.payload.wicket?.kind).toBe("hitballtwice");
+  expect(balls[1]?.payload.wicket?.out).toBe(dismissTarget);
 });
 
 test("tennis: a sanction's level renders as words in the activity feed", async ({

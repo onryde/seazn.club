@@ -899,6 +899,13 @@ export async function createStageAndGenerate(
 export interface RosterSlotSpec {
   fullName: string;
   positionKey?: string;
+  /** S13/#422 — omit for the (default) starting XI; "bench" seeds a real
+   *  bench member so a `football.sub`/`core.lineup.substitution` flow has
+   *  someone to bring ON. Matches the API's own `slot` enum
+   *  (`server/api-v1/schemas.ts`'s `z.enum(["starting","bench"])`) — every
+   *  existing caller omits this and keeps seeding an all-starting XI,
+   *  byte-identical to before this field existed. */
+  slot?: "starting" | "bench";
 }
 
 export interface RosteredFixture {
@@ -1024,7 +1031,7 @@ export async function seedRosteredFixture(
     const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/lineups/${entrantId}`, "PUT", {
       slots: roster.map((s, i) => ({
         person_id: personIds[s.fullName],
-        slot: "starting",
+        slot: s.slot ?? "starting",
         order_no: i + 1,
         roles: [],
         ...(s.positionKey ? { position_key: s.positionKey } : {}),

@@ -12,7 +12,7 @@ On a fixture, choose **Device link**. You get a link (and QR) to hand to whoever
 
 ## What the holder can do
 
-Score that one match. Nothing else — they can't finalize it, can't see other fixtures, can't touch settings. If they enter something wrong, they can void their own last entry before the match is finalized.
+Score that one match, with the same pad a signed-in scorer gets — [choosing a detail level](/help/scoring/fidelity), [crediting a player](/help/scoring/attribution), the lot. What they can't do: finalize the match, see other fixtures, or touch settings. If they enter something wrong, they can undo any of their own entries from the activity feed — never another device's or another scorer's — right up until the match is finalized. See [fixing a mistake](/help/scoring/corrections) for how undo works.
 
 ## Lifetime and revocation
 
@@ -23,3 +23,5 @@ Score that one match. Nothing else — they can't finalize it, can't see other f
 ## Common questions
 
 **Scorer role vs device link?** Scorers are teammates with accounts and standing assignments across many matches. Device links are day-of, one match, zero setup — made for the parent volunteering at Court 3.
+
+**What if the court has no signal?** Same as any other pad — entries queue on the device and send once it's back online. See [scoring without signal](/help/scoring/offline-scoring).

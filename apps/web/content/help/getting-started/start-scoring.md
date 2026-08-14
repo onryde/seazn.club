@@ -8,7 +8,7 @@ When the draw is ready, press **Start**. Starting locks entrants and format — 
 
 ## Scoring a match
 
-Open any fixture and use its score pad — each sport gets the right one (sets for badminton, [real tennis scoring](/help/scoring/tennis) with tie-breaks, overs for cricket, [periods and penalties for the hockeys](/help/scoring/hockey), plain points for generic scoring). Every entry updates standings, progression and public dashboards immediately.
+Set each side's [lineup](/help/scoring/lineups) before you start, then open any fixture and use its score pad — each sport gets the right one (sets for badminton, [real tennis scoring](/help/scoring/tennis) with tie-breaks, overs for cricket, [periods and penalties for the hockeys](/help/scoring/hockey), plain points for generic scoring). Every entry updates standings, progression and public dashboards immediately.
 
 ## Who can score
 
@@ -18,6 +18,6 @@ Open any fixture and use its score pad — each sport gets the right one (sets f
 
 ## Mistakes happen
 
-Wrong score? Undo it from the fixture — results are an event ledger, so corrections are tracked, not overwritten. When a match is done, **finalize** locks it.
+Wrong score? [Undo it from the activity feed](/help/scoring/corrections) — results are an event ledger, so corrections are tracked, not overwritten. When a match is done, **finalize** locks it.
 
 Next: [Share your dashboard](/help/getting-started/share-your-dashboard).

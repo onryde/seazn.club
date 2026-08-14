@@ -100,10 +100,11 @@ const EMPTY_SPEC: PadSpec = { panels: [], fidelity: {}, fidelityEntitlements: {}
  * (and the device-link fixture's own `config` column) IS already the
  * resolved, schema-parsed variant cfg (S12/#421 decision log — every
  * `.default()` is materialised by `usecases/divisions.ts` at write time), so
- * `configSchema.parse` ordinarily succeeds. But a caller reaches this
- * function only AFTER the `scorepad-v2` flag already read true, and a
- * resolution failure at that point must fall back to the always-safe v1
- * path — never 500 a page that was rendering fine before the flag existed.
+ * `configSchema.parse` ordinarily succeeds. But this is called unconditionally
+ * now (S13/#422 removed the feature flag that used to gate it, and with it
+ * the v1 pad a resolution failure used to fall back to), so a failure here
+ * must still not 500 the page — the caller (FixtureConsole / DeviceScorePad)
+ * simply renders no pad section when this returns `null`.
  */
 export async function resolveScorePadBootstrap(params: {
   sportModule: AnySportModule;

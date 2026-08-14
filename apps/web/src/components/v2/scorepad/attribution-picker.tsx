@@ -184,7 +184,11 @@ function renderAttributionItem(
     <div key={item.path} data-attribution-path={item.path} role="group" aria-label={caption} className="space-y-1">
       <span className="label !mb-0">{caption}</span>
       {options.length === 0 ? (
-        <p className="text-xs text-slate-400">{msg("scorepad.attribution.noRoster")}</p>
+        // S13/#422 W11 cutover — text-slate-400 on this white .card measures
+        // ~2.63:1, below AA's 4.5:1 floor; text-slate-600 clears it at
+        // 7.56:1 — the exact fix period-skin.tsx's own noRoster hint already
+        // got (dac2b6bb), reused here since it is the same pair.
+        <p className="text-xs text-slate-600">{msg("scorepad.attribution.noRoster")}</p>
       ) : (
         <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
           {options.map((opt) => {

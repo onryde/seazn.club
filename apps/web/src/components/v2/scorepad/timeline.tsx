@@ -184,7 +184,20 @@ function renderRow(
       data-voided={voided}
       className={`flex flex-col gap-1 px-4 py-2 text-xs sm:flex-row sm:items-center sm:gap-3 ${voided ? "opacity-50" : ""}`}
     >
-      <span className="w-8 shrink-0 font-mono text-slate-300">#{event.seq}</span>
+      {/* S13/#422 W11 cutover — every muted-caption color below (the seq#,
+       *  the voided marker, the attribution/recorder/timestamp captions)
+       *  measured below WCAG AA's 4.5:1 floor on this white .card, real
+       *  OKLab->linear-sRGB->relative-luminance computation:
+       *    text-slate-300 (seq#)              ~1.48:1
+       *    text-amber-600 (voided marker)     ~3.19:1
+       *    text-slate-400 (attrLine/recorder/timestamp) ~2.63:1
+       *  Raised to text-slate-600 (~7.56:1, the same fix period-skin.tsx's
+       *  own noRoster hint already got, dac2b6bb) and text-amber-700
+       *  (~5.05:1, this surface's own established amber-700 message step —
+       *  action-form.tsx's validity text, period-skin.tsx's escalation
+       *  hint). Foreground only; the dark tone badges/backgrounds are
+       *  untouched. */}
+      <span className="w-8 shrink-0 font-mono text-slate-600">#{event.seq}</span>
       <span
         className={`badge w-24 shrink-0 break-words text-center leading-tight normal-case sm:w-32 ${EVENT_TONE_STYLE[desc.tone]}`}
       >
@@ -192,11 +205,11 @@ function renderRow(
       </span>
       <span className="min-w-0 flex-1 text-slate-700">
         <span className={voided ? "line-through" : ""}>{desc.text}</span>
-        {voided && <span className="ml-1 text-amber-600">({msg("scorepad.timeline.voided")})</span>}
-        {attrLine && <span className="block text-slate-400">{attrLine}</span>}
-        {recorder && <span className="text-slate-400"> ({recorder})</span>}
+        {voided && <span className="ml-1 text-amber-700">({msg("scorepad.timeline.voided")})</span>}
+        {attrLine && <span className="block text-slate-600">{attrLine}</span>}
+        {recorder && <span className="text-slate-600"> ({recorder})</span>}
       </span>
-      <span className="shrink-0 text-slate-400">
+      <span className="shrink-0 text-slate-600">
         <ClientTime value={event.recorded_at} mode="time" />
       </span>
       {canVoid && (
@@ -232,11 +245,14 @@ export function Timeline(props: TimelineProps): ReactNode {
     <section className="card overflow-hidden" data-role="timeline">
       <header className="border-b border-slate-100 px-4 py-3">
         <h2 className="text-sm font-semibold text-slate-700">
-          {msg("scorepad.timeline.heading")} <span className="font-normal text-slate-400">({events.length})</span>
+          {/* S13/#422 W11 cutover — text-slate-400 on white ~2.63:1, below
+           *  AA's 4.5:1; text-slate-600 clears it at ~7.56:1 (same fix as
+           *  the row captions above). */}
+          {msg("scorepad.timeline.heading")} <span className="font-normal text-slate-600">({events.length})</span>
         </h2>
       </header>
       {events.length === 0 ? (
-        <p className="px-4 py-4 text-sm text-slate-400">{msg("scorepad.timeline.empty")}</p>
+        <p className="px-4 py-4 text-sm text-slate-600">{msg("scorepad.timeline.empty")}</p>
       ) : (
         <ul className="max-h-96 divide-y divide-slate-50 overflow-y-auto">
           {[...events].reverse().map((event) => {

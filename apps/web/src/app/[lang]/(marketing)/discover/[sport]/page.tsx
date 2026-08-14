@@ -13,11 +13,10 @@ import { hasLocale } from "@/lib/i18n-constants";
 import { sportLabel } from "@/lib/scoring-vocab";
 import { msgFor } from "@/lib/messages-i18n";
 
-// Sport keys with bespoke SEO copy in the marketing catalog; others fall back
-// to the generic block.
-const SPORTS_WITH_COPY = new Set([
-  "cricket", "football", "volleyball", "badminton", "tabletennis", "boardgame", "carrom",
-]);
+// Which sports get bespoke SEO copy lives in a sibling module: Next allows only
+// a fixed export set from a page, and the test that pins the list has to import
+// it from somewhere. See `sport-copy.ts`.
+import { SPORTS_WITH_COPY } from "./sport-copy";
 
 /** intro/detail for a sport — bespoke where we have it, generic otherwise. */
 function sportCopy(d: Dict, sport: string, nameLower: string): { intro: string; detail: string } {

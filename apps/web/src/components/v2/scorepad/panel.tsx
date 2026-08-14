@@ -112,7 +112,14 @@ export function Panel(props: PanelProps) {
       <details className="card group p-3">
         <summary className="btn btn-ghost w-full cursor-pointer list-none justify-between">
           <span>{label}</span>
-          <span aria-hidden className="text-xs text-purple-400 group-open:rotate-180">
+          {/* S13/#422 W11 cutover — text-purple-400 on this white .card
+           *  measures ~2.79:1 (aria-hidden does not exempt it from axe's
+           *  color-contrast rule: that only skips elements hidden from
+           *  SCREEN READERS, a visual-contrast check still evaluates any
+           *  CSS-visible node). text-purple-700 clears 4.5:1 at 7.07:1 and
+           *  matches the label right beside it (.btn-ghost's own
+           *  text-purple-700), so this is one consistent purple, not two. */}
+          <span aria-hidden className="text-xs text-purple-700 group-open:rotate-180">
             ▾
           </span>
         </summary>
