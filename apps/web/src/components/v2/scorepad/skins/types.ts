@@ -239,8 +239,10 @@ export function actionsByType(view: PadView, type: string): readonly PadActionVi
  * pinned by cricket-skin.test.ts's own sweep. football-skin.tsx and
  * period-skin.tsx use it only for types their sports never duplicate (a).
  *
- * Kept, rather than removed outright, because those three files' six call
- * sites are each individually safe today, and a mechanical rewrite onto
+ * Kept, rather than removed outright, because those three files' SEVEN call
+ * sites (period-skin.tsx:737; cricket-skin.tsx:502, :516, :856;
+ * football-skin.tsx:398, :430, :508) are each individually safe today, and a
+ * mechanical rewrite onto
  * `actionsByType` would touch working code with no behaviour change and no
  * failing test to justify the diff. `actionsByType` is the default choice for
  * any NEW call site; reach for this one only after checking the module list
