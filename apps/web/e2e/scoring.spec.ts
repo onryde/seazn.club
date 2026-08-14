@@ -444,12 +444,16 @@ test("cricket scores over-by-over: add an over grows the total, then close innin
 // balls, not 60, and reading it as 60 inflates both resource percentages and
 // publishes a target of 86 where the method says 84.
 //
-// Asserted through the API, not the DOM, on purpose: no surface paints
-// `revisedTarget` or `targetSource` today (#467), and a DOM probe for a value
-// that is never rendered passes in both states. `cricket.revise` also accepts a
-// manual `target`, which stamps targetSource "manual" and skips the maths
-// entirely — this sends `oversPerSide` alone and pins targetSource "dls", so a
-// revise that quietly fell through to the manual branch cannot pass it.
+// The arithmetic is pinned through the API, not the DOM: `cricket.revise`
+// also accepts a manual `target`, which stamps targetSource "manual" and
+// skips the maths entirely — this sends `oversPerSide` alone and pins
+// targetSource "dls", so a revise that quietly fell through to the manual
+// branch cannot pass either check below. (#467 was fixed by adding
+// `ck-revised-target` to the v2 cricket skin — see the DOM assertion
+// further down this test — so this comment no longer claims the value is
+// unrendered; it explains why the API checks stay even though a DOM one now
+// exists too: they are the only ones that can fire BEFORE the fixture has
+// a chase to paint, which is every moment before the second innings below.)
 test("cricket DLS scales a five-ball-over format onto the published table", async ({
   page,
   request,
@@ -522,7 +526,23 @@ test("cricket DLS scales a five-ball-over format onto the published table", asyn
   expect(fold.targetSource).toBe("dls");
   expect(fold.revisedTarget).toBe(84);
 
-  // And the shortened match is still scoreable — the pad opens on the chase.
+  // cricket-skin.tsx's `chaseValue` (the source of `ck-revised-target`,
+  // #467) returns null unless `state.innings.length >= 2` — correct product
+  // behaviour, since there is no target to chase before a chase exists.
+  // The 100-ball quota that closed innings #1 above is ALSO its
+  // `ballsLimit` (`legalBalls: 100` at seq 2 already equalled it), so it has
+  // already auto-closed (`autoClose`, cricket.ts) — a `cricket.innings.close`
+  // here would 422 with "no innings in progress". What is missing is
+  // innings #2 itself: `createInnings` opens it lazily on the first scoring
+  // event the fold sees with none open, which a genuine 0/0 chase-opening
+  // summary supplies cheaply (no roster/lineup needed — `partial: true`
+  // coarse fidelity, same shape the setup above already used twice).
+  await send(4, "cricket.innings.summary", { runs: 0, wickets: 0, legalBalls: 0, partial: true });
+
+  // Now genuinely chasing: the shortened match is scoreable, and the pad
+  // opens on the chase for real (previously the fixture never reached a
+  // second innings, so the checks below that read "0" were only ever
+  // matching the closed first innings' "150" as a substring).
   await page.goto(await fixturePath(page.request, fixtureId));
   // S13/#422 W11 cutover — "— total" was v1 CricketPad's own OverByOverForm
   // sentence ("<side> — total <runs>/<wickets>"), which the v2 cricket skin
@@ -540,11 +560,14 @@ test("cricket DLS scales a five-ball-over format onto the published table", asyn
   await expect(scoreField).toContainText("0");
   await expect(wicketsField).toContainText("0");
 
-  // #467 — the 84 asserted off the state API above must also be ON SCREEN.
-  // Until this, the revised target was verifiable only through /state, which is
-  // how #451 (a DLS bug that awarded the match to the wrong side) survived: an
-  // unrendered derivation is an unverified one. The pad must also say the
-  // figure is DLS-derived rather than one the organiser typed.
+  // #467 — the 84 asserted off the state API above must also be ON SCREEN,
+  // inside the chase this test just opened above (chaseValue, cricket-skin.tsx,
+  // renders null before a second innings exists — this DOM assertion could not
+  // fire a moment earlier). Before #467, the revised target was verifiable only
+  // through /state, which is how #451 (a DLS bug that awarded the match to the
+  // wrong side) survived: an unrendered derivation is an unverified one. The
+  // pad must also say the figure is DLS-derived rather than one the organiser
+  // typed.
   const target = page.getByTestId("ck-revised-target");
   await expect(target).toBeVisible({ timeout: 20_000 });
   await expect(target).toContainText("84");
