@@ -204,10 +204,20 @@ describe.skipIf(!HAS_DB)(
         expect(err).toBeInstanceOf(EngineError);
         const e = err as EngineError;
         expect(e.code).toBe("STAGE_NOT_READY");
-        const data = e.data as { reason?: string; groups?: number; qualifiers?: number; stranded?: number };
+        const data = e.data as {
+          reason?: string;
+          groups?: number;
+          qualifiers?: number;
+          required?: number;
+          stranded?: number;
+        };
         expect(data.reason).toBe("seeded_pool_too_few_qualifiers");
         expect(data.groups).toBe(4);
         expect(data.qualifiers).toBe(6);
+        // Minor 2 (P7 fix round, whole-branch review): `required` (the
+        // Math.max(2, groups * 2) computation, stages.ts:1457) was computed
+        // but never asserted by the only test that runs the real guard.
+        expect(data.required).toBe(8);
         expect(data.stranded).toBe(2);
       }
 
