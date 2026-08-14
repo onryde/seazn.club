@@ -32,6 +32,7 @@ import { ActionForm, type ActionFormProps } from "../action-form";
 import { AttributionPicker } from "../attribution-picker";
 import type { PadActionView, PadPanelView, PadView } from "../view-model";
 import {
+  actionsByType,
   type SkinDef,
   type SkinDispatch,
   type SkinGroup,
@@ -321,36 +322,27 @@ function renderPrimaryAction(
   );
 }
 
-/** All PadActionViews sharing a type, across every panel, in view order.
- *  Every sibling skin (racquet-skin.tsx's `GroupBody`, period-skin.tsx's
- *  `renderActionForms`, football-skin.tsx's `renderGenericAction`) resolves
- *  a group's own bare type strings via the shared `actionByType` (types.ts),
- *  which returns only the FIRST match -- exactly right when a group's type
- *  list has one action per type. Tennis's own `points`/`setScore` groups do
- *  not (`tennisLayout`'s own comment above): each names ONE type that
- *  covers TWO distinct PadActions, so resolving through `actionByType`
- *  silently dropped the second one -- found live via v6-sports.spec.ts's
- *  own tennis tie-break test, which had to drive `tb` through the API
- *  because no tile on the actual page could reach it. This local,
- *  type-PLURAL read is what `renderGroupActions` needs instead.
- *
- *  Still a search, never an array index into `view.panels` -- the S11
- *  review gap 2 fix this pairing is about: before that fix, `TennisSkin`
- *  zipped `layout.groups[i]` with `view.panels[i]` by position and drew
- *  from `panel.actions` (the VIEW), correct only because `tennisLayout`
- *  happens to build one group per surviving panel, unfiltered, in the same
- *  pass -- an invariant nothing on the Component side enforced. A type a
- *  group names but that (defensively) cannot be found on `view` still
- *  resolves to an empty array rather than crashing; the gate itself
- *  guarantees this never fires against a real spec (skin-coverage.test.ts). */
-function actionsByType(view: PadView, type: string): PadActionView[] {
-  const found: PadActionView[] = [];
-  for (const panel of view.panels) {
-    for (const action of panel.actions) if (action.type === type) found.push(action);
-  }
-  return found;
-}
-
+// `renderGroupActions` resolves a group's bare type strings back to real
+// PadActionViews via the SHARED `actionsByType` (types.ts) -- moved there
+// S13/#422 W11 cutover, once the whole-cfg-space sweep found tennis was not
+// the only module with this shape (types.ts's own doc comment has the full
+// list). It is a type-PLURAL read, not the shared `actionByType`'s
+// first-match-only one: tennis's own `points`/`setScore` groups each name
+// ONE type that covers TWO distinct PadActions (`tennisLayout`'s own comment
+// above), so a first-match resolution silently dropped the second one --
+// found live via v6-sports.spec.ts's own tennis tie-break test, which had to
+// drive `tb` through the API because no tile on the actual page could reach
+// it.
+//
+// Still a search, never an array index into `view.panels` -- the S11 review
+// gap 2 fix this pairing is about: before that fix, `TennisSkin` zipped
+// `layout.groups[i]` with `view.panels[i]` by position and drew from
+// `panel.actions` (the VIEW), correct only because `tennisLayout` happens to
+// build one group per surviving panel, unfiltered, in the same pass -- an
+// invariant nothing on the Component side enforced. A type a group names but
+// that (defensively) cannot be found on `view` still resolves to an empty
+// array rather than crashing; the gate itself guarantees this never fires
+// against a real spec (skin-coverage.test.ts).
 function renderGroupActions(group: SkinGroup, view: PadView, render: (action: PadActionView) => ReactNode): ReactNode[] {
   return group.actions.flatMap((type) => actionsByType(view, type)).map(render);
 }
