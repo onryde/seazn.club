@@ -2593,6 +2593,105 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   (`repair-decompose`, `roundrobin`, and `simulation`'s cricket case) failing
   only under full-suite parallelism and passing alone, which is how a
   four-failure run and a two-failure run of the same code both happened.
+- 2026-08-14 — S13/#422 — **the four items S12 re-deferred, closed with a
+  verdict each. Three DISCHARGED with real e2e (`apps/web/e2e/
+  scorepad-skins.spec.ts`, four new tests), one ACCEPTED with cause — and two
+  of S12's own recorded REASONS turn out wrong on inspection, corrected here
+  rather than silently carried forward.**
+  - **S3/#426 (mutable squads, `core.lineup.*` substitution) — DISCHARGED.**
+    Test: "football skin: a substitution, through the SAME reducer
+    core.lineup.substitution goes through". S12's reason ("no skin declares a
+    substitution action reachable") was already stale by this session:
+    football's `padSpec` DOES declare `football.sub` (a "Substitutions"
+    secondary panel) and the skin DOES render it — what was actually missing
+    was test-side, not product-side: `seedRosteredFixture` seeds every roster
+    member `slot:"starting"`, so there was never a bench member for the "on"
+    chip to offer. Fixed with a minimal additive `slot?: "starting"|"bench"`
+    on `RosterSlotSpec` (`apps/web/e2e/helpers.ts`) — every existing caller
+    omits it and is byte-unaffected. Confirmed (not assumed) that this
+    exercises the S3 mechanism itself: `football.ts`'s `applySub` calls
+    `reduceLineupEvent(liftSquads(state), { type:
+    "core.lineup.substitution", ... }, ...)` internally (`football.ts:1165`)
+    — `football.sub` is not a parallel vocabulary, it IS the reachable
+    surface for the shared lineup reducer S3 built.
+  - **S4/#428 (offence taxonomies) — DISCHARGED, both halves.** Tests:
+    "football skin: a penalty with an offence selected (PenaltyOffence)" and
+    "period skin (icehockey): a suspension with a reason selected
+    (PeriodSuspensionReason)". Football's `PenaltyOffence` lives on
+    `football.penalty` (the "Penalties" drawer, generic `ActionForm` path —
+    outcome/offence/at.period/at.elapsed all gate Confirm, since
+    `checkActionValidity` requires every declared FIELD regardless of the
+    payload schema's own optionality). Icehockey's `PeriodSuspensionReason`
+    lives on `{key}.suspension.start` (labelled "Card", always-visible
+    "discipline" group) — confirmed band 1, so unlike football's card/sub/
+    penalty (band 2, `scoring.match_timeline`) it needs no entitlement grant
+    at all. Both entitlements needed for this session's tests turn out
+    already granted anyway: `db/migration/deltas/V112__entitlements_v2.sql`
+    seeds `('pro','scoring.match_timeline',true,null)` and the
+    `scoring.rally_by_rally`/`scoring.ball_by_ball` twins alongside it, and
+    every e2e project's default storage state is the shared Pro org
+    (`playwright.config.ts`'s `AUTH_STATE = "e2e/.auth/pro.json"`) — so no
+    test in this session needed a bespoke entitlement grant.
+  - **S1/#429 — ACCEPTED, re-deferral stands, cause now precise rather than
+    generic.** Its three fold fixes (icehockey GWS +1, `metricOf` no-data-vs-
+    recorded-zero, the `resolved` set-piece counter) are real but each blocked
+    for a DIFFERENT, specific reason, not "expensive": (a) GWS +1 is only
+    observable after a full period match reaches a shoot-out — three period
+    advances, overtime, then a shoot-out kick sequence — and no existing e2e
+    helper reaches that state (`v6-sports.spec.ts`'s own standings test reaches
+    only "FT", never a shoot-out). (b) `metricOf`'s fix (`competition/
+    tiebreakers.ts:252`) is externally observable only when a tiebreaker
+    cascade compares a row with a metric genuinely RECORDED (e.g. a decided
+    0-0 draw's GD) against a row where it is ABSENT (an entrant who has not
+    yet played, or is missing from an h2h mini-table) — proving it needs
+    multiple fixtures engineered so two rows tie on every cascade level ABOVE
+    the metric being tested, which standings' own points-first ordering makes
+    fiddly to force deliberately. (c) the `resolved` set-piece counter
+    (`PeriodSetPiece.resolved`) has **zero product consumers** — verified by
+    `grep -rn "\.resolved\b" apps/web/src` returning no hit outside unrelated
+    AI-schedule-parsing code — so there is no page or API response anywhere
+    to assert against; its correctness is proven entirely by the engine's own
+    golden/mutation suites, which already cover it.
+  - **S5/#431 — PARTIALLY discharged, and the tennis half's reason is NOT
+    what S12 recorded.** Football's quarters half is DISCHARGED for real:
+    test "football skin: mini-soccer quarters — a QT period marker under the
+    non-default variant" drives `football.period {phase:"QT"}` under
+    `variantKey:"mini-soccer"` (`halves:4`). **Tennis's `gameAward` panel is
+    NOT entitlement-gated** — `nested/kernel.ts`'s own test
+    (`tennis-skin.test.ts:262`) shows it placed at a fresh, ordinary,
+    DEFAULT-variant match state; its only gate is `state.points.kind` (not
+    mid-tie-break), open from move zero. **A real defect found instead, and
+    this is why the panel could not be discharged**: `tennis.game.award`
+    declares `fields: []` and one REQUIRED attribution item (`winner:
+    EntrantId`, `nested/kernel.ts:345`). `ActionForm.handleTap`
+    (`apps/web/src/components/v2/scorepad/action-form.tsx:169-176`) decides
+    "auto-submit vs expand-for-input" by checking `action.fields.length`
+    alone — it never looks at `action.attribution` — so tapping "Award game"
+    fires `onSubmit({})` immediately, before any attribution picker ever
+    renders. The payload is missing the one required key and the event
+    cannot be recorded. This is not tennis-skin-specific: the universal
+    `Panel` component (`panel.tsx:93-99`) wires `ActionForm` the same way, so
+    the device-link entry point has the identical gap. Unit coverage never
+    caught it: `pad-renderer.test.tsx`'s own "zero-field action submits on a
+    single tap" test uses `cricket.newball`, whose `attribution` is ALSO
+    empty, so the one case that would expose the bug (zero fields, non-empty
+    attribution) is untested. **Not fixed here** — the do-not-touch list for
+    this session excludes `apps/web/src/components/**` without asking first,
+    and the correct fix point is the SHARED chassis
+    (`action-form.tsx`/`panel.tsx`), not a tennis-only workaround, so its
+    blast radius (every skin plus the universal renderer) is a call for the
+    owner, not a unilateral one-file patch. Flagged prominently rather than
+    routed around, per this session's own brief.
+  - **Verification**: `NODE_OPTIONS=--max-old-space-size=6144 rtk proxy npx
+    tsc --noEmit -p apps/web` → EXIT=0. `rtk proxy npx eslint e2e` → `✖ 3
+    problems (0 errors, 3 warnings)`, all three pre-existing and in files
+    this session did not touch (`journey-pro.spec.ts`,
+    `official-marks-reports.spec.ts`, `round-order.spec.ts`) — zero in
+    `helpers.ts`/`scorepad-skins.spec.ts`. **The four new tests are UNRUN**:
+    this session's brief forbids starting Playwright (a production build was
+    compiling for the main thread's own e2e gate at the time), so every
+    locator/selector above is verified by reading the component source and
+    dictionary values precisely, not by watching it pass.
 - _(append below)_
 
 ## Open questions for the owner

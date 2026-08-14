@@ -304,3 +304,180 @@ test("period skin (icehockey): a goal and a period advance", async ({ page, requ
   const goal = (await ledger(request, fx.fixtureId)).find((e) => e.type === "icehockey.goal")!;
   expect(goal.payload).toMatchObject({ by: fx.homeEntrantId, kind: "fg" });
 });
+
+// ---------------------------------------------------------------------------
+// S13/#422 W11 cutover — closing four items the programme carried as
+// deferred e2e debt (`_INDEX.md` decision log, S12 close-out entry "the
+// deferred-e2e debt, discharged per session with a verdict each"). Same
+// helpers, same real-fixture pattern as the five tests above.
+// ---------------------------------------------------------------------------
+
+test("football skin: a substitution, through the SAME reducer core.lineup.substitution goes through", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  // S3/#426 (mutable squads) — the deferred half. `football.sub` is NOT a
+  // parallel mechanism: its own fold (football.ts's `applySub`) calls
+  // `reduceLineupEvent(..., { type: "core.lineup.substitution", ... })`
+  // internally, so driving this action through the pad IS driving the S3
+  // shared lineup event end to end. `seedRosteredFixture` seeds every roster
+  // member `slot: "starting"`, so the "on" chip (bench pool) needs a real
+  // bench member — the new optional `slot` override on `RosterSlotSpec`
+  // (this file, added this session; every other caller is unaffected).
+  const fx = await seedRosteredFixture(request, {
+    label: `Skins FB Sub ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [
+      { fullName: `Skins FB OnPitch ${TAG}`, positionKey: "FW" },
+      { fullName: `Skins FB Bench ${TAG}`, slot: "bench" },
+    ],
+    away: [{ fullName: `Skins FB Sub Away ${TAG}` }],
+  });
+  await openLiveConsole(page, fx);
+
+  const off = fx.personIds[`Skins FB OnPitch ${TAG}`]!;
+  const on = fx.personIds[`Skins FB Bench ${TAG}`]!;
+
+  await pad(page).getByRole("button", { name: "Home · Substitution", exact: true }).click();
+  // "off" reads the on-pitch roster, "on" reads the bench — disjoint pools,
+  // so (unlike goal's scorer/assist, which both draw from the whole squad
+  // and each name appears twice) each seeded name appears exactly once.
+  await pad(page).getByRole("button", { name: `Skins FB OnPitch ${TAG}`, exact: true }).click();
+  // "on" is the LAST slot — tapping it auto-fires, the same rule the goal
+  // scorer+assist flow (scorepad-v2.spec.ts) already exercises.
+  await pad(page).getByRole("button", { name: `Skins FB Bench ${TAG}`, exact: true }).click();
+
+  await expect
+    .poll(
+      async () => (await ledger(request, fx.fixtureId)).filter((e) => e.type === "football.sub").length,
+      { timeout: 20_000 },
+    )
+    .toBe(1);
+
+  const sub = (await ledger(request, fx.fixtureId)).find((e) => e.type === "football.sub")!;
+  // The quick tile sends attribution ONLY, never the padSpec's `...stamp`
+  // fields — same shape as the goal test's `toEqual({ by: fx.homeEntrantId })`.
+  expect(sub.payload).toEqual({ by: fx.homeEntrantId, off, on });
+  await expectNoHorizontalScroll(page);
+});
+
+test("football skin: a penalty with an offence selected (PenaltyOffence)", async ({ page, request }) => {
+  test.setTimeout(120_000);
+  // S4/#428 (offence taxonomies) — the football half. `football.penalty`
+  // lives in the "Penalties" drawer and renders through the generic
+  // ActionForm path (unlike goal/card/sub's hand-tuned quick tiles): every
+  // declared field — outcome, offence, and the padSpec's own `...stamp`
+  // (at.period/at.elapsed) — gates the Confirm button.
+  const fx = await seedRosteredFixture(request, {
+    label: `Skins FB Penalty ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [{ fullName: `Skins FB Taker ${TAG}`, positionKey: "FW" }],
+    away: [{ fullName: `Skins FB Penalty Away ${TAG}`, positionKey: "GK" }],
+  });
+  await openLiveConsole(page, fx);
+
+  await pad(page).getByText("Penalties", { exact: true }).click();
+  await pad(page).getByRole("button", { name: "Penalty", exact: true }).click();
+
+  // NOT `{ exact: true }` on the three <select>s — a select's computed
+  // accessible name concatenates the caption with its current option text
+  // (see the icehockey goal test above); the plain number input stays exact.
+  await pad(page).getByLabel("Outcome").selectOption("saved");
+  await pad(page).getByLabel("Offence").selectOption("handball");
+  await pad(page).getByLabel("At period").selectOption("H1");
+  await pad(page).getByLabel("At elapsed", { exact: true }).fill("300");
+  await pad(page).getByRole("button", { name: "Home", exact: true }).click();
+
+  await pad(page).locator('[data-role="confirm"]').click();
+  await expect
+    .poll(
+      async () => (await ledger(request, fx.fixtureId)).filter((e) => e.type === "football.penalty").length,
+      { timeout: 20_000 },
+    )
+    .toBe(1);
+
+  const penalty = (await ledger(request, fx.fixtureId)).find((e) => e.type === "football.penalty")!;
+  expect(penalty.payload).toMatchObject({ by: fx.homeEntrantId, outcome: "saved", offence: "handball" });
+  await expectNoHorizontalScroll(page);
+});
+
+test("period skin (icehockey): a suspension with a reason selected (PeriodSuspensionReason)", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  // S4/#428 (offence taxonomies) — the period half. `suspension.start` is
+  // labelled "Card" and sits in the always-visible "discipline" secondary
+  // group, fidelity band 1 — free, no entitlement grant needed (verified:
+  // `period/kernel.ts`'s own `fidelityEntitlements` names band 2, never 1).
+  const fx = await seedRosteredFixture(request, {
+    label: `Skins IH Suspension ${TAG}`,
+    sportKey: "icehockey",
+    variantKey: "iihf",
+    home: [{ fullName: `Skins IH Offender ${TAG}` }],
+    away: [{ fullName: `Skins IH Susp Away ${TAG}` }],
+  });
+  await openLiveConsole(page, fx);
+
+  const offender = fx.personIds[`Skins IH Offender ${TAG}`]!;
+
+  await pad(page).getByRole("button", { name: "Card", exact: true }).click();
+  await pad(page).getByLabel("Class").selectOption("minor");
+  await pad(page).getByLabel("Reason").selectOption("tripping");
+  await pad(page).getByLabel("Minutes", { exact: true }).fill("2");
+  await pad(page).locator(`[data-value="${fx.homeEntrantId}"]`).click();
+  await pad(page).locator(`[data-value="${offender}"]`).click();
+  await pad(page).locator('[data-role="confirm"]').click();
+
+  await expect
+    .poll(
+      async () =>
+        (await ledger(request, fx.fixtureId)).filter((e) => e.type === "icehockey.suspension.start").length,
+      { timeout: 20_000 },
+    )
+    .toBe(1);
+
+  const susp = (await ledger(request, fx.fixtureId)).find((e) => e.type === "icehockey.suspension.start")!;
+  expect(susp.payload).toMatchObject({
+    by: fx.homeEntrantId,
+    class: "minor",
+    reason: "tripping",
+    person: offender,
+    minutes: 2,
+  });
+  await expectNoHorizontalScroll(page);
+});
+
+test("football skin: mini-soccer quarters — a QT period marker under the non-default variant", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  // S5/#431 — football's quarters half. `mini-soccer` (halves: 4) is the
+  // non-default variant the deferred row named; `periodMarkers(cfg)` only
+  // offers "QT"/"3QT" when `cfg.halves === 4`, so driving one proves the
+  // variant is live on the pad, not merely declared in the engine.
+  const fx = await seedRosteredFixture(request, {
+    label: `Skins FB Quarters ${TAG}`,
+    sportKey: "football",
+    variantKey: "mini-soccer",
+    home: [{ fullName: `Skins FB Qtr Home ${TAG}` }],
+    away: [{ fullName: `Skins FB Qtr Away ${TAG}` }],
+  });
+  await openLiveConsole(page, fx);
+
+  await pad(page).getByRole("button", { name: "Quarter-time", exact: true }).click();
+  await expect
+    .poll(
+      async () => (await ledger(request, fx.fixtureId)).filter((e) => e.type === "football.period").length,
+      { timeout: 20_000 },
+    )
+    .toBe(1);
+
+  const marker = (await ledger(request, fx.fixtureId)).find((e) => e.type === "football.period")!;
+  expect(marker.payload).toEqual({ phase: "QT" });
+  await expectNoHorizontalScroll(page);
+});
