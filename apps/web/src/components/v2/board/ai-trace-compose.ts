@@ -14,6 +14,7 @@
 import type { MessageKey } from "@/lib/messages";
 import type { AiPlanResponse } from "@/server/api-v1/schemas";
 import type { TraceEvent } from "./ai-trace";
+import { formatConflictDetail } from "./conflict-detail-format";
 
 /** `useMsg()`'s signature, named so a caller outside a DictProvider can supply
  *  its own translator without the module depending on React. */
@@ -55,7 +56,16 @@ export function buildScheduleTrace(
     const shown = conflicts.slice(0, 3);
     if (shown.length > 0) {
       for (const c of shown) {
-        events.push({ t: "flag", text: msg("board.ai.trace.line.flag", { what: c.detail || c.reason }) });
+        // Structured `details`, localized (C3, 2026-08-13 design amendment)
+        // — never the deprecated raw `detail` string. This pure module has
+        // no fixture/entrant name map to resolve ids with (it narrates from
+        // `plan` alone), so any id here degrades to a shortened form —
+        // never a full UUID — same documented fallback the formatter always
+        // uses when a name map is empty or absent.
+        const what = c.details
+          ? formatConflictDetail(c.details, { msg, entrantNames: {}, fixtureTitles: {} })
+          : c.reason;
+        events.push({ t: "flag", text: msg("board.ai.trace.line.flag", { what }) });
       }
     } else {
       events.push({ t: "flag", text: msg("board.ai.trace.line.flagGeneric") });

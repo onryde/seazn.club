@@ -570,6 +570,16 @@ export function ScheduleBoard({
     [actions.board, visibleIds],
   );
 
+  // Competition-wide fixture id -> title, for a conflict badge's `details
+  // .otherFixtureId` (C3, 2026-08-13 design amendment). Built from the FULL
+  // board (`actions.board`, not the filtered `board` above): the other
+  // fixture a conflict names can be on a day, or in a division, this render
+  // has filtered out.
+  const fixtureTitles = useMemo(
+    () => Object.fromEntries(actions.board.map((f) => [f.id, cardTitle(f, entrantNames, feedLabels)])),
+    [actions.board, entrantNames, feedLabels],
+  );
+
   const scheduled = board.filter((f) => f.scheduled_at !== null);
   const unscheduled = board.filter((f) => f.scheduled_at === null && f.status === "scheduled");
 
@@ -1334,6 +1344,7 @@ export function ScheduleBoard({
               divisionNames={divisionNames}
               entrantNames={entrantNames}
               feedLabels={feedLabels}
+              fixtureTitles={fixtureTitles}
               conflictsByFixture={actions.conflictsByFixture}
               canEdit={canEdit}
               multi={multi}
@@ -1371,6 +1382,7 @@ export function ScheduleBoard({
               divisionNames={divisionNames}
               entrantNames={entrantNames}
               feedLabels={feedLabels}
+              fixtureTitles={fixtureTitles}
               conflictsByFixture={actions.conflictsByFixture}
               canEdit={canEdit}
               multi={multi}
@@ -1389,6 +1401,7 @@ export function ScheduleBoard({
               fixtures={dayFixtures}
               entrantNames={entrantNames}
               feedLabels={feedLabels}
+              fixtureTitles={fixtureTitles}
               conflictsByFixture={actions.conflictsByFixture}
               canEdit={canEdit}
               pickedId={pickedId}
@@ -1404,6 +1417,7 @@ export function ScheduleBoard({
           divisions={visibleDivisions}
           entrantNames={entrantNames}
           feedLabels={feedLabels}
+          fixtureTitles={fixtureTitles}
           conflictsByFixture={actions.conflictsByFixture}
           canEdit={canEdit}
           pickedId={pickedId}

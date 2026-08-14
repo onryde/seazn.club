@@ -7,6 +7,7 @@
 import { divisionAccent, divisionHue, divisionShortCode, divisionTint } from "@/lib/division-hue";
 import type { FeedLabelPair } from "@/lib/schedule-board";
 import { CONFLICT_LABEL, cardTitle, type BoardConflict, type BoardFixture } from "./types";
+import { formatBoardConflictDetail } from "./conflict-detail-format";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { AlertTriangle, Lock, Pin } from "lucide-react";
@@ -17,6 +18,7 @@ export function FixtureBlock({
   showDivision,
   entrantNames,
   feedLabels,
+  fixtureTitles,
   conflicts,
   canEdit,
   picked,
@@ -30,6 +32,11 @@ export function FixtureBlock({
   showDivision: boolean;
   entrantNames: Record<string, string>;
   feedLabels: Record<string, FeedLabelPair>;
+  /** Competition-wide fixture id -> title (`cardTitle` output), for a
+   *  conflict's `details.otherFixtureId` (C3, 2026-08-13 design amendment).
+   *  Board-wide, unlike `entrantNames`' own scope, because the OTHER fixture
+   *  a conflict names can sit on a different day than this block. */
+  fixtureTitles: Record<string, string>;
   conflicts: BoardConflict[];
   canEdit: boolean;
   /** This block is the current pick (tap-to-assign source). */
@@ -155,7 +162,15 @@ export function FixtureBlock({
         {conflictGroups.map((group) => {
           const head = group[0]!;
           const groupBlocking = group.some((c) => c.blocking);
-          const detail = group.map((c) => c.detail).filter(Boolean).join("; ");
+          // Structured `details`, localized + name-resolved (C3, 2026-08-13
+          // design amendment) — never the deprecated raw `detail` string,
+          // which can carry a UUID. A conflict with no `details` at all
+          // (an older cache, or a producer that genuinely set none) drops
+          // out of the join rather than crashing or printing nothing useful.
+          const detail = group
+            .map((c) => (c.details ? formatBoardConflictDetail(c.details, { msg, entrantNames, fixtureTitles }) : undefined))
+            .filter(Boolean)
+            .join("; ");
           return (
             <span
               key={head.code}

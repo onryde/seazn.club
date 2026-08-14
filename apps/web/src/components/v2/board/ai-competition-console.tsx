@@ -63,6 +63,7 @@ import {
 import { blockingConflictKey, type AiConsoleFixture } from "./ai-diff";
 import { AiReviewPanel } from "./ai-review-panel";
 import { buildReviewRows } from "./ai-review";
+import { formatConflictDetail } from "./conflict-detail-format";
 
 /** One division as the competition board holds it. Everything here is either a
  *  pricing input, a gate the server enforces, or something the reader has to be
@@ -526,6 +527,10 @@ export function JointReviewStep({
   const plural = usePlural();
   const nameOf = new Map(divisions.map((d) => [d.id, d.name]));
   const meta = new Map(fixtures.map((f) => [f.id, f]));
+  // Fixture id -> matchup, for a blocking row's `details.otherFixtureId`
+  // (C3, 2026-08-13 design amendment). No per-entrant name map on this
+  // surface, so an entrant-level kind degrades to a shortened id.
+  const fixtureTitles = Object.fromEntries(fixtures.map((f) => [f.id, f.matchup]));
   // Which division owns a fixture. The BOARD first, then the proposal.
   //
   // The proposal alone is not enough and never was: it carries `division_id`
@@ -788,7 +793,9 @@ export function JointReviewStep({
                     )}
                     <span className="min-w-0 truncate">
                       {msg(blockingConflictKey(c.reason))}
-                      {c.detail ? ` — ${c.detail}` : ""}
+                      {c.details
+                        ? ` — ${formatConflictDetail(c.details, { msg, entrantNames: {}, fixtureTitles })}`
+                        : ""}
                     </span>
                   </p>
                 </li>

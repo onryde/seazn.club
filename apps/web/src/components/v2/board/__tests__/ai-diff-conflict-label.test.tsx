@@ -47,12 +47,15 @@ describe("blockingConflict* (reason → shared board.conflict.* labels)", () => 
 });
 
 const FIX = "11111111-1111-1111-1111-111111111111";
-// One blocking row carrying the engine's raw camelCase reason + English detail.
+// One blocking row carrying the engine's raw camelCase reason + structured
+// detail (C3, 2026-08-13 design amendment). `court_double_booking` with no
+// `otherFixtureId` is the reportability-fallback branch
+// (calendar.ts:1384) — the ".unknown" localized variant.
 const plan: AiPlanResponse = {
   proposal: [],
   unschedulable: [],
   warnings: [],
-  blocking: [{ fixtureId: FIX, reason: "court", detail: "court Court 1 double-booked" }],
+  blocking: [{ fixtureId: FIX, reason: "court", details: { kind: "court_double_booking", court: "Court 1" } }],
   diff: { moved: [], placed: [], unscheduled: [], unchanged: [] },
   explanations: [],
   summary: "Kept the court clear.",
@@ -90,8 +93,30 @@ describe("AiDiffPanel blocking row localization", () => {
     );
   });
 
-  it("keeps the raw engine detail only as supplementary text", () => {
+  it("localizes the structured detail as supplementary text — never the raw engine string (C3, 2026-08-13 design amendment)", () => {
     const html = renderPanel(enDict, "en");
-    expect(html).toContain("court Court 1 double-booked");
+    const expected = (enDict["board.conflict.detail.court_double_booking.unknown"] as string).replace(
+      "{court}",
+      "Court 1",
+    );
+    expect(html).toContain(expected);
+    // Non-vacuity: the deprecated raw shape is gone from this row entirely,
+    // not merely absent from the assertion.
+    expect(html).not.toContain("court Court 1 double-booked");
+  });
+
+  it("localizes the supplementary detail text into fr too — not only the primary label", () => {
+    // Regression guard for `c.detail || c.reason` sneaking back in
+    // (the file header's own past-tense warning): this pins that the
+    // SUPPLEMENTARY line changes language exactly as the primary label does.
+    const html = renderPanel(frDict, "fr");
+    const expected = (frDict["board.conflict.detail.court_double_booking.unknown"] as string).replace(
+      "{court}",
+      "Court 1",
+    );
+    expect(html).toContain(expected);
+    expect(frDict["board.conflict.detail.court_double_booking.unknown"]).not.toBe(
+      enDict["board.conflict.detail.court_double_booking.unknown"],
+    );
   });
 });

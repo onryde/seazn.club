@@ -75,11 +75,51 @@ export interface BoardConfig {
   };
 }
 
+/** Snake_case wire mirror of the engine's `ConflictDetail`
+ *  (`packages/engine/src/scheduling/conflict-detail.ts`), matching
+ *  `ScheduleConflictDetail` in server/api-v1/schemas.ts field for field.
+ *  Structural rather than the zod-inferred type or an engine import (C3,
+ *  2026-08-13 design amendment) — same reason `BoardConfig.constraints` is
+ *  hand-declared rather than importing `SchedulingConstraints` just above:
+ *  this module stays a pure shapes file. `kind` stays plain `string` here
+ *  (not `ConflictDetailKind`) so this file needn't know the engine's type;
+ *  `conflict-detail-format.ts` is the one place that narrows it and is
+ *  exhaustive over every kind. */
+export interface BoardConflictDetail {
+  kind: string;
+  entrant_ids?: string[];
+  person_ids?: string[];
+  other_fixture_id?: string;
+  court?: string;
+  day?: string;
+  other_day?: string;
+  weekday?: string;
+  required_weekday?: string;
+  required_date?: string;
+  time?: string;
+  required_time?: string;
+  rule_type?: string;
+  round_no?: number;
+  other_round_no?: number;
+  minutes?: number;
+  required_minutes?: number;
+  count?: number;
+  required_count?: number;
+}
+
 export interface BoardConflict {
   fixture_id: string;
   code: string;
   blocking: boolean;
+  /** @deprecated Pre-C3 English, derived server-side (byte-for-byte) from
+   *  `details` — kept only for any remaining reader of raw prose. New code
+   *  should read `details` and format via `conflict-detail-format.ts`. */
   detail?: string;
+  /** Structured, id-only conflict detail (C3, 2026-08-13 design amendment).
+   *  Additive: absent only for a conflict the engine built without a
+   *  `details` entry (there should be none — every family template sets one
+   *  — but the field stays optional to match the wire's own `.optional()`). */
+  details?: BoardConflictDetail;
 }
 
 export const CONFLICT_LABEL: Record<string, string> = {
@@ -95,7 +135,14 @@ export const CONFLICT_LABEL: Record<string, string> = {
   "warn.official_unavailable": "umpire unavailable",
 };
 
-// Plain-English explanations shown to organisers (no codes, no UUIDs).
+// Plain-English explanations shown to organisers (no codes, no UUIDs) — the
+// generic, code-level fallback when a conflict carries no structured
+// `details`, or `board.conflictHelp.<code>` is missing from the active
+// locale. The per-conflict specifics (names, courts, times) are never
+// hand-rolled prose: they come from `details` via
+// `conflict-detail-format.ts`, localized and name-resolved at render time,
+// so nothing shown to an organiser is ever a raw code or a UUID (C3,
+// 2026-08-13 design amendment).
 export const CONFLICT_HELP: Record<string, string> = {
   "conflict.court": "Two matches would use the same court at the same time.",
   "warn.rest": "There isn't enough rest between matches for a team or player.",

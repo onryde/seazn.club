@@ -27,6 +27,7 @@ import {
 import { AiQuoteMismatchNote } from "./ai-quote-card";
 import { Marker } from "./ai-marker";
 import { CONFLICT_LABEL } from "./types";
+import { formatConflictDetail } from "./conflict-detail-format";
 
 export function AiDiffPanel({
   plan,
@@ -44,6 +45,15 @@ export function AiDiffPanel({
   const msg = useMsg();
   const plural = usePlural();
   const byId = useMemo(() => new Map(fixtures.map((f) => [f.id, f])), [fixtures]);
+  // Fixture id -> matchup, for a blocking row's `details.otherFixtureId` (C3,
+  // 2026-08-13 design amendment). This surface has no per-ENTRANT name map
+  // (only the per-FIXTURE `matchup` the console already builds), so an
+  // entrant-level kind falls back to a shortened id — the documented
+  // degradation, never a raw UUID.
+  const fixtureTitles = useMemo(
+    () => Object.fromEntries(fixtures.map((f) => [f.id, f.matchup])),
+    [fixtures],
+  );
   const diff = useMemo(() => computeAiDiff(plan, fixtures), [plan, fixtures]);
   const notes = useMemo(
     () => new Map(plan.explanations.map((e) => [e.fixture_id, e.note])),
@@ -162,8 +172,10 @@ export function AiDiffPanel({
                     <p className="text-[11px] font-medium text-red-600">
                       {conflictLabel(c.reason)}
                     </p>
-                    {c.detail && (
-                      <p className="mt-0.5 text-[10px] text-slate-500">{c.detail}</p>
+                    {c.details && (
+                      <p className="mt-0.5 text-[10px] text-slate-500">
+                        {formatConflictDetail(c.details, { msg, entrantNames: {}, fixtureTitles })}
+                      </p>
                     )}
                     {isExcluded && (
                       <p className="text-[10px] font-medium text-slate-500">

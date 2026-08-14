@@ -10,8 +10,10 @@ import {
   CONFLICT_LABEL,
   cardTitle,
   type BoardConflict,
+  type BoardConflictDetail,
   type BoardFixture,
 } from "./types";
+import { formatBoardConflictDetail } from "./conflict-detail-format";
 import { useMsg, usePlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 
@@ -119,16 +121,30 @@ export function ConflictsPanel({
     const label = msg(key);
     return label === key ? (CONFLICT_LABEL[code] ?? code) : label;
   };
-  const conflictHelp = (code: string, detail?: string) => {
+  // The generic code-level help wins when the locale has it; otherwise this
+  // conflict's own structured `details` — localized and name-resolved,
+  // never the deprecated raw `detail` string, which can carry a UUID (C3,
+  // 2026-08-13 design amendment). Behaviour unchanged: `board.conflictHelp
+  // .<code>` exists for every live code today, so this fallback is already
+  // dead in production — kept only so an unmapped future code still says
+  // something useful instead of nothing.
+  const conflictHelp = (code: string, details?: BoardConflictDetail) => {
     const key = `board.conflictHelp.${code}` as MessageKey;
     const help = msg(key);
-    return help === key ? (CONFLICT_HELP[code] ?? detail ?? "") : help;
+    if (help !== key) return help;
+    if (CONFLICT_HELP[code]) return CONFLICT_HELP[code];
+    return details ? formatBoardConflictDetail(details, { msg, entrantNames, fixtureTitles }) : "";
   };
   const ref = useRef<HTMLElement | null>(null);
   useEffect(() => {
     ref.current?.focus();
   }, []);
   const byId = new Map(board.map((f) => [f.id, f]));
+  // Competition-wide fixture id -> title, for a conflict's
+  // `details.otherFixtureId` — `board` here already carries every fixture
+  // (unfiltered by day), so this needs no new prop the way `FixtureBlock`'s
+  // did.
+  const fixtureTitles = Object.fromEntries(board.map((f) => [f.id, cardTitle(f, entrantNames, feedLabels)]));
   return (
     <aside
       ref={ref as React.RefObject<HTMLElement>}
@@ -192,7 +208,7 @@ export function ConflictsPanel({
                 >
                   {conflictLabel(c.code)}
                 </span>
-                {conflictHelp(c.code, c.detail)}
+                {conflictHelp(c.code, c.details)}
               </p>
               {f && (
                 <button

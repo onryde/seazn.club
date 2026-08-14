@@ -39,6 +39,7 @@ const baseProps = {
   showDivision: false,
   entrantNames: { p1: "D", p2: "E" },
   feedLabels: {},
+  fixtureTitles: {},
   // `conflicts` is a required prop on FixtureBlock (unchanged by this task);
   // tests 4 and 5 below render via `{...baseProps}` with no override, so it
   // must default to an empty array here or both the pre- and post-fix
@@ -53,33 +54,59 @@ const baseProps = {
 
 describe("FixtureBlock", () => {
   it("merges same-code conflicts into ONE badge instead of repeating it per entrant", () => {
-    // The original bug: two `warn.rest` entries (D needs rest, E needs rest)
-    // rendered as two adjacent, indistinguishable "rest" badges.
+    // The original bug (and the C3, 2026-08-13 design amendment's reported
+    // symptom): two `warn.rest` entries (D needs rest, E needs rest) render
+    // as two adjacent, indistinguishable "rest" badges — and, pre-C3, the
+    // tooltip's `detail` was raw English embedding the entrant's raw UUID.
+    // Structured `details` resolved through `entrantNames` fixes both: one
+    // badge, and a localized, name-resolved tooltip.
     const conflicts: BoardConflict[] = [
-      { fixture_id: "fx-1", code: "warn.rest", blocking: false, detail: "D needs more rest" },
-      { fixture_id: "fx-1", code: "warn.rest", blocking: false, detail: "E needs more rest" },
+      { fixture_id: "fx-1", code: "warn.rest", blocking: false, details: { kind: "entrant_below_rest", entrant_ids: ["p1"] } },
+      { fixture_id: "fx-1", code: "warn.rest", blocking: false, details: { kind: "entrant_below_rest", entrant_ids: ["p2"] } },
     ];
     const html = renderToStaticMarkup(<FixtureBlock {...baseProps} conflicts={conflicts} />);
     expect(html.match(/>rest</g)).toHaveLength(1);
-    expect(html).toContain("D needs more rest; E needs more rest");
+    // The "; " join, preserved from the pre-C3 raw-string join — now over
+    // formatted, name-resolved text instead of raw prose.
+    expect(html).toContain('title="D does not get enough rest; E does not get enough rest"');
   });
 
-  it("keeps two DIFFERENT conflict codes as two separate badges", () => {
+  it("keeps two DIFFERENT conflict codes as two separate badges, and never crashes on a conflict with no details", () => {
     // Both entries share the same `blocking` value on purpose — the grouping
     // key is `code`, and a case where `blocking` also happens to differ
     // would pass just as well if the code grouped by `blocking` instead.
+    // Neither carries `details` (nor the deprecated `detail`) — the
+    // formatter must degrade to the code-level label rather than throw.
     const conflicts: BoardConflict[] = [
-      { fixture_id: "fx-1", code: "warn.rest", blocking: false, detail: "D needs rest" },
-      { fixture_id: "fx-1", code: "conflict.court", blocking: false, detail: "Court double-booked" },
+      { fixture_id: "fx-1", code: "warn.rest", blocking: false },
+      { fixture_id: "fx-1", code: "conflict.court", blocking: false },
     ];
     const html = renderToStaticMarkup(<FixtureBlock {...baseProps} conflicts={conflicts} />);
     expect(html.match(/>rest</g)).toHaveLength(1);
     expect(html).toContain(">court clash<");
+    expect(html).not.toContain("undefined");
+  });
+
+  it("the badge tooltip names the entrant, never a raw UUID (C3, 2026-08-13 design amendment)", () => {
+    // The reported symptom, byte for byte: a board conflict tooltip used to
+    // render `entrant 6be47174-7f41-4030-…-… below rest`. Anchored on `="` —
+    // React serialises an omitted prop as the string "$undefined", so a bare
+    // substring probe would pass whether or not the title attribute is
+    // really there.
+    const uuid = "6be47174-7f41-4030-9c1a-1e2f3a4b5c6d";
+    const conflicts: BoardConflict[] = [
+      { fixture_id: "fx-1", code: "warn.rest", blocking: false, details: { kind: "entrant_below_rest", entrant_ids: [uuid] } },
+    ];
+    const html = renderToStaticMarkup(
+      <FixtureBlock {...baseProps} entrantNames={{ [uuid]: "Devon" }} conflicts={conflicts} />,
+    );
+    expect(html).toContain('title="Devon does not get enough rest"');
+    expect(html).not.toContain(uuid);
   });
 
   it("drops the old red/amber conflict background and widens the division rail to 6px", () => {
     const conflicts: BoardConflict[] = [
-      { fixture_id: "fx-1", code: "warn.rest", blocking: true, detail: "D needs rest" },
+      { fixture_id: "fx-1", code: "warn.rest", blocking: true, details: { kind: "entrant_below_rest", entrant_ids: ["p1"] } },
     ];
     const html = renderToStaticMarkup(<FixtureBlock {...baseProps} conflicts={conflicts} />);
     expect(html).not.toContain("bg-red-50");

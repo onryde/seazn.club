@@ -10,6 +10,7 @@
 // sentence behind it is free to change without touching this file.
 import { describe, expect, it } from "vitest";
 import { buildScheduleTrace, type TraceMsgFn, type TraceSource } from "../ai-trace-compose";
+import { formatConflictDetail } from "../conflict-detail-format";
 
 const msg: TraceMsgFn = (k, vars) => (vars ? `${k}:${JSON.stringify(vars)}` : String(k));
 
@@ -51,19 +52,29 @@ describe("buildScheduleTrace", () => {
     expect(flaggedIds).toEqual([]);
   });
 
-  it("shows the caught conflict's detail and the repair round, then still lands clean", () => {
+  it("shows the caught conflict's formatted structured detail and the repair round, then still lands clean (C3, 2026-08-13 design amendment)", () => {
+    // Structured `details`, never the deprecated raw `detail` string — this
+    // pure module has no fixture/entrant name map, so the formatter's own
+    // documented fallback (a shortened id, never a full UUID) is what
+    // resolves `entrantIds` here. Computed through the SAME formatter +
+    // `msg` stub the production code uses, rather than a hand-escaped
+    // literal, so this pins the WIRING (which ctx `buildScheduleTrace`
+    // passes) rather than the formatter's own string output (already
+    // covered by conflict-detail-format.test.ts).
+    const details = { kind: "entrant_below_rest" as const, entrantIds: ["e1"] };
     const { events, flaggedIds } = buildScheduleTrace(
       source({
-        warnings: [{ fixtureId: "f1", reason: "rest", detail: "Alice 12m rest" }],
+        warnings: [{ fixtureId: "f1", reason: "rest", details }],
         usage: { input_tokens: 0, output_tokens: 0, repair_rounds: 2 },
       }),
       2,
       msg,
     );
 
+    const what = formatConflictDetail(details, { msg, entrantNames: {}, fixtureTitles: {} });
     expect(events).toEqual([
       ...SPINE,
-      { t: "flag", text: 'board.ai.trace.line.flag:{"what":"Alice 12m rest"}' },
+      { t: "flag", text: msg("board.ai.trace.line.flag", { what }) },
       { t: "step", text: "board.ai.trace.node.repair" },
       { t: "log", text: 'board.ai.trace.line.repair:{"rounds":2}' },
       // A repaired warning is resolved: nothing blocking remains, so the spine

@@ -91,11 +91,15 @@ import { ScheduleGateDialog } from "../schedule-gate-dialog";
 
 const enDict = en as unknown as Dict;
 
+// Both fixtures carry the deprecated `detail` string ALONGSIDE the
+// structured `details` — the wire pairs the two, or sends neither
+// (usecases/schedule.ts `mapConflicts`, C3 2026-08-13 design amendment).
 const REST_WARNING: BoardConflict = {
   fixture_id: "f1",
   code: "warn.rest",
   blocking: false,
   detail: "entrant e1 below rest",
+  details: { kind: "entrant_below_rest", entrant_ids: ["e1"] },
 } as unknown as BoardConflict;
 
 const COURT_CLASH: BoardConflict = {
@@ -103,6 +107,7 @@ const COURT_CLASH: BoardConflict = {
   code: "conflict.court",
   blocking: true,
   detail: "court Court 1 double-booked with f2",
+  details: { kind: "court_double_booking", court: "Court 1", other_fixture_id: "f2" },
 } as unknown as BoardConflict;
 
 // ---------------------------------------------------------------------------
@@ -164,6 +169,22 @@ describe("the gate dialog offers a way through for warnings", () => {
     // Cancel is localized rather than the primitive's hardcoded English.
     expect(html).toContain(CANCEL);
     expect(html).toContain(enDict["board.cancel"] as string);
+  });
+
+  it("falls back to the formatted, name-resolved structured detail when a code has no locale help and no CONFLICT_HELP entry (C3, 2026-08-13 design amendment)", () => {
+    // Every REAL code has a `board.conflictHelp.<code>` key today (the design
+    // doc's own finding — this fallback is "already dead" for the two
+    // fixtures above), so this pins the fallback with a code that has
+    // neither a locale key nor a `CONFLICT_HELP` entry — the only way to
+    // actually reach `formatBoardConflictDetail` from this dialog.
+    const UNMAPPED: BoardConflict = {
+      fixture_id: "f1",
+      code: "warn.some_future_code",
+      blocking: false,
+      details: { kind: "entrant_below_rest", entrant_ids: ["e1"] },
+    } as unknown as BoardConflict;
+    const html = dialogMarkup({ kind: "warnings", action: "publish", conflicts: [UNMAPPED] });
+    expect(html).toContain("Alpha does not get enough rest");
   });
 
   it("says out loud that starting publishes, and offers Start anyway", () => {

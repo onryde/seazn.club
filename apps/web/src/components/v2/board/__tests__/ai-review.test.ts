@@ -64,6 +64,28 @@ describe("buildReviewRows", () => {
     const rows = buildReviewRows({ warnings: plan.warnings, unschedulable: [] });
     expect(rows.map((r) => r.kind)).toEqual(["warning"]);
   });
+
+  // C3, 2026-08-13 design amendment: `AiReviewPanel` localizes a warning row's
+  // supplementary text from `details`, never the deprecated `detail` string —
+  // it has to actually reach the row for that to work.
+  it("carries a warning's structured details through, alongside the deprecated detail string", () => {
+    const [w] = buildReviewRows({
+      warnings: [
+        {
+          fixtureId: "f1",
+          reason: "rest",
+          detail: "entrant e1 below rest",
+          details: { kind: "entrant_below_rest", entrantIds: ["e1"] },
+        },
+      ],
+      unschedulable: [],
+      assumptions: [],
+    });
+    expect(w).toMatchObject({
+      kind: "warning",
+      details: { kind: "entrant_below_rest", entrantIds: ["e1"] },
+    });
+  });
 });
 
 describe("reviewRowCount", () => {

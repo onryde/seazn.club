@@ -26,8 +26,10 @@ import {
   CONFLICT_LABEL,
   cardTitle,
   type BoardConflict,
+  type BoardConflictDetail,
   type BoardFixture,
 } from "./types";
+import { formatBoardConflictDetail } from "./conflict-detail-format";
 
 /** Which action was refused. Only the copy differs — the contract does not. */
 export type GateAction = "publish" | "start";
@@ -67,15 +69,26 @@ export function ScheduleGateDialog({
     const out = msg(key);
     return out === key ? (CONFLICT_LABEL[code] ?? code) : out;
   };
-  const help = (code: string, detail?: string) => {
+  // Same fallback order as the conflicts panel: the generic code-level help
+  // wins when the locale has it, otherwise this conflict's own structured
+  // `details` (localized, name-resolved — never the deprecated raw `detail`
+  // string, C3 2026-08-13 design amendment). Already dead in production
+  // today (every live code has a `board.conflictHelp.<code>` key); kept for
+  // an unmapped future code.
+  const help = (code: string, details?: BoardConflictDetail) => {
     const key = `board.conflictHelp.${code}` as MessageKey;
     const out = msg(key);
-    return out === key ? (CONFLICT_HELP[code] ?? detail ?? "") : out;
+    if (out !== key) return out;
+    if (CONFLICT_HELP[code]) return CONFLICT_HELP[code];
+    return details ? formatBoardConflictDetail(details, { msg, entrantNames, fixtureTitles }) : "";
   };
 
   if (!gate) return null;
   const warning = gate.kind === "warnings";
   const byId = new Map(board.map((f) => [f.id, f]));
+  // Competition-wide fixture id -> title, for a conflict's
+  // `details.otherFixtureId` — `board` here already carries every fixture.
+  const fixtureTitles = Object.fromEntries(board.map((f) => [f.id, cardTitle(f, entrantNames, feedLabels)]));
   const title = warning
     ? msg(gate.action === "start" ? "board.gate.warnTitleStart" : "board.gate.warnTitlePublish")
     : msg("board.gate.blockTitle");
@@ -133,7 +146,7 @@ export function ScheduleGateDialog({
                 >
                   {label(c.code)}
                 </span>
-                {help(c.code, c.detail)}
+                {help(c.code, c.details)}
               </p>
             </li>
           );

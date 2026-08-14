@@ -19,6 +19,7 @@ const baseProps = {
   divisionNames: {},
   entrantNames: {},
   feedLabels: {},
+  fixtureTitles: {},
   conflictsByFixture: {},
   canEdit: true,
   multi: false,

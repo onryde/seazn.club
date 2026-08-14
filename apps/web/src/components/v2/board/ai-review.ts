@@ -11,6 +11,11 @@
 //
 // Pure: no JSX, no hooks, no dict. The panel does the localizing.
 import type { RuleCode } from "@/server/api-v1/schemas";
+// Type-only — erased at build, never pulls the (server-only) scheduling
+// barrel's runtime into this client module. Same pattern
+// ai-instruction-describe.ts and lib/schedule-board.ts already use for
+// `HardConstraint`/`Conflict`.
+import type { ConflictDetail } from "@seazn/engine/scheduling";
 
 /**
  * What a review row can be about.
@@ -25,7 +30,19 @@ import type { RuleCode } from "@/server/api-v1/schemas";
  *                  at the preview before a credit is spent.
  */
 export type ReviewRow =
-  | { kind: "warning"; fixtureId: string; reason: string; detail?: string; rule?: RuleCode }
+  | {
+      kind: "warning";
+      fixtureId: string;
+      reason: string;
+      /** @deprecated pre-C3 English; kept only for a reader that still uses
+       *  it. New code should read `details` (C3, 2026-08-13 design
+       *  amendment). */
+      detail?: string;
+      /** Structured, id-only conflict detail. Localize via
+       *  `conflict-detail-format.ts`, never render `detail` raw. */
+      details?: ConflictDetail;
+      rule?: RuleCode;
+    }
   | { kind: "unschedulable"; fixtureId: string; reason: string; rule: RuleCode }
   | { kind: "assumption"; text: string };
 
@@ -39,7 +56,13 @@ export type ReviewRow =
  */
 export type ReviewSource = {
   /** Engine `Conflict`s — camelCase, as the verifier emits them. */
-  warnings: { fixtureId: string; reason: string; detail?: string; rule?: RuleCode }[];
+  warnings: {
+    fixtureId: string;
+    reason: string;
+    detail?: string;
+    details?: ConflictDetail;
+    rule?: RuleCode;
+  }[];
   /** Solver give-ups — snake_case, as the API returns them. */
   unschedulable: { fixture_id: string; reason: string; rule: RuleCode }[];
   /** Absent on a plan taken before W5 widened the response. */
@@ -62,6 +85,7 @@ export function buildReviewRows(plan: ReviewSource): ReviewRow[] {
         fixtureId: w.fixtureId,
         reason: w.reason,
         detail: w.detail,
+        details: w.details,
         rule: w.rule,
       }),
     ),

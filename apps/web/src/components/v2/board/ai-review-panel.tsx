@@ -22,6 +22,7 @@ import { DivisionChip } from "./ai-division-chip";
 import { Marker } from "./ai-marker";
 import { reviewRowCount, reviewRowPulseIds, type ReviewRow } from "./ai-review";
 import { CONFLICT_LABEL } from "./types";
+import { formatConflictDetail } from "./conflict-detail-format";
 
 export function AiReviewPanel({
   rows,
@@ -42,6 +43,14 @@ export function AiReviewPanel({
   const msg = useMsg();
   const plural = usePlural();
   const byId = useMemo(() => new Map(fixtures.map((f) => [f.id, f])), [fixtures]);
+  // Fixture id -> matchup, for a warning row's `details.otherFixtureId` (C3,
+  // 2026-08-13 design amendment) — same reasoning as the diff panel's own
+  // `fixtureTitles`: no per-entrant name map on this surface, so an
+  // entrant-level kind degrades to a shortened id.
+  const fixtureTitles = useMemo(
+    () => Object.fromEntries(fixtures.map((f) => [f.id, f.matchup])),
+    [fixtures],
+  );
   // Read once, from the array below. Every number this card shows is this one,
   // so the header and the list cannot disagree (#388).
   const count = reviewRowCount(rows);
@@ -159,7 +168,11 @@ export function AiReviewPanel({
                     <p className="text-[11px] font-medium text-amber-700">
                       {conflictLabel(row.reason)}
                     </p>
-                    {row.detail && <p className="mt-0.5 text-[10px] text-slate-500">{row.detail}</p>}
+                    {row.details && (
+                      <p className="mt-0.5 text-[10px] text-slate-500">
+                        {formatConflictDetail(row.details, { msg, entrantNames: {}, fixtureTitles })}
+                      </p>
+                    )}
                   </>
                 ) : (
                   <>
