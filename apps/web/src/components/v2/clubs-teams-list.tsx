@@ -160,7 +160,7 @@ export function ClubsTeamsList({
                 open form instead of sitting on New club permanently. */}
             <button
               type="button"
-              className={`btn min-h-[44px] sm:min-h-0 ${creating === "club" ? "btn-primary" : ""}`}
+              className={`btn min-h-[44px] ${creating === "club" ? "btn-primary" : ""}`}
               disabled={busy}
               aria-expanded={creating === "club"}
               onClick={() => startCreate("club")}
@@ -169,7 +169,7 @@ export function ClubsTeamsList({
             </button>
             <button
               type="button"
-              className={`btn min-h-[44px] sm:min-h-0 ${creating === "team" ? "btn-primary" : ""}`}
+              className={`btn min-h-[44px] ${creating === "team" ? "btn-primary" : ""}`}
               disabled={busy}
               aria-expanded={creating === "team"}
               onClick={() => startCreate("team")}
@@ -198,14 +198,14 @@ export function ClubsTeamsList({
           </label>
           <button
             type="submit"
-            className="btn btn-primary min-h-[44px] sm:min-h-0"
+            className="btn btn-primary min-h-[44px]"
             disabled={busy || !draft.trim()}
           >
             {msg("clubs.list.create")}
           </button>
           <button
             type="button"
-            className="btn min-h-[44px] sm:min-h-0"
+            className="btn min-h-[44px]"
             disabled={busy}
             onClick={() => setCreating(null)}
           >
@@ -270,7 +270,7 @@ export function ClubsTeamsList({
                       {/* The ladder's missing rung: PATCH club_id adopts the
                           standalone team into a club (detach lives on the hub). */}
                       <select
-                        className="input min-h-[44px] w-auto max-w-full text-sm sm:min-h-0"
+                        className="input min-h-[44px] w-auto max-w-full text-sm"
                         aria-label={msg("clubs.list.addToClubAria", { name: t.name })}
                         value=""
                         disabled={busy}

@@ -771,7 +771,7 @@ export function StagesPanel({ divisionId, divisionSeq, competitionId, orgSlug, c
                       data-testid="stage-auto-schedule"
                       disabled={busy !== null || capacityByStage.get(stage.id)?.verdict === "impossible"}
                       onClick={() => void autoScheduleStage(stage.id)}
-                      className="btn btn-primary min-h-11 px-3 py-1 text-xs sm:min-h-0"
+                      className="btn btn-primary min-h-11 px-3 py-1 text-xs"
                     >
                       {busy === stage.id ? msg("schedule.working") : msg("schedule.unscheduled.cta")}
                     </button>

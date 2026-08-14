@@ -1222,7 +1222,7 @@ function EntrantTableRow({
                       setRosterVersion((v) => v + 1);
                     }
                   }}
-                  className="btn min-h-[44px] text-xs sm:min-h-0"
+                  className="btn min-h-[44px] text-xs"
                   title="Replace this entry's roster with the team's current squad"
                 >
                   Sync from team squad
