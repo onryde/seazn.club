@@ -14,6 +14,7 @@ import {
   loginUi,
   claimProfileBySql,
   setOrgLocaleSql,
+  scoreFixture,
 } from "./helpers";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
@@ -1058,4 +1059,222 @@ test("P6 public surface: a visitor sees the resolved slot label in the ORG's own
   await expect(page.locator("body")).not.toContainText("Winner of Group");
   await expect(page.locator("body")).not.toContainText("slot.winner_group");
   await expectNoHorizontalScroll(page);
+});
+
+// ---------------------------------------------------------------------------
+// P6 (D4b task B) — the organiser-facing proposal panel: full browser flow
+// (decided league -> panel -> resolve a tie -> confirm -> bracket shows real
+// entrants, schedule unchanged on screen), plus the destructive-dialog path.
+// Lives in mobile.spec.ts, not a new spec file, for the same reason as task
+// A's block above — a new file runs desktop-only and never sees 320/360/
+// 375/390/430/768/834.
+//
+// Tie mechanism: a 4-entrant single league where EVERY match is a DRAW
+// (`allowDraws: true`) makes every entrant finish level on points/diff/for —
+// the one deterministic way to reach a genuinely unresolved tie
+// (server/usecases/__tests__/stage-progression.test.ts's own "cross-group
+// tie is FLAGGED" test proves this exact shape; a 2-pool/1-draw shape was
+// considered and is NOT what that suite uses). `rankRange(1,2)` over that
+// league therefore ties BOTH destination slots against the SAME 4 candidates
+// — there is no third, non-tied row in this scenario; edit-in-place on a
+// NON-tied row is already proven at the component/wiring layer
+// (progression-panel-wiring.test.tsx), so this flow's job is the tie path
+// specifically, the one no unit test can fake (real standings, real DB,
+// real confirm route).
+// ---------------------------------------------------------------------------
+
+const P6B_EMAIL = () => `p6b-${TAG}@example.com`;
+let p6bDivisionId = "";
+const P6B_COURT = "Center Court E2E";
+const P6B_ENTRANTS = ["Nova Q", "Orion Q", "Piper Q", "Reeve Q"];
+
+test("P6 task B setup: a 4-way-tied league decides, KO panel has a real tie to resolve", async ({
+  page,
+}) => {
+  await loginUi(page, P6B_EMAIL());
+
+  const comp = await apiJson<{ id: string }>(page.request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `P6 TaskB ${TAG}`,
+    visibility: "private",
+  });
+  expect(comp.status).toBeLessThan(300);
+
+  const div = await apiJson<{ id: string }>(page.request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Open",
+    sport_key: "generic",
+    variant_key: "score",
+    // allowDraws is load-bearing: without it, a 1-1 result either 422s or
+    // is not treated as a genuine draw, and the standings cascade resolves
+    // a winner instead of leaving every entrant level.
+    config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  expect(div.status).toBeLessThan(300);
+  p6bDivisionId = div.data!.id;
+
+  await addEntrantsViaApi(page.request, p6bDivisionId, P6B_ENTRANTS);
+
+  const stages = await apiJson<{ id: string; kind: string }[]>(
+    page.request,
+    `/api/v1/divisions/${p6bDivisionId}/stages`,
+    "POST",
+    [
+      { seq: 1, kind: "league", name: "League", config: { legs: 1 } },
+      {
+        seq: 2,
+        kind: "knockout",
+        name: "Knockout",
+        config: {},
+        seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }], placement: "rank_order" },
+      },
+    ],
+  );
+  expect(stages.status).toBeLessThan(300);
+  const leagueId = stages.data!.find((s) => s.kind === "league")!.id;
+  const koId = stages.data!.find((s) => s.kind === "knockout")!.id;
+
+  // TBD KO fixture up front (owner ruling), then pinned — proving later that
+  // confirm fills it without disturbing the pin (the non-destructive
+  // guarantee, "on screen" this time rather than at the DB layer).
+  const koGen = await apiJson<{ created: number; fixtures: { id: string }[] }>(
+    page.request,
+    `/api/v1/stages/${koId}/generate`,
+    "POST",
+  );
+  expect(koGen.data!.created).toBe(1);
+  const koFixtureId = koGen.data!.fixtures[0]!.id;
+  const pin = await apiJson(page.request, `/api/v1/fixtures/${koFixtureId}`, "PATCH", {
+    scheduled_at: "2030-11-15T14:00:00.000Z",
+    court_label: P6B_COURT,
+  });
+  expect(pin.status).toBeLessThan(300);
+
+  const leagueGen = await apiJson<{ fixtures: { id: string }[] }>(
+    page.request,
+    `/api/v1/stages/${leagueId}/generate`,
+    "POST",
+  );
+  expect(leagueGen.data!.fixtures.length).toBe(6); // round robin of 4
+
+  await apiJson(page.request, `/api/v1/divisions/${p6bDivisionId}/start`, "POST");
+  for (const f of leagueGen.data!.fixtures) {
+    await scoreFixture(page.request, f.id, 1, 1); // every match drawn -> all 4 level
+  }
+
+  const completed = await apiJson<{ completed: boolean; seed_proposal?: { status: string } }>(
+    page.request,
+    `/api/v1/stages/${leagueId}/complete`,
+    "POST",
+  );
+  expect(completed.status).toBeLessThan(300);
+  expect(completed.data!.completed).toBe(true);
+  expect(completed.data!.seed_proposal?.status).toBe("draft");
+});
+
+test("P6 task B: panel resolves the tie, confirms, bracket shows real entrants, schedule unchanged on screen", async ({
+  page,
+}) => {
+  test.skip(p6bDivisionId === "", "P6 task B setup did not run/complete");
+  await loginUi(page, P6B_EMAIL()); // same user/org as setup — a fresh page has no session of its own
+
+  await page.goto(await divisionPath(page.request, p6bDivisionId, "?tab=fixtures"), { waitUntil: "load" });
+
+  const panel = page.locator('[data-progression-state="draft"]');
+  await expect(panel).toBeVisible({ timeout: 20_000 });
+  await expect(panel.getByText("Knockout")).toBeVisible();
+  await expect(panel.getByText("Tied", { exact: false }).first()).toBeVisible();
+
+  const confirmBtn = panel.getByRole("button", { name: "Confirm proposal" });
+  await expect(confirmBtn).toBeDisabled();
+
+  // Both destination slots are tied against the same 4 candidates (see the
+  // block comment above) — resolve each row's select explicitly, by NAME
+  // (never by option position, which follows a sorted entrant-id order the
+  // test cannot predict).
+  const rows = panel.locator("tbody tr");
+  await expect(rows).toHaveCount(2);
+  await rows.nth(0).locator("select").selectOption({ label: "Nova Q" });
+  await rows.nth(1).locator("select").selectOption({ label: "Orion Q" });
+
+  await expect(confirmBtn).toBeEnabled();
+  await expectNoHorizontalScroll(page);
+  await confirmBtn.click();
+
+  // router.refresh() re-fetches the server props; the panel's OWN state
+  // moves to "confirmed" once the reload lands.
+  await expect(page.locator('[data-progression-state="confirmed"]')).toBeVisible({ timeout: 20_000 });
+
+  // The bracket/fixture line now shows the CHOSEN entrants, never a raw TBD
+  // or slot.* key — the panel's edit-in-place actually reached the fixture.
+  await expect(page.getByText("Nova Q", { exact: false }).first()).toBeVisible();
+  await expect(page.getByText("Orion Q", { exact: false }).first()).toBeVisible();
+  await expect(page.getByText(/^TBD$/)).toHaveCount(0);
+
+  // Non-destructive guarantee, on screen: the court pinned before anyone
+  // qualified is still exactly what shows now that the slot is filled.
+  await expect(page.getByText(P6B_COURT, { exact: false }).first()).toBeVisible();
+
+  await expectNoHorizontalScroll(page);
+});
+
+test("P6 task B: destructive-edit dialog names the blast radius before regenerating a stage that already has fixtures", async ({
+  page,
+}) => {
+  test.skip(p6bDivisionId === "", "P6 task B setup did not run/complete");
+  await loginUi(page, P6B_EMAIL());
+
+  // A SEPARATE division/stage from the tie scenario — this path is generic
+  // to any stage with existing fixtures, not specific to `.seeding`. Reuses
+  // the same entrants; a plain 2-pool group stage keeps the fixture count
+  // small (2) and predictable for the dialog's named numbers.
+  const comp = await apiJson<{ id: string }>(page.request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `P6 TaskB Regen ${TAG}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string }>(page.request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Regen",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const regenDivisionId = div.data!.id;
+  await addEntrantsViaApi(page.request, regenDivisionId, ["Gale R", "Hollis R", "Ivy R", "Jett R"]);
+  const stage = await apiJson<{ id: string }[]>(page.request, `/api/v1/divisions/${regenDivisionId}/stages`, "POST", [
+    { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
+  ]);
+  const groupId = stage.data![0]!.id;
+  const gen = await apiJson<{ fixtures: { id: string }[] }>(page.request, `/api/v1/stages/${groupId}/generate`, "POST");
+  expect(gen.data!.fixtures.length).toBe(2);
+
+  await page.goto(await divisionPath(page.request, regenDivisionId, "?tab=fixtures"), { waitUntil: "load" });
+
+  const groupCard = page.locator("section.card", { hasText: "Groups" }).first();
+  const generateBtn = groupCard.getByRole("button", { name: "Generate fixtures" });
+  await expect(generateBtn).toBeVisible();
+  await generateBtn.click(); // stageFixtures.length > 0 already — must warn, not act immediately
+
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  await expect(dialog.getByText("Regenerate this stage's fixtures?", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("2 total", { exact: false })).toBeVisible(); // names the discard count
+  await expectNoHorizontalScroll(page);
+
+  // Cancel: the handler returns before calling act() at all (no fetch, no
+  // router.refresh() — proven at the unit layer in
+  // stages-panel-regenerate-blast-radius.test.ts's wiring; here the browser
+  // proof is that NO success/notice banner appears, since one only renders
+  // after a real generate response lands).
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("Nothing new", { exact: false })).toHaveCount(0);
+  await expect(page.getByText("already existed", { exact: false })).toHaveCount(0);
+
+  // Confirm: proceeds through the SAME unchanged regenerate route — rules
+  // didn't change, so this is idempotent (created: 0, existing: 2).
+  await generateBtn.click();
+  await expect(page.getByRole("alertdialog")).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("alertdialog").getByRole("button", { name: "Regenerate anyway" }).click();
+  await expect(page.getByRole("alertdialog")).toBeHidden();
+  await expect(page.getByText(/error/i)).toHaveCount(0);
 });
