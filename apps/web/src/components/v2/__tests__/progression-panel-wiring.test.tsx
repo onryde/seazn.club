@@ -6,7 +6,7 @@
 // real ApiV1Error class), record every call, drive selects/clicks, and read
 // back exactly what reached the network.
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
 import type { ReactElement } from "react";
 
 const net = vi.hoisted(() => ({
@@ -59,6 +59,23 @@ function baseProps(overrides: Partial<ProgressionPanelProps> = {}): ProgressionP
 
 function findByLabel(tree: ReactElement[], label: string): ReactElement | undefined {
   return tree.find((el) => propsOf(el)["aria-label"] === label);
+}
+
+function findAllByLabel(tree: ReactElement[], label: string): ReactElement[] {
+  return tree.filter((el) => propsOf(el)["aria-label"] === label);
+}
+
+/** The `value` of every rendered `<option>` inside a `<select>` element —
+ *  what a real user could actually click, as opposed to what the component's
+ *  state merely allows via a direct onChange call. `walk` (not a manual
+ *  `.props.children` read) because the select's children here are a MIXED
+ *  array — a conditional `{tied && <option/>}` alongside a separately
+ *  `.map()`-produced nested array — exactly the shape `walk` already
+ *  flattens for the top-level tree. */
+function optionValues(select: ReactElement): string[] {
+  return walk(select)
+    .filter((el) => el.type === "option")
+    .map((el) => propsOf(el).value as string);
 }
 
 function findButtonByText(tree: ReactElement[], text: string): ReactElement | undefined {
@@ -138,6 +155,49 @@ describe("ProgressionPanel — tie-pick gating, live", () => {
 
     const confirmCall = net.calls.find((c) => c.url === "/api/v1/stages/ko1/seed-proposal/confirm");
     expect((confirmCall!.json as { edits: unknown[] }).edits).toHaveLength(1);
+  });
+});
+
+describe("ProgressionPanel — duplicate-pick prevention across tied rows sharing a pool (review finding 1, fix round 1)", () => {
+  // The shape mobile.spec.ts's real e2e drives: ONE tie spans both
+  // destination slots, all 4 candidates eligible for either — never a
+  // third, non-tied row in this scenario.
+  const proposalSharedPool = {
+    id: "p6",
+    stageId: "ko1",
+    status: "draft" as const,
+    computed: {
+      qualifiers: [
+        { rank: 1, source: { stageId: "grp", rank: 1 }, entrantId: "e1", destinationSlot: "f1:home" },
+        { rank: 2, source: { stageId: "grp", rank: 2 }, entrantId: "e2", destinationSlot: "f1:away" },
+      ],
+      ties: [{ slots: ["f1:home", "f1:away"], entrantIds: ["e1", "e2", "e3", "e4"], reason: "seed" }],
+      standingsHash: "h6",
+    },
+  };
+
+  it("picking an entrant in one tied row removes it from a SIBLING tied row's own rendered options — a duplicate is not reachable through the real <select>", () => {
+    const island = renderIsland(ProgressionPanel, baseProps({ proposal: proposalSharedPool }));
+    let selects = findAllByLabel(island.tree(), "Entrant");
+    expect(selects).toHaveLength(2);
+    // Before any pick, f1:away's own dropdown still offers "e3".
+    expect(optionValues(selects[1]!)).toContain("e3");
+
+    // Pick e3 for the FIRST row (f1:home) — a real user can only choose
+    // among rendered <option>s, so driving onChange with a still-offered
+    // value is the realistic action (unlike setting arbitrary state).
+    expect(optionValues(selects[0]!)).toContain("e3");
+    (propsOf(selects[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "e3" } });
+
+    selects = findAllByLabel(island.tree(), "Entrant");
+    // f1:home keeps offering e3 — it's that row's OWN current pick, never
+    // excluded from itself.
+    expect(optionValues(selects[0]!)).toContain("e3");
+    // f1:away, drawing from the SAME pool, no longer offers it — before the
+    // fix this option stayed present, a user could pick e3 there too,
+    // allTiesResolved would still enable Confirm (slot coverage only, not
+    // uniqueness), and the POST would 422 SEEDING_SLOT_DOUBLE_ASSIGNED.
+    expect(optionValues(selects[1]!)).not.toContain("e3");
   });
 });
 

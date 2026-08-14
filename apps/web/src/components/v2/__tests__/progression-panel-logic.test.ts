@@ -150,6 +150,34 @@ describe("optionsForSlot — candidate entrants offered per row", () => {
     const edits = new Map([["f1:away", "e4"]]);
     expect(optionsForSlot("f1:home", qualifiers, [], edits, allEntrantIds)).toEqual(["e1", "e2", "e3"]);
   });
+
+  it("REVIEW FINDING 1 (fix round 1): a TIED slot's options exclude an entrant already picked for a SIBLING tied slot drawing from the SAME pool", () => {
+    // The multi-slot-tie shape the e2e drives: one TieOut spanning both
+    // destination slots, all 4 candidates eligible for either. Before the
+    // fix, the tied branch returned `tie.entrantIds` unfiltered — a
+    // duplicate pick was reachable (allTiesResolved only checks slot
+    // COVERAGE, not uniqueness, so Confirm would enable and the server
+    // would 422 SEEDING_SLOT_DOUBLE_ASSIGNED).
+    const ties: TieOut[] = [{ slots: ["f1:home", "f1:away"], entrantIds: ["e1", "e2", "e3", "e4"], reason: "seed" }];
+
+    // Before any edit, each tied slot's own default (from `qualifiers`) is
+    // already implicitly "held" by the OTHER slot — mirrors the non-tied
+    // branch's existing pre-edit exclusion, applied here for the first time.
+    expect(optionsForSlot("f1:home", qualifiers, ties, new Map(), allEntrantIds)).toEqual(["e1", "e3", "e4"]);
+    expect(optionsForSlot("f1:away", qualifiers, ties, new Map(), allEntrantIds)).toEqual(["e2", "e3", "e4"]);
+
+    // An explicit edit on f1:home to e3 must remove e3 from f1:away's
+    // options — the exact duplicate-pick path the review flagged.
+    const edits = new Map([["f1:home", "e3"]]);
+    const awayOptions = optionsForSlot("f1:away", qualifiers, ties, edits, allEntrantIds);
+    expect(awayOptions).not.toContain("e3");
+    expect(awayOptions).toEqual(["e1", "e2", "e4"]);
+
+    // f1:home's OWN list still offers e3 — it's that row's own current
+    // pick, never excluded from itself (same rule the non-tied branch has
+    // always followed).
+    expect(optionsForSlot("f1:home", qualifiers, ties, edits, allEntrantIds)).toContain("e3");
+  });
 });
 
 describe("dictionary hygiene — progression.tiedBadge is dead (review finding 4, P6/D4b task B fix round 1)", () => {

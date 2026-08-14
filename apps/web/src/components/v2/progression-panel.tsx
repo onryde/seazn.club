@@ -106,11 +106,20 @@ export function formatQualifierSource(
 }
 
 /** Candidate entrants for a slot's edit-in-place select. A TIED slot offers
- *  exactly its own tie's candidates (the ambiguity is between THOSE
- *  entrants, not the whole division); any other slot offers every division
- *  entrant not currently placed in a DIFFERENT slot (computed default,
- *  overridden by `editsBySlot` where present) — softly steering away from
- *  the double-assignment the server 422s on, never itself the validation. */
+ *  its own tie's candidates (the ambiguity is between THOSE entrants, not
+ *  the whole division); any other slot offers every division entrant — both
+ *  narrowed by the SAME `usedElsewhere` exclusion (computed default,
+ *  overridden by `editsBySlot` where present, entries for THIS slot itself
+ *  excluded) — softly steering away from the double-assignment the server
+ *  422s on, never itself the validation.
+ *
+ *  The tied branch used to skip this exclusion (review finding 1, P6/D4b
+ *  task B fix round 1): two tied rows sharing a candidate pool could both
+ *  offer, and a user could pick, the SAME entrant — allTiesResolved only
+ *  checks slot coverage, not uniqueness, so Confirm would enable and the
+ *  POST would 422 SEEDING_SLOT_DOUBLE_ASSIGNED. Applying the same filter to
+ *  both branches closes it at the option list, where a real user is
+ *  actually constrained. */
 export function optionsForSlot(
   destinationSlot: string,
   qualifiers: readonly QualifierOut[],
@@ -118,14 +127,14 @@ export function optionsForSlot(
   editsBySlot: ReadonlyMap<string, string>,
   allEntrantIds: readonly string[],
 ): string[] {
-  const tie = ties.find((t) => t.slots.includes(destinationSlot));
-  if (tie) return [...tie.entrantIds];
   const effective = new Map(qualifiers.map((q) => [q.destinationSlot, q.entrantId] as const));
   for (const [slot, id] of editsBySlot) effective.set(slot, id);
   const usedElsewhere = new Set(
     [...effective.entries()].filter(([slot]) => slot !== destinationSlot).map(([, id]) => id),
   );
-  return allEntrantIds.filter((id) => !usedElsewhere.has(id));
+  const tie = ties.find((t) => t.slots.includes(destinationSlot));
+  const pool = tie ? tie.entrantIds : allEntrantIds;
+  return pool.filter((id) => !usedElsewhere.has(id));
 }
 
 // ---------------------------------------------------------------------------
