@@ -197,7 +197,7 @@ export function DeviceScorePad({
       <header className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-[0_0_40px_-12px_rgba(16,185,129,0.25)]">
         <div aria-hidden className="h-0.5 bg-accent" />
         <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
-          <p className="flex min-w-0 items-center gap-2 truncate text-[11px] uppercase tracking-widest text-slate-500">
+          <p className="flex min-w-0 items-center gap-2 truncate text-[11px] uppercase tracking-widest text-slate-400">
             {logo && (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={logo} alt="" className="h-5 w-5 shrink-0 rounded bg-white/10 object-cover" />
@@ -213,7 +213,7 @@ export function DeviceScorePad({
               {msg("device.live")}
             </span>
           ) : (
-            <span className="shrink-0 text-[11px] uppercase tracking-widest text-slate-500">
+            <span className="shrink-0 text-[11px] uppercase tracking-widest text-slate-400">
               {statusLabel(live.status)}
             </span>
           )}
@@ -221,7 +221,7 @@ export function DeviceScorePad({
         <div className="px-3 py-4 text-center sm:px-4 sm:py-5">
           <p className="flex items-baseline justify-center gap-3 text-sm font-medium text-slate-200">
             <span className="max-w-[40%] truncate">{home?.name ?? msg("schedule.tbd")}</span>
-            <span className="text-[10px] uppercase tracking-widest text-slate-600">{msg("schedule.vs")}</span>
+            <span className="text-[10px] uppercase tracking-widest text-slate-400">{msg("schedule.vs")}</span>
             <span className="max-w-[40%] truncate">{away?.name ?? msg("schedule.tbd")}</span>
           </p>
           {/* Fluid LED numerals: clamp to the phone's width so set-score
@@ -231,12 +231,12 @@ export function DeviceScorePad({
             {(summary?.headline ?? "0 — 0").split(" · ").map((group, i, all) => (
               <span key={i} className="inline-block whitespace-nowrap">
                 {group}
-                {i < all.length - 1 && <span className="mx-2 text-slate-600">·</span>}
+                {i < all.length - 1 && <span className="mx-2 text-slate-400">·</span>}
               </span>
             ))}
           </p>
         </div>
-        <p className="border-t border-slate-800 px-4 py-2 text-center text-[10px] uppercase tracking-widest text-slate-600">
+        <p className="border-t border-slate-800 px-4 py-2 text-center text-[10px] uppercase tracking-widest text-slate-400">
           {msg("device.courtsideFooter", { scorer: sport.scorerLabel.toLowerCase() })}
         </p>
       </header>

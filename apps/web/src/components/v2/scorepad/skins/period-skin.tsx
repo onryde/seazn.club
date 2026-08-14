@@ -476,7 +476,7 @@ function renderAttributionItem(
       <label className="block">
         <span className="label">{caption}</span>
         <input
-          className="input"
+          className="input min-h-11"
           type="text"
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onSelect(e.target.value === "" ? undefined : e.target.value)}

@@ -446,7 +446,7 @@ function renderSkinAttribution(
             <label key={item.path} className="block">
               <span className="label">{caption}</span>
               <select
-                className="select"
+                className="select min-h-11"
                 value={typeof current === "string" ? current : ""}
                 onChange={(e) => setValue(item.path, e.target.value === "" ? undefined : e.target.value)}
               >

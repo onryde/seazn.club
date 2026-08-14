@@ -494,7 +494,14 @@ for (const width of WIDTHS) {
       // landmark is the faithful equivalent scope: everything a scorer sees
       // here, nothing from a toast/alert region outside it.
       await openScoreForm(dpage, 7, dpage.locator("main"));
-      await recordEvidence(dpage, `device-${width}`, "main");
+      // `body`, not `main`: the device page's own header (org strip, status,
+      // team line, courtside footer) renders OUTSIDE `<main>`, so a `main`
+      // scope silently excluded it — and that is not hypothetical, it hid four
+      // real colour-contrast violations in `device-score-pad.tsx` (slate-500
+      // and slate-600 on bg-slate-900) through an entire session of scans that
+      // reported zero. This page is a single-purpose scoring surface, so the
+      // whole document is the right bar.
+      await recordEvidence(dpage, `device-${width}`, "body");
     } finally {
       await ctx.close();
     }

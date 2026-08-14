@@ -92,7 +92,7 @@ function renderField(
       <label key={field.path} className="block">
         {caption && <span className="label">{caption}</span>}
         <select
-          className="select"
+          className="select min-h-11"
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value)}
         >
@@ -116,7 +116,7 @@ function renderField(
         {caption && <span className="label">{caption}</span>}
         <input
           type="number"
-          className="input"
+          className="input min-h-11"
           min={field.min}
           max={field.max}
           step={step}
@@ -235,7 +235,12 @@ export function ActionForm({ action, onSubmit, submitting = false, renderAttribu
       {renderAttribution?.(action, values, setValue)}
       {!validity.ok && <p className="text-xs text-amber-700">{msg(validity.reason.key)}</p>}
       <div className="flex gap-2">
-        <button type="button" data-role="cancel" className="btn btn-ghost flex-1" onClick={reset}>
+        {/* `min-h-11` (44px), not the `.btn` class alone: `btn-ghost` renders
+            38px here, under the repo's 44px touch floor, and Tailwind's
+            utilities layer wins over the components-layer `.btn` — the same
+            override that made cricket's over pickers 33px. Measured at
+            320/375/1280 on both the console and the device pad (S13/#422). */}
+        <button type="button" data-role="cancel" className="btn btn-ghost min-h-11 flex-1" onClick={reset}>
           {msg("scorepad.action.cancel")}
         </button>
         <button
