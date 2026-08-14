@@ -36,16 +36,28 @@
 // readouts, tabular-nums, exactly device-score-pad.tsx's established LED
 // treatment); groups are ordered by what a rinkside scorer actually reaches
 // for (goal first, period control always visible beside it, discipline/set-
-// piece next, shot detail tucked in a drawer); and person attribution — for
-// which this file gets no `lineups` prop at all (see SkinProps) — reads the
-// module's OWN folded state the same structural way attribution-picker.tsx
-// already does (`isSquadState`), degrading to a captioned text field rather
-// than a picker only when no roster has folded yet, and offering a jersey
-// NUMBER as the chip label once one has, deliberately ahead of a resolved
-// name (S12/#421 pass B): a scorer identifies a player by number first. Only
-// when NO number is declared does the chip fall back to `ctx.personNames`
-// (S11's SkinLayoutCtx, added but unconsumed here until now), and only past
-// that to a short id fragment — see `memberLabel`'s own comment.
+// piece next, shot detail tucked in a drawer); and person attribution reads
+// the module's OWN live folded state first (`readSquads`, the same
+// structural check attribution-picker.tsx's `isSquadState` uses), then falls
+// back to `ctx.lineups` — the kickoff team sheet, populated by
+// pad-renderer.tsx's own `skinCtx` (SkinLayoutCtx.lineups; PadRendererProps.
+// lineups is not even optional, so every real caller has it) — via the SAME
+// shared `resolveSquads` the unskinned render path already gets for free
+// through `<AttributionPicker>`. An earlier version of this comment claimed
+// the skin "gets no `lineups` prop at all"; that was true when this file was
+// first written (S11/#420 W9) but SkinLayoutCtx grew a `lineups` field
+// afterward and this skin never started reading it — every hockey/icehockey
+// suspension asked a scorer to hand-type a personId, since a suspension is
+// almost always the first discipline event of a match and no `core.lineup.*`
+// event has folded yet (S13/#422 W11, caught by a real-browser e2e). Now the
+// text-field degrade fires only when NEITHER route has a roster (the pure
+// coverage sweep's `state:{}` walk, which never reaches this code, or a
+// fixture with genuinely no saved lineup). Once a roster is known, by either
+// route, the chip label offers a jersey NUMBER first, deliberately ahead of
+// a resolved name (S12/#421 pass B): a scorer identifies a player by number
+// first. Only when NO number is declared does the chip fall back to
+// `ctx.personNames` (S11's SkinLayoutCtx), and only past that to a short id
+// fragment — see `memberLabel`'s own comment.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { padLabel } from "@/lib/scoring-vocab";
@@ -54,7 +66,7 @@ import { formatElapsed } from "@seazn/engine/core";
 import type { SquadState, SquadMember } from "@seazn/engine/core";
 import type { PadAttributionItem, PadFieldValue } from "@seazn/engine/sport";
 import { ActionForm, type ActionValues } from "../action-form";
-import { attributionItemCaption, isSquadState } from "../attribution-picker";
+import { attributionItemCaption, isSquadState, resolveSquads } from "../attribution-picker";
 import type { PadActionView, PadView } from "../view-model";
 import {
   actionByType,
@@ -339,21 +351,22 @@ function memberLabel(member: SquadMember, personNames: Readonly<Record<string, s
 
 /**
  * One attribution item, resolved against whatever roster facts THIS skin can
- * actually read off the module's own folded state (see `readEntrants`/
- * `readSquads` above) plus `ctx.personNames` (S11's SkinLayoutCtx — SkinProps
- * still carries no `lineups` prop, unlike PadRenderer). Three tiers, each an
- * honest reflection of what is actually known right now, never a fabricated
- * one:
+ * actually read — the module's own LIVE folded state first (`readSquads`),
+ * `ctx.lineups` (the kickoff team sheet) next, via `resolveSquads` — plus
+ * `ctx.personNames` for the chip label. Three tiers, each an honest
+ * reflection of what is actually known right now, never a fabricated one:
  *   - "side": real Home/Away chips keyed on `state.entrants` (always known
  *     once a fixture exists) — never a bare "home"/"away" literal, which the
  *     engine's own `EntrantId` schema would reject.
- *   - "person" WITH a folded squad: number chips, exactly the vocabulary a
- *     scorer already uses (`memberLabel`'s own comment on why number beats a
- *     resolved name here, not just id-vs-name).
- *   - "person" with NO folded squad yet (the common case before any
- *     `core.lineup.*` event — see `readSquads`): a captioned text field. Not
- *     a picker pretending to have data it does not — but still a real,
- *     labelled control, never a bare unlabelled input.
+ *   - "person" WITH a roster, live-folded OR from the kickoff sheet: number
+ *     chips, exactly the vocabulary a scorer already uses (`memberLabel`'s
+ *     own comment on why number beats a resolved name here, not just
+ *     id-vs-name).
+ *   - "person" with NO roster known by EITHER route (`ctx.lineups` also
+ *     absent — the pure coverage sweep, or a fixture with no saved lineup at
+ *     all): a captioned text field. Not a picker pretending to have data it
+ *     does not — but still a real, labelled control, never a bare unlabelled
+ *     input.
  */
 function renderAttributionItem(
   item: PadAttributionItem,
@@ -450,18 +463,24 @@ function renderAttributionItem(
 /**
  * Builds the `renderAttribution` callback `ActionForm` expects
  * (action-form.tsx's `ActionFormProps.renderAttribution`), closing over the
- * roster facts read once from `ctx.state`. Exported (not just an inline
- * closure inside `PeriodSkin`) so it is independently testable against a
- * REAL folded state without needing to drive the whole component through
- * the hook harness — the suspension flow is exactly the surface criterion 5
- * holds this skin to, and this is the one function that decides it.
+ * roster facts read once from `ctx.state` and `ctx.lineups`. Exported (not
+ * just an inline closure inside `PeriodSkin`) so it is independently
+ * testable against a REAL folded state without needing to drive the whole
+ * component through the hook harness — the suspension flow is exactly the
+ * surface criterion 5 holds this skin to, and this is the one function that
+ * decides it.
  */
 export function buildAttributionRenderer(
   ctx: SkinLayoutCtx,
   msg: MsgFn,
 ): (action: PadActionView, values: ActionValues, setValue: (path: string, value: PadFieldValue | undefined) => void) => ReactNode {
   const entrants = readEntrants(ctx.state);
-  const squads = readSquads(ctx.state);
+  // Live folded squad wins when one has folded (readSquads); otherwise fall
+  // back to the kickoff team sheet via the SAME resolveSquads the unskinned
+  // render path already gets through <AttributionPicker> — see the module
+  // header. `ctx.lineups` is absent only in the pure coverage sweep and one
+  // of this file's own unit tests (both keep the old state-only read).
+  const squads = ctx.lineups ? resolveSquads(ctx.state, ctx.lineups) : readSquads(ctx.state);
   const personNames = ctx.personNames;
   // Named, not an anonymous arrow: it returns JSX, so eslint's react/display-name
   // treats it as a component definition. It is really a render prop, but a name
