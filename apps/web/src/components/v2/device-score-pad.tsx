@@ -108,6 +108,17 @@ export function DeviceScorePad({
     setEvents(all);
   }, [authed, fixture.id]);
 
+  /** Same seam and same reasoning as fixture-console.tsx's own
+   *  `handlePadEvents` — see its comment. `<ScorePad/>`'s own pipeline
+   *  stamps a client-fabricated id on every event it knows about and never
+   *  learns the server's real row id, so the raw event list this fires with
+   *  is deliberately unused; only a real `resync()` (the same one `send()`
+   *  already trusts) can tell this component the real id `lastOwnVoidable`
+   *  needs. A failed opportunistic resync is swallowed. */
+  const handlePadEvents = useCallback(() => {
+    void resync().catch(() => undefined);
+  }, [resync]);
+
   const send: SendEvent = useCallback(
     async (type, payload) => {
       setError(null);
@@ -294,6 +305,7 @@ export function DeviceScorePad({
               identity={scorePadV2.identity}
               entitlements={scorePadV2.entitlements}
               band={scorePadV2.band}
+              onEvents={handlePadEvents}
             />
           </ScoringErrorBoundary>
         </section>
