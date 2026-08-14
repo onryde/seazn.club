@@ -129,12 +129,20 @@ export function boardMetrics(
   // an abstention. It also makes `daySpanMinutes` equal the whole-board span in
   // that case, which is the right number for a single day by definition.
   //
-  // NONE OF THE THREE IS RANKED. `isStrictlyBetter` reads only `placed`,
-  // `makespanMinutes`, `worstIdleGapMinutes` and `courtImbalanceMinutes`, and
-  // is unchanged by the day-aware rungs — see its own note for why mirroring
-  // the solver's ladder into it does not work, and the release-2 index
-  // (`2026-08-12-release2-prompts/_INDEX.md`) for the four attempts that
-  // proved it. These fields are for the response and the board's result strip.
+  // NONE OF THE THREE IS RANKED, HERE OR ANYWHERE. `isStrictlyBetter` reads
+  // only `placed`, `makespanMinutes`, `worstIdleGapMinutes` and
+  // `courtImbalanceMinutes`, and is unchanged by the day-aware rungs — see its
+  // own note for why mirroring the solver's ladder into it does not work, and
+  // the release-2 index (`2026-08-12-release2-prompts/_INDEX.md`) for the four
+  // attempts that proved it.
+  //
+  // READ BUT NOT ORDERED by the build gate, since 2026-08-13. `solveBuild`'s
+  // `ladderTied` compares these three for EQUALITY against the seed, to answer
+  // "did the solver find anything to gain" before trusting its proof. That is
+  // not a ranking and must never become one: an equality can decline to ship
+  // churn, an ordering would pick a winner on terms greedy scores well on by
+  // ignoring the typed rules. Otherwise these fields are for the response and
+  // the board's result strip.
   const dayOf = days?.dayOf ?? ((): number => 0);
   const byDay = new Map<number, { lo: number; hi: number }>();
   for (const a of assignments) {

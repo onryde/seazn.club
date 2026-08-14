@@ -525,6 +525,137 @@ would also change the apply gate's delta check and every surface sharing the
 predicate). With that guard in place the proved board never reaches the
 comparator, and trusting the proof becomes safe.
 
+#### CLOSED (2026-08-14): the gate trusts the proof, tie broken on the LADDER
+
+Branch `fix/c2-gate-proof-tie`, off `f364f4ce`. **61/61 on the six suites**
+(baseline on `origin/main` measured first, also 61/61, `grep -c
+UNAUTHENTICATED` = 0 on both, every `.testResults[].name` inside the worktree).
+
+**The change, in one line:** when the reply proved OUR ladder, the service is
+the authority on its own objective and its board ships; `isStrictlyBetter`
+survives only for a reply that proved nothing. D6's placed floor is checked
+first in every arm.
+
+**Why it is safe NOW and was not before: #564.** `isBlockingForBuild` refuses a
+solver board that introduces a durable-rule breach, at step 7, before the
+comparator. That was the stated prerequisite and it has landed, so the
+`not_before noon` failure that killed the earlier attempt cannot recur. The two
+ship together — do not port this gate to a tree without that guard.
+
+**TWO FALSE PREMISES IN THE TASK BRIEF, both measured, both the opposite of
+what the brief said. Neither is guessable from the code.**
+
+1. **The polish failure was never a tie.** The brief attributed
+   `does not anchor a BUILD to the board it was asked to replace` (expected 6
+   to be 0) to `ladderTied` being metric- rather than board-equality.
+   Instrumented on that fixture: `dayStartOffset` is **0 against 540** —
+   the two boards are not tied on any predicate. The real cause is `moved`'s
+   BASELINE. `movedFrom` fell back to greedy's own seed, which read as zero only
+   because every no-`current` exit RETURNED that seed; once the gate ships the
+   solver's board, a fresh full pass reports "6 matches moved" against a board
+   greedy invented mid-run and never showed anyone. Fixed by mirroring
+   `lostFrom` exactly: **no caller board ⇒ 0**. This is the R21-shaped fix the
+   notes above predicted would break POLISH — it does touch two
+   `build-polish.test.ts` arms, and both were rewritten rather than deleted (see
+   below).
+2. **Comparing ASSIGNMENTS, the brief's prescribed fix, ships churn.** Measured
+   on `schedule-solver-telemetry`'s one-fixture board: the proved reply is a
+   bare **court swap** (`a@C2` for `a@C1`, same instant) with all six rungs AND
+   `makespan` byte-identical. Board identity ships that, reports `ok`, and moves
+   every card on a board nothing improved — and `already_optimal` loses its only
+   reachable path. The tie is a question about the LADDER, so the tie rule is
+   **equality over the six rungs**, re-measured with ONE instrument
+   (`seed.metrics` carries no `DayView`, so the seed is re-measured with the
+   incumbent's `days` view — comparing the two as-is is the placer/verifier fork
+   this file keeps producing).
+
+**This is NOT the rejected mirror**, and the distinction is the whole design: an
+equality can decline to churn, an ordering would pick a winner on terms greedy
+scores well on precisely because it ignores typed rules. Never let `ladderTied`
+become a comparison.
+
+**Status untangled from the ship decision, as required.** `already_optimal` is
+now `provedOurLadder && ladderTied` — "a board nothing beat" — rather than
+`!improved`, which would also catch the D6 floor case and call a board the seed
+BEAT "already optimal". `infeasible` unchanged.
+
+**`moved`'s two suites were pinning opposite things** and coexisted only because
+a different board shipped in each fixture. `schedule-polish-current` pins
+BUILD ⇒ 0; `build-polish` pinned no-`current` ⇒ counted against the seed.
+Resolved toward 0, because the alternative makes `schedule-polish-current`
+VACUOUS (its mutant — BUILD passing `current` — would then also answer 6).
+`build-polish`'s scoping mutant (`moved: 3` on a two-row board) was preserved by
+giving that spec a `current`-carrying arm; verified by re-mutating
+(`expected 3 to be 2`).
+
+**Verification.** Both halves independently mutation-checked against
+`origin/main`'s `build.ts`: the gate half fails `expected 'greedy' to be
+'optimized'`, the `moved` half fails `expected 2 to be +0`. Engine
+`test:coverage` 3928 passed / 22 pre-existing pendings; engine + `apps/web` lint
+0 errors; engine + `apps/web` tsc 0 errors.
+
+**A THIRD fixed-park-instant site, found by CI on this PR.**
+`schedule.test.ts` -> "Community org: constraints/board are open, quick-start
+unaffected (#382)" parks round 1 at `at(-60)`. That instant was chosen when the
+board was assumed to start at 09:00, so it read as "earlier than everything";
+against a board the solver compacts to the day's open it is LATER than every
+card, putting round 1 after round 3 — a direct `order` breach, and blocking.
+Same premise as the two sites above, same cause, and it only surfaced now
+because the gate stopped discarding the compacted board: **2 red in 3 with the
+fix, 0 red in 4 on `origin/main`, same DB and box.** So the gate change did not
+break it — it removed the accident that was hiding it, exactly as the locks
+suite's note predicted.
+
+Fixed by the established technique, not a new one: park FORWARD off the board's
+own last card, on the LAST-round fixture. Backward is unfixable here for the
+recorded reason (on the seed day the earliest card sits ON the window floor, so
+the park fails with `window`). 6 of 6 green after, and the manual SET is now
+read back so the spec still proves a write happened. Full DB-backed run
+(`src/server src/lib`, real Postgres, real placement service): **4594 passed /
+0 failed**, against CI's 4593/1 before the fix.
+
+**SWEPT 2026-08-14: there is no fourth site today.** The recipe below is what
+the sweep actually needed — the naive one in the first draft of this entry
+produced BOTH false negatives and false leads, so use this and not that.
+
+*The discriminator is DATAFLOW, not the literal.* A fixed instant is only a
+hazard when it is parked ONTO a solver-produced board (`autoSchedule` -> park),
+because nothing pins which day the solver picks. These are NOT instances:
+
+  * a whole board the test authors at fixed offsets from one `T0` origin — it is
+    internally consistent wherever `T0` lands (`schedule-durable-hard-surfaces`
+    builds `violating` this way and applies it `source: "manual"`, overwriting
+    the proposal it took at :208);
+  * a write onto an EMPTY board — nothing to collide with
+    (`schedule-solver-telemetry`'s `at(0)`/`at(30)` at :744 and
+    `schedule.test.ts`'s `at(0)` at :658/:715 all follow `seedStage` /
+    `generateStageFixtures` with no `autoSchedule` between);
+  * `schedule-solver-telemetry`'s pinned-anchor spec at :593, which parks the
+    LAST round forward onto an empty board — deliberately preserved, twice now.
+
+*The dangerous shape is the INPUT, not an equality assertion.* All three known
+sites failed as `scheduled_at: at(N)` handed to `applySchedule`/`moveFixture`,
+throwing at the park before any assertion ran; the locks site's own
+`expect(...).toBe(at(-480))` lines never executed. A rule that hunts equality
+assertions and treats `scheduled_at: at(600)` as safe excludes every instance
+found so far — that literal IS the telemetry site's failing line.
+
+*`git grep -E` is POSIX ERE: `\s` matches NOTHING and fails silently.* The
+sweep's first pass returned zero hits on a pattern with 40+ real ones. Use
+`[[:space:]]`, and always run a positive control before believing an empty set:
+
+    git grep -naE "(scheduled_at|startAt)[[:space:]]*:[[:space:]]*at\(-?[0-9]" -- apps/web/src
+
+Anchor `\bat\(` if you widen it — a bare `at(` also matches CSS like
+`repeat(4,4rem)`. And grep by ADDED LINE, not by file: a touched file's
+pre-existing hits are not yours.
+
+**Load warning for whoever runs the engine suite next.** On a contended box the
+full engine run produced a DIFFERENT red set every time (15, then 2, then 5,
+including `swiss` at 40 s and `golden` replay at 7.1 s against 59 ms isolated).
+All green in isolation. Raise `--testTimeout` before believing any of them, and
+read `uptime` first — this is not limited to `repair-scale`/`repair-decompose`.
+
 #### The second site: `schedule-solver-telemetry.test.ts`
 
 "reflow leaves an already-legal board untouched, including a card parked late"

@@ -529,32 +529,53 @@ describe.skipIf(!HAS_DB)("scheduling console (doc 12, PROMPT-17)", () => {
     // `source: "manual"` on `applySchedule` — and each is read back, so a call
     // that returned quietly without writing cannot pass.
     //
-    // C1 (task 3): moved EARLIER than the auto-scheduled board (`at(-60)`),
-    // not later (the original `at(600)`). `fixtures[0]` is round 1
-    // (`generateStageFixtures` orders `round_no, seq_in_round`), and the
-    // auto-scheduled board above is round-order-correct by construction —
-    // pushing round 1 to `at(600)`, ten hours past every later round, was a
-    // genuine round-order violation this test was unknowingly creating.
-    // `applySchedule`'s delta gate has no way to see it (a single-fixture
-    // manual move puts only that ONE fixture in `assignments`; its own
-    // round-robin siblings sit in `existing`, and the round-order pair scan
-    // is scoped to `assignments` alone — the same shape as the escalated
-    // `moveFixture` gap, out of this task's scope to fix), so the move went
-    // through uncaught; `startDivision`'s own gate (`validateScheduleIn`,
-    // task 3 / G1) is ABSOLUTE, not delta, and correctly refused the
-    // resulting board. This test is about proving manual board editing isn't
-    // blocked by the entitlement gate, not about round order, so the fix is
-    // a legal target time — round 1 moving EARLIER can never breach
-    // round order — not a change to any gate.
+    // THE PARK SLOT COMES OFF THE BOARD, NOT OFF A FIXED INSTANT (2026-08-14).
+    // Third site of the premise `schedule-build-honours-locks` and
+    // `schedule-solver-telemetry` already fixed; this one only surfaced once the
+    // build gate stopped discarding the solver's compacted board, because
+    // `isStrictlyBetter` had been holding these suites still by accident.
+    //
+    // `config.startAt` is NOT the solver's floor: `applyWindow` floors the
+    // window at START-OF-DAY, so the solver's grid opens at midnight while
+    // greedy's cursor opens at 09:00 (`calendar.ts:759`). Under the day-aware
+    // rungs the solver compacts to that midnight, on the seed day or the next,
+    // run to run. `at(-60)` — 08:00 — was chosen when the board was assumed to
+    // start at 09:00, so it read as "earlier than everything". Against a
+    // compacted board it is LATER than every card, which puts round 1 after
+    // round 3: a direct `order` breach, and blocking. Measured on this exact
+    // fixture: 2 red in 3 runs with the gate fixed, 0 in 4 without it.
+    //
+    // FORWARD, off the board's own last card, and on the LAST-round fixture —
+    // the technique `parkSlot`/`lastRoundFixtureId` establish in the locks
+    // suite, for the reason recorded there: backward cannot be made robust,
+    // because on the seed day the earliest card sits exactly ON the window
+    // floor and no legal slot exists before it, so the park fails with `window`
+    // instead of `order`. Forward has no such edge — this competition ends in
+    // 2030 — and a LAST-round card moving later can no more breach round order
+    // than a round-1 card moving earlier could.
+    //
+    // The pin branch still rides on `fixtures[0]`; only the manual SET moves.
+    const [board] = await sql<{ latest: Date | null }[]>`
+      select max(scheduled_at) as latest from fixtures where stage_id = ${stage.id}`;
+    expect(board!.latest).not.toBeNull();
+    const parkedAt = new Date(board!.latest!.getTime() + 480 * MIN).toISOString();
+    const lastRound = fixtures[fixtures.length - 1]!;
+
     await patchFixture(auth, fixtures[0]!.id, { schedule_locked: true });
     await applySchedule(auth, stage.id, {
-      assignments: [{ fixture_id: fixtures[0]!.id, scheduled_at: at(-60), court_label: "C1" }],
+      assignments: [{ fixture_id: lastRound.id, scheduled_at: parkedAt, court_label: "C1" }],
       source: "manual",
     });
     const [pinned] = await sql<{ schedule_locked: boolean; court_label: string | null }[]>`
       select schedule_locked, court_label from fixtures where id = ${fixtures[0]!.id}`;
     expect(pinned!.schedule_locked).toBe(true);
     expect(pinned!.court_label).toBe("C1");
+    // The manual SET landed — read back, so a call that returned quietly
+    // without writing cannot pass. This is the half `at(-60)` used to carry.
+    const [moved] = await sql<{ scheduled_at: Date; court_label: string | null }[]>`
+      select scheduled_at, court_label from fixtures where id = ${lastRound.id}`;
+    expect(moved!.scheduled_at.toISOString()).toBe(parkedAt);
+    expect(moved!.court_label).toBe("C1");
 
     // Quick-start unaffected: start opens scoring immediately.
     const started = await startDivision(auth, division.id);

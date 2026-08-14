@@ -988,7 +988,21 @@ function greedySeed(input: BuildInput): GreedySeed {
         proved,
       }),
     movedFrom: (board) => {
-      const was = new Map((currentBoard ?? assignments).map((a) => [a.fixtureId, a]));
+      // NOTHING TO HAVE MOVED FROM, so nothing moved — the same rule
+      // `lostFrom` states directly below, for the same reason.
+      //
+      // Greedy's own seed used to stand in as the baseline here, and that was
+      // defensible for exactly as long as every no-`current` exit RETURNED that
+      // seed: a self-comparison, so zero. The build gate now ships the solver's
+      // proved board instead, and against an invented baseline the fallback
+      // reports "6 matches moved" on the first run of the day — measured, on
+      // `schedule-polish-current`'s own fixture — where those 6 cards moved
+      // from a board greedy built during this same run and never showed
+      // anybody. That is precisely the meaningless number R20 warns about for
+      // anchoring to greedy's re-placement. A fresh full pass does not move
+      // cards; it places them.
+      if (currentBoard === undefined) return 0;
+      const was = new Map(currentBoard.map((a) => [a.fixtureId, a]));
       return board.filter((a) => {
         const before = was.get(a.fixtureId);
         return before === undefined || before.court !== a.court || before.startAt !== a.startAt;
@@ -2099,13 +2113,14 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
     outcome.objectiveValues.length === TIER_COUNT &&
     TIER_NAMES.every((name, i) => outcome.objectiveValues[i]?.name === name);
 
-  // D6 — "never worse than greedy" — UNCHANGED by the day-aware rungs, and
-  // that is a deliberate, evidenced decision rather than an omission.
+  // D6 — "never worse than greedy". The history below is kept because it is the
+  // reasoning that has to survive: four measured variants died here, and the
+  // shape of the answer is not guessable from the code alone.
   //
   // The obvious move is to mirror the solver's new ladder here, because a gate
   // ranking on terms the placer no longer optimises can discard a board the
-  // placer proved optimal. That is a real defect and it is open — see the C2
-  // follow-up notes in `docs/superpowers/specs/2026-08-12-release2-prompts/_INDEX.md`.
+  // placer proved optimal. That was a real defect and it is CLOSED below — see
+  // the C2 follow-up notes in `docs/superpowers/specs/2026-08-12-release2-prompts/_INDEX.md`.
   // What is NOT the fix is mirroring the ladder into this comparison. The two
   // boards are not both products of it: the seed is greedy's, and greedy is
   // RULE-BLIND. It packs from the first admissible tick, which scores
@@ -2116,23 +2131,91 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // may start before noon, and drove `assertNoNewBlocking` failures across the
   // locks suites. Every variant traded one failure class for another.
   //
-  // So the ladder change ships WITHOUT touching who wins here, and the gate
-  // rework is its own task with its own diagnosis. `isStrictlyBetter` reads
-  // none of the day metrics, so `incumbentMetrics` carrying them (for the
-  // response, which publishes them) cannot change this comparison.
-  const improved = isStrictlyBetter(incumbentMetrics, seedMetrics);
+  // ------------------------------------------------------------------
+  // THE GATE REWORK (2026-08-13). All of the above still holds: ranking these
+  // two boards against each other is the wrong question, in BOTH directions.
+  // Ranking the day terms rewards greedy for being rule-blind. Ranking
+  // `makespan` — what `isStrictlyBetter` does — is the mirror error: the placer
+  // stopped optimising that term when the ladder went day-aware, so a board the
+  // service PROVED optimal loses on a number nobody was solving for. Measured
+  // on `schedule-polish-current`'s own fixture: the solver returns
+  // `dayStartOffsetMinutes: 0` against greedy's 540 and ties every other rung,
+  // and the old comparison discarded it because both boards span 150 minutes.
+  //
+  // What was missing before #564 was a way to REFUSE a proved board that breaks
+  // a durable rule. `isBlockingForBuild` is now that refusal, and it runs at
+  // step 7 above — so a board that reaches this line has already been checked
+  // against the typed rules the service is never told about. Trusting the proof
+  // here is safe only BECAUSE that guard runs first; the two ship together.
+  //
+  // So: the service is the authority on its own objective, and when it proves
+  // OUR ladder (`provedOurLadder` — names in order, not a bare count) there is
+  // nothing left for a comparator to decide. When it proves nothing — a starved
+  // reply, or a chain that proved a DIFFERENT ladder — `isStrictlyBetter` is
+  // still the only evidence there is, and D6 keeps it.
+  //
+  // TRUSTING THE PROOF NEEDS A TIE RULE, and the tie is a question about the
+  // LADDER, not about the boards. Equality on all six rungs is the solver's own
+  // statement that it found nothing to gain: greedy's board is optimal too, and
+  // the two are interchangeable by every measure the service was optimising.
+  // Shipping the candidate anyway is pure churn — measured on
+  // `schedule-solver-telemetry`'s one-fixture board, where the reply is a bare
+  // COURT SWAP (`a@C2` for `a@C1`, same instant) with all six rungs and
+  // `makespan` byte-identical. An organiser would see every card jump courts on
+  // a board nothing improved, and `already_optimal` would lose its only name.
+  //
+  // NOT THE REJECTED MIRROR. That variant ranked the day terms and so could
+  // PREFER a board for scoring better on one — which rewards greedy for being
+  // rule-blind, and is why it was reverted. This asks only whether the two
+  // boards are indistinguishable on the ladder, an equality, never an ordering;
+  // it can decline to churn, and can never pick a winner.
+  //
+  // MEASURED WITH ONE INSTRUMENT, not two. `seed.metrics` is built by
+  // `greedySeed` with NO `DayView`, and `boardMetrics` documents what that
+  // means: no view is ONE DAY, so its `daysUsed` is 1 and its `daySpanMinutes`
+  // is the whole-board span. Comparing those against `incumbentMetrics`, which
+  // was measured against the real grid, is the placer/verifier fork this file
+  // keeps paying for. Re-measure the seed with the same `days` view, and
+  // compare like with like. (`seedMetrics` stays valid for `isStrictlyBetter`
+  // below — all four terms it ranks are day-independent.)
+  const seedLadderMetrics = boardMetrics(seed.assignments, config.courts, fixtures.length, days);
+  const ladderTied =
+    incumbentMetrics.placed === seedLadderMetrics.placed &&
+    incumbentMetrics.daysUsed === seedLadderMetrics.daysUsed &&
+    incumbentMetrics.daySpanMinutes === seedLadderMetrics.daySpanMinutes &&
+    incumbentMetrics.dayStartOffsetMinutes === seedLadderMetrics.dayStartOffsetMinutes &&
+    incumbentMetrics.worstIdleGapMinutes === seedLadderMetrics.worstIdleGapMinutes &&
+    incumbentMetrics.courtImbalanceMinutes === seedLadderMetrics.courtImbalanceMinutes;
 
+  const improved =
+    // D6's floor first, in every arm: a board that places FEWER fixtures is
+    // worse whatever else it proved, and no proof outranks that.
+    incumbentMetrics.placed !== seedLadderMetrics.placed
+      ? incumbentMetrics.placed > seedLadderMetrics.placed
+      : provedOurLadder
+        ? !ladderTied
+        : isStrictlyBetter(incumbentMetrics, seedMetrics);
   if (!improved) {
-    // `already_optimal`/`infeasible` are ONLY reachable here — both require
-    // `!improved` by definition (a board that is `already_optimal` is, by
-    // that word, one nothing beat), so this must not run in the `improved`
-    // arm below: a fully-proved ladder that ALSO happens to have beaten the
-    // seed is `ok`, and calling it `already_optimal` would deny the very
-    // improvement this branch exists to ship.
+    // `already_optimal`/`infeasible` are ONLY reachable here — both describe a
+    // run that ships the SEED, so neither can be said in the `improved` arm
+    // below: a proved ladder that also beat the seed is `ok`, and calling it
+    // `already_optimal` would deny the very improvement this branch ships.
+    //
+    // DERIVED FROM THE PROOF AND THE BOARDS, NOT FROM `!improved`. Those two
+    // used to coincide and no longer do, which is why this is written out
+    // rather than inherited. `already_optimal` means "a board nothing beat",
+    // and that is now exactly `provedOurLadder && ladderTied`: the service
+    // proved our ladder and could not separate its own answer from the board
+    // greedy already had.
+    // Keying it off `!improved` instead would also catch the D6 floor case — a
+    // proved reply that placed FEWER than the seed — and call a board the seed
+    // BEAT "already optimal", which is the opposite of what the word says.
     const status: BuildStatus = provedOurLadder
       ? incumbentMetrics.placed === 0 && fixtures.length > 0
         ? "infeasible"
-        : "already_optimal"
+        : ladderTied
+          ? "already_optimal"
+          : "ok"
       : "ok";
     // The floor, not the candidate. `greedy()` recomputes conflicts/moved/
     // lost off `seed.assignments` itself — the SAME derivation every other

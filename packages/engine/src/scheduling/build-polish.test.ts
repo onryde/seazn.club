@@ -242,10 +242,15 @@ describe("buildSchedule — polish", () => {
     expect(out.assignments.find((x) => x.fixtureId === "a")?.startAt).toBe(T0 + 30 * MIN);
     expect(out.moved).toBe(1);
 
-    // The control: the identical run with no `current` falls back to the seed
-    // and counts both. Mocked again (`vi.spyOn` set once) since the previous
-    // call already consumed no state, but re-set for clarity and in case a
-    // future edit makes the two calls' mocks diverge.
+    // The control: the identical run with no `current` has NO baseline at all
+    // and counts nothing. It answered 2 until 2026-08-13, when `moved` stopped
+    // falling back to greedy's own seed — see `movedFrom`. The control still
+    // does its job, which is to prove the `1` above was read off the caller's
+    // board: the two baselines disagree by construction here (1 against 0), so
+    // a `moved` that had quietly gone back to the seed would answer 2 in the
+    // first arm and fail it. Mocked again (`vi.spyOn` set once) since the
+    // previous call already consumed no state, but re-set for clarity and in
+    // case a future edit makes the two calls' mocks diverge.
     vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
       okOutcome([
         { fixtureId: "b", court: "C1", startAtMs: T0 },
@@ -253,7 +258,7 @@ describe("buildSchedule — polish", () => {
       ]),
     );
     const seedBaseline = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
-    expect(seedBaseline.moved).toBe(2);
+    expect(seedBaseline.moved).toBe(0);
     await resetZ3();
   }, 120_000);
 
@@ -330,8 +335,14 @@ describe("buildSchedule — polish", () => {
     // nobody, so the solver drops `a` and places both. Measured: greedy `[a]`,
     // z3 `[b, c]`.
     //
-    //   scoped (correct): moved 2, lost 0
+    //   scoped (correct): moved 2, lost 1
     //   unscoped:         moved 3, on a 2-row board
+    //
+    // MEASURED AGAINST A CALLER BOARD, and since 2026-08-13 that is the only
+    // way to measure it: `moved` no longer falls back to greedy's seed when the
+    // caller supplies no board (`movedFrom`), so the no-`current` arm below
+    // answers 0 for both rules and cannot tell them apart. The `current` arm is
+    // where the mutant is killed; the no-`current` arm pins the new rule.
     //
     // It also refutes the reasoning the old code carried. "A seed baseline can
     // never lose a row because T0 maximises `placed`" is false:
@@ -357,14 +368,34 @@ describe("buildSchedule — polish", () => {
     const out = await buildSchedule({ fixtures, config: oneEach });
     expect(out.assignments.map((a) => a.fixtureId).sort()).toEqual(["b", "c"]);
 
-    // `a` fell out of the answer, and against the seed that is ordinary progress
-    // rather than a loss.
+    // `a` fell out of the answer, and against a baseline that never existed
+    // that is neither a loss nor a move. Both channels say nothing, by the same
+    // rule, which is the point: there was no board to have moved or lost from.
     expect(out.lost).toBe(0);
-    // Both rows are new to the baseline, so both count as moved — and no more.
-    expect(out.moved).toBe(2);
+    expect(out.moved).toBe(0);
+
+    // THE SCOPING RULE, on the same fixture, with a caller board so the two
+    // rules can still disagree. `a` is the organiser's row and the solver drops
+    // it: scoped counts the two rows ON the answer and reports the drop on its
+    // own channel; the unscoped rule this test was written for walks the
+    // BASELINE instead and reports `moved: 3` about a two-row board.
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+      okOutcome([
+        { fixtureId: "b", court: "C1", startAtMs: T0 },
+        { fixtureId: "c", court: "C2", startAtMs: T0 },
+      ]),
+    );
+    const held = await buildSchedule({
+      fixtures,
+      config: oneEach,
+      current: [row("a", "C1", T0)],
+    });
+    expect(held.assignments.map((a) => a.fixtureId).sort()).toEqual(["b", "c"]);
+    expect(held.moved).toBe(2);
+    expect(held.lost).toBe(1);
     // The invariant the conflated number broke, stated in its own right: a strip
     // rendering "moved N" beside this board cannot print an N larger than it.
-    expect(out.moved).toBeLessThanOrEqual(out.assignments.length);
+    expect(held.moved).toBeLessThanOrEqual(held.assignments.length);
     await resetZ3();
   }, 120_000);
 
