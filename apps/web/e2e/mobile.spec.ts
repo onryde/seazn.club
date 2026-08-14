@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type Locator } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import {
   TAG,
@@ -1207,6 +1207,24 @@ test("P6 task B setup: a 4-way-tied league decides, KO panel has a real tie to r
   expect(completed.data!.seed_proposal?.status).toBe("draft");
 });
 
+/** The real (non-placeholder) <option>s currently rendered in a progression
+ *  row's <select> — {value: entrant id, label: entrant name}. A tied row's
+ *  pool correctly EXCLUDES whichever entrant is the other tied row's current
+ *  pick (`optionsForSlot`, progression-panel.tsx:123-138). Before either row
+ *  has an organiser edit, "the other row's current pick" is its computed
+ *  default, which comes from the engine's "lots" tie-break — seeded by
+ *  freshly generated entrant UUIDs (packages/engine/src/competition/
+ *  tiebreakers.ts:577-611), so it is genuinely random per run. That means
+ *  which entrant is missing from which row's <select> is random too: a test
+ *  must read what a row actually offers rather than assume a fixed entrant
+ *  lands in a fixed row (see project_p6_taskb_confirm_tiebreak_flake.md). */
+async function realSelectOptions(select: Locator): Promise<{ value: string; label: string }[]> {
+  const entries = await select.locator("option").evaluateAll<{ value: string; label: string }[]>((opts) =>
+    opts.map((o) => ({ value: (o as HTMLOptionElement).value, label: (o.textContent ?? "").trim() })),
+  );
+  return entries.filter((o) => o.value !== ""); // drop the "choose an entrant" placeholder
+}
+
 test("P6 task B: panel resolves the tie, confirms, bracket shows real entrants, schedule unchanged on screen", async ({
   page,
 }) => {
@@ -1224,13 +1242,38 @@ test("P6 task B: panel resolves the tie, confirms, bracket shows real entrants, 
   await expect(confirmBtn).toBeDisabled();
 
   // Both destination slots are tied against the same 4 candidates (see the
-  // block comment above) — resolve each row's select explicitly, by NAME
-  // (never by option position, which follows a sorted entrant-id order the
-  // test cannot predict).
+  // block comment above), but WHICH entrant is missing from WHICH row is
+  // random per run (realSelectOptions above) — so resolve each row from
+  // whatever it actually offers: the first real option in row 0, then
+  // whatever remains distinct in row 1. This asserts the real relationship
+  // (two rows, two distinct entrants, row 1's pool excluding row 0's pick)
+  // rather than a coincidence of shuffle order, so it is strictly stronger
+  // than picking two hardcoded names.
   const rows = panel.locator("tbody tr");
   await expect(rows).toHaveCount(2);
-  await rows.nth(0).locator("select").selectOption({ label: "Nova Q" });
-  await rows.nth(1).locator("select").selectOption({ label: "Orion Q" });
+  const row0Select = rows.nth(0).locator("select");
+  const row1Select = rows.nth(1).locator("select");
+
+  const row0Options = await realSelectOptions(row0Select);
+  expect(row0Options.length).toBeGreaterThan(0);
+  const pick0 = row0Options[0]!;
+  await row0Select.selectOption({ value: pick0.value });
+  await expect(row0Select).toHaveValue(pick0.value);
+
+  // Only one of the two tied slots is resolved so far — confirm must stay
+  // disabled until BOTH are (allTiesResolved, progression-panel.tsx:68-70).
+  await expect(confirmBtn).toBeDisabled();
+
+  // Row 1's own pool must now exclude whatever row 0 just picked — the
+  // exact exclusion this flake was about, proven directly rather than
+  // assumed, before acting on it.
+  const row1Options = await realSelectOptions(row1Select);
+  expect(row1Options.length).toBeGreaterThan(0);
+  expect(row1Options.map((o) => o.value)).not.toContain(pick0.value);
+  const pick1 = row1Options[0]!;
+  await row1Select.selectOption({ value: pick1.value });
+  await expect(row1Select).toHaveValue(pick1.value);
+  expect(pick1.value).not.toBe(pick0.value);
 
   await expect(confirmBtn).toBeEnabled();
   await expectNoHorizontalScroll(page);
@@ -1242,8 +1285,8 @@ test("P6 task B: panel resolves the tie, confirms, bracket shows real entrants, 
 
   // The bracket/fixture line now shows the CHOSEN entrants, never a raw TBD
   // or slot.* key — the panel's edit-in-place actually reached the fixture.
-  await expect(page.getByText("Nova Q", { exact: false }).first()).toBeVisible();
-  await expect(page.getByText("Orion Q", { exact: false }).first()).toBeVisible();
+  await expect(page.getByText(pick0.label, { exact: false }).first()).toBeVisible();
+  await expect(page.getByText(pick1.label, { exact: false }).first()).toBeVisible();
   await expect(page.getByText(/^TBD$/)).toHaveCount(0);
 
   // Non-destructive guarantee, on screen: the court pinned before anyone
