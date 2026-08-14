@@ -115,7 +115,7 @@ export interface PublicFixture {
   away_entrant_id: string | null;
   /** D4b (P6) — {key, params} i18n pattern ref while the matching
    *  *_entrant_id is null (V360's fixtures.home/away_slot_label, exposed on
-   *  public_fixtures_v by V361). */
+   *  public_fixtures_v by V362). */
   home_slot_label: SlotLabel | null;
   away_slot_label: SlotLabel | null;
   scheduled_at: string | null;
