@@ -424,12 +424,28 @@ test("period skin (icehockey): a suspension with a reason selected (PeriodSuspen
 
   const offender = fx.personIds[`Skins IH Offender ${TAG}`]!;
 
-  await pad(page).getByRole("button", { name: "Card", exact: true }).click();
+  // The accessible name "Card" is ambiguous inside the pad, and permanently so:
+  // fidelity band 1 IS named "card" (`FIDELITY[1]`), so the band strip renders a
+  // "Card" button beside this action's own. Band buttons carry `data-band`;
+  // action buttons do not, which is the only stable discriminator between them.
+  await pad(page)
+    .getByRole("button", { name: "Card", exact: true })
+    .and(pad(page).locator("button:not([data-band])"))
+    .click();
   await pad(page).getByLabel("Class").selectOption("minor");
   await pad(page).getByLabel("Reason").selectOption("tripping");
   await pad(page).getByLabel("Minutes", { exact: true }).fill("2");
   await pad(page).locator(`[data-value="${fx.homeEntrantId}"]`).click();
-  await pad(page).locator(`[data-value="${offender}"]`).click();
+  // "person" and "servedBy" are both kind:"person" items reading the SAME
+  // full-squad pool (period-skin.tsx applies no side/role narrowing to
+  // either — see renderAttributionItem), so the offender's name renders
+  // TWICE — same disambiguation scorepad-v2.spec.ts's own scorer/assist flow
+  // already established: nth(0) is always the FIRST-declared attribution
+  // item in DOM order (period/kernel.ts's own `suspensionStartAction.
+  // attribution`: by, person, servedBy), i.e. "person", never "servedBy".
+  const offenderBtn = pad(page).getByRole("button", { name: `Skins IH Offender ${TAG}`, exact: true });
+  await expect(offenderBtn).toHaveCount(2);
+  await offenderBtn.nth(0).click();
   await pad(page).locator('[data-role="confirm"]').click();
 
   await expect
