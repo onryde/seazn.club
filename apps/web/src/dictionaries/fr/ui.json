@@ -1561,6 +1561,7 @@
   "slot.nth_group": "N° {n} du Groupe {g}",
   "slot.best_nth": "Meilleur {rank} des équipes classées {nth}èmes",
   "slot.rank_range": "Rang {rank}",
+  "slot.match_ref": "R{round}·{seq}",
   "slot.winner_match": "Vainqueur de {ext}",
   "slot.loser_match": "Perdant de {ext}",
   "schedule.bracket.rung": "Échelon {n}",

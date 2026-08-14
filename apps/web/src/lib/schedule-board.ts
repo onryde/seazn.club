@@ -4,6 +4,7 @@
 import type { Conflict } from "@seazn/engine/scheduling";
 import { GRID_FLOOR_MINUTES } from "@seazn/engine/scheduling/grid-step";
 import type { ScheduleConflict } from "@/server/api-v1/schemas";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import {
   addYmdDays,
   isoFromZonedParts,
@@ -70,25 +71,34 @@ export interface FeedRow {
 }
 
 export interface FeedLabelPair {
-  home?: string;
-  away?: string;
+  home?: SlotLabel;
+  away?: SlotLabel;
 }
 
 /**
  * TBD card labels from the feed wiring: the fixture receiving a winner/loser
- * shows "Winner of R1 #2" / "Loser of …" on the fed slot (doc 12 §2 — cards
- * render feed labels until entrants resolve).
+ * carries a `{ key: "slot.winner_match" | "slot.loser_match", params:
+ * {round, seq} }` pair for the fed slot (doc 12 §2 — cards render feed
+ * labels until entrants resolve).
+ *
+ * Data, never pre-rendered text (P7/F1) — this used to hand-build
+ * `"Winner of R1 #2"` here, a second, hardcoded-English copy of the SAME
+ * vocabulary `fixtures.home_slot_label`/`away_slot_label` already carry as
+ * `{key,params}`. Callers resolve this through resolveSlotLabel(), the one
+ * composition point both label mechanisms share (see board/types.ts's
+ * cardTitle()), so a card's short code and this feed's rendered text can't
+ * drift onto two ref formats.
  */
 export function feedLabels(rows: readonly FeedRow[]): Record<string, FeedLabelPair> {
   const byId = new Map(rows.map((r) => [r.id, r]));
   const labels: Record<string, FeedLabelPair> = {};
   for (const source of rows) {
-    for (const [target, slot, side] of [
-      [source.winner_to_fixture, source.winner_to_slot, "Winner"],
-      [source.loser_to_fixture, source.loser_to_slot, "Loser"],
+    for (const [target, slot, key] of [
+      [source.winner_to_fixture, source.winner_to_slot, "slot.winner_match"],
+      [source.loser_to_fixture, source.loser_to_slot, "slot.loser_match"],
     ] as const) {
       if (!target || !slot || !byId.has(target)) continue;
-      const label = `${side} of R${source.round_no} #${source.seq_in_round}`;
+      const label: SlotLabel = { key, params: { round: source.round_no, seq: source.seq_in_round } };
       const pair = (labels[target] ??= {});
       if (slot === 1) pair.home = label;
       else pair.away = label;

@@ -162,23 +162,28 @@ export function cardTitle(
   f: BoardFixture,
   names: Record<string, string>,
   feeds: Record<string, FeedLabelPair>,
-  // `feeds` is a SEPARATE, pre-existing scheduling-feed label mechanism
-  // (built in schedule/page.tsx from winner_to_fixture/winner_to_slot, out of
-  // this task's file set) — left untouched. `home_slot_label` (V360, D4b) is
-  // only consulted once `feeds` has nothing, so it never overrides it.
-  // `lookup` defaults to the client-safe English msg(); pass useMsg()'s bound
-  // fn from a caller that already sits inside a <DictProvider> for real
-  // localization (schedule-board.tsx's card render does; consoleFixtures()
-  // below is a plain exported function with no hook context, so it stays on
-  // the default).
+  // `feeds` is a SEPARATE, pre-existing scheduling-feed data source (built in
+  // schedule/page.tsx from winner_to_fixture/winner_to_slot, out of this
+  // task's file set) — that data source is untouched. Its SHAPE is not: as of
+  // P7/F1, `feeds[f.id]?.home`/`.away` are `SlotLabel` objects (same
+  // {key,params} shape as `home_slot_label`), so both go through
+  // resolveSlotLabel() below — one composition point instead of two, which is
+  // what stops the feed's ref text and the card's own short code from
+  // rendering the same match in two different formats. `feeds` still wins
+  // when both are present: `home_slot_label` is only consulted once `feeds`
+  // has nothing. `lookup` defaults to the client-safe English msg(); pass
+  // useMsg()'s bound fn from a caller that already sits inside a
+  // <DictProvider> for real localization (schedule-board.tsx's card render
+  // does; consoleFixtures() below is a plain exported function with no hook
+  // context, so it stays on the default).
   lookup: SlotLabelLookup = msg,
 ): string {
   const home = f.home_entrant_id
     ? (names[f.home_entrant_id] ?? "?")
-    : (feeds[f.id]?.home ?? resolveSlotLabel(f.home_slot_label ?? null, lookup, "schedule.tbd"));
+    : resolveSlotLabel(feeds[f.id]?.home ?? f.home_slot_label ?? null, lookup, "schedule.tbd");
   const away = f.away_entrant_id
     ? (names[f.away_entrant_id] ?? "?")
-    : (feeds[f.id]?.away ?? resolveSlotLabel(f.away_slot_label ?? null, lookup, "schedule.tbd"));
+    : resolveSlotLabel(feeds[f.id]?.away ?? f.away_slot_label ?? null, lookup, "schedule.tbd");
   return `${home} vs ${away}`;
 }
 

@@ -3829,6 +3829,7 @@ export type DictionaryKey =
   | "showcase.needsPublic"
   | "slot.best_nth"
   | "slot.loser_match"
+  | "slot.match_ref"
   | "slot.nth_group"
   | "slot.rank_range"
   | "slot.runner_up_group"

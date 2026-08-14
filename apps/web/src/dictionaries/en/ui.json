@@ -1561,6 +1561,7 @@
   "slot.nth_group": "No. {n} in Group {g}",
   "slot.best_nth": "Best {rank} of the {nth}-place teams",
   "slot.rank_range": "Rank {rank}",
+  "slot.match_ref": "R{round}·{seq}",
   "slot.winner_match": "Winner of {ext}",
   "slot.loser_match": "Loser of {ext}",
   "schedule.bracket.rung": "Rung {n}",

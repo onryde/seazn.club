@@ -46,7 +46,7 @@ import {
   type Density,
   type GhostBlock,
 } from "./board/types";
-import type { SlotLabelLookup } from "@/lib/slot-label";
+import { matchRef, type SlotLabelLookup } from "@/lib/slot-label";
 import { useBoardActions, type AutoScheduleMode, type GateRefusal } from "./board/use-board-actions";
 
 export type { BoardConfig, BoardConflict, BoardDivision, BoardFixture, BoardStage } from "./board/types";
@@ -268,7 +268,14 @@ export function consoleFixtures(
       division_id: f.division_id,
       scheduled_at: f.scheduled_at ? new Date(f.scheduled_at).toISOString() : null,
       court_label: f.court_label,
-      code: `R${f.round_no}·${f.seq_in_round}`,
+      // P7/F1: was a hand-built `R${...}·${...}` template — now the SAME
+      // matchRef() the feed label's {ext} substitution calls (slot-label.ts),
+      // so this code chip and a "Winner of …" label naming this same fixture
+      // can no longer drift onto two ref formats. `lookup` falls through to
+      // matchRef()'s own client-safe English default when undefined (see the
+      // param comment above), identically to how it already does for
+      // cardTitle()'s `matchup` on the next line.
+      code: matchRef(f.round_no, f.seq_in_round, lookup),
       matchup: cardTitle(f, entrantNames, feedLabels, lookup),
       isFinal: maxRound > 0 && f.round_no === maxRound && atMaxRound.get(f.division_id) === 1,
       isJunior: false,

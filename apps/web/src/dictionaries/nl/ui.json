@@ -1561,6 +1561,7 @@
   "slot.nth_group": "Nr. {n} van Groep {g}",
   "slot.best_nth": "Beste {rank} van de nummers {nth}",
   "slot.rank_range": "Plaats {rank}",
+  "slot.match_ref": "R{round}·{seq}",
   "slot.winner_match": "Winnaar van {ext}",
   "slot.loser_match": "Verliezer van {ext}",
   "schedule.bracket.rung": "Trede {n}",

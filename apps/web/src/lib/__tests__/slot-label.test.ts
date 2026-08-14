@@ -4,7 +4,7 @@
 // side — are plain `(key, vars?) => string` lookups, so the resolver takes
 // one as a parameter and never imports either itself (stays client-safe).
 import { describe, expect, it, vi } from "vitest";
-import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import { matchRef, resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { msgFor } from "@/lib/messages-i18n";
 import { LOCALES } from "@/lib/i18n-constants";
@@ -54,14 +54,19 @@ describe("resolveSlotLabel — real dictionaries, all 4 locales, every slot.* ke
   // match-reuse keys (winner_match/loser_match) are added by task A2 — this
   // list is deliberately the full vocabulary, not just the five that predate
   // this session, so a missing/half-added locale key fails HERE.
+  //
+  // P7/F1: winner_match/loser_match params are {round, seq} (numbers), not a
+  // pre-rendered {ext} string — resolveSlotLabel composes {ext} internally
+  // via matchRef()/slot.match_ref. See the dedicated composition describe
+  // block below for the exact-text assertions that prove that substitution.
   const cases: SlotLabel[] = [
     { key: "slot.winner_group", params: { g: "A" } },
     { key: "slot.runner_up_group", params: { g: "B" } },
     { key: "slot.nth_group", params: { n: 3, g: "C" } },
     { key: "slot.best_nth", params: { rank: 2, nth: 3 } },
     { key: "slot.rank_range", params: { rank: 5 } },
-    { key: "slot.winner_match", params: { ext: "R2 #1" } },
-    { key: "slot.loser_match", params: { ext: "R1 #3" } },
+    { key: "slot.winner_match", params: { round: 2, seq: 1 } },
+    { key: "slot.loser_match", params: { round: 1, seq: 3 } },
   ];
 
   for (const locale of LOCALES) {
@@ -88,4 +93,48 @@ describe("resolveSlotLabel — real dictionaries, all 4 locales, every slot.* ke
     const nl: SlotLabelLookup = (k, vars) => msgFor("nl", k, vars);
     expect(resolveSlotLabel(null, nl, "schedule.tbd")).not.toBe(resolveSlotLabel(null, en, "schedule.tbd"));
   });
+});
+
+// P7/F1: one composition point for the match ref, so the board card's short
+// code and the "Winner of …"/"Loser of …" feed text cannot drift onto two
+// formats. `matchRef()` is what schedule-board.tsx's consoleFixtures() calls
+// for the card's own `code` field; resolveSlotLabel() calls it internally for
+// slot.winner_match/slot.loser_match's {ext}. Same {round, seq} in, same ref
+// text out, on both sides — that equality is what these tests pin.
+describe("resolveSlotLabel — slot.match_ref composition (P7/F1)", () => {
+  it("en: composes the exact pinned text — 'R{round}·{seq}', middle dot, no space", () => {
+    const lookup: SlotLabelLookup = (k, vars) => msgFor("en", k, vars);
+    expect(matchRef(2, 1, lookup)).toBe("R2·1");
+    expect(resolveSlotLabel({ key: "slot.winner_match", params: { round: 2, seq: 1 } }, lookup, "schedule.tbd")).toBe(
+      "Winner of R2·1",
+    );
+    expect(resolveSlotLabel({ key: "slot.loser_match", params: { round: 1, seq: 3 } }, lookup, "schedule.tbd")).toBe(
+      "Loser of R1·3",
+    );
+  });
+
+  for (const locale of LOCALES) {
+    it(`${locale}: slot.winner_match's {ext} is EXACTLY matchRef()'s own output — the anti-drift invariant`, () => {
+      const lookup: SlotLabelLookup = (k, vars) => msgFor(locale, k, vars);
+      // The "expected" side is composed independently, straight off msgFor —
+      // not by calling resolveSlotLabel/matchRef again — so a regression in
+      // EITHER function's composition (not just a mismatch between them)
+      // still fails this.
+      const ref = msgFor(locale, "slot.match_ref", { round: 4, seq: 2 });
+      const expected = msgFor(locale, "slot.winner_match", { ext: ref });
+      expect(matchRef(4, 2, lookup)).toBe(ref);
+      const out = resolveSlotLabel({ key: "slot.winner_match", params: { round: 4, seq: 2 } }, lookup, "schedule.tbd");
+      expect(out).toBe(expected);
+      expect(out).toContain(ref); // the card's own ref text is a literal substring of the feed label
+    });
+
+    it(`${locale}: slot.loser_match's {ext} is EXACTLY matchRef()'s own output`, () => {
+      const lookup: SlotLabelLookup = (k, vars) => msgFor(locale, k, vars);
+      const ref = msgFor(locale, "slot.match_ref", { round: 1, seq: 5 });
+      const expected = msgFor(locale, "slot.loser_match", { ext: ref });
+      const out = resolveSlotLabel({ key: "slot.loser_match", params: { round: 1, seq: 5 } }, lookup, "schedule.tbd");
+      expect(out).toBe(expected);
+      expect(out).toContain(ref);
+    });
+  }
 });
