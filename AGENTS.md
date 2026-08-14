@@ -96,8 +96,15 @@ before diagnosing a real bug:
   UI bar, pre-commit OpenAPI drift check, and the no-new-issues /
   fix-inline-unless-blast-radius rule. Every dispatch brief should
   restate the relevant parts inline or point here explicitly.
-- **Never enable `.github/workflows/e2e.yml`.** Disabled deliberately;
-  verify e2e locally (prod build + `E2E_PROD_TARGET`).
+- **`.github/workflows/e2e.yml` is LIVE on pull requests** (owner-confirmed
+  2026-08-14). It was disabled for a long time and this file said "never
+  enable it", which is why several sessions still assume e2e is local-only —
+  it is not. Six Playwright jobs run per PR, including the seven-width
+  mobile/tablet matrix and a flag-forced scorepad-v2 job. Two consequences:
+  an edit to that file's CONTENTS now affects live CI rather than being dead
+  weight, and e2e coverage no longer has to be argued for locally. Verifying
+  locally as well is still useful (prod build + `E2E_PROD_TARGET`) — CI is
+  the arbiter, not the only signal.
 - Smoke CI runs on **PRs only** — merging locally and pushing to `main`
   skips it. Behavior changes need a PR or a local full-smoke first.
 - Every change ships a test that fails without it.

@@ -32,7 +32,7 @@ C6 (prose) is safe whenever.
 | C0 | `C0-division-rules-retirement.md` | division_rules | — | **MERGED** #537 → `f0f83939` |
 | C1 | `C1-round-ordering.md` | round ordering | C0 (same proto/build.ts region) | **MERGED** #546 → `78db2f1f` |
 | C2 | `C2-day-start-rung.md` | day_start | C1 (model.py overlap; rebase either way) | **MERGED** #555 → `40331cc2`, follow-up #557 → `4dc38a0e`. Shipped #512's two rungs too. **Leaves 3 open defects — see the C2 entries below before starting C3.** |
-| C3 | `C3-conflict-detail-names.md` | conflict details | not concurrent with C1 (schedule.ts) | **DONE, PR open** — see the C3 entry below. Family was 25 kinds, not 4; `conflictKey` and the AI repair round were both in the blast radius |
+| C3 | `C3-conflict-detail-names.md` | conflict details | not concurrent with C1 (schedule.ts) | **MERGED** #567 → `ccab1356`. Family was 25 kinds, not 4; `conflictKey` and the AI repair round were both in the blast radius |
 | C4 | `C4-z3-reflow-cpsat.md` | z3 stage A | C1 (reflow inherits round rule) | TODO |
 | C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | TODO |
 | C6 | `C6-z3-prose-identifiers.md` | z3 stage C | ~~anytime~~ → **after C4+C5** | **NO-OP today** (see below) |
@@ -753,9 +753,17 @@ Verified 6/6 green at loads 9.8-22.4, the exact band that had been failing.
 
 ### C3 — structured conflict details (2026-08-13/14, DONE)
 
-Branch `feat/c3-conflict-detail-names`, worktree `.claude/worktrees/c3-conflict-details`,
-off `d0cd9a25`. Three implementation phases (engine / server+wire / client),
-sequential because the file sets overlap.
+Branch `feat/c3-conflict-detail-names`, **MERGED as `ccab1356` (#567)**, 29
+commits. Three implementation phases (engine / server+wire / client),
+sequential because the file sets overlap, plus a review-response round.
+
+**Rebased TWICE onto a moving `main`, and the second one hid a real defect.**
+P6's #568 edits the same board components. Git merged both branches' hunks
+cleanly and `tsc` was happy — but P6 had landed a locale test that supplied
+the conflict counterparty as English PROSE, relying on the regex scrape C3
+deletes. Only RUNNING it showed the test no longer reached `titleOf()` at
+all. A clean rebase between two branches editing one render path is not
+evidence; re-run the suite.
 
 **Every `file:line` in the prompt had drifted — 0 of 11 exact.** C0 found two
 wrong, C1 four of eleven, C2 three. C3 found all of them. Treat the citation
