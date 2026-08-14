@@ -189,6 +189,20 @@ export function ProgressionPanel({
     setBusy("recompute");
     try {
       await apiV1(`/api/v1/stages/${stageId}/seed-proposal`, { method: "POST", json: {} });
+      // A recompute produces a BRAND NEW proposal — its own qualifiers, its
+      // own ties, possibly a different slot set entirely. None of that
+      // carries meaning for the picks the organiser made against the OLD
+      // proposal, so every local edit is discarded here rather than
+      // selectively kept: a "carry the edit if the slot still exists" rule
+      // would still be wrong whenever the qualifier that made the pick
+      // meaningful (e.g. which entrants a tie was between) has itself
+      // changed, and there is no way to tell that apart from here. Without
+      // this, a stale pick either rides into `buildEditsPayload`'s edits[]
+      // for a slot the new proposal doesn't have (server rejects with
+      // SEEDING_EDIT_UNKNOWN_SLOT / SEEDING_SLOT_FOREIGN_FIXTURE) or
+      // silently overrides a slot the new proposal DOES still name (review
+      // finding, fix round 2).
+      setEditsBySlot(new Map());
       router.refresh();
     } catch (err) {
       reportError(err);

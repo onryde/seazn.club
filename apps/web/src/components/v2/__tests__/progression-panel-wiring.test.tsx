@@ -359,3 +359,115 @@ describe("ProgressionPanel — a confirm failure meaning 'someone else already a
     expect(refresh).not.toHaveBeenCalled();
   });
 });
+
+describe("ProgressionPanel — recompute clears stale local edits (review finding, fix round 2)", () => {
+  // Fix round 1 (block above) closed a DUPLICATE pick within one proposal's
+  // own tied rows. This is a different failure: `recompute()` never cleared
+  // `editsBySlot` at all, so an edit survived ACROSS proposals — carried
+  // from the draft the organiser was editing, through the moment it went
+  // stale, into the brand-new proposal recompute produces. `.rerender()` is
+  // the only tool that can red this: it hands down fresh props while hook
+  // state (editsBySlot) carries over, exactly the shape a
+  // `router.refresh()`-driven RSC refetch takes in production (see
+  // reference_hook_harness_render_phase_setstate memory) — mount-then-assert
+  // at the second state alone renders correctly and would miss this.
+  const proposalWithTie = {
+    id: "p1",
+    stageId: "ko1",
+    status: "draft" as const,
+    computed: {
+      qualifiers: [
+        { rank: 1, source: { stageId: "grp", group: "A", rank: 1 }, entrantId: "e1", destinationSlot: "f1:home" },
+        { rank: 2, source: { stageId: "grp", group: "B", rank: 1 }, entrantId: "e3", destinationSlot: "f1:away" },
+      ],
+      ties: [{ slots: ["f1:home"], entrantIds: ["e1", "e2"], reason: "seed" }],
+      standingsHash: "h1",
+    },
+  };
+
+  it("a fresh proposal reusing the SAME destination slot renders ITS OWN computed value, not the dead pick from before the recompute", async () => {
+    const island = renderIsland(ProgressionPanel, baseProps({ proposal: proposalWithTie }));
+
+    // Organiser resolves the tie.
+    const tiedSelect = findByLabel(island.tree(), "Entrant");
+    (propsOf(tiedSelect!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "e2" } });
+
+    // The proposal goes stale (standings corrected elsewhere) — a fresh
+    // server fetch hands THIS SAME component instance a new `proposal` prop.
+    island.rerender(baseProps({ proposal: { ...proposalWithTie, status: "stale" } }));
+
+    // Organiser clicks Recompute.
+    const recomputeBtn = findButtonByText(island.tree(), "Recompute");
+    expect(recomputeBtn).toBeDefined();
+    await (propsOf(recomputeBtn!).onClick as () => Promise<void> | void)();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(refresh).toHaveBeenCalled();
+
+    // The server hands down a genuinely new proposal: same "f1:home" slot
+    // key, but no longer tied and a different computed entrant (the
+    // standings correction changed who qualifies).
+    const freshProposal = {
+      id: "p9",
+      stageId: "ko1",
+      status: "draft" as const,
+      computed: {
+        qualifiers: [
+          { rank: 1, source: { stageId: "grp", group: "A", rank: 1 }, entrantId: "e5", destinationSlot: "f1:home" },
+          { rank: 2, source: { stageId: "grp", group: "B", rank: 1 }, entrantId: "e3", destinationSlot: "f1:away" },
+        ],
+        ties: [],
+        standingsHash: "h9",
+      },
+    };
+    island.rerender(baseProps({ proposal: freshProposal, entrantNames: { ...ENTRANT_NAMES, e5: "Eve" } }));
+
+    // Anchored on the real `value` prop (not a bare probe): before the fix
+    // this read "e2" — the pre-recompute pick, still sitting in
+    // editsBySlot — instead of the new proposal's own qualifier "e5".
+    const select = findByLabel(island.tree(), "Entrant");
+    expect(propsOf(select!).value).toBe("e5");
+  });
+
+  it("an edit whose slot does not exist in the recomputed proposal never reaches buildEditsPayload's edits[]", async () => {
+    net.handler = async () => ({ filled: 1 });
+    const island = renderIsland(ProgressionPanel, baseProps({ proposal: proposalWithTie }));
+
+    const tiedSelect = findByLabel(island.tree(), "Entrant");
+    (propsOf(tiedSelect!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "e2" } });
+
+    island.rerender(baseProps({ proposal: { ...proposalWithTie, status: "stale" } }));
+
+    const recomputeBtn = findButtonByText(island.tree(), "Recompute");
+    await (propsOf(recomputeBtn!).onClick as () => Promise<void> | void)();
+    await new Promise((r) => setTimeout(r, 0));
+
+    // The recomputed bracket has no "f1:*" fixture at all — a structurally
+    // different proposal (the finding's "possibly a different slot set").
+    const freshProposal = {
+      id: "p10",
+      stageId: "ko1",
+      status: "draft" as const,
+      computed: {
+        qualifiers: [
+          { rank: 1, source: { stageId: "grp", group: "A", rank: 1 }, entrantId: "e4", destinationSlot: "f9:home" },
+          { rank: 2, source: { stageId: "grp", group: "B", rank: 1 }, entrantId: "e3", destinationSlot: "f9:away" },
+        ],
+        ties: [],
+        standingsHash: "h10",
+      },
+    };
+    island.rerender(baseProps({ proposal: freshProposal }));
+
+    const confirmBtn = findButtonByText(island.tree(), "Confirm proposal");
+    expect(propsOf(confirmBtn!).disabled).toBe(false); // zero ties on the fresh proposal — nothing to gate on
+    await (propsOf(confirmBtn!).onClick as () => Promise<void> | void)();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const confirmCall = net.calls.find((c) => c.url === "/api/v1/stages/ko1/seed-proposal/confirm");
+    expect(confirmCall).toBeDefined();
+    // The orphaned "f1:home" -> "e2" pick from before the recompute must not
+    // survive into the payload — before the fix it did, and the server
+    // would reject it (SEEDING_EDIT_UNKNOWN_SLOT / SEEDING_SLOT_FOREIGN_FIXTURE).
+    expect((confirmCall!.json as { edits: unknown[] }).edits).toEqual([]);
+  });
+});
