@@ -34,12 +34,12 @@ S13-gated. New-branch-in-worktree rule applies to every session.
 | Session | Feature | Prompt file | Depends on | External gate | Status |
 |---|---|---|---|---|---|
 | P1 | D2 capacity lib + route guard + card | `P01-capacity-precheck.md` | — | green-light | **MERGED** `78c8618f` (#544) |
-| P2 | D3 health lib + route + panel | `P02-schedule-health.md` | — (P1 pattern reuse, soft) | green-light | **IN FLIGHT** (wave 2) |
+| P2 | D3 health lib + route + panel | `P02-schedule-health.md` | — (P1 pattern reuse, soft) | green-light | **MERGED** `651c56c3` (#547) |
 | P3 | D7 enrichment + weekly digest | `P03-news-enrichment.md` | — | green-light | **MERGED** `51601495` (#545), V358 |
-| P4 | D1a template catalog + instantiation + wizard | `P04-templates-single-stage.md` | — | green-light | **IN FLIGHT** (wave 2) |
-| P5 | D4a seeding rules + TBD fixtures + fill engine | `P05-progression-engine.md` | — | green-light | TODO |
-| P6 | D4b proposal UI + confirm flow | `P06-progression-ui.md` | P5 | green-light | TODO |
-| P7 | D1b multi-stage templates | `P07-templates-multi-stage.md` | P4, P5 (StageSeeding merged) | green-light | TODO |
+| P4 | D1a template catalog + instantiation + wizard | `P04-templates-single-stage.md` | — | green-light | **MERGED** `e35efff1` (#548) |
+| P5 | D4a seeding rules + TBD fixtures + fill engine | `P05-progression-engine.md` | — | green-light | **MERGED** `776ba389` (#554), V360 |
+| P6 | D4b proposal UI + confirm flow | `P06-progression-ui.md` | P5 | green-light | **MERGED** `cdcc3bef` (#568), V362 |
+| P7 | D1b multi-stage templates | `P07-templates-multi-stage.md` | P4, P5 (StageSeeding merged) | green-light | TODO — **started then HELD by owner 2026-08-14**; re-pinned citations, rulings and T1–T5 briefs handed over (see below) |
 | P8 | D5a venues/courts schema + API + org UI | `P08-venues-schema-ui.md` | — | green-light + **release-2 C-chain done** | TODO |
 | P9 | D5b scheduler integration + stored-config migration | `P09-venues-scheduler.md` | P8 | same as P8 | TODO |
 | P10 | D5c calendars + window compiler | `P10-venues-calendars.md` | P9 | same as P8 | TODO |
@@ -503,3 +503,112 @@ is a dropped socket or a dead runner, not a broken project.** Two of
 three shard-1 failures on #554 were `The runner has received a shutdown
 signal`; under the old single job that would have taken all 246 tests red
 and told you nothing.
+
+## Wave 4 — P6 merged; P6 follow-ups closed; P7 started then HELD
+
+**P6 (D4b) MERGED `cdcc3bef` (#568), V362.** Stage progression UI:
+proposal panel, confirm flow, TBD labels everywhere fixtures render.
+
+**The two follow-ups P6 shipped knowingly were then closed in a separate
+session (2026-08-14), on the owner's instruction.** Both turned out
+differently from how P6 recorded them, and the difference is the point:
+
+**Follow-up 1 (the two `slot.*` keys with no production reader) was real
+and WIDER than recorded.** P6 named `stages.ts`'s `homeFrom`/`awayFrom`
+as the missed third path, which was correct. What it did not know is
+that `apps/web/src/lib/schedule-board.ts:82-95` **already shipped the
+same label as a hand-built English string** — so this was never "an
+unused key", it was two parallel paths for one piece of vocabulary, the
+live one violating the no-hardcoded-English rule. Worse, the ref it
+printed (`R1 #2`) did not match the board card the user has to match it
+against (`R1·2`). Fixed by giving both one key and one composition
+point, with the params persisted as `{round, seq}` data rather than
+rendered text.
+
+**Follow-up 2 (orphaned fixtures) rested on a FALSE PREMISE.** The
+recorded hazard — "a fixture orphaned by a rules change stays live" — is
+**unreachable**, and this was verified against the code rather than
+inferred:
+
+- `replaceStages` (`stages.ts:260-285`) is the ONLY writer that mutates
+  a stage's `kind`, `seeding` or structural `config`, and it refuses
+  while any fixture exists in the division, under
+  `pg_advisory_xact_lock` in the same transaction — so it cannot be
+  raced.
+- `fixtures.stage_id` is `on delete cascade` (`V214__fixtures.sql:6`),
+  so every other rules-edit route is delete-and-recreate and takes the
+  fixtures with it.
+- `undoDivision`/`redoDivision` have no case that touches `stages` at
+  all.
+
+**No detector was built.** Building one would have been building for a
+state that cannot occur — the same class of mistake as P6's overturned
+blast-radius ruling, inverted. The deliverable is a regression test
+pinning the two properties above so whatever makes it unreachable cannot
+be deleted silently.
+
+**Two REAL defects were found in its place:**
+
+1. `generateSeededStageFixtures` has no analogue of the plain path's
+   `group_too_few_entrants` guard (`stages.ts:985-995`). A `.seeding`
+   group stage whose qualifiers cannot fill its pools commits PARTIAL
+   fixtures, strands seeds with no slot label, and then every
+   `POST /stages/{id}/seed-proposal` 422s `SEEDING_RULES_MISSING`
+   telling the user to "regenerate them first" — **advice that cannot
+   work**, because generation is idempotent by `ext_key`. Permanent dead
+   end; only deleting and recreating the stage escapes. Fixed.
+   Note the plain path shares the blind spot (its guard requires
+   `gen.length === 0`, so a partial fill passes there too) but does NOT
+   dead-end, having no seed→slot map. Left alone deliberately.
+2. **`FORMAT_LOCKED` is division-wide with no per-stage predicate**, and
+   `patchDivision` (`divisions.ts:556-563`) runs the identical check. So
+   generating stage 1's fixtures freezes the rules of every later,
+   unplayed stage. `deleteStage` removes only the tail stage. NOT fixed
+   — narrowing it touches a shared release-2 surface, past the task's
+   blast radius. Pinned by a test and surfaced.
+
+### P7 handover — started 2026-08-14, HELD by the owner mid-session
+
+No P7 code shipped. What the session did produce, and what a resuming
+session should NOT re-derive:
+
+- **`page_playoff` IS DB-checked** (`V298__page_playoff_stage_kind.sql`;
+  the api-v1 `StageKind` enum's 9 values match the CHECK). The
+  format-templates design doc's fallback to `knockout(4)` for
+  `league-playoff` is **stale — do not take it**.
+- **`StageSeeding` lives at `api-v1/schemas.ts:543-555`**
+  (`StageSeedingSchema` / `StageSeedingInput`). Import it. A template's
+  `source` cannot be `{stageId: Uuid}` — catalog JSON has no UUIDs.
+- **`templates.ts:253-263` does not persist `seeding` at all.** Its
+  stage INSERT writes only `(division_id, seq, kind, name, config)`,
+  unlike `createStages` (`stages.ts:227-233`). So the gap is at the
+  persistence layer too, not only in the zod schema.
+- **RULING: instantiation must NOT generate fixtures.** The P07 prompt
+  says it should. A `.seeding` stage bypasses the entrant query and
+  mints synthetic entrants (`stages.ts:1348-1354`), so unlike a plain
+  stage it CAN generate with zero real entrants — and one row would
+  format-lock the competition at birth via BOTH `replaceStages` and
+  `patchDivision`, leaving the organiser unable to change even the sport
+  variant before adding an entrant. Today's code already refuses this
+  deliberately, with a comment defending it (`templates.ts:258-262`).
+  Keep that invariant; TBD fixtures come from the existing Generate
+  action.
+- **euro24's real best-thirds rule is a combination lookup table** (15
+  permutations of which groups' thirds qualify). `StageSeeding.map` is a
+  static `{slot, source}[]` and cannot express it. Map by rank among
+  thirds instead, and say so in the catalog entry — do not silently
+  approximate, and do not fork the schema.
+- **The P07 prompt's verify block runs vitest from the repo root**,
+  which yields `Cannot find package '@/...'` and a fake red across
+  hundreds of suites. Run it from `apps/web`. Same bug as P06's block.
+
+Full T1–T5 briefs, with the re-pinned citations, are committed at
+`docs/superpowers/plans/2026-08-14-p7-handover-briefs.md`, beside the
+session plan `2026-08-14-p7-multi-stage-templates-plan.md`. They are in
+`docs/` deliberately: `.superpowers/` is gitignored (`.gitignore:52`), so
+a handover left in the SDD workspace dies with the worktree.
+
+**Also note, for the T5 e2e brief:** `.github/workflows/e2e.yml` went LIVE
+on pull requests on 2026-08-14. Every brief written before that date —
+including T5 — says it is disabled and must never be enabled. That is now
+false; six Playwright jobs run per PR, including the seven-width matrix.

@@ -256,6 +256,62 @@ describe.skipIf(!HAS_DB)("replaceStages — format structure swap (v8)", () => {
   });
 });
 
+// F2b (P7 follow-up, 2026-08-14) — KNOWN LIMITATION, deliberately NOT fixed.
+// The FORMAT_LOCKED guard (replaceStages, stages.ts:276-278; patchDivision
+// runs the identical check, divisions.ts:556-563) is
+//   select 1 from fixtures f join stages s on s.id = f.stage_id
+//   where s.division_id = $1 limit 1
+// — division-WIDE, with no per-stage predicate. Generating stage 1's
+// fixtures therefore freezes the rules of every later, still-unplayed stage
+// too, and blocks patchDivision's variant/config edits even though they
+// don't touch the stage graph at all. Narrowing the guard to a per-stage
+// check is deliberately DEFERRED: replaceStages/patchDivision are a shared
+// release-2 surface and this is past this follow-up's blast radius (escalate
+// rather than silently widen scope). This test pins the CURRENT behaviour so
+// a future session doesn't need to rediscover it, and so any accidental
+// narrowing shows up as a red test here rather than a silent scope change.
+describe.skipIf(!HAS_DB)(
+  "FORMAT_LOCKED is division-wide, not per-stage (F2b — known limitation, not fixed)",
+  () => {
+    it("generating stage 1's fixtures 409s a later, untouched stage's replaceStages AND the division's patchDivision", async () => {
+      const owner = await seedOwner();
+      const { division } = await rig(owner);
+
+      const stages = await createStages(owner, division.id, [
+        { seq: 1, kind: "league", name: "L1", config: {}, qualification: null },
+        { seq: 2, kind: "league", name: "L2 (never played)", config: {}, qualification: null },
+      ]);
+      const stage1 = stages.find((s) => s.seq === 1)!;
+      const stage2 = stages.find((s) => s.seq === 2)!;
+
+      await createEntrants(owner, division.id, [
+        { kind: "individual", display_name: "A", seed: 1, members: [] },
+        { kind: "individual", display_name: "B", seed: 2, members: [] },
+      ]);
+      // Only stage 1 ever gets fixtures — stage 2 stays completely untouched.
+      await generateStageFixtures(owner, stage1.id);
+      const [{ count: stage2Fixtures }] = await sql<{ count: string }[]>`
+        select count(*)::text from fixtures where stage_id = ${stage2.id}`;
+      expect(Number(stage2Fixtures)).toBe(0);
+
+      // replaceStages on the whole graph — including the untouched stage 2 — 409s.
+      await expect(
+        replaceStages(owner, division.id, [
+          { seq: 1, kind: "league", name: "L1", config: {}, qualification: null },
+          { seq: 2, kind: "knockout", name: "L2 changed", config: {}, qualification: null },
+        ]),
+      ).rejects.toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
+
+      // patchDivision's variant/config guard runs the identical division-wide
+      // check — also 409s, even though it isn't touching any stage at all.
+      await expect(patchDivision(owner, division.id, { variant_key: "sets" })).rejects.toMatchObject({
+        status: 409,
+        code: "FORMAT_LOCKED",
+      });
+    });
+  },
+);
+
 describe.skipIf(!HAS_DB)("entrant-kind guard (spec 2026-07-18)", () => {
   it("blocks narrowing kinds that would orphan an active entrant, allows it once withdrawn", async () => {
     const owner = await seedOwner();

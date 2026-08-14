@@ -16,6 +16,7 @@
 // bracket.tbd, me.tbd, …) with slightly different translations per
 // surface; the resolver reuses whichever one already fit rather than
 // inventing a new canonical string.
+import { msg } from "@/lib/messages";
 import type { MessageKey } from "@/lib/messages";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
@@ -24,15 +25,44 @@ export type SlotLabelLookup = (
   vars?: Record<string, string | number>,
 ) => string;
 
+/** `{round, seq}` → the localized match-reference fragment ("R1·2" in
+ *  English — P7/F1), via the `slot.match_ref` dictionary key. This is the
+ *  ONE place that ref gets built: the board card's own short-code chip
+ *  (schedule-board.tsx's consoleFixtures) calls it directly, and
+ *  resolveSlotLabel() below calls it internally to fill slot.winner_match /
+ *  slot.loser_match's `{ext}`. Two call sites, one composition — so a card
+ *  labelled "R1·2" and a slot that says "Winner of R1·2" can't drift onto
+ *  different formats the way a hand-built template on each side could.
+ *  Defaults to the client-safe English `msg()`, same convention as
+ *  board/types.ts's `cardTitle()`. */
+export function matchRef(
+  round: number,
+  seq: number,
+  lookup: SlotLabelLookup = msg,
+): string {
+  return lookup("slot.match_ref" as MessageKey, { round, seq });
+}
+
 /** `SlotLabel | null` → display string. Never builds text itself — every
  *  character returned comes from `lookup`'s dictionary, so there is no
- *  concatenation path to audit. */
+ *  concatenation path to audit.
+ *
+ *  `slot.winner_match` / `slot.loser_match` are special-cased: their
+ *  persisted `params` are `{round, seq}` (numbers, never a rendered
+ *  fragment — P7/F1), and `{ext}` is composed here via matchRef() rather
+ *  than trusted from storage, so every renderer resolves the SAME ref text
+ *  regardless of which surface reads the row. */
 export function resolveSlotLabel(
   label: SlotLabel | null,
   lookup: SlotLabelLookup,
   fallbackKey: MessageKey,
 ): string {
   if (!label) return lookup(fallbackKey);
+  if (label.key === "slot.winner_match" || label.key === "slot.loser_match") {
+    const round = Number(label.params.round);
+    const seq = Number(label.params.seq);
+    return lookup(label.key as MessageKey, { ext: matchRef(round, seq, lookup) });
+  }
   const vars: Record<string, string | number> = {};
   for (const [k, v] of Object.entries(label.params)) {
     vars[k] = typeof v === "number" ? v : String(v);

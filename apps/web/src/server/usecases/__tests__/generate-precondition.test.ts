@@ -140,3 +140,111 @@ describe.skipIf(!HAS_DB)(
     });
   },
 );
+
+// F2a (P7 follow-up, 2026-08-14): the SEEDED-path analogue of the suite
+// above. A `.seeding` stage's entrants are synthetic placed seeds
+// (`slot:1..N`, from `.seeding.take` — see stage-seeding.ts, pure/no DB), not
+// real division entrants, so the source stage here needs no entrants,
+// fixtures, or even generation of its own — only its SHAPE matters, and a
+// "league" source's shape (poolKeys: []) doesn't even need that for a
+// `rankRange` take rule. generateSeededStageFixtures' only pre-existing
+// guard is `placed.length < 2` (the seeding analogue of the plain path's
+// `entrants.length < 2`) — it had NO analogue of `group_too_few_entrants`,
+// so a group target whose placed seeds snake-distribute unevenly across its
+// pools used to commit a PARTIAL fill (some pools get fixtures, a 0/1-seed
+// pool doesn't) instead of throwing, and the stranded seed could never be
+// seeded afterward (computeSeedProposal 422s SEEDING_RULES_MISSING forever —
+// "regenerate them first" cannot work, since `generate()` is deterministic
+// and newRows is keyed by ext_key).
+describe.skipIf(!HAS_DB)(
+  "generateSeededStageFixtures — seeded group-stage precondition (F2a, P7 follow-up)",
+  () => {
+    async function seedStagedDivision(auth: AuthCtx) {
+      const comp = await createCompetition(auth, {
+        ends_on: "2030-12-31",
+        name: "Gp Seed Cup " + randomUUID().slice(0, 6),
+        visibility: "private",
+        branding: {},
+      });
+      return createDivision(auth, comp.id, {
+        name: "Open Singles",
+        slug: "open-singles-seed-" + randomUUID().slice(0, 6),
+        sport_key: "generic",
+        variant_key: "score",
+        config: GENERIC_CONFIG,
+        eligibility: [],
+      });
+    }
+
+    it("throws STAGE_NOT_READY reason=seeded_pool_too_few_qualifiers BEFORE inserting any row, instead of committing a partial fill that 422s forever", async () => {
+      const { auth } = await seedOrg();
+      const division = await seedStagedDivision(auth);
+      const stages = await createStages(auth, division.id, [
+        { seq: 1, kind: "league", name: "Source", config: {}, qualification: null },
+        {
+          seq: 2,
+          kind: "group",
+          name: "Groups",
+          // 6 qualifiers snake-distributed into 4 pools: A=[1] B=[2] C=[3,6]
+          // D=[4,5] — roundRobinGen emits nothing for A/B (1 entrant each),
+          // so seeds 1 and 2 are stranded even though gen.length > 0 overall
+          // (C and D DO produce fixtures) — the exact partial-fill case a
+          // naive `gen.length === 0` check would miss.
+          config: { pools: { count: 4 } },
+          qualification: null,
+          seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 6 }], placement: "rank_order" },
+        },
+      ]);
+      const target = stages.find((s) => s.seq === 2)!;
+
+      try {
+        await generateStageFixtures(auth, target.id);
+        expect.unreachable("expected generateStageFixtures to throw");
+      } catch (err) {
+        expect(err).toBeInstanceOf(EngineError);
+        const e = err as EngineError;
+        expect(e.code).toBe("STAGE_NOT_READY");
+        const data = e.data as {
+          reason?: string;
+          groups?: number;
+          qualifiers?: number;
+          required?: number;
+          stranded?: number;
+        };
+        expect(data.reason).toBe("seeded_pool_too_few_qualifiers");
+        expect(data.groups).toBe(4);
+        expect(data.qualifiers).toBe(6);
+        // Minor 2 (P7 fix round, whole-branch review): `required` (the
+        // Math.max(2, groups * 2) computation, stages.ts:1457) was computed
+        // but never asserted by the only test that runs the real guard.
+        expect(data.required).toBe(8);
+        expect(data.stranded).toBe(2);
+      }
+
+      // Nothing partial was committed — the transaction failed cleanly.
+      const [{ count }] = await sql<{ count: string }[]>`
+        select count(*)::text from fixtures where stage_id = ${target.id}`;
+      expect(Number(count)).toBe(0);
+    });
+
+    it("still generates normally once enough qualifiers fill the pools", async () => {
+      const { auth } = await seedOrg();
+      const division = await seedStagedDivision(auth);
+      const stages = await createStages(auth, division.id, [
+        { seq: 1, kind: "league", name: "Source", config: {}, qualification: null },
+        {
+          seq: 2,
+          kind: "group",
+          name: "Groups",
+          config: { pools: { count: 4 } },
+          qualification: null,
+          seeding: { source: "previous", take: [{ kind: "rankRange", from: 1, to: 8 }], placement: "rank_order" },
+        },
+      ]);
+      const target = stages.find((s) => s.seq === 2)!;
+
+      const { created } = await generateStageFixtures(auth, target.id);
+      expect(created).toBeGreaterThan(0);
+    });
+  },
+);

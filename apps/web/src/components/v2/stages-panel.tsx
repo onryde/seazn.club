@@ -1036,21 +1036,45 @@ const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_pl
  * a DOM/jsdom harness, which this repo's component tests don't set up.
  */
 export function generatePreconditionMessage(err: unknown, msg: Msg): string | null {
-  if (
-    !(err instanceof ApiV1Error) ||
-    err.code !== "STAGE_NOT_READY" ||
-    err.extra.reason !== "group_too_few_entrants"
-  ) {
-    return null;
+  if (!(err instanceof ApiV1Error) || err.code !== "STAGE_NOT_READY") return null;
+  if (err.extra.reason === "group_too_few_entrants") {
+    const groups = Number(err.extra.groups ?? 1);
+    return groups > 1
+      ? msg("schedule.error.tooFewGroupEntrants", {
+          required: Number(err.extra.required ?? groups * 2),
+          have: Number(err.extra.entrants ?? 0),
+          groups,
+        })
+      : msg("schedule.error.tooFewEntrants");
   }
-  const groups = Number(err.extra.groups ?? 1);
-  return groups > 1
-    ? msg("schedule.error.tooFewGroupEntrants", {
-        required: Number(err.extra.required ?? groups * 2),
-        have: Number(err.extra.entrants ?? 0),
-        groups,
-      })
-    : msg("schedule.error.tooFewEntrants");
+  // F2a (P7 follow-up): the SEEDED-path analogue — a `.seeding` group stage
+  // whose placed seeds can't fill its configured pools
+  // (generateSeededStageFixtures) throws this reason instead. Same
+  // actionable-banner treatment; distinct copy because the shortfall is in
+  // QUALIFIERS the seeding rules produce, not in registered entrants.
+  if (err.extra.reason === "seeded_pool_too_few_qualifiers") {
+    const groups = Number(err.extra.groups ?? 1);
+    // P7 fix round (Major, whole-branch review): groups<=1 (an ungrouped
+    // seeded kind, or a group stage left at pools.count's default of 1)
+    // used to fall back to the PLAIN path's tooFewEntrants copy ("add at
+    // least 2 entrants to this stage first") — unactionable here, since a
+    // `.seeding` stage's entrants are synthetic slot:N seeds minted from
+    // seeding.take rules (stages.ts:1399-1403), not rows a user can add.
+    // The seeded path's real lever is the seeding rules or the source
+    // stage's qualifier count, so it gets its own copy, never tooFewEntrants.
+    return groups > 1
+      ? msg("schedule.error.tooFewSeededQualifiers", {
+          required: Number(err.extra.required ?? groups * 2),
+          have: Number(err.extra.qualifiers ?? 0),
+          groups,
+          stranded: Number(err.extra.stranded ?? 0),
+        })
+      : msg("schedule.error.tooFewQualifiers", {
+          qualifiers: Number(err.extra.qualifiers ?? 0),
+          stranded: Number(err.extra.stranded ?? 0),
+        });
+  }
+  return null;
 }
 
 /** A bye: one side empty with an auto-advance award outcome (v3/04 §3 item 6). */

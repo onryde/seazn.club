@@ -127,7 +127,7 @@ export default async function DivisionSchedulePage({
     preferredCurrency(auth.orgId),
   ]);
 
-  // Feed wiring for TBD card labels ("Winner of R1 #2" — doc 12 §2).
+  // Feed wiring for TBD card labels ("Winner of R1·2" — doc 12 §2).
   const feedRows = await withTenant(auth.orgId, (tx) =>
     tx<FeedRow[]>`
       select id, round_no, seq_in_round, winner_to_fixture, winner_to_slot,

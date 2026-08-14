@@ -788,22 +788,27 @@ export function previewDivisionFixtures(
       return { title: stage.name, note: "Preview isn't available for this format.", sections: [] };
     }
 
-    // id → label; and extKey → short ref so feeds read "Winner of R2 #1" — via
-    // the design's slot.winner_match/slot.loser_match ({ext}) pair, resolved
-    // through the same resolveSlotLabel() every real renderer uses (A1/A2),
-    // never a hand-built template. This preview has no locale in scope (it
-    // backs the marketing gallery + /help/formats, always English before and
-    // after), so it resolves through the client-safe English msg().
+    // id → label; and extKey → the SOURCE fixture's {round, seq} — numbers,
+    // never a rendered fragment (P7/F1) — so feeds resolve through the
+    // design's slot.winner_match/slot.loser_match pair via the SAME
+    // resolveSlotLabel() every real renderer uses (A1/A2), which composes
+    // "R2·1" from slot.match_ref internally. Never a hand-built template.
+    // This preview has no locale in scope (it backs the marketing gallery +
+    // /help/formats, always English before and after), so it resolves
+    // through the client-safe English msg(). Mirrors the exact map
+    // generateStageFixtures's own INSERT builds for the live path below, so
+    // the two cannot drift onto different ref formats.
     const idLabel = new Map<string, string>();
     for (let i = 0; i < entrantCount; i++) idLabel.set(`e${i + 1}`, label(i));
-    const refByExt = new Map(gen.map((f) => [f.extKey, `R${f.roundNo} #${f.seqInRound}`]));
+    const refByExt = new Map(gen.map((f) => [f.extKey, { round: f.roundNo, seq: f.seqInRound }]));
 
     const slot = (id: string | null, from?: { extKey: string; side: "winner" | "loser" }): string => {
       if (id) return idLabel.get(id) ?? id;
       if (from) {
-        const ext = refByExt.get(from.extKey) ?? "TBD";
+        const params = refByExt.get(from.extKey);
+        if (!params) return resolveSlotLabel(null, msg, "schedule.tbd");
         const key = from.side === "loser" ? "slot.loser_match" : "slot.winner_match";
-        return resolveSlotLabel({ key, params: { ext } }, msg, "schedule.tbd");
+        return resolveSlotLabel({ key, params }, msg, "schedule.tbd");
       }
       return resolveSlotLabel(null, msg, "schedule.tbd");
     };
@@ -1010,24 +1015,70 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
     const viaFillSlot = qualified !== null;
     const bakeDirect = (g: GenFixture) => !viaFillSlot || g.award !== undefined;
 
+    // Match-sourced slot labels (P7/F1): a slot with no baked entrant, fed by
+    // an earlier fixture in THIS generation (g.homeFrom/g.awayFrom), gets an
+    // i18n pattern ref persisted alongside the null entrant id — { key:
+    // "slot.winner_match" | "slot.loser_match", params: { round, seq } },
+    // numbers, NEVER a rendered fragment (resolveSlotLabel composes the ref
+    // text at render time via slot.match_ref, so every locale/surface can
+    // differ). This is the SAME {key,params} shape the .seeding path
+    // (descriptorLabel, stage-seeding.ts — untouched) already writes for its
+    // own kind of TBD slot; only the descriptor differs. `refByExt` mirrors
+    // the preview helper's own map above (extKey → the SOURCE fixture's
+    // {round, seq}) — built from the FULL `gen`, not just the new rows below,
+    // so a homeFrom/awayFrom pointing at an already-existing fixture still
+    // resolves. Gated on the ACTUAL entrant id about to be inserted (not
+    // `bakeDirect(g)` alone) — `bakeDirect` is a constant `true` for every
+    // fixture on the common, non-cross-stage-fill path, so a round-2+
+    // intra-bracket slot (g.home already null there) needs its OWN nullness
+    // check, not a proxy that never fires in that path.
+    //
+    // EXCEPT a bye: `byeExtKeys` names every source whose "match" resolves to
+    // an immediate award, not a real fixture ever played. Its winner is
+    // propagated into the fed slot synchronously below (the "Third pass"),
+    // inside this SAME transaction — no user ever sees that slot render as
+    // TBD, so labelling it would only create a label this call is about to
+    // strand. The Third pass's own invariant guard (P5 review finding, right
+    // below) exists precisely to catch a stale label reaching that update
+    // path; skipping the label here for a bye source is what keeps this
+    // task's own new label-writing from being the thing that trips it.
+    const refByExt = new Map(gen.map((f) => [f.extKey, { round: f.roundNo, seq: f.seqInRound }]));
+    const byeExtKeys = new Set(gen.filter((f) => f.award !== undefined).map((f) => f.extKey));
+    const matchSlotLabel = (
+      from?: { extKey: string; side: "winner" | "loser" },
+    ): { key: string; params: { round: number; seq: number } } | null => {
+      if (!from) return null;
+      if (byeExtKeys.has(from.extKey)) return null;
+      const params = refByExt.get(from.extKey);
+      if (!params) return null;
+      const key = from.side === "loser" ? "slot.loser_match" : "slot.winner_match";
+      return { key, params };
+    };
+
     // First pass: all new fixtures in one multi-row insert. Ids are generated
     // client-side so the feed/bye passes can reference them without relying
     // on RETURNING order.
     const newRows = gen
       .filter((g) => !byKey.has(g.extKey))
-      .map((g) => ({
-        id: randomUUID(),
-        stage_id: stageId,
-        division_id: stage.division_id,
-        pool_id: g.poolId ?? null,
-        round_no: g.roundNo,
-        seq_in_round: g.seqInRound,
-        home_entrant_id: bakeDirect(g) ? g.home : null,
-        away_entrant_id: bakeDirect(g) ? g.away : null,
-        ext_key: g.extKey,
-        status: g.award !== undefined ? "forfeited" : "scheduled",
-        outcome: g.award !== undefined ? JSON.stringify({ kind: "award", winner: g.award }) : null,
-      }));
+      .map((g) => {
+        const home_entrant_id = bakeDirect(g) ? g.home : null;
+        const away_entrant_id = bakeDirect(g) ? g.away : null;
+        return {
+          id: randomUUID(),
+          stage_id: stageId,
+          division_id: stage.division_id,
+          pool_id: g.poolId ?? null,
+          round_no: g.roundNo,
+          seq_in_round: g.seqInRound,
+          home_entrant_id,
+          away_entrant_id,
+          home_slot_label: home_entrant_id ? null : matchSlotLabel(g.homeFrom),
+          away_slot_label: away_entrant_id ? null : matchSlotLabel(g.awayFrom),
+          ext_key: g.extKey,
+          status: g.award !== undefined ? "forfeited" : "scheduled",
+          outcome: g.award !== undefined ? JSON.stringify({ kind: "award", winner: g.award }) : null,
+        };
+      });
     if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
     for (const r of newRows) byKey.set(r.ext_key, r.id);
     const created = newRows.length;
@@ -1376,6 +1427,56 @@ async function generateSeededStageFixtures(auth: AuthCtx, stageId: string): Prom
     // before results exist, same restriction the plain path has; `generate()`
     // covers every bracket/table kind that DOES have one.
     const gen: SeededGenFixture[] = generate(stage.kind, stage.config, entrants, poolIds);
+
+    // F2a (P7 follow-up, 2026-08-14): the plain path's `group_too_few_entrants`
+    // guard (:990-999) only fires when `gen.length === 0` — but a `.seeding`
+    // group stage's `entrants` here are the PLACED SEEDS, snake-distributed
+    // into `pools.count` pools the same way the plain path distributes real
+    // entrants. Too few seeds for the configured pool count doesn't
+    // necessarily zero out `gen` overall — it can leave INDIVIDUAL pools with
+    // 0 or 1 seed (roundRobinGen emits nothing for those) while OTHER pools
+    // still generate fine, so `gen.length > 0`. Those stranded seeds never
+    // appear as home/away/award in any `gen` entry, so they never get a
+    // home_slot_label/away_slot_label written below — and because `newRows`
+    // is keyed by ext_key and `generate()` is deterministic, a second call
+    // reproduces the identical (still-partial) `gen` and inserts nothing new.
+    // The only symptom is computeSeedProposal 422ing SEEDING_RULES_MISSING
+    // forever ("regenerate them first" — advice that cannot work, see
+    // destinationSlotsBySeed below). Catch the real condition — a placed seed
+    // with nowhere to land — BEFORE any row is inserted, so the transaction
+    // fails cleanly instead of committing a stage that can never be seeded.
+    const referenced = new Set<string>();
+    for (const g of gen) {
+      if (typeof g.home === "string") referenced.add(g.home);
+      if (typeof g.away === "string") referenced.add(g.away);
+      if (typeof g.award === "string") referenced.add(g.award);
+    }
+    const stranded = entrants.filter((e) => !referenced.has(e.id));
+    if (stranded.length > 0) {
+      const groups = stage.kind === "group" ? poolCount(stage.config) : 1;
+      const required = Math.max(2, groups * 2);
+      throw new EngineError(
+        "STAGE_NOT_READY",
+        groups > 1
+          ? `not enough qualifiers to fill ${groups} groups — each group needs at least 2 (have ${placed.length}, need ${required}); ${stranded.length} would never receive a fixture`
+          : // Reaching here means fixtures WERE generated and some qualifier
+            // still got none — a partial fill, never "no matches at all". Saying
+            // the latter would repeat the unactionable-advice defect this guard
+            // exists to remove. Unreachable today (with one pool stages.ts:655-656
+            // runs a full-field round robin that strands nobody, and every bracket
+            // generator places every seed or throws), so this is the shape a future
+            // generator regression would surface through, not live copy.
+            `${stranded.length} of ${placed.length} qualifiers would never receive a fixture`,
+        {
+          stageId,
+          reason: "seeded_pool_too_few_qualifiers",
+          groups,
+          qualifiers: placed.length,
+          required,
+          stranded: stranded.length,
+        },
+      );
+    }
 
     // Convert synthetic slot refs into labels. A bye AWARD line propagates
     // its label into the winner feed too (both resolve to the SAME

@@ -10,8 +10,13 @@
 // is UTC+12/+13, so its calendar day differs from the fixtures' UTC instants —
 // a browser-zone expansion lands on different DAYS, not just different hours.
 import { describe, expect, it } from "vitest";
-import { dailyHoursToWindows, windowsToDailyHours } from "@/lib/schedule-board";
+import { dailyHoursToWindows, feedLabels, windowsToDailyHours, type FeedRow } from "@/lib/schedule-board";
 import { zonedDateInput, zonedTimeInput } from "@/lib/zoned-datetime";
+import { matchRef, resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import { msgFor } from "@/lib/messages-i18n";
+import { LOCALES } from "@/lib/i18n-constants";
+import { consoleFixtures } from "@/components/v2/schedule-board";
+import { cardTitle, type BoardFixture } from "@/components/v2/board/types";
 
 /** The venue zone in every case below. */
 const AKL = "Pacific/Auckland";
@@ -170,5 +175,115 @@ describe("guards — the premise these assertions rest on", () => {
     // ever changes rather than reporting a vacuous green.
     expect(PROCESS_TZ).not.toBe(AKL);
     expect(zonedDateInput("2026-09-15T12:00:00.000Z", PROCESS_TZ)).not.toBe("2026-09-16");
+  });
+});
+
+// P7/F1: feedLabels() used to hand-build "Winner of R1 #2" — a second,
+// hardcoded-English copy of the same vocabulary fixtures.home_slot_label
+// already carries as {key,params}. It now builds the SAME shape.
+describe("feedLabels", () => {
+  const row = (over: Partial<FeedRow> & { id: string }): FeedRow => ({
+    round_no: 1,
+    seq_in_round: 1,
+    winner_to_fixture: null,
+    winner_to_slot: null,
+    loser_to_fixture: null,
+    loser_to_slot: null,
+    ...over,
+  });
+
+  it("builds a SlotLabel — never a pre-rendered string — with the SOURCE fixture's numeric {round, seq}", () => {
+    const rows = [
+      row({ id: "semi", round_no: 1, seq_in_round: 2, winner_to_fixture: "final", winner_to_slot: 1 }),
+      row({ id: "final" }),
+    ];
+    const labels = feedLabels(rows);
+    expect(labels["final"]!.home).toEqual({ key: "slot.winner_match", params: { round: 1, seq: 2 } });
+    // params are NUMBERS, never a rendered fragment like "R1·2" or "R1 #2".
+    expect(typeof labels["final"]!.home!.params.round).toBe("number");
+    expect(typeof labels["final"]!.home!.params.seq).toBe("number");
+  });
+
+  it("slot 1 -> home, slot 2 -> away; loser feed uses slot.loser_match", () => {
+    const rows = [
+      row({ id: "semi1", round_no: 1, seq_in_round: 1, loser_to_fixture: "bronze", loser_to_slot: 1 }),
+      row({ id: "semi2", round_no: 1, seq_in_round: 2, loser_to_fixture: "bronze", loser_to_slot: 2 }),
+      row({ id: "bronze" }),
+    ];
+    const labels = feedLabels(rows);
+    expect(labels["bronze"]!.home).toEqual({ key: "slot.loser_match", params: { round: 1, seq: 1 } });
+    expect(labels["bronze"]!.away).toEqual({ key: "slot.loser_match", params: { round: 1, seq: 2 } });
+  });
+
+  it("skips a feed pointing at a fixture outside the row set (defensive, same as before)", () => {
+    const rows = [row({ id: "semi", winner_to_fixture: "not-in-set", winner_to_slot: 1 })];
+    expect(feedLabels(rows)).toEqual({});
+  });
+
+  it("skips a row with no feed wiring at all", () => {
+    expect(feedLabels([row({ id: "solo" })])).toEqual({});
+  });
+});
+
+// The required anti-drift regression (F1 brief): the board card's OWN short
+// code — schedule-board.tsx:271's consoleFixtures(), via matchRef() — and the
+// feed label's {ext} substitution — feedLabels() + resolveSlotLabel(), the
+// exact wiring cardTitle() uses on every real board render — must produce the
+// SAME ref text for the SAME {round, seq}. Both sides call the REAL
+// production functions (not a hand-computed "expected" string), so this goes
+// red if EITHER re-hardcodes its own template independently of the other.
+describe("anti-drift: board card ref code vs feed label {ext} (P7/F1, required)", () => {
+  const boardFixture = (id: string, round_no: number, seq_in_round: number) => ({
+    id,
+    stage_id: "st-1",
+    division_id: "d1",
+    round_no,
+    seq_in_round,
+    home_entrant_id: "e1",
+    away_entrant_id: "e2",
+    scheduled_at: null,
+    venue: null,
+    court_label: null,
+    status: "scheduled",
+    schedule_source: "manual",
+    schedule_locked: false,
+    outcome: null,
+  });
+
+  for (const locale of LOCALES) {
+    it(`${locale}: consoleFixtures()'s .code and the fed slot's matchup embed the identical ref text`, () => {
+      const lookup: SlotLabelLookup = (k, vars) => msgFor(locale, k, vars);
+
+      // (a) the SOURCE fixture's own short-code chip, via the real
+      // schedule-board.tsx:271 code path.
+      const [sourceRow] = consoleFixtures([boardFixture("source", 2, 3)], { e1: "A", e2: "B" }, {}, lookup);
+      const cardCode = sourceRow!.code;
+      expect(cardCode).toBe(matchRef(2, 3, lookup)); // sanity: same fn schedule-board.tsx:271 calls
+
+      // (b) a TARGET fixture fed by that source's winner, via the real
+      // feedLabels() + cardTitle() path every board render uses.
+      const rows: FeedRow[] = [
+        { id: "source", round_no: 2, seq_in_round: 3, winner_to_fixture: "target", winner_to_slot: 1, loser_to_fixture: null, loser_to_slot: null },
+        { id: "target", round_no: 3, seq_in_round: 1, winner_to_fixture: null, winner_to_slot: null, loser_to_fixture: null, loser_to_slot: null },
+      ];
+      const feeds = feedLabels(rows);
+      const targetFixture: BoardFixture = {
+        ...boardFixture("target", 3, 1),
+        home_entrant_id: null,
+        away_entrant_id: null,
+      };
+      const matchup = cardTitle(targetFixture, {}, feeds, lookup);
+
+      expect(matchup).toContain(cardCode);
+    });
+  }
+
+  it("resolveSlotLabel's {ext} substitution for a feed label is the literal matchRef() output, not a re-derived copy", () => {
+    const lookup: SlotLabelLookup = (k, vars) => msgFor("en", k, vars);
+    const label = feedLabels([
+      { id: "s", round_no: 4, seq_in_round: 2, winner_to_fixture: "t", winner_to_slot: 1, loser_to_fixture: null, loser_to_slot: null },
+      { id: "t", round_no: 5, seq_in_round: 1, winner_to_fixture: null, winner_to_slot: null, loser_to_fixture: null, loser_to_slot: null },
+    ])["t"]!.home!;
+    expect(resolveSlotLabel(label, lookup, "schedule.tbd")).toBe(`Winner of ${matchRef(4, 2, lookup)}`);
   });
 });
