@@ -1,7 +1,25 @@
-# P7 (D1b) — multi-stage templates, plus the two P6 follow-ups
+# P6 follow-ups (P7 held by the owner mid-session)
 
-Session record. Branch `feat/p7-multi-stage-templates`, worktree
+Session record. Branch `fix/p6-followups`, worktree
 `.claude/worktrees/p7-templates`, off `main@cdcc3bef` (P6, PR #568).
+
+## Scope change, 2026-08-14 — read this first
+
+This session began as P7 (D1b multi-stage templates) with the two P6
+follow-ups attached. **Mid-session the owner held P7 and narrowed the
+session to the follow-ups alone.**
+
+- **SHIPPING**: F1 (match-sourced slot labels) and F2 (the orphaned-fixture
+  follow-up), plus doc/prompt changes.
+- **NOT SHIPPING**: T1–T5, the whole of P7. Their briefs are written and
+  on disk in this plan's SDD workspace (`t12-brief.md`, `t3-brief.md`,
+  `t4-brief.md`, `t5-brief.md`) so the next P7 session inherits the
+  re-pinned citations and the rulings rather than re-deriving them.
+
+The P7 sections below are **retained deliberately, as handover**, not as
+work in progress. Everything in them was verified against live code at
+`cdcc3bef`; the T3 ruling in particular cost real investigation and would
+otherwise be re-litigated wrongly. Nothing in them has been implemented.
 
 Prompt: `portfolio-prompts/P07-templates-multi-stage.md`.
 Rules: `portfolio-prompts/_RULES.md` → `_INDEX.md` → `docs/superpowers/RULES.md`.
@@ -11,20 +29,23 @@ Specs: `designs/2026-08-13-format-templates-design.md` (D1),
 Owner green-light 2026-08-14, and it carried an addition: **fix the two
 follow-ups P6 shipped knowingly**, not just build P7.
 
-## Scope, and why the follow-ups come first
+## Scope
 
-Three work groups. F1 and F2 are P6's open follow-ups; T1–T4 are P7.
+F1 and F2 are P6's open follow-ups, and after the mid-session hold they
+are the whole of this session's shipped work. T1–T5 (P7) are handover
+only — see the scope-change note above.
 
-**F1 is not merely a tidy-up — it is a P7 enabler.** `euro24` and
-`t20-super8` both end in knockout stages whose fixtures are fed by
-earlier matches. If match-sourced slots have no label, P7's own
-acceptance criterion ("Super 8 fixtures TBD-labeled") renders as bare
-"TBD". F1 therefore lands before the catalog work.
+F1 was sequenced first because it was also a P7 enabler: `euro24` and
+`t20-super8` end in knockout stages fed by earlier matches, so without a
+match-sourced label P7's own acceptance criterion ("Super 8 fixtures
+TBD-labeled") would have rendered as bare "TBD". That ordering turned out
+to be lucky rather than clever — it means the enabler is landing even
+though P7 is not.
 
-The prompt says "Do NOT touch P5 server internals, stages.ts, engine".
-**That stop-clause is overridden for F1 and F2 by the owner's explicit
-instruction to fix the follow-ups**, both of which live in `stages.ts`.
-It still binds T1–T4: the template tasks must not reach into P5.
+The P07 prompt says "Do NOT touch P5 server internals, stages.ts,
+engine". **That stop-clause is overridden for F1 and F2 by the owner's
+explicit instruction to fix the follow-ups**, both of which live in
+`stages.ts`. It would still bind T1–T5 if P7 resumes.
 
 ## Baseline (measured, not assumed)
 
