@@ -400,47 +400,30 @@ async function recordEvidence(page: Page, comboName: string, scopeSelector: stri
   expect
     .soft(focus.trapped, `focus got stuck cycling inside the pad without ever leaving it: ${JSON.stringify(focus.order)}`)
     .toBe(false);
-  // S13/#422 W11 cutover — LEFT RED, reported rather than fixed (same scope
-  // boundary as the axe check above). `backwardJumps > 0` on BOTH surfaces,
-  // at every width, root-caused (not guessed): the "Tally" panel's action
-  // group renders through panel.tsx's `grid` layout
-  // (ACTIONS_CLASS.grid = "grid grid-cols-2 gap-2", panel.tsx:35) — two grid
-  // columns, "Add points" in column 1 and "Correct (subtract)" in column 2,
-  // laid out SIDE BY SIDE. Column 1's ActionForm expands tall (Points input
-  // + Side/Person attribution groups + Cancel/Confirm) once opened, pushing
-  // its own controls to a large Y, while column 2's short "Correct
-  // (subtract)" button stays near the row's top — same shared grid row, so
-  // DOM/tab order (column 1 in full, then column 2) does not match the
-  // reading/visual order a sighted keyboard user would expect once that row
-  // is this tall. Deterministic, not a flake (console: 2 jumps @1280, 1 @375,
-  // 1 @320; device: 1 jump @1280, 1 @375, 0 @320 — 320 stacks narrow enough
-  // that the mismatch happens not to trigger). Not weakened or re-scoped to
-  // dodge it.
-  // RECORDED, NOT ASSERTED — and the distinction is deliberate, so read this
-  // before "tightening" it to `.toBe(0)`.
+  // S13 W11 follow-up — FIXED, and now asserted rather than merely recorded.
+  // Root cause (unchanged from the original diagnosis): the "Tally" panel's
+  // action group renders through panel.tsx's `grid` layout
+  // (ACTIONS_CLASS.grid = "grid grid-cols-2 gap-2") — two actions sharing
+  // one visual row, where an expanded ActionForm's controls extend far down
+  // column 1 while its row-mate's button stays near the row's top, so DOM/
+  // tab order used to land BACKWARD up the page once that row grew tall
+  // (deterministic, not a flake: console 2 jumps @1280, 1 @375, 1 @320;
+  // device 1 @1280, 1 @375, 0 @320 — the last measurement taken before the
+  // fix).
   //
-  // What IS asserted above, and must stay asserted: every interactive control
-  // in the pad is reachable by Tab, and nothing traps focus. Those are
-  // unambiguous WCAG failures and they pass.
-  //
-  // The backward-jump count is a different kind of claim. Tab order follows
-  // DOM order, and a two-column grid that tabs down column 1 before column 2
-  // is ordinary, widely-shipped layout — WCAG 2.4.3 requires an order that
-  // preserves meaning and operability, not one that never moves upward on
-  // screen. Whether this particular row reads wrongly to a sighted keyboard
-  // user is a LAYOUT judgement, and the fix is a visual change to
-  // `panel.tsx`'s `grid grid-cols-2` Tally row. Restyles need the owner's
-  // sign-off in this repo, so S13/#422 measured it, wrote it down, and did
-  // NOT redesign it unasked.
-  //
-  // The number is written into the JSON record below every run, so it cannot
-  // quietly drift: a reviewer sees it, and if the owner rules the layout
-  // should change, this becomes `.toBe(0)` in the same commit as the fix.
-  // Measured on the final build — console: 2 jumps @1280, 1 @375, 1 @320;
-  // device: 1 @1280, 1 @375, 0 @320.
-  expect
-    .soft(focus.order.length, "no interactive control in the pad was reachable by Tab")
-    .toBeGreaterThan(0);
+  // The fix is a DOM-order-only change, not a restyle: panel.tsx's
+  // `orderForTabSequence` now reorders each `grid`/`perSide` row so a
+  // still-collapsed action always precedes an expanded row-mate in the DOM,
+  // while an explicit CSS `order` pins every action to its ORIGINAL
+  // on-screen position regardless of that reorder — no positive `tabindex`,
+  // and pixel-identical at every width (see panel.tsx's own header and
+  // `orderForTabSequence`'s docstring for the mechanism; pad-renderer.
+  // test.tsx has the unit coverage, including the exact two-actions-share-
+  // one-`type` shape generic's real Tally panel uses). Owner sign-off for
+  // this panel.tsx change has been given, so the count is asserted at 0
+  // below — a regression here now fails the run instead of drifting
+  // unnoticed in the JSON record.
+  expect.soft(jumps, `${jumps} backward tab jump(s) recorded: ${JSON.stringify(focus.order)}`).toBe(0);
 
   await writeFile(
     join(OUT_DIR, `${comboName}.json`),
