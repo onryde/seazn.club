@@ -152,6 +152,57 @@ not in parallel — its own worktree, its own scout re-pin against a
 merged P6. The ratified wave plan's W4 = P6 ∥ P7 is superseded for this
 pair: both touch template/stage surfaces and the four dictionaries.
 
+## Open follow-ups this session ships KNOWINGLY
+
+Both surfaced by the final reviews. Neither blocks the PR; both are
+real and must not be quietly dropped.
+
+### 1. Two dictionary keys with no production reader
+
+`slot.winner_match` / `slot.loser_match` were added ×4 locales this
+session and are read ONLY by the marketing preview
+(`stages.ts:801-809`). `descriptorLabel` never emits them, so a live
+public bracket's round-2+ slots still render a bare "TBD" while the org
+board shows a feed label — an org/public divergence.
+
+Two paths were ruled out at the time and a **third was in reach and
+was missed**, which is the part worth recording:
+
+- BLOCKED: extend `SlotDescriptor`/`descriptorLabel`
+  (`stage-seeding.ts:68-100`) — that is P5 server logic, out of scope.
+- BLOCKED: expose `winner_to_fixture`/`winner_to_slot` on
+  `public_fixtures_v` — needs a new migration, barred.
+- **NOT BLOCKED, and not taken:** `stages.ts`'s own generation already
+  computes `g.homeFrom`/`g.awayFrom` per fixture (`GenFixture`,
+  `stages.ts:499-500, 525-526`) — the same data the English-only
+  preview helper already uses to build `{key:"slot.winner_match", …}`
+  directly, bypassing `SlotDescriptor` entirely. `SlotLabel` is a
+  generic `{key, params}` and both columns already exist from V360, so
+  **no migration is needed**. `generateStageFixtures` simply never
+  writes such a label today.
+
+The stop-clause was honest about the two paths it named; the
+alternatives search was not exhaustive. A follow-up that only repeats
+the two dead ends would send the next session down them again.
+
+### 2. Dropping the regenerate dialog leaves a hazard with no signal
+
+Dropping was the right immediate call — the client genuinely cannot
+compute which existing fixtures have gone stale, and a content-free
+disclaimer on every click (including the common harmless case) is worse
+than nothing.
+
+But the residual risk is larger than "clutter", and the PR should not
+imply it is closed: because `generateStageFixtures` only inserts, a
+fixture orphaned by a rules change **stays live**. It can still take a
+scheduled time and a result indefinitely, silently polluting standings
+and exports after the rules that produced it stopped applying. Before
+this session there was a false signal; now there is **zero** signal,
+which in that one dimension is worse.
+
+The real fix is server-side — generation reporting what no longer
+matches — and that is P5 territory, not P6's.
+
 ## Tests owed (all four, per RULES)
 
 Unit: label resolver (params, 4 locales, no concatenation). Regression:
