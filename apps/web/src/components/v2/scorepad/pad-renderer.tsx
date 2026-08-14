@@ -275,7 +275,14 @@ export function PadRenderer(props: PadRendererProps) {
       <header className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-[0_0_40px_-12px_rgba(16,185,129,0.25)]">
         {headline && (
           <div data-role="score-headline" className="border-b border-slate-800/70 px-3 pt-2.5 pb-2 text-center">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+            {/* S13/#422 W11 cutover — text-slate-500 on this dark scoreboard
+             *  header measures ~3.74:1, below WCAG AA's 4.5:1 floor for
+             *  normal text (real OKLab->linear-sRGB->relative-luminance
+             *  computation, not eyeballed). text-slate-400 clears it at
+             *  6.79:1, the exact fix already applied to the byte-identical
+             *  caption in period-skin.tsx (dac2b6bb) — same two colors,
+             *  reused here rather than inventing a new step. */}
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">
               {msg("scorepad.header.score")}
             </p>
             <p className="truncate text-xl font-bold tabular-nums tracking-tight text-white sm:text-2xl">{headline}</p>
@@ -343,7 +350,13 @@ export function PadRenderer(props: PadRendererProps) {
       />
 
       {view.panels.length === 0 ? (
-        <p className="card p-4 text-center text-sm text-purple-400">{msg("scorepad.emptyPhase")}</p>
+        {/* S13/#422 W11 cutover — text-purple-400 on this white .card
+         *  measures ~2.79:1, below the 4.5:1 AA floor. text-purple-700
+         *  clears it at 7.07:1 and is already this surface's own
+         *  established "readable purple" (globals.css .label/.btn-ghost),
+         *  so this reuses a step already visible right next to it rather
+         *  than introducing a new one. */}
+        <p className="card p-4 text-center text-sm text-purple-700">{msg("scorepad.emptyPhase")}</p>
       ) : skin ? (
         /* S11/#420 W9 — a sport with a hand-crafted layout draws through it
          *  instead of the universal panel walk. Consulted HERE rather than

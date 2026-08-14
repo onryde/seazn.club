@@ -381,8 +381,13 @@ export function ScoreHeader({ header, msg }: { header: SkinHeader; msg: MsgFn })
           >
             {field.value}
           </span>
+          {/* S13/#422 W11 cutover — text-slate-500 on bg-slate-900 measures
+           *  ~3.74:1, below AA's 4.5:1 floor (same byte-identical pattern
+           *  period-skin.tsx's header caption had, dac2b6bb). text-slate-400
+           *  clears it at ~6.79:1 — the same fix, reused rather than
+           *  reinvented. */}
           {field.captionKey && (
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">
               {msg(field.captionKey as MessageKey)}
             </span>
           )}
@@ -859,7 +864,10 @@ function AdminGroup({
       <details className="card group p-3">
         <summary className="btn btn-ghost w-full cursor-pointer list-none justify-between">
           <span>{caption}</span>
-          <span aria-hidden="true" className="text-xs text-purple-400 group-open:rotate-180">
+          {/* S13/#422 W11 cutover — text-purple-400 on white ~2.79:1, below
+           *  AA's 4.5:1; text-purple-700 clears it at ~7.07:1 and matches
+           *  the label beside it (.btn-ghost's own text-purple-700). */}
+          <span aria-hidden="true" className="text-xs text-purple-700 group-open:rotate-180">
             ▾
           </span>
         </summary>

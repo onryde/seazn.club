@@ -644,7 +644,10 @@ function renderHeader(layout: SkinLayout, queueDepth: number, offline: boolean, 
               // this file's own header). Safe here: `buildHeader` above is
               // this value's only producer, and it never writes anything but
               // a literal, hand-verified key.
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">{msg(field.captionKey as MessageKey)}</p>
+              // S13/#422 W11 cutover — text-slate-500 on bg-slate-900 ~3.74:1,
+              // below AA's 4.5:1 (same pattern as period-skin.tsx's header
+              // caption, dac2b6bb). text-slate-400 clears it at ~6.79:1.
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{msg(field.captionKey as MessageKey)}</p>
             )}
             <p className={field.emphasis ? "text-xl font-bold tabular-nums tracking-tight text-white sm:text-2xl" : "text-sm font-semibold tabular-nums text-slate-300"}>{field.value}</p>
           </div>
