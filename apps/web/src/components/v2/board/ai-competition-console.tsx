@@ -486,6 +486,7 @@ export function JointReviewStep({
   onBack,
   onReRun,
   msg,
+  entrantNames = {},
 }: {
   plan: AiCompetitionPlanResponse;
   divisions: JointDivision[];
@@ -494,6 +495,12 @@ export function JointReviewStep({
   excluded: string[];
   /** The board's current fixtures, for the blocked rows' code + matchup. */
   fixtures: AiConsoleFixture[];
+  /** Entrant id -> display name, for a blocking row's `details.entrantIds`
+   *  (C3 phase 4 — the gap found reviewing phase 3). Optional and additive:
+   *  the board is the only caller with a real map in scope today; every
+   *  other/direct-construction caller keeps today's degrade-to-short-id
+   *  behaviour unchanged. */
+  entrantNames?: Record<string, string>;
   applying: boolean;
   outcome: JointApplyOutcome | null;
   undoing: boolean;
@@ -752,7 +759,7 @@ export function JointReviewStep({
           count (#388). It replaced a hand-rolled warnings list whose header
           read `plan.warnings.length`, so the number spoke for one of the three
           kinds of row underneath it. */}
-      <AiReviewPanel rows={reviewRows} fixtures={fixtures} divisionFor={divisionFor} />
+      <AiReviewPanel rows={reviewRows} fixtures={fixtures} divisionFor={divisionFor} entrantNames={entrantNames} />
 
       {plan.blocking.length > 0 && (
         <div className="rounded-lg border border-red-200 bg-red-50/60 p-3">
@@ -794,7 +801,7 @@ export function JointReviewStep({
                     <span className="min-w-0 truncate">
                       {msg(blockingConflictKey(c.reason))}
                       {c.details
-                        ? ` — ${formatConflictDetail(c.details, { msg, entrantNames: {}, fixtureTitles })}`
+                        ? ` — ${formatConflictDetail(c.details, { msg, entrantNames, fixtureTitles })}`
                         : ""}
                     </span>
                   </p>
@@ -891,6 +898,7 @@ export function AiCompetitionConsole({
   onApplied,
   onRefetch,
   onProposalChange,
+  entrantNames = {},
 }: {
   competitionId: string;
   /** Every division on the board, in board order. */
@@ -902,6 +910,11 @@ export function AiCompetitionConsole({
   currency: Currency;
   /** The board's live fixtures across every division — the blocked rows' labels. */
   fixtures: AiConsoleFixture[];
+  /** Entrant id -> display name, board-wide (C3 phase 4 — the gap found
+   *  reviewing phase 3). Optional and additive: absent (or a miss) falls
+   *  back to a shortened id, never a raw UUID — the pre-existing degrade,
+   *  unchanged for any caller that does not supply it. */
+  entrantNames?: Record<string, string>;
   onClose: () => void;
   onApplied?: () => void;
   /** Pull the board WITHOUT claiming a write landed. `divisions[].seq` is a
@@ -1299,6 +1312,7 @@ export function AiCompetitionConsole({
       }}
       onReRun={() => void run(plan)}
       msg={msg}
+      entrantNames={entrantNames}
     />
   ) : (
     brief

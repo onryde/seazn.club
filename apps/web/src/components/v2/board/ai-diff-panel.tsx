@@ -34,6 +34,7 @@ export function AiDiffPanel({
   fixtures,
   excluded,
   onToggleExclude,
+  entrantNames = {},
 }: {
   plan: AiPlanResponse;
   /** The board's current fixtures (before the proposal) — powers the provenance. */
@@ -41,6 +42,12 @@ export function AiDiffPanel({
   /** Blocking fixtures the organiser has unticked (drop to tray on accept). */
   excluded: string[];
   onToggleExclude: (fixtureId: string) => void;
+  /** Entrant id -> display name, for a blocking row's `details.entrantIds`
+   *  (C3 phase 4 — the gap found reviewing phase 3). Optional and additive:
+   *  the board is the only caller with a real map in scope today
+   *  (`schedule-board.tsx`); every other/direct-construction caller keeps
+   *  today's degrade-to-short-id behaviour unchanged. */
+  entrantNames?: Record<string, string>;
 }) {
   const msg = useMsg();
   const plural = usePlural();
@@ -174,7 +181,7 @@ export function AiDiffPanel({
                     </p>
                     {c.details && (
                       <p className="mt-0.5 text-[10px] text-slate-500">
-                        {formatConflictDetail(c.details, { msg, entrantNames: {}, fixtureTitles })}
+                        {formatConflictDetail(c.details, { msg, entrantNames, fixtureTitles })}
                       </p>
                     )}
                     {isExcluded && (

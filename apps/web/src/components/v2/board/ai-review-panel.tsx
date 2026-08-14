@@ -29,6 +29,7 @@ export function AiReviewPanel({
   fixtures,
   divisionFor,
   onPulse,
+  entrantNames = {},
 }: {
   /** Built by `buildReviewRows` — the single source of both the list and the count. */
   rows: ReviewRow[];
@@ -39,6 +40,12 @@ export function AiReviewPanel({
   /** Highlight this card's PLACED fixtures on the grid. Offered only when the
    *  card holds at least one — see `reviewRowPulseIds`. */
   onPulse?: (fixtureIds: string[]) => void;
+  /** Entrant id -> display name, for a warning row's `details.entrantIds`
+   *  (C3 phase 4 — the gap found reviewing phase 3). Optional and additive:
+   *  the board is the only caller with a real map in scope today; every
+   *  other/direct-construction caller keeps today's degrade-to-short-id
+   *  behaviour unchanged. */
+  entrantNames?: Record<string, string>;
 }) {
   const msg = useMsg();
   const plural = usePlural();
@@ -170,7 +177,7 @@ export function AiReviewPanel({
                     </p>
                     {row.details && (
                       <p className="mt-0.5 text-[10px] text-slate-500">
-                        {formatConflictDetail(row.details, { msg, entrantNames: {}, fixtureTitles })}
+                        {formatConflictDetail(row.details, { msg, entrantNames, fixtureTitles })}
                       </p>
                     )}
                   </>

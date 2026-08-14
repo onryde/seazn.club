@@ -1528,6 +1528,7 @@ export function ScheduleBoard({
           aiAllowed={aiAllowed}
           currency={currency}
           fixtures={aiFixtures}
+          entrantNames={entrantNames}
           onClose={() => {
             setAiOpen(false);
             setAiProposal(null);
@@ -1550,6 +1551,7 @@ export function ScheduleBoard({
           scheduleFrozen={single.schedule_locked ?? false}
           brief={aiBrief}
           fixtures={aiFixtures}
+          entrantNames={entrantNames}
           prefillRepair={aiRepairScope}
           onClose={() => {
             setAiOpen(false);
