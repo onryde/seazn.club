@@ -1428,6 +1428,49 @@ async function generateSeededStageFixtures(auth: AuthCtx, stageId: string): Prom
     // covers every bracket/table kind that DOES have one.
     const gen: SeededGenFixture[] = generate(stage.kind, stage.config, entrants, poolIds);
 
+    // F2a (P7 follow-up, 2026-08-14): the plain path's `group_too_few_entrants`
+    // guard (:990-999) only fires when `gen.length === 0` — but a `.seeding`
+    // group stage's `entrants` here are the PLACED SEEDS, snake-distributed
+    // into `pools.count` pools the same way the plain path distributes real
+    // entrants. Too few seeds for the configured pool count doesn't
+    // necessarily zero out `gen` overall — it can leave INDIVIDUAL pools with
+    // 0 or 1 seed (roundRobinGen emits nothing for those) while OTHER pools
+    // still generate fine, so `gen.length > 0`. Those stranded seeds never
+    // appear as home/away/award in any `gen` entry, so they never get a
+    // home_slot_label/away_slot_label written below — and because `newRows`
+    // is keyed by ext_key and `generate()` is deterministic, a second call
+    // reproduces the identical (still-partial) `gen` and inserts nothing new.
+    // The only symptom is computeSeedProposal 422ing SEEDING_RULES_MISSING
+    // forever ("regenerate them first" — advice that cannot work, see
+    // destinationSlotsBySeed below). Catch the real condition — a placed seed
+    // with nowhere to land — BEFORE any row is inserted, so the transaction
+    // fails cleanly instead of committing a stage that can never be seeded.
+    const referenced = new Set<string>();
+    for (const g of gen) {
+      if (typeof g.home === "string") referenced.add(g.home);
+      if (typeof g.away === "string") referenced.add(g.away);
+      if (typeof g.award === "string") referenced.add(g.award);
+    }
+    const stranded = entrants.filter((e) => !referenced.has(e.id));
+    if (stranded.length > 0) {
+      const groups = stage.kind === "group" ? poolCount(stage.config) : 1;
+      const required = Math.max(2, groups * 2);
+      throw new EngineError(
+        "STAGE_NOT_READY",
+        groups > 1
+          ? `not enough qualifiers to fill ${groups} groups — each group needs at least 2 (have ${placed.length}, need ${required}); ${stranded.length} would never receive a fixture`
+          : "not enough qualifiers to generate any matches",
+        {
+          stageId,
+          reason: "seeded_pool_too_few_qualifiers",
+          groups,
+          qualifiers: placed.length,
+          required,
+          stranded: stranded.length,
+        },
+      );
+    }
+
     // Convert synthetic slot refs into labels. A bye AWARD line propagates
     // its label into the winner feed too (both resolve to the SAME
     // descriptor at confirm time) — see the third pass below. A bye seed
