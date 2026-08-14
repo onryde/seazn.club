@@ -39,6 +39,7 @@ import {
   applyCompetitionSchedule,
   lockDivisions,
   lockOrder,
+  sortConflicts,
   type CompetitionApplyDivision,
   type CompetitionApplyOut,
 } from "../competition-schedule-apply";
@@ -347,6 +348,28 @@ describe("joint apply — pure contracts", () => {
         source: "ai",
       }),
     ).toThrow();
+  });
+
+  it("orders equal-rank, same-reason conflicts by their canonical detail, not by fixtureId (C3 review finding 6)", () => {
+    // An empty `order` sends every conflict through the identical UNRANKED
+    // fallback, so the comparator falls straight through rank and reason to
+    // the detail-suffix compare this test targets — no fixture/division
+    // scaffolding needed for a comparator this pure.
+    const FIXTURE_LOW = "11111111-0000-4000-8000-000000000001";
+    const FIXTURE_HIGH = "99999999-0000-4000-8000-000000000009";
+    const conflictFor = (fixtureId: string, otherFixtureId: string): Conflict => ({
+      fixtureId,
+      reason: "court",
+      details: { kind: "court_double_booking", otherFixtureId, court: "Court 1" },
+    });
+    // otherFixtureId order is the OPPOSITE of fixtureId order — the only
+    // way to tell "sorted by canonical detail" apart from "sorted by
+    // fixtureId" (which is what comparing the whole `conflictKey` — LED by
+    // `fixtureId` — silently regresses to).
+    const low = conflictFor(FIXTURE_LOW, "zzzzzzzz-0000-4000-8000-000000000009");
+    const high = conflictFor(FIXTURE_HIGH, "00000000-0000-4000-8000-000000000000");
+
+    expect(sortConflicts([low, high], [])).toEqual([high, low]);
   });
 });
 

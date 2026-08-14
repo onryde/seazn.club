@@ -146,6 +146,18 @@ const MS_PER_MIN = 60_000;
 const ms = (v: string | Date): number => new Date(v).getTime();
 const iso = (t: number): string => new Date(t).toISOString();
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+/** A conflict's canonical detail alone, with the `fixtureId|reason|` prefix
+ *  `conflictKey` (calendar.ts) leads with stripped off — NOT
+ *  `canonConflictDetail` itself: it is not part of the engine's public
+ *  barrel (only the `ConflictDetail`/`ConflictDetailKind` TYPES are
+ *  re-exported, from calendar.ts), so this reuses `conflictKey`'s own
+ *  computation rather than re-deriving canon locally, which would risk
+ *  drifting from the engine's own field-order rules (review finding 6).
+ *  Exact by construction: `conflictKey(c) === \`${c.fixtureId}|${c.reason}|\`
+ *  + <canon>`, so slicing off that literal prefix recovers <canon> exactly,
+ *  never an approximation. */
+const conflictDetailSuffix = (c: Conflict): string =>
+  conflictKey(c).slice(`${c.fixtureId}|${c.reason}|`.length);
 
 // ---------------------------------------------------------------------------
 // Wire shapes
@@ -797,8 +809,10 @@ export async function applyCompetitionSchedule(
 
 /** Conflicts in reading order: division (domain order), then playing order
  *  within it. Never the fixture UUID except as a last-resort tie-break — the
- *  determinism contract (schedule-ai.ts:1-12). */
-function sortConflicts(conflicts: readonly Conflict[], order: readonly LoadedDivision[]): Conflict[] {
+ *  determinism contract (schedule-ai.ts:1-12). Exported for a direct,
+ *  pure-function regression test (C3 review finding 6) — no other module
+ *  imports it. */
+export function sortConflicts(conflicts: readonly Conflict[], order: readonly LoadedDivision[]): Conflict[] {
   const rank = new Map<string, [number, number, number, string]>();
   order.forEach((d, i) => {
     for (const f of d.fixtures) rank.set(f.id, [i, f.round_no, f.seq_in_round, f.ext_key ?? ""]);
@@ -813,11 +827,17 @@ function sortConflicts(conflicts: readonly Conflict[], order: readonly LoadedDiv
       ra[2] - rb[2] ||
       cmp(ra[3], rb[3]) ||
       cmp(a.reason, b.reason) ||
-      // `conflictKey` rather than the old raw `detail` string (C3,
-      // 2026-08-13): `reason` is already equal by this point, so this reduces
-      // to comparing the two conflicts' canonical detail suffix —
-      // deterministic ordering, same as before, off the structured detail.
-      cmp(conflictKey(a), conflictKey(b)) ||
+      // The two conflicts' canonical detail SUFFIX (review finding 6) — NOT
+      // `conflictKey` whole, which a prior version of this comment claimed
+      // "reduces to" the same thing. It does not: `conflictKey` LEADS with
+      // `fixtureId`, so comparing it whole sorts primarily by fixtureId and
+      // never reaches the detail at all when the two fixtures differ,
+      // silently changing this order from pre-C3 (which compared the raw
+      // `detail` string — no fixtureId prefix) and making the
+      // `cmp(a.fixtureId, b.fixtureId)` tie-break below unreachable (once
+      // the suffix comparison is 0, the fixtureId prefix that produced it
+      // must already be equal too).
+      cmp(conflictDetailSuffix(a), conflictDetailSuffix(b)) ||
       cmp(a.fixtureId, b.fixtureId)
     );
   });

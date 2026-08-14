@@ -169,6 +169,20 @@ const tooLarge = (): HttpError =>
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const ms = (iso: string): number => Date.parse(iso);
+/** A conflict's canonical detail alone, with the `fixtureId|reason|` prefix
+ *  `conflictKey` (calendar.ts) leads with stripped off — NOT
+ *  `canonConflictDetail` itself: it is not part of the engine's public
+ *  barrel (only the `ConflictDetail`/`ConflictDetailKind` TYPES are
+ *  re-exported, from calendar.ts), so this reuses `conflictKey`'s own
+ *  computation rather than re-deriving canon locally, which would risk
+ *  drifting from the engine's own field-order rules (review finding 6).
+ *  Exact by construction: `conflictKey(c) === \`${c.fixtureId}|${c.reason}|\`
+ *  + <canon>`, so slicing off that literal prefix recovers <canon> exactly,
+ *  never an approximation. Same helper as competition-schedule-apply.ts's
+ *  `sortConflicts` — duplicated rather than shared, matching how `cmp`
+ *  itself is already duplicated per file here. */
+const conflictDetailSuffix = (c: Conflict): string =>
+  conflictKey(c).slice(`${c.fixtureId}|${c.reason}|`.length);
 
 /** A sub-pack's settings with every person scope moved into the RUN's identity
  *  namespace (#450). Returned by reference when there is nothing to resolve, so
@@ -1750,14 +1764,21 @@ export function verifyJoint(plan: AiSchedulePlan, pack: CompetitionPack): Confli
       ra[2] - rb[2] ||
       cmp(ra[3], rb[3]) ||
       cmp(a.reason, b.reason) ||
-      // `conflictKey` rather than the old raw `detail` string (C3, 2026-08-13):
-      // `reason` is already equal by this point, so this reduces to comparing
-      // the two conflicts' canonical detail suffix — deterministic ordering,
-      // same as before, off the structured detail instead of its prose.
-      cmp(conflictKey(a), conflictKey(b)) ||
-      // Last-resort only: two conflicts identical on every domain key. Reaching
-      // this means the seed has duplicate (round, seq, ext_key) within one
-      // division, which the fixture generator does not produce.
+      // The two conflicts' canonical detail SUFFIX (review finding 6) — NOT
+      // `conflictKey` whole, which a prior version of this comment claimed
+      // "reduces to" the same thing. It does not: `conflictKey` LEADS with
+      // `fixtureId`, so comparing it whole sorts primarily by fixtureId and
+      // never reaches the detail at all when the two fixtures differ,
+      // silently changing this order from pre-C3 (which compared the raw
+      // `detail` string — no fixtureId prefix, off its prose instead of the
+      // structured detail) and making the `cmp(a.fixtureId, b.fixtureId)`
+      // tie-break below unreachable (once the suffix comparison is 0, the
+      // fixtureId prefix that produced it must already be equal too).
+      cmp(conflictDetailSuffix(a), conflictDetailSuffix(b)) ||
+      // Last-resort only: two conflicts identical on every domain key AND
+      // the same canonical detail. Reaching this means the seed has
+      // duplicate (round, seq, ext_key) within one division, which the
+      // fixture generator does not produce.
       cmp(a.fixtureId, b.fixtureId)
     );
   });

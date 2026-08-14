@@ -1641,3 +1641,61 @@ describe("verifyJoint — cross-division rest is the MAX (#398)", () => {
     expect(found.some((c) => c.reason === "rest")).toBe(true);
   });
 });
+
+// ===========================================================================
+// verifyJoint — conflict comparator (C3 review finding 6)
+// ===========================================================================
+
+describe("verifyJoint — conflict comparator regression", () => {
+  it("orders equal-rank, same-reason conflicts by their canonical detail, not by fixtureId", () => {
+    // F_LOW and F_HIGH sit in the SAME division at the SAME (round, seq) —
+    // `fixture()` defaults both to round:1/seq:0 — so their rank tuples are
+    // IDENTICAL and the comparator falls through rank and reason straight
+    // to the detail-suffix compare this test targets. Each clashes with a
+    // DIFFERENT counterparty on a DIFFERENT court, chosen so the
+    // counterparty (canon) order is the OPPOSITE of the fixtureId order —
+    // the only way to tell "sorted by canonical detail" apart from "sorted
+    // by fixtureId" (what comparing the whole `conflictKey` — LED by
+    // `fixtureId` — silently regresses to).
+    const F_LOW = "10000000-0000-4000-8000-000000000001";
+    const F_HIGH = "90000000-0000-4000-8000-000000000009";
+    const COUNTERPARTY_HIGH = "90000000-0000-4000-8000-000000000008"; // F_LOW's clash partner
+    const COUNTERPARTY_LOW = "10000000-0000-4000-8000-000000000002"; // F_HIGH's clash partner
+    const H1 = "a0000000-0000-4000-8000-000000000001";
+    const H2 = "a0000000-0000-4000-8000-000000000002";
+    const H3 = "a0000000-0000-4000-8000-000000000003";
+    const H4 = "a0000000-0000-4000-8000-000000000004";
+    const H5 = "a0000000-0000-4000-8000-000000000005";
+    const H6 = "a0000000-0000-4000-8000-000000000006";
+    const H7 = "a0000000-0000-4000-8000-000000000007";
+    const H8 = "a0000000-0000-4000-8000-000000000008";
+    const p = pack(
+      [division(D1, "Alpha", { settings: settings({ courts: ["Court 1", "Court 2"] }) })],
+      [
+        fixture(F_LOW, D1, { home: H1, away: H2 }),
+        fixture(COUNTERPARTY_HIGH, D1, { home: H3, away: H4 }),
+        fixture(F_HIGH, D1, { home: H5, away: H6 }),
+        fixture(COUNTERPARTY_LOW, D1, { home: H7, away: H8 }),
+      ],
+    );
+    const out = verifyJoint(
+      plan([
+        assign(F_LOW, at("09:00"), "Court 1"),
+        assign(COUNTERPARTY_HIGH, at("09:00"), "Court 1"),
+        assign(F_HIGH, at("09:00"), "Court 2"),
+        assign(COUNTERPARTY_LOW, at("09:00"), "Court 2"),
+      ]),
+      p,
+    );
+    const primary = out.filter((c) => c.fixtureId === F_LOW || c.fixtureId === F_HIGH);
+    expect(primary).toHaveLength(2);
+    expect(primary.every((c) => c.reason === "court")).toBe(true);
+    // Pre-C3 (and the fix): ordered by the counterparty each conflict
+    // names — F_HIGH's counterparty (COUNTERPARTY_LOW) sorts before
+    // F_LOW's (COUNTERPARTY_HIGH). The regression this guards: comparing
+    // `conflictKey` whole sorts by the LEADING fixtureId instead (F_LOW <
+    // F_HIGH), which emits these two rows in the opposite order.
+    expect(primary.map((c) => c.fixtureId)).toEqual([F_HIGH, F_LOW]);
+    expect(primary.map((c) => c.details?.otherFixtureId)).toEqual([COUNTERPARTY_LOW, COUNTERPARTY_HIGH]);
+  });
+});
