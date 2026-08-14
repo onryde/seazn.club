@@ -31,6 +31,25 @@ const projectViewport = (): { width: number; height: number } | null =>
   (test.info().project.use as { viewport?: { width: number; height: number } })
     .viewport ?? null;
 
+/** The project (viewport) this test is running under, e.g. "mobile-430".
+ *  helpers.ts's `TAG` is `Date.now().toString(36)`, evaluated once per
+ *  worker process — and a single `npx playwright test` invocation starts
+ *  all seven width projects as separate worker processes nearly
+ *  simultaneously, so two of them can land in the same millisecond and
+ *  resolve the SAME TAG (measured: the collision moved from mobile-430 to
+ *  tablet-834 between two otherwise-identical runs). Any P6 test that
+ *  MUTATES shared state folds this into its identity (email), because
+ *  mintLoginPathBySql's `insert ... on conflict (email) do nothing` makes a
+ *  colliding email log both workers into the literal same user — and from
+ *  there the same org, division and seed proposal, which is what produced
+ *  the `selectOption` timeout: one worker's confirm() flips the proposal
+ *  out from under the other, whose rows are then correctly no longer
+ *  editable. Read-only P6 tests that must see a mutating sibling's data
+ *  (same block, same worker) reuse that sibling's tagged identity instead
+ *  of computing their own — see the P6 setup/org-surface/public-surface and
+ *  P6 task B blocks below. */
+const projectTag = (): string => test.info().project.name;
+
 // The check that guards every other 375px assertion in this file. It compared
 // document.scrollWidth against clientWidth, which `overflow-x: clip`
 // (globals.css:63) pins to the viewport — so a 525px overflow read as clean.
@@ -955,10 +974,18 @@ let p6CompSlug = "";
 let p6DivSlug = "";
 let p6DivisionId = "";
 
+// Per-project identity (see `projectTag` above). The setup test below MUTATES
+// (creates the org/comp/division/stages) and the public-surface test MUTATES
+// too (setOrgLocaleSql flips the org's default_locale) — both need their own
+// account per width project. The org-surface test is read-only but must log
+// back into the SAME account as setup to see the division it created, so it
+// reuses this identity rather than computing a distinct one.
+const P6_FIX1_EMAIL = () => `p6-fix1-${TAG}-${projectTag()}@example.com`;
+
 test("P6 setup: a fresh org with an up-front TBD knockout fixture (seeded, group stage never generated)", async ({
   page,
 }) => {
-  await loginUi(page, `p6-fix1-${TAG}@example.com`);
+  await loginUi(page, P6_FIX1_EMAIL());
   const org = await activeOrg(page);
   p6OrgSlug = org.slug;
 
@@ -1016,7 +1043,7 @@ test("P6 org surface: the TBD fixture renders its resolved slot label, in the sw
   page,
 }) => {
   test.skip(p6DivisionId === "", "P6 setup test did not run/complete");
-  await loginUi(page, `p6-fix1-${TAG}@example.com`); // same user/org as setup — a fresh page has no session of its own
+  await loginUi(page, P6_FIX1_EMAIL()); // same user/org as setup — a fresh page has no session of its own
   // Default locale first — proves the whole pipeline (usecase -> V360/V362
   // columns -> API -> stages-panel.tsx) is actually live, not merely
   // unit-tested in isolation.
@@ -1045,7 +1072,7 @@ test("P6 public surface: a visitor sees the resolved slot label in the ORG's own
   page,
 }) => {
   test.skip(p6DivisionId === "", "P6 setup test did not run/complete");
-  await loginUi(page, `p6-fix1-${TAG}@example.com`); // same user/org as setup — activeOrg() below needs THIS org, not the default shared session's
+  await loginUi(page, P6_FIX1_EMAIL()); // same user/org as setup — activeOrg() below needs THIS org, not the default shared session's
   const org = await activeOrg(page);
   // The org's OWN locale — a public/embed page has no per-viewer request
   // scope to read a switcher cookie from (ISR), so THIS is the only lever a
@@ -1085,7 +1112,14 @@ test("P6 public surface: a visitor sees the resolved slot label in the ORG's own
 // real confirm route).
 // ---------------------------------------------------------------------------
 
-const P6B_EMAIL = () => `p6b-${TAG}@example.com`;
+// Per-project identity (see `projectTag` above, top of file). ALL THREE tests
+// below share this account within one worker — setup creates the tied league
+// + KO fixture, the confirm test MUTATES it (resolves the tie and confirms
+// the seed proposal — the test that raced across width projects when TAG
+// collided), and the destructive-edit test MUTATES too (generates then
+// regenerates a stage's fixtures). Each width project needs its own account
+// so its confirm()/regenerate() can't be raced by another project's.
+const P6B_EMAIL = () => `p6b-${TAG}-${projectTag()}@example.com`;
 let p6bDivisionId = "";
 const P6B_COURT = "Center Court E2E";
 const P6B_ENTRANTS = ["Nova Q", "Orion Q", "Piper Q", "Reeve Q"];
