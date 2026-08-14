@@ -631,8 +631,13 @@ Known-red baseline, not yours: `schedule-build-honours-locks.test.ts`
   reveals a product defect, REPORT it; do not fix it here. (This is how P6
   found three defects two review passes had missed — the report is the
   valuable output.)
-- `.github/workflows/e2e.yml`. **Never enable it.** It is disabled
-  deliberately; verify e2e locally.
+- `.github/workflows/e2e.yml`. Out of scope for this task — do not edit
+  it. **Correction (P7 fix round, 2026-08-14): it is NOT disabled.** It
+  is LIVE on pull requests — six Playwright jobs, including the
+  seven-width matrix — so this paragraph's original premise ("never
+  enable it, it's disabled deliberately") is stale; do not act on it.
+  Local verification (prod build + `E2E_PROD_TARGET`) is still useful,
+  but CI is now the arbiter too, not just a dead workflow file.
 - Any `db/migration/**` file.
 
 ## Rules of engagement
