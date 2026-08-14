@@ -298,16 +298,28 @@ describe("partition parity — grouping by the OLD key and the NEW key agree (de
     expect(partitionBy(conflictKey)).toEqual(partitionBy(oldKey));
   });
 
-  it("is not vacuously true because every conflict collapsed into one group", () => {
-    // The falsifier: a key that ignores `details` entirely (bare
-    // `fixtureId|reason`) would also produce "the same partition" as itself,
-    // trivially. Guard that this corpus's conflicts actually span more than
-    // one (fixtureId, reason) pair sharing a partition-relevant distinction —
-    // concretely, MORE groups than distinct fixtureIds would be impossible,
-    // but FEWER groups than conflicts (i.e. some real grouping happened) is
-    // the actual shape here: A1/A2 share no group with B1/B2, etc.
-    const byNewKey = partitionBy(conflictKey);
-    expect(byNewKey.length).toBeGreaterThan(1);
-    expect(byNewKey.length).toBeLessThan(conflicts.length + 1);
+  it("is not vacuously true: a key that IGNORED `details` partitions differently", () => {
+    // The two `it`s above compare two keyings of the same corpus. That proves
+    // nothing unless the corpus actually exercises the discrimination
+    // `details` carries: if every conflict here had a unique
+    // (fixtureId, reason), the bare pair would partition identically and both
+    // assertions would still pass against a `conflictKey` that had dropped the
+    // detail from its identity altogether — which is the precise regression
+    // they exist to catch.
+    //
+    // So falsify it directly. A1 carries TWO `court` rows differing ONLY in
+    // `otherFixtureId` (corpus section A) — the per-CARD collapse
+    // `calendar.ts:1364-1376` records as a bug that shipped once already, where
+    // a card that kept its clash with B and gained one with C reported the
+    // single row it always did. The degenerate key MUST be strictly coarser
+    // than the real one here, or this corpus cannot see that regression.
+    //
+    // The previous form of this guard asserted `length < conflicts.length + 1`,
+    // which no partition can ever violate — a vacuous falsifier is worse than
+    // none, because it reads as protection.
+    const degenerate = (c: Conflict): string => `${c.fixtureId}|${c.reason}`;
+    expect(partitionBy(degenerate)).not.toEqual(partitionBy(conflictKey));
+    expect(partitionBy(degenerate).length).toBeLessThan(partitionBy(conflictKey).length);
+    expect(partitionBy(conflictKey).length).toBeGreaterThan(1);
   });
 });
