@@ -1842,6 +1842,41 @@ async function reflowExisting(args: {
   ]);
   const frozen = [...known.keys()];
 
+  // A THIRD finding, beyond the reconciliation gap above: the placement
+  // service's own wire contract refuses a request naming ZERO movable
+  // fixtures ("fixtures must not be empty", `schema.py`) — silently, on a
+  // validation branch that (unlike its siblings) carries no log call, so
+  // this was found by reading the service's own source, not a log line.
+  // Measured against the real service: `solveBuild` resolves (no
+  // exception `buildSchedule`'s own catch would report) with
+  // `status: "ERROR"`, which `buildSchedule` maps to `solver_unavailable`
+  // — indistinguishable, from this caller's side, from a genuine outage.
+  //
+  // A reflow with nothing left to place — every schedulable fixture
+  // already frozen — is the ORDINARY shape of "click Re-flow a second
+  // time, nothing changed", not a corner, so `buildSchedule` must never
+  // be asked in the first place here. Mirrors the OLD z3-repair path's
+  // `clean, k=0` verdict for the identical shape: verify the untouched
+  // board directly and hand it back.
+  if (![...args.schedulable].some((f) => !known.has(f.id))) {
+    const assignments = [...known.values()];
+    return {
+      assignments,
+      conflicts: validateAssignments(assignments, args.config, args.board, args.dependencies),
+      metrics: boardMetrics(assignments, args.config.courts, total),
+      engine: "greedy",
+      status: "ok",
+      tiersCompleted: 0,
+      budgetExpired: false,
+      elapsedMs: Date.now() - startedAt,
+      moved: 0,
+      seeded: 0,
+      rlimitSpent: 0,
+      lnsWindowRlimits: [],
+      lost: 0,
+    };
+  }
+
   const out = await buildSchedule({
     fixtures: args.schedulable,
     config: args.config,

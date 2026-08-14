@@ -345,4 +345,67 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
     },
     120_000,
   );
+
+  // -------------------------------------------------------------------
+  // 5. A THIRD finding, beyond the reconciliation gap: the placement
+  // service's own wire contract refuses a request with zero MOVABLE
+  // fixtures ("fixtures must not be empty", `schema.py`) — silently on the
+  // service side (that specific validation branch has no log call, unlike
+  // its sibling branches, which is why it took reading the service's own
+  // source, not a log line, to find). Once every schedulable fixture is
+  // frozen (a stage reflowed a second time with nothing left to place —
+  // an ORDINARY case, not a corner), calling `buildSchedule` at all
+  // reaches this wire refusal every time and comes back
+  // `solver_unavailable` — a real regression from the old z3 path, which
+  // tolerated an empty proposal trivially (k=0, clean). A board that is
+  // ALREADY LEGAL is the scenario that exercises this: an illegal one (see
+  // the collision test above) is caught earlier, locally, by
+  // `buildSchedule`'s own pins-vs-pins pairwise check before it would ever
+  // reach the wire — so this needs its OWN, clean-board scenario to be
+  // non-vacuous. Verified failing against the pre-fix implementation
+  // before being fixed by skipping the solve call entirely when nothing
+  // is free to place.
+  // -------------------------------------------------------------------
+  it.skipIf(!HAS_SOLVER)(
+    "a fully-frozen, already-legal board (nothing left to place) never reaches the placement service",
+    async () => {
+      const auth = await seedOrg();
+      const { stageId } = await seedStage(auth, 4);
+
+      const built = await autoSchedule(auth, stageId, {
+        only_unlocked: false,
+        mode: "build",
+      });
+      await applySchedule(auth, stageId, {
+        assignments: built.assignments.map((a) => ({
+          fixture_id: a.fixture_id,
+          scheduled_at: a.scheduled_at,
+          court_label: a.court_label,
+        })),
+        source: "auto",
+      });
+
+      const before = await sql<
+        { id: string; scheduled_at: Date; court_label: string }[]
+      >`select id, scheduled_at, court_label from fixtures where stage_id = ${stageId} order by id`;
+
+      // Every fixture is already placed and legal — nothing unlocked and
+      // unscheduled remains. `only_unlocked: true` still asks reflow to
+      // run; there is simply nothing free for it to place.
+      const out = await autoSchedule(auth, stageId, {
+        only_unlocked: true,
+        mode: "reflow",
+      });
+
+      expect(out.solver.status).not.toBe("solver_unavailable");
+      expect(out.conflicts).toEqual([]);
+      const proposed = new Map(out.assignments.map((x) => [x.fixture_id, x]));
+      for (const row of before) {
+        expect(proposed.get(row.id)?.scheduled_at).toBe(row.scheduled_at.toISOString());
+        expect(proposed.get(row.id)?.court_label).toBe(row.court_label);
+      }
+      expect(out.solver.moved).toBe(0);
+    },
+    120_000,
+  );
 });
