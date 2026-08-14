@@ -141,9 +141,12 @@ jobs:
       # tree's one such suppression by name (#355, a ref read during render
       # on a v1 pad's live-scoring countdown) — that suppression was deleted
       # along with the rest of the v1 pads in the S13/#422 cutover, and the
-      # v2 skin #355's own coverage moved onto (period-skin.tsx) needs none;
-      # the several suppressions in the tree today each carry their own
-      # inline reasoning at their own call site instead.
+      # v2 skin #355's own coverage moved onto (period-skin.tsx) needs none.
+      # Most remaining suppressions carry their own inline reasoning at their
+      # call site (pad-renderer.tsx:116, use-pad-pipeline.ts:1198). At least one
+      # does not — pad-renderer.tsx's `skinDispatch` useMemo — so read this as
+      # the standard we hold new ones to, not as a claim about every existing
+      # one. Pre-existing; not introduced by the S13/#422 cutover.
       - name: eslint
         run: npx turbo run lint
 

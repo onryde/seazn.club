@@ -25,7 +25,7 @@ interleaved or in parallel, but `L2` waits on `L1` (shared `schemas.ts`).
 | S10 | #419 | `S10-419-w8-chassis-renderer.md` | S6 | **DONE, MERGED `cc907a0b` (PR #542)** — 4 prompt premises false (server idempotency is a fail-open Redis cache with NO ledger column, no pad subscribes to realtime, the client cannot import the engine as the brief assumed, the 409 already carries `current_seq`); the replay ruling was rewritten around ledger-slot inspection because blind `expected_seq` renegotiation — which the brief calls "the correctness heart" — IS the duplicate bug given that. Chassis + renderer + picker + timeline shipped; **the picker was found INERT by the e2e** (written, tested, wired to nothing — fifth instance of this programme's signature defect) and is now the pad's default. E2E covers tab death / offline / 409-mid-drain against the real API and RUNS IN CI (`SCOREPAD_V2_HARNESS=1` in the three e2e jobs). Smoke deferred to S13 (verified: `scripts/smoke.ts` has zero references). Contract S11 consumes: `PadRenderer` props + the `renderAttribution` / `timelineSlot` override seams. Flag `scorepad-v2` (PostHog) declared, wired to nothing, flipped in S12 |
 | S11 | #420 | `S11-420-w9-skins.md` | S7, S10 | **DONE** — **five** skins, not three: the prompt's two sport groupings were disproved by building the real specs (tennis is a different kernel from the setbased three; football cannot share with the period pair, but hockey/icehockey are byte-identical to each other). Coverage gate landed RED first and is mutation-proved. Renderer now consults the registry by default — owner ruling, taken because a registry nothing calls is S10's inert-picker defect again. Review caught 5 gaps, 2 of them real: `racquet`/`period` rendered PAID-GATED actions as live controls for 5 of 8 sports (the sweeps could not see it — `grantAllEntitlements` means `locked` never occurs in the suite), and cricket's batter/bowler pickers never resynced to the fold, so a scorer could score against the wrong end. Cricket has NO browser coverage: the harness's lineups are synthetic and every `cricket.ball` needs real roster members — S12 owes it, along with football's goal-with-assist |
 | S12 | #421 | `S12-421-w10-integration-flag.md` | S11 | **DONE** — v2 reaches both real entry points behind `scorepad-v2`, and driving it in a browser against real rosters found **nine** product defects plus two layout defects, none of which `tsc`, ~6000 unit tests, lint or a green production build could see. The chain was sequential — each fix uncovered the next — which is the signature of a path nothing had ever executed: a `"use client"` mapper called from both server loaders (invisible because `[].map(fn)` never invokes `fn`, so it is unreachable until the ledger has one row); the fold throwing on a foreign `core.start`; `ballInOver: 0` making the first ball of every over schema-invalid; the fold not advancing on its own ack, so exactly ONE event was ever scoreable on ANY sport; a duplicate-seq double-count on the ack path; undo swallowed for a just-scored event, and again for one queued across a reload; raw UUIDs in three skins' person pickers; a coach able to open the batting; and the lineup editor silently dropping `role`, which made that last fix unreachable from the product's own UI. The flag needed its own reader (`lib/scorepad-flag.ts`, three-state `SCOREPAD_V2_FORCE`) because `isServerFeatureEnabled` returns `fallback ?? false` with no PostHog client — so the v2 pad was unreachable from EVERY e2e run. Flag-off byte-identity proved two ways and **counted, not asserted**: exactly three non-additive lines across the three files on that path, all inert with the flag off; plus v1's own e2e green against a second server off the SAME build with `SCOREPAD_V2_FORCE=0`. Deferred e2e debt discharged per session with a verdict each (S6 by construction, S3 partially, S4 and S1 re-deferred with cause). Note for S13: the lineup-editor half is NOT flag-gated and ships live |
-| S13 | #422 | `S13-422-w11-cutover.md` | S12 | TODO |
+| S13 | #422 | `S13-422-w11-cutover.md` | S12 | **DONE** — v1 deleted outright (8 pads, 3 pad tests, both dispatch chains, the `scorepad-v2` flag, the `/score/harness` route, 160 dead dictionary keys across 4 locales); v2 is the only path. Deleting it surfaced FIVE behaviours v1 had that v2 did not: the suspension countdown, the DLS revised-target surface, hockey's escalation hint (whose v1 key `pad.pp.escalation` had never been translated in ANY locale — v1 rendered the raw key to users), person attribution on period suspensions (rendered as a raw UUID textbox because the skin read only `state.squads`, which is populated ONLY after a `core.lineup.*` folds — so every hockey/icehockey card in production asked the scorer to type a UUID), and `ActionForm.handleTap` auto-firing an incomplete payload for any action with no fields but a required attribution (7 declarations across tennis/carrom/generic/setbased). All five implemented on v2 before v1 was removed. An axe scan made reachable for the first time by the re-anchor then found **24 WCAG AA contrast failures** across the whole scorepad tree, worst 1.48:1 — all fixed, ratios computed from the oklch palette, and axe now runs per skin so the gap cannot silently reopen |
 | L1 | #412 | `L1-412-w1-eligibility.md` | — | TODO |
 | L2 | #413 | `L2-413-w2-date-hardening.md` | L1 | TODO |
 | L3 | #414 | `L3-414-w3-formats.md` | — | TODO |
@@ -2712,3 +2712,49 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   Not actionable without a product call.
 
 - _(append as they arise; ask in-session, never file an issue)_
+
+## PROGRAMME CLOSED — 2026-08-14
+
+ScoringPad v2 (#407, index #411, final wave #422) is **CLOSED**. The v1 pad no
+longer exists; the spec-driven v2 pad is the only scoring path at both entry
+points (`/f/[no]` and `/score/[token]`).
+
+**Correction to the S5/#431 sub-entry above, which now misdescribes HEAD.** That
+entry records the tennis `game.award` auto-submit defect as "not fixed here — a
+call for the owner". It WAS fixed, later in the same session, once it turned out
+not to be tennis-specific: `action-form.tsx`'s `handleTap` gated auto-submit on
+`action.fields.length === 0` alone, ignoring attribution, so **seven**
+declarations across tennis, carrom, generic and the setbased kernel fired an
+incomplete payload on first tap. The condition is now
+`action.fields.length === 0 && action.attribution.length === 0`, regression-test
+"zero-field action with a REQUIRED attribution must NOT auto-submit" in
+`pad-renderer.test.tsx`. Recorded rather than rewritten, per this log's rule.
+
+**The architecture as built, not as designed.** The pad renders entirely from
+each module's own `padSpec(cfg)`: five skins (cricket, football, period,
+racquet, tennis) plus a universal renderer for the sports with none — carrom,
+boardgame and generic go through the universal path, which is why carrom, which
+was UNSCOREABLE over a device link on v1, works now for free. Attribution,
+fidelity bands, the timeline and the offline queue live in the shared chassis,
+not in the skins.
+
+**The lesson the programme paid for nine times, and once more here.** Its
+signature defect is a seam that is declared, plumbed, and inert — reachable in
+the UI and unable to do its job. S13 found two more of them (the person picker
+that was a UUID textbox; `handleTap`'s missing attribution check) plus three
+behaviours that would have been silently lost in the deletion. **None of them
+were visible to `tsc`, ~7,300 unit tests, lint, or a green production build.**
+Every one surfaced by driving the real surface in a browser, or by a test that
+had never actually run. A test that has never executed is not coverage: the axe
+scan that found 24 contrast failures had been sitting in the suite for two
+sessions, dying on a stale locator before it ever reached the scan.
+
+**Deferred work that survives the programme**, recorded so it is not re-derived:
+the `resolved` set-piece counter has no product consumer (engine-only); the
+icehockey GWS +1 and `metricOf` fixes surface on standings, not on the pad;
+tennis's tie-break-carrying "Set score (tie-break)" tile is unreachable because
+`tennis-skin.tsx` type-dedup renders only the first of two same-typed actions;
+the "5v4" strength chip renders on the public scorebug but never the organiser
+console. #430 stays open for its two non-tier rows (plus/minus with the on-ice
+set, boardgame PGN). The T lane (fidelity band 3 for the sports that never got
+one) remains PARKED and is unblocked by this close.
