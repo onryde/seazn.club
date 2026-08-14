@@ -160,11 +160,12 @@ describe("optionsForSlot — candidate entrants offered per row", () => {
     // would 422 SEEDING_SLOT_DOUBLE_ASSIGNED).
     const ties: TieOut[] = [{ slots: ["f1:home", "f1:away"], entrantIds: ["e1", "e2", "e3", "e4"], reason: "seed" }];
 
-    // Before any edit, each tied slot's own default (from `qualifiers`) is
-    // already implicitly "held" by the OTHER slot — mirrors the non-tied
-    // branch's existing pre-edit exclusion, applied here for the first time.
-    expect(optionsForSlot("f1:home", qualifiers, ties, new Map(), allEntrantIds)).toEqual(["e1", "e3", "e4"]);
-    expect(optionsForSlot("f1:away", qualifiers, ties, new Map(), allEntrantIds)).toEqual(["e2", "e3", "e4"]);
+    // Before any edit, NEITHER tied slot's computed default counts as "held"
+    // by the other — fix round 3, Critical 2 (see optionsForSlot's own doc
+    // comment): a tied slot's default is excluded from `effective` until
+    // `editsBySlot` names it explicitly, so both rows offer the full pool.
+    expect(optionsForSlot("f1:home", qualifiers, ties, new Map(), allEntrantIds)).toEqual(["e1", "e2", "e3", "e4"]);
+    expect(optionsForSlot("f1:away", qualifiers, ties, new Map(), allEntrantIds)).toEqual(["e1", "e2", "e3", "e4"]);
 
     // An explicit edit on f1:home to e3 must remove e3 from f1:away's
     // options — the exact duplicate-pick path the review flagged.
@@ -177,6 +178,35 @@ describe("optionsForSlot — candidate entrants offered per row", () => {
     // pick, never excluded from itself (same rule the non-tied branch has
     // always followed).
     expect(optionsForSlot("f1:home", qualifiers, ties, edits, allEntrantIds)).toContain("e3");
+  });
+
+  it("REVIEW FINDING (fix round 3, Critical 2): a 2-entrant tie across 2 slots — the commonest real shape (two teams level in a group; stage-seeding.ts's resolveQualifiers builds ties this shape at stage-seeding.ts:355) — offers BOTH candidates in EACH row before any edit, never silently collapsing to one", () => {
+    // `effective` used to seed EVERY qualifier's computed default
+    // unconditionally, including tied slots the UI itself still renders as
+    // unpicked (value=""). With only 2 candidates, each row's own default
+    // was implicitly "held" by the other row before the organiser touched
+    // anything — leaving exactly ONE option per row, so Confirm could only
+    // ever rubber-stamp the engine's arbitrary tie-break order. A tied slot
+    // must stay OUT of `effective` until `editsBySlot` holds an explicit
+    // pick for it.
+    const tiedQualifiers: QualifierOut[] = [
+      { rank: 1, source: { stageId: "s1", rank: 1 }, entrantId: "e1", destinationSlot: "f1:home" },
+      { rank: 2, source: { stageId: "s1", rank: 2 }, entrantId: "e2", destinationSlot: "f1:away" },
+    ];
+    const ties: TieOut[] = [{ slots: ["f1:home", "f1:away"], entrantIds: ["e1", "e2"], reason: "seed" }];
+
+    // Before any edit: BOTH rows offer BOTH candidates — a real choice, not
+    // a single pre-narrowed option.
+    expect(optionsForSlot("f1:home", tiedQualifiers, ties, new Map(), ["e1", "e2"])).toEqual(["e1", "e2"]);
+    expect(optionsForSlot("f1:away", tiedQualifiers, ties, new Map(), ["e1", "e2"])).toEqual(["e1", "e2"]);
+
+    // The first EXPLICIT pick immediately narrows the sibling — double-
+    // assignment stays closed, verified rather than assumed.
+    const edits = new Map([["f1:home", "e2"]]);
+    expect(optionsForSlot("f1:away", tiedQualifiers, ties, edits, ["e1", "e2"])).toEqual(["e1"]);
+    // f1:home's own list still offers both — its own current pick is never
+    // excluded from itself.
+    expect(optionsForSlot("f1:home", tiedQualifiers, ties, edits, ["e1", "e2"])).toEqual(["e1", "e2"]);
   });
 });
 

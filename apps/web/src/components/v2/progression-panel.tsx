@@ -108,10 +108,9 @@ export function formatQualifierSource(
 /** Candidate entrants for a slot's edit-in-place select. A TIED slot offers
  *  its own tie's candidates (the ambiguity is between THOSE entrants, not
  *  the whole division); any other slot offers every division entrant — both
- *  narrowed by the SAME `usedElsewhere` exclusion (computed default,
- *  overridden by `editsBySlot` where present, entries for THIS slot itself
- *  excluded) — softly steering away from the double-assignment the server
- *  422s on, never itself the validation.
+ *  narrowed by the SAME `usedElsewhere` exclusion (effective pick per slot,
+ *  entries for THIS slot itself excluded) — softly steering away from the
+ *  double-assignment the server 422s on, never itself the validation.
  *
  *  The tied branch used to skip this exclusion (review finding 1, P6/D4b
  *  task B fix round 1): two tied rows sharing a candidate pool could both
@@ -119,7 +118,26 @@ export function formatQualifierSource(
  *  checks slot coverage, not uniqueness, so Confirm would enable and the
  *  POST would 422 SEEDING_SLOT_DOUBLE_ASSIGNED. Applying the same filter to
  *  both branches closes it at the option list, where a real user is
- *  actually constrained. */
+ *  actually constrained.
+ *
+ *  A TIED slot's own COMPUTED DEFAULT is excluded from `effective` until
+ *  `editsBySlot` names it explicitly (review finding, fix round 3, Critical
+ *  2 — a regression THIS fix round 1 change introduced): `qualifiers`
+ *  carries a provisional default for every slot, tied or not, but a tied
+ *  slot renders unpicked (`value=""`, the component's own render). Seeding
+ *  `effective` from that default unconditionally meant each tied row
+ *  implicitly "held" its computed pick before the organiser touched
+ *  anything — for the commonest real shape, a tie between exactly 2
+ *  entrants across 2 slots (two teams level in a group; see
+ *  stage-seeding.ts's resolveQualifiers / the `tie.entrantIds.length === 2`
+ *  case), that left EXACTLY ONE option per row: the organiser could only
+ *  rubber-stamp the engine's arbitrary "lots" order, never actually pick —
+ *  precisely what resolveQualifiers' own doc comment says must never happen
+ *  silently. A NON-tied slot keeps seeding from its default (there is only
+ *  ever one candidate for it to matter against); double-assignment stays
+ *  closed for tied slots too, because the first EXPLICIT pick on one row
+ *  immediately narrows its sibling's pool (verified in
+ *  progression-panel-logic.test.ts, not assumed). */
 export function optionsForSlot(
   destinationSlot: string,
   qualifiers: readonly QualifierOut[],
@@ -127,7 +145,12 @@ export function optionsForSlot(
   editsBySlot: ReadonlyMap<string, string>,
   allEntrantIds: readonly string[],
 ): string[] {
-  const effective = new Map(qualifiers.map((q) => [q.destinationSlot, q.entrantId] as const));
+  const tiedSlots = new Set(ties.flatMap((t) => t.slots));
+  const effective = new Map(
+    qualifiers
+      .filter((q) => !tiedSlots.has(q.destinationSlot) || editsBySlot.has(q.destinationSlot))
+      .map((q) => [q.destinationSlot, q.entrantId] as const),
+  );
   for (const [slot, id] of editsBySlot) effective.set(slot, id);
   const usedElsewhere = new Set(
     [...effective.entries()].filter(([slot]) => slot !== destinationSlot).map(([, id]) => id),
