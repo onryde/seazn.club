@@ -142,6 +142,64 @@ describe.skipIf(!HAS_DB)("getSeedProposal — read-only, P6/D4b task B", () => {
     expect(read!.status).toBe("confirmed");
   });
 
+  it("fix round 3 (Minor 7): two proposals with the IDENTICAL created_at resolve deterministically by id DESC, not Postgres's unspecified tie order", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Tiebreak " + randomUUID().slice(0, 6),
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    const stages = await createStages(auth, division.id, [
+      { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
+      {
+        seq: 2,
+        kind: "knockout",
+        name: "KO",
+        config: {},
+        seeding: { source: "previous", take: [{ kind: "topNPerGroup", n: 1 }], placement: "rank_order" },
+      },
+    ]);
+    const koStageId = stages.find((s) => s.kind === "knockout")!.id;
+    await generateStageFixtures(auth, koStageId);
+
+    // Two rows inserted directly (never through computeSeedProposal) sharing
+    // the EXACT SAME created_at — real insert timing at clock precision
+    // could never produce this naturally, so a raw insert is the only way
+    // to construct a genuine tie. Freshly random ids (never a hardcoded
+    // string) so a re-run of this suite against a persistent test DB can't
+    // collide with a leftover row from a previous run; the expected winner
+    // is computed FROM whichever id is actually larger, the same plain
+    // string ordering `order by id desc` gives for standard-form UUID text
+    // (dashes land at identical positions in any two UUIDs, so lexicographic
+    // and byte ordering agree). One row is 'stale' rather than 'draft' only
+    // to satisfy stage_seed_proposals_draft_uq (at most one draft per
+    // stage) — getSeedProposal's own query has no `where status = ...`, so
+    // this doesn't touch what's actually under test.
+    const idA = randomUUID();
+    const idB = randomUUID();
+    const expectedWinner = idA > idB ? idA : idB;
+    const computed = { qualifiers: [], ties: [], standingsHash: "tie" };
+    const tiedAt = new Date().toISOString();
+    await sql`
+      insert into stage_seed_proposals (id, org_id, stage_id, computed, status, created_at)
+      values (${idA}, ${auth.orgId}, ${koStageId}, ${sql.json(computed)}, 'stale', ${tiedAt})`;
+    await sql`
+      insert into stage_seed_proposals (id, org_id, stage_id, computed, status, created_at)
+      values (${idB}, ${auth.orgId}, ${koStageId}, ${sql.json(computed)}, 'draft', ${tiedAt})`;
+
+    const read = await getSeedProposal(auth, koStageId);
+    expect(read!.id).toBe(expectedWinner);
+  });
+
   it("is read-only — repeated calls before any compute insert NO rows (the ruling's core safety property: a panel rendering on page load must not create side effects)", async () => {
     const { auth } = await seedOrg("pro");
     const comp = await createCompetition(auth, {

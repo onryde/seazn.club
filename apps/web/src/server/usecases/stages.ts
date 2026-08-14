@@ -2048,7 +2048,7 @@ export async function getSeedProposal(auth: AuthCtx, stageId: string): Promise<S
     >`
       select id, stage_id, status, computed from stage_seed_proposals
       where stage_id = ${stageId}
-      order by created_at desc
+      order by created_at desc, id desc
       limit 1`;
     if (!row) return null;
     return { id: row.id, stageId: row.stage_id, status: row.status, computed: row.computed };
