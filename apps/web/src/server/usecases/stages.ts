@@ -788,22 +788,27 @@ export function previewDivisionFixtures(
       return { title: stage.name, note: "Preview isn't available for this format.", sections: [] };
     }
 
-    // id → label; and extKey → short ref so feeds read "Winner of R2 #1" — via
-    // the design's slot.winner_match/slot.loser_match ({ext}) pair, resolved
-    // through the same resolveSlotLabel() every real renderer uses (A1/A2),
-    // never a hand-built template. This preview has no locale in scope (it
-    // backs the marketing gallery + /help/formats, always English before and
-    // after), so it resolves through the client-safe English msg().
+    // id → label; and extKey → the SOURCE fixture's {round, seq} — numbers,
+    // never a rendered fragment (P7/F1) — so feeds resolve through the
+    // design's slot.winner_match/slot.loser_match pair via the SAME
+    // resolveSlotLabel() every real renderer uses (A1/A2), which composes
+    // "R2·1" from slot.match_ref internally. Never a hand-built template.
+    // This preview has no locale in scope (it backs the marketing gallery +
+    // /help/formats, always English before and after), so it resolves
+    // through the client-safe English msg(). Mirrors the exact map
+    // generateStageFixtures's own INSERT builds for the live path below, so
+    // the two cannot drift onto different ref formats.
     const idLabel = new Map<string, string>();
     for (let i = 0; i < entrantCount; i++) idLabel.set(`e${i + 1}`, label(i));
-    const refByExt = new Map(gen.map((f) => [f.extKey, `R${f.roundNo} #${f.seqInRound}`]));
+    const refByExt = new Map(gen.map((f) => [f.extKey, { round: f.roundNo, seq: f.seqInRound }]));
 
     const slot = (id: string | null, from?: { extKey: string; side: "winner" | "loser" }): string => {
       if (id) return idLabel.get(id) ?? id;
       if (from) {
-        const ext = refByExt.get(from.extKey) ?? "TBD";
+        const params = refByExt.get(from.extKey);
+        if (!params) return resolveSlotLabel(null, msg, "schedule.tbd");
         const key = from.side === "loser" ? "slot.loser_match" : "slot.winner_match";
-        return resolveSlotLabel({ key, params: { ext } }, msg, "schedule.tbd");
+        return resolveSlotLabel({ key, params }, msg, "schedule.tbd");
       }
       return resolveSlotLabel(null, msg, "schedule.tbd");
     };
@@ -1010,24 +1015,58 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
     const viaFillSlot = qualified !== null;
     const bakeDirect = (g: GenFixture) => !viaFillSlot || g.award !== undefined;
 
+    // Match-sourced slot labels (P7/F1): a slot with no baked entrant, fed by
+    // an earlier fixture in THIS generation (g.homeFrom/g.awayFrom), gets an
+    // i18n pattern ref persisted alongside the null entrant id — { key:
+    // "slot.winner_match" | "slot.loser_match", params: { round, seq } },
+    // numbers, NEVER a rendered fragment (resolveSlotLabel composes the ref
+    // text at render time via slot.match_ref, so every locale/surface can
+    // differ). This is the SAME {key,params} shape the .seeding path
+    // (descriptorLabel, stage-seeding.ts — untouched) already writes for its
+    // own kind of TBD slot; only the descriptor differs. `refByExt` mirrors
+    // the preview helper's own map above (extKey → the SOURCE fixture's
+    // {round, seq}) — built from the FULL `gen`, not just the new rows below,
+    // so a homeFrom/awayFrom pointing at an already-existing fixture still
+    // resolves. Gated on the ACTUAL entrant id about to be inserted (not
+    // `bakeDirect(g)` alone) — `bakeDirect` is a constant `true` for every
+    // fixture on the common, non-cross-stage-fill path, so a round-2+
+    // intra-bracket slot (g.home already null there) needs its OWN nullness
+    // check, not a proxy that never fires in that path.
+    const refByExt = new Map(gen.map((f) => [f.extKey, { round: f.roundNo, seq: f.seqInRound }]));
+    const matchSlotLabel = (
+      from?: { extKey: string; side: "winner" | "loser" },
+    ): { key: string; params: { round: number; seq: number } } | null => {
+      if (!from) return null;
+      const params = refByExt.get(from.extKey);
+      if (!params) return null;
+      const key = from.side === "loser" ? "slot.loser_match" : "slot.winner_match";
+      return { key, params };
+    };
+
     // First pass: all new fixtures in one multi-row insert. Ids are generated
     // client-side so the feed/bye passes can reference them without relying
     // on RETURNING order.
     const newRows = gen
       .filter((g) => !byKey.has(g.extKey))
-      .map((g) => ({
-        id: randomUUID(),
-        stage_id: stageId,
-        division_id: stage.division_id,
-        pool_id: g.poolId ?? null,
-        round_no: g.roundNo,
-        seq_in_round: g.seqInRound,
-        home_entrant_id: bakeDirect(g) ? g.home : null,
-        away_entrant_id: bakeDirect(g) ? g.away : null,
-        ext_key: g.extKey,
-        status: g.award !== undefined ? "forfeited" : "scheduled",
-        outcome: g.award !== undefined ? JSON.stringify({ kind: "award", winner: g.award }) : null,
-      }));
+      .map((g) => {
+        const home_entrant_id = bakeDirect(g) ? g.home : null;
+        const away_entrant_id = bakeDirect(g) ? g.away : null;
+        return {
+          id: randomUUID(),
+          stage_id: stageId,
+          division_id: stage.division_id,
+          pool_id: g.poolId ?? null,
+          round_no: g.roundNo,
+          seq_in_round: g.seqInRound,
+          home_entrant_id,
+          away_entrant_id,
+          home_slot_label: home_entrant_id ? null : matchSlotLabel(g.homeFrom),
+          away_slot_label: away_entrant_id ? null : matchSlotLabel(g.awayFrom),
+          ext_key: g.extKey,
+          status: g.award !== undefined ? "forfeited" : "scheduled",
+          outcome: g.award !== undefined ? JSON.stringify({ kind: "award", winner: g.award }) : null,
+        };
+      });
     if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
     for (const r of newRows) byKey.set(r.ext_key, r.id);
     const created = newRows.length;
