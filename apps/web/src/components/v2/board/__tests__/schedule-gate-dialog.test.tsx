@@ -130,7 +130,10 @@ const BOARD: BoardFixture[] = [
   } as unknown as BoardFixture,
 ];
 
-function dialogMarkup(gate: Parameters<typeof ScheduleGateDialog>[0]["gate"]): string {
+function dialogMarkup(
+  gate: Parameters<typeof ScheduleGateDialog>[0]["gate"],
+  fixtureTitles?: Record<string, string>,
+): string {
   return renderToStaticMarkup(
     <DictProvider locale={"en" as Locale} dict={enDict}>
       <ScheduleGateDialog
@@ -140,6 +143,7 @@ function dialogMarkup(gate: Parameters<typeof ScheduleGateDialog>[0]["gate"]): s
         feedLabels={{}}
         onConfirm={() => undefined}
         onDismiss={() => undefined}
+        fixtureTitles={fixtureTitles}
       />
     </DictProvider>,
   );
@@ -280,6 +284,40 @@ describe("fix round 3 (Important 3): an unfilled slot's conflict-row title resol
     expect(html).toContain("Ganador del Grupo A");
     expect(html).toContain("Ganador del Grupo B");
     expect(html).not.toContain("Winner of Group A");
+  });
+});
+
+describe("the gate dialog names a cross-division counterparty (C3 review findings 2+3)", () => {
+  // `BOARD` above (the dialog's own `board` prop) carries only `f1` — mirrors
+  // schedule-board.tsx passing this dialog the DIVISION-filtered `board`,
+  // which drops a cross-division counterparty. `OTHER_FIXTURE_ID` is never
+  // in `BOARD`, present only in the board-wide `fixtureTitles` map, same
+  // split as the ConflictsPanel regression this pairs with.
+  const OTHER_FIXTURE_ID = "22222222-2222-4222-8222-222222222222";
+  // Unmapped code, same reason the fallback test above needs one: every
+  // REAL code here has a locale `conflictHelp` key, which short-circuits
+  // before `fixtureTitles` is ever read.
+  const CROSS_DIVISION_CLASH: BoardConflict = {
+    fixture_id: "f1",
+    code: "warn.some_future_code",
+    blocking: true,
+    details: { kind: "court_double_booking", court: "Court 1", other_fixture_id: OTHER_FIXTURE_ID },
+  } as unknown as BoardConflict;
+
+  it("names the counterparty in full when the board-wide fixtureTitles map supplies it", () => {
+    const html = dialogMarkup(
+      { kind: "blocking", action: "publish", conflicts: [CROSS_DIVISION_CLASH] },
+      { [OTHER_FIXTURE_ID]: "Charlie vs Delta" },
+    );
+    expect(html).toContain("Charlie vs Delta");
+    expect(html).not.toContain(OTHER_FIXTURE_ID.slice(0, 8));
+  });
+
+  it("degrades to the short id — never a full UUID — when no fixtureTitles prop is supplied (optional, additive)", () => {
+    const html = dialogMarkup({ kind: "blocking", action: "publish", conflicts: [CROSS_DIVISION_CLASH] });
+    expect(html).toContain(OTHER_FIXTURE_ID.slice(0, 8));
+    expect(html).not.toContain("Charlie vs Delta");
+    expect(html).not.toContain(OTHER_FIXTURE_ID);
   });
 });
 

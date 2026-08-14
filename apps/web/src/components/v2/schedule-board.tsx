@@ -1450,6 +1450,7 @@ export function ScheduleBoard({
           checkFailed={actions.checkFailed}
           checking={actions.checking}
           onRetryCheck={() => void actions.revalidate()}
+          fixtureTitles={fixtureTitles}
         />
       )}
 
@@ -1460,6 +1461,7 @@ export function ScheduleBoard({
         board={board}
         entrantNames={entrantNames}
         feedLabels={feedLabels}
+        fixtureTitles={fixtureTitles}
         busy={actions.busy}
         onConfirm={() => {
           if (!gate) return;

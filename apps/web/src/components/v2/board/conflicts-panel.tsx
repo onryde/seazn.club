@@ -102,6 +102,7 @@ export function ConflictsPanel({
   checkFailed,
   checking,
   onRetryCheck,
+  fixtureTitles: fixtureTitlesProp,
 }: {
   conflicts: BoardConflict[];
   board: BoardFixture[];
@@ -114,6 +115,20 @@ export function ConflictsPanel({
   checkFailed: boolean;
   checking: boolean;
   onRetryCheck: () => void;
+  /** Competition-wide fixture id -> title (`cardTitle` output), for a
+   *  conflict's `details.otherFixtureId` (C3 review findings 2+3). Optional
+   *  — a required prop would break every existing test constructing this
+   *  panel directly, same reasoning `FixtureBlock`'s own `fixtureTitles`
+   *  prop and commit 335d750d's `entrantNames` both used. `board` here is
+   *  whatever the caller passed, and schedule-board.tsx passes the
+   *  DIVISION-filtered view (`board = actions.board.filter((f) =>
+   *  visibleIds.has(f.division_id))`) — a cross-division counterparty is
+   *  invisible to it, the same axis `FixtureBlock`'s own fix already
+   *  covers. When supplied, this should be built from the UNFILTERED board
+   *  (schedule-board.tsx's `actions.board`). Absent, this panel falls back
+   *  to deriving from its own `board` prop below — byte-for-byte its prior
+   *  behaviour, for a caller that has not been updated to pass it. */
+  fixtureTitles?: Record<string, string>;
 }) {
   const msg = useMsg();
   const conflictLabel = (code: string) => {
@@ -124,10 +139,15 @@ export function ConflictsPanel({
   // The generic code-level help wins when the locale has it; otherwise this
   // conflict's own structured `details` — localized and name-resolved,
   // never the deprecated raw `detail` string, which can carry a UUID (C3,
-  // 2026-08-13 design amendment). Behaviour unchanged: `board.conflictHelp
-  // .<code>` exists for every live code today, so this fallback is already
-  // dead in production — kept only so an unmapped future code still says
-  // something useful instead of nothing.
+  // 2026-08-13 design amendment). NOT dead in production (a prior comment
+  // here claimed it was): `conflict.start_window` is a live
+  // `ScheduleConflict.code` (`lib/schedule-board.ts:39`) with neither a
+  // `board.conflictHelp.conflict.start_window` key in any of the four
+  // dictionaries nor a `CONFLICT_HELP` entry (`types.ts`) — this branch is
+  // what an organiser actually sees for it today, and the improvement above
+  // (structured, name-resolved detail instead of the old raw `detail`
+  // string) reaches that live case. Kept for every other unmapped future
+  // code too.
   const conflictHelp = (code: string, details?: BoardConflictDetail) => {
     const key = `board.conflictHelp.${code}` as MessageKey;
     const help = msg(key);
@@ -141,10 +161,16 @@ export function ConflictsPanel({
   }, []);
   const byId = new Map(board.map((f) => [f.id, f]));
   // Competition-wide fixture id -> title, for a conflict's
-  // `details.otherFixtureId` — `board` here already carries every fixture
-  // (unfiltered by day), so this needs no new prop the way `FixtureBlock`'s
-  // did.
-  const fixtureTitles = Object.fromEntries(board.map((f) => [f.id, cardTitle(f, entrantNames, feedLabels)]));
+  // `details.otherFixtureId`. NOT safely derivable from `board` alone (a
+  // prior comment here claimed it was, "unfiltered by day" — true on the
+  // DAY axis, false on the DIVISION one): schedule-board.tsx passes this
+  // panel the division-filtered `board`, so a cross-division counterparty
+  // is invisible to a map built from it, the same gap `FixtureBlock`'s own
+  // `fixtureTitles` prop already covers (C3 review findings 2+3). Prefer
+  // the caller-supplied, board-wide map; fall back to the filtered
+  // self-derivation only when no caller has been updated to pass one.
+  const fixtureTitles =
+    fixtureTitlesProp ?? Object.fromEntries(board.map((f) => [f.id, cardTitle(f, entrantNames, feedLabels)]));
   return (
     <aside
       ref={ref as React.RefObject<HTMLElement>}

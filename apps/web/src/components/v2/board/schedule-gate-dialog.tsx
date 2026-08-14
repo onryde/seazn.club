@@ -49,6 +49,7 @@ export function ScheduleGateDialog({
   busy = false,
   onConfirm,
   onDismiss,
+  fixtureTitles: fixtureTitlesProp,
 }: {
   /** `null` closes it. The whole dialog is driven by the last refusal. */
   gate: ScheduleGate | null;
@@ -60,6 +61,19 @@ export function ScheduleGateDialog({
    *  the blocking case — there is no control that calls it. */
   onConfirm: () => void;
   onDismiss: () => void;
+  /** Competition-wide fixture id -> title (`cardTitle` output), for a
+   *  conflict's `details.otherFixtureId` (C3 review findings 2+3). Optional
+   *  — a required prop would break every existing test constructing this
+   *  dialog directly, same reasoning `FixtureBlock`'s own `fixtureTitles`
+   *  prop and commit 335d750d's `entrantNames` both used. `board` here is
+   *  whatever the caller passed, and schedule-board.tsx passes the
+   *  DIVISION-filtered view — a cross-division counterparty is invisible to
+   *  it, the same axis `FixtureBlock`'s own fix already covers. When
+   *  supplied, this should be built from the UNFILTERED board
+   *  (schedule-board.tsx's `actions.board`). Absent, this dialog falls back
+   *  to deriving from its own `board` prop below — byte-for-byte its prior
+   *  behaviour, for a caller that has not been updated to pass it. */
+  fixtureTitles?: Record<string, string>;
 }) {
   const msg = useMsg();
   // The same two lookups the conflicts panel uses, so a code reads identically
@@ -72,9 +86,13 @@ export function ScheduleGateDialog({
   // Same fallback order as the conflicts panel: the generic code-level help
   // wins when the locale has it, otherwise this conflict's own structured
   // `details` (localized, name-resolved — never the deprecated raw `detail`
-  // string, C3 2026-08-13 design amendment). Already dead in production
-  // today (every live code has a `board.conflictHelp.<code>` key); kept for
-  // an unmapped future code.
+  // string, C3 2026-08-13 design amendment). NOT dead in production (a
+  // prior comment here claimed it was): `conflict.start_window` is a live
+  // `ScheduleConflict.code` (`lib/schedule-board.ts:39`) with neither a
+  // `board.conflictHelp.conflict.start_window` key in any of the four
+  // dictionaries nor a `CONFLICT_HELP` entry (`types.ts`) — this branch is
+  // what an organiser refused on that code actually sees today. Kept for
+  // every other unmapped future code too.
   const help = (code: string, details?: BoardConflictDetail) => {
     const key = `board.conflictHelp.${code}` as MessageKey;
     const out = msg(key);
@@ -87,8 +105,14 @@ export function ScheduleGateDialog({
   const warning = gate.kind === "warnings";
   const byId = new Map(board.map((f) => [f.id, f]));
   // Competition-wide fixture id -> title, for a conflict's
-  // `details.otherFixtureId` — `board` here already carries every fixture.
-  const fixtureTitles = Object.fromEntries(board.map((f) => [f.id, cardTitle(f, entrantNames, feedLabels)]));
+  // `details.otherFixtureId`. NOT safely derivable from `board` alone (a
+  // prior comment here claimed it was): schedule-board.tsx passes this
+  // dialog the division-filtered `board`, so a cross-division counterparty
+  // is invisible to a map built from it (C3 review findings 2+3). Prefer
+  // the caller-supplied, board-wide map; fall back to the filtered
+  // self-derivation only when no caller has been updated to pass one.
+  const fixtureTitles =
+    fixtureTitlesProp ?? Object.fromEntries(board.map((f) => [f.id, cardTitle(f, entrantNames, feedLabels)]));
   const title = warning
     ? msg(gate.action === "start" ? "board.gate.warnTitleStart" : "board.gate.warnTitlePublish")
     : msg("board.gate.blockTitle");
