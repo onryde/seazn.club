@@ -424,12 +424,16 @@ describe("period skin — the suspension flow is a real, fillable form (not a ra
     expect(submitted).toMatchObject({ class: "minor", reason: "tripping", minutes: 2, by: H, person: OFFENDER, servedBy: server });
   });
 
-  it("icehockey: without a folded squad, person attribution degrades to a captioned text input (never a silent no-op) and still submits", () => {
+  it("icehockey: with NO roster known by any route (state.squads absent AND ctx.lineups absent), person attribution degrades to a captioned text input (never a silent no-op) and still submits", () => {
     const cfg = icehockey.configSchema.parse({});
     const lineups = defaultLineupPair(icehockey.positions);
     // No core.lineup.* event — state.squads stays absent (kernel's own
     // documented rule: ABSENT until it says something the team sheet does
-    // not), so this exercises the DEGRADE path deliberately.
+    // not). `ctx` below deliberately omits `lineups` too (see the next test
+    // for the realistic case — a REAL render always has it, via
+    // pad-renderer.tsx's own skinCtx, since PadRendererProps.lineups is not
+    // even optional) — this is the one case with NEITHER route to a roster,
+    // so it still exercises the true DEGRADE path.
     const state = foldClient(icehockey, cfg, lineups, [makeEnvelope(0, { type: "core.start", payload: {} })]);
     const summary = icehockey.summary(state);
     const spec = icehockey.padSpec!(cfg);
@@ -482,6 +486,79 @@ describe("period skin — the suspension flow is a real, fillable form (not a ra
     (propsOf(confirmBtn).onClick as () => void)();
 
     expect(submitted).toMatchObject({ class: "minor", reason: "tripping", minutes: 2, person: "12", servedBy: "7" });
+  });
+
+  // S13/#422 W11 — the e2e regression this test locks in: a real fixture
+  // console always seeds a lineup before a fixture can even be scored
+  // (server/engine-db/lineups.ts's PUT, wired through seedRosteredFixture in
+  // e2e/helpers.ts), so `ctx.lineups` is populated from the FIRST render —
+  // never the empty ctx the test above deliberately constructs. Before this
+  // fix, period-skin.tsx read ONLY `readSquads(ctx.state)` (the LIVE folded
+  // squad) and never consulted `ctx.lineups` at all, so a suspension —
+  // almost always the first discipline event of a match, before any
+  // `core.lineup.*` event has folded — showed a raw text box for "person"/
+  // "servedBy" in every real hockey/icehockey fixture, not just this
+  // artificial no-lineups unit-test shape.
+  it("icehockey: no folded core.lineup.* event, but a REAL kickoff lineup (ctx.lineups) — person attribution renders a picker sourced from the team sheet, never a text box", () => {
+    const cfg = icehockey.configSchema.parse({});
+    const lineups = defaultLineupPair(icehockey.positions);
+    const OFFENDER = "H-p2"; // present in the STARTING lineup from kickoff — no event needed to create it.
+    // Still no core.lineup.* event — state.squads stays absent exactly as
+    // in the degrade test above. The only difference is `ctx.lineups` is
+    // now set, matching every real render.
+    const state = foldClient(icehockey, cfg, lineups, [makeEnvelope(0, { type: "core.start", payload: {} })]);
+    const summary = icehockey.summary(state);
+    const spec = icehockey.padSpec!(cfg);
+    const entitlements = grantAllEntitlements(spec);
+    const view = buildPadView(spec, { state, summary, phase: "live", band: FULL_BAND, entitlements });
+    const action = actionByType(view, "icehockey.suspension.start");
+    expect(action).not.toBeNull();
+
+    const renderAttribution = buildAttributionRenderer({ cfg, state, summary, band: FULL_BAND, lineups }, msg);
+    let submitted: Record<string, unknown> | null = null;
+    const island = renderIsland(ActionForm, {
+      action: action!,
+      onSubmit: (payload: Record<string, unknown>) => (submitted = payload),
+      renderAttribution,
+    });
+
+    (propsOf(find(island.tree(), isType("button"))).onClick as () => void)();
+
+    let tree = island.tree();
+    (propsOf(findAll(tree, isType("select"))[0]!).onChange as (e: unknown) => void)({ target: { value: "minor" } });
+    tree = island.tree();
+    (propsOf(findAll(tree, isType("select"))[1]!).onChange as (e: unknown) => void)({ target: { value: "tripping" } });
+    tree = island.tree();
+    (propsOf(find(tree, (el) => el.type === "input" && propsOf(el).type === "number")).onChange as (e: unknown) => void)({
+      target: { value: "2" },
+    });
+
+    // The kickoff sheet is known even though no live squad has folded —
+    // "person" is a real chip picker, never a text input.
+    tree = island.tree();
+    const personGroup = byPath(tree, "person");
+    const personChips = chipsOf(personGroup);
+    expect(personChips.length).toBeGreaterThan(0);
+    const offenderChip = find(personChips, (c) => propsOf(c)["data-value"] === OFFENDER);
+    (propsOf(offenderChip).onClick as () => void)();
+
+    tree = island.tree();
+    const servedByChips = chipsOf(byPath(tree, "servedBy"));
+    const serverChip = find(servedByChips, (c) => propsOf(c)["data-value"] !== OFFENDER);
+    const server = propsOf(serverChip)["data-value"];
+    (propsOf(serverChip).onClick as () => void)();
+
+    tree = island.tree();
+    const byChip = chipsOf(byPath(tree, "by"))[0]!;
+    (propsOf(byChip).onClick as () => void)();
+
+    tree = island.tree();
+    const confirmBtn = find(tree, (el) => propsOf(el)["data-role"] === "confirm");
+    expect(propsOf(confirmBtn).disabled).toBe(false);
+    (propsOf(confirmBtn).onClick as () => void)();
+
+    expect(submitted).not.toBeNull();
+    expect(submitted).toMatchObject({ class: "minor", reason: "tripping", minutes: 2, person: OFFENDER, servedBy: server });
   });
 });
 
