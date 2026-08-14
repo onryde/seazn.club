@@ -127,11 +127,25 @@ test.describe.serial("pro lifecycle", () => {
       }
     }
     expect(padFixtureId).not.toBe("");
-    // Generic score pad: one labelled number input per side, then Record result.
-    const inputs = page.getByRole("spinbutton");
-    await inputs.nth(0).fill("3");
-    await inputs.nth(1).fill("1");
-    await page.getByRole("button", { name: "Record result" }).click();
+    // v2 universal pad (S13/#422 W11 cutover — the v1 generic pad this test
+    // used to drive, with its own always-visible number pair and "Record
+    // result" button, is deleted). This division's "score" variant resolves
+    // generic.ts's own padSpec to a "Score" panel with one action, "Enter
+    // final score": two number fields (p1Score, p2Score), no attribution.
+    // Tapping it expands the form rather than firing immediately
+    // (action-form.tsx: any non-empty `fields` expands instead of auto-
+    // submitting) — fill both sides, then confirm. No "Start match" tap
+    // first: generic.result tolerates phase "pre" as well as "live"
+    // (generic.ts's own applyResult), so the panel is already live and
+    // usable the moment the console renders it.
+    const pad = page.locator('[data-testid="score-pad"]');
+    const scoreEntry = pad.getByRole("button", { name: "Enter final score", exact: true });
+    await expect(scoreEntry).toBeVisible({ timeout: 20_000 });
+    await scoreEntry.click();
+    const scoreInputs = pad.getByRole("spinbutton");
+    await scoreInputs.nth(0).fill("3");
+    await scoreInputs.nth(1).fill("1");
+    await pad.locator('[data-role="confirm"]').click();
     // The result is decided when the API says so (UI copy churns during save).
     await expect
       .poll(
