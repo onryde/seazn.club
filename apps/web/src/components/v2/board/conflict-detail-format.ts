@@ -28,9 +28,29 @@ export interface ConflictDetailCtx {
   /** Fixture id -> a title for it (`cardTitle` output on the board; `matchup`
    *  on the AI console surfaces, which never had a `cardTitle` map). */
   fixtureTitles: Readonly<Record<string, string>>;
-  /** Person id -> display name. Optional: only a few surfaces have a
-   *  person-name map in scope. Absent (or a miss) falls back to
-   *  `personLabel`'s id handling below — never a raw UUID. */
+  /** Person id -> display name. Optional — and, as of C3 (2026-08-13), NOT
+   *  currently supplied by any caller: no board or joint-schedule surface
+   *  (`schedule-board.tsx`, `conflicts-panel.tsx`, `schedule-gate-dialog.tsx`,
+   *  `fixture-block.tsx`, the AI console tree) builds a person-id ->
+   *  display-name map today, unlike `entrantNames`/`fixtureTitles` above,
+   *  which every caller already has on hand. The only `personNames` maps
+   *  that exist in this codebase belong to unrelated flows scoped narrower
+   *  than the board: the officials incident-report drawer builds one from a
+   *  single fixture's `squad` roster (`components/officials/report-form.tsx`),
+   *  and the scorepad builds one from a live match's `SideInfo`
+   *  (`v2/scorepad/registry.tsx`'s `personNamesFrom`). Neither is reachable
+   *  from where a conflict renders.
+   *
+   *  The `personIds` this formatter resolves name `entrant_members` rows
+   *  (roster/squad members — see `peopleByEntrant`/`peopleOf` in
+   *  `server/usecases/schedule.ts`, which is what feeds the engine's
+   *  `Assignment.people`), not officials. Populating this for real would
+   *  need a NEW query joining `entrant_members` to `persons` on the
+   *  board/joint-schedule pages (none load one today) and threading the
+   *  result through every layer `entrantNames` already reaches — out of
+   *  scope for a review-response pass; left here as an honest, currently-
+   *  unfed optional field. Absent (or a miss) falls back to `personLabel`'s
+   *  id handling below — never a raw UUID. */
   personNames?: Readonly<Record<string, string>>;
 }
 
