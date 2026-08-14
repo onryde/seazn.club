@@ -160,14 +160,40 @@ export interface ActionFormProps {
     values: ActionValues,
     setValue: (path: string, value: PadFieldValue | undefined) => void,
   ) => ReactNode;
+  /** S13 W11 follow-up — notified whenever THIS form's own expand/collapse
+   *  state changes (tap to open, confirm/cancel to close). `expanded` lives
+   *  entirely in this component's own state (module header: "ActionForm
+   *  stays a REAL component"), so a parent that shares a visual grid row
+   *  across several actions (panel.tsx's `grid`/`perSide` layouts) has no
+   *  other way to learn "is my child currently the tall one" — the fact it
+   *  needs to keep that row's DOM/tab order matching what is actually on
+   *  screen. Omitted ⇒ no-op, exactly like every other optional render-prop
+   *  here. */
+  onExpandedChange?: (expanded: boolean) => void;
+  /** S13 W11 follow-up — an explicit CSS `order` for this form's own root
+   *  element (the collapsed button OR the expanded card). A parent may
+   *  freely reorder this component in the DOM (e.g. so a keyboard tab walk
+   *  never lands on a still-short sibling AFTER an expanded one) while
+   *  pinning it to a FIXED on-screen position via `order` — which, unlike
+   *  DOM position, plays no part in the browser's default tab sequence.
+   *  Omitted ⇒ no inline style, i.e. today's plain DOM-order placement. */
+  order?: number;
 }
 
-export function ActionForm({ action, onSubmit, submitting = false, renderAttribution }: ActionFormProps) {
+export function ActionForm({
+  action,
+  onSubmit,
+  submitting = false,
+  renderAttribution,
+  onExpandedChange,
+  order,
+}: ActionFormProps) {
   const msg = useMsg();
   const [expanded, setExpanded] = useState(false);
   const [values, setValues] = useState<ActionValues>(() => initialValues(action));
   const label = padLabel(action.labelKey.key, msg, action.labelKey.label);
   const validity = checkActionValidity(action, values);
+  const orderStyle = order === undefined ? undefined : { order };
 
   function setValue(path: string, value: PadFieldValue | undefined) {
     setValues((v) => ({ ...v, [path]: value }));
@@ -176,6 +202,7 @@ export function ActionForm({ action, onSubmit, submitting = false, renderAttribu
   function reset() {
     setValues(initialValues(action));
     setExpanded(false);
+    onExpandedChange?.(false);
   }
 
   function handleTap() {
@@ -190,6 +217,7 @@ export function ActionForm({ action, onSubmit, submitting = false, renderAttribu
       return;
     }
     setExpanded(true);
+    onExpandedChange?.(true);
   }
 
   function handleConfirm() {
@@ -205,6 +233,7 @@ export function ActionForm({ action, onSubmit, submitting = false, renderAttribu
         className="btn btn-primary h-14 w-full text-base"
         onClick={handleTap}
         disabled={submitting}
+        style={orderStyle}
       >
         {label}
       </button>
@@ -229,7 +258,7 @@ export function ActionForm({ action, onSubmit, submitting = false, renderAttribu
   // correctly — so 768 and 1280 are byte-identical to before. Inert in the
   // other two layouts: `col-span-*` does nothing to a flex child.
   return (
-    <div className="card col-span-2 space-y-3 border-2 border-accent-line p-3 sm:col-span-1">
+    <div className="card col-span-2 space-y-3 border-2 border-accent-line p-3 sm:col-span-1" style={orderStyle}>
       <p className="label !mb-0">{label}</p>
       {action.fields.map((field) => renderField(field, values[field.path], (v) => setValue(field.path, v), msg))}
       {renderAttribution?.(action, values, setValue)}
