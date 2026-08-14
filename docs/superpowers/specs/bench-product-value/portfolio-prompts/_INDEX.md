@@ -602,6 +602,13 @@ session should NOT re-derive:
   which yields `Cannot find package '@/...'` and a fake red across
   hundreds of suites. Run it from `apps/web`. Same bug as P06's block.
 
-Full T1–T5 briefs, with the re-pinned citations, are in the plan's SDD
-workspace beside
-`docs/superpowers/plans/2026-08-14-p7-multi-stage-templates-plan.md`.
+Full T1–T5 briefs, with the re-pinned citations, are committed at
+`docs/superpowers/plans/2026-08-14-p7-handover-briefs.md`, beside the
+session plan `2026-08-14-p7-multi-stage-templates-plan.md`. They are in
+`docs/` deliberately: `.superpowers/` is gitignored (`.gitignore:52`), so
+a handover left in the SDD workspace dies with the worktree.
+
+**Also note, for the T5 e2e brief:** `.github/workflows/e2e.yml` went LIVE
+on pull requests on 2026-08-14. Every brief written before that date —
+including T5 — says it is disabled and must never be enabled. That is now
+false; six Playwright jobs run per PR, including the seven-width matrix.
