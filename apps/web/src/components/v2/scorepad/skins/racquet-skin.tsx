@@ -352,7 +352,10 @@ function makeAttributionRenderer(state: unknown, msg: MsgFn) {
          *  optional on this kernel's schemas, so leaving it unset never
          *  blocks the tap above — this note says so rather than the row
          *  just silently never appearing. */}
-        {personItems.length > 0 && <p className="text-xs text-slate-400">{msg("scorepad.attribution.noRoster")}</p>}
+        {/* S13/#422 W11 cutover — text-slate-400 on white ~2.63:1, below
+         *  AA's 4.5:1; text-slate-600 clears it at ~7.56:1 (same fix as
+         *  period-skin.tsx's own noRoster hint, dac2b6bb). */}
+        {personItems.length > 0 && <p className="text-xs text-slate-600">{msg("scorepad.attribution.noRoster")}</p>}
       </div>
     );
   };
@@ -444,8 +447,11 @@ function ScoreHeader(props: { header: SkinHeader; msg: MsgFn }): ReactNode {
             >
               {field.value}
             </p>
+            {/* S13/#422 W11 cutover — text-slate-500 on bg-slate-900 ~3.74:1,
+             *  below AA's 4.5:1 (same pattern as period-skin.tsx's header
+             *  caption, dac2b6bb). text-slate-400 clears it at ~6.79:1. */}
             {field.captionKey && (
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">
                 {props.msg(field.captionKey as MessageKey)}
               </p>
             )}
@@ -478,7 +484,11 @@ export function RacquetSkin(props: SkinProps): ReactNode {
             <details key={group.id} className="card group p-3">
               <summary className="btn btn-ghost w-full cursor-pointer list-none justify-between">
                 <span>{label}</span>
-                <span aria-hidden className="text-xs text-purple-400 group-open:rotate-180">
+                {/* S13/#422 W11 cutover — text-purple-400 on white ~2.79:1,
+                 *  below AA's 4.5:1; text-purple-700 clears it at ~7.07:1
+                 *  and matches the label beside it (.btn-ghost's own
+                 *  text-purple-700). */}
+                <span aria-hidden className="text-xs text-purple-700 group-open:rotate-180">
                   ▾
                 </span>
               </summary>

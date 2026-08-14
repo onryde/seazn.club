@@ -820,7 +820,16 @@ export function PeriodSkin(props: SkinProps): ReactNode {
         <details className="card group p-3" data-role="drawer-groups">
           <summary className="btn btn-ghost w-full cursor-pointer list-none justify-between">
             <span>{msg("scorepad.skin.more")}</span>
-            <span aria-hidden className="text-xs text-purple-400 group-open:rotate-180">
+            {/* S13/#422 W11 cutover — a SEPARATE failure from this file's
+             *  dac2b6bb fix (that one addressed the dark-header captions and
+             *  the noRoster hint only): text-purple-400 on white ~2.79:1,
+             *  below AA's 4.5:1. aria-hidden does not exempt it from axe's
+             *  color-contrast rule (only screen-reader visibility, not
+             *  visual CSS visibility, per axe-core's own isVisible). Raised
+             *  to text-purple-700 (~7.07:1), matching the label beside it
+             *  (.btn-ghost's own text-purple-700) and every sibling skin's
+             *  own drawer-arrow fix this same session. */}
+            <span aria-hidden className="text-xs text-purple-700 group-open:rotate-180">
               ▾
             </span>
           </summary>

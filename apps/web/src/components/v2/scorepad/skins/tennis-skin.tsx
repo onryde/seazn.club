@@ -407,8 +407,12 @@ export function TennisSkin(props: SkinProps) {
                 </span>
               ) : (
                 <div key={field.id} className="shrink-0">
+                  {/* S13/#422 W11 cutover — text-slate-500 on bg-slate-900
+                   *  ~3.74:1, below AA's 4.5:1 (same pattern as
+                   *  period-skin.tsx's header caption, dac2b6bb).
+                   *  text-slate-400 clears it at ~6.79:1. */}
                   {field.captionKey && (
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">
                       {msg(field.captionKey as MessageKey)}
                     </p>
                   )}
@@ -442,7 +446,11 @@ export function TennisSkin(props: SkinProps) {
       </header>
 
       {layout.groups.length === 0 ? (
-        <p className="card p-4 text-center text-sm text-purple-400">{msg("scorepad.emptyPhase")}</p>
+        // S13/#422 W11 cutover — text-purple-400 on this white .card
+        // ~2.79:1, below AA's 4.5:1; text-purple-700 clears it at ~7.07:1
+        // and is already this surface's established readable-purple step
+        // (globals.css .label/.btn-ghost).
+        <p className="card p-4 text-center text-sm text-purple-700">{msg("scorepad.emptyPhase")}</p>
       ) : (
         <>
           {primary.map((group) => (
@@ -466,7 +474,11 @@ export function TennisSkin(props: SkinProps) {
             <details className="card group p-3">
               <summary className="btn btn-ghost w-full cursor-pointer list-none justify-between">
                 <span>{msg("scorepad.skin.more")}</span>
-                <span aria-hidden className="text-xs text-purple-400 group-open:rotate-180">
+                {/* S13/#422 W11 cutover — text-purple-400 on white ~2.79:1,
+                 *  below AA's 4.5:1; text-purple-700 clears it at ~7.07:1
+                 *  and matches the label beside it (.btn-ghost's own
+                 *  text-purple-700). */}
+                <span aria-hidden className="text-xs text-purple-700 group-open:rotate-180">
                   ▾
                 </span>
               </summary>

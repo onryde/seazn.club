@@ -350,12 +350,12 @@ export function PadRenderer(props: PadRendererProps) {
       />
 
       {view.panels.length === 0 ? (
-        {/* S13/#422 W11 cutover — text-purple-400 on this white .card
+        /* S13/#422 W11 cutover — text-purple-400 on this white .card
          *  measures ~2.79:1, below the 4.5:1 AA floor. text-purple-700
          *  clears it at 7.07:1 and is already this surface's own
          *  established "readable purple" (globals.css .label/.btn-ghost),
          *  so this reuses a step already visible right next to it rather
-         *  than introducing a new one. */}
+         *  than introducing a new one. */
         <p className="card p-4 text-center text-sm text-purple-700">{msg("scorepad.emptyPhase")}</p>
       ) : skin ? (
         /* S11/#420 W9 — a sport with a hand-crafted layout draws through it
