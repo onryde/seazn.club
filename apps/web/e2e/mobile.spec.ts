@@ -1426,7 +1426,12 @@ test("density-pair sweep: five more .select/.input controls hold the 44px floor 
 
   // Schedule > History (history-panel.tsx) — the create-save-point form
   // renders whenever `canEdit` is true; it needs no stage or schedule state.
-  await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"), { waitUntil: "load" });
+  // `tab=history`, NOT `tab=board`: the panel is only mounted on its own tab
+  // (`schedule/page.tsx:382`, `TABS` at :52). The first version of this test
+  // navigated to the board and waited 20s for a control that was never on the
+  // page — a red that read like an unreachable control and was really a wrong
+  // URL.
+  await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=history"), { waitUntil: "load" });
   await assertFloor(page.getByPlaceholder("e.g. before rain reshuffle"), "history save-point input");
   await expectNoHorizontalScroll(page);
 });
