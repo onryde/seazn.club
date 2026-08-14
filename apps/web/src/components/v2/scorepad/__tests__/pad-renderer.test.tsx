@@ -56,6 +56,49 @@ describe("ActionForm — zero-field action submits on a single tap", () => {
   });
 });
 
+// S13 W11 — the case the sibling block above does NOT cover: `cricket.newball`
+// is fields:[] AND attribution:[], so it never exercised `handleTap`'s
+// decision against a REQUIRED attribution. Flagged but left unfixed by
+// S5/#431 (docs/superpowers/specs/2026-08-06-scoringpad-v2-prompts/_INDEX.md,
+// "gameAward panel" entry): `tennis.game.award` (nested/kernel.ts's
+// `gameAwardAction`) declares `fields: []` and `attribution: [{ kind: "side",
+// path: "winner" }]`. Before this fix, `handleTap` decided "auto-submit vs
+// expand" from `action.fields.length` alone, so tapping fired `onSubmit({})`
+// immediately — a payload missing `winner` the server rejects, and
+// `renderAttribution` never ran because `expanded` never became true. The
+// same shape recurs across every sport (carrom.toss, generic.result,
+// tennis.point, and setbased/kernel.ts's rally/rallyAttributed/sub actions
+// for badminton/volleyball/tabletennis) — this is the chassis-level fix, not
+// a tennis-only one.
+describe("ActionForm — zero-field action with a REQUIRED attribution must NOT auto-submit", () => {
+  it("tapping opens the attribution picker instead of firing an incomplete payload", () => {
+    const action: PadActionView = {
+      type: "tennis.game.award",
+      labelKey: { key: "pad.tennis.action.gameAward", label: "Award game" },
+      fields: [],
+      attribution: [{ kind: "side", path: "winner" }],
+      availability: AVAILABLE,
+    };
+    let submitted: unknown = "not called";
+    let renderedAttribution: unknown = null;
+    const island = renderIsland(ActionForm, {
+      action,
+      onSubmit: (p: unknown) => (submitted = p),
+      renderAttribution: (a: PadActionView) => {
+        renderedAttribution = a.attribution;
+        return null;
+      },
+    });
+    const button = find(island.tree(), isType("button"));
+    expect(textOf(button)).toContain("Award game");
+    (propsOf(button).onClick as () => void)();
+    expect(submitted, "winner is unset — must not fire an incomplete payload").toBe("not called");
+    expect(renderedAttribution, "must expand into the attribution picker instead of auto-submitting").toEqual([
+      { kind: "side", path: "winner" },
+    ]);
+  });
+});
+
 describe("ActionForm — an action with fields expands, validates, and only submits once valid", () => {
   const action: PadActionView = {
     type: "cricket.ball",

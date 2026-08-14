@@ -1,19 +1,31 @@
 "use client";
 // One PadActionView, rendered courtside-sized (S10/#419 W8, chassis item 2).
-// A zero-field action (most admin actions — new ball, declare, follow-on) is
-// a single tap: no expansion step, no confirm screen. An action WITH fields
-// expands inline into an editor honouring each field's cfg-derived bounds
-// (never hardcoded — the field IS the bound), then a confirm/cancel pair.
-// `checkActionValidity`/`buildActionPayload` (view-model.ts) are the ONLY
-// places that decide "can this fire" / "what payload does this build" — this
-// file never re-derives either.
+// A zero-field action with NO attribution requirement either (most admin
+// actions — new ball, declare, follow-on) is a single tap: no expansion
+// step, no confirm screen. An action with fields, a required attribution, or
+// both expands inline instead — fields into an editor honouring each
+// field's cfg-derived bounds (never hardcoded — the field IS the bound),
+// attribution into whatever `renderAttribution` below supplies — then a
+// confirm/cancel pair. `checkActionValidity`/`buildActionPayload`
+// (view-model.ts) are the ONLY places that decide "can this fire" / "what
+// payload does this build" — this file never re-derives either.
 //
-// Attribution is a typed seam, not built here: the attribution picker is a
-// later pass (S10 dispatch scope). `renderAttribution`, when supplied, is
-// handed the action, the live values map and a setter so a future picker
-// writes into the SAME map `buildActionPayload` reads — never a parallel
-// one. Absent (the default today), attribution simply stays unset, which
-// `buildActionPayload` (via `buildPathObject`) omits from the payload.
+// Attribution collection itself is a typed seam, not built here:
+// `renderAttribution`, when supplied (every real caller does — see
+// pad-renderer.tsx's default wiring and each skin's own), is handed the
+// action, the live values map and a setter so the picker writes into the
+// SAME map `buildActionPayload` reads — never a parallel one. `handleTap`
+// below must actually reach that seam before a payload can be built: every
+// `PadAttributionItem` an action declares is REQUIRED — there is no
+// per-item optional flag (`PadAttributionItem`'s own header,
+// packages/engine/src/sport/module.ts) — so a non-empty `attribution` has to
+// expand exactly like a non-empty `fields` does. S13 W11 fix: before, only
+// `fields.length` gated the decision, so a zero-field action with a required
+// attribution (`tennis.game.award`'s `winner`, and the same shape in
+// carrom/generic/setbased-kernel's rally+sub actions) auto-submitted an
+// incomplete payload on the very first tap — flagged but left unfixed by
+// S5/#431 (docs/superpowers/specs/2026-08-06-scoringpad-v2-prompts/_INDEX.md,
+// "gameAward panel" entry).
 import { useState, type ReactNode } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { enumLabel, padLabel } from "@/lib/scoring-vocab";
@@ -168,7 +180,12 @@ export function ActionForm({ action, onSubmit, submitting = false, renderAttribu
 
   function handleTap() {
     if (submitting) return;
-    if (action.fields.length === 0) {
+    // Fast-path only when NEITHER fields NOR attribution need input — every
+    // declared attribution item is required (module header above), so a
+    // non-empty `action.attribution` must expand exactly like a non-empty
+    // `action.fields` already did, or the picker never runs and the built
+    // payload is missing a required key.
+    if (action.fields.length === 0 && action.attribution.length === 0) {
       onSubmit(buildActionPayload(action, values));
       return;
     }
