@@ -1032,11 +1032,23 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
     // fixture on the common, non-cross-stage-fill path, so a round-2+
     // intra-bracket slot (g.home already null there) needs its OWN nullness
     // check, not a proxy that never fires in that path.
+    //
+    // EXCEPT a bye: `byeExtKeys` names every source whose "match" resolves to
+    // an immediate award, not a real fixture ever played. Its winner is
+    // propagated into the fed slot synchronously below (the "Third pass"),
+    // inside this SAME transaction — no user ever sees that slot render as
+    // TBD, so labelling it would only create a label this call is about to
+    // strand. The Third pass's own invariant guard (P5 review finding, right
+    // below) exists precisely to catch a stale label reaching that update
+    // path; skipping the label here for a bye source is what keeps this
+    // task's own new label-writing from being the thing that trips it.
     const refByExt = new Map(gen.map((f) => [f.extKey, { round: f.roundNo, seq: f.seqInRound }]));
+    const byeExtKeys = new Set(gen.filter((f) => f.award !== undefined).map((f) => f.extKey));
     const matchSlotLabel = (
       from?: { extKey: string; side: "winner" | "loser" },
     ): { key: string; params: { round: number; seq: number } } | null => {
       if (!from) return null;
+      if (byeExtKeys.has(from.extKey)) return null;
       const params = refByExt.get(from.extKey);
       if (!params) return null;
       const key = from.side === "loser" ? "slot.loser_match" : "slot.winner_match";
