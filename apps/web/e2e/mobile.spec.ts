@@ -1016,6 +1016,7 @@ test("P6 org surface: the TBD fixture renders its resolved slot label, in the sw
   page,
 }) => {
   test.skip(p6DivisionId === "", "P6 setup test did not run/complete");
+  await loginUi(page, `p6-fix1-${TAG}@example.com`); // same user/org as setup — a fresh page has no session of its own
   // Default locale first — proves the whole pipeline (usecase -> V360/V362
   // columns -> API -> stages-panel.tsx) is actually live, not merely
   // unit-tested in isolation.
@@ -1044,6 +1045,7 @@ test("P6 public surface: a visitor sees the resolved slot label in the ORG's own
   page,
 }) => {
   test.skip(p6DivisionId === "", "P6 setup test did not run/complete");
+  await loginUi(page, `p6-fix1-${TAG}@example.com`); // same user/org as setup — activeOrg() below needs THIS org, not the default shared session's
   const org = await activeOrg(page);
   // The org's OWN locale — a public/embed page has no per-viewer request
   // scope to read a switcher cookie from (ISR), so THIS is the only lever a
