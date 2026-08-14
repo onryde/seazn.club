@@ -42,6 +42,30 @@ carry results. It names those numbers before calling the existing
 regenerate path. No server change, no new code invented to match a
 sentence in the prompt.
 
+> **THIS RULING WAS WRONG. Overturned by the whole-branch review.**
+>
+> Its premise — that late regeneration discards fixtures — was inferred
+> from the design doc calling `generateStageFixtures` an "idempotent
+> diff" and from the prompt's own wording. **Neither was checked against
+> the code, and the code deletes nothing.** `stages.ts:997-1031` builds
+> `byKey` from `existing` and inserts only `gen` rows missing from it;
+> unmatched existing rows are LEFT IN PLACE. `GenerateOutcome`
+> (`stages.ts:835-839`) carries only `created`/`existing`. The repo's
+> only `delete from fixtures` are `history.ts:135` (checkpoint restore)
+> and a demo seed.
+>
+> So the dialog shipped a false data-loss warning on a SAFE routine
+> action: an organiser adding a late entrant was told they would lose
+> 12 fixtures and 5 results. The real hazard is the opposite —
+> STRANDED leftovers, fixtures that no longer match the rules and are
+> silently kept.
+>
+> The correction is in flight. The lesson is the one this session kept
+> finding in other people's work and then reproduced in its own: I
+> verified that no error code existed for the destructive path (true,
+> and worth finding) but never verified that the destructive path
+> existed at all. Disproving one half of a premise is not checking it.
+
 **3. The label columns are wired to nothing.** V360 added
 `fixtures.home_slot_label` / `away_slot_label` (jsonb `{key, params}`),
 and `descriptorLabel()` (`stage-seeding.ts:89`) produces them, but no
