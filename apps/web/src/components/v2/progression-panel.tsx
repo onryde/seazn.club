@@ -18,14 +18,22 @@
 // never via useLocale() — useLocale() throws outside a <DictProvider>, which
 // would make this component untestable with the repo's hook-harness (no
 // provider tree there) for no real benefit, since the RSC already resolved
-// the locale once.
+// the locale once. `confirmedNotice`'s pluralisation (fix round 3, Minor 6)
+// follows the SAME reasoning: usePlural() also throws outside a
+// <DictProvider> (unlike useMsg(), which falls back to English), so it would
+// break every existing render/wiring test in this file the instant it was
+// called. useDict() shares useMsg()'s safe fallback (English catalog outside
+// a provider) and hands back the raw dict, which — paired with the `locale`
+// prop already in hand — lets this component call the plain `plural()`
+// runtime function directly, with zero new provider dependency.
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useDict, useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import { seedingErrorMessage } from "@/lib/seeding-error";
+import { plural } from "@/lib/i18n-runtime";
 import type { Locale } from "@/lib/i18n-constants";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
@@ -191,6 +199,7 @@ export function ProgressionPanel({
   canEdit,
 }: ProgressionPanelProps) {
   const msg = useMsg();
+  const dict = useDict();
   const router = useRouter();
   const [editsBySlot, setEditsBySlot] = useState<Map<string, string>>(new Map());
   const [busy, setBusy] = useState<"recompute" | "confirm" | null>(null);
@@ -244,7 +253,11 @@ export function ProgressionPanel({
         method: "POST",
         json: { proposalId: proposal.id, edits: buildEditsPayload(editsBySlot) },
       });
-      setNotice(msg("progression.confirmedNotice", { filled: out.filled }));
+      // Fix round 3 (Minor 6): was msg("progression.confirmedNotice", {filled})
+      // against a single English-only "{filled} slot(s) filled" key — an
+      // English pluralisation fudge shipped to all 4 locales. plural() picks
+      // the real .one/.other form for `locale` and auto-injects {count}.
+      setNotice(plural(dict, "progression.confirmedNotice", out.filled, locale));
       setEditsBySlot(new Map());
       router.refresh();
     } catch (err) {

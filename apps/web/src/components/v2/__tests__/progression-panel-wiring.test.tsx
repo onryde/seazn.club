@@ -253,6 +253,43 @@ describe("ProgressionPanel — edit-in-place on a NON-tied row", () => {
   });
 });
 
+describe("ProgressionPanel — confirmedNotice pluralisation (fix round 3, Minor 6)", () => {
+  // Reuses the NON-tied proposal shape — Confirm is enabled at mount, so no
+  // edit is needed before clicking it.
+  const proposalNoTies = {
+    id: "p2",
+    stageId: "ko1",
+    status: "draft" as const,
+    computed: {
+      qualifiers: [{ rank: 1, source: { stageId: "grp", rank: 1 }, entrantId: "e1", destinationSlot: "f1:home" }],
+      ties: [],
+      standingsHash: "h2",
+    },
+  };
+
+  it("filled: 1 renders the SINGULAR form, not the plural", async () => {
+    net.handler = async () => ({ filled: 1 });
+    const island = renderIsland(ProgressionPanel, baseProps({ proposal: proposalNoTies }));
+    const confirmBtn = findButtonByText(island.tree(), "Confirm proposal");
+    await (propsOf(confirmBtn!).onClick as () => Promise<void> | void)();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(island.text()).toContain("Confirmed — 1 slot filled.");
+    expect(island.text()).not.toContain("1 slots filled");
+  });
+
+  it("filled: 2 renders the PLURAL form — real pluralisation, not string interpolation alone", async () => {
+    net.handler = async () => ({ filled: 2 });
+    const island = renderIsland(ProgressionPanel, baseProps({ proposal: proposalNoTies }));
+    const confirmBtn = findButtonByText(island.tree(), "Confirm proposal");
+    await (propsOf(confirmBtn!).onClick as () => Promise<void> | void)();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(island.text()).toContain("Confirmed — 2 slots filled.");
+    expect(island.text()).not.toContain("2 slot filled.");
+  });
+});
+
 describe("ProgressionPanel — compute/recompute wiring", () => {
   it("no proposal yet: clicking Compute proposal POSTs the recompute route", async () => {
     net.handler = async () => ({ id: "p3", stageId: "ko1", status: "draft", computed: { qualifiers: [], ties: [], standingsHash: "h" } });
