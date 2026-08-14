@@ -2350,6 +2350,7 @@
   "pad.pp.matchCountdown": "match",
   "pad.pp.runningPenalties": "Pénalités en cours",
   "pad.pp.timersHint": "Les minuteurs sont une indication visuelle — libérez chaque pénalité explicitement.",
+  "pad.pp.escalation": "Ce joueur a déjà un carton vert — une nouvelle faute peut évoluer vers un carton jaune.",
   "sport.badminton": "Badminton",
   "sport.boardgame": "Jeu de société",
   "sport.carrom": "Carrom",

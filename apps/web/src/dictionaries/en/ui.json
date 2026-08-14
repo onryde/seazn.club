@@ -2350,6 +2350,7 @@
   "pad.pp.matchCountdown": "match",
   "pad.pp.runningPenalties": "Running penalties",
   "pad.pp.timersHint": "Timers are a display hint — release each penalty explicitly.",
+  "pad.pp.escalation": "This player already has a green card — a further offence may escalate to yellow.",
   "sport.badminton": "Badminton",
   "sport.boardgame": "Board game",
   "sport.carrom": "Carrom",

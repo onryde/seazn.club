@@ -2305,6 +2305,7 @@
   "pad.pp.matchCountdown": "wedstrijd",
   "pad.pp.runningPenalties": "Lopende straffen",
   "pad.pp.timersHint": "Timers zijn een weergavehint — geef elke straf expliciet vrij.",
+  "pad.pp.escalation": "Deze speler heeft al een groene kaart — een nieuwe overtreding kan escaleren naar geel.",
   "sport.badminton": "Badminton",
   "sport.boardgame": "Bordspel",
   "sport.carrom": "Carrom",

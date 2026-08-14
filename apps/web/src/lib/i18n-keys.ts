@@ -2635,6 +2635,7 @@ export type DictionaryKey =
   | "pad.icehockey.panel.setPiece"
   | "pad.icehockey.panel.shootout"
   | "pad.icehockey.panel.shot"
+  | "pad.pp.escalation"
   | "pad.pp.matchCountdown"
   | "pad.pp.runningPenalties"
   | "pad.pp.timersHint"

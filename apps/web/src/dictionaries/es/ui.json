@@ -2305,6 +2305,7 @@
   "pad.pp.matchCountdown": "partido",
   "pad.pp.runningPenalties": "Penalizaciones en curso",
   "pad.pp.timersHint": "Los temporizadores son una indicación visual: libera cada penalización explícitamente.",
+  "pad.pp.escalation": "Este jugador ya tiene tarjeta verde — una nueva infracción podría escalar a amarilla.",
   "sport.badminton": "Bádminton",
   "sport.boardgame": "Juego de mesa",
   "sport.carrom": "Carrom",
