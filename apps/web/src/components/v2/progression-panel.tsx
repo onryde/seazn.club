@@ -212,6 +212,22 @@ export function ProgressionPanel({
       router.refresh();
     } catch (err) {
       reportError(err);
+      // SEEDING_ALREADY_CONFIRMED / SEEDING_PROPOSAL_STALE mean someone else
+      // — another organiser, another tab — already acted on this exact
+      // proposal (review finding 2, fix round 1). The draft branch below has
+      // no way out except a fresh server fetch: the recompute affordance
+      // only appears once `proposal.status` itself flips to "confirmed" or
+      // "stale", and without a refresh the panel stays wedged, rendered as
+      // "draft" and holding now-dead editsBySlot state, until a manual
+      // reload. Every OTHER code is the current organiser's own fixable
+      // mistake (e.g. SEEDING_TIE_UNRESOLVED) — refreshing there would only
+      // discard their in-progress edits for no reason.
+      if (
+        err instanceof ApiV1Error &&
+        (err.code === "SEEDING_ALREADY_CONFIRMED" || err.code === "SEEDING_PROPOSAL_STALE")
+      ) {
+        router.refresh();
+      }
     } finally {
       setBusy(null);
     }

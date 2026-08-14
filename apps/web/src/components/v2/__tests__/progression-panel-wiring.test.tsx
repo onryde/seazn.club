@@ -312,3 +312,50 @@ describe("ProgressionPanel — API errors resolve through seedingErrorMessage, n
     expect(text).not.toContain("SEEDING_TIE_UNRESOLVED");
   });
 });
+
+describe("ProgressionPanel — a confirm failure meaning 'someone else already acted' re-syncs instead of wedging (review finding 2, fix round 1)", () => {
+  const proposalNoTies = {
+    id: "p7",
+    stageId: "ko1",
+    status: "draft" as const,
+    computed: {
+      qualifiers: [{ rank: 1, source: { stageId: "grp", rank: 1 }, entrantId: "e1", destinationSlot: "f1:home" }],
+      ties: [],
+      standingsHash: "h7",
+    },
+  };
+
+  // Two organisers, or two tabs, on the same stage: the SECOND confirm 409s
+  // one of these. Before the fix, the catch block only rendered the
+  // translated error and left the panel rendered as "draft" holding stale
+  // editsBySlot state — there's no recompute affordance on the draft branch
+  // (that only appears once `proposal.status` flips), so the user was stuck
+  // until a manual reload.
+  for (const code of ["SEEDING_ALREADY_CONFIRMED", "SEEDING_PROPOSAL_STALE"] as const) {
+    it(`a ${code} confirm failure calls router.refresh() so the page re-fetches and the panel leaves the dead "draft" branch`, async () => {
+      const { ApiV1Error } = await import("@/lib/client-v1");
+      net.handler = async () => {
+        throw new ApiV1Error("already handled elsewhere", 409, code);
+      };
+      const island = renderIsland(ProgressionPanel, baseProps({ proposal: proposalNoTies }));
+      const confirmBtn = findButtonByText(island.tree(), "Confirm proposal");
+      await (propsOf(confirmBtn!).onClick as () => Promise<void> | void)();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(refresh).toHaveBeenCalled();
+    });
+  }
+
+  it("a SEEDING_TIE_UNRESOLVED failure (the organiser's OWN fixable mistake) does NOT refresh — refreshing would just discard their in-progress edits for no reason", async () => {
+    const { ApiV1Error } = await import("@/lib/client-v1");
+    net.handler = async () => {
+      throw new ApiV1Error("a flagged tie is not resolved", 422, "SEEDING_TIE_UNRESOLVED");
+    };
+    const island = renderIsland(ProgressionPanel, baseProps({ proposal: proposalNoTies }));
+    const confirmBtn = findButtonByText(island.tree(), "Confirm proposal");
+    await (propsOf(confirmBtn!).onClick as () => Promise<void> | void)();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(refresh).not.toHaveBeenCalled();
+  });
+});
