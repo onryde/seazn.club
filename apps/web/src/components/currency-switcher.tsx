@@ -25,7 +25,11 @@ export function CurrencySwitcher({ current }: { current: Currency }) {
           document.cookie = `${CURRENCY_COOKIE}=${e.target.value}; path=/; max-age=31536000; samesite=lax`;
           router.refresh();
         }}
-        className="input w-auto py-1.5 text-sm"
+        // `.select` (components-layer) sets its own padding, but Tailwind's
+        // utilities layer wins, so `py-1.5 text-sm` beside it collapses this
+        // under the repo's 44px touch floor — the same override tracked in
+        // S13/#422 W11. `min-h-11` survives it; the density recipe stays.
+        className="input min-h-11 w-auto py-1.5 text-sm"
       >
         {SUPPORTED_CURRENCIES.map((c) => (
           <option key={c} value={c}>

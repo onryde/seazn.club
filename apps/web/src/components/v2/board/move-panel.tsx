@@ -125,7 +125,9 @@ export function MovePanel({
       </div>
       <label className="block">
         <span className="label">{venueCap}</span>
-        <select value={court} onChange={(e) => setCourt(e.target.value)} className="input px-2 py-1 text-xs">
+        {/* `.select`'s own padding loses to `px-2 py-1 text-xs` under
+            Tailwind's utilities layer (S13/#422 W11). `min-h-11` survives it. */}
+        <select value={court} onChange={(e) => setCourt(e.target.value)} className="input min-h-11 px-2 py-1 text-xs">
           {courts.length === 0 && <option value="">{msg("board.unassigned")}</option>}
           {courts.map((c) => (
             <option key={c} value={c}>{c}</option>

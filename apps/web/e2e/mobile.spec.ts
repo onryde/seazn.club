@@ -1348,3 +1348,85 @@ test("P6 task B fix round 3 (Critical 1): regenerating a stage that already has 
   // click).
   await expect(page.getByText("Nothing new to generate", { exact: false })).toBeVisible({ timeout: 10_000 });
 });
+
+// ---------------------------------------------------------------------------
+// S13/#422 W11 followup — app-wide `.select`/`.input` density-pair sweep.
+//
+// Same defect as T14b above: a components-layer `.select`/`.input` class sets
+// its own padding, but a `px-2 py-1 text-xs` (or `py-1.5 text-sm`, `py-1
+// text-xs`, etc.) utility recipe beside it wins under Tailwind's utilities
+// layer and silently collapses the control under this repo's 44px touch
+// floor. The scorepad tree and the lineup editor were fixed in an earlier
+// session; re-deriving the pattern with `git grep` across the rest of
+// apps/web/src/components turned up 12 more files (24 controls). `min-h-11`
+// on all of them, unconditional — no `sm:`/`md:` escape hatch, for the exact
+// reason T14b's comment gives: this file runs under all SEVEN width
+// projects (320/360/375/390/430/768/834), including tablet-768/834, and a
+// tablet is still a touch device. The density recipes themselves (text-xs,
+// etc.) are untouched — this is a sizing fix, not a restyle.
+//
+// Five of the twelve fixed files are covered below, each reusing a fixture
+// this file already has live by this point in the serial run (the shared
+// setup division/org and its registration settings, or the console's own
+// authenticated session) — no new seeding. The other seven (americano-panel,
+// board/move-panel, club-hub/team-squad-editor, division-builder's preview
+// step, me/officiating-lane, me/rsvp-control, stages-panel's AddMatchForm +
+// inline fixture edit) each need a format/officiating/club-hub scenario this
+// file has no fixture for yet — an americano-variant division, an officials
+// assignment on the signed-in account, a club with a team and squad, a
+// scheduled board to open the move sheet on, or a stage with fixtures to
+// open the inline editor on. Adding one bespoke seed per surface for a single
+// boundingBox() read would be a lot of new weight for what the fix itself
+// already proves is the same mechanical override; flagged here rather than
+// faked with a shallow test.
+// ---------------------------------------------------------------------------
+test("density-pair sweep: five more .select/.input controls hold the 44px floor (S13/#422 W11)", async ({
+  page,
+  browser,
+}) => {
+  const assertFloor = async (locator: Locator, label: string) => {
+    await expect(locator, `${label} not visible`).toBeVisible({ timeout: 20_000 });
+    const box = await locator.boundingBox();
+    expect(box, `${label} has no box`).not.toBeNull();
+    expect(box!.height, `${label} touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
+  };
+
+  // Pricing page currency switcher (currency-switcher.tsx) — anonymous,
+  // public; already one of the "public surfaces" routes above, just not
+  // previously measured control-by-control.
+  const anonCtx = await browser.newContext({ viewport: projectViewport() ?? undefined });
+  try {
+    const anon = await anonCtx.newPage();
+    await anon.goto("/pricing", { waitUntil: "load" });
+    await assertFloor(anon.locator("[data-currency-switcher]"), "pricing currency switcher");
+  } finally {
+    await anonCtx.close();
+  }
+
+  // Settings > Team (org-team.tsx) — both invite-role selects render
+  // whenever the signed-in account is an editor, which this file's shared
+  // session always is (it creates/edits competitions elsewhere without any
+  // permission error).
+  await page.goto("/settings?tab=team", { waitUntil: "load" });
+  await assertFloor(page.getByTestId("team-invite-email-role"), "team invite (email) role select");
+  await assertFloor(page.getByTestId("team-invite-link-role"), "team invite (link) role select");
+  await expectNoHorizontalScroll(page);
+
+  // Entrants tab (entrants-panel.tsx) — the shared setup division's own
+  // entrants (Ada M et al.) already carry a seed input each; no extra seeding.
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=entrants"), { waitUntil: "load" });
+  await assertFloor(page.locator('input[aria-label^="Seed for "]').first(), "entrant seed input");
+  await expectNoHorizontalScroll(page);
+
+  // Registrations tab (registrations-panel.tsx) — registration-settings were
+  // already enabled by the file's top-of-file setup test.
+  await page.goto(await divisionPath(page.request, divisionId, "/registrations"), { waitUntil: "load" });
+  await assertFloor(page.getByTestId("reg-search"), "registrations search input");
+  await expectNoHorizontalScroll(page);
+
+  // Schedule > History (history-panel.tsx) — the create-save-point form
+  // renders whenever `canEdit` is true; it needs no stage or schedule state.
+  await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"), { waitUntil: "load" });
+  await assertFloor(page.getByPlaceholder("e.g. before rain reshuffle"), "history save-point input");
+  await expectNoHorizontalScroll(page);
+});

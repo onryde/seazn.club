@@ -169,7 +169,9 @@ export function TeamSquadEditor({
             disabled={!canEdit}
             value={m.squad_number ?? ""}
             onChange={(e) => update(i, { squad_number: e.target.value ? Number(e.target.value) : null })}
-            className="input w-16 px-2 py-1"
+            // `.input`'s own padding loses to `px-2 py-1` under Tailwind's
+            // utilities layer (S13/#422 W11). `min-h-11` survives it.
+            className="input min-h-11 w-16 px-2 py-1"
             aria-label={msg("clubs.squad.noAria", { name: m.full_name })}
           />
           <label className="flex items-center gap-1 text-slate-500">
@@ -206,7 +208,7 @@ export function TeamSquadEditor({
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder={msg("clubs.squad.find")}
-            className="input w-40 px-2 py-1"
+            className="input min-h-11 w-40 px-2 py-1"
           />
           {candidates.map((p) => (
             <button
