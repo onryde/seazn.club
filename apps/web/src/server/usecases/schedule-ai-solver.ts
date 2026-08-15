@@ -38,17 +38,32 @@
 //      visible, not merely correct. Every path fills {@link SolverTelemetry}.
 //
 // UNLIKE THE Z3-ERA VERSION, this module does NOT wrap the call in its own
-// busy-gate/wall-clock race. Those existed only because `repairDecomposed`
-// serialises per process and cannot be cancelled (its `resetZ3()` tears down
-// a shared WASM context) — "a run parked behind another run's solve would
-// therefore sit past its own deadline with the engine reporting a perfectly
-// healthy elapsed time". `buildSchedule` does not have that problem: it has
-// its OWN admission control (`MAX_SOLVER_QUEUE`, checked FIRST, declining
-// rather than queueing past two in flight) and its OWN hard transport
-// deadline (`placement-client.ts`'s gRPC channel deadline plus a JS watchdog,
-// both derived from `wallMs`) — the same guarantees this module used to build
-// by hand, already provided one layer down. BUILD/POLISH/REFLOW already call
-// `buildSchedule` directly with no wrapper for exactly this reason
+// busy-gate/wall-clock race. Those existed for TWO z3-specific reasons:
+// `repairDecomposed` serialises per process and cannot be cancelled (its
+// `resetZ3()` tears down a shared WASM context), so "a run parked behind
+// another run's solve would therefore sit past its own deadline with the
+// engine reporting a perfectly healthy elapsed time" — and this module's own
+// busy flag was the ONLY thing standing between a caller and that queue,
+// since nothing else serialised z3 access for this path.
+//
+// `buildSchedule` narrows the SAME risk rather than eliminating it outright:
+// it has its OWN admission control (`MAX_SOLVER_QUEUE`, checked FIRST,
+// declining rather than queueing past two in flight) and its OWN hard
+// transport deadline (`placement-client.ts`'s gRPC channel deadline plus a JS
+// watchdog, both derived from `wallMs`, guaranteeing the PROMISE settles) —
+// but `build.ts` STILL wraps every `buildSchedule` call, this one included,
+// in the SAME process-wide `withZ3LockAndReset` mutex BUILD/POLISH/REFLOW
+// already queue behind (kept deliberately, for reasons unrelated to this
+// module — see that file's own comment on why removing it needs its own
+// measurement first). So a repair attempt CAN still exceed its nominal
+// budget while queued behind an unrelated BUILD/POLISH/REFLOW/repair call on
+// this box — the watchdog still guarantees the call eventually settles, and
+// `SolverTelemetry.ms` correctly reports the full elapsed time including any
+// queue wait, so nothing is mis-reported. It does mean the run-level budget
+// bookkeeping (`solverBudgetLeft`, `SOLVER_MIN_BUDGET_MS`) is a target, not a
+// hard ceiling this module itself enforces — same as it already is for
+// BUILD/POLISH/REFLOW. BUILD/POLISH/REFLOW already call `buildSchedule`
+// directly with no wrapper of their own for exactly this reason
 // (`schedule.ts`'s R17 ruling: a redundant wrapper here is not neutral, it is
 // the same mistake `withZ3Teardown` was — see that ruling's own comment for
 // the measured latency cost of layering a second serialisation on top of one
