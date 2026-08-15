@@ -1068,9 +1068,12 @@ interface AutoSchedulePlan {
  *
  * Phase 2 must not run inside phase 1's transaction, and this is a hard rule
  * rather than a preference. `withTenant` pins a pooled connection for the whole
- * callback, and the solve is now up to `AUTO_SOLVER_WALL_MS` of z3, spent
- * behind a strictly FIFO lock that a concurrent click may already be holding —
- * so a solve inside the transaction is tens of seconds of idle-in-transaction
+ * callback, and the solve is now up to `AUTO_SOLVER_WALL_MS` spent on a remote
+ * call to the placement CP-SAT service (BUILD/POLISH directly, REFLOW through
+ * `reflowExisting` — since C4, 2026-08-14, none of the three modes calls z3 for
+ * scheduling any more; that gRPC round trip has its own queueing on the service
+ * side, `solver_busy`/`solver_unavailable` when it is saturated or unreachable)
+ * — so a solve inside the transaction is tens of seconds of idle-in-transaction
  * per organiser click, and a handful of concurrent clicks exhausts the pool and
  * stalls DB traffic for the entire application.
  *
@@ -1529,12 +1532,19 @@ export function autoSolverWallMs(): number {
 /**
  * The per-ORG cooldown on the auto pass. Ten runs per five minutes.
  *
- * WHY PER-ORG AND NOT GLOBAL. The resource being protected is a SERIALISED one:
- * `withZ3Lock` is a correctness device, not a throughput knob (`resetZ3` kills
- * pthreads process-wide), so every solve on an instance runs one at a time, for
- * up to `AUTO_SOLVER_WALL_MS`. The failure mode is therefore one org
- * monopolising a queue everybody shares, not aggregate load — and a global
- * limiter would punish precisely the tenants being starved. The key is the org.
+ * WHY PER-ORG AND NOT GLOBAL. The resource being protected is a SHARED,
+ * capacity-constrained one: every solve (BUILD/POLISH directly, REFLOW
+ * through `reflowExisting` — none of the three calls z3 for scheduling any
+ * more, since C4, 2026-08-14) is a remote call to the placement service,
+ * which admits only a small, fixed number of concurrent solves
+ * (`PLACEMENT_MAX_WORKERS` on the service side — see `services/placement/
+ * fly.toml`; this comment predates that cutover and its "one at a time via
+ * `withZ3Lock`" framing is no longer literally accurate, but the underlying
+ * shape — a small shared ceiling, not unlimited parallelism — still holds,
+ * which is why the numbers below have not been revisited). The failure mode
+ * is therefore one org monopolising a queue everybody shares, not aggregate
+ * load — and a global limiter would punish precisely the tenants being
+ * starved. The key is the org.
  *
  * WHERE THE NUMBERS COME FROM. Ten runs x `AUTO_SOLVER_WALL_MS` is bounded to
  * ~27% of an instance's solver capacity, whatever the wall is currently set
