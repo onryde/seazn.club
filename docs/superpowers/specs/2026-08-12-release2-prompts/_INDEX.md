@@ -1007,25 +1007,63 @@ front):
   the coverage): 9/9. Not a C4 regression — `mobile.spec.ts` is untouched
   by this branch and the race is pre-existing.
 
+**Code review round.** Dispatched before opening the PR, per `_RULES.md`
+§4. First pass (`ef051d0b`): no Critical issues. One Important finding,
+fixed — two doc comments at the mode-dispatch fork point
+(`schedule.ts:1135-1138`, `:1267-1272`) still described the OLD
+z3-repair-solver-based REFLOW after `61b17510` changed the mechanism
+under them, actively misleading at the exact fork point a future reader
+needs to trust. Two Minor findings: a `log.warn` likely to fire on a
+routine fraction of reflow calls rather than rare anomalies (kept as-is
+— the reviewer's own note called it "a judgment call, not a defect," and
+the code's justification stands); and a real coverage gap — no test
+exercised `buildSchedule` actually being called while a pin-contradiction
+is present among the FROZEN cards, because the existing collision test
+leaves the whole board placed, so the fully-frozen fast path intercepts
+before the solver is ever reached. Fixed: added a variant that also
+clears a third, distinct fixture (so a free fixture exists and the fast
+path's guard does not fire), confirming `buildSchedule` is genuinely
+invoked with the contradiction present. Mutation-checked: forcing the
+guard to always fire reds it with "expected 0 to be greater than 0" (the
+free fixture never got placed). A second, scoped review pass on this
+follow-up commit (`555ca251`) returned **Ready to merge: Yes** — traced
+both rewritten comments against current code by hand and confirmed the
+new test's guard-condition trace independently, finding no Critical or
+Important issues. It flagged two more Minor items: the SAME staleness
+class two screens away (`autoSchedule`'s phase-boundary comment and
+`autoScheduleCooldown`'s derivation both still cited `z3`/`withZ3Lock`,
+predating C4 entirely per `git blame`, 2026-08-06) — fixed in `3a676263`,
+and along the way found `PLACEMENT_MAX_WORKERS` is 2 in production
+(`fly.toml`), not the 1 the old comment assumed, so that comment's
+"one at a time" claim was already imprecise for BUILD/POLISH before C4;
+corrected without re-deriving the cooldown's own numbers, which the fix
+says explicitly. The other Minor (a structurally-dead OR branch in the
+new test's own assertion) was left as-is — the reviewer's own words,
+"inert, not wrong."
+
 **Verified (all real, fresh DB per run, real placement service, real prod
 build for e2e):**
-- apps/web (`src/server src/lib`): 4827 / 4778 / 0 / 49 (total / passed /
-  failed / pending). 0 `UNAUTHENTICATED`, 0 `solver_unavailable` outside
-  the known bracket case, every `.testResults[].name` inside the worktree.
+- apps/web (`src/server src/lib`): 4828 / 4779 / 0 / 49 (total / passed /
+  failed / pending), post-review-fixes. 0 `UNAUTHENTICATED`, 0
+  `solver_unavailable` outside the known bracket case, every
+  `.testResults[].name` inside the worktree.
 - engine: 4004 / 3985 / 0 / 19. `repair*.test.ts`/`z3-*.test.ts`/
   `placement-integration.test.ts` all pass — z3 path compiles and passes,
-  unreferenced by REFLOW.
+  unreferenced by REFLOW. (Unaffected by the review-response commit —
+  packages/engine untouched by it.)
 - e2e: `z3-auto-schedule.spec.ts` + `schedule-board.spec.ts`
   (`--project=parallel`, full both files) 22/22 — includes both
   brief-named tests by exact title. `mobile.spec.ts`'s schedule-reflow
-  coverage 9/9 across all 7 width projects.
+  coverage 9/9 across all 7 width projects. (Unaffected by the
+  review-response commit.)
 - smoke: 836/0, after fixing 3 real FAILs the first full run found — all
   three root-caused (the bracket/TBD finding above, twice, plus a stale
   `tiers_completed === 0` premise directly caused by this session's own
-  wiring change).
+  wiring change). (Unaffected by the review-response commit.)
 - Regression: churn-minimization, engine-tag wire forwarding (new,
-  mutation-checked), round-order closure — all exist, all pass.
-- i18n: diff touches only `schedule.ts`, 5 test files, `bench-reflow.ts`,
+  mutation-checked), round-order closure, frozen-collision-with-a-free-
+  fixture (new, mutation-checked) — all exist, all pass.
+- i18n: diff touches only `schedule.ts`, 6 test files, `bench-reflow.ts`,
   `scripts/smoke.ts` — zero user-facing strings, no locale dict update
   owed. `openapi:gen` — zero diff. `packages/engine` + `apps/web`
   typecheck and lint both clean.
