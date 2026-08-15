@@ -64,7 +64,12 @@ import { repairSchedule } from "../src/scheduling/repair.ts";
 import { slotFixtures, validateAssignments } from "../src/scheduling/calendar.ts";
 import { syntheticBoard } from "../src/scheduling/repair-synthetic-board.ts";
 import { resetZ3 } from "../src/scheduling/z3-load.ts";
-import type { Assignment, SchedulableFixture } from "../src/scheduling/calendar.ts";
+import type {
+  Assignment,
+  SchedulableFixture,
+  SlotConfig,
+  VerifyConfig,
+} from "../src/scheduling/calendar.ts";
 
 // `process.env.BENCH_<NAME>` first, so this still takes configuration when
 // invoked through a runner that owns `process.argv` itself (the vitest-based
@@ -86,7 +91,7 @@ const WITH_DEPS = arg("deps", "true") !== "false";
 interface ReflowBoard {
   schedulable: SchedulableFixture[];
   placed: Assignment[];
-  config: ReturnType<typeof syntheticBoard>["config"] & { startAt: number };
+  config: SlotConfig & VerifyConfig & { courts: string[] };
   dependencies: ReturnType<typeof syntheticBoard>["dependencies"];
 }
 
@@ -109,12 +114,29 @@ function reflowBoard(n: number, placedFraction: number, withDeps: boolean): Refl
     people: a.people,
   }));
   // `syntheticBoard`'s `config` types as `VerifyConfig` (the repair bench's
-  // own need) and never sets `startAt` — a `SlotConfig`-only field the
-  // VERIFIER never reads but `slotFixtures`/`buildSchedule` (the PLACER
-  // side, needed here and not in `bench-repair.ts`) require. The window's
-  // own floor is the correct value: it is where `syntheticBoard`'s own
-  // slots start.
-  const config = { ...board.config, startAt: board.config.window.from };
+  // own need), which makes `matchMinutes`/`window` OPTIONAL (`VerifyConfig`
+  // is `Partial<Pick<SlotConfig, "matchMinutes" | ... | "window">>` —
+  // calendar.ts:911 — the verifier can validate some rules without either)
+  // and never sets `startAt` — a `SlotConfig`-only field the VERIFIER never
+  // reads but `slotFixtures`/`buildSchedule` (the PLACER side, needed here
+  // and not in `bench-repair.ts`) require. The concrete object
+  // `syntheticBoard` returns always sets both (repair-synthetic-board.ts
+  // :176/185) — a type-level gap, not a real "might be absent" case here —
+  // so this is narrowed with a runtime check rather than a blind `!`,
+  // which would silently construct a bad `SlotConfig` if that ever stopped
+  // being true. The window's own floor is the correct `startAt`: it is
+  // where `syntheticBoard`'s own slots start.
+  const { matchMinutes, window } = board.config;
+  if (matchMinutes === undefined || window === undefined) {
+    throw new Error("syntheticBoard() must set matchMinutes and window for the reflow bench");
+  }
+  const config: SlotConfig & VerifyConfig & { courts: string[] } = {
+    ...board.config,
+    courts: [...board.config.courts],
+    matchMinutes,
+    window,
+    startAt: window.from,
+  };
   // `withDeps=false` isolates a DIFFERENT, real finding this bench surfaced
   // (documented in the PR body): `buildSchedule`'s own gate
   // (`rejectedBlockingConflicts`/`isBlockingForBuild`) does not catch every
