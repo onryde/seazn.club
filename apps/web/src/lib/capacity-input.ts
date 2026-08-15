@@ -324,16 +324,31 @@ function capacityEntrants(fixtures: readonly CapacityFixtureInput[]): CapacityEn
 /**
  * Build the pure lib's input from a division's fixtures + resolved
  * schedule config. Returns `null` when there is nothing useful to assess:
- * an unbounded window (no `endAt`) has no day span to check supply
- * against, and `tz` absent is the same "skip rather than guess UTC" rule
- * every day-shaped rule in the engine package already follows.
+ * an unbounded window (no `startAt` or no `endAt`) has no day span to check
+ * supply against, and `tz` absent is the same "skip rather than guess UTC"
+ * rule every day-shaped rule in the engine package already follows.
+ *
+ * BOTH ends are checked, and checking only `to` is the bug this guard
+ * shipped with: every caller encodes a missing bound as an INFINITY
+ * (`from: -Infinity` for no start date, `to: Infinity` for no end date —
+ * stages-panel.tsx, board/settings-panel.tsx), and an unparseable stored
+ * date arrives as `Date.parse` NaN. A non-finite `from` survived this guard
+ * and reached `calendarDays` -> `dayKeyInTz(-Infinity, tz)`, i.e.
+ * `Intl.DateTimeFormat.format(new Date(-Infinity))`, which throws
+ * `RangeError: Invalid time value` — thrown during render inside both call
+ * sites' `useMemo`, with no `error.tsx` anywhere under
+ * `app/o/[orgSlug]/**`, so it took the entire division page to the global
+ * error boundary (observed on stg 2026-08-15: a division with an end date
+ * and no start date). `Number.isFinite` rejects Infinity and NaN alike,
+ * which is exactly the set of values the day-bucket math cannot format.
  */
 export function capacityInputForFixtures(
   fixtures: readonly CapacityFixtureInput[],
   config: CapacityConfigInput,
   divisionId: string,
 ): CapacityInput | null {
-  if (config.window === undefined || !Number.isFinite(config.window.to) || config.tz === undefined) return null;
+  if (config.window === undefined || config.tz === undefined) return null;
+  if (!Number.isFinite(config.window.from) || !Number.isFinite(config.window.to)) return null;
   return {
     matchMinutes: config.matchMinutes,
     gapMinutes: config.gapMinutes,

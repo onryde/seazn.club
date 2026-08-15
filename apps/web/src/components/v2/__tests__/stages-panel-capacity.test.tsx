@@ -48,6 +48,25 @@ describe("capacityForStage", () => {
     expect(report).toBeNull();
   });
 
+  // The shipped crash: a division with an END date and no START date. The
+  // window built here is `{ from: -Infinity, to: <finite> }`, which used to
+  // pass the skip guard and throw `RangeError: Invalid time value` out of the
+  // `capacityByStage` useMemo — with no error.tsx under
+  // app/o/[orgSlug]/**, that is the global "Something went wrong" boundary
+  // on the whole division page, every tab.
+  it("returns null when endAt is set but startAt is not (unbounded start — must not throw)", () => {
+    const call = () =>
+      capacityForStage(
+        "s1",
+        [fx("s1", "scheduled", "A", "B")],
+        { endAt: "2026-08-13T22:59:00.000Z", matchMinutes: 30, gapMinutes: 0 },
+        ORG_TZ,
+        DIV,
+      );
+    expect(call).not.toThrow();
+    expect(call()).toBeNull();
+  });
+
   it("is impossible for a stage with 6 round-robin fixtures and a 1-hour window on one court", () => {
     const fixtures: FxRow[] = [
       fx("s1", "scheduled", "A", "B"),
