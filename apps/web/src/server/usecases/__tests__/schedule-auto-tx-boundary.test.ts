@@ -1,14 +1,18 @@
-// The auto pass must not hold a database transaction across the z3 solve.
+// The auto pass must not hold a database transaction across the solve —
+// z3's, for BUILD/POLISH historically, or the placement service's gRPC round
+// trip, which is what BUILD/POLISH and (since C4, 2026-08-14, z3 retirement
+// stage A) REFLOW all use now.
 //
 // THE HAZARD. `withTenant` pins a pooled connection for the whole of its
 // callback. Before the solver wave the in-transaction work was a synchronous
 // `slotFixtures` pass — microseconds. It is now up to `AUTO_SOLVER_WALL_MS` of
-// solving, plus a `resetZ3()` that must first queue behind any concurrent
-// solve's `withZ3Lock`. A solve inside the transaction is therefore tens of
-// seconds of idle-in-transaction per organiser click, and a handful of
-// concurrent clicks exhausts the pool and stalls database traffic for the whole
-// application — an outage reached from a feature that "works" in every
-// functional test.
+// solving (a network round trip to the placement service, or — historically,
+// pre-C4, for REFLOW — a `resetZ3()` that must first queue behind any
+// concurrent solve's `withZ3Lock`). A solve inside the transaction is
+// therefore tens of seconds of idle-in-transaction per organiser click, and a
+// handful of concurrent clicks exhausts the pool and stalls database traffic
+// for the whole application — an outage reached from a feature that "works"
+// in every functional test.
 //
 // WHY THIS IS A STRUCTURAL ASSERTION AND NOT A TIMING ONE. "The transaction was
 // short" is a claim about a machine, not about the code: it passes on an idle
@@ -202,10 +206,18 @@ describe.skipIf(!HAS_DB)(
       expect(tx.depth).toBe(0);
     }, 120_000);
 
-    it("enters the repair solver at transaction depth 0 (reflow)", async () => {
+    it("enters the placement client at transaction depth 0 (reflow)", async () => {
       const { auth, stageId } = await seedStage();
-      // Put a board down so REFLOW has an incumbent and actually reaches the
-      // repair solver rather than short-circuiting.
+      // Put a board down so REFLOW has an incumbent, THEN clear exactly one
+      // fixture's slot before reflowing. C4 (2026-08-14, z3 retirement stage
+      // A) changed what "has an incumbent" needs to mean here: `reflowExisting`
+      // now freezes every already-placed card (locked or not) and skips
+      // calling the placement client ENTIRELY when nothing is left free to
+      // place — a fully-applied board alone (the original setup) now takes
+      // that fast path and never reaches `buildSchedule` at all, which would
+      // make this test vacuously pass with an EMPTY `tx.solveDepths` rather
+      // than genuinely observing the depth the client was entered at. One
+      // cleared fixture is enough to keep the client's own entry reachable.
       const first = await autoSchedule(auth, stageId, {
         only_unlocked: false,
         mode: "build",
@@ -218,6 +230,9 @@ describe.skipIf(!HAS_DB)(
         })),
         source: "auto",
       });
+      await sql`
+        update fixtures set scheduled_at = null, court_label = null
+        where id = ${first.assignments[0]!.fixture_id}`;
       tx.solveDepths = [];
       tx.opens = 0;
 

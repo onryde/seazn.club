@@ -24,10 +24,7 @@ import {
   dayKeyInTz,
   deltaConflicts,
   isBlockingConflict,
-  repairSchedule,
-  RepairVerificationError,
   roundOrderConflicts,
-  RULE_BY_REASON,
   slotFixtures,
   TIER_COUNT,
   validateAssignments,
@@ -36,12 +33,10 @@ import {
   zonedTimeToUtc,
   type Assignment,
   type BuildResult,
-  type BuildStatus,
   type Conflict,
   type ConflictDetail,
   type HardConstraint,
   type OrderDependency,
-  type RepairResult,
   type RuleFixture,
   type SchedulableFixture,
   type SlotConfig,
@@ -1073,9 +1068,12 @@ interface AutoSchedulePlan {
  *
  * Phase 2 must not run inside phase 1's transaction, and this is a hard rule
  * rather than a preference. `withTenant` pins a pooled connection for the whole
- * callback, and the solve is now up to `AUTO_SOLVER_WALL_MS` of z3, spent
- * behind a strictly FIFO lock that a concurrent click may already be holding —
- * so a solve inside the transaction is tens of seconds of idle-in-transaction
+ * callback, and the solve is now up to `AUTO_SOLVER_WALL_MS` spent on a remote
+ * call to the placement CP-SAT service (BUILD/POLISH directly, REFLOW through
+ * `reflowExisting` — since C4, 2026-08-14, none of the three modes calls z3 for
+ * scheduling any more; that gRPC round trip has its own queueing on the service
+ * side, `solver_busy`/`solver_unavailable` when it is saturated or unreachable)
+ * — so a solve inside the transaction is tens of seconds of idle-in-transaction
  * per organiser click, and a handful of concurrent clicks exhausts the pool and
  * stalls DB traffic for the entire application.
  *
@@ -1140,7 +1138,9 @@ export async function autoSchedule(
     // ruling 2026-08-12, #pins-in-build) — scope-locked fixtures (Jul3/03 §4
     // two-site safety) pin the same way. Hoisted out of the `schedulable`
     // builder below because THREE things read it now — the `locked` anchor,
-    // REFLOW's incumbent board, and the set the repair solver may not move.
+    // REFLOW's incumbent board, and the set `buildSchedule` may not move
+    // (C4, 2026-08-14: `reflowExisting`'s `pinned` arg, frozen alongside
+    // `placed` — see that function's own doc comment).
     //
     // `only_unlocked` used to gate this filter too, which was the bug: the
     // primary Auto-schedule button always posts `only_unlocked: false` (to
@@ -1268,11 +1268,16 @@ export async function autoSchedule(
 
   // ---- Phase 2: solve. Nothing below here holds a database connection.
   //
-  // Three modes, ONE config (design D2). BUILD and POLISH go to the tier solver;
-  // REFLOW goes to the repair solver, because "the fewest cards moved" is a
-  // property an ascending-k walk proves and a re-place cannot — `slotFixtures`
-  // re-places every unlocked card even when nothing is wrong, which is the
-  // defect this mode replaces.
+  // Three modes, ONE config (design D2), and — since C4 (2026-08-14, z3
+  // retirement stage A) — ONE solver behind all three: `buildSchedule`, the
+  // placement CP-SAT service. BUILD and POLISH call it directly, below.
+  // REFLOW calls it through `reflowExisting`, which is not a thin wrapper:
+  // `buildSchedule` has no "fewest cards moved" term of its own the way
+  // z3's old ascending-k repair walk did, so `reflowExisting` freezes every
+  // already-placed card (locked or not) via the same `frozen`/`current`
+  // mechanism POLISH uses (R20) to keep that property without one — see
+  // `reflowExisting`'s own doc comment for the full rationale, the accepted
+  // trade-off, and the reconciliation this makes necessary.
   const { schedulable, config, board, dependencies, total } = plan;
   // D2 capacity pre-check: arithmetic-provable impossibility refuses with a
   // typed 422 BEFORE either solver is reached — no db connection is held
@@ -1527,12 +1532,19 @@ export function autoSolverWallMs(): number {
 /**
  * The per-ORG cooldown on the auto pass. Ten runs per five minutes.
  *
- * WHY PER-ORG AND NOT GLOBAL. The resource being protected is a SERIALISED one:
- * `withZ3Lock` is a correctness device, not a throughput knob (`resetZ3` kills
- * pthreads process-wide), so every solve on an instance runs one at a time, for
- * up to `AUTO_SOLVER_WALL_MS`. The failure mode is therefore one org
- * monopolising a queue everybody shares, not aggregate load — and a global
- * limiter would punish precisely the tenants being starved. The key is the org.
+ * WHY PER-ORG AND NOT GLOBAL. The resource being protected is a SHARED,
+ * capacity-constrained one: every solve (BUILD/POLISH directly, REFLOW
+ * through `reflowExisting` — none of the three calls z3 for scheduling any
+ * more, since C4, 2026-08-14) is a remote call to the placement service,
+ * which admits only a small, fixed number of concurrent solves
+ * (`PLACEMENT_MAX_WORKERS` on the service side — see `services/placement/
+ * fly.toml`; this comment predates that cutover and its "one at a time via
+ * `withZ3Lock`" framing is no longer literally accurate, but the underlying
+ * shape — a small shared ceiling, not unlimited parallelism — still holds,
+ * which is why the numbers below have not been revisited). The failure mode
+ * is therefore one org monopolising a queue everybody shares, not aggregate
+ * load — and a global limiter would punish precisely the tenants being
+ * starved. The key is the org.
  *
  * WHERE THE NUMBERS COME FROM. Ten runs x `AUTO_SOLVER_WALL_MS` is bounded to
  * ~27% of an instance's solver capacity, whatever the wall is currently set
@@ -1783,19 +1795,40 @@ export function lockedFixtureIds(
 }
 
 /**
- * REFLOW: the board as it stands IS the proposal, and `repairSchedule` finds the
- * fewest moves that make it legal. A board with nothing wrong comes back k = 0
- * and moves nothing, which is exactly what `slotFixtures` could not express.
+ * REFLOW (C4, 2026-08-14 — z3 retirement stage A): routed through the same
+ * placement CP-SAT service BUILD/POLISH already call, instead of z3's
+ * ascending-k repair solver. `pinned` (schedule-locked) and `placed`
+ * (already on the board, just not locked) are BOTH frozen for this solve —
+ * the exact mechanism POLISH already uses (R20, `BuildInput.frozen` +
+ * `current`, resolved by `publishedSlotOf` in `build.ts`) — because
+ * `buildSchedule` has no "fewest cards moved" term of its own the way the
+ * repair solver's ascending-k walk did; pinning every already-placed card is
+ * what makes this mode keep that property without one. Owner's ruling on a
+ * design gap this session found beyond the brief's literal "wiring" framing
+ * — see the C4 status-log entry in
+ * `docs/superpowers/specs/2026-08-12-release2-prompts/_INDEX.md`.
  *
- * The result is mapped onto a `BuildResult` so the caller has one shape for all
- * three modes. Two rules govern that mapping and both are load-bearing:
+ * TRADE-OFF, explicitly accepted: REFLOW can no longer rearrange
+ * already-placed UNLOCKED cards to resolve a conflict that exists AMONG
+ * them — it can only place cards that have no slot yet, around everything
+ * already placed. `repairSchedule` could do this (moving one of a colliding
+ * pair); `buildSchedule` cannot, because neither `pinned` nor `placed` is
+ * ever a free variable here. Proven non-crashing rather than assumed —
+ * `schedule-reflow-cpsat.test.ts`'s two-card-collision case.
  *
- *   * a `timeout` or an `infeasible` returns the ORIGINAL board, never a
- *     partially-repaired one. A half-repaired board is worse than the board the
- *     organiser already has, because it has been moved without being fixed.
- *   * `tiersCompleted` is 0 and stays 0: the repair solver has no tier ladder,
- *     and reporting a number from a ladder it never walked would make an
- *     optimality claim (`tiers_completed === tiers_total`) that nothing proved.
+ * RECONCILIATION BELOW IS NOT REDUNDANT PLUMBING, and that was measured, not
+ * assumed. `buildSchedule`'s SUCCESS/`improved` exit anchors a `current`-only
+ * frozen id correctly (its own `pinnedAssignments`), but every FALLBACK exit
+ * — `already_optimal`, a proved tie, `verifier_rejected`, `not_searched` —
+ * reports `seed.assignments`, the PLAIN unpinned greedy seed, which has no
+ * idea a `current`-only id (no `.locked`) is supposed to stay put. Confirmed
+ * empirically against unmodified `build.ts`: a two-fixture repro, both
+ * `current`-anchored, mocked onto the `already_optimal` fallback, swapped
+ * both fixtures' courts. That fallback is not a corner — it is the ORDINARY
+ * shape of a reflow over a mostly-already-placed board (nothing to improve,
+ * or the budget does not prove an improvement), so every frozen id's slot in
+ * the board this function returns is read from `known` directly below,
+ * never trusted off `buildSchedule`'s own `assignments`.
  */
 /** A `BuildResult` plus the one fact only the REFLOW path is in a position to
  *  know: how many of `moved` were cards it placed for the first time rather than
@@ -1807,223 +1840,154 @@ async function reflowExisting(args: {
   /** Where the cards this run may move sit right now. */
   placed: readonly Assignment[];
   /** Cards this run may NOT move — obstacles to the solver, still part of the
-   *  proposal it hands back, exactly as `slotFixtures` returned them. */
+   *  proposal it hands back. */
   pinned: readonly Assignment[];
   config: SlotConfig & VerifyConfig & { courts: string[] };
   board: readonly Assignment[];
-  /** The division's direct feed edges. Threaded to BOTH the repair solver and
-   *  the verifier in `settle` — see `AutoSchedulePlan.dependencies`. Wiring only
-   *  the solver would stop this mode PRODUCING an inverted board while leaving
-   *  it unable to REPORT one it was handed and cannot move. */
+  /** The division's direct feed edges — threaded to both `buildSchedule` and
+   *  the fresh verifier pass below (see `AutoSchedulePlan.dependencies`). */
   dependencies: readonly OrderDependency[];
 }): Promise<ReflowResult> {
   const startedAt = Date.now();
   const total = args.schedulable.length;
-  const immovable = [...args.board, ...args.pinned];
-  const onBoard = new Set(args.placed.map((a) => a.fixtureId));
+  /** Every card this run may not move, keyed by id — `placed` first so a
+   *  fixture appearing in both (should never happen; `placed`/`pinned` are
+   *  constructed as a partition upstream) resolves to its locked slot. */
+  const known = new Map<string, Assignment>([
+    ...args.placed.map((a) => [a.fixtureId, a] as const),
+    ...args.pinned.map((a) => [a.fixtureId, a] as const),
+  ]);
+  const frozen = [...known.keys()];
 
-  // A repair solver MOVES cards; it cannot conjure one onto a board it is not
-  // on. "Re-flow unlocked" is fired from the UNSCHEDULED section of the stages
-  // panel, so the ordinary case is a stage where nothing is placed at all —
-  // under a bare `repairSchedule` that is a `clean` verdict over an empty
-  // proposal, and the organiser's click does nothing whatsoever. Greedy seeds
-  // exactly the cards with no placement yet; every card already on the board
-  // keeps the slot it has, which is the property this mode exists for.
-  const unseeded = args.schedulable.filter((f) => !onBoard.has(f.id) && f.locked === undefined);
-  const seed =
-    unseeded.length > 0
-      ? slotFixtures({
-          fixtures: unseeded,
-          config: args.config,
-          existing: [...immovable, ...args.placed],
-        })
-      : { assignments: [] as Assignment[], conflicts: [] as Conflict[] };
-  const proposal = [...args.placed, ...seed.assignments];
-  /**
-   * Cards this run PUT somewhere, as a set of ids.
-   *
-   * A greedy seed is a move. Counting only the repair solver's own moves made a
-   * run that scheduled an entire empty stage report `moved: 0`, and the result
-   * strip renders that as "nothing moved" — the plainest possible contradiction
-   * of what the organiser just watched happen.
-   *
-   * A SET, not a sum, because the repair solver may go on to move a card greedy
-   * has just seeded and that is one card touched, not two.
-   */
-  const seeded = new Set(seed.assignments.map((a) => a.fixtureId));
-  const touched = (alsoMoved: readonly string[] = []): number =>
-    new Set([...seeded, ...alsoMoved]).size;
-
-  const settle = (
-    assignments: readonly Assignment[],
-    status: BuildStatus,
-    engine: BuildResult["engine"],
-    moved: number,
-    budgetExpired: boolean,
-  ): ReflowResult => {
-    // The pinned cards rejoin the proposal here and NOT in `existing` above:
-    // they are this stage's cards, the caller applies the whole set, and
-    // `slotFixtures` has always returned them.
-    const full = [...assignments, ...args.pinned];
-    const placedIds = new Set(full.map((a) => a.fixtureId));
-    const conflicts: Conflict[] = validateAssignments(
-      full,
-      args.config,
-      args.board,
-      args.dependencies,
-    );
-    // `validateAssignments` answers for the rows it is handed and cannot report
-    // an ABSENCE, so a card nothing could place would come back clean.
-    //
-    // Two sources, in descending order of how well established they are:
-    // greedy's own diagnosis, which names the binding constraint, then a bare
-    // `no_slot`. The order is right; the FILTER on the first source is the part
-    // that has to be stated, and it is the engine's `conflictsFor` correction
-    // (a5b2c4d7) applied to this copy of the same rule.
-    //
-    // `seed.conflicts` is NOT "what greedy could not do". `slotFixtures` also
-    // files rows about cards it DID place — the `commit` person-overlap loop,
-    // and the clash it reports rather than fixes when a `locked` slot collides
-    // — and source 1 short-circuits the one below it. So a card greedy placed
-    // and something later removed (a repair path that stops being total over
-    // its proposal) was handed a row describing the placement greedy had just
-    // MADE, instead of the fact that the card is now on nobody's timetable.
-    // `person_overlap` is blocking, so that also shows the organiser a reason
-    // their board cannot be applied, about a card that is not on their board.
-    //
-    // `seeded` is the raw seed's placements — the same set `touched()` and the
-    // `seeded` count read. Deliberately not a second copy: two derivations of
-    // "what greedy placed" in one function is how this rule forked from the
-    // engine's in the first place.
-    for (const f of args.schedulable) {
-      if (placedIds.has(f.id)) continue;
-      const greedySaid = seeded.has(f.id)
-        ? []
-        : seed.conflicts.filter((c) => c.fixtureId === f.id);
-      if (greedySaid.length > 0) {
-        conflicts.push(...greedySaid);
-        continue;
-      }
-      conflicts.push({
-        fixtureId: f.id,
-        reason: "no_slot",
-        // Structured (C3, 2026-08-13 design amendment) — this copy of
-        // build.ts's own REFLOW rule (see the comment above this loop) reports
-        // the same `no_slot_lattice` kind build.ts:809 does, with no fields
-        // beyond `kind` (design doc's per-kind table, row 24).
-        details: { kind: "no_slot_lattice" },
-        rule: RULE_BY_REASON.no_slot,
-      });
-    }
+  // A THIRD finding, beyond the reconciliation gap above: the placement
+  // service's own wire contract refuses a request naming ZERO movable
+  // fixtures ("fixtures must not be empty", `schema.py`) — silently, on a
+  // validation branch that (unlike its siblings) carries no log call, so
+  // this was found by reading the service's own source, not a log line.
+  // Measured against the real service: `solveBuild` resolves (no
+  // exception `buildSchedule`'s own catch would report) with
+  // `status: "ERROR"`, which `buildSchedule` maps to `solver_unavailable`
+  // — indistinguishable, from this caller's side, from a genuine outage.
+  //
+  // A reflow with nothing left to place — every schedulable fixture
+  // already frozen — is the ORDINARY shape of "click Re-flow a second
+  // time, nothing changed", not a corner, so `buildSchedule` must never
+  // be asked in the first place here. Mirrors the OLD z3-repair path's
+  // `clean, k=0` verdict for the identical shape: verify the untouched
+  // board directly and hand it back.
+  if (![...args.schedulable].some((f) => !known.has(f.id))) {
+    const assignments = [...known.values()];
     return {
-      assignments: full,
-      conflicts,
-      metrics: boardMetrics(full, args.config.courts, total),
-      engine,
-      status,
+      assignments,
+      conflicts: validateAssignments(assignments, args.config, args.board, args.dependencies),
+      metrics: boardMetrics(assignments, args.config.courts, total),
+      engine: "greedy",
+      status: "ok",
       tiersCompleted: 0,
-      budgetExpired,
+      budgetExpired: false,
       elapsedMs: Date.now() - startedAt,
-      moved,
-      seeded: seeded.size,
-      // REFLOW runs the repair solver, which is bounded by its own budget and
-      // never opens an LNS window, so neither of the build solver's two rlimit
-      // audit fields has a value to report here. Zero and empty are the honest
-      // readings, not placeholders: `rlimitSpent` is what THIS run drew from
-      // the build budget, and it drew nothing.
+      moved: 0,
+      seeded: 0,
       rlimitSpent: 0,
       lnsWindowRlimits: [],
-      // `lost` is baseline rows this run could not place (R21). REFLOW's
-      // baseline is where the movable cards sit RIGHT NOW — `args.placed` —
-      // since `args.pinned` cannot move and rejoins `full` unconditionally.
-      //
-      // A TRIPWIRE, NOT A MEASUREMENT, and saying so is the point. No input
-      // this code can receive today makes it non-zero: `repairSchedule` is
-      // TOTAL over the proposal on every return path — `clean` hands back
-      // `[...proposal]` (repair.ts:287) and both `repaired` returns come off
-      // `proposal.map(…)` (repair.ts:1012), which is 1:1 by construction — and
-      // the `timeout` and `infeasible` arms below settle the proposal itself.
-      // `proposal` is `[...args.placed, …]`, so every baseline row is in it.
-      // Stubbing this to `lost: 0` therefore survives every functional reflow
-      // test in the suite; that is what makes it worth a comment.
-      //
-      // It is computed anyway because a repair that silently drops a card the
-      // organiser had scheduled is exactly the harm this number exists to
-      // surface, and totality is a property of TODAY's solver rather than a
-      // guarantee of the interface. `lost: 0` would hide the day that changes,
-      // and `moved` no longer carries it.
-      //
-      // But a guard nothing can trip is indistinguishable from dead code, so it
-      // is PROVEN live rather than argued for: `schedule-reflow-lost.test.ts`
-      // mocks a `repaired` result with one row removed and pins both ends — the
-      // count here, and the `no_slot` row the absence loop above raises for the
-      // dropped fixture. Do not delete this line without deleting that file.
-      lost: args.placed.filter((a) => !placedIds.has(a.fixtureId)).length,
+      lost: 0,
     };
-  };
+  }
 
-  let repaired: RepairResult;
-  try {
-    repaired = await repairSchedule({
-      proposal,
-      existing: immovable,
-      config: args.config,
-      dependencies: args.dependencies,
-      // The same wall the tier solver is held to. `repairSchedule`'s own default
-      // is 20s, and a clean board is answered without loading the WASM at all, so
-      // this only binds the run that is actually searching.
-      budgetMs: autoSolverWallMs(),
-    });
-  } catch (err) {
-    // `RepairVerificationError` (C1, 2026-08-12 round-order design fix-loop
-    // finding 1): z3's own constraint families do not include round order —
-    // out of scope by the design doc's own ruling, "the verifier now catches
-    // them" — so on an ordinary REFLOW (lock two cards, Auto-schedule; REFLOW
-    // is the DEFAULT mode) z3 can find a model where nothing needs to move
-    // while the REAL verifier still rejects `proposal` for a round-order
-    // breach z3 was never taught. Only ever thrown with `kind:
-    // "encoding_drift"` here — `repairSchedule` (unlike `repairAndVerify`,
-    // which this call site does NOT use) never throws
-    // `"verifier_rejected"` itself.
-    //
-    // Mirrors `build.ts`'s OWN handling of the placement solver's equivalent
-    // disagreement (`BuildStatus.verifier_rejected`: "the encoder and
-    // validateAssignments disagreed... the greedy seed is returned and the
-    // disagreement is logged") rather than inventing a new status or a
-    // synthesized conflict: `settle(proposal, ...)` re-runs the REAL
-    // `validateAssignments` over `full = [...proposal, ...args.pinned]` — a
-    // strict superset of what `RepairVerificationError.conflicts` (`pre`)
-    // already found dirty within `proposal` alone (adding rows to an
-    // `assignments` array can only add pairwise comparisons, never remove
-    // one already found) — so the organiser is handed the real,
-    // already-computed conflict through the ordinary conflict-reporting
-    // path, never a raw 500 from `http.ts`'s generic catch-all.
-    if (err instanceof RepairVerificationError) {
-      log.warn(
-        { kind: err.kind, conflicts: err.conflicts.map((c) => `${c.fixtureId}:${c.reason}`) },
-        "schedule: reflow repair encoding drift — verifier rejected the repaired board, falling back to the untouched proposal",
-      );
-      return settle(proposal, "verifier_rejected", "greedy", touched(), false);
-    }
-    throw err;
+  const out = await buildSchedule({
+    fixtures: args.schedulable,
+    config: args.config,
+    existing: args.board,
+    dependencies: args.dependencies,
+    wallMs: autoSolverWallMs(),
+    frozen,
+    // Empty means "no board" to `buildSchedule` (an empty array is NOT sent
+    // as one) — mirrors the BUILD/POLISH call site's identical guard on
+    // `currentBoard`, and matters here for the same reason: REFLOW's
+    // ordinary case is a stage with nothing on it yet at all.
+    ...(known.size > 0 ? { current: [...known.values()] } : {}),
+  });
+
+  // THE RECONCILIATION (see the doc comment above): every frozen id's slot
+  // comes from `known`, never from `out.assignments`, regardless of which
+  // exit produced them.
+  const assignments = [
+    ...out.assignments.filter((a) => !known.has(a.fixtureId)),
+    ...known.values(),
+  ];
+  // Structured telemetry for the branch this session's finding is about: how
+  // often the fallback actually NEEDED reconciling (not merely took the
+  // fallback exit — the success path's own `pinnedAssignments` already
+  // agrees with `known`, so this counts real corrections only). `log.warn`,
+  // not `info`: a nonzero count means `buildSchedule`'s own board would have
+  // silently relocated an already-placed card had this function trusted it.
+  const outById = new Map(out.assignments.map((a) => [a.fixtureId, a] as const));
+  const correctedCount = [...known.entries()].filter(([id, a]) => {
+    const reported = outById.get(id);
+    return reported === undefined || reported.court !== a.court || reported.startAt !== a.startAt;
+  }).length;
+  if (correctedCount > 0) {
+    log.warn(
+      { engine: out.engine, status: out.status, frozenCount: known.size, correctedCount },
+      "schedule: reflow reconciled frozen cards back onto their known slots — buildSchedule's own board would have moved at least one",
+    );
   }
-  switch (repaired.status) {
-    case "clean":
-      // `engine: "greedy"`, and NOT because nothing happened — `clean` is also
-      // the verdict after greedy has just seeded an entire empty stage, where
-      // the board is emphatically not untouched. It is because the REPAIR SOLVER
-      // changed nothing: whatever sits on this board came from greedy, and
-      // `engine` names where the board came from.
-      return settle(proposal, "ok", "greedy", touched(), false);
-    case "repaired":
-      return settle(repaired.assignments, "ok", "z3", touched(repaired.moved), false);
-    // A `timeout` and an `infeasible` both return the ORIGINAL board, so the
-    // only thing this run moved is whatever greedy seeded onto it.
-    case "timeout":
-      return settle(proposal, "ok", "greedy", touched(), true);
-    case "infeasible":
-      return settle(proposal, "infeasible", "greedy", touched(), false);
-  }
+  const presentIds = new Set(assignments.map((a) => a.fixtureId));
+  const conflicts: Conflict[] = [
+    ...validateAssignments(assignments, args.config, args.board, args.dependencies),
+    // `validateAssignments` iterates the rows it is handed and cannot report
+    // an ABSENCE, so a free fixture `buildSchedule` could not place needs
+    // its diagnosis read off `out.conflicts` directly — the engine's own
+    // `conflictsFor` machinery already does this better than a bare
+    // `no_slot` could (greedy's diagnosis when there is one, a PROVEN
+    // `no_slot` otherwise). Filtered to ids genuinely missing from the
+    // RECONCILED board: a frozen id can be absent from `out.assignments` on
+    // the fallback path above (its naive-seed placement disqualified for a
+    // blocking conflict it would not have had at its real, reconciled slot)
+    // without being absent here, and a stale row about it must not survive
+    // reconciliation.
+    ...out.conflicts.filter((c) => !presentIds.has(c.fixtureId)),
+  ];
+
+  // Every free (non-`known`) fixture that made it onto the board is a
+  // first-time placement, by construction — `known` is exactly "already has
+  // a slot", so its complement never did. It is now ALSO every relocation:
+  // reconciliation above means a `known` id never moves, so `moved` and
+  // `seeded` are always equal (a direct, testable consequence of the
+  // churn-minimization ruling — see the sibling assertion in
+  // `schedule-reflow-cpsat.test.ts`).
+  const seeded = assignments.filter((a) => !known.has(a.fixtureId)).length;
+
+  return {
+    assignments,
+    conflicts,
+    metrics: boardMetrics(assignments, args.config.courts, total),
+    // Forwarded, never re-derived — `out.engine` already says where the FREE
+    // fixtures' placements came from: `"optimized"` on a genuine
+    // improvement, `"greedy"` on every fallback, including "nothing needed
+    // placing at all" (this mode's most common shape). Exactly how
+    // BUILD/POLISH already report the same field.
+    engine: out.engine,
+    status: out.status,
+    ...(out.notSearchedReason !== undefined ? { notSearchedReason: out.notSearchedReason } : {}),
+    tiersCompleted: out.tiersCompleted,
+    budgetExpired: out.budgetExpired,
+    elapsedMs: Date.now() - startedAt,
+    moved: seeded,
+    seeded,
+    rlimitSpent: out.rlimitSpent,
+    lnsWindowRlimits: out.lnsWindowRlimits,
+    // ALWAYS 0, and now BY CONSTRUCTION rather than by measurement: `known`
+    // is unioned into `assignments` unconditionally above, so a `placed` or
+    // `pinned` row can never be absent from the board this function
+    // returns. Was a tripwire proven live by mocking a `repairSchedule` row
+    // drop (`schedule-reflow-lost.test.ts`, retired with this change —
+    // `repairSchedule` is not called on this path at all any more, so that
+    // file's mock is inert; see the PR body for why deleting the guard is
+    // safe rather than silent).
+    lost: 0,
+    ...(out.contradictoryPins !== undefined ? { contradictoryPins: out.contradictoryPins } : {}),
+  };
 }
 
 const roundToMinute = (t: number): number => Math.ceil(t / MS_PER_MIN) * MS_PER_MIN;

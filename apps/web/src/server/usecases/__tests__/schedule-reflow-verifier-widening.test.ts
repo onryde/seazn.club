@@ -249,32 +249,41 @@ describe.skipIf(!HAS_DB)(
     /**
      * FINDING 1's OWN regression test (C1, 2026-08-12 round-order design
      * fix-loop): a board where the ONLY thing wrong is round order, pinned
-     * against a card the repair solver cannot move. `rest`/`court`/etc. are
-     * real `RepairFamily` members the repair solver can legitimately RELAX
-     * and report honestly (see the test above, and the court-clash test
-     * below, both now kept clean of incidental round noise for exactly this
-     * reason) — round order is not one of them at all (the design doc's own
-     * "out of scope" ruling), so it can NEVER appear in a relaxed family, and
-     * a board dirty ONLY by round order forces `solveRepair`'s
-     * "moved.length === 0 && relaxed.length === 0" branch: z3 finds a model
-     * satisfying every family it knows about, with nothing moved, while the
-     * REAL verifier still rejects the board — the `RepairVerificationError`
-     * "encoding_drift" shape.
+     * against a card the repair solver cannot move.
      *
-     * Only ONE card is locked, not every card — `solveRepair`'s own
-     * pre-existing-conflict check is scoped to the proposal (the UNLOCKED
-     * fixtures) and never looks at conflicts between two LOCKED cards, so
-     * "lock everything" makes the proposal empty and the check trivially
-     * clean, which is the opposite of what this test needs (see the inline
-     * comment at the lock site below).
+     * MECHANISM UPDATED BY C4 (2026-08-14, z3 retirement stage A) — the
+     * ORIGINAL bug and the reason this test exists are unchanged below, but
+     * HOW `reflowExisting` reaches "untouched board, conflict reported,
+     * never a 500" is now completely different, so read this historically:
+     * `solveRepair`'s "moved.length === 0 && relaxed.length === 0" branch
+     * and `RepairVerificationError`'s "encoding_drift" no longer exist on
+     * this path at all — `repairSchedule` is not called by REFLOW any more.
+     * What actually fires now: `round1` is locked and `round2`/`round3`
+     * (their `Other` siblings included) are unlocked but already PLACED, so
+     * under C4's ruling every one of the 6 fixtures is frozen — there is
+     * nothing left for a solver to place, so `reflowExisting`'s own
+     * "nothing free, don't even ask the placement service" fast path fires
+     * (see its doc comment: the service's wire contract refuses a request
+     * naming zero movable fixtures) and the known board is verified
+     * directly. Same observable outcome the original bug fix promised
+     * (nothing moved, the real conflict rides along, never a 500) — proven
+     * by a structurally different, no-longer-solver-touching mechanism.
      *
-     * Before the fix this reached the organiser as an unhandled exception —
-     * `apps/web/src/server/api-v1/http.ts`'s generic catch-all turned it into
-     * an opaque `{ok:false, code:"INTERNAL"}` at HTTP 500. `reflowExisting` now
-     * catches it and degrades exactly the way `buildSchedule` already degrades
-     * its own solver/verifier disagreement: the untouched board comes back
-     * with `engine:"greedy"`, `status:"verifier_rejected"`, and the real,
-     * already-computed conflict — never a 500.
+     * (Historical, for the ORIGINAL finding this test pins:) `rest`/`court`/
+     * etc. are real `RepairFamily` members the repair solver could
+     * legitimately RELAX and report honestly (see the test above, and the
+     * court-clash test below, both kept clean of incidental round noise for
+     * exactly this reason) — round order was never one of them (the design
+     * doc's own "out of scope" ruling for z3), so a board dirty ONLY by
+     * round order used to reach the organiser as an unhandled exception —
+     * `apps/web/src/server/api-v1/http.ts`'s generic catch-all turned it
+     * into an opaque `{ok:false, code:"INTERNAL"}` at HTTP 500.
+     *
+     * Only ONE card is locked, not every card — kept as-is under C4 even
+     * though it no longer changes which fixtures end up frozen (all 6 do
+     * either way): it is what makes this test provably exercise "unlocked
+     * but already-placed is frozen too", not merely "locked is frozen",
+     * which is the C4-era point worth a comment surviving for.
      */
     it("degrades gracefully when round order is the only thing a pinned board violates", async () => {
       const { auth, stageId } = await seed();
@@ -356,13 +365,14 @@ describe.skipIf(!HAS_DB)(
         out.assignments.find((a) => a.fixture_id === round1.id)?.scheduled_at,
       ).toBe(at(240));
 
-      // The graceful fallback, by name — mirrors `buildSchedule`'s own
-      // `BuildStatus.verifier_rejected` ("the encoder and validateAssignments
-      // disagreed... the greedy seed is returned and the disagreement is
-      // logged"), the same status this file's other two tests never see
-      // because their own violations ARE relaxable.
+      // C4: `status: "ok"`, not `"verifier_rejected"` — there is no
+      // encoder/verifier disagreement to report any more, because nothing
+      // ever asked the placement service a question. `engine: "greedy"`
+      // still holds (it is REFLOW's fully-frozen fast path's fixed value,
+      // matching how every OTHER "the board came from somewhere other than
+      // a genuine solver improvement" exit reports it too).
       expect(out.solver.engine).toBe("greedy");
-      expect(out.solver.status).toBe("verifier_rejected");
+      expect(out.solver.status).toBe("ok");
 
       // And the real conflict rides along — both directly-adjacent pairs, at
       // minimum, each blaming the LATER round for starting first (mirrors
