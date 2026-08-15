@@ -368,7 +368,16 @@ export async function solveBoard(input: SolveBoardInput): Promise<SolveBoardOutc
     blockingIds.add(c.fixtureId);
     if (c.details?.otherFixtureId !== undefined) blockingIds.add(c.details.otherFixtureId);
   }
-  const unresolvedFixtureIds = violatorIds.filter((id) => blockingIds.has(id)).sort();
+  // Two ways a violator counts as unresolved: still named by a blocking
+  // conflict on the reconciled board, OR ABSENT from it entirely.
+  // `validateAssignments` "cannot report an absence — it iterates the rows
+  // it is handed" (`BuildResult.conflicts`'s own doc, engine), so a
+  // completely dropped fixture (buildSchedule returned nothing for it) never
+  // reaches `blockingIds` on its own — checked directly against
+  // `assignedById` instead.
+  const unresolvedFixtureIds = violatorIds
+    .filter((id) => blockingIds.has(id) || !assignedById.has(id))
+    .sort();
 
   const status: SolverRepairStatus =
     movedFixtureIds.length === 0 ? "unrepaired" : unresolvedFixtureIds.length > 0 ? "partial" : "repaired";
