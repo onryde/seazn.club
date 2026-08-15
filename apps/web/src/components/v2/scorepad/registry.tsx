@@ -27,6 +27,7 @@ import type { OwnIdentity } from "./types";
 import { PadRenderer } from "./pad-renderer";
 import { skinFor } from "./skins/registry";
 import type { SkinDef } from "./skins/types";
+import { resolvePad } from "./v3/registry";
 
 // ---------------------------------------------------------------------------
 // resolveScorePad — the written decision table
@@ -258,7 +259,26 @@ export function ScorePad(props: ScorePadProps) {
     );
   }
 
-  const padResolution = resolveScorePad(props.sportKey);
+  // v3 lane consulted FIRST (R1 chassis, Task 2). `resolveModuleClient`
+  // above already succeeded, which only happens for a key the engine's
+  // registry actually has registered (i.e. a `builtinModules` key), so
+  // `resolvePad` here is guaranteed a key `v3/registry.ts`'s `LEGACY_SPORTS`
+  // owns and cannot throw on this path. R1 ships zero v3 skins
+  // (`V3_SKINS` is empty), so `padLane.lane` is always "legacy" today and
+  // this reaches EXACTLY the pre-existing `resolveScorePad` call below with
+  // no behavioural change.
+  const padLane = resolvePad(props.sportKey);
+  let padResolution: ScorePadResolution;
+  if (padLane.lane === "legacy") {
+    padResolution = resolveScorePad(props.sportKey);
+  } else {
+    // Unreachable in R1. Kept as a loud failure — not a silent fallback —
+    // so a later wave that adds a sport to `V3_SKINS` is forced to also
+    // wire this branch's real v3 render path before that sport can ship,
+    // rather than this file quietly mis-rendering it through the legacy
+    // renderer or crashing somewhere less obvious.
+    throw new Error(`ScorePad: "${props.sportKey}" resolved to the v3 lane but no v3 renderer is wired yet`);
+  }
 
   return (
     <PadRenderer
