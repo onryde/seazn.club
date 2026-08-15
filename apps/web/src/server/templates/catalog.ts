@@ -19,12 +19,26 @@ import swiss11 from "./catalog/swiss11.json";
 import wc32 from "./catalog/wc32.json";
 import americanoNight from "./catalog/americano-night.json";
 import boxLeague from "./catalog/box-league.json";
+import euro24 from "./catalog/euro24.json";
+import t20Super8 from "./catalog/t20-super8.json";
+import leaguePlayoff from "./catalog/league-playoff.json";
 
-const RAW_CATALOG: unknown[] = [slam128, swiss11, wc32, americanoNight, boxLeague];
+const RAW_CATALOG: unknown[] = [
+  slam128,
+  swiss11,
+  wc32,
+  americanoNight,
+  boxLeague,
+  euro24,
+  t20Super8,
+  leaguePlayoff,
+];
 
-/** The P4 launch set (5 of the design doc's 8 — the other 3, euro24/
- *  t20-super8/league-playoff, need P7's StageSeeding). Parsed once here;
- *  a malformed entry throws at import time, not at request time. */
+/** The full 8-template design-doc catalog: P4's 5 (slam128/swiss11/wc32/
+ *  americano-night/box-league) plus P7's 3 (euro24/t20-super8/
+ *  league-playoff), the ones that needed D4's StageSeeding (schema.ts) to
+ *  express cross-stage qualification. Parsed once here; a malformed entry
+ *  throws at import time, not at request time. */
 export const TEMPLATE_CATALOG: CompetitionTemplate[] = RAW_CATALOG.map((raw) =>
   CompetitionTemplate.parse(raw),
 );

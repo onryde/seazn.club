@@ -1,0 +1,43 @@
+{
+  "key": "league-playoff",
+  "version": 1,
+  "i18n": {
+    "nameKey": "templates.leaguePlayoff.name",
+    "descriptionKey": "templates.leaguePlayoff.desc"
+  },
+  "divisions": [
+    {
+      "i18nNameKey": "templates.leaguePlayoff.div.main",
+      "sportKey": "cricket",
+      "variantKey": "t20",
+      "entrantKind": "team",
+      "entrantCount": 8,
+      "stages": [
+        {
+          "i18nNameKey": "templates.stage.leagueTable",
+          "kind": "league",
+          "scheduleDefaults": {
+            "matchMinutes": 210,
+            "gapMinutes": 30,
+            "suggestedCourtTags": ["grass"]
+          }
+        },
+        {
+          "i18nNameKey": "templates.stage.pagePlayoff",
+          "kind": "page_playoff",
+          "size": 4,
+          "seeding": {
+            "source": "previous",
+            "take": [{ "kind": "rankRange", "from": 1, "to": 4 }],
+            "placement": "rank_order"
+          },
+          "scheduleDefaults": {
+            "matchMinutes": 210,
+            "gapMinutes": 30,
+            "suggestedCourtTags": ["grass"]
+          }
+        }
+      ]
+    }
+  ]
+}

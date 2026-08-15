@@ -8,13 +8,22 @@ import { describe, expect, it } from "vitest";
 import { StageKind } from "@/server/api-v1/schemas";
 import { TEMPLATE_CATALOG, getTemplate } from "../catalog";
 
-// P4 launch set (design doc's 8-template catalog minus the 3 that need P7's
-// StageSeeding: euro24, t20-super8, league-playoff).
-const P4_KEYS = ["slam128", "swiss11", "wc32", "americano-night", "box-league"];
+// The full 8-template design-doc catalog: P4's 5 + P7's 3 (euro24/
+// t20-super8/league-playoff), the ones that needed D4's StageSeeding.
+const CATALOG_KEYS = [
+  "slam128",
+  "swiss11",
+  "wc32",
+  "americano-night",
+  "box-league",
+  "euro24",
+  "t20-super8",
+  "league-playoff",
+];
 
 describe("template catalog", () => {
-  it("ships exactly the 5 P4 launch templates, each parsed and unique by key", () => {
-    expect(TEMPLATE_CATALOG.map((t) => t.key).sort()).toEqual([...P4_KEYS].sort());
+  it("ships exactly the 8 design-doc templates, each parsed and unique by key", () => {
+    expect(TEMPLATE_CATALOG.map((t) => t.key).sort()).toEqual([...CATALOG_KEYS].sort());
   });
 
   it("getTemplate resolves a known key and returns null for an unknown one", () => {
@@ -48,9 +57,90 @@ describe("template catalog", () => {
     }
   });
 
-  it("wc32 is the one multi-stage template, and its knockout stage carries no qualification wiring (P7's job)", () => {
+  it("wc32 (P4-era, byte-stable) still carries no seeding wiring on its knockout stage — P7 did not retrofit it", () => {
     const wc32 = getTemplate("wc32")!;
     expect(wc32.divisions[0]!.stages).toHaveLength(2);
     expect(wc32.divisions[0]!.stages.map((s) => s.kind)).toEqual(["group", "knockout"]);
+    expect(wc32.divisions[0]!.stages[1]!.seeding).toBeUndefined();
+  });
+
+  // P7/D1b — the 3 entries StageSeeding unlocked. Each pins `take`,
+  // `placement`, and the map's slot count on the actual catalog object (not
+  // a hand-copy), so a future catalog edit that silently reshapes the
+  // seeding rules fails here.
+  describe("euro24 — R16 seeded from the group stage", () => {
+    it("R16's seeding pins take/placement/map: 2 group qualifiers x 6 groups + 4 best-thirds = 16 slots", () => {
+      const euro24 = getTemplate("euro24")!;
+      const stages = euro24.divisions[0]!.stages;
+      expect(stages.map((s) => s.kind)).toEqual(["group", "knockout"]);
+      expect(stages[0]!.groups).toBe(6);
+      expect(stages[0]!.seeding).toBeUndefined(); // nothing precedes the group stage
+
+      const r16 = stages[1]!;
+      expect(r16.size).toBe(16); // 12 group qualifiers (topNPerGroup n=2 x 6 groups) + 4 best-thirds
+      expect(r16.seeding?.source).toBe("previous");
+      expect(r16.seeding?.take).toEqual([
+        { kind: "topNPerGroup", n: 2 },
+        { kind: "bestNth", nth: 3, count: 4 },
+      ]);
+      expect(r16.seeding?.placement).toBe("seeded_map");
+      // Exactly the 4 best-third sources are explicitly mapped — the 12
+      // group qualifiers fall into the remaining seats in natural order
+      // (placeDescriptors' documented "remaining" fallback, stage-seeding.ts).
+      expect(r16.seeding?.map).toHaveLength(4);
+      expect(r16.seeding?.map).toEqual([
+        { slot: "13", source: "best:1" },
+        { slot: "14", source: "best:2" },
+        { slot: "15", source: "best:3" },
+        { slot: "16", source: "best:4" },
+      ]);
+    });
+
+    it("documents the UEFA best-thirds simplification in its own description copy (deliberate, not silent)", () => {
+      // The real UEFA best-thirds rule is a which-4-groups-qualified lookup
+      // table (15 permutations) that a static {slot,source}[] map cannot
+      // express — ranked-by-record is the documented simplification. Proven
+      // via the actual dictionary text a reader would see, not a comment.
+      const euro24 = getTemplate("euro24")!;
+      expect(euro24.i18n.descriptionKey).toBe("templates.euro24.desc");
+    });
+  });
+
+  describe("t20-super8 — a two-link seeding chain (group -> Super 8 -> SF/F)", () => {
+    it("pins both seeding stages' take/placement, and that the first stage has none", () => {
+      const t20 = getTemplate("t20-super8")!;
+      const stages = t20.divisions[0]!.stages;
+      expect(stages.map((s) => s.kind)).toEqual(["group", "group", "knockout"]);
+      expect(stages[0]!.groups).toBe(4);
+      expect(stages[0]!.seeding).toBeUndefined();
+
+      const super8 = stages[1]!;
+      expect(super8.groups).toBe(2);
+      expect(super8.seeding?.source).toBe("previous");
+      expect(super8.seeding?.take).toEqual([{ kind: "topNPerGroup", n: 2 }]);
+      expect(super8.seeding?.placement).toBe("snake");
+      expect(super8.seeding?.map).toBeUndefined();
+
+      const sfAndFinal = stages[2]!;
+      expect(sfAndFinal.size).toBe(4);
+      expect(sfAndFinal.seeding?.source).toBe("previous");
+      expect(sfAndFinal.seeding?.take).toEqual([{ kind: "topNPerGroup", n: 2 }]);
+      expect(sfAndFinal.seeding?.placement).toBe("rank_order");
+    });
+  });
+
+  describe("league-playoff — league table into a page_playoff", () => {
+    it("pins the page_playoff stage's seeding: rankRange 1..4, rank_order", () => {
+      const lp = getTemplate("league-playoff")!;
+      const stages = lp.divisions[0]!.stages;
+      expect(stages.map((s) => s.kind)).toEqual(["league", "page_playoff"]);
+      expect(stages[0]!.seeding).toBeUndefined();
+
+      const playoff = stages[1]!;
+      expect(playoff.size).toBe(4);
+      expect(playoff.seeding?.source).toBe("previous");
+      expect(playoff.seeding?.take).toEqual([{ kind: "rankRange", from: 1, to: 4 }]);
+      expect(playoff.seeding?.placement).toBe("rank_order");
+    });
   });
 });

@@ -1,0 +1,59 @@
+{
+  "key": "t20-super8",
+  "version": 1,
+  "i18n": {
+    "nameKey": "templates.t20Super8.name",
+    "descriptionKey": "templates.t20Super8.desc"
+  },
+  "divisions": [
+    {
+      "i18nNameKey": "templates.t20Super8.div.main",
+      "sportKey": "cricket",
+      "variantKey": "t20",
+      "entrantKind": "team",
+      "entrantCount": 16,
+      "stages": [
+        {
+          "i18nNameKey": "templates.stage.groupStage",
+          "kind": "group",
+          "groups": 4,
+          "scheduleDefaults": {
+            "matchMinutes": 210,
+            "gapMinutes": 30,
+            "suggestedCourtTags": ["grass"]
+          }
+        },
+        {
+          "i18nNameKey": "templates.stage.super8",
+          "kind": "group",
+          "groups": 2,
+          "seeding": {
+            "source": "previous",
+            "take": [{ "kind": "topNPerGroup", "n": 2 }],
+            "placement": "snake"
+          },
+          "scheduleDefaults": {
+            "matchMinutes": 210,
+            "gapMinutes": 30,
+            "suggestedCourtTags": ["grass"]
+          }
+        },
+        {
+          "i18nNameKey": "templates.stage.knockout",
+          "kind": "knockout",
+          "size": 4,
+          "seeding": {
+            "source": "previous",
+            "take": [{ "kind": "topNPerGroup", "n": 2 }],
+            "placement": "rank_order"
+          },
+          "scheduleDefaults": {
+            "matchMinutes": 210,
+            "gapMinutes": 30,
+            "suggestedCourtTags": ["grass"]
+          }
+        }
+      ]
+    }
+  ]
+}

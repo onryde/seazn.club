@@ -41,17 +41,18 @@ async function seedOrg(plan: "community" | "pro" = "pro"): Promise<{ auth: AuthC
 }
 
 /**
- * Seeds the REAL engine-registry configs for the sports the P4 catalog uses
- * (tennis, boardgame, football, badminton) — `on conflict do nothing`, so
- * this is safe whether or not `sync:sports` already ran on this DB. Mirrors
+ * Seeds the REAL engine-registry configs for the sports the catalog uses
+ * (tennis, boardgame, football, badminton, and P7's cricket for
+ * t20-super8/league-playoff) — `on conflict do nothing`, so this is safe
+ * whether or not `sync:sports` already ran on this DB. Mirrors
  * scripts/sync-sports.ts's own logic (same `builtinModules` source), scoped
- * to 4 sports instead of all 11 — the same reasoning `_seed.ts`'s
+ * to 5 sports instead of all 11 — the same reasoning `_seed.ts`'s
  * `seedFootballCatalog()` documents: a suite must not depend on ambient
  * catalog state, or it passes locally and 422s in CI (#404's exact failure
  * shape).
  */
 async function seedTemplateSportCatalog(): Promise<void> {
-  for (const key of ["tennis", "boardgame", "football", "badminton"]) {
+  for (const key of ["tennis", "boardgame", "football", "badminton", "cricket"]) {
     const mod = builtinModules.find((m) => m.key === key);
     if (!mod) throw new Error(`engine no longer ships sport '${key}'`);
     await sql`
@@ -444,10 +445,22 @@ describe.skipIf(!HAS_DB)(
     // slam128 a partial one (summary.test.ts); swiss11/americano-night/
     // box-league had NONE — a catalog edit reshaping any of these three
     // shipped green.
+    //
+    // P7/D1b: euro24/t20-super8/league-playoff added. `.seeding` on a stage
+    // is NOT read by instantiateTemplate (usecases/templates.ts) yet — it is
+    // captured on the parsed CompetitionTemplate and simply unused at this
+    // layer, exactly like an unread struct field, so these three instantiate
+    // through the SAME path as any other multi-stage template. That wiring
+    // is a later task's job; this pin only proves the catalog's declared
+    // stage kinds still reach the DB unchanged. league-playoff needs "pro":
+    // its page_playoff stage is gated by formats.double_elim (format-gates.ts).
     it.each([
       { key: "swiss11", plan: "community" as const, kinds: ["swiss"] },
       { key: "americano-night", plan: "pro" as const, kinds: ["americano"] }, // needs formats.advanced
       { key: "box-league", plan: "community" as const, kinds: ["group"] },
+      { key: "euro24", plan: "community" as const, kinds: ["group", "knockout"] },
+      { key: "t20-super8", plan: "pro" as const, kinds: ["group", "group", "knockout"] }, // 3 stages > community's stages.per_division.max (2)
+      { key: "league-playoff", plan: "pro" as const, kinds: ["league", "page_playoff"] }, // needs formats.double_elim
     ])(
       "$key instantiates to exactly 1 division with the pinned stage kind(s) $kinds",
       async ({ key, plan, kinds }) => {
