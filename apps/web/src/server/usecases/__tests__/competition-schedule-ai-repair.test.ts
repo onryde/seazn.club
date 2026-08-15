@@ -38,6 +38,7 @@ const D1 = "d1111111-1111-4111-8111-111111111111"; // "Alpha" — Court 1 only
 const D2 = "d2222222-2222-4222-8222-222222222222"; // "Beta"  — Court 1 and 2
 const F1 = "11111111-1111-4111-8111-111111111111";
 const F2 = "22222222-2222-4222-8222-222222222222";
+const F3 = "33333333-3333-4333-8333-333333333333";
 const E = (n: number) =>
   `${n}${n}${n}${n}${n}${n}${n}${n}-${n}${n}${n}${n}-4${n}${n}${n}-8${n}${n}${n}-${n}${n}${n}${n}${n}${n}${n}${n}${n}${n}${n}${n}`;
 
@@ -140,6 +141,42 @@ function makePack(): CompetitionPack {
   };
 }
 
+/** `makePack()` extended with a THIRD fixture (F3, also Beta) that never
+ *  touches the F1/F2 clash — Court 2, same instant, different entrants.
+ *  Exists only for the REGRESSION test below: `makePack()`'s 2-fixture board
+ *  can never express a non-violator (every scenario in this file makes BOTH
+ *  fixtures violators), so proving a repair round leaves a non-violator
+ *  byte-identical needs a board that actually has one. */
+function makeThreeFixturePack(): CompetitionPack {
+  const base = makePack();
+  return {
+    ...base,
+    divisions: base.divisions.map((d) =>
+      d.id === D2 ? { ...d, movableIds: [...d.movableIds, F3], draftPlaced: 2 } : d,
+    ),
+    participants: { ...base.participants, [F3]: [] },
+    fixtures: {
+      ...base.fixtures,
+      movable: [
+        ...base.fixtures.movable,
+        {
+          id: F3,
+          division_id: D2,
+          ext_key: "b2",
+          round: 1,
+          seq: 1,
+          pool: null,
+          home: E(5),
+          away: E(6),
+          feeds: { winner_to: null, after: [] },
+          current: { at: null, court: null },
+          pinned: false,
+        },
+      ],
+    },
+  };
+}
+
 const pack = makePack();
 const movableIds = new Set([F1, F2]);
 const courtsOf: Record<string, string[]> = { [D1]: ["Court 1"], [D2]: ["Court 1", "Court 2"] };
@@ -160,6 +197,14 @@ const cleanPlan = plan([assign(F1, at("09:00"), "Court 1"), assign(F2, at("09:00
 /** Both divisions on Court 1 at the same instant. Each division's own board is
  *  clean; only the joint pass reports it. */
 const crossClashPlan = plan([assign(F1, at("09:00"), "Court 1"), assign(F2, at("09:00"), "Court 1")]);
+/** `crossClashPlan` plus F3 (Beta, Court 2, same instant, different
+ *  entrants) — clean on every axis, the non-violator the REGRESSION test
+ *  below needs. */
+const crossClashPlanWithF3 = plan([
+  assign(F1, at("09:00"), "Court 1"),
+  assign(F2, at("09:00"), "Court 1"),
+  assign(F3, at("09:00"), "Court 2"),
+]);
 
 const planResponse = (p: unknown, usage: unknown = { input_tokens: 1000, output_tokens: 500 }) => ({
   parsed_output: p,
@@ -333,6 +378,47 @@ describe("solver repair in runCompetitionAiPlan (#401, C5)", () => {
     // `rule` is always populated (RULE_BY_REASON is exhaustive) — an order
     // check with nothing to order proves nothing.
     expect(conflicts.some((c) => "rule" in c && "detail" in c)).toBe(true);
+  });
+
+  it("REGRESSION: a repair round never disturbs a fixture outside the conflict it was asked to fix", async () => {
+    // The joint mirror of schedule-ai-repair.test.ts's identical regression —
+    // C5's own coverage gap, precedent from C4 (z3 retirement stage A). Needs
+    // `makeThreeFixturePack`: `makePack()`'s 2-fixture board makes BOTH
+    // fixtures violators in every scenario in this file, so it cannot express
+    // a non-violator to freeze.
+    const pack3 = makeThreeFixturePack();
+    const movableIds3 = new Set([F1, F2, F3]);
+    parse.mockResolvedValueOnce(planResponse(crossClashPlanWithF3));
+    buildSchedule.mockResolvedValueOnce(
+      buildResult([
+        { fixtureId: F1, court: "Court 1", startAt: T("2026-08-01T08:00:00Z"), endAt: T("2026-08-01T08:30:00Z"), entrants: [], people: [] },
+        // Clear of F3's frozen slot (Court 2, 08:00Z) — a same-slot mock here
+        // would create a NEW clash the adoption gate correctly refuses,
+        // triggering another repair round instead of testing reconciliation.
+        { fixtureId: F2, court: "Court 1", startAt: T("2026-08-01T18:00:00Z"), endAt: T("2026-08-01T18:30:00Z"), entrants: [], people: [] },
+        // F3 "moved" by the mock, standing in for a solver that did not
+        // honour the freeze — must not survive reconciliation.
+        { fixtureId: F3, court: "Court 1", startAt: T("2026-08-02T20:00:00Z"), endAt: T("2026-08-02T20:30:00Z"), entrants: [], people: [] },
+      ]),
+    );
+
+    const out = await runCompetitionAiPlan(pack3, movableIds3);
+
+    expect(out.blocking).toEqual([]);
+    const byId = new Map(out.proposal.map((p) => [p.fixture_id, p]));
+    // Byte-identical to the model's ORIGINAL crossClashPlanWithF3 values —
+    // never the mock's "moved" slot.
+    expect(byId.get(F3)).toMatchObject({ scheduled_at: at("09:00"), court_label: "Court 2" });
+    // The conflict itself is resolved, not silently dropped: F1 no longer
+    // shares Court 1/09:00 with F2.
+    expect(
+      byId.get(F1)!.scheduled_at !== byId.get(F2)!.scheduled_at ||
+        byId.get(F1)!.court_label !== byId.get(F2)!.court_label,
+    ).toBe(true);
+    // buildSchedule was asked to move ONLY the violators (F1/F2) — F3 must be
+    // named in `frozen`, never left free.
+    const sent = buildSchedule.mock.calls[0]![0] as { frozen?: string[] };
+    expect(sent.frozen).toEqual([F3]);
   });
 });
 
