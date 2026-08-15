@@ -1135,7 +1135,9 @@ export async function autoSchedule(
     // ruling 2026-08-12, #pins-in-build) — scope-locked fixtures (Jul3/03 §4
     // two-site safety) pin the same way. Hoisted out of the `schedulable`
     // builder below because THREE things read it now — the `locked` anchor,
-    // REFLOW's incumbent board, and the set the repair solver may not move.
+    // REFLOW's incumbent board, and the set `buildSchedule` may not move
+    // (C4, 2026-08-14: `reflowExisting`'s `pinned` arg, frozen alongside
+    // `placed` — see that function's own doc comment).
     //
     // `only_unlocked` used to gate this filter too, which was the bug: the
     // primary Auto-schedule button always posts `only_unlocked: false` (to
@@ -1263,11 +1265,16 @@ export async function autoSchedule(
 
   // ---- Phase 2: solve. Nothing below here holds a database connection.
   //
-  // Three modes, ONE config (design D2). BUILD and POLISH go to the tier solver;
-  // REFLOW goes to the repair solver, because "the fewest cards moved" is a
-  // property an ascending-k walk proves and a re-place cannot — `slotFixtures`
-  // re-places every unlocked card even when nothing is wrong, which is the
-  // defect this mode replaces.
+  // Three modes, ONE config (design D2), and — since C4 (2026-08-14, z3
+  // retirement stage A) — ONE solver behind all three: `buildSchedule`, the
+  // placement CP-SAT service. BUILD and POLISH call it directly, below.
+  // REFLOW calls it through `reflowExisting`, which is not a thin wrapper:
+  // `buildSchedule` has no "fewest cards moved" term of its own the way
+  // z3's old ascending-k repair walk did, so `reflowExisting` freezes every
+  // already-placed card (locked or not) via the same `frozen`/`current`
+  // mechanism POLISH uses (R20) to keep that property without one — see
+  // `reflowExisting`'s own doc comment for the full rationale, the accepted
+  // trade-off, and the reconciliation this makes necessary.
   const { schedulable, config, board, dependencies, total } = plan;
   // D2 capacity pre-check: arithmetic-provable impossibility refuses with a
   // typed 422 BEFORE either solver is reached — no db connection is held

@@ -259,6 +259,87 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
   );
 
   // -------------------------------------------------------------------
+  // 3b. The SAME collision, but with a genuinely free fixture alongside it
+  // — closes a gap the review of this PR found: test 3 above leaves every
+  // fixture placed (only `a`/`b` collide), so `known` covers the WHOLE
+  // schedulable set and `reflowExisting`'s fully-frozen fast path
+  // (its own doc comment, and finding 3 in the C4 PR body) intercepts
+  // before `buildSchedule` is ever called — test 3 exercises the fast
+  // path's verifier pass, not the solver. Clearing ONE more card here
+  // means the fast path's guard is false (a free fixture exists), so this
+  // is the first test where `buildSchedule` is called for real WHILE a
+  // pin-contradiction (`a`/`b`) is present in `frozen`/`current`.
+  // -------------------------------------------------------------------
+  it(
+    "two frozen cards collide AND a third card is genuinely free: buildSchedule is actually called, still doesn't crash",
+    async () => {
+      const auth = await seedOrg();
+      const { stageId } = await seedStage(auth, 4);
+
+      const built = await autoSchedule(auth, stageId, {
+        only_unlocked: false,
+        mode: "build",
+      });
+      await applySchedule(auth, stageId, {
+        assignments: built.assignments.map((a) => ({
+          fixture_id: a.fixture_id,
+          scheduled_at: a.scheduled_at,
+          court_label: a.court_label,
+        })),
+        source: "auto",
+      });
+
+      const rows = await sql<{ id: string; scheduled_at: Date; court_label: string }[]>`
+        select id, scheduled_at, court_label from fixtures
+        where stage_id = ${stageId} order by id`;
+      const [a, b, c] = rows;
+      // Same forced collision as test 3.
+      await sql`
+        update fixtures set scheduled_at = ${a!.scheduled_at}, court_label = ${a!.court_label}
+        where id = ${b!.id}`;
+      // The addition: a THIRD, distinct card loses its slot entirely, so
+      // `known` no longer covers every schedulable fixture and the
+      // fully-frozen fast path's guard does not fire.
+      await sql`
+        update fixtures set scheduled_at = null, court_label = null
+        where id = ${c!.id}`;
+
+      const out = await autoSchedule(auth, stageId, {
+        only_unlocked: true,
+        mode: "reflow",
+      });
+
+      // Genuinely reached the solver this time (not the fast path): a
+      // fully-frozen board reports `engine: "greedy"`/`status: "ok"`
+      // unconditionally (finding 3's fast path), so seeing anything else
+      // here — or `moved`/`seeded` being nonzero from `c` actually getting
+      // placed — is itself part of what this test is proving.
+      expect(out.solver.seeded).toBeGreaterThan(0);
+
+      // The collision between the two FROZEN cards still rides along,
+      // unresolved (the accepted trade-off) but never silently dropped —
+      // same assertion as test 3, now proven under a genuine solve rather
+      // than the verify-only fast path.
+      expect(out.assignments.map((x) => x.fixture_id)).toEqual(
+        expect.arrayContaining([a!.id, b!.id]),
+      );
+      const collision = out.conflicts.filter(
+        (conf) => conf.fixture_id === a!.id || conf.fixture_id === b!.id,
+      );
+      expect(collision.length).toBeGreaterThan(0);
+      expect(collision.some((conf) => conf.blocking)).toBe(true);
+
+      // And the free card: either placed, or its absence is explained —
+      // never silently missing (the house style this codebase applies to
+      // every "could this drop a fixture with no trace" question).
+      const cPlaced = out.assignments.find((x) => x.fixture_id === c!.id);
+      const cExplained = out.conflicts.some((conf) => conf.fixture_id === c!.id);
+      expect(cPlaced !== undefined || cExplained).toBe(true);
+    },
+    120_000,
+  );
+
+  // -------------------------------------------------------------------
   // 4. Round-order closure: the gap named in the round-ordering spec.
   // -------------------------------------------------------------------
   it.skipIf(!HAS_SOLVER)(
