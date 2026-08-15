@@ -11,14 +11,17 @@
 //
 // Reuses padLabel() (apps/web/src/lib/scoring-vocab.ts:907), the SAME vocab
 // path every legacy skin already calls for label text (S7/#427) — see
-// .superpowers/sdd/2026-08-15-scorepad-v3-r1-chassis/pins.md §4. padLabel's
-// PAD_LABEL_SET gate means an unregistered key never reaches the real
-// translator at all (no dev-mode "missing key" warning spam while R1's
-// per-sport keys don't exist), and its return value doubles as a hit/miss
-// signal here: called as `padLabel(perSportKey, t, eventType)`, a miss
-// echoes `eventType` straight back (the engineLabel we handed it), which
-// this treats as "no custom copy yet" and routes to the generic template.
-import { padLabel } from "@/lib/scoring-vocab";
+// .superpowers/sdd/2026-08-15-scorepad-v3-r1-chassis/pins.md §4.
+//
+// Fix round 1 (review finding 1): the hit/miss branch decision is made by
+// PAD_LABEL_KEYS membership, NOT by comparing padLabel's return value to
+// `eventType`. A value-comparison collides whenever a REAL per-sport
+// translation happens to equal the raw dot-joined event type (e.g. a
+// translator pastes the key/type instead of prose) — that would silently
+// read as "miss" and route to the generic fallback forever, with nothing
+// failing. Membership is authoritative regardless of what the registered
+// key's copy actually says.
+import { padLabel, PAD_LABEL_KEYS } from "@/lib/scoring-vocab";
 import type { MessageKey } from "@/lib/messages";
 
 /** Interpolating message lookup — the shape `useMsg()` (client) and
@@ -33,14 +36,26 @@ export interface Ribbon {
 }
 
 /**
+ * `pad.<sport>.ribbon.<suffix>` for an event type — split on the FIRST `.`
+ * only, since `eventType` itself may carry further dots (e.g.
+ * "tabletennis.expedite.start" per scoring-vocab.ts's `eventLabel` doc
+ * comment). Exported so the key it builds is directly assertable in a test,
+ * independent of whether that key happens to be registered in
+ * PAD_LABEL_KEYS today.
+ */
+export function ribbonKeyFor(eventType: string): string {
+  const sport = eventType.split(".")[0];
+  const suffix = eventType.slice(sport.length + 1);
+  return `pad.${sport}.ribbon.${suffix}`;
+}
+
+/**
  * Build the ribbon line for one just-committed event.
  *
- * Looks up `pad.<sport>.ribbon.<suffix>` first (split on the FIRST `.` —
- * `eventType` itself may carry further dots, e.g. "tabletennis.expedite.start"
- * per scoring-vocab.ts's `eventLabel` doc comment); falls back to the
- * generic `pad.ribbon.fallback` ("{event} recorded") with the raw event
- * type standing in for a vocab'd name until a later wave gives this event
- * its own copy.
+ * Looks up `pad.<sport>.ribbon.<suffix>` first; falls back to the generic
+ * `pad.ribbon.fallback` ("{event} recorded") with the raw event type
+ * standing in for a vocab'd name until a later wave gives this event its
+ * own copy.
  *
  * `payload`/`names` are accepted now — unused on R1's fallback path — so a
  * later wave's custom ribbon sentence (e.g. "{scorer} scores!") can
@@ -53,12 +68,9 @@ export function buildRibbon(
   names: (personId: string) => string,
   t: MsgFn,
 ): Ribbon {
-  const sport = eventType.split(".")[0];
-  const suffix = eventType.slice(sport.length + 1);
-  const perSportKey = `pad.${sport}.ribbon.${suffix}`;
-  const resolved = padLabel(perSportKey, t, eventType);
-  if (resolved !== eventType) {
-    return { text: resolved, undoable: true };
+  const perSportKey = ribbonKeyFor(eventType);
+  if (PAD_LABEL_KEYS.includes(perSportKey as MessageKey)) {
+    return { text: padLabel(perSportKey, t, eventType), undoable: true };
   }
   return { text: t("pad.ribbon.fallback", { event: eventType }), undoable: true };
 }
