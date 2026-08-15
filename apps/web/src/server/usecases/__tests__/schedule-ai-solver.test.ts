@@ -191,6 +191,21 @@ describe("solveBoard (#401, C5)", () => {
     expect(out.telemetry.fallback).toBe("partial");
   });
 
+  it("reports a violator buildSchedule dropped entirely as unresolved, not silently clean", async () => {
+    // validateAssignments "cannot report an absence — it iterates the rows
+    // it is handed" (BuildResult.conflicts's own doc), so a violator missing
+    // from buildSchedule's own assignments never reaches a blocking-conflict
+    // row on its own. Checked directly against the reconciled board's
+    // membership, not merely its conflict list.
+    buildSchedule.mockResolvedValueOnce(buildResult([])); // F1 dropped entirely
+
+    const out = await solveBoard(baseInput);
+
+    expect(out.telemetry.status).toBe("unrepaired");
+    expect(out.unresolvedFixtureIds).toEqual(["F1"]);
+    expect(out.movedFixtureIds).toEqual([]);
+  });
+
   it("reports unrepaired, with a budget fallback, when buildSchedule never got to search", async () => {
     buildSchedule.mockResolvedValueOnce(
       buildResult(baseInput.board, {

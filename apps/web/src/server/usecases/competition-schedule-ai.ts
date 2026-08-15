@@ -105,7 +105,13 @@ import {
 import { consumePreview, PREVIEW_STALE } from "./schedule-ai-preview";
 import { validateInstructionRules } from "@seazn/engine/scheduling";
 import { legacyVerifierConflict, withLegacyDetail } from "@/server/api-v1/conflict-detail-legacy";
-import type { HardConstraint, RuleCode, RuleFixture, VerifyConfig } from "@seazn/engine/scheduling";
+import type {
+  HardConstraint,
+  RuleCode,
+  RuleFixture,
+  SchedulableFixture,
+  VerifyConfig,
+} from "@seazn/engine/scheduling";
 import { resolveProvider, selectProvider, type ProviderName } from "@/server/ai/select-provider";
 import {
   AiProviderError,
@@ -1323,6 +1329,33 @@ export function toJointObstacleAssignments(pack: CompetitionPack): Assignment[] 
   });
 }
 
+/** The FULL movable set as `SchedulableFixture`s, for a `buildSchedule` call
+ *  over this pack (#401, C5 z3 retirement stage B) — the joint twin of
+ *  `schedule-ai.ts`'s `toSchedulableFixtures`, and the metadata twin of
+ *  `toJointEngineAssignments` just above (which builds the model's PROPOSED
+ *  positions; this builds what a fixture IS regardless of where the model put
+ *  it). Every field mirrors `toJointEngineAssignments`'s own derivation
+ *  exactly (poolId from `pack.poolIds`, divisionId from the fixture's OWN
+ *  `division_id`, stageId from `pack.stageIds`, roundNo from
+ *  `pack.roundNos`, people from `pack.participants`), so the two can never
+ *  disagree about which rule binds which fixture (#447).
+ *
+ *  Carries no `.locked` anchor even for a pinned fixture, for the same reason
+ *  the single-division twin does not: the repair round always hands
+ *  `solveBoard` a `frozen`/`board` pair covering every pinned id. */
+export function toJointSchedulableFixtures(pack: CompetitionPack): SchedulableFixture[] {
+  return pack.fixtures.movable.map((f) => ({
+    id: f.id,
+    ...(pack.roundNos[f.id] !== undefined ? { roundNo: pack.roundNos[f.id]! } : {}),
+    ...(f.home !== null ? { home: f.home } : {}),
+    ...(f.away !== null ? { away: f.away } : {}),
+    people: pack.participants[f.id] ?? [],
+    ...(pack.poolIds[f.id] !== undefined ? { poolId: pack.poolIds[f.id]! } : {}),
+    divisionId: f.division_id,
+    ...(pack.stageIds[f.id] !== undefined ? { stageId: pack.stageIds[f.id]! } : {}),
+  }));
+}
+
 /** Direct winner/loser feeds across the whole union — the joint mirror of
  *  `packFeedDependencies` (schedule-ai.ts:957). Feeds are within-division in
  *  practice, but the dependency list is resolved against the whole board by the
@@ -2101,11 +2134,42 @@ export async function runCompetitionAiPlan(
         repairTelemetry = { solver_ran: false, fallback: "court_split" };
       } else {
         const board = toJointEngineAssignments(chosen, pack);
+        // "Pin what stands, re-solve the violators" (z3 retirement design,
+        // stage B, C5) — the joint mirror of `schedule-ai.ts`'s identical
+        // ruling. The violators are every fixture THIS round's own JOINT
+        // verifier named in a blocking conflict; everything else this run
+        // may move — union every pinned fixture across every division — is
+        // FROZEN at its current slot, so a solve spanning several divisions
+        // cannot reshuffle a division the LLM conversation never flagged.
+        const violatorIds = new Set<string>();
+        for (const c of blocking) {
+          violatorIds.add(c.fixtureId);
+          if (c.details?.otherFixtureId !== undefined) violatorIds.add(c.details.otherFixtureId);
+        }
+        const frozen = new Set(
+          pack.fixtures.movable
+            .filter((f) => pinnedIds.has(f.id) || !violatorIds.has(f.id))
+            .map((f) => f.id),
+        );
         const attempt = await solveBoard({
-          proposal: board.filter((a) => !pinnedIds.has(a.fixtureId)),
-          existing: [...jointObstacles, ...board.filter((a) => pinnedIds.has(a.fixtureId))],
+          // The FULL movable set, violators included — `solveBoard`'s own
+          // defensive narrowing plus `buildSchedule`'s pin-promotion keep
+          // `frozen` ids from moving, not a pre-filter here (the same lesson
+          // C4 already learned for `reflowExisting`).
+          fixtures: toJointSchedulableFixtures(pack),
+          board,
+          frozen,
+          existing: jointObstacles,
           dependencies: jointDeps,
-          config: solverConfig,
+          config: {
+            ...solverConfig,
+            // `jointSolverConfig` always sets `matchMinutes` (the conservative
+            // MAX across every division, the same lever its own
+            // `perEntrantMinRest` already uses) — re-asserted as required
+            // here only because `VerifyConfig` types the field `Partial`.
+            matchMinutes: solverConfig.matchMinutes!,
+            startAt: windowBounds(pack.window).from,
+          },
           budgetMs: Math.max(solverBudgetLeft, 1),
         });
         solverBudgetLeft -= attempt.telemetry.ms ?? 0;
@@ -2131,7 +2195,7 @@ export async function runCompetitionAiPlan(
             chosen = patched;
             conflicts = after;
             blocking = afterBlocking;
-            boardEngine = "z3";
+            boardEngine = "optimized";
           } else {
             repairTelemetry = { ...repairTelemetry, fallback: "not_adopted" };
           }
@@ -2162,10 +2226,10 @@ export async function runCompetitionAiPlan(
         // prose reaches the model, not just the screen") — see the identical
         // comment at schedule-ai.ts's own `verifier_conflicts`.
         verifier_conflicts: conflicts.map(legacyVerifierConflict),
-        ...(boardEngine === "z3" ? { repaired_assignments: chosen.assignments } : {}),
+        ...(boardEngine === "optimized" ? { repaired_assignments: chosen.assignments } : {}),
         ...(unresolved.length > 0 ? { focus_fixture_ids: [...unresolved] } : {}),
         note:
-          boardEngine === "z3"
+          boardEngine === "optimized"
             ? "An automatic solver has already moved some fixtures to clear other conflicts. `repaired_assignments` is the board these conflicts were measured on and it REPLACES your previous output — start from it. Fix only these conflicts, concentrating on focus_fixture_ids. Move as few fixtures as possible. Do not reintroduce earlier conflicts. A court conflict between two divisions may be reported on both fixtures; where it is, moving either one resolves it."
             : "Fix only these conflicts. Move as few fixtures as possible. Do not reintroduce earlier conflicts. A court conflict between two divisions may be reported on both fixtures; where it is, moving either one resolves it.",
       }),

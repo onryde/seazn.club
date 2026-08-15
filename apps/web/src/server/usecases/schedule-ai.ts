@@ -60,7 +60,6 @@ import {
   type RuleFixture,
   type SchedulableFixture,
   type SchedulingConstraints,
-  type SlotConfig,
   type VerifyConfig,
 } from "@seazn/engine/scheduling";
 import {
@@ -1708,6 +1707,34 @@ export function toObstacleAssignments(pack: SchedulePack): Assignment[] {
   }));
 }
 
+/** The FULL movable set as `SchedulableFixture`s, for a `buildSchedule` call
+ *  over this pack (#401, C5 z3 retirement stage B) — the metadata twin of
+ *  `toEngineAssignments` just above, which builds the model's PROPOSED
+ *  positions; this builds what a fixture IS regardless of where the model
+ *  chose to put it. Every field mirrors `toEngineAssignments`'s own
+ *  derivation exactly (poolId from `pack.poolIds`, divisionId from
+ *  `pack.division.id`, stageId from `pack.stageIds`, roundNo from
+ *  `pack.roundNos`, people from `pack.participants`), so the two can never
+ *  disagree about which rule binds which fixture — the placer/verifier fork
+ *  this codebase keeps naming as its recurring defect (#447).
+ *
+ *  Carries no `.locked` anchor even for a pinned fixture: the repair round
+ *  always hands `solveBoard` a `frozen`/`board` pair covering every pinned
+ *  id, so a second, redundant anchor mechanism here is not needed and not
+ *  worth a second source of truth. */
+export function toSchedulableFixtures(pack: SchedulePack): SchedulableFixture[] {
+  return pack.fixtures.movable.map((f) => ({
+    id: f.id,
+    ...(pack.roundNos[f.id] !== undefined ? { roundNo: pack.roundNos[f.id]! } : {}),
+    ...(f.home !== null ? { home: f.home } : {}),
+    ...(f.away !== null ? { away: f.away } : {}),
+    people: pack.participants[f.id] ?? [],
+    ...(pack.poolIds[f.id] !== undefined ? { poolId: pack.poolIds[f.id]! } : {}),
+    divisionId: pack.division.id,
+    ...(pack.stageIds[f.id] !== undefined ? { stageId: pack.stageIds[f.id]! } : {}),
+  }));
+}
+
 /** Exactly the fields `toRuleFixture` reads, and nothing else — the widened
  *  parameter that lets a `fixtures` row reach the one builder (#447).
  *
@@ -2116,15 +2143,47 @@ export async function runAiPlan(
     if (blocking.length > 0 && (solverAttempts === 0 || solverBudgetLeft >= SOLVER_MIN_BUDGET_MS)) {
       solverAttempts++;
       const board = toEngineAssignments(chosen, pack);
+      // "Pin what stands, re-solve the violators" (z3 retirement design,
+      // stage B, C5). The violators are every fixture THIS round's own
+      // verifier named in a blocking conflict — both ends of a pairwise one
+      // (a court/person clash names its counterparty in
+      // `details.otherFixtureId`), never `warnings`: non-blocking residue is
+      // a quality note this round is not spending budget to chase (same
+      // hand-off policy the LLM round below already uses). Everything else
+      // this pack may move — union this pack's own pins — is FROZEN at its
+      // current slot: `buildSchedule` has no "fewest fixtures moved" term of
+      // its own the way z3's old ascending-k repair search did, so freezing
+      // every non-violator is what keeps this round from reshuffling a board
+      // the LLM conversation, and the organiser, have already seen (the same
+      // ruling C4 applied to REFLOW — see `reflowExisting`'s own doc
+      // comment, `schedule.ts`).
+      const violatorIds = new Set<string>();
+      for (const c of blocking) {
+        violatorIds.add(c.fixtureId);
+        if (c.details?.otherFixtureId !== undefined) violatorIds.add(c.details.otherFixtureId);
+      }
+      const frozen = new Set(
+        pack.fixtures.movable
+          .filter((f) => pinnedIds.has(f.id) || !violatorIds.has(f.id))
+          .map((f) => f.id),
+      );
       const attempt = await solveBoard({
-        // A pinned fixture is not the solver's to move — `structuralCheck`
-        // already refuses a model that moves one, and the solver must be held
-        // to the same rule. It goes in as immovable occupancy instead, so it
-        // still blocks the court and still owes its rest.
-        proposal: board.filter((a) => !pinnedIds.has(a.fixtureId)),
-        existing: [...obstacles, ...board.filter((a) => pinnedIds.has(a.fixtureId))],
+        // The FULL movable set, violators included — `solveBoard`'s own
+        // defensive narrowing plus `buildSchedule`'s pin-promotion are what
+        // keep `frozen` ids from moving, not a pre-filter here (the same
+        // lesson C4 already learned for `reflowExisting`: do not pre-filter
+        // `fixtures` yourself).
+        fixtures: toSchedulableFixtures(pack),
+        board,
+        frozen,
+        existing: obstacles,
         dependencies,
-        config: { ...config, courts: pack.settings.courts },
+        config: {
+          ...config,
+          courts: pack.settings.courts,
+          matchMinutes: pack.settings.matchMinutes,
+          startAt: windowBounds(pack.window).from,
+        },
         budgetMs: Math.max(solverBudgetLeft, 1),
       });
       solverBudgetLeft -= attempt.telemetry.ms ?? 0;
@@ -2153,7 +2212,7 @@ export async function runAiPlan(
           chosen = patched;
           conflicts = after;
           blocking = afterBlocking;
-          boardEngine = "z3";
+          boardEngine = "optimized";
         } else {
           repairTelemetry = { ...repairTelemetry, fallback: "not_adopted" };
         }
@@ -2196,10 +2255,10 @@ export async function runAiPlan(
         // When the solver moved fixtures, the model's own last turn is no longer
         // the board these conflicts were measured on. Send the board, or it
         // repairs a plan nobody holds and silently discards the solver's work.
-        ...(boardEngine === "z3" ? { repaired_assignments: chosen.assignments } : {}),
+        ...(boardEngine === "optimized" ? { repaired_assignments: chosen.assignments } : {}),
         ...(unresolved.length > 0 ? { focus_fixture_ids: [...unresolved] } : {}),
         note:
-          boardEngine === "z3"
+          boardEngine === "optimized"
             ? "An automatic solver has already moved some fixtures to clear other conflicts. `repaired_assignments` is the board these conflicts were measured on and it REPLACES your previous output — start from it. Fix only these conflicts, concentrating on focus_fixture_ids. Move as few fixtures as possible. Do not reintroduce earlier conflicts."
             : "Fix only these conflicts. Move as few fixtures as possible. Do not reintroduce earlier conflicts.",
       }),
