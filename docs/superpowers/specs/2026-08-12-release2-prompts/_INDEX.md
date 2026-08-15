@@ -33,7 +33,7 @@ C6 (prose) is safe whenever.
 | C1 | `C1-round-ordering.md` | round ordering | C0 (same proto/build.ts region) | **MERGED** #546 → `78db2f1f` |
 | C2 | `C2-day-start-rung.md` | day_start | C1 (model.py overlap; rebase either way) | **MERGED** #555 → `40331cc2`, follow-up #557 → `4dc38a0e`. Shipped #512's two rungs too. **Leaves 3 open defects — see the C2 entries below before starting C3.** |
 | C3 | `C3-conflict-detail-names.md` | conflict details | not concurrent with C1 (schedule.ts) | **MERGED** #567 → `ccab1356`. Family was 25 kinds, not 4; `conflictKey` and the AI repair round were both in the blast radius |
-| C4 | `C4-z3-reflow-cpsat.md` | z3 stage A | C1 (reflow inherits round rule) | TODO |
+| C4 | `C4-z3-reflow-cpsat.md` | z3 stage A | C1 (reflow inherits round rule) | **PR open** (this session) — see status log. Found two real, out-of-scope `buildSchedule` gaps shared with BUILD/POLISH (a frozen-feeder dependency gap, a bracket/TBD-fixture wall) — neither fixed here. |
 | C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | TODO |
 | C6 | `C6-z3-prose-identifiers.md` | z3 stage C | ~~anytime~~ → **after C4+C5** | **NO-OP today** (see below) |
 | C7 | `C7-z3-public-contract.md` | z3 stage D | C4+C5 **deployed** (nothing writes z3) | TODO |
@@ -861,3 +861,173 @@ route with no connection to conflict details. Isolated it was 3/3 green, and
 `OfficialConflict.detail` exactly as the scheduling family did. Out of C3's
 scope by the design's own framing; recorded so the next reader finds a decision
 rather than a miss. It wants its own task.
+
+### C4 — z3 stage A: reflow on CP-SAT (2026-08-14/15)
+
+Branch `feat/c4-z3-reflow-cpsat`, worktree `.claude/worktrees/c4-z3-reflow`,
+off `1b260e1a`. **This session is a continuation** — two prior attempts died
+mid-run from environment failures (computer sleep, an account usage-limit
+reset), not real blockers. Real work had already landed across three
+commits before this session started; this session closed out the remaining
+acceptance criteria and found two more real, out-of-scope defects along the
+way.
+
+**The wiring (already landed, `61b17510`/`9a7a475d`/`2c5e38e0`).**
+`reflowExisting` calls `buildSchedule` (the placement CP-SAT service)
+instead of z3's `repairSchedule`. Locked AND already-placed-unlocked cards
+are BOTH frozen for the solve (POLISH's own R20 mechanism), because
+`buildSchedule` has no "fewest cards moved" term the way the old repair
+solver's ascending-k walk did — pinning every already-placed card is what
+keeps that property without one.
+
+**Ruling — churn-minimization trade-off, accepted.** REFLOW can no longer
+rearrange already-placed UNLOCKED cards to resolve a conflict AMONG them —
+only place cards that have no slot yet. `moved`/`lost` simplified as a
+direct consequence (`moved == seeded` always, `lost == 0` always, by
+construction). Proven non-crashing, not merely assumed, by a dedicated
+two-card-collision test.
+
+**Finding — `buildSchedule`'s fallback exits do not anchor a frozen id.**
+The SUCCESS/`improved` path anchors a `current`-only frozen id correctly;
+every FALLBACK exit (`already_optimal`, a proved tie, `verifier_rejected`,
+`not_searched`) reports the plain unpinned greedy seed, which has no idea a
+`current`-only id is supposed to stay put — confirmed empirically (a
+throwaway two-fixture repro against unmodified `build.ts` swapped both
+fixtures' courts). This is the ORDINARY reflow shape (mostly-already-placed
+board, solver ties or fails to improve), not a corner. `reflowExisting` now
+reconciles every frozen id's slot from the caller's own record
+unconditionally, regardless of which exit produced the board. Mutation-
+checked: stripping the reconciliation reds all three scenario tests.
+
+**Finding — the placement service's wire refuses zero movable fixtures,
+silently.** "fixtures must not be empty" (`schema.py`), no log call on
+that branch. A reflow where everything is already frozen — the ORDINARY
+"click Re-flow again, nothing changed" case — hit this every time. Added a
+fully-frozen fast path that verifies the known board directly and never
+calls the placement service, mirroring the old `repairSchedule`
+"clean, k=0" verdict.
+
+**Finding (this session) — a dependency-encoding gap on a FROZEN feeder,
+shared with POLISH, out of scope.** `buildSchedule`'s CP-SAT encoding does
+not enforce a `dependsOn` edge against a FROZEN-but-not-`.locked`
+(current-anchored) feeder. Isolated with a throwaway 2-fixture repro
+(deleted after use): feeder frozen via `current` at T0, dependent free with
+a direct dependency edge, two courts available — `buildSchedule` placed the
+dependent AT THE SAME INSTANT as the feeder (not >= the feeder's end),
+`status: "ok"`, `engine: "optimized"`; `validateAssignments` correctly
+flagged the resulting order conflict on the raw, pre-reconciliation board.
+A control repro (the identical bench board, but no frozen/current at all)
+showed ZERO order conflicts — confirms the gap is specific to a dependency
+resting on a FROZEN feeder, not a general `build.ts` encoding defect.
+Shared with POLISH (identical `frozen`/`current` mechanism, R20) — out of
+C4's file set to fix (`build-encode.ts` is shared BUILD/POLISH code).
+Recorded so C5/a POLISH follow-up finds a decision, not a miss.
+
+**Finding (this session) — a bracket/TBD-fixture wall, shared with
+BUILD/POLISH, out of scope, found via a real smoke FAIL.**
+`buildSchedule` cannot handle ANY fixture with empty `entrant_indices` (a
+knockout bracket's TBD round-2+ slots, unknown until earlier rounds are
+played) — the placement service's schema rejects the WHOLE request
+(`INVALID_REQUEST`), wholesale, before the solver ever runs, with no log
+line on that branch (same undocumented-silent-rejection shape as the
+empty-movable-fixtures finding above). Root-caused with temporary
+instrumentation directly in `build.ts`'s ERROR-status branch (reverted
+after, `cp` backup, verified `git status --porcelain` clean). CONFIRMED
+SHARED WITH BUILD, not reflow-specific: replaying the identical bracket
+board as `mode: "build"` hits the identical `INVALID_REQUEST`. So this
+ceiling has applied to BUILD/POLISH since Task 06b's placement cutover —
+ANY bracket/knockout stage beyond round 1 has never been able to reach the
+optimiser. What C4 changes: REFLOW is the DEFAULT auto mode, and the OLD
+z3 repair solver never sent fixtures over this wire at all, so a fresh
+bracket's default Auto-schedule click used to reach z3's repair search and
+now always falls back to `buildSchedule`'s own internal greedy — the SAME
+ceiling BUILD/POLISH already silently had, newly inherited by reflow. Not
+a crash, not a silently-illegal board — every violation is still
+accurately reported as a conflict (`warn.instruction`/`warn.order`),
+nothing vanishes without an explanatory row — a real optimiser-reach
+regression for bracket-shaped reflow specifically, not a safety one. Out
+of C4's file set to fix (`build-encode.ts`/`placement-client.ts`/
+`schema.py` are shared BUILD/POLISH code, explicitly excluded by the C4
+prompt's "Do NOT touch... POLISH/BUILD paths"). `scripts/smoke.ts`'s #452
+checks rewritten to branch on `solver.status`: `solver_unavailable` on
+this board shape logs the known cause and asserts the safety invariant
+only (every fixture placed or explained); otherwise the original,
+stronger rest-rule assertions run unchanged, so the check self-upgrades
+the day this gap closes rather than needing another edit.
+
+**`engine` tag, confirmed deliberate not accidental.** Wire forward
+(`schedule.ts`'s `solver: { engine: out.engine, ... }`) is unconditional —
+was a hardcoded `"z3"` pre-change. The fully-frozen fast path reports
+`engine: "greedy"` explicitly, matching BUILD's own precedent exactly
+(`build.ts`: "`engine: 'greedy'` here matches z3's own exact precedent:
+`incumbent === seedAssignments` always reported `'greedy'` there too,
+`already_optimal` included — the field names where the BOARD came from,
+not which solver was consulted"). A genuine solver win reports
+`"optimized"` — confirmed via a new mock-based wire-forwarding regression
+test (`schedule-reflow-cpsat-engine-tag.test.ts`, mutation-checked) AND via
+the bench's real 6/6 "optimized" runs. No test tries to force a genuine
+non-tied win on a real toy board — `schedule-solver-telemetry.test.ts`'s
+own history ("THREE assertions have now been tried here and each was a
+RACE") already proved that specific shape is machine-load-dependent in this
+repo, not a gap.
+
+**Bench (`packages/engine/scripts/bench-reflow.ts`, new).** Hand-
+replicates both reflow shapes (pre- and post-cutover) directly against the
+engine — `bench-repair.ts`'s "placed board with injected clashes" shape is
+the wrong one for REFLOW's ordinary case. N=6/side, n=30 fixtures, 60%
+pre-placed, prod-shaped legal board, real placement service:
+
+| | wall ms (min/med/max) | placed | conflicts | engine |
+|---|---|---|---|---|
+| OLD (repairSchedule/z3), deps ON | 0 / 1 / 3 | 30/30 ×6 | 0 ×6 | greedy ×6 |
+| NEW (buildSchedule), deps ON | 276 / 357 / 407 | 30/30 ×6 | 0 ×6 | optimized ×6 |
+| NEW (buildSchedule), deps OFF | 295 / 394 / 590 | 30/30 ×6 | 0 ×6 | optimized ×6 |
+
+GATE (blocking conflicts, new vs old): PASS both arms — new never worse.
+NEW is slower in absolute ms than OLD's fast "nothing to repair" path
+(OLD's repair solver often has nothing to do once greedy has legalised the
+seed; NEW always performs a genuine remote solve) — both are trivially
+inside the solve wall; "wall respected" is about staying inside budget,
+not raw parity with the old fast-path number.
+
+**Two real environment traps hit and resolved this session** (recorded for
+the next session, not product bugs — both already had standing findings in
+this repo's tooling memory that a careful re-read would have caught up
+front):
+- e2e on `127.0.0.1` 401s: the session cookie is Secure under a prod build
+  and Playwright's `APIRequestContext` will not send a Secure cookie to
+  `127.0.0.1`. First attempt: 0/20 spec tests passed (only the 2 setup
+  tests), every failure `comp.data!.id` undefined — looked like a total
+  product outage. Root-caused via the trace.zip network log
+  (`"cookies":[]` on the request). Fix: `PLAYWRIGHT_BASE=http://localhost`.
+- The 7-width mobile matrix races over one org: all 7 width projects share
+  one process/TAG, so a mutating spec's competition name collides across
+  concurrent workers. First `--workers=4` run: 2/7 width projects failed on
+  the identical shape. Reran `--workers=1` (removes the concurrency, not
+  the coverage): 9/9. Not a C4 regression — `mobile.spec.ts` is untouched
+  by this branch and the race is pre-existing.
+
+**Verified (all real, fresh DB per run, real placement service, real prod
+build for e2e):**
+- apps/web (`src/server src/lib`): 4827 / 4778 / 0 / 49 (total / passed /
+  failed / pending). 0 `UNAUTHENTICATED`, 0 `solver_unavailable` outside
+  the known bracket case, every `.testResults[].name` inside the worktree.
+- engine: 4004 / 3985 / 0 / 19. `repair*.test.ts`/`z3-*.test.ts`/
+  `placement-integration.test.ts` all pass — z3 path compiles and passes,
+  unreferenced by REFLOW.
+- e2e: `z3-auto-schedule.spec.ts` + `schedule-board.spec.ts`
+  (`--project=parallel`, full both files) 22/22 — includes both
+  brief-named tests by exact title. `mobile.spec.ts`'s schedule-reflow
+  coverage 9/9 across all 7 width projects.
+- smoke: 836/0, after fixing 3 real FAILs the first full run found — all
+  three root-caused (the bracket/TBD finding above, twice, plus a stale
+  `tiers_completed === 0` premise directly caused by this session's own
+  wiring change).
+- Regression: churn-minimization, engine-tag wire forwarding (new,
+  mutation-checked), round-order closure — all exist, all pass.
+- i18n: diff touches only `schedule.ts`, 5 test files, `bench-reflow.ts`,
+  `scripts/smoke.ts` — zero user-facing strings, no locale dict update
+  owed. `openapi:gen` — zero diff. `packages/engine` + `apps/web`
+  typecheck and lint both clean.
+
+PR: see the row above for the link once opened.
