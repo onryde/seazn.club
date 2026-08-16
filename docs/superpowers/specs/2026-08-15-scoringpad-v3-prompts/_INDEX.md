@@ -18,7 +18,7 @@ one PR per wave, visual sign-off gate on each).
 | Wave | Prompt file | Depends on | Status |
 |---|---|---|---|
 | R1 | `R1-chassis.md` + plan `docs/superpowers/plans/2026-08-15-scorepad-v3-r1-chassis.md` | — | **MERGED #577 `86ce08b3`** (2026-08-16) — chassis behind an EMPTY `V3_SKINS`. Gate: unit 7709/7774 (4 pre-existing, in a file this branch never touched), tsc 0, lint 0 errors, legacy pad e2e 32/32 unedited vs a prod build, gallery 12/12 with 0px overflow at 320. Visual sign-off was the ABSENCE of change — owner acked by merging |
-| R2 | `R2-cricket.md` | R1 | TODO |
+| R2 | `R2-cricket.md` + plan `docs/superpowers/plans/2026-08-16-scorepad-v3-r2-cricket.md` | R1 | **IN FLIGHT** (2026-08-16) — worktree `.claude/worktrees/r2-cricket`, branch `feat/scorepad-v3-r2-cricket` off main `c8f0c916` |
 | R3 | `R3-football.md` | R1 | TODO |
 | R4 | `R4-tennis.md` | R1 | TODO |
 | R5 | `R5-racquet-split.md` | R1 | TODO |
@@ -128,3 +128,44 @@ Append one line per ruling: date, wave, decision, reason. Never delete.
 - **`violet-*` is used everywhere else in this app for AI surfaces**, yet spec
   §2.5 mandates a violet fill for primary tiles. Flag at the first gallery
   sign-off so the owner rules rather than discovering it mid-conversion.
+
+### R2 (2026-08-16) — owner rulings taken at scoping
+
+- **Cricket's 13 non-ball event types stay in the PAD, HYBRID surfacing.**
+  Toss, Review, Retire, Innings close and Declare become real phase-aware
+  tiles; the remaining 8 sit behind one `minor` "More" tile opening a sheet
+  that hosts the existing `padSpec(cfg)`-driven generic form. Reason: a
+  fully-declared tile set makes every FUTURE engine action silently
+  unreachable, while an all-generic surface is the monster-form grammar GF-7
+  exists to kill. Console authority chrome (Finalize/Forfeit/Abandon, D-12)
+  remains R7's; `/admin` is not in this programme.
+- **Recording chip is wired in R2 with the plan name parameterised** — the
+  `planLabel("pro")` literal dies before the chip first renders, so a
+  `pro_plus` org is never told the band is "available on Pro". Closes D-7 for
+  cricket rather than leaving §2.6 contradicted on a converted sport.
+- **Violet primary tiles are built exactly as §2.5 specs**, with the
+  `violet-*`-means-AI collision flagged in R2's gallery for the owner's
+  ruling with screenshots present. A recolour after that is a token change.
+
+### R2 — false premises found (verified 2026-08-16, before any code)
+
+- **R1 shipped NO v3 render host.** All six chassis components
+  (`scorebug`, `tile-grid`, `detail-dock`, `context-strip`, `swap-sheet`,
+  `recording-chip`) have **zero** production import sites — their only
+  consumers are their own `__tests__/` siblings. `registry.tsx:280` throws
+  `"resolved to the v3 lane but no v3 renderer is wired yet"` on purpose.
+  So R2 builds the **pad host** as well as the guided-sheet renderer and the
+  cricket skin — three chassis-sized items, not one conversion.
+- `SkinDefV3`'s methods take **`(view)` only**, not the spec §2.8 sketch's
+  `(view, ctx)`. Briefs written against the sketch mis-scope the skin.
+- The brief's "the over-dots strip must not assume 6" is **already half
+  closed**: `cricket-skin.tsx:98` `ballsPerOverOf()` reads cfg with 6 only as
+  an absent/invalid fallback, and `hundred` sets `ballsPerOver: 5` at
+  `cricket.ts:2811`. The v3 strip must carry that helper across, not invent it.
+- Cricket already has **20 `pad.cricket.*` keys** in `PAD_LABEL_KEYS` and 76
+  cricket keys per locale — but **no ribbon keys anywhere**, exactly as R1
+  predicted. `scorepad.skin.cricket.*` (11 keys per locale) exists in the
+  dictionaries while `scoring-vocab.ts` lists none of them.
+- **Four e2e specs drive the cricket pad today** (`scorepad-skins`,
+  `scorepad-v2`, `scoring`, `scoring-vocab-labels`). Flipping the lane breaks
+  all four; updating them is R2 scope, not R8's.
