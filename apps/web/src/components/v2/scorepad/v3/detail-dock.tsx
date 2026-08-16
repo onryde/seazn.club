@@ -1,0 +1,350 @@
+"use client";
+// Detail Dock — R1 chassis (Task 7). The tap-first flow's ONE enrichment
+// surface: a tap on TileGrid (./tile-grid.tsx) commits its event
+// IMMEDIATELY and durably (queue.ts's `enqueueHeld`, Task 4) — this
+// component is what appears for the ~6s HOLD_MS window afterward, offering
+// OPTIONAL chips (scorer, assist, boundary type, card colour…) that mutate
+// the still-unsent payload before it drains. It never asks for anything the
+// payload REQUIRES — only enrichment — and it never blocks: dismissing
+// early sends immediately (`releaseHeld`), exactly the same outcome as
+// letting the window expire on its own (queue.ts's own release tick fires
+// the identical `onDue` either way — see that file's header).
+//
+// SPLIT (matches scorebug.tsx/assertScorebugSpec and
+// tile-grid.tsx/tilesForPhase's own convention): the testable logic lives
+// in the pure-ish `dockController` below, never in `DetailDock`'s own JSX —
+// apps/web vitest is environment:"node", no jsdom (task-7-brief.md).
+//
+// RENDERER DESIGN (frontend-design pass, R1/Task 7). Two visual worlds
+// already exist in this wave: the Scorebug's stadium-night LCD tile (Task
+// 5, ./scorebug.tsx — bg-night, lime-400 digits, an always-on AUTHORITATIVE
+// readout) and TileGrid's daylight control surface (Task 6, ./tile-grid.tsx
+// — white/slate tiles, violet-600 primary; "a tile is a control, never a
+// readout"). The Dock belongs to neither outright: it is a CONSEQUENCE of a
+// tap on the daylight control surface, not a second readout, so it never
+// borrows .app-display or the night background — but a plain white popover
+// would send exactly the wrong signal for something optional and about to
+// vanish in six seconds. Resolution: a warm cream surface (bg-cream — the
+// SAME --mk-cream token the night tile prints ITS text in, repurposed here
+// as a fill, a literal bridge colour between the two worlds) carrying the
+// Scorebug's own `rounded-2xl border-t-2 border-lime-400` signature
+// verbatim, so the Dock reads as "the thing that just happened on the
+// readout, given a moment to breathe" rather than a disconnected system
+// dialog. The one signature element: a lime depletion bar along the top
+// edge that drains from full width to zero over the ACTUAL remaining hold
+// window — a pure CSS width transition, no JS animation loop, respecting
+// prefers-reduced-motion — the same --mk-live/"ticking" language already
+// used for the live-match dot elsewhere in this app (nav.tsx's
+// .app-gantry, scorebug.tsx's own live dot), applied here to visualise
+// "this is closing" instead of "this is live". Selected chips fill
+// violet-600 — TileGrid's own primary accent, reused deliberately: a
+// selected chip and a primary tile are the same weight of "the chosen
+// thing". Unselected chips mirror TileGrid's "standard" tile treatment
+// (white, slate-200 border) sized to a 44px rounded-full pill — this exact
+// product's OWN existing chip shape (attribution-picker.tsx's
+// `chipClass`), not an invented one. Typography stays off .app-display for
+// the same reason tile-grid.tsx gives: a chip is a control, never a
+// readout.
+import { useEffect, useReducer, useRef, useState } from "react";
+import type { DockChip, DockSpec } from "./types";
+import { mutateHeld, releaseHeld } from "../queue";
+import type { QueueStore } from "../queue-store";
+
+/**
+ * The narrow surface `dockController` needs from the queue store —
+ * PAYLOAD-level, not the whole `PendingEvent` queue.ts's own `mutateHeld`
+ * operates on. This is what lets a `DockChip.mutate` (types.ts:
+ * `(payload) => payload`) be handed to `store.mutateHeld` COMPLETELY
+ * UNWRAPPED — no per-call adapter at the tap site, matching the brief's own
+ * acceptance criterion verbatim ("store.mutateHeld(heldId, chip.mutate)").
+ * `makeDockStore` below is the ONE place this file bridges to queue.ts's
+ * real, PendingEvent-level primitives (Task 4) — a controller test can mock
+ * this interface directly with two `vi.fn()`s and never construct a
+ * QueueStore/PendingEvent at all (__tests__/dock.test.ts's own split).
+ */
+export interface DockStore {
+  /** Same contract as queue.ts's `mutateHeld`: resolves false — a no-op —
+   *  if `id` no longer names a currently-held entry (already released,
+   *  dropped, or its window already closed); never throws. */
+  mutateHeld: (id: string, fn: (payload: Record<string, unknown>) => Record<string, unknown>) => Promise<boolean>;
+  /** Same contract as queue.ts's `releaseHeld`: a no-op if `id` no longer
+   *  names a currently-held entry. */
+  releaseHeld: (id: string) => Promise<void>;
+}
+
+/**
+ * Production adapter: wraps a real `QueueStore` (queue-store.ts) into the
+ * payload-level `DockStore` shape above, via queue.ts's own `mutateHeld`/
+ * `releaseHeld` (Task 4) — the ONLY place in this file that touches the raw
+ * `PendingEvent` shape. `fn` (a `DockChip.mutate`) only ever sees/returns
+ * `payload`; every other `PendingEvent` field (type, expectedSeq, attempts,
+ * …) passes through untouched, proved directly in
+ * __tests__/dock.test.ts's own `makeDockStore` block.
+ */
+export function makeDockStore(store: QueueStore): DockStore {
+  return {
+    mutateHeld: (id, fn) =>
+      mutateHeld(store, id, (event) => ({ ...event, payload: fn(event.payload as Record<string, unknown>) })),
+    releaseHeld: (id) => releaseHeld(store, id),
+  };
+}
+
+export interface DockChipView {
+  chip: DockChip;
+  selected: boolean;
+}
+
+export interface DockController {
+  /** `spec.title`, verbatim (types.ts gives it no "i18n key" comment —
+   *  same pre-resolved-string convention as ScorebugSpec.context) — see
+   *  DetailDock's own render for how this combines with the chassis-fixed
+   *  `pad.dock.title` copy (Task 3). */
+  title: string;
+  /** Live view of every chip + its selection state — a GETTER, not a
+   *  snapshot, so a caller re-reading this after `tapChip` resolves sees
+   *  the update without a fresh `dockController(...)` call, which would
+   *  also silently reset every OTHER chip's own selection back to
+   *  unselected. */
+  readonly chips: DockChipView[];
+  /**
+   * Apply `chipId`'s own `mutate` to the held payload — EXACTLY ONCE ever,
+   * for the life of this controller instance, and marks it selected once
+   * the store confirms the mutation actually applied (a `false` result —
+   * the window already closed under us — leaves it unselected, since
+   * showing "selected" for a mutation that never landed would mislead the
+   * scorer). A tap on an ALREADY-selected chip, or an unknown `chipId`, is
+   * a no-op.
+   *
+   * RULING on the second case (the brief leaves this open): DockChip
+   * declares no inverse/revert of `mutate` (types.ts), and reconstructing
+   * one by snapshotting "the payload right before this chip's own mutate"
+   * is UNSOUND the instant a second, unrelated chip gets selected
+   * afterward — reverting chip A would also discard chip B's mutation,
+   * corrupting a payload neither chip's own author asked to touch. "At
+   * most once, never automatically undone" is the only behaviour that
+   * cannot corrupt the payload however many OTHER chips get tapped in
+   * between — see __tests__/dock.test.ts's own "second tap" block.
+   */
+  tapChip(chipId: string): Promise<void>;
+  /** Release the held entry now — "send now". Delegates to the store's
+   *  `releaseHeld`, itself idempotent (queue.ts), so a repeat call (e.g. a
+   *  double-tap on the dismiss control) is harmless. */
+  dismiss(): Promise<void>;
+}
+
+/**
+ * `null` in, `null` out — no dock rendered (a skin's own `dock(eventType,
+ * view)` returns `null` for an event with nothing worth enriching). For a
+ * real spec, returns a controller instance whose `chips`/selection state is
+ * privately held in closure — NOT reconstructed on every call, so a caller
+ * (DetailDock, below) must keep ONE instance alive across a tap's whole
+ * lifetime rather than calling this fresh on every render.
+ */
+export function dockController(spec: DockSpec | null, heldId: string, store: DockStore): DockController | null {
+  if (spec === null) return null;
+  const selectedIds = new Set<string>();
+  return {
+    title: spec.title,
+    get chips(): DockChipView[] {
+      return spec.chips.map((chip) => ({ chip, selected: selectedIds.has(chip.id) }));
+    },
+    async tapChip(chipId: string): Promise<void> {
+      if (selectedIds.has(chipId)) return; // second tap on a selected chip: no-op, see this interface's own doc
+      const chip = spec.chips.find((c) => c.id === chipId);
+      if (chip === undefined) return; // unknown chip id: nothing to apply
+      const applied = await store.mutateHeld(heldId, chip.mutate);
+      if (applied) selectedIds.add(chipId);
+    },
+    dismiss(): Promise<void> {
+      return store.releaseHeld(heldId);
+    },
+  };
+}
+
+export interface DetailDockProps {
+  /** The just-committed event's own dock spec — a skin's `dock(eventType,
+   *  view)` (types.ts). `null` renders nothing, mirroring `dockController`'s
+   *  own contract — a caller can pass this straight through with no
+   *  separate presence check. */
+  spec: DockSpec | null;
+  /** The held entry's `idempotencyKey` (queue.ts `enqueueHeld`'s own return
+   *  value) — identifies WHICH queued event this dock's chips mutate. */
+  heldId: string;
+  /** Payload-level bridge to the queue store — build via `makeDockStore`
+   *  above, around whatever `QueueStore` backs this pad. Should be a
+   *  STABLE reference across renders (e.g. memoized by the caller,
+   *  mirroring how use-pad-pipeline.ts memoizes its own store on
+   *  `dbName`): this component keys its internal controller's lifetime on
+   *  `heldId` alone, never on `store`'s identity, so an unstable `store`
+   *  reference costs nothing beyond the very first render for a given
+   *  `heldId` — see the render-phase reset below. */
+  store: DockStore;
+  /** Epoch ms when the hold window closes on its own — the SAME value as
+   *  the held `PendingEvent.heldUntil` (types.ts; queue.ts's `HOLD_MS`
+   *  applied at `enqueueHeld` time). Drives ONLY the visual countdown/
+   *  depletion bar; the actual expiry and send are queue.ts's own release
+   *  tick, entirely independent of whether this component is even
+   *  mounted. */
+  heldUntil: number;
+  /** Same MsgFn-shaped lookup scorebug.tsx's and tile-grid.tsx's own `t`
+   *  prop take (useMsg()/msgFor() both hand callers this shape) — loosely
+   *  typed (not the stricter MessageKey-only MsgFn) because
+   *  DockChip.label/DockSpec.title are plain `string` (types.ts —
+   *  skin-authored i18n keys, not literal MessageKeys), same reasoning as
+   *  tile-grid.tsx's own `t` prop. */
+  t: (key: string, vars?: Record<string, string | number>) => string;
+  /** Test-only clock override. Defaults to `Date.now`. */
+  now?: () => number;
+}
+
+/**
+ * Renders a DockSpec: a fixed "Add detail — optional" eyebrow
+ * (`pad.dock.title`, Task 3) plus the spec's own (already-resolved)
+ * `title`, a row of 44px chip buttons, a live "clears in Ns" countdown
+ * (`pad.dock.clears`), and an explicit dismiss control (reuses
+ * `disc.pad.dismiss` — "Dismiss" — rather than minting a new dictionary key
+ * this task is not permitted to add).
+ *
+ * The controller instance is reset ONLY when `heldId` changes (a
+ * render-phase state adjustment — React's own sanctioned pattern for this,
+ * already used elsewhere in this tree: use-pad-pipeline.ts's `foldedState`
+ * useMemo + its render-phase `setLastRejection`). Calling `dockController`
+ * fresh on every render would silently wipe out in-progress chip
+ * selections on every countdown tick.
+ */
+export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }: DetailDockProps) {
+  // Render-phase state reset (React's own sanctioned "adjust state during
+  // render" recipe — https://react.dev/reference/react/useState#storing-
+  // information-from-previous-renders — TWO useState calls, deliberately
+  // NOT a ref: this repo's react-hooks/refs lint rule forbids reading OR
+  // writing a ref's `.current` during render, stricter than plain React
+  // itself, so the "previous heldId" comparison below must be state too).
+  // Bundles every piece of per-held-entry state that must reset together
+  // exactly when `heldId` changes to a genuinely NEW held entry — never on
+  // an ordinary re-render (a countdown tick, a parent re-render with the
+  // same heldId) — into ONE guarded block, so nothing can reset out of
+  // step with anything else.
+  const [controller, setController] = useState<DockController | null>(() => dockController(spec, heldId, store));
+  const [remainingS, setRemainingS] = useState(() => Math.max(0, Math.ceil((heldUntil - now()) / 1000)));
+  const [holdMsAtMount, setHoldMsAtMount] = useState(() => Math.max(0, heldUntil - now()));
+  const [depleted, setDepleted] = useState(false);
+  const [controllerHeldId, setControllerHeldId] = useState(heldId);
+  if (controllerHeldId !== heldId) {
+    setControllerHeldId(heldId);
+    setController(dockController(spec, heldId, store));
+    setRemainingS(Math.max(0, Math.ceil((heldUntil - now()) / 1000)));
+    setHoldMsAtMount(Math.max(0, heldUntil - now()));
+    setDepleted(false);
+  }
+
+  const [, bump] = useReducer((n: number) => n + 1, 0);
+  const mountedRef = useRef(true);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
+
+  // Subscription-only (react-hooks/set-state-in-effect): every setState
+  // call below runs inside a DEFERRED callback (a timer/rAF tick), never
+  // synchronously as part of the effect body itself — the initial value
+  // and any heldId-driven reset are both already handled by the
+  // render-phase block above, so this effect's only job is to keep ticking
+  // for as long as the SAME controller (held entry) is current.
+  useEffect(() => {
+    if (controller === null) return;
+    const raf = requestAnimationFrame(() => setDepleted(true));
+    const tick = setInterval(() => {
+      setRemainingS(Math.max(0, Math.ceil((heldUntil - now()) / 1000)));
+    }, 250);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearInterval(tick);
+    };
+    // heldUntil/now intentionally excluded: this effect re-arms only when
+    // the CONTROLLER identity changes (i.e. a genuinely new held entry —
+    // see the render-phase reset above), not on every heldUntil/now
+    // reference a caller happens to pass.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controller]);
+
+  if (controller === null) return null;
+
+  const handleTap = (chipId: string) => {
+    void controller.tapChip(chipId).then(() => {
+      if (mountedRef.current) bump();
+    });
+  };
+  const handleDismiss = () => {
+    void controller.dismiss();
+  };
+
+  const prefersReducedMotion =
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      : false;
+
+  return (
+    <div
+      role="group"
+      aria-label={t("pad.dock.title")}
+      className="overflow-hidden rounded-2xl border-t-2 border-lime-400 bg-cream shadow-lg"
+    >
+      <div
+        aria-hidden="true"
+        className="h-[3px] bg-lime-400"
+        style={{
+          width: depleted ? "0%" : "100%",
+          transition: prefersReducedMotion ? "none" : `width ${holdMsAtMount}ms linear`,
+        }}
+      />
+
+      <div className="flex items-start justify-between gap-2 px-4 pt-3">
+        <div className="min-w-0">
+          <p className="mk-eyebrow text-slate-600">{t("pad.dock.title")}</p>
+          {controller.title && <p className="mt-1 truncate text-sm font-semibold text-slate-800">{controller.title}</p>}
+        </div>
+        <button
+          type="button"
+          onClick={handleDismiss}
+          aria-label={t("disc.pad.dismiss")}
+          style={{ minHeight: 44, minWidth: 44 }}
+          className="-mr-2 -mt-1 flex shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-900/5 hover:text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+        >
+          <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round">
+            <path d="M3 3l10 10M13 3L3 13" />
+          </svg>
+        </button>
+      </div>
+
+      <div className="flex flex-wrap gap-2 px-4 py-3">
+        {controller.chips.map(({ chip, selected }) => (
+          <button
+            key={chip.id}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => handleTap(chip.id)}
+            style={{ minHeight: 44 }}
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors ${
+              selected ? "border-transparent bg-violet-600 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            }`}
+          >
+            {selected && (
+              <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3.5 8.5l3 3 6-7" />
+              </svg>
+            )}
+            {t(chip.label)}
+          </button>
+        ))}
+      </div>
+
+      <div className="px-4 pb-3">
+        <span className="text-xs font-medium text-slate-600" style={{ fontVariantNumeric: "tabular-nums" }}>
+          {t("pad.dock.clears", { s: remainingS })}
+        </span>
+      </div>
+    </div>
+  );
+}
