@@ -20,6 +20,7 @@ import {
   type SchedulableFixture,
 } from "./calendar.ts";
 import { SchedulingConstraints, type HardConstraint } from "./constraints.ts";
+import { dayKeyInTz } from "./tz.ts";
 
 const TZ = "America/Los_Angeles";
 const SAT_1000_LOCAL = Date.UTC(2026, 6, 11, 17, 0);
@@ -42,6 +43,47 @@ const cards = (n: number): SchedulableFixture[] =>
 // whole set and a selector-driven rule is exercised rather than skipped.
 const ruleFixturesFor = (n: number): RuleFixture[] =>
   cards(n).map((f) => ({ id: f.id, extKey: f.id, divisionId: "d1", winnerTo: null }));
+
+// `cards()` deliberately shares one entrant so the rule under test is the only
+// thing that can move a card. That makes it USELESS for telling a universal
+// scope from a named one: with every card on `e1`, a cap scoped to `e1` and a
+// cap scoped to "every entrant" are the same assertion. These cards share
+// nothing, so a named-entrant cap binds exactly one of them and only a
+// universal cap binds them all.
+const disjointCards = (n: number): SchedulableFixture[] =>
+  Array.from({ length: n }, (_, i) => ({
+    id: `g${i + 1}`,
+    home: `h${i + 1}`,
+    away: `a${i + 1}`,
+    divisionId: "d1",
+    // `SchedulableFixture.people` is OPTIONAL (calendar.ts:82) and `scopeRowOf`
+    // fills `people: [...(f.people ?? [])]`. Omitting it makes every
+    // person-scoped rule silently bind nothing, so a person case built on a
+    // helper that forgets this passes while asserting nothing.
+    people: [`p-h${i + 1}`, `p-a${i + 1}`],
+  }));
+
+// `configFor` derives its rule fixtures from `cards(n)`. Cases that supply
+// their own board — disjoint entrants, or two divisions — must derive them from
+// THAT board, or every selector-resolved rule silently names nothing.
+const configOver = (rule: HardConstraint, fixtures: SchedulableFixture[], startAt: number) => ({
+  startAt,
+  matchMinutes: 30,
+  gapMinutes: 0,
+  perEntrantMinRest: 0,
+  courts: ["C1", "C2"],
+  blackouts: [],
+  sessionWindows: [],
+  tz: TZ,
+  horizonMinutes: 60 * 24 * 21,
+  ruleFixtures: fixtures.map((f) => ({
+    id: f.id,
+    extKey: f.id,
+    divisionId: f.divisionId,
+    winnerTo: null,
+  })),
+  constraints: SchedulingConstraints.parse({ hard: [rule] }),
+});
 
 const configFor = (rule: HardConstraint, n: number, startAt: number) => ({
   startAt,
@@ -128,6 +170,56 @@ describe("the day-cap read and write resolve the same rules", () => {
         .filter((c) => c.reason === "instruction")
         .map((c) => c.details),
     ).toEqual([]);
+  });
+});
+
+// Guards every universal-scope case added later. A universal scope is coming to
+// `ConstraintScope`, and the obvious way to cover it — another `FAMILIES` row —
+// would be measured against `cards()`, where every card sits on `e1` and the
+// existing cap row is already scoped to `e1`. On that board a universal cap and
+// a named cap are indistinguishable, so the row would pass without ever
+// exercising the new scope. This proves the disjoint helper CAN tell them
+// apart, using only the scopes that exist today.
+describe("the parity harness can tell scopes apart", () => {
+  it("a named-entrant cap on disjoint cards binds one card, not the set", () => {
+    const n = 6;
+    const fixtures = disjointCards(n);
+    const config = configOver(
+      { type: "max_fixtures_per_day", count: 1, scope: { kind: "entrant", entrantId: "h1" } },
+      fixtures,
+      SAT_1000_LOCAL,
+    );
+
+    const { assignments, conflicts } = slotFixtures({ fixtures, config });
+    expect(assignments).toHaveLength(n);
+    expect(conflicts.filter((c) => c.reason === "no_slot")).toEqual([]);
+
+    // THE DISCRIMINATING ASSERTION. `h1` is on ONE card, so a cap of 1 scoped to
+    // `h1` costs nothing and all six fit on day one. If this ever reads as more
+    // than one day, the scope is being ignored — and every universal-scope
+    // assertion built on this helper would be worthless.
+    expect(new Set(assignments.map((a) => dayKeyInTz(a.startAt, TZ))).size).toBe(1);
+
+    expect(
+      validateAssignments(assignments, config)
+        .filter((c) => c.reason === "instruction")
+        .map((c) => c.details),
+    ).toEqual([]);
+  });
+
+  it("the same cap on the SHARED-entrant board does bite", () => {
+    // The control. Same rule shape, same count, board where `e1` really is on
+    // every card: three cards capped at 1 must land on three days. Without this
+    // the assertion above could pass because the cap does nothing anywhere.
+    const n = 3;
+    const config = configFor(
+      { type: "max_fixtures_per_day", count: 1, scope: { kind: "entrant", entrantId: "e1" } },
+      n,
+      SAT_1000_LOCAL,
+    );
+    const { assignments } = slotFixtures({ fixtures: cards(n), config });
+    expect(assignments).toHaveLength(n);
+    expect(new Set(assignments.map((a) => dayKeyInTz(a.startAt, TZ))).size).toBe(3);
   });
 });
 

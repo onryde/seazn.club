@@ -892,62 +892,102 @@ per (entity, day) over that entity's own fixtures."
 
 ---
 
-### Task 5: Decide and test what an empty `people` list means
+### Task 4b: Expand a universal scope into N `RuleGroup`s at the ACL
 
-`SchedulableFixture.people` is optional (`calendar.ts:82`) and `scopeRowOf`
-fills `people: [...(f.people ?? [])]`. On a board whose caller omits `people`,
-`entityKeysFor` returns `[]` for `every_person`, no counter is ever
-incremented, and the cap binds nothing — a rule that reads back to the
-organiser as enforced and enforces nothing. This is the repo's "seam left for
-later ships inert" class and it must not ship undecided.
+**Re-scoped 2026-08-16 after rebasing onto C10 (#586).** The cap has THREE
+consumers, not two. `proto/scheduler.proto:154-170` rejects scopes on the wire
+by design — "the ACL resolves the scope and sends the RESULT" — and sends
+`RuleGroup { fixture_indices, min_rest_minutes, max_fixtures_per_day }`. A
+universal scope resolved to ONE `RuleGroup` is a competition-wide cap on the
+placement service, the same defect as Task 4's.
+
+`rule_groups` is already `repeated`, so a universal scope expands into **one
+`RuleGroup` per entity**, each with that entity's own `fixture_indices` and the
+same cap. **No proto change. No Python change.** The service keeps applying a
+rule to a set of fixture positions and never learns what a person is.
+
+**Files:**
+- Modify: whichever TS file builds `rule_groups` for `SolveBuildRequest` —
+  locate it first (`grep -an "rule_groups\|ruleGroups" packages/engine/src apps/web/src`)
+- Test: the placement-client / build suite covering rule-group construction
+
+**Interfaces:**
+- Consumes: `entityKeysFor` (Task 3), `scopeCoversFixture`.
+
+- [ ] **Step 1: Locate the rule-group builder and read how it resolves scopes today**
+- [ ] **Step 2: Write the failing test** — an `every_entrant` cap over a board
+      of N disjoint entrants produces N rule groups, each naming that entrant's
+      own fixture indices, each carrying the same `max_fixtures_per_day`; and a
+      `competition`-scoped cap still produces exactly one.
+- [ ] **Step 3: Run, confirm it fails** — today it produces one group holding
+      every fixture index.
+- [ ] **Step 4: Implement the expansion; run the suite**
+- [ ] **Step 5: Guard the group count.** N entities on a large board is N rule
+      groups; confirm a realistic board does not blow the request size, and
+      `log()` the group count so a pathological expansion is visible rather
+      than silent.
+- [ ] **Step 6: Commit**
+
+---
+
+### Task 5: Warn when a person cap meets an empty roster
+
+**Re-scoped 2026-08-16 — finding 2 was too pessimistic.** `people` IS
+populated in production: `entrant_members`
+(`db/migration/v2-engine/tables/V213__entrant_members.sql`) links entrant to
+person, `peopleByEntrant` (`apps/web/src/server/usecases/schedule.ts:556-560`)
+reads it, and it is called at five production entry points (`:725, :1139,
+:2079, :2395, :2639`). Rosters are captured at entrant creation via the "Find
+player…" directory picker (`apps/web/src/components/v2/entrants-panel.tsx:1444-1475`).
+So `every_person` binds real data on the DB-backed path and needs no new
+mechanism.
+
+What remains is narrower: an entrant whose roster is EMPTY — a name typed in,
+members never added. The cap binds nothing for that entrant while appearing to
+be in force. That has a specific fix ("add players to X"), so the right
+behaviour is a warning that NAMES those entrants, not a blanket refusal.
 
 **Files:**
 - Modify: `packages/engine/src/scheduling/calendar.ts`
 - Test: `packages/engine/src/scheduling/calendar-placer-verifier-parity.test.ts`
 
-- [ ] **Step 1: Establish which callers populate `people`**
-
-```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/daily-cap && \
-  grep -ran "people:" packages/engine/src apps/web/src --include='*.ts' --include='*.tsx' \
-  | grep -v node_modules | grep -v "\.test\." | head -40
-```
-
-Record the answer in the plan's status log before choosing. If the real
-scheduling entry points do NOT populate `people`, `every_person` is inert in
-production and that is a blocker to be raised, not worked around.
-
-- [ ] **Step 2: Write the failing test for the chosen behaviour**
-
-Recommended behaviour — an `every_person` cap on a board with no person data
-is a REFUSAL, not a silent pass, because silently ignoring the organiser's
-headline constraint is the worse failure:
+- [ ] **Step 1: Write the failing test**
 
 ```ts
-it("refuses an every_person cap on a board carrying no person data", () => {
-  // `people` omitted on every card — the default for any caller that has not
-  // been taught to populate it. The cap must not silently bind nothing.
-  const fixtures = cards(4); // `cards` sets no `people` — deliberate here
+it("warns, naming the entrants, when an every_person cap meets an empty roster", () => {
+  // `cards()` sets no `people` — the empty-roster shape. The cap must not
+  // silently bind nothing, and the warning has to name WHICH entrants are
+  // missing members or it is not actionable.
+  const n = 4;
   const config = configFor(
     { type: "max_fixtures_per_day", count: 2, scope: { kind: "every_person" } },
-    4,
+    n,
     SAT_1000_LOCAL,
   );
-  const { conflicts } = slotFixtures({ fixtures, config });
-  expect(conflicts.some((c) => c.reason === "instruction")).toBe(true);
+  const { conflicts } = slotFixtures({ fixtures: cards(n), config });
+  const warned = conflicts.filter((c) => c.reason === "instruction");
+  expect(warned.length).toBeGreaterThan(0);
+  expect(JSON.stringify(warned)).toContain("e1");
+});
+
+it("does NOT warn when every entrant on the board has people", () => {
+  // The control: the same cap over `disjointCards`, which carry people.
+  const n = 4;
+  const fixtures = disjointCards(n);
+  const config = configOver(
+    { type: "max_fixtures_per_day", count: 2, scope: { kind: "every_person" } },
+    fixtures,
+    SAT_1000_LOCAL,
+  );
+  expect(
+    slotFixtures({ fixtures, config }).conflicts.filter((c) => c.reason === "instruction"),
+  ).toEqual([]);
 });
 ```
 
-- [ ] **Step 3: Run, confirm it fails**
-
-Expected: FAIL — currently zero conflicts, because the cap is inert.
-
-- [ ] **Step 4: Implement the guard, and run the suite**
-
-Emit the conflict where the other instruction-rule conflicts are emitted, so
-it travels the same path to the organiser. Then re-run Task 3 Step 8's command
-and confirm nothing else moved.
-
+- [ ] **Step 2: Run, confirm the first fails** — today zero conflicts, cap inert.
+- [ ] **Step 3: Implement, emitting where other instruction conflicts are emitted**
+- [ ] **Step 4: Re-run Task 3 Step 8's command; confirm nothing else moved**
 - [ ] **Step 5: Commit**
 
 ---
