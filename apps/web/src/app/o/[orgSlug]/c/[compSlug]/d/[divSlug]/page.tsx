@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 // Division console (PROMPT-15 task 1): entrants & rosters, fixture console
 // (per stage: generate/complete/schedule), standings with the cascade trace.
 import Link from "@/components/ui/console-link";
-import { ClipboardList, Globe, MonitorPlay, Printer } from "lucide-react";
+import { Globe, MonitorPlay, Printer } from "lucide-react";
 import { StatusChip, divisionChipState } from "@/components/ui/status-chip";
 import { routes } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
@@ -221,14 +221,8 @@ export default async function DivisionPage({
               <MonitorPlay className="h-4 w-4" strokeWidth={1.75} />
               <span className="hidden sm:inline">{t(dict, "action.slideshow")} ↗</span>
             </Link>
-            <Link
-              href={routes.divisionRegistrations(orgSlug, compSlug, divSlug)}
-              aria-label={t(dict, "aria.registrations")}
-              className="btn btn-ghost gap-1.5"
-            >
-              <ClipboardList className="h-4 w-4" strokeWidth={1.75} />
-              <span className="hidden sm:inline">{t(dict, "action.registrations")}</span>
-            </Link>
+            {/* Division-level registration nav link removed (RS001 demolition,
+                #588) — competition-level Registration hub replaces it (RS004). */}
             {competition.visibility !== "private" && (
               // G9: straight to this division's public page.
               <a

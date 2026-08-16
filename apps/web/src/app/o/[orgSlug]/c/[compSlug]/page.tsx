@@ -239,7 +239,8 @@ export default async function CompetitionPage({
                             name={d.name}
                             items={[
                               { label: t(dict, "action.schedule"), href: routes.divisionSchedule(orgSlug, compSlug, d.slug) },
-                              { label: t(dict, "action.registrations"), href: routes.divisionRegistrations(orgSlug, compSlug, d.slug) },
+                              // action.registrations item removed (RS001
+                              // demolition, #588) — RS004's hub replaces it.
                               { label: t(dict, "action.slideshow"), href: routes.slideshowDivision(d.id), external: true },
                             ]}
                           />

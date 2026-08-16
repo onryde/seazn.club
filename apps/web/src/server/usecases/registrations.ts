@@ -12,19 +12,15 @@ import "server-only";
 // connection like the public read models — registrants have no org session;
 // the access token (sha256 stored, shown once) is their credential.
 // Organiser paths ride withTenant/RLS as usual.
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import type postgres from "postgres";
 import type Stripe from "stripe";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { LEGAL_VERSION } from "@/lib/legal";
 import { getLimit, hasFeature, requireFeature } from "@/lib/entitlements";
 import { platformFeeDefault } from "@/lib/platform-settings";
 import { getStripe } from "@/lib/stripe";
-import { captureServer } from "@/lib/posthog-server";
-import { EVENTS } from "@/lib/analytics-events";
 import {
-  sendRegistrationEmail,
   sendPaymentReminderEmail,
   sendRegistrationPromotedEmail,
   sendRefundIssuedEmail,
@@ -33,15 +29,10 @@ import {
 } from "@/lib/email";
 import { routes } from "@/lib/routes";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
-import { captureRegistrantLocale } from "@/lib/registrant-locale";
-import { generateRefCode, isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
+import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type {
-  PublicRegisterRequest,
-  PutRegistrationSettings,
-  RegistrationFormField,
-} from "@/server/api-v1/schemas";
+import type { PutRegistrationSettings, RegistrationFormField } from "@/server/api-v1/schemas";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
@@ -101,10 +92,6 @@ export function hashRegistrationToken(secret: string): string {
   return createHash("sha256").update(secret, "utf8").digest("hex");
 }
 
-function mintRegistrationToken(): string {
-  return REGISTRATION_TOKEN_PREFIX + randomBytes(24).toString("base64url");
-}
-
 /** Whole years between dob and `at` (doc 06 §2.1: never approximate). */
 export function ageAt(dobIso: string, at: Date): number {
   const dob = new Date(`${dobIso}T00:00:00Z`);
@@ -141,13 +128,21 @@ export function isMinor(dobIso: string, now: Date): boolean {
  *
  * The veto lives server-side so a forged request cannot reach the person
  * resolver; the schema's matching rule is only the useful error message.
+ *
+ * Orphaned by the RS001 registration demolition (#588) — its only caller,
+ * `submitRegistration`, is deleted (the public submit route is gone until
+ * RS003). Kept, with its schema coupling removed, because the #402 rule
+ * itself is unchanged and RS002/RS003 need it verbatim for the new
+ * group-shaped submit flow.
  */
 export function deriveLinkUserId(
   sessionUserId: string | null,
-  input: Pick<
-    PublicRegisterRequest,
-    "registering_self" | "guardian_name" | "guardian_consent" | "dob"
-  >,
+  input: {
+    registering_self?: boolean;
+    guardian_name?: string | null;
+    guardian_consent?: boolean;
+    dob?: string | null;
+  },
   now: Date,
 ): string | null {
   if (!sessionUserId) return null;
@@ -269,61 +264,133 @@ export interface RegistrationSettingsRow {
   updated_at: Date | null;
 }
 
+/**
+ * `registrations` (V364): one entry (team/pair/individual) inside a cart.
+ * Payment/contact/identity columns moved off this row onto its
+ * `registration_groups` parent — see `RegistrationGroupRow` — because one
+ * cart pays once, but a cart can hold several entries (design §3). Roster
+ * players moved to `registration_players` — see `RegistrationPlayerRow`.
+ */
 export interface RegistrationRow {
   id: string;
   division_id: string;
   org_id: string;
-  status: "pending" | "paid" | "confirmed" | "waitlisted" | "withdrawn" | "expired";
-  /** Human-quotable reference (v3/05 §3); null on pre-v2 rows. */
-  ref_code: string | null;
+  status:
+    | "pending" | "paid" | "confirmed" | "waitlisted" | "withdrawn" | "expired"
+    | "rejected";
   display_name: string;
-  contact_email: string;
-  dob: string | null;
-  gender: string | null;
-  guardian_name: string | null;
-  guardian_consent: boolean;
   answers: Record<string, unknown>;
-  roster: { name: string; dob?: string | null; squad_number?: number | null; self?: boolean }[];
-  /** #402 — the registrant's account, captured only under an explicit
-   *  "I'm registering myself" with no guardian involvement. Null for every
-   *  anonymous, guardian and organiser-side entry. Its presence IS the record
-   *  that the affirmation was given, and it is what `materialise` resolves the
-   *  player-lane person on. */
-  user_id: string | null;
+  /** This entry's own fee — stays per-entry because a cart can be partially
+   *  waitlisted (design §3); the cart's charged subtotal lives on the group. */
   amount_cents: number;
-  currency: string | null;
-  /** The platform-fee rate this card charge used, frozen at checkout creation
-   *  (V312). Null for offline registrations and pre-V312 card rows. It is what
-   *  stamps the competition's locked rate on the first paid entry. */
-  fee_percent: number | null;
-  payment_method: "offline" | "stripe" | null;
-  checkout_session_id: string | null;
-  payment_intent_id: string | null;
-  refunded_cents: number;
-  refunded_at: Date | null;
-  /** Card pendings only: pay-by deadline (spec §2, 48h). */
-  expires_at: Date | null;
-  reminded_at: Date | null;
-  offline_marked_paid_at: Date | null;
-  disputed_at: Date | null;
-  dispute_id: string | null;
   entrant_id: string | null;
   promoted_at: Date | null;
   withdrawn_at: Date | null;
-  /** Locale frozen at signup — registrant-facing mail sends in it (cycle 47). */
-  locale: string | null;
+  /** The cart this entry belongs to — every entry has exactly one (V364). */
+  group_id: string;
+  /** Set when this (team) entry can hand out a self-join link. */
+  join_code: string | null;
+  free_agent: boolean;
   created_at: Date;
+  updated_at: Date;
 }
 
-const REG_COLS = [
-  "id", "division_id", "org_id", "status", "ref_code", "display_name",
-  "contact_email", "dob", "gender", "guardian_name", "guardian_consent",
-  "answers", "roster", "amount_cents", "currency", "fee_percent", "payment_method",
-  "checkout_session_id", "payment_intent_id", "refunded_cents", "refunded_at",
-  "expires_at", "reminded_at", "offline_marked_paid_at", "disputed_at",
-  "dispute_id", "entrant_id", "promoted_at", "withdrawn_at", "locale", "user_id",
-  "created_at",
-] as const;
+/**
+ * `registration_groups` (V363): the cart — contact, access token, ref code
+ * and the whole payment envelope, shared by every entry inside it. Column
+ * names are unchanged from the pre-V364 `registrations` row they moved off,
+ * so every read that used to say `r.<col>` now says `g.<col>`.
+ */
+export interface RegistrationGroupRow {
+  id: string;
+  org_id: string;
+  competition_id: string;
+  contact_name: string;
+  contact_email: string;
+  user_id: string | null;
+  locale: string | null;
+  /** Human-quotable reference (v3/05 §3), shared by every entry in the cart. */
+  ref_code: string | null;
+  access_token_hash: string;
+  amount_cents: number;
+  currency: string | null;
+  payment_method: "offline" | "stripe" | null;
+  checkout_session_id: string | null;
+  payment_intent_id: string | null;
+  /** Card pendings only: pay-by deadline (spec §2, 48h). */
+  expires_at: Date | null;
+  reminded_at: Date | null;
+  refunded_cents: number;
+  refunded_at: Date | null;
+  disputed_at: Date | null;
+  dispute_id: string | null;
+  offline_marked_paid_at: Date | null;
+  offline_marked_paid_by: string | null;
+  /** The platform-fee rate this card charge used, frozen at checkout creation
+   *  (V312). Null for offline registrations. Stamps the competition's locked
+   *  rate on the first paid entry. */
+  fee_percent: number | null;
+  privacy_consent_at: Date | null;
+  privacy_consent_version: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/**
+ * `registration_players` (V363): one row per roster player — replaces the
+ * old `registrations.roster` jsonb (design §3/§6).
+ */
+export interface RegistrationPlayerRow {
+  id: string;
+  registration_id: string;
+  org_id: string;
+  full_name: string;
+  email: string | null;
+  dob: string | null;
+  gender: string | null;
+  guardian_name: string | null;
+  source: "captain_entered" | "self_joined";
+  consent_status: "pending" | "granted" | "guardian";
+  consent_at: Date | null;
+  claim_token_hash: string | null;
+  person_id: string | null;
+  squad_number: number | null;
+  is_captain: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/** r.* plus the group's payment/contact columns — every read below that
+ *  needs both the entry and its cart's envelope selects this shape off a
+ *  `registrations r join registration_groups g on g.id = r.group_id`. */
+export type RegistrationWithGroupRow = RegistrationRow &
+  Pick<
+    RegistrationGroupRow,
+    | "contact_name" | "contact_email" | "user_id" | "locale" | "ref_code"
+    | "access_token_hash" | "currency" | "payment_method" | "checkout_session_id"
+    | "payment_intent_id" | "expires_at" | "reminded_at" | "refunded_cents"
+    | "refunded_at" | "disputed_at" | "dispute_id" | "offline_marked_paid_at"
+    | "offline_marked_paid_by" | "fee_percent" | "privacy_consent_at"
+    | "privacy_consent_version"
+  >;
+
+/** r.* ∪ g.* for `RegistrationWithGroupRow` — every SELECT that needs the
+ *  joined shape interpolates `${regGroupCols(db)}` (same convention as
+ *  org-posts.ts's `COLS`/discipline.ts's `SELECT_SUSPENSION`), built from the
+ *  SAME `sql`/`tx` instance as the surrounding query so the two tables'
+ *  column list can only drift in one place. */
+function regGroupCols(db: AnySql) {
+  return db`
+    r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
+    r.amount_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
+    r.group_id, r.join_code, r.free_agent, r.created_at, r.updated_at,
+    g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code,
+    g.access_token_hash, g.currency, g.payment_method, g.checkout_session_id,
+    g.payment_intent_id, g.expires_at, g.reminded_at, g.refunded_cents,
+    g.refunded_at, g.disputed_at, g.dispute_id, g.offline_marked_paid_at,
+    g.offline_marked_paid_by, g.fee_percent, g.privacy_consent_at,
+    g.privacy_consent_version`;
+}
 
 const SETTINGS_COLS = [
   "division_id", "enabled", "entrant_kind", "opens_at", "closes_at",
@@ -449,8 +516,13 @@ function windowOpen(s: RegistrationSettingsRow, now: Date): boolean {
  * constraint matching the ON CONFLICT specification") — never at compile time.
  * The tombstone clause is also what lets a merged duplicate release the
  * identity slot so the survivor can hold it.
+ *
+ * Orphaned by the RS001 registration demolition (#588): `materialise` no
+ * longer has a `user_id` to resolve against (`registration_players` carries
+ * none — see `loadPlayers`'s doc comment). Exported, not deleted: RS002/RS008
+ * need this exact upsert once the claim flow supplies a real link.
  */
-async function resolvePlayerPerson(
+export async function resolvePlayerPerson(
   tx: Tx,
   orgId: string,
   userId: string,
@@ -468,102 +540,135 @@ async function resolvePlayerPerson(
   return person.id;
 }
 
+/**
+ * Roster reads (RS001 registration demolition, #588): players now come from
+ * `registration_players` (design §6) instead of the dropped `registrations.roster`
+ * jsonb. `is_captain desc` orders a team's captain first — the closest
+ * available analogue of the old "declared self" row, for callers that only
+ * want one representative player (there is none of those left in this file,
+ * but the order is a harmless, cheap default for whoever reads `players[0]`
+ * next).
+ *
+ * #402 self-link note: `registration_players` carries no `user_id` — the old
+ * roster's `self` flag captured which typed-in name was the submitter, which
+ * had nowhere to go in the new per-player-consent model (design §2 item 4:
+ * "join/claim is the consent moment for players entered by someone else").
+ * So every player minted here is an UNLINKED person, same as the old code's
+ * non-self branch — RS002/RS008 own wiring the real claim-flow link.
+ */
+async function loadPlayers(tx: Tx, registrationId: string): Promise<
+  { id: string; full_name: string; dob: string | null; gender: string | null; squad_number: number | null }[]
+> {
+  return tx`
+    select id, full_name, dob, gender, squad_number from registration_players
+    where registration_id = ${registrationId}
+    order by is_captain desc, created_at`;
+}
+
 async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: string): Promise<string> {
   if (reg.entrant_id) return reg.entrant_id;
   const [entrant] = await tx<{ id: string }[]>`
     insert into entrants (division_id, kind, display_name, status)
     values (${reg.division_id}, ${entrantKind}, ${reg.display_name}, 'confirmed')
     returning id`;
+  const players = await loadPlayers(tx, reg.id);
   if (entrantKind === "individual") {
-    // With no captured session this is byte-for-byte the pre-#402 insert: the
-    // anonymous and guardian flows cannot regress.
-    const personId = reg.user_id
-      ? await resolvePlayerPerson(
-          tx, reg.org_id, reg.user_id, reg.display_name, reg.dob, reg.gender,
-        )
-      : (
-          await tx<{ id: string }[]>`
-            insert into persons (org_id, full_name, dob, gender)
-            values (${reg.org_id}, ${reg.display_name}, ${reg.dob}, ${reg.gender})
-            returning id`
-        )[0].id;
+    // No player row yet (nothing populates registration_players until
+    // RS002/RS003 ship the new submit flow) falls back to the entry's own
+    // display_name with no dob/gender — byte-for-byte the old anonymous path.
+    const p = players[0];
+    const personId = (
+      await tx<{ id: string }[]>`
+        insert into persons (org_id, full_name, dob, gender)
+        values (${reg.org_id}, ${p?.full_name ?? reg.display_name}, ${p?.dob ?? null}, ${p?.gender ?? null})
+        returning id`
+    )[0].id;
     // A RESOLVED person can already sit on this entrant (re-confirm), which the
     // fresh-insert path could never hit — so the membership write is idempotent.
     await tx`
       insert into entrant_members (entrant_id, person_id)
       values (${entrant.id}, ${personId})
       on conflict (entrant_id, person_id) do nothing`;
-  } else if (entrantKind === "team" && reg.roster.length > 0) {
-    // Team roster supplied at registration → a person + squad member per player.
-    //
-    // ONE registrant, so at most one roster entry may resolve. The schema
-    // rejects a second `self`, but `roster` is jsonb read back off a stored row
-    // and a second resolving entry would hand two different humans the same
-    // person id — the second membership then vanishing into `do nothing`. The
-    // guarantee has to live here, where the person is minted.
-    let selfResolved = false;
-    for (const p of reg.roster) {
-      const name = p.name.trim();
+  } else if (entrantKind === "team" && players.length > 0) {
+    // Team roster → a person + squad member per player row.
+    for (const p of players) {
+      const name = p.full_name.trim();
       if (!name) continue;
-      // Only the row the submitter DECLARED as themselves resolves. Every other
-      // roster name is a typed string with no identity of its own — name
-      // matching may suggest (#404), never link.
-      const selfUserId = reg.user_id && p.self && !selfResolved ? reg.user_id : null;
-      if (selfUserId) selfResolved = true;
-      const personId =
-        selfUserId
-          ? await resolvePlayerPerson(tx, reg.org_id, selfUserId, name, p.dob ?? null, null)
-          : (
-              await tx<{ id: string }[]>`
-                insert into persons (org_id, full_name, dob)
-                values (${reg.org_id}, ${name}, ${p.dob ?? null})
-                returning id`
-            )[0].id;
+      const personId = (
+        await tx<{ id: string }[]>`
+          insert into persons (org_id, full_name, dob, gender)
+          values (${reg.org_id}, ${name}, ${p.dob}, ${p.gender})
+          returning id`
+      )[0].id;
       await tx`
         insert into entrant_members (entrant_id, person_id, squad_number)
-        values (${entrant.id}, ${personId}, ${p.squad_number ?? null})
+        values (${entrant.id}, ${personId}, ${p.squad_number})
         on conflict (entrant_id, person_id) do nothing`;
     }
   }
   await tx`
     update registrations
-    set entrant_id = ${entrant.id}, status = 'confirmed', expires_at = null,
-        updated_at = now()
+    set entrant_id = ${entrant.id}, status = 'confirmed', updated_at = now()
     where id = ${reg.id}`;
+  // expires_at (the pay-by deadline) now lives on the cart, not the entry —
+  // clearing it here matches today's single-entry-per-cart behaviour exactly;
+  // once a cart can hold several entries this needs to stop clearing the
+  // whole cart's deadline on one entry's confirmation (RS002 territory).
+  await tx`
+    update registration_groups set expires_at = null, updated_at = now()
+    where id = ${reg.group_id}`;
   return entrant.id;
 }
 
-/** Oldest waitlisted → pending (doc 16 §1.1 auto-promotion). Waitlisted rows
- *  hold amount 0, so promotion SNAPSHOTS the current fee + method (spec §2);
- *  card divisions get a fresh 48h pay window. Returns the promoted row. */
+/**
+ * Oldest waitlisted → pending (doc 16 §1.1 auto-promotion). Waitlisted rows
+ * hold amount 0, so promotion SNAPSHOTS the current fee + method (spec §2);
+ * card divisions get a fresh 48h pay window. Returns the promoted row.
+ *
+ * currency/payment_method/expires_at now live on the entry's CART
+ * (`registration_groups`), not the entry — writing them here overwrites the
+ * whole group's snapshot, which is exactly right while every group holds one
+ * entry (true until RS002/RS003 ship multi-entry carts) and wrong the moment
+ * a promoted entry shares a cart with something else already paid for at a
+ * different rate/currency. RS002 territory; flagged, not fixed here.
+ */
 async function promoteOldestWaitlisted(
   tx: Tx,
   divisionId: string,
   settings: RegistrationSettingsRow | null,
-): Promise<RegistrationRow | null> {
+): Promise<RegistrationWithGroupRow | null> {
   const feeCents = settings?.fee_cents ?? 0;
   const method = settings?.payment_method ?? "offline";
   const stripeWindow = method === "stripe" && feeCents > 0;
-  const [row] = await tx<RegistrationRow[]>`
+  const [picked] = await tx<{ id: string; group_id: string }[]>`
+    select id, group_id from registrations
+    where division_id = ${divisionId} and status = 'waitlisted'
+    order by created_at, id limit 1
+    for update skip locked`;
+  if (!picked) return null;
+  await tx`
     update registrations
     set status = 'pending', promoted_at = now(), updated_at = now(),
-        amount_cents = ${feeCents},
-        currency = ${settings?.currency ?? "gbp"},
+        amount_cents = ${feeCents}
+    where id = ${picked.id}`;
+  await tx`
+    update registration_groups
+    set currency = ${settings?.currency ?? "gbp"},
         payment_method = ${method},
-        expires_at = ${stripeWindow ? tx`now() + interval '48 hours'` : null}
-    where id = (
-      select id from registrations
-      where division_id = ${divisionId} and status = 'waitlisted'
-      order by created_at, id limit 1
-      for update skip locked)
-    returning ${sql(REG_COLS as unknown as string[])}`;
+        expires_at = ${stripeWindow ? tx`now() + interval '48 hours'` : null},
+        updated_at = now()
+    where id = ${picked.group_id}`;
+  const [row] = await tx<RegistrationWithGroupRow[]>`
+    select ${regGroupCols(tx)}
+    from registrations r join registration_groups g on g.id = r.group_id
+    where r.id = ${picked.id}`;
   return row ?? null;
 }
 
 /** Post-tx promoted email (fire-and-forget): card entries get a fresh
  *  token-free checkout link, offline entries the resolved instructions. */
 async function notifyPromoted(
-  promoted: RegistrationRow,
+  promoted: RegistrationWithGroupRow,
   ctx: DivisionCtx,
   settings: RegistrationSettingsRow | null,
   origin: string,
@@ -875,214 +980,24 @@ export async function publicRegistrationInfo(
 }
 
 // ---------------------------------------------------------------------------
-// Public: submit
+// Public: submit — REMOVED (RS001 registration demolition, #588)
 // ---------------------------------------------------------------------------
-
-export interface SubmitResult {
-  registration: RegistrationRow;
-  access_token: string;
-  checkout_url: string | null;
-}
-
-/**
- * Public registration submit (doc 16 §1.1). Free divisions → pending
- * (organiser approves); paid → pending + Stripe Checkout (payment confirms);
- * over capacity → waitlisted, no payment taken.
- */
-export async function submitRegistration(
-  orgSlug: string,
-  compSlug: string,
-  input: PublicRegisterRequest,
-  origin: string,
-  opts?: { locale?: Locale | null; sessionUserId?: string | null },
-): Promise<SubmitResult> {
-  const ctx = await divisionCtx(sql, input.division_id);
-  if (
-    ctx.org_slug !== orgSlug ||
-    ctx.comp_slug !== compSlug ||
-    !["public", "unlisted"].includes(ctx.comp_visibility)
-  ) {
-    throw new HttpError(404, "division not found");
-  }
-  await requireFeature(ctx.org_id, "registration.enabled");
-
-  const settings = await loadSettings(sql, input.division_id);
-  if (!settings || !windowOpen(settings, new Date())) {
-    throw new HttpError(422, "Registration is not open for this division");
-  }
-
-  // Eligibility (doc 06 §2): checkable rules validate now; the DOB the form
-  // collected feeds the person row on confirm.
-  const issues = eligibilityIssues(
-    ctx.eligibility ?? [],
-    { dob: input.dob, gender: input.gender },
-    seasonStartYear(ctx),
-  );
-  if (issues.length > 0) throw new HttpError(422, issues.join(" "));
-
-  // Guardian consent for minors (doc 06 §4.7, doc 16 §1.1).
-  if (input.dob && isMinor(input.dob, new Date())) {
-    if (!input.guardian_consent || !input.guardian_name?.trim()) {
-      throw new HttpError(422, "A guardian's name and consent are required for players under 18");
-    }
-  }
-
-  // GDPR consent (spec 2026-07-14): explicit agreement before we store the
-  // registrant's details; timestamp + policy version make it demonstrable.
-  if (!input.privacy_consent) {
-    throw new HttpError(422, "Please agree to the privacy policy to register");
-  }
-
-  const answers = validateAnswers(settings.form_fields ?? [], input.answers);
-  const secret = mintRegistrationToken();
-
-  const linkUserId = deriveLinkUserId(opts?.sessionUserId ?? null, input, new Date());
-
-  // Payment path is the division's choice (spec §3): offline entries are
-  // accepted immediately with the organiser's instructions; card entries mint
-  // a Stripe Checkout session at submit and hold the spot for 48 hours.
-  const paid = settings.fee_cents > 0;
-  const useStripe = paid && settings.payment_method === "stripe";
-  if (useStripe && !ctx.charges_enabled) {
-    throw new HttpError(
-      503,
-      "Card payments are temporarily unavailable for this event — try again shortly or contact the organiser",
-    );
-  }
-  // Card intake needs the paid entitlement, not just live Connect (P2-10): an
-  // org downgraded to community must stop collecting cards even though its
-  // Connect account still works. Competition-scoped so an Event Pass keeps the
-  // comp's paid intake open. In-flight rows are untouched — resumeRegistration-
-  // Checkout + the reminder sweep keep honouring snapshots (mid-flight money
-  // completes). requireFeature throws PaymentRequiredError → 402.
-  if (useStripe) {
-    await requireFeature(ctx.org_id, "registration.paid", ctx.competition_id);
-  }
-
-  // postgres types begin() as UnwrapPromiseArray (db.ts note) — safe cast.
-  const reg = (await sql.begin(async (tx) => {
-      // Capacity under a settings row lock: two concurrent submits must not
-      // both take the last spot.
-      await tx`select 1 from registration_settings
-               where division_id = ${input.division_id} for update`;
-      const taken = await activeCount(tx, input.division_id);
-      // The plan's entrant quota also bounds intake (doc 10 §1) — never
-      // accept money for a spot the plan can't materialise. Competition-scoped
-      // (same `ctx.competition_id` the paid-intake gate uses a dozen lines up):
-      // the Event Pass raises this quota 32 → 64, and resolving it org-wide
-      // meant a passed competition still waitlisted entry 33 (Phase 2 sweep).
-      const planLimit = await getLimit(
-        ctx.org_id, "entrants.per_division.max", ctx.competition_id,
-      );
-      const hardCap = Math.min(
-        settings.capacity ?? Number.POSITIVE_INFINITY,
-        planLimit ?? Number.POSITIVE_INFINITY,
-      );
-      const waitlisted = taken >= hardCap;
-      // Roster only applies to team entries; drop it for individual/pair.
-      const roster = settings.entrant_kind === "team" ? input.players : [];
-      // Reference number (v3/05 §3): server-generated, unique per environment;
-      // ~729M payload space so a couple of retries always clears a collision.
-      let row: RegistrationRow | undefined;
-      for (let attempt = 0; attempt < 5 && !row; attempt++) {
-        const ref = generateRefCode();
-        try {
-          // Savepoint: a unique-violation must not abort the outer tx —
-          // roll back to here and draw a fresh code instead.
-          row = (await tx.savepoint(async (sp) => {
-            const [r] = await sp<RegistrationRow[]>`
-              insert into registrations
-                (division_id, status, ref_code, display_name, contact_email, dob, gender,
-                 guardian_name, guardian_consent, privacy_consent_at, privacy_consent_version,
-                 answers, roster, amount_cents, currency,
-                 payment_method, expires_at, access_token_hash, locale, user_id)
-              values
-                (${input.division_id}, ${waitlisted ? "waitlisted" : "pending"}, ${ref},
-                 ${input.display_name}, ${input.contact_email}, ${input.dob ?? null},
-                 ${input.gender ?? null}, ${input.guardian_name ?? null},
-                 ${input.guardian_consent}, now(), ${LEGAL_VERSION},
-                 ${sp.json(answers as never)},
-                 ${sp.json(roster as never)},
-                 ${waitlisted ? 0 : settings.fee_cents}, ${settings.currency},
-                 ${settings.payment_method},
-                 ${useStripe && !waitlisted ? sp`now() + interval '48 hours'` : null},
-                 ${hashRegistrationToken(secret)},
-                 ${captureRegistrantLocale(opts?.locale ?? null, ctx.default_locale)},
-                 ${linkUserId})
-              returning ${sql(REG_COLS as unknown as string[])}`;
-            return r;
-          })) as unknown as RegistrationRow;
-        } catch (err) {
-          // 23505 on the ref index → draw again; anything else is real.
-          const pg = err as { code?: string; constraint_name?: string };
-          if (pg.code !== "23505" || !String(pg.constraint_name ?? "").includes("ref_code")) {
-            throw err;
-          }
-        }
-      }
-      if (!row) throw new HttpError(503, "could not allocate a reference — please retry");
-      await audit(tx, ctx.competition_id, ctx.org_id, "registration.submitted", {
-        registration_id: row.id,
-        division_id: input.division_id,
-        status: row.status,
-        fee_cents: row.amount_cents,
-      }, null);
-      return row;
-    })) as unknown as RegistrationRow;
-
-  // Card path: mint the Checkout session AFTER the tx (network call). A mint
-  // failure must not lose the registration — the status page offers Pay and
-  // the T-24h reminder carries a fresh link.
-  let checkoutUrl: string | null = null;
-  if (useStripe && reg.status === "pending") {
-    try {
-      checkoutUrl = await createRegistrationCheckout(reg, ctx, origin, secret);
-    } catch {
-      /* pay-later path stays available */
-    }
-  }
-
-  // Confirmation email — offline entries carry the resolved cash/bank
-  // instructions (division override → org); card entries carry the pay link
-  // and deadline. Fire-and-forget: a mail hiccup must not fail the signup.
-  const statusUrl =
-    `${origin}/shared/${ctx.org_slug}/${ctx.comp_slug}/register/status` +
-    `?rid=${reg.id}&token=${encodeURIComponent(secret)}`;
-  const offlineInstructions = settings.payment_instructions ?? ctx.payment_instructions;
-  void sendRegistrationEmail({
-    to: reg.contact_email,
-    locale: toLocale(reg.locale),
-    orgName: ctx.org_name,
-    competitionName: ctx.comp_name,
-    displayName: reg.display_name,
-    status: reg.status,
-    feeCents: paid ? settings.fee_cents : 0,
-    currency: settings.currency,
-    paymentInstructions:
-      paid && !useStripe && reg.status !== "waitlisted" ? offlineInstructions : null,
-    payUrl: useStripe && reg.status === "pending" ? (checkoutUrl ?? statusUrl) : null,
-    payDeadline: reg.expires_at,
-    statusUrl,
-    refCode: reg.ref_code,
-    refStatusUrl: reg.ref_code ? `${origin}/r/${reg.ref_code}` : null,
-  }).catch(() => {});
-
-  // Public-registration funnel (feature 1): a distinct anonymous person per
-  // registrant (no login here), grouped by the receiving org.
-  await captureServer({
-    event: EVENTS.REGISTRATION_SUBMITTED,
-    distinctId: `reg:${reg.id}`,
-    orgId: ctx.org_id,
-    properties: {
-      division_id: input.division_id,
-      status: reg.status,
-      paid,
-      entrant_kind: settings.entrant_kind,
-    },
-  });
-
-  return { registration: reg, access_token: secret, checkout_url: checkoutUrl };
-}
+//
+// `submitRegistration` and its `SubmitResult` return shape inserted a single
+// `registrations` row carrying the whole old per-entry payment/contact/roster
+// envelope in one INSERT — exactly the shape V363/V364 split across
+// `registration_groups` (cart) and `registration_players` (per-player rows).
+// There is no mechanical translation of a single-row INSERT into "create a
+// cart, then one-or-more entries, then their players" — that is a new group
+// submit flow, not a re-pointed query, so it is out of this session's
+// "mechanical re-pointing" scope. RS002/RS003 own it (design §4, §7 P1);
+// until that PR merges the public register route stays deleted and the
+// public pages show the closed state (see the three rewritten pages).
+//
+// Pure helpers this function used stay exported for RS002 to reuse verbatim:
+// `eligibilityIssues`, `validateAnswers`, `deriveLinkUserId`, `isMinor`,
+// `ageAt`, `hashRegistrationToken`. `mintRegistrationToken` (private, token-
+// minting only) and `generateRefCode`'s only call site here went with it.
 
 /** Destination charge on the org's Connect account; the platform keeps
  *  application_fee_amount (doc 16 §1.1). Always charges the SNAPSHOTTED
@@ -1090,7 +1005,7 @@ export async function submitRegistration(
  *  status-page return URLs; null falls back to the token-free /r/[ref] pair
  *  (email-minted sessions — the reminder can't recover the hashed token). */
 async function createRegistrationCheckout(
-  reg: RegistrationRow,
+  reg: RegistrationWithGroupRow,
   ctx: DivisionCtx,
   origin: string,
   token: string | null,
@@ -1144,10 +1059,11 @@ async function createRegistrationCheckout(
     cancel_url: `${returnBase}&checkout=cancelled`,
   });
   if (!session.url) throw new HttpError(502, "Stripe did not return a checkout URL");
+  // checkout_session_id/fee_percent live on the cart now (V364), not the entry.
   await sql`
-    update registrations
+    update registration_groups
     set checkout_session_id = ${session.id}, fee_percent = ${feePercent}, updated_at = now()
-    where id = ${reg.id}`;
+    where id = ${reg.group_id}`;
   return session.url;
 }
 
@@ -1185,7 +1101,7 @@ export async function handleRegistrationCheckoutCompleted(
 
 type PayOutcome =
   | { kind: "confirmed"; divisionId: string; competitionId: string; orgId: string }
-  | { kind: "late" | "duplicate"; reg: RegistrationRow; competitionId: string; intent: string }
+  | { kind: "late" | "duplicate"; reg: RegistrationWithGroupRow; competitionId: string; intent: string }
   | null;
 
 async function confirmPaidRegistration(
@@ -1195,9 +1111,10 @@ async function confirmPaidRegistration(
   chargedFeePercent: number | null = null,
 ): Promise<void> {
   const outcome = (await sql.begin(async (tx) => {
-    const [reg] = await tx<RegistrationRow[]>`
-      select ${sql(REG_COLS as unknown as string[])} from registrations
-      where id = ${regId} for update`;
+    const [reg] = await tx<RegistrationWithGroupRow[]>`
+      select ${regGroupCols(tx)}
+      from registrations r join registration_groups g on g.id = r.group_id
+      where r.id = ${regId} for update`;
     if (!reg) return null;
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
@@ -1212,11 +1129,12 @@ async function confirmPaidRegistration(
     }
     // Money landing on a dead registration (withdrawn/expired, spec issue #1):
     // record the intent for the audit trail and send it straight back.
+    // payment_intent_id lives on the cart now (V364).
     if (reg.status === "withdrawn" || reg.status === "expired") {
-      await tx`update registrations
+      await tx`update registration_groups
                set payment_intent_id = coalesce(payment_intent_id, ${paymentIntentId}),
                    updated_at = now()
-               where id = ${regId}`;
+               where id = ${reg.group_id}`;
       if (!paymentIntentId && !reg.payment_intent_id) return null;
       return {
         kind: "late",
@@ -1229,10 +1147,15 @@ async function confirmPaidRegistration(
     await tx`
       update registrations
       set status = 'paid',
-          payment_intent_id = coalesce(${paymentIntentId}, payment_intent_id),
           amount_cents = coalesce(${amountTotal}, amount_cents),
           updated_at = now()
       where id = ${regId}`;
+    // payment_intent_id lives on the cart now (V364).
+    await tx`
+      update registration_groups
+      set payment_intent_id = coalesce(${paymentIntentId}, payment_intent_id),
+          updated_at = now()
+      where id = ${reg.group_id}`;
     // Lock the competition's fee rate on its FIRST paid entry (V312), from the
     // rate the PAID SESSION was billed at — not reg.fee_percent, which a later
     // re-mint overwrites, so paying a stale session after a plan change would
@@ -1303,11 +1226,12 @@ async function confirmPaidRegistration(
   try {
     const refund = await stripeRefund(outcome.intent, undefined);
     if (outcome.kind === "late") {
+      // refunded_cents/refunded_at live on the cart now (V364).
       await sql`
-        update registrations
+        update registration_groups
         set refunded_cents = ${amountTotal ?? outcome.reg.amount_cents},
             refunded_at = now(), updated_at = now()
-        where id = ${regId}`;
+        where id = ${outcome.reg.group_id}`;
     }
     await audit(sql, outcome.competitionId, outcome.reg.org_id, "registration.refunded", {
       registration_id: regId,
@@ -1340,16 +1264,20 @@ export async function handleRegistrationDispute(
       ? dispute.payment_intent
       : dispute.payment_intent?.id;
   if (!intent) return false;
-  const [reg] = await sql<RegistrationRow[]>`
-    select ${sql(REG_COLS as unknown as string[])} from registrations
-    where payment_intent_id = ${intent}`;
+  // payment_intent_id lives on the cart now (V364).
+  const [reg] = await sql<RegistrationWithGroupRow[]>`
+    select ${regGroupCols(sql)}
+    from registrations r join registration_groups g on g.id = r.group_id
+    where g.payment_intent_id = ${intent}
+    order by r.created_at, r.id limit 1`;
   if (!reg) return false; // not an entry-fee charge (or intent not written yet)
   const ctx = await divisionCtx(sql, reg.division_id);
 
   if (phase === "created") {
-    await sql`update registrations
+    // disputed_at/dispute_id live on the cart now (V364).
+    await sql`update registration_groups
               set disputed_at = now(), dispute_id = ${dispute.id}, updated_at = now()
-              where id = ${reg.id}`;
+              where id = ${reg.group_id}`;
     await audit(sql, ctx.competition_id, reg.org_id, "registration.disputed", {
       registration_id: reg.id,
       dispute_id: dispute.id,
@@ -1370,19 +1298,22 @@ export async function handleRegistrationDispute(
     return true;
   }
   if (dispute.status === "won") {
-    await sql`update registrations set disputed_at = null, updated_at = now()
-              where id = ${reg.id}`;
+    await sql`update registration_groups set disputed_at = null, updated_at = now()
+              where id = ${reg.group_id}`;
     await audit(sql, ctx.competition_id, reg.org_id, "registration.dispute_won", {
       registration_id: reg.id,
       dispute_id: dispute.id,
     }, null);
   } else if (dispute.status === "lost") {
     // The write-off must land whatever Stripe does next — same contract as
-    // refund failure never undoing a withdrawal.
-    await sql`update registrations
-              set refunded_cents = amount_cents,
+    // refund failure never undoing a withdrawal. refunded_cents/refunded_at
+    // live on the cart now (V364); `amount_cents` here is THIS entry's own
+    // fee (still on `registrations`), not the cart's subtotal, so it has to
+    // ride as a JS value rather than a same-row column reference.
+    await sql`update registration_groups
+              set refunded_cents = ${reg.amount_cents},
                   refunded_at = coalesce(refunded_at, now()), updated_at = now()
-              where id = ${reg.id}`;
+              where id = ${reg.group_id}`;
     await audit(sql, ctx.competition_id, reg.org_id, "registration.dispute_lost", {
       registration_id: reg.id,
       dispute_id: dispute.id,
@@ -1402,9 +1333,10 @@ export async function handleRegistrationDispute(
           currency: reg.currency ?? "gbp",
           refCode: reg.ref_code,
           recoveredCents: recovery.recoveredCents,
-          consoleUrl:
-            fallbackOrigin() +
-            routes.divisionRegistrations(ctx.org_slug, ctx.comp_slug, ctx.div_slug),
+          // divisionRegistrations route deleted (RS001 demolition, #588) —
+          // point at the competition page for now; RS004's hub re-points
+          // this at the new competition-level Registration hub.
+          consoleUrl: fallbackOrigin() + routes.competition(ctx.org_slug, ctx.comp_slug),
         }).catch(() => {});
       }
     }
@@ -1460,8 +1392,10 @@ export async function syncRegistrationRefund(charge: Stripe.Charge): Promise<voi
       ? charge.payment_intent
       : charge.payment_intent?.id;
   if (!intent) return;
+  // The whole payment envelope (payment_intent_id, refunded_cents,
+  // refunded_at) lives on registration_groups now (V364).
   await sql`
-    update registrations
+    update registration_groups
     set refunded_cents = greatest(refunded_cents, ${charge.amount_refunded}),
         refunded_at = coalesce(refunded_at, now()), updated_at = now()
     where payment_intent_id = ${intent}`;
@@ -1474,9 +1408,11 @@ export async function syncRegistrationRefund(charge: Stripe.Charge): Promise<voi
  */
 export async function reconcileRegistration(regId: string, token: string): Promise<boolean> {
   try {
+    // access_token_hash/checkout_session_id live on the cart now (V364).
     const [reg] = await sql<{ status: string; checkout_session_id: string | null }[]>`
-      select status, checkout_session_id from registrations
-      where id = ${regId} and access_token_hash = ${hashRegistrationToken(token)}`;
+      select r.status, g.checkout_session_id
+      from registrations r join registration_groups g on g.id = r.group_id
+      where r.id = ${regId} and g.access_token_hash = ${hashRegistrationToken(token)}`;
     if (!reg || reg.status !== "pending" || !reg.checkout_session_id) return false;
     const session = await getStripe().checkout.sessions.retrieve(reg.checkout_session_id);
     if (session.payment_status !== "paid") return false;
@@ -1544,10 +1480,12 @@ export interface PublicStatusView {
   created_at: string;
 }
 
-async function regByToken(regId: string, token: string): Promise<RegistrationRow> {
-  const [reg] = await sql<RegistrationRow[]>`
-    select ${sql(REG_COLS as unknown as string[])} from registrations
-    where id = ${regId} and access_token_hash = ${hashRegistrationToken(token)}`;
+async function regByToken(regId: string, token: string): Promise<RegistrationWithGroupRow> {
+  // access_token_hash lives on the cart now (V364).
+  const [reg] = await sql<RegistrationWithGroupRow[]>`
+    select ${regGroupCols(sql)}
+    from registrations r join registration_groups g on g.id = r.group_id
+    where r.id = ${regId} and g.access_token_hash = ${hashRegistrationToken(token)}`;
   if (!reg) throw new HttpError(404, "registration not found");
   return reg;
 }
@@ -1640,14 +1578,21 @@ export interface PublicRefView {
   can_withdraw: boolean;
 }
 
-async function regByRef(ref: string): Promise<RegistrationRow> {
+async function regByRef(ref: string): Promise<RegistrationWithGroupRow> {
   // Checksum rejects typos before the DB sees them; normalise dashes/case so
   // "sz abcd efgh" read over a phone still resolves.
   const canonical = normalizeRefCode(ref);
   if (!isValidRefCode(canonical)) throw new HttpError(404, "registration not found");
-  const [reg] = await sql<RegistrationRow[]>`
-    select ${sql(REG_COLS as unknown as string[])} from registrations
-    where ref_code = ${canonical}`;
+  // ref_code lives on the cart now (V364) — shared by every entry in it. A
+  // cart with more than one entry (not reachable yet: nothing creates one
+  // until RS002/RS003) would have several rows match here; this picks the
+  // oldest deterministically rather than an arbitrary one. RS007 owns
+  // deciding whether /r/[ref] should show the whole cart instead of one entry.
+  const [reg] = await sql<RegistrationWithGroupRow[]>`
+    select ${regGroupCols(sql)}
+    from registrations r join registration_groups g on g.id = r.group_id
+    where g.ref_code = ${canonical}
+    order by r.created_at, r.id limit 1`;
   if (!reg) throw new HttpError(404, "registration not found");
   return reg;
 }
@@ -1664,12 +1609,10 @@ export async function publicRegistrationStatusByRef(
     select name, slug, youth, player_name_display from divisions
     where id = ${reg.division_id}`;
   const mode = resolveNameDisplay(div?.player_name_display ?? null, div?.youth ?? false);
+  // access_token_hash already rode the join in regByRef — no separate fetch
+  // needed (it lives on the cart now, V364).
   const canWithdraw =
-    !!token &&
-    reg.status !== "withdrawn" &&
-    hashRegistrationToken(token) ===
-      (await sql<{ access_token_hash: string }[]>`
-        select access_token_hash from registrations where id = ${reg.id}`)[0]!.access_token_hash;
+    !!token && reg.status !== "withdrawn" && hashRegistrationToken(token) === reg.access_token_hash;
   return {
     ref_code: reg.ref_code!,
     status: reg.status,
@@ -1743,7 +1686,7 @@ async function stripeRefund(
 }
 
 /** Fire-and-forget refund receipt to the registrant (spec T9). */
-function notifyRefund(reg: RegistrationRow, ctx: DivisionCtx, amountCents: number): void {
+function notifyRefund(reg: RegistrationWithGroupRow, ctx: DivisionCtx, amountCents: number): void {
   void sendRefundIssuedEmail({
     to: reg.contact_email,
     locale: toLocale(reg.locale),
@@ -1756,15 +1699,18 @@ function notifyRefund(reg: RegistrationRow, ctx: DivisionCtx, amountCents: numbe
   }).catch(() => {});
 }
 
-async function withdrawCore(reg: RegistrationRow, actorId: string | null): Promise<void> {
+async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null): Promise<void> {
   if (reg.status === "withdrawn") return; // idempotent
   const settings = await loadSettings(sql, reg.division_id);
   const ctx = await divisionCtx(sql, reg.division_id);
 
   const outcome = (await sql.begin(async (tx) => {
-    const [locked] = await tx<RegistrationRow[]>`
-      select ${sql(REG_COLS as unknown as string[])} from registrations
-      where id = ${reg.id} for update`;
+    // `for update` on the join locks both the entry AND its cart row — right
+    // here, since the refund block below reads the cart's payment_intent_id.
+    const [locked] = await tx<RegistrationWithGroupRow[]>`
+      select ${regGroupCols(tx)}
+      from registrations r join registration_groups g on g.id = r.group_id
+      where r.id = ${reg.id} for update`;
     if (!locked || locked.status === "withdrawn") return null;
     const freedSpot = (SPOT_HOLDERS as readonly string[]).includes(locked.status);
     await tx`
@@ -1791,7 +1737,9 @@ async function withdrawCore(reg: RegistrationRow, actorId: string | null): Promi
       }, actorId);
     }
     return { locked, promoted };
-  })) as unknown as { locked: RegistrationRow; promoted: RegistrationRow | null } | null;
+  })) as unknown as
+    | { locked: RegistrationWithGroupRow; promoted: RegistrationWithGroupRow | null }
+    | null;
   if (!outcome) return;
 
   fireDivisionRevalidate(reg.division_id, ctx.competition_id);
@@ -1809,10 +1757,13 @@ async function withdrawCore(reg: RegistrationRow, actorId: string | null): Promi
   if (refundable && beforeLock) {
     try {
       const refund = await stripeRefund(locked.payment_intent_id as string, undefined);
+      // refunded_cents/refunded_at live on the cart now (V364); `amount_cents`
+      // here is THIS entry's own fee, not the cart's subtotal column, so it
+      // rides as the already-fetched JS value.
       await sql`
-        update registrations
-        set refunded_cents = amount_cents, refunded_at = now(), updated_at = now()
-        where id = ${reg.id}`;
+        update registration_groups
+        set refunded_cents = ${locked.amount_cents}, refunded_at = now(), updated_at = now()
+        where id = ${locked.group_id}`;
       await audit(sql, ctx.competition_id, ctx.org_id, "registration.refunded", {
         registration_id: reg.id,
         amount_cents: locked.amount_cents,
@@ -1850,14 +1801,16 @@ export async function sweepRegistrations(
   let expired = 0;
   let promotedCount = 0;
 
-  const due = await sql<RegistrationRow[]>`
-    select ${sql(REG_COLS as unknown as string[])} from registrations
-    where status = 'pending' and payment_method = 'stripe'
-      and expires_at is not null
-      and expires_at < now() + interval '24 hours'
-      and expires_at > now()
-      and reminded_at is null
-    order by expires_at
+  // payment_method/expires_at/reminded_at live on the cart now (V364).
+  const due = await sql<RegistrationWithGroupRow[]>`
+    select ${regGroupCols(sql)}
+    from registrations r join registration_groups g on g.id = r.group_id
+    where r.status = 'pending' and g.payment_method = 'stripe'
+      and g.expires_at is not null
+      and g.expires_at < now() + interval '24 hours'
+      and g.expires_at > now()
+      and g.reminded_at is null
+    order by g.expires_at
     limit 200`;
   for (const reg of due) {
     try {
@@ -1879,21 +1832,24 @@ export async function sweepRegistrations(
     } catch {
       continue; // reminded_at stays null — the next sweep retries
     }
-    await sql`update registrations set reminded_at = now(), updated_at = now()
-              where id = ${reg.id}`;
+    await sql`update registration_groups set reminded_at = now(), updated_at = now()
+              where id = ${reg.group_id}`;
     reminded++;
   }
 
-  const overdue = await sql<{ id: string; division_id: string }[]>`
-    select id, division_id from registrations
-    where status = 'pending' and expires_at is not null and expires_at < now()
-    order by expires_at
+  // expires_at lives on the cart now (V364).
+  const overdue = await sql<{ id: string; division_id: string; group_id: string }[]>`
+    select r.id, r.division_id, r.group_id
+    from registrations r join registration_groups g on g.id = r.group_id
+    where r.status = 'pending' and g.expires_at is not null and g.expires_at < now()
+    order by g.expires_at
     limit 200`;
   for (const { id, division_id } of overdue) {
     const outcome = (await sql.begin(async (tx) => {
-      const [locked] = await tx<RegistrationRow[]>`
-        select ${sql(REG_COLS as unknown as string[])} from registrations
-        where id = ${id} for update`;
+      const [locked] = await tx<RegistrationWithGroupRow[]>`
+        select ${regGroupCols(tx)}
+        from registrations r join registration_groups g on g.id = r.group_id
+        where r.id = ${id} for update`;
       if (
         !locked ||
         locked.status !== "pending" ||
@@ -1920,7 +1876,7 @@ export async function sweepRegistrations(
       }
       return { promoted, settings, competitionId: div.competition_id };
     })) as unknown as {
-      promoted: RegistrationRow | null;
+      promoted: RegistrationWithGroupRow | null;
       settings: RegistrationSettingsRow | null;
       competitionId: string;
     } | null;
@@ -1945,29 +1901,31 @@ export async function listRegistrations(
   auth: AuthCtx,
   divisionId: string,
   status: string | null,
-): Promise<RegistrationRow[]> {
+): Promise<RegistrationWithGroupRow[]> {
   return withTenant(auth.orgId, async (tx) => {
     const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
-    return tx<RegistrationRow[]>`
-      select ${sql(REG_COLS as unknown as string[])} from registrations
-      where division_id = ${divisionId}
-        ${status ? tx`and status = ${status}` : tx``}
-      order by created_at, id`;
+    return tx<RegistrationWithGroupRow[]>`
+      select ${regGroupCols(tx)}
+      from registrations r join registration_groups g on g.id = r.group_id
+      where r.division_id = ${divisionId}
+        ${status ? tx`and r.status = ${status}` : tx``}
+      order by r.created_at, r.id`;
   });
 }
 
-async function orgReg(tx: Tx, regId: string): Promise<RegistrationRow> {
-  const [reg] = await tx<RegistrationRow[]>`
-    select ${sql(REG_COLS as unknown as string[])} from registrations
-    where id = ${regId} for update`;
+async function orgReg(tx: Tx, regId: string): Promise<RegistrationWithGroupRow> {
+  const [reg] = await tx<RegistrationWithGroupRow[]>`
+    select ${regGroupCols(tx)}
+    from registrations r join registration_groups g on g.id = r.group_id
+    where r.id = ${regId} for update`;
   if (!reg) throw new HttpError(404, "registration not found");
   return reg;
 }
 
 /** Organiser approve (free regs and waitlist overrides). Paid-division regs
  *  must be paid first — confirming an unpaid one would gift the spot. */
-export async function confirmRegistration(auth: AuthCtx, regId: string): Promise<RegistrationRow> {
+export async function confirmRegistration(auth: AuthCtx, regId: string): Promise<RegistrationWithGroupRow> {
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
@@ -2004,7 +1962,7 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
 export async function markRegistrationPaidOffline(
   auth: AuthCtx,
   regId: string,
-): Promise<RegistrationRow> {
+): Promise<RegistrationWithGroupRow> {
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
@@ -2026,10 +1984,13 @@ export async function markRegistrationPaidOffline(
       select competition_id from divisions where id = ${reg.division_id}`;
     assertNotFrozen(frozen, div.competition_id);
     await tx`
-      update registrations
-      set status = 'paid', offline_marked_paid_at = now(),
-          offline_marked_paid_by = ${auth.userId}, updated_at = now()
+      update registrations set status = 'paid', updated_at = now()
       where id = ${regId}`;
+    // offline_marked_paid_at/by live on the cart now (V364).
+    await tx`
+      update registration_groups
+      set offline_marked_paid_at = now(), offline_marked_paid_by = ${auth.userId}, updated_at = now()
+      where id = ${reg.group_id}`;
     await materialise(tx, { ...reg, status: "paid" }, settings?.entrant_kind ?? "individual");
     await audit(tx, div.competition_id, auth.orgId, "registration.offline_paid", {
       registration_id: regId,
@@ -2045,7 +2006,7 @@ export async function markRegistrationPaidOffline(
 export async function confirmRegistrationWaived(
   auth: AuthCtx,
   regId: string,
-): Promise<RegistrationRow> {
+): Promise<RegistrationWithGroupRow> {
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
@@ -2104,14 +2065,16 @@ export async function sendPaymentReminder(
   return { sent };
 }
 
-async function orgRegAfter(tx: Tx, regId: string): Promise<RegistrationRow> {
-  const [reg] = await tx<RegistrationRow[]>`
-    select ${sql(REG_COLS as unknown as string[])} from registrations where id = ${regId}`;
+async function orgRegAfter(tx: Tx, regId: string): Promise<RegistrationWithGroupRow> {
+  const [reg] = await tx<RegistrationWithGroupRow[]>`
+    select ${regGroupCols(tx)}
+    from registrations r join registration_groups g on g.id = r.group_id
+    where r.id = ${regId}`;
   return reg;
 }
 
 /** Organiser: push a pending registration to the waitlist. */
-export async function waitlistRegistration(auth: AuthCtx, regId: string): Promise<RegistrationRow> {
+export async function waitlistRegistration(auth: AuthCtx, regId: string): Promise<RegistrationWithGroupRow> {
   return withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     if (reg.status !== "pending") {
@@ -2133,7 +2096,7 @@ export async function waitlistRegistration(auth: AuthCtx, regId: string): Promis
 export async function withdrawRegistrationOrganiser(
   auth: AuthCtx,
   regId: string,
-): Promise<RegistrationRow> {
+): Promise<RegistrationWithGroupRow> {
   const reg = await withTenant(auth.orgId, async (tx) => orgReg(tx, regId));
   await withdrawCore(reg, auth.userId);
   return withTenant(auth.orgId, async (tx) => orgRegAfter(tx, regId));
@@ -2144,7 +2107,7 @@ export async function refundRegistration(
   auth: AuthCtx,
   regId: string,
   amountCents: number | undefined,
-): Promise<RegistrationRow> {
+): Promise<RegistrationWithGroupRow> {
   const reg = await withTenant(auth.orgId, async (tx) => orgReg(tx, regId));
   if (!reg.payment_intent_id) throw new HttpError(422, "No payment to refund");
   const remaining = reg.amount_cents - reg.refunded_cents;
@@ -2157,10 +2120,11 @@ export async function refundRegistration(
   const row = await withTenant(auth.orgId, async (tx) => {
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
+    // refunded_cents/refunded_at live on the cart now (V364).
     await tx`
-      update registrations
+      update registration_groups
       set refunded_cents = refunded_cents + ${amount}, refunded_at = now(), updated_at = now()
-      where id = ${regId}`;
+      where id = ${reg.group_id}`;
     await audit(tx, div.competition_id, auth.orgId, "registration.refunded", {
       registration_id: regId,
       amount_cents: amount,
@@ -2181,23 +2145,27 @@ export async function exportRegistrationsCsv(auth: AuthCtx, divisionId: string):
     if (!division) throw new HttpError(404, "division not found");
     const settings = await loadSettings(tx, divisionId);
     const fieldKeys = (settings?.form_fields ?? []).map((f) => f.key);
-    const rows = await tx<RegistrationRow[]>`
-      select ${sql(REG_COLS as unknown as string[])} from registrations
-      where division_id = ${divisionId}
-      order by created_at, id`;
+    const rows = await tx<RegistrationWithGroupRow[]>`
+      select ${regGroupCols(tx)}
+      from registrations r join registration_groups g on g.id = r.group_id
+      where r.division_id = ${divisionId}
+      order by r.created_at, r.id`;
     const esc = (v: unknown): string => {
       const s = v === null || v === undefined ? "" : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
+    // dob/gender/guardian_name/guardian_consent dropped from this export
+    // (RS001 registration demolition, #588): they moved off the entry onto
+    // `registration_players` — one-to-many per entry, so there is no single
+    // flat value left to print here without inventing a flattening rule.
+    // RS005's Registrants tab CSV export owns the per-player-aware version.
     const header = [
-      "id", "status", "display_name", "contact_email", "dob", "gender",
-      "guardian_name", "guardian_consent", "amount_cents", "currency",
-      "refunded_cents", "created_at", ...fieldKeys,
+      "id", "status", "display_name", "contact_email", "amount_cents",
+      "currency", "refunded_cents", "created_at", ...fieldKeys,
     ];
     const lines = rows.map((r) =>
       [
-        r.id, r.status, r.display_name, r.contact_email, r.dob ?? "",
-        r.gender ?? "", r.guardian_name ?? "", r.guardian_consent,
+        r.id, r.status, r.display_name, r.contact_email,
         r.amount_cents, r.currency ?? "", r.refunded_cents,
         new Date(r.created_at).toISOString(),
         ...fieldKeys.map((k) => (r.answers as Record<string, unknown>)[k] ?? ""),
