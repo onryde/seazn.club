@@ -939,9 +939,82 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
   await expectNoHorizontalScroll(page);
   await assertNotClipped('[data-testid="template-gallery"]', "the template gallery");
 
-  await gallery.getByRole("button", { name: /view details/i }).first().click();
+  // euro24, not .first(): P7/D1b (T5) needs a template that actually carries
+  // a PROGRESSION map (a `.seeding` stage) to prove that block renders real
+  // rule text, and needs the sheet body's reorder (T4, 403c6bfd) proven
+  // against the template most likely to break it — PROGRESSION is the block
+  // T4's own comment names as having worsened the pre-fix scroll-fold, and
+  // .first() (slam128) carries no seeding at all, so the old assertions
+  // never exercised either.
+  await gallery.getByTestId("template-card-euro24").click();
+  const dialog = page.locator('[role="dialog"]');
   await expect(page.getByTestId("template-detail-structure")).toBeVisible({ timeout: 15_000 });
   await expectNoHorizontalScroll(page);
+
+  // PROGRESSION content: not just the testid present — the actual rendered
+  // rule text, joining BOTH take rules euro24's knockout stage carries
+  // (topNPerGroup + bestNth) with the "and" connector, arrowed to the stage
+  // they feed. A block that rendered but stayed empty, or dropped the
+  // second rule, would still pass a bare visibility check.
+  const progression = page.getByTestId("template-detail-progression");
+  await expect(progression).toBeVisible();
+  await expect(progression).toContainText("Top 2 per group and 4 best 3-placed → Knockout");
+
+  // Regression guard for T4's reorder: form fields (Name/Starts on/Ends on)
+  // must render ABOVE the Structure/Progression prose, not below it — pre-T4
+  // the required Ends-on field sat below the sheet's internal scroll fold on
+  // every template, and PROGRESSION only made the prose above it longer.
+  // boundingBox() never scrolls, so this reads the layout exactly as first
+  // painted — a revert to prose-first would put Structure's box above
+  // Ends-on's and this comparison would flip.
+  const endsOnField = dialog.getByLabel(/^Ends on/i);
+  const structureList = page.getByTestId("template-detail-structure");
+  const [endsOnBox, structureBox] = await Promise.all([
+    endsOnField.boundingBox(),
+    structureList.boundingBox(),
+  ]);
+  expect(endsOnBox, "Ends on field has no layout box").not.toBeNull();
+  expect(structureBox, "Structure block has no layout box").not.toBeNull();
+  expect(
+    endsOnBox!.y,
+    "Ends on field must render ABOVE the Structure prose block (T4 reorder)",
+  ).toBeLessThan(structureBox!.y);
+
+  // At the tightest width, the field must actually be reachable without
+  // scrolling — not merely earlier in the DOM. Walks up to the nearest
+  // scrollable ancestor (the sheet's own overflow-y-auto body) and checks
+  // the field's rect sits inside ITS unscrolled visible window, which is
+  // what a reorder-revert would push it out of.
+  if (test.info().project.name === "mobile-320") {
+    const reach = await endsOnField.evaluate((el) => {
+      let node = el.parentElement;
+      while (node && node !== document.body) {
+        const oy = getComputedStyle(node).overflowY;
+        if (oy === "auto" || oy === "scroll") break;
+        node = node.parentElement;
+      }
+      const elRect = el.getBoundingClientRect();
+      if (!node || node === document.body) {
+        return {
+          withinView: elRect.top >= 0 && elRect.bottom <= window.innerHeight,
+          elBottom: elRect.bottom,
+          containerBottom: window.innerHeight,
+        };
+      }
+      const containerRect = node.getBoundingClientRect();
+      return {
+        withinView: elRect.top >= containerRect.top - 1 && elRect.bottom <= containerRect.bottom + 1,
+        elBottom: elRect.bottom,
+        containerBottom: containerRect.bottom,
+      };
+    });
+    expect(
+      reach.withinView,
+      `Ends on field (bottom ${reach.elBottom}) must fit inside the sheet's visible ` +
+        `scroll area (bottom ${reach.containerBottom}) at 320px without scrolling`,
+    ).toBe(true);
+  }
+
   const submit = page.getByTestId("template-detail-submit");
   const submitBox = await submit.boundingBox();
   expect(submitBox, "the template detail submit has no box").not.toBeNull();
@@ -951,6 +1024,122 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
     path: `test-results/portfolio-panels-${test.info().project.name}.png`,
     fullPage: false,
   });
+});
+
+// ---------------------------------------------------------------------------
+// P7 (D1b task T5) — the t20-super8 catalog template: THREE stages at
+// instantiation (group -> Super 8 -> knockout), the first template in the
+// catalog where TWO stages carry `.seeding` in the same division. Instantiation
+// itself creates NO fixtures (owner ruling, D1b brief: a `.seeding` stage
+// mints synthetic entrants and can generate with zero real ones, and one
+// fixture row at birth would format-lock the competition via both
+// replaceStages and patchDivision) — so this proves the stages exist and are
+// visible FIRST, then adds entrants and generates before a Super 8 fixture
+// exists to assert on at all.
+//
+// Pro-only: t20-super8 is 3 stages, over community's stages.per_division.max
+// (2) on stage count alone — this file's shared storageState account is the
+// Pro user (playwright.config.ts's AUTH_STATE), so no plan flip is needed.
+// ---------------------------------------------------------------------------
+
+test("P7/D1b: the t20-super8 template creates 3 stages, and Super 8 fixtures resolve seeded slot labels before the group stage is even played", async ({
+  page,
+  request,
+}) => {
+  await page.goto(`/o/${orgSlug}/c/new`, { waitUntil: "load" });
+  await expect(page.getByTestId("template-gallery")).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("template-card-t20-super8").click();
+  await expect(page.getByTestId("template-detail-structure")).toBeVisible({ timeout: 15_000 });
+  // Every mobile/tablet project shares the SAME storageState org (one Pro
+  // account, seven concurrent worker processes) — the sheet defaults Name to
+  // the template's own translated string verbatim, so leaving it untouched
+  // means every project races to insert the identical (org_id, slug) pair.
+  // TAG alone is not enough (it's per-PROCESS and this file's own comment
+  // above documents two processes landing on the same TAG); add the same
+  // random suffix seedScoredDivision() uses for exactly this reason.
+  await page
+    .getByLabel("Name", { exact: true })
+    .fill(`T20 Super 8 ${TAG}-${Math.random().toString(36).slice(2, 6)}`);
+  await page.getByLabel(/^Ends on/i).fill("2030-12-31");
+  await page.getByTestId("template-detail-submit").click();
+  // Away from /c/new specifically — a URL matching the pre-click page would
+  // be a vacuous wait (the trap this repo's helpers call out explicitly).
+  await page.waitForURL(/\/o\/[^/]+\/c\/(?!new$)[^/?]+$/, { timeout: 20_000 });
+
+  const slug = page.url().match(/\/c\/([^/?]+)/)![1]!;
+  const list = await apiJson<{ items: { id: string; slug: string }[] }>(
+    request,
+    "/api/v1/competitions?limit=100",
+  );
+  const t20CompId = list.data!.items.find((c) => c.slug === slug)!.id;
+  const divs = await apiJson<{ id: string }[]>(request, `/api/v1/competitions/${t20CompId}/divisions`);
+  const t20DivisionId = divs.data![0]!.id;
+
+  await page.goto(await divisionPath(page.request, t20DivisionId, "?tab=fixtures"), { waitUntil: "load" });
+
+  // Three stages, visible, before a single entrant exists or Generate has
+  // ever been clicked — instantiation creates the STAGE ROWS, never
+  // fixtures. Digit-prefixed: StagesPanel's own heading is "{seq}. {name}";
+  // ProgressionPanel (rendered above it for each seeded stage) uses the
+  // SAME stage name with no digit, so an un-prefixed match would be
+  // ambiguous for Super 8 and Knockout (both carry .seeding).
+  await expect(page.getByRole("heading", { name: /^\d+\.\s*Group Stage$/ })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByRole("heading", { name: /^\d+\.\s*Super 8$/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^\d+\.\s*Knockout$/ })).toBeVisible();
+
+  const stages = await apiJson<{ id: string; kind: string; seq: number; name: string }[]>(
+    request,
+    `/api/v1/divisions/${t20DivisionId}/stages`,
+  );
+  expect(stages.data!.length, "t20-super8 must instantiate all 3 stages").toBe(3);
+  const groupStageId = stages.data!.find((s) => s.name === "Group Stage")!.id;
+  const super8StageId = stages.data!.find((s) => s.name === "Super 8")!.id;
+
+  const teamNames = Array.from({ length: 16 }, (_, i) => `T20 Squad ${i + 1}`);
+  await addEntrantsViaApi(request, t20DivisionId, teamNames, "team");
+
+  const groupGen = await apiJson(request, `/api/v1/stages/${groupStageId}/generate`, "POST");
+  expect(groupGen.status, "group-stage generate").toBeLessThan(300);
+
+  const superGen = await apiJson<{
+    created: number;
+    fixtures: { home_entrant_id: string | null; away_entrant_id: string | null }[];
+  }>(request, `/api/v1/stages/${super8StageId}/generate`, "POST");
+  expect(superGen.status, "Super 8 generate").toBeLessThan(300);
+  expect(superGen.data!.created, "Super 8 must generate real fixture rows").toBeGreaterThan(0);
+  // The group stage was only just generated, never played — every Super 8
+  // fixture must still be TBD on both sides at the data level, not only
+  // in the rendered copy asserted below.
+  for (const f of superGen.data!.fixtures) {
+    expect(f.home_entrant_id).toBeNull();
+    expect(f.away_entrant_id).toBeNull();
+  }
+
+  await page.reload({ waitUntil: "load" });
+  const super8Section = page.locator("section.card").filter({
+    has: page.getByRole("heading", { name: /^\d+\.\s*Super 8$/ }),
+  });
+  await expect(super8Section).toBeVisible();
+  const fixtureRows = super8Section.locator("ul li");
+  await expect(fixtureRows.first()).toBeVisible({ timeout: 15_000 });
+  const rowCount = await fixtureRows.count();
+  expect(rowCount, "Super 8 must render its generated fixtures").toBeGreaterThan(0);
+  const rowTexts = await fixtureRows.allTextContents();
+  for (const text of rowTexts) {
+    // Resolved seed-descriptor text (P6/D4b's slot-label resolver), never a
+    // real team name and never the raw pre-P6 "TBD" fallback — proving the
+    // seeding rules P7 persists actually reach a non-terminal (group-kind)
+    // stage, not only a knockout final (mobile.spec.ts:1051-1052 already
+    // covers a knockout; deliberately not re-asserting that exact string
+    // here — group letters differ per run and would either collide with or
+    // duplicate that pin for no new signal).
+    expect(text).toMatch(/Winner of Group|Runner-up of Group/);
+    for (const name of teamNames) {
+      expect(text, `Super 8 row leaked a real entrant name: ${text}`).not.toContain(name);
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------
