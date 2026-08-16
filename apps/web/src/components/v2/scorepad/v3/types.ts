@@ -7,7 +7,20 @@ export type TapModel = "S" | "T";
 export type PadPhase = "pre" | "live" | "post";
 
 export interface StripItem { label?: string; value: string; accent?: boolean }
-export interface WhoLine { name: string; serving?: boolean }
+// Fix round 2 (Task 5 review, Important — controller ruling): servingLabel
+// is a deliberate, additive contract change. The chassis (v3/scorebug.tsx)
+// must never resolve a sport-namespaced i18n key itself — reusing
+// scorepad.skin.tennis.header.serving there put one sport's key inside a
+// primitive every sport's ScorebugSpec renders through (racquet sports keep
+// their OWN separate scorepad.skin.racquet.header.serving key precisely
+// because one sport's key must not serve another; cricket/football have no
+// serving concept at all). servingLabel is PRE-LOCALISED by the skin that
+// builds the WhoLine, exactly like ScorebugHalf.big/ScorebugSpec.context
+// are already pre-formatted strings — the chassis only renders it verbatim.
+// Optional and additive: a WhoLine with serving:true and no servingLabel
+// stays valid (see scorebug.tsx's whoNames for the explicit, non-fabricating
+// fallback behaviour).
+export interface WhoLine { name: string; serving?: boolean; servingLabel?: string }
 export interface TapEvent { type: string; payload: Record<string, unknown> }
 
 export interface ScorebugHalf {

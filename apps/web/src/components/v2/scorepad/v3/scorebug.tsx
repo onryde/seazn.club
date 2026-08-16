@@ -50,26 +50,31 @@ export interface ScorebugProps {
  * Fix round 1 (review, Minor finding 3): the visible serving dot (below,
  * `aria-hidden`) carried no screen-reader equivalent — the aria-label built
  * from this function's output was who + hint only, silently dropping the
- * "who is serving" cue sighted users get. Folded in here rather than left
- * decorative-only.
+ * "who is serving" cue sighted users get.
  *
- * Reuses `scorepad.skin.tennis.header.serving` (already real copy in all
- * four dictionaries — "Serving"/"Saque"/"Service"/"Opslag") instead of
- * registering a new key: no dictionary file needed touching. Resolved via
- * a DIRECT `t(key)` call, not `padLabel()` — every skin's own `captionKey`
- * (the same "static, already-known-good UI caption" shape as this) resolves
- * the identical way (`msg(field.captionKey as MessageKey)` in cricket-skin
- * .tsx:391, football-skin.tsx:653, tennis-skin.tsx:415/428, racquet-skin
- * .tsx:464) — `padLabel`'s PAD_LABEL_KEYS gate is for text that MIGHT be an
- * unregistered dynamic key (like `ScorebugHalf.hint`, above), which this
- * literal, known-valid key is not; routing it through `padLabel` would have
- * silently always rendered the English fallback regardless of locale, since
- * this key is not registered in PAD_LABEL_KEYS.
+ * Fix round 2 (review, Important — controller ruling): round 1's fix
+ * resolved `scorepad.skin.tennis.header.serving` itself, from inside this
+ * shared chassis primitive — wrong, because that key belongs to ONE sport
+ * and this file renders every sport's ScorebugSpec (racquet sports already
+ * keep their OWN separate `scorepad.skin.racquet.header.serving` key
+ * precisely because one sport's key must not serve another; cricket and
+ * football, the first two sports this wave converts, have no serving
+ * concept at all). The chassis must never resolve a sport-namespaced key.
+ *
+ * Corrected shape: `WhoLine.servingLabel` (types.ts) is PRE-LOCALISED by
+ * the skin that builds the WhoLine — exactly like `ScorebugHalf.big` and
+ * `ScorebugSpec.context` are already pre-formatted/pre-localised strings —
+ * and this function only renders it verbatim. No `t`/MsgFn needed here at
+ * all any more. Explicit, stated fallback (no fabricated English): a
+ * WhoLine with `serving:true` and no `servingLabel` renders its bare name
+ * only — the "serving" fact simply does not reach this string until the
+ * skin populates the field; the visible dot (HalfContent, below) still
+ * marks it visually in the meantime. Exported so it's testable as a plain
+ * function (`__tests__/scorebug.test.ts`) with no DOM/render involved.
  */
-function whoNames(who: readonly WhoLine[], t: MsgFn): string {
-  const servingLabel = t("scorepad.skin.tennis.header.serving");
+export function whoNames(who: readonly WhoLine[]): string {
   return who
-    .map((w) => (w.serving ? `${w.name}, ${servingLabel}` : w.name))
+    .map((w) => (w.serving && w.servingLabel ? `${w.name}, ${w.servingLabel}` : w.name))
     .join(", ");
 }
 
@@ -133,7 +138,7 @@ export function Scorebug({ spec, t, onTap }: ScorebugProps) {
                 key={i}
                 type="button"
                 onClick={() => half.tapEvent && onTap?.(half.tapEvent)}
-                aria-label={[whoNames(half.who, t), hintText].filter(Boolean).join(" ")}
+                aria-label={[whoNames(half.who), hintText].filter(Boolean).join(" ")}
                 style={{ minHeight: 44 }}
                 className="flex flex-col items-center justify-center gap-1 px-3 py-3 text-center outline-offset-[-3px] transition-colors hover:bg-cream/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
               >
