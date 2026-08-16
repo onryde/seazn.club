@@ -8,7 +8,13 @@
 import { describe, expect, it } from "vitest";
 import { makeClock } from "@seazn/engine/scheduling";
 
-import { PARSER_PROMPT, RawParsed, resolveParsed } from "../schedule-ai-parse";
+import {
+  PARSER_PROMPT,
+  PARSE_TOKEN_CEILING,
+  PARSE_TOKENS_PER_ATTEMPT,
+  RawParsed,
+  resolveParsed,
+} from "../schedule-ai-parse";
 
 const TZ = "Europe/London";
 const CLOCK = makeClock(Date.parse("2026-08-03T09:00:00Z"), TZ);
@@ -127,6 +133,36 @@ describe("contradictory rules are refused, not silently applied", () => {
 
     expect(out.hard).toEqual([{ type: "not_after", time: "20:00", scope: COMPETITION }]);
     expect(out.unparsed.length).toBe(1);
+  });
+});
+
+describe("the pre-flight's token budget", () => {
+  it("keeps the corrective retry reachable after a first attempt that truncated", () => {
+    // The retry is needed EXACTLY when the first attempt ran out of room, which
+    // means it spent its whole per-attempt cap. If that cap were half the
+    // ceiling or more, `clampRound` returns 0 on the second pass and the loop
+    // breaks without ever retrying — the retry would exist only for the cases
+    // that never needed it. Raising the ceiling on 2026-08-16 (2k -> 5k, after
+    // the two longest bench rows kept landing as schema misses) is exactly the
+    // sort of edit that can silently violate this, so it is asserted rather
+    // than left as a comment.
+    //
+    // NON-strict, deliberately. schedule-ai-parse.ts's own comment says the
+    // per-attempt cap must be "STRICTLY under half the ceiling" because a
+    // truncating first attempt "has spent the whole ceiling" — but
+    // clampRound is max(0, min(cap, budget - spent)), so at exactly half a
+    // truncating attempt leaves exactly one more full attempt. The shipped
+    // values were 1000/2000, i.e. exactly half, and the retry worked. The real
+    // requirement is that two full attempts fit.
+    expect(PARSE_TOKENS_PER_ATTEMPT * 2).toBeLessThanOrEqual(PARSE_TOKEN_CEILING);
+  });
+
+  it("gives a single attempt room for the longest instructions seen on the bench", () => {
+    // Gemini averaged ~474 output tokens per case but schema-missed on the two
+    // longest multi-clause rows, which is what a truncated answer looks like
+    // from the outside — parseInstruction cannot tell "ran out of room" from
+    // "answered wrongly".
+    expect(PARSE_TOKENS_PER_ATTEMPT).toBeGreaterThanOrEqual(2_000);
   });
 });
 

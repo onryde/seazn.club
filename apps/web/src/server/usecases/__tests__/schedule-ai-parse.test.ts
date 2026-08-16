@@ -209,11 +209,20 @@ describe("parseInstruction", () => {
     expect(req.maxTokens).toBeLessThanOrEqual(PARSE_TOKENS_PER_ATTEMPT);
   });
 
-  it("clamps the retry to what is LEFT of its own ceiling", async () => {
-    const provider = stub([null, B_OUT], 1_800);
+  it("clamps the retry to the smaller of its per-attempt cap and what is LEFT", async () => {
+    // Asserted as the RULE, not as a number. This previously expected exactly
+    // `PARSE_TOKEN_CEILING - 1_800`, which only held while the remaining
+    // ceiling was the binding limit. Raising the ceiling to 10k on 2026-08-16
+    // made the per-attempt cap bind instead, and a hard-coded figure turns a
+    // correct clamp into a red test — or, worse, would have gone green on a
+    // later edit that broke the clamp but happened to match the number.
+    const spentOnFirst = 1_800;
+    const provider = stub([null, B_OUT], spentOnFirst);
     await parseInstruction("…", CTX, { provider });
     const second = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[1]![0] as { maxTokens: number };
-    expect(second.maxTokens).toBe(PARSE_TOKEN_CEILING - 1_800);
+    expect(second.maxTokens).toBe(
+      Math.min(PARSE_TOKENS_PER_ATTEMPT, PARSE_TOKEN_CEILING - spentOnFirst),
+    );
   });
 });
 

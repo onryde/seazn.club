@@ -261,13 +261,28 @@ const RETRY_SUFFIX =
 /** The pre-flight's own ceiling. A compiled instruction is a small JSON object —
  *  a few hundred output tokens — and this round is unpriced, so it gets a hard
  *  bound of its own rather than a share of the run's budget. */
-export const PARSE_TOKEN_CEILING = 2_000;
+export const PARSE_TOKEN_CEILING = 10_000;
 
-/** Per-attempt cap. It must be STRICTLY under half the ceiling or the corrective
- *  retry is unreachable exactly when it is needed: a first attempt that missed
- *  the schema by truncating has spent the whole ceiling, `clampRound` returns 0,
- *  and the loop breaks before retrying. */
-export const PARSE_TOKENS_PER_ATTEMPT = 1_000;
+/** Per-attempt cap. Two full attempts must fit inside the ceiling, or the
+ *  corrective retry is unreachable exactly when it is needed: `clampRound` is
+ *  `max(0, min(cap, budget - spent))`, so a first attempt that missed the
+ *  schema by truncating must still leave a whole attempt behind it. The
+ *  hardening suite asserts `2 * PARSE_TOKENS_PER_ATTEMPT <= PARSE_TOKEN_CEILING`
+ *  rather than trusting this comment.
+ *
+ *  Raised 2026-08-16 (1k -> 2.5k, ceiling 2k -> 10k). The parse bench's two
+ *  longest multi-clause rows kept landing as schema misses on an arm that
+ *  averaged ~474 output tokens per case — the signature of an answer running
+ *  out of room rather than one that was wrong, which `parseInstruction` cannot
+ *  tell apart from the outside because both surface as `parsed: null`. The
+ *  round is still unpriced and still small: a compiled instruction is a few
+ *  hundred tokens, and this only widens the room the hardest ones get.
+ *
+ *  Note what the ceiling now does: the loop runs at most TWO attempts, so real
+ *  spend cannot exceed 2 x 2.5k = 5k and the 10k ceiling never binds. It is
+ *  deliberate headroom — the per-attempt cap is the live limit — so do not read
+ *  10k as the pre-flight's expected cost. */
+export const PARSE_TOKENS_PER_ATTEMPT = 2_500;
 
 const PARSE_TIMEOUT_MS = 60_000;
 
