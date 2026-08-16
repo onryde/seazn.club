@@ -135,6 +135,29 @@ describe("dockController", () => {
     });
   });
 
+  it("FIX ROUND 1 finding 2 — two taps fired before the first resolves still call mutateHeld exactly once (no race)", async () => {
+    // The original guard (`if (selectedIds.has(chipId)) return`) only
+    // blocked a REPEAT tap once the FIRST tap's own store.mutateHeld had
+    // already resolved and added the id — between a tap starting and its
+    // await resolving, selectedIds does not have the id yet, so a second
+    // tap fired in that window sailed past the guard too. This test
+    // controls the store's own resolution explicitly (a manually-resolved
+    // gate promise) so both taps are GUARANTEED to overlap, deterministically
+    // — no reliance on incidental microtask timing.
+    const s = spec();
+    let resolveFirst: (applied: boolean) => void;
+    const gate = new Promise<boolean>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const store = fakeStore({ mutateHeld: vi.fn(() => gate) });
+    const c = dockController(s, "held-1", store)!;
+    const p1 = c.tapChip("scorer"); // starts; suspends awaiting the still-pending `gate`
+    const p2 = c.tapChip("scorer"); // fired before `gate` has resolved — must not also call through
+    resolveFirst!(true);
+    await Promise.all([p1, p2]);
+    expect(store.mutateHeld).toHaveBeenCalledTimes(1);
+  });
+
   it("chips are selected independently — tapping a second chip does not affect the first", async () => {
     const s = spec({ chips: [chip({ id: "a" }), chip({ id: "b" })] });
     const store = fakeStore();

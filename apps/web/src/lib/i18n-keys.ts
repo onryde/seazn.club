@@ -2572,6 +2572,7 @@ export type DictionaryKey =
   | "pad.cricket.panel.superOver"
   | "pad.cricket.panel.wicket"
   | "pad.dock.clears"
+  | "pad.dock.dismiss"
   | "pad.dock.title"
   | "pad.football.action.card"
   | "pad.football.action.goal"

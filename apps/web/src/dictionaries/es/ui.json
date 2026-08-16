@@ -2310,6 +2310,7 @@
   "pad.pp.timersHint": "Los temporizadores son una indicación visual: libera cada penalización explícitamente.",
   "pad.pp.escalation": "Este jugador ya tiene tarjeta verde — una nueva infracción podría escalar a amarilla.",
   "pad.dock.clears": "se cierra en {s} s",
+  "pad.dock.dismiss": "Enviar ahora",
   "pad.dock.title": "Añadir detalle — opcional",
   "pad.ribbon.fallback": "{event} registrado",
   "pad.ribbon.justNow": "ahora mismo",

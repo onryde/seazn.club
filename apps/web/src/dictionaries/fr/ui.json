@@ -2355,6 +2355,7 @@
   "pad.pp.timersHint": "Les minuteurs sont une indication visuelle — libérez chaque pénalité explicitement.",
   "pad.pp.escalation": "Ce joueur a déjà un carton vert — une nouvelle faute peut évoluer vers un carton jaune.",
   "pad.dock.clears": "se ferme dans {s} s",
+  "pad.dock.dismiss": "Envoyer maintenant",
   "pad.dock.title": "Ajouter un détail — facultatif",
   "pad.ribbon.fallback": "{event} enregistré",
   "pad.ribbon.justNow": "à l’instant",

@@ -96,9 +96,12 @@ export interface DockChipView {
 
 export interface DockController {
   /** `spec.title`, verbatim (types.ts gives it no "i18n key" comment —
-   *  same pre-resolved-string convention as ScorebugSpec.context) — see
-   *  DetailDock's own render for how this combines with the chassis-fixed
-   *  `pad.dock.title` copy (Task 3). */
+   *  same pre-resolved-string convention as ScorebugSpec.context) — the
+   *  dock's ONE visible title (controller ruling, fix round 1). The
+   *  chassis-fixed `pad.dock.title` copy ("Add detail — optional", Task 3)
+   *  is the DEFAULT a skin may point this at, not a second line — it earns
+   *  a place in `DetailDock`'s render only as the surrounding group's
+   *  accessible name. */
   title: string;
   /** Live view of every chip + its selection state — a GETTER, not a
    *  snapshot, so a caller re-reading this after `tapChip` resolves sees
@@ -108,12 +111,17 @@ export interface DockController {
   readonly chips: DockChipView[];
   /**
    * Apply `chipId`'s own `mutate` to the held payload — EXACTLY ONCE ever,
-   * for the life of this controller instance, and marks it selected once
-   * the store confirms the mutation actually applied (a `false` result —
-   * the window already closed under us — leaves it unselected, since
+   * for the life of this controller instance. The id is claimed
+   * SYNCHRONOUSLY, before the store call, so two taps fired back-to-back
+   * without awaiting the first (a real double-tap, or two bound handlers
+   * firing for one press) cannot both pass the guard and both apply
+   * `chip.mutate` — see __tests__/dock.test.ts's own "FIX ROUND 1 finding
+   * 2" race test. If the store then reports the mutation could NOT apply
+   * (a `false` result — the hold window already closed under us), the
+   * claim is rolled back and the chip reads unselected again, since
    * showing "selected" for a mutation that never landed would mislead the
-   * scorer). A tap on an ALREADY-selected chip, or an unknown `chipId`, is
-   * a no-op.
+   * scorer. A tap on an ALREADY-selected (or still in-flight) chip, or an
+   * unknown `chipId`, is a no-op.
    *
    * RULING on the second case (the brief leaves this open): DockChip
    * declares no inverse/revert of `mutate` (types.ts), and reconstructing
@@ -149,11 +157,22 @@ export function dockController(spec: DockSpec | null, heldId: string, store: Doc
       return spec.chips.map((chip) => ({ chip, selected: selectedIds.has(chip.id) }));
     },
     async tapChip(chipId: string): Promise<void> {
-      if (selectedIds.has(chipId)) return; // second tap on a selected chip: no-op, see this interface's own doc
+      if (selectedIds.has(chipId)) return; // second tap (or a still in-flight one) on this chip: no-op, see this interface's own doc
       const chip = spec.chips.find((c) => c.id === chipId);
       if (chip === undefined) return; // unknown chip id: nothing to apply
+      // FIX ROUND 1 finding 2: claim the id SYNCHRONOUSLY, before the
+      // `await` below — not only once the store confirms it. Two taps
+      // fired back-to-back without awaiting the first (a real double-tap,
+      // or two bound handlers firing for one press) both run their
+      // synchronous prefix — including this `selectedIds.has` check —
+      // before either can resolve, so marking selection only AFTER the
+      // await left a window where both passed the guard and both called
+      // `store.mutateHeld`, double-applying `chip.mutate`. Claiming here
+      // closes it: the second call's own `selectedIds.has` check now sees
+      // the id already claimed and returns immediately, no store call.
+      selectedIds.add(chipId);
       const applied = await store.mutateHeld(heldId, chip.mutate);
-      if (applied) selectedIds.add(chipId);
+      if (!applied) selectedIds.delete(chipId); // roll back: the mutation never actually landed
     },
     dismiss(): Promise<void> {
       return store.releaseHeld(heldId);
@@ -198,12 +217,16 @@ export interface DetailDockProps {
 }
 
 /**
- * Renders a DockSpec: a fixed "Add detail — optional" eyebrow
- * (`pad.dock.title`, Task 3) plus the spec's own (already-resolved)
- * `title`, a row of 44px chip buttons, a live "clears in Ns" countdown
- * (`pad.dock.clears`), and an explicit dismiss control (reuses
- * `disc.pad.dismiss` — "Dismiss" — rather than minting a new dictionary key
- * this task is not permitted to add).
+ * Renders a DockSpec: its ONE title (`controller.title` — see
+ * `DockController.title`'s own doc for the fix-round-1 ruling on why this
+ * is the only visible heading), a row of 44px chip buttons, a live "clears
+ * in Ns" countdown (`pad.dock.clears`), and an explicit dismiss control
+ * (`pad.dock.dismiss` — "Send now": minted in fix round 1, since the
+ * button's real effect is an immediate send, which the previously-reused
+ * `disc.pad.dismiss` — a consequence-free banner hide elsewhere in this
+ * app — misdescribed). `pad.dock.title` ("Add detail — optional") is used
+ * ONLY as the surrounding group's `aria-label`, never rendered as visible
+ * text.
  *
  * The controller instance is reset ONLY when `heldId` changes (a
  * render-phase state adjustment — React's own sanctioned pattern for this,
@@ -302,13 +325,17 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
 
       <div className="flex items-start justify-between gap-2 px-4 pt-3">
         <div className="min-w-0">
-          <p className="mk-eyebrow text-slate-600">{t("pad.dock.title")}</p>
-          {controller.title && <p className="mt-1 truncate text-sm font-semibold text-slate-800">{controller.title}</p>}
+          {/* FIX ROUND 1 finding 1 (controller ruling): the dock renders
+             exactly ONE title — DockSpec.title, skin-supplied. The fixed
+             `pad.dock.title` copy ("Add detail — optional") is the DEFAULT a
+             skin may point its own title at, not a second visible line; it
+             earns a place only as this group's accessible name (below). */}
+          <p className="truncate text-sm font-semibold text-slate-800">{controller.title}</p>
         </div>
         <button
           type="button"
           onClick={handleDismiss}
-          aria-label={t("disc.pad.dismiss")}
+          aria-label={t("pad.dock.dismiss")}
           style={{ minHeight: 44, minWidth: 44 }}
           className="-mr-2 -mt-1 flex shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-900/5 hover:text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
         >
@@ -324,18 +351,50 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
             key={chip.id}
             type="button"
             aria-pressed={selected}
-            onClick={() => handleTap(chip.id)}
+            // FIX ROUND 1 finding 3 (design call): a selected chip is
+            // ALREADY inert to a repeat tap at the controller level
+            // (dockController.tapChip: "at most once, never auto-undone")
+            // — leaving it a live, hover-reactive button that silently
+            // swallows every further tap gave no feedback that anything
+            // had changed. Reads as CONFIRMED, not merely disabled: keeps
+            // the existing solid violet-600 fill + checkmark (already the
+            // "chosen/done" treatment, matching TileGrid's own primary
+            // weight) and drops the click/hover affordance rather than
+            // inventing a separate greyed-out look. `aria-disabled` (not
+            // the native `disabled` attribute) keeps it focusable, so a
+            // screen-reader user tabbing through still perceives "this
+            // choice was made" instead of the control silently vanishing
+            // from the tab order.
+            aria-disabled={selected || undefined}
+            onClick={selected ? undefined : () => handleTap(chip.id)}
             style={{ minHeight: 44 }}
-            className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors ${
-              selected ? "border-transparent bg-violet-600 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            className={`inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors ${
+              selected
+                ? "cursor-default border-transparent bg-violet-600 text-white"
+                : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
             }`}
           >
             {selected && (
-              <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 16 16"
+                className="h-3.5 w-3.5 shrink-0"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <path d="M3.5 8.5l3 3 6-7" />
               </svg>
             )}
-            {t(chip.label)}
+            {/* FIX ROUND 1 finding 5: a long localized chip label with no
+               natural break point can otherwise force this pill wider than
+               its container — the same 320px-overflow defect class
+               tile-grid.tsx's own fix round guarded against (`min-w-0` on
+               the flex item above + `break-words` here, not `truncate`:
+               mirrors that precedent's exact remedy rather than a new one). */}
+            <span className="break-words">{t(chip.label)}</span>
           </button>
         ))}
       </div>
