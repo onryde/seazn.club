@@ -624,7 +624,30 @@ test("cricket v3 pad: tiles + context strip hold the 44px floor, no horizontal s
   await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
   const pad = page.getByTestId("score-pad");
   await expect(pad).toBeVisible({ timeout: 20_000 });
-  await page.getByRole("button", { name: "Start match", exact: true }).click();
+  // Click until the ledger actually moves. `waitUntil: "load"` resolves
+  // before React has hydrated, so on a loaded machine the first click lands
+  // on server-rendered markup with no handler attached and is silently a
+  // no-op: the fixture stays "Scheduled", core.start never lands, and the
+  // failure surfaces 20s later at the poll below as an empty event list
+  // rather than anywhere near the click. Observed at all seven widths while
+  // the same flow passed under the `parallel` project on a quieter machine.
+  const startBtn = page.getByRole("button", { name: "Start match", exact: true });
+  await expect(startBtn).toBeEnabled({ timeout: 20_000 });
+  await expect
+    .poll(
+      async () => {
+        if (await startBtn.isVisible().catch(() => false)) {
+          await startBtn.click({ timeout: 5_000 }).catch(() => {});
+        }
+        const res = await apiJson<{ type: string }[]>(
+          page.request,
+          `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`,
+        );
+        return (res.data ?? []).some((e) => e.type === "core.start");
+      },
+      { timeout: 30_000, message: "Start match must reach the ledger once the pad has hydrated" },
+    )
+    .toBe(true);
   // Wait on the real LEDGER, not the click alone — the pad's own
   // `useFixtureStream` polls at a 15s interval (scorepad-v2.spec.ts's own
   // `openLiveConsole` comment), so a tile-visibility check racing the click
