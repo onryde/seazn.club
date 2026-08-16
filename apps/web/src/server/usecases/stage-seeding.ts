@@ -214,6 +214,35 @@ export function placeDescriptors(
   return seats as SlotDescriptor[];
 }
 
+/** The full "does this StageSeeding rule actually resolve" check every
+ *  WRITER of a `.seeding` rule must run before trusting it: expand `take`
+ *  against the source's real shape, let `placeDescriptors` validate a
+ *  `seeded_map`'s slot/source references against what that shape actually
+ *  produces (throws `SEEDING_MAP_SLOT_INVALID`/`SEEDING_MAP_SOURCE_INVALID`),
+ *  then require at least 2 qualifiers (`SEEDING_RULES_MISSING`). A mismatch
+ *  422s HERE — the "at save time, not proposal time" contract
+ *  `placeDescriptors`' own doc comment above describes — rather than
+ *  persisting silently and only surfacing downstream at TBD-fixture
+ *  generation time (stages.ts's generateSeededStageFixtures).
+ *
+ *  Pure: every caller resolves the source stage and its shape itself (DB
+ *  access differs per caller — stages.ts's tx-scoped resolveSeedingSource/
+ *  sourceShapeOf against a live stage graph for createStages/replaceStages,
+ *  or templates.ts's instantiateTemplate reading its own just-inserted
+ *  sibling row) and passes the resolved `SourceShape` in. Two callers, one
+ *  function — moved here (was stages.ts-private) specifically so they can't
+ *  drift apart. */
+export function validateSeedingAgainstShape(
+  shape: SourceShape,
+  seeding: { take: readonly TakeRule[]; placement: Placement; map?: readonly SeededMapEntry[] },
+): void {
+  const pots = expandTake(seeding.take, shape);
+  placeDescriptors(pots, seeding.placement, seeding.map); // throws on a bad seeded_map
+  if (pots.reduce((n, p) => n + p.length, 0) < 2) {
+    throw new HttpError(422, "this stage's seeding rules produce fewer than 2 qualifiers", "SEEDING_RULES_MISSING");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Resolution: seed-ordered descriptors + the source stage's real standings
 // tables -> resolved entrant ids + flagged ties. Runs only after the source

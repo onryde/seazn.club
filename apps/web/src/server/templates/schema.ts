@@ -20,13 +20,43 @@
 // commit 51f1db9c, so "the wire schema" and "the DB-checked kinds" are one
 // and the same set.
 //
-// No `seeding` field yet on TemplateStage — that lands in P7 with D4's
-// StageSeeding. wc32's knockout stage therefore carries no qualification
-// wiring to its group stage in P4 (documented in catalog/wc32.json).
+// `seeding` (P7, D4's StageSeeding) is declared below as an OPTIONAL field on
+// TemplateStage, imported verbatim from api-v1/schemas.ts's
+// StageSeedingSchema/TakeRuleSchema — never redeclared, copied, or forked.
+// It is narrowed to `source: "previous"` only (TemplateStageSeeding, just
+// below the imports): a catalog JSON has no live stage UUIDs for the
+// `{stageId}` branch to reference — they only exist once instantiation
+// creates the real stage rows. wc32's knockout stage predates this and still
+// carries no seeding wiring to its group stage (documented in
+// catalog/wc32.json) — retrofitting it is out of scope here; the 5 P4
+// entries' output must stay byte-stable.
 import "server-only";
 import { z } from "zod";
-import { StageKind } from "@/server/api-v1/schemas";
+import { StageKind, StageSeedingSchema, type StageSeedingInput } from "@/server/api-v1/schemas";
 import { PointsRule } from "@seazn/engine/competition";
+
+/** StageSeedingSchema narrowed to the ONE branch a static catalog entry can
+ *  ever express: `source: "previous"`. `.refine()`'s type-predicate overload
+ *  both enforces this at runtime (a `{stageId}` source throws at parse
+ *  time) and narrows the INFERRED type to the literal, so a future
+ *  instantiation usecase reading `TemplateStage.seeding.source` sees
+ *  `"previous"` only — never has to defensively handle the live-stage-id
+ *  branch that can't occur here. This is the `.refine`-style narrowing the
+ *  P7 dispatch calls for: constrain the imported schema, don't fork it —
+ *  `.omit`/`.extend` aren't options here because the exported
+ *  `StageSeedingSchema` binding is already the POST-`.refine()` ZodEffects
+ *  (schemas.ts's own `seeded_map needs a non-empty map` check), and
+ *  ZodEffects doesn't carry `.omit`/`.extend` — only the ZodObject before
+ *  that refine would have, and schemas.ts doesn't export it separately. */
+export const TemplateStageSeeding = StageSeedingSchema.refine(
+  (s): s is StageSeedingInput & { source: "previous" } => s.source === "previous",
+  {
+    message:
+      'template stage seeding must use source: "previous" — a catalog template has no live stage id to reference yet',
+    path: ["source"],
+  },
+);
+export type TemplateStageSeeding = z.infer<typeof TemplateStageSeeding>;
 
 export const TemplateEntrantKind = z.enum(["team", "pair", "individual"]);
 export type TemplateEntrantKind = z.infer<typeof TemplateEntrantKind>;
@@ -69,6 +99,16 @@ export const TemplateStage = z.object({
    *  the sugar. */
   config: z.record(z.string(), z.unknown()).optional(),
   scheduleDefaults: ScheduleDefaults.optional(),
+  /** Cross-stage seed wiring (P7, D4's StageSeeding) for a stage that
+   *  qualifies from an EARLIER stage in the same division — euro24's R16
+   *  (best-thirds), t20-super8's Super 8 and SF/F (a two-link chain),
+   *  league-playoff's page_playoff. Absent on a stage nothing feeds (the
+   *  division's first stage) or on a stage that just advances winners
+   *  within its own bracket (QF/SF/F rounds inside one `knockout` stage are
+   *  NOT separate TemplateStages, so they need no seeding of their own).
+   *  See TemplateStageSeeding above for why `source` is narrowed to
+   *  `"previous"`. */
+  seeding: TemplateStageSeeding.optional(),
 });
 export type TemplateStage = z.infer<typeof TemplateStage>;
 

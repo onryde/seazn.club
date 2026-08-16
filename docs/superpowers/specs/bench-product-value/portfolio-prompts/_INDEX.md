@@ -39,7 +39,7 @@ S13-gated. New-branch-in-worktree rule applies to every session.
 | P4 | D1a template catalog + instantiation + wizard | `P04-templates-single-stage.md` | — | green-light | **MERGED** `e35efff1` (#548) |
 | P5 | D4a seeding rules + TBD fixtures + fill engine | `P05-progression-engine.md` | — | green-light | **MERGED** `776ba389` (#554), V360 |
 | P6 | D4b proposal UI + confirm flow | `P06-progression-ui.md` | P5 | green-light | **MERGED** `cdcc3bef` (#568), V362 |
-| P7 | D1b multi-stage templates | `P07-templates-multi-stage.md` | P4, P5 (StageSeeding merged) | green-light | TODO — **started then HELD by owner 2026-08-14**; re-pinned citations, rulings and T1–T5 briefs handed over (see below) |
+| P7 | D1b multi-stage templates | `P07-templates-multi-stage.md` | P4, P5 (StageSeeding merged) | green-light | **DONE 2026-08-16**, PR open — 3 templates + seeding persisted + progression map; stages now named not kinded (owner ruling); `validateStageSeeding` shared with instantiation; 2 defects found and reported unfixed (`uniqueSlug` race, modal 320 fold). Status: `docs/superpowers/plans/2026-08-16-p7-session-status.md` |
 | P8 | D5a venues/courts schema + API + org UI | `P08-venues-schema-ui.md` | — | green-light + **release-2 C-chain done** | TODO |
 | P9 | D5b scheduler integration + stored-config migration | `P09-venues-scheduler.md` | P8 | same as P8 | TODO |
 | P10 | D5c calendars + window compiler | `P10-venues-calendars.md` | P9 | same as P8 | TODO |
@@ -612,3 +612,53 @@ a handover left in the SDD workspace dies with the worktree.
 on pull requests on 2026-08-14. Every brief written before that date —
 including T5 — says it is disabled and must never be enabled. That is now
 false; six Playwright jobs run per PR, including the seven-width matrix.
+
+### P7 RESUMED AND COMPLETED 2026-08-16
+
+The handover above was executed as written. Full record:
+`docs/superpowers/plans/2026-08-16-p7-session-status.md`. What a later
+session should not re-derive:
+
+- **`validateStageSeeding` now lives in the shared `stage-seeding.ts`** and
+  is called by `createStages`/`replaceStages` AND `instantiateTemplate`.
+  This deliberately overrode the T3 brief's "do not touch `stages.ts`". The
+  first instantiation guard replicated only the "no earlier stage" branch, so
+  a catalog entry whose `take`/`map` disagreed with its source stage's shape
+  persisted silently and 422'd later at proposal/generate — while its own new
+  comment claimed the opposite. Inlining the three validation calls at the
+  template site was rejected: that is a second copy of the save-time
+  validation, the exact parallel-paths class this session existed to close.
+- **Stages are named by `i18nNameKey`, not by kind, in both the detail sheet
+  and the gallery card** (owner ruling, from a mockup). `t20-super8` is the
+  catalog's first template with two same-kind stages, which made the old
+  rendering read "Group stage → Group stage → Knockout" with two identical
+  progression prefixes. EN `templates.stageKind.*` was retitled to Title Case
+  to match `templates.stage.*`, since both paths now render side by side.
+- **The detail sheet leads with its form** (Name / Starts on / Ends on before
+  the description and STRUCTURE/PROGRESSION), owner-approved, because the
+  required Ends-on field sat below the modal's scroll fold at 320×568.
+- **The no-fixtures-at-instantiation ruling is now pinned by a test**, so a
+  later session cannot quietly reintroduce generation without a red.
+- **euro24's best-thirds simplification is asserted against the loaded
+  dictionary text in all four locales**, not against the key's name — the
+  first version of that test would have stayed green if the caveat sentence
+  were deleted from every locale.
+
+**Two defects found and REPORTED, not fixed** (both outside the task's file
+set, both real):
+
+1. `uniqueSlug()` (`apps/web/src/server/usecases/slugs.ts`) is
+   check-then-insert with no retry or transaction guard. Two concurrent
+   same-named competitions in one org both pass the "slug taken?" check; the
+   loser gets a raw `competitions_org_id_slug_key` violation surfaced into
+   the UI, contradicting that module's documented "generated slugs never
+   409" guarantee. Surfaced by the new e2e, whose seven viewport projects
+   share one org.
+2. The detail sheet's required field sits below the modal's internal scroll
+   fold at 320×568 on EVERY template, including ones P7 never touched
+   (reproduced on `box-league`). P7 mitigated its own share by reordering the
+   sheet body; the underlying `components/modal.tsx` behaviour is untouched.
+
+Also: `templateStageKinds` (`server/templates/summary.ts`) lost its last
+production caller when the card moved to the shared helper. Only its own test
+calls it now. Function kept, comment corrected — a later session may delete both.
