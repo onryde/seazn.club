@@ -171,7 +171,10 @@ export function RecordingChip({ activeBand, entitledBands, t }: RecordingChipPro
         style={{ minHeight: 44 }}
         className="flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 text-left text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
       >
-        <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-violet-600" />
+        <span
+          aria-hidden="true"
+          className={`h-2 w-2 shrink-0 rounded-full ${current.locked ? "bg-amber-500" : "bg-violet-600"}`}
+        />
         <span className="min-w-0 flex-1 truncate">{current.label}</span>
         {showUpsell && (
           <svg
@@ -188,6 +191,21 @@ export function RecordingChip({ activeBand, entitledBands, t }: RecordingChipPro
           </svg>
         )}
       </button>
+      {/* Defensive, not decorative (Task 11 fix batch, deferred from Task 9's
+       * review). buildRecording's own contract says the ACTIVE band can
+       * never be locked ("an org cannot be actively using a band it does
+       * not hold" — see the doc comment above). If that invariant is ever
+       * violated anyway — an entitlement revoked mid-fixture, say — this
+       * component's whole reason to exist is to never go silent about a
+       * lock (header comment's "never a silent lock icon" rule), so a bare
+       * `current.label` with no lock treatment would be exactly the defect
+       * this chip replaces. Unreachable while every caller upholds the
+       * invariant, and R1 ships this component with zero callers either
+       * way (registry.ts's V3_SKINS is empty) — but "unreachable today"
+       * ships inert, not untested, in this repo. */}
+      {current.locked && current.upsell && (
+        <p className="mt-1.5 min-w-0 break-words px-4 text-xs font-medium text-amber-700">{current.upsell}</p>
+      )}
       {expanded && showUpsell && next?.upsell && (
         <p className="mt-1.5 min-w-0 break-words px-4 text-xs font-medium text-slate-500">{next.upsell}</p>
       )}
