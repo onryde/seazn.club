@@ -30,14 +30,19 @@ describe("buildRibbon", () => {
   });
 
   it("takes the per-sport lookup branch when the key is registered in PAD_LABEL_KEYS", () => {
-    // Unconditional: the mocked padLabel above already does the real
-    // key-routing (it only calls through for "pad.cricket.ribbon.wicket"),
-    // so tHit just needs a distinguishable return value — no need to
-    // re-compare against a synthetic key that (correctly) isn't a member of
-    // the real MessageKey union.
-    const tHit: MsgFn = () => "Wicket!";
+    // Fix round 2 (review, Critical): the oracle MUST discriminate by its
+    // input. A constant oracle (`() => "Wicket!"`) returns the same text on
+    // the hit path (padLabel → mocked → m(key)) and the fallback path
+    // (t("pad.ribbon.fallback", {...})), so an inverted branch condition in
+    // buildRibbon — the exact bug fix round 1 corrected — would still leave
+    // this test green. Templating the key into the output makes the two
+    // paths' outputs provably different: the hit path calls
+    // tHit("pad.cricket.ribbon.wicket"), the fallback path (if the branch
+    // were broken) would call tHit("pad.ribbon.fallback", {...}) instead —
+    // different key in, different text out, either way.
+    const tHit: MsgFn = (k) => `HIT:${k}`;
     const r = buildRibbon("cricket.wicket", { side: "home" }, () => "?", tHit);
-    expect(r).toEqual({ text: "Wicket!", undoable: true });
+    expect(r).toEqual({ text: "HIT:pad.cricket.ribbon.wicket", undoable: true });
   });
 });
 
