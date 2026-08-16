@@ -129,6 +129,65 @@ Append one line per ruling: date, wave, decision, reason. Never delete.
   §2.5 mandates a violet fill for primary tiles. Flag at the first gallery
   sign-off so the owner rules rather than discovering it mid-conversion.
 
+### R2 — owed by later waves (each also written into that wave's own prompt)
+
+Every item here is deferred with a NAMED owner, never dropped. A wave that
+reads `_RULES.md` → `_INDEX.md` → its own prompt meets each of these twice.
+
+- **R3–R7, every conversion: implement `phase?(view)`.** R2 added it (G3) so
+  tiles gate on the MATCH, not a user-clicked tab, and made it OPT-IN so this
+  wave did not migrate sports it never tested. A skin that omits it silently
+  keeps the tab-shaped behaviour D-16 describes. Map a richer engine phase
+  DOWN to the three `PadPhase` values inside your own `phase()` body; never
+  widen the type.
+- **R3–R7: two chassis capabilities exist now — use them instead of
+  re-deriving.** `GuidedSheetStep.when(answers)` skips a step without a tap
+  (so one tile can open a flow that asks only what varies), and
+  `SheetPersonStep.candidates` supersedes the pool when the skin knows the
+  exact legal people. Both were built for cricket's wicket and are generic.
+- **R3–R7: `WhoLine.servingLabel` must be supplied wherever `serving` is
+  set** (R1's standing item, still open — R4/R5 are where it bites). The
+  chassis renders a pre-localised label the SKIN provides; when `serving` is
+  true and no label is given the screen-reader cue is silently absent.
+- **R3–R7: the recording chip needs a real `fidelityEntitlements`.** R2
+  parameterised the plan name and cricket declares real entries
+  (`{2: "stats.player", 3: "scoring.ball_by_ball"}`). A converting sport whose
+  module declares none renders an upsell for a band nothing gates.
+- **R7: D-4 is yours, and R2 did NOT close it.** The R2 brief listed D-4 as
+  owed, but the duplicate Activity ledger is console-level and R2 is barred
+  from console chrome — spec §8 already assigns the row R1/R7. R2 closes D-5
+  (the pad's ribbon renders words, not payload dumps) and leaves D-4 whole.
+- **R7: enforce the tile-hierarchy convention.** "Forfeit/Abandon are not
+  representable in the tile grid" is still only a COMMENT, with no type or
+  runtime block (R1's item, unchanged by R2 — cricket simply declares no such
+  tile). Console chrome is where the enforcement belongs.
+- **R8: attribution has no required/optional flag, so nothing can validate
+  it.** `checkActionValidity` (`view-model.ts:208`) deliberately skips
+  attribution, and its own docstring gives the reason: `PadAttributionItem`
+  (`packages/engine/src/sport/module.ts:264`) carries only `kind`, `path`,
+  `role?` and `labelKey?` — there is no way to tell a required item from an
+  optional one. Consequence today: an action can be confirmed with a required
+  person unfilled, the engine's `strictObject` then rejects it, and the
+  scorer's tap DEAD-ENDS on a refusal (`cricket.toss.wonBy`,
+  `cricket.review.by`). Genuinely optional items (a wicket with no named
+  fielder) are correct as they stand. Not data loss — a dead-end tap. The fix
+  is an ENGINE contract change plus a sweep of all 11 sports' `padSpec`
+  declarations plus conformance and golden replay, which is why R2 (permitted
+  no engine work, §9) could not take it. See §9 item 2.
+- **R8: cricket's dock has no shot-type chip.** Spec §3 promises shot-type
+  enrichment, but `CricketBall` is a `z.strictObject` with no field to carry
+  it, so the dock ships with Free hit alone. Adding the field is a payload
+  change with golden-corpus consequences. See §9 item 3.
+- **R8: delete `skins/cricket-skin.tsx`.** Dead for cricket from R2's flip
+  onward, but deliberately left on disk — the v2 path must keep working until
+  the last sport converts. Cricket also keeps its `RESOLUTION_KIND` row, now
+  unreached, so the legacy drift guard does not rot before then.
+- **R8: R2 deferred SMOKE by name**, per the brief. `scripts/smoke.ts` never
+  drove the v3 cricket pad.
+- **R8: finish `content/help/scoring/fidelity.md`.** R2 reworded it to be true
+  of BOTH lanes (worded recording chip for cricket, raw picker for the other
+  ten). When the last sport converts, the dual wording becomes wrong.
+
 ### R2 (2026-08-16) — owner rulings taken at scoping
 
 - **Cricket's 13 non-ball event types stay in the PAD, HYBRID surfacing.**

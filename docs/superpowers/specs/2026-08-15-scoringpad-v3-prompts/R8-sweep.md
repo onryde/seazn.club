@@ -28,3 +28,37 @@ Read `_RULES.md`, `_INDEX.md`, spec §5–§8. Scout re-pins.
 
 **Acceptance:** all four test types green programme-wide (JSON counts), zero
 deferred debt without a named owner, owner's closing sign-off recorded.
+
+## Inherited from R2 — debts with your name on them
+
+- **Attribution has no required/optional flag, so nothing can validate it.**
+  `checkActionValidity` (`apps/web/src/components/v2/scorepad/view-model.ts:208`)
+  deliberately skips attribution, and its own docstring says why:
+  `PadAttributionItem` (`packages/engine/src/sport/module.ts:264`) carries only
+  `kind`, `path`, `role?` and `labelKey?` — nothing distinguishes a required
+  item from an optional one, and the same action legitimately has both
+  (`cricket.review`: `by` required, `person`/`against` optional). Today an
+  action can be confirmed with a required person unfilled; the engine's
+  `strictObject` then rejects it and the scorer's tap DEAD-ENDS on a refusal
+  (`cricket.toss.wonBy`, `cricket.review.by`). It is a dead-end tap, not data
+  loss. Fix = add the flag to the engine contract, populate it across all 11
+  sports' `padSpec` declarations, honour it in `checkActionValidity`, then
+  conformance + golden replay because `padSpec` output is recorded surface.
+  R2 could not take it: §9 permits no engine work there. See §9 item 2.
+- **Cricket's dock has no shot-type chip.** Spec §3 promises shot-type
+  enrichment; `CricketBall` is a `z.strictObject` with no field to carry it, so
+  the dock ships with Free hit alone. Adding the field is a payload change with
+  golden-corpus consequences. See §9 item 3.
+- **Delete `skins/cricket-skin.tsx`** (dead for cricket since R2's flip, kept on
+  disk because the v2 path must work until the last sport converts), and drop
+  cricket's now-unreached `RESOLUTION_KIND` row with the rest of the legacy
+  machinery.
+- **R2 deferred SMOKE to you by name** — `scripts/smoke.ts` has never driven the
+  v3 cricket pad, on either the pro or the free path.
+- **Finish `content/help/scoring/fidelity.md`.** R2 reworded it to be true of
+  BOTH lanes (worded recording chip for cricket, raw picker for the other ten).
+  Once the last sport converts, that dual wording becomes wrong. `basics.md`
+  now links `scoring/cricket.md`; the per-sport page convention is the pattern.
+- **Verify the event-copy gate reds on a missing `pad.<sport>.ribbon` key** —
+  R2 added cricket's ribbon keys to `PAD_LABEL_KEYS`, which is what makes that
+  gate meaningful.

@@ -194,6 +194,59 @@ wonder whether these were missed):**
   own `super_over` behaviour of dispatching `cricket.superover.ball` in place
   of `cricket.ball`.
 
+**G4 (found by task C mid-flight) — a sheet's payload cannot see the match.**
+`GuidedSheetSpec.buildPayload(answers)` receives ONLY the wizard's own answers,
+but cricket's wicket is a `cricket.ball` event: the payload also needs `over`,
+`ballInOver`, `striker`, `nonStriker` and `bowler`, none of which the sheet
+asks for (the context strip already holds them, and asking again is the wasted
+tap D-14/D-15 exist to remove). Task C died at the 600 s watchdog before
+implementing anything for this; `buildPayload`'s signature is unchanged.
+
+**Controller ruling on G4 (2026-08-16):** make `sheets` a method of the view —
+`sheets?(view): Record<string, GuidedSheetSpec>` — rather than adding a second
+parameter to `buildPayload`. Every other member of `SkinDefV3` (`scorebug`,
+`tiles`, `dock`, `context`, `swap`, `phase`) is already a function of `view`;
+the static `sheets` record is the anomaly, and closing over the view at build
+time needs no new plumbing and no change to the renderer's own contract. The
+host must therefore rebuild the sheet spec per render rather than caching it,
+or the closed-over view goes stale — state that requirement in the type's
+docstring, since nothing else enforces it.
+
+**G5 (found by review of task C, 2026-08-16) — the context strip was INERT.**
+`buildContext` derived every slot from the engine fold, the cricket skin
+shipped no `contextSelect`, and `pad-host.tsx`'s `onSelect` therefore resolved
+to `undefined`: a scorer could open the picker, choose a person, and watch the
+chip revert to its pre-tap value on the next render, forever. D-14 would have
+regressed — v2's three dropdowns at least held what you chose.
+
+The cause is structural, not careless. No cricket event records a
+striker/bowler pick (all 15 schemas checked), and a pure `view → spec` builder
+has nowhere to hold a pending choice, which is exactly what v2 used local
+`useState` for (`cricket-skin.tsx:548-553`).
+
+**Controller ruling on G5:** the HOST holds the pending selection.
+`PadHostV3` keeps per-slot overrides in local state and feeds them back
+through `PadHostView`; a skin reads `override ?? fold value` when it builds
+both the context strip and the ball payload. Skins stay pure functions of the
+view, no engine change is needed (the people already travel in the ball
+payload), and §2.4's promise — set once, tap to change, every ball carries
+them — is restored. `contextSelect` REMAINS on the contract for a sport whose
+engine genuinely can persist the pick; cricket simply is not one.
+
+**G6 (same review) — the wicket sheet's "who's out" pool is wrong.**
+`SquadMember.onField` is never cleared by a dismissal, only by lineup and
+substitution events (`cricket.ts:2100-2113`), so the whole batting-side
+on-field roster is offered: by the ninth wicket the picker lists ~9 already-out
+players beside the 2 real ones. The engine rejects a wrong pick
+(`cricket.ts:1237`), so nothing corrupts — it is a wrong-but-tappable list,
+which is the D-15 defect wearing a new coat.
+
+**Controller ruling on G6:** give `SheetPersonStep` an optional explicit
+`candidates` list that supersedes the pool when present. A run-out has exactly
+two possible batters, and the skin knows both. Same shape as the G2/G4
+additions: small, additive, and it removes a wrong choice rather than
+documenting it.
+
 **Also settled by the same scout, so C does not re-derive it:**
 `fine.striker/nonStriker/currentBowler` exist at **fidelity tier 3 only**
 (`fine: null` below it), and `cricket.ball` is itself a band-3 action — so the
