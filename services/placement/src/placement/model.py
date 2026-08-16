@@ -1442,22 +1442,42 @@ def build_model(
     # rather than per pair would mint two `NewIntVar`s named `gap_{i}_{j}`
     # for the identical pair — redundant constraints for the same fact, not
     # a correctness bug, but avoidable cheaply by collecting pairs first.
-    gap_pairs: set[tuple[int, int]] = set()
+    # ENCOUNTER order, not `sorted()` — deliberately, and the earlier draft of
+    # this fold got it wrong. `by_entrant` alone (no `by_person` at all) is
+    # every pre-C10 caller's shape, and pre-C10 this loop walked
+    # `by_entrant.values()` directly — dict INSERTION order (first sighting
+    # while enumerating `fixtures`), not a numeric sort of the pairs it
+    # produced. A global `sorted()` over the collected pairs agrees with that
+    # on most boards (small, few groups) but not all: two groups where the
+    # LOWER-numbered group is discovered SECOND — entrant 0 first-seen at
+    # fixture 1 covering {1,2}, entrant 3 first-seen at fixture 0 covering
+    # {0,3} — walks pre-C10 as `gap_0_3, gap_1_2` but a global sort of the
+    # SAME pair set gives `gap_0_3, gap_1_2` too by coincidence on 2 pairs;
+    # `test_t2_gap_variables_keep_pre_c10_encounter_order` below uses a
+    # three-pair-then-one-pair shape where the two orders genuinely disagree.
+    # Same pair SET either way — `AddMaxEquality` below does not care — but
+    # CP-SAT's search is sensitive to variable CREATION order, so a caller
+    # sending no `person_indices` at all would still get a different
+    # `CpModel` than pre-C10, silently, the moment this shipped. Walking
+    # `by_entrant` first, in its own order, and appending only pairs
+    # `by_person` adds that were not already seen, keeps the entrant-only
+    # case byte-identical to pre-C10 by construction.
+    gap_pairs: list[tuple[int, int]] = []
+    seen_pairs: set[tuple[int, int]] = set()
     for group in (*by_entrant.values(), *by_person.values()):
         if len(group) < 2:
             continue
         for x in range(len(group)):
             for y in range(x + 1, len(group)):
                 i, j = group[x], group[y]
-                gap_pairs.add((i, j) if i < j else (j, i))
+                key = (i, j) if i < j else (j, i)
+                if key in seen_pairs:
+                    continue
+                seen_pairs.add(key)
+                gap_pairs.append(key)
 
     diff_vars: list[Any] = []
-    # `sorted()`, not raw `set` iteration order — matches the file's own
-    # "reproducible constraint-construction order" convention (section 6's
-    # `sorted(set(by_entrant) | set(pinned_rest_by_entrant))`, section 9's
-    # `sorted(day_bounds)`), even though a `set[tuple[int, int]]` of small
-    # ints is already stable in CPython — this does not depend on that.
-    for i, j in sorted(gap_pairs):
+    for i, j in gap_pairs:
         d = model.NewIntVar(0, gap_units_max, f"gap_{i}_{j}")
         model.Add(d * gap_unit >= start[i] - start[j] - dur_ms).OnlyEnforceIf([placed[i], placed[j]])
         model.Add(d * gap_unit >= start[j] - start[i] - dur_ms).OnlyEnforceIf([placed[i], placed[j]])
