@@ -2132,11 +2132,17 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     );
     // …and every example it names must be a real caller, so the illustration is
     // not itself a falsehood.
+    // "registrations" DROPPED from both this list and the article's own
+    // example sentence (RS001 registration demolition, #588):
+    // components/v2/registrations-panel.tsx is deleted along with the rest of
+    // the old org-console registration UI, and nothing replaces it as a
+    // freeze-checked caller until RS004/RS005/RS009 ship the new
+    // competition-level Registration hub. Naming it here would assert a file
+    // that no longer exists.
     for (const [example, file] of [
       ["schedule board", "components/v2/schedule-board.tsx"],
       ["entrants", "components/v2/entrants-panel.tsx"],
       ["officials", "components/v2/officials-panel.tsx"],
-      ["registrations", "components/v2/registrations-panel.tsx"],
       ["settings", "components/v2/division-settings.tsx"],
     ] as const) {
       expect(addOns, `the article stopped naming ${example}`).toContain(example);

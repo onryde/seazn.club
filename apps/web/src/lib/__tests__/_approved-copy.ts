@@ -546,7 +546,24 @@ export const APPROVED_ADD_ONS_INVENTORY: string[] = [
   // them. A frozen admin is blocked across essentially the whole editing
   // product, not four screens. Re-read against `server/api-v1/auth.ts`
   // (requireResourceAuth -> requireOrgAuth) and the measured caller walk.
-  "066578c9f729b625",
+  //
+  // ROUND 8 (RS001 registration demolition, #588). Dropped "registrations"
+  // from the example list — the org-console "registrations panel" component
+  // this word named is deleted along with the rest of the old org-console
+  // registration UI (design
+  // `docs/superpowers/specs/2026-08-16-registration-redesign-design.md`; not
+  // cited by its own former path here, since a deleted file would fail this
+  // very file's citation-existence gate). Checked against the same caller
+  // walk `help-copy-truth.test.ts` runs: no registration-related component
+  // currently writes through a freeze-checked (`requireOrgAuth` /
+  // `requireResourceAuth`) route — the one surviving piece of registration
+  // UI is a PUBLIC-facing surface authenticated by access token, not a
+  // session, so it was never in this set. The remaining four examples
+  // (schedule board, entrants, officials, settings) are unchanged and still
+  // real callers. RS004/RS005/RS009 own re-adding an example once the new
+  // competition-level Registration hub ships a freeze-checked org-console
+  // surface.
+  "83bc6609f7aa1de5",
   // ROUND 7 (M1's twin). This paragraph said the control "refuses to go below
   // the number of organisations the group is standing on" — the ORG count,
   // sixteen lines after the identical error was corrected at surface 23 and in
