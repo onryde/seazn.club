@@ -61,11 +61,14 @@ export const ALLOWED_PROVIDERS = ["xai", "google-vertex"] as const;
  *  Slugs come from the endpoint `tag` field up to the first "/", same standard
  *  as ALLOWED_PROVIDERS. Re-verify whenever an arm is added.
  *
- *  NOTE: nothing organiser-facing routes here yet. parserAiModel() still
- *  defaults to claude-haiku-4-5 on the Anthropic direct transport; these slugs
- *  are reachable only by setting SCHEDULING_PARSE_MODEL. Promoting one to the
- *  default is a separate change that MUST also update
- *  help/scheduling/ai-scheduling.md and /legal/sub-processors, which today name
+ *  ROUTING TODAY: parserAiModel() defaults to google/gemini-3.7-flash wherever
+ *  OPENROUTER_API_KEY is set, which is served by `google-vertex` — already on
+ *  the paid-path allowlist above and already named to organisers in
+ *  help/scheduling/ai-scheduling.md, so that promotion added no sub-processor.
+ *  `deepinfra` and `akashml` remain BENCH-ONLY: they are reachable solely by
+ *  pinning SCHEDULING_PARSE_MODEL to a model they serve. Promoting one of those
+ *  to the default is a different matter and MUST also update
+ *  help/scheduling/ai-scheduling.md and /legal/sub-processors, which name
  *  Anthropic, Google and xAI only. */
 export const PARSE_ALLOWED_PROVIDERS = ["google-vertex", "xai", "deepinfra", "akashml"] as const;
 

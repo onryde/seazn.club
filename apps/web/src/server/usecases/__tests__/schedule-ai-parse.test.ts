@@ -421,14 +421,23 @@ describe("pre-flight plumbing (#398)", () => {
   });
 
   it("picks the provider from the MODEL, not from the global AI_PROVIDER", async () => {
-    // `parserAiModel()` returns a bare Anthropic id. Resolved off AI_PROVIDER,
-    // that id goes to OpenRouter as a 404 under AI_PROVIDER=openrouter — and
-    // this function's own catch swallows it, so every run would silently compile
-    // to no rules with nothing in the logs to say why.
+    // A bare Anthropic id resolved off AI_PROVIDER goes to OpenRouter as a 404
+    // under AI_PROVIDER=openrouter — and this function's own catch swallows it,
+    // so every run would silently compile to no rules with nothing in the logs
+    // to say why.
+    //
+    // OPENROUTER_API_KEY is deleted EXPLICITLY rather than relied on being
+    // absent: since 2026-08-16 parserAiModel() returns an OpenRouter slug when
+    // that key is present, so a test that merely inherits an unkeyed
+    // environment would assert the fallback branch while appearing to assert
+    // the default one, and would flip meaning the moment CI gained the key.
+    const savedKey = process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
     resolveProviderMock.mockReturnValue(stub([B_OUT]));
     await parseInstruction("final on friday", CTX);
     expect(resolveProviderMock).toHaveBeenCalledWith("anthropic");
     expect(parserAiModel()).not.toContain("/");
+    if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey;
 
     resolveProviderMock.mockClear();
     process.env.SCHEDULING_PARSE_MODEL = "google/gemini-3.6-flash";

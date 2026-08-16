@@ -242,10 +242,43 @@ export const PARSE_TOKENS_PER_ATTEMPT = 1_000;
 
 const PARSE_TIMEOUT_MS = 60_000;
 
+/** The default since 2026-08-16, on the evidence of the instruction-parse bench
+ *  (35 hand-labelled cases, 5 arms). Against the previous default
+ *  claude-haiku-4-5 it invented ZERO constraints where haiku invented five,
+ *  scored 32/35 against 30/35, and costs $1.88/Mtok against $5.00.
+ *
+ *  Inventions are the metric that decided it. A rule the organiser is shown as
+ *  enforced while nothing enforces it is worse than no rule (see rule 2 at the
+ *  top of this file), and haiku produced ten of them before the schema and
+ *  prompt were hardened — including reading "lunch break 12PM to 1PM" as
+ *  not_before 12:00 + not_after 13:00, which confines an entire tournament to
+ *  the lunch hour.
+ *
+ *  Served by `google-vertex`, which was already on the paid-path allowlist and
+ *  is already named to organisers in help/scheduling/ai-scheduling.md
+ *  ("Google (Gemini) ... reached through the OpenRouter gateway"). This
+ *  promotion therefore adds no sub-processor and owes no copy change. */
+export const PARSE_MODEL = "google/gemini-3.7-flash";
+
+/** Where OpenRouter is not configured. NOT cosmetic: `parseInstruction` refuses
+ *  before calling when the provider has no key, and returns
+ *  `{raw:null, failed:true}` — which the run treats as "no compiled rules" and
+ *  never surfaces as an error. Defaulting a deployment that holds only
+ *  ANTHROPIC_API_KEY to an OpenRouter slug would therefore discard every
+ *  organiser's brief in silence. It degrades to the previous default instead,
+ *  which is worse at refusing but is at least reachable. */
+export const PARSE_MODEL_FALLBACK = "claude-haiku-4-5-20251001";
+
 /** Cheap and fast: the compile is a small extraction, and the referee checks
- *  every rule it produces regardless of which model produced it. */
+ *  every rule it produces regardless of which model produced it.
+ *
+ *  Read at call time, like the ladder in schedule-ai.ts: OPENROUTER_API_KEY is
+ *  the same deliberate production flip that activates the architect's gemini
+ *  rung, so the two move together rather than needing separate configuration. */
 export function parserAiModel(): string {
-  return process.env.SCHEDULING_PARSE_MODEL ?? "claude-haiku-4-5-20251001";
+  const pinned = process.env.SCHEDULING_PARSE_MODEL;
+  if (pinned) return pinned;
+  return process.env.OPENROUTER_API_KEY ? PARSE_MODEL : PARSE_MODEL_FALLBACK;
 }
 
 // ---------------------------------------------------------------------------
