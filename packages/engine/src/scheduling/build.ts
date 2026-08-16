@@ -271,6 +271,10 @@ export const TIER_COUNT = TIER_NAMES.length;
  *
  * Two of those terms moved under the placement cutover and neither is
  * re-derivable from this file, so re-measuring means rebuilding the sweep
+ * FIRST — see **#589**, which argues the gate's premise moved too, not only
+ * its number: z3 spent the whole wall encoding and never searched, whereas
+ * CP-SAT is anytime and hands back an incumbent, so read the `too_big` rate
+ * before re-tuning anything here. Rebuilding the sweep
  * first: `encodeBuild` and the first `solver.push()` were z3's pre-search
  * costs, and the solved row reads `engine: "optimized"` now, never `"z3"`
  * (that value is retiring — see the z3 retirement design, stage D).

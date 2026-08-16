@@ -1513,6 +1513,10 @@ const SOLVER_SLACK_MS = 24 * 60 * MS_PER_MIN;
  * z3 tier encoder in `82553ec3`. The numbers above stand as the record that set
  * this constant; moving it means rebuilding the sweep against CP-SAT first.
  *
+ * AND MOVING IT MOVES SOMETHING ELSE. `canSolveWithin` scales the R18 size
+ * gate by `wallMs / 8_000`, and this wall is what the web layer passes, so
+ * changing it silently re-tunes which boards reach the solver at all. #589.
+ *
  * Expiring is ORDINARY, not a failure: `budget_expired` rides the wire and the
  * result strip says how many improvement targets the run got through. What is
  * NOT ordinary is reading the flag as "not optimal" — optimality is

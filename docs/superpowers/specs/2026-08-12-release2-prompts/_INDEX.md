@@ -117,7 +117,10 @@ that "still reports `engine: \"z3\"`". Neither half is reachable: BUILD reports
 `optimized`, and that script was DELETED with the z3 tier encoder in
 `82553ec3`. `schedule.ts:1504` cites the same dead script. Both now say so
 rather than sending someone hunting. Whoever moves `MAX_SOLVE_ENCODING` or
-`AUTO_SOLVER_WALL_MS` next has to rebuild the sweep against CP-SAT first —
+`AUTO_SOLVER_WALL_MS` next has to rebuild the sweep against CP-SAT first
+(**issue #589**, which also records that the gate's PREMISE inverted — z3 never
+searched past the budget, CP-SAT is anytime and returns an incumbent, so the
+gate can now refuse a board the service would have improved) —
 that is a real gap this task found and did not close.
 
 **A vacuous assertion, found by sweeping rather than by reading.**
