@@ -17,6 +17,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
+  TemplateCard,
   TemplateDetailSheet,
   takeRuleText,
   templateProgressionLines,
@@ -207,6 +208,13 @@ const renderSheet = (template: CompetitionTemplate, dict: Dict = enUi as Dict, l
     </DictProvider>,
   );
 
+// TemplateCard takes `msg` as a direct prop (unlike TemplateDetailSheet,
+// which calls useT() internally) — no DictProvider needed to render it.
+const renderCard = (template: CompetitionTemplate, dict: Dict = enUi as Dict) =>
+  renderToStaticMarkup(
+    <TemplateCard template={template} msg={(key, vars) => tRuntime(dict, key, vars)} onSelect={() => {}} />,
+  );
+
 describe("TemplateDetailSheet — progression section", () => {
   it("renders the progression map, with both of euro24's take rules present, prefixed by its source stage", () => {
     const html = renderSheet(templateWith([GROUP_NO_SEEDING, EURO24_KNOCKOUT]));
@@ -267,6 +275,47 @@ describe("TemplateDetailSheet — progression section", () => {
     expect(html).toContain("League → Page playoff");
     expect(html).not.toContain("league → page_playoff");
     expect(html).toContain("Ranked 1–4");
+  });
+});
+
+// P7/D1b T7 (coordinator-flagged, same defect class as the sheet's
+// STRUCTURE line above): the gallery GRID card's own structure summary used
+// `templateStageKinds(template).map(stageKindLabel).join(" → ")` — flat kind
+// labels across every division, the SAME bug the sheet fix above closed,
+// just a second code path expressing the same vocabulary. Now composed from
+// `templateStructureChain` (the SAME helper the sheet uses, one per
+// division, joined) — no second ambiguity-detection implementation.
+describe("TemplateCard — gallery grid structure summary", () => {
+  it("names BOTH ambiguous group-kind stages by their OWN name for t20-super8, fixing the identical-looking-links defect on the CARD too", () => {
+    const t20 = getTemplate("t20-super8");
+    if (!t20) throw new Error("t20-super8 missing from the catalog — catalog.test.ts should already fail this");
+    const html = renderCard(t20);
+    expect(html).toContain("Group Stage → Super 8 → Knockout");
+    expect(html).not.toContain("Group stage → Group stage → Knockout");
+  });
+
+  // Regression: the five pre-P7 catalog templates' cards must render their
+  // BYTE-IDENTICAL pre-existing kind-label summary — same expected strings
+  // as templateStructureChain's own regression block above, since every one
+  // of these templates has exactly one division (so joining ACROSS divisions
+  // is a no-op) and no kind collision within it.
+  it.each([
+    ["slam128", "Knockout"],
+    ["swiss11", "Swiss"],
+    ["wc32", "Group stage → Knockout"],
+    ["americano-night", "Americano"],
+    ["box-league", "Group stage"],
+  ])("regression: %s's card structure summary is byte-identical to before this task (%s)", (key, expected) => {
+    const template = getTemplate(key);
+    if (!template) throw new Error(`${key} missing from the catalog — catalog.test.ts should already fail this`);
+    const html = renderCard(template);
+    expect(html).toContain(expected);
+    // Card's structure `<span>` is 2 elements after the description span —
+    // pin its EXACT text, not just a substring, so a mutation that appended
+    // stray text alongside `expected` would still be caught.
+    const match = html.match(/text-purple-600">([^<]*)</);
+    expect(match, `${key}: structure span not found in rendered card`).not.toBeNull();
+    expect(match![1]).toBe(`${expected} · ${template.divisions[0].entrantCount} entrants`);
   });
 });
 

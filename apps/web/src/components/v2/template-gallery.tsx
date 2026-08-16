@@ -29,7 +29,7 @@ import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { routes } from "@/lib/routes";
 import { useT } from "@/components/i18n/dict-provider";
 import type { CompetitionTemplate, TemplateStage } from "@/server/templates/schema";
-import { templateEntrantTotal, templateStageKinds } from "@/server/templates/summary";
+import { templateEntrantTotal } from "@/server/templates/summary";
 
 // useT() (not useMsg()) throughout this file, deliberately: every key here
 // is resolved off DATA (template.i18n.nameKey, a stage's kind) rather than
@@ -171,7 +171,7 @@ export function templateProgressionLines(msg: Msg, template: CompetitionTemplate
   return lines;
 }
 
-function TemplateCard({
+export function TemplateCard({
   template,
   msg,
   onSelect,
@@ -180,7 +180,13 @@ function TemplateCard({
   msg: Msg;
   onSelect: () => void;
 }) {
-  const structure = templateStageKinds(template).map((k) => stageKindLabel(msg, k)).join(" → ");
+  // Reuses templateStructureChain — the SAME per-division composition
+  // helper TemplateDetailSheet's Structure line uses below — one call per
+  // division, joined, rather than a second kind-vs-own-name disambiguation
+  // implementation. Every catalog template today has exactly one division,
+  // so this is byte-identical to calling it once; a future multi-division
+  // template gets the same disambiguation automatically instead of drifting.
+  const structure = template.divisions.map((division) => templateStructureChain(msg, division)).join(" → ");
   return (
     <button
       type="button"
