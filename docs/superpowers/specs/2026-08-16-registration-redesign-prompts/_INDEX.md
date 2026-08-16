@@ -61,9 +61,15 @@ serves its closed/unavailable state during that window.
    `REGISTRATION_CURRENCIES` (= `SUPPORTED_CURRENCIES` minus exclusions);
    per-division `registration_settings.currency` dropped; offline payment
    uses the SAME restricted list; carts single-currency by construction;
-   groups snapshot the currency at submit. INR stays only if RS001b's live
-   destination-charge verify passes (subscription INR is a platform charge —
-   proves nothing about registration's `transfer_data` path).
+   groups snapshot the currency at submit.
+10. **Same-currency rule** (owner ruling 2026-08-16, supersedes the live-INR
+    verify RS001b briefly carried): a connected org's charge currency always
+    equals its account's settlement currency (INR→INR, GBP→GBP; no FX leg).
+    Sync locks `organizations.currency` to the account `default_currency`;
+    free allowlist choice is for unconnected (offline/display) orgs only;
+    unsupported settlement currency → card-unsupported state at connect
+    time. Consequence: INR card payment is unreachable on the GB platform
+    (cannot onboard IN-settled accounts) — INR is offline/display-only.
 
 ## False premises found
 

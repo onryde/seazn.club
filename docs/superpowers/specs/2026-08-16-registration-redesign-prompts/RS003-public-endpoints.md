@@ -35,10 +35,13 @@ consume, with the same abuse protections the old single endpoint had.
      itself is rebuilt in RS007).
 3. **Payment orchestration**: after insert, when subtotal > 0, create the
    Stripe checkout for the GROUP (one session, line items per payable entry)
-   in `group.currency` — the RS001b snapshot, never a re-read of org
-   settings — validated ∈ `REGISTRATION_CURRENCIES` first (clean 422 with a
-   stable error shape; a bad currency must never surface as a Stripe error
-   on the public page), reusing the existing registration payment machinery
+   in `group.currency` — the RS001b snapshot is what gets charged — after
+   validating it ∈ `REGISTRATION_CURRENCIES` AND == the org's current
+   currency (the same-currency lock pins that to the connected account's
+   settlement currency; a snapshot gone stale because the org's currency
+   moved since submit → clean 422 with a stable error shape, no Stripe
+   call — a bad currency must never surface as a Stripe error on the
+   public page), reusing the existing registration payment machinery
    RS001 preserved. Public request/response schemas never carry a currency
    field — it is server-resolved. Load
    `stripe:stripe-best-practices` before touching it. Webhook path: group
@@ -62,7 +65,8 @@ consume, with the same abuse protections the old single endpoint had.
 - [ ] Per-currency: a destination-charge checkout test runs for EVERY member
       of `REGISTRATION_CURRENCIES` (test mode, parameterised over the
       constant so a list change without a matching test run goes red);
-      out-of-list currency on a group → 422, no Stripe call
+      out-of-list currency on a group → 422, no Stripe call; snapshot ≠
+      current org currency → 422, no Stripe call
 - [ ] join endpoint: happy, full-roster, dead-code, rate-limited
 - [ ] `openapi:gen` + `i18n:gen-keys` → `git status --porcelain` empty
 - [ ] Counts from JSON reporter; `tsc EXIT=0`; lint clean

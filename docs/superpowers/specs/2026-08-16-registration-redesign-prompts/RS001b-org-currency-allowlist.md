@@ -19,29 +19,38 @@ this live with INR). Two design faults die here:
 1. **Per-division currency is incompatible with the cart.** One checkout
    session per cart, and a session has ONE currency — per-division currency
    makes a multi-division cart un-payable. Currency moves to the org.
-2. **No allowlist.** Subscription INR works because the platform charges
-   itself; registration is a **destination charge** (`transfer_data`) — a
-   different rule set. Only currencies proven through the destination-charge
-   loop may be offered.
+2. **No allowlist, and a possible FX leg.** Subscription INR works because
+   the platform charges itself; registration is a **destination charge**
+   (`transfer_data`) — a different rule set. Owner ruling (2026-08-16):
+   **same-currency rule** — a connected org's charge currency always equals
+   its account's settlement currency (INR account → INR, GBP → GBP), so no
+   FX leg ever exists; free allowlist choice is for UNCONNECTED (offline/
+   display) orgs only. INR card payment is therefore out of reach for now
+   (GB platform cannot onboard IN-settled accounts — IN is not in its
+   transfer countries); INR stays selectable for offline/display orgs.
 
 ## Scope
 
 1. **Allowlist mechanism** (`apps/web/src/lib/currency.ts`):
-   `REGISTRATION_CURRENCY_EXCLUSIONS` (starts empty; INR verdict below may
-   populate it) and derived `REGISTRATION_CURRENCIES` =
-   `SUPPORTED_CURRENCIES` minus exclusions. ONE authority — subscriptions
+   `REGISTRATION_CURRENCY_EXCLUSIONS` (starts empty; the standing lever for
+   delisting a registration currency without touching subscriptions) and
+   derived `REGISTRATION_CURRENCIES` = `SUPPORTED_CURRENCIES` minus
+   exclusions. ONE authority — subscriptions
    keep the full list; registration derives from it. Do NOT fork a second
    hand-written list (parallel vocab lists drift).
-2. **Live INR verify — do this FIRST, it decides the migration's CHECK.**
-   Owner-sanctioned live loop (never print the key): one minimal-amount live
-   Checkout destination charge in `inr` to the owner's real connected
-   account, paid and then refunded. Passes → INR stays. Fails → add `inr` to
-   the exclusions and record the exact Stripe error in `_INDEX.md` (False
-   premises if the failure contradicts this file). Test-mode INR is already
-   proven green (2026-08-16, GB→GB) — test mode proves nothing here.
+2. **Same-currency enforcement** (`server/usecases/stripe-connect.ts`,
+   `syncConnectAccount`): while connected, `organizations.currency` mirrors
+   the account's `default_currency` — on every sync, overwriting any manual
+   choice (the lock IS the ruling; RS004 greys the select accordingly).
+   When the account's `default_currency` ∉ `REGISTRATION_CURRENCIES`:
+   leave `organizations.currency` untouched and set a card-unsupported
+   state the settings UI can read (pattern-match how
+   `stripe_disabled_reason` is stored/read; RS004 renders the message) —
+   the failure surfaces at CONNECT time, never on the public pay page.
+   Structured log both branches (applied / unsupported-skip).
 3. **Delta migration** (`db/migration/deltas/V<next>__org_currency.sql`):
    - `organizations.currency` text NOT NULL default `'gbp'`, CHECK over the
-     final `REGISTRATION_CURRENCIES` codes.
+     `REGISTRATION_CURRENCIES` codes.
    - `registration_groups.currency` text NOT NULL, no default (must be
      explicitly snapshotted at insert). Safe as a plain ADD only because the
      table is empty (zero-data greenfield) — do not pattern-copy this
@@ -52,20 +61,15 @@ this live with INR). Two design faults die here:
    column — `tsc` and `grep -a` sweep for the dropped column; zero refs
    remain. Group-snapshot READS stay out of scope (RS002/RS003 consume the
    column; this session only creates it).
-5. **Connect prefill**: `syncConnectAccount`
-   (`server/usecases/stripe-connect.ts`) additionally mirrors the connected
-   account's `default_currency` into `organizations.currency` ONLY while the
-   org is still at the default `'gbp'` AND the value ∈
-   `REGISTRATION_CURRENCIES`. Never overwrite an explicit choice; structured
-   log on apply and on skip-reason.
-
 No UI this session (RS004 ships the select + chip). No new user-facing
 strings ⇒ no i18n work owed.
 
 ## Acceptance criteria
 
-- [ ] Live INR verdict recorded in `_INDEX.md` (pass: INR in CHECK + list;
-      fail: excluded in BOTH, exact error quoted) — refund confirmed either way
+- [ ] Same-currency lock: sync overwrites a manually-set org currency with
+      the account's `default_currency`; unsupported settlement currency →
+      card-unsupported state set, `organizations.currency` untouched;
+      unconnected org → sync never touches currency (three unit tests)
 - [ ] Drift test: DB CHECK code set == `REGISTRATION_CURRENCIES` (reads
       `pg_constraint` on the test DB; list change without migration change
       goes red)
@@ -73,24 +77,22 @@ strings ⇒ no i18n work owed.
       2-decimal (fee inputs and stored cents do `×100` math — a zero-decimal
       currency would charge 100× the intended amount)
 - [ ] `grep -a` sweep: zero references to `registration_settings.currency`
-- [ ] Prefill: sets while default + supported; skips when org chose
-      explicitly; skips when account default is excluded (three unit tests)
 - [ ] Fresh schema (`db:apply` AND `sync:sports`) green; suite counts pasted
       from JSON reporter; `tsc EXIT=0`; lint clean
 
 ### Test types
 
-- **Unit** — drift, zero-decimal guard, prefill guards (DB-backed).
+- **Unit** — drift, zero-decimal guard, same-currency lock branches
+  (DB-backed).
 - **E2E/Smoke** — deferred: RS006/RS007/RS010 (no reachable surface).
 - **Regression** — the drift test IS the regression net for every later
   list change.
 
 ## Gotchas
 
-- The CHECK constraint is written AFTER the live INR verdict — sequencing
-  inside the session matters.
-- Live key handling per standing rule: run the loop, never echo the key or
-  paste raw account objects into the transcript.
+- The lock overwrites on EVERY sync, not just the first — an org that
+  changes its Stripe bank/settlement currency later must converge on the
+  next sync, and existing groups keep their snapshots (RS002's rule).
 - `db:apply` alone is NOT a fresh schema — pair with `sync:sports` or
   `funnel.test.ts` reds on an unrelated assertion.
 - rtk vitest summaries lie on collection failure — judge green only from
@@ -102,9 +104,10 @@ strings ⇒ no i18n work owed.
 
 Inline-first session (small file set: one migration, `lib/currency.ts`,
 `stripe-connect.ts`, tests). Scout only for RS001's surviving read sites.
-Reviewer focus: CHECK/list drift, prefill overwrite bug, live-loop hygiene.
+Reviewer focus: CHECK/list drift, lock-branch coverage (incl. the
+unsupported-settlement path), card-unsupported state read path.
 
 ## On close
 
-`_INDEX.md`: RS001b → DONE + PR#, INR verdict + error text, final list as
-shipped. Memory + snapshot.
+`_INDEX.md`: RS001b → DONE + PR#, the card-unsupported representation
+chosen (RS004 reads it), final list as shipped. Memory + snapshot.

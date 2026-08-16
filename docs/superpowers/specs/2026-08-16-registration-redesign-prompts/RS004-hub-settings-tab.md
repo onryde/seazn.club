@@ -47,7 +47,11 @@ Settings tab lands before the stepper.
    hub): select over `REGISTRATION_CURRENCIES` (code + `Intl.DisplayNames`
    name), writing `organizations.currency` via the existing org-settings
    update surface with a zod enum mirroring the constant (not
-   `z.string().length(3)`); label strings ×4 locales.
+   `z.string().length(3)`). Same-currency rule: while a connected account
+   exists the select is LOCKED (disabled, "set by your Stripe account"
+   explainer — sync owns the value); when RS001b's card-unsupported state
+   is set, render its message here and beside the payment-method choice in
+   the config panel. All strings ×4 locales.
 
 ## Acceptance criteria
 
@@ -58,7 +62,9 @@ Settings tab lands before the stepper.
       (`data-feature` attr rendered, as the old gate did)
 - [ ] Currency: config panel shows the chip (no input); org-settings select
       persists; changed org currency re-renders the hub's fee cells in the
-      new currency; select offers exactly `REGISTRATION_CURRENCIES`
+      new currency; select offers exactly `REGISTRATION_CURRENCIES`;
+      connected org → select disabled, shows the account's currency;
+      card-unsupported state → its message rendered, card option unavailable
 - [ ] Register-link copy button yields the working public URL (even though the
       page it points to is still closed-state — assert the URL, not the page)
 - [ ] Viewer/scorer: no nav entry, direct URL → 403/redirect matching the
