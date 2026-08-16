@@ -252,6 +252,42 @@ export function TemplateDetailSheet({
       }
     >
       <form id="template-detail-form" onSubmit={submit} className="space-y-4">
+        {/* Form fields lead, prose follows (owner ruling, 320px scroll-fold
+            fix): at 320x568 the required Ends-on field sat below the modal's
+            internal scroll fold on EVERY template, pre-P7 (reproduced on
+            box-league) and worsened by PROGRESSION below. A mobile organiser
+            now sees what they must fill in without scrolling, and scrolls
+            only for the explanatory copy underneath. Pure reorder — every
+            block below is unchanged, only their sequence moved. */}
+        <label className="block">
+          <span className="label">{msg("comp.wizard.name.label")}</span>
+          <input
+            autoFocus
+            required
+            maxLength={200}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="input"
+          />
+        </label>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <DateTimeField
+            kind="date"
+            label={msg("comp.wizard.startsOn")}
+            value={startsOn}
+            onChange={setStartsOn}
+          />
+          <DateTimeField
+            kind="date"
+            label={`${msg("comp.wizard.endsOn")} *`}
+            required
+            min={startsOn || undefined}
+            value={endsOn}
+            onChange={setEndsOn}
+          />
+        </div>
+
         <p>{msg(template.i18n.descriptionKey)}</p>
 
         <div>
@@ -291,35 +327,6 @@ export function TemplateDetailSheet({
             </ul>
           </div>
         )}
-
-        <label className="block">
-          <span className="label">{msg("comp.wizard.name.label")}</span>
-          <input
-            autoFocus
-            required
-            maxLength={200}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="input"
-          />
-        </label>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <DateTimeField
-            kind="date"
-            label={msg("comp.wizard.startsOn")}
-            value={startsOn}
-            onChange={setStartsOn}
-          />
-          <DateTimeField
-            kind="date"
-            label={`${msg("comp.wizard.endsOn")} *`}
-            required
-            min={startsOn || undefined}
-            value={endsOn}
-            onChange={setEndsOn}
-          />
-        </div>
 
         {paywall && <UpgradeGate feature={paywall.feature} />}
         {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}

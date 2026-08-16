@@ -194,6 +194,26 @@ describe("TemplateDetailSheet — progression section", () => {
   });
 });
 
+// Owner-ruled fix for the 320px scroll-fold: at 320x568 the required
+// Ends-on field sat below the modal's internal scroll fold on EVERY
+// template even pre-P7 (reproduced on box-league), and PROGRESSION grew
+// that overflow further. The form fields now render BEFORE the
+// description/STRUCTURE/PROGRESSION prose, so a mobile organiser sees
+// what they must fill in without scrolling.
+describe("TemplateDetailSheet — form leads, prose follows (320px scroll-fold fix)", () => {
+  it("the Ends-on field precedes STRUCTURE and PROGRESSION in the rendered DOM order", () => {
+    const html = renderSheet(templateWith([GROUP_NO_SEEDING, EURO24_KNOCKOUT]));
+    const endsOnIdx = html.indexOf("Ends on *");
+    const structureIdx = html.indexOf('data-testid="template-detail-structure"');
+    const progressionIdx = html.indexOf('data-testid="template-detail-progression"');
+    expect(endsOnIdx, "Ends-on label not found in rendered output").toBeGreaterThan(-1);
+    expect(structureIdx, "structure block not found").toBeGreaterThan(-1);
+    expect(progressionIdx, "progression block not found").toBeGreaterThan(-1);
+    expect(endsOnIdx).toBeLessThan(structureIdx);
+    expect(endsOnIdx).toBeLessThan(progressionIdx);
+  });
+});
+
 describe("i18n — every templates.* key template-gallery.tsx references resolves in all four locales", () => {
   it("resolves to a non-empty string, all four locales", () => {
     const srcPath = fileURLToPath(new URL("../template-gallery.tsx", import.meta.url));
