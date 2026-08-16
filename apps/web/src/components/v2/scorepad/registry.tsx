@@ -16,11 +16,12 @@
 // `builtinModules` keys explicitly — "universal" is a DECISION, not a
 // fallthrough — and `__tests__/registry.test.tsx` is the drift guard: a 12th
 // sport with no row fails CI, mutation-proved there.
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import type { EventEnvelope, Lineup, LineupPair, LineupSlot } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand } from "@seazn/engine/sport";
 import type { MemberIn, SideInfo, LineupSlotIn } from "@/components/v2/fixture-console";
 import { useMsg } from "@/components/i18n/dict-provider";
+import type { MessageKey } from "@/lib/messages";
 import { resolveModuleClient } from "./module-client";
 import { deviceLinkTransport, sessionTransport, type PadAuthMode } from "./transport";
 import type { OwnIdentity } from "./types";
@@ -28,6 +29,7 @@ import { PadRenderer } from "./pad-renderer";
 import { skinFor } from "./skins/registry";
 import type { SkinDef } from "./skins/types";
 import { resolvePad } from "./v3/registry";
+import type { TFn } from "./v3/context-strip";
 import { PadHostV3 } from "./v3/pad-host";
 
 // ---------------------------------------------------------------------------
@@ -232,6 +234,14 @@ type ModuleResolution = { ok: true; module: AnySportModule } | { ok: false; mess
  */
 export function ScorePad(props: ScorePadProps) {
   const msg = useMsg();
+  // Widens useMsg()'s MessageKey-only param to the plain `string` a v3
+  // skin FACTORY declares (v3/registry.ts's own header explains why
+  // `V3_SKINS` holds factories, never already-built skins) — the SAME
+  // adapter `pad-host.tsx` already builds for the chassis's own `t` prop,
+  // duplicated here rather than threaded through as a shared export: this
+  // is the "component that resolves the skin" cricket.tsx's header points
+  // at, a different component from `PadHostV3` with its own `useMsg()`.
+  const t: TFn = useCallback((key: string, vars?: Record<string, string | number>) => msg(key as MessageKey, vars), [msg]);
   const resolution = useMemo((): ModuleResolution => {
     try {
       return { ok: true, module: resolveModuleClient(props.sportKey, props.moduleVersion) };
@@ -264,20 +274,22 @@ export function ScorePad(props: ScorePadProps) {
   // above already succeeded, which only happens for a key the engine's
   // registry actually has registered (i.e. a `builtinModules` key), so
   // `resolvePad` here is guaranteed a key `v3/registry.ts`'s `LEGACY_SPORTS`
-  // owns and cannot throw on this path.
+  // (or, for cricket, `V3_SKINS`) owns and cannot throw on this path.
   //
-  // R2/task B replaces what used to be a deliberate throw
+  // R2/task B replaced what used to be a deliberate throw
   // (`"resolved to the v3 lane but no v3 renderer is wired yet"`) with the
   // REAL v3 branch, `PadHostV3` (./v3/pad-host.tsx) — R1 shipped six
   // chassis primitives with zero production import sites; this is that
-  // import site. `V3_SKINS` (v3/registry.ts) stays EMPTY through the end of
-  // this wave (cricket's own conversion is a later task), so `padLane.lane`
-  // is still always "legacy" today and every real call still reaches
-  // EXACTLY the pre-existing `resolveScorePad`/`PadRenderer` path below with
-  // NO behavioural change — but the v3 branch is now real, tested code a
-  // later wave activates by adding one entry to `V3_SKINS`, not a throw
-  // someone has to notice and replace first.
-  const padLane = resolvePad(props.sportKey);
+  // import site. R2/task E is the first sport-by-sport flip: `V3_SKINS`
+  // (v3/registry.ts) now owns "cricket", so `padLane.lane` is "v3" for
+  // cricket specifically and still "legacy" for the other 10 — no
+  // behavioural change for any of them, proved by
+  // `__tests__/registry-totality.test.ts`'s own per-sport sweep. A later
+  // wave activates the next sport by adding one entry to `V3_SKINS` (and
+  // removing it from `LEGACY_SPORTS`), not by finding and replacing a
+  // throw. `t` is the real, live translator built above — see
+  // `v3/registry.ts`'s own header for why `resolvePad` needs one now.
+  const padLane = resolvePad(props.sportKey, t);
 
   if (padLane.lane === "v3") {
     return (

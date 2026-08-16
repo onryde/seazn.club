@@ -366,7 +366,11 @@ vi.mock("../v3/registry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../v3/registry")>();
   return {
     ...actual,
-    resolvePad: (key: string) => (key === "generic" ? { lane: "v3" as const, skin: FAKE_V3_SKIN } : actual.resolvePad(key)),
+    // R2/task E: resolvePad now takes a live translator too (v3/registry.ts's
+    // own header explains why) — this fake sportKey never reaches a real
+    // skin's own string-building, so a no-op stand-in is fine either way.
+    resolvePad: (key: string, t: (k: string) => string) =>
+      key === "generic" ? { lane: "v3" as const, skin: FAKE_V3_SKIN } : actual.resolvePad(key, t),
   };
 });
 
