@@ -44,13 +44,28 @@ async function openLiveConsole(page: Page, fx: RosteredFixture): Promise<void> {
     .toContain("core.start");
 }
 
-/** Tap one context-strip chip and pick a candidate by NAME. `chipLabel` must
- *  match the slot's UNSET text exactly ("Bowler"/"Striker"/"Non-striker") —
- *  `exact: true` matters because Playwright's default text match is a
- *  case-insensitive substring, and "Non-striker" contains "striker". */
+/** Tap one context-strip chip and pick a candidate by NAME.
+ *
+ *  A chip's accessible name is the COMPOUND `` `${label}: ${name}` ``
+ *  (`chipLabel`, context-strip.tsx) the instant the slot already holds a
+ *  person — every slot this file ever reaches one already does, via
+ *  `resolvePeople`'s own fold/order defaults — so it is NEVER just the bare
+ *  label. `chipLabel` is matched as a name PREFIX, anchored at both start and
+ *  either end-of-string or ":" (`^…(:|$)`): a bare `exact: true` match on the
+ *  label alone matches zero elements and hangs until timeout (the R2-review
+ *  bug this replaces — it hung whether or not the underlying override
+ *  actually worked, so it could never fail for the right reason), while an
+ *  unanchored substring match would let "Striker" also match "Non-striker: …".
+ *
+ *  Only `bowler`, and only at an over boundary, is ever safe to pass here —
+ *  striker/non-striker are `readOnly` (a plain `<span>`, no `<button>` at
+ *  all, `ContextSlot.readOnly`) because the engine's strict fold refuses any
+ *  override for them on the live submit path. Calling this for either still
+ *  hangs (zero buttons match), which is the correct, loud failure rather
+ *  than a silent no-op. */
 async function setContextPerson(page: Page, chipLabel: string, personName: string): Promise<void> {
   const strip = pad(page).locator('[data-role="context-strip"]');
-  await strip.getByRole("button", { name: chipLabel, exact: true }).click();
+  await strip.getByRole("button", { name: new RegExp(`^${chipLabel}(:|$)`) }).click();
   const candidate = strip.getByRole("button", { name: personName, exact: true });
   await expect(candidate, `${chipLabel} picker must show real names, not ids`).toBeVisible({ timeout: 10_000 });
   await candidate.click();
@@ -196,6 +211,10 @@ test(
 );
 
 test("cricket v3: undo INSIDE the soft-commit hold window drops silently, no core.void", async ({ page }) => {
+  // openLiveConsole's own two 20s-ceiling waits plus the 5s dock checks and a
+  // flat 7s post-hold wait land close to the 60s default under load —
+  // scoring.spec.ts's comparable undo conversion sets the same 120_000.
+  test.setTimeout(120_000);
   const fx = await seedRosteredFixture(page.request, {
     label: `V3 Cricket UndoHeld ${TAG}`,
     sportKey: "cricket",
@@ -233,6 +252,11 @@ test("cricket v3: undo INSIDE the soft-commit hold window drops silently, no cor
 });
 
 test("cricket v3: undo AFTER send voids through core.void", async ({ page }) => {
+  // openLiveConsole's own two 20s-ceiling waits, the send-confirmation poll,
+  // the dock-clear check, and the core.void poll are five chained 20s
+  // ceilings against a 60s default — scoring.spec.ts's comparable undo
+  // conversion sets the same 120_000.
+  test.setTimeout(120_000);
   const fx = await seedRosteredFixture(page.request, {
     label: `V3 Cricket UndoSent ${TAG}`,
     sportKey: "cricket",

@@ -251,7 +251,26 @@ const SPORTS: GallerySport[] = [
         before += 1;
       }
       const strip = pad(page).locator('[data-role="context-strip"]');
-      await strip.getByRole("button", { name: "Bowler", exact: true }).click();
+      // Chip accessible name is compound (`"Bowler: <name>"`, chipLabel in
+      // context-strip.tsx) the instant a bowler is resolved — which it always
+      // is here (resolvePeople's own bowlingOrder[0] default). A bare
+      // `exact: true` match on the label alone matches nothing and hangs for
+      // this test's whole `test.setTimeout(180_000)` budget (R2 review
+      // finding — the identical bug scorepad-v3-cricket.spec.ts's own
+      // `setContextPerson` had) — matched as a name PREFIX instead, anchored
+      // so it can never also satisfy a differently-labelled chip.
+      //
+      // Left unguarded by a `.catch(() => false)`, unlike every `openDock`
+      // step below: `openDock` is genuinely optional per sport (a sport with
+      // no distinct detail panel just returns false), but changing the
+      // bowler here is the one context-strip pick this flow cannot skip —
+      // the naive default for over 2 is over 1's own bowler, which the
+      // engine rejects outright as "cannot bowl consecutive overs" (this
+      // sport's own `scoreOne` header comment). A failure here means the
+      // capture genuinely did not reach a valid "03-scored" state and should
+      // fail loudly, the same posture every OTHER sport's unguarded
+      // `scoreOne` already takes.
+      await strip.getByRole("button", { name: /^Bowler(:|$)/ }).click();
       await strip.getByRole("button", { name: `Gallery Cricket Fielder ${tag}`, exact: true }).click();
 
       await pad(page).getByRole("button", { name: "Wicket", exact: true }).click();
