@@ -517,10 +517,13 @@ function windowOpen(s: RegistrationSettingsRow, now: Date): boolean {
  * The tombstone clause is also what lets a merged duplicate release the
  * identity slot so the survivor can hold it.
  *
- * Orphaned by the RS001 registration demolition (#588): `materialise` no
- * longer has a `user_id` to resolve against (`registration_players` carries
- * none — see `loadPlayers`'s doc comment). Exported, not deleted: RS002/RS008
- * need this exact upsert once the claim flow supplies a real link.
+ * Restored to `materialise`'s call path (RS001 follow-up, #588): the account
+ * lives on `registration_players.user_id` — set for the submitter's own row
+ * at submit (design §4 step 1) or at claim/join (design §2 item 4), never on
+ * the group, whose contact is often a rep entering OTHER people's entries
+ * (see `loadPlayers`'s doc comment). `materialise` calls this per player, in
+ * both the individual and team branches, whenever that player's row carries a
+ * `user_id`; a row with none keeps the plain unlinked insert.
  */
 export async function resolvePlayerPerson(
   tx: Tx,
@@ -549,18 +552,23 @@ export async function resolvePlayerPerson(
  * but the order is a harmless, cheap default for whoever reads `players[0]`
  * next).
  *
- * #402 self-link note: `registration_players` carries no `user_id` — the old
- * roster's `self` flag captured which typed-in name was the submitter, which
- * had nowhere to go in the new per-player-consent model (design §2 item 4:
- * "join/claim is the consent moment for players entered by someone else").
- * So every player minted here is an UNLINKED person, same as the old code's
- * non-self branch — RS002/RS008 own wiring the real claim-flow link.
+ * #402 self-link note: `registration_players.user_id` replaces the old
+ * roster's boolean `self` flag — instead of a flag `materialise` had to
+ * interpret itself, whichever caller wrote the row (RS002/RS003 at submit,
+ * RS008 at claim) decides directly which ONE row, if any, carries the
+ * account. `materialise` (via `resolvePlayerPerson`, above) trusts that
+ * decision verbatim: a row with a `user_id` resolves into the linked
+ * player-lane person; a row without one still mints a fresh, unlinked person
+ * exactly as before.
  */
 async function loadPlayers(tx: Tx, registrationId: string): Promise<
-  { id: string; full_name: string; dob: string | null; gender: string | null; squad_number: number | null }[]
+  {
+    id: string; full_name: string; dob: string | null; gender: string | null;
+    squad_number: number | null; user_id: string | null;
+  }[]
 > {
   return tx`
-    select id, full_name, dob, gender, squad_number from registration_players
+    select id, full_name, dob, gender, squad_number, user_id from registration_players
     where registration_id = ${registrationId}
     order by is_captain desc, created_at`;
 }
@@ -577,12 +585,19 @@ async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: string): P
     // RS002/RS003 ship the new submit flow) falls back to the entry's own
     // display_name with no dob/gender — byte-for-byte the old anonymous path.
     const p = players[0];
-    const personId = (
-      await tx<{ id: string }[]>`
-        insert into persons (org_id, full_name, dob, gender)
-        values (${reg.org_id}, ${p?.full_name ?? reg.display_name}, ${p?.dob ?? null}, ${p?.gender ?? null})
-        returning id`
-    )[0].id;
+    const fullName = p?.full_name ?? reg.display_name;
+    const dob = p?.dob ?? null;
+    const gender = p?.gender ?? null;
+    // A player row carrying a user_id (#402) resolves into that account's
+    // linked person instead of minting a fresh one — see resolvePlayerPerson.
+    const personId = p?.user_id
+      ? await resolvePlayerPerson(tx, reg.org_id, p.user_id, fullName, dob, gender)
+      : (
+          await tx<{ id: string }[]>`
+            insert into persons (org_id, full_name, dob, gender)
+            values (${reg.org_id}, ${fullName}, ${dob}, ${gender})
+            returning id`
+        )[0].id;
     // A RESOLVED person can already sit on this entrant (re-confirm), which the
     // fresh-insert path could never hit — so the membership write is idempotent.
     await tx`
@@ -590,16 +605,19 @@ async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: string): P
       values (${entrant.id}, ${personId})
       on conflict (entrant_id, person_id) do nothing`;
   } else if (entrantKind === "team" && players.length > 0) {
-    // Team roster → a person + squad member per player row.
+    // Team roster → a person + squad member per player row. Same #402 link
+    // check as the individual branch above, per player.
     for (const p of players) {
       const name = p.full_name.trim();
       if (!name) continue;
-      const personId = (
-        await tx<{ id: string }[]>`
-          insert into persons (org_id, full_name, dob, gender)
-          values (${reg.org_id}, ${name}, ${p.dob}, ${p.gender})
-          returning id`
-      )[0].id;
+      const personId = p.user_id
+        ? await resolvePlayerPerson(tx, reg.org_id, p.user_id, name, p.dob, p.gender)
+        : (
+            await tx<{ id: string }[]>`
+              insert into persons (org_id, full_name, dob, gender)
+              values (${reg.org_id}, ${name}, ${p.dob}, ${p.gender})
+              returning id`
+          )[0].id;
       await tx`
         insert into entrant_members (entrant_id, person_id, squad_number)
         values (${entrant.id}, ${personId}, ${p.squad_number})

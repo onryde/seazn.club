@@ -157,6 +157,18 @@ create table registration_players (
   consent_at        timestamptz,
   guardian_name     text,
 
+  -- The account that owns THIS player row (#402 identity link, restored as a
+  -- follow-up: the RS001 demolition moved `registrations.user_id` onto the
+  -- cart and left nothing for `resolvePlayerPerson` to resolve against).
+  -- Deliberately NOT on `registration_groups`: the group's contact is often a
+  -- club rep entering SEVERAL other people's entries, and resolving every
+  -- player in the cart against the rep's own account would mis-link entries
+  -- that are not theirs. Set for the submitter's own row at submit ("I'm
+  -- playing", design §4 step 1) and at claim/join (design §2 item 4) — both
+  -- still unwired (RS002/RS003, RS008); `materialise` is the consumer and is
+  -- wired in this same follow-up so the column ships with a live reader.
+  user_id           uuid references users(id) on delete set null,
+
   -- Set when the player is invited to claim their row (the consent moment for
   -- captain-entered players). `person_id` is filled at materialization.
   claim_token_hash  text,
@@ -188,6 +200,11 @@ create index registration_players_org_idx on registration_players (org_id);
 -- A claim link must resolve to exactly one player row; most rows never get one.
 create unique index registration_players_claim_token_key
   on registration_players (claim_token_hash) where claim_token_hash is not null;
+
+-- Every FK gets its covering index — a users delete/lookup for this specific
+-- player's account must not sequential-scan the table.
+create index registration_players_user_idx
+  on registration_players (user_id) where user_id is not null;
 
 -- Person-merge and "where does this person appear" walk this the other way.
 create index registration_players_person_idx
