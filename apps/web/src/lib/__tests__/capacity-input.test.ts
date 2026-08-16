@@ -63,6 +63,28 @@ describe("capacityInputForFixtures — when to skip", () => {
     expect(capacityInputForFixtures([], config, "div-1")).toBeNull();
   });
 
+  // The mirror of the case above, and the one that actually shipped broken:
+  // both client call sites (stages-panel.tsx, board/settings-panel.tsx) encode
+  // "no start date" as `from: -Infinity`, exactly as they encode "no end date"
+  // as `to: Infinity`. Only `to` was ever checked, so an end-without-start
+  // config reached `calendarDays` -> `dayKeyInTz(-Infinity, tz)` ->
+  // `Intl.DateTimeFormat.format(new Date(-Infinity))`, which throws
+  // `RangeError: Invalid time value` inside a render-phase useMemo and takes
+  // the whole division page down (stg, div 0cb7e4bd, 2026-08-15).
+  it("returns null when the window's start is not finite (endAt set, startAt absent)", () => {
+    const config = { ...baseConfig(), window: { from: Number.NEGATIVE_INFINITY, to: DAY1 + DAY_MS } };
+    expect(() => capacityInputForFixtures([], config, "div-1")).not.toThrow();
+    expect(capacityInputForFixtures([], config, "div-1")).toBeNull();
+  });
+
+  // `Date.parse` of an unparseable stored date yields NaN, which every call
+  // site passes straight through — NaN is not finite either, and reaches the
+  // same formatter with the same RangeError.
+  it("returns null when either end of the window is NaN (an unparseable stored date)", () => {
+    expect(capacityInputForFixtures([], { ...baseConfig(), window: { from: NaN, to: DAY1 + DAY_MS } }, "div-1")).toBeNull();
+    expect(capacityInputForFixtures([], { ...baseConfig(), window: { from: DAY1, to: NaN } }, "div-1")).toBeNull();
+  });
+
   it("returns null when tz is absent (day-bucket math has no zone to run in)", () => {
     const config = { ...baseConfig(), tz: undefined };
     expect(capacityInputForFixtures([], config, "div-1")).toBeNull();
