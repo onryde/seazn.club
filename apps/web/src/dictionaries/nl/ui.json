@@ -3729,5 +3729,9 @@
   "scorepad.skin.period.group.discipline": "Discipline",
   "scorepad.skin.period.group.setPiece": "Standaardsituaties",
   "scorepad.skin.period.group.shootout": "Shoot-out",
-  "scorepad.skin.period.group.shots": "Schoten"
+  "scorepad.skin.period.group.shots": "Schoten",
+  "routeError.title": "Er is iets misgegaan",
+  "routeError.body": "Deze pagina liep tegen een onverwachte fout aan. De rest van deze competitie werkt gewoon — probeer het opnieuw of kies een ander tabblad.",
+  "routeError.reference": "Referentie: {digest}",
+  "routeError.retry": "Opnieuw proberen"
 }

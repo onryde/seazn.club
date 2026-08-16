@@ -267,17 +267,36 @@ export async function putScheduleSettings(
         division.ends_on !== null
           ? zonedTimeToUtc(ymdAddDays(division.ends_on, 1), "00:00", tzForWindow)
           : null;
+      const startsBefore =
+        compFrom !== null && !!input.config.startAt && ms(input.config.startAt) < compFrom;
+      const endsAfter = compTo !== null && !!input.config.endAt && ms(input.config.endAt) >= compTo;
       const outside: string[] = [];
-      if (compFrom !== null && input.config.startAt && ms(input.config.startAt) < compFrom) {
-        outside.push(`starts before the competition opens on ${division.starts_on}`);
-      }
-      if (compTo !== null && input.config.endAt && ms(input.config.endAt) >= compTo) {
-        outside.push(`ends after the competition closes on ${division.ends_on}`);
-      }
+      if (startsBefore) outside.push(`starts before the competition opens on ${division.starts_on}`);
+      if (endsAfter) outside.push(`ends after the competition closes on ${division.ends_on}`);
       if (outside.length > 0) {
+        // The English sentence stays EXACTLY as it was, because it is still
+        // what a non-browser client (the public API, a curl) reads — the /api/v1
+        // envelope has no locale to render into and this repo has no
+        // server-side i18n at all (no Accept-Language read anywhere under
+        // src/server). Localization happens at the ONE place that knows the
+        // reader's locale: the organiser's own panel, which maps the code below
+        // through `scheduleWindowErrorMessage` and falls back to this string
+        // for any client that does not.
+        //
+        // WHICH BOUND was crossed rides in `extra` as two booleans rather than
+        // being re-derived by parsing the sentence — a parse would break the
+        // moment the copy is edited, and the copy is the part most likely to
+        // be edited.
         throw new HttpError(
           422,
           `this division's schedule ${outside.join(" and ")} — widen the competition dates, or bring the division inside them`,
+          "SCHEDULE_OUTSIDE_COMPETITION",
+          {
+            startsBefore,
+            endsAfter,
+            competitionStartsOn: division.starts_on,
+            competitionEndsOn: division.ends_on,
+          },
         );
       }
     }

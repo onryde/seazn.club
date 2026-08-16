@@ -3729,5 +3729,9 @@
   "scorepad.skin.period.group.discipline": "Discipline",
   "scorepad.skin.period.group.setPiece": "Set pieces",
   "scorepad.skin.period.group.shootout": "Shootout",
-  "scorepad.skin.period.group.shots": "Shots"
+  "scorepad.skin.period.group.shots": "Shots",
+  "routeError.title": "Something went wrong",
+  "routeError.body": "This page hit an unexpected error. The rest of this competition still works — try again, or pick another tab.",
+  "routeError.reference": "Reference: {digest}",
+  "routeError.retry": "Try again"
 }

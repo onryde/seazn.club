@@ -3729,5 +3729,9 @@
   "scorepad.skin.period.group.discipline": "Disciplina",
   "scorepad.skin.period.group.setPiece": "Acciones a balón parado",
   "scorepad.skin.period.group.shootout": "Tanda de penaltis",
-  "scorepad.skin.period.group.shots": "Tiros"
+  "scorepad.skin.period.group.shots": "Tiros",
+  "routeError.title": "Algo ha salido mal",
+  "routeError.body": "Esta página ha sufrido un error inesperado. El resto de la competición sigue funcionando: inténtalo de nuevo o elige otra pestaña.",
+  "routeError.reference": "Referencia: {digest}",
+  "routeError.retry": "Reintentar"
 }

@@ -14,6 +14,7 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { Tip } from "@/components/ui/tip";
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { apiV1 } from "@/lib/client-v1";
+import { settingsErrorText } from "@/lib/schedule-error";
 import { track, EVENTS } from "@/lib/analytics";
 import { useMsg, useLocale, usePlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
@@ -1598,7 +1599,7 @@ export function ScheduleBoard({
             actions.setNotice(msg("boardset.saved"));
             router.refresh();
           }}
-          onError={(err) => actions.setError(err instanceof Error ? err.message : msg("boardset.error"))}
+          onError={(err) => actions.setError(settingsErrorText(err, locale, msg("boardset.error")))}
         />
       )}
     </div>

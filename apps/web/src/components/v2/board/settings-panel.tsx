@@ -28,7 +28,8 @@ import {
 import type { BoardConfig } from "./types";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { Tip } from "@/components/ui/tip";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useLocale } from "@/components/i18n/dict-provider";
+import { settingsErrorText } from "@/lib/schedule-error";
 import { pluralizeVenue } from "@/lib/venue";
 // D2 capacity pre-check (design doc bench-product-value/designs/2026-08-13-
 // capacity-precheck-design.md): both imports are CLIENT-SAFE leaves — see
@@ -72,6 +73,7 @@ export function StandaloneScheduleSettings(props: {
   }[];
 }) {
   const msg = useMsg();
+  const locale = useLocale();
   const router = useRouter();
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -89,7 +91,10 @@ export function StandaloneScheduleSettings(props: {
         }}
         onError={(err) => {
           setNotice(null);
-          setError(err instanceof Error ? err.message : msg("boardset.error"));
+          // Same resolver the board uses, so the settings TAB and the board's
+          // inline settings card cannot disagree about how a refusal reads —
+          // they are the same save against the same endpoint.
+          setError(settingsErrorText(err, locale, msg("boardset.error")));
         }}
       />
     </div>

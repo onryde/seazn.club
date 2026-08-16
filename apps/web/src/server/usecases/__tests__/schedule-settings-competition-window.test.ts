@@ -157,6 +157,41 @@ describe.skipIf(!HAS_DB)("a division's window must sit inside its competition", 
     ).rejects.toThrow(/starts before .* and ends after /);
   });
 
+  // THE WIRE CONTRACT the organiser's panel reads. The refusal's English
+  // sentence stays exactly as it was — it is what a curl or the public API
+  // gets, and this repo has no server-side i18n — but the browser needs a
+  // machine-readable handle to translate, so the throw now carries a code and
+  // the two crossed-bound booleans. `lib/schedule-error.ts` consumes precisely
+  // these fields; without them it falls back to the English string, silently,
+  // which is why they are asserted here and not only there.
+  it("carries the SCHEDULE_OUTSIDE_COMPETITION code and which bound was crossed", async () => {
+    const auth = await seedOrg("Europe/London");
+    const divisionId = await seedDivision(auth, { starts_on: COMP_FROM, ends_on: COMP_TO });
+    await expect(
+      put(auth, divisionId, { startAt: "2026-08-01T09:00:00.000Z", endAt: "2026-08-15T22:59:00.000Z" }),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: "SCHEDULE_OUTSIDE_COMPETITION",
+      extra: {
+        startsBefore: true,
+        endsAfter: false,
+        competitionStartsOn: COMP_FROM,
+        competitionEndsOn: COMP_TO,
+      },
+    });
+  });
+
+  it("marks endsAfter alone when only the end overhangs, and both when both do", async () => {
+    const auth = await seedOrg("Europe/London");
+    const divisionId = await seedDivision(auth, { starts_on: COMP_FROM, ends_on: COMP_TO });
+    await expect(
+      put(auth, divisionId, { startAt: "2026-08-12T09:00:00.000Z", endAt: "2026-08-25T22:59:00.000Z" }),
+    ).rejects.toMatchObject({ extra: { startsBefore: false, endsAfter: true } });
+    await expect(
+      put(auth, divisionId, { startAt: "2026-08-01T09:00:00.000Z", endAt: "2026-08-25T22:59:00.000Z" }),
+    ).rejects.toMatchObject({ extra: { startsBefore: true, endsAfter: true } });
+  });
+
   it("applies no containment when the competition carries no dates", async () => {
     const auth = await seedOrg("Europe/London");
     const divisionId = await seedDivision(auth, {});

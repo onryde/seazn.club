@@ -11,5 +11,8 @@
   "seeding.SEEDING_SLOT_DOUBLE_ASSIGNED": "El mismo participante está asignado a más de una posición. Corrige tus ediciones e inténtalo de nuevo.",
   "seeding.SEEDING_ENTRANT_FOREIGN": "Uno de los participantes clasificados ya no pertenece a esta división.",
   "seeding.SEEDING_SLOT_FOREIGN_FIXTURE": "Una de las posiciones de destino pertenece a otra fase. Vuelve a calcular la propuesta e inténtalo de nuevo.",
-  "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "Una de las posiciones de destino ya está cubierta. Vuelve a calcular la propuesta para ver qué queda."
+  "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "Una de las posiciones de destino ya está cubierta. Vuelve a calcular la propuesta para ver qué queda.",
+  "schedule.SCHEDULE_OUTSIDE_COMPETITION.before": "El calendario de esta división empieza antes de que la competición abra el {startsOn}. Amplía las fechas de la competición o ajusta la división para que quede dentro.",
+  "schedule.SCHEDULE_OUTSIDE_COMPETITION.after": "El calendario de esta división termina después de que la competición cierre el {endsOn}. Amplía las fechas de la competición o ajusta la división para que quede dentro.",
+  "schedule.SCHEDULE_OUTSIDE_COMPETITION.both": "El calendario de esta división empieza antes de que la competición abra el {startsOn} y termina después de que cierre el {endsOn}. Amplía las fechas de la competición o ajusta la división para que quede dentro."
 }
