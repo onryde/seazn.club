@@ -69,12 +69,10 @@
 // the measured latency cost of layering a second serialisation on top of one
 // that already exists).
 import {
-  buildSchedule,
-  isBlockingConflict,
-  validateAssignments,
+  repairDecomposedCpsat,
   type Assignment,
   type BuildInput,
-  type BuildResult,
+  type DecomposedRepairResult,
   type OrderDependency,
   type SchedulableFixture,
 } from "@seazn/engine/scheduling";
@@ -196,13 +194,14 @@ export interface SolverTelemetry {
    *  several. */
   solver_ran: boolean;
   status?: SolverRepairStatus;
-  /** Violator fixtures whose slot changed. NOT a proved minimum — unlike
-   *  z3's old ascending-k repair search, `buildSchedule` has no preference
-   *  for touching fewer of the violators than necessary, so a two-fixture
-   *  clash can come back with BOTH sides relocated even when moving one
-   *  would have sufficed. Frozen (non-violator) fixtures are UNAFFECTED
-   *  regardless — that invariant, not minimality within the violator set,
-   *  is what this module still guarantees. */
+  /** Violator fixtures whose slot changed. NOT a proved minimum in general —
+   *  `buildSchedule` has no preference for touching fewer of the violators
+   *  than necessary within one component, so a component with several
+   *  violators can come back with more of them relocated than strictly
+   *  necessary. `minimality` (below) says when `moved` IS provably the
+   *  fewest possible. Frozen (non-violator) fixtures are UNAFFECTED
+   *  regardless — structurally, not merely by convention (C9,
+   *  `repair-decompose-cpsat.ts`'s own doc comment). */
   moved?: number;
   /** Wall-clock the request paid. */
   ms?: number;
@@ -212,6 +211,17 @@ export interface SolverTelemetry {
   unresolved?: number;
   /** Conflicts the reconciled board still carries, blocking or not. */
   residual?: number;
+  /** C9 (decomposed repair on CP-SAT): whether `moved` is a PROVED minimum
+   *  (`disjointConflictBound`, `repair-minimality.ts` — unchanged from the z3
+   *  era, since it never touched z3 to begin with) or merely an upper bound a
+   *  restricted search happened to find. Recovers the
+   *  `data-minimality="proved"` claim C5 had to drop. */
+  minimality?: "proved" | "upper_bound";
+  /** Components the decomposed driver resolved (clean or repaired) vs.
+   *  declined (skipped, timed out, infeasible). Diagnostic only — `unresolved`
+   *  is the field that decides the next round's hand-off. */
+  components_solved?: number;
+  components_skipped?: number;
   /** The budget ran out, or `buildSchedule` reported it never got to search. */
   timed_out?: boolean;
   fallback?: SolverFallback;
@@ -305,57 +315,6 @@ export async function solveBoard(input: SolveBoardInput): Promise<SolveBoardOutc
   const frozen = new Set([...input.frozen].filter((id) => knownById.has(id)));
   const violatorIds = input.fixtures.map((f) => f.id).filter((id) => !frozen.has(id));
 
-  /**
-   * A violator's dependency edge touches a FROZEN feeder — decline before
-   * ever calling `buildSchedule`.
-   *
-   * C4's own documented finding (schedule.ts's `reflowExisting`, "a
-   * dependency-encoding gap on a FROZEN feeder... shared with POLISH, out
-   * of C4's file set to fix... Recorded so C5/a POLISH follow-up finds a
-   * decision, not a miss"): `buildSchedule`'s CP-SAT encoding does not
-   * enforce a `dependsOn` edge against a fixture that is FROZEN via
-   * `frozen`/`current` rather than genuinely `.locked`. C4 never needed to
-   * fix it because REFLOW freezes every already-placed card, so a
-   * dependency edge is either entirely inside the frozen set (both ends
-   * already placed, nothing to enforce) or entirely outside it (both ends
-   * free, ordinary encoding). C5's violator-derived freeze is the first
-   * caller that can hand `buildSchedule` an edge with exactly ONE end
-   * frozen — a free dependent whose feeder is a non-violator.
-   *
-   * Confirmed live, not merely theoretical: a real CI smoke run on a
-   * knockout-bracket board reproduced it directly — a third-place playoff
-   * (a violator, freely movable) depending on two decided semi-finals
-   * (both non-violators, hence frozen) came back from `buildSchedule`
-   * scheduled BEFORE both feeders finished, a genuine `order_before_feeder`
-   * breach. `solveBoard`'s own re-verification caught it (correctly scored
-   * `"partial"`/`"unrepaired"`, never `"repaired"`), but the board still
-   * reached the LLM repair round carrying a violation the model was not
-   * well-positioned to reason about, and it survived every remaining round.
-   *
-   * The fix is not to encode the dependency correctly — that is
-   * `build-encode.ts`, shared BUILD/POLISH code, out of this module's
-   * reach — it is to recognise the exact shape the encoder cannot express
-   * and route around it, the same way the fully-frozen case below routes
-   * around a different wire-contract limit. C9 (a decomposed CP-SAT
-   * driver) is expected to close this properly by keeping a dependency's
-   * two ends in the same component whenever one is frozen; until then,
-   * this is the narrow, targeted guard.
-   */
-  const violatorSet = new Set(violatorIds);
-  const dependencyTouchesFrozenFeeder = input.dependencies.some(
-    (d) =>
-      (violatorSet.has(d.fixtureId) && frozen.has(d.dependsOn)) ||
-      (violatorSet.has(d.dependsOn) && frozen.has(d.fixtureId)),
-  );
-  if (dependencyTouchesFrozenFeeder) {
-    return {
-      assignments: null,
-      movedFixtureIds: [],
-      unresolvedFixtureIds: [...violatorIds].sort(),
-      telemetry: { solver_ran: false, fallback: "unrepaired" },
-    };
-  }
-
   if (violatorIds.length === 0) {
     // Mirrors `reflowExisting`'s identical guard (schedule.ts): the placement
     // service's wire refuses a request naming zero movable fixtures
@@ -373,26 +332,34 @@ export async function solveBoard(input: SolveBoardInput): Promise<SolveBoardOutc
     };
   }
 
+  // A violator this pack's own model report never gave a slot at all — the
+  // decomposed driver works over CURRENT PLACEMENTS (`repairComponents`
+  // builds its graph from `Assignment[]`, matching `repairDecomposed`'s own
+  // z3-era contract), so a fixture with no row in `board` is structurally
+  // invisible to it, not merely un-attempted. Never silently dropped: folded
+  // into `unresolvedFixtureIds` directly, same hand-off the LLM round always
+  // got for this shape.
+  const boardIds = new Set(input.board.map((a) => a.fixtureId));
+  const unplacedViolators = violatorIds.filter((id) => !boardIds.has(id));
+
   const startedAt = Date.now();
-  let out: BuildResult;
+  let out: DecomposedRepairResult;
   try {
-    out = await buildSchedule({
+    out = await repairDecomposedCpsat({
       fixtures: input.fixtures,
-      config: input.config,
+      proposal: input.board,
+      callerFrozen: frozen,
       existing: input.existing,
       dependencies: input.dependencies,
-      wallMs: input.budgetMs ?? solverBudgetMs(),
-      frozen: [...frozen],
-      // Empty means "no board" to `buildSchedule` (an empty array is NOT sent
-      // as one) — mirrors `reflowExisting`'s identical guard.
-      ...(input.board.length > 0 ? { current: input.board } : {}),
+      config: input.config,
+      budgetMs: input.budgetMs ?? solverBudgetMs(),
     });
   } catch {
-    // Every throw lands here, including an encoder/verifier-drift exception —
-    // the engine's own "I produced a board my own verifier rejects" alarm.
-    // Loud in the engine's tests, silent for the organiser: the LLM repairs
-    // the board exactly as it did before this wave, and telemetry records
-    // that the solver blew up.
+    // Every throw lands here — the driver's own "I produced a schedule my
+    // own verifier rejects" alarm (an impossible event, loud in the
+    // engine's own tests). Silent for the organiser: the LLM repairs the
+    // board exactly as it did before this wave, and telemetry records that
+    // the solver blew up.
     return {
       assignments: null,
       movedFixtureIds: [],
@@ -402,57 +369,38 @@ export async function solveBoard(input: SolveBoardInput): Promise<SolveBoardOutc
   }
   const ms = Date.now() - startedAt;
 
-  // THE RECONCILIATION (module doc comment, guarantee 2): every frozen id's
-  // slot comes from `board` via `knownById`, never from `out.assignments`,
-  // regardless of which exit produced them.
-  const assignments = [
-    ...out.assignments.filter((a) => !frozen.has(a.fixtureId)),
-    // Safe: every id in `frozen` passed the `knownById.has(id)` filter above.
-    ...[...frozen].map((id) => knownById.get(id)!),
-  ];
-  const assignedById = new Map(assignments.map((a) => [a.fixtureId, a] as const));
+  // NO RECONCILIATION STEP HERE — unlike the C5 (single `buildSchedule`
+  // call) shape this replaces, `repairDecomposedCpsat` already guarantees
+  // every frozen id's slot is exactly `board`'s, verified internally before
+  // it ever returns (its own doc comment: a caller-frozen fixture is never
+  // a decision variable in the first place, not merely reconciled after).
+  const assignments = out.assignments;
 
-  const movedFixtureIds = violatorIds
-    .filter((id) => {
-      const after = assignedById.get(id);
-      if (after === undefined) return false; // not placed at all — unresolved, not moved
-      const before = knownById.get(id);
-      return before === undefined || before.court !== after.court || before.startAt !== after.startAt;
-    })
-    .sort();
-
-  // Re-verified over the RECONCILED board, not `out.conflicts` — that report
-  // is over `buildSchedule`'s OWN pre-reconciliation assignments, which can
-  // still show a frozen id's stale (fallback-exit) slot as the source of a
-  // conflict the reconciliation above already fixed. This module's verifier
-  // pass is diagnostic only (residual count, the `unresolved` hint for the
-  // next LLM round) — the caller re-verifies the adopted board with its own,
-  // more precise verifier before deciding anything.
-  const conflicts = validateAssignments(assignments, input.config, input.existing, input.dependencies);
-  const blockingIds = new Set<string>();
-  for (const c of conflicts.filter(isBlockingConflict)) {
-    blockingIds.add(c.fixtureId);
-    if (c.details?.otherFixtureId !== undefined) blockingIds.add(c.details.otherFixtureId);
-  }
-  // Two ways a violator counts as unresolved: still named by a blocking
-  // conflict on the reconciled board, OR ABSENT from it entirely.
-  // `validateAssignments` "cannot report an absence — it iterates the rows
-  // it is handed" (`BuildResult.conflicts`'s own doc, engine), so a
-  // completely dropped fixture (buildSchedule returned nothing for it) never
-  // reaches `blockingIds` on its own — checked directly against
-  // `assignedById` instead.
-  const unresolvedFixtureIds = violatorIds
-    .filter((id) => blockingIds.has(id) || !assignedById.has(id))
-    .sort();
+  const violatorSet = new Set(violatorIds);
+  // `out.moved`/`out.unresolvedFixtureIds` cover every fixture in `proposal`
+  // (`input.board`) — narrowed to violators for wire parity with the
+  // pre-C9 contract ("Violator fixtures ..."), and because a component that
+  // is entirely caller-frozen but self-contradictory can appear in
+  // `unresolvedFixtureIds` too (a pre-existing board defect this module has
+  // never been able to fix — see `repairDecomposedCpsat`'s own handling).
+  const movedFixtureIds = [...out.moved].filter((id) => violatorSet.has(id)).sort();
+  const unresolvedFixtureIds = [
+    ...new Set([
+      ...out.unresolvedFixtureIds.filter((id) => violatorSet.has(id)),
+      ...unplacedViolators,
+    ]),
+  ].sort();
 
   const status: SolverRepairStatus =
-    movedFixtureIds.length === 0 ? "unrepaired" : unresolvedFixtureIds.length > 0 ? "partial" : "repaired";
+    unresolvedFixtureIds.length > 0 ? (movedFixtureIds.length > 0 ? "partial" : "unrepaired") : "repaired";
+  const timedOut = out.components.some((c) => c.skipReason === "budget_exhausted");
   const fallback: SolverFallback | undefined =
-    status === "repaired"
-      ? undefined
-      : status === "unrepaired" && out.status === "not_searched" && out.notSearchedReason === "out_of_time"
-        ? "budget"
-        : status;
+    status === "repaired" ? undefined : status === "unrepaired" && timedOut ? "budget" : status;
+
+  const componentsSolved = out.components.filter(
+    (c) => c.outcome === "clean" || c.outcome === "repaired",
+  ).length;
+  const componentsSkipped = out.components.length - componentsSolved;
 
   return {
     assignments,
@@ -464,8 +412,10 @@ export async function solveBoard(input: SolveBoardInput): Promise<SolveBoardOutc
       moved: movedFixtureIds.length,
       ms,
       unresolved: unresolvedFixtureIds.length,
-      residual: conflicts.length,
-      ...(out.budgetExpired ? { timed_out: true } : {}),
+      residual: out.residual.length,
+      ...(status === "repaired" ? { minimality: out.minimality.verdict } : {}),
+      ...(out.components.length > 0 ? { components_solved: componentsSolved, components_skipped: componentsSkipped } : {}),
+      ...(timedOut ? { timed_out: true } : {}),
       ...(fallback !== undefined ? { fallback } : {}),
     },
   };
