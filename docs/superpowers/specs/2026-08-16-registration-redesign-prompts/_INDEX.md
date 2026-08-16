@@ -116,6 +116,19 @@ serves its closed/unavailable state during that window.
 - **Currency**: untouched by RS001 (`registration_settings.currency` still
   exists; `registration_groups.currency` ships unconstrained). Ruling 9 above
   says sessions opened before the addendum owe none of it — RS001b owns it.
+- **`registration_players.user_id`** (design gap #2, found mid-session): the old
+  `materialise` linked a signed-in registrant's person to their account via
+  `resolvePlayerPerson` (the `(org_id, user_id, lane='player')` upsert that
+  #402/#404 identity dedupe hangs off). `registrations.user_id` moved to the
+  **group** — and a group is now a club rep who may enter *other people*, so
+  resolving every entry against the group's account would mis-link strangers to
+  the rep. The account therefore belongs on the **player row**: set for the
+  submitter's own row at submit ("I'm playing"), and at claim/join.
+  Without it the demolition silently downgraded every materialised person to
+  unlinked, and the sweep deleted the tests that covered the linked path —
+  caught by diffing `resolvePlayerPerson`'s call sites across `6984951d..HEAD`
+  (2 callers → 0). Consumer is live and tested in RS001; the producer is
+  RS002/RS003 (submit) and RS008 (claim).
 
 ## False premises found
 
