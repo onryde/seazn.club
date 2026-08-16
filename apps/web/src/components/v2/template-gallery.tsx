@@ -94,8 +94,9 @@ export function takeRuleText(msg: Msg, rule: TakeRule): string {
     default:
       // Belt and suspenders, same spirit as stageKindLabel's fallback above
       // — no TakeRule variant reaches this today (TakeRuleSchema is exactly
-      // the 3 cases above), `rule` narrows to `never` here.
-      return rule.kind;
+      // the 3 cases above), so `rule` narrows to `never` here; the cast is
+      // needed only because tsc rejects a bare property read on `never`.
+      return (rule as { kind: string }).kind;
   }
 }
 
