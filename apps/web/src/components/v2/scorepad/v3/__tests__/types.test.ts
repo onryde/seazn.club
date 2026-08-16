@@ -14,4 +14,17 @@ describe("assertScorebugSpec", () => {
     expect(v).toContain("halves[0]: tappable requires hint");
     expect(v).toContain("halves[0]: tappable requires tapEvent");
   });
+  it("rejects an empty who array", () => {
+    // Task 5 follow-up: this branch (types.ts:74, `who must be non-empty`)
+    // shipped in Task 1 with no test — a mutant deleting the check
+    // survived. Deliberately non-tappable here so the other two checks
+    // stay unfired and this assertion is isolated to the one message.
+    const v = assertScorebugSpec({
+      context: "c",
+      phase: "live",
+      halves: [{ who: [], big: "0" }, half()],
+      strip: [],
+    });
+    expect(v).toEqual(["halves[0]: who must be non-empty"]);
+  });
 });
