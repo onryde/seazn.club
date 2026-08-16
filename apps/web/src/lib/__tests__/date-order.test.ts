@@ -11,7 +11,13 @@
 // Pure by design: both call sites use `useLocale()` and cannot be mounted —
 // apps/web is vitest `environment: "node"` with no jsdom.
 import { describe, expect, it } from "vitest";
-import { endDateIsBackwards, startDay, windowIsBackwards } from "../date-order";
+import {
+  divisionEndBounds,
+  divisionStartBounds,
+  endDateIsBackwards,
+  startDay,
+  windowIsBackwards,
+} from "../date-order";
 
 describe("startDay", () => {
   it("is the day a datetime-local value falls on, and undefined when blank", () => {
@@ -115,5 +121,78 @@ describe("windowIsBackwards", () => {
     ] as const) {
       expect(windowIsBackwards(o, c), `${o} → ${c}`).toBe(server(o, c));
     }
+  });
+});
+
+// The competition window a division's schedule must sit inside. The server
+// already refuses a division outside it (schedule.ts CONTAINMENT GUARD, 422
+// "widen the competition dates, or bring the division inside them"); these two
+// helpers are what let the pickers say so BEFORE the save, from the same
+// numbers, so the input cannot permit what the server then rejects.
+describe("divisionStartBounds", () => {
+  it("is the competition's own window, both ends", () => {
+    expect(divisionStartBounds({ startsOn: "2026-07-01", endsOn: "2026-07-20" })).toEqual({
+      min: "2026-07-01",
+      max: "2026-07-20",
+    });
+  });
+
+  it("bounds only the end the competition actually declares", () => {
+    expect(divisionStartBounds({ startsOn: null, endsOn: "2026-07-20" })).toEqual({
+      min: undefined,
+      max: "2026-07-20",
+    });
+    expect(divisionStartBounds({ startsOn: "2026-07-01", endsOn: null })).toEqual({
+      min: "2026-07-01",
+      max: undefined,
+    });
+    // No competition row in scope at all (a surface that does not thread it):
+    // no bounds, never a guessed one — the server stays the authority.
+    expect(divisionStartBounds(undefined)).toEqual({ min: undefined, max: undefined });
+  });
+
+  // A PAST competition is a real competition — a club records a tournament
+  // that already happened, and the wizard must let them. The bound is the
+  // competition's own window, never "today", which is exactly why this is
+  // derived from `starts_on`/`ends_on` and nothing else.
+  it("permits a wholly past window, unchanged", () => {
+    expect(divisionStartBounds({ startsOn: "2019-01-05", endsOn: "2019-01-09" })).toEqual({
+      min: "2019-01-05",
+      max: "2019-01-09",
+    });
+  });
+});
+
+describe("divisionEndBounds", () => {
+  it("floors at the division's own start day when that is later than the competition's", () => {
+    // Both rules at once: inside the competition AND not before this
+    // division's own start. The later floor wins.
+    expect(
+      divisionEndBounds({ startsOn: "2026-07-01", endsOn: "2026-07-20" }, "2026-07-08T09:00"),
+    ).toEqual({ min: "2026-07-08", max: "2026-07-20" });
+  });
+
+  it("falls back to the competition's start when the division has no start yet", () => {
+    expect(divisionEndBounds({ startsOn: "2026-07-01", endsOn: "2026-07-20" }, "")).toEqual({
+      min: "2026-07-01",
+      max: "2026-07-20",
+    });
+  });
+
+  it("keeps the division's start as the floor when no competition window is known", () => {
+    expect(divisionEndBounds(undefined, "2026-07-08T09:00")).toEqual({
+      min: "2026-07-08",
+      max: undefined,
+    });
+    expect(divisionEndBounds(undefined, "")).toEqual({ min: undefined, max: undefined });
+  });
+
+  it("never lets a start EARLIER than the competition's loosen the floor", () => {
+    // A stored division that already sits outside its competition stays
+    // editable (the server only checks a CHANGED range), but the picker must
+    // not advertise the out-of-window days as legal.
+    expect(
+      divisionEndBounds({ startsOn: "2026-07-01", endsOn: "2026-07-20" }, "2026-06-20T09:00"),
+    ).toEqual({ min: "2026-07-01", max: "2026-07-20" });
   });
 });

@@ -113,6 +113,22 @@ describe("DateTimeSplitField", () => {
     expect(laterDay).toContain('value="00:15"'); // would be filtered on the SAME day, not this one
   });
 
+  it("passes max's date half to the date input, and never constrains the time list with it", () => {
+    // The competition window's upper bound. Only the DATE half carries it: a
+    // time ceiling on the last day would be a different rule from the one the
+    // server enforces (the 422 compares whole days — `starts_on`/`ends_on` are
+    // dates), and time-options.ts has no `maxTime` filter to lean on. A bare
+    // "YYYY-MM-DD" max splits to `{date, time: ""}`, same as `min` does.
+    const html = renderToStaticMarkup(
+      <DateTimeSplitField {...baseProps} value="2026-08-07T09:30" max="2026-08-20" />,
+    );
+    expect(html).toContain('max="2026-08-20"');
+    // The time <select> is untouched — no `max` reaches it, and its options
+    // are the full list.
+    expect(html).toContain('value="23:45"');
+    expect((html.match(/max="2026-08-20"/g) ?? []).length).toBe(1);
+  });
+
   it("the current time value is always offered even when min would otherwise filter it out", () => {
     const html = renderToStaticMarkup(
       <DateTimeSplitField {...baseProps} value="2026-08-07T09:00" min="2026-08-07T09:15" />,

@@ -39,6 +39,14 @@ export interface DateTimeFieldProps {
   onChange: (value: string) => void;
   label: string;
   min?: string;
+  /**
+   * Upper bound, `kind="date"` and the date half of `kind="datetime-local"`
+   * only — never the time `<select>` (see `DateTimeSplitField`). The bound the
+   * competition window needs: a division's schedule may not run past the
+   * competition's last day, which the server already rejects with a 422, and
+   * the picker should say so before the save rather than after it.
+   */
+  max?: string;
   disabled?: boolean;
   /**
    * Announce the field as compulsory to assistive tech. This does NOT set the
@@ -122,6 +130,7 @@ export function DateTimeField({
   onChange,
   label,
   min,
+  max,
   disabled,
   required,
   labelHidden,
@@ -137,6 +146,7 @@ export function DateTimeField({
         onChange={onChange}
         label={label}
         min={min}
+        max={max}
         disabled={disabled}
         required={required}
         labelHidden={labelHidden}
@@ -196,6 +206,12 @@ export function DateTimeField({
         className="input w-full text-base"
         value={value}
         min={min}
+        // `kind` is always "date" here, so this is a day bound — never a
+        // time-of-day one. The `kind="time"` branch above takes no `max` at
+        // all: `timeOptions()` has a `minTime` filter and no `maxTime`, and a
+        // ceiling on the last day's clock is a different rule from the
+        // whole-day one the server enforces.
+        max={max}
         // `kind` here is always "date" (the other two branches return above),
         // and a date input measures `step` in DAYS — so it is never set. The
         // (now removed) `step={900}` regression is pinned in the sibling test.

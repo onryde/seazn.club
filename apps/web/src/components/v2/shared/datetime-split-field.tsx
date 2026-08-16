@@ -43,6 +43,12 @@ export interface DateTimeSplitFieldProps {
    *  the time half on the day it names — see `filterByMin` in time-options.ts;
    *  a different day keeps the full option list. */
   min?: string;
+  /** An upper bound for the DATE half only — the time `<select>` is never
+   *  constrained by it (time-options.ts has no `maxTime` filter, and the rule
+   *  this exists for — a division inside its competition's window — compares
+   *  whole days). A bare "YYYY-MM-DD" splits to `{date, time: ""}` just as
+   *  `min` does. */
+  max?: string;
   disabled?: boolean;
   required?: boolean;
   labelHidden?: boolean;
@@ -56,6 +62,7 @@ export function DateTimeSplitField({
   onChange,
   label,
   min,
+  max,
   disabled,
   required,
   labelHidden,
@@ -93,12 +100,18 @@ export function DateTimeSplitField({
     onChange(joinValue(next.date, next.time));
   }
 
+  // Same split as `dateMin`, and deliberately no `timeMax` twin — see the
+  // `max` prop's own doc above.
+  const maxHalves = max !== undefined && max !== "" ? splitValue(max) : null;
+  const dateMax = maxHalves !== null && maxHalves.date !== "" ? maxHalves.date : undefined;
+
   const dateProps: DateTimeFieldProps = {
     kind: "date",
     value: halves.date,
     onChange: setDate,
     label,
     min: dateMin,
+    max: dateMax,
     disabled,
     required,
     labelHidden,

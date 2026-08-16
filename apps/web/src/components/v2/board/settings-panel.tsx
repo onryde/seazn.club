@@ -18,6 +18,7 @@ import { RestFloorNote, restFloorNoteShown } from "@/components/v2/rest-floor-no
 import { apiV1 } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { dailyHoursToWindows, windowsToDailyHours } from "@/lib/schedule-board";
+import { divisionEndBounds, divisionStartBounds, type CompetitionWindow } from "@/lib/date-order";
 import {
   isoFromZonedDateTime,
   isoFromZonedParts,
@@ -54,6 +55,8 @@ export function StandaloneScheduleSettings(props: {
   venueCap?: string;
   /** The VENUE clock (`settings.orgTz`, #448). See {@link SettingsPanel}. */
   orgTz: string;
+  /** The parent competition's own dates. See {@link SettingsPanel}. */
+  competitionWindow?: CompetitionWindow;
   /** D2 capacity pre-check: the division's own fixtures, EVERY status — this
    *  panel filters to movable itself (see {@link SettingsPanel}'s doc
    *  comment). Optional so no OTHER caller of this wrapper breaks; omitted,
@@ -100,6 +103,7 @@ export function SettingsPanel({
   constraintsAllowed,
   venueCap = "Court",
   orgTz,
+  competitionWindow,
   defaultOpen = false,
   onSaved,
   onError,
@@ -122,6 +126,14 @@ export function SettingsPanel({
    *  may override). Required rather than defaulted: a wrong zone here stores the
    *  wrong instant and looks correct on the way back out. */
   orgTz: string;
+  /** The parent COMPETITION's own `starts_on`/`ends_on`. The server refuses a
+   *  division whose schedule range leaves this window (schedule.ts CONTAINMENT
+   *  GUARD → 422), so both date fields carry it as `min`/`max` and an unset
+   *  start seeds its date half from the competition's opening day. Optional:
+   *  omitted, the fields are unbounded exactly as before and the server stays
+   *  the authority — the same "client hint, server authority" split the
+   *  capacity precheck on this panel already follows. */
+  competitionWindow?: CompetitionWindow;
   defaultOpen?: boolean;
   onSaved: () => void;
   onError: (err: unknown) => void;
@@ -129,7 +141,15 @@ export function SettingsPanel({
   const msg = useMsg();
   const [open, setOpen] = useState(defaultOpen);
   const [startAt, setStartAt] = useState(
-    config.startAt ? zonedDateTimeInput(config.startAt, orgTz) : "",
+    config.startAt
+      ? zonedDateTimeInput(config.startAt, orgTz)
+      : // No stored start: seed the DATE half from the competition's opening
+        // day and leave the time blank. A bare `YYYY-MM-DD` is exactly what
+        // `splitValue` reads as "date set, time unset", and
+        // `isoFromZonedDateTime` returns null for it — so this pre-fills the
+        // calendar without inventing a time-of-day, and a save before the
+        // organiser picks one still writes the same `null` it writes today.
+        (competitionWindow?.startsOn ?? ""),
   );
   const [endAt, setEndAt] = useState(config.endAt ? zonedDateInput(config.endAt, orgTz) : "");
   const [matchMinutes, setMatchMinutes] = useState(config.matchMinutes);
@@ -351,6 +371,7 @@ export function SettingsPanel({
             kind="datetime-local"
             label={msg("boardset.startAt")}
             value={startAt}
+            {...divisionStartBounds(competitionWindow)}
             onChange={setStartAt}
             disabled={!canEdit}
           />
@@ -361,7 +382,12 @@ export function SettingsPanel({
             kind="date"
             label={msg("boardset.endAt")}
             value={endAt}
-            min={startAt ? startAt.slice(0, 10) : undefined}
+            // Was `min={startAt.slice(0, 10)}` — the same own-start floor, now
+            // taking the LATER of that and the competition's opening day, plus
+            // the competition's closing day as a ceiling. `divisionEndBounds`
+            // slices the start with `startDay`, so the floor is still one
+            // expression shared with `endDateIsBackwards`.
+            {...divisionEndBounds(competitionWindow, startAt)}
             onChange={setEndAt}
             disabled={!canEdit}
           />

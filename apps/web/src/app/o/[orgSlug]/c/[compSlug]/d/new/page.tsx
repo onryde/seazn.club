@@ -68,6 +68,10 @@ export default async function NewDivisionPage({
           orgSlug={orgSlug}
           compSlug={compSlug}
           sports={sports}
+          // The window this division's schedule must sit inside. The seed PUT
+          // the wizard fires after create is refused outside it (422) and the
+          // wizard swallows that refusal, so the pickers carry the bound.
+          competitionWindow={{ startsOn: competition.starts_on, endsOn: competition.ends_on }}
           constraintsAllowed={constraintsAllowed}
           archivedSlotsExplainRefusal={explainArchivedSlots}
         />

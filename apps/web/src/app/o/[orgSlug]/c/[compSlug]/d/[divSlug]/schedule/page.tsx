@@ -360,6 +360,10 @@ export default async function DivisionSchedulePage({
             constraintsAllowed={constraints}
             venueCap={venueLabel(division.sport_key)}
             orgTz={orgTz}
+            // The competition's own dates — already in scope for the board's
+            // day range above. The panel's date pickers carry them as
+            // min/max, matching the server's containment 422.
+            competitionWindow={{ startsOn: competition.starts_on, endsOn: competition.ends_on }}
             // D2 capacity pre-check card: `fixtures` is already fetched
             // unconditionally above (every tab, not gated like the
             // officials-only reads) — no new query for this.

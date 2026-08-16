@@ -115,6 +115,7 @@ describe("DateTimeField", () => {
       onChange,
       label: "Kickoff",
       min: "2026-08-01T00:00",
+      max: "2026-08-20",
       disabled: false,
       required: true,
       labelHidden: true,
@@ -127,6 +128,7 @@ describe("DateTimeField", () => {
     expect(forwarded.onChange).toBe(onChange);
     expect(forwarded.label).toBe("Kickoff");
     expect(forwarded.min).toBe(props.min);
+    expect(forwarded.max).toBe(props.max);
     expect(forwarded.required).toBe(true);
     expect(forwarded.labelHidden).toBe(true);
     expect(forwarded.step).toBe(300);
@@ -180,6 +182,26 @@ describe("DateTimeField", () => {
     expect(renderToStaticMarkup(<DateTimeField {...base} />)).not.toContain("min=");
     // Same for `disabled`, which the wizard toggles per step.
     expect(inputOf({ ...base, disabled: true }).disabled).toBe(true);
+  });
+
+  it("applies max when provided, and omits it otherwise (kind=\"date\")", () => {
+    // The upper bound the competition window needs: a division's schedule may
+    // not run past the competition's last day (the server already 422s that —
+    // `boundsError` in schedule-settings), so the picker has to say so before
+    // the save, not after. Absence stays absence for the same reason `min`'s
+    // does: `max=""` would make every date unselectable in some browsers.
+    const base: DateTimeFieldProps = {
+      kind: "date",
+      value: "",
+      onChange: () => {},
+      label: "End date",
+    };
+    expect(inputOf({ ...base, max: "2026-08-20" }).max).toBe("2026-08-20");
+    expect(inputOf(base).max).toBeUndefined();
+    expect(renderToStaticMarkup(<DateTimeField {...base} />)).not.toContain("max=");
+    // Both bounds together — the whole point is a closed window.
+    const bounded = inputOf({ ...base, min: "2026-08-07", max: "2026-08-20" });
+    expect([bounded.min, bounded.max]).toEqual(["2026-08-07", "2026-08-20"]);
   });
 
   it('min filters the offered list on kind="time", via timeOptions\' minTime', () => {
