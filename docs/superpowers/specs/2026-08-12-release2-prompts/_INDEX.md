@@ -1546,26 +1546,57 @@ build for e2e):**
     commits from this branch touching either. This diff's own file
     (`repair-decompose-cpsat.test.ts`, 13 tests) is fully green in the
     full run.
-- apps/web: `src/server src/lib` DB-backed run — **4864 total / 4815
-  passed / 0 failed / 49 pending, `success: true`** (isolated re-run; a
-  first concurrent run showed 7 failures, ALL in three C5-era test files
+- apps/web: `src/server src/lib` DB-backed run, FRESH DB (`db:apply` +
+  `sync:sports` on a brand new scratch Postgres, port confirmed mine via
+  `show data_directory`) — **4864 total / 4813 passed / 2 failed / 49
+  pending.** The 2 failures (`help-copy-truth.test.ts`,
+  `pass-scoping-guard.test.ts`) are byte-identical to `origin/main`, zero
+  commits on this branch touching either, `STACK_TRACE_ERROR`-redacted
+  (the machine's global `RTK.md` hook rewrites even a literal `npx`
+  invocation through `rtk` transparently — `rtk proxy` needed for the
+  real text), and reproduce clean 115/115 re-run together in isolation —
+  the same transient-under-contention signature as the engine suite's
+  two, just in apps/web this time. An EARLIER run this session (before
+  this fresh-DB pass) showed 7 failures, ALL in three C5-era test files
   mocking `buildSchedule` directly — `schedule-ai-repair.test.ts`,
   `competition-schedule-ai-repair.test.ts`,
   `schedule-ai-repair-cpsat-wiring.test.ts` — whose mock point went inert
   the same way `schedule-ai-solver.test.ts`'s did; all three repointed at
   `repairDecomposedCpsat`, the REGRESSION tests whose own guarantee moved
   to the driver level adapted to prove what's still true at the runner
-  layer). Includes `schedule-ai-solver.test.ts` rewritten for the new seam
+  layer. Includes `schedule-ai-solver.test.ts` rewritten for the new seam
   (15/15).
-- e2e: `ai-architect.spec.ts --project=parallel`, real prod build, real
-  placement service — 16/16 (first run, with the ORIGINAL unmodified
-  assertions, correctly went 11 passed/1 failed at the #452 minimality
-  check — the expected-and-verified signal before fixing it).
-- smoke: 874 passed / 3 failed / 877 total, `SCHEDULING_AI_BASE_URL`
-  exported. The 3 failures are EXACTLY `:9755`/`:9768`/`:9780`, nothing
-  else — the density and general-dependency fixes introduced no
-  regressions anywhere else in the suite.
-- tsc/lint: engine + apps/web clean.
+- e2e: `ai-architect.spec.ts --project=parallel`, real prod `standalone`
+  build served by `node server.js` (never `next start`), real placement
+  service, this same fresh DB — **16/16** (`stats.expected: 16,
+  unexpected: 0, flaky: 0, skipped: 0`), both minimality specs confirmed
+  present by name (#401, #452). An EARLIER run this session, before
+  fixing the minimality regression, correctly went 11 passed/1 failed at
+  the #452 check — the expected-and-verified signal before the fix.
+- smoke: **881 passed / 3 failed (884 total)**, `SCHEDULING_AI_BASE_URL`
+  exported pointing at the script's own fixture server
+  (`AI_FIXTURE_PORT` 4319, set identically on the smoke process and the
+  server-under-test) — confirmed NOT vacuous: zero `SCHEDULING_AI_BASE_URL
+  unset` skip lines anywhere in the run, `placement optimized` suite
+  fully green (4/4, real `engine="optimized"` assertions), and the 3
+  failures are real named `v4 AI/bracket` assertions. The 3 failures are
+  exactly `scripts/smoke.ts:9756`/`:9768`/`:9780` (an earlier note in
+  this doc cited `:9755`, one line off the string literal itself — same
+  three) — confirmed byte-identical to `origin/main`, **unmodified**,
+  exactly the outcome this task's own bracket/TBD finding above requires.
+- `npx turbo run typecheck` and `npx turbo run lint` — the actual CI
+  gate, not the scoped per-package checks this task ran earlier — both
+  **0 errors** (lint: 77 pre-existing warnings in apps/web, none in a
+  file this task touches). Caught one real error the scoped checks
+  missed: `repair-decompose-cpsat.test.ts`'s untyped `vi.fn()` left
+  `mockImplementationOnce`'s expected signature resolving to a
+  void-returning function, tripping
+  `@typescript-eslint/no-misused-promises` on every async implementation
+  supplied — fixed by typing the mock to `buildSchedule`'s real
+  signature (separate commit).
+- `git rebase origin/main`: confirmed literal no-op — "Current branch
+  ... is up to date" (`origin/main` still `7477e3df`, unchanged since
+  dispatch).
 - `openapi:gen`: zero diff — `minimality`/`components_solved`/
   `components_skipped` were already declared on the wire, unused, since C5;
   no schema change owed.
