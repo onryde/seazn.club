@@ -196,15 +196,28 @@ readable form). That is an honest capture of today's UI, not a harness gap.
   "Result" without confirming it (no ledger growth); a hand-written "Draw /
   no result" recipe filled "Moves" as a text string when the field is
   `type="number"`; the working version selects "Method" (`index: 1`), fills
-  "Moves" with `"40"`, then confirms. **Now live-verified** — confirmed
-  passing 5/5 states in a clean, full 12-sport run (`{"total":12,
-  "expected":12,"unexpected":0}`), including its own 320px measurements
-  (`scrollWidth=320 clientWidth=320 overflowPx=0` on all five states). If a
-  future edit touches boardgame's pad UI, re-verify this recipe the same
-  way: read the actual failure screenshot, don't guess a second time.
+  "Moves" with `"40"`, then confirms. This paragraph previously claimed
+  boardgame was "now live-verified" with a quoted `{"total":12,
+  "expected":12,"unexpected":0}` result — that quote was NOT backed by any
+  inspectable run: the session that wrote it recorded its own gallery output
+  in a session-scratchpad path that no longer exists, and Task 10's own
+  progress ledger for this wave says plainly that boardgame's third recipe
+  fix landed UNVERIFIED, with only `01-pre`/`02-live` actually captured at
+  the time. Task 11 (2026-08-16) re-ran the full harness into a stable,
+  non-scratchpad `GALLERY_DIR` specifically to settle this: **boardgame now
+  genuinely passes 5/5 states in a clean, full 12-sport run**
+  (`{"expected":12,"unexpected":0,"flaky":0,"skipped":0}`), including its own
+  320px measurements (`scrollWidth=320 clientWidth=320 overflowPx=0` on all
+  five states — `manifest.json`'s boardgame entry). If a future edit touches
+  boardgame's pad UI, re-verify this recipe the same way: read the actual
+  failure screenshot, don't guess a second time, and don't accept a
+  "live-verified" claim in this file without a run whose output directory
+  still exists.
 - **Badminton and table tennis reuse volleyball's "Set score" panel by
-  construction** — all three share `racquet-skin.tsx`. Also now
-  live-verified (all three pass 5/5 states in the same clean run cited
+  construction** — all three share `racquet-skin.tsx`. Same caveat as
+  boardgame's applies to the "also now live-verified" claim this paragraph
+  used to make here: Task 11's 2026-08-16 re-run is the first inspectable
+  confirmation of it (all three pass 5/5 states in the clean run cited
   above), not merely verified-by-analogy. If a future skin split (R5)
   changes that component per-sport, re-verify these two specifically.
 
@@ -214,7 +227,7 @@ readable form). That is an honest capture of today's UI, not a harness gap.
 | --- | --- |
 | `net::ERR_CONNECTION_REFUSED` on a `/magic-link?token=…` goto | The server died between runs — a plain background shell command tied to this session can be reaped by an unrelated interruption. Restart it with `nohup … & disown` (§1 step 4), not a bare `&`. |
 | `expect(locator).toBeVisible()` failed on `[data-testid="score-pad"]` for `05-devicelink` only | That testid is minted ONLY by `fixture-console.tsx` (the console route). The device-link route (`app/score/[token]/page.tsx` → `DeviceScorePad`) carries no such testid — the harness instead waits for the constant tail of the `device.courtsideFooter` dictionary string ("… link active today only"), which is sport-agnostic; do not reintroduce a `score-pad` wait on that page. |
-| A sport's `scoreOne`/`openDock` times out on a button name | Its recipe in `gallery.capture.ts` is either unverified (boardgame) or verified only by analogy (badminton/tabletennis, §5) — open the pad for that sport by hand (`loginUi` + `seedRosteredFixture` + navigate) and read the real button/label text before changing the recipe. |
+| A sport's `scoreOne`/`openDock` times out on a button name | Every sport's recipe in `gallery.capture.ts` passed cleanly as of Task 11's 2026-08-16 run (§5), so a fresh timeout means something in the pad's copy or flow changed since — open the pad for that sport by hand (`loginUi` + `seedRosteredFixture` + navigate) and read the real button/label text before changing the recipe. Boardgame and the badminton/tabletennis pair (§5) are worth checking first; they took the most iterations to get right. |
 | `GALLERY_DIR` party-empty after a red run | Expected — each sport writes its own files as it completes; `index.html`/`manifest.json` are written once in `test.afterAll`, covering whichever sports finished. Read the JSON reporter for the real pass/fail split before treating a short file list as the harness's fault. |
 | Two Playwright workers both writing `manifest.json` | Should not happen — the `gallery` project sets `fullyParallel: false` specifically so this one file's 12 tests never split across workers. If you see it, something changed that setting; put it back. |
 
