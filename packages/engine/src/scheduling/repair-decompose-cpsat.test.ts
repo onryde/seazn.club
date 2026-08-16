@@ -243,6 +243,58 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
     expect(validateAssignments(r.assignments, cfg(), [], [{ fixtureId: "f2", dependsOn: "f1", direct: true }])).toEqual([]);
   });
 
+  it("nudges TWO violators forward off the SAME frozen feeder — one's own pre-existing conflict must not veto the other's candidate", async () => {
+    // Both f2 and f3 depend on frozen feeder f1 and both come back from the
+    // mocked solve unmoved (the wire drops both dependency edges, same as
+    // the single-violator test above). While f2 is being nudged, f3 is still
+    // sitting in `background` at its OWN pre-repair, still-conflicting
+    // position — that conflict belongs to f3, not to whatever candidate is
+    // being tried for f2, and must never make every candidate for f2 look
+    // illegal. Before the fix, nudgeForward's conflict check was unscoped
+    // (any blocking conflict anywhere in the combined board vetoed the
+    // candidate), so the FIRST violator processed could never find a legal
+    // slot — this is the real-world shape `scripts/repro-ai-bracket-
+    // frozen-feeder.ts` hit once C10 let `buildSchedule` actually be
+    // reached for it (two TBD bracket siblings both depending on the same
+    // decided semis).
+    // f3 sits on C2 at +50min — after f2's own [0,40] window on that same
+    // court (clear of it, and of the config's 5min gapMinutes), but still
+    // well before f1's required floor (its end at 40min plus 45min rest =
+    // 85min) — so f3 owes its OWN order breach against f1 without also
+    // court-clashing f1 (C1) or f2 (C2, but non-overlapping window).
+    const proposal = [
+      at("f1", "C1", 0, ["e1", "e2"], 40),
+      at("f2", "C2", 0, ["e5", "e6"], 40),
+      at("f3", "C2", 50, ["e7", "e8"], 40),
+    ];
+    const dependencies = [
+      { fixtureId: "f2", dependsOn: "f1", direct: true },
+      { fixtureId: "f3", dependsOn: "f1", direct: true },
+    ];
+    buildSchedule.mockResolvedValueOnce(
+      buildResult([at("f2", "C2", 0, ["e5", "e6"], 40), at("f3", "C2", 50, ["e7", "e8"], 40)]),
+    );
+    const r = await repairDecomposedCpsat({
+      fixtures: [fx("f1", "e1", "e2"), fx("f2", "e5", "e6"), fx("f3", "e7", "e8")],
+      proposal,
+      callerFrozen: new Set(["f1"]),
+      dependencies,
+      config: cfg(),
+    });
+    expect(r.status).toBe("repaired");
+    const f1After = r.assignments.find((a) => a.fixtureId === "f1")!;
+    const f2After = r.assignments.find((a) => a.fixtureId === "f2")!;
+    const f3After = r.assignments.find((a) => a.fixtureId === "f3")!;
+    // f1 (the frozen feeder) never moved.
+    expect(f1After.startAt).toBe(proposal[0]!.startAt);
+    expect(f1After.court).toBe("C1");
+    // Both dependents now clear f1's end plus rest.
+    expect(f2After.startAt).toBeGreaterThanOrEqual(f1After.endAt);
+    expect(f3After.startAt).toBeGreaterThanOrEqual(f1After.endAt);
+    expect(r.moved).toEqual(["f2", "f3"]);
+    expect(validateAssignments(r.assignments, cfg(), [], dependencies)).toEqual([]);
+  });
+
   it("does NOT nudge when a residual conflict is not a clean order-vs-frozen-feeder shape", async () => {
     // f2 and f3 are both violators clashing with EACH OTHER on court — a
     // shape the nudge must never touch (it is not "order against a frozen

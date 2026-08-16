@@ -72,31 +72,52 @@
 // merely by convention — it is never a `buildSchedule` decision variable and
 // `nudgeForward` never touches one either.
 //
-// A GENUINE, SEPARATE LIMIT THIS DRIVER DOES NOT CLOSE — reported, not
-// engineered around: a TBD bracket slot (`SchedulableFixture` with neither
-// `home` nor `away` — `home_entrant_id`/`away_entrant_id` both null) carries
-// its POSSIBLE participants only in `people`, and the placement wire
-// (`placement-client.ts`) never forwards `people` at all, only
-// `entrantIds` derived from `home`/`away`. Two TBD siblings that share
-// `people` but not `entrantIds` are therefore invisible to CP-SAT's own
-// participant-overlap encoding no matter how they are decomposed — and
-// `services/placement/src/placement/schema.py` refuses ANY fixture with
-// empty `entrant_indices` outright (`INVALID_REQUEST`, silently — no log
-// line on that branch), so `buildSchedule` is never even reached for a
-// component containing one. Confirmed directly against the real placement
-// service and the exact scenario `scripts/repro-ai-bracket-frozen-feeder.ts`
-// exercises (both TBD fixtures reach the service with `entrant_indices`
-// empty and the whole request is rejected `INVALID_REQUEST` before any
-// solve): this is why the third-place-playoff/two-decided-semis scenario
-// still cannot be repaired by this driver, DIFFERENT FROM AND IN ADDITION TO
-// the straddle above — closing it needs the wire to carry a `people`-shaped
-// NoOverlap concept the Python model does not have today, which is a wire
-// protocol change touching `packages/engine/src/scheduling/placement-client.ts`
-// AND `services/placement/**`, well outside this task's file set. See the C9
-// PR body for the full account. `solveBoard` still handles this shape
-// SAFELY — every path here either commits a component this driver has
-// independently re-verified, or leaves it unresolved; no illegal board is
-// ever produced or reported repaired.
+// THE TBD-SIBLING GAP DESCRIBED ABOVE THIS PARAGRAPH IN EARLIER REVISIONS —
+// CLOSED by C10 (2026-08-16, wire person indices), verified here. A TBD
+// bracket slot (`SchedulableFixture` with neither `home` nor `away`) carries
+// its POSSIBLE participants only in `people`; C10 threads that field onto
+// the wire for every MOVABLE fixture (`build.ts`'s `solveBuild` →
+// `placement-client.ts`'s `personIndices`, a namespace separate from
+// `entrantIds`), and narrowed `services/placement/src/placement/schema.py`'s
+// refusal to "neither `entrant_indices` nor `person_indices`" rather than
+// "no `entrant_indices`" alone. Two TBD siblings that share `people`, both
+// genuinely movable (violators, never folded into `existing` — see below),
+// now reach a real `by_person` `AddNoOverlap` group in the Python model, the
+// same as any other participant-overlap pair.
+//
+// That alone was not sufficient — closing the wire gap exposed a SECOND,
+// pre-existing bug in `nudgeForward`, below, that made this exact shape fail
+// anyway until fixed here too: two violators sharing one frozen feeder are
+// nudged ONE AT A TIME (see the loop in the driver), and while the first is
+// being searched, the second still sits in `background` at its own
+// pre-repair, still-conflicting position. `nudgeForward`'s conflict check
+// was unscoped — ANY blocking conflict anywhere in the combined board vetoed
+// a candidate, including the second violator's own not-yet-resolved breach —
+// so the first violator processed could never find a legal slot, and the
+// component fell back to `timeout`/`infeasible` with nothing moved. Fixed by
+// scoping the check to conflicts naming the candidate itself, matching the
+// `own.has(c.fixtureId)` discipline the rest of this function already
+// applies. Verified against the real placement service both ways:
+// `scripts/repro-ai-bracket-frozen-feeder.ts` went from `{engine:"llm",
+// solver_ran:true, status:"unrepaired", moved:0}` with all 8 `person_overlap`
+// rows still `blocking`, to `{engine:"optimized", status:"repaired", moved:1,
+// minimality:"proved"}` with `blocking` empty — and a unit regression
+// (`repair-decompose-cpsat.test.ts`, "nudges TWO violators forward off the
+// SAME frozen feeder") pins the mocked-`buildSchedule` shape directly,
+// mutation-checked red on the unscoped filter.
+//
+// STILL OPEN, narrower than either of the above and NOT touched by this
+// pass: `existing` (a caller-frozen fold, or the caller's own `existing`
+// param) carries no `people`/`person_indices` on the wire — C10 scoped that
+// addition to `fixtures` only (see `placement-client.ts`'s own comment on
+// `IndexSpace.personIndexOf`). A TBD sibling that is itself CALLER-FROZEN
+// (never a violator, folded into `existing` rather than `fixtures`) still
+// loses its participant set the moment it crosses that fold, so a
+// person_overlap between a frozen TBD slot and a movable one is invisible to
+// CP-SAT no matter how this driver decomposes it. Rarer than the shape
+// above — it needs a TBD slot the caller's own verifier did NOT already
+// name in the blocking conflict that made it a violator — and unreached by
+// any test in this suite; reported, not engineered around.
 import {
   effectiveHard,
   effectiveRestMinutes,
@@ -272,8 +293,19 @@ function nudgeForward(
         ...(fx.poolId !== undefined ? { poolId: fx.poolId } : {}),
         ...(fx.divisionId !== undefined ? { divisionId: fx.divisionId } : {}),
       };
+      // Scoped to THIS candidate alone, not "the whole board is clean" — a
+      // sibling violator waiting its own turn in `background` (not yet
+      // nudged, still sitting at its pre-repair, still-conflicting position)
+      // owns its own pre-existing conflicts against the frozen feeders,
+      // and those must never veto a placement for the CURRENT fixture that
+      // is otherwise perfectly legal. Every pairwise conflict family here
+      // (order, person_overlap, rest, court) names the fixture it is ABOUT
+      // as `Conflict.fixtureId` on at least one of its rows — the same
+      // scoping discipline `localConflicts`/`afterNudge` already apply via
+      // `own.has(c.fixtureId)` above; this was the one check in the
+      // function that had not been given it.
       const conflicts = validateAssignments([candidate], config, background, dependencies).filter(
-        isBlockingConflict,
+        (c) => c.fixtureId === fixtureId && isBlockingConflict(c),
       );
       if (conflicts.length === 0) return candidate;
     }
