@@ -364,6 +364,27 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
     expect(padLabel("pad.kabaddi.action.raid", echo, "Raid")).toBe("Raid");
   });
 
+  it("threads an optional vars object through to the translator, additively (R1 chassis Task 11, Ruling G)", () => {
+    // padLabel's own MsgFn originally took no vars, so a per-sport
+    // interpolating sentence (e.g. v3/ribbon.ts's future "FOUR · Kannan ·
+    // through covers", design spec §2.2) could never reach the translator
+    // through this path. No real pad.<sport>.ribbon.* key is registered
+    // yet (v3/ribbon.ts's own header comment: R1 ships the fallback path
+    // only), so this proves the plumbing end to end against an existing
+    // per-sport PAD_LABEL_KEYS entry instead — padLabel routes every
+    // registered key through the same code, whatever its own suffix.
+    const withVars: MsgFn = (key, vars) => (vars ? `${key}::${JSON.stringify(vars)}` : `${key}::novars`);
+    expect(padLabel("pad.cricket.action.wicket", withVars, "Wicket", { scorer: "Kannan" })).toBe(
+      'pad.cricket.action.wicket::{"scorer":"Kannan"}',
+    );
+    // Existing callers never pass a 4th argument — the no-vars path is
+    // untouched by the widening.
+    expect(padLabel("pad.cricket.action.wicket", withVars, "Wicket")).toBe("pad.cricket.action.wicket::novars");
+    // An unregistered key still falls back to engineLabel and never
+    // reaches the translator at all, vars or not.
+    expect(padLabel("pad.kabaddi.action.raid", withVars, "Raid", { x: 1 })).toBe("Raid");
+  });
+
   it("translates rather than copying English — every locale differs from en somewhere", () => {
     // A locale file filled by copy-paste would pass every assertion above.
     // Pin that each locale really carries its own copy for these keys.

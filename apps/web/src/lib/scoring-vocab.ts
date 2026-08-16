@@ -830,8 +830,20 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
 
 const PAD_LABEL_SET: ReadonlySet<string> = new Set<string>(PAD_LABEL_KEYS);
 
-/** Bound translator: client `useMsg()` or server `(k)=>msgFor(locale,k)`. */
-export type MsgFn = (key: MessageKey) => string;
+/**
+ * Bound translator: client `useMsg()` or server `(k)=>msgFor(locale,k)`.
+ *
+ * `vars` is OPTIONAL and additive (Task 11, R1 chassis Ruling G): every
+ * existing call site here calls `m(key)` with one argument and stays
+ * valid unchanged. Widened to match `useMsg()`'s real signature
+ * (dict-provider.tsx:78) and v3/ribbon.ts's own local `MsgFn`, so a
+ * per-sport interpolating sentence ("FOUR · Kannan · through covers",
+ * design spec §2.2) can flow through `padLabel` — R1 ships the plumbing
+ * only; no per-sport vocab yet computes a real `vars` object to pass
+ * (that lands with each conversion wave, alongside its own dictionary
+ * copy — see v3/ribbon.ts's header comment).
+ */
+export type MsgFn = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
 const title = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 /** "second_yellow" → "Second yellow" */
@@ -903,9 +915,16 @@ export const awardLabel = (key: string, m: MsgFn): string | null =>
  * ships one, and a pad control with no text at all is not a thing a scorer can
  * press — a humanized token off a key like `pad.cricket.action.superOverBall`
  * would read "Superoverball".
+ *
+ * `vars` is OPTIONAL (Task 11 Ruling G) and threads straight through to
+ * `m` -- additive, so every existing 3-argument call site is untouched.
  */
-export const padLabel = (key: string, m: MsgFn, engineLabel: string): string =>
-  PAD_LABEL_SET.has(key) ? m(key as MessageKey) : engineLabel;
+export const padLabel = (
+  key: string,
+  m: MsgFn,
+  engineLabel: string,
+  vars?: Record<string, string | number>,
+): string => (PAD_LABEL_SET.has(key) ? m(key as MessageKey, vars) : engineLabel);
 
 /** Localized name for a lineup slot's role (`player` | `coach` | `staff`). */
 export const squadRoleLabel = (role: string, m: MsgFn): string =>
