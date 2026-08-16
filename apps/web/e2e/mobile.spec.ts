@@ -954,11 +954,14 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
   // PROGRESSION content: not just the testid present — the actual rendered
   // rule text, joining BOTH take rules euro24's knockout stage carries
   // (topNPerGroup + bestNth) with the "and" connector, arrowed to the stage
-  // they feed. A block that rendered but stayed empty, or dropped the
-  // second rule, would still pass a bare visibility check.
+  // they feed, and prefixed by the SOURCE stage's own name (P7/D1b T6 — the
+  // source prefix is what tells two seeded stages apart when a template has
+  // more than one, as t20-super8 below does). A block that rendered but
+  // stayed empty, dropped the second rule, or dropped the source prefix,
+  // would still pass a bare visibility check.
   const progression = page.getByTestId("template-detail-progression");
   await expect(progression).toBeVisible();
-  await expect(progression).toContainText("Top 2 per group and 4 best 3-placed → Knockout");
+  await expect(progression).toContainText("Group Stage: Top 2 per group and 4 best 3-placed → Knockout");
 
   // Regression guard for T4's reorder: form fields (Name/Starts on/Ends on)
   // must render ABOVE the Structure/Progression prose, not below it — pre-T4
