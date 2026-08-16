@@ -1318,6 +1318,97 @@ PR: see the row above for the link.
 
 ### C9 — decomposed repair on CP-SAT (2026-08-16)
 
+**UPDATE (2026-08-16, post-C10 verification): CANARY NOW GREEN, PR READY FOR
+REVIEW.** Everything below this line, down through the PR link, is the
+record of the ORIGINAL session that found the bracket/TBD gap and reported
+it — left intact as history. C10 (#586, "put person identity on the
+placement wire") merged the fix that gap called for, and this branch was
+rebased onto it (`fe44dfb7`, 23 commits, clean). A dedicated verification
+pass then re-ran everything fresh and found the wire fix was NECESSARY but
+not SUFFICIENT: closing it exposed a second, latent, pre-existing bug this
+task's own new code (`nudgeForward`) had carried since it was first
+written, invisible until the wire gap stopped shadowing it.
+
+**The second bug.** Two violators sharing one frozen feeder are nudged
+ONE AT A TIME (the loop in `repairDecomposedCpsat`). While the first is
+being searched, the second still sits in `background` at its own
+pre-repair, still-conflicting position. `nudgeForward`'s conflict filter
+was unscoped — `validateAssignments(...).filter(isBlockingConflict)`,
+with no check that the conflict actually NAMES the candidate — so the
+second violator's own not-yet-resolved breach against the frozen feeder
+vetoed every candidate tried for the first, forever. The component fell
+back to `timeout`/`infeasible` with nothing moved, landing on the same
+`{status:"unrepaired", moved:0}` shape the pre-C10 wire refusal used to
+produce, for a different reason. Exactly the bracket/TBD scenario hits
+this: both TBD siblings depend on the same decided semis. Fixed by scoping
+the filter to `c.fixtureId === fixtureId`
+(`packages/engine/src/scheduling/repair-decompose-cpsat.ts`, one line),
+matching the `own.has(c.fixtureId)` discipline the rest of the function
+already applied. Regression test added and mutation-checked
+(`repair-decompose-cpsat.test.ts`, "nudges TWO violators forward off the
+SAME frozen feeder" — red on the unscoped filter, green on the fix).
+Commit `b2d9089b`.
+
+**The canary, unmodified, all three assertions, fresh run:**
+`scripts/smoke.ts` (current line numbers ~9852/9859/9871 — C10 shifted the
+file by about 97 lines from the `:9755`/`:9768`/`:9780` cited when this was
+last red; the assertion TEXT and IDs, `#396`/`#399`/`#401`, are unchanged):
+
+```
+PASS  v4 AI/bracket: refine REPAIRS the clashing prior instead of shipping it (#401)
+PASS  v4 AI/bracket: ...by moving exactly ONE fixture, proved minimal (#401)
+PASS  v4 AI/bracket: the person_overlap that blocked is GONE from the response (#396, #399, #401)
+```
+
+`scripts/repro-ai-bracket-frozen-feeder.ts` — the acceptance signal its own
+header comment names, reached: `{"engine":"optimized","solver_ran":true,
+"status":"repaired","moved":1,"minimality":"proved"}`, `blocking: []`.
+Previously (this same script, pre-fix): `{"engine":"llm","solver_ran":true,
+"status":"unrepaired","moved":0}`, 8 `person_overlap` rows blocking.
+
+**Full re-verification, fresh DB per run, real placement service
+(`PLACEMENT_WALL_SECONDS_MAX=60`), real prod `standalone` build:**
+- smoke: **903 passed / 0 failed (903 total)** — up from 900/903 pre-fix.
+  Confirmed not vacuous (no `SCHEDULING_AI_BASE_URL unset` line anywhere,
+  `placement optimized` suite green).
+- apps/web `src/server src/lib`: **4996 total / 4940 passed / 0 failed / 56
+  pending**, 0 failed suites, all paths confirmed under this worktree.
+- packages/engine `test:coverage`: **4025 total / 4004 passed / 2 failed /
+  19 pending.** Both failures are `placement-integration.test.ts`
+  (untouched by this session — only C10 appended a new, passing test to
+  the end of that file; the two failing ones predate it), and both are
+  load-sensitive, not structural: this machine ran ~20 concurrent sessions
+  throughout (`uptime` load average 10.78–18.45 during the failing run),
+  and the second failure ("falls back to greedy with the service
+  unreachable", a 10s-timeout test whose own comment already flags this
+  exact risk) PASSED on immediate re-run alone as load dropped to 5.94.
+  The first ("32-fixture/5-court board", 20s test timeout vs. the
+  service's own allowed wall) is the identically-documented pre-existing
+  mismatch the original C9 session already found.
+- `ai-architect.spec.ts --project=parallel`, real prod build, real
+  placement service: **16/16** (`stats.expected:16, unexpected:0,
+  skipped:0, flaky:0`), both minimality specs confirmed by name (#401,
+  #452). One local-only detour: the first attempt 401'd on
+  `activateFreshProPlusOrgWithSlug` with `PLAYWRIGHT_BASE=http://
+  127.0.0.1:3200` — the session's own secure-cookie-on-127.0.0.1 trap
+  (`reference_e2e_secure_cookie_needs_localhost`), fixed by using
+  `http://localhost:3200` instead; no code change, a run-recipe correction.
+- `npx turbo run lint` / `npx turbo run typecheck`: both **0 errors**
+  (lint: the same 77 pre-existing warnings, none in a file this session
+  touched).
+
+**Fix mandate honoured: narrow.** The only production-code change this
+verification session made is the one-line `nudgeForward` scope fix above,
+found by following the brief's own instruction to confirm C9's
+decomposition and C10's wire actually agree. Nothing else was touched;
+nothing pre-existing was engineered around.
+
+PR #583 body updated with these numbers, title's `[BLOCKED — pending wire
+fix]` prefix dropped, marked ready for review (`gh pr ready 583`). NOT
+merged — owner's call.
+
+---
+
 Branch `feat/c9-decomposed-repair-cpsat`, worktree
 `.claude/worktrees/c9-decomposed`, off `origin/main` at `7477e3df` — carries
 C5's 11 commits (deliberate, owner-ruled: C9 supersedes C5's solver call
