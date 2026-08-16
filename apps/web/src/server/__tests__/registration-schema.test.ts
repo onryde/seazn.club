@@ -8,7 +8,7 @@
 // by deleting a group and counting rows, not by reading pg_constraint.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -292,6 +292,51 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
     await dropOrg(orgId);
   });
 
+  // The first cut of V363 created both tables with no RLS, no tenant policy and
+  // no GRANT — invisible to every catalog assertion and to the whole typecheck,
+  // and fatal the moment an organiser-scoped call went through `withTenant`
+  // (`permission denied for table registration_groups`). These two run as
+  // `app_user` with the tenant GUC set, exactly as production does, so they fail
+  // on a missing grant AND on a missing policy.
+  it("registration_groups is readable under withTenant and isolated per org", async () => {
+    const a = await seedOrgCompDiv();
+    const b = await seedOrgCompDiv();
+    const ga = await seedGroup(a.compId, a.tag);
+    await seedGroup(b.compId, b.tag);
+
+    const seen = await withTenant(a.orgId, async (tx) => {
+      const rows = await tx<{ id: string }[]>`select id from registration_groups`;
+      return rows.map((r) => r.id);
+    });
+    expect(seen).toContain(ga.id);
+    // Org B's cart is invisible from inside org A's transaction.
+    expect(seen).toHaveLength(1);
+
+    await dropOrg(a.orgId);
+    await dropOrg(b.orgId);
+  });
+
+  it("registration_players is readable under withTenant and isolated per org", async () => {
+    const a = await seedOrgCompDiv();
+    const b = await seedOrgCompDiv();
+    for (const o of [a, b]) {
+      const group = await seedGroup(o.compId, o.tag);
+      const reg = await seedEntry(group.id, o.divId);
+      await sql`
+        insert into registration_players (registration_id, full_name, source)
+        values (${reg.id}, ${`Player ${o.tag}`}, 'captain_entered')`;
+    }
+
+    const names = await withTenant(a.orgId, async (tx) => {
+      const rows = await tx<{ full_name: string }[]>`select full_name from registration_players`;
+      return rows.map((r) => r.full_name);
+    });
+    expect(names).toEqual([`Player ${a.tag}`]);
+
+    await dropOrg(a.orgId);
+    await dropOrg(b.orgId);
+  });
+
   it("indexes the reads that matter (group siblings, entry players, person lookup)", async () => {
     const rows = await sql<Row[]>`
       select indexname from pg_indexes
@@ -312,7 +357,12 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
   });
 });
 
+// One shared client per file: end it AND uncache it, so a later DB test file in
+// the same worker (isolate:false) opens a fresh connection instead of an ended one.
 afterAll(async () => {
   if (!HAS_DB) return;
-  await sql.end();
+  const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
+  const client = globalForDb._sql;
+  globalForDb._sql = undefined;
+  await client?.end();
 });
