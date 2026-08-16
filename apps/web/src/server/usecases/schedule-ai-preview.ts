@@ -120,6 +120,14 @@ const StoredResolvedParse = z.object({
   unparsed: z.array(z.string()),
   assumptions: z.array(z.string()),
   windowMs: z.object({ from: z.number(), to: z.number() }).nullable(),
+  // Added 2026-08-16 with the mid-day break. NO `.default([])`, for the reason
+  // this schema's own comment gives: a row written before that deploy is a row
+  // we do not recognise, and defaulting the field would be the schema quietly
+  // repairing the thing it exists to detect. Such a preview surfaces as
+  // PREVIEW_STALE and is re-previewed, which is cheap — previews are short-lived.
+  dailyBreaks: z.array(
+    z.object({ from: z.string(), to: z.string(), court: z.string().optional() }),
+  ),
 });
 
 /** The 409 both run orchestrators raise when a `preview_id` cannot be honoured.

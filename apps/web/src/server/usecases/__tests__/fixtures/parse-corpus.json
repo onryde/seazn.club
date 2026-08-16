@@ -367,8 +367,18 @@
       "id": "c01",
       "tier": 5,
       "text": "Let's schedule a match and run for 4 days and keep 2 matches in the morning and 3 matches in the afternoon also we have lunch break from 12PM to 1PM",
-      "trap": "OWNER EXAMPLE. Originally three schema gaps at once. The run-length gap CLOSED on 2026-08-16 (span end), so this row is now KNOWN-AMBIGUOUS and deliberately left as defer-all: the sentence states no start day, so a model compiling {start:today|tomorrow, end:span 4} is arguably right and will be scored wrong here. Do not read a c01 failure as an invention without checking which clause caused it. The per-session cap and the lunch break remain genuinely unexpressible - a model emitting max_fixtures_per_day 5, or not_after 12:00, has invented a rule that deletes the afternoon.",
-      "expect": { "hard": [], "unparsed": true }
+      "trap": "OWNER EXAMPLE. RE-BASELINED TWICE on 2026-08-16 as its gaps closed: the run-length gap (span end) and the mid-day break gap (no_play_between). The lunch break is now REQUIRED, not deferred. Still KNOWN-AMBIGUOUS on one clause: the sentence states no start day, so a model that also compiles {window start:today|tomorrow, end:span 4} is arguably right and will be scored as having invented it. Do not read a c01 failure as an invention without checking which clause caused it. Only the morning/afternoon split is genuinely unexpressible - max_fixtures_per_day counts a WHOLE day, so compiling it as 5 states a rule the organiser never gave.",
+      "expect": {
+        "hard": [
+          {
+            "type": "no_play_between",
+            "from": "12:00",
+            "to": "13:00",
+            "scope": { "kind": "competition" }
+          }
+        ],
+        "unparsed": true
+      }
     },
     {
       "id": "c02",
@@ -440,8 +450,18 @@
       "id": "c05",
       "tier": 5,
       "text": "lunch break from 12 to 1",
-      "trap": "mid-day exclusion in isolation. not_after 12:00 would silently delete the afternoon.",
-      "expect": { "hard": [], "unparsed": true }
+      "trap": "RE-BASELINED 2026-08-16. Was expect:{hard:[],unparsed:true} because the parser had no word for a mid-day break - though the ENGINE has modelled Blackout all along. no_play_between now exists, so the correct answer changed. not_after 12:00 still silently deletes the afternoon and now scores as an invention.",
+      "expect": {
+        "hard": [
+          {
+            "type": "no_play_between",
+            "from": "12:00",
+            "to": "13:00",
+            "scope": { "kind": "competition" }
+          }
+        ],
+        "unparsed": false
+      }
     },
     {
       "id": "c06",

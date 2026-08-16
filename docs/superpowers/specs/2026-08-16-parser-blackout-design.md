@@ -172,6 +172,28 @@ now fails on `invented` rather than passing.
 5. **Bench** — re-run the 35-case corpus; c05 and c01 must move from
    invention/defer to compiled.
 
+## Status 2026-08-16
+
+Built and green (188 tests / 40 suites, typecheck clean) EXCEPT one piece,
+recorded here rather than left to be discovered:
+
+**`ParserContext.courts` is not populated in production.** All three
+`parseInstruction` call sites — `schedule-ai.ts`,
+`competition-schedule-ai.ts`, `schedule-ai-preview.ts` — have division
+ids and names in hand at that point but no court list; supplying one
+means hoisting a schedule-config load ahead of the parse, which reorders
+a DB read and is its own change.
+
+Consequence, stated plainly: **global breaks work end to end** — which
+is the case that motivated this work — and **court-scoped breaks always
+defer**, because the guard cannot verify a label against a list it was
+never given. That is fail-safe, not fail-open: the organiser is told the
+court break was not applied rather than having it silently widened to
+every court.
+
+Closing this is a follow-up: load courts before the parse at the three
+sites, then the guard starts admitting them with no further change.
+
 ## Risks
 
 - **Widened context is a new invention surface.** Mitigated by the

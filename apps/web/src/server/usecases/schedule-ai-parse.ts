@@ -103,6 +103,25 @@ const RawHard = z.discriminatedUnion("type", [
   z.object({ type: z.literal("fixture_on_date"), selector: Selector, date: DateRef, scope: Scope }),
   z.object({ type: z.literal("not_before"), time: HHMM, scope: Scope }),
   z.object({ type: z.literal("not_after"), time: HHMM, scope: Scope }),
+  /** A break in the middle of a day — lunch, a ceremony, a court closure.
+   *
+   *  Like `window`, this never becomes a HardConstraint. The engine has modelled
+   *  it as `Blackout {court?, from, to}` on the schedule config since long before
+   *  the parser could say it: `build-grid.ts` removes those slots from the
+   *  lattice and the verifier reports violations. `resolveParsed` therefore
+   *  hands it out symbolically and `buildSchedulePack` expands it to one
+   *  Blackout per day of the run.
+   *
+   *  `court` is optional; omitted means every court. It is the one field the
+   *  model may name from `ParserContext.courts`, and an unrecognised label
+   *  defers the whole break — see `resolveDailyBreaks`. */
+  z.object({
+    type: z.literal("no_play_between"),
+    from: HHMM,
+    to: HHMM,
+    court: z.string().min(1).optional(),
+    scope: Scope,
+  }),
   /** Symbolic only, and the ONE member that never becomes a HardConstraint:
    *  `resolveParsed` turns it into the pack's calendar window, which the
    *  verifier already checks. */
@@ -147,6 +166,7 @@ Schema:
     { "type": "fixture_on_weekday", "selector": Selector, "weekday": "MON".."SUN", "scope": Scope },
     { "type": "fixture_on_date", "selector": Selector, "date": DateRef, "scope": Scope },
     { "type": "not_before" | "not_after", "time": "HH:mm", "scope": Scope },
+    { "type": "no_play_between", "from": "HH:mm", "to": "HH:mm", "court": string?, "scope": Scope },
     { "type": "window", "start": DateRef, "end": DateRef | {"kind":"span","days":int}, "scope": Scope }
   ],
   "soft": [ { "note": string, "weight": 1|2|3 } ],
@@ -177,7 +197,14 @@ Rules:
    is named, scope to it; otherwise scope {"kind":"competition"} (= every
    division's terminal fixture). Never address a fixture by round number.
 5. not_before / not_after take a wall-clock "HH:mm" only, never a date or an
-   instant. A date range is a "window".
+   instant, and they bound the WHOLE day. A date range is a "window".
+   A pause INSIDE a day — lunch, a ceremony, a closure — is "no_play_between",
+   never a not_before/not_after pair: "lunch 12PM to 1PM" is
+   {"type":"no_play_between","from":"12:00","to":"13:00"}. It repeats on every
+   day of the run, so state it once. "from" must be earlier in the day than
+   "to"; a pause running past midnight cannot be stated, so it goes to unparsed.
+   Add "court" ONLY with a label copied exactly from the context you were given;
+   omit it for a pause on every court, and never invent a court name.
 6. Preferences that are not checkable placement rules ("keep mornings relaxed")
    go to soft with a weight. Wording you cannot map at all goes VERBATIM into
    unparsed. Never invent a constraint that is not clearly stated. When wording
@@ -186,19 +213,21 @@ Rules:
    requirement this schema has no vocabulary for.
 9. Some instructions are PARTLY expressible. Compile the part you can and put
    the rest in unparsed. Never stretch a nearby rule type to cover wording it
-   does not mean — there is no way to say a break in the middle of a day, a cap
-   on one part of a day, a cap on a named date, or a per-player limit, and
-   not_before/not_after are the WHOLE day's bounds, not a gap inside it.
+   does not mean — there is no way to say a cap on one PART of a day, a cap on
+   a named date, or a per-player limit.
 
 Example C
-instruction: "run for 4 days and keep 2 matches in the morning and 3 in the
-afternoon, lunch break 12PM to 1PM."
+instruction: "run for 4 days from Monday and keep 2 matches in the morning and
+3 in the afternoon, lunch break 12PM to 1PM."
 output:
-{"hard":[],"soft":[],
- "unparsed":["run for 4 days","keep 2 matches in the morning and 3 in the afternoon","lunch break 12PM to 1PM"]}
-Nothing here is expressible: a duration is not a DateRef, a cap on part of a day
-is not max_fixtures_per_day, and a mid-day break is not not_before/not_after —
-{"type":"not_after","time":"12:00"} would delete the whole afternoon.
+{"hard":[
+  {"type":"window","start":{"kind":"weekday","weekday":"MON"},"end":{"kind":"span","days":4},"scope":{"kind":"competition"}},
+  {"type":"no_play_between","from":"12:00","to":"13:00","scope":{"kind":"competition"}}],
+ "soft":[],
+ "unparsed":["keep 2 matches in the morning and 3 in the afternoon"]}
+The run length and the lunch break both have a form. The morning/afternoon split
+does not: max_fixtures_per_day counts a WHOLE day, so compiling it as 5 would
+state a rule the organiser never gave.
 7. Tolerate typos and broken grammar; compile the evident intent.
 8. A scope is ONLY the whole competition or a division id you were given. There
    is no scope for one team, one player or one pool. In particular a PER-PLAYER
@@ -289,6 +318,17 @@ export function parserAiModel(): string {
  *  field the scope vocabulary cannot express is an invitation to invent ids. */
 export interface ParserContext {
   divisions: { id: string; name: string }[];
+  /** Court labels, so a break can be scoped to one of them.
+   *
+   *  This deliberately reverses the rule that removed `ext_key` — never offer a
+   *  field the model cannot fill honestly — and is safe only because it is
+   *  VERIFIABLE where a fixture key was not: the court set is small, known, and
+   *  cheap to show, so `resolveParsed` can reject a label that was not on it.
+   *
+   *  Optional so a caller with no court list still compiles. When it is absent
+   *  the model has nothing to name, and a break that names a court anyway is
+   *  deferred rather than quietly widened to every court. */
+  courts?: string[];
 }
 
 export interface ParseOutcome {
@@ -377,6 +417,41 @@ export async function parseInstruction(
 // Deterministic resolution — everything the model is bad at
 // ---------------------------------------------------------------------------
 
+/**
+ * One symbolic daily break becomes one concrete `Blackout` per day of the run.
+ *
+ * Called at the pack edge (buildSchedulePack), not in `resolveParsed`, because
+ * only the pack knows which days the run actually covers — an instruction
+ * stating no date range still gets its lunch break honoured.
+ *
+ * Every instant is built from wall-clock day boundaries in ONE zone. Stepping
+ * by 86_400_000 instead would drift by an hour across a DST boundary: on a
+ * 23-hour day, yesterday's noon plus a day is 13:00 local, which deletes an
+ * hour of play and keeps an hour of lunch — silently, on exactly one day of the
+ * run. Same reasoning as `setWindow` below.
+ */
+export function expandDailyBreaks(
+  breaks: readonly { from: string; to: string; court?: string }[],
+  startYmd: string,
+  endYmd: string,
+  tz: string,
+): { court?: string; from: number; to: number }[] {
+  if (breaks.length === 0) return [];
+  const out: { court?: string; from: number; to: number }[] = [];
+  // Bounded: a pathological range must not spin. A year of daily breaks is
+  // already far past anything a tournament states.
+  for (let ymd = startYmd, guard = 0; ymd <= endYmd && guard < 400; ymd = ymdAddDays(ymd, 1), guard++) {
+    for (const b of breaks) {
+      out.push({
+        ...(b.court !== undefined ? { court: b.court } : {}),
+        from: zonedTimeToUtc(ymd, b.from, tz),
+        to: zonedTimeToUtc(ymd, b.to, tz),
+      });
+    }
+  }
+  return out;
+}
+
 export interface ResolvedParse {
   hard: HardConstraint[];
   soft: RawParsed["soft"];
@@ -390,6 +465,15 @@ export interface ResolvedParse {
    *  drift. `to` is the last whole second of the final day, matching what
    *  `windowBounds` expects. */
   windowMs: { from: number; to: number } | null;
+  /** Mid-day breaks, still SYMBOLIC — wall-clock strings, not instants.
+   *
+   *  Deliberately not expanded here. A break repeats every day of the run, and
+   *  when the organiser states no date range `resolveParsed` has no idea which
+   *  days those are: only the pack does. Expanding here would mean either
+   *  dropping the break or guessing at days, and guessing is the failure this
+   *  whole file exists to prevent. `buildSchedulePack` owns the expansion, next
+   *  to where it already renders `config.blackouts`. */
+  dailyBreaks: { from: string; to: string; court?: string }[];
 }
 
 const resolveDateRef = (ref: DateRef, clock: Clock): string =>
@@ -515,12 +599,13 @@ export function resolveParsed(
   raw: RawParsed | null,
   clock: Clock,
   tz: string,
-  hints: { fixtureCount?: number } = {},
+  hints: { fixtureCount?: number; courts?: string[] } = {},
 ): ResolvedParse {
   const assumptions: string[] = [];
   const hard: HardConstraint[] = [];
+  const dailyBreaks: ResolvedParse["dailyBreaks"] = [];
   if (raw === null) {
-    return { hard, soft: [], unparsed: [], assumptions, windowMs: null };
+    return { hard, soft: [], unparsed: [], assumptions, windowMs: null, dailyBreaks };
   }
 
   let windowMs: { from: number; to: number } | null = null;
@@ -588,6 +673,38 @@ export function resolveParsed(
       }
       setWindow(start, end);
       assumptions.push(`instruction window resolved to ${start}..${end} (${tz})`);
+    } else if (h.type === "no_play_between") {
+      // Engine `Blackout` has no division concept, so a division-scoped break
+      // would quietly apply to everybody — refused, exactly as a
+      // division-scoped window is.
+      if (h.scope.kind !== "competition") {
+        unparsed.push(`a break for one division only is not supported — state it for the whole run`);
+        continue;
+      }
+      // One same-day window only. `from >= to` covers both the reversed pair
+      // and a break spanning midnight (22:00..02:00), which is two blackouts on
+      // two days rather than one; reading either as a same-day window would
+      // invert what the organiser said.
+      if (h.from >= h.to) {
+        unparsed.push(
+          `a break from ${h.from} to ${h.to} could not be read as a single break within one day`,
+        );
+        continue;
+      }
+      if (h.court !== undefined) {
+        // Verify against the labels the model was actually shown. Dropping just
+        // the court would turn "court 2 is closed at lunch" into "everything
+        // stops at lunch" — a larger constraint than was stated. An
+        // unverifiable court is not the same as no court.
+        if (hints.courts === undefined || !hints.courts.includes(h.court)) {
+          unparsed.push(`a break was stated for '${h.court}', which is not one of this run's courts`);
+          continue;
+        }
+      }
+      dailyBreaks.push({ from: h.from, to: h.to, ...(h.court !== undefined ? { court: h.court } : {}) });
+      assumptions.push(
+        `no play between ${h.from} and ${h.to}${h.court !== undefined ? ` on ${h.court}` : ""} on every day of the run (${tz})`,
+      );
     } else if (h.type === "fixture_on_date") {
       hard.push({ ...h, date: resolveDateRef(h.date, clock) });
     } else if (h.type === "fixture_on_weekday") {
@@ -633,5 +750,5 @@ export function resolveParsed(
     }
   }
 
-  return { hard, soft: raw.soft, unparsed, assumptions, windowMs };
+  return { hard, soft: raw.soft, unparsed, assumptions, windowMs, dailyBreaks };
 }
