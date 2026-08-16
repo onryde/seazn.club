@@ -409,6 +409,10 @@ export interface BuildCompetitionPackOptions {
    *  feasibility bump must see the JOINT fixture count or it would extend a
    *  window per division on partial counts. */
   raw?: RawParsed | null;
+  /** A compile was attempted and produced nothing — distinct from `raw: null`,
+   *  which also covers "no instruction given". See BuildPackOptions in
+   *  schedule-ai.ts. */
+  parseFailed?: boolean;
   /** W5 (#400): the stored resolution of a confirmed preview, which wins over
    *  `raw`. The joint twin of {@link BuildPackOptions.resolved} — and it is
    *  deliberately NOT forwarded to the per-division sub-packs, which resolve
@@ -924,7 +928,14 @@ export async function buildCompetitionPack(
   // union above — the union is the right default for windows we inferred, but
   // it would quietly widen the one window they actually asked for.
   const resolved =
-    opts.resolved ?? resolveParsed(opts.raw ?? null, clock, orgTz, { fixtureCount: movable.length });
+    opts.resolved ??
+    resolveParsed(opts.raw ?? null, clock, orgTz, {
+      fixtureCount: movable.length,
+      // Tells "no instruction" apart from "an instruction we could not read" —
+      // the joint path needs it as much as the single-division one, or a whole
+      // competition is scheduled ignoring a brief nobody is told was dropped.
+      parseFailed: opts.parseFailed === true,
+    });
   if (resolved.windowMs !== null) {
     window.start = zonedIso(resolved.windowMs.from, orgTz);
     window.end = zonedIso(resolved.windowMs.to, orgTz);
@@ -2742,6 +2753,7 @@ async function planForCompetition(
     mode: input.mode,
     instruction: input.instruction,
     raw: parse.raw,
+    parseFailed: parse.failed,
     // The resolution the organiser actually saw, not a re-resolution against a
     // clock that has moved since. See BuildPackOptions.resolved.
     ...(confirmed !== null ? { resolved: confirmed.resolved } : {}),

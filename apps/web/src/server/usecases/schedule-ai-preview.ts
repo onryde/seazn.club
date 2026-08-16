@@ -516,6 +516,10 @@ export async function previewScheduleAi(
   const clock = makeClock(Date.now(), resolved.orgTz);
   const compiled = resolveParsed(parse.raw, clock, resolved.orgTz, {
     fixtureCount: resolved.fixtureCount,
+    // The preview is where an organiser DECIDES whether to spend a credit, so
+    // it is the one surface where "we could not read your brief" must appear
+    // before the money goes — not after a run has quietly ignored it.
+    parseFailed: parse.failed,
   });
 
   const previewId = randomUUID();

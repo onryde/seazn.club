@@ -136,6 +136,51 @@ describe("contradictory rules are refused, not silently applied", () => {
   });
 });
 
+describe("a brief that could not be compiled is never discarded in silence", () => {
+  // resolveParsed's own comment says `raw === null` means "there was no
+  // instruction, OR the compile failed". Those are opposite situations sharing
+  // one representation, and the run treats both as "no rules": an organiser who
+  // wrote a careful brief gets a schedule that ignores every word of it, with
+  // nothing anywhere saying so. Silence is right for the first case and wrong
+  // for the second, so the two must be told apart.
+
+  it("says so when the compile failed", () => {
+    const out = resolveParsed(null, CLOCK, TZ, { parseFailed: true });
+
+    expect(out.assumptions.length).toBe(1);
+    expect(out.assumptions[0]).toContain("could not");
+  });
+
+  it("stays silent when there was simply no instruction", () => {
+    const out = resolveParsed(null, CLOCK, TZ, {});
+
+    expect(out.assumptions).toEqual([]);
+  });
+
+  it("compiles no rules either way — this reports, it does not rescue", () => {
+    // Deliberately NOT a fallback to a soft reading. schedule-ai-parse.ts
+    // refuses that: presenting an uncompiled brief as if it were enforced is
+    // the harm, and guessing at rules to fill the gap would be worse than
+    // saying nothing.
+    const out = resolveParsed(null, CLOCK, TZ, { parseFailed: true });
+
+    expect(out.hard).toEqual([]);
+    expect(out.dailyBreaks).toEqual([]);
+    expect(out.windowMs).toBeNull();
+  });
+
+  it("does not add the line when a parse actually succeeded", () => {
+    const out = resolveParsed(
+      RawParsed.parse({ hard: [], soft: [], unparsed: [] }),
+      CLOCK,
+      TZ,
+      { parseFailed: true },
+    );
+
+    expect(out.assumptions).toEqual([]);
+  });
+});
+
 describe("the pre-flight's token budget", () => {
   it("keeps the corrective retry reachable after a first attempt that truncated", () => {
     // The retry is needed EXACTLY when the first attempt ran out of room, which
