@@ -38,8 +38,6 @@ C6 (prose) is safe whenever.
 | C6 | `C6-z3-prose-identifiers.md` | z3 stage C | ~~anytime~~ → **after C4+C5** | **NO-OP today** (see below) |
 | C7 | `C7-z3-public-contract.md` | z3 stage D | C4+C5 **deployed** (nothing writes z3) | TODO |
 | C8 | `C8-z3-delete-solver.md` | z3 stage E | C7 | TODO |
-| C9 | `C9-decomposed-repair-cpsat.md` | decomposed repair | **C10** (owner ruling 2026-08-16) | PR #583, blocked draft |
-| C10 | `C10-wire-person-indices.md` | person on the wire | — | **PR open** (this session) — hard gate before C9/C7/C8. See status log: the canary's "red today" premise does NOT hold on a main-based branch. |
 
 ### C1 — round ordering (2026-08-12/13, DONE)
 
@@ -1071,98 +1069,3 @@ build for e2e):**
   typecheck and lint both clean.
 
 PR: see the row above for the link once opened.
-
-### C10 — person identity on the placement wire (2026-08-16)
-
-Branch `feat/c10-wire-person-indices`, off `main` at `7477e3df`. Hard gate:
-C9 (#583) is a blocked draft until this lands, and C7/C8 sit behind it.
-
-**What shipped.** `Fixture.person_indices` (proto field 4) +
-`SolveBuildRequest.person_count` (field 14), mirroring
-`entrant_indices`/`entrant_count` in a strictly separate namespace —
-`placement.model` grows a second, person-keyed `AddNoOverlap` family
-(`by_person`, reusing each fixture's own `interval_rest`) and folds
-person-only pairs into T2's idle-gap term. `schema.py`'s empty-entrant
-refusal NARROWS to "neither entrants nor people" rather than being deleted.
-On the TS side `placement-client.ts` sends the fields through their own
-`personIndexOf` table, and `build.ts` forwards `SchedulableFixture.people`
-— which it never did before, so the client-side field alone would have
-sent nothing.
-
-**FALSE PREMISE IN THE BRIEF, and it changes what this session could
-prove.** The brief states the canary `scripts/smoke.ts:9755`/`:9768`/`:9780`
-is "RED today and must pass unmodified once C9 is rebased". Traced on this
-branch: the AI repair round runs **z3 in-process** —
-`schedule-ai.ts` → `schedule-ai-solver.ts`'s `solveBoard` →
-`repairDecomposed` → `repair.ts:259`'s
-`withZ3LockAndReset(() => solveRepair(input))`. `placement-client.ts` is
-never imported on that path, and C5/C9's commits are not ancestors of this
-branch. So those three assertions are **GREEN here and were green on main**;
-they are red only on C9's branch, where repair is routed through CP-SAT.
-Consequences:
-
-- This session cannot make the canary "go green" — only avoid breaking it.
-  Confirmed unmodified and passing; see the verification block.
-- `scripts/repro-ai-bracket-frozen-feeder.ts` is **structurally
-  inapplicable here**, not merely partial: on this branch it exercises the
-  z3 path, which always repaired this board. Running it proves nothing
-  about C10. Its header's "OPEN, parked pending C9" framing is written from
-  the C5/C9 branches and is stale for any main-based branch.
-- The real evidence for C10 is therefore the Python-side tests (the exact
-  hazard the refusal cited) plus a live end-to-end test against a running
-  service, not the canary.
-
-**Deploy order: SERVICE FIRST. Strictly safe; no guard needed.**
-
-- *Service first (reader before writer).* An old caller sends neither
-  field. Every fixture with empty `entrant_indices` also has empty
-  `person_indices`, so the narrowed refusal fires exactly as the old
-  unconditional one did; `by_person` is empty so no constraint family and
-  no T2 pair is added. Proved byte-identical at the `CpModel` level
-  (`test_person_indices_empty_leaves_the_model_byte_identical`) AND
-  against the pre-C10 module itself on five boards.
-
-  **This claim was briefly FALSE and review caught it.** The first
-  implementation collected T2's pairs into a `set` and walked it with a
-  global `sorted()`. That does not reproduce `by_entrant`'s
-  dict-insertion order: on five fixtures with entrant 0 over `[0, 3, 4]`
-  and entrant 1 (seen later) over `[1, 2]`, pre-C10 creates
-  `gap_0_3, gap_0_4, gap_3_4, gap_1_2` and the sorted form creates
-  `gap_0_3, gap_0_4, gap_1_2, gap_3_4` — same pair SET, different
-  variable-creation order, on a board with no person data at all. No
-  board becomes illegal (`AddMaxEquality` is order-independent) but
-  CP-SAT's search is order-sensitive, so every existing caller could have
-  got a different tied-optimal board and solve time on deploy. Fixed by
-  walking `by_entrant` first in its own order and appending only new
-  pairs from `by_person`. Two lessons worth carrying: a `sorted()` that
-  looks like housekeeping can be a behaviour change, and the FIRST
-  regression test written for this passed against the bug because its
-  board agreed under both ordering rules — the board, not the assertion,
-  was the weak link.
-- *Caller first (writer before reader).* An old service treats fields 4/14
-  as unknown and ignores them. For an undecided-bracket fixture it applies
-  its OLD unconditional refusal → `INVALID_REQUEST` → `build.ts` falls back
-  to greedy as `solver_unavailable` — **today's behaviour**, not a
-  regression. For a fixture that has entrants AND people, the person
-  constraint is silently absent, which is the hazard the refusal message
-  describes — but `build.ts` re-verifies every returned board and
-  `person_overlap` is in `isBlockingConflict`, so a clash the solver
-  INTRODUCED is caught by `rejectedBlockingConflicts` and the run falls back
-  to greedy with a structured `log.error`. Degraded and noisy, never
-  silently wrong.
-
-**C0's precedent does not transfer, and that is a finding.** C0 added an
-`UnknownFields()` probe because its risk direction was an OLD caller
-sending a RETIRED field to a NEW service — the new service can see the
-unknown bytes arrive. C10's risk direction is the mirror image: a NEW
-caller sending a NEW field to an OLD service, and the old service is by
-definition the one without the probe. An `UnknownFields()` check on this
-side is structurally incapable of detecting C10's hazard. What ships
-instead is `_log_person_only_fixtures`, one structured line per request
-that exercises the new acceptance path, so a rollout can be CONFIRMED
-rather than assumed.
-
-**Scope line held:** `PinnedRow` was NOT widened. A pin can still only be
-attributed entrants, never people, for participant-rest purposes;
-`by_person` is built from movable fixtures alone. Recorded rather than
-fixed — it is the pin-side twin of C6 and wants its own task.
