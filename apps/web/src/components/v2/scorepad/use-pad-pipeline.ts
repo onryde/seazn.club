@@ -983,6 +983,20 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
         if (queued.length === 0) break;
         const next = queued[0]!;
 
+        // ScoringPad v3 R1 chassis soft-commit (spec §2.3, task 4): a
+        // still-held entry (queue.ts's enqueueHeld) must not be sent before
+        // its own release tick, or an explicit releaseHeld/flushHeldBefore,
+        // clears `heldUntil` — treated exactly like an empty queue for THIS
+        // drain pass, never skipped past to a later entry (expectedSeq
+        // assumes strict FIFO order, so sending something behind a still-
+        // held entry out of turn is not safe in general). `heldUntil` is
+        // `undefined` for every event enqueued via the plain `enqueue()`
+        // path — today's exact behaviour — so this is a provable no-op for
+        // every existing caller; no production skin calls enqueueHeld yet
+        // this wave (R1 ruling: all 11 sports still score through the plain
+        // path), so this guard is presently dormant too.
+        if (next.heldUntil !== undefined && next.heldUntil > Date.now()) break;
+
         // S12/#421 pass G — undo-before-reload (file header PASS G UPDATE,
         // _INDEX.md decision log). `next` itself is NEVER reassigned below —
         // `eventToSend` is the WIRE-BOUND copy, translated (if at all) to

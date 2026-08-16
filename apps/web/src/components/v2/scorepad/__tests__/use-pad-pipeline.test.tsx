@@ -12,7 +12,7 @@ import type { CricketBallEv, CricketCfg, CricketState } from "@seazn/engine/spor
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { foldClient, resolveModuleClient } from "../module-client";
 import type { AppendCallResult, AppendEventBody } from "../pipeline";
-import { enqueue } from "../queue";
+import { HOLD_MS, enqueue, enqueueHeld } from "../queue";
 import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "../types";
 import type { FixtureStateResult, PadTransport } from "../transport";
 import type { RealtimeConnector } from "../use-fixture-stream";
@@ -1840,5 +1840,66 @@ describe("usePadPipeline — a pre-pass-H PendingEvent (no voidTargetSeq) still 
     const localVoidEnvelope = pad.current.events.find((e) => e.type === "core.void");
     expect(localVoidEnvelope, "the legacy void must still fold locally too, not vanish from the ledger").toBeTruthy();
     expect(localVoidEnvelope!.voids).toBe(STALE_ID);
+  });
+});
+
+// ScoringPad v3 R1 chassis soft-commit (spec §2.3, task 4) — the ONE
+// production-code change outside queue.ts: runDrain's own front-of-queue
+// guard for a still-held entry (`heldUntil`). queue.ts's own
+// __tests__/soft-commit.test.ts proves enqueueHeld/mutateHeld/releaseHeld/
+// dropHeld/flushHeldBefore thoroughly at the store level; THIS test proves
+// the one line spliced into THIS file's runDrain actually defers a real
+// drain the way those store-level tests assume a caller will. No production
+// skin calls enqueueHeld yet this wave (R1 ruling), so this seeds the
+// durable queue directly — the same bypass-submit() pattern the pass-J
+// backward-compat test above already uses, for the same reason (submit()
+// itself is untouched and has no held-path today).
+describe("usePadPipeline — R1 chassis soft-commit: runDrain defers a still-held entry (task 4)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a held entry blocks the WHOLE FIFO drain until its window closes, then a later trigger sends everything in order", async () => {
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(1), success(2), success(3)] });
+    const pad = mountPipeline(baseParams({ transport }));
+    await vi.advanceTimersByTimeAsync(0); // let the mount-time resume/drain effect settle first
+
+    // Same instance the hook itself uses — use-pad-pipeline.ts:738's default
+    // dbName is `scorepad-queue-${fixtureId}`, and baseParams()'s fixtureId
+    // is "fx-1" (module header's queueStoreRegistry mock hands back the
+    // SAME memoryQueueStore() for a repeated dbName).
+    const store = indexedDbQueueStore("scorepad-queue-fx-1");
+    await enqueueHeld(
+      store,
+      {
+        localId: "held-1",
+        idempotencyKey: "held-1",
+        type: "generic.score",
+        payload: { by: "H", points: 1 },
+        expectedSeq: 0,
+        createdAt: new Date().toISOString(),
+        attempts: 0,
+      },
+      HOLD_MS,
+      () => {}, // no production caller wires this to runDrain yet this wave — see file note above
+    );
+
+    await pad.current.submit("generic.score", { by: "A", points: 2 }); // queued BEHIND the still-held entry
+
+    expect(appendCalls).toHaveLength(0); // neither sent — the held entry blocks the whole FIFO drain, not just itself
+    expect(pad.current.queueDepth).toBe(2); // still durably queued and counted — "ribbon renders it" either way
+
+    await vi.advanceTimersByTimeAsync(HOLD_MS); // held-1's own window closes; its heldUntil clears itself
+    await pad.current.submit("generic.score", { by: "H", points: 99 }); // ANY later drain trigger re-drains
+
+    expect(appendCalls.map((c) => c.body.payload)).toEqual([
+      { by: "H", points: 1 }, // held-1 — sent first, in its original queue position
+      { by: "A", points: 2 },
+      { by: "H", points: 99 },
+    ]);
+    expect(pad.current.queueDepth).toBe(0);
   });
 });

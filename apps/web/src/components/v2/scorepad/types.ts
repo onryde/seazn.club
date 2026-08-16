@@ -53,6 +53,19 @@ export interface PendingEvent {
    *  it as `undefined` must never throw, only degrade to that older,
    *  same-mount-only behaviour. */
   voidTargetSeq?: number;
+  /** ScoringPad v3 R1 chassis soft-commit (spec §2.3, task 4) — epoch-ms
+   *  deadline before which this entry, though already durably enqueued and
+   *  already folded into the optimistic state, must NOT be sent. Set only
+   *  by queue.ts's `enqueueHeld`; cleared by `releaseHeld`/`flushHeldBefore`/
+   *  the natural release tick `enqueueHeld` itself arms — never touched by
+   *  `enqueue()`. Absent for every event enqueued through the plain
+   *  `enqueue()` path (today's exact behaviour, byte for byte unchanged)
+   *  and for any record persisted by a build predating this field. An
+   *  ABSOLUTE deadline, not a relative duration, so "remaining window" is
+   *  automatically correct after a reload: queue-store.ts needed no code
+   *  change for this field to survive one — put()/list() already persist
+   *  whatever fields PendingEvent carries, generically. */
+  heldUntil?: number;
 }
 
 /** Network reachability as the pipeline understands it. The pipeline still
