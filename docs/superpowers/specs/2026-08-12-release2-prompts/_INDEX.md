@@ -34,7 +34,7 @@ C6 (prose) is safe whenever.
 | C2 | `C2-day-start-rung.md` | day_start | C1 (model.py overlap; rebase either way) | **MERGED** #555 → `40331cc2`, follow-up #557 → `4dc38a0e`. Shipped #512's two rungs too. **Leaves 3 open defects — see the C2 entries below before starting C3.** |
 | C3 | `C3-conflict-detail-names.md` | conflict details | not concurrent with C1 (schedule.ts) | **MERGED** #567 → `ccab1356`. Family was 25 kinds, not 4; `conflictKey` and the AI repair round were both in the blast radius |
 | C4 | `C4-z3-reflow-cpsat.md` | z3 stage A | C1 (reflow inherits round rule) | **PR open** (this session) — see status log. Found two real, out-of-scope `buildSchedule` gaps shared with BUILD/POLISH (a frozen-feeder dependency gap, a bracket/TBD-fixture wall) — neither fixed here. |
-| C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | **PR open** (this session) — see status log. Bench found a real, accepted density-degradation limit (CP-SAT without decomposition), left as a follow-up candidate, not fixed here. |
+| C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | **PARKED, PR #576 draft** — owner ruling 2026-08-16: land C9 first. CI found a real bracket/frozen-feeder repair-capability regression the session's own (vacuous — see status log) local smoke run could not see. See status log. |
 | C6 | `C6-z3-prose-identifiers.md` | z3 stage C | ~~anytime~~ → **after C4+C5** | **NO-OP today** (see below) |
 | C7 | `C7-z3-public-contract.md` | z3 stage D | C4+C5 **deployed** (nothing writes z3) | TODO |
 | C8 | `C8-z3-delete-solver.md` | z3 stage E | C7 | TODO |
@@ -1188,3 +1188,126 @@ build for e2e):**
   `packages/engine` + `apps/web` lint and typecheck all clean.
 
 PR: see the row above for the link once opened.
+
+#### CORRECTION (2026-08-16): the smoke number above was VACUOUS on exactly
+#### the code this task changed — read before trusting a smoke count here
+
+The "833/836, 3 failed, all environmental" claim above is accurate about
+the three failures it names, and was simultaneously **vacuous as
+verification of this diff**. `scripts/smoke.ts:9296`:
+`const aiConfigured = !!process.env.SCHEDULING_AI_BASE_URL;` gates the
+ENTIRE AI section (`v4AiSuite`) — every AI-repair check in the file,
+including the ones that would have caught the regression below — behind
+that one env var. The original local run never set it, so the whole
+section silently did not execute; `total` stayed at ~836 rather than CI's
+own ~891, and only `pending`/skip counts would have shown the gap, which
+nothing in that run's own summary surfaced. **Same shape this repo's
+`_RULES.md` already names for a worktree missing `.env.local`** ("~1772 DB
+tests skip themselves while `total` stays unchanged") — a different cause,
+identical failure mode: a real section silently not running, reading as a
+clean, smaller-than-expected total rather than as an obvious skip. Next
+session: confirm the total lands near ~891 (export
+`SCHEDULING_AI_BASE_URL`, point it at wherever `startAiFixtureServer()`
+binds — 4319 by default) before trusting ANY smoke number that touches
+`schedule-ai.ts`/`competition-schedule-ai.ts`/`schedule-ai-solver.ts`.
+
+#### PARKED (2026-08-16): a real bracket/frozen-feeder repair-capability
+#### regression, found via CI, not locally — owner ruling: land C9 first
+
+CI on PR #576 red on `Smoke — build + server + e2e` (889 passed, 2 failed;
+9/10 other checks green) — invisible locally for the reason above. Two
+failures, both in `scripts/smoke.ts`'s "v4 AI/bracket" checks
+(`~:9768`/`~:9780`, #396/#399/#401), on a 4-entrant knockout bracket with a
+third-place playoff: two DECIDED semi-finals, and two TBD slots (the final,
+the playoff) scheduled at the same instant — legal on named-entrant rules,
+unsafe on the people who could still reach either slot (a recursive
+`person_overlap`, #396's whole point).
+
+**Root cause, confirmed with evidence
+(`scripts/repro-ai-bracket-frozen-feeder.ts`, committed this session as a
+verification tool):** `buildSchedule`'s CP-SAT encoding does not enforce an
+`OrderDependency` edge against a fixture that is FROZEN via
+`frozen`/`current` rather than genuinely `.locked` — C4's own documented,
+explicitly out-of-scope finding (`reflowExisting`'s doc comment: "a
+dependency-encoding gap on a FROZEN feeder... shared with POLISH...
+Recorded so C5/a POLISH follow-up finds a decision, not a miss"), now
+actually reached.
+
+**Why REFLOW could never expose this, and why C5's own split is the first
+caller that can — the generalizable lesson, not just this task's bug:**
+REFLOW freezes EVERY already-placed card uniformly, so a dependency edge in
+a REFLOW call is always fully inside the frozen set or fully outside it —
+never straddling. C5's violator-derived freeze
+(`frozen = pins ∪ non-violators`) can produce an edge with EXACTLY ONE end
+frozen: a free violator depending on a frozen non-violator. A bracket's
+third-place playoff (a violator — it's IN the clash) depending on two
+decided semis (non-violators — nothing names them) is exactly that shape.
+**Any future caller that derives its frozen set from something OTHER than
+"everything already placed" should expect this same straddle and check for
+it up front, not rediscover it via a CI red.**
+
+**A competing, initially plausible hypothesis (the bracket/TBD
+empty-`entrant_indices` wire-schema wall C4 also documented) was raised,
+investigated, and REFUTED, not assumed** — that would predict
+`solver_unavailable`/`INVALID_REQUEST`; what was measured was
+`engine: "optimized"` (buildSchedule genuinely reached and answered) with a
+concrete `order_before_feeder` conflict naming two fully-DECIDED semis as
+the offended feeders. Refuting a plausible-sounding hypothesis with actual
+telemetry rather than accepting it is the reason the real cause was found
+at all.
+
+**Fix shipped, kept (`a59a9916`):** `solveBoard` declines the solver
+attempt entirely — never calls `buildSchedule` — when a dependency edge has
+exactly one end in the violator set and the other in the frozen set,
+falling through to the LLM repair path cleanly (the same shape the
+existing fully-frozen fast path already uses). Correct, defensive code on
+its own terms; C9's decomposition (keeping a dependency's two ends in one
+connected component whenever one is frozen) is expected to make it
+redundant, and whoever lands C9 should evaluate removing it rather than
+carrying two overlapping mechanisms indefinitely.
+
+**Why the fix alone was not enough to ship, and why this parked rather than
+shipping degraded:** with the guard in place, the solver declines
+correctly — but the fallthrough LLM round never resolves the underlying
+`person_overlap`, because (per `smoke.ts`'s own pre-#401 comment) this
+exact clash shape was ALWAYS structurally unrepairable by the model alone;
+z3's direct participation was specifically what made it repairable (#401's
+entire point). So declining is not a latency trade — for this shape it is a
+genuine capability regression back to the pre-#401 state, and knockout
+brackets refined after round-1 results are known are the ORDINARY case for
+this shape, not a tail risk. Measured (`repro-ai-bracket-frozen-feeder.ts`,
+matches CI):
+```
+repair: {"engine":"llm","solver_ran":false,"fallback":"unrepaired"}
+blocking: 8 person_overlap rows (both TBD fixtures × all 4 shared people)
+diff.moved: []   (after 2 full LLM repair rounds)
+```
+
+**The safety story held throughout — this is the part that did NOT
+regress.** `solveBoard`'s own re-verification (real `validateAssignments`,
+independent of `buildSchedule.status`) never once reported an illegal or
+unresolved board as `"repaired"` — before the guard, the order-violating
+board correctly scored `"partial"`; after it, the declined board correctly
+scores `solver_ran:false`/`fallback:"unrepaired"`. No organiser was ever
+shown a corrupted or falsely-clean board at any point. What regressed is
+repair CAPABILITY on one shape, never the correctness of what gets
+reported — the two-layer verification (module-level re-check, then the
+caller's unchanged adoption gate) this task built for the DENSITY finding
+held equally well for a completely different failure shape it was never
+specifically designed for, which is itself worth recording as a design
+validation.
+
+**`smoke.ts:9768`/`:9772`/`:9780` are deliberately left failing on
+`origin/main`'s branch — do not relax them.** They are the canary that
+proves C9 restored the capability: passing again is a genuine C9 acceptance
+signal, not a test detail. `C9-decomposed-repair-cpsat.md` has been amended
+(this session) with this finding as an explicit acceptance criterion.
+
+**Owner ruling (via coordinator, 2026-08-16): land C9 first, then revisit
+C5.** PR #576 converted to draft, title prefixed `[PARKED — pending C9]`,
+NOT rebased onto `origin/main`'s subsequent commits (rebasing now is
+throwaway work while C9 is built on top of unparked C5). Branch
+`feat/c5-ai-repair-cpsat` stays as-is; whoever resumes this should rebase
+THEN, not before C9 lands.
+
+PR: see the row above for the link.
