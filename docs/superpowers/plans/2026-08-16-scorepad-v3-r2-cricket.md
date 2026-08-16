@@ -101,6 +101,107 @@ needs the owner's sign-off), not a silent re-baseline.
 - dock: shot type.
 - swap sheet: new batter after wicket, `cricket.retire` flow.
 
+### C-gaps — three contract facts the spec's cricket row assumes but the code does not provide
+
+Scouted 2026-08-16 from `CRICKET_EVENT_SCHEMAS`, `padSpec(cfg)`, `InningsState`
+and `skins/types.ts`. Each one silently degrades the wave if discovered during
+implementation instead of before it.
+
+**G1 — over dots are not buildable from the view.** Spec §3 wants
+`▸striker* · non-striker · over dots · ⚾bowler`, but the fold exposes NO
+per-ball history: `CricketState` has `runs/wickets/legalBalls` and nothing
+else, and v2's `OverProgress` (`cricket-skin.tsx:405`) therefore renders bare
+filled/unfilled segments from a COUNT — it cannot tell a dot from a four from
+a wicket. `SkinProps` carries no events array either. Since the v3 `view` is
+whatever the v3 host defines (R1 typed it `View = unknown`), the host must
+pass the event stream it already holds so the skin can derive real outcome
+dots. Run rate is the same shape of problem and is cheaply derivable
+(`runs / (legalBalls / 6)`); it is presentation, not state.
+
+**G2 — the wicket sheet's steps are CONDITIONAL, and `GuidedSheetSpec.steps`
+is a flat array.** Only `{caught, runout, stumped}` take a fielder
+(`FIELDER_ELIGIBLE_KINDS`), and only `runout` has a batter who varies
+(`VARIABLE_OUT_KINDS`) — for every other kind the batter out is the striker
+and asking is a wasted tap, which is the D-15 defect restated. The renderer
+needs conditional steps (a `when(answers)` predicate or equivalent), which is
+a change to the R1 type and to A1's renderer. `bowlerCredited` is derived from
+the kind (`BOWLER_CREDITED_KINDS`), never asked.
+
+**G3 — `PadPhase` is a USER-CLICKED TAB, not the match phase.** The engine has
+`state.phase: "pre"|"live"|"super_over"|"done"|"final"` (`cricket.ts:459`),
+while `PadPhase` in `view-model.ts:36` is a tab `pad-renderer.tsx` holds in
+`useState`, defaulted to `view.phases[0]`. v3's `TileSpec.phases` must gate on
+the ENGINE phase — spec §3's "phase-awareness kills D-16" means an action is
+unavailable because the MATCH is not there, not because a tab is unselected.
+Note `super_over` has no `PadPhase` equivalent and v2 switches
+`cricket.ball` → `cricket.superover.ball` on it (`cricket-skin.tsx:502`).
+
+**Task B disposition on G1-G3 (seen mid-implementation, recorded so C doesn't
+wonder whether these were missed):**
+
+- **G1 — FIXED.** `PadHostView` (v3/types.ts) now carries `events: readonly
+  EventEnvelope[]` — the same list `pipeline.events` already exposes, no
+  second copy. Small, additive, zero behaviour change for anything not yet
+  reading it. `pad-host.tsx` populates it from `usePadPipeline`'s own result.
+- **G2 — NOT fixed this task; a workaround exists.** Conditional
+  (`when(answers)`-gated) guided-sheet steps are a real chassis gap, but
+  cricket's wicket flow does NOT strictly require them: C can use several
+  destructive TILES (Bowled/Caught/LBW/Run out/…) instead of one "Wicket"
+  tile with a kind-picker as step 1 — each tile opens its own fixed,
+  non-conditional 1-2-step sheet (kind is then implicit in which tile was
+  tapped, not asked). That reshapes C's tile layout but needs no chassis
+  change. If C decides the single-tile-with-kind-picker shape is worth it
+  anyway, `GuidedSheetStep`/`answerStep`/`backStep` (types.ts,
+  guided-sheet.tsx — both task B's own files) are exactly where a `when`
+  predicate would land; flagged here rather than built speculatively against
+  a requirement C hasn't confirmed.
+- **G3 — NOT fixed; needs a controller ruling, not a task-B judgment call.**
+  Whether `PadPhase` should derive from a sport's own engine phase (cricket:
+  `pre|live|super_over|done|final`) rather than a chassis-local
+  self-correcting tab affects `TileSpec.phases`/`view-model.ts`'s `PadPhase`
+  — types shared with R3-R7, not scoped to cricket — and `super_over` has no
+  `PadPhase` slot to land in regardless of who decides this. `pad-host.tsx`
+  ships the SAME local-state-plus-self-correction phase model
+  `pad-renderer.tsx` already uses (structural: snaps to the first phase with
+  a declared tile, same as the legacy renderer snaps to the first phase with
+  a declared panel) — a real, working default, not a placeholder — but it
+  does not attempt G3's redesign. Left for the owner/controller to rule on
+  before C is blocked by it for real.
+
+**Controller rulings on G2 and G3 (2026-08-16) — both go to C:**
+
+- **G2 — build the `when(answers)` predicate; do NOT fan the wicket out into
+  ten destructive tiles.** The workaround is legitimate engineering but the
+  wrong product: spec §2.4 names this flow explicitly ("a guided sheet for
+  events that cannot be side-only (cricket wicket: kind → who)"), §3's cricket
+  row lists exactly one red `Wicket` tile, and §2.5 caps the destructive class
+  at Wicket/Card. Ten red tiles is GF-1's monster-button monotony re-created in
+  the surface built to kill it. So `GuidedSheetStep` gains an optional
+  `when(answers): boolean`, evaluated as the wizard advances; a step whose
+  predicate is false is skipped without a tap. Cricket then declares one sheet:
+  kind → (who out, only when `runout`) → (fielder, only when caught/runout/
+  stumped). `bowlerCredited` is derived from the kind and never asked.
+- **G3 — the host derives the phase from match state, via a skin hook.**
+  `TileSpec.phases` gating on a user-clicked tab means an action is hidden
+  because of a UI selection rather than because the match cannot accept it,
+  which is not what §3's "phase-awareness kills D-16" asks for. `PadPhase`
+  stays the three-value UI concept — do NOT widen it to the engine's five, and
+  do NOT give `super_over` its own slot. Instead `SkinDefV3` gains an optional
+  `phase?(view): PadPhase`; the host uses it when present and keeps B's
+  self-correcting default when absent, so R3–R7 opt in rather than being
+  migrated by this wave. Cricket implements it: `pre → "pre"`,
+  `live|super_over → "live"`, `done|final → "post"`, and the skin keeps v2's
+  own `super_over` behaviour of dispatching `cricket.superover.ball` in place
+  of `cricket.ball`.
+
+**Also settled by the same scout, so C does not re-derive it:**
+`fine.striker/nonStriker/currentBowler` exist at **fidelity tier 3 only**
+(`fine: null` below it), and `cricket.ball` is itself a band-3 action — so the
+keypad and the context strip are a tier-3 surface, and lower bands legitimately
+see the summary actions instead. Extras are NOT separate events: a wide is
+`cricket.ball` with `runs.extras{kind,runs}`. Both `cricket.ball` and
+`cricket.superover.ball` share one schema.
+
 ### D — i18n
 - `pad.cricket.ribbon.*` ×4 locales **and** into `PAD_LABEL_KEYS` (R1's owed
   item — dictionaries alone leave ribbon copy on the generic fallback forever
@@ -135,6 +236,25 @@ assertion must anchor on `="` (React serialises an omitted prop as
 - New spec: full over + wicket + undo + device link, real rosters.
 - Add the converted pad to `mobile.spec.ts`'s seven-width matrix.
 - axe per skin; screenshots 320/768/1280, no horizontal scroll, 44px floor.
+
+### H — help pages (English only, `content/help/**` owes no i18n)
+
+Surveyed 2026-08-16: `apps/web/content/help/scoring/` already keeps a
+per-sport page convention (`tennis.md`, `hockey.md`) and cricket has none.
+Two existing pages describe UI this wave changes:
+
+- `scoring/fidelity.md` documents the "**Detail level** switch above the
+  scoring actions" and says a locked level shows "with a lock icon and
+  'Requires a plan upgrade'" — that bare padlock is exactly what §2.6's
+  worded recording chip replaces (D-7). Cricket is the first sport where the
+  page becomes wrong. Word it so it is TRUE of both lanes while the other 10
+  sports still show the picker; R8's sweep finishes it.
+- `scoring/basics.md` says "overs and wickets for cricket" with no link —
+  point it at the new page.
+
+New `scoring/cricket.md`: the tap-then-enrich grammar, the context strip
+(who is striking/bowling, set once), the wicket sheet, undo inside vs after
+the ~6 s window, and what a device link can and cannot do.
 
 ### G — gate, gallery, sign-off
 - Gallery capture for cricket, publish the artifact, owner per-screen verdicts

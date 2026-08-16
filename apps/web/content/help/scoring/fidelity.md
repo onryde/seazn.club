@@ -4,7 +4,7 @@ description: Pick how much a match records, from the final result up to the fine
 order: 11
 ---
 
-Every pad has a **Detail level** switch above the scoring actions. It decides how much gets recorded, from the bare result up to the finest grain the sport supports.
+Every pad states its **detail level** above the scoring actions, and lets you change it. It decides how much gets recorded, from the bare result up to the finest grain the sport supports. Most pads show the four levels as a switch; [cricket](/help/scoring/cricket) states the level in words — "Recording ball by ball" — and opens the same choices when you tap it.
 
 ## The four levels
 
@@ -17,7 +17,7 @@ Each level records strictly more than the one below it, and picking a higher lev
 
 ## Free vs paid
 
-**Result only** and **Card** are available on every plan. **Timeline** and **Detail** need a plan that includes match-timeline scoring. Pick a level you're not entitled to and it still shows — locked, with a lock icon and "Requires a plan upgrade" — rather than disappearing, so you know it exists without being able to use it.
+**Result only** and **Card** are available on every plan. **Timeline** and **Detail** need a plan that includes match-timeline scoring. Pick a level you're not entitled to and it still shows rather than disappearing, so you know it exists without being able to use it. It says which plan carries it — "records every ball on Pro" — so what's missing and what would fix it are both on screen.
 
 ## Changing level mid-match
 
