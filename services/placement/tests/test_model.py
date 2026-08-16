@@ -1486,36 +1486,47 @@ def test_t2_gap_variables_keep_their_pre_c10_creation_order():
     reproducibility regression that no assertion in this file would catch.
 
     Verified DIRECTLY during this task by importing the pre-C10 `model.py`
-    alongside the current one and diffing `str(model.Proto())` on four
-    boards (disjoint entrants; one shared entrant; three fixtures sharing
-    one entrant, i.e. three pairs; and two independent groups) — all four
-    byte-identical. That comparison needs a historical copy of the module
-    and so cannot live in the suite; this test pins the ORDER it confirmed,
-    which is the part a future refactor could break.
+    alongside the current one and diffing `str(model.Proto())` on several
+    boards — all byte-identical. That comparison needs a historical copy of
+    the module and so cannot live in the suite; this test pins the ORDER it
+    confirmed, which is the part a future refactor could break.
 
-    The board is the two-groups case deliberately: with only one group the
-    assertion holds for any ordering rule, and with one pair it holds
-    trivially. Two groups plus a three-pair group is the smallest board on
-    which insertion order and sorted order could actually disagree.
+    THE BOARD IS THE WHOLE POINT, and an earlier draft of this test got it
+    wrong: two groups where the group discovered SECOND happens to also sort
+    second (e.g. entrant 0 covering fixtures [0,1,2], entrant 3 covering
+    [2,3]) passes under BOTH encounter order and a global `sorted()`,
+    because the two orders coincide on that shape — proving nothing about a
+    reorder regression specifically. Mutation-checked by hand: restoring the
+    `sorted()` this task removed left that board's assertion GREEN.
+
+    This board is chosen so the two orders genuinely DISAGREE. Entrant 100
+    is first seen at fixture 0 and ends up covering [0, 2, 3] (three pairs);
+    entrant 200 is first seen at fixture 1 and covers [1, 4] (one pair) —
+    discovered SECOND, but its one pair (1, 4) sorts BETWEEN two of entrant
+    100's. Encounter order is `gap_0_2, gap_0_3, gap_2_3, gap_1_4`; a global
+    sort of the identical pair set gives `gap_0_2, gap_0_3, gap_1_4,
+    gap_2_3`. Same four pairs, different order — and only a board shaped
+    like this can tell the two rules apart, which is why a set-equality
+    check cannot catch a regression here and this test pins the literal
+    sequence instead. Mutation-checked the other way too: this exact
+    assertion goes red when `sorted()` is restored.
     """
-    t0 = _GROUP_ANCHOR
-    t1 = t0 + 60 * MIN_MS
-    t2 = t0 + 120 * MIN_MS
-    grid_slots = [(c, t, 0) for c in (0, 1) for t in (t0, t1, t2)]
-    # Entrant 0 covers fixtures 0,1,2 (three pairs); entrant 3 covers 3,4
-    # (one pair). Note fixture 2 is deliberately introduced by the SECOND
-    # entrant of an earlier fixture, so insertion order into `by_entrant` is
-    # not simply ascending.
-    fixtures = [([0, 1], 0), ([0, 2], 0), ([0, 3], 0), ([3, 4], 0)]
+    t = [_GROUP_ANCHOR + k * 60 * MIN_MS for k in range(5)]
+    grid_slots = [(c, x, 0) for c in (0, 1) for x in t]
+    fixtures: list[tuple[list[int], int]] = [
+        ([100], 0),  # fixture 0 -- entrant 100 first seen here
+        ([200], 0),  # fixture 1 -- entrant 200 first seen here
+        ([100], 0),  # fixture 2
+        ([100], 0),  # fixture 3
+        ([200], 0),  # fixture 4
+    ]
     constraints = {"match_minutes": 30, "gap_minutes": 0}
     model = build_model(fixtures, 2, grid_slots, 30, constraints, [], [])
 
     gap_names = [v.name for v in model.Proto().variables if v.name.startswith("gap_")]
-    # ASCENDING (i, j) with i < j, entrant 0's three pairs first (it is the
-    # lower-numbered key) then entrant 3's single pair. Pinned literally --
-    # a set comparison would pass under any reordering, which is the whole
-    # thing this test exists to refuse.
-    assert gap_names == ["gap_0_1", "gap_0_2", "gap_1_2", "gap_2_3"], gap_names
+    # Pinned literally, in order -- a set comparison would pass under any
+    # reordering, which is the whole thing this test exists to refuse.
+    assert gap_names == ["gap_0_2", "gap_0_3", "gap_2_3", "gap_1_4"], gap_names
 
 
 # --- degenerate constraint values must fail loudly, not solve quietly -------
