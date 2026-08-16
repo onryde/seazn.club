@@ -51,6 +51,29 @@ message Fixture {
   // more than one round sequence in one division -- see
   // `docs/superpowers/specs/2026-08-12-round-order-hard-lexicographic-design.md`.
   optional uint32 round = 3;
+  // C10 (2026-08-16, wire person indices) -- mirrors `entrant_indices`
+  // exactly, one namespace over: 0 <= idx < `SolveBuildRequest.person_count`,
+  // range-checked only (repeated fields carry no presence ambiguity).
+  //
+  // A genuinely undecided knockout slot (a final, a third-place playoff,
+  // before its feeders have resolved) has no entrants yet but has PEOPLE --
+  // the players who can still reach it -- and two such slots can clash on a
+  // shared person while sharing no entrant at all. Before this field existed
+  // that clash was invisible to this service: a fixture with no entrants was
+  // refused outright (see `SolveBuildRequest`'s own history of that refusal),
+  // and even a fixture WITH entrants had no way to signal that its roster
+  // overlaps another fixture's under a DIFFERENT entrant id (the cross-
+  // division/multi-registration shape `packages/engine/src/scheduling/
+  // repair-domain.ts`'s `sharesParticipant` and `build-encode.ts`'s
+  // `byParticipant` already treat as a first-class case on the TS side).
+  //
+  // DELIBERATELY A SEPARATE NAMESPACE from `entrant_indices`, never merged
+  // into one index space: an entrant id and a person id can collide as
+  // plain integers (both start counting from 0) while meaning completely
+  // different things, and `repair-domain.ts`'s `sharesParticipant` already
+  // compares the two families in separate, non-crossing loops. This field
+  // mirrors that semantics rather than inventing a new one.
+  repeated uint32 person_indices = 4;
 }
 
 message Slot {
@@ -283,6 +306,12 @@ message SolveBuildRequest {
   // authoritative in production (2026-08-12), so it was retired outright
   // rather than carrying a further release.
   repeated RuleGroup rule_groups = 13;
+  // C10 (2026-08-16, wire person indices) -- the declared bound for every
+  // `Fixture.person_indices` value, exactly `entrant_count`'s role one
+  // namespace over. Declared rather than inferred for the same reason
+  // `entrant_count` is: an inferred bound (the largest index actually used)
+  // cannot distinguish "person 7" from a typo, a declared one can.
+  uint32 person_count = 14;
 }
 
 message SolveBuildResponse {
