@@ -7,7 +7,7 @@
 // .superpowers/sdd/2026-08-15-scorepad-v3-r1-chassis/pins.md §7 — scout-
 // verified 2026-08-16 against globals.css:436-439, no disagreement found).
 import { describe, it, expect } from "vitest";
-import { NIGHT_TILE_PAIRS, SCORE_TEXT_PX } from "../tokens";
+import { NIGHT_TILE_PAIRS, NIGHT_TILE_CLASSES, SCORE_TEXT_PX, SCORE_TEXT_SIZE_CLASS } from "../tokens";
 
 /** WCAG 2.x relative luminance of one sRGB channel (0-255) -> linear.
  *  https://www.w3.org/TR/WCAG21/#dfn-relative-luminance */
@@ -93,5 +93,70 @@ describe("night-tile token pairs meet WCAG AA", () => {
 
   it("the lime pair's large-text carve-out is backed by an actual >=24px rendered size", () => {
     expect(SCORE_TEXT_PX).toBeGreaterThanOrEqual(24);
+  });
+});
+
+// Task A3 (R2 wave, silent-desync closure): before this block, scorebug.tsx
+// hand-matched NIGHT_TILE_PAIRS's colours in its OWN literal Tailwind
+// classes ("bg-night", "text-cream", "text-lime-400"). Editing scorebug.tsx
+// changed what rendered without changing what this FILE measures, because
+// nothing tied the two together — a class edit there was invisible here.
+// The fix: scorebug.tsx no longer owns those literals at all — it imports
+// NIGHT_TILE_CLASSES/SCORE_TEXT_SIZE_CLASS from ../tokens and renders
+// those verbatim, so the class name lives in exactly ONE place. This block
+// proves that place agrees with what NIGHT_TILE_PAIRS was proven against.
+//
+// TAILWIND_UTILITY_HEX is deliberately NOT derived from NIGHT_TILE_PAIRS —
+// it's independently sourced from globals.css's `@theme inline` block
+// (bg-night/-night-2/text-cream <- --mk-night/-night-2/-cream,
+// globals.css:51-55 + :436-439) and Tailwind's own built-in palette
+// (lime-400 = #a3e635 upstream default; globals.css:52 notes it
+// coincidentally equals --mk-lime). A table derived FROM NIGHT_TILE_PAIRS
+// would make this whole block circular — it would agree with itself no
+// matter what NIGHT_TILE_CLASSES said.
+const TAILWIND_UTILITY_HEX: Record<string, string> = {
+  "bg-night": "#150b36",
+  "bg-night-2": "#1d1145",
+  "text-cream": "#f5f0e8",
+  "text-lime-400": "#a3e635",
+};
+
+const TAILWIND_TEXT_SIZE_PX: Record<string, number> = {
+  "text-4xl": 36,
+};
+
+describe("scorebug.tsx renders exactly what this file measures (the wiring, not just the token)", () => {
+  it("NIGHT_TILE_CLASSES resolve to the same hex NIGHT_TILE_PAIRS was proven against", () => {
+    expect(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.tileBg]).toBe(NIGHT_TILE_PAIRS.creamOnNight.bg);
+    expect(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.tileBg]).toBe(NIGHT_TILE_PAIRS.limeOnNight.bg);
+    expect(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.bandBg]).toBe(NIGHT_TILE_PAIRS.creamOnNight2.bg);
+    expect(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.creamText]).toBe(NIGHT_TILE_PAIRS.creamOnNight.fg);
+    expect(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.creamText]).toBe(NIGHT_TILE_PAIRS.creamOnNight2.fg);
+    expect(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.limeText]).toBe(NIGHT_TILE_PAIRS.limeOnNight.fg);
+  });
+
+  it("the muted/subtle cream variants (hint + context/strip text) are still the SAME cream name, not an independent colour", () => {
+    // Not independently AA-tested against the /70,/80 opacity blend — a
+    // pre-existing R1 scope choice (contrast.test.ts, above, checks
+    // full-opacity cream only). This only guards that the hue can't drift
+    // out from under those variants unnoticed.
+    expect(NIGHT_TILE_CLASSES.creamTextMuted).toBe(`${NIGHT_TILE_CLASSES.creamText}/70`);
+    expect(NIGHT_TILE_CLASSES.creamTextSubtle).toBe(`${NIGHT_TILE_CLASSES.creamText}/80`);
+  });
+
+  it("re-derives AA from the class-resolved hex directly, not by trusting the agreement check above", () => {
+    expect(
+      contrastRatio(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.tileBg], TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.creamText]),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.bandBg], TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.creamText]),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.tileBg], TAILWIND_UTILITY_HEX[NIGHT_TILE_CLASSES.limeText]),
+    ).toBeGreaterThanOrEqual(3.0);
+  });
+
+  it("SCORE_TEXT_SIZE_CLASS renders the same pixel size SCORE_TEXT_PX licenses the large-text floor for", () => {
+    expect(TAILWIND_TEXT_SIZE_PX[SCORE_TEXT_SIZE_CLASS]).toBe(SCORE_TEXT_PX);
   });
 });

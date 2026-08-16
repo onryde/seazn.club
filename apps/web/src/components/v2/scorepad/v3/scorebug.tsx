@@ -31,6 +31,7 @@
 import type { ScorebugHalf, ScorebugSpec, TapEvent, WhoLine } from "./types";
 import { padLabel } from "@/lib/scoring-vocab";
 import type { MsgFn } from "./ribbon";
+import { NIGHT_TILE_CLASSES, SCORE_TEXT_SIZE_CLASS } from "./tokens";
 
 export interface ScorebugProps {
   spec: ScorebugSpec;
@@ -81,7 +82,9 @@ export function whoNames(who: readonly WhoLine[]): string {
 function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string }) {
   return (
     <>
-      <div className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 app-display text-[13px] font-semibold tracking-wide text-cream sm:text-sm">
+      <div
+        className={`flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 app-display text-[13px] font-semibold tracking-wide ${NIGHT_TILE_CLASSES.creamText} sm:text-sm`}
+      >
         {half.who.map((w, i) => (
           <span key={i} className="inline-flex items-center gap-1">
             {w.serving && (
@@ -92,13 +95,13 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
         ))}
       </div>
       <div
-        className="app-display text-4xl font-bold leading-none text-lime-400"
+        className={`app-display ${SCORE_TEXT_SIZE_CLASS} font-bold leading-none ${NIGHT_TILE_CLASSES.limeText}`}
         style={{ fontVariantNumeric: "tabular-nums" }}
       >
         {half.big}
       </div>
       {half.tappable && hintText && (
-        <span className="text-[11px] font-medium text-cream/70">{hintText}</span>
+        <span className={`text-[11px] font-medium ${NIGHT_TILE_CLASSES.creamTextMuted}`}>{hintText}</span>
       )}
     </>
   );
@@ -112,8 +115,8 @@ function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string 
  */
 export function Scorebug({ spec, t, onTap }: ScorebugProps) {
   return (
-    <div className="overflow-hidden rounded-2xl border-t-2 border-lime-400 bg-night shadow-lg">
-      <div className="flex items-center justify-center gap-2 bg-night-2 px-3 py-1.5">
+    <div className={`overflow-hidden rounded-2xl border-t-2 border-lime-400 ${NIGHT_TILE_CLASSES.tileBg} shadow-lg`}>
+      <div className={`flex items-center justify-center gap-2 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5`}>
         {spec.phase === "live" && (
           <span
             aria-hidden="true"
@@ -121,7 +124,7 @@ export function Scorebug({ spec, t, onTap }: ScorebugProps) {
           />
         )}
         <span
-          className="app-display text-center text-[11px] tracking-wide text-cream/80"
+          className={`app-display text-center text-[11px] tracking-wide ${NIGHT_TILE_CLASSES.creamTextSubtle}`}
           style={{ fontVariantNumeric: "tabular-nums" }}
         >
           {spec.context}
@@ -155,14 +158,14 @@ export function Scorebug({ spec, t, onTap }: ScorebugProps) {
       </div>
 
       {spec.strip.length > 0 && (
-        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 bg-night-2 px-3 py-1.5">
+        <div className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5`}>
           {spec.strip.map((item, i) => (
             <span
               key={i}
               className={
                 item.accent
-                  ? "text-xs font-semibold text-cream"
-                  : "text-xs font-medium text-cream/70"
+                  ? `text-xs font-semibold ${NIGHT_TILE_CLASSES.creamText}`
+                  : `text-xs font-medium ${NIGHT_TILE_CLASSES.creamTextMuted}`
               }
               style={{ fontVariantNumeric: "tabular-nums" }}
             >
