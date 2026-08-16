@@ -55,6 +55,7 @@ describe("soft-commit", () => {
 
     await enqueueHeld(store, event("a"), HOLD_MS, sendSpyA); // A's own deadline: t=6000
     await vi.advanceTimersByTimeAsync(1000); // t=1000, well inside A's window
+    expect(vi.getTimerCount()).toBe(1); // just A's own release tick pending
 
     await enqueueHeld(store, event("b"), HOLD_MS, sendSpyB); // flushes A first; B's deadline: t=7000
 
@@ -65,15 +66,26 @@ describe("soft-commit", () => {
     expect(list.find((e) => e.idempotencyKey === "a")?.heldUntil).toBeUndefined();
     expect(list.find((e) => e.idempotencyKey === "b")?.heldUntil).toBeDefined();
 
-    // A's flushed-away tick must never ALSO fire on its own original
-    // schedule (t=6000) — that would be a silent double-send. t=6500 is
-    // past A's original deadline but still short of B's real one (t=7000).
+    // The flush must actually CANCEL A's own timer (queue.ts's cancelTick),
+    // not merely leave it dangling — exactly one fake timer pending now
+    // (B's), never A's-plus-B's. Asserted directly on vitest's own timer
+    // count rather than on queue.ts's internal tick registry (not exported,
+    // and shouldn't be just for this).
+    expect(vi.getTimerCount()).toBe(1);
+
+    // Separately, and NOT what the assertion above is proving: even if that
+    // cancellation somehow failed and A's stale timer fired anyway, a
+    // SECOND onDue call is independently guarded by clearHeldFlag's own
+    // idempotency (an already-unheld entry's second clear attempt is a
+    // no-op, `cleared === false` — see queue.ts). t=6500 is past A's
+    // original schedule (t=6000) but still short of B's real one (t=7000).
     await vi.advanceTimersByTimeAsync(5500); // t=6500
     expect(sendSpyA).toHaveBeenCalledTimes(1); // still just once
     expect(sendSpyB).not.toHaveBeenCalled(); // B's own window hasn't closed yet
 
     await vi.advanceTimersByTimeAsync(500); // t=7000 — B's real deadline
     expect(sendSpyB).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0); // nothing left pending
   });
 
   it("mutateHeld lands in the sent payload", async () => {

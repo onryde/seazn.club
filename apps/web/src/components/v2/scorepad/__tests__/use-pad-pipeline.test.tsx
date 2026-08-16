@@ -1903,3 +1903,106 @@ describe("usePadPipeline — R1 chassis soft-commit: runDrain defers a still-hel
     expect(pad.current.queueDepth).toBe(0);
   });
 });
+
+// ScoringPad v3 R1 chassis soft-commit — task 4 FIX ROUND 1 (controller
+// review, both Important findings independently confirming concerns raised
+// in the original task-4-report.md).
+//
+// Finding 1: the mount resume effect (above, the "Resume a leftover queue
+// from a previous session" effect) re-seeds a leftover held entry into
+// `pendingEnvelopes` and correctly lets runDrain's own guard skip it, but
+// armed no tick for it — queue.ts's release-tick registry is in-memory only
+// by design (a live JS closure cannot survive a reload), so the entry's
+// PRE-reload tick died with the tab. Nothing else in this file would ever
+// call runDrain again on its behalf (no interval/poll anywhere — the only
+// triggers are this mount effect once, the `online` listener, and submit()).
+// Fixed by re-arming a fresh tick for the REMAINING window in that same loop.
+//
+// Finding 2: `UsePadPipelineResult` had no drain trigger at all — `runDrain`
+// was a private useCallback. Controller ruling: widen the hook now rather
+// than leave Task 7's Dock to guess. Fixed by exposing the SAME `runDrain`
+// callback as `retryDrain` — no reshaping needed, exactly the "expose the
+// existing callback" the controller asked for.
+describe("usePadPipeline — task 4 fix round 1 (controller review findings 1 & 2)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("finding 2: retryDrain is a public trigger for a real drain pass, with no submit() involved", async () => {
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(1)] });
+    const pad = mountPipeline(baseParams({ transport }));
+    await vi.advanceTimersByTimeAsync(0); // let the mount-time resume/drain effect settle first
+
+    // Seeded directly, bypassing submit() — same pattern as the describe
+    // block above and the pass-J backward-compat test: proves retryDrain
+    // itself does the draining, not some side effect of how the event
+    // arrived in the store.
+    const store = indexedDbQueueStore("scorepad-queue-fx-1");
+    await enqueue(store, {
+      localId: "direct-1",
+      idempotencyKey: "direct-1",
+      type: "generic.score",
+      payload: { by: "H", points: 7 },
+      expectedSeq: 0,
+      createdAt: new Date().toISOString(),
+      attempts: 0,
+    });
+    expect(appendCalls).toHaveLength(0); // nothing has triggered a drain yet
+
+    await pad.current.retryDrain();
+
+    expect(appendCalls).toHaveLength(1);
+    expect(appendCalls[0]!.body.payload).toEqual({ by: "H", points: 7 });
+    expect(pad.current.queueDepth).toBe(0);
+  });
+
+  it("finding 1: a leftover held entry re-arms its own tick on resume and sends once its REMAINING window closes, with no further trigger", async () => {
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(1)] });
+    const DB_NAME = "soft-commit-resume-rearm";
+    const store = indexedDbQueueStore(DB_NAME);
+
+    // Simulate a tap that happened, then the tab died 2s into its 6s hold —
+    // enqueueHeld's own in-memory tick died with it (queue.ts's registry is
+    // not durable by design); only the durable `heldUntil` survives, same
+    // shape reload durability already proves at the queue.ts level in
+    // soft-commit.test.ts.
+    await enqueueHeld(
+      store,
+      {
+        localId: "held-1",
+        idempotencyKey: "held-1",
+        type: "generic.score",
+        payload: { by: "H", points: 1 },
+        expectedSeq: 0,
+        createdAt: new Date().toISOString(),
+        attempts: 0,
+      },
+      HOLD_MS,
+      () => {}, // belongs to the pre-"reload" instance — irrelevant to this test
+    );
+    await vi.advanceTimersByTimeAsync(2000); // 2s elapsed pre-"reload"; 4s of the window remain
+
+    // A genuinely fresh mount — matching a real reload (ownEventIds starts
+    // empty, exactly like the pass-J backward-compat test above).
+    const pad = mountPipeline(baseParams({ transport, queueDbName: DB_NAME }));
+    await vi.advanceTimersByTimeAsync(0); // let the resume effect's async IIFE settle
+
+    expect(appendCalls).toHaveLength(0); // still held — must not send early
+    expect(pad.current.queueDepth).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(3999); // t=5999 since the ORIGINAL enqueue — just short
+    expect(appendCalls).toHaveLength(0);
+
+    // t=6000 since the ORIGINAL enqueue: the REMAINING ~4000ms (not a fresh
+    // HOLD_MS from mount time, which would land at t=8000) closes. No
+    // submit()/online event anywhere in this test — only the resume
+    // effect's own re-armed tick can be responsible for what happens next.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(appendCalls).toHaveLength(1);
+    expect(appendCalls[0]!.body.payload).toEqual({ by: "H", points: 1 });
+    expect(pad.current.queueDepth).toBe(0);
+  });
+});

@@ -234,7 +234,7 @@ import { EngineError, type EventEnvelope, type LineupPair } from "@seazn/engine/
 import type { AnySportModule } from "@seazn/engine/sport";
 import { foldClient } from "./module-client";
 import { indexedDbQueueStore } from "./queue-store";
-import { depth, enqueue, markDropped, peekInOrder, recordAttempt } from "./queue";
+import { depth, enqueue, markDropped, peekInOrder, recordAttempt, releaseHeld } from "./queue";
 import { deepEqual, reconcile, sendOne } from "./pipeline";
 import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "./types";
 import type { PadAuthMode, PadTransport } from "./transport";
@@ -324,6 +324,18 @@ export interface UsePadPipelineResult {
    *  drains. Never throws — a permanent rejection surfaces via
    *  `lastRejection`, a network failure via `offline`. */
   submit: (type: string, payload: unknown) => Promise<void>;
+  /** Task 4 fix round 1 (controller review finding 2): a public trigger for
+   *  a real drain pass, with no new enqueue attached — the SAME `runDrain`
+   *  this hook already runs at mount, on `online`, and after every
+   *  `submit()`, just exposed rather than kept a private closure. Exists so
+   *  a caller holding a released-but-not-yet-sent event (queue.ts's
+   *  `releaseHeld`/`dropHeld`/`flushHeldBefore` only clear `heldUntil` —
+   *  they do not themselves talk to a transport) has something to call
+   *  afterward: a future Dock's "send now" action wires `onDue` (the 4th
+   *  `enqueueHeld` param) to THIS. Safe to call at any time, including with
+   *  an empty queue (a no-op) or while a drain is already in flight
+   *  (piggybacks on it — see runDrain's own doc). */
+  retryDrain: () => Promise<void>;
   /** S12/#421 — every known event (durable ledger + still-queued local
    *  ones), oldest first: the raw list `state` above was folded FROM, for a
    *  persistent activity feed (timeline.tsx). Same combination `foldedState`
@@ -995,6 +1007,11 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
         // every existing caller; no production skin calls enqueueHeld yet
         // this wave (R1 ruling: all 11 sports still score through the plain
         // path), so this guard is presently dormant too.
+        // TODO(task 4 fix round 1, Minor 2 — R2+): this guard assumes AT
+        // MOST ONE held entry (flushHeldBefore's own invariant) ever sits at
+        // the front — if a future wave allows more than one concurrently
+        // held entry, this front-only stop needs to become a scan past the
+        // held PREFIX, not just index [0].
         if (next.heldUntil !== undefined && next.heldUntil > Date.now()) break;
 
         // S12/#421 pass G — undo-before-reload (file header PASS G UPDATE,
@@ -1175,6 +1192,10 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // reading (so it reflects them), THEN attempt the drain.
   useEffect(() => {
     let cancelled = false;
+    // Task 4 fix round 1 (controller review finding 1): timers re-armed
+    // below for a leftover HELD entry, so unmounting before one fires can
+    // clear it rather than leave it referencing a stale closure.
+    const rearmedHoldTimers: ReturnType<typeof setTimeout>[] = [];
     void (async () => {
       const leftover = await peekInOrder(store);
       if (cancelled) return;
@@ -1192,6 +1213,32 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           // browser/device-local), so it was unquestionably submitted under
           // THIS `identity`, exactly like a fresh submit() below.
           markOwn(p.idempotencyKey);
+          // Task 4 fix round 1 (controller review finding 1): a leftover
+          // entry can carry `heldUntil` from a BEFORE-reload enqueueHeld —
+          // its original release tick was a live JS closure (queue.ts's
+          // ticksByStore registry, in-memory only by design) that died with
+          // the tab. Without this, runDrain below correctly SKIPS it as
+          // still-held (the guard a few lines up in this file), but nothing
+          // would ever call runDrain again on its behalf — no interval/poll
+          // exists anywhere in this hook, only this mount effect once, the
+          // `online` listener, and submit(). Left alone, a scorer who taps,
+          // reloads mid-window, and leaves the tab open+online would have
+          // that event sit unsent indefinitely, not merely late. Re-arm a
+          // FRESH tick for its REMAINING window (never a new full holdMs —
+          // `heldUntil` is an absolute deadline, unaffected by the reload).
+          // `releaseHeld` clears `heldUntil` (idempotent no-op if something
+          // else — e.g. a fast concurrent flushHeldBefore from a new tap —
+          // already resolved it first); the explicit `runDrain()` after it
+          // is what actually sends, since releaseHeld itself has no live
+          // `onDue` to call for a tick it never registered.
+          if (p.heldUntil !== undefined) {
+            const remaining = Math.max(0, p.heldUntil - Date.now());
+            const timer = setTimeout(() => {
+              if (cancelled) return;
+              void releaseHeld(store, p.idempotencyKey).then(() => runDrain());
+            }, remaining);
+            rearmedHoldTimers.push(timer);
+          }
         }
         commitPendingEnvelopes(seeded);
       }
@@ -1205,6 +1252,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     return () => {
       cancelled = true;
       window.removeEventListener("online", onOnline);
+      for (const timer of rearmedHoldTimers) clearTimeout(timer);
     };
     // Deliberately mount-only: `runDrain`/`refreshDepth` read fresh state via
     // refs/the store itself, so re-subscribing on every identity change would
@@ -1301,5 +1349,5 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // needs to display, even while the FOLD is showing the server's override.
   const events = useMemo(() => [...ledgerEvents, ...pendingEnvelopes.values()], [ledgerEvents, pendingEnvelopes]);
 
-  return { state: foldedState, summary, queueDepth, offline, lastRejection, resyncing, submit, events, ownEventIds };
+  return { state: foldedState, summary, queueDepth, offline, lastRejection, resyncing, submit, events, ownEventIds, retryDrain: runDrain };
 }

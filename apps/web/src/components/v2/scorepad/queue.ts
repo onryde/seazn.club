@@ -207,7 +207,10 @@ export async function enqueueHeld(
  *  change `type`/`payload` only: this does not re-arm or extend the
  *  release tick, so a `fn` that itself clears `heldUntil` bypasses the
  *  `onDue` notification entirely (use `releaseHeld` to change the
- *  lifecycle, `mutateHeld` only to correct what will be sent). */
+ *  lifecycle, `mutateHeld` only to correct what will be sent).
+ *  TODO(task 4 fix round 1, Minor 2 — R2+ Dock): if a `fn` ever needs to
+ *  touch `heldUntil` itself, route through `releaseHeld` first instead —
+ *  today that silently drops the `onDue` call, not merely a stale value. */
 export async function mutateHeld(
   store: QueueStore,
   id: string,
