@@ -1119,7 +1119,26 @@ Consequences:
   `person_indices`, so the narrowed refusal fires exactly as the old
   unconditional one did; `by_person` is empty so no constraint family and
   no T2 pair is added. Proved byte-identical at the `CpModel` level
-  (`test_person_indices_empty_leaves_the_model_byte_identical`).
+  (`test_person_indices_empty_leaves_the_model_byte_identical`) AND
+  against the pre-C10 module itself on five boards.
+
+  **This claim was briefly FALSE and review caught it.** The first
+  implementation collected T2's pairs into a `set` and walked it with a
+  global `sorted()`. That does not reproduce `by_entrant`'s
+  dict-insertion order: on five fixtures with entrant 0 over `[0, 3, 4]`
+  and entrant 1 (seen later) over `[1, 2]`, pre-C10 creates
+  `gap_0_3, gap_0_4, gap_3_4, gap_1_2` and the sorted form creates
+  `gap_0_3, gap_0_4, gap_1_2, gap_3_4` — same pair SET, different
+  variable-creation order, on a board with no person data at all. No
+  board becomes illegal (`AddMaxEquality` is order-independent) but
+  CP-SAT's search is order-sensitive, so every existing caller could have
+  got a different tied-optimal board and solve time on deploy. Fixed by
+  walking `by_entrant` first in its own order and appending only new
+  pairs from `by_person`. Two lessons worth carrying: a `sorted()` that
+  looks like housekeeping can be a behaviour change, and the FIRST
+  regression test written for this passed against the bug because its
+  board agreed under both ordering rules — the board, not the assertion,
+  was the weak link.
 - *Caller first (writer before reader).* An old service treats fields 4/14
   as unknown and ignores them. For an undecided-bracket fixture it applies
   its OLD unconditional refusal → `INVALID_REQUEST` → `build.ts` falls back
