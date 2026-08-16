@@ -34,7 +34,7 @@ C6 (prose) is safe whenever.
 | C2 | `C2-day-start-rung.md` | day_start | C1 (model.py overlap; rebase either way) | **MERGED** #555 → `40331cc2`, follow-up #557 → `4dc38a0e`. Shipped #512's two rungs too. **Leaves 3 open defects — see the C2 entries below before starting C3.** |
 | C3 | `C3-conflict-detail-names.md` | conflict details | not concurrent with C1 (schedule.ts) | **MERGED** #567 → `ccab1356`. Family was 25 kinds, not 4; `conflictKey` and the AI repair round were both in the blast radius |
 | C4 | `C4-z3-reflow-cpsat.md` | z3 stage A | C1 (reflow inherits round rule) | **PR open** (this session) — see status log. Found two real, out-of-scope `buildSchedule` gaps shared with BUILD/POLISH (a frozen-feeder dependency gap, a bracket/TBD-fixture wall) — neither fixed here. |
-| C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | TODO |
+| C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | **PR open** (this session) — see status log. Bench found a real, accepted density-degradation limit (CP-SAT without decomposition), left as a follow-up candidate, not fixed here. |
 | C6 | `C6-z3-prose-identifiers.md` | z3 stage C | ~~anytime~~ → **after C4+C5** | **NO-OP today** (see below) |
 | C7 | `C7-z3-public-contract.md` | z3 stage D | C4+C5 **deployed** (nothing writes z3) | TODO |
 | C8 | `C8-z3-delete-solver.md` | z3 stage E | C7 | TODO |
@@ -1067,5 +1067,124 @@ build for e2e):**
   `scripts/smoke.ts` — zero user-facing strings, no locale dict update
   owed. `openapi:gen` — zero diff. `packages/engine` + `apps/web`
   typecheck and lint both clean.
+
+PR: see the row above for the link once opened.
+
+### C5 — z3 stage B: AI repair on CP-SAT (2026-08-15/16)
+
+Branch `feat/c5-ai-repair-cpsat`, worktree `.claude/worktrees/c5-ai-repair`,
+off `edd358af` (C4 merged). **PR open** — see the row above once linked.
+
+**The wiring.** Both AI runners' repair round (`runAiPlan` in
+`schedule-ai.ts`, `runCompetitionAiPlan` in `competition-schedule-ai.ts`)
+now call `buildSchedule` (the placement CP-SAT service) instead of z3's
+`repairDecomposed`, through a rewritten shared `solveBoard`
+(`schedule-ai-solver.ts`). Applies C4's own "pin what stands, re-solve the
+violators" ruling directly — the generalization is VIOLATOR-derived rather
+than C4's PLACEMENT-derived split: frozen = this pack's own pins ∪ every
+movable fixture NOT named by a blocking conflict from this round's own
+verifier (both ends of a pairwise conflict, via `fixtureId` +
+`details.otherFixtureId`), never `warnings`. `fixtures` handed to
+`buildSchedule` stays the FULL movable set, never pre-filtered — same
+lesson C4 already learned, `buildSchedule`'s own pin-promotion is what
+excludes a frozen id.
+
+**Decomposition-bypass — VERIFIED BY BENCH, and it does NOT hold at every
+density.** Built `packages/engine/scripts/bench-ai-repair-cpsat.ts`
+(extending `bench-reflow.ts`'s pattern) and measured N=6/side against a
+real local placement service:
+
+| board | OLD (z3, decomposed) | NEW (CP-SAT, monolithic) | gate |
+|---|---|---|---|
+| 30 fixtures, 10 free (~33%), wall 10s | 2167-2557ms, 0 conflicts, moved=5 | 433-817ms, 0 conflicts, moved=10 | PASS |
+| 40 fixtures, 24 free (~60%), wall 45s | 7821-8891ms, 0 conflicts | 44643-45636ms (budget exhausted), 24 blocking, engine=greedy | **FAIL** |
+
+At high violator density the non-decomposed CP-SAT solve does not complete
+even at a generous 45s wall (server `PLACEMENT_WALL_SECONDS_MAX=60`, ruling
+out its own 10s default as the cause) and `buildSchedule` falls back to its
+own internal greedy, which does not avoid the injected clashes. z3's
+decomposed search handles the identical board in under 9s at zero conflicts
+by splitting it into independent, much smaller connected components. **NOT
+fixed** — re-adding decomposition for CP-SAT reverses this stage's own
+premise and is materially larger than its scope. Assessed and confirmed
+(independently, by code review too) as a bounded LATENCY/BUDGET-WASTE risk,
+not a safety one: `solveBoard`'s own re-verification (real
+`validateAssignments`, regardless of `buildSchedule.status`) plus the
+CALLER's pre-existing, unchanged adoption gate
+(`afterBlocking.length < blocking.length`) together mean a degraded solve
+never gets silently adopted — it wastes solver budget and falls through to
+the LLM repair round exactly as if the solver had declined outright.
+Flagged as a real follow-up candidate (a density-aware budget/skip
+heuristic), not blocking this stage.
+
+**Fallback-exit reconciliation — recurred, exactly as C4 found for
+REFLOW.** `buildSchedule`'s non-`ok` exits report the plain unpinned greedy
+seed, not the pinned board. `solveBoard` reconciles every frozen id's slot
+from the caller's own board unconditionally; mutation-checked. A SECOND,
+related bug found while writing the budget-exhaustion test: the original
+`unresolvedFixtureIds` computation only checked the reconciled board's
+blocking-conflict list, missing a violator `buildSchedule` dropped from its
+response entirely (`validateAssignments` cannot report an absence). Fixed;
+mutation-checked.
+
+**Code review dispatched before the PR, per `_RULES.md`.** One pass
+(large diff, single close pass — concentrated in two mirrored call sites
+plus one shared module). Verdict: **Ready to merge, with fixes.** Traced the
+reconciliation, the defensive frozen-id narrowing, and — flagged as the
+single most important thing to verify — the two-layer independent
+re-verification (`solveBoard`'s own, then the caller's adoption gate) that
+prevents an organiser from ever seeing a false-clean board; confirmed sound
+by hand, not just asserted. Found 1 Critical (a deterministic e2e break,
+`data-minimality="proved"` — the review found it independently via static
+tracing at almost the same moment this session found it by actually running
+the e2e suite; both fixes agree), 2 Important (the joint test file's
+missing REGRESSION test; the `data-moved="1"` guarantee question — see bench
+above), 2 Minor (a doc comment overstating the lock-wrapper removal; the
+"proved minimal" UI copy silently going dark). All addressed except the
+UI-copy Minor, left as a noted, deliberately out-of-scope product call.
+
+**e2e finding, found independently before code review flagged it too.**
+`ai-architect.spec.ts:1173` ("a clash off the minute boundary...", #452)
+asserted `data-minimality="proved"` — a z3-ascending-k-specific claim
+`solveBoard` no longer makes. `ai-diff-panel.tsx:334` (untouched) already
+falls back to `"unknown"` when `repair.minimality` is unpopulated, so this
+was a deterministic break in a live, PR-gating spec, not speculation. Fixed
+the assertion and rewrote both doc comments at that test that described the
+retired z3 "proved minimal" mechanism — same staleness class C4's own
+review caught twice at its own mode-dispatch fork point.
+
+**Verified (all real, fresh DB per run, real placement service, real prod
+build for e2e):**
+- apps/web (`src/server src/lib`): 4835 / 4786 / 0 / 49 (total/passed/
+  failed/pending), `success: true`.
+- engine (`test:coverage`): 4004 / 3982 / 0 / 22, coverage gate passed
+  (`EXIT=0`). Initial full run hit 40 failures across 17 files — ALL in
+  files this diff never touches (sport-module conformance/property tests,
+  z3's own timing tests); confirmed 100% environmental (load average
+  45/211/184 during the contended run — apps/web's own suite, this engine
+  run, a prod build, and a code-review subagent all running at once — vs a
+  clean 144 files/3982 tests on a quiet-box re-run, and all 17 originally-
+  failed files individually green in isolation too).
+- e2e: `ai-architect.spec.ts --project=parallel`, full file, **16/16**, run
+  twice (once catching the stale minimality assertion, once clean after the
+  fix) against a real local prod build + real placement service. Covers all
+  three brief-named specs by title (line numbers drifted: `:1064`→same,
+  `:1147`→`:1157`, `:1238`→`:1250`).
+- smoke: 833/836 (3 failed), all 3 confirmed environmental by reading
+  `smoke.ts`'s own source (`:6252`, `:5835`, `:5843` — each branches on
+  real Supabase/Stripe creds OR a genuinely absent key producing a specific
+  503-guard message; this session's stub/dummy values read as "configured"
+  without being real, satisfying neither branch). Nothing in this diff
+  touches logo upload, storage, or revenue reporting.
+- Regression: two REGRESSION tests (single-division, joint — the joint one
+  added after code review, required extending the joint test pack to 3
+  fixtures since its 2-fixture pack makes every scenario all-violators),
+  plus the reconciliation and dropped-violator mutation checks. All
+  mutation-verified.
+- i18n: diff touches only `apps/web/src/server/{usecases,api-v1}/**`, their
+  tests, `openapi/*.json`, one engine bench script, and `ai-architect.spec.ts`
+  (test code only) — zero user-facing strings, no locale dict update owed.
+  `openapi:gen` — the expected 4-spot `engine` enum diff, nothing else.
+  `packages/engine` + `apps/web` lint and typecheck all clean.
 
 PR: see the row above for the link once opened.
