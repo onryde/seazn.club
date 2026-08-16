@@ -12,7 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Assignment, SchedulableFixture, VerifyConfig } from "./calendar.ts";
 import { isBlockingConflict, validateAssignments } from "./calendar.ts";
-import type { BuildResult } from "./build.ts";
+import type { BuildInput, BuildResult } from "./build.ts";
 
 // `vi.doMock` + per-test `vi.resetModules()` + a fresh dynamic import, NOT a
 // hoisted top-level `vi.mock` — this engine suite runs `isolate: false`
@@ -27,12 +27,19 @@ import type { BuildResult } from "./build.ts";
 // a fresh `await import(...)` per test, unmocked again in `afterEach`, so the
 // mock's lifetime is this test only and can neither leak in from, nor leak
 // out to, a neighbouring file sharing the worker.
-let buildSchedule: ReturnType<typeof vi.fn>;
+// Explicitly typed to `buildSchedule`'s own real signature (matching how
+// `vi.spyOn(realModule, "solveBuild")` types itself elsewhere in this repo,
+// e.g. `build.test.ts`'s `async (input) => {...}` implementations) — an
+// untyped `vi.fn()` left `mockImplementationOnce`'s expected parameter type
+// resolving to a plain void-returning function, which
+// `@typescript-eslint/no-misused-promises` correctly flagged everywhere an
+// async implementation was supplied below.
+let buildSchedule: ReturnType<typeof vi.fn<(input: BuildInput) => Promise<BuildResult>>>;
 type RepairModule = typeof import("./repair-decompose-cpsat.ts");
 let repairDecomposedCpsat: RepairModule["repairDecomposedCpsat"];
 
 beforeEach(async () => {
-  buildSchedule = vi.fn();
+  buildSchedule = vi.fn<(input: BuildInput) => Promise<BuildResult>>();
   vi.resetModules();
   vi.doMock("./build.ts", async () => {
     const actual = await vi.importActual<typeof import("./build.ts")>("./build.ts");
