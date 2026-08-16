@@ -3729,5 +3729,9 @@
   "scorepad.skin.period.group.discipline": "Discipline",
   "scorepad.skin.period.group.setPiece": "Phases arrêtées",
   "scorepad.skin.period.group.shootout": "Séance de tirs au but",
-  "scorepad.skin.period.group.shots": "Tirs"
+  "scorepad.skin.period.group.shots": "Tirs",
+  "routeError.title": "Une erreur est survenue",
+  "routeError.body": "Cette page a rencontré une erreur inattendue. Le reste de la compétition fonctionne toujours : réessayez ou choisissez un autre onglet.",
+  "routeError.reference": "Référence : {digest}",
+  "routeError.retry": "Réessayer"
 }

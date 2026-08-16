@@ -125,3 +125,79 @@ test("rounds group with dates, times honour the competition tz, reschedule undoe
     )
     .toBe(before);
 });
+
+// THE STAGING CRASH (#575), as a browser sees it.
+//
+// A division stored with an END date and NO start date is a legal, reachable
+// shape: the settings schema allows either half alone, and staging held one.
+// The fixtures tab's capacity pre-check then built a window of
+// `{ from: -Infinity, to: <instant> }` and handed `-Infinity` to
+// `Intl.DateTimeFormat.format`, which throws `RangeError: Invalid time value`
+// — inside a render-phase `useMemo`, so React unwound the whole tree. Every
+// tab of the page died, not just the panel that asked.
+//
+// The unit regressions live in `lib/__tests__/capacity-input.test.ts`; what
+// they cannot show is the blast radius, because a thrown `useMemo` is not a
+// null return. Only a rendered page proves the tab renders at all — and this
+// exact stored shape is the one nobody had ever loaded.
+//
+// Deliberately NOT asserting the boundary copy is absent by string match: a
+// boundary rendering here fails every assertion below anyway, and matching on
+// its copy would rot the moment that copy is translated (which
+// `c/[compSlug]/error.tsx` now is).
+test("a division with an END date and no start date still renders its fixtures tab", async ({
+  page,
+  request,
+}) => {
+  const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `EndOnly ${TAG}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string; slug: string }>(
+    request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  await apiJson(
+    request,
+    `/api/v1/divisions/${div.data!.id}/entrants`,
+    "POST",
+    ["A", "B", "C", "D"].map((n, i) => ({ kind: "individual", display_name: n, seed: i + 1 })),
+  );
+  const stage = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/divisions/${div.data!.id}/stages`,
+    "POST",
+    { seq: 1, kind: "league", name: "League" },
+  );
+  // The crashing shape: `endAt` present, `startAt` absent entirely. Fixtures
+  // are generated and left unscheduled, which is what puts the capacity
+  // pre-check — the throw site — on screen in the first place.
+  await apiJson(request, `/api/v1/divisions/${div.data!.id}/schedule-settings`, "PUT", {
+    config: {
+      endAt: "2026-09-20T22:59:00.000Z",
+      matchMinutes: 30,
+      gapMinutes: 0,
+      courts: ["Court 1"],
+      perEntrantMinRest: 0,
+      blackouts: [],
+      sessionWindows: [],
+    },
+    tz: "UTC",
+  });
+  await apiJson(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
+
+  const org = await activeOrg(page);
+  await page.goto(`/o/${org.slug}/c/${comp.data!.slug}/d/${div.data!.slug}?tab=fixtures`);
+
+  // The page rendered its own content — not a boundary, not a blank shell.
+  await expect(page.getByText("Not scheduled yet")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Auto-schedule remaining" })).toBeVisible();
+});
