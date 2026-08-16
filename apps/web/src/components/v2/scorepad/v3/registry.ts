@@ -16,8 +16,22 @@
 import { builtinModules } from "@seazn/engine/sports";
 import type { SkinDefV3 } from "./types";
 
-/** Sport key -> v3 skin. Empty in R1; populated sport-by-sport from R2. */
-export const V3_SKINS: Partial<Record<string, SkinDefV3>> = {};
+/**
+ * Sport key -> v3 skin. Empty in R1; populated sport-by-sport from R2.
+ *
+ * Built with `Object.create(null)` rather than `{}` (Task 11 fix batch,
+ * deferred from Task 2's review): a plain object literal inherits
+ * `Object.prototype`, so `"constructor" in V3_SKINS` and
+ * `V3_SKINS["constructor"]` both resolve truthy even though no such key
+ * was ever inserted — `resolvePad("constructor")` would silently return
+ * `{ lane: "v3", skin: Object }` instead of throwing. A null-prototype
+ * object has no inherited properties, so both the `in` check below (and
+ * in `__tests__/registry-totality.test.ts`) and `V3_SKINS[key]` read only
+ * OWN properties, same as `Object.hasOwn` would give — with zero change
+ * to real-key behaviour (assignment/lookup for an actual sport key is
+ * unaffected by the prototype).
+ */
+export const V3_SKINS: Partial<Record<string, SkinDefV3>> = Object.create(null);
 
 /**
  * Every engine sport key, computed from `builtinModules` rather than

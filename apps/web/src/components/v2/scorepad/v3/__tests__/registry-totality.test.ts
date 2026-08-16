@@ -15,6 +15,13 @@ import { V3_SKINS, LEGACY_SPORTS, resolvePad } from "../registry";
 
 describe("registry totality", () => {
   it("every engine sport resolves to exactly one lane", () => {
+    // Task 11 fix batch (deferred from Task 2's review): this gate has no
+    // floor assertion on its own key source — an empty `builtinModules`
+    // import would skip the loop below entirely and still report a
+    // passing run, indistinguishable from a real green. Mitigated only by
+    // a DIFFERENT file (registry.test.tsx:87) today; this line makes the
+    // gate self-contained.
+    expect(builtinModules.length).toBeGreaterThan(0);
     for (const m of builtinModules) {
       const key = m.key;
       const inV3 = key in V3_SKINS;
@@ -27,5 +34,15 @@ describe("registry totality", () => {
 
   it("unknown key throws — no silent universal fallback", () => {
     expect(() => resolvePad("quidditch")).toThrow(/no pad lane/);
+  });
+
+  it("a key equal to an Object.prototype property name is not falsely owned (Task 11 fix batch)", () => {
+    // Before the fix, V3_SKINS was a plain `{}` literal: `"constructor" in
+    // V3_SKINS` and `V3_SKINS["constructor"]` both read the INHERITED
+    // Object.prototype.constructor, so this key resolved truthy though it
+    // was never inserted — resolvePad("constructor") returned a bogus
+    // { lane: "v3", skin: Object } instead of throwing.
+    expect("constructor" in V3_SKINS).toBe(false);
+    expect(() => resolvePad("constructor")).toThrow(/no pad lane/);
   });
 });
