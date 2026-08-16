@@ -63,6 +63,26 @@ Wave A runs in parallel (provably disjoint files). Everything after is serial.
   literal Tailwind. Link them so a class edit cannot desync what
   `contrast.test.ts` measures from what renders.
 
+### A5 — guided sheets span TWO sides (found by A1, blocks C)
+
+`GuidedSheetProps` takes ONE `view: PoolView` (one squad), following
+`ContextStrip`/`SwapSheet` precedent — and R1's `SheetPersonStep` has
+`pool: "onfield" | "bench" | "all"` with no notion of side. Cricket's wicket
+flow needs the **batting** side for "who out" and the **fielding** side for
+"fielder", in one sheet. So `SheetPersonStep` needs an explicit side and the
+host must resolve pools for both. This is a change to an R1 type; R2 owns it
+as its first consumer. Do it in B (host) so C (skin) can just declare the flow.
+
+### A4 — alpha-text AA (found by A3, folded in rather than raised)
+
+`NIGHT_TILE_PAIRS` AA-tests full-opacity cream only, but the scorebug renders
+hint / context / strip text at `cream/70` and `cream/80`. Cricket's scorebug is
+largely made of exactly those (`T20 · Over 0.5 · RR 14.4`, the over dots), so
+the gap ships with this wave unless closed. Composite the alpha over the night
+ground, assert AA on the RESULT, and mutation-prove it. If a real ratio fails,
+that is a finding for the gallery sign-off (a token change is a restyle and
+needs the owner's sign-off), not a silent re-baseline.
+
 ### B — v3 pad host (serial, biggest single item)
 - New `v3/pad-host.tsx`: assembles scorebug + ribbon + context strip + tile grid
   + detail dock + swap sheet + guided sheet + recording chip over
