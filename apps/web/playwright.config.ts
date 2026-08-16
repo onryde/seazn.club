@@ -143,6 +143,31 @@ export default defineConfig({
       },
       dependencies: ["setup"],
     },
+    // v3/R1 Task 10 — the productized gallery capture harness
+    // (e2e/gallery.capture.ts). Deliberately named `.capture.ts`, not
+    // `.spec.ts`, so it falls outside every OTHER project's default
+    // testMatch and a plain `npm run test:e2e` sweep never selects it even
+    // without this entry — but that same fact means NO project resolves it
+    // at all without one. This project exists only so the harness is
+    // actually invokable; it changes nothing about any other project's
+    // matching. It is doubly guarded on top of that: the file's own
+    // `test.skip(!process.env.GALLERY_DIR)` skips every test here unless
+    // GALLERY_DIR is set, so `npx playwright test --project=gallery` with
+    // no env var is a same no-op. No `storageState`/`setup` dependency —
+    // each capture mints and logs in as its own fresh Pro org (loginUi,
+    // PROD_TARGET-safe via mintLoginPathBySql — no shared-account budget or
+    // magic-link rate limit involved). See docs/runbooks/pad-gallery.md.
+    {
+      name: "gallery",
+      testMatch: /gallery\.capture\.ts/,
+      // One worker, one sport at a time: the file's own `test.afterAll`
+      // writes ONE shared `index.html` manifest into GALLERY_DIR once every
+      // sport has captured, which is only race-free if the 12 per-sport
+      // tests never run concurrently (they'd otherwise land across separate
+      // worker processes, each with its own afterAll firing independently).
+      fullyParallel: false,
+      use: { ...devices["Desktop Chrome"] },
+    },
   ],
   // NO `webServer` BLOCK, deliberately (#342). It used to run
   // `npm run build && npm run start`, which was wrong in three ways at once:

@@ -2,9 +2,15 @@
 // events in IndexedDB keyed by idempotency_key, surviving tab death and
 // reload"). QueueStore is deliberately tiny — list/put/delete/clear — so
 // queue.ts's ordering/idempotency operations (enqueue, peek-in-order,
-// mark-acked, mark-dropped, recordAttempt, renegotiate) can all be expressed
-// in terms of these four primitives without the store needing to know
-// anything about the append/replay protocol.
+// mark-acked, mark-dropped, recordAttempt, renegotiate, and — R1 chassis
+// soft-commit, spec §2.3 — enqueueHeld/mutateHeld/releaseHeld/dropHeld/
+// flushHeldBefore) can all be expressed in terms of these four primitives
+// without the store needing to know anything about the append/replay
+// protocol, OR about `heldUntil` specifically: put()/list() persist and
+// return whatever fields PendingEvent carries, generically, so a new
+// durable field on that type (types.ts) needs no code change here at all —
+// this file was named in the R1 task's scope for exactly that reason, not
+// because it changed.
 import type { PendingEvent } from "./types";
 
 export interface QueueStore {
