@@ -380,7 +380,7 @@ export function DuplicatesPanel({
 
       {outcome && (
         <div className="modal-overlay">
-          <div className="modal max-h-[90vh] overflow-y-auto sm:max-w-xl">
+          <div className="modal max-h-[90dvh] overflow-y-auto sm:max-w-xl">
             <span aria-hidden className="sheet-handle" />
             <MergeOutcomeCard
               survivorName={outcome.entry.survivor_name}
@@ -504,7 +504,7 @@ export function MergeConfirmDialog({
         role="dialog"
         aria-modal="true"
         aria-label={msg("persons.dupes.dialog.title")}
-        className="modal max-h-[90vh] overflow-y-auto sm:max-w-2xl"
+        className="modal max-h-[90dvh] overflow-y-auto sm:max-w-2xl"
       >
         <span aria-hidden className="sheet-handle" />
         <h2 className="app-display text-lg font-semibold text-slate-800">

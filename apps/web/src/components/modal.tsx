@@ -28,7 +28,10 @@ export function Modal({
     <div className="modal-overlay" onClick={onClose}>
       {/* Bottom sheet under `sm`, centered modal above (v3/02 pattern 3). */}
       <div
-        className={`flex max-h-[85vh] w-full ${maxW} flex-col rounded-t-2xl border border-purple-100 bg-white p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-2xl sm:pb-6`}
+        // 85dvh, not 85vh: `vh` is the LARGE viewport and ignores retractable
+        // mobile browser chrome, so the panel was measured against a box taller
+        // than the visible one and the footer sat under the chrome at 320×568.
+        className={`flex max-h-[85dvh] w-full ${maxW} flex-col rounded-t-2xl border border-purple-100 bg-white p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-2xl sm:pb-6`}
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}

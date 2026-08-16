@@ -1023,6 +1023,22 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
   expect(submitBox, "the template detail submit has no box").not.toBeNull();
   expect(submitBox!.height, `submit touch target is ${submitBox!.height}px`).toBeGreaterThanOrEqual(44);
 
+  // The FOOTER, not the body. `components/modal.tsx` puts the footer outside
+  // the scrollable body (`shrink-0`), so it is the part a panel taller than the
+  // visible viewport pushes off-screen entirely — no scroll can recover it.
+  //
+  // HONEST LIMIT: this cannot prove the 85vh→85dvh fix. Headless Chrome has no
+  // retractable browser chrome, so `100dvh === 100vh` here and the two spell
+  // the same number at every one of these seven widths. The unit assertion in
+  // components/__tests__/pass-checkout-parity.test.tsx is what pins the unit;
+  // this pins the geometry that unit exists to protect.
+  const viewportH = page.viewportSize()!.height;
+  expect(
+    submitBox!.y + submitBox!.height,
+    `the sheet's footer button ends at ${submitBox!.y + submitBox!.height}px, past the ` +
+      `${viewportH}px viewport — a footer outside the scroll body cannot be scrolled to`,
+  ).toBeLessThanOrEqual(viewportH + 1);
+
   await page.screenshot({
     path: `test-results/portfolio-panels-${test.info().project.name}.png`,
     fullPage: false,

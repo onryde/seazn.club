@@ -326,12 +326,22 @@ body {
   }
 
   /* Dialogs are bottom sheets under `sm` (v3/02 pattern 3): full-width,
-     drag handle, internal scroll; centered modal from `sm` up. */
+     drag handle, internal scroll; centered modal from `sm` up.
+
+     `top-0 h-dvh`, NOT `inset-0`. On a fixed element `inset-0` resolves against
+     the LARGE viewport — the one that ignores retractable browser chrome — so
+     `items-end` parked the sheet's bottom edge, and with it the footer's
+     confirm button, underneath that chrome on a 320×568 phone. Capping the
+     PANEL at 85dvh does not fix this on its own: a short panel inside a
+     too-tall container is still bottom-aligned to the wrong bottom. */
   .modal-overlay {
-    @apply fixed inset-0 z-50 flex items-end justify-center bg-purple-950/30 backdrop-blur-sm sm:items-center sm:p-4;
+    @apply fixed inset-x-0 top-0 z-50 flex h-dvh items-end justify-center bg-purple-950/30 backdrop-blur-sm sm:items-center sm:p-4;
   }
+  /* The raw-class variant (hand-rolled dialogs). Unlike components/modal.tsx it
+     had NO height cap and NO scroll at all, so anything past the fold was
+     simply unreachable rather than merely scrolled. */
   .modal {
-    @apply w-full max-w-none rounded-t-2xl border border-purple-100 bg-white p-6 shadow-2xl sm:max-w-md sm:rounded-2xl;
+    @apply max-h-[85dvh] w-full max-w-none overflow-y-auto rounded-t-2xl border border-purple-100 bg-white p-6 shadow-2xl sm:max-w-md sm:rounded-2xl;
     padding-bottom: calc(1.5rem + env(safe-area-inset-bottom));
   }
   @media (min-width: 40rem) {
