@@ -33,7 +33,17 @@ import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = new URL("../../", import.meta.url).pathname;
 
-/** The trees a developer reads to learn how scheduling works TODAY. */
+/**
+ * The trees a developer reads to learn how scheduling works TODAY.
+ *
+ * This file excludes itself, and the reason is worth keeping: it quotes every
+ * retired claim verbatim, so it is the single densest z3 hit in the repo. It
+ * did not need excluding while it was UNTRACKED — `git grep` searches tracked
+ * content only, so the ledger passed until the first commit and failed
+ * immediately after. Same trap took out an earlier draft of the positive
+ * control below. An empty `git grep` result is not evidence a file is clean;
+ * it can equally mean git has never heard of it.
+ */
 const LIVE_TREES = [
   "packages/engine/src",
   "apps/web/src",
@@ -41,6 +51,7 @@ const LIVE_TREES = [
   "scripts",
   "proto",
   "services/placement/src",
+  ":!scripts/__tests__/z3-retirement-drift.test.ts",
 ];
 
 /**
