@@ -84,8 +84,8 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
 
     for (const c of [
       "id", "registration_id", "org_id", "full_name", "email", "dob", "gender",
-      "guardian_name", "source", "consent_status", "consent_at", "claim_token_hash",
-      "person_id", "squad_number", "is_captain", "created_at", "updated_at",
+      "guardian_name", "source", "consent_status", "consent_at", "user_id",
+      "claim_token_hash", "person_id", "squad_number", "is_captain", "created_at", "updated_at",
     ]) {
       expect(byName.has(c), `registration_players.${c} missing`).toBe(true);
     }
@@ -93,9 +93,34 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
       expect(byName.get(c), `${c} should be NOT NULL`).toBe("NO");
     }
     // Only the divisions that need them demand dob/gender, so the column cannot.
-    for (const c of ["dob", "gender", "email", "person_id", "guardian_name"]) {
+    // user_id is nullable too — most players never link an account (#402).
+    for (const c of ["dob", "gender", "email", "person_id", "guardian_name", "user_id"]) {
       expect(byName.get(c), `${c} should be nullable`).toBe("YES");
     }
+  });
+
+  it("registration_players.user_id survives a user delete — SET NULL, not cascade", async () => {
+    const { orgId, compId, divId, tag } = await seedOrgCompDiv();
+    const group = await seedGroup(compId, tag);
+    const reg = await seedEntry(group.id, divId);
+    const [{ id: userId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified)
+      values (${`u-${tag}@test.local`}, 'Linked User', true)
+      returning id`;
+    const [player] = await sql<{ id: string; user_id: string | null }[]>`
+      insert into registration_players (registration_id, full_name, source, user_id)
+      values (${reg.id}, 'Linked Player', 'captain_entered', ${userId})
+      returning id, user_id`;
+    expect(player.user_id).toBe(userId);
+
+    await sql`delete from users where id = ${userId}`;
+
+    const rows = await sql<{ user_id: string | null }[]>`
+      select user_id from registration_players where id = ${player.id}`;
+    expect(rows, "the player row must survive the user delete").toHaveLength(1);
+    expect(rows[0]!.user_id).toBeNull();
+
+    await dropOrg(orgId);
   });
 
   it("registrations keeps only per-entry state; the cart columns are gone", async () => {

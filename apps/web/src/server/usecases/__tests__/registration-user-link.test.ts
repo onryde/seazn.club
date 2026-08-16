@@ -1,17 +1,28 @@
-// #402 — the registrant's session, and the person it resolves to.
+// #402 — the account behind a registration, and the person it resolves to.
 //
 // Two halves, deliberately in one file because the second depends on what the
 // first writes:
 //
-//  1. CAPTURE. `registrations.user_id` is written ONLY when the submitter is
-//     signed in AND affirmed "I'm registering myself" AND left every guardian
-//     field empty. Being signed in is never enough on its own — a guardian, a
-//     spouse and a team captain are all signed in too, and inferring the link
-//     would merge them into one person exactly as `contact_email` would
-//     (persons-identity.test.ts pins that same harm in its email form).
-//  2. RESOLVE. Given that link, `materialise` upserts into the PLAYER lane on
-//     (org_id, user_id, 'player'), so one human entering two divisions gets one
-//     persons row. Everything without a link keeps today's plain insert.
+//  1. CAPTURE. Pre-RS001 this was `registrations.user_id`, written ONLY when
+//     the submitter was signed in AND affirmed "I'm registering myself" AND
+//     left every guardian field empty (`deriveLinkUserId`, still exported,
+//     still pinned pure below). Post-RS001/V363 the target column is
+//     `registration_players.user_id` — the account that owns ONE specific
+//     player row, set for the submitter's own row at submit (design §4 step
+//     1) or at claim/join (design §2 item 4). Deliberately NOT
+//     `registration_groups.user_id`: the group's contact is often a club rep
+//     entering OTHER people's entries, and resolving every player against
+//     the rep's account would mis-link entries that are not theirs. Nothing
+//     writes this column yet (RS002/RS003 own submit, RS008 owns claim) —
+//     untested here, on purpose; that capture decision has no call site to
+//     pin against until one of those ships.
+//  2. RESOLVE. Given a player row carrying a `user_id`, `materialise` calls
+//     `resolvePlayerPerson` to upsert into the PLAYER lane on (org_id,
+//     user_id, 'player'), so one human entering two divisions gets ONE
+//     persons row. A row with no `user_id` keeps the plain unlinked insert.
+//     Restored below, seeded directly against the V363/V364 shape (RS001
+//     follow-up) — this half needs no submit flow, only a player row that
+//     already carries the link.
 //
 // Real Postgres required; skipped without DATABASE_URL.
 import { describe, expect, it } from "vitest";
@@ -21,7 +32,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { deriveLinkUserId, putRegistrationSettings } from "../registrations";
+import { confirmRegistration, deriveLinkUserId, putRegistrationSettings } from "../registrations";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -176,18 +187,181 @@ describe.skipIf(!HAS_DB)("organiser-side entry creation (#402)", () => {
   });
 });
 
-// describe("person resolution by (org_id, user_id, 'player') (#402)")
-// DELETED (RS001 demolition, #588): all 7 tests depended on TWO things that
-// no longer hold. (1) submitRegistration's session capture — see the note
-// above. (2) `resolvePlayerPerson`, the upsert-by-(org_id,user_id,'player')
-// this whole describe block existed to pin, is no longer CALLED by
-// `materialise`/`confirmRegistration` at all: `registration_players` carries
-// no `user_id` for the new per-player-consent model to resolve against (see
-// registrations.ts's `loadPlayers` and `resolvePlayerPerson` doc comments —
-// "Orphaned by the RS001 registration demolition… Exported, not deleted:
-// RS002/RS008 need this exact upsert once the claim flow supplies a real
-// link"). Today `materialise` inserts a fresh, unlinked person on every
-// confirm — seeding around problem (1) here would just prove problem (2) a
-// test failure, not a passing regression pin. RS002/RS008 own re-wiring the
-// resolve-on-confirm call and re-testing this file's whole premise once the
-// claim flow supplies a real link.
+async function makeUser(): Promise<string> {
+  const [u] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, password_hash)
+    values (${`u-${randomUUID().slice(0, 8)}@test.local`}, 'Session User', 'x')
+    returning id`;
+  return u.id;
+}
+
+async function personCount(orgId: string): Promise<number> {
+  const [{ n }] = await sql<{ n: string }[]>`
+    select count(*)::text as n from persons where org_id = ${orgId}`;
+  return Number(n);
+}
+
+/**
+ * Direct V363/V364 fixture: the group → entry → player-row chain
+ * `submitRegistration` used to write in one call (now deleted — see the file
+ * header). `userId` on a player entry mimics whatever RS002/RS003 (submit) or
+ * RS008 (claim) will eventually stamp onto that ONE row — never the group's
+ * own `user_id`, which is the CONTACT's account and is not what `materialise`
+ * resolves against.
+ */
+async function seedPlayerEntry(
+  divisionId: string,
+  players: { name: string; dob?: string | null; gender?: string | null; userId?: string | null }[],
+): Promise<{ id: string }> {
+  const [{ competition_id: competitionId }] = await sql<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${divisionId}`;
+  const [group] = await sql<{ id: string }[]>`
+    insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash)
+    values (
+      ${competitionId}, 'Contact', ${`c-${randomUUID().slice(0, 8)}@test.local`},
+      ${`tok-${randomUUID()}`}
+    )
+    returning id`;
+  const [reg] = await sql<{ id: string }[]>`
+    insert into registrations (group_id, division_id, display_name)
+    values (${group.id}, ${divisionId}, ${players[0]?.name ?? "Entry"})
+    returning id`;
+  for (const p of players) {
+    await sql`
+      insert into registration_players (registration_id, full_name, dob, gender, user_id, source)
+      values (
+        ${reg.id}, ${p.name}, ${p.dob ?? null}, ${p.gender ?? null}, ${p.userId ?? null},
+        'captain_entered'
+      )`;
+  }
+  return reg;
+}
+
+describe.skipIf(!HAS_DB)("person resolution by (org_id, user_id, 'player') (#402, restored)", () => {
+  it("THE headline: one signed-in registrant, two divisions ⇒ ONE persons row, linked", async () => {
+    const { auth } = await seedOrg("pro");
+    const divA = await seedOpenDivision(auth);
+    const divB = await seedOpenDivision(auth);
+    const userId = await makeUser();
+    const before = await personCount(auth.orgId);
+
+    const a = await seedPlayerEntry(divA.divisionId, [{ name: "Sam Player", dob: ADULT_DOB, userId }]);
+    const b = await seedPlayerEntry(divB.divisionId, [{ name: "Sam Player", dob: ADULT_DOB, userId }]);
+    const ca = await confirmRegistration(auth, a.id);
+    const cb = await confirmRegistration(auth, b.id);
+
+    expect(await personCount(auth.orgId)).toBe(before + 1);
+    const [person] = await sql<{ user_id: string | null; lane: string }[]>`
+      select user_id, lane from persons where org_id = ${auth.orgId} and user_id = ${userId}`;
+    expect(person.user_id).toBe(userId);
+    expect(person.lane).toBe("player");
+
+    const members = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members
+       where entrant_id in (${ca.entrant_id as string}, ${cb.entrant_id as string})`;
+    expect(members).toHaveLength(2);
+    expect(members[0]!.person_id).toBe(members[1]!.person_id);
+  });
+
+  it("the resolved person keeps its OWN data — a later entry never overwrites it", async () => {
+    const { auth } = await seedOrg("pro");
+    const divA = await seedOpenDivision(auth);
+    const divB = await seedOpenDivision(auth);
+    const userId = await makeUser();
+
+    const a = await seedPlayerEntry(divA.divisionId, [
+      { name: "Original Name", dob: "1990-01-01", userId },
+    ]);
+    await confirmRegistration(auth, a.id);
+    const b = await seedPlayerEntry(divB.divisionId, [{ name: "Typo Nmae", dob: "1991-02-02", userId }]);
+    await confirmRegistration(auth, b.id);
+
+    const [person] = await sql<{ full_name: string; dob: string | null }[]>`
+      select full_name, dob from persons
+       where org_id = ${auth.orgId} and user_id = ${userId} and lane = 'player'`;
+    expect(person.full_name).toBe("Original Name");
+    expect(person.dob).toBe("1990-01-01");
+  });
+
+  it("a player row with a NULL user_id still materialises an unlinked person, fresh each time", async () => {
+    const { auth } = await seedOrg("pro");
+    const div = await seedOpenDivision(auth);
+    const before = await personCount(auth.orgId);
+    const one = await seedPlayerEntry(div.divisionId, [{ name: "Anon A", userId: null }]);
+    const two = await seedPlayerEntry(div.divisionId, [{ name: "Anon B", userId: null }]);
+    const ca = await confirmRegistration(auth, one.id);
+    await confirmRegistration(auth, two.id);
+
+    expect(await personCount(auth.orgId)).toBe(before + 2);
+    const [{ user_id: linked }] = await sql<{ user_id: string | null }[]>`
+      select p.user_id from persons p join entrant_members em on em.person_id = p.id
+       where em.entrant_id = ${ca.entrant_id as string}`;
+    expect(linked).toBeNull();
+  });
+
+  it("team roster: the linked player's row resolves & dedupes; unlinked teammates insert fresh each time", async () => {
+    const { auth } = await seedOrg("pro");
+    const divA = await seedOpenDivision(auth, "team");
+    const divB = await seedOpenDivision(auth, "team");
+    const userId = await makeUser();
+
+    const players = [
+      { name: "Cap Tain", dob: ADULT_DOB, userId },
+      { name: "Team Mate One", userId: null },
+      { name: "Team Mate Two", userId: null },
+    ];
+    const a = await seedPlayerEntry(divA.divisionId, players);
+    const b = await seedPlayerEntry(divB.divisionId, players);
+    const ca = await confirmRegistration(auth, a.id);
+    const cb = await confirmRegistration(auth, b.id);
+
+    const [{ n }] = await sql<{ n: string }[]>`
+      select count(*)::text as n from persons
+       where org_id = ${auth.orgId} and user_id = ${userId} and lane = 'player'`;
+    expect(Number(n)).toBe(1);
+
+    const rows = await sql<{ entrant_id: string; person_id: string }[]>`
+      select entrant_id, person_id from entrant_members
+       where entrant_id in (${ca.entrant_id as string}, ${cb.entrant_id as string})`;
+    expect(rows).toHaveLength(6);
+    // The captain's person is the only one appearing on BOTH entrants; the two
+    // team-mates are unlinked and insert fresh on every confirm.
+    const counts = new Map<string, number>();
+    for (const r of rows) counts.set(r.person_id, (counts.get(r.person_id) ?? 0) + 1);
+    expect([...counts.values()].filter((c) => c === 2)).toHaveLength(1);
+    expect(counts.size).toBe(5);
+    const [captain] = await sql<{ id: string }[]>`
+      select id from persons
+       where org_id = ${auth.orgId} and user_id = ${userId} and lane = 'player'`;
+    expect(counts.get(captain!.id)).toBe(2);
+  });
+
+  it("two concurrent confirmations of the same linked user ⇒ still ONE persons row", async () => {
+    const { auth } = await seedOrg("pro");
+    const divA = await seedOpenDivision(auth);
+    const divB = await seedOpenDivision(auth);
+    const userId = await makeUser();
+    const before = await personCount(auth.orgId);
+
+    const a = await seedPlayerEntry(divA.divisionId, [{ name: "Race One", dob: ADULT_DOB, userId }]);
+    const b = await seedPlayerEntry(divB.divisionId, [{ name: "Race Two", dob: ADULT_DOB, userId }]);
+    await Promise.all([confirmRegistration(auth, a.id), confirmRegistration(auth, b.id)]);
+
+    expect(await personCount(auth.orgId)).toBe(before + 1);
+  });
+});
+
+// Two more cases from the pre-RS001 version of this describe are NOT
+// restored: a guardian's/parent's own veto against linking a CHILD's row, and
+// a defensive "only the first of two flagged rows resolves" guard. Both
+// tested `deriveLinkUserId`/the old roster's single boolean `self` flag —
+// decisions the OLD `submitRegistration` made about WHETHER to write a link
+// at all. That decision now lives entirely upstream of `materialise`
+// (RS002/RS003's submit flow, RS008's claim flow): whichever row a future
+// caller stamps `user_id` onto is not something `materialise` re-derives, so
+// there is no `materialise`-level surface left to pin either scenario
+// against — restoring them here would either duplicate the NULL-user_id
+// coverage above under a different name, or invent a same-registration
+// double-`user_id` guard nobody has asked `materialise` to enforce.
+// RS002/RS003/RS008 own re-pinning their own linking decisions once they
+// exist.
