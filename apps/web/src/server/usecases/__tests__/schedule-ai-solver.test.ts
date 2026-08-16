@@ -104,6 +104,47 @@ describe("solveBoard (#401, C5)", () => {
     expect(out.telemetry.solver_ran).toBe(false);
   });
 
+  it("declines cleanly, before calling buildSchedule, when a violator's dependency touches a frozen feeder", async () => {
+    // C4's own documented gap ("a dependency-encoding gap on a FROZEN
+    // feeder, shared with POLISH, out of C4's file set to fix") reaches
+    // this path through C5's frozen/violator split — confirmed by a real
+    // CI smoke failure on a bracket board (a third-place playoff, free/
+    // violator, depending on two frozen semi-finals): buildSchedule placed
+    // the dependent BEFORE its frozen feeders finished, a genuine order
+    // breach the caller's own re-verification correctly flagged but the
+    // LLM round could not talk itself out of within its budget. Declining
+    // before ever calling buildSchedule avoids manufacturing the illegal
+    // board in the first place, falling through to the LLM repair path
+    // exactly as a kill-switch decline already does.
+    //
+    // F1 is the violator (baseInput freezes F2); the edge points AT the
+    // frozen feeder.
+    const out = await solveBoard({
+      ...baseInput,
+      dependencies: [{ fixtureId: "F1", dependsOn: "F2", direct: true }],
+    });
+
+    expect(buildSchedule).not.toHaveBeenCalled();
+    expect(out.telemetry.solver_ran).toBe(false);
+  });
+
+  it("still attempts the solve when a dependency exists but touches no frozen fixture", async () => {
+    // The guard above is specifically about a FROZEN feeder — a dependency
+    // between two fixtures that are BOTH violators (free to move together)
+    // is exactly the ordinary case buildSchedule's own encoding handles
+    // (both ends are real placement variables), so this must not decline.
+    buildSchedule.mockResolvedValueOnce(buildResult(baseInput.board));
+
+    const out = await solveBoard({
+      ...baseInput,
+      frozen: new Set<string>(), // nothing frozen — F1 and F2 are both violators
+      dependencies: [{ fixtureId: "F1", dependsOn: "F2", direct: true }],
+    });
+
+    expect(buildSchedule).toHaveBeenCalled();
+    expect(out.telemetry.solver_ran).toBe(true);
+  });
+
   it("reconciles a frozen fixture back onto its known slot, even when buildSchedule itself moved it", async () => {
     // THE regression this module exists to prevent: buildSchedule's fallback
     // exits (already_optimal, a proved tie, verifier_rejected, not_searched)

@@ -305,6 +305,57 @@ export async function solveBoard(input: SolveBoardInput): Promise<SolveBoardOutc
   const frozen = new Set([...input.frozen].filter((id) => knownById.has(id)));
   const violatorIds = input.fixtures.map((f) => f.id).filter((id) => !frozen.has(id));
 
+  /**
+   * A violator's dependency edge touches a FROZEN feeder — decline before
+   * ever calling `buildSchedule`.
+   *
+   * C4's own documented finding (schedule.ts's `reflowExisting`, "a
+   * dependency-encoding gap on a FROZEN feeder... shared with POLISH, out
+   * of C4's file set to fix... Recorded so C5/a POLISH follow-up finds a
+   * decision, not a miss"): `buildSchedule`'s CP-SAT encoding does not
+   * enforce a `dependsOn` edge against a fixture that is FROZEN via
+   * `frozen`/`current` rather than genuinely `.locked`. C4 never needed to
+   * fix it because REFLOW freezes every already-placed card, so a
+   * dependency edge is either entirely inside the frozen set (both ends
+   * already placed, nothing to enforce) or entirely outside it (both ends
+   * free, ordinary encoding). C5's violator-derived freeze is the first
+   * caller that can hand `buildSchedule` an edge with exactly ONE end
+   * frozen — a free dependent whose feeder is a non-violator.
+   *
+   * Confirmed live, not merely theoretical: a real CI smoke run on a
+   * knockout-bracket board reproduced it directly — a third-place playoff
+   * (a violator, freely movable) depending on two decided semi-finals
+   * (both non-violators, hence frozen) came back from `buildSchedule`
+   * scheduled BEFORE both feeders finished, a genuine `order_before_feeder`
+   * breach. `solveBoard`'s own re-verification caught it (correctly scored
+   * `"partial"`/`"unrepaired"`, never `"repaired"`), but the board still
+   * reached the LLM repair round carrying a violation the model was not
+   * well-positioned to reason about, and it survived every remaining round.
+   *
+   * The fix is not to encode the dependency correctly — that is
+   * `build-encode.ts`, shared BUILD/POLISH code, out of this module's
+   * reach — it is to recognise the exact shape the encoder cannot express
+   * and route around it, the same way the fully-frozen case below routes
+   * around a different wire-contract limit. C9 (a decomposed CP-SAT
+   * driver) is expected to close this properly by keeping a dependency's
+   * two ends in the same component whenever one is frozen; until then,
+   * this is the narrow, targeted guard.
+   */
+  const violatorSet = new Set(violatorIds);
+  const dependencyTouchesFrozenFeeder = input.dependencies.some(
+    (d) =>
+      (violatorSet.has(d.fixtureId) && frozen.has(d.dependsOn)) ||
+      (violatorSet.has(d.dependsOn) && frozen.has(d.fixtureId)),
+  );
+  if (dependencyTouchesFrozenFeeder) {
+    return {
+      assignments: null,
+      movedFixtureIds: [],
+      unresolvedFixtureIds: [...violatorIds].sort(),
+      telemetry: { solver_ran: false, fallback: "unrepaired" },
+    };
+  }
+
   if (violatorIds.length === 0) {
     // Mirrors `reflowExisting`'s identical guard (schedule.ts): the placement
     // service's wire refuses a request naming zero movable fixtures
