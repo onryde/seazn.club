@@ -249,16 +249,44 @@ export async function instantiateTemplate(
           if (templateStage.points !== undefined) {
             validatePointsRule(templateStage.points, sportModule.metrics);
           }
+          // D4a (P5, T3): `.seeding.source` is narrowed to the literal
+          // "previous" for every template stage (TemplateStageSeeding, T1)
+          // — a catalog JSON has no live stage UUID for the `{stageId}`
+          // branch. "previous" means "the stage immediately before this one
+          // in the SAME division" (stages.ts's resolveSeedingSource,
+          // :1313-1317 — run later, at save/generate time, by P5's own
+          // code; NOT resolved here), so a stage at this division's index 0
+          // can never have one: there is no earlier stage, now or ever (a
+          // stage's position is fixed once instantiation writes it). Caught
+          // here rather than left to surface downstream at proposal/
+          // generate time — the same "a catalog bug 422s now, not later"
+          // contract this function already applies to sport/variant/config/
+          // points above.
+          if (templateStage.seeding !== undefined && si === 0) {
+            throw new Error("seeding.source is 'previous' but this is the division's first stage");
+          }
           const stageName = t(dict, templateStage.i18nNameKey);
           const [stage] = await tx<{ id: string }[]>`
-            insert into stages (division_id, seq, kind, name, config)
+            insert into stages (division_id, seq, kind, name, config, seeding)
             values (${divisionId}, ${si + 1}, ${templateStage.kind}, ${stageName},
-                    ${tx.json(effectiveStageConfig(templateStage) as never)})
+                    ${tx.json(effectiveStageConfig(templateStage) as never)},
+                    ${templateStage.seeding ? tx.json(templateStage.seeding as never) : null})
             returning id`;
-          // No fixtures at instantiation time by design: entrants don't
-          // exist yet (design doc §UI — "wizard routes into the entrant-add
-          // step with placeholder counts... no fake entrants created"), so
-          // generateStageFixtures never runs here.
+          // Seeding rules ARE persisted here (T3, D4a/P5's StageSeeding) —
+          // the row above carries `templateStage.seeding` verbatim, same
+          // column/shape/serialisation `createStages` uses
+          // (usecases/stages.ts). Fixtures are still NOT generated at
+          // instantiation time, by design: entrants don't exist yet (design
+          // doc §UI — "wizard routes into the entrant-add step with
+          // placeholder counts... no fake entrants created"), so
+          // generateStageFixtures never runs here — a `.seeding` stage's
+          // TBD fixtures come later from the existing Generate action
+          // (stages.ts's generateSeededStageFixtures, which already handles
+          // `.seeding` stages). This split matters, not just defers work: a
+          // fixture row anywhere in the division trips replaceStages'/
+          // patchDivision's FORMAT_LOCKED guard (stages.ts :276-281,
+          // divisions.ts :563) — generating eagerly here would freeze the
+          // division's format/variant before a single entrant exists.
           stageResults.push({ id: stage!.id, fixtureCount: 0 });
         }
         divisionResults.push({ id: divisionId, stages: stageResults });

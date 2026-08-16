@@ -446,14 +446,13 @@ describe.skipIf(!HAS_DB)(
     // box-league had NONE — a catalog edit reshaping any of these three
     // shipped green.
     //
-    // P7/D1b: euro24/t20-super8/league-playoff added. `.seeding` on a stage
-    // is NOT read by instantiateTemplate (usecases/templates.ts) yet — it is
-    // captured on the parsed CompetitionTemplate and simply unused at this
-    // layer, exactly like an unread struct field, so these three instantiate
-    // through the SAME path as any other multi-stage template. That wiring
-    // is a later task's job; this pin only proves the catalog's declared
-    // stage kinds still reach the DB unchanged. league-playoff needs "pro":
-    // its page_playoff stage is gated by formats.double_elim (format-gates.ts).
+    // P7/D1b: euro24/t20-super8/league-playoff added. Their `.seeding` rules
+    // ARE now read and persisted by instantiateTemplate
+    // (usecases/templates.ts, T3) — this pin only proves the catalog's
+    // declared STAGE KINDS still reach the DB unchanged; seeding persistence
+    // itself has its own dedicated coverage in the "seeding persistence
+    // (P7/D1b T3)" describe block below. league-playoff needs "pro": its
+    // page_playoff stage is gated by formats.double_elim (format-gates.ts).
     it.each([
       { key: "swiss11", plan: "community" as const, kinds: ["swiss"] },
       { key: "americano-night", plan: "pro" as const, kinds: ["americano"] }, // needs formats.advanced
@@ -484,3 +483,104 @@ describe.skipIf(!HAS_DB)(
     );
   },
 );
+
+describe.skipIf(!HAS_DB)("createFromTemplate — seeding persistence (P7/D1b T3)", () => {
+  it("euro24's knockout `.seeding` rule is persisted onto the stage row — take, placement, and the map's descriptor-key grammar survive verbatim", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("community");
+    const result = await createFromTemplate(auth, {
+      template_key: "euro24",
+      name: `euro24-seeding-${randomUUID().slice(0, 6)}`,
+      ends_on: "2030-12-31",
+      visibility: "private",
+    });
+    const knockoutStageId = result.divisions[0]!.stages[1]!.id;
+    const [row] = await sql<{ seeding: unknown }[]>`
+      select seeding from stages where id = ${knockoutStageId}`;
+    const catalogSeeding = getTemplate("euro24")!.divisions[0]!.stages[1]!.seeding!;
+    // Assert against the catalog's OWN parsed values (not a re-typed
+    // literal here) so this test can't drift out of sync with the catalog,
+    // while still proving take/placement/map — not just non-null — reached
+    // the row.
+    expect(row!.seeding).toMatchObject({
+      source: "previous",
+      take: catalogSeeding.take,
+      placement: catalogSeeding.placement,
+    });
+    // The map's descriptor-key grammar (stage-seeding.ts, P5): `slot` a
+    // stringified seed index, `source` a "best:N"/"rank:N"/"{pool}{rank}"
+    // descriptor key — pinned literally so a future change that
+    // normalises/re-keys it on the way in goes red here.
+    expect((row!.seeding as { map: unknown }).map).toEqual([
+      { slot: "13", source: "best:1" },
+      { slot: "14", source: "best:2" },
+      { slot: "15", source: "best:3" },
+      { slot: "16", source: "best:4" },
+    ]);
+  });
+
+  it("t20-super8's TWO `.seeding` stages (super8 + knockout) both persist, snake and rank_order placements alike", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro"); // 3 stages > community's stages.per_division.max
+    const result = await createFromTemplate(auth, {
+      template_key: "t20-super8",
+      name: `t20-seeding-${randomUUID().slice(0, 6)}`,
+      ends_on: "2030-12-31",
+      visibility: "private",
+    });
+    const [groupStage, super8Stage, knockoutStage] = result.divisions[0]!.stages;
+    const rows = await sql<{ id: string; seeding: { source: string; placement: string } | null }[]>`
+      select id, seeding from stages where id in ${sql([groupStage!.id, super8Stage!.id, knockoutStage!.id])}`;
+    const byId = new Map(rows.map((r) => [r.id, r.seeding]));
+    expect(byId.get(groupStage!.id)).toBeNull();
+    expect(byId.get(super8Stage!.id)).toMatchObject({ source: "previous", placement: "snake" });
+    expect(byId.get(knockoutStage!.id)).toMatchObject({ source: "previous", placement: "rank_order" });
+  });
+
+  it("instantiation still generates ZERO fixture rows for a multi-stage `.seeding` template — pins the §2 no-fixtures-at-instantiation ruling", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    const result = await createFromTemplate(auth, {
+      template_key: "t20-super8",
+      name: `t20-fixtures-${randomUUID().slice(0, 6)}`,
+      ends_on: "2030-12-31",
+      visibility: "private",
+    });
+    const stageIds = result.divisions[0]!.stages.map((s) => s.id);
+    for (const stage of result.divisions[0]!.stages) {
+      expect(stage.fixtureCount).toBe(0);
+    }
+    // Not just the returned count — the fixtures TABLE itself must have no
+    // rows for any of this division's stages, seeded or not.
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures where stage_id in ${sql(stageIds)}`;
+    expect(n).toBe(0);
+  });
+
+  it("regression: `.seeding` declared on a division's FIRST stage is a malformed template — refused 422, no orphan competition", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    const before = await competitionCount(auth.orgId);
+    const template = SLAM_STAGE_TEMPLATE({
+      seeding: {
+        source: "previous",
+        take: [{ kind: "rankRange", from: 1, to: 2 }],
+        placement: "rank_order",
+      },
+    });
+    const name = `BadSeeding ${randomUUID().slice(0, 6)}`;
+    await expect(
+      instantiateTemplate(auth, template, { name, ends_on: "2030-12-31" }),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: TEMPLATE_INSTANTIATION_FAILED_CODE,
+      extra: { divisionIndex: 0, stageIndex: 0 },
+    });
+    // Rollback, proven by re-querying rather than trusting the thrown
+    // error: neither the count nor a same-named row survives.
+    expect(await competitionCount(auth.orgId)).toBe(before);
+    const [{ n: orphanCompetitions }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from competitions where org_id = ${auth.orgId} and name = ${name}`;
+    expect(orphanCompetitions).toBe(0);
+  });
+});
