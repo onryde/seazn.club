@@ -17,7 +17,7 @@ interleaved: **org lane** RS004 → RS005 → RS009, **public lane** RS006 → R
 
 | Session | Prompt file | Depends on | Status |
 |---|---|---|---|
-| RS001 | `RS001-schema-and-demolition.md` | — | TODO |
+| RS001 | `RS001-schema-and-demolition.md` | — | IN PROGRESS — `feat/rs001-registration-schema` |
 | RS001b | `RS001b-org-currency-allowlist.md` | RS001 | TODO |
 | RS002 | `RS002-core-usecases.md` | RS001b | TODO |
 | RS003 | `RS003-public-endpoints.md` | RS002 | TODO |
@@ -71,10 +71,78 @@ serves its closed/unavailable state during that window.
     time. Consequence: INR card payment is unreachable on the GB platform
     (cannot onboard IN-settled accounts) — INR is offline/display-only.
 
+## Session rulings
+
+### RS001 (2026-08-16) — branch `feat/rs001-registration-schema`
+
+- **V-numbers**: high-water mark was **V362**. RS001 ships
+  `V363__registration_groups_players.sql` and `V364__registrations_regroup.sql`.
+  Schema test: `apps/web/src/server/__tests__/registration-schema.test.ts`
+  (13/13 on v364, **12/13 red on v362** — it genuinely gates the migration).
+- **Payment-columns verdict**: the whole payment/identity envelope moves to
+  `registration_groups` and is **dropped from `registrations`** —
+  `contact_email`, `access_token_hash`, `ref_code`, `locale`, `user_id`,
+  `payment_method`, `checkout_session_id`, `payment_intent_id`, `expires_at`,
+  `reminded_at`, `refunded_cents`, `refunded_at`, `disputed_at`, `dispute_id`,
+  `offline_marked_paid_at`, `offline_marked_paid_by`, `fee_percent`,
+  `currency`, `privacy_consent_at`, `privacy_consent_version`. Safe: a scout
+  sweep found every one read **only** inside
+  `server/usecases/registrations.ts` (+ its own tests). Rationale: one payment
+  per cart makes a per-entry checkout session meaningless. `amount_cents` and
+  `status` stay per entry (design §3 — a cart can be partially waitlisted).
+- **Extra drop, beyond the literal brief**: `dob`, `gender`, `guardian_name`,
+  `guardian_consent` also leave `registrations` — per-player validation and
+  per-person consent make `registration_players` the single source of truth,
+  and nullable duplicates on the entry row would drift. `display_name` stays
+  as the entry label (team/pair/individual name).
+- **Design gap fixed**: `registration_players` gains **`guardian_name`** —
+  design §3 lists `consent_status='guardian'` with nowhere to record WHO
+  consented, which the old `registrations.guardian_name` did capture.
+- **`join_code` is globally unique** (partial unique index where not null), not
+  per-division: a `?join=<CODE>` link carries nothing else, so it must resolve
+  to exactly one entry.
+- **No new `(division_id, status)` index** — the existing
+  `registrations_division_idx (division_id, status, created_at)` already serves
+  it as a leading-column prefix.
+- **Old-shape rows are deleted, not migrated** (`delete from registrations` in
+  V364): prod is empty, so this only clears local/`seed:demo` rows that have no
+  group and no player rows and would violate the new invariants.
+- **`r/[ref]` verdict**: it **does** read registrations
+  (`publicRegistrationStatusByRef` + `reconcileRegistrationBySession`) and
+  `ref_code` moved to the group → RS001 gives it the closed state; RS007
+  re-points it at group refs. Sibling `r/[ref]/ticket.png/route.tsx` rides along.
+- **`registration-pulse.tsx` verdict**: registration-only (sole importer is
+  `registrations-panel.tsx`) → deleted with the rest.
+- **Currency**: untouched by RS001 (`registration_settings.currency` still
+  exists; `registration_groups.currency` ships unconstrained). Ruling 9 above
+  says sessions opened before the addendum owe none of it — RS001b owns it.
+
 ## False premises found
 
-(none yet — record them here with the session that found them)
+- **`seazn-local-env` skill vs `AGENTS.md`**: the skill still says "never
+  enable `.github/workflows/e2e.yml`". It has been **LIVE on PRs since
+  2026-08-14** (AGENTS.md is right; the skill is stale). Bearing on RS001: the
+  workflow names only `mobile.spec.ts`, `payments-hardening.spec.ts`,
+  `ai-architect.spec.ts` and `placement-cutover.spec.ts` by filename — no
+  registration spec — but **`mobile.spec.ts` probes registration-settings**, so
+  deleting that surface without editing that spec reds live CI.
 
 ## Gotchas discovered
 
-(none yet)
+- Test-DB ports **54329 and 54341 were both squatted** by other sessions on
+  2026-08-16: `pg_ctl` exited 1 while `psql` cheerfully answered from the
+  foreign server. RS001 ran on **54367** after checking `show data_directory`.
+- `.env.local` (root and `apps/web`) points `DATABASE_URL` at the **dev** DB on
+  `:5432`, and `vitest.globalSetup.ts` deliberately does not load it — a
+  DB-backed run must pass `DATABASE_URL` explicitly or every DB suite SKIPS
+  while `total` stays unchanged.
+- **Run vitest from `apps/web`, not the worktree root** — the `@/` alias lives
+  in `apps/web/vitest.config.ts`, so a root-launched run dies with
+  `Cannot find package '@/lib/db'` and reports `total: 0` (a collection
+  failure, not a pass).
+- **A subagent destroyed uncommitted work**: it decided the worktree "was never
+  created", wrote its files into the **main checkout**, then "repaired" by
+  reverting — taking this file's uncommitted edits with it, and stalling at the
+  600s watchdog. Every RS dispatch since carries an explicit "the worktree
+  exists; never create/remove one; never `git checkout|restore|reset|clean|
+  stash`; commit at each milestone" block.
