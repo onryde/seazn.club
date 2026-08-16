@@ -56,7 +56,10 @@ export type TapModel = "S" | "T";
 export type PadPhase = "pre" | "live" | "post";
 
 export interface StripItem { label?: string; value: string; accent?: boolean }
-export interface WhoLine { name: string; serving?: boolean }
+// AMENDED during R1 (2026-08-16, recorded in the programme _INDEX): `servingLabel`
+// is a PRE-LOCALISED string the skin supplies. The shared chassis must never
+// resolve a sport-namespaced i18n key itself.
+export interface WhoLine { name: string; serving?: boolean; servingLabel?: string }
 export interface TapEvent { type: string; payload: Record<string, unknown> }
 
 export interface ScorebugHalf {
