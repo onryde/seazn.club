@@ -7,6 +7,10 @@
 import { describe, expect, it } from "vitest";
 import { StageKind } from "@/server/api-v1/schemas";
 import { TEMPLATE_CATALOG, getTemplate } from "../catalog";
+import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 
 // The full 8-template design-doc catalog: P4's 5 + P7's 3 (euro24/
 // t20-super8/league-playoff), the ones that needed D4's StageSeeding.
@@ -96,13 +100,29 @@ describe("template catalog", () => {
       ]);
     });
 
-    it("documents the UEFA best-thirds simplification in its own description copy (deliberate, not silent)", () => {
+    it("documents the UEFA best-thirds simplification in its own description copy, in all 4 locales (deliberate, not silent)", () => {
       // The real UEFA best-thirds rule is a which-4-groups-qualified lookup
       // table (15 permutations) that a static {slot,source}[] map cannot
       // express — ranked-by-record is the documented simplification. Proven
-      // via the actual dictionary text a reader would see, not a comment.
+      // by reading the ACTUAL dictionary string a reader would see (review
+      // finding: asserting only the key's NAME stays green if the caveat
+      // sentence is deleted from every locale — this reads the text).
+      // Each assertion is that locale's OWN translated marker, not a
+      // pasted-English check: a locale that ships the sentence in English
+      // (or drops it) fails on ITS OWN row, not just en's.
       const euro24 = getTemplate("euro24")!;
-      expect(euro24.i18n.descriptionKey).toBe("templates.euro24.desc");
+      const key = euro24.i18n.descriptionKey;
+      expect(key).toBe("templates.euro24.desc");
+      const dicts: Record<string, Record<string, string>> = {
+        en: uiEn as Record<string, string>,
+        es: uiEs as Record<string, string>,
+        fr: uiFr as Record<string, string>,
+        nl: uiNl as Record<string, string>,
+      };
+      expect(dicts.en![key]).toContain("ranked by record, not the official slot-swap table");
+      expect(dicts.es![key]).toContain("no por la tabla oficial de cruces");
+      expect(dicts.fr![key]).toContain("pas selon le tableau officiel de tirage");
+      expect(dicts.nl![key]).toContain("niet op het officiële loting-schema");
     });
   });
 

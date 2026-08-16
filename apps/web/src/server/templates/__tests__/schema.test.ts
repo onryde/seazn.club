@@ -2,7 +2,7 @@
 // with D4's StageSeeding).
 import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { CompetitionTemplate } from "../schema";
+import { CompetitionTemplate, type TemplateStageSeeding } from "../schema";
 
 const MINIMAL_VALID = {
   key: "slam128",
@@ -98,5 +98,27 @@ describe("CompetitionTemplate schema", () => {
       ],
     };
     expect(() => CompetitionTemplate.parse(withLiveStageId)).toThrow();
+  });
+
+  // Review finding: the runtime `.toThrow()` above only proves the parse-time
+  // check. It says nothing about the INFERRED type — a refactor that drops
+  // the `.refine()` type-predicate overload in schema.ts (keeping only a
+  // plain boolean-returning refine) would leave every runtime test green
+  // while the compile-time guarantee silently vanished. This closure is
+  // never called (mirrors credits-admin-adjust.test.ts's "confined to the
+  // allowlist" pattern) — the directive below becomes an UNUSED
+  // `@ts-expect-error` and fails `tsc` with TS2578 the moment the narrowing
+  // is lost, which is the actual enforcement; the `expect` calls only
+  // confirm both closures still compile as functions today.
+  it("type-level: TemplateStageSeeding['source'] is narrowed to the \"previous\" literal, not the wider union (tsc-enforced, not vitest-enforced)", () => {
+    const valid = (): TemplateStageSeeding["source"] => "previous";
+    const bogus = (): TemplateStageSeeding["source"] => {
+      // @ts-expect-error — a {stageId} live-stage-id reference is not
+      // assignable to the narrowed "previous" literal (see schema.ts's
+      // TemplateStageSeeding `.refine()` type-predicate).
+      return { stageId: randomUUID() };
+    };
+    expect(typeof valid).toBe("function");
+    expect(typeof bogus).toBe("function");
   });
 });
