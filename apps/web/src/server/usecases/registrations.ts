@@ -352,6 +352,15 @@ export interface RegistrationPlayerRow {
   source: "captain_entered" | "self_joined";
   consent_status: "pending" | "granted" | "guardian";
   consent_at: Date | null;
+  /**
+   * The account this player row belongs to — set for the submitter's own row at
+   * submit ("I'm playing"), and at claim/join. `materialise` resolves a LINKED
+   * person (`resolvePlayerPerson`) when it is present and an anonymous one when
+   * it is not. It lives here rather than on the group because a group is a cart:
+   * a club rep may enter other people, and linking their entries to the rep's
+   * account would attach strangers to that identity.
+   */
+  user_id: string | null;
   claim_token_hash: string | null;
   person_id: string | null;
   squad_number: number | null;
@@ -561,11 +570,12 @@ export async function resolvePlayerPerson(
  * player-lane person; a row without one still mints a fresh, unlinked person
  * exactly as before.
  */
+// Projected off RegistrationPlayerRow rather than restated: the row type is the
+// table's shape, so a column that appears in the SELECT but never in the
+// interface (as `user_id` briefly did) fails the typecheck instead of drifting
+// quietly — this file has no other consumer of the type to catch it.
 async function loadPlayers(tx: Tx, registrationId: string): Promise<
-  {
-    id: string; full_name: string; dob: string | null; gender: string | null;
-    squad_number: number | null; user_id: string | null;
-  }[]
+  Pick<RegistrationPlayerRow, "id" | "full_name" | "dob" | "gender" | "squad_number" | "user_id">[]
 > {
   return tx`
     select id, full_name, dob, gender, squad_number, user_id from registration_players
