@@ -20,6 +20,7 @@ import {
   TemplateDetailSheet,
   takeRuleText,
   templateProgressionLines,
+  templateStructureChain,
   type Msg,
 } from "../template-gallery";
 import { DictProvider } from "@/components/i18n/dict-provider";
@@ -107,12 +108,16 @@ describe("templateProgressionLines", () => {
     expect(templateProgressionLines(enMsg, templateWith([GROUP_NO_SEEDING]))).toHaveLength(0);
   });
 
-  it("renders ALL take rules for a stage with more than one, not just the first", () => {
+  it("renders ALL take rules for a stage with more than one, not just the first, prefixed by its source stage", () => {
     const lines = templateProgressionLines(enMsg, templateWith([GROUP_NO_SEEDING, EURO24_KNOCKOUT]));
     expect(lines).toHaveLength(1);
     expect(lines[0].text).toContain("Top 2 per group");
     expect(lines[0].text).toContain("4 best 3-placed");
     expect(lines[0].text).toContain("Knockout");
+    // P7/D1b T6: the line must NAME the stage entrants come FROM (the
+    // previous stage's own i18nNameKey, "Group Stage" — GROUP_NO_SEEDING
+    // here), not just describe the take rule and target.
+    expect(lines[0].text).toBe("Group Stage: Top 2 per group and 4 best 3-placed → Knockout");
   });
 
   // Reviewer gap 1: a DIFFERENT multiplicity than the euro24 case above —
@@ -122,18 +127,76 @@ describe("templateProgressionLines", () => {
   // `.seeding`. A `templateProgressionLines` that silently truncated to
   // `lines[0]` would pass every OTHER test in this file (none of them has
   // more than one seeded stage) while shipping only half the map here.
-  it("renders a distinct line for EACH seeded stage in t20-super8 (Super 8 AND Knockout), not just the first", () => {
+  //
+  // T6: both lines ALSO share the identical take-rule text ("Top 2 per
+  // group") and both targets are `group`-kind stages one level up — before
+  // this task NEITHER the take text NOR a kind label could tell the two
+  // lines' origins apart (P7/D1b defect). Only the source-stage-name prefix
+  // does, so this test pins that prefix explicitly, not just "some text
+  // differs somewhere".
+  it("renders a distinct line for EACH seeded stage in t20-super8 (Super 8 AND Knockout), each prefixed by its OWN source stage", () => {
     const t20 = getTemplate("t20-super8");
     if (!t20) throw new Error("t20-super8 missing from the catalog — catalog.test.ts should already fail this");
 
     const lines = templateProgressionLines(enMsg, t20);
     expect(lines).toHaveLength(2);
-    expect(lines[0].text).toBe("Top 2 per group → Super 8");
-    expect(lines[1].text).toBe("Top 2 per group → Knockout");
-    // Same take rule, different targets — a naive dedupe-by-text mutation
-    // would also pass "both lines present" if it merged them; this rules
-    // that out explicitly.
+    expect(lines[0].text).toBe("Group Stage: Top 2 per group → Super 8");
+    expect(lines[1].text).toBe("Super 8: Top 2 per group → Knockout");
     expect(lines[0].text).not.toBe(lines[1].text);
+    // The load-bearing assertion: a fix that named both lines from the same
+    // stage (e.g. always the division's FIRST stage, rather than each
+    // stage's actual immediate predecessor) would still pass every check
+    // above by accident on this data, since lines[0] genuinely is fed by
+    // the first stage — but it would fail HERE, on line[1]'s prefix.
+    const sourcePrefix = (text: string) => text.split(":")[0];
+    expect(sourcePrefix(lines[0].text)).toBe("Group Stage");
+    expect(sourcePrefix(lines[1].text)).toBe("Super 8");
+    expect(sourcePrefix(lines[0].text)).not.toBe(sourcePrefix(lines[1].text));
+  });
+});
+
+describe("templateStructureChain — Structure section's per-division stage chain", () => {
+  it("names BOTH ambiguous group-kind stages by their OWN name in t20-super8, fixing the identical-looking-links defect (P7/D1b T6)", () => {
+    const t20 = getTemplate("t20-super8");
+    if (!t20) throw new Error("t20-super8 missing from the catalog — catalog.test.ts should already fail this");
+    expect(templateStructureChain(enMsg, t20.divisions[0])).toBe("Group Stage → Super 8 → Knockout");
+  });
+
+  // Regression: none of the 5 pre-P7 catalog templates repeats a kind
+  // within one division, so every one of them must keep rendering its
+  // BYTE-IDENTICAL pre-existing kind-label chain — never a stage's own
+  // i18nNameKey. Reads the REAL shipped catalog (not lookalike fixtures),
+  // same reasoning as the t20-super8 case above.
+  it.each([
+    ["slam128", "Knockout"],
+    ["swiss11", "Swiss"],
+    ["wc32", "Group stage → Knockout"],
+    ["americano-night", "Americano"],
+    ["box-league", "Group stage"],
+  ])("regression: %s's structure chain is byte-identical to before this task (%s)", (key, expected) => {
+    const template = getTemplate(key);
+    if (!template) throw new Error(`${key} missing from the catalog — catalog.test.ts should already fail this`);
+    expect(templateStructureChain(enMsg, template.divisions[0])).toBe(expected);
+  });
+});
+
+describe("templates.detail.progression.line — all four locales interpolate source, take, AND target", () => {
+  // The key itself already existed (euro24/t20-super8/league-playoff shipped
+  // it pre-T6 with 2 params); T6 adds a THIRD param to its value in all four
+  // dictionaries. The generic "every templates.* key resolves in all four
+  // locales" scan below only proves the key is present and non-empty, which
+  // a dictionary that forgot to add {source} to its template string would
+  // still pass. This proves the stronger claim: each locale's STRING
+  // actually references all three placeholders, not just source/target.
+  it.each(ALL_DICTS)("%s's progression.line template uses {source}, {take}, AND {target}", (locale, dict) => {
+    const text = tRuntime(dict, "templates.detail.progression.line", {
+      source: "SRC_STAGE_MARKER",
+      take: "TAKE_RULE_MARKER",
+      target: "TGT_STAGE_MARKER",
+    });
+    expect(text, `${locale} dropped {source}`).toContain("SRC_STAGE_MARKER");
+    expect(text, `${locale} dropped {take}`).toContain("TAKE_RULE_MARKER");
+    expect(text, `${locale} dropped {target}`).toContain("TGT_STAGE_MARKER");
   });
 });
 
@@ -145,29 +208,42 @@ const renderSheet = (template: CompetitionTemplate, dict: Dict = enUi as Dict, l
   );
 
 describe("TemplateDetailSheet — progression section", () => {
-  it("renders the progression map, with both of euro24's take rules present", () => {
+  it("renders the progression map, with both of euro24's take rules present, prefixed by its source stage", () => {
     const html = renderSheet(templateWith([GROUP_NO_SEEDING, EURO24_KNOCKOUT]));
     expect(html).toContain('data-testid="template-detail-progression"');
     expect(html).toContain("Top 2 per group");
     expect(html).toContain("4 best 3-placed");
+    expect(html).toContain("Group Stage: Top 2 per group");
   });
 
-  it("renders BOTH t20-super8 progression lines (two seeded stages), not just one", () => {
+  it("renders BOTH t20-super8 progression lines (two seeded stages), each prefixed by its OWN source stage, not just one", () => {
     const t20 = getTemplate("t20-super8");
     if (!t20) throw new Error("t20-super8 missing from the catalog — catalog.test.ts should already fail this");
     const html = renderSheet(t20);
     expect(html).toContain('data-testid="template-detail-progression"');
-    expect(html).toContain("Top 2 per group → Super 8");
-    expect(html).toContain("Top 2 per group → Knockout");
+    expect(html).toContain("Group Stage: Top 2 per group → Super 8");
+    expect(html).toContain("Super 8: Top 2 per group → Knockout");
+  });
+
+  it("renders BOTH t20-super8 structure links with their OWN names, not the identical 'Group stage' kind label twice", () => {
+    const t20 = getTemplate("t20-super8");
+    if (!t20) throw new Error("t20-super8 missing from the catalog — catalog.test.ts should already fail this");
+    const html = renderSheet(t20);
+    expect(html).toContain('data-testid="template-detail-structure"');
+    expect(html).toContain("Group Stage → Super 8 → Knockout");
+    expect(html).not.toContain("Group stage → Group stage → Knockout");
   });
 
   it("regression: a template with no seeded stages omits the section and the structure list is unchanged", () => {
     const html = renderSheet(templateWith([GROUP_NO_SEEDING]));
     expect(html).not.toContain('data-testid="template-detail-progression"');
     // Structure section renders its pre-existing "{division} — {kind chain}
-    // · {n} entrants" line exactly as before this task (stageKindLabel's
-    // "Group stage", NOT the stage's own i18nNameKey "Group Stage" — the
-    // structure line never rendered individual stage names).
+    // · {n} entrants" line exactly as before this task: a single group-kind
+    // stage has no kind collision within its division, so it still resolves
+    // via stageKindLabel's "Group stage", NOT the stage's own i18nNameKey
+    // "Group Stage" (templateStructureChain only switches to a stage's own
+    // name when its kind repeats within the division — see the dedicated
+    // describe block below for the case that DOES switch).
     expect(html).toContain('data-testid="template-detail-structure"');
     expect(html).toContain("Tournament");
     expect(html).toContain("Group stage");

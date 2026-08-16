@@ -64,6 +64,25 @@ function stageKindLabel(msg: Msg, kind: string): string {
   return msg(STAGE_KIND_KEY[kind] ?? kind);
 }
 
+/** The Structure section's per-division stage chain (P7/D1b T6). A stage
+ *  renders by its OWN name (`i18nNameKey`) when another stage in the SAME
+ *  division shares its `kind` — t20-super8's two `group`-kind stages
+ *  ("Group Stage" and "Super 8") are indistinguishable by kind label alone
+ *  ("Group stage → Group stage → Knockout", the defect this fixes) — and
+ *  falls back to the pre-existing generic kind label otherwise. No division
+ *  in the pre-P7 catalog repeats a kind, so this renders BYTE-IDENTICAL to
+ *  the old kind-label-only chain for all five of those templates (proven in
+ *  template-gallery-progression.test.tsx against the real catalog, not just
+ *  lookalike fixtures). */
+export function templateStructureChain(msg: Msg, division: CompetitionTemplate["divisions"][number]): string {
+  return division.stages
+    .map((stage) => {
+      const kindIsAmbiguous = division.stages.filter((s) => s.kind === stage.kind).length > 1;
+      return kindIsAmbiguous ? msg(stage.i18nNameKey) : stageKindLabel(msg, stage.kind);
+    })
+    .join(" → ");
+}
+
 // --- Progression map (P7 D1b T4) -------------------------------------------
 //
 // A stage carrying `.seeding` qualifies from an earlier stage in the same
@@ -112,22 +131,40 @@ function joinTakeTexts(msg: Msg, texts: string[]): string {
 export type ProgressionLine = { key: string; text: string };
 
 /** Every seeded stage across every division, as a fully-formatted
- *  "{source} -> {target}" line. The empty array (no stage carries
- *  `.seeding`) is the pre-P7 catalog shape, and the caller renders nothing
- *  for it — the sheet's markup for those templates is unchanged by this. */
+ *  "{source}: {take} -> {target}" line (P7/D1b T6 adds the leading
+ *  "{source}: " — the SOURCE stage's own name — because two seeded stages
+ *  that share a take rule and a target kind, like t20-super8's Super 8 and
+ *  Knockout both reading "Top 2 per group -> ...", were otherwise
+ *  indistinguishable). The empty array (no stage carries `.seeding`) is the
+ *  pre-P7 catalog shape, and the caller renders nothing for it. */
 export function templateProgressionLines(msg: Msg, template: CompetitionTemplate): ProgressionLine[] {
   const lines: ProgressionLine[] = [];
   for (const division of template.divisions) {
-    for (const stage of division.stages) {
+    for (let i = 0; i < division.stages.length; i++) {
+      const stage = division.stages[i];
       if (!stage.seeding) continue;
-      const source = joinTakeTexts(
+      // seeding.source is schema-narrowed to "previous" only (schema.ts's
+      // TemplateStageSeeding) — always the stage immediately before this
+      // one in THIS division's own array, never a different division or a
+      // live stage id (a catalog entry has none yet). Guard defensively
+      // anyway: nothing in the Zod shape stops a future catalog entry from
+      // setting `.seeding` on a division's first stage even though
+      // schema.ts's own comment says that never happens — skip such a line
+      // rather than crash the whole sheet on `undefined.i18nNameKey`.
+      const sourceStage: TemplateStage | undefined = division.stages[i - 1];
+      if (!sourceStage) continue;
+      const take = joinTakeTexts(
         msg,
         stage.seeding.take.map((rule) => takeRuleText(msg, rule)),
       );
       const target = msg(stage.i18nNameKey);
       lines.push({
         key: `${division.i18nNameKey}:${stage.i18nNameKey}`,
-        text: msg("templates.detail.progression.line", { source, target }),
+        text: msg("templates.detail.progression.line", {
+          source: msg(sourceStage.i18nNameKey),
+          take,
+          target,
+        }),
       });
     }
   }
@@ -299,7 +336,7 @@ export function TemplateDetailSheet({
               <li key={division.i18nNameKey}>
                 <span className="font-medium text-slate-700">{msg(division.i18nNameKey)}</span>
                 {" — "}
-                {division.stages.map((s) => stageKindLabel(msg, s.kind)).join(" → ")}
+                {templateStructureChain(msg, division)}
                 {" · "}
                 {msg("templates.gallery.entrantCount", { count: division.entrantCount })}
               </li>

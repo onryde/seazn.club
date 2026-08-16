@@ -3747,7 +3747,7 @@
   "routeError.reference": "Référence : {digest}",
   "routeError.retry": "Réessayer",
   "templates.detail.progressionTitle": "Progression",
-  "templates.detail.progression.line": "{source} → {target}",
+  "templates.detail.progression.line": "{source} : {take} → {target}",
   "templates.detail.take.topNPerGroup": "Les {n} premiers par groupe",
   "templates.detail.take.bestNth": "{count} meilleurs {nth}èmes",
   "templates.detail.take.rankRange": "Classés {from}–{to}",
