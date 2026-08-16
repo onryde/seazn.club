@@ -38,7 +38,7 @@ C6 (prose) is safe whenever.
 | C6 | `C6-z3-prose-identifiers.md` | z3 stage C | ~~anytime~~ → **after C4+C5** | **NO-OP today** (see below) |
 | C7 | `C7-z3-public-contract.md` | z3 stage D | C4+C5 **deployed** (nothing writes z3) | TODO |
 | C8 | `C8-z3-delete-solver.md` | z3 stage E | C7 | TODO |
-| C9 | `C9-decomposed-repair-cpsat.md` | z3 retirement gap closure | branches off `origin/main` directly, includes C5's commits (C5 targets a different base — see status log) | **PR open** (this session) — see status log. Density regression CLOSED, general frozen-feeder dependency gap CLOSED. Bracket/TBD-sibling gap (what parked C5) NOT closed — new finding, contradicts this brief's own "REFUTED" note. |
+| C9 | `C9-decomposed-repair-cpsat.md` | z3 retirement gap closure | branches off `origin/main` directly, includes C5's commits (C5 targets a different base — see status log) | **PR #583 open**, targets `main` — see status log. Density regression CLOSED, general frozen-feeder dependency gap CLOSED. Bracket/TBD-sibling gap (what parked C5) NOT closed — new finding, contradicts this brief's own "REFUTED" note. #576 (C5) should close as superseded once #583 merges. |
 
 ### C1 — round ordering (2026-08-12/13, DONE)
 
@@ -1608,4 +1608,6 @@ just z3 leftovers sharing a file — C8's original "z3 reflow/repair code
 paths... their tests" wording would have deleted `repair-decompose.ts`
 wholesale, taking this task's own driver down with it.
 
-PR: see the row above for the link once opened.
+PR: https://github.com/ashokhein/seazn.club/pull/583 (targets `main`;
+carries C5's 11 commits too — #576 should close as superseded once this
+merges).
