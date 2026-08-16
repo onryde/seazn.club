@@ -460,12 +460,11 @@ test("cricket scores over-by-over: add an over grows the total, then close innin
 // targetSource "dls", so a revise that quietly fell through to the manual
 // branch cannot pass either check below. #467 was fixed by adding
 // `ck-revised-target` to the v2 cricket skin, giving this arithmetic an
-// ON-SCREEN proof too — but R2's v2→v3 cutover for cricket (V3_SKINS) ships
-// no v3 equivalent of that surface (see this test's own comment at the DOM
-// assertion this used to make, further down) — so as of this conversion the
-// API checks below are AGAIN the only proof of #451/#467, exactly as before
-// #467 existed. Not this task's gap to close (do-not-touch `src/`); flagged
-// loudly rather than silently dropped.
+// ON-SCREEN proof too. R2's v2→v3 cutover for cricket (V3_SKINS) shipped no
+// v3 equivalent of that surface for one PR — a real regression inside that
+// same wave's own blast radius, not a deferred gap — closed by a follow-up
+// task in the same wave (`buildScorebug`, v3/skins/cricket.tsx, now appends
+// a target strip item; see this test's own DOM assertion further down).
 test("cricket DLS scales a five-ball-over format onto the published table", async ({
   page,
   request,
@@ -564,23 +563,30 @@ test("cricket DLS scales a five-ball-over format onto the published table", asyn
   await expect(scorebug).toBeVisible({ timeout: 20_000 });
   await expect(scorebug).toContainText("0/0");
 
-  // #467 — GAP, not a conversion (flagged, not silently dropped): the 84
-  // asserted off the state API above (`fold.revisedTarget`) had an ON-SCREEN
-  // proof under v2 (`cricket-skin.tsx`'s `chaseValue`/`ck-revised-target`,
-  // worded "…DLS…") — #451 (a DLS bug that awarded the match to the wrong
-  // side) survived specifically BECAUSE the revised target was once
-  // API-only, unverified by any render. `v3/skins/cricket.tsx`'s own
-  // `CricketStateShape`/`buildScorebug` never reads `revisedTarget` or
-  // `targetSource` at all (grepped 2026-08-16, case-insensitive, across
-  // every v3/*.tsx file — zero hits outside the `dls?: {enabled}` CFG
-  // shape) — there is currently NO v3 surface this DOM assertion could
-  // target, so #467's own regression guard is unrepresented on the v3 lane
-  // today. This is a real product gap the R2 cricket skin (task C) did not
-  // close, not something an e2e conversion can paper over without inventing
-  // UI in `v3/skins/cricket.tsx` — out of this task's scope (do-not-touch
-  // `src/`). Left here as a loud marker for the controller/a follow-up task;
-  // the two `/state` assertions above (`targetSource`, `revisedTarget`)
-  // stay as the only proof of #451's fix until a v3 surface exists.
+  // #467 — the 84 asserted off the state API above must also be ON SCREEN,
+  // inside the chase this test just opened above (`buildScorebug`,
+  // v3/skins/cricket.tsx, appends no target strip item before one exists —
+  // this DOM assertion could not fire a moment earlier). Before #467, the
+  // revised target was verifiable only through /state, which is how #451 (a
+  // DLS bug that awarded the match to the wrong side) survived: an
+  // unrendered derivation is an unverified one. The pad must also say the
+  // figure is DLS-derived rather than one the organiser typed — GAP CLOSED:
+  // R2 gave the v3 cricket skin a target strip item (appended after
+  // striker/non-striker/dots/bowler, `scorepad.skin.cricket.header.dlsPar`
+  // caption when `cfg.dls.enabled && targetSource === "dls"`, same guard v2
+  // used). scorebug.tsx (chassis, out of this task's scope) attaches no
+  // PER-ITEM data-testid to a strip entry, only the container's own
+  // `data-role="v3-scorebug"` — so this anchors on the container locator's
+  // REAL rendered text via `toContainText`, exactly like the `"0/0"` check
+  // above, not a raw `page.content()` substring search (the trap AGENTS.md
+  // warns of — React serialising an omitted prop as the string
+  // `"$undefined"` — applies to grepping raw HTML/RSC-payload source; a
+  // Playwright locator query reads only the live DOM, so it cannot be
+  // fooled by that sentinel). The joined "DLS par 84" (caption + value,
+  // space-separated exactly as scorebug.tsx renders a labelled StripItem)
+  // is the anchor: it can only be produced by the real caption sitting next
+  // to the real value, not by either string appearing elsewhere on the pad.
+  await expect(scorebug).toContainText("DLS par 84");
 
   // Every surface works at 375px with no horizontal page scroll (v3/02 §4).
   await page.setViewportSize({ width: 375, height: 800 });

@@ -326,6 +326,75 @@ describe("buildScorebug", () => {
     expect(spec.strip[3]).toEqual({ value: "⚾Away One" });
   });
 
+  // Regression: v2's chaseValue/`ck-revised-target` (cricket-skin.tsx) showed
+  // the chasing side's target the moment one existed; the v3 rewrite never
+  // read `revisedTarget`/`targetSource` at all — this wave's own blast
+  // radius, not a deferred gap.
+  describe("revised target (regression: v2's ck-revised-target had no v3 equivalent)", () => {
+    it("appends nothing to the strip when there is no revised target", () => {
+      const spec = buildScorebug(view(), t);
+      expect(spec.strip).toHaveLength(4);
+    });
+
+    it("appends the target after bowler, without disturbing the existing four items", () => {
+      const spec = buildScorebug(
+        view({ state: state({ innings: [innings()], revisedTarget: 165, targetSource: "manual" }) }),
+        t,
+      );
+      expect(spec.strip).toHaveLength(5);
+      expect(spec.strip[0]).toEqual({ value: "▸Home One", accent: true });
+      expect(spec.strip[1]).toEqual({ value: "Home Two" });
+      expect(spec.strip[3]).toEqual({ value: "⚾Away One" });
+      expect(spec.strip[4]).toEqual({
+        label: "scorepad.skin.cricket.header.target",
+        value: "165",
+        accent: true,
+      });
+    });
+
+    it("captions it DLS par only when cfg.dls is enabled AND the fold sourced it from dls", () => {
+      const spec = buildScorebug(
+        view({
+          cfg: cfg({ dls: { enabled: true } }),
+          state: state({ revisedTarget: 142, targetSource: "dls" }),
+        }),
+        t,
+      );
+      expect(spec.strip[4]).toEqual({
+        label: "scorepad.skin.cricket.header.dlsPar",
+        value: "142",
+        accent: true,
+      });
+    });
+
+    it("falls back to the plain target caption when cfg.dls is currently disabled, even if the fold says dls (mirrors v2's own isDls guard)", () => {
+      const spec = buildScorebug(
+        view({
+          cfg: cfg({ dls: { enabled: false } }),
+          state: state({ revisedTarget: 142, targetSource: "dls" }),
+        }),
+        t,
+      );
+      expect(spec.strip[4]).toEqual({
+        label: "scorepad.skin.cricket.header.target",
+        value: "142",
+        accent: true,
+      });
+    });
+
+    it("is available from fidelity band 1, not gated to band 3", () => {
+      const spec = buildScorebug(
+        view({ band: 1, state: state({ revisedTarget: 99, targetSource: "manual" }) }),
+        t,
+      );
+      expect(spec.strip[4]).toEqual({
+        label: "scorepad.skin.cricket.header.target",
+        value: "99",
+        accent: true,
+      });
+    });
+  });
+
   it("dots read from view.events, sized by cfg ballsPerOver — a hundred cfg's strip differs from a 6-ball one", () => {
     const events = [
       ballEvent("f1", { ballInOver: 1, runs: { bat: 0 } }),

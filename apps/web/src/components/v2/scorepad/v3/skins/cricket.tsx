@@ -79,6 +79,7 @@ import {
   type PadPhase,
   type ScorebugSpec,
   type SkinDefV3,
+  type StripItem,
   type SwapSlot,
   type TileSpec,
 } from "../types";
@@ -145,6 +146,13 @@ interface CricketStateShape {
   phase?: "pre" | "live" | "super_over" | "done" | "final";
   innings?: CricketInningsShape[];
   orders?: { home?: string[]; away?: string[] };
+  /** Set by `cricket.revise` (either branch — DLS auto-compute or a manual
+   *  `target`), present from fidelity band 1 upward (cricket.ts:465-466).
+   *  Absent from this shape until this fix (a real regression, not a
+   *  deferred gap — see `buildScorebug`'s own comment on the strip item
+   *  these two drive). */
+  revisedTarget?: number | null;
+  targetSource?: "dls" | "manual" | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -387,6 +395,49 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   const bowlerName = people.bowler ? (view.personNames[people.bowler] ?? people.bowler) : "";
   const dots = overDots(view.events, bpo);
 
+  // REGRESSION FIX (not a deferred gap — found inside this wave's own blast
+  // radius): v2's `chaseValue`/`ck-revised-target` (cricket-skin.tsx) showed
+  // the chasing side's target the moment one existed; this v3 rewrite never
+  // read `revisedTarget`/`targetSource` at all. Appended to `strip`, never
+  // `context`: `context` is the chassis's most MUTED text (scorebug.tsx's
+  // `creamTextSubtle`, 11px) reserved for ambient format/over/run-rate,
+  // while `strip` already supports per-item `accent` emphasis (the striker
+  // marker uses it) and sits one visual step below the halves — the closest
+  // available slot to "the score itself" without widening `halves`' fixed
+  // 2-slot tuple, which would touch the shared chassis type/renderer this
+  // wave must not edit. APPENDED after bowler, not prepended: prepending
+  // would reindex the four existing items `cricket.test.ts` already pins at
+  // strip[0]/[1]/[3] for no functional gain. `accent: true` so it reads with
+  // the same visual weight as the on-strike marker, matching "the most-read
+  // number after the score" — the other three passive items stay muted.
+  // Gated on `revisedTarget != null` ONLY (no fidelity-band check): the
+  // fold populates it from band 1 up (cricket.ts:465-466) and this builder
+  // never reads `view.band`, so a lower-band pad still gets it — the
+  // ball-by-ball strip items above it (striker/dots/bowler) are the band-3
+  // surface, this is not. Deliberately narrower than v2's own `chaseValue`:
+  // that function ALSO fabricated a plain "first innings + 1" arithmetic
+  // target when no revise had happened yet — this reads only the engine's
+  // own recorded `revisedTarget`, never re-derives the arithmetic itself
+  // (out of scope for a regression fix; the ledger is the source of truth).
+  // `targetSource` changes what a scorer understands (a DLS par is "be
+  // ahead of this line right now", not "reach this total by the end") so it
+  // picks the caption, exactly mirroring v2's own `isDls` guard — cfg.dls
+  // must be CURRENTLY enabled, not just true when the revise happened.
+  const strip: StripItem[] = [
+    { value: `▸${strikerName}`, accent: true },
+    { value: nonStrikerName },
+    { value: dots.length > 0 ? dots.join(" ") : "—" },
+    { value: `⚾${bowlerName}` },
+  ];
+  if (state.revisedTarget != null) {
+    const isDls = cfg.dls?.enabled === true && state.targetSource === "dls";
+    strip.push({
+      label: t(isDls ? "scorepad.skin.cricket.header.dlsPar" : "scorepad.skin.cricket.header.target"),
+      value: String(state.revisedTarget),
+      accent: true,
+    });
+  }
+
   return {
     context: contextParts.join(" · "),
     phase: resolvePhase(view),
@@ -394,12 +445,7 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
       { who: [{ name: t("scorepad.skin.cricket.scorebug.batting") }], big: `${runs}/${wickets}` },
       { who: [{ name: t("scorepad.skin.cricket.scorebug.overs") }], big: oversText(legalBalls, bpo) },
     ],
-    strip: [
-      { value: `▸${strikerName}`, accent: true },
-      { value: nonStrikerName },
-      { value: dots.length > 0 ? dots.join(" ") : "—" },
-      { value: `⚾${bowlerName}` },
-    ],
+    strip,
   };
 }
 
