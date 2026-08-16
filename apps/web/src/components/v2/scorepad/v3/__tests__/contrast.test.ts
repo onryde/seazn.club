@@ -7,6 +7,8 @@
 // .superpowers/sdd/2026-08-15-scorepad-v3-r1-chassis/pins.md §7 — scout-
 // verified 2026-08-16 against globals.css:436-439, no disagreement found).
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   NIGHT_TILE_PAIRS,
   NIGHT_TILE_CLASSES,
@@ -269,5 +271,49 @@ describe("alpha (translucent) text meets WCAG AA at its EFFECTIVE composited col
     const bgHex = TAILWIND_UTILITY_HEX[site.bgClass];
     const composited = compositeOver(hex, alpha, bgHex);
     expect(contrastRatio(bgHex, composited)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// Defect 1 (R2 review finding, docs/superpowers/plans/2026-08-16-scorepad-
+// v3-r2-cricket.md): commit 792121a5 (task A3) set out to close the silent
+// desync between THIS file's token math and scorebug.tsx's rendered
+// classes — but every block above only ever reads ../tokens, never
+// scorebug.tsx itself. A reviewer reintroduced a bare literal in place of a
+// token reference ("text-night-2" where the lime score digits belong —
+// night-2 is close to the tile's own night ground, so this is near-zero
+// contrast, not merely a desync-risk) and the whole v3 suite (268/268 at the
+// time) stayed green, because nothing anywhere renders this component or
+// reads its source text. This block is that missing check: it reads
+// scorebug.tsx's ACTUAL source (comments stripped first, so this file's own
+// prose — e.g. scorebug.tsx's header comment saying "stadium-night" — can
+// never false-positive) and fails if a literal that must route through a
+// token appears bare, or if the "night" background family is ever paired
+// with a "text-" prefix at all (no token does this — see NIGHT_TILE_CLASSES,
+// ../tokens.ts — so it is banned outright, which is what actually catches a
+// WRONG literal like the reviewer's, not merely a correct-but-undesynced
+// one). Mutation-proved in this task's own report: reintroducing
+// "text-night-2" at the score digits turns the "%s" case for "text-night"
+// red; restoring the token reference turns it green again.
+describe("scorebug.tsx's SOURCE TEXT carries no bare literal duplicating (or misusing) a night-tile token", () => {
+  const scorebugSrc = readFileSync(join(process.cwd(), "src/components/v2/scorepad/v3/scorebug.tsx"), "utf8");
+  // Strips both comment styles before matching, so prose mentioning these
+  // words in English (this file's own comments included) can never trip a
+  // false positive — only literal Tailwind classes in actual code can.
+  const codeOnly = scorebugSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+
+  const bannedLiterals: readonly string[] = [
+    NIGHT_TILE_CLASSES.tileBg, // "bg-night" — substring also flags "bg-night-2" (bandBg)
+    NIGHT_TILE_CLASSES.creamText, // "text-cream" — substring also flags /70, /80 (creamTextMuted/creamTextSubtle)
+    NIGHT_TILE_CLASSES.limeText, // "text-lime-400" — the score digits' colour
+    SCORE_TEXT_SIZE_CLASS, // "text-4xl" — the score-size class
+    // Not a real token at all (NIGHT_TILE_CLASSES has no text-* entry for
+    // the night family — it is background-only, tileBg/bandBg) — banned
+    // unconditionally rather than as a "duplicates a token" check. This is
+    // the literal the reviewer actually used; see the mutation proof above.
+    "text-night",
+  ];
+
+  it.each(bannedLiterals)("never appears as a bare literal outside a token reference: %s", (literal) => {
+    expect(codeOnly.includes(literal)).toBe(false);
   });
 });

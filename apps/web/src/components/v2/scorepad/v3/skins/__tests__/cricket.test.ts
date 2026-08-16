@@ -678,12 +678,48 @@ describe("buildContext — striker/non-striker are read-only (blocker 2)", () =>
     expect(buildContext(view())!.slots.find((s) => s.id === "nonStriker")!.readOnly).toBe(true);
   });
 
-  it("leaves bowler editable — not read-only, the one slot the engine genuinely allows a scorer to set (at an over boundary)", () => {
-    expect(buildContext(view())!.slots.find((s) => s.id === "bowler")!.readOnly).toBeUndefined();
-  });
-
   it("all three slots stay required — readOnly is orthogonal to required, informational vs editable", () => {
     expect(buildContext(view())!.slots.every((s) => s.required)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Defect 3 (R2 review finding, docs/superpowers/plans/2026-08-16-scorepad-
+// v3-r2-cricket.md): blocker 2 above made striker/non-striker readOnly but
+// left bowler unconditionally tappable. Bowler IS a genuine edit — but ONLY
+// at an over boundary (cricket.ts:1152-1172, `fine.currentBowler === null`
+// accepts any eligible bowler with no fold-match check). Mid-over, the SAME
+// strict fold refuses any other pick (cricket.ts:1173-1178, "over in
+// progress belongs to X") — identical shape to the striker/non-striker
+// refusal blocker 2 already closed. `view()`'s default fixture
+// (`innings()`'s `fine.currentBowler: "a1"`) is itself mid-over, which is
+// why the pre-fix suite's "leaves bowler editable" assertion above was
+// itself wrong (asserted `undefined` — i.e. editable — against a mid-over
+// fixture where the fold would refuse a different pick) and has been
+// replaced by the two states below.
+// ---------------------------------------------------------------------------
+
+describe("buildContext — bowler read-only tracks the fold's own over boundary (defect 3)", () => {
+  it("mid-over (fine.currentBowler already set): the fold refuses any other pick — readOnly", () => {
+    const v = view({ state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: "a1" } })] }) });
+    expect(buildContext(v)!.slots.find((s) => s.id === "bowler")!.readOnly).toBe(true);
+  });
+
+  it("over boundary (fine.currentBowler is null): the fold accepts any eligible bowler — editable, not read-only", () => {
+    const v = view({ state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null } })] }) });
+    expect(buildContext(v)!.slots.find((s) => s.id === "bowler")!.readOnly).toBeUndefined();
+  });
+
+  it("a coarse-fidelity innings (fine entirely absent) defaults to read-only — no ball event is even accepted at that fidelity (cricket.ts:1130), so there is nothing to prove a boundary from", () => {
+    const v = view({ state: state({ innings: [innings({ fine: null })] }) });
+    expect(buildContext(v)!.slots.find((s) => s.id === "bowler")!.readOnly).toBe(true);
+  });
+
+  it("striker/nonStriker stay readOnly regardless of the bowler boundary state — the two concerns are independent", () => {
+    const v = view({ state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null } })] }) });
+    const spec = buildContext(v)!;
+    expect(spec.slots.find((s) => s.id === "striker")!.readOnly).toBe(true);
+    expect(spec.slots.find((s) => s.id === "nonStriker")!.readOnly).toBe(true);
   });
 });
 

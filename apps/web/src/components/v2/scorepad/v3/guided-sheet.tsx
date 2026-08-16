@@ -102,6 +102,38 @@ function candidatesForStep(step: SheetPersonStep, view: PoolView): readonly stri
   return step.candidates ?? resolvePool({ pool: step.pool }, view);
 }
 
+/** R2 review finding (defect 2): drops any answer whose OWN step is no
+ *  longer reachable given the answers kept so far — the guard for "back up,
+ *  change a branch-determining answer, and a stale key from the abandoned
+ *  branch survives into what `buildPayload` sees." Pre-fix, `answerStep`
+ *  only ever SPREAD `{...state.answers, [step.id]: value}`, so a step that
+ *  goes from visible to gated-off never lost its old answer — the object
+ *  handed to `buildPayload` kept growing, never shrinking. Cricket's own
+ *  `buildPayload` happens to re-derive every read from the final `kind`
+ *  (safe BY DISCIPLINE), but that is a per-skin accident the chassis itself
+ *  must not rely on for R3-R7.
+ *
+ *  Walks `spec.steps` in declaration order, keeping an answer only when its
+ *  step is visible against the answers ALREADY kept — a strict left-to-right
+ *  fixed point, never against the raw, not-yet-pruned map, so a stale answer
+ *  can never itself keep a LATER stale answer alive by being read out of
+ *  order (`when` predicates only ever look at earlier steps by convention —
+ *  StepPredicate's own doc, types.ts). A spec with no `when` anywhere (every
+ *  pre-G2 spec) keeps every answer unchanged: every step is always visible,
+ *  so nothing is ever dropped. */
+function pruneAnswers(
+  spec: GuidedSheetSpec,
+  answers: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  const pruned: Record<string, string> = {};
+  for (const step of spec.steps) {
+    if (!stepVisible(step, pruned)) continue;
+    const value = answers[step.id];
+    if (value !== undefined) pruned[step.id] = value;
+  }
+  return pruned;
+}
+
 /** The first index at or after `fromIndex` whose step is visible against
  *  `answers`, or `null` once scanning runs off the end (the wizard is
  *  complete — every remaining step, if any, is gated off). A single-step
@@ -183,7 +215,12 @@ export type GuidedSheetAdvance = { done: false; state: GuidedSheetState } | { do
 export function answerStep(spec: GuidedSheetSpec, state: GuidedSheetState, value: string): GuidedSheetAdvance {
   const step = spec.steps[state.stepIndex];
   if (!step) return { done: false, state };
-  const answers = { ...state.answers, [step.id]: value };
+  const raw = { ...state.answers, [step.id]: value };
+  // Defect 2 (R2 review): prune before scanning forward AND before handing
+  // answers to buildPayload — this step's own answer always survives (it was
+  // just visible, or the wizard couldn't have been on it), but an earlier
+  // branch's now-unreachable answer must not ride along either place.
+  const answers = pruneAnswers(spec, raw);
   const nextIndex = firstVisibleFrom(spec, answers, state.stepIndex + 1);
   if (nextIndex === null) {
     return { done: true, event: { type: spec.event, payload: spec.buildPayload(answers) } };

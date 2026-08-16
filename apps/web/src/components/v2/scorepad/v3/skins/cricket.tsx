@@ -183,6 +183,25 @@ function opponentSide(side: "home" | "away"): "home" | "away" {
   return side === "home" ? "away" : "home";
 }
 
+/**
+ * Defect 3 (R2 review finding, `docs/superpowers/plans/2026-08-16-scorepad-
+ * v3-r2-cricket.md`): bowler is genuinely editable ONLY at an over
+ * boundary — `fine.currentBowler === null` ("null = new over pending",
+ * cricket.ts:414/1152). Once a bowler is on record for the over
+ * (`fine.currentBowler` a person id), the strict fold refuses any other pick
+ * outright (cricket.ts:1173-1178, "over in progress belongs to X") — the
+ * SAME refusal shape striker/non-striker already get `readOnly: true` for
+ * (`buildContext` below), so the chip must not offer a choice mid-over
+ * either. No `fine` at all (a coarse-fidelity innings) can neither prove a
+ * boundary nor submit a ball event regardless of who is picked
+ * (cricket.ts:1130, "recorded at summary fidelity") — defaults read-only,
+ * the safe side of "never a control that merely LOOKS disabled"
+ * (ContextSlot.readOnly's own doc, ../types.ts).
+ */
+export function bowlerIsReadOnly(innings: CricketInningsShape | null): boolean {
+  return innings?.fine?.currentBowler !== null;
+}
+
 /** The open innings, or the most recently closed one once none is open
  *  (post-match display). `null` pre-toss / before any innings exists. */
 export function currentInnings(state: CricketStateShape): CricketInningsShape | null {
@@ -655,16 +674,31 @@ export function buildDock(eventType: string, t: TFn): DockSpec | null {
 // three slots. Bowler is different: `currentBowler === null` (an over
 // boundary, cricket.ts:1152-1172) accepts ANY eligible bowler with no
 // fold-match check at all — a genuine edit — so only striker/nonStriker get
-// `readOnly: true` below (ContextSlot.readOnly, ../types.ts). The two names
-// stay in the strip regardless: they are real, useful information (who is
-// on strike right now) even though a scorer cannot reassign them from here.
+// an UNCONDITIONAL `readOnly: true` below (ContextSlot.readOnly,
+// ../types.ts). The two names stay in the strip regardless: they are real,
+// useful information (who is on strike right now) even though a scorer
+// cannot reassign them from here.
+//
+// DEFECT 3 (found by a later review, 2026-08-16, same plan doc): blocker 2's
+// own bowler comment left the chip unconditionally tappable and flagged,
+// rather than closed, the mid-over case — the fold is JUST as strict about
+// bowler there as it is about striker/non-striker (cricket.ts:1173-1178,
+// "over in progress belongs to X"), so a scorer could tap it, pick anyone,
+// and watch the next ball get rejected — the identical "picker opens and
+// silently fails" shape this file has now closed twice. `bowlerIsReadOnly`
+// (above) derives the answer straight from `fine.currentBowler` instead of
+// leaving the chip permanently open: `true` mid-over, `undefined` (editable)
+// at an over boundary, matching striker/nonStriker's own "absent means
+// editable" convention rather than writing a redundant `readOnly: false`.
 // ---------------------------------------------------------------------------
 
 export function buildContext(view: PadHostView): ContextStripSpec | null {
   const state = asState(view.state);
   if (state.phase !== "live" && state.phase !== "super_over") return null;
-  if (currentInnings(state) === null) return null;
+  const innings = currentInnings(state);
+  if (innings === null) return null;
   const people = resolvePeople(state, view.contextOverrides);
+  const bowlerReadOnly = bowlerIsReadOnly(innings);
   return {
     slots: [
       {
@@ -683,16 +717,14 @@ export function buildContext(view: PadHostView): ContextStripSpec | null {
         required: true,
         readOnly: true, // blocker 2 — see this file's header above
       },
-      // Bowler stays genuinely tappable: an over boundary
-      // (`currentBowler === null`) accepts any eligible bowler with no
-      // fold-match check (cricket.ts:1152-1172), a real edit. Note this
-      // chip does NOT yet distinguish that case from mid-over, where the
-      // fold is JUST as strict about bowler as it is about striker/
-      // non-striker (cricket.ts:1173-1178, "over in progress belongs to
-      // X") — blocker 2's own scope is "make striker and non-striker
-      // honest", not a new mid-over-bowler behaviour, so that finer split
-      // is flagged here rather than silently left unconsidered.
-      { id: "bowler", label: "pad.cricket.context.bowler", personId: people.bowler || undefined, pool: "onfield", required: true },
+      {
+        id: "bowler",
+        label: "pad.cricket.context.bowler",
+        personId: people.bowler || undefined,
+        pool: "onfield",
+        required: true,
+        readOnly: bowlerReadOnly ? true : undefined, // defect 3 — see this file's header above
+      },
     ],
   };
 }

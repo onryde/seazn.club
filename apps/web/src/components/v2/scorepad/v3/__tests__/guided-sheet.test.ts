@@ -226,6 +226,72 @@ describe("currentStep / answerStep / backStep — G2 conditional steps", () => {
   });
 });
 
+// --- R2 review finding: stale answers from an abandoned branch must not ---
+// --- survive a branch-determining answer changing (guided-sheet.tsx:186) -
+
+// Back up, change a branch-determining answer (kind), and a stale key from
+// the abandoned branch must NOT survive into `state.answers` — reuses
+// conditionalSpec (kind -> who[only runout] -> fielder[unconditional]),
+// exactly cricket's own wicket-sheet shape.
+describe("answerStep — prunes an abandoned branch's stale answer when an earlier answer changes", () => {
+  it("switching kind from runout to bowled after answering 'who' drops 'who' from state.answers, not just skips past it", () => {
+    const afterRunout = answerStep(conditionalSpec, initialSheetState(), "runout");
+    if (afterRunout.done) throw new Error("expected step 1 (who)");
+    const afterWho = answerStep(conditionalSpec, afterRunout.state, "somePerson");
+    if (afterWho.done) throw new Error("expected step 2 (fielder)");
+    expect(afterWho.state.answers).toEqual({ kind: "runout", who: "somePerson" });
+
+    // Back up past "who" to "kind" — backStep itself never touches answers
+    // (its own doc), so both are still carried at this point.
+    const backToWho = backStep(conditionalSpec, afterWho.state);
+    const backToKind = backStep(conditionalSpec, backToWho);
+    expect(backToKind).toEqual({ stepIndex: 0, answers: { kind: "runout", who: "somePerson" } });
+
+    // Change the branch-determining answer: "who" is no longer reachable
+    // (when() now false), "fielder" still is (no `when` in conditionalSpec).
+    const switched = answerStep(conditionalSpec, backToKind, "bowled");
+    if (switched.done) throw new Error("expected step 2 (fielder) — unconditional in conditionalSpec");
+    expect(switched.state.stepIndex).toBe(2);
+    // The actual bug: pre-fix, answerStep only ever SPREADS {...state.answers,
+    // [step.id]: value} — "who" survives the merge even though its own step
+    // is no longer reachable under kind:"bowled".
+    expect(switched.state.answers).toEqual({ kind: "bowled" });
+  });
+
+  it("the pruned state is what a skin's buildPayload actually sees — a spec that blindly spreads every answer never receives the stale key", () => {
+    // Cricket's own buildPayload re-derives every read from the final `kind`
+    // and would mask this bug (plan doc's own "safe by discipline, not by
+    // contract" finding) — this spec is deliberately the OPPOSITE, sloppy
+    // skin the chassis itself must still protect.
+    const spreadingSpec: GuidedSheetSpec = { ...conditionalSpec, buildPayload: (answers) => ({ ...answers }) };
+    const afterRunout = answerStep(spreadingSpec, initialSheetState(), "runout");
+    if (afterRunout.done) throw new Error("expected step 1 (who)");
+    const afterWho = answerStep(spreadingSpec, afterRunout.state, "somePerson");
+    if (afterWho.done) throw new Error("expected step 2 (fielder)");
+    const backToKind = backStep(spreadingSpec, backStep(spreadingSpec, afterWho.state));
+    const switched = answerStep(spreadingSpec, backToKind, "bowled");
+    if (switched.done) throw new Error("expected step 2 (fielder), not the end yet");
+
+    const finished = answerStep(spreadingSpec, switched.state, "someFielder");
+    if (!finished.done) throw new Error("expected done");
+    expect(finished.event.payload).toEqual({ kind: "bowled", fielder: "someFielder" }); // no stale "who"
+  });
+
+  it("does not prune an answer whose step is STILL visible after the change — only genuinely unreachable ones", () => {
+    // Answer runout -> who, then go back to kind and re-answer runout again
+    // (same branch). "who" stays visible throughout, so its answer must
+    // survive — pruning must not be a blanket wipe on every kind change.
+    const afterRunout = answerStep(conditionalSpec, initialSheetState(), "runout");
+    if (afterRunout.done) throw new Error("expected step 1 (who)");
+    const afterWho = answerStep(conditionalSpec, afterRunout.state, "somePerson");
+    if (afterWho.done) throw new Error("expected step 2 (fielder)");
+    const backToKind = backStep(conditionalSpec, backStep(conditionalSpec, afterWho.state));
+    const reAnswered = answerStep(conditionalSpec, backToKind, "runout");
+    if (reAnswered.done) throw new Error("expected step 1 (who) again");
+    expect(reAnswered.state.answers).toEqual({ kind: "runout", who: "somePerson" });
+  });
+});
+
 // --- Rendering: real >=44px controls, forward-on-answer, Back/Cancel -------
 
 const t: GuidedSheetProps["t"] = (k) => k;
