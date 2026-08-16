@@ -421,3 +421,186 @@ test("a court-scoped blackout reaches the OPTIMISER instead of switching it off"
   // stated directly rather than only through the imbalance metric.
   expect(new Set(after.map((f) => f.court_label))).toEqual(new Set(["C1", "C2"]));
 });
+
+// --- C10 (2026-08-16, wire person indices design): two fixtures sharing a
+// --- PERSON under different entrants are never placed concurrently --------
+//
+// NOT the undecided-knockout-slot shape the brief leads with, and that
+// deviation is itself a finding, recorded here rather than silently swapped
+// in. `schedule.ts`'s plain Auto-schedule button — this file's own subject —
+// resolves a fixture's `people` through `peopleOf` (schedule.ts:576-581),
+// which is UNCONDITIONALLY empty for a TBD (null-sided) fixture by design
+// ("D4a (P5)", that function's own comment: "a TBD/seeded fixture's null
+// side(s) contribute NO people here... Person-level constraints... skip TBD
+// slots until filled — recorded limitation"). That is a real, pre-existing,
+// deliberate gap in THIS caller specifically — `schedule-ai.ts`'s
+// `participants[f.id] ?? []` (#396) resolves the SAME question recursively
+// through the bracket's feed graph and does not share it — and it means a
+// knockout-final board proves nothing about C10 through this button: the
+// service would correctly refuse it (neither entrants nor people), exactly
+// as it should, and exactly as it did before this task, because this
+// caller never attaches a person to a slot no entrant has filled yet. Fixing
+// `peopleOf` to be recursive is a real, separate feature change and is out
+// of C10's scope; flagged here rather than worked around silently.
+//
+// THE SHAPE THIS BUTTON CAN ACTUALLY PROVE: two FULLY RESOLVED fixtures —
+// real entrants on both sides, `peopleOf` reads their rosters directly, no
+// TBD slot involved at all — that share ONE PERSON under two DIFFERENT
+// entrant registrations (a person entered twice, or the same competitor
+// under two different pairing/team ids — realistic, and the exact
+// cross-registration case `packages/engine/src/scheduling/build-encode.ts`'s
+// `byParticipant` and `repair-domain.ts`'s `sharesParticipant` already treat
+// as first-class on the TS side). `entrant_indices` is non-empty on both
+// fixtures either way, so the PRE-C10 refusal never applied to this shape —
+// what C10 changes here is narrower and just as real: whether the SERVICE's
+// own NoOverlap sees the shared person at all. Before this task it could
+// not (no person data on the wire), so the only reason a board like this
+// came back legal was `build.ts`'s independent, caller-side re-verification
+// (`conflictsForBoard`/`rejectedBlockingConflicts`, which already treats
+// `person_overlap` as blocking and falls back to greedy over it — see
+// `build.test.ts`'s "hands back the greedy seed, LOUDLY, over a breach the
+// solver INTRODUCED") — a board that needed REJECTING and RETRYING, not one
+// the solver got right the first time. Post-C10 the solver's own model
+// should never produce the clash to begin with.
+//
+// TWO TICKS, TWO COURTS: four (court, tick) slots for two fixtures — ample
+// room to place both if the shared person is irrelevant, and exactly the
+// shape a placer blind to that person would happily fill by putting both on
+// the earliest tick, one per court.
+const SHARED_PERSON_START = new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString();
+const SHARED_PERSON_START_MS = Date.parse(SHARED_PERSON_START);
+const SHARED_PERSON_MATCH_MIN = 30;
+const SHARED_PERSON_FIXTURE_COUNT = 2;
+
+async function createPerson(request: APIRequestContext, fullName: string): Promise<string> {
+  const res = await apiJson<{ id: string }>(request, "/api/v1/persons", "POST", {
+    full_name: fullName,
+    consent: {},
+  });
+  expect(res.status).toBe(201);
+  return res.data!.id;
+}
+
+/** An individual entrant with an EXPLICIT roster (rather than
+ *  `addEntrantsViaApi`'s auto-generated one-person-per-entrant shape), so a
+ *  `person_id` can be reused across two different entrants. */
+async function createEntrantWithPerson(
+  request: APIRequestContext,
+  divisionId: string,
+  displayName: string,
+  personId: string,
+  seed: number,
+): Promise<string> {
+  const res = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`, "POST", [
+    { kind: "individual", display_name: displayName, seed, members: [{ person_id: personId }] },
+  ]);
+  expect(res.status).toBe(201);
+  return res.data![0]!.id;
+}
+
+test("two fixtures sharing only a person, under different entrants, are never placed concurrently (C10)", async ({
+  page,
+  request,
+}) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Placement SharedPerson ${TAG}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "SharedPerson",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  const divisionId = div.data!.id;
+
+  // shared plays as BOTH "SP Ent 0" (fixture a's home) and "SP Ent 2"
+  // (fixture b's home) -- two distinct entrant registrations, one human.
+  const shared = await createPerson(request, `SP Shared ${TAG}`);
+  const other0 = await createPerson(request, `SP Other0 ${TAG}`);
+  const other1 = await createPerson(request, `SP Other1 ${TAG}`);
+  const other2 = await createPerson(request, `SP Other2 ${TAG}`);
+  const e0 = await createEntrantWithPerson(request, divisionId, `SP Ent 0${TAG}`, shared, 1);
+  const e1 = await createEntrantWithPerson(request, divisionId, `SP Ent 1${TAG}`, other0, 2);
+  const e2 = await createEntrantWithPerson(request, divisionId, `SP Ent 2${TAG}`, shared, 3);
+  const e3 = await createEntrantWithPerson(request, divisionId, `SP Ent 3${TAG}`, other1, 4);
+  // A fifth, unrelated entrant/person keeps the division's entrant COUNT the
+  // same shape addEntrantsViaApi-based boards use elsewhere in this file,
+  // without touching the two fixtures under test.
+  await createEntrantWithPerson(request, divisionId, `SP Ent 4${TAG}`, other2, 5);
+
+  const stage = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/divisions/${divisionId}/stages`,
+    "POST",
+    { seq: 1, kind: "league", name: "League" },
+  );
+  const stageId = stage.data!.id;
+  const fixtureIds: string[] = [];
+  for (const [home, away] of [
+    [e0, e1],
+    [e2, e3],
+  ]) {
+    const added = await apiJson<{ fixture_id: string }>(
+      request,
+      `/api/v1/stages/${stageId}/fixtures`,
+      "POST",
+      { home_entrant_id: home, away_entrant_id: away, round_no: 1 },
+    );
+    expect(added.status).toBe(201);
+    fixtureIds.push(added.data!.fixture_id);
+  }
+  expect(fixtureIds.length).toBe(SHARED_PERSON_FIXTURE_COUNT);
+
+  const settings = await apiJson(
+    request,
+    `/api/v1/divisions/${divisionId}/schedule-settings`,
+    "PUT",
+    {
+      tz: "UTC",
+      config: {
+        startAt: SHARED_PERSON_START,
+        matchMinutes: SHARED_PERSON_MATCH_MIN,
+        gapMinutes: 0,
+        courts: ["Court A", "Court B"],
+        perEntrantMinRest: 0,
+        blackouts: [],
+        // Exactly two ticks -- four (court, tick) slots for two fixtures.
+        sessionWindows: [
+          {
+            from: SHARED_PERSON_START,
+            to: new Date(SHARED_PERSON_START_MS + 2 * SHARED_PERSON_MATCH_MIN * 60_000).toISOString(),
+          },
+        ],
+      },
+    },
+  );
+  expect(settings.status).toBe(200);
+
+  const strip = await runAutoSchedule(page, divisionId);
+
+  // ASSERTION 1 -- the solver's OWN board needed no rejection-and-retry.
+  // `verifier_rejected` is reachable ONLY when the placement service handed
+  // back a board `build.ts`'s independent re-verification then refused
+  // (`rejectedBlockingConflicts`, `person_overlap` blocking) -- see the
+  // docblock above for why that path, not `solver_unavailable`, is this
+  // shape's pre-C10 failure signature.
+  const status = await strip.getAttribute("data-status");
+  expect(status, `schedule-auto answered data-status="${status}"`).not.toBe("verifier_rejected");
+  expect(SOLVED, `schedule-auto answered data-status="${status}"`).toContain(status);
+  await expect(page.getByTestId("schedule-result-lost")).toHaveCount(0);
+
+  // ASSERTION 2 -- the acceptance criterion itself: both fixtures placed,
+  // never at the same instant, despite four slots being available to a
+  // person-blind placer for exactly that.
+  const after = await Promise.all(fixtureIds.map((id) => getFixture(request, id)));
+  expect(after.filter((f) => f.scheduled_at !== null)).toHaveLength(SHARED_PERSON_FIXTURE_COUNT);
+  const times = after.map((f) => f.scheduled_at);
+  expect(new Set(times).size).toBe(times.length);
+});
