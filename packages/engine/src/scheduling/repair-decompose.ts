@@ -349,8 +349,13 @@ export function repairComponents(input: RepairComponentInput): RepairComponent[]
  * bounds exactly those same assignments. So the guard's answer is not to fail —
  * it is to DECLINE TO DECOMPOSE and solve the board whole, which is precisely
  * today's behaviour and therefore never a regression.
+ *
+ * Exported (C9): solver-agnostic — the mismatch this guards against is a fact
+ * about `assertDayCap`'s counting, not about which solver runs a component, so
+ * `repair-decompose-cpsat.ts`'s CP-SAT driver reuses this UNCHANGED rather than
+ * re-deriving it. See that file's own doc comment.
  */
-function dayCapGuard(
+export function dayCapGuard(
   proposal: readonly Assignment[],
   config: VerifyConfig,
 ): DecompositionModeReason | null {

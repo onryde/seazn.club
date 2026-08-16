@@ -40,6 +40,23 @@ not port LNS.
 bench not worse. Known limit: the repair bench omits hard rules (#455) — gate
 on conflict counts from the verifier, not on the bench alone.
 
+**AMENDED 2026-08-16 (C5/C9):** this stage as designed above is a SINGLE
+monolithic `buildSchedule` call ("pin what stands, re-solve violators" in
+one request). Shipped that way first (C5), then measured two real gaps a
+monolithic call cannot close: high-violator-density boards exhaust budget
+and fall back to greedy (24 blocking conflicts at ~60% density), and a
+dependency edge from a free violator to a frozen non-violator is silently
+dropped by the wire's `freeFixtureIds` filter (the frozen-feeder straddle).
+C9 (`C9-decomposed-repair-cpsat.md`) closes both by decomposing FIRST —
+reusing the z3 driver's own component graph (`repair-decompose.ts`,
+solver-agnostic, proven so) — then solving each component with
+`buildSchedule`. One residual gap C9 found and did NOT close: a component
+containing a TBD bracket slot (empty `entrant_indices`) is refused by the
+placement service wholesale regardless of decomposition — see C9's own
+entry in `2026-08-12-release2-prompts/_INDEX.md` for the full account.
+Stage B's end state (`"optimized"`) and gate are otherwise unchanged by
+this amendment.
+
 ### C — prose, docs, internal identifiers (parallel-safe, anytime)
 Comments, docs, internal function/module names. **Never touches stored enum
 VALUES** — an identifier that is also a persisted value belongs to stage D.

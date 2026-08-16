@@ -86,4 +86,9 @@ export * from "./repair-domain.ts";
 export * from "./repair.ts";
 export * from "./repair-decompose.ts";
 export * from "./repair-minimality.ts";
+// The decomposed CP-SAT driver (C9). Free to name here for the same reason
+// `repair-decompose.ts` is: it names no z3 at all, and `build.ts`'s own
+// dynamic import already keeps `placement-client.ts`'s gRPC dependency out of
+// a client bundle.
+export * from "./repair-decompose-cpsat.ts";
 export * from "./z3-load.ts";

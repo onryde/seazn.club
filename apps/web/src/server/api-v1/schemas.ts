@@ -2570,8 +2570,13 @@ const AiConstraintSuggestions = z.object({
  *
  * `engine` is the headline and the rest is why. `"none"` means no repair changed
  * the board — it verified clean, or repair was attempted and nothing was
- * adopted. `"z3"` means the automatic solver fixed it, for no credits and no
- * model call. `"llm"` means the assistant was asked to repair it.
+ * adopted. `"optimized"` means the placement CP-SAT service fixed it, for no
+ * credits and no model call (z3 retirement design, stage B, C5 — the repair
+ * round's own solver call is `buildSchedule`, not z3's `repairDecomposed`, as
+ * of 2026-08-15). `"z3"` stays a valid INPUT value — a board repaired before
+ * this cutover still reads back as `"z3"`, and the wire narrows it away only
+ * once stage D (C7) lands — but it is no longer produced. `"llm"` means the
+ * assistant was asked to repair it.
  *
  * The rest of the object exists because #401 requires the FALLBACK to be
  * visible, not merely correct: a run where the solver timed out, was queued
@@ -2584,7 +2589,7 @@ const AiConstraintSuggestions = z.object({
  * reason `usage` is shaped this way.
  */
 export const AiRepairReport = z.object({
-  engine: z.enum(["none", "z3", "llm"]),
+  engine: z.enum(["none", "z3", "llm", "optimized"]),
   /** Did the WASM solver actually run? False on the clean path, and on both
    *  paths where the attempt was declined before it started. */
   solver_ran: z.boolean(),

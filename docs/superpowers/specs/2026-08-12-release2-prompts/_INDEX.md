@@ -34,10 +34,11 @@ C6 (prose) is safe whenever.
 | C2 | `C2-day-start-rung.md` | day_start | C1 (model.py overlap; rebase either way) | **MERGED** #555 → `40331cc2`, follow-up #557 → `4dc38a0e`. Shipped #512's two rungs too. **Leaves 3 open defects — see the C2 entries below before starting C3.** |
 | C3 | `C3-conflict-detail-names.md` | conflict details | not concurrent with C1 (schedule.ts) | **MERGED** #567 → `ccab1356`. Family was 25 kinds, not 4; `conflictKey` and the AI repair round were both in the blast radius |
 | C4 | `C4-z3-reflow-cpsat.md` | z3 stage A | C1 (reflow inherits round rule) | **PR open** (this session) — see status log. Found two real, out-of-scope `buildSchedule` gaps shared with BUILD/POLISH (a frozen-feeder dependency gap, a bracket/TBD-fixture wall) — neither fixed here. |
-| C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | TODO |
+| C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | **PARKED, PR #576 draft** — owner ruling 2026-08-16: land C9 first. CI found a real bracket/frozen-feeder repair-capability regression the session's own (vacuous — see status log) local smoke run could not see. See status log. |
 | C6 | `C6-z3-prose-identifiers.md` | z3 stage C | ~~anytime~~ → **after C4+C5** | **NO-OP today** (see below) |
 | C7 | `C7-z3-public-contract.md` | z3 stage D | C4+C5 **deployed** (nothing writes z3) | TODO |
 | C8 | `C8-z3-delete-solver.md` | z3 stage E | C7 | TODO |
+| C9 | `C9-decomposed-repair-cpsat.md` | z3 retirement gap closure | branches off `origin/main` directly, includes C5's commits (C5 targets a different base — see status log) | **PR #583 open**, targets `main` — see status log. Density regression CLOSED, general frozen-feeder dependency gap CLOSED. Bracket/TBD-sibling gap (what parked C5) NOT closed — new finding, contradicts this brief's own "REFUTED" note. #576 (C5) should close as superseded once #583 merges. |
 
 ### C1 — round ordering (2026-08-12/13, DONE)
 
@@ -1069,3 +1070,635 @@ build for e2e):**
   typecheck and lint both clean.
 
 PR: see the row above for the link once opened.
+
+### C5 — z3 stage B: AI repair on CP-SAT (2026-08-15/16)
+
+Branch `feat/c5-ai-repair-cpsat`, worktree `.claude/worktrees/c5-ai-repair`,
+off `edd358af` (C4 merged). **PR open** — see the row above once linked.
+
+**The wiring.** Both AI runners' repair round (`runAiPlan` in
+`schedule-ai.ts`, `runCompetitionAiPlan` in `competition-schedule-ai.ts`)
+now call `buildSchedule` (the placement CP-SAT service) instead of z3's
+`repairDecomposed`, through a rewritten shared `solveBoard`
+(`schedule-ai-solver.ts`). Applies C4's own "pin what stands, re-solve the
+violators" ruling directly — the generalization is VIOLATOR-derived rather
+than C4's PLACEMENT-derived split: frozen = this pack's own pins ∪ every
+movable fixture NOT named by a blocking conflict from this round's own
+verifier (both ends of a pairwise conflict, via `fixtureId` +
+`details.otherFixtureId`), never `warnings`. `fixtures` handed to
+`buildSchedule` stays the FULL movable set, never pre-filtered — same
+lesson C4 already learned, `buildSchedule`'s own pin-promotion is what
+excludes a frozen id.
+
+**Decomposition-bypass — VERIFIED BY BENCH, and it does NOT hold at every
+density.** Built `packages/engine/scripts/bench-ai-repair-cpsat.ts`
+(extending `bench-reflow.ts`'s pattern) and measured N=6/side against a
+real local placement service:
+
+| board | OLD (z3, decomposed) | NEW (CP-SAT, monolithic) | gate |
+|---|---|---|---|
+| 30 fixtures, 10 free (~33%), wall 10s | 2167-2557ms, 0 conflicts, moved=5 | 433-817ms, 0 conflicts, moved=10 | PASS |
+| 40 fixtures, 24 free (~60%), wall 45s | 7821-8891ms, 0 conflicts | 44643-45636ms (budget exhausted), 24 blocking, engine=greedy | **FAIL** |
+
+At high violator density the non-decomposed CP-SAT solve does not complete
+even at a generous 45s wall (server `PLACEMENT_WALL_SECONDS_MAX=60`, ruling
+out its own 10s default as the cause) and `buildSchedule` falls back to its
+own internal greedy, which does not avoid the injected clashes. z3's
+decomposed search handles the identical board in under 9s at zero conflicts
+by splitting it into independent, much smaller connected components. **NOT
+fixed** — re-adding decomposition for CP-SAT reverses this stage's own
+premise and is materially larger than its scope. Assessed and confirmed
+(independently, by code review too) as a bounded LATENCY/BUDGET-WASTE risk,
+not a safety one: `solveBoard`'s own re-verification (real
+`validateAssignments`, regardless of `buildSchedule.status`) plus the
+CALLER's pre-existing, unchanged adoption gate
+(`afterBlocking.length < blocking.length`) together mean a degraded solve
+never gets silently adopted — it wastes solver budget and falls through to
+the LLM repair round exactly as if the solver had declined outright.
+Flagged as a real follow-up candidate (a density-aware budget/skip
+heuristic), not blocking this stage.
+
+**Fallback-exit reconciliation — recurred, exactly as C4 found for
+REFLOW.** `buildSchedule`'s non-`ok` exits report the plain unpinned greedy
+seed, not the pinned board. `solveBoard` reconciles every frozen id's slot
+from the caller's own board unconditionally; mutation-checked. A SECOND,
+related bug found while writing the budget-exhaustion test: the original
+`unresolvedFixtureIds` computation only checked the reconciled board's
+blocking-conflict list, missing a violator `buildSchedule` dropped from its
+response entirely (`validateAssignments` cannot report an absence). Fixed;
+mutation-checked.
+
+**Code review dispatched before the PR, per `_RULES.md`.** One pass
+(large diff, single close pass — concentrated in two mirrored call sites
+plus one shared module). Verdict: **Ready to merge, with fixes.** Traced the
+reconciliation, the defensive frozen-id narrowing, and — flagged as the
+single most important thing to verify — the two-layer independent
+re-verification (`solveBoard`'s own, then the caller's adoption gate) that
+prevents an organiser from ever seeing a false-clean board; confirmed sound
+by hand, not just asserted. Found 1 Critical (a deterministic e2e break,
+`data-minimality="proved"` — the review found it independently via static
+tracing at almost the same moment this session found it by actually running
+the e2e suite; both fixes agree), 2 Important (the joint test file's
+missing REGRESSION test; the `data-moved="1"` guarantee question — see bench
+above), 2 Minor (a doc comment overstating the lock-wrapper removal; the
+"proved minimal" UI copy silently going dark). All addressed except the
+UI-copy Minor, left as a noted, deliberately out-of-scope product call.
+
+**e2e finding, found independently before code review flagged it too.**
+`ai-architect.spec.ts:1173` ("a clash off the minute boundary...", #452)
+asserted `data-minimality="proved"` — a z3-ascending-k-specific claim
+`solveBoard` no longer makes. `ai-diff-panel.tsx:334` (untouched) already
+falls back to `"unknown"` when `repair.minimality` is unpopulated, so this
+was a deterministic break in a live, PR-gating spec, not speculation. Fixed
+the assertion and rewrote both doc comments at that test that described the
+retired z3 "proved minimal" mechanism — same staleness class C4's own
+review caught twice at its own mode-dispatch fork point.
+
+**Verified (all real, fresh DB per run, real placement service, real prod
+build for e2e):**
+- apps/web (`src/server src/lib`): 4835 / 4786 / 0 / 49 (total/passed/
+  failed/pending), `success: true`.
+- engine (`test:coverage`): 4004 / 3982 / 0 / 22, coverage gate passed
+  (`EXIT=0`). Initial full run hit 40 failures across 17 files — ALL in
+  files this diff never touches (sport-module conformance/property tests,
+  z3's own timing tests); confirmed 100% environmental (load average
+  45/211/184 during the contended run — apps/web's own suite, this engine
+  run, a prod build, and a code-review subagent all running at once — vs a
+  clean 144 files/3982 tests on a quiet-box re-run, and all 17 originally-
+  failed files individually green in isolation too).
+- e2e: `ai-architect.spec.ts --project=parallel`, full file, **16/16**, run
+  twice (once catching the stale minimality assertion, once clean after the
+  fix) against a real local prod build + real placement service. Covers all
+  three brief-named specs by title (line numbers drifted: `:1064`→same,
+  `:1147`→`:1157`, `:1238`→`:1250`).
+- smoke: 833/836 (3 failed), all 3 confirmed environmental by reading
+  `smoke.ts`'s own source (`:6252`, `:5835`, `:5843` — each branches on
+  real Supabase/Stripe creds OR a genuinely absent key producing a specific
+  503-guard message; this session's stub/dummy values read as "configured"
+  without being real, satisfying neither branch). Nothing in this diff
+  touches logo upload, storage, or revenue reporting.
+- Regression: two REGRESSION tests (single-division, joint — the joint one
+  added after code review, required extending the joint test pack to 3
+  fixtures since its 2-fixture pack makes every scenario all-violators),
+  plus the reconciliation and dropped-violator mutation checks. All
+  mutation-verified.
+- i18n: diff touches only `apps/web/src/server/{usecases,api-v1}/**`, their
+  tests, `openapi/*.json`, one engine bench script, and `ai-architect.spec.ts`
+  (test code only) — zero user-facing strings, no locale dict update owed.
+  `openapi:gen` — the expected 4-spot `engine` enum diff, nothing else.
+  `packages/engine` + `apps/web` lint and typecheck all clean.
+
+PR: see the row above for the link once opened.
+
+#### CORRECTION (2026-08-16): the smoke number above was VACUOUS on exactly
+#### the code this task changed — read before trusting a smoke count here
+
+The "833/836, 3 failed, all environmental" claim above is accurate about
+the three failures it names, and was simultaneously **vacuous as
+verification of this diff**. `scripts/smoke.ts:9296`:
+`const aiConfigured = !!process.env.SCHEDULING_AI_BASE_URL;` gates the
+ENTIRE AI section (`v4AiSuite`) — every AI-repair check in the file,
+including the ones that would have caught the regression below — behind
+that one env var. The original local run never set it, so the whole
+section silently did not execute; `total` stayed at ~836 rather than CI's
+own ~891, and only `pending`/skip counts would have shown the gap, which
+nothing in that run's own summary surfaced. **Same shape this repo's
+`_RULES.md` already names for a worktree missing `.env.local`** ("~1772 DB
+tests skip themselves while `total` stays unchanged") — a different cause,
+identical failure mode: a real section silently not running, reading as a
+clean, smaller-than-expected total rather than as an obvious skip. Next
+session: confirm the total lands near ~891 (export
+`SCHEDULING_AI_BASE_URL`, point it at wherever `startAiFixtureServer()`
+binds — 4319 by default) before trusting ANY smoke number that touches
+`schedule-ai.ts`/`competition-schedule-ai.ts`/`schedule-ai-solver.ts`.
+
+#### PARKED (2026-08-16): a real bracket/frozen-feeder repair-capability
+#### regression, found via CI, not locally — owner ruling: land C9 first
+
+CI on PR #576 red on `Smoke — build + server + e2e` (889 passed, 2 failed;
+9/10 other checks green) — invisible locally for the reason above. Two
+failures, both in `scripts/smoke.ts`'s "v4 AI/bracket" checks
+(`~:9768`/`~:9780`, #396/#399/#401), on a 4-entrant knockout bracket with a
+third-place playoff: two DECIDED semi-finals, and two TBD slots (the final,
+the playoff) scheduled at the same instant — legal on named-entrant rules,
+unsafe on the people who could still reach either slot (a recursive
+`person_overlap`, #396's whole point).
+
+**Root cause, confirmed with evidence
+(`scripts/repro-ai-bracket-frozen-feeder.ts`, committed this session as a
+verification tool):** `buildSchedule`'s CP-SAT encoding does not enforce an
+`OrderDependency` edge against a fixture that is FROZEN via
+`frozen`/`current` rather than genuinely `.locked` — C4's own documented,
+explicitly out-of-scope finding (`reflowExisting`'s doc comment: "a
+dependency-encoding gap on a FROZEN feeder... shared with POLISH...
+Recorded so C5/a POLISH follow-up finds a decision, not a miss"), now
+actually reached.
+
+**Why REFLOW could never expose this, and why C5's own split is the first
+caller that can — the generalizable lesson, not just this task's bug:**
+REFLOW freezes EVERY already-placed card uniformly, so a dependency edge in
+a REFLOW call is always fully inside the frozen set or fully outside it —
+never straddling. C5's violator-derived freeze
+(`frozen = pins ∪ non-violators`) can produce an edge with EXACTLY ONE end
+frozen: a free violator depending on a frozen non-violator. A bracket's
+third-place playoff (a violator — it's IN the clash) depending on two
+decided semis (non-violators — nothing names them) is exactly that shape.
+**Any future caller that derives its frozen set from something OTHER than
+"everything already placed" should expect this same straddle and check for
+it up front, not rediscover it via a CI red.**
+
+**A competing, initially plausible hypothesis (the bracket/TBD
+empty-`entrant_indices` wire-schema wall C4 also documented) was raised,
+investigated, and REFUTED, not assumed** — that would predict
+`solver_unavailable`/`INVALID_REQUEST`; what was measured was
+`engine: "optimized"` (buildSchedule genuinely reached and answered) with a
+concrete `order_before_feeder` conflict naming two fully-DECIDED semis as
+the offended feeders. Refuting a plausible-sounding hypothesis with actual
+telemetry rather than accepting it is the reason the real cause was found
+at all.
+
+**Fix shipped, kept (`a59a9916`):** `solveBoard` declines the solver
+attempt entirely — never calls `buildSchedule` — when a dependency edge has
+exactly one end in the violator set and the other in the frozen set,
+falling through to the LLM repair path cleanly (the same shape the
+existing fully-frozen fast path already uses). Correct, defensive code on
+its own terms; C9's decomposition (keeping a dependency's two ends in one
+connected component whenever one is frozen) is expected to make it
+redundant, and whoever lands C9 should evaluate removing it rather than
+carrying two overlapping mechanisms indefinitely.
+
+**Why the fix alone was not enough to ship, and why this parked rather than
+shipping degraded:** with the guard in place, the solver declines
+correctly — but the fallthrough LLM round never resolves the underlying
+`person_overlap`, because (per `smoke.ts`'s own pre-#401 comment) this
+exact clash shape was ALWAYS structurally unrepairable by the model alone;
+z3's direct participation was specifically what made it repairable (#401's
+entire point). So declining is not a latency trade — for this shape it is a
+genuine capability regression back to the pre-#401 state, and knockout
+brackets refined after round-1 results are known are the ORDINARY case for
+this shape, not a tail risk. Measured (`repro-ai-bracket-frozen-feeder.ts`,
+matches CI):
+```
+repair: {"engine":"llm","solver_ran":false,"fallback":"unrepaired"}
+blocking: 8 person_overlap rows (both TBD fixtures × all 4 shared people)
+diff.moved: []   (after 2 full LLM repair rounds)
+```
+
+**The safety story held throughout — this is the part that did NOT
+regress.** `solveBoard`'s own re-verification (real `validateAssignments`,
+independent of `buildSchedule.status`) never once reported an illegal or
+unresolved board as `"repaired"` — before the guard, the order-violating
+board correctly scored `"partial"`; after it, the declined board correctly
+scores `solver_ran:false`/`fallback:"unrepaired"`. No organiser was ever
+shown a corrupted or falsely-clean board at any point. What regressed is
+repair CAPABILITY on one shape, never the correctness of what gets
+reported — the two-layer verification (module-level re-check, then the
+caller's unchanged adoption gate) this task built for the DENSITY finding
+held equally well for a completely different failure shape it was never
+specifically designed for, which is itself worth recording as a design
+validation.
+
+**`smoke.ts:9768`/`:9772`/`:9780` are deliberately left failing on
+`origin/main`'s branch — do not relax them.** They are the canary that
+proves C9 restored the capability: passing again is a genuine C9 acceptance
+signal, not a test detail. `C9-decomposed-repair-cpsat.md` has been amended
+with this finding as an explicit acceptance criterion, and its own
+"Gate: C5 merged" line corrected to reflect the inverted order below — see
+PR #581 (`docs/c9-frozen-feeder-finding`, separate branch off `origin/main`,
+since this C5 branch is not being rebased while parked).
+
+**Owner ruling (via coordinator, 2026-08-16): land C9 first, then revisit
+C5.** PR #576 converted to draft, title prefixed `[PARKED — pending C9]`,
+NOT rebased onto `origin/main`'s subsequent commits (rebasing now is
+throwaway work while C9 is built on top of unparked C5). Branch
+`feat/c5-ai-repair-cpsat` stays as-is; whoever resumes this should rebase
+THEN, not before C9 lands.
+
+PR: see the row above for the link.
+
+### C9 — decomposed repair on CP-SAT (2026-08-16)
+
+**UPDATE (2026-08-16, post-C10 verification): CANARY NOW GREEN, PR READY FOR
+REVIEW.** Everything below this line, down through the PR link, is the
+record of the ORIGINAL session that found the bracket/TBD gap and reported
+it — left intact as history. C10 (#586, "put person identity on the
+placement wire") merged the fix that gap called for, and this branch was
+rebased onto it (`fe44dfb7`, 23 commits, clean). A dedicated verification
+pass then re-ran everything fresh and found the wire fix was NECESSARY but
+not SUFFICIENT: closing it exposed a second, latent, pre-existing bug this
+task's own new code (`nudgeForward`) had carried since it was first
+written, invisible until the wire gap stopped shadowing it.
+
+**The second bug.** Two violators sharing one frozen feeder are nudged
+ONE AT A TIME (the loop in `repairDecomposedCpsat`). While the first is
+being searched, the second still sits in `background` at its own
+pre-repair, still-conflicting position. `nudgeForward`'s conflict filter
+was unscoped — `validateAssignments(...).filter(isBlockingConflict)`,
+with no check that the conflict actually NAMES the candidate — so the
+second violator's own not-yet-resolved breach against the frozen feeder
+vetoed every candidate tried for the first, forever. The component fell
+back to `timeout`/`infeasible` with nothing moved, landing on the same
+`{status:"unrepaired", moved:0}` shape the pre-C10 wire refusal used to
+produce, for a different reason. Exactly the bracket/TBD scenario hits
+this: both TBD siblings depend on the same decided semis. Fixed by scoping
+the filter to `c.fixtureId === fixtureId`
+(`packages/engine/src/scheduling/repair-decompose-cpsat.ts`, one line),
+matching the `own.has(c.fixtureId)` discipline the rest of the function
+already applied. Regression test added and mutation-checked
+(`repair-decompose-cpsat.test.ts`, "nudges TWO violators forward off the
+SAME frozen feeder" — red on the unscoped filter, green on the fix).
+Commit `b2d9089b`.
+
+**The canary, unmodified, all three assertions, fresh run:**
+`scripts/smoke.ts` (current line numbers ~9852/9859/9871 — C10 shifted the
+file by about 97 lines from the `:9755`/`:9768`/`:9780` cited when this was
+last red; the assertion TEXT and IDs, `#396`/`#399`/`#401`, are unchanged):
+
+```
+PASS  v4 AI/bracket: refine REPAIRS the clashing prior instead of shipping it (#401)
+PASS  v4 AI/bracket: ...by moving exactly ONE fixture, proved minimal (#401)
+PASS  v4 AI/bracket: the person_overlap that blocked is GONE from the response (#396, #399, #401)
+```
+
+`scripts/repro-ai-bracket-frozen-feeder.ts` — the acceptance signal its own
+header comment names, reached: `{"engine":"optimized","solver_ran":true,
+"status":"repaired","moved":1,"minimality":"proved"}`, `blocking: []`.
+Previously (this same script, pre-fix): `{"engine":"llm","solver_ran":true,
+"status":"unrepaired","moved":0}`, 8 `person_overlap` rows blocking.
+
+**Full re-verification, fresh DB per run, real placement service
+(`PLACEMENT_WALL_SECONDS_MAX=60`), real prod `standalone` build:**
+- smoke: **903 passed / 0 failed (903 total)** — up from 900/903 pre-fix.
+  Confirmed not vacuous (no `SCHEDULING_AI_BASE_URL unset` line anywhere,
+  `placement optimized` suite green).
+- apps/web `src/server src/lib`: **4996 total / 4940 passed / 0 failed / 56
+  pending**, 0 failed suites, all paths confirmed under this worktree.
+- packages/engine `test:coverage`: **4025 total / 4004 passed / 2 failed /
+  19 pending.** Both failures are `placement-integration.test.ts`
+  (untouched by this session — only C10 appended a new, passing test to
+  the end of that file; the two failing ones predate it), and both are
+  load-sensitive, not structural: this machine ran ~20 concurrent sessions
+  throughout (`uptime` load average 10.78–18.45 during the failing run),
+  and the second failure ("falls back to greedy with the service
+  unreachable", a 10s-timeout test whose own comment already flags this
+  exact risk) PASSED on immediate re-run alone as load dropped to 5.94.
+  The first ("32-fixture/5-court board", 20s test timeout vs. the
+  service's own allowed wall) is the identically-documented pre-existing
+  mismatch the original C9 session already found.
+- `ai-architect.spec.ts --project=parallel`, real prod build, real
+  placement service: **16/16** (`stats.expected:16, unexpected:0,
+  skipped:0, flaky:0`), both minimality specs confirmed by name (#401,
+  #452). One local-only detour: the first attempt 401'd on
+  `activateFreshProPlusOrgWithSlug` with `PLAYWRIGHT_BASE=http://
+  127.0.0.1:3200` — the session's own secure-cookie-on-127.0.0.1 trap
+  (`reference_e2e_secure_cookie_needs_localhost`), fixed by using
+  `http://localhost:3200` instead; no code change, a run-recipe correction.
+- `npx turbo run lint` / `npx turbo run typecheck`: both **0 errors**
+  (lint: the same 77 pre-existing warnings, none in a file this session
+  touched).
+
+**Fix mandate honoured: narrow.** The only production-code change this
+verification session made is the one-line `nudgeForward` scope fix above,
+found by following the brief's own instruction to confirm C9's
+decomposition and C10's wire actually agree. Nothing else was touched;
+nothing pre-existing was engineered around.
+
+PR #583 body updated with these numbers, title's `[BLOCKED — pending wire
+fix]` prefix dropped, marked ready for review (`gh pr ready 583`). NOT
+merged — owner's call.
+
+---
+
+Branch `feat/c9-decomposed-repair-cpsat`, worktree
+`.claude/worktrees/c9-decomposed`, off `origin/main` at `7477e3df` — carries
+C5's 11 commits (deliberate, owner-ruled: C9 supersedes C5's solver call
+while keeping everything else C5 got right; C5's PR #576 gets closed as
+superseded once this merges, targeting `main`, never C5's branch).
+
+**The wiring.** `repairDecomposedCpsat`
+(`packages/engine/src/scheduling/repair-decompose-cpsat.ts`, new) replaces
+C5's single monolithic `buildSchedule` call in `solveBoard`
+(`schedule-ai-solver.ts`) with a decomposed one: `repairComponents` /
+`dayCapGuard` (`repair-decompose.ts`) and `disjointConflictBound`
+(`repair-minimality.ts`) reused UNCHANGED — verified end to end that they
+are genuinely solver-agnostic, not merely asserted (`dayCapGuard` needed one
+export added, no behaviour change). Each component gets its own
+`buildSchedule` call, sequential, matching `build.ts:1196`'s
+`withZ3LockAndReset` mutex (unchanged, out of scope per the brief).
+
+**Density regression: CLOSED, measured.** 24 free / 40 fixtures (~60%
+violator density), N=6, real placement service,
+`PLACEMENT_WALL_SECONDS_MAX=60` (server-side — MUST be set explicitly; the
+service defaults to 10s and silently caps every request below it otherwise,
+see "environment trap" below):
+
+| arm | wall ms (min/med/max) | blocking conflicts | moved | engine |
+|---|---|---|---|---|
+| z3 decomposed (old) | 5306 / 5778 / 5841 | 0 | 12 | z3 |
+| CP-SAT monolithic (C5) | 10269 / 10343 / 10347 | **24** | 24 | greedy (fell back) |
+| **CP-SAT decomposed (C9)** | **386 / 433 / 703** | **0** | 24 | optimized |
+
+10/30 (moderate density, N=6): 166–317 ms, 0 blocking — faster than C5's own
+433–817 ms, not a regression.
+
+**Component-limit / budget constants: MEASURED, not inherited from z3's.**
+`CPSAT_COMPONENT_MOVABLE_LIMIT = 40`, `DEFAULT_CPSAT_COMPONENT_BUDGET_MS =
+10_000`. Curve (worst-case density — every fixture pairwise-clashing,
+deliberately pathological, real components are far cheaper — see the
+density table above):
+
+| movable n | wall ms | outcome |
+|---|---|---|
+| 5 | 1403–1530 | `already_optimal`, instant |
+| 10–30 | ~9.7–10.5s | plateaus at the 10s budget, falls back to greedy, 0 blocking every time (safe, not optimal) |
+| 60 | 26–28 ms | `buildSchedule`'s own R22 size gate (`canSolveWithin`) declines instantly |
+
+**The frozen-feeder straddle: TWO shapes, only ONE closes.** C4's original
+finding (real, named entrants on both ends of the dependency) is CLOSED:
+`repairComponents` unions on every `dependencies` edge, so a violator and
+its frozen feeder always land in one component; the feeder is folded into
+`existing` (see "design pivot" below for why, not left genuinely movable);
+`nudgeForward` (a narrow, real-verifier-only forward search, never a
+general repair mechanism) closes the resulting dependency-drop. Verified
+against the real placement service, both directions:
+`repair-decompose-cpsat-integration.test.ts` proves the fix AND proves the
+identical board reds through a single monolithic `buildSchedule` call (the
+C5 shape) — a genuine fix, not a coincidence of the board.
+
+**The bracket/TBD-sibling case — what actually parked C5's PR #576 — is
+NOT closed. This is a finding that CONTRADICTS this brief's own "REFUTED"
+note (line ~250-256 of the brief as originally written), found by
+re-running `scripts/repro-ai-bracket-frozen-feeder.ts` directly against
+this session's implementation, not assumed from the brief's text.**
+Measured:
+
+```
+repair: {"engine":"llm","solver_ran":true,"status":"unrepaired","moved":0,
+         "unresolved":2,"residual":8,"components_solved":0,
+         "components_skipped":1,"fallback":"unrepaired"}
+blocking: 8 person_overlap rows (unchanged)
+```
+
+Root cause, confirmed directly against the real placement service via a
+temporary diagnostic (reverted, `git status --porcelain` clean afterward):
+both TBD fixtures (the final, the third-place playoff) have `home`/`away`
+both null — `toSchedulableFixtures` (`schedule-ai.ts`) correctly omits both
+fields for a genuinely undecided bracket slot, per its own established
+contract — so their `entrant_indices` are EMPTY on the wire.
+`services/placement/src/placement/schema.py` refuses ANY fixture with empty
+`entrant_indices` outright (`INVALID_REQUEST`, silently — no log line,
+commit `f04a597a`, 2026-08-10, predates C5 entirely): `"fixtures[0].
+entrant_indices must not be empty. A fixture with no entrants joins no
+participant group, so the participant-rest NoOverlap and every T2 idle-gap
+term skip it."` `buildSchedule` is never reached for a component containing
+a TBD sibling, REGARDLESS of decomposition — the wall applies with one
+component or forty, so no amount of graph restructuring closes it.
+
+Decomposition genuinely closes the ORDER/dependency aspect (see above), but
+the recursive `person_overlap` BETWEEN two TBD siblings is a SEPARATE
+problem: the wire's `entrantIds` (derived only from `home`/`away`) is the
+ONLY participant-overlap channel CP-SAT has, and `people` (where "everyone
+who could still reach this slot" actually lives — #396's own mechanism) is
+never forwarded to the wire at all. Confirmed with a live placement-service
+call: a synthetic 4-fixture board with two movable, entrant-less "TBD"
+fixtures sharing `people` is rejected `INVALID_REQUEST` before any solve;
+the identical board with synthetic-but-DISTINCT entrant ids on the TBD pair
+(masking the wire gap rather than closing it) reaches the solver but then
+places both TBD fixtures at the same instant anyway, since CP-SAT has no
+information that they must not overlap — confirming this is not a
+component-boundary problem decomposition can address, it is a wire
+EXPRESSIVENESS gap. Closing it needs the wire to carry a `people`-shaped
+NoOverlap concept the Python model does not have today — a proto /
+`placement-client.ts` / `services/placement/**` change, well outside this
+task's stated file set. **Reported per this task's own explicit
+instruction to stop and report a contradicted premise rather than engineer
+around it under time pressure — not attempted here.**
+
+**Consequence: `scripts/smoke.ts:9755`/`:9768`/`:9780` (the "v4 AI/bracket"
+canary, #396/#399/#401) remain RED, unweakened.** This is this task's
+primary, explicit acceptance gate, and it is NOT closed. Confirmed these are
+the ONLY 3 failures in a full smoke run (874 passed / 3 failed / 877 total,
+`SCHEDULING_AI_BASE_URL` exported — without it the AI section silently
+doesn't run at all, the exact vacuous-green shape that let C5 ship two real
+reds believing it was green). The safety story holds throughout regardless:
+`solveBoard`'s own re-verification never once reports an illegal or
+falsely-clean board — the decline is honest and the board falls through to
+the LLM round exactly as it did with C5's guard in place, just reached via
+a genuine attempt (`solver_ran:true`) rather than a pre-emptive one.
+
+**C5's frozen-feeder guard (`a59a9916`): REMOVED.** It declined
+INDISCRIMINATELY on any dependency-touches-frozen-feeder shape, including
+the general (non-TBD) case C9 now genuinely fixes. Removing it lets
+decomposition repair what it can; for the TBD-sibling shape it cannot
+reach, the empty-entrant wall provides the identical safe outcome (decline,
+fall to LLM) via a more honest mechanism (a genuine attempt that fails, not
+a pre-emptive skip that never tries).
+
+**Design pivot, measured not guessed: why a frozen feeder is folded into
+`existing`, not left genuinely movable.** First design tried: pass a
+caller-frozen component member as a genuinely movable `buildSchedule`
+fixture, so its dependency edges survive `freeFixtureIds`. Measured
+directly against the real placement service and REJECTED:
+`buildSchedule`'s own objective ladder (`days`/`day_span`/`day_start`/
+`idle_gap`/`imbalance`) rewards compactness with nothing anchoring a
+fixture to `current`, so a frozen feeder with any window slack ahead of it
+gets relocated even with zero other fixtures in play — a lone feeder with
+60 minutes of slack was moved a full hour with nothing else to solve.
+Reconciling after (discard the whole component if a frozen member came
+back moved) would then discard nearly every component with any slack at
+all — the opposite of what decomposition exists for. Shipped design: every
+caller-frozen component member is folded into `existing` (structurally
+incapable of drifting, identical mechanism to C5's own), and
+`nudgeForward` closes the resulting dependency-drop instead.
+
+**Minimality: RECOVERED, verified end to end against the real stack, not
+assumed from unit coverage alone.** `disjointConflictBound` never touched
+z3 — reused unchanged. `ai-architect.spec.ts`'s two single-clash specs
+(#401, #452) both now assert `data-minimality="proved"` (previously
+`"unknown"` after C5) — confirmed by first running the suite UNMODIFIED and
+watching #452 fail exactly as expected (`data-minimality` genuinely
+rendered `"proved"` against an assertion still pinned to `"unknown"`)
+before updating either assertion. Mutation-checked at the unit level too:
+forcing a component to move an unnecessary second fixture drops the
+verdict to `upper_bound`.
+
+**Environment trap hit and resolved this session, recorded for the next
+one:** `PLACEMENT_WALL_SECONDS_MAX` defaults to **10** seconds
+(`services/placement/src/placement/config.py`) when the placement service
+is started without it set explicitly — NOT the `wallMs`/budget value a
+caller passes per-request, which is silently capped underneath. The very
+first density-bench and calibration runs this session were capped at ~10s
+regardless of a 30–60s requested wall, producing numbers that could not be
+trusted; re-run correctly once caught. C5's own bench avoided this by
+setting it — this session initially missed it despite the standing
+`AGENTS.md` warning quoting the exact env var, which is worth flagging: the
+warning describes WHY (the density bench needs it to rule out the 10s
+default as the cause) but the recipe to actually SET it when starting a
+LOCAL placement service for ad hoc verification is easy to skip since nothing
+enforces it and a capped run still returns a plausible-looking answer.
+
+**Verified (all real, fresh DB per run, real placement service, real prod
+build for e2e):**
+- engine: `repair-decompose-cpsat.test.ts` (13, mocked driver logic) +
+  `repair-decompose-cpsat-integration.test.ts` (3, real placement service)
+  — 16/16 alone. Full `test:coverage`, ISOLATED (no concurrent suite):
+  **4020 total / 3990 passed / 11 failed / 19 pending, `success: false`**
+  on the first isolated pass — traced, not accepted at face value:
+  - **8 of the 13 in `repair-decompose-cpsat.test.ts` itself** — this
+    task's OWN new file, mocked, deterministic, zero DB/network
+    dependency, 13/13 alone. Root cause: it used a hoisted top-level
+    `vi.mock("./build.ts", ...)`, but `packages/engine/vitest.config.ts`
+    runs `isolate: false` (shares the module cache across every file in a
+    worker; its own header names the identical class of bug in
+    `build-lns-wiring.test.ts`: "not the machine, not the wall — FILE
+    ORDER"). A hoisted mock is not reliably scoped to one file under that
+    setting once real siblings importing `./build.ts`
+    (`build.test.ts` and others) share the worker. Fixed by matching this
+    repo's own proven pattern (`build.test.ts:750-807`): per-test
+    `vi.resetModules()` + `vi.doMock()` + a fresh `await import(...)`,
+    unmocked again in `afterEach` — cannot leak in or out by construction.
+    Proved both directions with a forced `--maxWorkers=1` pairing repro
+    (worst-case single-worker sharing): unfixed, alone it was 13/13 but
+    failed identically to the full run when paired with `build.test.ts`;
+    fixed, paired with `build.test.ts` it is 86/86 (that file's own 73 +
+    this file's 13), and paired with `roundrobin.test.ts` +
+    `placement-integration.test.ts` + `repair-decompose.test.ts` together
+    it introduces no failure in any of them either.
+  - **`roundrobin.test.ts` (1) and `placement-integration.test.ts` (2)** —
+    confirmed pre-existing and unrelated, not this diff: both files are
+    byte-identical to `origin/main` (`git diff origin/main -- <path>`,
+    zero output; zero commits on this branch touching either), and
+    neither is reachable from `repair-decompose-cpsat.ts`'s own import
+    graph. Traced past the wrapper first, since the harness's own
+    transparent hook rewrites even a literal `npx vitest` invocation
+    through `rtk` (per this machine's global `RTK.md`) and redacted the
+    real failures as `STACK_TRACE_ERROR` even inside the `--outputFile`
+    JSON's `failureMessages` — `rtk proxy npx vitest run <file>` for the
+    unredacted text was necessary to read them at all. Real cause:
+    `placement-integration.test.ts`'s 32-fixture/5-court case
+    deterministically pegs the full server-granted 30s wall every run
+    today (`solver_elapsed_ms` 30015-30020 across four separate
+    invocations, `status: FEASIBLE`, only 2/3 tiers — a genuine
+    budget-exhaustion case, not noise), against the test's own hardcoded
+    20s vitest timeout — a pre-existing mismatch in a file this task
+    never opens. `roundrobin.test.ts` dying with a bare
+    `STACK_TRACE_ERROR` is the exact memory-pressure signature
+    `vitest.config.ts`'s own header already documents by name for that
+    file. Left alone — out of this task's scope and already proven
+    unrelated, not silently patched over.
+  - The other 0 (19 pending are pre-existing skips, unrelated).
+  - **Final isolated re-run after the fix: 4020 total / 3998 passed / 3
+    failed / 19 pending, `success: false`.** All 3 remaining failures
+    are the two pre-existing files above (`repair-scale.test.ts`'s
+    "500-movable board returns inside its budget rather than hanging",
+    a z3 timing test whose own header says its 3s budget is deliberately
+    NOT scaled for a loaded host, plus `placement-integration.test.ts`'s
+    same two) — both confirmed byte-identical to `origin/main`, zero
+    commits from this branch touching either. This diff's own file
+    (`repair-decompose-cpsat.test.ts`, 13 tests) is fully green in the
+    full run.
+- apps/web: `src/server src/lib` DB-backed run, FRESH DB (`db:apply` +
+  `sync:sports` on a brand new scratch Postgres, port confirmed mine via
+  `show data_directory`) — **4864 total / 4813 passed / 2 failed / 49
+  pending.** The 2 failures (`help-copy-truth.test.ts`,
+  `pass-scoping-guard.test.ts`) are byte-identical to `origin/main`, zero
+  commits on this branch touching either, `STACK_TRACE_ERROR`-redacted
+  (the machine's global `RTK.md` hook rewrites even a literal `npx`
+  invocation through `rtk` transparently — `rtk proxy` needed for the
+  real text), and reproduce clean 115/115 re-run together in isolation —
+  the same transient-under-contention signature as the engine suite's
+  two, just in apps/web this time. An EARLIER run this session (before
+  this fresh-DB pass) showed 7 failures, ALL in three C5-era test files
+  mocking `buildSchedule` directly — `schedule-ai-repair.test.ts`,
+  `competition-schedule-ai-repair.test.ts`,
+  `schedule-ai-repair-cpsat-wiring.test.ts` — whose mock point went inert
+  the same way `schedule-ai-solver.test.ts`'s did; all three repointed at
+  `repairDecomposedCpsat`, the REGRESSION tests whose own guarantee moved
+  to the driver level adapted to prove what's still true at the runner
+  layer. Includes `schedule-ai-solver.test.ts` rewritten for the new seam
+  (15/15).
+- e2e: `ai-architect.spec.ts --project=parallel`, real prod `standalone`
+  build served by `node server.js` (never `next start`), real placement
+  service, this same fresh DB — **16/16** (`stats.expected: 16,
+  unexpected: 0, flaky: 0, skipped: 0`), both minimality specs confirmed
+  present by name (#401, #452). An EARLIER run this session, before
+  fixing the minimality regression, correctly went 11 passed/1 failed at
+  the #452 check — the expected-and-verified signal before the fix.
+- smoke: **881 passed / 3 failed (884 total)**, `SCHEDULING_AI_BASE_URL`
+  exported pointing at the script's own fixture server
+  (`AI_FIXTURE_PORT` 4319, set identically on the smoke process and the
+  server-under-test) — confirmed NOT vacuous: zero `SCHEDULING_AI_BASE_URL
+  unset` skip lines anywhere in the run, `placement optimized` suite
+  fully green (4/4, real `engine="optimized"` assertions), and the 3
+  failures are real named `v4 AI/bracket` assertions. The 3 failures are
+  exactly `scripts/smoke.ts:9756`/`:9768`/`:9780` (an earlier note in
+  this doc cited `:9755`, one line off the string literal itself — same
+  three) — confirmed byte-identical to `origin/main`, **unmodified**,
+  exactly the outcome this task's own bracket/TBD finding above requires.
+- `npx turbo run typecheck` and `npx turbo run lint` — the actual CI
+  gate, not the scoped per-package checks this task ran earlier — both
+  **0 errors** (lint: 77 pre-existing warnings in apps/web, none in a
+  file this task touches). Caught one real error the scoped checks
+  missed: `repair-decompose-cpsat.test.ts`'s untyped `vi.fn()` left
+  `mockImplementationOnce`'s expected signature resolving to a
+  void-returning function, tripping
+  `@typescript-eslint/no-misused-promises` on every async implementation
+  supplied — fixed by typing the mock to `buildSchedule`'s real
+  signature (separate commit).
+- `git rebase origin/main`: confirmed literal no-op — "Current branch
+  ... is up to date" (`origin/main` still `7477e3df`, unchanged since
+  dispatch).
+- `openapi:gen`: zero diff — `minimality`/`components_solved`/
+  `components_skipped` were already declared on the wire, unused, since C5;
+  no schema change owed.
+
+**C8 narrowed** (`C8-z3-delete-solver.md`): `repairComponents`/
+`dayCapGuard` (`repair-decompose.ts`) and `disjointConflictBound`
+(`repair-minimality.ts`) are C9's own production dependencies now, not
+just z3 leftovers sharing a file — C8's original "z3 reflow/repair code
+paths... their tests" wording would have deleted `repair-decompose.ts`
+wholesale, taking this task's own driver down with it.
+
+PR: https://github.com/ashokhein/seazn.club/pull/583 (targets `main`;
+carries C5's 11 commits too — #576 should close as superseded once this
+merges).

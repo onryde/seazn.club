@@ -62516,7 +62516,8 @@
                               "enum": [
                                 "none",
                                 "z3",
-                                "llm"
+                                "llm",
+                                "optimized"
                               ]
                             },
                             "solver_ran": {
@@ -67018,7 +67019,8 @@
                               "enum": [
                                 "none",
                                 "z3",
-                                "llm"
+                                "llm",
+                                "optimized"
                               ]
                             },
                             "solver_ran": {

@@ -1090,6 +1090,11 @@ test("a double-booked plan is repaired by the solver before the organiser sees i
   // the minimal one, which is the property this wave exists to deliver.
   await expect(strip).toHaveAttribute("data-moved", "1");
   await expect(strip).toHaveAttribute("data-unresolved", "0");
+  // C9 (decomposed repair on CP-SAT, 2026-08-16): a single disjoint clash's
+  // k=1 meets `disjointConflictBound`'s independent lower bound of 1, so the
+  // certificate is honestly PROVED, not merely found — recovered from C5's
+  // "unknown" (see the #452 test's own doc comment for the full history).
+  await expect(strip).toHaveAttribute("data-minimality", "proved");
   await shot(page, "13-repair-strip");
 
   // Proof the model was actually asked and the clash actually came back, so this
@@ -1126,23 +1131,39 @@ test("a double-booked plan is repaired by the solver before the organiser sees i
  * the clashing pair.
  *
  * What this pins that nothing else does: sub-minute instants crossing every
- * layer of the real stack — model plan → engine verifier → z3 repair → the
- * repair's own re-verification → the apply gate → `timestamptz`. A repair whose
- * encoding drifts does not come back merely wrong; `repairAndVerify` throws
- * `RepairVerificationError` and the run drops through to the PAID LLM repair
- * round, so both the CLEAN board and the "exactly one schedule call" assertion
- * below are load-bearing.
+ * layer of the real stack — model plan → engine verifier → the placement
+ * CP-SAT service (`buildSchedule`, via `solveBoard` — z3's `repairDecomposed`
+ * until C5, the z3 retirement stage B cutover on 2026-08-15) → `solveBoard`'s
+ * own re-verification → the apply gate → `timestamptz`. A repair whose
+ * encoding drifts does not come back merely wrong: `solveBoard` re-verifies
+ * its own reconciled board and reports it unresolved/partial rather than
+ * repaired, the runner's adoption gate then refuses it (strictly fewer
+ * blocking conflicts or nothing is adopted), and the run drops through to the
+ * PAID LLM repair round exactly as a thrown `RepairVerificationError` used to
+ * route it — so both the CLEAN board and the "exactly one schedule call"
+ * assertion below are still load-bearing.
  *
  * HONEST LIMIT, so nobody over-claims this later: it is not proven that this
- * board would have gone red on the pre-#457 encoder. z3 is free to choose any
- * minimal repair, and only some of those choices put the moved card adjacent
- * enough to a rounded obstacle for the old `roundMin` to matter. What IS true
- * is that no minute-aligned board can go red on it at all, so this is the first
- * e2e that can.
+ * board would have gone red on the pre-#457 encoder. The solver is free to
+ * place the moved card anywhere legal, and only some of those choices put it
+ * adjacent enough to a rounded obstacle for the old `roundMin` to matter. What
+ * IS true is that no minute-aligned board can go red on it at all, so this is
+ * the first e2e that can.
  *
  * Deliberately kept ALONGSIDE the whole-minute test rather than replacing it:
- * that one is the minimal-repair proof on a wholly aligned board, and the two
- * agreeing on `data-moved="1"` / `proved` is itself an assertion.
+ * that one is the same-shape repair on a wholly aligned board, and the two
+ * agreeing on `data-moved="1"` is itself an assertion.
+ *
+ * `data-minimality` HISTORY: C5 (2026-08-15) dropped this to `"unknown"` —
+ * the single monolithic `buildSchedule` call it introduced has no ascending-k
+ * mechanism the way z3's old repair search did, so it never claimed a
+ * moved-count PROVED minimal. C9 (2026-08-16, decomposed repair on CP-SAT)
+ * RECOVERS `"proved"` here — `disjointConflictBound`
+ * (`repair-minimality.ts`) never touched z3 to begin with, and the decomposed
+ * driver reuses it unchanged: a single-clash component's `k=1` meets the
+ * independent lower bound of 1, so the certificate is honestly `"proved"`,
+ * not merely found. Re-verified against the real stack (this test), not
+ * assumed from the engine unit tests alone.
  */
 test("a clash off the minute boundary is repaired without losing its seconds (#452)", async ({
   page,
@@ -1164,12 +1185,13 @@ test("a clash off the minute boundary is repaired without losing its seconds (#4
   await expect(page.getByText(/CLEAN · 0 blocking/)).toBeVisible({ timeout: 30_000 });
   const strip = page.locator('[data-testid="ai-repair-strip"]');
   await expect(strip).toBeVisible();
-  // The SAME verdict the whole-minute clash produces — one move, proved minimal,
-  // nothing given up. That parity is the point: putting four off-minute cards on
-  // the board must not degrade the repair. (It does when the CLASH pair is the
-  // off-minute one: measured `data-moved="2"`, `data-minimality="upper_bound"`.
-  // See `FIXTURE_CLASH_SECONDS`.)
+  // The SAME verdict the whole-minute clash produces — one move, nothing given
+  // up. That parity is the point: putting four off-minute cards on the board
+  // must not degrade the repair. (It does when the CLASH pair is the
+  // off-minute one: measured `data-moved="2"` pre-C5. See `FIXTURE_CLASH_SECONDS`.)
   await expect(strip).toHaveAttribute("data-moved", "1");
+  // C9 (decomposed repair on CP-SAT, 2026-08-16): "proved", recovered from
+  // C5's "unknown" — see this test's own doc comment for the history.
   await expect(strip).toHaveAttribute("data-minimality", "proved");
   await expect(strip).toHaveAttribute("data-unresolved", "0");
   await shot(page, "14-repair-strip-offminute");
