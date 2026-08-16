@@ -669,12 +669,28 @@ test("cricket v3 pad: tiles + context strip hold the 44px floor, no horizontal s
     )
     .toBe(1);
 
-  const chips = pad.locator('[data-role="context-strip"] button');
+  // Every chip, interactive or not. After the first ball the strip is
+  // ENTIRELY non-interactive by design: striker and non-striker are
+  // read-only because the engine refuses those overrides under a strict
+  // fold, and bowler is read-only until an over boundary (`currentBowler
+  // === null`) because mid-over the same fold refuses it. Selecting on
+  // `button` therefore matched nothing here and the test failed at all
+  // seven widths — the 44px floor applies to the chip footprint, which is
+  // what a thumb meets, not to whether it happens to be a control.
+  const chips = pad.locator('[data-role="context-chip"]');
   await expect(chips.first(), "context strip must render once an innings exists").toBeVisible({ timeout: 20_000 });
   const chipCount = await chips.count();
+  expect(chipCount, "cricket declares striker, non-striker and bowler").toBe(3);
   for (let i = 0; i < chipCount; i++) {
     await assertFloor(chips.nth(i), `context chip ${i}`);
   }
+  // Mid-over none of them may be a control: a chip that opens a picker the
+  // engine will refuse is the defect this wave fixed twice (G5, then the
+  // bowler's own mid-over case).
+  await expect(
+    pad.locator('[data-role="context-chip"][data-readonly="false"]'),
+    "mid-over every context chip is read-only",
+  ).toHaveCount(0);
 
   await expectNoHorizontalScroll(page);
 });

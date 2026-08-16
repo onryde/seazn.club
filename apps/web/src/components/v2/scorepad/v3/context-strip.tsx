@@ -172,6 +172,8 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
             return (
               <span
                 key={slot.id}
+                data-role="context-chip"
+                data-readonly="true"
                 style={{ minHeight: 44 }}
                 className="inline-flex min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700"
               >
@@ -185,6 +187,8 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
             <button
               key={slot.id}
               type="button"
+              data-role="context-chip"
+              data-readonly="false"
               aria-pressed={active}
               onClick={() => setActiveSlotId(active ? null : slot.id)}
               style={{ minHeight: 44 }}
