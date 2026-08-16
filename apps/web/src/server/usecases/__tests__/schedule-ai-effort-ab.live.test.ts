@@ -934,6 +934,35 @@ describe.skipIf(!LIVE)("effort A/B (live, billed)", () => {
     for (const arm of stage5Arms) cell("bracket-16", bracketPack, arm);
   }
 
+  // --- Stage 6 (2026-08-16): gemini-3.7-flash vs the incumbent 3.6 ----------
+  // google/gemini-3.6-flash is rung 1 of DEFAULT_LADDER (schedule-ai.ts:2366),
+  // so it is what production actually runs wherever OPENROUTER_API_KEY is set.
+  // gemini-3.7-flash is its successor at HALF the output rate — $1.875 vs
+  // $3.75 per Mtok, verified live 2026-08-16 against /models — on the same
+  // `google-vertex` slug, so it needs no allowlist change and no new
+  // sub-processor. Output tokens are ~96% of a run's cost, so if 3.7 holds
+  // plan quality this halves the architect bill outright.
+  //
+  // The incumbent is re-run in the SAME session rather than compared against
+  // the 2026-07-21 STAGE3 numbers: those were a different pack revision and a
+  // different draft path (STAGE5 changed bracket-16 to a realistic greedy
+  // draft), so cross-session numbers are not a control.
+  //
+  // Both arms, all three packs, effort high, 32k default. n via AI_AB_REPEATS.
+  // Enable with AI_AB_SHOOTOUT_STAGE6=1.
+  const GEMINI_37_ARMS: Arm[] = [
+    { model: "google/gemini-3.7-flash", effort: "high", provider: "openrouter", label: "gemini-3.7-flash" },
+    { model: "google/gemini-3.6-flash", effort: "high", provider: "openrouter", label: "gemini-3.6-flash" },
+  ];
+  const stage6Arms = process.env.AI_AB_ONLY_ARM
+    ? GEMINI_37_ARMS.filter((a) => a.label === process.env.AI_AB_ONLY_ARM)
+    : GEMINI_37_ARMS;
+  if (process.env.AI_AB_SHOOTOUT_STAGE6 === "1") {
+    for (const arm of stage6Arms) {
+      for (const [name, build] of FINAL_PACKS) cell(name, build, arm);
+    }
+  }
+
   it("summary", () => {
     const roundMs = Number(process.env.SCHEDULING_AI_ROUND_TIMEOUT_MS) || 300_000;
     process.stdout.write(
@@ -977,6 +1006,7 @@ describe.skipIf(!LIVE)("effort A/B (live, billed)", () => {
     if (process.env.AI_AB_SHOOTOUT_STAGE3 === "1") expectedCells += FINAL_ARMS.length * FINAL_PACKS.length;
     if (process.env.AI_AB_SHOOTOUT_STAGE4 === "1") expectedCells += RESCUE_40K_ARMS.length;
     if (process.env.AI_AB_SHOOTOUT_STAGE5 === "1") expectedCells += stage5Arms.length;
+    if (process.env.AI_AB_SHOOTOUT_STAGE6 === "1") expectedCells += stage6Arms.length * FINAL_PACKS.length;
     const expected = expectedCells * REPEATS;
     expect(rows.length).toBe(expected);
     expect(rows.every((r) => r.error === "")).toBe(true);

@@ -69,6 +69,7 @@ import {
   resolvePersonScopes,
 } from "@/server/usecases/engine-constraints";
 import {
+  expandDailyBreaks,
   parseInstruction,
   resolveParsed,
   type RawParsed,
@@ -967,7 +968,14 @@ export async function buildSchedulePack(
     // window the organiser stated in words. Rendering stays here so there is a
     // single writer of the pack's window strings.
     const resolved =
-      opts.resolved ?? resolveParsed(opts.raw ?? null, clock, orgTz, { fixtureCount: movable.length });
+      opts.resolved ??
+      // `courts` lets resolveParsed verify a court-scoped break against labels
+      // the model was actually shown; an unrecognised one defers the whole
+      // break rather than silently widening it to every court.
+      resolveParsed(opts.raw ?? null, clock, orgTz, {
+        fixtureCount: movable.length,
+        courts,
+      });
     const window =
       resolved.windowMs !== null
         ? {
@@ -1265,7 +1273,21 @@ export async function buildSchedulePack(
       sessionWindows: config.sessionWindows
         .map((w) => ({ from: zonedIso(w.from, orgTz), to: zonedIso(w.to, orgTz) }))
         .sort((a, b) => cmp(a.from, b.from) || cmp(a.to, b.to)),
-      blackouts: config.blackouts
+      // A mid-day break stated in the instruction ("lunch 12PM to 1PM") is a
+      // BLACKOUT, which the engine has always modelled — it was only the parser
+      // that had no word for it, which is why the model used to compile it as a
+      // whole-day not_before/not_after pair and confine the run to the lunch
+      // hour. resolveParsed keeps it symbolic because it cannot know the run's
+      // days; the expansion belongs here, where the window is settled.
+      blackouts: [
+        ...config.blackouts,
+        ...expandDailyBreaks(
+          resolved.dailyBreaks,
+          dayKeyInTz(resolved.windowMs?.from ?? windowStartMs, orgTz),
+          dayKeyInTz(resolved.windowMs?.to ?? windowEndMs, orgTz),
+          orgTz,
+        ),
+      ]
         .map((b) => ({
           ...(b.court !== undefined ? { court: b.court } : {}),
           from: zonedIso(b.from, orgTz),

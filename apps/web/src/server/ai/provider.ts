@@ -41,6 +41,12 @@ export type AiChatRequest<T> = {
   schema: { name: string; zod: ZodType<T> };
   signal: AbortSignal;
   timeoutMs: number;
+  /** Which routing allowlist this request travels under. Omitted means the
+   *  paid path (ALLOWED_PROVIDERS). `"parse"` is the unpriced instruction
+   *  pre-flight, which shops a wider, cheaper set of serving vendors —
+   *  see PARSE_ALLOWED_PROVIDERS. Adapters that do not route (Anthropic
+   *  direct) ignore it. */
+  routing?: "parse";
 };
 
 export type AiChatResponse<T> = {

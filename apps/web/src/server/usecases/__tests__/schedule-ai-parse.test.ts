@@ -209,11 +209,20 @@ describe("parseInstruction", () => {
     expect(req.maxTokens).toBeLessThanOrEqual(PARSE_TOKENS_PER_ATTEMPT);
   });
 
-  it("clamps the retry to what is LEFT of its own ceiling", async () => {
-    const provider = stub([null, B_OUT], 1_800);
+  it("clamps the retry to the smaller of its per-attempt cap and what is LEFT", async () => {
+    // Asserted as the RULE, not as a number. This previously expected exactly
+    // `PARSE_TOKEN_CEILING - 1_800`, which only held while the remaining
+    // ceiling was the binding limit. Raising the ceiling to 10k on 2026-08-16
+    // made the per-attempt cap bind instead, and a hard-coded figure turns a
+    // correct clamp into a red test — or, worse, would have gone green on a
+    // later edit that broke the clamp but happened to match the number.
+    const spentOnFirst = 1_800;
+    const provider = stub([null, B_OUT], spentOnFirst);
     await parseInstruction("…", CTX, { provider });
     const second = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[1]![0] as { maxTokens: number };
-    expect(second.maxTokens).toBe(PARSE_TOKEN_CEILING - 1_800);
+    expect(second.maxTokens).toBe(
+      Math.min(PARSE_TOKENS_PER_ATTEMPT, PARSE_TOKEN_CEILING - spentOnFirst),
+    );
   });
 });
 
@@ -421,14 +430,23 @@ describe("pre-flight plumbing (#398)", () => {
   });
 
   it("picks the provider from the MODEL, not from the global AI_PROVIDER", async () => {
-    // `parserAiModel()` returns a bare Anthropic id. Resolved off AI_PROVIDER,
-    // that id goes to OpenRouter as a 404 under AI_PROVIDER=openrouter — and
-    // this function's own catch swallows it, so every run would silently compile
-    // to no rules with nothing in the logs to say why.
+    // A bare Anthropic id resolved off AI_PROVIDER goes to OpenRouter as a 404
+    // under AI_PROVIDER=openrouter — and this function's own catch swallows it,
+    // so every run would silently compile to no rules with nothing in the logs
+    // to say why.
+    //
+    // OPENROUTER_API_KEY is deleted EXPLICITLY rather than relied on being
+    // absent: since 2026-08-16 parserAiModel() returns an OpenRouter slug when
+    // that key is present, so a test that merely inherits an unkeyed
+    // environment would assert the fallback branch while appearing to assert
+    // the default one, and would flip meaning the moment CI gained the key.
+    const savedKey = process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
     resolveProviderMock.mockReturnValue(stub([B_OUT]));
     await parseInstruction("final on friday", CTX);
     expect(resolveProviderMock).toHaveBeenCalledWith("anthropic");
     expect(parserAiModel()).not.toContain("/");
+    if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey;
 
     resolveProviderMock.mockClear();
     process.env.SCHEDULING_PARSE_MODEL = "google/gemini-3.6-flash";

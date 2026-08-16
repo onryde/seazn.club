@@ -36,18 +36,69 @@
  *  Anthropic-direct — three names total, not six. */
 export const ALLOWED_PROVIDERS = ["xai", "google-vertex"] as const;
 
-const POLICY = {
-  provider: {
-    data_collection: "deny",
-    only: ALLOWED_PROVIDERS,
-    // Upstream default is true. Left on, routing can fall through to a
-    // provider outside `only` and the promise quietly stops holding.
-    allow_fallbacks: false,
-  },
-  zdr: true,
-} as const;
+/** The PARSE pre-flight's own allowlist (schedule-ai-parse.ts). Deliberately a
+ *  SECOND list rather than a widening of the one above: the pre-flight is an
+ *  unpriced extraction whose whole output is a small typed JSON object, so it
+ *  can shop for cheap models, while architect and officials traffic stays on
+ *  the three vendors help/scheduling/ai-scheduling.md actually names.
+ *
+ *  Verified live 2026-08-15 against /models/{id}/endpoints. The trap this list
+ *  exists to survive: a model id says who BUILT a model, never who SERVES it.
+ *  Neither vendor serves its own model on the cheap tier —
+ *  `z-ai/glm-4.7-flash` is served by deepinfra / venice / cloudflare / novita
+ *  and NOT by the `z-ai` slug; `nvidia/nemotron-3.5-lightning` by deepinfra /
+ *  coreweave / venice and NOT by `nvidia`. The only `z-ai`-served GLM endpoint
+ *  is glm-5.2 at $4.40/Mtok with `structured_outputs: no`, which this adapter
+ *  cannot use at all.
+ *
+ *  Every slug here supports `structured_outputs`. That is a hard requirement,
+ *  not a preference: buildOpenRouterBody always sends
+ *  `response_format: json_schema, strict: true`, and an endpoint that ignores
+ *  it produces a schema miss that parseInstruction swallows into
+ *  `failed: true` — indistinguishable, from the outside, from a model that is
+ *  simply bad at the task.
+ *
+ *  Slugs come from the endpoint `tag` field up to the first "/", same standard
+ *  as ALLOWED_PROVIDERS. Re-verify whenever an arm is added.
+ *
+ *  ROUTING TODAY: parserAiModel() defaults to google/gemini-3.7-flash wherever
+ *  OPENROUTER_API_KEY is set, which is served by `google-vertex` — already on
+ *  the paid-path allowlist above and already named to organisers in
+ *  help/scheduling/ai-scheduling.md, so that promotion added no sub-processor.
+ *  `deepinfra` and `akashml` remain BENCH-ONLY: they are reachable solely by
+ *  pinning SCHEDULING_PARSE_MODEL to a model they serve. Promoting one of those
+ *  to the default is a different matter and MUST also update
+ *  help/scheduling/ai-scheduling.md and /legal/sub-processors, which name
+ *  Anthropic, Google and xAI only. */
+export const PARSE_ALLOWED_PROVIDERS = ["google-vertex", "xai", "deepinfra", "akashml"] as const;
 
-/** Stamp the policy onto a request body, last, so nothing can override it. */
-export function applyPolicy<T extends object>(body: T): T & typeof POLICY {
-  return { ...body, ...POLICY };
+type Policy = {
+  provider: {
+    data_collection: "deny";
+    only: readonly string[];
+    allow_fallbacks: false;
+  };
+  zdr: true;
+};
+
+/** Stamp the policy onto a request body, last, so nothing can override it.
+ *
+ *  `providers` widens only WHO may serve the request. What they may do with it
+ *  — deny training, zero retention, no fallback off the list — is fixed here
+ *  and is identical on every route. */
+export function applyPolicy<T extends object>(
+  body: T,
+  providers: readonly string[] = ALLOWED_PROVIDERS,
+): T & Policy {
+  return {
+    ...body,
+    provider: {
+      data_collection: "deny",
+      only: providers,
+      // Upstream default is true. Left on, routing can fall through to a
+      // provider outside `only` and the promise quietly stops holding.
+      allow_fallbacks: false,
+    },
+    zdr: true,
+  };
 }
