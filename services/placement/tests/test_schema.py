@@ -1428,3 +1428,62 @@ def test_legacy_wire_field_ignored_is_not_logged_for_a_clean_request():
 
     events = [e for e in captured if e["event"] == "legacy_wire_field_ignored"]
     assert events == [], captured
+
+
+# --- C10: the deploy-window observability line -------------------------------
+#
+# `_log_person_only_fixtures`'s counterpart to the two
+# `legacy_wire_field_ignored` tests above, and it exists for the MIRROR
+# reason. C0's probe answers "is a stale caller still sending a retired
+# field", which its service can see arrive. C10's risk runs the other way —
+# a NEW caller reaching an OLD service — and the old service is by
+# definition the one without the probe, so no check on this side could ever
+# detect it (see the C10 section of the release-2 `_INDEX.md`). What IS
+# answerable here, and what an operator actually needs mid-rollout, is
+# whether the new acceptance path is being exercised at all.
+
+
+def test_person_only_fixture_accepted_is_logged_with_its_fixture_indices():
+    """The rollout signal itself: a fixture that reaches the model with no
+    entrants and only people is exactly the shape the pre-C10 refusal
+    always rejected, so one line proves the new path is live."""
+    req = _valid_request(
+        entrant_count=2,
+        person_count=2,
+        fixtures=[
+            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0),
+            scheduler_pb2.Fixture(division_index=0, person_indices=[0, 1]),
+        ],
+    )
+
+    with structlog.testing.capture_logs() as captured:
+        request_to_model_input(req)
+
+    events = [e for e in captured if e["event"] == "person_only_fixture_accepted"]
+    assert len(events) == 1, captured
+    assert events[0]["request_id"] == "r1"
+    # POSITION 1, not 0 -- names the person-only fixture specifically rather
+    # than reporting "some fixture on this board", which is what makes the
+    # line diagnosable instead of merely present.
+    assert events[0]["fixture_indices"] == [1]
+
+
+def test_person_only_fixture_accepted_is_not_logged_for_an_ordinary_board():
+    """The other half, same argument the clean-request test above makes: a
+    board whose fixtures all carry entrants must not log as if it were
+    exercising the new path -- including a fixture that carries people
+    ALONGSIDE its entrants, which is ordinary data and not the shape the
+    refusal ever rejected."""
+    req = _valid_request(
+        entrant_count=2,
+        person_count=2,
+        fixtures=[
+            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0, person_indices=[0, 1])
+        ],
+    )
+
+    with structlog.testing.capture_logs() as captured:
+        request_to_model_input(req)
+
+    events = [e for e in captured if e["event"] == "person_only_fixture_accepted"]
+    assert events == [], captured
