@@ -132,14 +132,43 @@ was first written: task C4 taught `build_model` to enforce a rule group's DAY
 CAP (`max_fixtures_per_day`) against the fixtures and pins it covers, and task
 C6 taught it to fold a pin into its entrants' participant-rest groups,
 resolving that pin's own rest as the max `min_rest_minutes` over the rule
-groups it counts against (`pinned_rule_group_indices`) — so `main.py` now
-calls `build_model` with TEN positional arguments, not seven: `rule_groups`,
-`pinned_rule_group_indices` and `pinned_entrant_indices` all join the
-original seven. A rule group's `min_rest_minutes` applying directly to its
-own MOVABLE fixtures (rather than only to the pins that count against it) is
-still unread and a separate, later task. See `placement.model`'s own module
-docstring ("A FIFTH is CLOSED as of task C4" / "A SIXTH is CLOSED as of task
-C6") for both halves' mechanics.
+groups it counts against (`pinned_rule_group_indices`) — so `main.py` calls
+`build_model` with (as of the round-order design's own C1, 2026-08-12)
+TWELVE positional arguments, not seven: `rule_groups`,
+`pinned_rule_group_indices`, `pinned_entrant_indices`, `fixture_rounds` and
+`pinned_round` all join the original seven. A rule group's `min_rest_minutes`
+applying directly to its own MOVABLE fixtures (rather than only to the pins
+that count against it) is still unread and a separate, later task. See
+`placement.model`'s own module docstring ("A FIFTH is CLOSED as of task C4" /
+"A SIXTH is CLOSED as of task C6") for both halves' mechanics.
+
+--- task C10 (2026-08-16): Fixture.person_indices / SolveBuildRequest.person_count --
+
+A fourth field, and the first to touch `Fixture` itself since round 6: a
+person is a DIFFERENT participant channel from an entrant, not a rename of
+one. The gap this closes: an undecided knockout slot (a final, a third-place
+playoff, before its feeders resolve) has no entrant yet, but has people --
+the players who can still reach it -- and this service could not see that at
+all before this task, because person identity never crossed the wire. The
+refusal `_validated_fixtures` raises for `fixtures[i]` narrows from "entrants
+must not be empty" to "neither entrants nor people may be empty"; see that
+function's own comment for why the refusal survives at all rather than being
+deleted.
+
+`person_indices` is a SEPARATE namespace from `entrant_indices` throughout —
+own declared bound (`person_count`, mirroring `entrant_count`), own range/
+duplicate checks, own `ModelInput.person_indices` parallel list, own
+`by_person` grouping in `placement.model` (module docstring, "AN EIGHTH") —
+never merged into the entrant tables at any layer, matching
+`packages/engine/src/scheduling/repair-domain.ts`'s `sharesParticipant`,
+which already compares the two families in separate, non-crossing loops.
+`main.py` now calls `build_model` with THIRTEEN positional arguments:
+`person_indices` joins the twelve above, last.
+
+Only `Fixture` was widened, not `PinnedRow`: `PinnedRow.entrant_indices` (C6)
+has no `person_indices` counterpart on the wire this round, so a pin can
+still only be attributed entrants, never people, for participant-rest
+purposes. Deliberate scope, not an oversight -- see the PR body.
 """
 
 from __future__ import annotations
@@ -187,16 +216,17 @@ class ModelInput:
     (`parsed.courts`, `parsed.step_minutes`, ...) — every name below is
     unchanged from the string contract even though several TYPES are not.
 
-    The five fields after `wall_seconds` were, when this was written, an
+    The six fields after `wall_seconds` were, when this was written, an
     exception to "exactly `build_model`'s arguments": the #21 contract
     programme's own C1/C4/C6 tasks (a different "C1" from the one below —
     the #21 programme numbered rule_groups C1; the round-order design reused
     the label independently, three weeks later), validated here like
     everything else but not among the seven `main.py` originally passed to
-    `build_model`. All five now flow: #21's C4 added `rule_groups` and
-    `pinned_rule_group_indices`, #21's C6 added `pinned_entrant_indices`, and
-    the round-order design's C1 (2026-08-12) added `fixture_rounds` and
-    `pinned_round` — `main.py` now passes TWELVE arguments.
+    `build_model`. All six now flow: #21's C4 added `rule_groups` and
+    `pinned_rule_group_indices`, #21's C6 added `pinned_entrant_indices`, the
+    round-order design's C1 (2026-08-12) added `fixture_rounds` and
+    `pinned_round`, and task C10 (2026-08-16) added `person_indices` —
+    `main.py` now passes THIRTEEN arguments.
     """
 
     courts: int  # the COUNT of courts (len(court_names)); names never reach the domain
@@ -239,6 +269,17 @@ class ModelInput:
     # both read identically as "this pin is unconstrained by round order",
     # which is the only interpretation `model.py`'s pair scan needs.
     pinned_round: list[int | None]
+    # C10 (2026-08-16, wire person indices design) -- parallel to `fixtures`
+    # the same way `fixture_rounds` is: `person_indices[i]` is `fixtures[i]`'s
+    # person indices. Kept off `fixtures`'s own tuple shape for the identical
+    # reason `fixture_rounds` is -- `model.py` unpacks `fixtures` as a bare
+    # 2-tuple, so widening it there is a crash, not a behaviour change.
+    #
+    # Only `fixtures` carries one: `existing` (a pin) has no `person_indices`
+    # field on the wire in this round -- `PinnedRow` was not widened, only
+    # `Fixture` was (see this module's own module docstring and the PR body
+    # for why that is a deliberate scope line, not an oversight).
+    person_indices: list[list[int]]
 
 
 def _require_index_present(has_field: bool, where: str) -> None:
@@ -276,12 +317,12 @@ def _require_index_range(value: int, bound: int, where: str) -> int:
 
 
 def _validated_fixtures(
-    proto_fixtures, entrant_count: int, division_count: int
-) -> tuple[list[tuple[list[int], int]], list[int | None]]:
+    proto_fixtures, entrant_count: int, division_count: int, person_count: int
+) -> tuple[list[tuple[list[int], int]], list[int | None], list[list[int]]]:
     """The movable fixtures, with every index they carry checked for range,
-    plus their C1 round numbers as a SEPARATE parallel list (see
-    `ModelInput.fixture_rounds`'s own comment for why it is not folded onto
-    the tuple).
+    plus their C1 round numbers and C10 person indices as SEPARATE parallel
+    lists (see `ModelInput.fixture_rounds`/`ModelInput.person_indices`'s own
+    comments for why neither is folded onto the tuple).
 
     Runs first because everything after it resolves against what it returns:
     the dependency endpoints resolve against `len(fixtures)`.
@@ -293,13 +334,25 @@ def _validated_fixtures(
     """
     fixtures: list[tuple[list[int], int]] = []
     fixture_rounds: list[int | None] = []
+    fixture_people: list[list[int]] = []
     for i, f in enumerate(proto_fixtures):
-        if len(f.entrant_indices) == 0:
+        # C10 (2026-08-16, wire person indices design) -- narrowed from "must
+        # not be empty" to "neither entrants nor people": a genuinely
+        # undecided knockout slot (a final, a third-place playoff, before its
+        # feeders have resolved) has no entrants yet but has PEOPLE -- the
+        # players who can still reach it -- and section 6's participant-rest
+        # NoOverlap and the T2 idle-gap term now join a fixture through
+        # EITHER family (`placement.model`'s `by_entrant`/`by_person`). The
+        # refusal survives for the case neither family can rescue: a fixture
+        # that names no participant AT ALL joins no group either way, so the
+        # measured hazard below still applies to it unchanged.
+        if len(f.entrant_indices) == 0 and len(f.person_indices) == 0:
             raise InvalidRequestError(
-                f"fixtures[{i}].entrant_indices must not be empty. A fixture with no entrants "
-                "joins no participant group, so the participant-rest NoOverlap and every T2 "
-                "idle-gap term skip it. Measured (string contract, same mechanism): two fixtures "
-                "sharing one player placed CONCURRENTLY, reported OPTIMAL."
+                f"fixtures[{i}] has neither entrant_indices nor person_indices set. A fixture "
+                "joining no participant group at all -- by entrant OR by person -- skips the "
+                "participant-rest NoOverlap and every T2 idle-gap term. Measured (string "
+                "contract, same mechanism): two fixtures sharing one player placed CONCURRENTLY, "
+                "reported OPTIMAL."
             )
         entrant_indices = [
             _require_index_range(e, entrant_count, f"fixtures[{i}].entrant_indices[{j}]")
@@ -318,13 +371,36 @@ def _validated_fixtures(
                 "so it becomes silently UNPLACEABLE and the board comes back OPTIMAL without it."
             )
 
+        # C10 -- the person-namespace mirror of the two checks just above,
+        # range then duplicate. A SEPARATE table from `entrant_indices`
+        # throughout (`person_count`, never `entrant_count`): an entrant id
+        # and a person id are different namespaces that happen to both be
+        # small integers, and `placement.model`'s `by_entrant`/`by_person`
+        # must never be built from one shared map -- see this module's own
+        # module docstring and `Fixture.person_indices`'s proto comment.
+        person_indices = [
+            _require_index_range(p, person_count, f"fixtures[{i}].person_indices[{j}]")
+            for j, p in enumerate(f.person_indices)
+        ]
+        if len(set(person_indices)) != len(person_indices):
+            # The identical hazard the entrant duplicate check above closes,
+            # one namespace over: a repeated person would put this fixture's
+            # index in its own `by_person` group twice, forcing its rest
+            # interval to not overlap itself -- unsatisfiable.
+            raise InvalidRequestError(
+                f"fixtures[{i}].person_indices repeats a person, got {list(person_indices)!r}. "
+                "The duplicate makes the fixture overlap itself in its own participant-rest group, "
+                "so it becomes silently UNPLACEABLE and the board comes back OPTIMAL without it."
+            )
+
         _require_index_present(f.HasField("division_index"), f"fixtures[{i}].division_index")
         division_index = _require_index_range(
             f.division_index, division_count, f"fixtures[{i}].division_index"
         )
         fixtures.append((entrant_indices, division_index))
         fixture_rounds.append(f.round if f.HasField("round") else None)
-    return fixtures, fixture_rounds
+        fixture_people.append(person_indices)
+    return fixtures, fixture_rounds, fixture_people
 
 
 def _validated_rule_groups(
@@ -543,6 +619,53 @@ def _log_legacy_wire_fields(req) -> None:
         log.info("legacy_wire_field_ignored", request_id=req.request_id, field_numbers=legacy)
 
 
+def _log_person_only_fixtures(
+    request_id: str, fixtures: list[tuple[list[int], int]], fixture_people: list[list[int]]
+) -> None:
+    """Observability for the C10 (2026-08-16) deploy window -- the mirror
+    image of `_log_legacy_wire_fields` above, for an ADDITIVE field rather
+    than a retired one.
+
+    This field number (`Fixture.person_indices` = 4) cannot be detected via
+    `UnknownFields()` the way a stale caller's field 10 can: an old, not-yet-
+    upgraded `build.ts`/`packages/engine` simply never emits it, so there is
+    no unknown-field byte to see arrive -- unlike C0's case, there is nothing
+    to probe FOR on this side. What IS observable, and what an operator
+    actually needs during this rollout, is the other direction: whether the
+    NEW acceptance path this task adds is being exercised at all -- a
+    fixture that reaches `build_model` with entrants empty and only people
+    carrying it, the shape the pre-C10 refusal always rejected outright.
+
+    Deploy-order note (see the PR body for the full analysis): an OLDER
+    service -- this module's code before this change -- rejects such a
+    fixture unconditionally regardless of what `person_indices` carries, so
+    a caller upgraded ahead of this service sees EXACTLY today's behaviour,
+    not a new failure mode; conversely a caller not yet upgraded sends an
+    empty `person_indices`/`person_count`, so a NEW service's narrowed
+    refusal reduces to the OLD unconditional one. Recommended order is still
+    service-first, mirroring `_log_legacy_wire_fields`'s own "reader
+    upgrades before writer" discipline -- but nothing here is a hard gate,
+    because neither ordering can silently ship a WORSE board than the one
+    that ships today; see `build.ts`'s `rejectedBlockingConflicts`
+    (`person_overlap` is a blocking reason there), which already catches a
+    person-blind solver's mistake and falls back to greedy rather than
+    trust it. This log exists so a rollout can be CONFIRMED rather than
+    assumed, not because the transition is unsafe without it.
+
+    O(1)-ish per request, logs INDICES only (never any id -- this module
+    never had ids to begin with, round 6) -- one line per request, not per
+    fixture, so a board with many undecided bracket slots costs one log
+    line, not one per slot.
+    """
+    indices = [
+        i
+        for i, ((entrant_indices, _division), people) in enumerate(zip(fixtures, fixture_people))
+        if len(entrant_indices) == 0 and len(people) > 0
+    ]
+    if indices:
+        log.info("person_only_fixture_accepted", request_id=request_id, fixture_indices=indices)
+
+
 def request_to_model_input(req) -> ModelInput:
     """Translate a `SolveBuildRequest` into domain types, or reject it.
 
@@ -592,8 +715,12 @@ def request_to_model_input(req) -> ModelInput:
     num_courts = len(req.court_names)
     entrant_count = req.entrant_count
     division_count = req.division_count
+    person_count = req.person_count
 
-    fixtures, fixture_rounds = _validated_fixtures(req.fixtures, entrant_count, division_count)
+    fixtures, fixture_rounds, fixture_people = _validated_fixtures(
+        req.fixtures, entrant_count, division_count, person_count
+    )
+    _log_person_only_fixtures(req.request_id, fixtures, fixture_people)
     # C1. Must run before `existing` below: `existing[].rule_group_indices`
     # resolves against `len(rule_groups)`.
     rule_groups = _validated_rule_groups(req.rule_groups, len(fixtures))
@@ -635,6 +762,7 @@ def request_to_model_input(req) -> ModelInput:
         pinned_entrant_indices=pinned_entrant_indices,
         fixture_rounds=fixture_rounds,
         pinned_round=pinned_round,
+        person_indices=fixture_people,
     )
 
 

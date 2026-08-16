@@ -1998,6 +1998,125 @@ def test_free_solve_of_a_two_round_division_respects_order_on_one_day():
     )
 
 
+# --- C10 (2026-08-16, wire person indices design) ---------------------------
+#
+# `person_indices` (parallel to `fixtures`, `build_model`'s new last
+# parameter) feeds a SECOND participant-rest grouping, `by_person`, built
+# from a namespace disjoint from `by_entrant` -- see the module docstring's
+# "AN EIGHTH" section. THE acceptance criterion (task brief): two fixtures
+# sharing ONLY a person are never placed concurrently -- pinned here, on the
+# Python side, not only through the TS stack, because this is the exact
+# hazard the pre-C10 refusal message cited as measured.
+
+
+def test_two_movable_fixtures_sharing_only_a_person_are_never_placed_concurrently():
+    """DISJOINT entrant sets (fixture 0 plays entrant 0, fixture 1 plays
+    entrant 1 -- they never collide on `by_entrant`), but the SAME person
+    (10) in both -- the cross-registration/cross-division shape
+    `build-encode.ts`'s `byParticipant` and `repair-domain.ts`'s
+    `sharesParticipant` already treat as first-class on the TS side.
+
+    One tick, two courts: the ONLY way both fixtures could be placed AT ALL
+    is at that one instant, on the two different courts -- i.e. concurrently.
+    Court exclusivity cannot be what binds (two courts, one each, is legal
+    by itself); only a person-keyed NoOverlap can refuse the second.
+
+    Genuinely red without `by_person`: delete the grouping (or the loop that
+    reads it) and nothing distinguishes this pair from two unrelated
+    fixtures — both place at the one tick, capacity 2, proven by hand as
+    this task's mutation check (see the task report).
+    """
+    t0 = _GROUP_ANCHOR
+    num_courts = 2
+    grid_slots = [(0, t0, 0), (1, t0, 0)]
+    fixtures: list[tuple[list[int], int]] = [([0], 0), ([1], 0)]  # disjoint entrants
+    person_indices = [[10], [10]]  # shared person
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
+    model = build_model(
+        fixtures, num_courts, grid_slots, 30, constraints, [], [], person_indices=person_indices
+    )
+    capacity, detail = _rest_probe_capacity(model)
+    assert capacity == 1, (
+        f"two fixtures sharing only a person, no shared entrant, must not both be placed at the "
+        f"one instant available: {detail}"
+    )
+
+
+def test_two_undecided_bracket_slots_sharing_people_are_never_placed_concurrently():
+    """THE real shape the brief's smoke canary (`scripts/smoke.ts`
+    #396/#399/#401) and the pre-C10 refusal message are both about: a
+    knockout final and a third-place playoff, BOTH still undecided (no
+    entrant resolved for either — `entrant_indices` empty on both), whose
+    person sets overlap because the same semi-finalists could still reach
+    either slot. `test_schema.py`'s `test_accepts_a_fixture_with_empty_
+    entrant_indices_but_nonempty_person_indices` proves this shape gets IN
+    the door; this proves what happens to it once inside.
+    """
+    t0 = _GROUP_ANCHOR
+    num_courts = 2
+    grid_slots = [(0, t0, 0), (1, t0, 0)]
+    fixtures: list[tuple[list[int], int]] = [([], 0), ([], 0)]  # both undecided
+    person_indices = [[10, 11, 12, 13], [10, 11, 12, 13]]  # same 4 semi-finalists
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
+    model = build_model(
+        fixtures, num_courts, grid_slots, 30, constraints, [], [], person_indices=person_indices
+    )
+    capacity, detail = _rest_probe_capacity(model)
+    assert capacity == 1, (
+        f"two undecided bracket slots sharing every possible finalist must not both be placed at "
+        f"the one instant available: {detail}"
+    )
+
+
+def test_a_movable_fixture_with_no_entrants_but_a_person_is_placeable():
+    """The converse of the two tests above, so neither could be passing
+    because an entrant-less fixture is silently unplaceable full stop. One
+    fixture, no entrants, one person, one tick — must place, not be
+    silently dropped."""
+    t0 = _GROUP_ANCHOR
+    grid_slots = [(0, t0, 0)]
+    fixtures: list[tuple[list[int], int]] = [([], 0)]
+    person_indices = [[10]]
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
+    model = build_model(
+        fixtures, 1, grid_slots, 30, constraints, [], [], person_indices=person_indices
+    )
+    capacity, detail = _rest_probe_capacity(model)
+    assert capacity == 1, f"an entrant-less fixture with a person must still be placeable: {detail}"
+
+
+def test_t2_idle_gap_reads_a_person_only_pair_not_only_entrant_pairs():
+    """Confirms the module docstring's own claim ("AN EIGHTH… T2 reads BOTH
+    groupings too") at the `CpModel` level, the same introspection technique
+    `test_idle_gap_variables_are_bounded_by_a_duration_not_an_epoch` below
+    uses: a `gap_0_1` variable must exist for a pair that shares a person
+    and NO entrant, proving T2 did not silently stay entrant-only. The
+    refusal this task narrows explicitly claimed "every T2 idle-gap term"
+    skips a participant-less fixture — this is the term staying honest about
+    that claim for the NEW, person-only case.
+    """
+    t0 = _GROUP_ANCHOR
+    t1 = t0 + 3_600_000
+    grid_slots = [(0, t0, 0), (0, t1, 0)]
+    fixtures: list[tuple[list[int], int]] = [([0], 0), ([1], 0)]  # disjoint entrants
+    person_indices = [[10], [10]]  # shared person
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
+    model = build_model(
+        fixtures, 1, grid_slots, 30, constraints, [], [], person_indices=person_indices
+    )
+    gap_var_names = {v.name for v in model.Proto().variables if v.name.startswith("gap_")}
+    assert "gap_0_1" in gap_var_names, (
+        f"T2 built no gap variable for a pair sharing only a person: {sorted(gap_var_names)}"
+    )
+    # And exactly one — the dedup this task adds (`gap_pairs`, a `set`) must
+    # not mint a SECOND `NewIntVar` for the same fixture pair just because it
+    # also happens to be reachable through a different grouping. This board
+    # has only the one shared channel, so this is really pinning "no
+    # accidental duplicate for an entrant+person pair" via a board simple
+    # enough to count exactly.
+    assert len(gap_var_names) == 1, f"expected exactly one gap variable, got {sorted(gap_var_names)}"
+
+
 # --- T2's unit: the idle-gap variables are DURATIONS on the tick lattice ----
 #
 # Both assertions below fail on the millisecond/epoch encoding this replaced,
