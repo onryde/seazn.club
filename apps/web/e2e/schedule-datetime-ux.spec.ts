@@ -28,7 +28,7 @@ import {
  * P09 report rather than this file; it is not a permanent screenshot suite
  * and does not belong committed with a session-scoped path.
  *
- * SELECTORS ARE IDS/ROLES, NEVER COPY (#465) — matches z3-auto-schedule.spec.ts.
+ * SELECTORS ARE IDS/ROLES, NEVER COPY (#465) — matches auto-schedule.spec.ts.
  *
  * Each test seeds its own competition/division/stage; nothing here is shared
  * state, so the file needs no serial mode.
@@ -123,7 +123,7 @@ test.describe("blackout window constrains the board (case a)", () => {
     expect(fixtureIds.length).toBe(6);
 
     // tz: "UTC" throughout, matching every sibling spec in this area
-    // (schedule-board.spec.ts, z3-auto-schedule.spec.ts, ai-architect.spec.ts)
+    // (schedule-board.spec.ts, auto-schedule.spec.ts, ai-architect.spec.ts)
     // — pinning the org clock to UTC means "local midnight" IS UTC midnight,
     // so the instants below need no runner-zone conversion (#448 governs on
     // settings.orgTz, and this makes orgTz unambiguous).
@@ -149,7 +149,7 @@ test.describe("blackout window constrains the board (case a)", () => {
     /** Re-posts on `solver_busy` (a live status under parallel workers sharing
      *  the build queue cap) rather than accepting it — accepting it would let
      *  this file pass against a solver that never ran, the one thing case (a)
-     *  exists to rule out. Mirrors z3-auto-schedule.spec.ts's BUSY_RETRIES. */
+     *  exists to rule out. Mirrors auto-schedule.spec.ts's BUSY_RETRIES. */
     async function autoUntilSolved(): Promise<AutoResult> {
       const attempts = 4;
       for (let attempt = 1; attempt <= attempts; attempt++) {

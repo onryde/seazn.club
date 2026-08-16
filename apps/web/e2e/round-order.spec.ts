@@ -3,14 +3,14 @@ import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, divisionPath, 
 
 // C1 task 2 item 2 — owner-demanded browser e2e. The owner explicitly
 // rejected task 1's real-solver integration runs (schedule-reflow-*.test.ts,
-// z3-auto-schedule engine coverage) as a substitute: those prove the ENGINE
+// auto-schedule engine coverage) as a substitute: those prove the ENGINE
 // enforces round order, never that an organiser clicking Auto-schedule in a
 // real browser against a real build actually SEES a board in round order.
 //
 // Flow: a round-robin board -> Auto-schedule -> the resulting board is in
 // round order. Every assertion below reads the RENDERED PAGE — never
 // `getFixture`/`/api/v1/fixtures/:id`, which every other scheduling spec in
-// this directory (z3-auto-schedule.spec.ts included) uses freely, and which
+// this directory (auto-schedule.spec.ts included) uses freely, and which
 // this file deliberately does not, since an API read would prove the
 // database is in round order and say nothing about the screen.
 //
@@ -30,7 +30,7 @@ import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, divisionPath, 
 // `"$undefined"`, so `data-fixture-id` would still be PRESENT, just wrong).
 
 const SOLVED = ["ok", "already_optimal"];
-/** See z3-auto-schedule.spec.ts's own comment on this constant: solver_busy
+/** See auto-schedule.spec.ts's own comment on this constant: solver_busy
  *  is a live, transient status under this project's parallel workers, and
  *  retrying rather than accepting it is what keeps this file honest about
  *  proving a real solve. */
@@ -39,7 +39,7 @@ const BUSY_BACKOFF_MS = 4_000;
 
 /** A private competition + a 4-entrant round-robin division (6 fixtures,
  *  3 rounds of 2) on a two-court grid — the same shape
- *  z3-auto-schedule.spec.ts's own seedBoard uses, trimmed to just what this
+ *  auto-schedule.spec.ts's own seedBoard uses, trimmed to just what this
  *  file needs. `createStageAndGenerate`'s default `kind: "league"` is what
  *  makes this board's rounds ROUND-ROBIN ones at all — `roundRobinStageIds`
  *  (schedule.ts) is `kind in ('league', 'group')` only. */

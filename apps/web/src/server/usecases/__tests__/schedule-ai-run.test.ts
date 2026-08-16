@@ -164,8 +164,9 @@ beforeEach(() => {
   parse.mockReset();
   process.env.ANTHROPIC_API_KEY = "test-key";
   delete process.env.AI_PROVIDER;
-  // W6 (#401): these tests drive the LLM REPAIR LOOP, which the z3 solver now
-  // runs ahead of. That loop is still live code — it is what runs when the
+  // W6 (#401): these tests drive the LLM REPAIR LOOP, which the
+  // CP-SAT repair solver now runs ahead of. That loop is still live
+  // code — it is what runs when the
   // solver is switched off, out of budget, queued, or unable to finish a board —
   // and this suite is its coverage, so the solver is switched off here and
   // exercised in schedule-ai-repair.test.ts instead.

@@ -1054,7 +1054,7 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
     // dropping fixtures on the floor.
     expect(placed.assignments).toHaveLength(6);
 
-    // The z3 path reaches the same window through `buildGrid`'s lattice. Its
+    // The solver path reaches the same window through `buildGrid`'s lattice. Its
     // universe is pinned explicitly here because `applyWindow` leaves `to` at
     // Infinity when the config carries no `endAt`, and buildGrid answers an
     // unbounded universe by returning NO slots — which would make the control
@@ -1076,10 +1076,12 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
     const { auth } = await seedOrg("pro");
     // WHERE THIS WINDOW SITS IS THE TEST.
     //
-    // A stored blackout flips this run from greedy onto z3, and z3's lattice
-    // opens at LOCAL MIDNIGHT on the governing clock — `applyWindow` derives
-    // the universe from `startAt`'s DAY, not from `startAt` itself. Measured:
-    // with the window at 11:00 and `startAt` at 10:00, z3 answers it by moving
+    // A stored blackout flips this run from greedy onto the solver, and the
+    // lattice it is given opens at LOCAL MIDNIGHT on the governing clock —
+    // `applyWindow` derives the universe from `startAt`'s DAY, not from
+    // `startAt` itself. Measured (under z3, and the lattice is unchanged by the
+    // CP-SAT cutover — it is `applyWindow`/`buildGrid`, not the solver):
+    // with the window at 11:00 and `startAt` at 10:00, the solver answers by moving
     // the entire six-fixture board back to 00:00–02:30 and the window is
     // simply nowhere near the board. "Nothing landed inside it" is then true
     // of a solver that never looked at it — the exact vacuity this prompt
@@ -1162,14 +1164,16 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
     // ...and the window COST something. Any packing of six 30-minute fixtures
     // on one court that avoids the hour must finish later than the packing
     // that does not, so this is true whichever arrangement the solver picks —
-    // z3 spends the window by pushing the whole board past it rather than
+    // the solver spends the window by pushing the whole board past it rather than
     // leaving a hole, since that is the shorter makespan. A run that quietly
     // dropped the window would land on the control's board instead.
     const latest = (p: { assignments: { scheduled_at: string }[] }) =>
       Math.max(...p.assignments.map((a) => Date.parse(a.scheduled_at)));
     expect(latest(guarded)).toBeGreaterThan(latest(control));
-    // Two autoSchedule passes, and each one pays the z3/WASM warm-up: the
-    // sibling solver tests in this file run ~20s apiece on their own.
+    // Two autoSchedule passes, and each one pays a full solve: the sibling
+    // solver tests in this file run ~20s apiece on their own. (That cost was
+    // the z3 WASM warm-up when this budget was set; it is the placement
+    // service's own wall now, and the budget still has to cover two of them.)
   }, 120_000);
 
   // TZ NOTE — the gap this block reported is now CLOSED, and these helpers are
@@ -1255,7 +1259,7 @@ describe.skipIf(!HAS_DB)("court removal is refused while a pin sits on it (date/
   /** A 4-entrant single-pool division (6 fixtures) with the two-court config
    *  already stored, plus whatever extra courts a case needs. Returns the
    *  generated fixtures so a case can place and pin one by hand — `autoSchedule`
-   *  is deliberately avoided here: it costs the z3 warm-up and decides court
+   *  is deliberately avoided here: it costs a full solve and decides court
    *  placement itself, which is the very thing these cases need to control. */
   async function seedCourtDivision(courts: string[] = COURT_GUARD_CONFIG.courts) {
     const { auth } = await seedOrg("pro");

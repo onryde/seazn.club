@@ -1508,6 +1508,11 @@ const SOLVER_SLACK_MS = 24 * 60 * MS_PER_MIN;
  * (falls straight to greedy) while 20s gets one improved board. 20 seconds is
  * where THIS range levels off — re-run the sweep before moving it again.
  *
+ * That sweep was z3's, and it is not re-runnable as written: BUILD solves
+ * through the placement service now, and `bench-build.ts` was deleted with the
+ * z3 tier encoder in `82553ec3`. The numbers above stand as the record that set
+ * this constant; moving it means rebuilding the sweep against CP-SAT first.
+ *
  * Expiring is ORDINARY, not a failure: `budget_expired` rides the wire and the
  * result strip says how many improvement targets the run got through. What is
  * NOT ordinary is reading the flag as "not optimal" — optimality is

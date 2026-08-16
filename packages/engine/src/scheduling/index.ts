@@ -76,8 +76,10 @@ export * from "./build-encode.ts";
 // window plan and the acceptance rule and takes the solve itself as a
 // parameter, so it names no z3 at all.
 export * from "./build-lns.ts";
-// The control loop over that model. Same story: it imports `loadZ3`, and the
-// WASM stays behind the dynamic import inside it.
+// The control loop. It solves through the placement service now, not the model
+// above — its only remaining z3 reference is the `withZ3LockAndReset` mutex it
+// shares with the repair path, and even that names no WASM: the dynamic import
+// stays inside `loadZ3`.
 export * from "./build.ts";
 // The repair solver (#401). All three are free to name here: `z3-load.ts`'s
 // only `z3-solver` reference is `import type`, and the WASM stays behind the
