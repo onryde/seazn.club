@@ -190,18 +190,23 @@ readable form). That is an honest capture of today's UI, not a harness gap.
   (recorded in `_RULES.md` §2's capture traps). The harness stays on plain
   run-scoring taps for cricket for exactly that reason — this is deliberate
   scope, not missing coverage.
-- **Boardgame has no verified UI recipe.** No e2e spec in this repo has ever
-  driven boardgame's pad (confirmed by search across `apps/web/e2e/`) — it
-  is captured via a generic, bounded DOM prober (`genericProbe` in the
-  harness: clicks the first enabled, non-chrome tile) rather than a known
-  button label. Treat its `03-scored`/`04-dock` screens as lower-confidence
-  than the other eleven sports until someone hand-verifies boardgame's own
-  flow and the harness is updated with a named recipe (same pattern as the
-  other eleven).
+- **Boardgame had no e2e precedent anywhere in this repo** (confirmed by
+  search) when this harness was first written, and its recipe went through
+  three live iterations before it worked: a generic DOM prober clicked
+  "Result" without confirming it (no ledger growth); a hand-written "Draw /
+  no result" recipe filled "Moves" as a text string when the field is
+  `type="number"`; the working version selects "Method" (`index: 1`), fills
+  "Moves" with `"40"`, then confirms. **Now live-verified** — confirmed
+  passing 5/5 states in a clean, full 12-sport run (`{"total":12,
+  "expected":12,"unexpected":0}`), including its own 320px measurements
+  (`scrollWidth=320 clientWidth=320 overflowPx=0` on all five states). If a
+  future edit touches boardgame's pad UI, re-verify this recipe the same
+  way: read the actual failure screenshot, don't guess a second time.
 - **Badminton and table tennis reuse volleyball's "Set score" panel by
-  construction**, not by a spec that has driven them directly — all three
-  share `racquet-skin.tsx`. If a future skin split (R5) changes that
-  component per-sport, re-verify these two specifically.
+  construction** — all three share `racquet-skin.tsx`. Also now
+  live-verified (all three pass 5/5 states in the same clean run cited
+  above), not merely verified-by-analogy. If a future skin split (R5)
+  changes that component per-sport, re-verify these two specifically.
 
 ## 6. Failure modes worth knowing
 

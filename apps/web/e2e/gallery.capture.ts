@@ -168,40 +168,6 @@ async function captureState(
   }
 }
 
-/**
- * Last-resort action driver for a sport with NO existing e2e precedent
- * anywhere in this repo (boardgame — confirmed by search; see its SPORTS
- * entry below). Clicks the first ENABLED, non-chrome tile in the pad's own
- * action area (excludes "Start match", fidelity-band buttons via
- * `data-band`, and Undo/Void), then gives a `[data-role="confirm"]` panel a
- * short window to appear. Returns whether it did (a genuine "dock" panel)
- * or the tap already fired an immediate, un-panelled event.
- *
- * Deliberately NOT used for any sport with a verified recipe below — a
- * blind prober is strictly riskier than a known button label, and this
- * repo has at least one documented case (cricket wicket-completion) where
- * an unplanned tap sequence wedged the page.
- */
-async function genericProbe(page: Page): Promise<boolean> {
-  const candidates = pad(page).getByRole("button");
-  const count = await candidates.count();
-  for (let i = 0; i < count; i++) {
-    const btn = candidates.nth(i);
-    if (!(await btn.isEnabled().catch(() => false))) continue;
-    const hasBand = await btn.getAttribute("data-band").catch(() => null);
-    if (hasBand !== null) continue;
-    const name = ((await btn.getAttribute("aria-label")) ?? (await btn.textContent()) ?? "").trim();
-    if (!name || /^start match$/i.test(name) || /^(undo|void)$/i.test(name)) continue;
-    await btn.click();
-    const opened = await pad(page)
-      .locator('[data-role="confirm"]')
-      .isVisible({ timeout: 2_000 })
-      .catch(() => false);
-    return opened;
-  }
-  return false;
-}
-
 interface GallerySport {
   slug: string;
   label: string;
@@ -498,6 +464,12 @@ const SPORTS: GallerySport[] = [
     label: "Carrom (ICF)",
     sportKey: "carrom",
     variantKey: "icf",
+    // Verified live: the default `entrantKind` ("team") 422s here —
+    // `ENTRANT_KIND_NOT_ALLOWED, this division doesn't take 'team'
+    // entrants` — matching carrom-pad.spec.ts's own convention
+    // (`addEntrantsViaApi`'s default is "individual", which is what that
+    // file relies on implicitly).
+    entrantKind: "individual",
     roster: (tag) => ({
       home: [{ fullName: `Gallery Carrom Home ${tag}` }],
       away: [{ fullName: `Gallery Carrom Away ${tag}` }],
@@ -576,14 +548,38 @@ const SPORTS: GallerySport[] = [
       away: [{ fullName: `Gallery Boardgame Away ${tag}` }],
     }),
     // No e2e precedent exists anywhere in this repo for boardgame (confirmed
-    // by search) — it is the "universal" renderer (registry.tsx), same
-    // family as carrom/generic, with no bespoke skin and no prior scoring
-    // flow ever driven in a browser. Falls back to the generic tile prober
-    // rather than a guessed button label.
+    // by search) — this recipe was built entirely from two live capture
+    // attempts. The pad's own "Scoring" card has exactly two real actions,
+    // "Result" and "Draw / no result" (read off the captured "02-live"
+    // screenshot); BOTH open a panel (Method select + Moves text input,
+    // gated by `[data-role="confirm"]`, which stays disabled with "Fill in
+    // the required fields to continue" until both are set) rather than
+    // firing immediately — the first two live attempts (a blind generic
+    // prober, then an un-filled "Draw / no result" tap) both timed out on
+    // `waitForLedgerGrowth` for exactly that reason, confirmed by reading
+    // the failure screenshot each time rather than guessing again blind.
     scoreOne: async (page) => {
-      await genericProbe(page);
+      await pad(page).getByRole("button", { name: "Draw / no result", exact: true }).click();
+      await pad(page).getByLabel("Method").selectOption({ index: 1 });
+      // "Moves" is a plain move-COUNT (`input[type=number] min=0 max=400`),
+      // not a move-list string — verified live after a first attempt filled
+      // "1. e4 e5" into it and Playwright refused ("Cannot type text into
+      // input[type=number]").
+      await pad(page).getByLabel("Moves", { exact: true }).fill("40");
+      await pad(page).locator('[data-role="confirm"]').click();
     },
-    openDock: async (page) => genericProbe(page),
+    // Same panel shape, "Result" instead — filled with Method only and left
+    // unconfirmed (mirrors every other sport's dock: some fields set, the
+    // rest visibly incomplete, never submitted).
+    openDock: async (page) => {
+      const result = pad(page).getByRole("button", { name: "Result", exact: true });
+      if (!(await result.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
+      await result.click();
+      const method = pad(page).getByLabel("Method");
+      if (!(await method.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
+      await method.selectOption({ index: 1 });
+      return true;
+    },
   },
 ];
 
