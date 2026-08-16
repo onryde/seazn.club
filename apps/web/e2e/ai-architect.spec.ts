@@ -1090,6 +1090,11 @@ test("a double-booked plan is repaired by the solver before the organiser sees i
   // the minimal one, which is the property this wave exists to deliver.
   await expect(strip).toHaveAttribute("data-moved", "1");
   await expect(strip).toHaveAttribute("data-unresolved", "0");
+  // C9 (decomposed repair on CP-SAT, 2026-08-16): a single disjoint clash's
+  // k=1 meets `disjointConflictBound`'s independent lower bound of 1, so the
+  // certificate is honestly PROVED, not merely found — recovered from C5's
+  // "unknown" (see the #452 test's own doc comment for the full history).
+  await expect(strip).toHaveAttribute("data-minimality", "proved");
   await shot(page, "13-repair-strip");
 
   // Proof the model was actually asked and the clash actually came back, so this
@@ -1147,12 +1152,18 @@ test("a double-booked plan is repaired by the solver before the organiser sees i
  *
  * Deliberately kept ALONGSIDE the whole-minute test rather than replacing it:
  * that one is the same-shape repair on a wholly aligned board, and the two
- * agreeing on `data-moved="1"` is itself an assertion. `data-minimality` is
- * NOT part of that parity any more (C5, 2026-08-15): unlike z3's old
- * ascending-k repair search, the placement CP-SAT service never claims a
- * moved-count is PROVED minimal, so every repair on this path now reports
- * `"unknown"` (`ai-diff-panel.tsx`'s `repair.minimality ?? "unknown"`
- * fallback) — an honest absence of a claim, not a regression.
+ * agreeing on `data-moved="1"` is itself an assertion.
+ *
+ * `data-minimality` HISTORY: C5 (2026-08-15) dropped this to `"unknown"` —
+ * the single monolithic `buildSchedule` call it introduced has no ascending-k
+ * mechanism the way z3's old repair search did, so it never claimed a
+ * moved-count PROVED minimal. C9 (2026-08-16, decomposed repair on CP-SAT)
+ * RECOVERS `"proved"` here — `disjointConflictBound`
+ * (`repair-minimality.ts`) never touched z3 to begin with, and the decomposed
+ * driver reuses it unchanged: a single-clash component's `k=1` meets the
+ * independent lower bound of 1, so the certificate is honestly `"proved"`,
+ * not merely found. Re-verified against the real stack (this test), not
+ * assumed from the engine unit tests alone.
  */
 test("a clash off the minute boundary is repaired without losing its seconds (#452)", async ({
   page,
@@ -1179,10 +1190,9 @@ test("a clash off the minute boundary is repaired without losing its seconds (#4
   // must not degrade the repair. (It does when the CLASH pair is the
   // off-minute one: measured `data-moved="2"` pre-C5. See `FIXTURE_CLASH_SECONDS`.)
   await expect(strip).toHaveAttribute("data-moved", "1");
-  // C5 (z3 retirement stage B, 2026-08-15): "unknown", not "proved" — the
-  // placement CP-SAT service never claims a moved-count is minimal the way
-  // z3's ascending-k repair search did. See this test's own doc comment.
-  await expect(strip).toHaveAttribute("data-minimality", "unknown");
+  // C9 (decomposed repair on CP-SAT, 2026-08-16): "proved", recovered from
+  // C5's "unknown" — see this test's own doc comment for the history.
+  await expect(strip).toHaveAttribute("data-minimality", "proved");
   await expect(strip).toHaveAttribute("data-unresolved", "0");
   await shot(page, "14-repair-strip-offminute");
 
