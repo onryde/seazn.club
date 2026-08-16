@@ -15,11 +15,19 @@
 // swapCandidates(view, policyVerdict) is spec §2.7 (Swap sheet, owner ask
 // 2026-08-15): the engine models substitution law per sport as a VALUE,
 // never a throw (S3/#426's `reduceLineupEvent` — refusal is `{ok:false,
-// reason}`, structurally never an exception). A refused verdict must
-// collapse the candidate pool to empty AND carry its `reason` through
-// VERBATIM, so the sheet can render sport-worded refusal copy ("Rolling
-// subs aren't allowed in 11-a-side — 3 of 3 used") instead of a dead or
-// silently-disabled control (task-8-brief.md's explicit bar).
+// reason: LineupRejectionReason, message: string}`, structurally never an
+// exception). `.reason` is a terse MACHINE SLUG ("sub-cap-reached"); the
+// sport-worded prose a scorer actually reads lives in `.message` ("this
+// side has used all 3 substitutions this variant allows"). A refused
+// verdict must collapse the candidate pool to empty AND carry that PROSE
+// through VERBATIM via `PolicyVerdict.message`, so the sheet can render
+// sport-worded refusal copy instead of a dead or silently-disabled control
+// (task-8-brief.md's explicit bar) — and never the raw slug (fix round 1,
+// review finding 1: this file originally conflated the two under a field
+// named `reason`; `PolicyVerdict.message` below is the corrected shape,
+// branded via `refusalMessage()` so a `LineupRejectionReason`-typed value
+// cannot be threaded in by mistake — see the "@ts-expect-error" and
+// real-`reduceLineupEvent` tests in the `swapCandidates` block).
 //
 // Rendering is proved with the shared `_hook-harness` (renderIsland/walk/
 // textOf), NOT direct function invocation — both components use `useState`
@@ -33,10 +41,17 @@
 // function — sees every button (same precedent as attribution-picker.tsx's
 // `renderAttributionItem`).
 import { describe, it, expect } from "vitest";
-import type { SideSquad, SquadMember } from "@seazn/engine/core";
+import type { LineupPolicy, LineupRejectionReason, SideSquad, SquadMember, SquadState } from "@seazn/engine/core";
+import { reduceLineupEvent } from "@seazn/engine/core";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { resolvePool, ContextStrip, type ContextStripProps } from "../context-strip";
-import { swapCandidates, SwapSheet, type PolicyVerdict, type SwapSheetProps } from "../swap-sheet";
+import {
+  refusalMessage,
+  swapCandidates,
+  SwapSheet,
+  type PolicyVerdict,
+  type SwapSheetProps,
+} from "../swap-sheet";
 import type { ContextStripSpec } from "../types";
 
 function member(over: Partial<SquadMember> = {}): SquadMember {
@@ -96,23 +111,71 @@ describe("swapCandidates", () => {
     expect(swapCandidates({ squad: s }, ok)).toEqual({ candidates: ["b"] });
   });
 
-  it("ok verdict + genuinely empty bench: empty candidates, undefined reason (not a policy refusal)", () => {
+  it("ok verdict + genuinely empty bench: empty candidates, undefined message (not a policy refusal)", () => {
     const s = squad([member({ personId: "a", onField: true })]);
-    expect(swapCandidates({ squad: s }, ok)).toEqual({ candidates: [], reason: undefined });
+    expect(swapCandidates({ squad: s }, ok)).toEqual({ candidates: [], message: undefined });
   });
 
-  it("refused verdict: candidates collapse to empty and reason is surfaced VERBATIM, byte-identical to the module's own string", () => {
+  it("refused verdict: candidates collapse to empty and message is surfaced VERBATIM, byte-identical to the module's own string", () => {
     const s = squad([member({ personId: "a", onField: true }), member({ personId: "b", onField: false })]);
-    const verdict: PolicyVerdict = { ok: false, reason: "Rolling subs aren't allowed in 11-a-side — 3 of 3 used" };
+    const verdict: PolicyVerdict = {
+      ok: false,
+      message: refusalMessage("Rolling subs aren't allowed in 11-a-side — 3 of 3 used"),
+    };
     expect(swapCandidates({ squad: s }, verdict)).toEqual({
       candidates: [],
-      reason: "Rolling subs aren't allowed in 11-a-side — 3 of 3 used",
+      message: "Rolling subs aren't allowed in 11-a-side — 3 of 3 used",
     });
   });
 
-  it("refused verdict never fabricates a reason when the module gave none — stays undefined, never throws", () => {
+  it("refused verdict never fabricates a message when the module gave none — stays undefined, never throws", () => {
     const s = squad([member({ personId: "a", onField: true }), member({ personId: "b", onField: false })]);
-    expect(swapCandidates({ squad: s }, { ok: false })).toEqual({ candidates: [], reason: undefined });
+    expect(swapCandidates({ squad: s }, { ok: false })).toEqual({ candidates: [], message: undefined });
+  });
+
+  // --- Fix round 1, finding 1 (Important) -----------------------------
+  // `reduceLineupEvent`'s refusal is `{ok:false, reason: LineupRejectionReason,
+  // message: string}` (core/lineup.ts:270-295) — `.reason` is a MACHINE SLUG,
+  // `.message` is the sport-worded PROSE. This file originally named its own
+  // field `reason` and documented it as mirroring the engine's `{ok:false,
+  // reason}` — wrong on both counts. These two tests prove the corrected
+  // contract two different ways: a compile-time type rejection, and a
+  // runtime proof against the REAL engine reducer (not a hand-maintained
+  // mock that could silently drift from what the engine actually returns).
+
+  it("TYPE-LEVEL: refusalMessage rejects a value statically typed LineupRejectionReason — proves the slug cannot compile where prose belongs", () => {
+    const slug: LineupRejectionReason = "sub-cap-reached";
+    // @ts-expect-error — a machine slug must never be threaded as refusal
+    // prose (fix round 1, finding 1). If NotRejectionCode/refusalMessage's
+    // negative constraint ever stops working, tsc reports THIS line as an
+    // unused "@ts-expect-error" directive (TS2578) and `npm run typecheck`
+    // fails — this is a real, tsc-checked assertion, not a comment.
+    refusalMessage(slug);
+  });
+
+  it("RUNTIME, against the real engine: PolicyVerdict.message carries reduceLineupEvent's .message, never its .reason slug", () => {
+    const home = squad([member({ personId: "a", onField: true })]);
+    const away = squad([member({ personId: "x", onField: true })]);
+    const squads: SquadState = { home, away };
+    const policy: LineupPolicy = { reentry: "none", reentryPositionLock: false, allowSquadGrowth: false, maxSubs: 0 };
+
+    const result = reduceLineupEvent(
+      squads,
+      {
+        type: "core.lineup.substitution",
+        payload: { side: "home-1", off: "a", on: { personId: "new1", slot: "bench", orderNo: 99 } },
+      },
+      policy,
+    );
+
+    if (result.ok) throw new Error("expected a real sub-cap refusal from the engine");
+    expect(result.reason).toBe("sub-cap-reached"); // the machine slug — never rendered
+    expect(result.message).toBe("this side has used all 0 substitutions this variant allows"); // the prose
+
+    const verdict: PolicyVerdict = { ok: false, message: refusalMessage(result.message) };
+    const { message } = swapCandidates({ squad: home }, verdict);
+    expect(message).toBe(result.message);
+    expect(message).not.toBe(result.reason);
   });
 });
 
@@ -290,13 +353,13 @@ describe("SwapSheet rendering", () => {
     expect(swapped).toEqual(["a", "b"]);
   });
 
-  it("a refused policy verdict renders the reason as inline text, NEVER inside a button, with zero candidate controls", () => {
+  it("a refused policy verdict renders the message as inline text, NEVER inside a button, with zero candidate controls", () => {
     const s = squad([member({ personId: "a", onField: true }), member({ personId: "b", onField: false })]);
-    const reason = "Rolling subs aren't allowed in 11-a-side — 3 of 3 used";
+    const message = "Rolling subs aren't allowed in 11-a-side — 3 of 3 used";
     const island = renderIsland(SwapSheet, {
       spec: swapSpec,
       view: { squad: s },
-      policyVerdict: { ok: false, reason },
+      policyVerdict: { ok: false, message: refusalMessage(message) },
       personNames: names,
       t,
       onSwap: () => {},
@@ -306,7 +369,30 @@ describe("SwapSheet rendering", () => {
     const onStepButtons = buttonsOf(island.tree());
     expect(onStepButtons).toHaveLength(1); // ONLY the "off chosen" header chip — no candidate buttons
     for (const b of onStepButtons) expect(propsOf(b).disabled).toBeFalsy();
-    expect(island.text()).toContain(reason);
+    expect(island.text()).toContain(message);
+  });
+
+  // Fix round 1, finding 2 (Minor): the empty/non-refused branch of
+  // renderCandidateRow (context-strip.tsx) was previously proven only via
+  // swapCandidates' own unit tests — never through an actual render. This
+  // drives it through SwapSheet directly: an ok verdict whose bench is
+  // genuinely empty (nobody left to bring on) must paint the reused
+  // "noRoster" empty text, not silently render nothing.
+  it("an ok verdict with a genuinely empty bench renders the reused empty-pool text, not a blank on-step", () => {
+    const s = squad([member({ personId: "a", onField: true })]); // nobody else at all
+    const island = renderIsland(SwapSheet, {
+      spec: swapSpec,
+      view: { squad: s },
+      policyVerdict: { ok: true },
+      personNames: { a: "Player A" },
+      t,
+      onSwap: () => {},
+    });
+    click(buttonsOf(island.tree())[0]!); // off -> "a"
+
+    const onStepButtons = buttonsOf(island.tree());
+    expect(onStepButtons).toHaveLength(1); // only the "off chosen" header chip — no candidate buttons
+    expect(island.text()).toContain("scorepad.attribution.noRoster"); // emptyText, via the identity t stub
   });
 
   it("the off-chosen header chip is itself tappable to reopen the off step", () => {

@@ -15,19 +15,36 @@
 // swapCandidates(view, policyVerdict): `policyVerdict` is the module's own
 // already-resolved verdict for whether a substitution is currently legal
 // for this side at all — the shape a real caller builds from
-// reduceLineupEvent's `{ok:false, reason}` refusal. This pure function
-// takes it as an opaque value rather than calling the reducer itself,
-// since that needs a concrete off/on pair this function does not have (it
-// is building the CANDIDATE LIST a caller picks "on" from, not replaying a
-// specific swap). A refused verdict collapses the candidate pool to empty
-// and carries `.reason` through UNCHANGED — the sheet renders that string
-// verbatim, never re-translated (task-8 dispatch, explicit constraint: a
-// policy refusal is engine-authored copy, not a translation key). An ok
-// verdict with a genuinely empty bench also yields empty candidates, but
-// with `reason` left undefined — the renderer tells the two apart and
-// falls back to the same reused `scorepad.attribution.noRoster` empty
-// state attribution-picker.tsx already uses, rather than a fabricated
-// second string.
+// reduceLineupEvent's refusal branch. This pure function takes it as an
+// opaque value rather than calling the reducer itself, since that needs a
+// concrete off/on pair this function does not have (it is building the
+// CANDIDATE LIST a caller picks "on" from, not replaying a specific swap).
+//
+// FIX ROUND 1 (review finding 1, Important): a caller's refusal is
+// `LineupReduceResult`'s `{ok:false, reason: LineupRejectionReason,
+// message: string}` (core/lineup.ts:270-295) — `.reason` is a TERSE
+// MACHINE SLUG ("sub-cap-reached", lineup.ts:544), `.message` is the
+// sport-worded PROSE ("this side has used all 3 substitutions this
+// variant allows", lineup.ts:545). This file originally named its own
+// field `reason` and documented it as "the module's `{ok:false, reason}`
+// refusal" — wrong on both counts, and an invitation for the next wiring
+// task to thread the slug onto screen. `PolicyVerdict.message` below is
+// renamed to match the ENGINE's own prose field exactly (so the correct
+// mapping, `message: refusalMessage(result.message)`, is also the obvious
+// one) and additionally BRANDED via `refusalMessage()`/`NotRejectionCode`
+// so that passing a value whose static type is `LineupRejectionReason` —
+// i.e. threading `result.reason` instead of `result.message` — is a real
+// tsc error, not just a doc comment (see `context-swap.test.ts`'s
+// `@ts-expect-error` proof, and its end-to-end test against the REAL
+// `reduceLineupEvent`). A refused verdict collapses the candidate pool to
+// empty and carries `.message` through UNCHANGED — the sheet renders that
+// string verbatim, never re-translated (task-8 dispatch, explicit
+// constraint: a policy refusal is engine-authored copy, not a translation
+// key). An ok verdict with a genuinely empty bench also yields empty
+// candidates, but with `message` left undefined — the renderer tells the
+// two apart and falls back to the same reused `scorepad.attribution.
+// noRoster` empty state attribution-picker.tsx already uses, rather than a
+// fabricated second string.
 //
 // SCOPE NOTE: the OFF list (who can come off) is `resolvePool({pool:
 // "onfield"}, view)` directly, no policy gate — spec §2.7 says "both
@@ -49,28 +66,62 @@
 // section-label device the rest of the "floodlit console" language already
 // uses — rather than inventing new label chrome for two lines of copy.
 import { useState } from "react";
+import type { LineupRejectionReason } from "@seazn/engine/core";
 import { renderCandidateRow, resolvePool, type PoolView, type TFn } from "./context-strip";
+
+/**
+ * `T` collapses to `never` when its STATIC type is (a subtype of)
+ * `LineupRejectionReason` — core/lineup.ts's closed union of machine slugs
+ * — and passes through unchanged otherwise. A distributive conditional: for
+ * a `T` that IS the whole `LineupRejectionReason` union (e.g. a variable
+ * explicitly typed `: LineupRejectionReason`), every member distributes to
+ * `never`, so the union-of-nevers is `never`. For a general `string` (e.g.
+ * `LineupReduceResult`'s `.message`), `string extends LineupRejectionReason`
+ * is false (the wider type is never assignable to the narrower literal
+ * union), so the type passes through as `string`. This is what makes
+ * `refusalMessage` below reject a slug at its CALL SITE rather than only in
+ * a comment — see `context-swap.test.ts`'s `@ts-expect-error` proof.
+ */
+type NotRejectionCode<T extends string> = T extends LineupRejectionReason ? never : T;
+
+/** Branded so a bare string cannot be assigned to `PolicyVerdict.message`
+ *  without going through this constructor, AND typed (via
+ *  `NotRejectionCode`) so a value statically typed `LineupRejectionReason`
+ *  — i.e. `reduceLineupEvent`'s machine `.reason` slug — is rejected by
+ *  tsc at the call site. The only sanctioned way to produce one is from a
+ *  real refusal's `.message` (sport-worded prose), never its `.reason`. */
+export type RefusalMessage = string & { readonly __refusalMessage: unique symbol };
+export function refusalMessage<T extends string>(message: NotRejectionCode<T>): RefusalMessage {
+  // Cast via `unknown`: `message`'s type here is the CONDITIONAL
+  // `NotRejectionCode<T>`, which tsc cannot prove overlaps with the
+  // branded `RefusalMessage` object-intersection type directly (a real
+  // TS2352 at this exact line without the detour) — the value itself is
+  // still plainly a string at runtime, so the two-step cast is safe.
+  return message as unknown as RefusalMessage;
+}
 
 export interface PolicyVerdict {
   readonly ok: boolean;
-  /** Sport-worded refusal copy, verbatim from the module — never
-   *  re-translated, never fabricated. Present only when `ok` is false. */
-  readonly reason?: string;
+  /** Sport-worded refusal PROSE — `reduceLineupEvent`'s `.message`, never
+   *  its `.reason` machine slug (core/lineup.ts:270-295). Verbatim from the
+   *  module, never re-translated, never fabricated. Present only when `ok`
+   *  is false. */
+  readonly message?: RefusalMessage;
 }
 
 export interface SwapCandidatesResult {
   readonly candidates: readonly string[];
-  /** Carried through from `policyVerdict.reason`, verbatim, ONLY when the
+  /** Carried through from `policyVerdict.message`, verbatim, ONLY when the
    *  verdict itself refused (candidates is then always empty). Undefined
    *  for an ok verdict, even one whose bench happens to be empty — that
    *  case is not a policy refusal and must not borrow its copy. */
-  readonly reason?: string;
+  readonly message?: RefusalMessage;
 }
 
 /** The swap-specific pool filter: gated by the module's own policy verdict
  *  first, resolvePool's bench pool second. See the file header. */
 export function swapCandidates(view: PoolView, policyVerdict: PolicyVerdict): SwapCandidatesResult {
-  if (!policyVerdict.ok) return { candidates: [], reason: policyVerdict.reason };
+  if (!policyVerdict.ok) return { candidates: [], message: policyVerdict.message };
   return { candidates: resolvePool({ pool: "bench" }, view) };
 }
 
@@ -99,7 +150,7 @@ export interface SwapSheetProps {
  * step; picking one moves to the on step, whose header shows the chosen
  * player as a violet "engaged" chip — itself tappable to reopen the off
  * step, so a wrong pick is never a dead end. The on step's candidates come
- * from `swapCandidates`; an empty result renders `reason` verbatim when
+ * from `swapCandidates`; an empty result renders `message` verbatim when
  * the verdict refused, else the reused `noRoster` empty state — never a
  * disabled button either way.
  */
@@ -118,7 +169,7 @@ export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap }:
     );
   }
 
-  const { candidates, reason } = swapCandidates(view, policyVerdict);
+  const { candidates, message } = swapCandidates(view, policyVerdict);
   const offName = personNames[offId] ?? t("eventCopy.unknownPerson");
 
   return (
@@ -136,8 +187,8 @@ export function SwapSheet({ spec, view, policyVerdict, personNames, t, onSwap }:
         </button>
       </div>
       <div className="px-4 py-3">
-        {candidates.length === 0 && reason !== undefined ? (
-          <p className="text-xs text-slate-600">{reason}</p>
+        {candidates.length === 0 && message !== undefined ? (
+          <p className="text-xs text-slate-600">{message}</p>
         ) : (
           renderCandidateRow(candidates, personNames, t, (id) => onSwap(offId, id), emptyText)
         )}
