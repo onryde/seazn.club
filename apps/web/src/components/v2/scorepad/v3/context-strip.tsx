@@ -76,7 +76,7 @@ export function resolvePool(slot: PoolSlot, view: PoolView): readonly string[] {
 export type TFn = (key: string, vars?: Record<string, string | number>) => string;
 
 const candidateButtonClass =
-  "min-w-0 shrink-0 break-words rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
+  "min-w-0 max-w-full break-words rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
 
 /**
  * A row of real 44px candidate buttons, or `emptyText` when the pool is
@@ -175,7 +175,7 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
                 data-role="context-chip"
                 data-readonly="true"
                 style={{ minHeight: 44 }}
-                className="inline-flex min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700"
+                className="inline-flex min-w-0 max-w-full cursor-default items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700"
               >
                 <span className="break-words">{chipLabel(slot, personNames, t)}</span>
               </span>
@@ -192,7 +192,7 @@ export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextSt
               aria-pressed={active}
               onClick={() => setActiveSlotId(active ? null : slot.id)}
               style={{ minHeight: 44 }}
-              className={`inline-flex min-w-0 shrink-0 items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 ${
+              className={`inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 ${
                 active
                   ? "border-transparent bg-violet-600 text-white hover:bg-violet-700"
                   : unset
