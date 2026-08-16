@@ -74,6 +74,63 @@ const FAMILIES: ReadonlyArray<readonly [string, HardConstraint, number, number]>
   ["fixture_on_date", { type: "fixture_on_date", selector: TERMINAL, date: "2026-07-15", scope: D1 }, 3, SAT_1000_LOCAL],
 ];
 
+// A CHARACTERISATION test, not a red-first one: it passes before the refactor
+// below it and must keep passing after. `dayCapRulesFor`'s comment claims it is
+// the one resolution shared by the placement-time tally READ and the
+// commit-time WRITE, but only `countDay` called it — `nextAcceptableStart`
+// walked `placementHard` itself. They agreed only because both happened to call
+// `scopeCoversFixture` with the same arguments, which is a coincidence rather
+// than an invariant, and it stops holding the moment a scope makes the read and
+// the write differ in SHAPE rather than in predicate.
+//
+// Two caps with DIFFERENT scopes are what makes the resolution observable at
+// all: with one rule, index 0 is the only index and any walk finds it.
+describe("the day-cap read and write resolve the same rules", () => {
+  it("honours two differently-scoped day caps at once", () => {
+    // `e2` is on f1 and f2 only; `e1` is on all four. A cap of 1 on `e2` and a
+    // cap of 3 on `e1` must BOTH hold, so the tally each rule reads has to be
+    // the tally that rule wrote.
+    const fixtures: SchedulableFixture[] = [
+      { id: "f1", home: "e1", away: "e2", divisionId: "d1" },
+      { id: "f2", home: "e1", away: "e2", divisionId: "d1" },
+      { id: "f3", home: "e1", away: "e3", divisionId: "d1" },
+      { id: "f4", home: "e1", away: "e4", divisionId: "d1" },
+    ];
+    const config = {
+      startAt: SAT_1000_LOCAL,
+      matchMinutes: 30,
+      gapMinutes: 0,
+      perEntrantMinRest: 0,
+      courts: ["C1", "C2"],
+      blackouts: [],
+      sessionWindows: [],
+      tz: TZ,
+      horizonMinutes: 60 * 24 * 21,
+      ruleFixtures: fixtures.map((f) => ({
+        id: f.id,
+        extKey: f.id,
+        divisionId: "d1",
+        winnerTo: null,
+      })),
+      constraints: SchedulingConstraints.parse({
+        hard: [
+          { type: "max_fixtures_per_day", count: 1, scope: { kind: "entrant", entrantId: "e2" } },
+          { type: "max_fixtures_per_day", count: 3, scope: { kind: "entrant", entrantId: "e1" } },
+        ],
+      }),
+    };
+
+    const { assignments, conflicts } = slotFixtures({ fixtures, config });
+    expect(assignments).toHaveLength(4);
+    expect(conflicts.filter((c) => c.reason === "no_slot")).toEqual([]);
+    expect(
+      validateAssignments(assignments, config)
+        .filter((c) => c.reason === "instruction")
+        .map((c) => c.details),
+    ).toEqual([]);
+  });
+});
+
 describe("the placer's own output satisfies the verifier (#463)", () => {
   it.each(FAMILIES)("emits no %s violation it could have avoided", (_family, rule, n, startAt) => {
     const config = configFor(rule, n, startAt);

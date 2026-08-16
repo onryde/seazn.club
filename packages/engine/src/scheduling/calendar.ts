@@ -590,12 +590,21 @@ export function slotFixtures(input: SlotInput): SlotResult {
     const day = dayKeyInTz(start, zone);
     const time = hhmmInTz(start, zone);
     let bound = start;
+    // ONE resolution, shared with the commit-time write in `countDay` — the
+    // invariant `dayCapRulesFor` was introduced for and, until now, only half
+    // held: the write called it, this read walked `placementHard` itself. The
+    // two agreed only because both called `scopeCoversFixture` with the same
+    // arguments, which is a coincidence, not an invariant. The wall-clock and
+    // selector families keep the walk below because they are not tallied; only
+    // the cap has a counter, and only a counter can be indexed wrongly.
+    for (const i of dayCapRulesFor(row, rf)) {
+      const h = placementHard[i]!;
+      if (h.type !== "max_fixtures_per_day") continue;
+      if ((dayCounts[i]!.get(day) ?? 0) >= h.count) bound = Math.max(bound, dayStart(ymdAddDays(day, 1)));
+    }
     for (let i = 0; i < placementHard.length; i++) {
       const h = placementHard[i]!;
       if (!scopeCoversFixture(h.scope, rf, row)) continue;
-      if (h.type === "max_fixtures_per_day") {
-        if ((dayCounts[i]!.get(day) ?? 0) >= h.count) bound = Math.max(bound, dayStart(ymdAddDays(day, 1)));
-      }
       // WALL-CLOCK bounds in the org zone, never instants (constraints.ts:56).
       // Compared with the same `<` / `>` the verifier uses, so a start landing
       // exactly ON the bound is legal to both — an off-by-one here would place
