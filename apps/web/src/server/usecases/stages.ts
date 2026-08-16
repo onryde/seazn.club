@@ -54,6 +54,7 @@ import {
   expandTake,
   placeDescriptors,
   resolveQualifiers,
+  validateSeedingAgainstShape,
   type PoolTableRows,
   type SlotDescriptor,
   type SlotLabel,
@@ -1369,11 +1370,7 @@ async function validateStageSeeding(
 ): Promise<void> {
   const source = await resolveSeedingSource(tx, target, seeding.source);
   const shape = await sourceShapeOf(tx, source);
-  const pots = expandTake(seeding.take, shape);
-  placeDescriptors(pots, seeding.placement, seeding.map); // throws on a bad seeded_map
-  if (pots.reduce((n, p) => n + p.length, 0) < 2) {
-    throw new HttpError(422, "this stage's seeding rules produce fewer than 2 qualifiers", "SEEDING_RULES_MISSING");
-  }
+  validateSeedingAgainstShape(shape, seeding);
 }
 
 async function generateSeededStageFixtures(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {

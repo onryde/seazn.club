@@ -583,4 +583,57 @@ describe.skipIf(!HAS_DB)("createFromTemplate — seeding persistence (P7/D1b T3)
       select count(*)::int as n from competitions where org_id = ${auth.orgId} and name = ${name}`;
     expect(orphanCompetitions).toBe(0);
   });
+
+  it("regression: `.seeding`'s `take`/`map` mismatched against the source stage's REAL shape is refused 422, no orphan competition (reviewer follow-up on ac991ee5)", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    const before = await competitionCount(auth.orgId);
+    // Source stage genuinely has 2 pools (A, B) — `topNPerGroup(n:1)`
+    // against that REAL shape produces descriptor keys "A1"/"B1" only.
+    // "C1" names a pool that doesn't exist: this can only be caught by
+    // resolving the sibling stage's actual persisted shape, exactly what
+    // stages.ts's validateStageSeeding/sourceShapeOf do at save time for a
+    // manually-built stage graph — instantiateTemplate must run the SAME
+    // check, not merely persist the mismatch for a later 422 at generate
+    // time (stages.ts's generateSeededStageFixtures).
+    const template: CompetitionTemplate = {
+      key: "test-shape-mismatch",
+      version: 1,
+      i18n: { nameKey: "templates.slam128.name", descriptionKey: "templates.slam128.desc" },
+      divisions: [
+        {
+          i18nNameKey: "templates.slam128.div.main",
+          sportKey: "tennis",
+          variantKey: "grand-slam",
+          entrantKind: "individual",
+          entrantCount: 8,
+          stages: [
+            { i18nNameKey: "templates.stage.groupStage", kind: "group", groups: 2 },
+            {
+              i18nNameKey: "templates.stage.mainDraw",
+              kind: "knockout",
+              seeding: {
+                source: "previous",
+                take: [{ kind: "topNPerGroup", n: 1 }],
+                placement: "seeded_map",
+                map: [{ slot: "1", source: "C1" }],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const name = `ShapeMismatch ${randomUUID().slice(0, 6)}`;
+    await expect(
+      instantiateTemplate(auth, template, { name, ends_on: "2030-12-31" }),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: TEMPLATE_INSTANTIATION_FAILED_CODE,
+      extra: { divisionIndex: 0, stageIndex: 1 },
+    });
+    expect(await competitionCount(auth.orgId)).toBe(before);
+    const [{ n: orphanCompetitions }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from competitions where org_id = ${auth.orgId} and name = ${name}`;
+    expect(orphanCompetitions).toBe(0);
+  });
 });
