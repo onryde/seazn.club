@@ -22,6 +22,7 @@ import { MORE_SHEET_KEY } from "../types";
 import {
   adaptSwapSlot,
   combinedPool,
+  contextOverridesStale,
   decideUndo,
   dedicatedEventTypes,
   entitledBandsFrom,
@@ -342,6 +343,36 @@ describe("resolvePadPhase", () => {
     const real = resolvePadPhase("post", "live", ["pre", "live"]);
     const viaMutant = mutant("post", "live", ["pre", "live"]);
     expect(real).not.toBe(viaMutant); // real: "post" (skin-derived); mutant: "live" (available doesn't include post, so it keeps current)
+  });
+});
+
+// --- contextOverridesStale (G5's own precedence rule) ----------------------
+
+// G5 (controller ruling, 2026-08-16): a pending context-strip override lives
+// only until the fold itself advances. `PadHostV3`'s own render-phase reset
+// (pad-host.tsx) clears `contextOverrides` to `{}` exactly when this
+// function reports `true` — proved here as a pure decision, independent of
+// the React shell this file's own header says is untestable via the
+// node-only hook-harness.
+describe("contextOverridesStale", () => {
+  it("false when the state reference is unchanged — an override survives across renders with no new event", () => {
+    const s = { runs: 12 };
+    expect(contextOverridesStale(s, s)).toBe(false);
+  });
+
+  it("true once the state reference changes, even to a deeply-equal object — a new event landed, so every override is stale", () => {
+    expect(contextOverridesStale({ runs: 12 }, { runs: 12 })).toBe(true);
+  });
+
+  it("true on the very first check when nothing has been captured yet (undefined vs a real state)", () => {
+    expect(contextOverridesStale(undefined, { runs: 0 })).toBe(true);
+  });
+
+  it("mutation proof: a version that compared deep equality instead of reference would disagree on the deeply-equal case above", () => {
+    const deepEqualMutant = (a: unknown, b: unknown) => JSON.stringify(a) !== JSON.stringify(b);
+    const real = contextOverridesStale({ runs: 12 }, { runs: 12 });
+    const viaMutant = deepEqualMutant({ runs: 12 }, { runs: 12 });
+    expect(real).not.toBe(viaMutant); // real: true (different objects); mutant: false (deep-equal payloads)
   });
 });
 

@@ -109,7 +109,23 @@ export interface SheetChoiceStep { id: string; kind: "choice"; title: string; op
  * step; the host resolves each side's own `PoolView` once (pad-host.tsx)
  * and guided-sheet.tsx picks between the two per-step.
  */
-export interface SheetPersonStep { id: string; kind: "person"; title: string; pool: "onfield" | "bench" | "all"; side: "home" | "away"; when?: StepPredicate }
+/**
+ * R2/task C (G6 — controller ruling 2026-08-16, binding, `docs/superpowers/
+ * plans/2026-08-16-scorepad-v3-r2-cricket.md`): `candidates`, when present,
+ * SUPERSEDES `pool` entirely — same additive shape as `when` above. Exists
+ * because `pool` alone cannot express "exactly these two people": cricket's
+ * "who's out" step needs exactly the two batters at the crease, but
+ * `SquadMember.onField` is never cleared by a dismissal (only by lineup/
+ * substitution events), so `pool:"onfield"` alone offers the WHOLE
+ * batting-side on-field roster — by the ninth wicket, ~9 already-out
+ * players beside the 2 real ones (D-15 wearing a new coat). A skin that
+ * knows the exact eligible set states it directly; `pool`/`side` stay
+ * REQUIRED regardless (guided-sheet.tsx's own resolvePool still needs a
+ * pool/side to fall back to for every step that does NOT set `candidates`,
+ * which is still the common case — a swap's off/on pickers, a fielder pick
+ * with no narrower notion than "the whole fielding side").
+ */
+export interface SheetPersonStep { id: string; kind: "person"; title: string; pool: "onfield" | "bench" | "all"; side: "home" | "away"; candidates?: readonly string[]; when?: StepPredicate }
 export type GuidedSheetStep = SheetChoiceStep | SheetPersonStep;
 export interface GuidedSheetSpec { event: string; steps: GuidedSheetStep[]; buildPayload: (answers: Record<string, string>) => Record<string, unknown> }
 
@@ -215,7 +231,29 @@ export interface SkinDefV3<View = unknown> {
    *  the policy" posture every other optional method here already takes).
    *  Omit the method entirely for a skin with no `context()` at all. */
   contextSelect?(slotId: string, personId: string, view: View): TapEvent | null;
-  sheets?: Record<string, GuidedSheetSpec>;
+  /**
+   * R2/task C (G4 — controller ruling 2026-08-16, binding, `docs/superpowers/
+   * plans/2026-08-16-scorepad-v3-r2-cricket.md`): a METHOD of the view, not a
+   * static record. `GuidedSheetSpec.buildPayload(answers)` sees only the
+   * wizard's own answers, but a real sheet's event often needs more than
+   * that — cricket's wicket is a `cricket.ball` event whose payload also
+   * needs `over`/`ballInOver`/`striker`/`nonStriker`/`bowler`, all already
+   * held by the context strip and none worth asking again (re-asking IS the
+   * D-14/D-15 defect this chassis exists to remove). Rather than adding a
+   * second parameter to `buildPayload`, `sheets` closes over the live
+   * `view` at build time — the same shape every OTHER member here already
+   * takes (`scorebug`, `tiles`, `dock`, `context`, `swap`, `phase`); the
+   * static record R1 shipped was the anomaly, not the norm.
+   *
+   * CALLER OBLIGATION (nothing else enforces this): the host must rebuild
+   * this record EVERY RENDER, from the CURRENT `view` — never cache/memoize
+   * it across renders keyed on anything narrower than `view` itself, or a
+   * sheet's closed-over `over`/`striker`/`bowler`/etc. goes stale the moment
+   * the match state moves and the memo doesn't recompute. `pad-host.tsx`
+   * calls `props.skin.sheets?.(view)` inline in its own render body (no
+   * `useMemo`) for exactly this reason.
+   */
+  sheets?(view: View): Record<string, GuidedSheetSpec>;
   /** Declares this skin's swap-sheet integration (design §2.7) — `null`
    *  when a swap is not applicable right now (e.g. no sub currently legal
    *  to OFFER, as opposed to legal-but-refused, which is `policyOk: false`
@@ -252,6 +290,28 @@ export interface SkinDefV3<View = unknown> {
  * outcomes, so a skin building something like an over-dots strip needs the
  * raw event stream. The SAME list `pipeline.events` already exposes
  * (oldest first, ledger + still-queued local ones), never a re-derived copy.
+ *
+ * `contextOverrides` (G5 — controller ruling 2026-08-16, same plan doc):
+ * a slot id -> person id map of PENDING context-strip picks the HOST holds
+ * in local state, not the fold. Exists because a context-strip selection is
+ * not always a real event a sport's engine can persist (cricket has no
+ * event that records "who is currently striking/bowling" as its own
+ * standalone fact) — without somewhere to hold a pending pick, a scorer
+ * tapping a candidate would watch the chip silently revert on the next
+ * render, forever (the exact regression G5 found and fixed). A skin reads
+ * `view.contextOverrides[slotId] ?? <its own fold-derived value>` when
+ * building BOTH the context strip (so the chip shows the pick) and the next
+ * dispatched payload (so the tap actually carries it) — cricket's
+ * `resolvePeople(state, overrides)` is the one place this happens, reused
+ * by every builder that needs striker/nonStriker/bowler. CALLER OBLIGATION
+ * (pad-host.tsx, nothing else enforces this): an override lives only until
+ * the fold itself advances — the WHOLE map resets, unconditionally, the
+ * moment `pipeline.state` moves to a new object (a render-phase reset keyed
+ * on state identity, `contextOverridesStale` in pad-host.tsx), never
+ * per-slot and never left to outlive the ball it was captured for. Without
+ * this, a stale override could contradict the engine's own fold after a
+ * strike rotation (an odd run swaps striker/non-striker) or a new batter
+ * arriving after a wicket.
  */
 export interface PadHostView {
   readonly cfg: unknown;
@@ -263,6 +323,7 @@ export interface PadHostView {
   readonly personNames: Readonly<Record<string, string>>;
   readonly squads: SquadState;
   readonly events: readonly EventEnvelope[];
+  readonly contextOverrides: Readonly<Record<string, string>>;
 }
 
 export function assertScorebugSpec(spec: ScorebugSpec): string[] {

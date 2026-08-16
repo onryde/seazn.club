@@ -1,0 +1,722 @@
+// R2/task C — cricket SkinDefV3. Pure-data assertions only (environment:
+// "node", no jsdom — apps/web vitest convention every v3 primitive follows);
+// the wicket sheet's `when`-skip logic is proved by driving the REAL
+// guided-sheet.tsx step machine against this file's own `buildSheets`
+// output, not a re-implemented stand-in.
+import { describe, expect, it } from "vitest";
+import type { EventEnvelope, SquadState } from "@seazn/engine/core";
+import { initSquads } from "@seazn/engine/core";
+import { answerStep, backStep, currentStep, initialSheetState } from "../../guided-sheet";
+import type { PadHostView } from "../../types";
+import {
+  EXTRA_KINDS,
+  FIELDER_ELIGIBLE_KINDS,
+  VARIABLE_OUT_KINDS,
+  WICKET_KINDS,
+  ballEventType,
+  ballsPerOverOf,
+  buildContext,
+  buildDock,
+  buildScorebug,
+  buildSheets,
+  buildSwap,
+  buildTiles,
+  cricketSkinV3,
+  currentInnings,
+  oversText,
+  overDots,
+  resolvePeople,
+  resolvePhase,
+  runRate,
+  variantCode,
+} from "../cricket";
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+const t = (key: string, vars?: Record<string, string | number>): string =>
+  vars ? `${key}(${JSON.stringify(vars)})` : key;
+
+function squads(): SquadState {
+  return initSquads({
+    home: {
+      entrantId: "home-1",
+      slots: [
+        { personId: "h1", slot: "starting", orderNo: 1 },
+        { personId: "h2", slot: "starting", orderNo: 2 },
+        { personId: "h3", slot: "starting", orderNo: 3 },
+      ],
+    },
+    away: {
+      entrantId: "away-1",
+      slots: [
+        { personId: "a1", slot: "starting", orderNo: 1 },
+        { personId: "a2", slot: "starting", orderNo: 2 },
+        { personId: "a3", slot: "starting", orderNo: 3 },
+      ],
+    },
+  });
+}
+
+function innings(over: Record<string, unknown> = {}) {
+  return {
+    battingSide: "home" as const,
+    runs: 12,
+    wickets: 1,
+    legalBalls: 5,
+    closed: false,
+    fine: { striker: "h1", nonStriker: "h2", currentBowler: "a1", freeHitPending: false },
+    ...over,
+  };
+}
+
+function state(over: Record<string, unknown> = {}) {
+  return {
+    phase: "live" as const,
+    innings: [innings()],
+    orders: { home: ["h1", "h2", "h3"], away: ["a1", "a2", "a3"] },
+    ...over,
+  };
+}
+
+function cfg(over: Record<string, unknown> = {}) {
+  return { ballsPerOver: 6, inningsPerSide: 1, ballsPerInnings: 120, dls: { enabled: false }, superOver: false, ...over };
+}
+
+function view(over: Partial<PadHostView> = {}): PadHostView {
+  return {
+    cfg: cfg(),
+    state: state(),
+    summary: {},
+    phase: "live",
+    band: 3,
+    entitlements: {},
+    personNames: { h1: "Home One", h2: "Home Two", h3: "Home Three", a1: "Away One", a2: "Away Two", a3: "Away Three" },
+    squads: squads(),
+    events: [],
+    contextOverrides: {},
+    ...over,
+  };
+}
+
+function ballEvent(id: string, payload: Record<string, unknown>, type = "cricket.ball"): EventEnvelope {
+  return { id, fixtureId: "fx-1", seq: 0, type, payload, recordedAt: "2026-01-01T00:00:00.000Z", recordedBy: null };
+}
+
+// ---------------------------------------------------------------------------
+// ballsPerOverOf / oversText
+// ---------------------------------------------------------------------------
+
+describe("ballsPerOverOf", () => {
+  it("defaults to 6 when cfg carries none", () => {
+    expect(ballsPerOverOf({})).toBe(6);
+    expect(ballsPerOverOf(null)).toBe(6);
+    expect(ballsPerOverOf(undefined)).toBe(6);
+  });
+  it("reads the hundred's 5-ball over from cfg — never assumes 6", () => {
+    expect(ballsPerOverOf({ ballsPerOver: 5 })).toBe(5);
+  });
+  it("ignores a non-positive value and falls back to 6", () => {
+    expect(ballsPerOverOf({ ballsPerOver: 0 })).toBe(6);
+    expect(ballsPerOverOf({ ballsPerOver: -1 })).toBe(6);
+  });
+});
+
+describe("oversText", () => {
+  it("formats legal balls as overs.balls for a 6-ball over", () => {
+    expect(oversText(0, 6)).toBe("0.0");
+    expect(oversText(5, 6)).toBe("0.5");
+    expect(oversText(6, 6)).toBe("1.0");
+    expect(oversText(13, 6)).toBe("2.1");
+  });
+  it("formats against a 5-ball (hundred) over — a different quotient/remainder than 6 would give", () => {
+    expect(oversText(5, 5)).toBe("1.0"); // vs "0.5" at bpo=6
+    expect(oversText(11, 5)).toBe("2.1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// currentInnings / resolvePeople / ballEventType
+// ---------------------------------------------------------------------------
+
+describe("currentInnings", () => {
+  it("is null with no innings recorded yet", () => {
+    expect(currentInnings({})).toBeNull();
+  });
+  it("picks the open (not closed) innings over a closed earlier one", () => {
+    const s = { innings: [innings({ closed: true, runs: 200 }), innings({ closed: false, runs: 12 })] };
+    expect(currentInnings(s)?.runs).toBe(12);
+  });
+  it("falls back to the last innings once every innings is closed", () => {
+    const s = { innings: [innings({ closed: true, runs: 200 }), innings({ closed: true, runs: 180 })] };
+    expect(currentInnings(s)?.runs).toBe(180);
+  });
+});
+
+describe("resolvePeople", () => {
+  it("reads striker/non-striker/bowler from the fold's own fine state", () => {
+    const p = resolvePeople(state());
+    expect(p).toEqual({ battingSide: "home", bowlingSide: "away", striker: "h1", nonStriker: "h2", bowler: "a1" });
+  });
+  it("defaults to the batting/bowling order's first entrants before any fold value exists — v2's own default, stateless here", () => {
+    const s = state({ innings: [innings({ fine: { striker: null, nonStriker: null, currentBowler: null } })] });
+    const p = resolvePeople(s);
+    expect(p).toEqual({ battingSide: "home", bowlingSide: "away", striker: "h1", nonStriker: "h2", bowler: "a1" });
+  });
+  it("empty string, never a crash, when even the order is unset", () => {
+    const p = resolvePeople({ innings: [innings({ fine: null })], orders: {} });
+    expect(p.striker).toBe("");
+    expect(p.nonStriker).toBe("");
+    expect(p.bowler).toBe("");
+  });
+  it("swaps batting/bowling side for an away-batting innings", () => {
+    const p = resolvePeople(state({ innings: [innings({ battingSide: "away", fine: { striker: "a1", nonStriker: "a2", currentBowler: "h1" } })] }));
+    expect(p.battingSide).toBe("away");
+    expect(p.bowlingSide).toBe("home");
+  });
+});
+
+describe("ballEventType", () => {
+  it("is cricket.ball outside a super over", () => {
+    expect(ballEventType({ phase: "live" })).toBe("cricket.ball");
+    expect(ballEventType({ phase: "pre" })).toBe("cricket.ball");
+  });
+  it("switches to cricket.superover.ball while the engine is actually in one", () => {
+    expect(ballEventType({ phase: "super_over" })).toBe("cricket.superover.ball");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// overDots — C-gaps §G1, mutation target #2 (ballsPerOver load-bearing)
+// ---------------------------------------------------------------------------
+
+describe("overDots", () => {
+  it("reads real per-ball outcomes — dot, runs, boundary, wicket — not a bare filled count", () => {
+    const events = [
+      ballEvent("e1", { ballInOver: 1, runs: { bat: 0 } }),
+      ballEvent("e2", { ballInOver: 2, runs: { bat: 2 } }),
+      ballEvent("e3", { ballInOver: 3, runs: { bat: 4 }, boundary: 4 }),
+      ballEvent("e4", { ballInOver: 4, runs: { bat: 0 }, wicket: { kind: "bowled", out: "h1", bowlerCredited: true } }),
+    ];
+    expect(overDots(events, 6)).toEqual(["•", "2", "4", "W"]);
+  });
+
+  it("renders extras with their own short notation", () => {
+    const events = [
+      ballEvent("e1", { ballInOver: 1, runs: { bat: 0, extras: { kind: "wide", runs: 1 } } }),
+      ballEvent("e2", { ballInOver: 1, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }),
+      ballEvent("e3", { ballInOver: 1, runs: { bat: 0, extras: { kind: "bye", runs: 2 } } }),
+      ballEvent("e4", { ballInOver: 1, runs: { bat: 0, extras: { kind: "legbye", runs: 1 } } }),
+    ];
+    // Each event's own ballInOver===1 makes it its own "fresh over" boundary
+    // for this isolated per-symbol check (each windowed call takes just the
+    // one event under test).
+    expect(overDots([events[0]!], 6)).toEqual(["wd"]);
+    expect(overDots([events[1]!], 6)).toEqual(["nb"]);
+    expect(overDots([events[2]!], 6)).toEqual(["b2"]);
+    expect(overDots([events[3]!], 6)).toEqual(["lb1"]);
+  });
+
+  it("ignores non-ball event types entirely", () => {
+    const events = [
+      ballEvent("e0", {}, "cricket.toss"),
+      ballEvent("e1", { ballInOver: 1, runs: { bat: 1 } }),
+    ];
+    expect(overDots(events, 6)).toEqual(["1"]);
+  });
+
+  it("a hundred fixture (bpo=5) yields exactly 5 dots for a full over — sized by cfg ballsPerOver, not a hardcoded window", () => {
+    // 1 stale ball from the over before, then a fresh 5-ball over
+    // (ballInOver 1..5). The ballInOver===1 boundary trim means an
+    // OVERSIZED window (bpo wrongly read as 6) is harmless here — it still
+    // finds and drops the stale ball. Where bpo is genuinely load-bearing is
+    // the other direction: an UNDERSIZED window (bpo wrongly read too
+    // small) truncates real balls off the FRONT of the current over, since
+    // the slice never reaches far enough back to see this over's own first
+    // ball at all.
+    const events = [
+      ballEvent("stale", { ballInOver: 5, runs: { bat: 1 } }),
+      ballEvent("f1", { ballInOver: 1, runs: { bat: 0 } }),
+      ballEvent("f2", { ballInOver: 2, runs: { bat: 1 } }),
+      ballEvent("f3", { ballInOver: 3, runs: { bat: 0 } }),
+      ballEvent("f4", { ballInOver: 4, runs: { bat: 4 }, boundary: 4 }),
+      ballEvent("f5", { ballInOver: 5, runs: { bat: 0 }, wicket: { kind: "bowled", out: "h1", bowlerCredited: true } }),
+    ];
+    expect(overDots(events, 5)).toEqual(["•", "1", "•", "4", "W"]);
+    // A too-small bpo (3) truncates: the window can't see back to f1/f2, and
+    // none of what remains in it is a fresh ballInOver===1 boundary, so the
+    // whole (already-too-short) window is returned as-is — 3 dots, missing
+    // this over's own first two real balls. A too-large bpo (6) stays
+    // correct (the trim still finds and drops the stale ball) — proving the
+    // window size is genuinely read from bpo either way, not ignored.
+    expect(overDots(events, 3)).toEqual(["•", "4", "W"]);
+    expect(overDots(events, 6)).toEqual(["•", "1", "•", "4", "W"]);
+  });
+});
+
+describe("runRate", () => {
+  it("is null before any legal ball", () => {
+    expect(runRate(0, 0, 6)).toBeNull();
+  });
+  it("scales by ballsPerOver, not a hardcoded 6", () => {
+    expect(runRate(30, 30, 6)).toBe(6); // 30 runs off 5 overs of 6 = 6 RPO
+    expect(runRate(30, 30, 5)).toBe(5); // 30 runs off 6 overs of 5 = 5 RPO
+  });
+});
+
+describe("variantCode", () => {
+  it("reads TEST for a two-innings cfg regardless of other fields", () => {
+    expect(variantCode({ inningsPerSide: 2, ballsPerOver: 6 })).toBe("TEST");
+  });
+  it("reads HUNDRED from the 5-ball over", () => {
+    expect(variantCode({ ballsPerOver: 5 })).toBe("HUNDRED");
+  });
+  it("reads T20/ODI from ballsPerInnings", () => {
+    expect(variantCode({ ballsPerOver: 6, ballsPerInnings: 120 })).toBe("T20");
+    expect(variantCode({ ballsPerOver: 6, ballsPerInnings: 300 })).toBe("ODI");
+  });
+  it("is null for a cfg matching none of the four shipped presets — never fabricates a label", () => {
+    expect(variantCode({ ballsPerOver: 6, ballsPerInnings: 40 })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolvePhase — G3, mutation target #3
+// ---------------------------------------------------------------------------
+
+describe("resolvePhase", () => {
+  it("maps every engine phase to its PadPhase", () => {
+    expect(resolvePhase({ state: { phase: "pre" } })).toBe("pre");
+    expect(resolvePhase({ state: { phase: "live" } })).toBe("live");
+    expect(resolvePhase({ state: { phase: "super_over" } })).toBe("live");
+    expect(resolvePhase({ state: { phase: "done" } })).toBe("post");
+    expect(resolvePhase({ state: { phase: "final" } })).toBe("post");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildScorebug
+// ---------------------------------------------------------------------------
+
+describe("buildScorebug", () => {
+  it("renders the batting score and overs halves, both passive", () => {
+    const spec = buildScorebug(view(), t);
+    expect(spec.halves[0]!.big).toBe("12/1");
+    expect(spec.halves[1]!.big).toBe("0.5");
+    expect(spec.halves[0]!.tappable).toBeUndefined();
+    expect(spec.halves[1]!.tappable).toBeUndefined();
+  });
+
+  it("context is variant · over · run rate, joined with the chassis separator", () => {
+    const spec = buildScorebug(view(), t);
+    expect(spec.context).toBe("T20 · scorepad.skin.cricket.context.over 0.5 · scorepad.skin.cricket.context.runRate 14.4");
+  });
+
+  it("omits the variant segment for a cfg matching no shipped preset", () => {
+    const spec = buildScorebug(view({ cfg: cfg({ ballsPerInnings: 40 }) }), t);
+    expect(spec.context.startsWith("T20")).toBe(false);
+    expect(spec.context).toContain("scorepad.skin.cricket.context.over");
+  });
+
+  it("strip shows striker (accented, on-strike marker), non-striker, dots, bowler", () => {
+    const spec = buildScorebug(view({ state: state({ innings: [innings()] }) }), t);
+    expect(spec.strip[0]).toEqual({ value: "▸Home One", accent: true });
+    expect(spec.strip[1]).toEqual({ value: "Home Two" });
+    expect(spec.strip[3]).toEqual({ value: "⚾Away One" });
+  });
+
+  it("dots read from view.events, sized by cfg ballsPerOver — a hundred cfg's strip differs from a 6-ball one", () => {
+    const events = [
+      ballEvent("f1", { ballInOver: 1, runs: { bat: 0 } }),
+      ballEvent("f2", { ballInOver: 2, runs: { bat: 1 } }),
+      ballEvent("f3", { ballInOver: 3, runs: { bat: 0 } }),
+      ballEvent("f4", { ballInOver: 4, runs: { bat: 4 }, boundary: 4 }),
+      ballEvent("f5", { ballInOver: 5, runs: { bat: 1 } }),
+    ];
+    const hundred = buildScorebug(view({ cfg: cfg({ ballsPerOver: 5, ballsPerInnings: 100 }), events }), t);
+    expect(hundred.strip[2]).toEqual({ value: "• 1 • 4 1" });
+    // The overs figure ALSO goes through ballsPerOverOf(view.cfg): at bpo=5,
+    // 5 legal balls is a completed over ("1.0"); at a wrongly-assumed 6 it
+    // would read "0.5" instead — a real, integration-level dependency on
+    // reading cfg's own ballsPerOver, not just the standalone helper.
+    expect(hundred.context).toContain("HUNDRED · scorepad.skin.cricket.context.over 1.0");
+  });
+
+  it("phase mirrors resolvePhase", () => {
+    expect(buildScorebug(view({ state: state({ phase: "done" }) }), t).phase).toBe("post");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildTiles
+// ---------------------------------------------------------------------------
+
+describe("buildTiles", () => {
+  it("declares at most two primary tiles for the live phase", () => {
+    const tiles = buildTiles(view());
+    const livePrimary = tiles.filter((tl) => tl.kind === "primary" && tl.phases.includes("live"));
+    expect(livePrimary).toHaveLength(2);
+    expect(livePrimary.map((tl) => tl.id).sort()).toEqual(["run0", "run1"]);
+  });
+
+  it("run keypad covers 0,1,2,3,4,6 — never 5", () => {
+    const ids = buildTiles(view())
+      .filter((tl) => tl.id.startsWith("run"))
+      .map((tl) => tl.id);
+    expect(ids.sort()).toEqual(["run0", "run1", "run2", "run3", "run4", "run6"]);
+  });
+
+  it("wicket is the one destructive tile, full width", () => {
+    const wicket = buildTiles(view()).find((tl) => tl.id === "wicket")!;
+    expect(wicket.kind).toBe("destructive");
+    expect(wicket.span).toBe(4);
+    expect(wicket.action).toEqual({ sheet: "wicket" });
+  });
+
+  it("wide gets its own tile, separate from the four minor extras", () => {
+    const tiles = buildTiles(view());
+    expect(tiles.some((tl) => tl.id === "wide" && tl.kind === "standard")).toBe(true);
+    const minor = tiles.filter((tl) => tl.id.startsWith("extra-"));
+    expect(minor.map((tl) => tl.id).sort()).toEqual(["extra-bye", "extra-legbye", "extra-noball", "extra-penalty"]);
+    expect(minor.every((tl) => tl.kind === "minor")).toBe(true);
+  });
+
+  it("toss is the sole pre-phase tile", () => {
+    const tiles = buildTiles(view());
+    const pre = tiles.filter((tl) => tl.phases.includes("pre"));
+    expect(pre.map((tl) => tl.id)).toEqual(["toss"]);
+  });
+
+  it("declare only appears for a two-innings (test) cfg", () => {
+    expect(buildTiles(view()).some((tl) => tl.id === "declare")).toBe(false);
+    expect(buildTiles(view({ cfg: cfg({ inningsPerSide: 2 }) })).some((tl) => tl.id === "declare")).toBe(true);
+  });
+
+  it("the run keypad dispatches cricket.superover.ball while the engine is in a super over", () => {
+    const tiles = buildTiles(view({ state: state({ phase: "super_over" }) }));
+    const run0 = tiles.find((tl) => tl.id === "run0")!;
+    expect(run0.action).toMatchObject({ event: { type: "cricket.superover.ball" } });
+  });
+
+  it("a run tile's payload carries over/ballInOver/striker/nonStriker/bowler and the tapped run count", () => {
+    const tiles = buildTiles(view());
+    const run4 = tiles.find((tl) => tl.id === "run4")!;
+    expect(run4.action).toEqual({
+      event: {
+        type: "cricket.ball",
+        payload: { over: 0, ballInOver: 6, striker: "h1", nonStriker: "h2", bowler: "a1", runs: { bat: 4 }, boundary: 4 },
+      },
+    });
+  });
+
+  it("More is a minor, full-width catch-all visible in live and post, never pre", () => {
+    const more = buildTiles(view()).find((tl) => tl.id === "more")!;
+    expect(more.kind).toBe("minor");
+    expect(more.phases.sort()).toEqual(["live", "post"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildDock
+// ---------------------------------------------------------------------------
+
+describe("buildDock", () => {
+  it("offers a Free Hit chip for a ball event", () => {
+    const dock = buildDock("cricket.ball", t)!;
+    expect(dock.title).toBe("pad.cricket.dock.title");
+    expect(dock.chips).toHaveLength(1);
+    expect(dock.chips[0]!.id).toBe("freeHit");
+    expect(dock.chips[0]!.mutate({ runs: { bat: 0 } })).toEqual({ runs: { bat: 0 }, freeHit: true });
+  });
+  it("also offers it for a super-over ball", () => {
+    expect(buildDock("cricket.superover.ball", t)).not.toBeNull();
+  });
+  it("is null for every non-ball event type — never a stray dock on an admin action", () => {
+    expect(buildDock("cricket.toss", t)).toBeNull();
+    expect(buildDock("cricket.retire", t)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildContext
+// ---------------------------------------------------------------------------
+
+describe("buildContext", () => {
+  it("is null before the match goes live", () => {
+    expect(buildContext(view({ state: state({ phase: "pre", innings: [] }) }))).toBeNull();
+  });
+  it("is null with no innings open yet", () => {
+    expect(buildContext(view({ state: state({ innings: [] }) }))).toBeNull();
+  });
+  it("three required slots, personId from the fold", () => {
+    const spec = buildContext(view())!;
+    expect(spec.slots.map((s) => s.id)).toEqual(["striker", "nonStriker", "bowler"]);
+    expect(spec.slots.every((s) => s.required)).toBe(true);
+    expect(spec.slots.find((s) => s.id === "striker")!.personId).toBe("h1");
+  });
+  it("stays available during a super over", () => {
+    expect(buildContext(view({ state: state({ phase: "super_over" }) }))).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G5 (controller ruling 2026-08-16) — the context strip was INERT: cricket
+// has no event to persist a striker/bowler pick, so the HOST holds a pending
+// per-slot override (PadHostView.contextOverrides) and every resolvePeople()
+// call site reads `override ?? fold value`. Proves BOTH halves of the
+// acceptance criteria: (a) the strip (buildContext) shows the override, (b)
+// the NEXT ball's payload (buildTiles) carries it too — the same
+// resolvePeople() call backs both, so they can never disagree.
+// ---------------------------------------------------------------------------
+
+describe("G5 — context overrides supersede the fold", () => {
+  it("buildContext shows the override, not the fold's own striker", () => {
+    const v = view({ contextOverrides: { striker: "h3" } });
+    const spec = buildContext(v)!;
+    expect(spec.slots.find((s) => s.id === "striker")!.personId).toBe("h3");
+  });
+
+  it("the next ball's payload carries the override too — the strip and the tap can never disagree", () => {
+    const v = view({ contextOverrides: { striker: "h3", bowler: "a2" } });
+    const tiles = buildTiles(v);
+    const run1 = tiles.find((tl) => tl.id === "run1")!;
+    expect(run1.action).toMatchObject({ event: { payload: { striker: "h3", bowler: "a2", nonStriker: "h2" } } });
+  });
+
+  it("an unset slot's override leaves that slot on the fold's own value — overrides are per-slot, not all-or-nothing", () => {
+    const v = view({ contextOverrides: { bowler: "a3" } });
+    const spec = buildContext(v)!;
+    expect(spec.slots.find((s) => s.id === "striker")!.personId).toBe("h1"); // fold, unchanged
+    expect(spec.slots.find((s) => s.id === "bowler")!.personId).toBe("a3"); // overridden
+  });
+
+  it("mutation proof: a resolvePeople that ignored contextOverrides entirely would disagree with the real one here", () => {
+    const withOverride = resolvePeople(state(), { striker: "h3" });
+    const withoutOverride = resolvePeople(state());
+    expect(withOverride.striker).not.toBe(withoutOverride.striker);
+    expect(withOverride.striker).toBe("h3");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSheets — wicket sheet `when`-skip logic driven through the REAL
+// guided-sheet.tsx step machine (mutation target #1).
+// ---------------------------------------------------------------------------
+
+describe("buildSheets — wicket flow (D-15)", () => {
+  function wicketSpec() {
+    return buildSheets(view()).wicket;
+  }
+
+  it("bowled skips BOTH who-out and fielder — straight from kind to a built event", () => {
+    const spec = wicketSpec();
+    const s = initialSheetState();
+    expect(currentStep(spec, s)!.id).toBe("kind");
+    const outcome = answerStep(spec, s, "bowled");
+    expect(outcome.done).toBe(true);
+    if (!outcome.done) throw new Error("expected done");
+    expect(outcome.event.payload).toMatchObject({
+      wicket: { kind: "bowled", out: "h1", bowlerCredited: true },
+    });
+    expect((outcome.event.payload as { wicket: { fielder?: string } }).wicket.fielder).toBeUndefined();
+  });
+
+  it("caught skips who-out (striker implied) but asks for fielder", () => {
+    const spec = wicketSpec();
+    const s = initialSheetState();
+    const afterKind = answerStep(spec, s, "caught");
+    expect(afterKind.done).toBe(false);
+    if (afterKind.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterKind.state)!.id).toBe("fielder");
+    const final = answerStep(spec, afterKind.state, "a2");
+    expect(final.done).toBe(true);
+    if (!final.done) throw new Error("expected done");
+    expect(final.event.payload).toMatchObject({ wicket: { kind: "caught", out: "h1", fielder: "a2", bowlerCredited: true } });
+  });
+
+  it("runout asks BOTH who-out and fielder, in order", () => {
+    const spec = wicketSpec();
+    const s = initialSheetState();
+    const afterKind = answerStep(spec, s, "runout");
+    expect(afterKind.done).toBe(false);
+    if (afterKind.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterKind.state)!.id).toBe("out");
+    const afterOut = answerStep(spec, afterKind.state, "h2"); // non-striker run out
+    expect(afterOut.done).toBe(false);
+    if (afterOut.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterOut.state)!.id).toBe("fielder");
+    const final = answerStep(spec, afterOut.state, "a3");
+    expect(final.done).toBe(true);
+    if (!final.done) throw new Error("expected done");
+    expect(final.event.payload).toMatchObject({ wicket: { kind: "runout", out: "h2", fielder: "a3", bowlerCredited: false } });
+  });
+
+  it("stumped skips who-out but asks for fielder, and bowlerCredited is true", () => {
+    const spec = wicketSpec();
+    const afterKind = answerStep(spec, initialSheetState(), "stumped");
+    if (afterKind.done) throw new Error("expected not done");
+    const final = answerStep(spec, afterKind.state, "a1");
+    if (!final.done) throw new Error("expected done");
+    expect(final.event.payload).toMatchObject({ wicket: { kind: "stumped", out: "h1", fielder: "a1", bowlerCredited: true } });
+  });
+
+  it("back from fielder returns to kind for a non-runout dismissal — skips over the gated-off who-out step, never gets stuck on it", () => {
+    const spec = wicketSpec();
+    const afterKind = answerStep(spec, initialSheetState(), "caught");
+    if (afterKind.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterKind.state)!.id).toBe("fielder");
+    const backed = backStep(spec, afterKind.state);
+    expect(currentStep(spec, backed)!.id).toBe("kind");
+  });
+
+  it("dispatches cricket.superover.ball while the engine is in a super over", () => {
+    const spec = buildSheets(view({ state: state({ phase: "super_over" }) })).wicket;
+    expect(spec.event).toBe("cricket.superover.ball");
+  });
+
+  it("every WICKET_KINDS member is offered as a kind option, each with a real label", () => {
+    const spec = wicketSpec();
+    const options = spec.steps[0]!.kind === "choice" ? spec.steps[0]!.options : [];
+    expect(options.map((o) => o.id).sort()).toEqual([...WICKET_KINDS].sort());
+    expect(options.every((o) => typeof o.label === "string" && o.label.length > 0)).toBe(true);
+  });
+
+  // G6 (controller ruling 2026-08-16): the "out" step declares exactly the
+  // two batters at the crease as `candidates`, never the whole batting-side
+  // on-field roster — SquadMember.onField is never cleared by a dismissal,
+  // so `pool:"onfield"` alone would still list every already-out player.
+  it("the 'out' step's candidates are exactly the two batters at the crease, not the whole on-field roster", () => {
+    const spec = wicketSpec();
+    const out = spec.steps.find((s) => s.id === "out")!;
+    if (out.kind !== "person") throw new Error("expected a person step");
+    expect(out.candidates).toEqual(["h1", "h2"]); // striker, non-striker — h3 (on-field but not batting) excluded
+    expect(out.pool).toBe("onfield"); // kept as a fallback/doc value even though candidates supersedes it (G6, types.ts)
+  });
+
+  it("the 'out' step's candidates track a context override — reads the SAME resolvePeople(state, overrides) the payload does", () => {
+    const spec = buildSheets(view({ contextOverrides: { striker: "h3" } })).wicket;
+    const out = spec.steps.find((s) => s.id === "out")!;
+    if (out.kind !== "person") throw new Error("expected a person step");
+    expect(out.candidates).toEqual(["h3", "h2"]);
+  });
+
+  it("the 'fielder' step declares NO candidates override — still the whole fielding-side pool, unlike 'out'", () => {
+    const spec = wicketSpec();
+    const fielder = spec.steps.find((s) => s.id === "fielder")!;
+    if (fielder.kind !== "person") throw new Error("expected a person step");
+    expect(fielder.candidates).toBeUndefined();
+    expect(fielder.pool).toBe("onfield");
+  });
+});
+
+describe("buildSheets — toss/review/inningsClose", () => {
+  it("toss: who won -> elected, both required, in that order", () => {
+    const spec = buildSheets(view()).toss;
+    expect(spec.event).toBe("cricket.toss");
+    const s = initialSheetState();
+    expect(currentStep(spec, s)!.id).toBe("wonBy");
+    const afterWon = answerStep(spec, s, "home-1");
+    if (afterWon.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterWon.state)!.id).toBe("elected");
+    const done = answerStep(spec, afterWon.state, "bat");
+    if (!done.done) throw new Error("expected done");
+    expect(done.event).toEqual({ type: "cricket.toss", payload: { wonBy: "home-1", elected: "bat" } });
+  });
+
+  it("review: kind -> outcome -> by, never asks the two optional persons", () => {
+    const spec = buildSheets(view()).review;
+    const s = initialSheetState();
+    const afterKind = answerStep(spec, s, "player");
+    if (afterKind.done) throw new Error("expected not done");
+    const afterOutcome = answerStep(spec, afterKind.state, "upheld");
+    if (afterOutcome.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterOutcome.state)!.id).toBe("by");
+    const done = answerStep(spec, afterOutcome.state, "away-1");
+    if (!done.done) throw new Error("expected done");
+    expect(done.event).toEqual({ type: "cricket.review", payload: { kind: "player", outcome: "upheld", by: "away-1" } });
+  });
+
+  it("inningsClose: one reason step, covering every CricketClose.reason member", () => {
+    const spec = buildSheets(view()).inningsClose;
+    const step = spec.steps[0]!;
+    const options = step.kind === "choice" ? step.options.map((o) => o.id) : [];
+    expect(options.sort()).toEqual(
+      ["all_out", "forfeited", "other", "overs_complete", "target_reached", "time", "weather"].sort(),
+    );
+    const done = answerStep(spec, initialSheetState(), "weather");
+    if (!done.done) throw new Error("expected done");
+    expect(done.event).toEqual({ type: "cricket.innings.close", payload: { reason: "weather" } });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSwap — retire flow
+// ---------------------------------------------------------------------------
+
+describe("buildSwap", () => {
+  it("is null before the match is live", () => {
+    expect(buildSwap(view({ state: state({ phase: "pre", innings: [] }) }))).toBeNull();
+  });
+  it("is null with no one at the crease yet", () => {
+    expect(buildSwap(view({ state: state({ innings: [innings({ fine: null })], orders: {} }) }))).toBeNull();
+  });
+  it("scopes to the batting side and builds a cricket.retire event from the picked pair", () => {
+    const slot = buildSwap(view())!;
+    expect(slot.side).toBe("home");
+    expect(slot.policyOk).toBe(true);
+    expect(slot.buildEvent("h1", "h3")).toEqual({ type: "cricket.retire", payload: { person: "h1", incoming: "h3", reason: "other" } });
+  });
+  it("scopes to away when away is batting", () => {
+    const slot = buildSwap(
+      view({ state: state({ innings: [innings({ battingSide: "away", fine: { striker: "a1", nonStriker: "a2", currentBowler: "h1" } })] }) }),
+    )!;
+    expect(slot.side).toBe("away");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cricketSkinV3 — factory assembly
+// ---------------------------------------------------------------------------
+
+describe("cricketSkinV3", () => {
+  it("assembles a full SkinDefV3, key/tapModel correct, scorebug/dock close over the given t", () => {
+    const skin = cricketSkinV3(t);
+    expect(skin.key).toBe("cricket");
+    expect(skin.tapModel).toBe("T");
+    expect(skin.scorebug(view()).context).toContain("scorepad.skin.cricket.context.over");
+    expect(skin.dock("cricket.ball", view())?.title).toBe("pad.cricket.dock.title");
+    expect(skin.tiles(view()).length).toBeGreaterThan(0);
+    expect(skin.phase!(view())).toBe("live");
+    expect(skin.context!(view())).not.toBeNull();
+    expect(skin.sheets!(view()).wicket).toBeDefined();
+    expect(skin.swap!(view())).not.toBeNull();
+    // No contextSelect — cricket has no event to persist a selection with
+    // (this file's own header).
+    expect(skin.contextSelect).toBeUndefined();
+  });
+
+  it("two different t functions produce two independently-localised scorebugs — proves the closure, not a shared cache", () => {
+    const skinA = cricketSkinV3((k) => `A:${k}`);
+    const skinB = cricketSkinV3((k) => `B:${k}`);
+    expect(skinA.scorebug(view()).halves[0]!.who[0]!.name).toBe("A:scorepad.skin.cricket.scorebug.batting");
+    expect(skinB.scorebug(view()).halves[0]!.who[0]!.name).toBe("B:scorepad.skin.cricket.scorebug.batting");
+  });
+});
+
+// Sanity: EXTRA_KINDS/WICKET_KINDS/FIELDER_ELIGIBLE_KINDS/VARIABLE_OUT_KINDS
+// exports match the scouted facts the brief pinned (do-not-re-derive list).
+describe("closed vocabularies", () => {
+  it("WICKET_KINDS has all 10 members", () => {
+    expect(WICKET_KINDS).toHaveLength(10);
+  });
+  it("EXTRA_KINDS has all 5 members", () => {
+    expect(EXTRA_KINDS).toHaveLength(5);
+  });
+  it("FIELDER_ELIGIBLE_KINDS is exactly caught/runout/stumped", () => {
+    expect([...FIELDER_ELIGIBLE_KINDS].sort()).toEqual(["caught", "runout", "stumped"]);
+  });
+  it("VARIABLE_OUT_KINDS is exactly runout", () => {
+    expect([...VARIABLE_OUT_KINDS]).toEqual(["runout"]);
+  });
+});

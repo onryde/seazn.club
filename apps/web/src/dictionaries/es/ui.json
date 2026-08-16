@@ -3790,5 +3790,14 @@
   "pad.cricket.sheet.inningsClose.reason.forfeited": "Forfait",
   "pad.cricket.sheet.inningsClose.reason.other": "Otro",
   "pad.cricket.dock.title": "Detalle de la bola",
-  "pad.cricket.dock.freeHit": "Free hit"
+  "pad.cricket.dock.freeHit": "Free hit",
+  "scorepad.skin.cricket.context.over": "Over",
+  "scorepad.skin.cricket.context.runRate": "RR",
+  "scorepad.skin.cricket.scorebug.batting": "Bateo",
+  "scorepad.skin.cricket.scorebug.overs": "Overs",
+  "pad.cricket.sheet.toss.wonBy.title": "¿Quién ganó el sorteo?",
+  "pad.cricket.sheet.toss.elected.title": "¿Batear o lanzar?",
+  "pad.cricket.sheet.review.kind.title": "Tipo de revisión",
+  "pad.cricket.sheet.review.outcome.title": "Resultado",
+  "pad.cricket.sheet.review.by.title": "Solicitado por"
 }

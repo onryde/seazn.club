@@ -28,7 +28,13 @@
 // (bench-INCLUSIVE, cannot make the split; A1 dispatch, explicit
 // constraint). Candidates render via context-strip.tsx's own
 // renderCandidateRow, so a person step looks and behaves exactly like every
-// other picker in this chassis rather than a parallel one.
+// other picker in this chassis rather than a parallel one. G6 (controller
+// ruling, R2/task C review, types.ts's own doc on `SheetPersonStep.
+// candidates`): a step's own explicit `candidates` list, when present,
+// SUPERSEDES `pool` entirely (`candidatesForStep` below) — for a case
+// `resolvePool` cannot express at all, e.g. cricket's "who's out" needing
+// exactly the two batters at the crease rather than the whole on-field
+// roster (`SquadMember.onField` is never cleared by a dismissal).
 //
 // SCOPE NOTE, UPDATED (R2/task A5 — the wave that hits this first, exactly
 // as flagged below used to predict): unlike ContextStripProps/
@@ -63,7 +69,7 @@
 // `destructive` in the TileGrid sense, so violet/red have no place here.
 import { useState } from "react";
 import { renderCandidateRow, resolvePool, type PoolView, type TFn } from "./context-strip";
-import type { GuidedSheetSpec, GuidedSheetStep, TapEvent } from "./types";
+import type { GuidedSheetSpec, GuidedSheetStep, SheetPersonStep, TapEvent } from "./types";
 
 export interface GuidedSheetState {
   readonly stepIndex: number;
@@ -84,6 +90,16 @@ export function initialSheetState(): GuidedSheetState {
  *  identically to before this change. */
 function stepVisible(step: GuidedSheetStep, answers: Readonly<Record<string, string>>): boolean {
   return step.when === undefined || step.when(answers);
+}
+
+/** G6 (controller ruling, types.ts's own doc on `SheetPersonStep.candidates`):
+ *  an explicit `candidates` list SUPERSEDES `pool` entirely when present —
+ *  `resolvePool` (context-strip.tsx) is not consulted at all in that case,
+ *  never merged/intersected with it. Absent `candidates` is "resolve the
+ *  pool exactly as before this change" — every pre-G6 spec (none declare
+ *  `candidates`) reads identically. */
+function candidatesForStep(step: SheetPersonStep, view: PoolView): readonly string[] {
+  return step.candidates ?? resolvePool({ pool: step.pool }, view);
 }
 
 /** The first index at or after `fromIndex` whose step is visible against
@@ -302,7 +318,7 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
       <div className="px-4 py-3">
         {step.kind === "choice"
           ? renderChoiceRow(step.options, t, handleAnswer)
-          : renderCandidateRow(resolvePool({ pool: step.pool }, views[step.side]), personNames, t, handleAnswer, emptyText)}
+          : renderCandidateRow(candidatesForStep(step, views[step.side]), personNames, t, handleAnswer, emptyText)}
       </div>
       <div className="flex justify-end px-4 pb-3">
         <button type="button" onClick={handleCancel} style={{ minHeight: 44 }} className={cancelButtonClass}>

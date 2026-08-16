@@ -29,6 +29,7 @@
 import { describe, it, expect } from "vitest";
 import type { SideSquad, SquadMember } from "@seazn/engine/core";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
+import { resolvePool } from "../context-strip";
 import {
   GuidedSheet,
   answerStep,
@@ -446,5 +447,80 @@ describe("GuidedSheet rendering", () => {
     click(findByText(buttonsOf(island.tree()), "Kannan")); // -> fielder step, bench pool empty
 
     expect(island.text()).toContain("scorepad.attribution.noRoster");
+  });
+});
+
+// --- G6 (controller ruling, 2026-08-16): SheetPersonStep.candidates -------
+
+// A bench player ("bench1") deliberately chosen as the ONLY declared
+// candidate for a step whose own `pool` is "onfield" — `resolvePool({pool:
+// "onfield"}, ...)` can NEVER produce a bench id on its own (onFieldPersons()
+// excludes it by construction), so this is a case `pool` cannot express at
+// all, not merely a narrower version of what `pool` would already offer.
+// Proves `candidates` truly SUPERSEDES `pool` rather than being merged with
+// or filtered by it.
+const candidatesSquad = squad([
+  member({ personId: "kannan", onField: true }),
+  member({ personId: "arjun", onField: true }),
+  member({ personId: "bench1", onField: false }),
+]);
+const candidatesViews = { home: { squad: candidatesSquad }, away: { squad: candidatesSquad } };
+const candidatesNames = { kannan: "Kannan", arjun: "Arjun", bench1: "Bench One" };
+
+const candidatesSpec: GuidedSheetSpec = {
+  event: "cricket.wicket",
+  steps: [
+    {
+      id: "who",
+      kind: "person",
+      title: "pad.sheet.wicket.who.title",
+      pool: "onfield", // would resolve to kannan/arjun ONLY if consulted
+      side: "home",
+      candidates: ["bench1"],
+    },
+  ],
+  buildPayload: (answers) => ({ out: answers.who }),
+};
+
+describe("GuidedSheet rendering — G6 candidates supersede pool", () => {
+  it("an explicit candidates list renders VERBATIM — a bench id pool:\"onfield\" could never produce on its own", () => {
+    const island = renderIsland(GuidedSheet, {
+      spec: candidatesSpec,
+      views: candidatesViews,
+      personNames: candidatesNames,
+      t,
+      onComplete: () => {},
+    });
+    const shown = buttonsOf(island.tree())
+      .map((b) => textOf(b))
+      .filter((text) => text !== "pad.sheet.back" && text !== "pad.sheet.cancel");
+    expect(shown).toEqual(["Bench One"]);
+  });
+
+  it("mutation proof: a resolver that used pool INSTEAD of candidates disagrees with the real one — onfield pair vs the bench candidate", () => {
+    // The mutant this guards against: candidatesForStep's own body reverted
+    // to `resolvePool({ pool: step.pool }, view)` unconditionally, ignoring
+    // `step.candidates` entirely.
+    const viaPoolMutant = resolvePool({ pool: "onfield" }, candidatesViews.home);
+    expect([...viaPoolMutant].sort()).toEqual(["arjun", "kannan"]);
+    // The REAL rendering (previous test) shows exactly ["Bench One"] — the
+    // two outputs are provably different, so the candidates branch is
+    // genuinely load-bearing, not dead code the pool path already covers.
+    expect(viaPoolMutant).not.toContain("bench1");
+  });
+
+  it("a step with no candidates at all still resolves via pool — the pre-G6 path is unchanged", () => {
+    const island = renderIsland(GuidedSheet, {
+      spec: wicketSpec, // "who" step: pool:"onfield", side:"home", no candidates
+      views: candidatesViews,
+      personNames: candidatesNames,
+      t,
+      onComplete: () => {},
+    });
+    click(findByText(buttonsOf(island.tree()), "pad.sheet.wicket.kind.caught"));
+    const shown = buttonsOf(island.tree())
+      .map((b) => textOf(b))
+      .filter((text) => text !== "pad.sheet.back" && text !== "pad.sheet.cancel");
+    expect(shown.sort()).toEqual(["Arjun", "Kannan"]); // onfield pair — bench1 still excluded, same as pool-only always did
   });
 });

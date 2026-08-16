@@ -236,6 +236,29 @@ export function resolvePadPhase(
   return skinPhase ?? resolveNextPhase(current, available);
 }
 
+/**
+ * G5 (controller ruling 2026-08-16, `docs/superpowers/plans/2026-08-16-
+ * scorepad-v3-r2-cricket.md`): the PRECEDENCE RULE for `PadHostView.
+ * contextOverrides` — a pending context-strip pick lives only until the
+ * fold itself advances. `true` means "the fold has moved on since
+ * `overridesFor` was captured, so every override is stale and must be
+ * dropped", checked by REFERENCE: every module's own fold is an immutable
+ * update (a new object every time, never a mutated one in place — same
+ * assumption `squadStateOf`/every `useMemo` dependency in this file already
+ * makes), so `prevState !== nextState` is exactly "at least one new
+ * event landed". Deliberately WHOLE-MAP, never per-slot: any state change
+ * means at least one ball/event was just processed, so the entire
+ * pre-ball override set is stale, not merely whichever slot happened to
+ * move (e.g. an odd run rotates the strike — the NON-striker slot's own
+ * override is just as stale as the striker's, even though only one name
+ * actually swapped). `PadHostV3`'s own render-phase reset (below) is the
+ * one call site — see that block's own comment for why a ref cannot back
+ * this comparison in this repo (`react-hooks/refs`).
+ */
+export function contextOverridesStale(overridesFor: unknown, currentState: unknown): boolean {
+  return overridesFor !== currentState;
+}
+
 /** Adapts a skin's primitive-only `SwapSlot` (types.ts) into swap-sheet.tsx's
  *  own concrete shapes — see types.ts's `SwapSlot` header for why the
  *  contract stays primitive-only (avoiding a circular type import) and why
@@ -335,6 +358,25 @@ export function PadHostV3(props: PadHostV3Props) {
   const [swapOpen, setSwapOpen] = useState(false);
   const [openSheet, setOpenSheet] = useState<SheetResolution | null>(null);
 
+  // G5's own precedence rule (contextOverridesStale, above): a pending
+  // context-strip pick lives only until the fold itself advances. Render-
+  // phase reset (React's own sanctioned "adjust state during render" recipe
+  // — https://react.dev/reference/react/useState#storing-information-from-
+  // previous-renders — TWO useState calls, deliberately NOT a ref: this
+  // repo's react-hooks/refs lint rule forbids reading OR writing a ref's
+  // `.current` during render, same reason DetailDock's own heldId reset
+  // uses this exact recipe, detail-dock.tsx). `overridesFor` tracks WHICH
+  // state object the current `contextOverrides` were captured against;
+  // once `pipeline.state` moves to a new object (a ball/event just landed),
+  // the whole map resets to `{}` in the SAME render that notices it, never
+  // a stale value bleeding into this render's own `view`.
+  const [contextOverrides, setContextOverrides] = useState<Record<string, string>>({});
+  const [overridesFor, setOverridesFor] = useState<unknown>(pipeline.state);
+  if (contextOverridesStale(overridesFor, pipeline.state)) {
+    setOverridesFor(pipeline.state);
+    setContextOverrides({});
+  }
+
   const view: PadHostView = useMemo(
     () => ({
       cfg: props.cfg,
@@ -350,8 +392,12 @@ export function PadHostV3(props: PadHostV3Props) {
       // building an over-dots strip needs the raw stream. The SAME list this
       // component's own ribbon reads (`pipeline.events`), never a second copy.
       events: pipeline.events,
+      // G5: pending context-strip picks not yet reflected by the fold — see
+      // types.ts's own doc on PadHostView.contextOverrides and this file's
+      // contextOverridesStale/render-phase-reset block above.
+      contextOverrides,
     }),
-    [props.cfg, pipeline.state, pipeline.summary, phase, props.band, entitlements, personNames, squads, pipeline.events],
+    [props.cfg, pipeline.state, pipeline.summary, phase, props.band, entitlements, personNames, squads, pipeline.events, contextOverrides],
   );
 
   const tiles = useMemo(() => props.skin.tiles(view), [props.skin, view]);
@@ -371,7 +417,15 @@ export function PadHostV3(props: PadHostV3Props) {
     [pipeline.state, pipeline.summary, phase, props.band, entitlements],
   );
   const padView = useMemo(() => buildPadView(spec, padViewCtx), [spec, padViewCtx]);
-  const dedicated = useMemo(() => dedicatedEventTypes(tiles, props.skin.sheets), [tiles, props.skin.sheets]);
+  // G4 (types.ts's own doc on `SkinDefV3.sheets`): rebuilt every render,
+  // deliberately NOT wrapped in useMemo — `sheets(view)` closes over the
+  // live view, and memoizing this would let that closure go stale the
+  // moment match state moves without this particular memo's deps noticing
+  // (e.g. a skin's `view.events`-derived sheet content). Cheap by
+  // construction (a handful of object literals), so there is no real cost
+  // to paying it every render.
+  const sheets = props.skin.sheets?.(view);
+  const dedicated = useMemo(() => dedicatedEventTypes(tiles, sheets), [tiles, sheets]);
   const moreActionsList = useMemo(() => moreActions(spec, padViewCtx, dedicated), [spec, padViewCtx, dedicated]);
 
   // The ONE dispatch gateway (task brief item 5): every event this host
@@ -404,10 +458,10 @@ export function PadHostV3(props: PadHostV3Props) {
   );
   const handleOpenSheet = useCallback(
     (sheetKey: string) => {
-      const resolution = resolveSheet(sheetKey, props.skin.sheets);
+      const resolution = resolveSheet(sheetKey, sheets);
       if (resolution.kind !== "none") setOpenSheet(resolution);
     },
-    [props.skin.sheets],
+    [sheets],
   );
 
   const dockStore = useMemo(() => makeDockStore(pipeline.queueStore), [pipeline.queueStore]);
@@ -466,6 +520,15 @@ export function PadHostV3(props: PadHostV3Props) {
             personNames={personNames}
             t={t}
             onSelect={(slotId, personId) => {
+              // G5: always record the pick as a pending override FIRST — the
+              // chip must reflect it and the next tap's payload must carry
+              // it even for a skin (like cricket) with no contextSelect at
+              // all. A skin whose engine CAN persist the pick as a real
+              // event (contextSelect present) still gets that event
+              // dispatched too — the override simply self-clears once the
+              // fold catches up (contextOverridesStale, above), so there is
+              // no conflict between the two mechanisms.
+              setContextOverrides((prev) => ({ ...prev, [slotId]: personId }));
               const event = props.skin.contextSelect?.(slotId, personId, view);
               if (event) void dispatch(event.type, event.payload);
             }}
