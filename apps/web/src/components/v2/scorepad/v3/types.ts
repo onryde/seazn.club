@@ -75,7 +75,27 @@ export interface ContextSlot {
 }
 export interface ContextStripSpec { slots: ContextSlot[] }
 
-export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string }[] }
+/**
+ * R2/task C (G2 — controller ruling 2026-08-16, binding, `docs/superpowers/
+ * plans/2026-08-16-scorepad-v3-r2-cricket.md`): `when(answers)` gates
+ * whether a step is shown at all, evaluated against every answer
+ * accumulated SO FAR (never a later one — the step hasn't been reached yet
+ * when its own `when` is checked). Absent means "always shown" — every
+ * step R1 shipped before this wave keeps working with zero change, since
+ * `undefined` and `() => true` are equivalent to `stepVisible()`
+ * (guided-sheet.tsx). This is what lets cricket's wicket sheet ask "who's
+ * out" ONLY for a run-out and "fielder" ONLY for the three kinds where
+ * naming one is meaningful, instead of fanning the wicket tile out into
+ * ten destructive tiles (spec §2.5's hierarchy cap) or asking a wasted tap
+ * on every other dismissal (the D-15 defect restated). Convention this
+ * type does not itself enforce: a `GuidedSheetSpec`'s FIRST step should
+ * never declare `when` — nothing precedes it to gate on, and
+ * `initialSheetState()` (guided-sheet.tsx) always starts at index 0 with
+ * no answers yet, unconditionally.
+ */
+export type StepPredicate = (answers: Readonly<Record<string, string>>) => boolean;
+
+export interface SheetChoiceStep { id: string; kind: "choice"; title: string; options: { id: string; label: string }[]; when?: StepPredicate }
 /**
  * R2/task A5 (`_INDEX.md` R1 "owed by later waves", closed here): `side` is
  * REQUIRED, not optional-with-a-default. Cricket's wicket flow needs the
@@ -89,7 +109,7 @@ export interface SheetChoiceStep { id: string; kind: "choice"; title: string; op
  * step; the host resolves each side's own `PoolView` once (pad-host.tsx)
  * and guided-sheet.tsx picks between the two per-step.
  */
-export interface SheetPersonStep { id: string; kind: "person"; title: string; pool: "onfield" | "bench" | "all"; side: "home" | "away" }
+export interface SheetPersonStep { id: string; kind: "person"; title: string; pool: "onfield" | "bench" | "all"; side: "home" | "away"; when?: StepPredicate }
 export type GuidedSheetStep = SheetChoiceStep | SheetPersonStep;
 export interface GuidedSheetSpec { event: string; steps: GuidedSheetStep[]; buildPayload: (answers: Record<string, string>) => Record<string, unknown> }
 
@@ -156,6 +176,30 @@ export interface SwapSlot {
 export interface SkinDefV3<View = unknown> {
   key: string;
   tapModel: TapModel;
+  /**
+   * R2/task C (G3 — controller ruling 2026-08-16, binding, same plan doc as
+   * G2 above): derives the pad's phase from the MATCH, not a user-clicked
+   * tab. Task B shipped `pad-host.tsx` with a self-correcting local `phase`
+   * state (snaps to the first phase with a declared tile, mirroring
+   * `pad-renderer.tsx`'s legacy panel-tab correction) because no skin
+   * existed yet to prove a real alternative against — a real, working
+   * default, never a placeholder, and it is EXACTLY what the host keeps
+   * using when a skin omits this method. When present, the host trusts
+   * this method's answer verbatim (never re-validated against which
+   * phases currently have tiles): the whole point of G3 is that an action
+   * is unavailable because the MATCH is not there yet/any more, not
+   * because a tab is unselected — deferring to `resolveNextPhase` here
+   * would silently reintroduce the tab-shaped bug this method exists to
+   * remove. `PadPhase` stays the three-value UI concept on purpose — do
+   * NOT widen it to a sport's own richer engine phase, and do not give a
+   * mid-match sub-phase (cricket's `super_over`) its own slot; a skin
+   * whose engine has more phases than three MAPS them down in its own
+   * `phase()` body (cricket: `pre→"pre"`, `live`/`super_over→"live"`,
+   * `done`/`final→"post"`). Omit this method entirely for a skin not yet
+   * migrated onto it — R3–R7 opt in one sport at a time, exactly like
+   * `context`/`swap` below already do for their own concerns.
+   */
+  phase?(view: View): PadPhase;
   scorebug(view: View): ScorebugSpec;
   tiles(view: View): TileSpec[];
   dock(eventType: string, view: View): DockSpec | null;

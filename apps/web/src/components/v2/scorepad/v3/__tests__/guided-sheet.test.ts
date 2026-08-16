@@ -129,13 +129,99 @@ describe("answerStep", () => {
 describe("backStep", () => {
   it("is a no-op on the first step — returns the SAME state reference, never a negative index", () => {
     const state = initialSheetState();
-    expect(backStep(state)).toBe(state);
+    expect(backStep(wicketSpec, state)).toBe(state);
   });
 
   it("decrements the index and keeps every answer already given", () => {
     const s1 = answerStep(wicketSpec, initialSheetState(), "caught");
     if (s1.done) throw new Error("expected step 1");
-    expect(backStep(s1.state)).toEqual({ stepIndex: 0, answers: { kind: "caught" } });
+    expect(backStep(wicketSpec, s1.state)).toEqual({ stepIndex: 0, answers: { kind: "caught" } });
+  });
+});
+
+// --- G2 (controller ruling, 2026-08-16): conditional `when(answers)` steps -
+
+// Mirrors cricket's real wicket sheet shape (kind -> who out [only runout] ->
+// fielder [only caught/runout/stumped]) with a THIRD, unconditional step
+// tacked on the end so a "skip the only conditional step" run still has a
+// real next step to land on, distinguishing "skipped forward" from
+// "wizard complete" in the same test.
+const conditionalSpec: GuidedSheetSpec = {
+  event: "cricket.wicket",
+  steps: [
+    {
+      id: "kind",
+      kind: "choice",
+      title: "pad.sheet.wicket.kind.title",
+      options: [
+        { id: "bowled", label: "pad.sheet.wicket.kind.bowled" },
+        { id: "runout", label: "pad.sheet.wicket.kind.runout" },
+      ],
+    },
+    {
+      id: "who",
+      kind: "person",
+      title: "pad.sheet.wicket.who.title",
+      pool: "onfield",
+      side: "home",
+      when: (answers) => answers.kind === "runout",
+    },
+    { id: "fielder", kind: "person", title: "pad.sheet.wicket.fielder.title", pool: "bench", side: "away" },
+  ],
+  buildPayload: (answers) => ({ kind: answers.kind, out: answers.who, fielder: answers.fielder }),
+};
+
+describe("currentStep / answerStep / backStep — G2 conditional steps", () => {
+  it("a false `when` skips the step WITHOUT a tap: answering 'bowled' (when()=false) lands directly on 'fielder', not 'who'", () => {
+    const outcome = answerStep(conditionalSpec, initialSheetState(), "bowled");
+    if (outcome.done) throw new Error("expected step 2 (fielder), not done");
+    expect(outcome.state.stepIndex).toBe(2);
+    expect(currentStep(conditionalSpec, outcome.state)?.id).toBe("fielder");
+  });
+
+  it("a true `when` shows the step: answering 'runout' (when()=true) lands on 'who'", () => {
+    const outcome = answerStep(conditionalSpec, initialSheetState(), "runout");
+    if (outcome.done) throw new Error("expected step 1 (who), not done");
+    expect(outcome.state.stepIndex).toBe(1);
+    expect(currentStep(conditionalSpec, outcome.state)?.id).toBe("who");
+  });
+
+  it("mutation proof: a `when` that is never consulted (always true) would show 'who' after 'bowled' too — the real function disagrees", () => {
+    const alwaysVisible = conditionalSpec.steps.map((s) => ({ ...s, when: undefined }));
+    const mutantSpec: GuidedSheetSpec = { ...conditionalSpec, steps: alwaysVisible as GuidedSheetSpec["steps"] };
+    const real = answerStep(conditionalSpec, initialSheetState(), "bowled");
+    const mutant = answerStep(mutantSpec, initialSheetState(), "bowled");
+    if (real.done || mutant.done) throw new Error("expected both mid-wizard");
+    expect(real.state.stepIndex).not.toBe(mutant.state.stepIndex);
+    expect(real.state.stepIndex).toBe(2); // fielder — who skipped
+    expect(mutant.state.stepIndex).toBe(1); // who — NOT skipped, proving the predicate is load-bearing
+  });
+
+  it("backStep skips a gated-off step going backward too — from 'fielder' after 'bowled', Back returns to 'kind', never the skipped 'who'", () => {
+    const afterBowled = answerStep(conditionalSpec, initialSheetState(), "bowled");
+    if (afterBowled.done) throw new Error("expected step 2 (fielder)");
+    const back = backStep(conditionalSpec, afterBowled.state);
+    expect(back.stepIndex).toBe(0);
+    expect(currentStep(conditionalSpec, back)?.id).toBe("kind");
+  });
+
+  it("backStep lands on a conditional step when it WAS shown: from 'fielder' after 'runout'+a who-pick, Back returns to 'who'", () => {
+    const afterRunout = answerStep(conditionalSpec, initialSheetState(), "runout");
+    if (afterRunout.done) throw new Error("expected step 1 (who)");
+    const afterWho = answerStep(conditionalSpec, afterRunout.state, "somePerson");
+    if (afterWho.done) throw new Error("expected step 2 (fielder)");
+    const back = backStep(conditionalSpec, afterWho.state);
+    expect(back.stepIndex).toBe(1);
+    expect(currentStep(conditionalSpec, back)?.id).toBe("who");
+  });
+
+  it("a step with no `when` at all behaves exactly as before G2 — always visible, unaffected by answers", () => {
+    // wicketSpec (above) declares no `when` anywhere; its own pre-existing
+    // answerStep/backStep tests already pin this, this is an explicit
+    // cross-check against the NEW conditional machinery specifically.
+    const outcome = answerStep(wicketSpec, initialSheetState(), "bowled");
+    if (outcome.done) throw new Error("expected step 1 (who) — unconditional in wicketSpec");
+    expect(outcome.state.stepIndex).toBe(1);
   });
 });
 

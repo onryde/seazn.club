@@ -217,6 +217,25 @@ export function resolveNextPhase(current: PadPhase, available: readonly PadPhase
   return available.includes(current) ? current : available[0]!;
 }
 
+/**
+ * G3 (controller ruling 2026-08-16, `docs/superpowers/plans/2026-08-16-
+ * scorepad-v3-r2-cricket.md`): when a skin declares `phase(view)`
+ * (types.ts), its answer is AUTHORITATIVE — never re-derived or
+ * cross-checked against `resolveNextPhase`'s tile-declared set, because
+ * the whole point of G3 is "unavailable because the match is not there",
+ * not "unavailable because a tab is unselected". `resolveNextPhase`'s
+ * self-correcting default (task B) is used ONLY when the skin has no
+ * `phase()` at all — R3–R7 opt in one sport at a time; a skin that omits
+ * this method keeps behaving exactly as task B shipped it, zero change.
+ */
+export function resolvePadPhase(
+  skinPhase: PadPhase | null,
+  current: PadPhase,
+  available: readonly PadPhase[],
+): PadPhase {
+  return skinPhase ?? resolveNextPhase(current, available);
+}
+
 /** Adapts a skin's primitive-only `SwapSlot` (types.ts) into swap-sheet.tsx's
  *  own concrete shapes — see types.ts's `SwapSlot` header for why the
  *  contract stays primitive-only (avoiding a circular type import) and why
@@ -337,7 +356,10 @@ export function PadHostV3(props: PadHostV3Props) {
 
   const tiles = useMemo(() => props.skin.tiles(view), [props.skin, view]);
   const availablePhases = useMemo(() => phasesWithTiles(tiles), [tiles]);
-  const nextPhase = resolveNextPhase(phase, availablePhases);
+  // G3: a skin's own phase(view), when declared, overrides the self-correcting
+  // default below rather than being cross-checked against it — see
+  // resolvePadPhase's own doc.
+  const nextPhase = resolvePadPhase(props.skin.phase?.(view) ?? null, phase, availablePhases);
   if (nextPhase !== phase) setPhase(nextPhase);
 
   const scorebugSpec = useMemo(() => props.skin.scorebug(view), [props.skin, view]);

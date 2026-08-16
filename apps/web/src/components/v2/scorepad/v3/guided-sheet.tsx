@@ -70,18 +70,68 @@ export interface GuidedSheetState {
   readonly answers: Readonly<Record<string, string>>;
 }
 
-/** The wizard's start state: first step, nothing answered yet. */
+/** The wizard's start state: first step, nothing answered yet. Relies on
+ *  the convention `GuidedSheetStep`'s own doc states (types.ts): a spec's
+ *  FIRST step never declares `when`, so index 0 is always visible against
+ *  the empty answer set — no spec/scan needed here to establish that. */
 export function initialSheetState(): GuidedSheetState {
   return { stepIndex: 0, answers: {} };
 }
 
+/** G2 (controller ruling, types.ts's own doc on `StepPredicate`): whether
+ *  `step` is shown given `answers` accumulated so far. Absent `when` is
+ *  "always shown" — every pre-G2 spec (none declare `when` at all) reads
+ *  identically to before this change. */
+function stepVisible(step: GuidedSheetStep, answers: Readonly<Record<string, string>>): boolean {
+  return step.when === undefined || step.when(answers);
+}
+
+/** The first index at or after `fromIndex` whose step is visible against
+ *  `answers`, or `null` once scanning runs off the end (the wizard is
+ *  complete — every remaining step, if any, is gated off). A single-step
+ *  spec with no `when` anywhere degenerates to `fromIndex` itself,
+ *  unchanged from pre-G2 behaviour. */
+function firstVisibleFrom(
+  spec: GuidedSheetSpec,
+  answers: Readonly<Record<string, string>>,
+  fromIndex: number,
+): number | null {
+  for (let i = fromIndex; i < spec.steps.length; i++) {
+    if (stepVisible(spec.steps[i]!, answers)) return i;
+  }
+  return null;
+}
+
+/** The nearest visible index BEFORE `beforeIndex`, scanning backward —
+ *  `backStep`'s own skip-logic, mirroring `firstVisibleFrom`'s forward
+ *  scan. Clamps to 0 if nothing earlier is visible (defensive: unreachable
+ *  through the real UI given the "first step never declares `when`"
+ *  convention, kept total rather than assumed). */
+function lastVisibleBefore(
+  spec: GuidedSheetSpec,
+  answers: Readonly<Record<string, string>>,
+  beforeIndex: number,
+): number {
+  for (let i = beforeIndex - 1; i >= 0; i--) {
+    if (stepVisible(spec.steps[i]!, answers)) return i;
+  }
+  return 0;
+}
+
 /** The step `state` currently points at, or `null` once the index has run
- *  past the end. Defensive only — `answerStep` below never itself produces
- *  a `stepIndex` past `spec.steps.length` (see its own doc), so a live
- *  `GuidedSheet` never actually renders the `null` case; kept total anyway
- *  so this function never throws on a malformed/out-of-range state. */
+ *  past the end (or every remaining step is gated off by `when` — G2).
+ *  Defensive only in the "stepIndex already past `spec.steps.length`" case
+ *  — `answerStep`/`backStep` below never themselves produce such an index
+ *  (see their own docs), so a live `GuidedSheet` never actually renders
+ *  the `null` case that way; kept total anyway so this function never
+ *  throws on a malformed/out-of-range state. The `when`-gated-off case
+ *  (state.stepIndex itself invisible) IS reachable in principle if a
+ *  caller constructs a `GuidedSheetState` by hand rather than through
+ *  `answerStep`/`backStep` — resolved the same forward-scanning way either
+ *  way, so this function stays correct regardless of how `state` arrived. */
 export function currentStep(spec: GuidedSheetSpec, state: GuidedSheetState): GuidedSheetStep | null {
-  return spec.steps[state.stepIndex] ?? null;
+  const idx = firstVisibleFrom(spec, state.answers, state.stepIndex);
+  return idx === null ? null : spec.steps[idx]!;
 }
 
 export type GuidedSheetAdvance = { done: false; state: GuidedSheetState } | { done: true; event: TapEvent };
@@ -95,22 +145,31 @@ export type GuidedSheetAdvance = { done: false; state: GuidedSheetState } | { do
  * can read any earlier answer by name, not just the immediately-previous
  * one.
  *
- * On the step immediately before the wizard's end, hands back the fully
- * built `TapEvent` (`spec.buildPayload` run over every accumulated answer,
- * INCLUDING this one) instead of a further `state` — the component calls
- * `onComplete` with `event` and resets, never renders a `stepIndex` sitting
- * past the last real step. Called with no current step at all (`state`
- * already past the end — see `currentStep`) is a no-op that returns the
- * SAME `state` unchanged, never throws: defensive parity with `currentStep`
- * above, unreachable through the real UI (see `backStep`'s doc for why the
- * index can only ever sit in-range there too).
+ * G2 (controller ruling): the NEXT step is the first one, scanning forward
+ * from `stepIndex + 1`, whose `when(answers)` — evaluated against the
+ * answers accumulated so far, INCLUDING this one — is true or absent
+ * (`firstVisibleFrom`). A step whose predicate is false is skipped WITHOUT
+ * a tap, never merely disabled/skippable-by-the-user; this is the whole
+ * mechanism that lets cricket ask "who's out" only for a run-out and
+ * "fielder" only for the three kinds where naming one is meaningful.
+ *
+ * On the step immediately before the wizard's end (nothing further is
+ * visible), hands back the fully built `TapEvent` (`spec.buildPayload` run
+ * over every accumulated answer, INCLUDING this one) instead of a further
+ * `state` — the component calls `onComplete` with `event` and resets,
+ * never renders a `stepIndex` sitting past the last real step. Called with
+ * no current step at all (`state` already past the end — see `currentStep`)
+ * is a no-op that returns the SAME `state` unchanged, never throws:
+ * defensive parity with `currentStep` above, unreachable through the real
+ * UI (see `backStep`'s doc for why the index can only ever sit in-range
+ * there too).
  */
 export function answerStep(spec: GuidedSheetSpec, state: GuidedSheetState, value: string): GuidedSheetAdvance {
   const step = spec.steps[state.stepIndex];
   if (!step) return { done: false, state };
   const answers = { ...state.answers, [step.id]: value };
-  const nextIndex = state.stepIndex + 1;
-  if (nextIndex >= spec.steps.length) {
+  const nextIndex = firstVisibleFrom(spec, answers, state.stepIndex + 1);
+  if (nextIndex === null) {
     return { done: true, event: { type: spec.event, payload: spec.buildPayload(answers) } };
   }
   return { done: false, state: { stepIndex: nextIndex, answers } };
@@ -123,10 +182,20 @@ export function answerStep(spec: GuidedSheetSpec, state: GuidedSheetState, value
  * (`stepIndex` 0), returning the SAME `state` reference unchanged:
  * `GuidedSheet` below only ever renders a Back control once `stepIndex > 0`,
  * so this branch is defensive, not something a real tap can reach.
+ *
+ * G2 (controller ruling): lands on the nearest EARLIER visible step
+ * (`lastVisibleBefore`), not merely `stepIndex - 1` — a plain decrement
+ * would land back on a step `answerStep` just SKIPPED on the way forward
+ * (e.g. "who's out" after a `kind: "bowled"` answer), and `currentStep`'s
+ * own forward-scan would immediately re-skip it, making Back silently
+ * inert on exactly the runs where skipping did anything. `spec` is
+ * therefore a required parameter here, unlike R1's version of this
+ * function — its one call site (`GuidedSheet` below) already has `spec`
+ * in scope.
  */
-export function backStep(state: GuidedSheetState): GuidedSheetState {
+export function backStep(spec: GuidedSheetSpec, state: GuidedSheetState): GuidedSheetState {
   if (state.stepIndex === 0) return state;
-  return { stepIndex: state.stepIndex - 1, answers: state.answers };
+  return { stepIndex: lastVisibleBefore(spec, state.answers, state.stepIndex), answers: state.answers };
 }
 
 const backButtonClass =
@@ -211,7 +280,7 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
       setState(outcome.state);
     }
   };
-  const handleBack = () => setState((s) => backStep(s));
+  const handleBack = () => setState((s) => backStep(spec, s));
   const handleCancel = () => {
     setState(initialSheetState());
     onCancel?.();

@@ -28,6 +28,7 @@ import {
   moreActions,
   phasesWithTiles,
   resolveNextPhase,
+  resolvePadPhase,
   resolveSheet,
   sidePool,
   squadStateOf,
@@ -320,6 +321,27 @@ describe("resolveNextPhase", () => {
 
   it("keeps the current phase when NOTHING is declared anywhere yet — nothing to snap to", () => {
     expect(resolveNextPhase("live", [])).toBe("live");
+  });
+});
+
+// G3 (controller ruling, 2026-08-16): a skin's own phase(view) overrides the
+// self-correcting default, verbatim, never cross-checked against `available`.
+describe("resolvePadPhase", () => {
+  it("trusts the skin's derived phase verbatim, even when NO tile declares that phase", () => {
+    expect(resolvePadPhase("post", "live", ["pre", "live"])).toBe("post");
+  });
+
+  it("falls back to resolveNextPhase's self-correcting default when the skin has no phase() (null)", () => {
+    expect(resolvePadPhase(null, "live", ["post"])).toBe("post"); // same as resolveNextPhase("live", ["post"])
+    expect(resolvePadPhase(null, "live", ["pre", "live"])).toBe("live");
+  });
+
+  it("mutation proof: a version that ignored skinPhase and always fell through to resolveNextPhase would disagree here", () => {
+    const mutant = (skinPhase: string | null, current: "pre" | "live" | "post", available: readonly ("pre" | "live" | "post")[]) =>
+      resolveNextPhase(current, available); // pretends skinPhase does not exist
+    const real = resolvePadPhase("post", "live", ["pre", "live"]);
+    const viaMutant = mutant("post", "live", ["pre", "live"]);
+    expect(real).not.toBe(viaMutant); // real: "post" (skin-derived); mutant: "live" (available doesn't include post, so it keeps current)
   });
 });
 
