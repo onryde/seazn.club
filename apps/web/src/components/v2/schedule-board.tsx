@@ -1590,6 +1590,10 @@ export function ScheduleBoard({
           constraintsAllowed={constraintsAllowed}
           venueCap={venueCap}
           orgTz={settings.orgTz}
+          // The same two dates this board already takes for its day range —
+          // the panel bounds its date pickers by them, so a range outside the
+          // competition is refused by the picker rather than by the save's 422.
+          competitionWindow={{ startsOn: competitionStart ?? null, endsOn: competitionEnd ?? null }}
           onSaved={() => {
             actions.setNotice(msg("boardset.saved"));
             router.refresh();

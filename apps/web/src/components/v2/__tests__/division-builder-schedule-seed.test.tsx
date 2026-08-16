@@ -73,6 +73,22 @@ describe("buildScheduleSeed — wizard schedule-settings seed", () => {
     expect(seed.startAt).toBeNull();
     expect(seed.endAt).toBeNull();
   });
+
+  it("treats a DATE-ONLY start as unset, never as midnight", () => {
+    // The competition-window prefill seeds the start field with the
+    // competition's opening DAY and no time — a bare `YYYY-MM-DD`, which is
+    // what `splitValue`/`joinValue` already treat as a half-filled pair.
+    // Storing it would invent a time-of-day the organiser never chose, and
+    // `new Date("2026-08-01")` is midnight UTC rather than midnight on the
+    // venue clock: for a venue west of UTC that instant lands on the previous
+    // day and the seed PUT 422s against its own competition's opening date —
+    // a refusal this wizard deliberately swallows, so it would vanish.
+    const seed = buildScheduleSeed({ ...input, startAt: "2026-08-01" });
+    expect(seed.startAt).toBeNull();
+    // The END field is a date input, so a bare date there is COMPLETE and
+    // still becomes that day's last minute — unchanged.
+    expect(seed.endAt).toBe(new Date("2026-08-03T23:59:00").toISOString());
+  });
 });
 
 describe("DivisionBuilder — scheduling step date/time controls", () => {

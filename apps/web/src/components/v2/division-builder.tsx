@@ -18,7 +18,12 @@ import { FormatRecommendStrip } from "@/components/v2/format-recommend-strip";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { useMsg, useLocale } from "@/components/i18n/dict-provider";
 import { sportLabel } from "@/lib/scoring-vocab";
-import { endDateIsBackwards, startDay } from "@/lib/date-order";
+import {
+  divisionEndBounds,
+  divisionStartBounds,
+  endDateIsBackwards,
+  type CompetitionWindow,
+} from "@/lib/date-order";
 
 export interface SportOption {
   key: string;
@@ -86,6 +91,10 @@ const GENDERS: { key: string; labelKey: "wizard.gender.m" | "wizard.gender.f" | 
   { key: "x", labelKey: "wizard.gender.x" },
 ];
 
+/** A COMPLETE `datetime-local` value: both halves present. Anything shorter (a
+ *  bare `YYYY-MM-DD`) is the half-filled state `joinValue` reports as "". */
+const DATETIME_LOCAL_VALUE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+
 /** The schedule-settings body the wizard seeds right after create (doc 12 §3).
  *  `singleVenue` collapses the list to the first venue: more than one court
  *  trips `usesConstraints()` server-side, which 402s the WHOLE PUT — dates and
@@ -107,7 +116,12 @@ export function buildScheduleSeed(
   return {
     courts: opts.singleVenue ? courts.slice(0, 1) : courts,
     matchMinutes: input.matchMinutes,
-    startAt: input.startAt ? new Date(input.startAt).toISOString() : null,
+    // A HALF-FILLED start (a date with no time — what the competition-window
+    // prefill seeds, and what `joinValue` already emits "" for) is unset, not
+    // midnight: `new Date("2026-08-01")` is midnight UTC, which for a venue
+    // west of UTC is the previous day on the venue clock and 422s against the
+    // competition's own opening date.
+    startAt: DATETIME_LOCAL_VALUE.test(input.startAt) ? new Date(input.startAt).toISOString() : null,
     endAt: input.endAt ? new Date(`${input.endAt}T23:59:00`).toISOString() : null,
   };
 }
@@ -118,6 +132,7 @@ export function DivisionBuilder({
   orgSlug,
   compSlug,
   sports,
+  competitionWindow,
   constraintsAllowed = true,
   archivedSlotsExplainRefusal = false,
 }: {
@@ -125,6 +140,14 @@ export function DivisionBuilder({
   orgSlug: string;
   compSlug: string;
   sports: SportOption[];
+  /** The competition this division is being created inside — its own
+   *  `starts_on`/`ends_on`. Both schedule fields carry it as `min`/`max`, and
+   *  the start seeds its date half from the opening day, because the seed PUT
+   *  this wizard fires after create is refused server-side when the range
+   *  leaves that window (schedule.ts CONTAINMENT GUARD → 422) — and that PUT
+   *  deliberately swallows every error, so an out-of-window range would
+   *  otherwise vanish with no message at all. */
+  competitionWindow?: CompetitionWindow;
   /** Pro `scheduling.constraints` — gates a multi-venue list (doc 12 §5). */
   constraintsAllowed?: boolean;
   /**
@@ -178,7 +201,12 @@ export function DivisionBuilder({
   );
   // Once the organiser edits the length, stop auto-filling it from the sport.
   const [matchMinutesTouched, setMatchMinutesTouched] = useState(false);
-  const [scheduleStart, setScheduleStart] = useState(""); // datetime-local
+  // datetime-local. Seeded with the competition's opening DAY (a bare
+  // `YYYY-MM-DD`, which `splitValue` reads as "date set, time unset") so the
+  // calendar opens on the right month without inventing a time-of-day:
+  // `buildScheduleSeed` treats a half-filled value as unset, exactly as
+  // `joinValue` does, so nothing is stored until the organiser picks a time.
+  const [scheduleStart, setScheduleStart] = useState(() => competitionWindow?.startsOn ?? "");
   const [scheduleEnd, setScheduleEnd] = useState(""); // date
 
   const [tab, setTab] = useState<"basics" | "eligibility" | "format" | "scheduling">("basics");
@@ -787,6 +815,7 @@ export function DivisionBuilder({
             kind="datetime-local"
             label={msg("boardset.startAt")}
             value={scheduleStart}
+            {...divisionStartBounds(competitionWindow)}
             onChange={setScheduleStart}
           />
           {/* The hint sits beside the field rather than inside its <label>:
@@ -798,7 +827,11 @@ export function DivisionBuilder({
               kind="date"
               label={msg("boardset.endAt")}
               value={scheduleEnd}
-              min={startDay(scheduleStart)}
+              // Was `min={startDay(scheduleStart)}`. Same floor — `startDay` is
+              // still the expression inside `divisionEndBounds`, so this and
+              // the `endDateIsBackwards` guard in submit() cannot fork — with
+              // the competition's own window added on both ends.
+              {...divisionEndBounds(competitionWindow, scheduleStart)}
               onChange={setScheduleEnd}
             />
             <span className="mt-0.5 block text-xs text-slate-400">{msg("wizard.endDateHint")}</span>
