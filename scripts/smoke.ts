@@ -8349,8 +8349,8 @@ async function schedulingConstraintsSuite(): Promise<void> {
   // THIS CHECK USED TO ASSERT A VIOLATION WAS REPORTED, and the premise it rested
   // on was greedy's. `gapMinutes: 0` packs round 2 straight onto the court a semi
   // just vacated, so under `slotFixtures` the dependent started 0 minutes after
-  // its feeder and the 60-minute rule was breached. The default auto mode is the
-  // z3 repair solver now, and handed that same greedy board it MOVES the
+  // its feeder and the 60-minute rule was breached. The default auto mode runs
+  // the CP-SAT solver now, and handed that same greedy board it MOVES the
   // dependent until the rule is satisfied — so there is no violation left to
   // report, and the old assertion was failing on an improvement.
   //
@@ -9851,9 +9851,9 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
       //
       // These two checks used to assert that the clashing prior SURVIVED to the
       // response, on the stated premise that it was "unrepairable". That premise
-      // was true only while nothing could repair it. The z3 solver now runs
-      // before the model is asked again, so the organiser is no longer shown a
-      // board that puts one human on two courts at once.
+      // was true only while nothing could repair it. The CP-SAT repair solver
+      // now runs before the model is asked again, so the organiser is no
+      // longer shown a board that puts one human on two courts at once.
       //
       // Both fixtures are still placed — the clash is resolved by MOVING one, not
       // by dropping either. The guards below keep this from going vacuous in the

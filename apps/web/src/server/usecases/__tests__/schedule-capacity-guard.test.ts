@@ -110,12 +110,17 @@ describe.skipIf(!HAS_DB)("autoSchedule — D2 capacity guard wiring", () => {
       status: 422,
       code: "CAPACITY_IMPOSSIBLE",
     });
-    // REFLOW's solve phase is the LOCAL z3 repair solver (schedule.ts's own
-    // phase-2 comment) — z3LoadCount is a per-process WASM-load counter
-    // (z3-load.ts), so an unchanged count is direct proof this run never
-    // reached it. A live placement service would only mask the OTHER
-    // (BUILD/POLISH) solve path, not this one — this assertion does not
-    // depend on one being reachable either way.
+    // REFLOW's solve phase WAS the local z3 repair solver, and this counter
+    // was direct proof the run never reached it: `z3LoadCount` is a
+    // per-process WASM-load counter (`z3-load.ts`), so an unchanged count
+    // meant no solve happened.
+    //
+    // C4 moved REFLOW onto `buildSchedule` (CP-SAT), so this assertion can no
+    // longer fail on this path — nothing here loads z3 whether the guard fires
+    // or not. It is kept, unchanged, only because it is harmless and belongs
+    // to the same deletion as `z3LoadCount` itself (z3 retirement stage E).
+    // What actually proves the guard fired is the 422 above; if you want the
+    // "never reached the solver" fact back, spy on `placement-client` instead.
     expect(z3LoadCount()).toBe(z3Before);
   });
 

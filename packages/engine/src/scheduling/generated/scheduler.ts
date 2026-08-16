@@ -207,7 +207,7 @@ export interface PinnedRow {
    * What it closes: `by_entrant` is built from movable fixtures only, so two
    * PINNED rows sharing an entrant thirty minutes apart under a 30-minute
    * rest rule are invisible to each other. The service returns OPTIMAL on a
-   * board z3 proves INFEASIBLE.
+   * board the TS verifier (`validateAssignments`) rejects.
    */
   entrantIndices: number[];
   /**

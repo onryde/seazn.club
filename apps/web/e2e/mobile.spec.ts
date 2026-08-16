@@ -589,7 +589,7 @@ test("lineup editor role/pair-order selects hold at phone width", async ({ page,
 /**
  * T15 — the z3 solver action bar and its result strip at phone width.
  *
- * THIS TEST CANNOT LIVE IN `z3-auto-schedule.spec.ts`. The `mobile-se`
+ * THIS TEST CANNOT LIVE IN `auto-schedule.spec.ts`. The `mobile-se`
  * (375×667) and `mobile-14` (390×844) projects are declared with
  * `testMatch: /mobile\.spec\.ts/`, so they run this one file and nothing else —
  * a new spec file gets desktop coverage only, however it is named. The 375px

@@ -230,8 +230,10 @@
 # as `status:"ERROR"` plus `error.code === "SOLVER_BUSY"`, which
 # `build.ts:1483-1484` maps to `greedy("solver_busy")` — a valid board, plus
 # copy (`board.result.busy`, all four locales) promising a retry helps. That is
-# a different answer from the LOCAL `MAX_SOLVER_QUEUE`/z3-WASM `"solver_busy"`
-# path `build.ts` already had; both land on the same status key on purpose.
+# a different answer from the LOCAL `MAX_SOLVER_QUEUE` admission gate's own
+# `"solver_busy"` (`MAX_SOLVER_QUEUE` in `build.ts`, in-process, ahead of this
+# call — it was the z3-WASM queue when it was written); both land on the same
+# status key on purpose.
 #
 # `[services.concurrency]` plus `fly scale count 10` is what turns "graceful
 # fallback for organiser #2" into "organiser #2 gets a real solve". Machine

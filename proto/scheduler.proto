@@ -135,7 +135,7 @@ message PinnedRow {
   // What it closes: `by_entrant` is built from movable fixtures only, so two
   // PINNED rows sharing an entrant thirty minutes apart under a 30-minute
   // rest rule are invisible to each other. The service returns OPTIMAL on a
-  // board z3 proves INFEASIBLE.
+  // board the TS verifier (`validateAssignments`) rejects.
   repeated uint32 entrant_indices = 4;
   // C1 (2026-08-12 round-ordering design) -- this pin's round, in the SAME
   // sequence as `Fixture.round`, so a pin-movable pair can be ordered even

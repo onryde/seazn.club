@@ -239,6 +239,10 @@ export const TIER_COUNT = TIER_NAMES.length;
  *   node --experimental-strip-types packages/engine/scripts/bench-build.ts \
  *     --sizes=140,160,180 --per-entrant=2 --wall=8000 --not-after=2
  *
+ * **THAT SCRIPT NO LONGER EXISTS** — `82553ec3` deleted it with the z3 tier
+ * encoder the placement cutover orphaned, so the two commands above are a
+ * record of how the figure was obtained, not something you can run today.
+ *
  * At the 8_000 ms production wall the solver improved the board at every size
  * up to 140 fixtures on a 144-slot lattice (20_160 fixture-slots) and improved
  * NOTHING at 160 on a 216-slot lattice (34_560) or above — `tiersCompleted: 0`,
@@ -259,11 +263,21 @@ export const TIER_COUNT = TIER_NAMES.length;
  * --- WHAT TO RE-MEASURE BEFORE CHANGING THIS ------------------------------
  *
  * This number is a ratio between the wall and this machine's speed, so it is
- * NOT portable across a change to either. Re-run the two commands above and
- * move it if: `AUTO_SOLVER_WALL_MS` changes; the pre-search cost changes
- * (anything touching `encodeBuild`, `buildGrid` or the first `push()`); or the
- * deployment target's CPU changes. The figure to read off the sweep is the
- * largest `n x slots` whose row still reports `engine: "z3"`.
+ * NOT portable across a change to either. Move it if: `AUTO_SOLVER_WALL_MS`
+ * changes; the pre-search cost changes (`buildGrid`, and whatever the solver
+ * of the day pays before it starts searching); or the deployment target's CPU
+ * changes. The figure to read off a sweep is the largest `n x slots` whose row
+ * still reports a SOLVED board rather than the greedy seed.
+ *
+ * Two of those terms moved under the placement cutover and neither is
+ * re-derivable from this file, so re-measuring means rebuilding the sweep
+ * FIRST — see **#589**, which argues the gate's premise moved too, not only
+ * its number: z3 spent the whole wall encoding and never searched, whereas
+ * CP-SAT is anytime and hands back an incumbent, so read the `too_big` rate
+ * before re-tuning anything here. Rebuilding the sweep
+ * first: `encodeBuild` and the first `solver.push()` were z3's pre-search
+ * costs, and the solved row reads `engine: "optimized"` now, never `"z3"`
+ * (that value is retiring — see the z3 retirement design, stage D).
  */
 export const MAX_SOLVE_ENCODING = 20_000;
 

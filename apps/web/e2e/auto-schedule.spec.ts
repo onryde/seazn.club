@@ -1,8 +1,10 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, divisionPath } from "./helpers";
 
-// T15 — the three z3 solver actions on the schedule board, driven through the
-// UI against the real engine.
+// T15 — the three solver actions on the schedule board, driven through the
+// UI against the real engine. (Named `z3-auto-schedule.spec.ts` until the z3
+// retirement's stage C; the actions are the same three, the solver behind them
+// is CP-SAT.)
 //
 // WHY THIS EXISTS AND WHAT ONLY IT CAN SEE. `schedule-board.spec.ts` already
 // exercises `/schedule/auto` over HTTP, so the endpoint is covered. What nothing
@@ -10,8 +12,9 @@ import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, divisionPath }
 // proposal comes back, `useBoardActions` APPLIES it, and the result strip
 // reports what the solver did. Three things can only fail here —
 //
-//   1. the z3 WASM not being reachable from a production-shaped server (it has
-//      shipped as a silent prod no-op before, and every unit test stayed green);
+//   1. the solver not being reachable from a production-shaped server — z3's
+//      WASM shipped as a silent prod no-op that way once, with every unit test
+//      green, and an unset `PLACEMENT_SERVICE_HOST` fails the same shape;
 //   2. a button wired to the wrong solver — all three render identically and
 //      differ only in the body they send;
 //   3. the strip reporting a run that did not happen, or not reporting one that

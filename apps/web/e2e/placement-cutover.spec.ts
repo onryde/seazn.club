@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { TAG, apiJson, addEntrantsViaApi, divisionPath } from "./helpers";
 
-// Task 11 (placement cutover) — proves the ONE thing `z3-auto-schedule.spec.ts`
+// Task 11 (placement cutover) — proves the ONE thing `auto-schedule.spec.ts`
 // structurally cannot: that clicking Auto-schedule in a real browser, against a
 // real running placement service, produces a board the OPTIMISER produced —
 // not the greedy fallback wearing identical copy.
@@ -13,7 +13,7 @@ import { TAG, apiJson, addEntrantsViaApi, divisionPath } from "./helpers";
 // because `engine` only reports "optimized" when the candidate the service
 // returns is STRICTLY better than greedy's own seed (`isStrictlyBetter`,
 // `build-objectives.ts` — placed count, then makespan, then worst idle gap,
-// then court imbalance, lexicographic). Every one of `z3-auto-schedule.spec.ts`'s
+// then court imbalance, lexicographic). Every one of `auto-schedule.spec.ts`'s
 // boards (including its own `seedBoard()`, a 4-entrant/2-court round robin) is
 // small and regular enough that greedy's seed IS already the tier solver's
 // optimum — `engine` stays "greedy", correctly, no matter how well the cutover
@@ -47,7 +47,7 @@ import { TAG, apiJson, addEntrantsViaApi, divisionPath } from "./helpers";
 // web layer allows.
 //
 // SELECTORS ARE IDS, NEVER COPY (#465) — same discipline as
-// `z3-auto-schedule.spec.ts`. `data-engine` is the ONE thing this file exists
+// `auto-schedule.spec.ts`. `data-engine` is the ONE thing this file exists
 // to assert: `ENGINE_KEY` (`result-strip.tsx`) deliberately renders
 // "optimized" with the SAME copy as z3 in every locale, so the rendered
 // provenance string cannot tell them apart — only the attribute can.
@@ -67,7 +67,7 @@ const ROUNDS: [number, number][][] = [
 const FIXTURE_COUNT = ROUNDS.flat().length; // 9
 
 /** The two statuses a working build can return — identical set to
- *  `z3-auto-schedule.spec.ts`'s `SOLVED`, duplicated rather than imported: that
+ *  `auto-schedule.spec.ts`'s `SOLVED`, duplicated rather than imported: that
  *  file is Prompt 10's, not shared module surface, and its own comment says
  *  this list is deliberately closed and does not grow. */
 const SOLVED = ["ok", "already_optimal"];
@@ -75,7 +75,7 @@ const SOLVED = ["ok", "already_optimal"];
 /** `solver_busy` is a live, ordinary status under `PLACEMENT_MAX_WORKERS=1` —
  *  not a fault, and not accepted here either: accepting it would let this file
  *  pass against a solve that never ran, the one thing it exists to catch. Same
- *  bounded retry as `z3-auto-schedule.spec.ts`'s `runSolver`. */
+ *  bounded retry as `auto-schedule.spec.ts`'s `runSolver`. */
 const BUSY_RETRIES = 3;
 const BUSY_BACKOFF_MS = 4_000;
 
@@ -169,7 +169,7 @@ async function seedBoard(
 /**
  * Click Auto-schedule and wait for the whole run to land, retrying a
  * `solver_busy` answer rather than accepting it — see `BUSY_RETRIES` above.
- * Mirrors `z3-auto-schedule.spec.ts`'s `runSolver`, one action instead of
+ * Mirrors `auto-schedule.spec.ts`'s `runSolver`, one action instead of
  * three: this file only ever drives BUILD.
  */
 async function runAutoSchedule(page: Page, divisionId: string): Promise<Locator> {
@@ -246,7 +246,7 @@ test("Auto-schedule reaches the OPTIMISER, not the greedy fallback wearing the s
   await expect(strip).toHaveAttribute("data-engine", /^(optimized|greedy)$/);
 
   // ASSERTION 2 — a solved status, not a proof-in-progress one. Read on VALUE
-  // membership, matching `z3-auto-schedule.spec.ts`'s own discipline: a bare
+  // membership, matching `auto-schedule.spec.ts`'s own discipline: a bare
   // "the attribute exists" check cannot fail against a dropped source either.
   const status = await strip.getAttribute("data-status");
   expect(SOLVED, `solver reported data-status="${status}"`).toContain(status);
