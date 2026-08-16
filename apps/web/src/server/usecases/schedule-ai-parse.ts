@@ -40,6 +40,24 @@ const DateRef = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("date"), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }),
 ]);
 
+/** A run LENGTH, usable only as a window's end. "run for 4 days" had no
+ *  representation before 2026-08-16, and the parse bench caught the model
+ *  filling the gap twice over: first with a fabricated `2024-01-03`, then —
+ *  after the date rule was tightened — with an invented THU weekday. Both are
+ *  the model doing calendar arithmetic, which rule 1 exists to forbid.
+ *
+ *  So `days` is the run's length as the organiser SAID it, inclusive of the
+ *  start day, and `resolveParsed` does the counting. The model copies a number
+ *  out of the text; it never adds anything to a date.
+ *
+ *  Deliberately NOT a `DateRef` member: "how long does the run last" is
+ *  meaningless for `fixture_on_date`, and keeping it out of that union makes
+ *  the nonsense unexpressible rather than merely discouraged. */
+const SpanEnd = z.object({
+  kind: z.literal("span"),
+  days: z.number().int().positive().max(366),
+});
+
 /** Deliberately NARROWER than the engine's `ConstraintScope`, which also carries
  *  `entrant`, `person` and `pool`. Those bind fine when a durable config states
  *  them by id (the API path), but this parser is only ever handed division ids —
@@ -52,16 +70,24 @@ const Scope = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("division"), divisionId: z.string().min(1) }),
 ]);
 
-/** No `round`, no `id`: the model addresses fixtures by terminal-ness or by an
- *  ext_key it was actually shown. Round numbers are display labels. */
-const Selector = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("terminal") }),
-  z.object({
-    kind: z.literal("ext_key"),
-    extKey: z.string().min(1),
-    divisionId: z.string().min(1).optional(),
-  }),
-]);
+/** No `round`, no `id`, and — since 2026-08-16 — no `ext_key` either. Round
+ *  numbers are display labels, and the ext_key variant was unreachable by
+ *  construction: `ParserContext` carries divisions and nothing else, so the
+ *  model is never shown a single fixture key. The only way it could populate
+ *  that field was to invent one, and the parse bench caught it doing exactly
+ *  that — "put the semifinals on Friday" compiled to
+ *  `{kind:"ext_key", extKey:"semifinals"}`, which binds to no fixture and left
+ *  the organiser told a rule was enforced when nothing enforced it.
+ *
+ *  An option a model cannot satisfy honestly is an invitation, not a
+ *  capability. Stage addressing beyond the terminal fixture belongs in
+ *  `unparsed` until the vocabulary and the context both exist for it.
+ *
+ *  Kept as a discriminated union of one so adding a real stage selector later
+ *  is an additive change rather than a reshape. The engine's own selector
+ *  still supports ext_key for the durable-config API path, which DOES know
+ *  fixture keys — this narrowing is the parser's alone. */
+const Selector = z.discriminatedUnion("kind", [z.object({ kind: z.literal("terminal") })]);
 
 const HHMM = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 
@@ -80,7 +106,12 @@ const RawHard = z.discriminatedUnion("type", [
   /** Symbolic only, and the ONE member that never becomes a HardConstraint:
    *  `resolveParsed` turns it into the pack's calendar window, which the
    *  verifier already checks. */
-  z.object({ type: z.literal("window"), start: DateRef, end: DateRef, scope: Scope }),
+  z.object({
+    type: z.literal("window"),
+    start: DateRef,
+    end: z.union([DateRef, SpanEnd]),
+    scope: Scope,
+  }),
 ]);
 
 export const RawParsed = z.object({
@@ -116,19 +147,27 @@ Schema:
     { "type": "fixture_on_weekday", "selector": Selector, "weekday": "MON".."SUN", "scope": Scope },
     { "type": "fixture_on_date", "selector": Selector, "date": DateRef, "scope": Scope },
     { "type": "not_before" | "not_after", "time": "HH:mm", "scope": Scope },
-    { "type": "window", "start": DateRef, "end": DateRef, "scope": Scope }
+    { "type": "window", "start": DateRef, "end": DateRef | {"kind":"span","days":int}, "scope": Scope }
   ],
   "soft": [ { "note": string, "weight": 1|2|3 } ],
   "unparsed": [ string ]
 }
 Scope: {"kind":"competition"} | {"kind":"division","divisionId":id}
-Selector: {"kind":"terminal"} | {"kind":"ext_key","extKey":key}
+Selector: {"kind":"terminal"}
 DateRef: {"kind":"today"} | {"kind":"tomorrow"} |
          {"kind":"weekday","weekday":"MON".."SUN"} | {"kind":"date","date":"YYYY-MM-DD"}
 
 Rules:
 1. NEVER resolve dates yourself. "tomorrow" stays {"kind":"tomorrow"}; "friday"
-   stays {"kind":"weekday","weekday":"FRI"}. You have no calendar.
+   stays {"kind":"weekday","weekday":"FRI"}. You have no calendar. Use
+   {"kind":"date"} only if the instruction itself contains an explicit calendar
+   date; you cannot compute one. Writing a date that does not appear in the
+   instruction is the worst error you can make.
+   A stated RUN LENGTH is the one exception, and it is still not arithmetic:
+   "run for 4 days from Monday" is
+   {"start":{"kind":"weekday","weekday":"MON"},"end":{"kind":"span","days":4}}.
+   Copy the number you read; "days" counts the start day itself, and we do the
+   counting. Never turn a length into a weekday or a date yourself.
 2. "at least N minutes" is a LOWER BOUND -> min_rest_minutes N. Only explicit
    "exactly" / "no more than" language means anything else.
 3. When rest wording is ambiguous about whether it means between a player's own
@@ -141,7 +180,25 @@ Rules:
    instant. A date range is a "window".
 6. Preferences that are not checkable placement rules ("keep mornings relaxed")
    go to soft with a weight. Wording you cannot map at all goes VERBATIM into
-   unparsed. Never invent a constraint that is not clearly stated.
+   unparsed. Never invent a constraint that is not clearly stated. When wording
+   could read either way, prefer soft: it is a wish the organiser sees and
+   nothing pretends to enforce. Reserve unparsed for wording that states a real
+   requirement this schema has no vocabulary for.
+9. Some instructions are PARTLY expressible. Compile the part you can and put
+   the rest in unparsed. Never stretch a nearby rule type to cover wording it
+   does not mean — there is no way to say a break in the middle of a day, a cap
+   on one part of a day, a cap on a named date, or a per-player limit, and
+   not_before/not_after are the WHOLE day's bounds, not a gap inside it.
+
+Example C
+instruction: "run for 4 days and keep 2 matches in the morning and 3 in the
+afternoon, lunch break 12PM to 1PM."
+output:
+{"hard":[],"soft":[],
+ "unparsed":["run for 4 days","keep 2 matches in the morning and 3 in the afternoon","lunch break 12PM to 1PM"]}
+Nothing here is expressible: a duration is not a DateRef, a cap on part of a day
+is not max_fixtures_per_day, and a mid-day break is not not_before/not_after —
+{"type":"not_after","time":"12:00"} would delete the whole afternoon.
 7. Tolerate typos and broken grammar; compile the evident intent.
 8. A scope is ONLY the whole competition or a division id you were given. There
    is no scope for one team, one player or one pool. In particular a PER-PLAYER
@@ -255,6 +312,10 @@ export async function parseInstruction(
         schema: { name: "instruction_constraints", zod: RawParsed },
         signal: controller.signal,
         timeoutMs: PARSE_TIMEOUT_MS,
+        // This round travels on the pre-flight's own, wider allowlist
+        // (PARSE_ALLOWED_PROVIDERS) — inert unless the model is an OpenRouter
+        // slug, which only SCHEDULING_PARSE_MODEL can make it.
+        routing: "parse",
       });
       if (res === null) continue;
       // Meter on EVERY path, hit or miss — an un-metered round is a budget leak,
@@ -309,6 +370,107 @@ const resolveDateRef = (ref: DateRef, clock: Clock): string =>
 
 const MS_PER_DAY = 86_400_000;
 
+const scopeKey = (scope: { kind: string; divisionId?: string }): string =>
+  scope.kind === "division" ? `division:${scope.divisionId}` : "competition";
+
+/** The identity a rule competes for. Two rules sharing one cannot both hold.
+ *  `null` means the type permits many at once and is never in conflict:
+ *  fixture_on_* is per-selector, and `window` has its own first-wins handling
+ *  further down. */
+function conflictKeyOf(rule: RawHardConstraint): string | null {
+  switch (rule.type) {
+    case "max_fixtures_per_day":
+    case "not_before":
+    case "not_after":
+      return `${rule.type}|${scopeKey(rule.scope)}`;
+    // Rest bounds are only rivals when they bound the SAME relationship.
+    // "45 minutes between a player's own matches and 30 before the round they
+    // feed into" is two distinct bounds, not a disagreement.
+    case "min_rest_minutes":
+      return `${rule.type}|${scopeKey(rule.scope)}|${rule.rest_scope}`;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Refuse rules that contradict each other rather than letting one win silently.
+ *
+ * Found by the 2026-08-16 parse bench: "6 matches on Saturday and 4 on Sunday"
+ * compiled to `max_fixtures_per_day` 6 AND 4, both competition-scoped, because
+ * a per-DATE cap has no vocabulary here. Nothing downstream noticed. Whichever
+ * the solver happened to read, the organiser had been shown a rule that was not
+ * the one being enforced — the same class of harm rule 2 of this file forbids,
+ * arrived at by a different route.
+ *
+ * An exact duplicate is NOT a contradiction: it says the same thing twice, so
+ * it collapses quietly. Only genuinely different values for one identity are
+ * refused, and then BOTH go, because there is no principled way to pick.
+ */
+function refuseContradictions(rules: readonly RawHardConstraint[]): {
+  kept: RawHardConstraint[];
+  refused: string[];
+} {
+  const groups = new Map<string, RawHardConstraint[]>();
+  const kept: RawHardConstraint[] = [];
+  for (const rule of rules) {
+    const key = conflictKeyOf(rule);
+    if (key === null) {
+      kept.push(rule);
+      continue;
+    }
+    (groups.get(key) ?? groups.set(key, []).get(key)!).push(rule);
+  }
+
+  const refused: string[] = [];
+  for (const [key, group] of groups) {
+    const distinct = new Map(group.map((r) => [JSON.stringify(r), r]));
+    if (distinct.size === 1) {
+      kept.push(distinct.values().next().value!);
+      continue;
+    }
+    const type = key.split("|")[0];
+    refused.push(
+      `${type} was stated more than once with different values for the same scope — none was applied`,
+    );
+  }
+  return { kept, refused };
+}
+
+/**
+ * Refuse wall-clock bounds that every fixture already satisfies.
+ *
+ * The parse bench caught the model answering "everything after 2pm except the
+ * final" with `not_after "23:59"`, and earlier with `not_before "00:00"`. Both
+ * are no-ops. They are not harmless: the organiser is shown a compiled rule,
+ * believes the exception was understood, and nothing was.
+ *
+ * Only the two true no-ops are refused. `not_after "00:00"` forbids everything,
+ * which is absurd rather than vacuous — the verifier will say so, and an
+ * organiser can see and correct a rule that visibly bites. A rule that does
+ * nothing is the one that hides.
+ */
+function refuseVacuousBounds(rules: readonly RawHardConstraint[]): {
+  kept: RawHardConstraint[];
+  refused: string[];
+} {
+  const kept: RawHardConstraint[] = [];
+  const refused: string[] = [];
+  for (const rule of rules) {
+    const isNoOp =
+      (rule.type === "not_before" && rule.time === "00:00") ||
+      (rule.type === "not_after" && rule.time === "23:59");
+    if (isNoOp) {
+      refused.push(
+        `${rule.type} ${rule.time} would not rule anything out, so it was not applied`,
+      );
+      continue;
+    }
+    kept.push(rule);
+  }
+  return { kept, refused };
+}
+
 /**
  * Symbolic parse → concrete constraints plus the pack's calendar window.
  *
@@ -343,9 +505,13 @@ export function resolveParsed(
     };
   };
 
-  const unparsed = [...raw.unparsed];
+  // Refuse contradictions BEFORE anything is resolved, so a refused cap cannot
+  // also drive the feasibility reading further down.
+  const { kept: nonConflicting, refused } = refuseContradictions(raw.hard);
+  const { kept, refused: vacuous } = refuseVacuousBounds(nonConflicting);
+  const unparsed = [...raw.unparsed, ...refused, ...vacuous];
 
-  for (const h of raw.hard) {
+  for (const h of kept) {
     if (h.type === "window") {
       // A window is the run's calendar, and the pack has exactly one. A
       // division-scoped window would silently clamp every other division, so it
@@ -361,7 +527,17 @@ export function resolveParsed(
         continue;
       }
       const start = resolveDateRef(h.start, clock);
-      let end = resolveDateRef(h.end, clock);
+      // A span states a LENGTH, so it is counted from the start and can never
+      // land before it — the roll-forward branch below is unreachable for it.
+      let end =
+        h.end.kind === "span"
+          ? ymdAddDays(start, h.end.days - 1)
+          : resolveDateRef(h.end, clock);
+      if (h.end.kind === "span") {
+        assumptions.push(
+          `a run of ${h.end.days} days from ${start} read as ${start}..${end} (${tz})`,
+        );
+      }
       if (end < start) {
         // Roll whole weeks until the range is non-empty. A single +7 still lands
         // before the start whenever the start is an explicit far-future date.
@@ -403,7 +579,7 @@ export function resolveParsed(
     // COMPETITION-scoped caps only. A division-scoped 1/day bounds that
     // division, not the run, and using it here would extend everybody's window
     // by a week on the strength of a rule most fixtures are not subject to.
-    const cap = raw.hard.reduce<number | null>(
+    const cap = kept.reduce<number | null>(
       (m, h) =>
         h.type === "max_fixtures_per_day" && h.scope.kind === "competition"
           ? Math.min(m ?? Infinity, h.count)

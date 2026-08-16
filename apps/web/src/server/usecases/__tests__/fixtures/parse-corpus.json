@@ -1,0 +1,497 @@
+{
+  "context": {
+    "divisions": [
+      { "id": "d1", "name": "Open Singles" },
+      { "id": "d2", "name": "Mixed Doubles" }
+    ]
+  },
+  "notes": [
+    "Expected shapes are the RAW parse (pre-resolveParsed), so DateRefs stay symbolic.",
+    "expect.unparsed is a boolean: we assert wording was DEFERRED, not that it was echoed verbatim.",
+    "Tier 5 rows are mostly-unexpressible on purpose. The right answer there is to defer, and the failure mode being measured is a model that invents a rule instead."
+  ],
+  "cases": [
+    {
+      "id": "s01",
+      "tier": 1,
+      "text": "no more than 3 matches a day",
+      "trap": "plainest possible cap",
+      "expect": {
+        "hard": [{ "type": "max_fixtures_per_day", "count": 3, "scope": { "kind": "competition" } }],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "s02",
+      "tier": 1,
+      "text": "at least 30 minutes between a player's own matches",
+      "trap": "explicitly own-matches, so per_person not both",
+      "expect": {
+        "hard": [
+          {
+            "type": "min_rest_minutes",
+            "minutes": 30,
+            "rest_scope": "per_person",
+            "scope": { "kind": "competition" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "s03",
+      "tier": 1,
+      "text": "nothing before 9am",
+      "trap": "12h to HH:mm",
+      "expect": {
+        "hard": [{ "type": "not_before", "time": "09:00", "scope": { "kind": "competition" } }],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "s04",
+      "tier": 1,
+      "text": "no matches after 8pm",
+      "trap": "pm conversion",
+      "expect": {
+        "hard": [{ "type": "not_after", "time": "20:00", "scope": { "kind": "competition" } }],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "s05",
+      "tier": 1,
+      "text": "play from tomorrow until Friday",
+      "trap": "dates stay symbolic (prompt rule 1)",
+      "expect": {
+        "hard": [
+          {
+            "type": "window",
+            "start": { "kind": "tomorrow" },
+            "end": { "kind": "weekday", "weekday": "FRI" },
+            "scope": { "kind": "competition" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "s06",
+      "tier": 1,
+      "text": "the final should be on Saturday",
+      "trap": "terminal selector, never a round number",
+      "expect": {
+        "hard": [
+          {
+            "type": "fixture_on_weekday",
+            "selector": { "kind": "terminal" },
+            "weekday": "SAT",
+            "scope": { "kind": "competition" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "s07",
+      "tier": 1,
+      "text": "the final is on 2026-09-12",
+      "trap": "explicit date passes through as a date DateRef",
+      "expect": {
+        "hard": [
+          {
+            "type": "fixture_on_date",
+            "selector": { "kind": "terminal" },
+            "date": { "kind": "date", "date": "2026-09-12" },
+            "scope": { "kind": "competition" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "s08",
+      "tier": 1,
+      "text": "start at 10am",
+      "trap": "a start time is a lower bound, not a window",
+      "expect": {
+        "hard": [{ "type": "not_before", "time": "10:00", "scope": { "kind": "competition" } }],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "m01",
+      "tier": 2,
+      "text": "schedule three matches per day and hav a gap 30 mins at at least and run a whole matches from tomorrow till Sunday.",
+      "trap": "typo-bearing variant of prompt Example A - different numbers so recall does not substitute for parsing",
+      "expect": {
+        "hard": [
+          { "type": "max_fixtures_per_day", "count": 3, "scope": { "kind": "competition" } },
+          {
+            "type": "min_rest_minutes",
+            "minutes": 30,
+            "rest_scope": "both",
+            "scope": { "kind": "competition" }
+          },
+          {
+            "type": "window",
+            "start": { "kind": "tomorrow" },
+            "end": { "kind": "weekday", "weekday": "SUN" },
+            "scope": { "kind": "competition" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "m02",
+      "tier": 2,
+      "text": "2 matches a day, nothing before 9am, nothing after 6pm",
+      "trap": "three rules in one clause list",
+      "expect": {
+        "hard": [
+          { "type": "max_fixtures_per_day", "count": 2, "scope": { "kind": "competition" } },
+          { "type": "not_before", "time": "09:00", "scope": { "kind": "competition" } },
+          { "type": "not_after", "time": "18:00", "scope": { "kind": "competition" } }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "m03",
+      "tier": 2,
+      "text": "40 min gap for each player before the next round and the final on Sunday",
+      "trap": "ambiguous rest wording -> both (prompt rule 3)",
+      "expect": {
+        "hard": [
+          {
+            "type": "min_rest_minutes",
+            "minutes": 40,
+            "rest_scope": "both",
+            "scope": { "kind": "competition" }
+          },
+          {
+            "type": "fixture_on_weekday",
+            "selector": { "kind": "terminal" },
+            "weekday": "SUN",
+            "scope": { "kind": "competition" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "m04",
+      "tier": 2,
+      "text": "keep it to 4 a day between the 10th and the 14th of September 2026",
+      "trap": "prose date range to two explicit DateRefs",
+      "expect": {
+        "hard": [
+          { "type": "max_fixtures_per_day", "count": 4, "scope": { "kind": "competition" } },
+          {
+            "type": "window",
+            "start": { "kind": "date", "date": "2026-09-10" },
+            "end": { "kind": "date", "date": "2026-09-14" },
+            "scope": { "kind": "competition" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "m05",
+      "tier": 2,
+      "text": "no more then 2 mathces per day pls, and dont start befor 8:30",
+      "trap": "broken spelling throughout (prompt rule 7)",
+      "expect": {
+        "hard": [
+          { "type": "max_fixtures_per_day", "count": 2, "scope": { "kind": "competition" } },
+          { "type": "not_before", "time": "08:30", "scope": { "kind": "competition" } }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "d01",
+      "tier": 3,
+      "text": "Open Singles can only play 2 matches a day",
+      "trap": "division name to the id it was shown",
+      "expect": {
+        "hard": [
+          {
+            "type": "max_fixtures_per_day",
+            "count": 2,
+            "scope": { "kind": "division", "divisionId": "d1" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "d02",
+      "tier": 3,
+      "text": "Mixed Doubles shouldn't start before 11am",
+      "trap": "second division, must not default to d1",
+      "expect": {
+        "hard": [
+          { "type": "not_before", "time": "11:00", "scope": { "kind": "division", "divisionId": "d2" } }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "d03",
+      "tier": 3,
+      "text": "the Open Singles final on Friday",
+      "trap": "division-scoped terminal (prompt rule 4)",
+      "expect": {
+        "hard": [
+          {
+            "type": "fixture_on_weekday",
+            "selector": { "kind": "terminal" },
+            "weekday": "FRI",
+            "scope": { "kind": "division", "divisionId": "d1" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "d04",
+      "tier": 3,
+      "text": "give Mixed Doubles players 60 minutes rest between their own matches",
+      "trap": "division scope plus explicit per_person",
+      "expect": {
+        "hard": [
+          {
+            "type": "min_rest_minutes",
+            "minutes": 60,
+            "rest_scope": "per_person",
+            "scope": { "kind": "division", "divisionId": "d2" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "d05",
+      "tier": 3,
+      "text": "3 a day overall but Open Singles no more than 1 a day",
+      "trap": "same rule type at two different scopes",
+      "expect": {
+        "hard": [
+          { "type": "max_fixtures_per_day", "count": 3, "scope": { "kind": "competition" } },
+          {
+            "type": "max_fixtures_per_day",
+            "count": 1,
+            "scope": { "kind": "division", "divisionId": "d1" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "t01",
+      "tier": 4,
+      "text": "no player plays more than 2 matches a day",
+      "trap": "PROMPT RULE 8 - a per-player cap is NOT max_fixtures_per_day",
+      "expect": { "hard": [], "unparsed": true }
+    },
+    {
+      "id": "t02",
+      "tier": 4,
+      "text": "each team plays twice a day at most",
+      "trap": "per-team cap, same rule-8 class",
+      "expect": { "hard": [], "unparsed": true }
+    },
+    {
+      "id": "t03",
+      "tier": 4,
+      "text": "put the semifinals on Friday",
+      "trap": "Selector has terminal and ext_key only - no stage or round addressing",
+      "expect": { "hard": [], "unparsed": true }
+    },
+    {
+      "id": "t04",
+      "tier": 4,
+      "text": "make sure Alice doesn't play twice in a row",
+      "trap": "person scope does not exist in Scope",
+      "expect": { "hard": [], "unparsed": true }
+    },
+    {
+      "id": "t05",
+      "tier": 4,
+      "text": "run division Open Singles between the 5th and the 9th of September 2026",
+      "trap": "schema PERMITS a division-scoped window; resolveParsed rejects it later. The raw layer must emit it faithfully, not pre-censor.",
+      "expect": {
+        "hard": [
+          {
+            "type": "window",
+            "start": { "kind": "date", "date": "2026-09-05" },
+            "end": { "kind": "date", "date": "2026-09-09" },
+            "scope": { "kind": "division", "divisionId": "d1" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "t06",
+      "tier": 4,
+      "text": "keep mornings relaxed",
+      "trap": "a preference: belongs in soft, and soft is NOT unparsed",
+      "expect": { "hard": [], "unparsed": false }
+    },
+    {
+      "id": "t07",
+      "tier": 4,
+      "text": "no two matches on the same court back to back",
+      "trap": "court/venue is not in the constraint vocabulary",
+      "expect": { "hard": [], "unparsed": true }
+    },
+    {
+      "id": "t08",
+      "tier": 4,
+      "text": "avoid clashing with the football final on TV",
+      "trap": "external event, nothing to compile against",
+      "expect": { "hard": [], "unparsed": true }
+    },
+    {
+      "id": "t09",
+      "tier": 4,
+      "text": "schedule the final last",
+      "trap": "ordering relative to other fixtures is not expressible",
+      "expect": { "hard": [], "unparsed": true }
+    },
+    {
+      "id": "c01",
+      "tier": 5,
+      "text": "Let's schedule a match and run for 4 days and keep 2 matches in the morning and 3 matches in the afternoon also we have lunch break from 12PM to 1PM",
+      "trap": "OWNER EXAMPLE. Originally three schema gaps at once. The run-length gap CLOSED on 2026-08-16 (span end), so this row is now KNOWN-AMBIGUOUS and deliberately left as defer-all: the sentence states no start day, so a model compiling {start:today|tomorrow, end:span 4} is arguably right and will be scored wrong here. Do not read a c01 failure as an invention without checking which clause caused it. The per-session cap and the lunch break remain genuinely unexpressible - a model emitting max_fixtures_per_day 5, or not_after 12:00, has invented a rule that deletes the afternoon.",
+      "expect": { "hard": [], "unparsed": true }
+    },
+    {
+      "id": "c02",
+      "tier": 5,
+      "text": "we play over the weekend, 6 matches on Saturday and 4 on Sunday, finals Sunday evening",
+      "trap": "per-DATE caps are not expressible (the cap is scope-wide); only the terminal-on-Sunday half compiles",
+      "expect": {
+        "hard": [
+          {
+            "type": "fixture_on_weekday",
+            "selector": { "kind": "terminal" },
+            "weekday": "SUN",
+            "scope": { "kind": "competition" }
+          }
+        ],
+        "unparsed": true
+      }
+    },
+    {
+      "id": "c03",
+      "tier": 5,
+      "text": "start 9am, finish by 9pm, 90 minutes between a player's own matches, max 8 a day, from tomorrow to next Friday",
+      "trap": "five legitimate rules at once - the long-but-fully-expressible case",
+      "expect": {
+        "hard": [
+          { "type": "not_before", "time": "09:00", "scope": { "kind": "competition" } },
+          { "type": "not_after", "time": "21:00", "scope": { "kind": "competition" } },
+          {
+            "type": "min_rest_minutes",
+            "minutes": 90,
+            "rest_scope": "per_person",
+            "scope": { "kind": "competition" }
+          },
+          { "type": "max_fixtures_per_day", "count": 8, "scope": { "kind": "competition" } },
+          {
+            "type": "window",
+            "start": { "kind": "tomorrow" },
+            "end": { "kind": "weekday", "weekday": "FRI" },
+            "scope": { "kind": "competition" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "c04",
+      "tier": 5,
+      "text": "Open Singles: 2 a day, no earlier than 10; Mixed Doubles: 3 a day, no later than 7pm",
+      "trap": "four rules across two division scopes, semicolon-separated",
+      "expect": {
+        "hard": [
+          {
+            "type": "max_fixtures_per_day",
+            "count": 2,
+            "scope": { "kind": "division", "divisionId": "d1" }
+          },
+          { "type": "not_before", "time": "10:00", "scope": { "kind": "division", "divisionId": "d1" } },
+          {
+            "type": "max_fixtures_per_day",
+            "count": 3,
+            "scope": { "kind": "division", "divisionId": "d2" }
+          },
+          { "type": "not_after", "time": "19:00", "scope": { "kind": "division", "divisionId": "d2" } }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "c05",
+      "tier": 5,
+      "text": "lunch break from 12 to 1",
+      "trap": "mid-day exclusion in isolation. not_after 12:00 would silently delete the afternoon.",
+      "expect": { "hard": [], "unparsed": true }
+    },
+    {
+      "id": "c06",
+      "tier": 5,
+      "text": "run for 4 days from Monday",
+      "trap": "RE-BASELINED 2026-08-16. Was expect:{hard:[],unparsed:true} because a run length had no representation - and the bench caught the model filling that gap twice, first with a fabricated 2024 date and then with an invented THU. The span end now exists, so the correct answer changed: state the length, let resolveParsed count. A model that still computes the end weekday itself now fails on `invented`.",
+      "expect": {
+        "hard": [
+          {
+            "type": "window",
+            "start": { "kind": "weekday", "weekday": "MON" },
+            "end": { "kind": "span", "days": 4 },
+            "scope": { "kind": "competition" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "c07",
+      "tier": 5,
+      "text": "at least 45 minutes between a player's own matches and 30 minutes before the round they feed into",
+      "trap": "both rest_scopes stated separately - must NOT collapse to a single 'both'",
+      "expect": {
+        "hard": [
+          {
+            "type": "min_rest_minutes",
+            "minutes": 45,
+            "rest_scope": "per_person",
+            "scope": { "kind": "competition" }
+          },
+          {
+            "type": "min_rest_minutes",
+            "minutes": 30,
+            "rest_scope": "feeder_to_dependent",
+            "scope": { "kind": "competition" }
+          }
+        ],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "c08",
+      "tier": 5,
+      "text": "everything after 2pm except the final which can be earlier",
+      "trap": "exception semantics are not expressible; the base bound compiles, the exception must defer",
+      "expect": {
+        "hard": [{ "type": "not_before", "time": "14:00", "scope": { "kind": "competition" } }],
+        "unparsed": true
+      }
+    }
+  ]
+}

@@ -63,3 +63,8 @@ packages/engine/sim-report.json
 # (.claude/agents/*.md) stay tracked; only the per-run memory is ignored.
 **/.claude/agent-memory/
 
+# Parse-bench run output. A billed sweep writes this on every run, so tracking
+# it would put non-deterministic model answers in the diff of unrelated work.
+# The corpus and the scorer ARE tracked; the results are not.
+apps/web/parse-bench-results.json
+

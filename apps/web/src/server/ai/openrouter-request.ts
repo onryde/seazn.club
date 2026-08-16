@@ -1,7 +1,7 @@
 // Translates a provider-neutral request into OpenRouter's OpenAI-shaped body.
 // Pure and synchronous so the wire shape can be asserted without a network.
 import { z } from "zod";
-import { applyPolicy } from "./openrouter-policy";
+import { applyPolicy, ALLOWED_PROVIDERS, PARSE_ALLOWED_PROVIDERS } from "./openrouter-policy";
 import type { AiChatRequest, AiTurn } from "./provider";
 
 /** An OpenRouter assistant turn's `content` (see openrouter-provider.ts's
@@ -119,18 +119,26 @@ export function buildOpenRouterBody<T>(req: AiChatRequest<T>): Record<string, un
         ? { max_tokens: req.reasoning.tokens }
         : undefined;
 
-  return applyPolicy({
-    model: req.model,
-    max_tokens: req.maxTokens,
-    messages,
-    ...(reasoning ? { reasoning } : {}),
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: req.schema.name,
-        strict: true,
-        schema: stripUnsupportedBounds(z.toJSONSchema(req.schema.zod)),
+  // Route on the request's own allowlist. Defaulting here rather than in
+  // applyPolicy's signature keeps the widening visible at the one call site
+  // that can trigger it.
+  const providers = req.routing === "parse" ? PARSE_ALLOWED_PROVIDERS : ALLOWED_PROVIDERS;
+
+  return applyPolicy(
+    {
+      model: req.model,
+      max_tokens: req.maxTokens,
+      messages,
+      ...(reasoning ? { reasoning } : {}),
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: req.schema.name,
+          strict: true,
+          schema: stripUnsupportedBounds(z.toJSONSchema(req.schema.zod)),
+        },
       },
     },
-  });
+    providers,
+  );
 }
