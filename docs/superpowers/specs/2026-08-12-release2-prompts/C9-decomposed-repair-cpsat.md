@@ -1,8 +1,19 @@
 # C9 — decomposed repair on CP-SAT
 
 Spec of record: `../2026-08-12-z3-retirement-design.md` (closes the gap C5's
-bench opened). Gate: **C5 merged**, and **strictly before C8** — see
-"Sequencing" below, this is not optional ordering.
+bench opened). **Strictly before C8** — see "Sequencing" below, this is not
+optional ordering.
+
+**GATE INVERTED 2026-08-16 — read before trusting the line this replaces.**
+This brief originally gated on "C5 merged", written when C5 was expected to
+land normally. Owner ruling, 2026-08-16: **C9 now goes FIRST.** C5's PR
+(#576) found a second, more serious gap via CI after this brief was
+written — see "Why this exists"'s second subsection below — and is PARKED,
+not merged, specifically pending this task. Do not wait for a C5 merge that
+is not coming next; `feat/c5-ai-repair-cpsat` exists as an open, unmerged
+branch (commit `a59a9916` is the one this brief's Acceptance section
+references) and its own `_INDEX.md` entry has the full account. C9 still
+must land strictly before C8 either way.
 
 ## Why this exists
 
@@ -29,6 +40,63 @@ blocking.length`) never adopts a degraded board — it falls through to LLM
 repair exactly as if the solver had declined. So today's cost is **wasted
 solver budget and latency, never a corrupted board an organiser can see.**
 C9 recovers the capability.
+
+### A second, more serious gap found AFTER this brief was first written —
+### added here 2026-08-16, once C5's own PR (#576) surfaced it via CI
+
+C5's PR was parked (owner ruling, 2026-08-16) rather than merged as planned,
+because CI found a gap this brief did not originally scope: on a knockout
+bracket, `buildSchedule`'s CP-SAT encoding does not enforce an
+`OrderDependency` edge against a fixture that is FROZEN via
+`frozen`/`current` rather than genuinely `.locked` — a THIRD-PLACE PLAYOFF
+(a violator, free to move) depending on two DECIDED semi-finals (both
+non-violators, hence frozen) came back scheduled BEFORE its own feeders
+finished. This is C4's own documented, explicitly out-of-scope finding
+("a dependency-encoding gap on a FROZEN feeder... shared with POLISH"),
+reached for the first time via C5's violator-derived freeze:
+REFLOW freezes every already-placed card uniformly, so a dependency edge in
+a REFLOW call is always fully inside the frozen set or fully outside it;
+C5's `frozen = pins ∪ non-violators` split is the first caller that can
+produce an edge with EXACTLY ONE end frozen. **Any decomposition driver
+inherits this exposure by construction** — components are built from the
+SAME dependency graph, and a component boundary that separates a frozen
+feeder from its free dependent reproduces the identical straddle, just at
+component-assignment time instead of solve time.
+
+C5 shipped a narrow, targeted guard (`schedule-ai-solver.ts`, commit
+`a59a9916`, kept, not reverted): decline the solver attempt entirely,
+before ever calling `buildSchedule`, when a dependency edge has exactly one
+end in the violator set and the other in the frozen set. That closes the
+SAFETY question (no illegal board is ever produced or reported as
+"repaired" — `solveBoard`'s own re-verification held throughout, both
+before and after the guard) but NOT the capability one: with the guard
+declining, the fallthrough LLM repair round never resolved the underlying
+clash either, because — per `scripts/smoke.ts`'s own pre-#401 comment —
+this exact clash shape (recursive `person_overlap` across two TBD bracket
+slots) was ALWAYS structurally unrepairable by the model alone; z3's direct
+participation was specifically what made it repairable in the first place.
+So the guard alone reverts this shape to genuinely unrepairable, not merely
+slower — a real capability regression, and knockout brackets refined after
+round-1 results are known are the ORDINARY case for this shape, not an edge
+case. Reproduction script, committed and runnable:
+`scripts/repro-ai-bracket-frozen-feeder.ts` (has the full scenario, the
+measured telemetry, and instructions to re-run it against whatever this
+task builds).
+
+**This is now an explicit acceptance criterion for THIS task — see
+"Acceptance" below — not merely a hoped-for side effect of decomposition.**
+The expectation (stated in "Goal" below, unchanged) is that keeping a
+dependency's two ends in the same connected component whenever one is
+frozen closes this by construction: the playoff and both its semis solve
+TOGETHER, so there is no frozen/free straddle for the encoder to miss. Treat
+that as a claim to VERIFY against `repro-ai-bracket-frozen-feeder.ts`
+directly, not an assumption — if some other shape (e.g. a THREE-round
+bracket, or a semi-final that is ITSELF a violator in some later round)
+still straddles a component boundary, say so plainly rather than declaring
+the class closed on one example. Once verified, evaluate whether C5's
+`a59a9916` guard becomes redundant (decomposition should make the straddle
+it defends against unreachable) and is safe to remove — do not assume it
+must stay forever just because it shipped first.
 
 ## The premise correction this task rests on
 
@@ -154,6 +222,27 @@ behaviour (it stays compiling until C8).
 - **No moderate-density regression:** the 10/30 scenario stays at 0 blocking
   and does not get materially slower than C5's 433–817 ms. Decomposition
   overhead on an easy board must not cost more than it saves.
+- **The bracket/frozen-feeder regression that parked C5's PR (#576) is
+  closed, measured against the SAME reproduction, not a new one:**
+  `scripts/repro-ai-bracket-frozen-feeder.ts` run against this task's
+  decomposed driver returns `repair: {engine:"optimized", status:"repaired",
+  moved:1}` (or another genuinely repaired shape — `moved` is not required
+  to be exactly 1, see C5's own note that CP-SAT has no minimality
+  preference within a violator set unless a certificate proves one) with
+  ZERO `person_overlap` rows in `blocking`, on a knockout bracket where a
+  free dependent (the third-place playoff) depends on frozen non-violator
+  feeders (two decided semi-finals). This is a SEPARATE, higher-priority
+  acceptance criterion from the density one above — it is what parked C5,
+  not merely a nice-to-have alongside it. `scripts/smoke.ts:9768`/`:9772`/
+  `:9780` ("v4 AI/bracket", #396/#399/#401) were deliberately left failing,
+  unrelaxed, by C5 specifically so their passing again is this criterion's
+  own CI-visible signal — do not relax them separately from actually fixing
+  the underlying capability.
+- Once the criterion above is verified, evaluate whether C5's frozen-feeder
+  guard (`schedule-ai-solver.ts`, commit `a59a9916` on
+  `feat/c5-ai-repair-cpsat`) is now redundant and safe to remove — state the
+  decision either way in this task's own PR, do not silently carry two
+  overlapping mechanisms without saying so.
 - Component-limit and per-component-budget constants are backed by a MEASURED
   CP-SAT curve pasted in the PR, not inherited from z3's.
 - Anytime property proven by test: a deliberately short budget yields a
