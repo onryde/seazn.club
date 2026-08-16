@@ -57,6 +57,11 @@ function squad(members: SquadMember[]): SideSquad {
   return { entrantId: "home-1", members, subsUsed: 0, exemptUsed: {} };
 }
 
+// A5 (R2, folded into this task): "who out" and "fielder" are genuinely
+// OPPOSITE sides in a real wicket flow — the batting side's on-field pair
+// vs the fielding side's own roster. `side` proves that split: "who" reads
+// "home", "fielder" reads "away", so a passing suite is proof the wizard
+// resolved each step against the RIGHT squad, not just A squad.
 const wicketSpec: GuidedSheetSpec = {
   event: "cricket.wicket",
   steps: [
@@ -69,8 +74,8 @@ const wicketSpec: GuidedSheetSpec = {
         { id: "caught", label: "pad.sheet.wicket.kind.caught" },
       ],
     },
-    { id: "who", kind: "person", title: "pad.sheet.wicket.who.title", pool: "onfield" },
-    { id: "fielder", kind: "person", title: "pad.sheet.wicket.fielder.title", pool: "bench" },
+    { id: "who", kind: "person", title: "pad.sheet.wicket.who.title", pool: "onfield", side: "home" },
+    { id: "fielder", kind: "person", title: "pad.sheet.wicket.fielder.title", pool: "bench", side: "away" },
   ],
   buildPayload: (answers) => ({ kind: answers.kind, out: answers.who, fielder: answers.fielder }),
 };
@@ -155,17 +160,28 @@ function findByText(tree: ReturnType<typeof buttonsOf>, text: string) {
 }
 
 describe("GuidedSheet rendering", () => {
+  // A5: TWO distinct squads — "who" (side: "home") must resolve against
+  // baseSquad ONLY, "fielder" (side: "away") against fieldingSquad ONLY. A
+  // host that mixed the two up (e.g. always passing `views.home` regardless
+  // of `step.side`) would leak home names into the fielder step or vice
+  // versa — every assertion below on WHICH names appear is the guard
+  // against exactly that.
   const baseSquad = squad([
     member({ personId: "kannan", onField: true }),
     member({ personId: "arjun", onField: true }),
     member({ personId: "bench1", onField: false }),
   ]);
-  const names = { kannan: "Kannan", arjun: "Arjun", bench1: "Bench One" };
+  const fieldingSquad = squad([
+    member({ personId: "bowler1", onField: true }),
+    member({ personId: "fieldBench1", onField: false }),
+  ]);
+  const views = { home: { squad: baseSquad }, away: { squad: fieldingSquad } };
+  const names = { kannan: "Kannan", arjun: "Arjun", bench1: "Bench One", bowler1: "Bowler One", fieldBench1: "Field Bench One" };
 
   it("renders the first step's title and its choice options as real >=44px buttons, no Back on step 1, Cancel always present", () => {
     const island = renderIsland(GuidedSheet, {
       spec: wicketSpec,
-      view: { squad: baseSquad },
+      views,
       personNames: names,
       t,
       onComplete: () => {},
@@ -181,7 +197,7 @@ describe("GuidedSheet rendering", () => {
   it("answering the choice step advances to the person step and shows a Back control", () => {
     const island = renderIsland(GuidedSheet, {
       spec: wicketSpec,
-      view: { squad: baseSquad },
+      views,
       personNames: names,
       t,
       onComplete: () => {},
@@ -195,7 +211,7 @@ describe("GuidedSheet rendering", () => {
   it('a person step with pool "onfield" resolves candidates via resolvePool — onfield only, bench excluded', () => {
     const island = renderIsland(GuidedSheet, {
       spec: wicketSpec,
-      view: { squad: baseSquad },
+      views,
       personNames: names,
       t,
       onComplete: () => {},
@@ -211,7 +227,7 @@ describe("GuidedSheet rendering", () => {
   it('the fielder step (pool "bench") resolves the bench-only split — never candidatesForPerson\'s bench-inclusive pool', () => {
     const island = renderIsland(GuidedSheet, {
       spec: wicketSpec,
-      view: { squad: baseSquad },
+      views,
       personNames: names,
       t,
       onComplete: () => {},
@@ -222,14 +238,40 @@ describe("GuidedSheet rendering", () => {
     const shown = buttonsOf(island.tree())
       .map((b) => textOf(b))
       .filter((text) => text !== "pad.sheet.back" && text !== "pad.sheet.cancel");
-    expect(shown).toEqual(["Bench One"]); // bench only: kannan/arjun (onfield) excluded
+    // Bench of the AWAY squad (side: "away") — never baseSquad's own bench
+    // (bench1/"Bench One"), which would leak if the host used `views.home`
+    // for both steps instead of resolving per `step.side`.
+    expect(shown).toEqual(["Field Bench One"]);
+  });
+
+  it("A5: the who step and the fielder step draw from DIFFERENT squads — a home name never appears as a fielder candidate and vice versa", () => {
+    const island = renderIsland(GuidedSheet, {
+      spec: wicketSpec,
+      views,
+      personNames: names,
+      t,
+      onComplete: () => {},
+    });
+    click(findByText(buttonsOf(island.tree()), "pad.sheet.wicket.kind.caught"));
+    const whoShown = buttonsOf(island.tree())
+      .map((b) => textOf(b))
+      .filter((text) => text !== "pad.sheet.back" && text !== "pad.sheet.cancel");
+    expect(whoShown).not.toContain("Bowler One"); // away-side onfield member must not leak into the home-side "who" step
+    expect(whoShown).not.toContain("Field Bench One");
+
+    click(findByText(buttonsOf(island.tree()), "Kannan"));
+    const fielderShown = buttonsOf(island.tree())
+      .map((b) => textOf(b))
+      .filter((text) => text !== "pad.sheet.back" && text !== "pad.sheet.cancel");
+    expect(fielderShown).not.toContain("Arjun"); // home-side member must not leak into the away-side "fielder" step
+    expect(fielderShown).not.toContain("Bench One");
   });
 
   it("answering the last step calls onComplete with {type: spec.event, payload: buildPayload(answers)} for ALL accumulated answers", () => {
     let completed: unknown = null;
     const island = renderIsland(GuidedSheet, {
       spec: wicketSpec,
-      view: { squad: baseSquad },
+      views,
       personNames: names,
       t,
       onComplete: (event) => {
@@ -238,11 +280,11 @@ describe("GuidedSheet rendering", () => {
     });
     click(findByText(buttonsOf(island.tree()), "pad.sheet.wicket.kind.caught"));
     click(findByText(buttonsOf(island.tree()), "Kannan"));
-    click(findByText(buttonsOf(island.tree()), "Bench One"));
+    click(findByText(buttonsOf(island.tree()), "Field Bench One"));
 
     expect(completed).toEqual({
       type: "cricket.wicket",
-      payload: { kind: "caught", out: "kannan", fielder: "bench1" },
+      payload: { kind: "caught", out: "kannan", fielder: "fieldBench1" },
     });
   });
 
@@ -250,7 +292,7 @@ describe("GuidedSheet rendering", () => {
     let completed = false;
     const island = renderIsland(GuidedSheet, {
       spec: wicketSpec,
-      view: { squad: baseSquad },
+      views,
       personNames: names,
       t,
       onComplete: () => {
@@ -269,7 +311,7 @@ describe("GuidedSheet rendering", () => {
     let cancelled = false;
     const island = renderIsland(GuidedSheet, {
       spec: wicketSpec,
-      view: { squad: baseSquad },
+      views,
       personNames: names,
       t,
       onComplete: () => {
@@ -290,7 +332,7 @@ describe("GuidedSheet rendering", () => {
     let completed = false;
     const island = renderIsland(GuidedSheet, {
       spec: wicketSpec,
-      view: { squad: baseSquad },
+      views,
       personNames: names,
       t,
       onComplete: () => {
@@ -303,10 +345,14 @@ describe("GuidedSheet rendering", () => {
 
   it("a genuinely empty candidate pool renders the reused noRoster empty text, not a blank step", () => {
     const soloSquad = squad([member({ personId: "kannan", onField: true })]);
+    // The away squad needs its OWN onfield member (so "fielder"'s bench pool
+    // is empty for the honest reason — nobody on the bench — not merely
+    // because this squad happens to be tiny).
+    const soloAwaySquad = squad([member({ personId: "onlyFielder", onField: true })]);
     const island = renderIsland(GuidedSheet, {
       spec: wicketSpec,
-      view: { squad: soloSquad },
-      personNames: { kannan: "Kannan" },
+      views: { home: { squad: soloSquad }, away: { squad: soloAwaySquad } },
+      personNames: { kannan: "Kannan", onlyFielder: "Only Fielder" },
       t,
       onComplete: () => {},
     });

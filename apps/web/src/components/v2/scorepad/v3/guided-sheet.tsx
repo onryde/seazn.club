@@ -30,18 +30,22 @@
 // renderCandidateRow, so a person step looks and behaves exactly like every
 // other picker in this chassis rather than a parallel one.
 //
-// SCOPE NOTE (mirrors context-strip.tsx's / swap-sheet.tsx's own "SCOPE
-// NOTE"s): this component takes exactly ONE `view: PoolView` — one squad —
-// for its whole lifetime, matching ContextStripProps/SwapSheetProps'
-// convention exactly. Cricket's real wicket flow needs the BATTING side for
-// "who out" and the FIELDING side for "fielder" — two different squads a
-// single PoolView cannot express. That is a real limitation of this general
-// chassis primitive, deliberately left unsolved here: which squad(s) back a
-// given sheet's steps is exactly the kind of per-sport decision Ruling F
-// already prices in as a later skin's job, not this file's. The wave that
-// wires cricket's actual wicket sheet must either widen this contract (e.g.
-// resolve a per-step squad before rendering) or work around it another way
-// — flagged here rather than silently assumed away.
+// SCOPE NOTE, UPDATED (R2/task A5 — the wave that hits this first, exactly
+// as flagged below used to predict): unlike ContextStripProps/
+// SwapSheetProps, this component does NOT take one `view: PoolView` for its
+// whole lifetime. Cricket's real wicket flow needs the BATTING side for
+// "who out" and the FIELDING side for "fielder" in ONE sheet — two
+// different squads a single PoolView cannot express, and the person steps
+// here are the one place in this chassis where that actually bites (a
+// context-strip chip or a swap sub is always scoped to ONE side already).
+// `GuidedSheetProps.views` below is a `{home, away}` pair instead: each
+// `SheetPersonStep` now carries its own REQUIRED `side` (types.ts), and
+// `resolvePool` is called against `views[step.side]` — the chassis still
+// makes no decision about which side means what (it does not know "home"
+// is batting or fielding right now); it only picks the matching PoolView a
+// skin's own step already named. The former text of this note ("deliberately
+// left unsolved here... the wave that wires cricket's actual wicket sheet
+// must either widen this contract") is exactly what this change does.
 //
 // RENDERER DESIGN (frontend-design pass, task A1): reuses swap-sheet.tsx's
 // card idiom verbatim (plain white/slate-200 card, .mk-eyebrow step title,
@@ -161,10 +165,13 @@ function renderChoiceRow(options: readonly { id: string; label: string }[], t: T
 
 export interface GuidedSheetProps {
   spec: GuidedSheetSpec;
-  /** The single squad every `kind:"person"` step in this sheet resolves
-   *  against — see the file header's SCOPE NOTE for why this is one squad,
-   *  not per-side. */
-  view: PoolView;
+  /** Both squads a `kind:"person"` step might resolve against — see the
+   *  file header's SCOPE NOTE. Each step picks its own via its REQUIRED
+   *  `side` (types.ts's `SheetPersonStep`); this component never guesses
+   *  which one a step meant. Built once by the host per render
+   *  (pad-host.tsx's `sidePool` builder) from whichever `SquadState` the
+   *  current fold carries. */
+  views: Readonly<Record<"home" | "away", PoolView>>;
   personNames: Readonly<Record<string, string>>;
   t: TFn;
   /** Fires once the LAST step is answered: `{type: spec.event, payload:
@@ -191,7 +198,7 @@ export interface GuidedSheetProps {
  * wizard — the same "reset, don't carry stale state forward" posture
  * DetailDock takes on a new `heldId` (render-phase reset, its own header).
  */
-export function GuidedSheet({ spec, view, personNames, t, onComplete, onCancel }: GuidedSheetProps) {
+export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel }: GuidedSheetProps) {
   const [state, setState] = useState<GuidedSheetState>(() => initialSheetState());
   const step = currentStep(spec, state);
 
@@ -226,7 +233,7 @@ export function GuidedSheet({ spec, view, personNames, t, onComplete, onCancel }
       <div className="px-4 py-3">
         {step.kind === "choice"
           ? renderChoiceRow(step.options, t, handleAnswer)
-          : renderCandidateRow(resolvePool({ pool: step.pool }, view), personNames, t, handleAnswer, emptyText)}
+          : renderCandidateRow(resolvePool({ pool: step.pool }, views[step.side]), personNames, t, handleAnswer, emptyText)}
       </div>
       <div className="flex justify-end px-4 pb-3">
         <button type="button" onClick={handleCancel} style={{ minHeight: 44 }} className={cancelButtonClass}>

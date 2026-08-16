@@ -12,7 +12,7 @@ import type { CricketBallEv, CricketCfg, CricketState } from "@seazn/engine/spor
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { foldClient, resolveModuleClient } from "../module-client";
 import type { AppendCallResult, AppendEventBody } from "../pipeline";
-import { HOLD_MS, enqueue, enqueueHeld } from "../queue";
+import { HOLD_MS, enqueue, enqueueHeld, releaseHeld } from "../queue";
 import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "../types";
 import type { FixtureStateResult, PadTransport } from "../transport";
 import type { RealtimeConnector } from "../use-fixture-stream";
@@ -2004,5 +2004,138 @@ describe("usePadPipeline — task 4 fix round 1 (controller review findings 1 & 
     expect(appendCalls).toHaveLength(1);
     expect(appendCalls[0]!.body.payload).toEqual({ by: "H", points: 1 });
     expect(pad.current.queueDepth).toBe(0);
+  });
+});
+
+// R2 (spec §2.3, task B — v3 pad host): the soft-commit entry point the
+// dock's held path actually calls. `submit()` above is UNTOUCHED — same
+// enqueue()+runDrain() behaviour it always had — this is a SEPARATE method
+// sharing its double-submit guard/expectedSeq/optimistic-commit machinery
+// (same refs, same closure) but enqueuing HELD (queue.ts's `enqueueHeld`)
+// and never calling `runDrain` itself: "only the enqueue -> send moment
+// moves" (spec §2.3's own framing). `dropHeldSubmission` is the undo-INSIDE-
+// the-window half: queue.ts's `dropHeld` (no network, no core.void) PLUS the
+// matching `pendingEnvelopes` rollback `dropHeld` alone cannot reach, since
+// that map is this hook's own private state.
+describe("usePadPipeline — R2 soft-commit entry point (submitHeld / dropHeldSubmission)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("advances the optimistic fold immediately but defers the send until onDue fires and a drain is triggered", async () => {
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(1)] });
+    const pad = mountPipeline(baseParams({ transport }));
+    await vi.advanceTimersByTimeAsync(0); // let the mount-time resume/drain effect settle first
+
+    const onDue = vi.fn();
+    const held = await pad.current.submitHeld("generic.score", { by: "H", points: 3 }, HOLD_MS, onDue);
+
+    expect(held).not.toBeNull();
+    expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({ home: 3, away: 0 });
+    expect(appendCalls).toHaveLength(0); // durably queued, not sent
+    expect(pad.current.queueDepth).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    expect(onDue).toHaveBeenCalledTimes(1); // the hold's own release tick fired
+    expect(appendCalls).toHaveLength(0); // firing onDue is not itself a send — nothing here calls retryDrain
+
+    // The dock's real onDue is `() => void pipeline.retryDrain()` — proved
+    // directly, not assumed: calling it now is what actually sends.
+    await pad.current.retryDrain();
+    expect(appendCalls).toHaveLength(1);
+    expect(appendCalls[0]!.body.payload).toEqual({ by: "H", points: 3 });
+    expect(pad.current.queueDepth).toBe(0);
+  });
+
+  it("releasing early (Dock 'send now') sends without waiting out the rest of the window", async () => {
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(1)] });
+    const pad = mountPipeline(baseParams({ transport }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const onDue = vi.fn(() => {
+      void pad.current.retryDrain();
+    });
+    const held = await pad.current.submitHeld("generic.score", { by: "A", points: 2 }, HOLD_MS, onDue);
+    expect(held).not.toBeNull();
+
+    await releaseHeld(pad.current.queueStore, held!.heldId); // the SAME store retryDrain/enqueueHeld share
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onDue).toHaveBeenCalledTimes(1);
+    expect(appendCalls).toHaveLength(1);
+    expect(appendCalls[0]!.body.payload).toEqual({ by: "A", points: 2 });
+
+    // The now-cancelled natural tick must never ALSO fire a second send.
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    expect(appendCalls).toHaveLength(1);
+  });
+
+  it("shares submit()'s double-submit guard: an identical action within the window holds nothing new", async () => {
+    const { transport } = fakeTransport({ appendResults: [] });
+    const pad = mountPipeline(baseParams({ transport }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const first = await pad.current.submitHeld("generic.score", { by: "H", points: 1 }, HOLD_MS, vi.fn());
+    const second = await pad.current.submitHeld("generic.score", { by: "H", points: 1 }, HOLD_MS, vi.fn());
+
+    expect(first).not.toBeNull();
+    expect(second).toBeNull(); // identical action, accepted too recently — same DOUBLE_SUBMIT_WINDOW_MS submit() uses
+    expect(pad.current.queueDepth).toBe(1); // only one entry was ever held
+  });
+
+  it("dropHeldSubmission undoes a still-held tap with no network call, no core.void, and reverts the optimistic fold", async () => {
+    const { transport, appendCalls } = fakeTransport({ appendResults: [] });
+    const pad = mountPipeline(baseParams({ transport }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const held = await pad.current.submitHeld("generic.score", { by: "H", points: 5 }, HOLD_MS, vi.fn());
+    expect(held).not.toBeNull();
+    expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({ home: 5, away: 0 });
+
+    const dropped = await pad.current.dropHeldSubmission(held!.heldId);
+    expect(dropped).toBe(true);
+    // Reverted — exactly as if the tap never happened (`ledgerEvents` alone,
+    // matching the "optimistic fold" describe block's own pre-tap assertion).
+    expect((pad.current.state as { running: unknown }).running).toBeUndefined();
+    expect(pad.current.queueDepth).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(HOLD_MS); // the (cancelled) release tick must never fire a send either
+    expect(appendCalls).toHaveLength(0);
+    expect(appendCalls.some((c) => c.body.type === "core.void")).toBe(false);
+  });
+
+  it("dropHeldSubmission is a no-op for an id that names no currently-held entry (already sent, or never held)", async () => {
+    const { transport } = fakeTransport({ appendResults: [] });
+    const pad = mountPipeline(baseParams({ transport }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(await pad.current.dropHeldSubmission("ghost")).toBe(false);
+  });
+
+  it("queueStore is the SAME store submit()'s own plain enqueue path drains — a plain submit still sends normally", async () => {
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(1)] });
+    const pad = mountPipeline(baseParams({ transport }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Seeded directly against the exposed store, bypassing submit()/
+    // submitHeld() entirely — proves `queueStore` is genuinely the hook's
+    // own live store (same pattern the R1 fix-round-1 tests above use via
+    // `indexedDbQueueStore("scorepad-queue-fx-1")`), not a disconnected copy.
+    await enqueue(pad.current.queueStore, {
+      localId: "direct-2",
+      idempotencyKey: "direct-2",
+      type: "generic.score",
+      payload: { by: "A", points: 9 },
+      expectedSeq: 0,
+      createdAt: new Date().toISOString(),
+      attempts: 0,
+    });
+    await pad.current.retryDrain();
+
+    expect(appendCalls).toHaveLength(1);
+    expect(appendCalls[0]!.body.payload).toEqual({ by: "A", points: 9 });
   });
 });

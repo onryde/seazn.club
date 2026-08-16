@@ -28,6 +28,7 @@ import { PadRenderer } from "./pad-renderer";
 import { skinFor } from "./skins/registry";
 import type { SkinDef } from "./skins/types";
 import { resolvePad } from "./v3/registry";
+import { PadHostV3 } from "./v3/pad-host";
 
 // ---------------------------------------------------------------------------
 // resolveScorePad — the written decision table
@@ -263,22 +264,42 @@ export function ScorePad(props: ScorePadProps) {
   // above already succeeded, which only happens for a key the engine's
   // registry actually has registered (i.e. a `builtinModules` key), so
   // `resolvePad` here is guaranteed a key `v3/registry.ts`'s `LEGACY_SPORTS`
-  // owns and cannot throw on this path. R1 ships zero v3 skins
-  // (`V3_SKINS` is empty), so `padLane.lane` is always "legacy" today and
-  // this reaches EXACTLY the pre-existing `resolveScorePad` call below with
-  // no behavioural change.
+  // owns and cannot throw on this path.
+  //
+  // R2/task B replaces what used to be a deliberate throw
+  // (`"resolved to the v3 lane but no v3 renderer is wired yet"`) with the
+  // REAL v3 branch, `PadHostV3` (./v3/pad-host.tsx) — R1 shipped six
+  // chassis primitives with zero production import sites; this is that
+  // import site. `V3_SKINS` (v3/registry.ts) stays EMPTY through the end of
+  // this wave (cricket's own conversion is a later task), so `padLane.lane`
+  // is still always "legacy" today and every real call still reaches
+  // EXACTLY the pre-existing `resolveScorePad`/`PadRenderer` path below with
+  // NO behavioural change — but the v3 branch is now real, tested code a
+  // later wave activates by adding one entry to `V3_SKINS`, not a throw
+  // someone has to notice and replace first.
   const padLane = resolvePad(props.sportKey);
-  let padResolution: ScorePadResolution;
-  if (padLane.lane === "legacy") {
-    padResolution = resolveScorePad(props.sportKey);
-  } else {
-    // Unreachable in R1. Kept as a loud failure — not a silent fallback —
-    // so a later wave that adds a sport to `V3_SKINS` is forced to also
-    // wire this branch's real v3 render path before that sport can ship,
-    // rather than this file quietly mis-rendering it through the legacy
-    // renderer or crashing somewhere less obvious.
-    throw new Error(`ScorePad: "${props.sportKey}" resolved to the v3 lane but no v3 renderer is wired yet`);
+
+  if (padLane.lane === "v3") {
+    return (
+      <PadHostV3
+        module={resolution.module}
+        cfg={props.resolvedConfig}
+        fixtureId={props.fixtureId}
+        lineups={lineups}
+        identity={props.identity}
+        transport={transport}
+        band={props.band}
+        entitlements={props.entitlements}
+        initialEvents={props.initialEvents}
+        onEvents={props.onEvents}
+        queueDbName={`scorepad-${props.fixtureId}`}
+        personNames={personNames}
+        skin={padLane.skin}
+      />
+    );
   }
+
+  const padResolution = resolveScorePad(props.sportKey);
 
   return (
     <PadRenderer
