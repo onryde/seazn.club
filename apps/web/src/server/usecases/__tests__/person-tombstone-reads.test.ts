@@ -13,17 +13,9 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createPerson, listPersons } from "../persons";
-import {
-  confirmRegistration,
-  putRegistrationSettings,
-  submitRegistration,
-} from "../registrations";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
-
-/** Old enough that the registration flow links the session (#402 finding 5). */
-const ADULT_DOB = "1990-05-05";
 
 const DIVISION_CONFIG = { points: { w: 3, d: 1, l: 0 }, progressScore: false };
 
@@ -46,14 +38,6 @@ async function seedPublicDivision(
     eligibility: [],
   });
   return { divisionId: division.id, orgSlug, compSlug: competition.slug };
-}
-
-async function makeLoginUser(): Promise<string> {
-  const [u] = await sql<{ id: string }[]>`
-    insert into users (email, display_name, email_verified)
-    values (${`t404-${randomUUID().slice(0, 8)}@test.local`}, 'Session User', true)
-    returning id`;
-  return u.id;
 }
 
 describe.skipIf(!HAS_DB)("#404 a tombstoned person is invisible", () => {
@@ -119,74 +103,19 @@ describe.skipIf(!HAS_DB)("#404 a tombstoned person is invisible", () => {
     expect(playerIds).not.toContain(absorbed.id);
   });
 
-  it("a registration upsert lands on the survivor, not the tombstone", async () => {
-    const { auth } = await seedOrg("pro");
-    const userId = await makeLoginUser();
-    const divA = await seedPublicDivision(auth);
-    const divB = await seedPublicDivision(auth);
-    for (const div of [divA, divB]) {
-      await putRegistrationSettings(auth, div.divisionId, {
-        enabled: true,
-        entrant_kind: "individual",
-        fee_cents: 0,
-        currency: "usd",
-        form_fields: [],
-        opens_at: null,
-        closes_at: null,
-        capacity: null,
-        refund_lock_at: null,
-      });
-    }
-    const submit = (div: typeof divA) =>
-      submitRegistration(
-        div.orgSlug,
-        div.compSlug,
-        {
-          division_id: div.divisionId,
-          display_name: "Sam Player",
-          contact_email: `sam-${randomUUID().slice(0, 8)}@test.local`,
-          dob: ADULT_DOB,
-          gender: null,
-          guardian_name: null,
-          guardian_consent: false,
-          privacy_consent: true,
-          registering_self: true,
-          answers: {},
-          players: [],
-        },
-        "http://test.local",
-        { sessionUserId: userId },
-      );
-
-    // The registration mints the account's player person...
-    const a = await submit(divA);
-    await confirmRegistration(auth, a.registration.id);
-    const [minted] = await sql<{ id: string }[]>`
-      select id from persons
-       where org_id = ${auth.orgId} and user_id = ${userId} and lane = 'player'`;
-
-    // ...and an organiser then merges it into an imported duplicate. The
-    // tombstone must release the (org, user, lane) identity slot so the
-    // survivor can take it — this is the state the ON CONFLICT has to survive.
-    const [survivor] = await sql<{ id: string }[]>`
-      insert into persons (org_id, full_name, lane) values (${auth.orgId}, 'Sam Player', 'player')
-      returning id`;
-    await sql`update persons set merged_into = ${survivor.id} where id = ${minted.id}`;
-    await sql`update persons set user_id = ${userId} where id = ${survivor.id}`;
-
-    // The next registration by the same account must land on the survivor. With
-    // a statement predicate that no longer implies the index predicate Postgres
-    // cannot infer the arbiter at all and this throws 42P10, not 23505.
-    const b = await submit(divB);
-    const confirmed = await confirmRegistration(auth, b.registration.id);
-    const [member] = await sql<{ person_id: string }[]>`
-      select person_id from entrant_members where entrant_id = ${confirmed.entrant_id as string}`;
-    expect(member.person_id).toBe(survivor.id);
-
-    const live = await sql<{ id: string }[]>`
-      select id from persons
-       where org_id = ${auth.orgId} and user_id = ${userId} and lane = 'player'
-         and merged_into is null`;
-    expect(live.map((r) => r.id)).toEqual([survivor.id]);
-  });
+  // "a registration upsert lands on the survivor, not the tombstone" DELETED
+  // (RS001 registration demolition, #588): its subject was `resolvePlayerPerson`
+  // — the ON-CONFLICT-by-(org_id,user_id,lane) upsert this test proved keeps
+  // arbitrating correctly even across a tombstone — reached via
+  // submitRegistration's session capture + confirmRegistration. Both links in
+  // that chain are gone: submitRegistration is deleted, AND (independently)
+  // `materialise`/`confirmRegistration` no longer CALLS `resolvePlayerPerson`
+  // at all — `registration_players` carries no user_id for it to resolve
+  // against (see registrations.ts's `resolvePlayerPerson`/`loadPlayers` doc
+  // comments: "Orphaned by the RS001 registration demolition… RS002/RS008
+  // need this exact upsert once the claim flow supplies a real link"). A
+  // seeded input cannot fix this — the upsert call site itself does not run
+  // today, so nothing would land on the survivor to assert against. Tracked
+  // for #404's review queue; RS002/RS008 own re-wiring the call and
+  // re-testing this file's premise once the claim flow supplies a real link.
 });

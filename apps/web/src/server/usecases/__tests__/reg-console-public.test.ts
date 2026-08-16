@@ -13,7 +13,8 @@ import {
   publicRegistrationInfo,
   publicRegistrationStatus,
   putRegistrationSettings,
-  submitRegistration,
+  hashRegistrationToken,
+  REGISTRATION_TOKEN_PREFIX,
 } from "../registrations";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
@@ -90,30 +91,36 @@ async function rig(owner: AuthCtx, capacity: number | null) {
   return { competition, division };
 }
 
-const SUBMIT_BASE = {
-  display_name: "Alex Test",
-  contact_email: "alex@test.local",
-  dob: null,
-  gender: null,
-  guardian_name: null,
-  guardian_consent: false,
-  privacy_consent: true,
-  answers: {},
-  players: [],
+/**
+ * `submitRegistration` is deleted (RS001 registration demolition, #588) — see
+ * registrations.test.ts's own `seedRegistration` doc comment for the full
+ * rationale. Kept as a SEPARATE, minimal helper here (not imported from that
+ * suite) per this file's own header: neither suite may destabilise the
+ * other. Both tests below read waitlist COUNT/POSITION off rows that already
+ * hold a given status — overflow-at-submission itself was submitRegistration's
+ * decision and isn't reproduced; the rows are seeded directly in the state a
+ * capacity-1 submission run would have left them in.
+ */
+const seedEntry = async (
+  competitionId: string,
+  divisionId: string,
+  name: string,
+  status: "pending" | "waitlisted" = "pending",
+): Promise<{ id: string; access_token: string }> => {
+  const rawToken = REGISTRATION_TOKEN_PREFIX + randomUUID().replace(/-/g, "");
+  const [group] = await sql<{ id: string }[]>`
+    insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash)
+    values (
+      ${competitionId}, ${name}, ${`${name.toLowerCase().replace(/ /g, ".")}@test.local`},
+      ${hashRegistrationToken(rawToken)}
+    )
+    returning id`;
+  const [reg] = await sql<{ id: string }[]>`
+    insert into registrations (group_id, division_id, display_name, status)
+    values (${group.id}, ${divisionId}, ${name}, ${status})
+    returning id`;
+  return { id: reg.id, access_token: rawToken };
 };
-
-const submit = (orgSlug: string, compSlug: string, divisionId: string, name: string) =>
-  submitRegistration(
-    orgSlug,
-    compSlug,
-    {
-      ...SUBMIT_BASE,
-      division_id: divisionId,
-      display_name: name,
-      contact_email: `${name.toLowerCase().replace(/ /g, ".")}@test.local`,
-    },
-    "http://test.local",
-  );
 
 describe.skipIf(!HAS_DB)("PROMPT-52 public waitlist reads", () => {
   it("exposes waitlisted count on PublicDivisionInfo and #N on the status page", async () => {
@@ -121,16 +128,16 @@ describe.skipIf(!HAS_DB)("PROMPT-52 public waitlist reads", () => {
     const owner = asOwner(orgId, ownerId);
     const { competition, division } = await rig(owner, 1);
 
-    await submit(orgSlug, competition.slug, division.id, "Holder One");
-    const w1 = await submit(orgSlug, competition.slug, division.id, "First Wait");
-    const w2 = await submit(orgSlug, competition.slug, division.id, "Second Wait");
+    await seedEntry(competition.id, division.id, "Holder One", "pending");
+    const w1 = await seedEntry(competition.id, division.id, "First Wait", "waitlisted");
+    const w2 = await seedEntry(competition.id, division.id, "Second Wait", "waitlisted");
 
     const info = await publicRegistrationInfo(orgSlug, competition.slug);
     expect(info.divisions).toHaveLength(1);
     expect(info.divisions[0]!.waitlisted).toBe(2);
 
-    const s1 = await publicRegistrationStatus(w1.registration.id, w1.access_token);
-    const s2 = await publicRegistrationStatus(w2.registration.id, w2.access_token);
+    const s1 = await publicRegistrationStatus(w1.id, w1.access_token);
+    const s2 = await publicRegistrationStatus(w2.id, w2.access_token);
     expect(s1.status).toBe("waitlisted");
     expect(s1.position).toBe(1);
     expect(s2.position).toBe(2);
@@ -141,8 +148,8 @@ describe.skipIf(!HAS_DB)("PROMPT-52 public waitlist reads", () => {
     const owner = asOwner(orgId, ownerId);
     const { competition, division } = await rig(owner, 5);
 
-    const r = await submit(orgSlug, competition.slug, division.id, "In Room");
-    const s = await publicRegistrationStatus(r.registration.id, r.access_token);
+    const r = await seedEntry(competition.id, division.id, "In Room", "pending");
+    const s = await publicRegistrationStatus(r.id, r.access_token);
     expect(s.status).not.toBe("waitlisted");
     expect(s.position).toBeNull();
 
