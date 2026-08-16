@@ -46,8 +46,31 @@ export interface ScorebugProps {
   onTap?: (event: TapEvent) => void;
 }
 
-function whoNames(who: readonly WhoLine[]): string {
-  return who.map((w) => w.name).join(", ");
+/**
+ * Fix round 1 (review, Minor finding 3): the visible serving dot (below,
+ * `aria-hidden`) carried no screen-reader equivalent — the aria-label built
+ * from this function's output was who + hint only, silently dropping the
+ * "who is serving" cue sighted users get. Folded in here rather than left
+ * decorative-only.
+ *
+ * Reuses `scorepad.skin.tennis.header.serving` (already real copy in all
+ * four dictionaries — "Serving"/"Saque"/"Service"/"Opslag") instead of
+ * registering a new key: no dictionary file needed touching. Resolved via
+ * a DIRECT `t(key)` call, not `padLabel()` — every skin's own `captionKey`
+ * (the same "static, already-known-good UI caption" shape as this) resolves
+ * the identical way (`msg(field.captionKey as MessageKey)` in cricket-skin
+ * .tsx:391, football-skin.tsx:653, tennis-skin.tsx:415/428, racquet-skin
+ * .tsx:464) — `padLabel`'s PAD_LABEL_KEYS gate is for text that MIGHT be an
+ * unregistered dynamic key (like `ScorebugHalf.hint`, above), which this
+ * literal, known-valid key is not; routing it through `padLabel` would have
+ * silently always rendered the English fallback regardless of locale, since
+ * this key is not registered in PAD_LABEL_KEYS.
+ */
+function whoNames(who: readonly WhoLine[], t: MsgFn): string {
+  const servingLabel = t("scorepad.skin.tennis.header.serving");
+  return who
+    .map((w) => (w.serving ? `${w.name}, ${servingLabel}` : w.name))
+    .join(", ");
 }
 
 function HalfContent({ half, hintText }: { half: ScorebugHalf; hintText: string }) {
@@ -92,7 +115,10 @@ export function Scorebug({ spec, t, onTap }: ScorebugProps) {
             className="mk-live-dot h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--mk-live)]"
           />
         )}
-        <span className="app-display text-center text-[11px] tracking-wide text-cream/80">
+        <span
+          className="app-display text-center text-[11px] tracking-wide text-cream/80"
+          style={{ fontVariantNumeric: "tabular-nums" }}
+        >
           {spec.context}
         </span>
       </div>
@@ -107,7 +133,7 @@ export function Scorebug({ spec, t, onTap }: ScorebugProps) {
                 key={i}
                 type="button"
                 onClick={() => half.tapEvent && onTap?.(half.tapEvent)}
-                aria-label={[whoNames(half.who), hintText].filter(Boolean).join(" ")}
+                aria-label={[whoNames(half.who, t), hintText].filter(Boolean).join(" ")}
                 style={{ minHeight: 44 }}
                 className="flex flex-col items-center justify-center gap-1 px-3 py-3 text-center outline-offset-[-3px] transition-colors hover:bg-cream/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
               >

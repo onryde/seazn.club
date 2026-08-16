@@ -48,6 +48,25 @@ describe("contrastRatio (WCAG 2.x formula)", () => {
   it("is symmetric in argument order", () => {
     expect(contrastRatio("#150b36", "#f5f0e8")).toBeCloseTo(contrastRatio("#f5f0e8", "#150b36"), 10);
   });
+
+  // Fix round 1 (review, Important): the three checks above are all
+  // gamma-INVARIANT — 0 and 1 map to themselves whether or not
+  // srgbChannelToLinear's power-curve branch runs at all (0/12.92=0,
+  // ((1+0.055)/1.055)^2.4=1), so a mutant that deletes sRGB linearisation
+  // entirely (returns the normalised channel `s` unchanged) still passes
+  // all three, AND still clears every real token pair's floor below
+  // (naive/no-gamma values: creamOnNight 8.738 vs its 4.5 floor,
+  // creamOnNight2 7.023 vs 4.5, limeOnNight 7.444 vs 3.0 — all still
+  // "pass" without gamma correction at all). #767676 on white is the
+  // standard reference gray where gamma-correct and naive-linear
+  // contrast diverge enough to flip a real AA verdict: correct
+  // (gamma-applied) ratio is ~4.5422 (clears the 4.5 floor, barely, for
+  // real); naive (gamma deleted) is ~2.0478 (fails it outright). A
+  // mutant deleting srgbChannelToLinear's curve is only catchable via a
+  // pair like this one, not via an endpoint or an already-generous pair.
+  it("distinguishes gamma-correct from naive-linear luminance (#767676 on white)", () => {
+    expect(contrastRatio("#767676", "#ffffff")).toBeCloseTo(4.5422, 3);
+  });
 });
 
 describe("night-tile token pairs meet WCAG AA", () => {
