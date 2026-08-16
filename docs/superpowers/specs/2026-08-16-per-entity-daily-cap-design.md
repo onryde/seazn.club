@@ -152,6 +152,55 @@ invented-rule metric stops biting.
 5. **Bench** — re-run the 35-case corpus; `t01`/`t02` move from deferred
    to compiled without new inventions elsewhere.
 
+## Implementation finding 2026-08-16 — it is a TALLY change, not a scope change
+
+Investigated before starting, and it is bigger than approach A's
+description implies.
+
+Every existing `ConstraintScope` member answers one boolean question —
+"does this rule bind this fixture?" — via `scopeCoversFixture`
+(`calendar.ts:941`). A universal scope answers `true` for everything,
+which looks trivial. It is not, because of what sits behind it:
+
+```ts
+// calendar.ts — one counter per RULE per DAY
+const dayCounts = placementHard.map(() => new Map<string, number>());
+```
+
+A competition-scoped cap needs one counter per day. A per-person cap
+needs one counter **per person per day**, and a single fixture
+increments SEVERAL of them (both entrants, or every person on both
+sides). So:
+
+- the key becomes `${personKey}|${ymd}`, not `${ymd}`;
+- the placement-time READ must ask "would any person in this fixture
+  exceed their own count", not "would the day exceed its count";
+- the commit-time WRITE must increment every covered entity, not one
+  bucket.
+
+`scopeCoversFixture` returning `true` is necessary and nowhere near
+sufficient.
+
+**The hazard this creates is the repo's known worst one.** The same
+read/write pair exists twice — `calendar.ts` for the greedy placer and
+verifier, `build-encode.ts` for CP-SAT — and a placer/verifier fork is
+the recurring defect class here, which is why
+`calendar-placer-verifier-parity.test.ts` and
+`build-encode-parity.test.ts` both exist. Any implementation MUST
+extend those parity suites first, before either tally is touched.
+
+**Sequencing checked 2026-08-16, and it is clear:** open PR #576 (C5,
+z3-ai-repair → CP-SAT) touches ZERO files under
+`packages/engine/src/scheduling/`. `constraints.ts`, `calendar.ts` and
+`build-encode.ts` are uncontested. C7 is the z3 public contract, not the
+constraint enum, so the "engine enum" gate noted in the bench programme
+does not apply to `ConstraintScope`.
+
+**Estimate:** this is a session of its own — engine union, two tally
+implementations, two parity suites, golden corpus, then parser, prompt
+and corpus re-baseline. Starting it inside a session that has already
+shipped four other things is how a placer/verifier fork gets written.
+
 ## Risks
 
 - **Widest blast radius of anything proposed this session.** A
