@@ -337,6 +337,52 @@ export function runRate(runs: number, legalBalls: number, bpo: number): number |
 }
 
 /**
+ * The runs the chasing side needs to win, with the caption it should carry —
+ * ported from v2's own `chaseValue`+`isDls` pair (`../../skins/cricket-
+ * skin.tsx`). Major 3 (R2 review finding, `docs/superpowers/plans/2026-08-
+ * 16-scorepad-v3-r2-cricket.md`): `buildScorebug`'s first version read an
+ * EXPLICIT `revisedTarget` only, so an ORDINARY chase — no DLS revise, nobody
+ * manually set a target — showed nothing at all, even though that is the
+ * COMMON case (most matches never see a `cricket.revise`).
+ *
+ * Single-innings: an explicit `revisedTarget` when one has been recorded,
+ * else the trivial "first innings + 1" arithmetic — ONLY once a second
+ * innings actually exists (there is nothing to chase before that). Two-
+ * innings (test): only an EXPLICIT revision — the natural 4th-innings target
+ * needs cross-innings aggregation the engine owns privately (`chaseTarget()`,
+ * cricket.ts, not exported), and reimplementing that here would be exactly
+ * the domain-logic duplication v2's own comment already warned against; a
+ * two-innings match with no revise shows no target at all, matching v2 byte
+ * for byte.
+ *
+ * `isDls` mirrors v2's own guard exactly: `cfg.dls` must be CURRENTLY
+ * enabled, not merely true when the revise happened. When `value` comes from
+ * the arithmetic fallback (no `revisedTarget` recorded at all), `targetSource`
+ * is necessarily not `"dls"` either — the engine only ever sets the two
+ * together — so `isDls` is always false there; not a separate branch, the
+ * same single check v2 uses for both cases.
+ */
+export function chaseTarget(cfg: CricketCfgShape, state: CricketStateShape): { value: number; isDls: boolean } | null {
+  const innings = state.innings ?? [];
+  const singleInnings = cfg.inningsPerSide !== 2;
+  let value: number | null;
+  if (singleInnings) {
+    if (innings.length < 2) {
+      value = null;
+    } else if (state.revisedTarget != null) {
+      value = state.revisedTarget;
+    } else {
+      const first = innings[0];
+      value = typeof first?.runs === "number" ? first.runs + 1 : null;
+    }
+  } else {
+    value = state.revisedTarget ?? null;
+  }
+  if (value === null) return null;
+  return { value, isDls: cfg.dls?.enabled === true && state.targetSource === "dls" };
+}
+
+/**
  * A locale-INVARIANT format code (T20/ODI/HUNDRED/TEST), deliberately never
  * routed through `t`: these four are used as bare notation internationally
  * (the same convention a distance unit symbol or a jersey number gets),
@@ -396,44 +442,44 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   const dots = overDots(view.events, bpo);
 
   // REGRESSION FIX (not a deferred gap — found inside this wave's own blast
-  // radius): v2's `chaseValue`/`ck-revised-target` (cricket-skin.tsx) showed
-  // the chasing side's target the moment one existed; this v3 rewrite never
-  // read `revisedTarget`/`targetSource` at all. Appended to `strip`, never
-  // `context`: `context` is the chassis's most MUTED text (scorebug.tsx's
-  // `creamTextSubtle`, 11px) reserved for ambient format/over/run-rate,
-  // while `strip` already supports per-item `accent` emphasis (the striker
-  // marker uses it) and sits one visual step below the halves — the closest
-  // available slot to "the score itself" without widening `halves`' fixed
-  // 2-slot tuple, which would touch the shared chassis type/renderer this
-  // wave must not edit. APPENDED after bowler, not prepended: prepending
-  // would reindex the four existing items `cricket.test.ts` already pins at
-  // strip[0]/[1]/[3] for no functional gain. `accent: true` so it reads with
-  // the same visual weight as the on-strike marker, matching "the most-read
-  // number after the score" — the other three passive items stay muted.
-  // Gated on `revisedTarget != null` ONLY (no fidelity-band check): the
-  // fold populates it from band 1 up (cricket.ts:465-466) and this builder
-  // never reads `view.band`, so a lower-band pad still gets it — the
-  // ball-by-ball strip items above it (striker/dots/bowler) are the band-3
-  // surface, this is not. Deliberately narrower than v2's own `chaseValue`:
-  // that function ALSO fabricated a plain "first innings + 1" arithmetic
-  // target when no revise had happened yet — this reads only the engine's
-  // own recorded `revisedTarget`, never re-derives the arithmetic itself
-  // (out of scope for a regression fix; the ledger is the source of truth).
-  // `targetSource` changes what a scorer understands (a DLS par is "be
-  // ahead of this line right now", not "reach this total by the end") so it
-  // picks the caption, exactly mirroring v2's own `isDls` guard — cfg.dls
-  // must be CURRENTLY enabled, not just true when the revise happened.
+  // radius, then extended by Major 3's own review finding): v2's
+  // `chaseValue`/`ck-revised-target` (cricket-skin.tsx) showed the chasing
+  // side's target the moment one existed — including the plain "first
+  // innings + 1" arithmetic for an ordinary chase with no DLS revise, the
+  // COMMON case; this v3 rewrite originally read `revisedTarget` only, which
+  // Major 3 closes via `chaseTarget` above (ported from v2 verbatim).
+  // Appended to `strip`, never `context`: `context` is the chassis's most
+  // MUTED text (scorebug.tsx's `creamTextSubtle`, 11px) reserved for ambient
+  // format/over/run-rate, while `strip` already supports per-item `accent`
+  // emphasis (the striker marker uses it) and sits one visual step below the
+  // halves — the closest available slot to "the score itself" without
+  // widening `halves`' fixed 2-slot tuple, which would touch the shared
+  // chassis type/renderer this wave must not edit. APPENDED after bowler,
+  // not prepended: prepending would reindex the four existing items
+  // `cricket.test.ts` already pins at strip[0]/[1]/[3] for no functional
+  // gain. `accent: true` so it reads with the same visual weight as the
+  // on-strike marker, matching "the most-read number after the score" — the
+  // other three passive items stay muted. Gated on `chaseTarget` returning
+  // non-null ONLY (no fidelity-band check): the fold populates
+  // `revisedTarget` from band 1 up (cricket.ts:465-466), the arithmetic
+  // fallback needs nothing from the fold beyond ordinary summary-level
+  // innings totals, and this builder never reads `view.band` — a lower-band
+  // pad still gets it. The ball-by-ball strip items above it (striker/dots/
+  // bowler) are the band-3 surface, this is not. `target.isDls` picks the
+  // caption (a DLS par is "be ahead of this line right now", not "reach
+  // this total by the end") — see `chaseTarget`'s own doc for why that flag
+  // is always false on the arithmetic-fallback branch, not a separate check.
   const strip: StripItem[] = [
     { value: `▸${strikerName}`, accent: true },
     { value: nonStrikerName },
     { value: dots.length > 0 ? dots.join(" ") : "—" },
     { value: `⚾${bowlerName}` },
   ];
-  if (state.revisedTarget != null) {
-    const isDls = cfg.dls?.enabled === true && state.targetSource === "dls";
+  const target = chaseTarget(cfg, state);
+  if (target) {
     strip.push({
-      label: t(isDls ? "scorepad.skin.cricket.header.dlsPar" : "scorepad.skin.cricket.header.target"),
-      value: String(state.revisedTarget),
+      label: t(target.isDls ? "scorepad.skin.cricket.header.dlsPar" : "scorepad.skin.cricket.header.target"),
+      value: String(target.value),
       accent: true,
     });
   }
@@ -594,6 +640,24 @@ export function buildDock(eventType: string, t: TFn): DockSpec | null {
 // skin still declares no `contextSelect` — the fix does not need one; a
 // per-slot override is not itself a persisted engine fact, exactly the gap
 // `contextSelect` exists to close for a sport whose engine CAN persist one.
+//
+// BLOCKER 2 (found by a later review, 2026-08-16, same plan doc): G5 made an
+// override PERSIST, but never asked whether the engine would actually ACCEPT
+// one for every slot — it does not. `cricket.ts`'s `applyDelivery` runs
+// striker/non-striker under `strictOrder: true` (cricket.ts:1183-1200), and
+// on the LIVE submit path (`isStrictFold` defaults true — only
+// reconciliation/replay of already-ledgered history ever passes
+// `strict:false`) a submitted ball whose striker/nonStriker disagrees with
+// the fold's OWN derived pair is refused outright, not silently corrected.
+// So a scorer tapping either chip and picking anyone could open the picker,
+// choose a name, and watch every subsequent ball get rejected — the exact
+// "picker opens and silently fails" shape G5 closed, reopened for two of
+// three slots. Bowler is different: `currentBowler === null` (an over
+// boundary, cricket.ts:1152-1172) accepts ANY eligible bowler with no
+// fold-match check at all — a genuine edit — so only striker/nonStriker get
+// `readOnly: true` below (ContextSlot.readOnly, ../types.ts). The two names
+// stay in the strip regardless: they are real, useful information (who is
+// on strike right now) even though a scorer cannot reassign them from here.
 // ---------------------------------------------------------------------------
 
 export function buildContext(view: PadHostView): ContextStripSpec | null {
@@ -603,8 +667,31 @@ export function buildContext(view: PadHostView): ContextStripSpec | null {
   const people = resolvePeople(state, view.contextOverrides);
   return {
     slots: [
-      { id: "striker", label: "pad.cricket.context.striker", personId: people.striker || undefined, pool: "onfield", required: true },
-      { id: "nonStriker", label: "pad.cricket.context.nonStriker", personId: people.nonStriker || undefined, pool: "onfield", required: true },
+      {
+        id: "striker",
+        label: "pad.cricket.context.striker",
+        personId: people.striker || undefined,
+        pool: "onfield",
+        required: true,
+        readOnly: true, // blocker 2 — see this file's header above
+      },
+      {
+        id: "nonStriker",
+        label: "pad.cricket.context.nonStriker",
+        personId: people.nonStriker || undefined,
+        pool: "onfield",
+        required: true,
+        readOnly: true, // blocker 2 — see this file's header above
+      },
+      // Bowler stays genuinely tappable: an over boundary
+      // (`currentBowler === null`) accepts any eligible bowler with no
+      // fold-match check (cricket.ts:1152-1172), a real edit. Note this
+      // chip does NOT yet distinguish that case from mid-over, where the
+      // fold is JUST as strict about bowler as it is about striker/
+      // non-striker (cricket.ts:1173-1178, "over in progress belongs to
+      // X") — blocker 2's own scope is "make striker and non-striker
+      // honest", not a new mid-over-bowler behaviour, so that finer split
+      // is flagged here rather than silently left unconsidered.
       { id: "bowler", label: "pad.cricket.context.bowler", personId: people.bowler || undefined, pool: "onfield", required: true },
     ],
   };

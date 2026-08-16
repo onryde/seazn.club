@@ -43,9 +43,11 @@ import { initSquads } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
+import { scoringErrorText, type MsgFn } from "@/lib/scoring-vocab";
 import type { PadTransport } from "../transport";
 import type { OwnIdentity } from "../types";
 import { usePadPipeline } from "../use-pad-pipeline";
+import type { RejectionInfo } from "../use-pad-pipeline";
 import { HOLD_MS } from "../queue";
 import { buildPadView, type PadActionView, type PadViewCtx } from "../view-model";
 import { createSkinDispatch } from "../skins/types";
@@ -180,6 +182,27 @@ export function resolveSheet(sheetKey: string, sheets: Record<string, GuidedShee
   if (sheetKey === MORE_SHEET_KEY) return { kind: "action" };
   const spec = sheets?.[sheetKey];
   return spec ? { kind: "guided", spec } : { kind: "none" };
+}
+
+/**
+ * Blocker 1 (R2 review finding, `docs/superpowers/plans/2026-08-16-
+ * scorepad-v3-r2-cricket.md`): `PadHostV3` built and held `pipeline.
+ * lastRejection` (usePadPipeline's own surfaced 422-class refusal) but never
+ * rendered it anywhere — a rejected v3 submission, in ANY sport, for ANY
+ * reason, produced NO on-screen feedback at all; the pad simply looked like
+ * it silently ignored the tap. This is chassis-wide (every later wave's
+ * skin renders through this one host), not a per-sport fix.
+ *
+ * Ports the legacy renderer's own surface verbatim in semantics
+ * (pad-renderer.tsx: `pipeline.lastRejection && <p>{scoringErrorText(...)}
+ * </p>`) — same source (`pipeline.lastRejection`), same resolver
+ * (`scoringErrorText`), same fallback key (`scorepad.rejection.fallback`,
+ * already localized in all 4 dictionaries — no new i18n key needed). `null`
+ * means "render nothing", matching the legacy renderer's `&&`-gated JSX.
+ */
+export function rejectionText(rejection: RejectionInfo | null, m: MsgFn): string | null {
+  if (!rejection) return null;
+  return scoringErrorText(rejection.code, rejection.message, m, "scorepad.rejection.fallback");
 }
 
 export type UndoDecision = { kind: "drop"; heldId: string } | { kind: "void"; eventId: string };
@@ -467,6 +490,9 @@ export function PadHostV3(props: PadHostV3Props) {
   const dockStore = useMemo(() => makeDockStore(pipeline.queueStore), [pipeline.queueStore]);
   const dockSpec = held ? props.skin.dock(held.eventType, view) : null;
 
+  // Blocker 1 — see rejectionText's own doc above.
+  const rejectionMsg = rejectionText(pipeline.lastRejection, msg);
+
   const events = pipeline.events;
   const latestEvent = events.length > 0 ? events[events.length - 1]! : null;
   const ribbon = latestEvent
@@ -490,6 +516,15 @@ export function PadHostV3(props: PadHostV3Props) {
       <div data-role="v3-scorebug">
         <Scorebug spec={scorebugSpec} t={t} onTap={(event: TapEvent) => void dispatch(event.type, event.payload)} />
       </div>
+
+      {rejectionMsg && (
+        <p
+          data-role="v3-rejection"
+          className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+        >
+          {rejectionMsg}
+        </p>
+      )}
 
       {ribbon && (
         <div

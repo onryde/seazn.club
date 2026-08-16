@@ -21,6 +21,7 @@ import {
   buildSheets,
   buildSwap,
   buildTiles,
+  chaseTarget,
   cricketSkinV3,
   currentInnings,
   oversText,
@@ -336,9 +337,27 @@ describe("buildScorebug", () => {
       expect(spec.strip).toHaveLength(4);
     });
 
+    // Major 3 (this wave's own Blocker/Major review): these four fixtures
+    // now open a SECOND innings before asserting on the target, matching
+    // `chaseTarget`'s ported-from-v2 guard (a single-innings cfg shows no
+    // target at all — explicit or arithmetic — before a second innings
+    // exists; see `chaseTarget`'s own doc). The pre-Major-3 version of this
+    // suite set `revisedTarget` against a ONE-innings fixture, which only
+    // passed because the OLD implementation had no innings-length gate at
+    // all — an artificial state the real engine's own UI never shows a
+    // target for. `innings()` (the second, open element) keeps the SAME
+    // striker/nonStriker/bowler `fine` block the pre-existing strip[0..3]
+    // assertions already depend on, so only the target-shaped assertions
+    // below actually changed meaning.
     it("appends the target after bowler, without disturbing the existing four items", () => {
       const spec = buildScorebug(
-        view({ state: state({ innings: [innings()], revisedTarget: 165, targetSource: "manual" }) }),
+        view({
+          state: state({
+            innings: [innings({ closed: true }), innings()],
+            revisedTarget: 165,
+            targetSource: "manual",
+          }),
+        }),
         t,
       );
       expect(spec.strip).toHaveLength(5);
@@ -356,7 +375,7 @@ describe("buildScorebug", () => {
       const spec = buildScorebug(
         view({
           cfg: cfg({ dls: { enabled: true } }),
-          state: state({ revisedTarget: 142, targetSource: "dls" }),
+          state: state({ innings: [innings({ closed: true }), innings()], revisedTarget: 142, targetSource: "dls" }),
         }),
         t,
       );
@@ -371,7 +390,7 @@ describe("buildScorebug", () => {
       const spec = buildScorebug(
         view({
           cfg: cfg({ dls: { enabled: false } }),
-          state: state({ revisedTarget: 142, targetSource: "dls" }),
+          state: state({ innings: [innings({ closed: true }), innings()], revisedTarget: 142, targetSource: "dls" }),
         }),
         t,
       );
@@ -384,7 +403,10 @@ describe("buildScorebug", () => {
 
     it("is available from fidelity band 1, not gated to band 3", () => {
       const spec = buildScorebug(
-        view({ band: 1, state: state({ revisedTarget: 99, targetSource: "manual" }) }),
+        view({
+          band: 1,
+          state: state({ innings: [innings({ closed: true }), innings()], revisedTarget: 99, targetSource: "manual" }),
+        }),
         t,
       );
       expect(spec.strip[4]).toEqual({
@@ -414,6 +436,75 @@ describe("buildScorebug", () => {
 
   it("phase mirrors resolvePhase", () => {
     expect(buildScorebug(view({ state: state({ phase: "done" }) }), t).phase).toBe("post");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// chaseTarget — Major 3 (R2 review finding). buildScorebug's ORIGINAL fix
+// only read an explicit `revisedTarget`; v2's own `chaseValue`
+// (../../skins/cricket-skin.tsx) ALSO derived a plain "first innings + 1"
+// target for an ordinary chase with no DLS revise at all — the COMMON case
+// (most matches never see a `cricket.revise`). This ports that arithmetic
+// fallback, matching v2 exactly.
+// ---------------------------------------------------------------------------
+
+describe("chaseTarget", () => {
+  it("is null before a second innings exists — nothing to chase yet", () => {
+    expect(chaseTarget(cfg(), state({ innings: [innings({ closed: true })] }))).toBeNull();
+  });
+
+  it("single innings, second innings started, no revise at all: first innings runs + 1 — the common case Major 3 restores", () => {
+    const first = innings({ runs: 150, closed: true });
+    const second = innings({ runs: 40, closed: false });
+    expect(chaseTarget(cfg(), state({ innings: [first, second] }))).toEqual({ value: 151, isDls: false });
+  });
+
+  it("an explicit revisedTarget wins over the arithmetic fallback", () => {
+    const first = innings({ runs: 150, closed: true });
+    const second = innings({ runs: 40, closed: false });
+    expect(
+      chaseTarget(cfg(), state({ innings: [first, second], revisedTarget: 130, targetSource: "manual" })),
+    ).toEqual({ value: 130, isDls: false });
+  });
+
+  it("isDls true only when cfg.dls is enabled AND the fold sourced the value from dls", () => {
+    const first = innings({ runs: 150, closed: true });
+    const second = innings({ runs: 40, closed: false });
+    expect(
+      chaseTarget(
+        cfg({ dls: { enabled: true } }),
+        state({ innings: [first, second], revisedTarget: 130, targetSource: "dls" }),
+      ),
+    ).toEqual({ value: 130, isDls: true });
+  });
+
+  it("two-innings (test) cfg NEVER gets the arithmetic fallback — only an explicit revise, matching v2 exactly", () => {
+    const first = innings({ runs: 300, closed: true });
+    const second = innings({ runs: 40, closed: false });
+    expect(chaseTarget(cfg({ inningsPerSide: 2 }), state({ innings: [first, second] }))).toBeNull();
+  });
+
+  it("two-innings cfg DOES read an explicit revise", () => {
+    const first = innings({ runs: 300, closed: true });
+    const second = innings({ runs: 40, closed: false });
+    expect(
+      chaseTarget(cfg({ inningsPerSide: 2 }), state({ innings: [first, second], revisedTarget: 210, targetSource: "manual" })),
+    ).toEqual({ value: 210, isDls: false });
+  });
+});
+
+describe("buildScorebug — ordinary chase target (Major 3, integration)", () => {
+  it("shows the plain arithmetic target on the strip once a second innings starts, even with no revise at all", () => {
+    const first = innings({ runs: 150, closed: true });
+    const second = innings({
+      runs: 40,
+      wickets: 2,
+      legalBalls: 18,
+      closed: false,
+      fine: { striker: "h1", nonStriker: "h2", currentBowler: "a1", freeHitPending: false },
+    });
+    const spec = buildScorebug(view({ state: state({ innings: [first, second] }) }), t);
+    expect(spec.strip[4]).toEqual({ label: "scorepad.skin.cricket.header.target", value: "151", accent: true });
   });
 });
 
@@ -565,6 +656,34 @@ describe("G5 — context overrides supersede the fold", () => {
     const withoutOverride = resolvePeople(state());
     expect(withOverride.striker).not.toBe(withoutOverride.striker);
     expect(withOverride.striker).toBe("h3");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Blocker 2 (R2 review finding) — striker/non-striker are NOT genuine edits:
+// the engine's strictOrder fold (cricket.ts:1183-1200) refuses any submitted
+// ball whose striker/nonStriker disagrees with its OWN derived pair on the
+// live submit path (isStrictFold defaults true — only reconciliation/replay
+// ever passes strict:false). Only bowler is a real edit, and only at an over
+// boundary. buildContext must mark the two fake slots readOnly so the strip
+// stops pretending they can be reassigned.
+// ---------------------------------------------------------------------------
+
+describe("buildContext — striker/non-striker are read-only (blocker 2)", () => {
+  it("marks striker readOnly", () => {
+    expect(buildContext(view())!.slots.find((s) => s.id === "striker")!.readOnly).toBe(true);
+  });
+
+  it("marks nonStriker readOnly", () => {
+    expect(buildContext(view())!.slots.find((s) => s.id === "nonStriker")!.readOnly).toBe(true);
+  });
+
+  it("leaves bowler editable — not read-only, the one slot the engine genuinely allows a scorer to set (at an over boundary)", () => {
+    expect(buildContext(view())!.slots.find((s) => s.id === "bowler")!.readOnly).toBeUndefined();
+  });
+
+  it("all three slots stay required — readOnly is orthogonal to required, informational vs editable", () => {
+    expect(buildContext(view())!.slots.every((s) => s.required)).toBe(true);
   });
 });
 

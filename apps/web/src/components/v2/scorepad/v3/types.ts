@@ -72,6 +72,30 @@ export interface ContextSlot {
   personId?: string;
   pool: "onfield" | "bench" | "all";
   required: boolean;
+  /**
+   * R2/task C (Blocker 2 — review finding, `docs/superpowers/plans/2026-08-
+   * 16-scorepad-v3-r2-cricket.md`, binding): `true` when the sport's own
+   * engine fold will NEVER accept a scorer's override for this slot on the
+   * LIVE submit path — e.g. cricket's striker/non-striker, derived under
+   * `strictOrder: true` (`cricket.ts`'s own `applyDelivery`) and rejected
+   * outright the moment a submitted payload disagrees with the fold's own
+   * derived pair (`isStrictFold` defaults TRUE — only reconciliation/replay
+   * of already-ledgered history ever passes `strict:false`, never the live
+   * dispatch path a context-strip tap feeds). Rendering such a slot as an
+   * ordinary tappable chip is the "picker opens and silently fails" defect
+   * G5 was fixed to close, reopened for a slot the engine can never actually
+   * move: a scorer could pick ANY candidate and every next ball would be
+   * refused.
+   *
+   * `readOnly: true` keeps the chip's INFORMATION — who is on strike / who
+   * is non-striker is genuinely useful even when it cannot be reassigned —
+   * while removing the false affordance: the chassis renderer
+   * (context-strip.tsx) must render such a slot with no tap target and no
+   * picker at all, never a control that merely LOOKS disabled. Optional/
+   * absent means editable — every pre-R2 slot, and every other sport's own
+   * `context()`, keeps behaving identically with zero change.
+   */
+  readOnly?: boolean;
 }
 export interface ContextStripSpec { slots: ContextSlot[] }
 

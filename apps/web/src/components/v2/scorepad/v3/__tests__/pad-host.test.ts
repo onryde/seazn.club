@@ -15,8 +15,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { LineupPair, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
 import type { PadField, PadPanel, PadSpec } from "@seazn/engine/sport";
+import type { MsgFn } from "@/lib/scoring-vocab";
 import { createSkinDispatch } from "../../skins/types";
 import { buildPadView, type PadViewCtx } from "../../view-model";
+import type { RejectionInfo } from "../../use-pad-pipeline";
 import type { GuidedSheetSpec, TileSpec } from "../types";
 import { MORE_SHEET_KEY } from "../types";
 import {
@@ -28,6 +30,7 @@ import {
   entitledBandsFrom,
   moreActions,
   phasesWithTiles,
+  rejectionText,
   resolveNextPhase,
   resolvePadPhase,
   resolveSheet,
@@ -404,5 +407,51 @@ describe("pad-host's dispatch composition — a skin cannot invent an event (tas
     // dispatched against the LIVE-phase view, it must still refuse.
     await expect(dispatch("cricket.matchClose", {})).rejects.toThrow();
     expect(submit).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rejectionText — Blocker 1 (R2 review finding). PadHostV3 built
+// `pipeline.lastRejection` (usePadPipeline's own surfaced 422-class refusal)
+// but never rendered it anywhere: any rejected v3 submission, in any sport,
+// for any reason, produced NO on-screen feedback — the pad simply looked
+// like it ignored the tap. Ports the legacy renderer's own surface
+// (pad-renderer.tsx: `pipeline.lastRejection && <p>{scoringErrorText(...)}
+// </p>`) verbatim in semantics: same source, same resolver
+// (scoringErrorText), same fallback key.
+// ---------------------------------------------------------------------------
+
+const identityMsg = ((key: string) => key) as MsgFn;
+
+describe("rejectionText", () => {
+  it("null when there is no rejection at all", () => {
+    expect(rejectionText(null, identityMsg)).toBeNull();
+  });
+
+  it("resolves a real engine error code to localized copy via scoringErrorText, never the raw message", () => {
+    const text = rejectionText({ code: "WRONG_PHASE", message: "raw engine text" }, identityMsg);
+    expect(text).toBe("engineError.WRONG_PHASE"); // the identity msg echoes the resolved key back
+    expect(text).not.toBe("raw engine text");
+  });
+
+  it("falls back to the raw message for a non-engine code", () => {
+    const text = rejectionText({ code: "NETWORK_ERROR", message: "Server exploded" }, identityMsg);
+    expect(text).toBe("Server exploded");
+  });
+
+  it("falls back to the fallback key when there is neither an engine code nor a usable raw message", () => {
+    const text = rejectionText({ code: "NETWORK_ERROR", message: "" }, identityMsg);
+    expect(text).toBe("scorepad.rejection.fallback");
+  });
+});
+
+describe("rejectionText — mutation proof (blocker 1: the v3 pad swallowed every engine refusal)", () => {
+  it("a version that stops reading `rejection` (always returns null) disagrees with the real one on a genuine rejection", () => {
+    const stopsReadingRejection = (): string | null => null; // ignores its args entirely, by design
+    const rejection: RejectionInfo = { code: "NETWORK_ERROR", message: "Server exploded" };
+    const real = rejectionText(rejection, identityMsg);
+    const viaMutant = stopsReadingRejection(rejection, identityMsg);
+    expect(real).not.toBe(viaMutant); // real: "Server exploded"; mutant: null
+    expect(real).not.toBeNull();
   });
 });
