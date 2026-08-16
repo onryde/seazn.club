@@ -33,6 +33,17 @@
 -- is deliberately left unconstrained here — RS001b introduces
 -- `organizations.currency` and the `REGISTRATION_CURRENCIES` allowlist CHECK
 -- as its own delta (design §2 addendum).
+--
+-- RLS (RS001 demolition follow-up, #588): the first cut of this file created
+-- both tables with no RLS enabled, no tenant policy and no GRANT to
+-- `app_user` — every other tenant-scoped table gets this in the same
+-- migration that creates it (house convention, see V118 and V360's
+-- `stage_seed_proposals`), and its absence here was invisible until an
+-- organiser-scoped call through `withTenant` actually touched either table:
+-- `permission denied for table registration_groups`. Caught by a runtime
+-- (not just typecheck) pass over the re-pointed `registrations.ts` and fixed
+-- here rather than as a follow-up delta, since this migration has not shipped
+-- yet (branch `feat/rs001-registration-schema`, unmerged).
 -- =============================================================================
 
 create table registration_groups (
@@ -116,6 +127,13 @@ create index registration_groups_user_idx
 create index registration_groups_offline_paid_by_idx
   on registration_groups (offline_marked_paid_by) where offline_marked_paid_by is not null;
 
+alter table registration_groups enable row level security;
+alter table registration_groups force  row level security;
+drop policy if exists registration_groups_tenant on registration_groups;
+create policy registration_groups_tenant on registration_groups for all to app_user
+  using (org_id = current_org_id()) with check (org_id = current_org_id());
+grant select, insert, update, delete on registration_groups to app_user;
+
 create table registration_players (
   id                uuid primary key default gen_random_uuid(),
   registration_id   uuid not null references registrations(id) on delete cascade,
@@ -174,3 +192,10 @@ create unique index registration_players_claim_token_key
 -- Person-merge and "where does this person appear" walk this the other way.
 create index registration_players_person_idx
   on registration_players (person_id) where person_id is not null;
+
+alter table registration_players enable row level security;
+alter table registration_players force  row level security;
+drop policy if exists registration_players_tenant on registration_players;
+create policy registration_players_tenant on registration_players for all to app_user
+  using (org_id = current_org_id()) with check (org_id = current_org_id());
+grant select, insert, update, delete on registration_players to app_user;
