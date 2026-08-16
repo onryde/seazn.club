@@ -96,6 +96,13 @@ const CLUBS = [
   "Brookfield",
   "Hillcrest",
   "Seaview",
+  // P7: the t20-super8 template needs 16 team entrants — every existing
+  // caller of entrantsFor("team", n) stayed at n<=8, so 12 was enough until
+  // now.
+  "Kingswood",
+  "Fairview",
+  "Ashgrove",
+  "Milbrook",
 ];
 let nameCursor = 0;
 const person = () => `${FIRST[nameCursor % 16]} ${LAST[(nameCursor++ * 7 + 3) % 16]}`;
@@ -976,6 +983,10 @@ async function main() {
   // fixtures) — only on the Pro account, into the Padel & Ladder Club.
   if (account === "pro") await seedAdvancedFormats();
 
+  // P7 (D1b): a template-instantiated competition — Pro-only, see the
+  // function for why.
+  if (account === "pro") await seedTemplateCompetition();
+
   // #376's `closed` state — community only, see the function.
   if (account === "community") await seedClosedCompetition();
 
@@ -1099,6 +1110,104 @@ async function seedArchivedSlotHolder(competitionName: string): Promise<void> {
   console.log(
     `${competitionName} / ${NAME}: ${played}/${total} played, archived — holds a quota slot`,
   );
+}
+
+/**
+ * P7 (D1b): a competition created FROM a catalog template — the demo
+ * dataset previously built every competition by hand, so the three P7
+ * templates (`euro24`, `t20-super8`, `league-playoff`) were only ever visible
+ * in unit/e2e/smoke fixtures, never in a seeded org a human actually opens.
+ *
+ * Drives `/api/v1/competitions/from-template` — the SAME endpoint the
+ * wizard's "start from a famous format" step calls (templates.ts's
+ * `createFromTemplate`) — never a direct DB insert, so the demo proves the
+ * real instantiation path rather than a shape the route could silently
+ * drift from. `t20-super8` (4 groups -> Super 8 -> knockout, 3 stages) is
+ * PRO-ONLY: 3 stages exceeds Community's `stages.per_division.max` of 2
+ * (catalog.test.ts pins this).
+ *
+ * Generates fixtures for STAGE 1 ONLY and decides none of them — the whole
+ * point of seeding this is the CONTRAST between real group fixtures and the
+ * later two stages still sitting in their TBD/seeded state. Instantiation
+ * itself never generates fixtures for ANY stage (P7 ruling — see
+ * templates.ts's comment on `stageResults.push`: a `.seeding` stage mints
+ * synthetic entrants at generate time, so generating eagerly at
+ * instantiation, before real entrants exist, would format-lock the
+ * division at birth). Fixtures come from the existing Generate action
+ * (`playStageAfterStart` below), same as every other division in this file.
+ *
+ * Resume-safe by NAME, checked before creating — unlike the PLAN loop's
+ * competition step above (which catches an "already in use" 409 that a
+ * caller-supplied `slug` collision throws), neither `/api/v1/competitions`
+ * nor `/api/v1/competitions/from-template` are ever called with an explicit
+ * slug here, and `uniqueSlug` (slugs.ts) auto-suffixes a colliding slug
+ * rather than 409ing — a catch-based resume would silently create a second,
+ * differently-slugged competition with the same name on every rerun. Check-
+ * first, like seedArchivedSlotHolder/seedAdvancedFormats below.
+ */
+async function seedTemplateCompetition(): Promise<void> {
+  const NAME = "T20 Super League";
+  const existing = await call("/api/v1/competitions?limit=100");
+  let comp = ((existing.items ?? existing) as { id: string; name: string }[]).find(
+    (c) => c.name === NAME,
+  );
+  if (comp) {
+    console.log(`${NAME}: exists, resuming`);
+  } else {
+    try {
+      const created = (await call("/api/v1/competitions/from-template", "POST", {
+        template_key: "t20-super8",
+        name: NAME,
+        ends_on: "2030-12-31",
+      })) as { competitionId: string };
+      comp = { id: created.competitionId, name: NAME };
+    } catch (e) {
+      // Same escape the PLAN loop above takes: a plan cap is a skip, not an
+      // abort of the whole seed run.
+      if (/cap|limit|payment/i.test(String(e))) {
+        console.log(`${NAME}: skipped (plan cap on this account)`);
+        return;
+      }
+      throw e;
+    }
+  }
+
+  const divisionsRes = await call(`/api/v1/competitions/${comp.id}/divisions`);
+  const divisions = (
+    Array.isArray(divisionsRes) ? divisionsRes : (divisionsRes.items ?? [])
+  ) as { id: string; name: string }[];
+  const division = divisions[0];
+  if (!division) {
+    console.log(`${NAME}: no division found on an existing competition, skipping`);
+    return;
+  }
+
+  const entrantsRes = await call(`/api/v1/divisions/${division.id}/entrants`);
+  const entrants = Array.isArray(entrantsRes) ? entrantsRes : (entrantsRes.items ?? []);
+  if (entrants.length === 0) {
+    await call(`/api/v1/divisions/${division.id}/entrants`, "POST", entrantsFor("team", 16));
+  }
+
+  const stagesRes = await call(`/api/v1/divisions/${division.id}/stages`);
+  const stages = (
+    Array.isArray(stagesRes) ? stagesRes : (stagesRes.items ?? [])
+  ) as { id: string; seq: number; status: string }[];
+  stages.sort((a, b) => a.seq - b.seq);
+  const stage1 = stages[0];
+  if (!stage1) {
+    console.log(`${NAME}: division has no stages, skipping`);
+    return;
+  }
+  if (stage1.status === "pending") {
+    // ratio 0: generate + publish the schedule, decide nothing. Stage 1
+    // shows real fixtures; stages 2/3 stay TBD off their `.seeding` rules.
+    const { total } = await playStageAfterStart(division.id, stage1.id, "cricket", "t20", 0);
+    console.log(
+      `${NAME} / ${division.name} (from template t20-super8): ${stages.length} stages, stage 1 generated ${total} fixtures, 0 played`,
+    );
+  } else {
+    console.log(`${NAME} / ${division.name}: stage 1 already generated, skipped`);
+  }
 }
 
 /** Seed an americano stage (needs individual entrants backed by persons) and a
