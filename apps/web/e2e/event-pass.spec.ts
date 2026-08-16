@@ -32,7 +32,8 @@ import type { PassLockReason } from "../src/lib/entitlements";
 // Use cases (spec 2026-07-21 "Use cases"), run at BOTH viewports:
 //   U1  buy from a bitten gate; checkout, pass active, gate gone, invoice exists
 //   U6  division 11 → Pro-only ceiling, pass credited, never re-sold
-//   U7  public registration past the community cap on the passed competition
+//   U7  REMOVED by RS001 (registration demolition) — its mechanism was the
+//       public register POST, which no longer exists; owed back by RS006/RS007
 //   U12 billing page names the purchase and links its Stripe invoice
 //   U14 upgrade to Pro inside 30 days: same customer, $29 on the balance,
 //       card required, pass dormant not consumed
@@ -79,11 +80,6 @@ const GENERIC = {
   variant_key: "score",
   config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
 };
-
-/** Community's `entrants.per_division.max` (V319). The pass lifts it to 128, so
- *  entry 65 is the boundary that separates them — 33–64, which the spec's U7
- *  still names, is allowed on BOTH since V319 and proves nothing. */
-const COMMUNITY_ENTRANT_CAP = 64;
 
 // ---------------------------------------------------------------------------
 // One-shot SQL against the app's schema (helpers.ts keeps withDb private).
@@ -134,9 +130,9 @@ const OPEN_ENDS_ON = "2099-12-31";
 
 /** A community org with its own owner and one unlisted competition.
  *
- *  Unlisted, not public: public registration accepts both, and community holds
- *  only ONE public competition (`dashboard.public.max` = 1) while U7 needs two
- *  side by side. */
+ *  Unlisted, not public: community holds only ONE public competition
+ *  (`dashboard.public.max` = 1), so unlisted is what leaves room for the
+ *  sibling competitions some of the tests below seed alongside it. */
 async function seedRig(label: string): Promise<Rig> {
   const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
   const ownerEmail = `ep-${label}-${tag}@example.com`;
@@ -171,21 +167,6 @@ async function seedRig(label: string): Promise<Rig> {
               ${OPEN_ENDS_ON})
       returning id`;
     return { orgId, orgSlug, ownerEmail, compId, compSlug };
-  });
-}
-
-/** A second competition in the SAME org — U7's control arm. Scoped by org_id on
- *  the way in; the returned id is what every later lookup uses. */
-async function seedSiblingCompetition(orgId: string, label: string): Promise<{ id: string; slug: string }> {
-  const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
-  const slug = `ep-${label}-plain-${tag}`;
-  return withDb(async (sql) => {
-    const [row] = await sql<{ id: string }[]>`
-      insert into competitions (org_id, name, slug, visibility, branding, ends_on)
-      values (${orgId}, ${"EP Plain " + tag}, ${slug}, 'unlisted', ${sql.json({})},
-              ${OPEN_ENDS_ON})
-      returning id`;
-    return { id: row!.id, slug };
   });
 }
 
@@ -244,24 +225,6 @@ async function seedClosedCompetition(
               ${arm.status}, ${arm.endsOn})
       returning id`;
     return { id: row!.id, slug };
-  });
-}
-
-/** Fill a division to `taken` spot-holding entries. Inserted directly: 64 round
- *  trips through the public endpoint would trip its own per-IP rate limit long
- *  before they finished. Scoped to a division this spec created. */
-async function fillDivision(divisionId: string, orgId: string, taken: number): Promise<void> {
-  const tag = randomBytes(5).toString("hex");
-  await withDb(async (sql) => {
-    await sql`
-      insert into registrations
-        (division_id, org_id, status, display_name, contact_email, ref_code,
-         access_token_hash, payment_method)
-      select ${divisionId}, ${orgId}, 'pending',
-             'Seed ' || g, 'seed-' || g || '-' || ${tag} || '@test.local',
-             ${"SZ-" + tag.toUpperCase() + "-"} || lpad(g::text, 4, '0'),
-             ${tag + "-"} || g, 'offline'
-      from generate_series(1, ${taken}) g`;
   });
 }
 
@@ -698,80 +661,13 @@ for (const vp of VIEWPORTS) {
       expect(await page.locator("main").innerText()).not.toContain("$29");
     });
 
-    test(`U7 · public registration passes 64 on the passed competition only (${vp.name})`, async ({
-      page,
-    }) => {
-      test.skip(!stripeUsable, "Stripe not usable — U1 skipped the pass money path");
-      test.setTimeout(180_000);
-      await signIn(page, rig.ownerEmail);
-
-      const settings = {
-        enabled: true,
-        entrant_kind: "individual",
-        // Unlimited by the organiser's own choice, so the PLAN quota is the only
-        // thing that can waitlist anyone — otherwise this measures capacity.
-        capacity: null,
-        fee_cents: 0,
-        currency: "gbp",
-        form_fields: [],
-        payment_method: "offline",
-      };
-
-      const passedDivision = divisionIds[0]!;
-      expect(
-        (await apiJson(
-          page.request,
-          `/api/v1/divisions/${passedDivision}/registration-settings`,
-          "PUT",
-          settings,
-        )).status,
-      ).toBeLessThan(300);
-
-      const plain = await seedSiblingCompetition(rig.orgId, vp.label);
-      const plainDiv = await apiJson<{ id: string }>(
-        page.request,
-        `/api/v1/competitions/${plain.id}/divisions`,
-        "POST",
-        { name: "Open", ...GENERIC },
-      );
-      expect(plainDiv.status).toBe(201);
-      expect(
-        (await apiJson(
-          page.request,
-          `/api/v1/divisions/${plainDiv.data!.id}/registration-settings`,
-          "PUT",
-          settings,
-        )).status,
-      ).toBeLessThan(300);
-
-      // Both sit exactly ON the community cap, so entry 65 is the question.
-      await fillDivision(passedDivision, rig.orgId, COMMUNITY_ENTRANT_CAP);
-      await fillDivision(plainDiv.data!.id, rig.orgId, COMMUNITY_ENTRANT_CAP);
-
-      const submit = (compSlug: string, divisionId: string, who: string) =>
-        apiJson<{ status: string }>(
-          page.request,
-          `/api/v1/public/orgs/${rig.orgSlug}/competitions/${compSlug}/register`,
-          "POST",
-          {
-            division_id: divisionId,
-            display_name: who,
-            contact_email: `${who.toLowerCase().replace(/\W+/g, "-")}-${randomBytes(3).toString("hex")}@example.com`,
-            privacy_consent: true,
-          },
-        );
-
-      const onPassed = await submit(rig.compSlug, passedDivision, "Entry Sixty Five");
-      const onPlain = await submit(plain.slug, plainDiv.data!.id, "Plain Sixty Five");
-
-      // The pass lifts `entrants.per_division.max` 64 → 128 for ITS competition.
-      expect(onPassed.status).toBe(201);
-      expect(onPassed.data!.status).toBe("pending");
-      // …and only its competition. Without this arm the test would still pass
-      // if the raised cap leaked org-wide, which is the other half of the bug.
-      expect(onPlain.status).toBe(201);
-      expect(onPlain.data!.status).toBe("waitlisted");
-    });
+    // U7 · public registration passes 64 on the passed competition only — REMOVED
+    // by RS001. Its only mechanism was a POST to the public register endpoint
+    // (`/api/v1/public/orgs/{orgSlug}/competitions/{slug}/register`), which
+    // RS001 deleted along with the rest of the old registration UI; there is no
+    // surviving way to submit an entry and observe the cap. seedSiblingCompetition,
+    // fillDivision and COMMUNITY_ENTRANT_CAP existed only to support this test and
+    // are removed with it. Owed back once RS006/RS007 restore public submission.
 
     test(`U12 · the billing page names the purchase and links its invoice (${vp.name})`, async ({
       page,
