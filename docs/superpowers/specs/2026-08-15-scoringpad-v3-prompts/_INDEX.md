@@ -17,7 +17,7 @@ one PR per wave, visual sign-off gate on each).
 
 | Wave | Prompt file | Depends on | Status |
 |---|---|---|---|
-| R1 | `R1-chassis.md` + plan `docs/superpowers/plans/2026-08-15-scorepad-v3-r1-chassis.md` | — | **PR #577 OPEN** (2026-08-16) — chassis landed behind an EMPTY `V3_SKINS`. Gate: unit 7709/7774 (4 pre-existing, untouched file), tsc 0, lint 0 errors, legacy pad e2e 32/32 unedited vs a prod build, gallery 12/12 with 0px overflow at 320. Visual sign-off = the ABSENCE of change; owner ack pending |
+| R1 | `R1-chassis.md` + plan `docs/superpowers/plans/2026-08-15-scorepad-v3-r1-chassis.md` | — | **MERGED #577 `86ce08b3`** (2026-08-16) — chassis behind an EMPTY `V3_SKINS`. Gate: unit 7709/7774 (4 pre-existing, in a file this branch never touched), tsc 0, lint 0 errors, legacy pad e2e 32/32 unedited vs a prod build, gallery 12/12 with 0px overflow at 320. Visual sign-off was the ABSENCE of change — owner acked by merging |
 | R2 | `R2-cricket.md` | R1 | TODO |
 | R3 | `R3-football.md` | R1 | TODO |
 | R4 | `R4-tennis.md` | R1 | TODO |
