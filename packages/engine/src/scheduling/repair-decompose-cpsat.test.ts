@@ -9,18 +9,42 @@
 // real CP-SAT solver — a mock can be made to say anything, and the straddle
 // this driver closes is specifically about what the REAL wire does with a
 // dependency edge.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Assignment, SchedulableFixture, VerifyConfig } from "./calendar.ts";
 import { isBlockingConflict, validateAssignments } from "./calendar.ts";
 import type { BuildResult } from "./build.ts";
 
-const { buildSchedule } = vi.hoisted(() => ({ buildSchedule: vi.fn() }));
-vi.mock("./build.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./build.ts")>()),
-  buildSchedule,
-}));
+// `vi.doMock` + per-test `vi.resetModules()` + a fresh dynamic import, NOT a
+// hoisted top-level `vi.mock` — this engine suite runs `isolate: false`
+// (vitest.config.ts), which shares the module cache across every file in a
+// worker. A hoisted `vi.mock("./build.ts", ...)` is only reliably applied to
+// THIS file's own static imports; measured directly (full engine run,
+// `--coverage`): 8/13 tests here failed when run alongside other files that
+// import `./build.ts` for real, while this same file was 13/13 green run
+// alone. Matches this repo's own recorded fix for the identical class of bug
+// (`build.test.ts:734-740`, `build-lns-wiring.test.ts:140-151` — "not the
+// machine, not the wall — FILE ORDER"): `vi.doMock` + `vi.resetModules()` +
+// a fresh `await import(...)` per test, unmocked again in `afterEach`, so the
+// mock's lifetime is this test only and can neither leak in from, nor leak
+// out to, a neighbouring file sharing the worker.
+let buildSchedule: ReturnType<typeof vi.fn>;
+type RepairModule = typeof import("./repair-decompose-cpsat.ts");
+let repairDecomposedCpsat: RepairModule["repairDecomposedCpsat"];
 
-const { repairDecomposedCpsat } = await import("./repair-decompose-cpsat.ts");
+beforeEach(async () => {
+  buildSchedule = vi.fn();
+  vi.resetModules();
+  vi.doMock("./build.ts", async () => {
+    const actual = await vi.importActual<typeof import("./build.ts")>("./build.ts");
+    return { ...actual, buildSchedule };
+  });
+  ({ repairDecomposedCpsat } = await import("./repair-decompose-cpsat.ts"));
+});
+
+afterEach(() => {
+  vi.doUnmock("./build.ts");
+  vi.resetModules();
+});
 
 const MIN = 60_000;
 const T0 = Date.parse("2026-09-07T09:00:00Z");
@@ -78,10 +102,6 @@ const buildResult = (assignments: Assignment[], overrides: Partial<BuildResult> 
   rlimitSpent: 0,
   lnsWindowRlimits: [],
   ...overrides,
-});
-
-beforeEach(() => {
-  buildSchedule.mockReset();
 });
 
 describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => {
