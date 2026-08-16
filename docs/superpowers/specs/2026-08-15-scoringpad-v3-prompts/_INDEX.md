@@ -105,12 +105,21 @@ Append one line per ruling: date, wave, decision, reason. Never delete.
   (`pro_plus`). Parameterise it BEFORE the first wave that both populates a
   real entitlement and wires the chip, or an org already on Pro gets told the
   band is "available on Pro".
-- **Boardgame gallery coverage is partial** (01-pre and 02-live confirmed; its
-  scored/dock/device-link recipe was iterated three times and its final form
-  was never independently re-verified). Do not trust a boardgame screen you
-  did not capture yourself.
+- **`SkinDefV3.sheets` HAS NO CHASSIS RENDERER.** `GuidedSheetSpec`,
+  `SheetChoiceStep`, `SheetPersonStep` and `TileSpec.action = {sheet: string}`
+  are declared in `v3/types.ts` with **zero** consumers: `tile-grid.tsx`
+  forwards `tile.action` to `onAction` untouched, and nothing anywhere renders
+  a guided step wizard. Task 8 built `swap-sheet.tsx` against its own
+  `SwapSheetSpec`, so `{swap: true}` has a real component while
+  `{sheet: string}` does not. **R2 hits this first** — cricket's wicket flow
+  (kind → who) is exactly this shape. Build the renderer as part of R2 rather
+  than assuming the chassis provides it.
 - `ContextSlot.required` drives only the "unset" dot today — honoured but
   cosmetic until a skin gates on it.
+- `v3/tokens.ts`'s `NIGHT_TILE_PAIRS` / `SCORE_TEXT_PX` are imported ONLY by
+  `contrast.test.ts`; `scorebug.tsx` hand-matches the same colours and size in
+  literal Tailwind classes. A class edit can silently desync what is tested
+  from what renders — link them when a skin first consumes the scorebug.
 - Tile hierarchy: "Forfeit/Abandon are not representable in the tile grid" is a
   CONVENTION stated in a comment, with no type or runtime block. Skin-level
   validation owes the enforcement.
