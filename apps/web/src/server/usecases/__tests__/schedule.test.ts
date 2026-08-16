@@ -1079,13 +1079,19 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
     // A stored blackout flips this run from greedy onto the solver, and the
     // lattice it is given opens at LOCAL MIDNIGHT on the governing clock —
     // `applyWindow` derives the universe from `startAt`'s DAY, not from
-    // `startAt` itself. Measured (under z3, and the lattice is unchanged by the
-    // CP-SAT cutover — it is `applyWindow`/`buildGrid`, not the solver):
-    // with the window at 11:00 and `startAt` at 10:00, the solver answers by moving
-    // the entire six-fixture board back to 00:00–02:30 and the window is
-    // simply nowhere near the board. "Nothing landed inside it" is then true
-    // of a solver that never looked at it — the exact vacuity this prompt
-    // exists to rule out.
+    // `startAt` itself.
+    //
+    // MEASURED UNDER z3, and not re-measured since: with the window at 11:00
+    // and `startAt` at 10:00, the solver moved the entire six-fixture board
+    // back to 00:00–02:30, leaving the window nowhere near it. The LATTICE
+    // half of that carries over — it is `applyWindow`/`buildGrid`'s, not any
+    // solver's, and C2 independently observed CP-SAT compacting to the same
+    // midnight — but treat the exact 00:00–02:30 span as the old measurement
+    // it is. Nothing below asserts it, so a wrong reading here would not fail.
+    //
+    // The point survives either way: "nothing landed inside it" is true of a
+    // solver that never looked at it — the exact vacuity this prompt exists to
+    // rule out.
     //
     // So the window goes half an hour after midnight, where nothing can pack
     // around it: this org has no timezone, hence a UTC governing clock, and no

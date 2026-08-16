@@ -46,11 +46,18 @@ const REPO_ROOT = new URL("../../", import.meta.url).pathname;
  */
 const LIVE_TREES = [
   "packages/engine/src",
+  // `packages/engine/scripts` and ALL of `services/placement` are in scope, not
+  // just their `src`. Review caught both as holes: the benches and harnesses
+  // are where z3 is discussed most, and `services/placement/fly.toml` is a file
+  // this very stage edited while the sweep beside it looked only at
+  // `services/placement/src`. A ledger with a hole in it reads exactly like a
+  // ledger without one.
+  "packages/engine/scripts",
   "apps/web/src",
   "apps/web/e2e",
   "scripts",
   "proto",
-  "services/placement/src",
+  "services/placement",
   ":!scripts/__tests__/z3-retirement-drift.test.ts",
 ];
 
@@ -191,6 +198,15 @@ const OWNED_BY_C8 = [
   "packages/engine/src/scheduling/z3-load.test.ts",
   "packages/engine/src/scheduling/z3-load.ts",
   "packages/engine/src/scheduling/z3-serialisation.test.ts",
+  // The benches and harnesses. `bench-repair.ts` and `bench-decompose.ts` are
+  // named in C8's file set outright; the other four survive as files but lose
+  // their z3 imports with `z3-load.ts`, so their entries here go either way.
+  "packages/engine/scripts/bench-ai-repair-cpsat.ts",
+  "packages/engine/scripts/bench-decompose.ts",
+  "packages/engine/scripts/bench-reflow.ts",
+  "packages/engine/scripts/bench-repair.ts",
+  "packages/engine/scripts/probe-lns-gate.ts",
+  "packages/engine/scripts/repair-cpsat-harness.ts",
 ];
 
 /** Neither stage's: prose that is TRUE today. Two shapes, both legitimate —
@@ -250,6 +266,15 @@ const ACCURATE_TODAY = [
   "scripts/smoke.ts",
   "services/placement/src/placement/model.py",
   "services/placement/src/placement/objective.py",
+  // The Python side's own comparative commentary — CP-SAT's encoding reasoned
+  // about against z3's, which stays useful after the solver is gone — plus the
+  // deploy config, whose z3 mention is now explicitly past tense.
+  "services/placement/bench/README.md",
+  "services/placement/bench/placement_bench.py",
+  "services/placement/bench/placement_repair_bench.py",
+  "services/placement/fly.toml",
+  "services/placement/tests/test_model.py",
+  "services/placement/tests/test_objective.py",
 ];
 
 const LIVE_TREE_Z3_FILES = [...OWNED_BY_C7, ...OWNED_BY_C8, ...ACCURATE_TODAY];
