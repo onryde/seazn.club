@@ -15,7 +15,7 @@
 // violation strings, same non-throwing convention as `assertScorebugSpec`
 // in ../types.ts (see ../__tests__/types.test.ts).
 import { describe, it, expect } from "vitest";
-import { tilesForPhase, assertTileHierarchy, TileGrid } from "../tile-grid";
+import { tilesForPhase, assertTileHierarchy, TileGrid, type TileGridProps } from "../tile-grid";
 import type { TileSpec } from "../types";
 
 const tile = (over: Partial<TileSpec> = {}): TileSpec => ({
@@ -174,5 +174,71 @@ describe("Tile rendering — finding 1 fix: min-w-0 / break-words present on the
     const button = renderTile(tile({ kind: "standard", sublabel: "pad.tile.sub" }));
     const [, sublabelSpan] = button.props.children;
     expect(sublabelSpan && sublabelSpan.props.className).toContain("break-words");
+  });
+});
+
+// Task A1 (R2 wave): the guided-sheet renderer's own consumer-side wiring.
+// R1 shipped TileSpec.action = {sheet: string} (types.ts) but this file
+// forwarded EVERY action shape to onAction untouched — nothing routed a
+// {sheet} tap anywhere distinct from a real event tap (_INDEX.md, R1 "owed
+// by later waves"). A1 carves out a SEPARATE path (onOpenSheet) for
+// {sheet} only; {event} and {swap:true} must stay byte-identical through
+// onAction — a later task wires both hosts (the guided sheet itself, and
+// swap-sheet's own host), so this file's only job is correct ROUTING, not
+// deciding what either destination does with what it's handed.
+describe("Tile action routing (task A1) — {sheet} takes a distinct path, {event}/{swap} stay byte-identical through onAction", () => {
+  function clickTile(
+    spec: TileSpec,
+    handlers: { onAction?: TileGridProps["onAction"]; onOpenSheet?: TileGridProps["onOpenSheet"] },
+  ): void {
+    const grid = TileGrid({ tiles: [spec], phase: "live", t: (k) => k, ...handlers }) as unknown as RenderedEl<{
+      children: RenderedEl<unknown>[];
+    }>;
+    const [tileEl] = grid.props.children;
+    const button = tileEl.type(tileEl.props) as unknown as { props: { onClick: () => void } };
+    button.props.onClick();
+  }
+
+  it("a {sheet} tile calls onOpenSheet with the sheet key and never calls onAction", () => {
+    const opened: string[] = [];
+    const actioned: unknown[] = [];
+    clickTile(tile({ action: { sheet: "wicket" } }), {
+      onOpenSheet: (key) => opened.push(key),
+      onAction: (a) => actioned.push(a),
+    });
+    expect(opened).toEqual(["wicket"]);
+    expect(actioned).toEqual([]);
+  });
+
+  it("an {event} tile still calls onAction(action, tile) untouched, and never calls onOpenSheet", () => {
+    const actioned: unknown[] = [];
+    const opened: string[] = [];
+    const spec = tile({ id: "four", action: { event: { type: "cricket.ball", payload: { runs: 4 } } } });
+    clickTile(spec, {
+      onAction: (a, tapped) => actioned.push([a, tapped.id]),
+      onOpenSheet: (key) => opened.push(key),
+    });
+    expect(actioned).toEqual([[spec.action, "four"]]);
+    expect(opened).toEqual([]);
+  });
+
+  it("a {swap:true} tile still calls onAction(action, tile) untouched, and never calls onOpenSheet", () => {
+    const actioned: unknown[] = [];
+    const opened: string[] = [];
+    const spec = tile({ id: "sub", action: { swap: true } });
+    clickTile(spec, {
+      onAction: (a, tapped) => actioned.push([a, tapped.id]),
+      onOpenSheet: (key) => opened.push(key),
+    });
+    expect(actioned).toEqual([[spec.action, "sub"]]);
+    expect(opened).toEqual([]);
+  });
+
+  it("a {sheet} tile with no onOpenSheet handler does not throw and does not silently fall back to onAction", () => {
+    const actioned: unknown[] = [];
+    expect(() =>
+      clickTile(tile({ action: { sheet: "wicket" } }), { onAction: (a) => actioned.push(a) }),
+    ).not.toThrow();
+    expect(actioned).toEqual([]);
   });
 });

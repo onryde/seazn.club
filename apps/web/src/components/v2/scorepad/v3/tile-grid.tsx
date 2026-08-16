@@ -119,12 +119,27 @@ export interface TileGridProps {
    *  this shape). Tile `label`/`sublabel` are i18n keys (types.ts), never
    *  hardcoded English — this renderer never prints raw copy. */
   t: (key: string, vars?: Record<string, string | number>) => string;
-  /** Fires with the tapped tile's own `action`, untouched. R1 ships no
-   *  pipeline/sheet/swap wiring for this component yet (out of this
-   *  file's scope by brief) — a caller not yet ready to dispatch can
-   *  render a fully-formed, real, still-inert grid, same posture
-   *  scorebug.tsx's optional `onTap` takes for the same reason. */
+  /** Fires with the tapped tile's own `action`, untouched, for every action
+   *  shape EXCEPT `{sheet}` (task A1 carved that one out below — see
+   *  `onOpenSheet`). R1 ships no pipeline/swap wiring for this component
+   *  yet (out of this file's scope by brief) — a caller not yet ready to
+   *  dispatch can render a fully-formed, real, still-inert grid, same
+   *  posture scorebug.tsx's optional `onTap` takes for the same reason. */
   onAction?: (action: TileSpec["action"], tile: TileSpec) => void;
+  /** Fires INSTEAD of `onAction` when a tapped tile's action is
+   *  `{sheet: string}` — the sheet key names an entry in the skin's own
+   *  `SkinDefV3.sheets` (types.ts), which a host resolves into a
+   *  `GuidedSheetSpec` for ./guided-sheet.tsx (task A1). Kept as a
+   *  DISTINCT path rather than folded into `onAction` because a sheet-open
+   *  is not itself a scoring action — it starts a multi-step flow that
+   *  only PRODUCES one once the wizard completes (guided-sheet.tsx's own
+   *  `onComplete`), so a single generic `onAction` callback would have to
+   *  re-discriminate the union right back apart to tell the two apart
+   *  anyway. `{event}` and `{swap: true}` tiles are UNCHANGED by this: they
+   *  keep going through `onAction` exactly as R1 shipped it. A later task
+   *  wires both this and swap's own host handling — this file's job is
+   *  correct ROUTING only. */
+  onOpenSheet?: (sheetKey: string) => void;
 }
 
 /**
@@ -133,12 +148,12 @@ export interface TileGridProps {
  * later") — every visual decision is table-driven off `kind`
  * (KIND_MIN_HEIGHT / KIND_CLASS above), never a per-tile special case.
  */
-export function TileGrid({ tiles, phase, t, onAction }: TileGridProps) {
+export function TileGrid({ tiles, phase, t, onAction, onOpenSheet }: TileGridProps) {
   const visible = tilesForPhase(tiles, phase);
   return (
     <div className="grid grid-cols-4 gap-2">
       {visible.map((tile) => (
-        <Tile key={tile.id} tile={tile} t={t} onAction={onAction} />
+        <Tile key={tile.id} tile={tile} t={t} onAction={onAction} onOpenSheet={onOpenSheet} />
       ))}
     </div>
   );
@@ -148,19 +163,31 @@ function Tile({
   tile,
   t,
   onAction,
+  onOpenSheet,
 }: {
   tile: TileSpec;
   t: TileGridProps["t"];
   onAction?: TileGridProps["onAction"];
+  onOpenSheet?: TileGridProps["onOpenSheet"];
 }) {
   const minHeight = KIND_MIN_HEIGHT[tile.kind];
   const spanClass = SPAN_CLASS[tile.span ?? 1];
+  // Route by action shape (task A1): {sheet} takes the distinct
+  // onOpenSheet path; {event}/{swap:true} keep going through onAction
+  // exactly as before — see TileGridProps.onOpenSheet's own doc.
+  const handleClick = () => {
+    if ("sheet" in tile.action) {
+      onOpenSheet?.(tile.action.sheet);
+    } else {
+      onAction?.(tile.action, tile);
+    }
+  };
   return (
     <button
       type="button"
       data-tile-id={tile.id}
       data-tile-kind={tile.kind}
-      onClick={() => onAction?.(tile.action, tile)}
+      onClick={handleClick}
       style={{ minHeight }}
       className={`relative min-w-0 flex flex-col items-center justify-center gap-0.5 rounded-xl px-2 py-1.5 text-center transition-colors ${spanClass} ${KIND_CLASS[tile.kind]} ${
         tile.kind === "minor"
