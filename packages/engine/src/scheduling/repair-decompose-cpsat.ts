@@ -408,7 +408,12 @@ export async function repairDecomposedCpsat(
     const trueBackground: Assignment[] = [...existing, ...outsideComponent];
     const background: Assignment[] = [...trueBackground, ...frozenMembers];
 
-    if (mode === "components" && ids.length > componentLimit) {
+    // Gated on VIOLATORS, not the component's full size: a caller-frozen
+    // member is never a `buildSchedule` decision variable (it joins
+    // `background` above), so it costs this solve nothing like what a
+    // genuinely movable fixture does — a 3-violator component with 50
+    // frozen feeders swept in by dependency edges is cheap, not large.
+    if (mode === "components" && violatorIds.length > componentLimit) {
       reports.push(report(component, background.length, "skipped", "over_component_limit"));
       input.onComponent?.(reports[reports.length - 1]!);
       continue;
