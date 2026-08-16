@@ -1421,6 +1421,103 @@ def test_rule_groups_empty_leaves_the_model_byte_identical():
     assert "ivr_0" in names and "ivr_1" in names, sorted(names)
 
 
+def test_person_indices_empty_leaves_the_model_byte_identical():
+    """C10's DEPLOY-ORDER safety claim, proved at the `CpModel` level rather
+    than argued.
+
+    This is the whole evidence for "service first is strictly safe": a
+    not-yet-upgraded caller sends no `person_indices` at all, and the
+    service must then build the byte-for-byte model it built before this
+    task existed. `by_person` is empty, so its `AddNoOverlap` loop never
+    executes and T2's `gap_pairs` set receives nothing from it.
+
+    The same `str(model.Proto())` text-format comparison
+    `test_rule_groups_empty_leaves_the_model_byte_identical` above uses,
+    and for the same reason — see that test's own docstring for why `==`
+    on the pybind11-wrapped `CpModelProto` is object identity and `str()`
+    is the real serialisation.
+
+    Deliberately compares against `person_indices=[]` AND against omitting
+    the parameter entirely, because those are two different caller shapes
+    (`main.py` always passes it; a bench/test caller may not) and both must
+    land on the pre-C10 model.
+    """
+    t0 = _GROUP_ANCHOR
+    t1 = t0 + 60 * MIN_MS
+    num_courts = 2
+    grid_slots = [(c, t, 0) for c in (0, 1) for t in (t0, t1)]
+    fixtures = [([0], 0), ([1], 0)]
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
+
+    omitted = build_model(fixtures, num_courts, grid_slots, 30, constraints, [], [])
+    explicit_empty = build_model(
+        fixtures, num_courts, grid_slots, 30, constraints, [], [], person_indices=[]
+    )
+    # A per-fixture empty list, the shape `placement.schema` actually
+    # produces for a request whose fixtures carry no `person_indices` --
+    # distinct from the whole parameter being empty, and the shape an
+    # UPGRADED service receives from a NOT-yet-upgraded caller.
+    per_fixture_empty = build_model(
+        fixtures, num_courts, grid_slots, 30, constraints, [], [], person_indices=[[], []]
+    )
+
+    baseline = str(omitted.Proto())
+    assert str(explicit_empty.Proto()) == baseline
+    assert str(per_fixture_empty.Proto()) == baseline
+
+    # Not vacuous, same guard as the test above: the model really does
+    # contain the participant-rest intervals a person group would have
+    # joined, so an equality here is a statement about a real model.
+    names = {c.name for c in omitted.Proto().constraints}
+    assert "ivr_0" in names and "ivr_1" in names, sorted(names)
+
+
+def test_t2_gap_variables_keep_their_pre_c10_creation_order():
+    """The half `*_byte_identical` structurally CANNOT prove, pinned.
+
+    Both byte-identical tests above compare NEW code against NEW code, so a
+    change that moved EVERY caller — including one that sends no person data
+    at all — is invisible to them. C10 made exactly such a change: T2's pair
+    loop went from a raw double iteration over `by_entrant.values()` to a
+    deduped, SORTED `gap_pairs` set (needed so a pair reachable through both
+    an entrant and a person does not mint two `NewIntVar`s of one name).
+    Sorted order and dict-insertion order are not the same thing, and CP-SAT
+    search is order-sensitive, so a silent reordering here is a
+    reproducibility regression that no assertion in this file would catch.
+
+    Verified DIRECTLY during this task by importing the pre-C10 `model.py`
+    alongside the current one and diffing `str(model.Proto())` on four
+    boards (disjoint entrants; one shared entrant; three fixtures sharing
+    one entrant, i.e. three pairs; and two independent groups) — all four
+    byte-identical. That comparison needs a historical copy of the module
+    and so cannot live in the suite; this test pins the ORDER it confirmed,
+    which is the part a future refactor could break.
+
+    The board is the two-groups case deliberately: with only one group the
+    assertion holds for any ordering rule, and with one pair it holds
+    trivially. Two groups plus a three-pair group is the smallest board on
+    which insertion order and sorted order could actually disagree.
+    """
+    t0 = _GROUP_ANCHOR
+    t1 = t0 + 60 * MIN_MS
+    t2 = t0 + 120 * MIN_MS
+    grid_slots = [(c, t, 0) for c in (0, 1) for t in (t0, t1, t2)]
+    # Entrant 0 covers fixtures 0,1,2 (three pairs); entrant 3 covers 3,4
+    # (one pair). Note fixture 2 is deliberately introduced by the SECOND
+    # entrant of an earlier fixture, so insertion order into `by_entrant` is
+    # not simply ascending.
+    fixtures = [([0, 1], 0), ([0, 2], 0), ([0, 3], 0), ([3, 4], 0)]
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
+    model = build_model(fixtures, 2, grid_slots, 30, constraints, [], [])
+
+    gap_names = [v.name for v in model.Proto().variables if v.name.startswith("gap_")]
+    # ASCENDING (i, j) with i < j, entrant 0's three pairs first (it is the
+    # lower-numbered key) then entrant 3's single pair. Pinned literally --
+    # a set comparison would pass under any reordering, which is the whole
+    # thing this test exists to refuse.
+    assert gap_names == ["gap_0_1", "gap_0_2", "gap_1_2", "gap_2_3"], gap_names
+
+
 # --- degenerate constraint values must fail loudly, not solve quietly -------
 #
 # proto3 scalars are non-optional: an unset `match_minutes` arrives as 0,
