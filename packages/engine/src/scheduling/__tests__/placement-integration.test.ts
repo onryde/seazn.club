@@ -325,4 +325,66 @@ describe.skipIf(!RUN_INTEGRATION)("placement integration (requires a running ser
     expect(result.status).toBe("solver_unavailable");
     expect(result.assignments.length).toBeGreaterThan(0);
   }, 10_000);
+
+  /**
+   * THE undecided-knockout-slot shape (C10, 2026-08-16, wire person indices
+   * design): two TBD bracket fixtures — no entrants at all, `home`/`away`
+   * both undefined — sharing every person who could still reach either
+   * slot. Before this task the service refused ANY fixture with empty
+   * `entrant_indices` unconditionally (`placement.schema`'s pre-C10
+   * history), so a board shaped exactly like this never reached the solver
+   * at all: `build.ts`'s catch block folded the refusal into
+   * `solver_unavailable`, indistinguishable from a genuine outage. C4
+   * documented BUILD/POLISH bracket boards hitting this same wall.
+   *
+   * ONE tick, two courts: the only way both fixtures could be placed AT
+   * ALL is at that one instant — concurrently. `services/placement/tests/
+   * test_model.py`'s `test_two_undecided_bracket_slots_sharing_people_are_
+   * never_placed_concurrently` already proves the CP-SAT mechanics in
+   * isolation, against the domain directly; this is the live, real-service,
+   * real-wire proof of the identical claim — the encode, the RPC, the
+   * decode, and the real TS verifier re-checking the real service's output.
+   */
+  function undecidedBracketBoard(): BuildInput {
+    const config: BuildInput["config"] = {
+      startAt: T0,
+      matchMinutes: 30,
+      gapMinutes: 0,
+      courts: ["C1", "C2"],
+      // Inert by construction, like `scaleBoard`'s own — no entrant exists
+      // on this board at all (both fixtures are fully undecided), so there
+      // is nothing for a per-entrant rest floor to apply to.
+      perEntrantMinRest: 0,
+      window: { from: T0, to: T0 + 30 * MIN },
+      tz: "UTC",
+    };
+    const fixtures: SchedulableFixture[] = [
+      { id: "final", roundNo: 1, people: ["p1", "p2", "p3", "p4"] },
+      { id: "playoff", roundNo: 1, people: ["p1", "p2", "p3", "p4"] },
+    ];
+    return { fixtures, config };
+  }
+
+  it("accepts, rather than refuses, two undecided bracket fixtures sharing every possible finalist", async () => {
+    const input = undecidedBracketBoard();
+    const result = await buildSchedule(input);
+
+    // THE deploy-order claim made concrete: a board this shape used to be
+    // refused outright (empty `entrant_indices` on both fixtures), which is
+    // indistinguishable from a genuine outage at this layer — both fold
+    // into `solver_unavailable`. This asserts the refusal no longer fires.
+    expect(result.status).not.toBe("solver_unavailable");
+    expect(result.assignments.length).toBeGreaterThan(0);
+
+    // THE acceptance criterion itself, checked by the REAL verifier against
+    // the REAL service's output — not a mock, not a reimplemented checker.
+    // Two fixtures sharing only a person must never be placed concurrently.
+    const conflicts = validateAssignments(
+      result.assignments,
+      input.config,
+      input.existing ?? [],
+      input.dependencies ?? [],
+    );
+    expect(conflicts.filter((c) => c.reason === "person_overlap")).toHaveLength(0);
+  }, 20_000);
 });

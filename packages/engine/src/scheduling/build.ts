@@ -1868,6 +1868,12 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
       entrantIds: [f.home, f.away].filter((e): e is string => e !== undefined),
       divisionId: f.divisionId ?? "",
       roundNo: roundBearingFor(f),
+      // C10 (2026-08-16, wire person indices). Same derivation `assignmentOf`
+      // (above) and `encodeBuild`'s own `rowOf`/`asAssignment` (z3 path) use
+      // for `Assignment.people` — carried through, not dropped, so an
+      // undecided knockout slot's participant set reaches the placement
+      // service the same way it always reached z3's in-process encoder.
+      people: [...(f.people ?? [])],
     })),
     grid: {
       slots: grid.slots.map((s) => ({

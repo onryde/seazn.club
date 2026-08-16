@@ -298,7 +298,7 @@ describe("solveBuild", () => {
     // groups and pinned rule/entrant references through the real encoder"
     // below, which covers it directly rather than duplicating it here.
     expect(decoded.slots).toEqual([{ courtIndex: 0, startAtMs: 1_700_000_000_000, dayIndex: 0 }]);
-    expect(decoded.fixtures).toEqual([{ entrantIndices: [0, 1], divisionIndex: 0 }]);
+    expect(decoded.fixtures).toEqual([{ entrantIndices: [0, 1], divisionIndex: 0, personIndices: [] }]);
     expect(decoded.wallSeconds).toBe(8);
   });
 
@@ -336,8 +336,8 @@ describe("solveBuild", () => {
     const decoded = SolveBuildRequest.decode(SolveBuildRequest.encode(request).finish());
 
     expect(decoded.fixtures).toEqual([
-      { entrantIndices: [0, 1], divisionIndex: 0, round: 3 },
-      { entrantIndices: [2, 3], divisionIndex: 0, round: undefined },
+      { entrantIndices: [0, 1], divisionIndex: 0, round: 3, personIndices: [] },
+      { entrantIndices: [2, 3], divisionIndex: 0, round: undefined, personIndices: [] },
     ]);
     expect(decoded.existing[0]).toMatchObject({ round: 2 });
     expect(decoded.existing[1]?.round).toBeUndefined();
@@ -439,11 +439,24 @@ describe("solveBuild", () => {
   // `fixtures`/`courts` in order and coincidentally returning the right
   // strings — the brief's warning that "a mapping that is wrong in both
   // directions round-trips perfectly and is still wrong").
+  //
+  // C10 (2026-08-16, wire person indices) — "priya" deliberately appears in
+  // BOTH fixtures' `people` (proves person dedup, the SAME test "bob" already
+  // runs for entrants) and NEITHER string used for a person here is ever
+  // used as an entrant, or vice versa, so a bug that let `personIndexOf`
+  // fall back to the entrant table (or share its map) would either throw
+  // (an id genuinely never registered as an entrant) rather than silently
+  // return a plausible-looking wrong index.
   const ROUND_TRIP_INPUT = {
     courts: ["Court 1", "Court 2"],
     fixtures: [
-      { fixtureId: "f1", entrantIds: ["alice", "bob"], divisionId: "div-a" },
-      { fixtureId: "f2", entrantIds: ["bob", "carol"], divisionId: "div-b" },
+      { fixtureId: "f1", entrantIds: ["alice", "bob"], divisionId: "div-a", people: ["priya"] },
+      {
+        fixtureId: "f2",
+        entrantIds: ["bob", "carol"],
+        divisionId: "div-b",
+        people: ["priya", "quinn"],
+      },
     ],
     grid: {
       slots: [
@@ -469,9 +482,13 @@ describe("solveBuild", () => {
     // courts and fixtures do not (see the duplicate-court tests below).
     expect(request.entrantCount).toBe(3); // alice, bob, carol
     expect(request.divisionCount).toBe(2); // div-a, div-b
+    // C10 — its OWN, separate index space, starting fresh at 0: priya=0 (from
+    // f1), quinn=1 (NEW, from f2). Neither collides with the entrant table's
+    // own 0/1/2 despite counting from the same origin.
+    expect(request.personCount).toBe(2); // priya, quinn
     expect(request.fixtures).toEqual([
-      { entrantIndices: [0, 1], divisionIndex: 0 }, // f1: alice=0, bob=1, div-a=0
-      { entrantIndices: [1, 2], divisionIndex: 1 }, // f2: bob=1 (reused), carol=2, div-b=1
+      { entrantIndices: [0, 1], divisionIndex: 0, personIndices: [0] }, // f1: alice=0, bob=1, div-a=0, priya=0
+      { entrantIndices: [1, 2], divisionIndex: 1, personIndices: [0, 1] }, // f2: bob=1, carol=2, div-b=1, priya=0 (reused), quinn=1
     ]);
     expect(request.slots).toEqual([
       { courtIndex: 0, startAtMs: 1_700_000_000_000, dayIndex: 0 },
