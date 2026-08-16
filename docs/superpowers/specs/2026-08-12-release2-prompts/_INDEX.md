@@ -35,7 +35,7 @@ C6 (prose) is safe whenever.
 | C3 | `C3-conflict-detail-names.md` | conflict details | not concurrent with C1 (schedule.ts) | **MERGED** #567 → `ccab1356`. Family was 25 kinds, not 4; `conflictKey` and the AI repair round were both in the blast radius |
 | C4 | `C4-z3-reflow-cpsat.md` | z3 stage A | C1 (reflow inherits round rule) | **PR open** (this session) — see status log. Found two real, out-of-scope `buildSchedule` gaps shared with BUILD/POLISH (a frozen-feeder dependency gap, a bracket/TBD-fixture wall) — neither fixed here. |
 | C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | **PARKED, PR #576 draft** — owner ruling 2026-08-16: land C9 first. CI found a real bracket/frozen-feeder repair-capability regression the session's own (vacuous — see status log) local smoke run could not see. See status log. |
-| C6 | `C6-z3-prose-identifiers.md` | z3 stage C | ~~anytime~~ → **after C4+C5** | **NO-OP today** (see below) |
+| C6 | `C6-z3-prose-identifiers.md` | z3 stage C | ~~anytime~~ → **after C4+C5** | ~~NO-OP today~~ → **BRANCH `feat/c6-z3-prose-identifiers`**, real work once A+B landed — 15 false claims, one of them an actionable instruction naming a deleted script. Ships the ledger C8's acceptance asks for as a test. See status log. |
 | C7 | `C7-z3-public-contract.md` | z3 stage D | C4+C5 **deployed** (nothing writes z3) | TODO |
 | C8 | `C8-z3-delete-solver.md` | z3 stage E | C7 | TODO |
 | C9 | `C9-decomposed-repair-cpsat.md` | z3 retirement gap closure | branches off `origin/main` directly, includes C5's commits (C5 targets a different base — see status log) | **PR #583 open**, targets `main` — see status log. Density regression CLOSED, general frozen-feeder dependency gap CLOSED. Bracket/TBD-sibling gap (what parked C5) NOT closed — new finding, contradicts this brief's own "REFUTED" note. #576 (C5) should close as superseded once #583 merges. |
@@ -94,6 +94,81 @@ surviving identifier is accurate; `build.ts:300-306` already carries an earlier
 session's comment pre-empting this rename. C6 must run AFTER C4+C5.
 `content/help/**` has zero z3 hits and never owed an edit. Finding recorded on
 branch `feat/c6-z3-prose` (`b5ade286`), parked.
+
+### C6 — z3 prose, RUN FOR REAL (2026-08-16/17)
+
+Branch `feat/c6-z3-prose-identifiers`, worktree `.claude/worktrees/c6-z3-prose`,
+off `8b85ab39`. The 2026-08-13 entry above was right about its own day and is
+now spent: C4 (`edd358af`) and C9 (`8b85ab39`, carrying C5) moved the last
+production caller off z3, so the prose that says otherwise became false the
+moment they merged. **The diff is comment-only** — `git diff main HEAD` outside
+the new test file has ZERO changed lines that are not comments, which is the
+whole behavioural argument and is worth re-running rather than re-deriving.
+
+**Fifteen false claims, and the count is the finding.** The earlier sweep read
+the hits as accurate because it asked "does z3 still exist" (yes) rather than
+"does THIS sentence describe what runs" (no). Six of the fifteen were one
+sentence copy-pasted across AI test files — a shared-source defect, so a
+per-file judgement call would have caught one and left five.
+
+**Two were actionable, not merely wrong.** `build.ts`'s R18 gate told a future
+engineer to re-measure by running `scripts/bench-build.ts` and reading the row
+that "still reports `engine: \"z3\"`". Neither half is reachable: BUILD reports
+`optimized`, and that script was DELETED with the z3 tier encoder in
+`82553ec3`. `schedule.ts:1504` cites the same dead script. Both now say so
+rather than sending someone hunting. Whoever moves `MAX_SOLVE_ENCODING` or
+`AUTO_SOLVER_WALL_MS` next has to rebuild the sweep against CP-SAT first —
+that is a real gap this task found and did not close.
+
+**A vacuous assertion, found by sweeping rather than by reading.**
+`schedule-capacity-guard.test.ts` asserts `z3LoadCount()` is unchanged as proof
+that a refused REFLOW never reached the solver. Since C4 that counter cannot
+move on this path whatever happens, so the assertion cannot fail. Left in place
+(it dies with `z3LoadCount` in C8) but the comment now says the 422 above it is
+what carries the proof, and names the placement-client spy that would restore
+the real fact.
+
+**`z3-auto-schedule.spec.ts` is now `auto-schedule.spec.ts`**, with its fourteen
+cross-references in sibling specs. Config-inert, verified rather than assumed:
+it is selected by the catch-all `parallel` project (`testIgnore`, not
+`testMatch`), appears in no `SERIAL_SPECS` entry and in no workflow file, and
+`playwright test --list --project=parallel` still collects its 5 tests under the
+new name, 0 under the old.
+
+**The proto and its generated stubs were changed by REGENERATING.**
+`proto/scheduler.proto`'s comments propagate verbatim into
+`generated/scheduler.ts`, so a hand-edit of one silently forks the pair.
+`npm run gen:proto --workspace packages/engine` produced a one-line diff and
+nothing else — which is also the evidence that the pinned `protoc`
+devDependency is deterministic, the property `gen-proto.ts`'s own header argues
+for at length.
+
+**What C7 and C8 inherit is now a TEST, not a PR comment.**
+`scripts/__tests__/z3-retirement-drift.test.ts` (runs in CI at `ci.yml:429`,
+the repo-root scripts step) pins two things: each retired claim, anchored to
+the file it lived in, and the exact literal list of files in the live trees
+that still mention z3, grouped `OWNED_BY_C7` / `OWNED_BY_C8` / `ACCURATE_TODAY`.
+Both directions fail — an unlisted file that gains a z3 mention, and a listed
+file that loses its last one — so C7/C8 cannot shrink the code and leave the
+ledger overstating what it covers. Measured against `main`'s content: **16 of
+19 assertions red**, the 3 green ones being the non-vacuity scan, the positive
+control and the disjointness check, none of which depend on the fix.
+
+**Anchoring the claims to files was not tidiness.** The first draft matched the
+phrases repo-wide and flagged four LEGITIMATE uses — `build.ts:2112` and
+`smoke.ts:8391` contrast the z3 path in the past tense, `repair-cpsat-harness`
+really does bridge the z3 repair solver, and `test_model.py:1150` cites the
+same "a board z3 proves INFEASIBLE" sentence as its own case's rationale. A
+prose gate that cannot tell "z3 did this" from "z3 does this" is a nuisance.
+
+**Not C6's, decided and recorded rather than left ambiguous:** the seeded
+competition/player names prefixed `Z3 ` in `auto-schedule.spec.ts` and
+`smoke.ts` are test DATA, not prose or identifiers, so they stay (the ledger
+lists both files); `services/placement/bench/placement_repair_bench.py`'s
+"repair.ts encodes in z3" is TRUE — `repair.ts` still does — and goes when C8
+deletes it; everything under `docs/**`, `.claude/**` and the 60 `design/**`
+PNGs (where `git grep -a` finds "z3" inside compressed bytes) is history or
+noise.
 
 ## Decisions already made (do not re-open)
 

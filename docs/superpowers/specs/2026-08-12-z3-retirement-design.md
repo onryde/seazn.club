@@ -57,10 +57,27 @@ entry in `2026-08-12-release2-prompts/_INDEX.md` for the full account.
 Stage B's end state (`"optimized"`) and gate are otherwise unchanged by
 this amendment.
 
-### C — prose, docs, internal identifiers (parallel-safe, anytime)
+### C — prose, docs, internal identifiers (~~parallel-safe, anytime~~ after A+B)
 Comments, docs, internal function/module names. **Never touches stored enum
 VALUES** — an identifier that is also a persisted value belongs to stage D.
 Zero behavior change; no gate beyond green suites.
+
+**AMENDED 2026-08-13, then RUN 2026-08-16/17.** "Anytime" was an ordering
+error: this stage renames prose that says z3 where the code no longer means z3,
+so while REFLOW and the AI repair round still CALLED z3 every surviving
+identifier was accurate and the stage was a no-op. Once A (`edd358af`) and B
+(`8b85ab39`) landed it became real — 15 false claims, six of them one sentence
+copied across AI test files, two of them actionable instructions pointing at a
+script the cutover had deleted. Full account in
+`2026-08-12-release2-prompts/_INDEX.md`'s C6 entry.
+
+The stage also acquired a gate it did not have when this was written:
+`scripts/__tests__/z3-retirement-drift.test.ts` pins each retired claim to the
+file it lived in AND pins the exact list of live-tree files still mentioning
+z3, grouped by whether stage D or stage E inherits them. That list is what
+stage E's acceptance below asks for; keeping it true continuously is cheaper
+than reconstructing it, and it fails in both directions, so neither later stage
+can shrink the code and leave the ledger overstating its coverage.
 
 ### D — public contract retirement (after A+B deployed: nothing writes z3)
 1. Migration (next free V-number): rewrite rows `engine z3 | z3+lns →

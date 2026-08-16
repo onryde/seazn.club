@@ -64,7 +64,17 @@ runs; C9 only guarantees it was true the day it landed.
 - Dependency-graph proof (knip/depcheck or an import test) that the z3
   package is unreferenced — fails while any import remains.
 - `git grep -a -i z3` clean outside history/migrations/specs — paste the
-  remaining-hits list.
+  remaining-hits list. **C6 already built that list as a test**:
+  `scripts/__tests__/z3-retirement-drift.test.ts`'s `OWNED_BY_C8` is your file
+  set, `OWNED_BY_C7` is what must already be gone by the time you run, and
+  `ACCURATE_TODAY` is what survives you. It fails in BOTH directions, so
+  deleting a file without emptying its ledger entry goes red rather than
+  quietly leaving the ledger overstating its coverage — expect to edit that
+  test, and treat an untouched one as a sign you deleted less than you think.
+  (Two entries there are test DATA rather than code: the `Z3 `-prefixed seeded
+  competition/player names in `auto-schedule.spec.ts` and `smoke.ts`. Renaming
+  them is safe — nothing asserts on the prefix, checked — but it is a data
+  change, which is why C6 left them.)
 - Prod-build smoke: standalone build + reflow + AI loop e2e green (the WASM
   config removal is exactly the kind of change that ships a silent prod
   no-op — prove the prod server path, not the dev server).
