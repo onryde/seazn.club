@@ -3753,5 +3753,5 @@
   "templates.detail.take.rankRange": "Classés {from}–{to}",
   "templates.detail.take.and": "{a} et {b}",
   "templates.stageKind.league": "Championnat",
-  "templates.stageKind.pagePlayoff": "Playoff Page"
+  "templates.stageKind.pagePlayoff": "Barrage Page"
 }

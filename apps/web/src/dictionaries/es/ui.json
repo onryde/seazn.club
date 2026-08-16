@@ -3753,5 +3753,5 @@
   "templates.detail.take.rankRange": "Posiciones {from}–{to}",
   "templates.detail.take.and": "{a} y {b}",
   "templates.stageKind.league": "Liga",
-  "templates.stageKind.pagePlayoff": "Playoff Page"
+  "templates.stageKind.pagePlayoff": "Cuadro Page"
 }

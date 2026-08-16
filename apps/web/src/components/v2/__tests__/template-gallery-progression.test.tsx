@@ -30,6 +30,14 @@ import nlUi from "@/dictionaries/nl/ui.json";
 import { t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import type { CompetitionTemplate } from "@/server/templates/schema";
+// Real shipped catalog data (not a hand-built fixture) for the
+// multiple-SEEDED-STAGES case below — reviewer gap 1: t20-super8's Super 8
+// stage AND its knockout stage both carry `.seeding`, so this tracks the
+// actual production data instead of a lookalike that could drift from it.
+// `catalog.ts` is server-only, which only matters to a browser BUNDLE; a
+// vitest test runs in Node like any other import (catalog.test.ts already
+// imports it directly, in this same style, from server/templates/__tests__).
+import { getTemplate } from "@/server/templates/catalog";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
@@ -106,6 +114,27 @@ describe("templateProgressionLines", () => {
     expect(lines[0].text).toContain("4 best 3-placed");
     expect(lines[0].text).toContain("Knockout");
   });
+
+  // Reviewer gap 1: a DIFFERENT multiplicity than the euro24 case above —
+  // TWO OR MORE SEEDED STAGES in one template, not one stage with two take
+  // rules. t20-super8 (catalog/t20-super8.json) is exactly that in
+  // production: its "Super 8" stage AND its "Knockout" stage both carry
+  // `.seeding`. A `templateProgressionLines` that silently truncated to
+  // `lines[0]` would pass every OTHER test in this file (none of them has
+  // more than one seeded stage) while shipping only half the map here.
+  it("renders a distinct line for EACH seeded stage in t20-super8 (Super 8 AND Knockout), not just the first", () => {
+    const t20 = getTemplate("t20-super8");
+    if (!t20) throw new Error("t20-super8 missing from the catalog — catalog.test.ts should already fail this");
+
+    const lines = templateProgressionLines(enMsg, t20);
+    expect(lines).toHaveLength(2);
+    expect(lines[0].text).toBe("Top 2 per group → Super 8");
+    expect(lines[1].text).toBe("Top 2 per group → Knockout");
+    // Same take rule, different targets — a naive dedupe-by-text mutation
+    // would also pass "both lines present" if it merged them; this rules
+    // that out explicitly.
+    expect(lines[0].text).not.toBe(lines[1].text);
+  });
 });
 
 const renderSheet = (template: CompetitionTemplate, dict: Dict = enUi as Dict, locale: Locale = "en") =>
@@ -121,6 +150,15 @@ describe("TemplateDetailSheet — progression section", () => {
     expect(html).toContain('data-testid="template-detail-progression"');
     expect(html).toContain("Top 2 per group");
     expect(html).toContain("4 best 3-placed");
+  });
+
+  it("renders BOTH t20-super8 progression lines (two seeded stages), not just one", () => {
+    const t20 = getTemplate("t20-super8");
+    if (!t20) throw new Error("t20-super8 missing from the catalog — catalog.test.ts should already fail this");
+    const html = renderSheet(t20);
+    expect(html).toContain('data-testid="template-detail-progression"');
+    expect(html).toContain("Top 2 per group → Super 8");
+    expect(html).toContain("Top 2 per group → Knockout");
   });
 
   it("regression: a template with no seeded stages omits the section and the structure list is unchanged", () => {
