@@ -1,5 +1,7 @@
-// W6 (#401), C5 (z3 retirement stage B) — the repair solver inside the JOINT
-// runner, now a `buildSchedule` call instead of z3's `repairDecomposed`.
+// W6 (#401), C5 (z3 retirement stage B), C9 (decomposed repair on CP-SAT) —
+// the repair solver inside the JOINT runner, now `repairDecomposedCpsat`
+// instead of a single `buildSchedule` call (C5) or z3's `repairDecomposed`
+// (pre-C5).
 //
 // The property this file exists for is in the first test: the clash is between
 // two divisions that each hold exactly ONE fixture, so every per-division board
@@ -7,19 +9,21 @@
 // per-division solver would report nothing to fix and hand a double-booked court
 // to the organiser.
 //
-// `buildSchedule` is mocked at the `@seazn/engine/scheduling` boundary for the
-// same reason `schedule-ai-repair.test.ts` mocks it: determinism, and
-// `schedule-ai-solver.test.ts` already covers `solveBoard`'s own CP-SAT
-// behavior unit-level. This file's job is the JOINT runner's behavior around
-// that call — the cross-division visibility, the court-ownership guard, the
-// adoption gate — which is orthogonal to which solver is under the hood.
+// `repairDecomposedCpsat` is mocked at the `@seazn/engine/scheduling` boundary,
+// at the same seam `schedule-ai-repair.test.ts` mocks it (see that file's own
+// header for why `buildSchedule` no longer works as the mock point — C9 moved
+// the actual solve one layer down). `schedule-ai-solver.test.ts` covers
+// `solveBoard`'s own behavior unit-level. This file's job is the JOINT
+// runner's behavior around that call — the cross-division visibility, the
+// court-ownership guard, the adoption gate — which is orthogonal to which
+// solver is under the hood.
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { buildSchedule } = vi.hoisted(() => ({ buildSchedule: vi.fn() }));
+const { repairDecomposedCpsat } = vi.hoisted(() => ({ repairDecomposedCpsat: vi.fn() }));
 vi.mock("@seazn/engine/scheduling", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@seazn/engine/scheduling")>()),
-  buildSchedule,
+  repairDecomposedCpsat,
 }));
 
 const parse = vi.fn();
@@ -32,7 +36,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
 
 import { jointSolverConfig, runCompetitionAiPlan } from "../competition-schedule-ai";
 import type { CompetitionPack } from "../competition-schedule-ai";
-import { boardMetrics, type Assignment, type BuildResult } from "@seazn/engine/scheduling";
+import type { Assignment, DecomposedRepairResult, RepairComponentReport } from "@seazn/engine/scheduling";
 
 const D1 = "d1111111-1111-4111-8111-111111111111"; // "Alpha" — Court 1 only
 const D2 = "d2222222-2222-4222-8222-222222222222"; // "Beta"  — Court 1 and 2
@@ -213,28 +217,46 @@ const planResponse = (p: unknown, usage: unknown = { input_tokens: 1000, output_
   content: [],
 });
 
-/** A `buildSchedule` result over `assignments`, with real metrics — hand-
- *  enumerating `BoardMetrics`'s fields would be a second, driftable copy of
- *  the shape. */
-const buildResult = (assignments: Assignment[], overrides: Partial<BuildResult> = {}): BuildResult => ({
-  assignments,
-  conflicts: [],
-  metrics: boardMetrics(assignments, pack.courts, assignments.length),
-  engine: "optimized",
-  status: "ok",
-  tiersCompleted: 0,
-  budgetExpired: false,
-  elapsedMs: 5,
-  moved: 0,
-  lost: 0,
-  rlimitSpent: 0,
-  lnsWindowRlimits: [],
-  ...overrides,
-});
+/** A `repairDecomposedCpsat` result. `moved`/`unresolvedFixtureIds` are the
+ *  fields `solveBoard` actually reads — the rest exist for shape
+ *  completeness only. */
+const decomposedResult = (
+  assignments: Assignment[],
+  overrides: Partial<DecomposedRepairResult> = {},
+): DecomposedRepairResult => {
+  const componentIds = assignments.map((a) => a.fixtureId);
+  const defaultComponent: RepairComponentReport = {
+    index: 0,
+    size: componentIds.length,
+    frozen: 0,
+    fixtureIds: componentIds,
+    outcome: "repaired",
+    k: 0,
+    moved: [],
+    checks: 0,
+    elapsedMs: 5,
+    relaxed: [],
+  };
+  return {
+    status: "repaired",
+    assignments,
+    moved: [],
+    k: 0,
+    elapsedMs: 5,
+    checks: 0,
+    relaxed: [],
+    components: [defaultComponent],
+    unresolvedFixtureIds: [],
+    minimality: { verdict: "upper_bound", k: 0, lowerBound: 0, witnesses: [], caveats: [] },
+    mode: "components",
+    residual: [],
+    ...overrides,
+  };
+};
 
 beforeEach(() => {
   parse.mockReset();
-  buildSchedule.mockReset();
+  repairDecomposedCpsat.mockReset();
   process.env.ANTHROPIC_API_KEY = "test-key";
   delete process.env.AI_PROVIDER;
   delete process.env.SCHEDULING_AI_MODEL;
@@ -249,11 +271,14 @@ describe("solver repair in runCompetitionAiPlan (#401, C5)", () => {
     // Both F1/F2 are violators (the two sides of the cross-division clash) —
     // this 2-fixture pack has no non-violator to freeze. F1 stays on Alpha's
     // only court; F2 moves to Court 2, which Beta legitimately owns.
-    buildSchedule.mockResolvedValueOnce(
-      buildResult([
-        { fixtureId: F1, court: "Court 1", startAt: T("2026-08-01T08:00:00Z"), endAt: T("2026-08-01T08:30:00Z"), entrants: [], people: [] },
-        { fixtureId: F2, court: "Court 2", startAt: T("2026-08-01T08:00:00Z"), endAt: T("2026-08-01T08:30:00Z"), entrants: [], people: [] },
-      ]),
+    repairDecomposedCpsat.mockResolvedValueOnce(
+      decomposedResult(
+        [
+          { fixtureId: F1, court: "Court 1", startAt: T("2026-08-01T08:00:00Z"), endAt: T("2026-08-01T08:30:00Z"), entrants: [], people: [] },
+          { fixtureId: F2, court: "Court 2", startAt: T("2026-08-01T08:00:00Z"), endAt: T("2026-08-01T08:30:00Z"), entrants: [], people: [] },
+        ],
+        { moved: [F2] },
+      ),
     );
 
     const out = await runCompetitionAiPlan(pack, movableIds);
@@ -268,8 +293,8 @@ describe("solver repair in runCompetitionAiPlan (#401, C5)", () => {
     expect(parse).toHaveBeenCalledTimes(1);
 
     // Nothing to freeze — every fixture in this pack is a violator.
-    const sent = buildSchedule.mock.calls[0]![0] as { frozen?: string[] };
-    expect(sent.frozen).toEqual([]);
+    const sent = repairDecomposedCpsat.mock.calls[0]![0] as { callerFrozen?: Set<string> };
+    expect(sent.callerFrozen).toEqual(new Set());
   });
 
   it("never places a fixture on a court its own division does not own", async () => {
@@ -277,11 +302,14 @@ describe("solver repair in runCompetitionAiPlan (#401, C5)", () => {
     // court ownership is a structural rule — so a solver handed the union of
     // courts would be free to park Alpha on Court 2 and be graded clean.
     parse.mockResolvedValueOnce(planResponse(crossClashPlan));
-    buildSchedule.mockResolvedValueOnce(
-      buildResult([
-        { fixtureId: F1, court: "Court 1", startAt: T("2026-08-01T08:00:00Z"), endAt: T("2026-08-01T08:30:00Z"), entrants: [], people: [] },
-        { fixtureId: F2, court: "Court 2", startAt: T("2026-08-01T08:00:00Z"), endAt: T("2026-08-01T08:30:00Z"), entrants: [], people: [] },
-      ]),
+    repairDecomposedCpsat.mockResolvedValueOnce(
+      decomposedResult(
+        [
+          { fixtureId: F1, court: "Court 1", startAt: T("2026-08-01T08:00:00Z"), endAt: T("2026-08-01T08:30:00Z"), entrants: [], people: [] },
+          { fixtureId: F2, court: "Court 2", startAt: T("2026-08-01T08:00:00Z"), endAt: T("2026-08-01T08:30:00Z"), entrants: [], people: [] },
+        ],
+        { moved: [F2] },
+      ),
     );
 
     const out = await runCompetitionAiPlan(pack, movableIds);
@@ -299,7 +327,7 @@ describe("solver repair in runCompetitionAiPlan (#401, C5)", () => {
 
     expect(out.repair).toEqual({ engine: "none", solver_ran: false });
     expect(parse).toHaveBeenCalledTimes(1);
-    expect(buildSchedule).not.toHaveBeenCalled();
+    expect(repairDecomposedCpsat).not.toHaveBeenCalled();
   });
 
   it("falls back to the LLM repair round when the solver is switched off, and says so", async () => {
@@ -315,15 +343,43 @@ describe("solver repair in runCompetitionAiPlan (#401, C5)", () => {
     expect(out.repair.solver_ran).toBe(false);
     expect(out.repair.fallback).toBe("disabled");
     expect(out.usage.repair_rounds).toBe(1);
-    expect(buildSchedule).not.toHaveBeenCalled();
+    expect(repairDecomposedCpsat).not.toHaveBeenCalled();
   });
 
   it("falls back and hands the LLM the fixtures it could not resolve when the solver makes no progress", async () => {
     parse
       .mockResolvedValueOnce(planResponse(crossClashPlan))
       .mockResolvedValueOnce(planResponse(cleanPlan));
-    buildSchedule.mockResolvedValueOnce(
-      buildResult([], { status: "not_searched", notSearchedReason: "out_of_time", budgetExpired: true }),
+    // The component never got to search — `skipReason: "budget_exhausted"`
+    // is what `solveBoard` reads to derive `fallback: "budget"`/
+    // `timed_out: true`.
+    repairDecomposedCpsat.mockResolvedValueOnce(
+      decomposedResult(
+        [
+          { fixtureId: F1, court: "Court 1", startAt: T("2026-08-01T08:00:00Z"), endAt: T("2026-08-01T08:30:00Z"), entrants: [], people: [] },
+          { fixtureId: F2, court: "Court 1", startAt: T("2026-08-01T08:00:00Z"), endAt: T("2026-08-01T08:30:00Z"), entrants: [], people: [] },
+        ],
+        {
+          status: "unrepaired",
+          moved: [],
+          unresolvedFixtureIds: [F1, F2],
+          components: [
+            {
+              index: 0,
+              size: 2,
+              frozen: 0,
+              fixtureIds: [F1, F2],
+              outcome: "skipped",
+              skipReason: "budget_exhausted",
+              k: 0,
+              moved: [],
+              checks: 0,
+              elapsedMs: 5,
+              relaxed: [],
+            },
+          ],
+        },
+      ),
     );
 
     const out = await runCompetitionAiPlan(pack, movableIds);
@@ -386,20 +442,28 @@ describe("solver repair in runCompetitionAiPlan (#401, C5)", () => {
     // `makeThreeFixturePack`: `makePack()`'s 2-fixture board makes BOTH
     // fixtures violators in every scenario in this file, so it cannot express
     // a non-violator to freeze.
+    // C9 moved WHERE this is guaranteed: a caller-frozen fixture is now
+    // structurally never a `buildSchedule` decision variable inside
+    // `repairDecomposedCpsat` (mutation-checked directly in
+    // `repair-decompose-cpsat.test.ts`) — `solveBoard` no longer runs its
+    // own reconciliation on top of the driver's result. So this test now
+    // proves what's still true at this layer: `runCompetitionAiPlan`
+    // computes `callerFrozen` correctly (F3, never F1/F2) and passes the
+    // driver's own (correctly-frozen) answer through undisturbed.
     const pack3 = makeThreeFixturePack();
     const movableIds3 = new Set([F1, F2, F3]);
     parse.mockResolvedValueOnce(planResponse(crossClashPlanWithF3));
-    buildSchedule.mockResolvedValueOnce(
-      buildResult([
-        { fixtureId: F1, court: "Court 1", startAt: T("2026-08-01T08:00:00Z"), endAt: T("2026-08-01T08:30:00Z"), entrants: [], people: [] },
-        // Clear of F3's frozen slot (Court 2, 08:00Z) — a same-slot mock here
-        // would create a NEW clash the adoption gate correctly refuses,
-        // triggering another repair round instead of testing reconciliation.
-        { fixtureId: F2, court: "Court 1", startAt: T("2026-08-01T18:00:00Z"), endAt: T("2026-08-01T18:30:00Z"), entrants: [], people: [] },
-        // F3 "moved" by the mock, standing in for a solver that did not
-        // honour the freeze — must not survive reconciliation.
-        { fixtureId: F3, court: "Court 1", startAt: T("2026-08-02T20:00:00Z"), endAt: T("2026-08-02T20:30:00Z"), entrants: [], people: [] },
-      ]),
+    repairDecomposedCpsat.mockResolvedValueOnce(
+      decomposedResult(
+        [
+          { fixtureId: F1, court: "Court 1", startAt: T("2026-08-01T08:00:00Z"), endAt: T("2026-08-01T08:30:00Z"), entrants: [], people: [] },
+          { fixtureId: F2, court: "Court 1", startAt: T("2026-08-01T18:00:00Z"), endAt: T("2026-08-01T18:30:00Z"), entrants: [], people: [] },
+          // F3 exactly where `crossClashPlanWithF3` put it — the shape the
+          // real driver always produces for a caller-frozen id.
+          { fixtureId: F3, court: "Court 2", startAt: T("2026-08-01T08:00:00Z"), endAt: T("2026-08-01T08:30:00Z"), entrants: [], people: [] },
+        ],
+        { moved: [F2] },
+      ),
     );
 
     const out = await runCompetitionAiPlan(pack3, movableIds3);
@@ -415,10 +479,11 @@ describe("solver repair in runCompetitionAiPlan (#401, C5)", () => {
       byId.get(F1)!.scheduled_at !== byId.get(F2)!.scheduled_at ||
         byId.get(F1)!.court_label !== byId.get(F2)!.court_label,
     ).toBe(true);
-    // buildSchedule was asked to move ONLY the violators (F1/F2) — F3 must be
+    // The decomposed driver was asked to move ONLY the violators (F1/F2) —
+    // F3 must be
     // named in `frozen`, never left free.
-    const sent = buildSchedule.mock.calls[0]![0] as { frozen?: string[] };
-    expect(sent.frozen).toEqual([F3]);
+    const sent = repairDecomposedCpsat.mock.calls[0]![0] as { callerFrozen?: Set<string> };
+    expect(sent.callerFrozen).toEqual(new Set([F3]));
   });
 });
 
