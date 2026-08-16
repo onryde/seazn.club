@@ -3,16 +3,6 @@
 // #396/#399/#401) fail once the AI repair round is routed through the
 // placement CP-SAT service instead of z3.
 //
-// DUPLICATED onto this C9-prep branch (`docs/c9-frozen-feeder-finding`,
-// origin/main-based) deliberately: the owner ruled 2026-08-16 that C9 lands
-// BEFORE C5 merges, so whoever picks up C9 should not have to fetch this
-// from the still-open, unmerged `feat/c5-ai-repair-cpsat` branch (commit
-// `2be96820`) just to get the verification tool this brief's own
-// "Acceptance" section requires. The two copies WILL drift if either is
-// edited without the other — if you change this file while working C9,
-// consider whether the C5 branch's copy needs the same edit, or just delete
-// that copy once C9 merges and C5 rebases onto it.
-//
 // THE SCENARIO: a 4-entrant knockout bracket with a third-place playoff.
 // Two semi-finals are DECIDED (home/away known); the final and the 3rd/4th
 // playoff are both TBD (null entrants) and, in the reproduced prior, are
