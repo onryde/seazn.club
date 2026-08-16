@@ -26,13 +26,14 @@ Gaps this redesign closes:
 - **Names are public by default.** Registering = consent to public name, stated plainly in the consent step copy. Opt-out later (claim/profile) flips public rendering to initials. Youth divisions keep the existing `player_name_display` override.
 - **Approval:** per-division toggle `auto` (default, today's behavior) | `manual` (organiser approves/rejects pending entries).
 - **Public flow shape:** stepper + cart, one payment per cart.
+- **Currency (addendum 2026-08-16, decided after RS001 started — lands as RS001b):** one preferred currency per org (`organizations.currency`), selected from the platform allowlist (`SUPPORTED_CURRENCIES` minus registration exclusions = `REGISTRATION_CURRENCIES`); per-division `registration_settings.currency` is dropped. The same restricted list applies when payment is collected offline (no free-text display currency). Carts are single-currency by construction. INR is a member only if RS001b's live destination-charge verify passes — subscription INR proves nothing (platform charge, no `transfer_data`).
 - **Greenfield:** old form, old org route, old roster jsonb, old single-entry POST route all removed. Prod holds zero registration data (owner-confirmed 2026-08-16), so there is no backfill anywhere — columns drop and constraints are strict from day one. No feature flags; PR sequencing keeps every merge shippable.
 
 ## 3. Data model
 
 New tables:
 
-**`registration_groups`** — one cart/submission. `id`, `org_id`, `competition_id`, `contact_name`, `contact_email`, `user_id` (nullable), `ref_code` (public reference), `access_token_hash`, `locale`, `amount_cents` (charged subtotal), payment fields (mirroring today's registration payment columns: `payment_method`, Stripe refs, `expires_at`), timestamps. Every registration belongs to a group (size 1 is normal).
+**`registration_groups`** — one cart/submission. `id`, `org_id`, `competition_id`, `contact_name`, `contact_email`, `user_id` (nullable), `ref_code` (public reference), `access_token_hash`, `locale`, `amount_cents` (charged subtotal), payment fields (mirroring today's registration payment columns: `payment_method`, Stripe refs, `expires_at`), `currency` (org currency snapshotted at submit — later org-currency changes never touch existing groups), timestamps. Every registration belongs to a group (size 1 is normal).
 
 **`registration_players`** — replaces `registrations.roster` jsonb. `id`, `registration_id`, `org_id`, `full_name`, `email` (nullable), `dob` (nullable), `gender` (nullable, `m|f|x`), `source` (`captain_entered | self_joined`), `consent_status` (`pending | granted | guardian`), `consent_at`, `claim_token_hash` (nullable), `person_id` (nullable, set at materialization), `squad_number`/`is_captain` carried where provided. Per-player dob/gender required only when the division's category/age rules need them.
 
@@ -40,7 +41,8 @@ Changed tables:
 
 - **`registrations`**: add `group_id` FK NOT NULL, `join_code` (nullable, team entries), `free_agent` boolean default false, status enum gains `rejected`. Drop `roster` jsonb. Per-entry `status` and `amount_cents` stay — a cart can be partially waitlisted.
 - **`divisions`**: add `category` (`open|mens|womens|mixed`, null = open), `age_min`, `age_max` (years, evaluated against season start year as today). `eligibility` jsonb stays for custom extra rules; `eligibilityIssues()` evaluates first-class columns plus jsonb.
-- **`registration_settings`**: add `approval` (`auto|manual`, default auto), `allow_free_agents` boolean default false. Everything else unchanged.
+- **`registration_settings`**: add `approval` (`auto|manual`, default auto), `allow_free_agents` boolean default false; **drop `currency`** (org-level now; RS001b delta). Everything else unchanged.
+- **`organizations`**: add `currency` (text NOT NULL default `gbp`, DB CHECK over `REGISTRATION_CURRENCIES`) — every fee in the org is priced, displayed and charged in it. Set in org settings; Connect sync prefills it from the connected account's `default_currency` only while the org is still at the default.
 
 Statuses: `pending → confirmed | waitlisted | rejected`, plus existing `paid`, `withdrawn`, `expired`. `rejected` is terminal, only reachable in manual mode. Waitlist promotion stays oldest-first (existing `waitlistPositions`), with manual promote allowed.
 
@@ -52,7 +54,7 @@ Route stays `/shared/[orgSlug]/[competitionSlug]/register`. New client flow, ser
 - **Step 2 — Entries.** Division cards with badges: category, age band, fee, capacity (`12/16` / `waitlist` / `closes <date>`). Adding an entry follows the division's `entrant_kind`: team (name it), pair, individual, free-agent (when `allow_free_agents`). Same division may appear twice (Team A, Team B). Divisions the registrant cannot enter *as a player* are greyed with the reason but stay pickable for team entries (a club rep is not the player).
 - **Step 3 — Details.** Per entry: roster builder (typed or pasted, reusing today's `parseRoster`), per-player dob/gender fields only when required by the division, live per-player eligibility including the mixed-composition meter ("needs at least one of each gender"); custom `form_fields` answers; partner name for pairs. Free-agent entries need nothing extra.
 - **Step 4 — Consent.** Privacy (required, versioned) — copy states names are public by default and opt-out is available anytime; media consent (optional); guardian block when the registrant is a minor. Notice that captain-entered players will be asked to confirm when they join/claim.
-- **Step 5 — Review & pay.** Line items per entry. Submit runs one row-locked transaction: capacity re-checked per entry; entries flipping to waitlist are shown before payment and are **not charged** (pay on promotion, reusing `expires_at` machinery). One Stripe checkout for the payable subtotal. Honeypot + both rate-limit buckets kept.
+- **Step 5 — Review & pay.** Line items per entry. Submit runs one row-locked transaction: capacity re-checked per entry; entries flipping to waitlist are shown before payment and are **not charged** (pay on promotion, reusing `expires_at` machinery). One Stripe checkout for the payable subtotal, in the group's snapshotted org currency (single-currency cart by construction; the endpoint validates the currency ∈ `REGISTRATION_CURRENCIES` before minting the session — a clean 422, never a Stripe error on the public page). Honeypot + both rate-limit buckets kept.
 
 **After submit:** group status page `/shared/.../register/status?ref=<GROUP_REF>` — per-entry status, roster fill meter, captain's copy-join-link, cancel entry.
 
@@ -66,7 +68,7 @@ Single-entry divisions ride the same stepper with a cart of one; step 2 collapse
 
 New route `/o/[orgSlug]/c/[compSlug]/registration`, linked from the competition overview. Two tabs.
 
-**Settings tab.** Division rows: status pill (open/scheduled/closed), window, capacity meter, fee, kind, category/age badges, approval mode, free-agent flag. Row opens the config panel: existing `registration_settings` fields plus category/age (writing to `divisions`), approval toggle, `allow_free_agents`; existing form-fields builder and payment section (`registration.paid` gate) fold into this panel. Per-division public register link with copy button.
+**Settings tab.** Division rows: status pill (open/scheduled/closed), window, capacity meter, fee, kind, category/age badges, approval mode, free-agent flag. Row opens the config panel: existing `registration_settings` fields plus category/age (writing to `divisions`), approval toggle, `allow_free_agents`; existing form-fields builder and payment section (`registration.paid` gate) fold into this panel. Currency is org-level: the panel shows a read-only currency chip linking to org settings — the select (codes + `Intl.DisplayNames` names, `REGISTRATION_CURRENCIES` only) lives on the org settings page, no per-division currency input anywhere. Per-division public register link with copy button.
 
 **Registrants tab.** Cross-division table; filters: division, status, kind, free-agent, consent-pending; text search. Columns: name, division, kind (team shows roster fill `5/7`), status, payment, submitted. Row expands to: full entry, roster with per-player consent status, answers, cart siblings (same group). Actions: approve/reject (manual mode), withdraw, promote-from-waitlist, assign free agent → picker of that division's team entries (inserts into the team's `registration_players` / `entrant_members` when already materialized), copy join link, resend confirmation, CSV export.
 
@@ -80,7 +82,7 @@ Unchanged in shape: confirm still creates `entrants` + `entrant_members` idempot
 
 ## 7. Phasing (all shippable, no flags)
 
-1. **P1 — schema + backend + old-surface removal.** Migrations (no backfill — prod is empty); group submit usecase + endpoint, join endpoint, per-player eligibility incl. mixed rule, approval transitions, waitlist pay-on-promotion path. All old registration surfaces deleted here (old form, old endpoint + zod schema, old org route + panel/settings components) because the schema change breaks them; the public register page renders its existing "registration closed/unavailable" state until P3.
+1. **P1 — schema + backend + old-surface removal.** Migrations (no backfill — prod is empty); the org-currency/allowlist delta (RS001b) follows as its own PR immediately after the base schema merges; group submit usecase + endpoint, join endpoint, per-player eligibility incl. mixed rule, approval transitions, waitlist pay-on-promotion path. All old registration surfaces deleted here (old form, old endpoint + zod schema, old org route + panel/settings components) because the schema change breaks them; the public register page renders its existing "registration closed/unavailable" state until P3.
 2. **P2 — org hub.** Settings + Registrants tabs; organisers can configure divisions (category/age, approval, free agents) before the public flow exists. Registrants tab starts empty.
 3. **P3 — public stepper.** New form wired to the P1 endpoint; registration surface live end-to-end.
 4. **P4 — consent claim/opt-out surfaces + free-agent assignment UI + polish.** Cleanup of anything left.
@@ -93,6 +95,7 @@ Registration is intentionally unavailable to the public between P1 and P3 merges
 - **E2E (Playwright):** multi-team cart with Stripe test payment; join link end-to-end; manual approval flow; hub actions (approve, promote, assign free agent); new public + hub surfaces in `mobile.spec.ts` (seven widths).
 - **Smoke:** group registration happy path.
 - **Regression:** existing single-entry divisions register unchanged via the stepper (cart of one).
+- **Currency:** drift test (DB CHECK set == `REGISTRATION_CURRENCIES`); zero-decimal guard (every member is 2-decimal — fee math is `×100`); test-mode destination-charge checkout test per member; ONE live INR destination-charge verify in RS001b (owner-sanctioned) decides INR's membership.
 - **i18n:** every new string in all 4 locale dictionaries; grep existing e2e assertions before changing any user-facing text.
 - **Screenshots:** 1280 / 768 / 320 for both surfaces.
 

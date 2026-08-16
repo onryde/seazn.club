@@ -34,8 +34,13 @@ consume, with the same abuse protections the old single endpoint had.
      old status page fetched server-side — match the old pattern; the page
      itself is rebuilt in RS007).
 3. **Payment orchestration**: after insert, when subtotal > 0, create the
-   Stripe checkout for the GROUP (one session, line items per payable entry),
-   reusing the existing registration payment machinery RS001 preserved. Load
+   Stripe checkout for the GROUP (one session, line items per payable entry)
+   in `group.currency` — the RS001b snapshot, never a re-read of org
+   settings — validated ∈ `REGISTRATION_CURRENCIES` first (clean 422 with a
+   stable error shape; a bad currency must never surface as a Stripe error
+   on the public page), reusing the existing registration payment machinery
+   RS001 preserved. Public request/response schemas never carry a currency
+   field — it is server-resolved. Load
    `stripe:stripe-best-practices` before touching it. Webhook path: group
    payment success → entries pending→paid/confirmed via RS002 transitions;
    verify the existing webhook handler keys by registration — rework it to key
@@ -54,6 +59,10 @@ consume, with the same abuse protections the old single endpoint had.
 - [ ] Paid cart: checkout session created for subtotal of non-waitlisted
       entries only; webhook flips the whole group; partial-waitlist cart
       charges the right amount (test with Stripe test mode)
+- [ ] Per-currency: a destination-charge checkout test runs for EVERY member
+      of `REGISTRATION_CURRENCIES` (test mode, parameterised over the
+      constant so a list change without a matching test run goes red);
+      out-of-list currency on a group → 422, no Stripe call
 - [ ] join endpoint: happy, full-roster, dead-code, rate-limited
 - [ ] `openapi:gen` + `i18n:gen-keys` → `git status --porcelain` empty
 - [ ] Counts from JSON reporter; `tsc EXIT=0`; lint clean

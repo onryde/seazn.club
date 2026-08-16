@@ -31,9 +31,11 @@ Settings tab lands before the stepper.
    free-agent flag, per-division public register link + copy button (link only
    when competition visibility allows, as the old page did).
 4. **Config panel** (row click → panel/drawer): every `registration_settings`
-   field (enabled, opens_at/closes_at, capacity, fee+currency+payment method —
+   field (enabled, opens_at/closes_at, capacity, fee+payment method —
    behind the `registration.paid` entitlement gate exactly as before — refund
-   lock, payment instructions), the **form-fields builder** (port the old
+   lock, payment instructions; currency is org-level since RS001b: render a
+   read-only currency chip linking to org settings, NO per-division currency
+   input), the **form-fields builder** (port the old
    builder UI from git history of `registration-settings.tsx` — do not
    redesign its data shape), plus new: category select, age_min/age_max,
    approval toggle, allow_free_agents (only for team divisions). Category/age
@@ -41,6 +43,11 @@ Settings tab lands before the stepper.
    the rest to `registration_settings`.
 5. **API**: whatever settings read/update endpoints RS001 preserved need
    extending for the new fields; openapi:gen if api-v1 zod moves.
+6. **Org preferred-currency select**: on the org settings page (not this
+   hub): select over `REGISTRATION_CURRENCIES` (code + `Intl.DisplayNames`
+   name), writing `organizations.currency` via the existing org-settings
+   update surface with a zod enum mirroring the constant (not
+   `z.string().length(3)`); label strings ×4 locales.
 
 ## Acceptance criteria
 
@@ -49,6 +56,9 @@ Settings tab lands before the stepper.
       values persist (Playwright, prod build, localhost:3100)
 - [ ] Entitlement: fee section locked without `registration.paid`
       (`data-feature` attr rendered, as the old gate did)
+- [ ] Currency: config panel shows the chip (no input); org-settings select
+      persists; changed org currency re-renders the hub's fee cells in the
+      new currency; select offers exactly `REGISTRATION_CURRENCIES`
 - [ ] Register-link copy button yields the working public URL (even though the
       page it points to is still closed-state — assert the URL, not the page)
 - [ ] Viewer/scorer: no nav entry, direct URL → 403/redirect matching the

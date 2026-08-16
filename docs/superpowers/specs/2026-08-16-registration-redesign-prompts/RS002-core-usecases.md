@@ -36,7 +36,9 @@ modules if it passes ~600 lines — it was near that before) and
      `confirmed` if approval=`auto` and no payment due, mirroring the old
      status ladder
    - inserts: one `registration_groups` row (ref_code, access_token — same
-     generation scheme as before), N `registrations` (join_code generated for
+     generation scheme as before; `currency` snapshotted from
+     `organizations.currency` — the RS001b column, NOT NULL, no default, so a
+     missed snapshot fails loudly at insert), N `registrations` (join_code generated for
      team entries), M `registration_players` (source=`captain_entered`,
      consent_status=`pending`, except a self row = `granted`)
    - **payable subtotal**: sum fees of non-waitlisted entries only; store on
@@ -81,6 +83,8 @@ modules if it passes ~600 lines — it was near that before) and
 - [ ] Age band: player over/under → per-player issue naming the row index
 - [ ] Cart of 3 with 1 waitlisted → subtotal charges 2; group insert atomic
       (kill mid-tx test: nothing persisted)
+- [ ] Group insert snapshots `organizations.currency`; changing the org
+      currency afterwards leaves existing groups' currency untouched
 - [ ] Approval: manual division holds `pending` even when free+capacity ok;
       approve→confirmed materializes; reject terminal (approve after reject
       fails); auto division unchanged from old behavior

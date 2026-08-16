@@ -9,7 +9,8 @@ Design of record: `../2026-08-16-registration-redesign-design.md` (approved
 
 ## Order
 
-Main chain RS001 → RS002 → RS003 is sequential (schema → usecases → endpoints).
+Main chain RS001 → RS001b → RS002 → RS003 is sequential (schema → currency
+delta → usecases → endpoints).
 After RS003 two lanes are file-disjoint and may run in either order or
 interleaved: **org lane** RS004 → RS005 → RS009, **public lane** RS006 → RS007
 → RS008. RS010 is last, after both lanes.
@@ -17,7 +18,8 @@ interleaved: **org lane** RS004 → RS005 → RS009, **public lane** RS006 → R
 | Session | Prompt file | Depends on | Status |
 |---|---|---|---|
 | RS001 | `RS001-schema-and-demolition.md` | — | TODO |
-| RS002 | `RS002-core-usecases.md` | RS001 | TODO |
+| RS001b | `RS001b-org-currency-allowlist.md` | RS001 | TODO |
+| RS002 | `RS002-core-usecases.md` | RS001b | TODO |
 | RS003 | `RS003-public-endpoints.md` | RS002 | TODO |
 | RS004 | `RS004-hub-settings-tab.md` | RS003 | TODO |
 | RS005 | `RS005-hub-registrants-tab.md` | RS004 | TODO |
@@ -53,6 +55,15 @@ serves its closed/unavailable state during that window.
    are **never charged** at submit (pay on promotion).
 8. **Greenfield, zero prod data**: no backfill, no flags, no compat shims; old
    surfaces deleted in RS001.
+9. **Org preferred currency + allowlist** (addendum 2026-08-16, decided while
+   RS001 was already in flight — RS001 sessions opened before this line owe
+   none of it): one currency per org (`organizations.currency`), select over
+   `REGISTRATION_CURRENCIES` (= `SUPPORTED_CURRENCIES` minus exclusions);
+   per-division `registration_settings.currency` dropped; offline payment
+   uses the SAME restricted list; carts single-currency by construction;
+   groups snapshot the currency at submit. INR stays only if RS001b's live
+   destination-charge verify passes (subscription INR is a platform charge —
+   proves nothing about registration's `transfer_data` path).
 
 ## False premises found
 
