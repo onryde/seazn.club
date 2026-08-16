@@ -1,8 +1,18 @@
-// C5 (z3 retirement, stage B) — the wiring switch, proven by direct call
-// interception rather than an indirect signal, mirroring C4's
-// `schedule-reflow-cpsat-wiring.test.ts` exactly (same header rationale: a
-// status/outcome check can be vacuously true on a board that happens not to
-// need real solving either way).
+// C5 (z3 retirement, stage B), C9 (decomposed repair on CP-SAT) — the wiring
+// switch, proven by direct call interception rather than an indirect signal,
+// mirroring C4's `schedule-reflow-cpsat-wiring.test.ts` exactly (same header
+// rationale: a status/outcome check can be vacuously true on a board that
+// happens not to need real solving either way).
+//
+// C9 moved the actual solve one layer down: `solveBoard` now calls
+// `repairDecomposedCpsat` (packages/engine), which calls `buildSchedule`
+// itself, per component, via its own relative import — so `buildSchedule`
+// is no longer the right interception point for "did the CP-SAT path run
+// at all" (a spy on it would need to reach INSIDE the decomposed driver's
+// own module graph, which a barrel-level mock cannot do). Spying on
+// `repairDecomposedCpsat` instead proves the same fact this file always
+// proved: the repair round reaches the placement-service-backed CP-SAT
+// path, never z3's `repairDecomposed`.
 //
 // Real Postgres is required (skipped without DATABASE_URL); the placement
 // service is whatever `PLACEMENT_SERVICE_HOST` points at (or unreachable,
@@ -20,15 +30,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
-const calls = vi.hoisted(() => ({ buildSchedule: 0, repairDecomposed: 0 }));
+const calls = vi.hoisted(() => ({ repairDecomposedCpsat: 0, repairDecomposed: 0 }));
 
 vi.mock("@seazn/engine/scheduling", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@seazn/engine/scheduling")>();
   return {
     ...actual,
-    buildSchedule: async (input: Parameters<typeof actual.buildSchedule>[0]) => {
-      calls.buildSchedule++;
-      return actual.buildSchedule(input);
+    repairDecomposedCpsat: async (input: Parameters<typeof actual.repairDecomposedCpsat>[0]) => {
+      calls.repairDecomposedCpsat++;
+      return actual.repairDecomposedCpsat(input);
     },
     repairDecomposed: async (input: Parameters<typeof actual.repairDecomposed>[0]) => {
       calls.repairDecomposed++;
@@ -158,10 +168,10 @@ function clashingPlan(fixtureIds: string[]): unknown {
   };
 }
 
-describe.skipIf(!HAS_DB)("AI repair round calls buildSchedule, never repairDecomposed (C5 wiring)", () => {
+describe.skipIf(!HAS_DB)("AI repair round calls repairDecomposedCpsat, never z3's repairDecomposed (C9 wiring)", () => {
   it("single-division: runAiPlan's repair round routes through the placement client, not z3's repair solver", async () => {
     parse.mockReset();
-    calls.buildSchedule = 0;
+    calls.repairDecomposedCpsat = 0;
     calls.repairDecomposed = 0;
     process.env.ANTHROPIC_API_KEY = "test-key";
     delete process.env.SCHEDULING_REPAIR_SOLVER;
@@ -177,7 +187,7 @@ describe.skipIf(!HAS_DB)("AI repair round calls buildSchedule, never repairDecom
     });
     const out = await runAiPlan(pack, movableIds);
 
-    expect(calls.buildSchedule).toBeGreaterThan(0);
+    expect(calls.repairDecomposedCpsat).toBeGreaterThan(0);
     expect(calls.repairDecomposed).toBe(0);
     // The clash was genuinely a live conflict, not a no-op: some engine
     // actually ran a repair round (solver or, if it declined, the LLM —
@@ -188,7 +198,7 @@ describe.skipIf(!HAS_DB)("AI repair round calls buildSchedule, never repairDecom
 
   it("joint: runCompetitionAiPlan's repair round routes through the placement client, not z3's repair solver", async () => {
     parse.mockReset();
-    calls.buildSchedule = 0;
+    calls.repairDecomposedCpsat = 0;
     calls.repairDecomposed = 0;
     process.env.ANTHROPIC_API_KEY = "test-key";
     delete process.env.SCHEDULING_REPAIR_SOLVER;
@@ -210,7 +220,7 @@ describe.skipIf(!HAS_DB)("AI repair round calls buildSchedule, never repairDecom
     });
     const out = await runCompetitionAiPlan(pack, movableIds);
 
-    expect(calls.buildSchedule).toBeGreaterThan(0);
+    expect(calls.repairDecomposedCpsat).toBeGreaterThan(0);
     expect(calls.repairDecomposed).toBe(0);
     expect(out.repair.engine).not.toBe("none");
   }, 120_000);
