@@ -292,6 +292,31 @@ as written; conflict detail is reached only if this work chooses to name
 the offending person in a message, which is a separate, optional
 improvement rather than forced fallout.
 
+**6. The CP-SAT encoder does not merely need widening — a universal scope
+compiles it into the exact bug rule 8 exists to prevent.**
+`build-encode.ts:484-513` encodes the cap as a FIXTURE-SET problem, not an
+entity problem: `scopedFixtures(h)` resolves the scope to a set of fixture
+indices, the slots are grouped by `dayKeyInTz`, and each day gets one
+clause capping how many of THAT DAY's slots the scoped fixtures may
+occupy (`room = count - immovable`).
+
+Point a universal scope at that and `scopedFixtures` returns **every**
+fixture, so the clause becomes "at most `count` fixtures run on this day",
+competition-wide. That is precisely the misreading `PARSER_PROMPT` rule 8
+was written to stop — "a 60-player event capped at two matches daily" —
+except reached through the encoder instead of the parser, on a board the
+solver will then call OPTIMAL. The greedy placer would spread the cards
+correctly and CP-SAT would refuse them, which is a placer/verifier fork
+with the sign flipped.
+
+The fix is not a wider `scopedFixtures`. The encoder needs one clause per
+**(entity, day)** — for each person (or entrant) appearing on the board,
+cap the slots of the fixtures that contain that entity on that day — which
+is a different clause count and a different loop nest from what is there.
+The comment at :477-483 anticipates a new rule TYPE being silently
+mis-encoded and says the parity whitelist catches it; a new SCOPE is the
+same hazard with no guard at all. Finding 3 is why this ships green.
+
 **Unchanged and confirmed:** `ConstraintScope` is a
 `z.discriminatedUnion("kind", …)` at `constraints.ts:30-37` with the five
 members the spec lists, re-exported by `scheduling/index.ts:46` via
