@@ -15,7 +15,7 @@
 // violation strings, same non-throwing convention as `assertScorebugSpec`
 // in ../types.ts (see ../__tests__/types.test.ts).
 import { describe, it, expect } from "vitest";
-import { tilesForPhase, assertTileHierarchy } from "../tile-grid";
+import { tilesForPhase, assertTileHierarchy, TileGrid } from "../tile-grid";
 import type { TileSpec } from "../types";
 
 const tile = (over: Partial<TileSpec> = {}): TileSpec => ({
@@ -104,5 +104,75 @@ describe("assertTileHierarchy", () => {
       tile({ id: "d", kind: "standard", phases: ["live"] }),
     ];
     expect(assertTileHierarchy(tiles)).toEqual([]);
+  });
+});
+
+// Fix round 1, review finding 1 (Important): a grid item's default
+// `min-width: auto` is content-based, so an unbreakable single-token i18n
+// label in the last column can push the whole grid past a 320px viewport
+// even though `grid-cols-4` resolves to `repeat(4, minmax(0,1fr))` —
+// `minmax(0,1fr)` frees the TRACK's automatic minimum, not the ITEM's own
+// content-based one. Fix: `min-w-0` on the tile button (the grid item) +
+// `break-words` on the label/sublabel spans (so the text's own min-content
+// size can shrink below its full unbroken width).
+//
+// The primary proof for this fix is EMPIRICAL, not this unit test: the
+// real compiled Tailwind v4 CSS (via `@tailwindcss/postcss`, the same
+// plugin apps/web's own build uses) rendered at a 320px viewport in
+// headless Chromium, comparing `document.scrollWidth` against
+// `clientWidth` before and after these two classes — see
+// task-6-report.md's FIX ROUND 1 section for the exact numbers. That
+// browser session was attempted from this environment but the shared
+// Playwright MCP browser profile was locked by a concurrent session in
+// this worktree at the time (confirmed via a harmless read-only
+// `browser_tabs` "list" call, which failed identically to the navigate
+// call — not something safe to force past by killing another agent's
+// live browser). This describe block is the sanctioned fallback named in
+// the review: a direct assertion that the fix's classes are present on
+// the actual rendered output, reached by calling `TileGrid` as a plain
+// function (React elements are plain objects; no jsdom needed) and
+// invoking its child `Tile` element's own function to reach the real
+// <button>/<span> props.
+/** Minimal shape for reading rendered props back out — deliberately NOT
+ *  React's own `ReactElement<P, T>` generics (its `.type` field's built-in
+ *  type is `string | JSXElementConstructor<P>`, which has no call
+ *  signature, so a real ReactElement type can't express "call `.type` as a
+ *  function" without fighting the library's own types). This describes
+ *  only the structural shape this test actually reads. */
+interface RenderedEl<P> {
+  type: (props: P) => RenderedEl<unknown> | { props: { className: string } };
+  props: P;
+}
+interface SpanEl {
+  props: { className: string };
+}
+
+describe("Tile rendering — finding 1 fix: min-w-0 / break-words present on the rendered output", () => {
+  function renderTile(spec: TileSpec) {
+    const grid = TileGrid({ tiles: [spec], phase: "live", t: (k) => k }) as unknown as RenderedEl<{
+      children: RenderedEl<unknown>[];
+    }>;
+    const [tileEl] = grid.props.children;
+    const button = tileEl.type(tileEl.props) as unknown as {
+      props: { className: string; children: [SpanEl, SpanEl | false] };
+    };
+    return button;
+  }
+
+  it("the tile button carries min-w-0, so it can shrink below its content width as a grid item", () => {
+    const button = renderTile(tile({ kind: "standard" }));
+    expect(button.props.className).toContain("min-w-0");
+  });
+
+  it("the label span carries break-words, so an unbreakable token can wrap instead of forcing overflow", () => {
+    const button = renderTile(tile({ kind: "standard" }));
+    const [labelSpan] = button.props.children;
+    expect(labelSpan.props.className).toContain("break-words");
+  });
+
+  it("the sublabel span also carries break-words when a sublabel is declared", () => {
+    const button = renderTile(tile({ kind: "standard", sublabel: "pad.tile.sub" }));
+    const [, sublabelSpan] = button.props.children;
+    expect(sublabelSpan && sublabelSpan.props.className).toContain("break-words");
   });
 });

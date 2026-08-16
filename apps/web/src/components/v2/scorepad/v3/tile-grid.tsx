@@ -18,7 +18,11 @@
 //
 // Match-losing actions (Forfeit, Abandon) never live in this grid by
 // design — they belong to console chrome, not the scorer's tap surface —
-// so this file adds no affordance for them.
+// so this file adds no affordance for them. This is a CONVENTION this
+// file does not enforce: neither TileSpec nor TileKind impose a type or
+// runtime block on a skin declaring one anyway (review finding 3, R1/task
+// 6 fix round 1) — deferred to skin-level validation in a later wave, not
+// a guarantee this file makes today.
 //
 // RENDERER DESIGN (frontend-design pass, R1/Task 6). This grid sits in the
 // DAYLIGHT product shell, not the night-tile Scorebug (Task 5, ./scorebug
@@ -158,7 +162,7 @@ function Tile({
       data-tile-kind={tile.kind}
       onClick={() => onAction?.(tile.action, tile)}
       style={{ minHeight }}
-      className={`relative flex flex-col items-center justify-center gap-0.5 rounded-xl px-2 py-1.5 text-center transition-colors ${spanClass} ${KIND_CLASS[tile.kind]} ${
+      className={`relative min-w-0 flex flex-col items-center justify-center gap-0.5 rounded-xl px-2 py-1.5 text-center transition-colors ${spanClass} ${KIND_CLASS[tile.kind]} ${
         tile.kind === "minor"
           ? // The 40px minor tile is visually smaller than the 44px touch
             // floor every other tile meets by height alone. Rather than
@@ -175,12 +179,21 @@ function Tile({
             // target or DOM node, so a click landing in that 2px margin
             // still fires this button's own onClick — no extra element,
             // no aria workaround needed.
+            //
+            // CAVEAT (review finding 2, fix round 1): this bleed is
+            // escapable. Any ancestor sized flush to this tile with
+            // `overflow: hidden`/`clip` (a scroll sheet, a tightly
+            // clipped card) silently clips the pseudo-element back to a
+            // real 40px hit area with no warning anywhere at runtime. A
+            // future integrator wiring this grid into such a container
+            // must either keep clearance around minor tiles or stop
+            // relying on this technique for the 44px floor.
             "before:absolute before:inset-x-0 before:-inset-y-0.5"
           : ""
       }`}
     >
-      <span className={tile.kind === "minor" ? "text-xs" : "text-sm"}>{t(tile.label)}</span>
-      {tile.sublabel && <span className="text-[11px] opacity-70">{t(tile.sublabel)}</span>}
+      <span className={`break-words ${tile.kind === "minor" ? "text-xs" : "text-sm"}`}>{t(tile.label)}</span>
+      {tile.sublabel && <span className="break-words text-[11px] opacity-70">{t(tile.sublabel)}</span>}
     </button>
   );
 }
