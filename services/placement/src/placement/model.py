@@ -330,6 +330,47 @@ immediately before a stricter partner can still under-constrain in one
 direction. Closing that needs a per-PAIR bound the one-interval-per-row
 encoding still cannot express — unchanged from C6's own note above, and out
 of this task's scope for the identical reason.
+
+AN EIGHTH is CLOSED as of task C10 (2026-08-16): **a fixture can now join a
+participant-rest/idle-gap group by PERSON, not only by entrant.** Before
+this, a fixture with no entrants (a genuinely undecided knockout slot — a
+final, a third-place playoff, before its feeders resolve) had no way to
+signal WHO could still reach it, so `placement.schema` refused it outright
+(that refusal's own history is documented there) and even a fixture WITH
+entrants had no way to flag that its roster overlaps another fixture's under
+a DIFFERENT entrant id (a cross-division/multi-registration clash —
+`packages/engine/src/scheduling/build-encode.ts`'s `byParticipant` and
+`repair-domain.ts`'s `sharesParticipant` already treat this as a first-class
+case on the TS side; this module could not see it at all).
+
+`person_indices` (parallel to `fixtures`, `build_model`'s new last
+parameter) feeds a SECOND grouping, `by_person`, built exactly like
+`by_entrant` but from a DISJOINT id space — never merged into it, matching
+`sharesParticipant`'s own two separate, non-crossing loops. Both groupings
+reuse the SAME per-fixture `interval_rest[i]` (rest is a property of the
+FIXTURE, resolved once, regardless of which participant family joins it to
+whom — the identical reasoning `build-encode.ts`'s `rowOf` comment states
+for the z3 encoder), so section 6 below simply adds a second family of
+`AddNoOverlap` groups, one per person, alongside the entrant-keyed ones.
+
+T2 (the idle-gap objective term, NOT "section 10" — that number belongs to
+the round-order pair scan) reads BOTH groupings too — the refusal's own
+message already claimed "every T2 idle-gap term" skips a participant-less
+fixture, so a fixture that now joins a group via people only, and no
+entrants, must not silently be exempt from T2 either. The pair set the two
+groupings would independently produce is DEDUPED before building gap
+variables (see T2's own comment below): a pair that shares BOTH an entrant
+and a person — the common case for two ordinary, fully-resolved fixtures —
+would otherwise get two `NewIntVar`s of the same name and a redundant
+constraint pair, which is wasteful rather than wrong, but avoidable cheaply.
+
+Deliberately NOT extended to `PinnedRow` this round: `pinned_entrant_indices`
+(C6, above) has no `person_indices` counterpart, so a pin can still only be
+attributed entrants for participant-rest purposes, never people. `by_person`
+is therefore built from MOVABLE fixtures alone, exactly as `by_entrant` was
+before C6 taught it to also read pins — see `_gap_lattice_ms`'s own comment,
+which already documents (now for two groupings, not one) that a pin sits off
+the T2 lattice regardless.
 """
 
 from __future__ import annotations
@@ -522,9 +563,9 @@ def _gap_lattice_ms(admissible_starts: list[int], dur_ms: int) -> int:
     board this can be wrong on; there are only boards it does not help.
 
     Pins are deliberately not consulted: a pin is allowed to sit OFF the
-    lattice (see `_day_of_pin`), but `by_entrant` — the only thing T2's
-    pairs are built from — holds movable fixture positions alone, so no
-    pinned start ever reaches a gap variable.
+    lattice (see `_day_of_pin`), but `by_entrant`/`by_person` (C10) — the
+    only things T2's pairs are built from — both hold movable fixture
+    positions alone, so no pinned start ever reaches a gap variable.
 
     Returns at least 1, so the caller can divide by it unconditionally.
     """
@@ -554,6 +595,7 @@ def build_model(
     pinned_entrant_indices: list[list[int]] | None = None,
     fixture_rounds: list[int | None] | None = None,
     existing_rounds: list[int | None] | None = None,
+    person_indices: list[list[int]] | None = None,
 ) -> cp_model.CpModel:
     """Build the full constraint model. No objective is set — `solve()` owns
     that, so the tier chain (Prompt 03) can drive one model through several
@@ -623,11 +665,22 @@ def build_model(
             (`build.ts`) is documented to only ever forward a pin's round
             when that division match is unambiguous. See section 10's own
             comment for the full reasoning and its consequence.
+        person_indices: C10 (2026-08-16, wire person indices design) —
+            parallel to `fixtures` the same way `fixture_rounds` is:
+            `person_indices[i]` is `fixtures[i]`'s person indices, a
+            SEPARATE namespace from its entrant indices (module docstring,
+            "AN EIGHTH"). Read by section 6 (a second, person-keyed family
+            of `AddNoOverlap` groups, `by_person`) and by T2 (the same
+            groups feed the idle-gap pair set, deduped against the
+            entrant-keyed pairs). No pinned equivalent: `existing` carries
+            no person data on the wire this round, so `by_person` is built
+            from these movable fixtures alone.
     """
     del step_minutes  # see the docstring: contractual, not load-bearing.
     rule_groups = rule_groups or []
     pinned_rule_group_indices = pinned_rule_group_indices or []
     pinned_entrant_indices = pinned_entrant_indices or []
+    person_indices = person_indices or []
     fixture_rounds = fixture_rounds or []
     existing_rounds = existing_rounds or []
 
@@ -794,6 +847,15 @@ def build_model(
         for entrant in entrant_indices:
             by_entrant.setdefault(entrant, []).append(i)
 
+    # C10 (2026-08-16, wire person indices design) — the SAME grouping, one
+    # namespace over (module docstring, "AN EIGHTH"). A separate dict, never
+    # merged into `by_entrant`: an entrant id and a person id are different
+    # participant channels that happen to both be small integers.
+    by_person: dict[int, list[int]] = {}
+    for i, person_ids in enumerate(person_indices):
+        for person in person_ids:
+            by_person.setdefault(person, []).append(i)
+
     interval_rest = [
         model.NewOptionalFixedSizeIntervalVar(start[i], dur_ms + rest_ms[i], placed[i], f"ivr_{i}")
         for i in range(n)
@@ -852,6 +914,20 @@ def build_model(
         group = [interval_rest[i] for i in by_entrant.get(entrant, [])] + pinned_rest_by_entrant.get(
             entrant, []
         )
+        if len(group) >= 2:
+            model.AddNoOverlap(group)
+
+    # C10 — the person-keyed mirror of the loop just above, minus the pinned
+    # half: `by_person` holds movable fixture positions only (module
+    # docstring, "AN EIGHTH" — `existing` carries no person data on the wire
+    # this round). Reuses the SAME `interval_rest[i]` a fixture's entrant
+    # groups already use — rest is a property of the fixture, not of which
+    # participant family is asking — so a fixture that belongs to both an
+    # entrant group and a person group simply sits in two `AddNoOverlap`
+    # families at once, exactly as a two-entrant fixture already sits in two
+    # entrant-keyed families today.
+    for person in sorted(by_person):
+        group = [interval_rest[i] for i in by_person[person]]
         if len(group) >= 2:
             model.AddNoOverlap(group)
 
@@ -1355,21 +1431,57 @@ def build_model(
     # against the horizon exactly, and caught this.
     gap_units_max = -(-gap_span_ms // gap_unit)
 
-    diff_vars: list[Any] = []
-    for group in by_entrant.values():
+    # C10 — pairs are collected from BOTH `by_entrant` and `by_person` (module
+    # docstring, "AN EIGHTH": the refusal this task narrows already claimed
+    # "every T2 idle-gap term" skips a participant-less fixture, so a fixture
+    # that now joins a group by person only must not silently stay exempt
+    # here). DEDUPED at the (i, j) FIXTURE-PAIR level, across both groupings,
+    # before any `NewIntVar` is created: two ordinary, fully-resolved
+    # fixtures routinely share BOTH an entrant and a person (the person IS
+    # one of the entrant's roster), and building a gap variable per grouping
+    # rather than per pair would mint two `NewIntVar`s named `gap_{i}_{j}`
+    # for the identical pair — redundant constraints for the same fact, not
+    # a correctness bug, but avoidable cheaply by collecting pairs first.
+    # ENCOUNTER order, not `sorted()` — deliberately, and the earlier draft of
+    # this fold got it wrong. `by_entrant` alone (no `by_person` at all) is
+    # every pre-C10 caller's shape, and pre-C10 this loop walked
+    # `by_entrant.values()` directly — dict INSERTION order (first sighting
+    # while enumerating `fixtures`), not a numeric sort of the pairs it
+    # produced. A global `sorted()` over the collected pairs agrees with that
+    # on most boards (small, few groups) but not all: two groups where the
+    # LOWER-numbered group is discovered SECOND — entrant 0 first-seen at
+    # fixture 1 covering {1,2}, entrant 3 first-seen at fixture 0 covering
+    # {0,3} — walks pre-C10 as `gap_0_3, gap_1_2` but a global sort of the
+    # SAME pair set gives `gap_0_3, gap_1_2` too by coincidence on 2 pairs;
+    # `test_t2_gap_variables_keep_pre_c10_encounter_order` below uses a
+    # three-pair-then-one-pair shape where the two orders genuinely disagree.
+    # Same pair SET either way — `AddMaxEquality` below does not care — but
+    # CP-SAT's search is sensitive to variable CREATION order, so a caller
+    # sending no `person_indices` at all would still get a different
+    # `CpModel` than pre-C10, silently, the moment this shipped. Walking
+    # `by_entrant` first, in its own order, and appending only pairs
+    # `by_person` adds that were not already seen, keeps the entrant-only
+    # case byte-identical to pre-C10 by construction.
+    gap_pairs: list[tuple[int, int]] = []
+    seen_pairs: set[tuple[int, int]] = set()
+    for group in (*by_entrant.values(), *by_person.values()):
         if len(group) < 2:
             continue
         for x in range(len(group)):
             for y in range(x + 1, len(group)):
                 i, j = group[x], group[y]
-                d = model.NewIntVar(0, gap_units_max, f"gap_{i}_{j}")
-                model.Add(d * gap_unit >= start[i] - start[j] - dur_ms).OnlyEnforceIf(
-                    [placed[i], placed[j]]
-                )
-                model.Add(d * gap_unit >= start[j] - start[i] - dur_ms).OnlyEnforceIf(
-                    [placed[i], placed[j]]
-                )
-                diff_vars.append(d)
+                key = (i, j) if i < j else (j, i)
+                if key in seen_pairs:
+                    continue
+                seen_pairs.add(key)
+                gap_pairs.append(key)
+
+    diff_vars: list[Any] = []
+    for i, j in gap_pairs:
+        d = model.NewIntVar(0, gap_units_max, f"gap_{i}_{j}")
+        model.Add(d * gap_unit >= start[i] - start[j] - dur_ms).OnlyEnforceIf([placed[i], placed[j]])
+        model.Add(d * gap_unit >= start[j] - start[i] - dur_ms).OnlyEnforceIf([placed[i], placed[j]])
+        diff_vars.append(d)
     worst_gap_units = model.NewIntVar(0, gap_units_max, "worst_gap_units")
     if diff_vars:
         model.AddMaxEquality(worst_gap_units, diff_vars)
@@ -1399,6 +1511,11 @@ def build_model(
         existing=len(existing),
         dependencies=len(dependencies),
         rule_groups=len(rule_groups),
+        # C10 — `person_groups` distinct from `by_entrant`'s own (unlogged,
+        # pre-existing) count: an operator watching this line during the
+        # rollout wants to see whether ANY request is exercising the new
+        # grouping at all, not a precise cardinality.
+        person_groups=len(by_person),
     )
     return model
 

@@ -118,6 +118,8 @@ EXPECTED_REQUEST_FIELDS = {
     "constraints":    (11, FieldDescriptor.TYPE_MESSAGE, False, True),
     "wall_seconds":   (12, FieldDescriptor.TYPE_DOUBLE,  False, False),
     "rule_groups":    (13, FieldDescriptor.TYPE_MESSAGE, True,  False),
+    # C10 (2026-08-16, wire person indices design).
+    "person_count":   (14, FieldDescriptor.TYPE_UINT32,  False, False),
 }
 
 EXPECTED_RESPONSE_FIELDS = {
@@ -145,6 +147,8 @@ EXPECTED_MESSAGE_FIELDS = {
         "division_index":  (2, FieldDescriptor.TYPE_UINT32, False, True),
         # C1 (2026-08-12 round-ordering design).
         "round":           (3, FieldDescriptor.TYPE_UINT32, False, True),
+        # C10 (2026-08-16, wire person indices design).
+        "person_indices":  (4, FieldDescriptor.TYPE_UINT32, True,  False),
     },
     "PinnedRow": {
         "court_index":        (1, FieldDescriptor.TYPE_UINT32, False, True),

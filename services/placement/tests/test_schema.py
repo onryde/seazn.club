@@ -479,6 +479,91 @@ def test_rejects_duplicate_entrant_indices_within_a_fixture():
         request_to_model_input(req)
 
 
+# --- C10 (2026-08-16, wire person indices design) ---------------------------
+#
+# `Fixture.person_indices` / `SolveBuildRequest.person_count`: a genuinely
+# undecided knockout slot (a final, a third-place playoff, before its
+# feeders resolve) has no entrants yet but has PEOPLE -- the players who can
+# still reach it. The refusal above narrows from "entrant_indices must not
+# be empty" to "neither entrants nor people may be empty" -- see
+# `_validated_fixtures`'s own comment for the full reasoning, and the module
+# docstring's "task C10" section for the design.
+
+
+def test_accepts_a_fixture_with_empty_entrant_indices_but_nonempty_person_indices():
+    """THE C10 acceptance criterion, on the schema/ACL boundary alone (the
+    NoOverlap consequence is proven in `test_model.py`, on the Python side,
+    per the brief). Before this task this exact request was refused
+    unconditionally -- `test_rejects_a_fixture_with_neither_entrant_indices_
+    nor_person_indices` below is what replaced that unconditional refusal.
+    """
+    req = _valid_request(
+        person_count=2,
+        fixtures=[scheduler_pb2.Fixture(division_index=0, person_indices=[0, 1])],
+    )
+    parsed = request_to_model_input(req)
+    assert parsed.fixtures == [([], 0)]
+    assert parsed.person_indices == [[0, 1]]
+
+
+def test_rejects_a_fixture_with_neither_entrant_indices_nor_person_indices():
+    """The NARROWED refusal -- still a refusal, on the one case neither
+    family can rescue. Note there was, before this task, NO test anywhere in
+    this suite pinning the empty-entrant refusal's behaviour at all (the
+    brief's own finding); this test and the acceptance test above are what
+    close that gap, on the new, narrower condition.
+    """
+    req = _valid_request(fixtures=[scheduler_pb2.Fixture(division_index=0)])
+    with pytest.raises(InvalidRequestError, match="neither entrant_indices nor person_indices"):
+        request_to_model_input(req)
+
+
+def test_rejects_duplicate_person_indices_within_a_fixture():
+    """The person-namespace mirror of `test_rejects_duplicate_entrant_
+    indices_within_a_fixture` above: a repeated person would put the
+    fixture's index in its own `by_person` group twice, forcing its rest
+    interval not to overlap itself -- unsatisfiable, so `placed[i] = 0`."""
+    req = _valid_request(
+        person_count=1,
+        fixtures=[scheduler_pb2.Fixture(division_index=0, person_indices=[0, 0])],
+    )
+    with pytest.raises(InvalidRequestError, match="person_indices"):
+        request_to_model_input(req)
+
+
+def test_person_indices_and_entrant_indices_are_independent_namespaces():
+    """Index 0 in `person_indices` must never resolve against `entrant_
+    count`, and vice versa -- a low `person_count` must not leak into the
+    entrant range check, and a low `entrant_count` must not leak into the
+    person one. Chosen so a namespace mix-up (checking a person index
+    against `entrant_count`, or an entrant index against `person_count`)
+    would flip which assertion raises, not merely which message is seen."""
+    req = _valid_request(
+        entrant_count=5,
+        person_count=1,
+        fixtures=[
+            scheduler_pb2.Fixture(entrant_indices=[4], division_index=0, person_indices=[0])
+        ],
+    )
+    parsed = request_to_model_input(req)
+    assert parsed.fixtures == [([4], 0)]
+    assert parsed.person_indices == [[0]]
+
+    # Now push the PERSON index to 4 (in range for entrant_count=5, out of
+    # range for person_count=1) -- must still be rejected, proving the
+    # person check is bounded by `person_count`, not silently falling back
+    # to the (here, more permissive) entrant bound.
+    leaked = _valid_request(
+        entrant_count=5,
+        person_count=1,
+        fixtures=[
+            scheduler_pb2.Fixture(entrant_indices=[0], division_index=0, person_indices=[4])
+        ],
+    )
+    with pytest.raises(InvalidRequestError, match=r"person_indices\[0\] = 4 is out of range"):
+        request_to_model_input(leaked)
+
+
 def test_accepts_pinned_rows_with_no_identity_of_their_own():
     """`PinnedRow` carries no fixture id or index — round 6 confirmed by
     tracing every read that the old `Assignment.fixture_id` on an `existing`
@@ -817,6 +902,8 @@ def _maximal_request() -> scheduler_pb2.SolveBuildRequest:
         court_names=["Court 1", "Court 2"],
         entrant_count=4,
         division_count=1,
+        # C10 (2026-08-16, wire person indices design).
+        person_count=2,
         slots=[
             scheduler_pb2.Slot(court_index=c, start_at_ms=SLOT_MS + k * 3_600_000, day_index=0)
             for c in (0, 1)
@@ -824,7 +911,9 @@ def _maximal_request() -> scheduler_pb2.SolveBuildRequest:
         ],
         step_minutes=10,
         fixtures=[
-            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0, round=1),
+            scheduler_pb2.Fixture(
+                entrant_indices=[0, 1], division_index=0, round=1, person_indices=[0, 1]
+            ),
             scheduler_pb2.Fixture(entrant_indices=[2, 3], division_index=0, round=2),
         ],
         existing=[
@@ -856,6 +945,8 @@ INDEX_FIELDS = {
     "OrderPair.before_index": lambda r: setattr(r.dependencies[0], "before_index", 999),
     "OrderPair.after_index": lambda r: setattr(r.dependencies[0], "after_index", 999),
     "RuleGroup.fixture_indices": lambda r: r.rule_groups[0].fixture_indices.__setitem__(0, 999),
+    # C10 (2026-08-16, wire person indices design).
+    "Fixture.person_indices": lambda r: r.fixtures[0].person_indices.__setitem__(0, 999),
 }
 
 #: Deliberately outside the range/presence policy, with the reason. Listed
@@ -876,6 +967,8 @@ EXEMPT_INDEX_FIELDS = {
     "SolveBuildRequest.division_count": "a declared bound for division_index fields, not itself an index",
     "Fixture.round": "an opaque ordering key in the caller's own round-robin sequence, not a position",
     "PinnedRow.round": "an opaque ordering key in the caller's own round-robin sequence, not a position",
+    # C10 (2026-08-16, wire person indices design).
+    "SolveBuildRequest.person_count": "a declared bound for person_indices, not itself an index",
 }
 
 
@@ -918,6 +1011,7 @@ def test_the_index_policy_accounts_for_every_uint32_field_in_the_contract():
         "SolveBuildRequest.division_count",
         "Fixture.round",
         "PinnedRow.round",
+        "SolveBuildRequest.person_count",
     }
     assert set(INDEX_FIELDS).isdisjoint(EXEMPT_INDEX_FIELDS)
 
@@ -946,6 +1040,11 @@ def test_the_maximal_request_is_valid_unperturbed():
     # everything else.
     assert parsed.fixture_rounds == [1, 2]
     assert parsed.pinned_round == [1]
+    # C10: fixture 0 carries person_indices=[0, 1], fixture 1 carries none --
+    # proves the parallel list flows through unperturbed AND that "no people"
+    # is a real, distinct answer from "some people", not a default that
+    # collapses the two.
+    assert parsed.person_indices == [[0, 1], []]
 
 
 def test_an_exempt_field_carries_no_range_or_presence_check():
@@ -992,6 +1091,8 @@ REPEATED_INDEX_FIELDS = {
     "RuleGroup.fixture_indices",
     "PinnedRow.rule_group_indices",
     "PinnedRow.entrant_indices",
+    # C10 (2026-08-16, wire person indices design).
+    "Fixture.person_indices",
 }
 
 
@@ -1326,4 +1427,63 @@ def test_legacy_wire_field_ignored_is_not_logged_for_a_clean_request():
         request_to_model_input(req)
 
     events = [e for e in captured if e["event"] == "legacy_wire_field_ignored"]
+    assert events == [], captured
+
+
+# --- C10: the deploy-window observability line -------------------------------
+#
+# `_log_person_only_fixtures`'s counterpart to the two
+# `legacy_wire_field_ignored` tests above, and it exists for the MIRROR
+# reason. C0's probe answers "is a stale caller still sending a retired
+# field", which its service can see arrive. C10's risk runs the other way —
+# a NEW caller reaching an OLD service — and the old service is by
+# definition the one without the probe, so no check on this side could ever
+# detect it (see the C10 section of the release-2 `_INDEX.md`). What IS
+# answerable here, and what an operator actually needs mid-rollout, is
+# whether the new acceptance path is being exercised at all.
+
+
+def test_person_only_fixture_accepted_is_logged_with_its_fixture_indices():
+    """The rollout signal itself: a fixture that reaches the model with no
+    entrants and only people is exactly the shape the pre-C10 refusal
+    always rejected, so one line proves the new path is live."""
+    req = _valid_request(
+        entrant_count=2,
+        person_count=2,
+        fixtures=[
+            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0),
+            scheduler_pb2.Fixture(division_index=0, person_indices=[0, 1]),
+        ],
+    )
+
+    with structlog.testing.capture_logs() as captured:
+        request_to_model_input(req)
+
+    events = [e for e in captured if e["event"] == "person_only_fixture_accepted"]
+    assert len(events) == 1, captured
+    assert events[0]["request_id"] == "r1"
+    # POSITION 1, not 0 -- names the person-only fixture specifically rather
+    # than reporting "some fixture on this board", which is what makes the
+    # line diagnosable instead of merely present.
+    assert events[0]["fixture_indices"] == [1]
+
+
+def test_person_only_fixture_accepted_is_not_logged_for_an_ordinary_board():
+    """The other half, same argument the clean-request test above makes: a
+    board whose fixtures all carry entrants must not log as if it were
+    exercising the new path -- including a fixture that carries people
+    ALONGSIDE its entrants, which is ordinary data and not the shape the
+    refusal ever rejected."""
+    req = _valid_request(
+        entrant_count=2,
+        person_count=2,
+        fixtures=[
+            scheduler_pb2.Fixture(entrant_indices=[0, 1], division_index=0, person_indices=[0, 1])
+        ],
+    )
+
+    with structlog.testing.capture_logs() as captured:
+        request_to_model_input(req)
+
+    events = [e for e in captured if e["event"] == "person_only_fixture_accepted"]
     assert events == [], captured

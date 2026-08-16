@@ -109,7 +109,34 @@ export interface Fixture {
    * more than one round sequence in one division -- see
    * `docs/superpowers/specs/2026-08-12-round-order-hard-lexicographic-design.md`.
    */
-  round?: number | undefined;
+  round?:
+    | number
+    | undefined;
+  /**
+   * C10 (2026-08-16, wire person indices) -- mirrors `entrant_indices`
+   * exactly, one namespace over: 0 <= idx < `SolveBuildRequest.person_count`,
+   * range-checked only (repeated fields carry no presence ambiguity).
+   *
+   * A genuinely undecided knockout slot (a final, a third-place playoff,
+   * before its feeders have resolved) has no entrants yet but has PEOPLE --
+   * the players who can still reach it -- and two such slots can clash on a
+   * shared person while sharing no entrant at all. Before this field existed
+   * that clash was invisible to this service: a fixture with no entrants was
+   * refused outright (see `SolveBuildRequest`'s own history of that refusal),
+   * and even a fixture WITH entrants had no way to signal that its roster
+   * overlaps another fixture's under a DIFFERENT entrant id (the cross-
+   * division/multi-registration shape `packages/engine/src/scheduling/
+   * repair-domain.ts`'s `sharesParticipant` and `build-encode.ts`'s
+   * `byParticipant` already treat as a first-class case on the TS side).
+   *
+   * DELIBERATELY A SEPARATE NAMESPACE from `entrant_indices`, never merged
+   * into one index space: an entrant id and a person id can collide as
+   * plain integers (both start counting from 0) while meaning completely
+   * different things, and `repair-domain.ts`'s `sharesParticipant` already
+   * compares the two families in separate, non-crossing loops. This field
+   * mirrors that semantics rather than inventing a new one.
+   */
+  personIndices: number[];
 }
 
 export interface Slot {
@@ -369,6 +396,14 @@ export interface SolveBuildRequest {
    * rather than carrying a further release.
    */
   ruleGroups: RuleGroup[];
+  /**
+   * C10 (2026-08-16, wire person indices) -- the declared bound for every
+   * `Fixture.person_indices` value, exactly `entrant_count`'s role one
+   * namespace over. Declared rather than inferred for the same reason
+   * `entrant_count` is: an inferred bound (the largest index actually used)
+   * cannot distinguish "person 7" from a typo, a declared one can.
+   */
+  personCount: number;
 }
 
 export interface SolveBuildResponse {
@@ -382,7 +417,7 @@ export interface SolveBuildResponse {
 }
 
 function createBaseFixture(): Fixture {
-  return { entrantIndices: [], divisionIndex: undefined, round: undefined };
+  return { entrantIndices: [], divisionIndex: undefined, round: undefined, personIndices: [] };
 }
 
 export const Fixture: MessageFns<Fixture> = {
@@ -398,6 +433,11 @@ export const Fixture: MessageFns<Fixture> = {
     if (message.round !== undefined) {
       writer.uint32(24).uint32(message.round);
     }
+    writer.uint32(34).fork();
+    for (const v of message.personIndices) {
+      writer.uint32(v);
+    }
+    writer.join();
     return writer;
   },
 
@@ -442,6 +482,24 @@ export const Fixture: MessageFns<Fixture> = {
           message.round = reader.uint32();
           continue;
         }
+        case 4: {
+          if (tag === 32) {
+            message.personIndices.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 34) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.personIndices.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -464,6 +522,11 @@ export const Fixture: MessageFns<Fixture> = {
         ? globalThis.Number(object.division_index)
         : undefined,
       round: isSet(object.round) ? globalThis.Number(object.round) : undefined,
+      personIndices: globalThis.Array.isArray(object?.personIndices)
+        ? object.personIndices.map((e: any) => globalThis.Number(e))
+        : globalThis.Array.isArray(object?.person_indices)
+        ? object.person_indices.map((e: any) => globalThis.Number(e))
+        : [],
     };
   },
 
@@ -478,6 +541,9 @@ export const Fixture: MessageFns<Fixture> = {
     if (message.round !== undefined) {
       obj.round = Math.round(message.round);
     }
+    if (message.personIndices?.length) {
+      obj.personIndices = message.personIndices.map((e) => Math.round(e));
+    }
     return obj;
   },
 
@@ -489,6 +555,7 @@ export const Fixture: MessageFns<Fixture> = {
     message.entrantIndices = object.entrantIndices?.map((e) => e) || [];
     message.divisionIndex = object.divisionIndex ?? undefined;
     message.round = object.round ?? undefined;
+    message.personIndices = object.personIndices?.map((e) => e) || [];
     return message;
   },
 };
@@ -1315,6 +1382,7 @@ function createBaseSolveBuildRequest(): SolveBuildRequest {
     constraints: undefined,
     wallSeconds: 0,
     ruleGroups: [],
+    personCount: 0,
   };
 }
 
@@ -1355,6 +1423,9 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
     }
     for (const v of message.ruleGroups) {
       RuleGroup.encode(v!, writer.uint32(106).fork()).join();
+    }
+    if (message.personCount !== 0) {
+      writer.uint32(112).uint32(message.personCount);
     }
     return writer;
   },
@@ -1462,6 +1533,14 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
           message.ruleGroups.push(RuleGroup.decode(reader, reader.uint32()));
           continue;
         }
+        case 14: {
+          if (tag !== 112) {
+            break;
+          }
+
+          message.personCount = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1519,6 +1598,11 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
         : globalThis.Array.isArray(object?.rule_groups)
         ? object.rule_groups.map((e: any) => RuleGroup.fromJSON(e))
         : [],
+      personCount: isSet(object.personCount)
+        ? globalThis.Number(object.personCount)
+        : isSet(object.person_count)
+        ? globalThis.Number(object.person_count)
+        : 0,
     };
   },
 
@@ -1560,6 +1644,9 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
     if (message.ruleGroups?.length) {
       obj.ruleGroups = message.ruleGroups.map((e) => RuleGroup.toJSON(e));
     }
+    if (message.personCount !== 0) {
+      obj.personCount = Math.round(message.personCount);
+    }
     return obj;
   },
 
@@ -1582,6 +1669,7 @@ export const SolveBuildRequest: MessageFns<SolveBuildRequest> = {
       : undefined;
     message.wallSeconds = object.wallSeconds ?? 0;
     message.ruleGroups = object.ruleGroups?.map((e) => RuleGroup.fromPartial(e)) || [];
+    message.personCount = object.personCount ?? 0;
     return message;
   },
 };

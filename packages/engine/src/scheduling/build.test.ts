@@ -1648,6 +1648,67 @@ describe("buildSchedule — Placement path", () => {
     ]);
   });
 
+  // C10 (2026-08-16, wire person indices design). Before this task,
+  // `placementInput.fixtures` never carried `people` at all -- `toRequest()`
+  // (`placement-client.ts`) gaining a `personIndices` field would still have
+  // sent nothing, because this call site never forwarded the data to send.
+  // This is the OTHER half of the fix the brief's own scouting understated
+  // (see the PR body): `placement-client.ts` gaining the field is necessary
+  // but not sufficient without this.
+  it("forwards a fixture's people onto the wire, as data separate from entrantIds (C10)", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    await buildSchedule(
+      minimalInput({ fixtures: [fx("f1", "E1", "E2", { people: ["p1", "p2"] })] }),
+    );
+    expect(captured).toBeDefined();
+    expect(captured!.fixtures).toEqual([
+      { fixtureId: "f1", entrantIds: ["E1", "E2"], divisionId: "", roundNo: 1, people: ["p1", "p2"] },
+    ]);
+  });
+
+  // The undecided-knockout-slot shape itself: no entrants at all, but people
+  // — the exact case the pre-C10 wire could not express. `fx` requires
+  // `home`/`away` positionally, so they are overridden back to `undefined`
+  // via `over` (`SchedulableFixture.home`/`.away` are themselves optional).
+  it("forwards people for a fixture with no entrants at all (an undecided knockout slot)", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    await buildSchedule(
+      minimalInput({
+        fixtures: [
+          fx("f1", "E1", "E2", { home: undefined, away: undefined, people: ["p1", "p2", "p3", "p4"] }),
+        ],
+      }),
+    );
+    expect(captured).toBeDefined();
+    expect(captured!.fixtures).toEqual([
+      { fixtureId: "f1", entrantIds: [], divisionId: "", roundNo: 1, people: ["p1", "p2", "p3", "p4"] },
+    ]);
+  });
+
+  // The default case must stay an empty array, not `undefined` — the
+  // generated encoder needs an iterable, and an omitted `people` on
+  // `SchedulableFixture` is the overwhelming majority of fixtures (an
+  // ordinary, fully-resolved fixture with no cross-registration/undecided-
+  // slot concern at all).
+  it("sends an empty people array, not undefined, when a fixture carries none", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+    await buildSchedule(minimalInput());
+    expect(captured).toBeDefined();
+    expect(captured!.fixtures[0]?.people).toEqual([]);
+  });
+
   it("derives a rule group's maxFixturesPerDay from a division-scoped max_fixtures_per_day hard rule", async () => {
     let captured: SolveBuildInput | undefined;
     vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {

@@ -1421,6 +1421,114 @@ def test_rule_groups_empty_leaves_the_model_byte_identical():
     assert "ivr_0" in names and "ivr_1" in names, sorted(names)
 
 
+def test_person_indices_empty_leaves_the_model_byte_identical():
+    """C10's DEPLOY-ORDER safety claim, proved at the `CpModel` level rather
+    than argued.
+
+    This is the whole evidence for "service first is strictly safe": a
+    not-yet-upgraded caller sends no `person_indices` at all, and the
+    service must then build the byte-for-byte model it built before this
+    task existed. `by_person` is empty, so its `AddNoOverlap` loop never
+    executes and T2's `gap_pairs` set receives nothing from it.
+
+    The same `str(model.Proto())` text-format comparison
+    `test_rule_groups_empty_leaves_the_model_byte_identical` above uses,
+    and for the same reason — see that test's own docstring for why `==`
+    on the pybind11-wrapped `CpModelProto` is object identity and `str()`
+    is the real serialisation.
+
+    Deliberately compares against `person_indices=[]` AND against omitting
+    the parameter entirely, because those are two different caller shapes
+    (`main.py` always passes it; a bench/test caller may not) and both must
+    land on the pre-C10 model.
+    """
+    t0 = _GROUP_ANCHOR
+    t1 = t0 + 60 * MIN_MS
+    num_courts = 2
+    grid_slots = [(c, t, 0) for c in (0, 1) for t in (t0, t1)]
+    fixtures = [([0], 0), ([1], 0)]
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
+
+    omitted = build_model(fixtures, num_courts, grid_slots, 30, constraints, [], [])
+    explicit_empty = build_model(
+        fixtures, num_courts, grid_slots, 30, constraints, [], [], person_indices=[]
+    )
+    # A per-fixture empty list, the shape `placement.schema` actually
+    # produces for a request whose fixtures carry no `person_indices` --
+    # distinct from the whole parameter being empty, and the shape an
+    # UPGRADED service receives from a NOT-yet-upgraded caller.
+    per_fixture_empty = build_model(
+        fixtures, num_courts, grid_slots, 30, constraints, [], [], person_indices=[[], []]
+    )
+
+    baseline = str(omitted.Proto())
+    assert str(explicit_empty.Proto()) == baseline
+    assert str(per_fixture_empty.Proto()) == baseline
+
+    # Not vacuous, same guard as the test above: the model really does
+    # contain the participant-rest intervals a person group would have
+    # joined, so an equality here is a statement about a real model.
+    names = {c.name for c in omitted.Proto().constraints}
+    assert "ivr_0" in names and "ivr_1" in names, sorted(names)
+
+
+def test_t2_gap_variables_keep_their_pre_c10_creation_order():
+    """The half `*_byte_identical` structurally CANNOT prove, pinned.
+
+    Both byte-identical tests above compare NEW code against NEW code, so a
+    change that moved EVERY caller — including one that sends no person data
+    at all — is invisible to them. C10 made exactly such a change: T2's pair
+    loop went from a raw double iteration over `by_entrant.values()` to a
+    deduped, SORTED `gap_pairs` set (needed so a pair reachable through both
+    an entrant and a person does not mint two `NewIntVar`s of one name).
+    Sorted order and dict-insertion order are not the same thing, and CP-SAT
+    search is order-sensitive, so a silent reordering here is a
+    reproducibility regression that no assertion in this file would catch.
+
+    Verified DIRECTLY during this task by importing the pre-C10 `model.py`
+    alongside the current one and diffing `str(model.Proto())` on several
+    boards — all byte-identical. That comparison needs a historical copy of
+    the module and so cannot live in the suite; this test pins the ORDER it
+    confirmed, which is the part a future refactor could break.
+
+    THE BOARD IS THE WHOLE POINT, and an earlier draft of this test got it
+    wrong: two groups where the group discovered SECOND happens to also sort
+    second (e.g. entrant 0 covering fixtures [0,1,2], entrant 3 covering
+    [2,3]) passes under BOTH encounter order and a global `sorted()`,
+    because the two orders coincide on that shape — proving nothing about a
+    reorder regression specifically. Mutation-checked by hand: restoring the
+    `sorted()` this task removed left that board's assertion GREEN.
+
+    This board is chosen so the two orders genuinely DISAGREE. Entrant 100
+    is first seen at fixture 0 and ends up covering [0, 2, 3] (three pairs);
+    entrant 200 is first seen at fixture 1 and covers [1, 4] (one pair) —
+    discovered SECOND, but its one pair (1, 4) sorts BETWEEN two of entrant
+    100's. Encounter order is `gap_0_2, gap_0_3, gap_2_3, gap_1_4`; a global
+    sort of the identical pair set gives `gap_0_2, gap_0_3, gap_1_4,
+    gap_2_3`. Same four pairs, different order — and only a board shaped
+    like this can tell the two rules apart, which is why a set-equality
+    check cannot catch a regression here and this test pins the literal
+    sequence instead. Mutation-checked the other way too: this exact
+    assertion goes red when `sorted()` is restored.
+    """
+    t = [_GROUP_ANCHOR + k * 60 * MIN_MS for k in range(5)]
+    grid_slots = [(c, x, 0) for c in (0, 1) for x in t]
+    fixtures: list[tuple[list[int], int]] = [
+        ([100], 0),  # fixture 0 -- entrant 100 first seen here
+        ([200], 0),  # fixture 1 -- entrant 200 first seen here
+        ([100], 0),  # fixture 2
+        ([100], 0),  # fixture 3
+        ([200], 0),  # fixture 4
+    ]
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
+    model = build_model(fixtures, 2, grid_slots, 30, constraints, [], [])
+
+    gap_names = [v.name for v in model.Proto().variables if v.name.startswith("gap_")]
+    # Pinned literally, in order -- a set comparison would pass under any
+    # reordering, which is the whole thing this test exists to refuse.
+    assert gap_names == ["gap_0_2", "gap_0_3", "gap_2_3", "gap_1_4"], gap_names
+
+
 # --- degenerate constraint values must fail loudly, not solve quietly -------
 #
 # proto3 scalars are non-optional: an unset `match_minutes` arrives as 0,
@@ -1996,6 +2104,125 @@ def test_free_solve_of_a_two_round_division_respects_order_on_one_day():
     assert start_by_fixture[1] <= start_by_fixture[0], (
         f"round 1 (fixture 1) must not start after round 2 (fixture 0): {outcome.assignments}"
     )
+
+
+# --- C10 (2026-08-16, wire person indices design) ---------------------------
+#
+# `person_indices` (parallel to `fixtures`, `build_model`'s new last
+# parameter) feeds a SECOND participant-rest grouping, `by_person`, built
+# from a namespace disjoint from `by_entrant` -- see the module docstring's
+# "AN EIGHTH" section. THE acceptance criterion (task brief): two fixtures
+# sharing ONLY a person are never placed concurrently -- pinned here, on the
+# Python side, not only through the TS stack, because this is the exact
+# hazard the pre-C10 refusal message cited as measured.
+
+
+def test_two_movable_fixtures_sharing_only_a_person_are_never_placed_concurrently():
+    """DISJOINT entrant sets (fixture 0 plays entrant 0, fixture 1 plays
+    entrant 1 -- they never collide on `by_entrant`), but the SAME person
+    (10) in both -- the cross-registration/cross-division shape
+    `build-encode.ts`'s `byParticipant` and `repair-domain.ts`'s
+    `sharesParticipant` already treat as first-class on the TS side.
+
+    One tick, two courts: the ONLY way both fixtures could be placed AT ALL
+    is at that one instant, on the two different courts -- i.e. concurrently.
+    Court exclusivity cannot be what binds (two courts, one each, is legal
+    by itself); only a person-keyed NoOverlap can refuse the second.
+
+    Genuinely red without `by_person`: delete the grouping (or the loop that
+    reads it) and nothing distinguishes this pair from two unrelated
+    fixtures — both place at the one tick, capacity 2, proven by hand as
+    this task's mutation check (see the task report).
+    """
+    t0 = _GROUP_ANCHOR
+    num_courts = 2
+    grid_slots = [(0, t0, 0), (1, t0, 0)]
+    fixtures: list[tuple[list[int], int]] = [([0], 0), ([1], 0)]  # disjoint entrants
+    person_indices = [[10], [10]]  # shared person
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
+    model = build_model(
+        fixtures, num_courts, grid_slots, 30, constraints, [], [], person_indices=person_indices
+    )
+    capacity, detail = _rest_probe_capacity(model)
+    assert capacity == 1, (
+        f"two fixtures sharing only a person, no shared entrant, must not both be placed at the "
+        f"one instant available: {detail}"
+    )
+
+
+def test_two_undecided_bracket_slots_sharing_people_are_never_placed_concurrently():
+    """THE real shape the brief's smoke canary (`scripts/smoke.ts`
+    #396/#399/#401) and the pre-C10 refusal message are both about: a
+    knockout final and a third-place playoff, BOTH still undecided (no
+    entrant resolved for either — `entrant_indices` empty on both), whose
+    person sets overlap because the same semi-finalists could still reach
+    either slot. `test_schema.py`'s `test_accepts_a_fixture_with_empty_
+    entrant_indices_but_nonempty_person_indices` proves this shape gets IN
+    the door; this proves what happens to it once inside.
+    """
+    t0 = _GROUP_ANCHOR
+    num_courts = 2
+    grid_slots = [(0, t0, 0), (1, t0, 0)]
+    fixtures: list[tuple[list[int], int]] = [([], 0), ([], 0)]  # both undecided
+    person_indices = [[10, 11, 12, 13], [10, 11, 12, 13]]  # same 4 semi-finalists
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
+    model = build_model(
+        fixtures, num_courts, grid_slots, 30, constraints, [], [], person_indices=person_indices
+    )
+    capacity, detail = _rest_probe_capacity(model)
+    assert capacity == 1, (
+        f"two undecided bracket slots sharing every possible finalist must not both be placed at "
+        f"the one instant available: {detail}"
+    )
+
+
+def test_a_movable_fixture_with_no_entrants_but_a_person_is_placeable():
+    """The converse of the two tests above, so neither could be passing
+    because an entrant-less fixture is silently unplaceable full stop. One
+    fixture, no entrants, one person, one tick — must place, not be
+    silently dropped."""
+    t0 = _GROUP_ANCHOR
+    grid_slots = [(0, t0, 0)]
+    fixtures: list[tuple[list[int], int]] = [([], 0)]
+    person_indices = [[10]]
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
+    model = build_model(
+        fixtures, 1, grid_slots, 30, constraints, [], [], person_indices=person_indices
+    )
+    capacity, detail = _rest_probe_capacity(model)
+    assert capacity == 1, f"an entrant-less fixture with a person must still be placeable: {detail}"
+
+
+def test_t2_idle_gap_reads_a_person_only_pair_not_only_entrant_pairs():
+    """Confirms the module docstring's own claim ("AN EIGHTH… T2 reads BOTH
+    groupings too") at the `CpModel` level, the same introspection technique
+    `test_idle_gap_variables_are_bounded_by_a_duration_not_an_epoch` below
+    uses: a `gap_0_1` variable must exist for a pair that shares a person
+    and NO entrant, proving T2 did not silently stay entrant-only. The
+    refusal this task narrows explicitly claimed "every T2 idle-gap term"
+    skips a participant-less fixture — this is the term staying honest about
+    that claim for the NEW, person-only case.
+    """
+    t0 = _GROUP_ANCHOR
+    t1 = t0 + 3_600_000
+    grid_slots = [(0, t0, 0), (0, t1, 0)]
+    fixtures: list[tuple[list[int], int]] = [([0], 0), ([1], 0)]  # disjoint entrants
+    person_indices = [[10], [10]]  # shared person
+    constraints = {"match_minutes": 30, "gap_minutes": 0}
+    model = build_model(
+        fixtures, 1, grid_slots, 30, constraints, [], [], person_indices=person_indices
+    )
+    gap_var_names = {v.name for v in model.Proto().variables if v.name.startswith("gap_")}
+    assert "gap_0_1" in gap_var_names, (
+        f"T2 built no gap variable for a pair sharing only a person: {sorted(gap_var_names)}"
+    )
+    # And exactly one — the dedup this task adds (`gap_pairs`, a `set`) must
+    # not mint a SECOND `NewIntVar` for the same fixture pair just because it
+    # also happens to be reachable through a different grouping. This board
+    # has only the one shared channel, so this is really pinning "no
+    # accidental duplicate for an entrant+person pair" via a board simple
+    # enough to count exactly.
+    assert len(gap_var_names) == 1, f"expected exactly one gap variable, got {sorted(gap_var_names)}"
 
 
 # --- T2's unit: the idle-gap variables are DURATIONS on the tick lattice ----

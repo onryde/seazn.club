@@ -56,6 +56,22 @@ export interface SolveBuildInput {
      *  never forwarding it for a bracket/stepladder fixture. Absent means
      *  unconstrained by round order on the service side, not round 0. */
     roundNo?: number;
+    /**
+     * C10 (2026-08-16, wire person indices) — person ids, straight from
+     * {@link SchedulableFixture.people} — resolved through a SEPARATE index
+     * space than {@link entrantIds}; see `Fixture.person_indices`'s own
+     * comment in the proto for why the two must never be merged into one.
+     *
+     * A genuinely undecided knockout slot (a final, a third-place playoff,
+     * before its feeders have resolved) has no entrants yet — `entrantIds`
+     * above is `[]` — but very much has people: the players who can still
+     * reach it. Omitted/`undefined` is "no people recorded for this
+     * fixture", a real answer (an ordinary, fully-resolved singles fixture
+     * may carry no `people` of its own at all if the caller never populated
+     * it), not a refusal — the service refuses only when BOTH `entrantIds`
+     * and this are empty.
+     */
+    people?: string[];
   }[];
   /**
    * `dayIndex` is the CALLER's calendar day for the slot, resolved in the
@@ -273,12 +289,19 @@ function toRequest(input: SolveBuildInput, requestId: string, indices: IndexSpac
     courtNames: indices.courtNames,
     entrantCount: indices.entrantCount,
     divisionCount: indices.divisionCount,
-    fixtures: input.fixtures.map(({ entrantIds, divisionId, roundNo }) => ({
+    // C10. Declared bound for every `personIndices` value below, exactly
+    // `entrantCount`'s role one namespace over.
+    personCount: indices.personCount,
+    fixtures: input.fixtures.map(({ entrantIds, divisionId, roundNo, people }) => ({
       entrantIndices: entrantIds.map((entrantId) => indices.entrantIndexOf(entrantId)),
       divisionIndex: indices.divisionIndexOf(divisionId),
       // C1. Straight passthrough — `round` is an opaque ordering key, not an
       // index into anything `indices` resolves.
       round: roundNo,
+      // C10 — resolved through `personIndexOf`, a SEPARATE table from
+      // `entrantIndexOf` (see `buildIndexSpace`): a person id and an entrant
+      // id are different namespaces and must never share one index space.
+      personIndices: (people ?? []).map((personId) => indices.personIndexOf(personId)),
     })),
     slots: input.grid.slots.map(({ court, startAtMs, dayIndex }) => ({
       courtIndex: indices.courtIndexOf(court),
@@ -470,6 +493,18 @@ interface IndexSpace {
    */
   divisionIndexOf: (divisionId: string) => number;
   divisionCount: number;
+  /**
+   * C10 (2026-08-16, wire person indices) — total for every person id in
+   * every fixture's `people`, on the SAME "declared, not inferred" logic as
+   * `entrantIndexOf`/`entrantCount`, but its own table: a person id and an
+   * entrant id are separate namespaces (`Fixture.person_indices`'s own proto
+   * comment), so this must never fall back to `entrantIndexOf` or share its
+   * map. Only `fixtures` feeds it — `existing` carries no person data on the
+   * wire yet (`PinnedRow` has no `person_indices` field; out of this round's
+   * scope, see the PR body).
+   */
+  personIndexOf: (personId: string) => number;
+  personCount: number;
 }
 
 /**
@@ -520,12 +555,20 @@ function buildIndexSpace(input: SolveBuildInput): IndexSpace {
   // space, not a lookup into one that already exists.
   const entrantIndexById = new Map<string, number>();
   const divisionIndexById = new Map<string, number>();
+  // C10 — person ids: INFERRED the same way entrants are, but its OWN map.
+  // Only `fixtures` ever registers one: `existing` carries no `people` field
+  // on `SolveBuildInput` (see `IndexSpace.personIndexOf`'s own comment), so
+  // there is no C6-style second registration pass to mirror here.
+  const personIndexById = new Map<string, number>();
   for (const fixture of input.fixtures) {
     for (const entrantId of fixture.entrantIds) {
       if (!entrantIndexById.has(entrantId)) entrantIndexById.set(entrantId, entrantIndexById.size);
     }
     if (!divisionIndexById.has(fixture.divisionId)) {
       divisionIndexById.set(fixture.divisionId, divisionIndexById.size);
+    }
+    for (const personId of fixture.people ?? []) {
+      if (!personIndexById.has(personId)) personIndexById.set(personId, personIndexById.size);
     }
   }
   // C6 — `existing[].entrantIds` can name an entrant no MOVABLE fixture uses
@@ -569,6 +612,8 @@ function buildIndexSpace(input: SolveBuildInput): IndexSpace {
     entrantCount: entrantIndexById.size,
     divisionIndexOf: (divisionId) => totalLookup(divisionIndexById, divisionId),
     divisionCount: divisionIndexById.size,
+    personIndexOf: (personId) => totalLookup(personIndexById, personId),
+    personCount: personIndexById.size,
   };
 }
 
