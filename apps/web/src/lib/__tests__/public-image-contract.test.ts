@@ -30,20 +30,11 @@ interface Case {
 }
 
 const CASES: Case[] = [
-  {
-    name: "register-form.tsx org logo",
-    file: join(SRC_ROOT, "components/public-site/register-form.tsx"),
-    srcExpr: "org.logo_url",
-    width: 48,
-    height: 48,
-  },
-  {
-    name: "[competitionSlug]/register/page.tsx sponsor logo",
-    file: join(SRC_ROOT, "app/(public)/shared/[orgSlug]/[competitionSlug]/register/page.tsx"),
-    srcExpr: "s.logo",
-    width: 16,
-    height: 16,
-  },
+  // register-form.tsx (org logo) and the register/page.tsx sponsor-logo call
+  // site were removed by the RS001 registration demolition (#588): the old
+  // form is deleted outright, and the register page is now a minimal
+  // closed-state shell with no sponsor masthead. RS006 owns the rebuilt
+  // public stepper and reintroduces whatever image contracts it needs.
   {
     name: "[competitionSlug]/page.tsx sponsor logo",
     file: join(SRC_ROOT, "app/(public)/shared/[orgSlug]/[competitionSlug]/page.tsx"),

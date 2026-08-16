@@ -4,8 +4,20 @@
 // joined-at, and a Promote affordance consistent with auto-promotion (the
 // oldest entry is #1 — the same row the sweep would promote). Semantics
 // untouched: Promote calls the existing confirm/waive endpoints.
-import type { Registration } from "./registrations-panel";
 import { useMsg } from "@/components/i18n/dict-provider";
+
+// Local shape (RS001 demolition, #588): previously imported from the deleted
+// registrations-panel.tsx. This component has no other caller left in the
+// tree after that deletion — kept, unwired, for RS005's Registrants tab.
+export interface Registration {
+  id: string;
+  status: string;
+  display_name: string;
+  contact_email: string;
+  amount_cents: number;
+  payment_intent_id: string | null;
+  created_at: string;
+}
 
 export function WaitlistQueue({
   rows,
