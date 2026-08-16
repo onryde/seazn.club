@@ -1301,7 +1301,10 @@ validation.
 `origin/main`'s branch — do not relax them.** They are the canary that
 proves C9 restored the capability: passing again is a genuine C9 acceptance
 signal, not a test detail. `C9-decomposed-repair-cpsat.md` has been amended
-(this session) with this finding as an explicit acceptance criterion.
+with this finding as an explicit acceptance criterion, and its own
+"Gate: C5 merged" line corrected to reflect the inverted order below — see
+PR #581 (`docs/c9-frozen-feeder-finding`, separate branch off `origin/main`,
+since this C5 branch is not being rebased while parked).
 
 **Owner ruling (via coordinator, 2026-08-16): land C9 first, then revisit
 C5.** PR #576 converted to draft, title prefixed `[PARKED — pending C9]`,
