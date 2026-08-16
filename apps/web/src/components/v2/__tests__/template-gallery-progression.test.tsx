@@ -164,17 +164,22 @@ describe("templateStructureChain — Structure section's per-division stage chai
   });
 
   // Regression: none of the 5 pre-P7 catalog templates repeats a kind
-  // within one division, so every one of them must keep rendering its
-  // BYTE-IDENTICAL pre-existing kind-label chain — never a stage's own
-  // i18nNameKey. Reads the REAL shipped catalog (not lookalike fixtures),
+  // within one division, so every one of them must keep resolving via the
+  // UNCHANGED kind-label path (never a stage's own i18nNameKey). Expected
+  // strings use Title Case ("Group Stage", not "Group stage") per the T7
+  // casing fix to templates.stageKind.* — before that fix this path and the
+  // sheet's own-name path rendered the SAME concept in two different
+  // casings side by side across different cards/templates; the kind-label
+  // SELECTION logic these 5 exercise is unchanged, only the label text's
+  // casing is. Reads the REAL shipped catalog (not lookalike fixtures),
   // same reasoning as the t20-super8 case above.
   it.each([
     ["slam128", "Knockout"],
     ["swiss11", "Swiss"],
-    ["wc32", "Group stage → Knockout"],
+    ["wc32", "Group Stage → Knockout"],
     ["americano-night", "Americano"],
-    ["box-league", "Group stage"],
-  ])("regression: %s's structure chain is byte-identical to before this task (%s)", (key, expected) => {
+    ["box-league", "Group Stage"],
+  ])("regression: %s's structure chain still resolves via the kind-label path (%s)", (key, expected) => {
     const template = getTemplate(key);
     if (!template) throw new Error(`${key} missing from the catalog — catalog.test.ts should already fail this`);
     expect(templateStructureChain(enMsg, template.divisions[0])).toBe(expected);
@@ -233,13 +238,13 @@ describe("TemplateDetailSheet — progression section", () => {
     expect(html).toContain("Super 8: Top 2 per group → Knockout");
   });
 
-  it("renders BOTH t20-super8 structure links with their OWN names, not the identical 'Group stage' kind label twice", () => {
+  it("renders BOTH t20-super8 structure links with their OWN names, not the identical 'Group Stage' kind label twice", () => {
     const t20 = getTemplate("t20-super8");
     if (!t20) throw new Error("t20-super8 missing from the catalog — catalog.test.ts should already fail this");
     const html = renderSheet(t20);
     expect(html).toContain('data-testid="template-detail-structure"');
     expect(html).toContain("Group Stage → Super 8 → Knockout");
-    expect(html).not.toContain("Group stage → Group stage → Knockout");
+    expect(html).not.toContain("Group Stage → Group Stage → Knockout");
   });
 
   it("regression: a template with no seeded stages omits the section and the structure list is unchanged", () => {
@@ -248,13 +253,17 @@ describe("TemplateDetailSheet — progression section", () => {
     // Structure section renders its pre-existing "{division} — {kind chain}
     // · {n} entrants" line exactly as before this task: a single group-kind
     // stage has no kind collision within its division, so it still resolves
-    // via stageKindLabel's "Group stage", NOT the stage's own i18nNameKey
-    // "Group Stage" (templateStructureChain only switches to a stage's own
-    // name when its kind repeats within the division — see the dedicated
-    // describe block below for the case that DOES switch).
+    // via stageKindLabel (templates.stageKind.group), NOT the stage's own
+    // i18nNameKey (templates.stage.groupStage) — templateStructureChain only
+    // switches to a stage's own name when its kind repeats within the
+    // division (see the dedicated describe block below for the case that
+    // DOES switch). Both keys now resolve to the SAME text ("Group Stage",
+    // T7's casing fix) so this no longer proves which path rendered by
+    // eyeballing the string alone — the assertion below is really pinning
+    // "the pre-existing single-stage shape renders unchanged", not casing.
     expect(html).toContain('data-testid="template-detail-structure"');
     expect(html).toContain("Tournament");
-    expect(html).toContain("Group stage");
+    expect(html).toContain("Group Stage");
     expect(html).toContain("24 entrants");
   });
 
@@ -272,9 +281,46 @@ describe("TemplateDetailSheet — progression section", () => {
       "cricket",
     );
     const html = renderSheet(leaguePlayoff);
-    expect(html).toContain("League → Page playoff");
+    expect(html).toContain("League → Page Playoff");
     expect(html).not.toContain("league → page_playoff");
     expect(html).toContain("Ranked 1–4");
+  });
+});
+
+// Reviewer gap 2 (P7/D1b T7 review round): the block above proves the
+// SHEET's Structure line via only ONE synthetic single-group fixture
+// (GROUP_NO_SEEDING). templateStructureChain's own kind-vs-own-name
+// selection already has a dedicated 5-real-template regression block
+// above, and TemplateCard's mirrors it — but neither proves the SHEET's
+// OWN JSX (a separate call site) actually wires templateStructureChain's
+// output into the Structure <li> correctly; a local wiring slip there
+// could ship undetected. Mirrors TemplateCard's regression block below,
+// through renderSheet instead of renderCard.
+describe("TemplateDetailSheet — structure line regression (5 real pre-P7 templates)", () => {
+  it.each([
+    ["slam128", "Knockout"],
+    ["swiss11", "Swiss"],
+    ["wc32", "Group Stage → Knockout"],
+    ["americano-night", "Americano"],
+    ["box-league", "Group Stage"],
+  ])("regression: %s's sheet Structure line still resolves via the kind-label path (%s)", (key, expected) => {
+    const template = getTemplate(key);
+    if (!template) throw new Error(`${key} missing from the catalog — catalog.test.ts should already fail this`);
+    const html = renderSheet(template);
+    const structureStart = html.indexOf('data-testid="template-detail-structure"');
+    expect(structureStart, `${key}: structure testid not found`).toBeGreaterThan(-1);
+    // Isolate to JUST the structure <ul>...</ul> block before matching —
+    // a bare html.toContain(expected) is silently vacuous for a
+    // single-word label like "Swiss"/"Americano", which ALSO appears in
+    // the template's own name/description rendered elsewhere in the
+    // sheet (proven by mutation: a broken chain still passed those 2
+    // cases under a whole-document toContain check). Then pin the EXACT
+    // chain text between the " — " and " · " separators, not a substring
+    // of it, mirroring TemplateCard's exact-match regression check.
+    const structureHtml = html.slice(structureStart, html.indexOf("</ul>", structureStart));
+    const chainMatch = structureHtml.match(/— (.*?) ·/);
+    expect(chainMatch, `${key}: could not isolate the structure chain text`).not.toBeNull();
+    expect(chainMatch![1]).toBe(expected);
   });
 });
 
@@ -291,21 +337,21 @@ describe("TemplateCard — gallery grid structure summary", () => {
     if (!t20) throw new Error("t20-super8 missing from the catalog — catalog.test.ts should already fail this");
     const html = renderCard(t20);
     expect(html).toContain("Group Stage → Super 8 → Knockout");
-    expect(html).not.toContain("Group stage → Group stage → Knockout");
+    expect(html).not.toContain("Group Stage → Group Stage → Knockout");
   });
 
-  // Regression: the five pre-P7 catalog templates' cards must render their
-  // BYTE-IDENTICAL pre-existing kind-label summary — same expected strings
-  // as templateStructureChain's own regression block above, since every one
-  // of these templates has exactly one division (so joining ACROSS divisions
-  // is a no-op) and no kind collision within it.
+  // Regression: the five pre-P7 catalog templates' cards must keep resolving
+  // via the UNCHANGED kind-label path — same expected strings (Title Case
+  // per the T7 casing fix) as templateStructureChain's own regression block
+  // above, since every one of these templates has exactly one division (so
+  // joining ACROSS divisions is a no-op) and no kind collision within it.
   it.each([
     ["slam128", "Knockout"],
     ["swiss11", "Swiss"],
-    ["wc32", "Group stage → Knockout"],
+    ["wc32", "Group Stage → Knockout"],
     ["americano-night", "Americano"],
-    ["box-league", "Group stage"],
-  ])("regression: %s's card structure summary is byte-identical to before this task (%s)", (key, expected) => {
+    ["box-league", "Group Stage"],
+  ])("regression: %s's card structure summary still resolves via the kind-label path (%s)", (key, expected) => {
     const template = getTemplate(key);
     if (!template) throw new Error(`${key} missing from the catalog — catalog.test.ts should already fail this`);
     const html = renderCard(template);

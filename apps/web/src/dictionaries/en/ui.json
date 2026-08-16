@@ -1461,7 +1461,7 @@
   "templates.detail.useTemplate": "Use this template",
   "templates.detail.structureTitle": "Structure",
   "templates.stageKind.knockout": "Knockout",
-  "templates.stageKind.group": "Group stage",
+  "templates.stageKind.group": "Group Stage",
   "templates.stageKind.swiss": "Swiss",
   "templates.stageKind.americano": "Americano",
   "schedule.notice.undone": "Change undone.",
@@ -3753,5 +3753,5 @@
   "templates.detail.take.rankRange": "Ranked {from}–{to}",
   "templates.detail.take.and": "{a} and {b}",
   "templates.stageKind.league": "League",
-  "templates.stageKind.pagePlayoff": "Page playoff"
+  "templates.stageKind.pagePlayoff": "Page Playoff"
 }
