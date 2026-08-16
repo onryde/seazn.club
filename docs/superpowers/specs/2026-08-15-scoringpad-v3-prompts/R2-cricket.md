@@ -17,6 +17,26 @@ match.close tiles (phase-aware). The hundred's 5-ball over is cfg-only and
 NEVER appears in PadSpec (S11 finding) — the over-dots strip must read
 `ballsPerOver` from cfg, not assume 6.
 
+**Two things R1 left for you — read before scoping, they widen this task:**
+
+1. **The guided-sheet renderer does not exist.** R1 shipped
+   `GuidedSheetSpec` / `SheetChoiceStep` / `SheetPersonStep` and
+   `TileSpec.action = {sheet: string}` in `v3/types.ts` with ZERO consumers:
+   `tile-grid.tsx` forwards `tile.action` to `onAction` untouched and nothing
+   renders a step wizard. R1's `swap-sheet.tsx` was built against its own
+   `SwapSheetSpec`, so `{swap:true}` has a component and `{sheet}` does not.
+   The wicket flow above is the first real use, so **R2 builds the chassis
+   renderer as well as cricket's use of it.**
+2. **The recording chip.** Spec §2.6 replaces the raw fidelity picker with the
+   worded chip *when a sport converts*, so cricket is where it first renders —
+   yet R1 shipped `buildRecording` with a hardcoded `planLabel("pro")` stand-in
+   because no module declares `fidelityEntitlements` and the chip had no import
+   sites. `plan-label.ts` already lists `pro_plus`. **Parameterise the plan name
+   before the chip renders**, or an org already on Pro is told the band is
+   "available on Pro". If you decide cricket should NOT wire the chip this
+   wave, record that in `_INDEX.md` — silently leaving the old picker
+   contradicts §2.6.
+
 **Register rows owed:** D-4 (single ledger presentation on this surface),
 D-5 (ribbon words, not payload dumps), D-14, D-15. Close or record why not.
 
