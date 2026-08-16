@@ -14,7 +14,13 @@ import type { CreateDivision, PatchDivision } from "@/server/api-v1/schemas";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
-import { slugify, uniqueSlug, recordSlugHistory, RESERVED_ENTITY_SLUGS } from "./slugs";
+import {
+  slugify,
+  withUniqueSlug,
+  SLUG_CONSTRAINT,
+  recordSlugHistory,
+  RESERVED_ENTITY_SLUGS,
+} from "./slugs";
 import { invalidateSlugCache } from "@/server/slug-resolve";
 
 export interface DivisionRow {
@@ -212,9 +218,22 @@ export async function createDivision(
       });
     }
 
+    // Shared by both slug paths so the generated one can be RETRIED against
+    // the unique index — `q` is the savepoint, and replaces `tx` inside it.
+    const insert = async (slug: string, q: postgres.TransactionSql): Promise<DivisionRow> => {
+      const [row] = await q<DivisionRow[]>`
+        insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
+                               module_version, eligibility, tiebreakers, youth)
+        values (${competitionId}, ${input.name}, ${slug}, ${input.sport_key}, ${input.variant_key},
+                ${q.json(parsed.data as never)}, ${sport.module_version},
+                ${q.json(input.eligibility as never)},
+                ${input.tiebreakers ? q.json(input.tiebreakers as never) : null},
+                ${eligibilityIsYouth(input.eligibility)})
+        returning ${q(COLS)}`;
+      return row!;
+    };
     // Explicit slugs 409 on collision; generated ones dedupe with "-2"
     // suffixes and skip the reserved "new" (static /d/new route).
-    let slug: string;
     if (input.slug) {
       if (RESERVED_ENTITY_SLUGS.has(input.slug)) {
         throw new HttpError(422, `slug '${input.slug}' is reserved`);
@@ -224,25 +243,21 @@ export async function createDivision(
       if (dupe) {
         throw new HttpError(409, `slug '${input.slug}' is already in use in this competition`);
       }
-      slug = input.slug;
-    } else {
-      slug = await uniqueSlug(slugify(input.name), async (s) => {
-        const [taken] = await tx`
-          select 1 from divisions where competition_id = ${competitionId} and slug = ${s}`;
-        return !!taken;
-      });
+      return insert(input.slug, tx);
     }
-
-    const [row] = await tx<DivisionRow[]>`
-      insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
-                             module_version, eligibility, tiebreakers, youth)
-      values (${competitionId}, ${input.name}, ${slug}, ${input.sport_key}, ${input.variant_key},
-              ${tx.json(parsed.data as never)}, ${sport.module_version},
-              ${tx.json(input.eligibility as never)},
-              ${input.tiebreakers ? tx.json(input.tiebreakers as never) : null},
-              ${eligibilityIsYouth(input.eligibility)})
-      returning ${tx(COLS)}`;
-    return row;
+    return withUniqueSlug(
+      tx,
+      {
+        base: slugify(input.name),
+        constraint: SLUG_CONSTRAINT.divisions,
+        taken: async (s) => {
+          const [taken] = await tx`
+            select 1 from divisions where competition_id = ${competitionId} and slug = ${s}`;
+          return !!taken;
+        },
+      },
+      insert,
+    );
   });
   // Activation funnel (feature 1): step after competition_created.
   await fireDivisionCreated(auth, input.sport_key, competitionId);
@@ -615,36 +630,59 @@ export async function patchDivision(
       effective.youth = eligibilityIsYouth(patch.eligibility);
     }
     // Rename regenerates the slug (v3/01 §2); old slug keeps redirecting.
+    let before: { name: string; slug: string; competition_id: string } | undefined;
     if (patch.name) {
-      const [before] = await tx<{ name: string; slug: string; competition_id: string }[]>`
+      [before] = await tx<{ name: string; slug: string; competition_id: string }[]>`
         select name, slug, competition_id from divisions where id = ${id}`;
       if (!before) throw new HttpError(404, "division not found");
-      if (patch.name !== before.name) {
-        const regenerated = await uniqueSlug(slugify(patch.name), async (s) => {
+    }
+    const regenerating = !!patch.name && !!before && patch.name !== before.name;
+
+    // The slug write is retryable, so the history row it implies belongs in
+    // the SAME savepoint — a redirect must never outlive the update it names.
+    const update = async (
+      eff: Record<string, unknown>,
+      q: postgres.TransactionSql,
+    ): Promise<DivisionRow> => {
+      if (eff.slug && before && eff.slug !== before.slug) {
+        await recordSlugHistory(q, "division", before.competition_id, before.slug, id);
+        previousSlug = before.slug;
+        previousCompetitionId = before.competition_id;
+      }
+      const cols = Object.keys(eff);
+      const values = {
+        ...eff,
+        ...(patch.eligibility ? { eligibility: q.json(patch.eligibility as never) } : {}),
+        ...(patch.tiebreakers ? { tiebreakers: q.json(patch.tiebreakers as never) } : {}),
+      };
+      const [row] = await q<DivisionRow[]>`
+        update divisions set ${q(values as never, ...(cols as never[]))}
+        where id = ${id} returning ${q(COLS)}`;
+      if (!row) throw new HttpError(404, "division not found");
+      return row;
+    };
+    if (!regenerating) return update(effective, tx);
+    return withUniqueSlug(
+      tx,
+      {
+        base: slugify(patch.name!),
+        constraint: SLUG_CONSTRAINT.divisions,
+        taken: async (s) => {
           const [taken] = await tx`
             select 1 from divisions
-            where competition_id = ${before.competition_id} and slug = ${s} and id <> ${id}`;
+            where competition_id = ${before!.competition_id} and slug = ${s} and id <> ${id}`;
           return !!taken;
-        });
-        if (regenerated !== before.slug) {
-          effective.slug = regenerated;
-          await recordSlugHistory(tx, "division", before.competition_id, before.slug, id);
-          previousSlug = before.slug;
-          previousCompetitionId = before.competition_id;
-        }
-      }
-    }
-    const cols = Object.keys(effective);
-    const values = {
-      ...effective,
-      ...(patch.eligibility ? { eligibility: tx.json(patch.eligibility as never) } : {}),
-      ...(patch.tiebreakers ? { tiebreakers: tx.json(patch.tiebreakers as never) } : {}),
-    };
-    const [row] = await tx<DivisionRow[]>`
-      update divisions set ${tx(values as never, ...(cols as never[]))}
-      where id = ${id} returning ${tx(COLS)}`;
-    if (!row) throw new HttpError(404, "division not found");
-    return row;
+        },
+      },
+      (slug, sp) => {
+        // Cleared per attempt: a retry can land back on the division's current
+        // slug, and bookkeeping left over from the failed attempt would bust
+        // the slug cache for a rename that did not happen.
+        previousSlug = null;
+        previousCompetitionId = null;
+        return update(slug === before!.slug ? effective : { ...effective, slug }, sp);
+      },
+    );
   });
   // A rename busts the cached slug resolution (old + new key) — outside the
   // tx, matching the pattern in patchCompetition.

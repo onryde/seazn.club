@@ -25,6 +25,45 @@ test("create a competition via the wizard", async ({ page }) => {
   await expect(page.getByRole("heading", { name })).toBeVisible();
 });
 
+/**
+ * Two same-named competitions created back to back through the wizard.
+ *
+ * The user-facing contract slugs.ts's header promises: "Generated slugs never
+ * 409". Before `withUniqueSlug` the second create raced its own pre-check and
+ * could surface a raw `competitions_org_id_slug_key` violation into the UI.
+ *
+ * HONEST LIMIT: this is sequential, so it does not reproduce the race — two
+ * wizard runs cannot be made to interleave inside one transaction from here.
+ * What it does hold is the contract the race broke, end to end through the real
+ * UI: the second create SUCCEEDS, gets its own suffixed URL, and shows no
+ * error. The race itself is proven deterministically against a held,
+ * uncommitted duplicate in
+ * apps/web/src/server/usecases/__tests__/slug-race.test.ts.
+ */
+test("a second competition of the same name creates cleanly with its own slug", async ({
+  page,
+}) => {
+  const name = `Slug Twin ${TAG}`;
+  const base = `slug-twin-${TAG}`;
+
+  for (const expectedSlug of [base, `${base}-2`]) {
+    await page.goto("/competitions/new");
+    await startBlankCompetition(page);
+    await page.getByPlaceholder("Summer Championship 2026").fill(name);
+    await page.getByLabel(/^Ends on/i).fill("2030-12-31");
+    await page.getByRole("button", { name: /create/i }).click();
+
+    await expect(page.getByRole("link", { name: /add division/i })).toBeVisible({
+      timeout: 20_000,
+    });
+    // The slug is the URL, so a suffix regression is visible here and nowhere
+    // else — both rows carry the same NAME by construction.
+    expect(page.url(), `create #${expectedSlug} landed on the wrong URL`).toContain(
+      `/c/${expectedSlug}`,
+    );
+  }
+});
+
 // Settings are organised into tabs (General / Branding / Archived); one form
 // spans them, so an unsaved edit must survive a tab switch and save from any
 // tab. Showcase stays inline on General (under visibility, which gates it);

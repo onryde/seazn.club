@@ -10,7 +10,7 @@ import { HttpError } from "@/lib/errors";
 import { requireFeature, withinLimit, PaymentRequiredError } from "@/lib/entitlements";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { slugify, uniqueSlug } from "@/server/usecases/slugs";
+import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "@/server/usecases/slugs";
 import { fold } from "@seazn/engine/import";
 
 export interface ClubRow {
@@ -76,22 +76,37 @@ export async function createClub(auth: AuthCtx, input: CreateClubInput): Promise
   if (!cap.ok) throw new PaymentRequiredError("clubs.max");
   return withTenant(auth.orgId, async (tx) => {
     try {
-      const slug = await uniqueSlug(slugify(input.name), async (s) => {
-        const [hit] = await tx`select 1 from clubs where slug = ${s}`;
-        return !!hit;
-      });
-      const [row] = await tx<ClubRow[]>`
-        insert into clubs (org_id, name, short_name, colors, external_ref,
-                           slug, home_ground, website, notes)
-        values (${auth.orgId}, ${input.name}, ${input.short_name ?? null},
-                ${input.colors === undefined ? null : tx.json(input.colors as never)},
-                ${input.external_ref ?? null},
-                ${slug}, ${input.home_ground ?? null},
-                ${input.website ?? null}, ${input.notes ?? null})
-        returning ${tx(COLS)}`;
-      return row!;
+      return await withUniqueSlug(
+        tx,
+        {
+          base: slugify(input.name),
+          constraint: SLUG_CONSTRAINT.clubs,
+          taken: async (s) => {
+            const [hit] = await tx`select 1 from clubs where slug = ${s}`;
+            return !!hit;
+          },
+        },
+        async (slug, q) => {
+          const [row] = await q<ClubRow[]>`
+            insert into clubs (org_id, name, short_name, colors, external_ref,
+                               slug, home_ground, website, notes)
+            values (${auth.orgId}, ${input.name}, ${input.short_name ?? null},
+                    ${input.colors === undefined ? null : q.json(input.colors as never)},
+                    ${input.external_ref ?? null},
+                    ${slug}, ${input.home_ground ?? null},
+                    ${input.website ?? null}, ${input.notes ?? null})
+            returning ${q(COLS)}`;
+          return row!;
+        },
+      );
     } catch (err) {
-      if ((err as { code?: string }).code === "23505") {
+      // `clubs` carries TWO unique indexes. This 409 is the identity one —
+      // `clubs_upsert_key (org_id, coalesce(external_ref, lower(trim(name))))`
+      // — and it is genuinely about the name. The slug index is NOT: under a
+      // concurrent create the name is free and only the slug was claimed, so
+      // routing it here reported "a club named 'X' already exists" about a
+      // club that did not exist. `withUniqueSlug` absorbs that one above.
+      if ((err as { constraint_name?: string }).constraint_name === "clubs_upsert_key") {
         throw new HttpError(409, `a club named '${input.name}' already exists`);
       }
       throw err;

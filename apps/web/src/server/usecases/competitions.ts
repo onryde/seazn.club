@@ -45,7 +45,14 @@ const COLS = [
 ] as const;
 
 // Slug helpers moved to ./slugs (PROMPT-30) \u2014 re-exported for existing importers.
-import { slugify, uniqueSlug, recordSlugHistory, RESERVED_ENTITY_SLUGS } from "./slugs";
+import {
+  slugify,
+  withUniqueSlug,
+  SLUG_CONSTRAINT,
+  recordSlugHistory,
+  RESERVED_ENTITY_SLUGS,
+} from "./slugs";
+import type postgres from "postgres";
 export { slugify } from "./slugs";
 
 /** Cheap existence check (no row data) — used to gate first-login UI (e.g.
@@ -187,30 +194,44 @@ export async function createCompetition(
     }
   }
   const row = await withTenant(auth.orgId, async (tx) => {
+    // The insert is shared by both slug paths so the generated one can be
+    // RETRIED against the unique index — `q` is the savepoint the retry rolls
+    // back to, and must be used in place of `tx` inside it.
+    const insert = async (slug: string, q: postgres.TransactionSql): Promise<CompetitionRow> => {
+      const [row] = await q<CompetitionRow[]>`
+        insert into competitions (org_id, name, slug, description, starts_on, ends_on,
+                                  visibility, branding, discoverable, created_by)
+        values (${auth.orgId}, ${input.name}, ${slug}, ${input.description ?? null},
+                ${input.starts_on ?? null}, ${input.ends_on ?? null}, ${input.visibility},
+                ${q.json(input.branding as never)}, ${input.discoverable === true},
+                ${auth.userId})
+        returning ${q(COLS)}`;
+      return row!;
+    };
     // Explicit slugs are the caller's choice — collisions 409. Generated
     // slugs dedupe with "-2" suffixes; "new" is reserved (static /c/new).
-    let slug: string;
+    let created: CompetitionRow;
     if (input.slug) {
       if (RESERVED_ENTITY_SLUGS.has(input.slug)) {
         throw new HttpError(422, `slug '${input.slug}' is reserved`);
       }
       const [existing] = await tx`select 1 from competitions where slug = ${input.slug}`;
       if (existing) throw new HttpError(409, `slug '${input.slug}' is already in use`);
-      slug = input.slug;
+      created = await insert(input.slug, tx);
     } else {
-      slug = await uniqueSlug(slugify(input.name), async (s) => {
-        const [taken] = await tx`select 1 from competitions where slug = ${s}`;
-        return !!taken;
-      });
+      created = await withUniqueSlug(
+        tx,
+        {
+          base: slugify(input.name),
+          constraint: SLUG_CONSTRAINT.competitions,
+          taken: async (s) => {
+            const [taken] = await tx`select 1 from competitions where slug = ${s}`;
+            return !!taken;
+          },
+        },
+        insert,
+      );
     }
-    const [created] = await tx<CompetitionRow[]>`
-      insert into competitions (org_id, name, slug, description, starts_on, ends_on,
-                                visibility, branding, discoverable, created_by)
-      values (${auth.orgId}, ${input.name}, ${slug}, ${input.description ?? null},
-              ${input.starts_on ?? null}, ${input.ends_on ?? null}, ${input.visibility},
-              ${tx.json(input.branding as never)}, ${input.discoverable === true},
-              ${auth.userId})
-      returning ${tx(COLS)}`;
     // Opt-in is audited exactly like the PATCH path (doc 15 §1 "who/when").
     if (created.discoverable) {
       await tx`
@@ -353,18 +374,7 @@ export async function patchCompetition(
     const effective = { ...patch };
     // Rename regenerates the slug (v3/01 §2); the old slug keeps redirecting
     // via slug_history, so links and QR codes survive.
-    if (!patch.slug && patch.name && patch.name !== before.name) {
-      const regenerated = await uniqueSlug(slugify(patch.name), async (s) => {
-        const [taken] = await tx`
-          select 1 from competitions where slug = ${s} and id <> ${id}`;
-        return !!taken;
-      });
-      if (regenerated !== before.slug) effective.slug = regenerated;
-    }
-    if (effective.slug && effective.slug !== before.slug) {
-      await recordSlugHistory(tx, "competition", auth.orgId, before.slug, id);
-      previousSlug = before.slug;
-    }
+    const regenerating = !patch.slug && !!patch.name && patch.name !== before.name;
     const nextVisibility = patch.visibility ?? before.visibility;
     // Hard coupling (doc 15 §1): never leak a non-public competition to
     // discovery. Turning it on needs `public`; dropping visibility
@@ -376,16 +386,53 @@ export async function patchCompetition(
       effective.discoverable = false;
     }
 
-    const cols = Object.keys(effective) as (keyof PatchCompetition)[];
-    const values = {
-      ...effective,
-      ...(effective.branding ? { branding: tx.json(effective.branding as never) } : {}),
-      ...(effective.discovery ? { discovery: tx.json(effective.discovery as never) } : {}),
+    // The rename's slug write is retryable, so the history row it implies has
+    // to sit inside the same savepoint — a rollback that kept the history but
+    // discarded the update would leave a redirect pointing at a slug that
+    // never existed.
+    const update = async (
+      eff: PatchCompetition,
+      q: postgres.TransactionSql,
+    ): Promise<CompetitionRow> => {
+      if (eff.slug && eff.slug !== before.slug) {
+        await recordSlugHistory(q, "competition", auth.orgId, before.slug, id);
+        previousSlug = before.slug;
+      }
+      const cols = Object.keys(eff) as (keyof PatchCompetition)[];
+      const values = {
+        ...eff,
+        ...(eff.branding ? { branding: q.json(eff.branding as never) } : {}),
+        ...(eff.discovery ? { discovery: q.json(eff.discovery as never) } : {}),
+      };
+      const [updated] = await q<CompetitionRow[]>`
+        update competitions set ${q(values as never, ...(cols as never[]))}
+        where id = ${id} returning ${q(COLS)}`;
+      if (!updated) throw new HttpError(404, "competition not found");
+      return updated;
     };
-    const [row] = await tx<CompetitionRow[]>`
-      update competitions set ${tx(values as never, ...(cols as never[]))}
-      where id = ${id} returning ${tx(COLS)}`;
-    if (!row) throw new HttpError(404, "competition not found");
+    const row = regenerating
+      ? await withUniqueSlug(
+          tx,
+          {
+            base: slugify(patch.name!),
+            constraint: SLUG_CONSTRAINT.competitions,
+            taken: async (s) => {
+              const [taken] = await tx`
+                select 1 from competitions where slug = ${s} and id <> ${id}`;
+              return !!taken;
+            },
+          },
+          // A regenerated slug equal to the current one is not a rename at all
+          // — no slug column write, no history row (pre-existing behaviour).
+          // `previousSlug` is cleared per attempt: a retry can land back on the
+          // current slug, and leftover bookkeeping would bust the slug cache
+          // for a rename that did not happen.
+          (slug, sp) => {
+            previousSlug = null;
+            return update(slug === before.slug ? effective : { ...effective, slug }, sp);
+          },
+        )
+      : await update(effective, tx);
 
     // Opt-in/out is org-level content consent — recorded as a division-
     // independent competition event in the same tx (doc 15 §1 "audited

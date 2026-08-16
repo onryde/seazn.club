@@ -41,7 +41,7 @@ import { resolveModule } from "@/server/engine-db";
 import { getDictionary, t } from "@/lib/i18n";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateFromTemplate, FromTemplateResult } from "@/server/api-v1/schemas";
-import { slugify, uniqueSlug } from "./slugs";
+import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
 import {
   assertActiveQuota,
   assertPublicQuota,
@@ -199,16 +199,26 @@ export async function instantiateTemplate(
   const dict = await getDictionary("en", "ui");
 
   const { slug, divisions } = await withTenant(auth.orgId, async (tx) => {
-    const slug = await uniqueSlug(slugify(input.name), async (s) => {
-      const [taken] = await tx`select 1 from competitions where slug = ${s}`;
-      return !!taken;
-    });
-    await tx`
-      insert into competitions (id, org_id, name, slug, visibility, branding, created_by,
-                                 ends_on, starts_on, template_key, template_version)
-      values (${competitionId}, ${auth.orgId}, ${input.name}, ${slug}, ${input.visibility ?? "private"},
-              '{}', ${auth.userId}, ${input.ends_on}, ${input.starts_on ?? null},
-              ${template.key}, ${template.version})`;
+    const slug = await withUniqueSlug(
+      tx,
+      {
+        base: slugify(input.name),
+        constraint: SLUG_CONSTRAINT.competitions,
+        taken: async (s) => {
+          const [taken] = await tx`select 1 from competitions where slug = ${s}`;
+          return !!taken;
+        },
+      },
+      async (candidate, q) => {
+        await q`
+          insert into competitions (id, org_id, name, slug, visibility, branding, created_by,
+                                     ends_on, starts_on, template_key, template_version)
+          values (${competitionId}, ${auth.orgId}, ${input.name}, ${candidate}, ${input.visibility ?? "private"},
+                  '{}', ${auth.userId}, ${input.ends_on}, ${input.starts_on ?? null},
+                  ${template.key}, ${template.version})`;
+        return candidate;
+      },
+    );
 
     const divisionResults: FromTemplateResult["divisions"] = [];
     for (let di = 0; di < template.divisions.length; di++) {
@@ -239,20 +249,30 @@ export async function instantiateTemplate(
         }
 
         const divisionName = t(dict, templateDivision.i18nNameKey);
-        const divisionSlug = await uniqueSlug(slugify(divisionName), async (s) => {
-          const [taken] = await tx`
-            select 1 from divisions where competition_id = ${competitionId} and slug = ${s}`;
-          return !!taken;
-        });
-        const [division] = await tx<{ id: string }[]>`
-          insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
-                                  module_version, eligibility, tiebreakers)
-          values (${competitionId}, ${divisionName}, ${divisionSlug}, ${templateDivision.sportKey},
-                  ${templateDivision.variantKey}, ${tx.json(parsedConfig.data as never)},
-                  ${sport.module_version}, '[]',
-                  ${templateDivision.tiebreakers ? tx.json(templateDivision.tiebreakers as never) : null})
-          returning id`;
-        const divisionId = division!.id;
+        const division = await withUniqueSlug(
+          tx,
+          {
+            base: slugify(divisionName),
+            constraint: SLUG_CONSTRAINT.divisions,
+            taken: async (s) => {
+              const [taken] = await tx`
+                select 1 from divisions where competition_id = ${competitionId} and slug = ${s}`;
+              return !!taken;
+            },
+          },
+          async (divisionSlug, q) => {
+            const [row] = await q<{ id: string }[]>`
+              insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
+                                      module_version, eligibility, tiebreakers)
+              values (${competitionId}, ${divisionName}, ${divisionSlug}, ${templateDivision.sportKey},
+                      ${templateDivision.variantKey}, ${q.json(parsedConfig.data as never)},
+                      ${sport.module_version}, '[]',
+                      ${templateDivision.tiebreakers ? q.json(templateDivision.tiebreakers as never) : null})
+              returning id`;
+            return row!;
+          },
+        );
+        const divisionId = division.id;
 
         const stageResults: FromTemplateResult["divisions"][number]["stages"] = [];
         for (let si = 0; si < templateDivision.stages.length; si++) {
