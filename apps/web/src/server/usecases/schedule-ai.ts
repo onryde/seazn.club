@@ -502,6 +502,12 @@ export interface BuildPackOptions {
    *  nobody approved. Absent on every other path, which resolves `raw` as
    *  before. */
   resolved?: ResolvedParse | null;
+  /** True when a compile was ATTEMPTED and produced nothing. Distinct from
+   *  `raw: null`, which also covers "no instruction was given" — and the
+   *  difference is the whole point: without it an organiser's unreadable brief
+   *  is discarded in silence. `parseInstruction` never throws, so a transport
+   *  failure, a refusal and a twice-missed schema all arrive here identically. */
+  parseFailed?: boolean;
   scope?: { from?: string; courts?: string[]; pool_ids?: string[] };
   prior?: {
     instruction: string;
@@ -975,6 +981,7 @@ export async function buildSchedulePack(
       resolveParsed(opts.raw ?? null, clock, orgTz, {
         fixtureCount: movable.length,
         courts,
+        parseFailed: opts.parseFailed === true,
       });
     const window =
       resolved.windowMs !== null
@@ -2807,6 +2814,7 @@ async function planForDivision(
     ...input,
     now: Date.now(),
     raw: parse.raw,
+    parseFailed: parse.failed,
     // The RESOLVED parse as the organiser saw it, not a re-resolution of `raw`.
     // `resolveParsed` reads the org clock, so re-running it minutes later can
     // move a symbolic "tomorrow" onto a different date — a run under rules

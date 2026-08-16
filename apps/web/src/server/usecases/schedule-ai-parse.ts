@@ -609,17 +609,31 @@ function refuseVacuousBounds(rules: readonly RawHardConstraint[]): {
  * `raw === null` is a first-class input, not an error path: there was no
  * instruction, or the compile failed. The default window stands, no rules are
  * compiled, and nothing is assumed on the organiser's behalf.
+ *
+ * Those two causes are OPPOSITE situations, though, and `hints.parseFailed`
+ * tells them apart. Silence is right when nobody wrote a brief. It is wrong
+ * when somebody did and it could not be compiled: `parseInstruction` never
+ * throws — a transport failure, a refusal, or a twice-missed schema all return
+ * `{raw: null, failed: true}` — so without this the organiser writes a careful
+ * brief, receives a schedule that ignores every word of it, and is told
+ * nothing. Reporting it is deliberately all this does. Guessing at rules to
+ * fill the gap would be the very harm rule 2 of this file forbids.
  */
 export function resolveParsed(
   raw: RawParsed | null,
   clock: Clock,
   tz: string,
-  hints: { fixtureCount?: number; courts?: string[] } = {},
+  hints: { fixtureCount?: number; courts?: string[]; parseFailed?: boolean } = {},
 ): ResolvedParse {
   const assumptions: string[] = [];
   const hard: HardConstraint[] = [];
   const dailyBreaks: ResolvedParse["dailyBreaks"] = [];
   if (raw === null) {
+    if (hints.parseFailed === true) {
+      assumptions.push(
+        `your scheduling instruction could not be read, so none of it was applied — this schedule was built from your saved settings alone`,
+      );
+    }
     return { hard, soft: [], unparsed: [], assumptions, windowMs: null, dailyBreaks };
   }
 
