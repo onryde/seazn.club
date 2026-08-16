@@ -2,6 +2,12 @@
 // requires: "repair bench not worse [...] gate on conflict counts from the
 // verifier, not on the bench alone."
 //
+// C9 (decomposed repair on CP-SAT) extended this with a third arm,
+// `runDecomposed`, measuring `repairDecomposedCpsat` against the identical
+// board `runOld`/`runNew` already measure — this is what closes the density
+// regression `runNew` (C5's monolithic `buildSchedule` call) opened at high
+// violator density: see the PR body for the three-way table.
+//
 // NOT `bench-repair.ts` reused, and NOT `bench-reflow.ts` either. `bench-
 // repair.ts` benches raw `repairSchedule` against a synthetic board — the
 // bare z3 primitive, not `repairDecomposed`/`solveBoard`'s actual call
@@ -44,6 +50,7 @@
 // comparison this exists to make).
 import { buildSchedule } from "../src/scheduling/build.ts";
 import { repairDecomposed } from "../src/scheduling/repair-decompose.ts";
+import { repairDecomposedCpsat } from "../src/scheduling/repair-decompose-cpsat.ts";
 import { isBlockingConflict, validateAssignments } from "../src/scheduling/calendar.ts";
 import { syntheticBoard } from "../src/scheduling/repair-synthetic-board.ts";
 import { resetZ3 } from "../src/scheduling/z3-load.ts";
@@ -179,6 +186,33 @@ async function runNew(b: RepairBoard): Promise<RunResult> {
   };
 }
 
+/** Mirrors `solveBoard` AFTER C9: decomposed into components first
+ *  (`repairDecomposedCpsat`), each solved with its OWN `buildSchedule` call —
+ *  the direct comparison arm for the density regression `runNew` (the C5
+ *  monolithic shape) measured. */
+async function runDecomposed(b: RepairBoard): Promise<RunResult> {
+  const t0 = performance.now();
+  const out = await repairDecomposedCpsat({
+    fixtures: b.fixtures,
+    proposal: b.board,
+    callerFrozen: new Set(b.frozenIds),
+    existing: [],
+    dependencies: b.dependencies,
+    config: b.config,
+    budgetMs: WALL_MS,
+  });
+  const wallMs = performance.now() - t0;
+  const conflicts = validateAssignments(out.assignments, b.config, [], b.dependencies);
+  return {
+    wallMs,
+    conflicts: conflicts.length,
+    blockingConflicts: conflicts.filter(isBlockingConflict).length,
+    status: out.status,
+    engine: out.status === "repaired" || out.status === "partial" ? "optimized" : "greedy",
+    moved: out.moved.length,
+  };
+}
+
 function summarize(label: string, rows: RunResult[]): void {
   const walls = rows.map((r) => r.wallMs).sort((a, b2) => a - b2);
   const mid = Math.floor(walls.length / 2);
@@ -213,13 +247,21 @@ async function main(): Promise<void> {
   for (let i = 0; i < RUNS; i++) {
     newRuns.push(await runNew(board));
   }
-  summarize("NEW (buildSchedule / placement service)", newRuns);
+  summarize("NEW (buildSchedule / placement service, monolithic, C5)", newRuns);
+
+  const decomposedRuns: RunResult[] = [];
+  for (let i = 0; i < RUNS; i++) {
+    decomposedRuns.push(await runDecomposed(board));
+  }
+  summarize("DECOMPOSED (repairDecomposedCpsat, C9)", decomposedRuns);
 
   const oldMaxConflicts = Math.max(...oldRuns.map((r) => r.blockingConflicts));
   const newMaxConflicts = Math.max(...newRuns.map((r) => r.blockingConflicts));
+  const decomposedMaxConflicts = Math.max(...decomposedRuns.map((r) => r.blockingConflicts));
   console.log(
-    `\nGATE: blocking conflicts — old max ${oldMaxConflicts}, new max ${newMaxConflicts} — ` +
-      `${newMaxConflicts <= oldMaxConflicts ? "PASS (new never worse)" : "FAIL (new is worse)"}`,
+    `\nGATE: blocking conflicts — old(z3) max ${oldMaxConflicts}, new(monolithic) max ${newMaxConflicts}, ` +
+      `decomposed(C9) max ${decomposedMaxConflicts} — ` +
+      `${decomposedMaxConflicts <= oldMaxConflicts ? "PASS (C9 never worse than z3)" : "FAIL (C9 worse than z3)"}`,
   );
   console.log(
     "NOTE: this board omits hard instruction rules (repair-synthetic-board.ts's own scope limit, " +

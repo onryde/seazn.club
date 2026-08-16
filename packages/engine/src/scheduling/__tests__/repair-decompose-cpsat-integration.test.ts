@@ -32,18 +32,17 @@ const at = (id: string, court: string, offsetMin: number, entrants: string[], du
 const fx = (id: string, home: string, away: string): SchedulableFixture => ({ id, home, away });
 
 type TestConfig = VerifyConfig & { courts: string[]; startAt: number; matchMinutes: number };
-const cfg = (over: Partial<VerifyConfig> = {}): TestConfig =>
-  ({
-    matchMinutes: 30,
-    gapMinutes: 0,
-    perEntrantMinRest: 0,
-    blackouts: [],
-    sessionWindows: [],
-    courts: ["A", "B"],
-    startAt: T0 - 60 * MIN,
-    window: { from: T0 - 60 * MIN, to: T0 + 8 * 60 * MIN },
-    ...over,
-  }) as TestConfig;
+const cfg = (over: Partial<VerifyConfig> = {}): TestConfig => ({
+  matchMinutes: 30,
+  gapMinutes: 0,
+  perEntrantMinRest: 0,
+  blackouts: [],
+  sessionWindows: [],
+  courts: ["A", "B"],
+  startAt: T0 - 60 * MIN,
+  window: { from: T0 - 60 * MIN, to: T0 + 8 * 60 * MIN },
+  ...over,
+});
 
 (RUN_INTEGRATION ? describe : describe.skip)(
   "repairDecomposedCpsat integration (requires a running placement service)",

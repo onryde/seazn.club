@@ -10,7 +10,7 @@
 // this driver closes is specifically about what the REAL wire does with a
 // dependency edge.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Assignment, OrderDependency, SchedulableFixture, VerifyConfig } from "./calendar.ts";
+import type { Assignment, SchedulableFixture, VerifyConfig } from "./calendar.ts";
 import { isBlockingConflict, validateAssignments } from "./calendar.ts";
 import type { BuildResult } from "./build.ts";
 
@@ -43,18 +43,17 @@ const at = (
 const fx = (id: string, home: string, away: string): SchedulableFixture => ({ id, home, away });
 
 type TestConfig = VerifyConfig & { courts: string[]; startAt: number; matchMinutes: number };
-const cfg = (over: Partial<VerifyConfig> = {}): TestConfig =>
-  ({
-    matchMinutes: 40,
-    gapMinutes: 5,
-    perEntrantMinRest: 45,
-    blackouts: [],
-    sessionWindows: [],
-    tz: "UTC",
-    courts: ["C1", "C2"],
-    startAt: T0 - 60 * MIN,
-    ...over,
-  }) as TestConfig;
+const cfg = (over: Partial<VerifyConfig> = {}): TestConfig => ({
+  matchMinutes: 40,
+  gapMinutes: 5,
+  perEntrantMinRest: 45,
+  blackouts: [],
+  sessionWindows: [],
+  tz: "UTC",
+  courts: ["C1", "C2"],
+  startAt: T0 - 60 * MIN,
+  ...over,
+});
 
 const buildResult = (assignments: Assignment[], overrides: Partial<BuildResult> = {}): BuildResult => ({
   assignments,
