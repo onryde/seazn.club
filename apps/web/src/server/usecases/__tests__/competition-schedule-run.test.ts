@@ -178,10 +178,10 @@ beforeEach(() => {
   delete process.env.SCHEDULING_AI_LADDER;
   delete process.env.SCHEDULING_AI_CHEAP_MODEL;
   // W6 (#401): this suite is the coverage for the LLM REPAIR LOOP and for the
-  // ladder that escalates on a plan the referee refuses.
-  // The CP-SAT repair solver now runs ahead of that loop
-  // and would fix these boards for free, so it is switched
-  // off here and exercised in competition-schedule-ai-repair.test.ts instead.
+  // ladder that escalates on a plan the referee refuses. The CP-SAT repair
+  // solver now runs ahead of that loop and would fix these boards for free, so
+  // it is switched off here and exercised in
+  // competition-schedule-ai-repair.test.ts instead.
   process.env.SCHEDULING_REPAIR_SOLVER = "off";
 });
 
