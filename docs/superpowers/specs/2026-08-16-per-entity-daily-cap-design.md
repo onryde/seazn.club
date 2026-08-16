@@ -317,6 +317,65 @@ The comment at :477-483 anticipates a new rule TYPE being silently
 mis-encoded and says the parity whitelist catches it; a new SCOPE is the
 same hazard with no guard at all. Finding 3 is why this ships green.
 
+**7. Finding 2 was too pessimistic: `people` IS populated in production, from
+a real roster.** Re-checked directly. `entrant_members`
+(`db/migration/v2-engine/tables/V213__entrant_members.sql`, PK
+`(entrant_id, person_id)`) is the entrant↔person link, and
+`peopleByEntrant(tx, entrantIds)`
+(`apps/web/src/server/usecases/schedule.ts:556-560`) reads it and stamps
+`people` on every DB-driven assignment — called at five production entry
+points (`:725, :1139, :2079, :2395, :2639`). Rosters are captured at entrant
+creation through a "Find player…" picker over the existing persons directory
+(`apps/web/src/components/v2/entrants-panel.tsx:1444-1475`), so a team or a
+doubles pair already carries its members.
+
+So `every_person` is NOT inert on the DB-backed path, and this work needs no
+new roster mechanism. The optionality on `SchedulableFixture.people` is there
+for engine-internal and synthetic builders, not a production gap.
+
+What survives of finding 2 is narrower and still real: an entrant whose roster
+is EMPTY — a name typed in without members ever being added. A person cap
+binds nothing for that entrant while appearing to be in force. That is a
+data-completeness problem with a specific fix ("add players to X"), so the
+right behaviour is a warning that NAMES the entrants with empty rosters, not a
+blanket refusal of the build. Task 5 should be re-scoped to that.
+
+**8. The wire cannot carry a universal scope at all — and does not need to.**
+`proto/scheduler.proto:154-170` states the ruling explicitly: putting a scope
+on the wire "is the wrong shape, and rejecting it is the whole design",
+because the placement service has no person concept and must not learn one.
+Instead "the ACL resolves the scope and sends the RESULT" — `build.ts` uses
+`scopeCoversFixture` to turn any scope into a set of fixtures, and sends
+`RuleGroup { fixture_indices, min_rest_minutes, max_fixtures_per_day }`
+(`:176-192`).
+
+That is the same fixture-set shape finding 6 identifies as wrong for a
+universal scope — except here it is baked into the protocol, not one encoder.
+A universal scope resolved to ONE `RuleGroup` becomes a competition-wide cap
+on the service exactly as it does in `build-encode.ts`.
+
+**But `rule_groups` is already `repeated`.** So a universal scope expands, at
+the wire boundary only, into **N `RuleGroup`s — one per entity**, each
+carrying that entity's own `fixture_indices` and the same
+`max_fixtures_per_day`. No proto change, no Python change, no new concept
+taught to the service; it keeps "applying a rule to a set of fixture
+positions, which is the only thing it was ever doing".
+
+This resolves the spec's A-vs-B argument, which conflated two layers. B's
+costs — "200 near-identical rules is unreadable", "the AI pack's token budget
+is a live constraint", "it loses the organiser's sentence" — are all costs at
+the ORGANISER-FACING layer. None of them apply to a machine-facing wire
+message. So: **A above the ACL** (one constraint, one sentence, one thing the
+organiser reads back), **B below it** (N rule groups, which is the only shape
+the protocol accepts). Approach A remains right, and B is how it is
+transported.
+
+Consequence for scope: the tally exists in THREE consumers, not two — the
+greedy placer/verifier (`calendar.ts`), the in-process z3 encoder
+(`build-encode.ts`), and the placement service via the ACL. The third needs
+expansion at the boundary rather than a tally, and the Python side needs
+nothing.
+
 **Unchanged and confirmed:** `ConstraintScope` is a
 `z.discriminatedUnion("kind", …)` at `constraints.ts:30-37` with the five
 members the spec lists, re-exported by `scheduling/index.ts:46` via
