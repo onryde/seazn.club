@@ -196,10 +196,107 @@ z3-ai-repair → CP-SAT) touches ZERO files under
 constraint enum, so the "engine enum" gate noted in the bench programme
 does not apply to `ConstraintScope`.
 
+**Correction, re-checked at implementation start 2026-08-16:** that
+sequencing paragraph checked #576 only, and there are TWO open PRs. #583
+(C9, decomposed repair on CP-SAT) *does* touch
+`packages/engine/src/scheduling/` — five files:
+`index.ts`, `repair-decompose.ts`, `repair-decompose-cpsat.ts` and their
+two suites. The conclusion survives but for a narrower reason than
+stated: the three files this spec rewrites — `constraints.ts`,
+`calendar.ts`, `build-encode.ts` — are still uncontested by BOTH PRs. The
+one shared file is the barrel `index.ts`, which C9 edits and which this
+work touches only if the new scope needs a new export. Prefer widening
+the existing `ConstraintScope` export over adding a barrel line, and if a
+new export is unavoidable, expect a one-line rebase conflict against
+whichever of the two lands first.
+
 **Estimate:** this is a session of its own — engine union, two tally
 implementations, two parity suites, golden corpus, then parser, prompt
 and corpus re-baseline. Starting it inside a session that has already
 shipped four other things is how a placer/verifier fork gets written.
+
+## Pinned at implementation start 2026-08-16 — five findings, three of which correct this spec
+
+Citations re-pinned against `main` at `a0cfb708`. The tally analysis above
+holds exactly. Five things it did not know:
+
+**1. The READ does not use the shared resolver, and the code comment says
+it does.** `calendar.ts:516-518` introduces `dayCapRulesFor` as "One
+resolution for the tally READ at placement time and the tally WRITE at
+commit time — two scope walks is how a placer and a verifier fork in the
+first place." The WRITE (`countDay`, :566) does call it. The READ
+(`nextAcceptableStart`, :593-597) does **not** — it walks `placementHard`
+with its own inline `scopeCoversFixture` call, because that loop also
+serves `not_before` / `not_after` / the selector families. The two agree
+today only because both happen to call the same predicate with the same
+arguments. That is precisely the fork the comment claims was designed
+away, sitting dormant behind a boolean that is currently symmetric.
+
+It stops being dormant here. Under a universal scope the read and write
+diverge in SHAPE, not just in predicate: the write increments N buckets
+(one per person on the card), the read must test N buckets. An inline
+walk that keeps returning one index will fork the moment the write
+returns many. **So the first engine change is not the union — it is
+routing the read through `dayCapRulesFor`, with a test pinning current
+behaviour, so the widening has one resolver to widen instead of two.**
+
+**2. `every_person` is inert unless callers populate `people`.**
+`SchedulableFixture.people` is **optional** (`calendar.ts:82`), and
+`scopeRowOf` (:486-488) fills `people: [...(f.people ?? [])]`. A fixture
+whose caller omits `people` yields an empty list, `scopeCoversFixture`'s
+`person` branch returns false, and a person-scoped cap silently binds
+nothing. A universal `every_person` cap inherits that exactly: on a board
+built without `people` it is a rule that reads back to the organiser as
+enforced and enforces nothing. This is the repo's known "seam left for
+later ships inert" class. The cap must not be shipped without either a
+populated-`people` precondition asserted at build time or an explicit,
+tested decision about what an empty `people` list means.
+
+**3. `build-encode-parity.test.ts` is structurally blind to this
+change.** Its guard is `ENCODED_RULE_TYPES` (:40-46), a whitelist keyed on
+`HardConstraint["type"]`, and its own comment states its purpose: to make
+"the NEXT unencoded **type** fail here rather than pass unnoticed". This
+work adds no rule type — it widens `scope` on an existing one. The suite
+will therefore stay green whether or not CP-SAT encodes `every_person`.
+Extending it means adding a **scope axis**, not another row; a row is the
+change that looks like coverage and is not.
+
+The sibling suite has its own version of the same trap.
+`calendar-placer-verifier-parity.test.ts` is table-driven (`FAMILIES`,
+:60-75; `it.each` at :78) and takes a new row easily — but its `cards(n)`
+helper (:33-39) gives **every** card `home: "e1"`, one shared entrant, and
+its existing `max_fixtures_per_day` row is already scoped
+`{kind:"entrant", entrantId:"e1"}`. On that fixture set a universal cap
+and a named-`e1` cap are the same assertion, so an `every_entrant` row
+added naively passes without ever distinguishing the new scope from the
+old one. A universal-scope row needs a card set with **disjoint**
+entrants, where a named-entrant cap does not bite and only a universal one
+does. `cards()` also sets no `people` at all, which is finding 2 arriving
+in the test fixtures: an `every_person` row against it is vacuous.
+
+**4. There is no scheduling golden corpus, so test-plan item 2 has no
+target.** All golden machinery under `packages/engine/src/testkit/` drives
+the **sport-module scoring** corpus — eleven `*.golden.json` under
+`src/sports/**`. Nothing under `scheduling/` participates, and no JSON
+under `scheduling/` exists at all. Running `EXTEND_GOLDEN=1` here would
+append to the scoring corpus and go green while saying nothing about a
+constraint scope. Item 2 should be struck and its intent — a durable,
+reviewable record of the new scope's behaviour — met by the parity suites
+plus a checked-in scheduling fixture, or a scheduling golden corpus
+should be created deliberately as its own piece of work.
+
+**5. Blast radius is smaller than Risks states: `conflict-detail.ts` does
+not read `scope`.** Its only `scope` occurrence is a comment on line 9.
+The "reaches ... conflict details (25 kinds as of C3)" risk does not hold
+as written; conflict detail is reached only if this work chooses to name
+the offending person in a message, which is a separate, optional
+improvement rather than forced fallout.
+
+**Unchanged and confirmed:** `ConstraintScope` is a
+`z.discriminatedUnion("kind", …)` at `constraints.ts:30-37` with the five
+members the spec lists, re-exported by `scheduling/index.ts:46` via
+`export * from "./constraints.ts"` — so a new union member needs **no new
+barrel line**, which removes the only file this work shared with PR #583.
 
 ## Risks
 
