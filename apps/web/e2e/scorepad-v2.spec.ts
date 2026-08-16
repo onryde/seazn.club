@@ -87,19 +87,6 @@ async function openLiveConsole(page: Page, fx: RosteredFixture): Promise<void> {
     .toContain("core.start");
 }
 
-/** Set this over's striker / non-striker / bowler. The three selects are in
- *  the skin's own "This over" panel, in that order. */
-async function setOverPeople(
-  page: Page,
-  people: { striker: string; nonStriker: string; bowler: string },
-): Promise<void> {
-  const selects = pad(page).locator('[data-role="cricket-this-over"] select');
-  await expect(selects).toHaveCount(3);
-  await selects.nth(0).selectOption(people.striker);
-  await selects.nth(1).selectOption(people.nonStriker);
-  await selects.nth(2).selectOption(people.bowler);
-}
-
 test.describe("v2 console — cricket, the headline flow S11 could not drive", () => {
   let fx: RosteredFixture;
 
@@ -126,6 +113,11 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
   test("a full over including an extra, then a dismissal credited to a fielder", async ({
     page,
   }) => {
+    // Six taps land through the soft-commit hold (queue.ts's HOLD_MS =
+    // 6000ms, spec §2.3) plus a wicket's own guided-sheet dispatch, each
+    // waited out below rather than raced — comfortably exceeds Playwright's
+    // 60s config default.
+    test.setTimeout(150_000);
     await openLiveConsole(page, fx);
 
     const striker = fx.personIds[`Striker ${TAG}`]!;
@@ -133,16 +125,19 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
     const bowler = fx.personIds[`Bowler ${TAG}`]!;
     const fielder = fx.personIds[`Fielder ${TAG}`]!;
 
-    // The person pickers must show NAMES. Before this session they rendered
-    // raw UUIDs (cricket-skin's `displayPerson` returned its argument), which
-    // is unusable courtside and is asserted here so it cannot regress
-    // silently — the coverage sweep cannot see option TEXT, only layout data.
-    const strikerSelect = pad(page).locator('[data-role="cricket-this-over"] select').first();
-    await expect(strikerSelect.locator(`option[value="${striker}"]`)).toHaveText(
-      `Striker ${TAG}`,
-    );
-
-    await setOverPeople(page, { striker, nonStriker, bowler });
+    // The context strip (D-14's replacement for the three "This over"
+    // selects) only renders once an innings exists (`buildContext`,
+    // v3/skins/cricket.tsx, requires `currentInnings() !== null`), and
+    // `cricket.ts`'s own fold creates that innings LAZILY, inside ball 1's
+    // own apply — so there is nothing to tap yet at this point in the flow.
+    // Ball 1 is unconditionally the lineup's own default opener pair/bowler
+    // (`createInnings`'s "openers from lineup order", §2.3 — any other pair
+    // 422s "striker/non-striker do not match the ledger"), which is exactly
+    // what this fixture's roster already resolves to with no picker
+    // involved. The "shows real names, not raw ids" proof (D-14's own
+    // regression, S11-era: cricket-skin's `displayPerson` once returned its
+    // argument verbatim) moves to right after ball 1 below, once the strip
+    // actually exists to read.
 
     // Five legal deliveries plus ONE wide. The wide is the point: it does not
     // advance `ballInOver`, so an over containing one is six legal balls
@@ -168,6 +163,25 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
         )
         .toBe(delivered);
     }
+
+    // NOW the context strip exists (ball 1 created the innings) — the
+    // "shows real names, not raw ids" proof this describe block's own
+    // header names (D-14). Membership across the whole strip, not a
+    // per-slot identity: an odd run (ball 1's "1") rotates strike, so
+    // whether "Striker"/"NonStriker" currently occupy the striker or the
+    // non-striker chip is not fixed — every one of the three seeded names
+    // must appear SOMEWHERE in the strip's own rendered text regardless.
+    // Matched as `": <name>"` (chipLabel's own `"${label}: ${name}"` format,
+    // context-strip.tsx), never a bare name: "NonStriker" contains "Striker"
+    // as a literal substring, so a bare `toContainText("Striker …")` would
+    // pass off "NonStriker …" alone and never actually prove the "Striker"
+    // chip rendered anything.
+    const strip = pad(page).locator('[data-role="context-strip"]');
+    await expect(strip).toBeVisible({ timeout: 10_000 });
+    await expect(strip).toContainText(`: Striker ${TAG}`);
+    await expect(strip).toContainText(`: NonStriker ${TAG}`);
+    await expect(strip).toContainText(`: Bowler ${TAG}`);
+
     await pad(page).getByRole("button", { name: "Wide", exact: true }).click();
     await expect
       .poll(
@@ -209,27 +223,32 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
     // A caught dismissal, credited to a fielder who is a real member of the
     // fielding side.
     //
-    // The wicket surface is hand-rolled BUTTONS — `ThisOverGroup` builds it
-    // itself and never routes through `action-form.tsx`, so there is no
-    // `<select>` and no `[data-role="confirm"]` here (football's goal DOES go
-    // through ActionForm, which is why the same selector is right there and
-    // wrong here). The flow is: Wicket -> kind -> [which batter, only when the
-    // kind is ambiguous] -> fielder, and picking the fielder submits.
+    // The wicket surface is the v3 guided sheet (G2, v3/guided-sheet.tsx) —
+    // "Wicket" is a tile whose `action` is `{sheet: "wicket"}`, opening
+    // `[data-role="v3-sheet"]`; there is no `<select>` and no
+    // `[data-role="confirm"]` here (football's goal DOES go through the
+    // generic ActionForm, which is why the same selector is right there and
+    // wrong here — this sheet completes on the LAST answer, no separate
+    // confirm step). The flow is: Wicket -> kind -> [which batter, only when
+    // `kind === "runout"`] -> fielder [only when kind is caught/runout/
+    // stumped], and picking the fielder completes the wizard and dispatches.
     //
     // Nothing below is wrapped in `.catch()`. A swallowed step would leave the
     // flagship "credited to a named fielder" assertion passing over a UI it
     // never actually drove.
+    const sheet = pad(page).locator('[data-role="v3-sheet"]');
     await pad(page).getByRole("button", { name: "Wicket", exact: true }).click();
-    await pad(page).getByRole("button", { name: "Caught", exact: true }).click();
+    await sheet.getByRole("button", { name: "Caught", exact: true }).click();
 
     // Only some dismissal kinds ask which batter is out (a run-out can take
     // either end); a catch cannot, so this step is conditional by design
-    // rather than by defensiveness — and it asserts by NAME, which also pins
-    // that the picker resolves personNames rather than drawing a raw id.
-    const outChoice = pad(page).getByRole("button", { name: `Striker ${TAG}`, exact: true });
+    // (G2's `when(answers)`, not by defensiveness) — and it asserts by NAME,
+    // which also pins that the picker resolves personNames rather than
+    // drawing a raw id.
+    const outChoice = sheet.getByRole("button", { name: `Striker ${TAG}`, exact: true });
     if ((await outChoice.count()) > 0) await outChoice.first().click();
 
-    await pad(page).getByRole("button", { name: `Fielder ${TAG}`, exact: true }).click();
+    await sheet.getByRole("button", { name: `Fielder ${TAG}`, exact: true }).click();
 
     await expect
       .poll(async () => {
@@ -406,7 +425,7 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
       .toBe(1);
   });
 
-  test("no horizontal scroll at 375 or 320, and this over's pickers meet the touch bar", async ({
+  test("no horizontal scroll at 375 or 320, and the tile grid + context strip meet the touch bar", async ({
     page,
   }) => {
     for (const width of [375, 320]) {
@@ -420,27 +439,46 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
       // this one loads. Conditional rather than unconditional: calling
       // `openLiveConsole` here would wait forever on a "Start match" button a
       // sibling has already consumed, and skipping the click entirely would
-      // find no "This over" panel on the run where this test happens to be
-      // first.
+      // find no tile grid on the run where this test happens to be first.
       const startBtn = page.getByRole("button", { name: "Start match", exact: true });
       if ((await startBtn.count()) > 0) await startBtn.click();
 
-      // The three "This over" selects are the REQUIRED entry before every
-      // over, so a courtside scorer hits them once per over for a whole
-      // innings — the strongest case in this pad for the repo's 44px bar, and
-      // measured at 33px before this session (`.select`'s own padding loses to
-      // the `px-2 py-1 text-xs` density utilities beside it). Guarded by count
-      // first: a selector that matches nothing passes a for-all height check
-      // vacuously, which is exactly how a renamed `data-role` would slip past.
-      const selects = pad(page).locator('[data-role="cricket-this-over"] select');
-      const n = await selects.count();
-      expect(n, `this over's pickers must be present at ${width}`).toBe(3);
-      for (let i = 0; i < n; i++) {
-        const box = await selects.nth(i).boundingBox();
-        expect(box, `picker ${i} must be laid out at ${width}`).not.toBeNull();
-        expect(box!.height, `picker ${i} at ${width}px is ${Math.round(box!.height)}px`).toBeGreaterThanOrEqual(
+      // The run/wicket TILES are the REQUIRED entry every ball, replacing the
+      // v2 "This over" selects as the pad's most-tapped control (D-14) — the
+      // strongest case in this pad for the repo's 44px bar (the v2 selects
+      // measured at 33px before the session that fixed them; tile-grid.tsx's
+      // own `KIND_MIN_HEIGHT` declares 52px for `primary`/`destructive`, so
+      // this MEASURES rather than assumes that holds once real CSS is laid
+      // out). Guarded by count first: a selector matching nothing would pass
+      // a for-all height check vacuously, which is exactly how a renamed
+      // `data-tile-id` would slip past.
+      const requiredTiles = pad(page).locator(
+        '[data-tile-id="run0"], [data-tile-id="run1"], [data-tile-id="wicket"]',
+      );
+      const tileCount = await requiredTiles.count();
+      expect(tileCount, `run/wicket tiles must be present at ${width}`).toBe(3);
+      for (let i = 0; i < tileCount; i++) {
+        const box = await requiredTiles.nth(i).boundingBox();
+        expect(box, `tile ${i} must be laid out at ${width}`).not.toBeNull();
+        expect(box!.height, `tile ${i} at ${width}px is ${Math.round(box!.height)}px`).toBeGreaterThanOrEqual(
           44,
         );
+      }
+
+      // The context strip (D-14's own "set once, tap to change" chips) only
+      // renders once an innings exists (buildContext, v3/skins/cricket.tsx) —
+      // which, on this shared-`fx` race, may or may not be true yet. Checked
+      // best-effort, same race tolerance as the "Start match" branch above:
+      // when present, every chip must ALSO clear the 44px bar.
+      const chips = pad(page).locator('[data-role="context-strip"] button');
+      const chipCount = await chips.count();
+      for (let i = 0; i < chipCount; i++) {
+        const box = await chips.nth(i).boundingBox();
+        expect(box, `context chip ${i} must be laid out at ${width}`).not.toBeNull();
+        expect(
+          box!.height,
+          `context chip ${i} at ${width}px is ${Math.round(box!.height)}px`,
+        ).toBeGreaterThanOrEqual(44);
       }
     }
   });

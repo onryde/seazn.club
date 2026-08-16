@@ -32,6 +32,9 @@ test("cricket: the tenth dismissal is offered as words, not snake_case", async (
   page,
   request,
 }) => {
+  // One held dispatch (queue.ts's HOLD_MS = 6000ms soft-commit) the ledger
+  // poll below waits out.
+  test.setTimeout(90_000);
   const org = await activeOrg(page);
   const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
@@ -121,47 +124,56 @@ test("cricket: the tenth dismissal is offered as words, not snake_case", async (
   const pad = page.getByTestId("score-pad");
   await expect(pad).toBeVisible({ timeout: 30_000 });
 
-  // S13/#422 W11 cutover — v1's per-ball "Wicket" <select> (aria-labelled
-  // "Wicket") and its "Ball-by-ball"/"Over-by-over" mode switch are both
-  // gone: the v2 cricket skin (cricket-skin.tsx's ThisOverGroup) scores
-  // ball-by-ball unconditionally, with no mode to switch into, and offers
-  // the ten WICKET_KINDS as a button LIST inside a collapsible "Wicket"
-  // drawer rather than a <select>.
+  // S13/#422 W11 cutover, then R2's v2→v3 cutover for cricket: v1's per-ball
+  // "Wicket" <select> and v2's collapsible "Wicket" drawer of buttons are
+  // both gone — the v3 cricket skin's "Wicket" TILE opens a guided sheet
+  // (v3/guided-sheet.tsx) whose first step is the same ten-kind picker,
+  // still real 44px BUTTONS, never a <select>.
   //
-  // The striker/non-striker pickers are NOT set explicitly here (measured,
-  // not assumed): the server enforces that a ball's striker/non-striker
-  // must match the ledger's own idea of who is at the crease
-  // (INVALID_EVENT "striker/non-striker do not match the ledger") — after
-  // the seeded dismissal above, that is the fold's OWN resolved pair
-  // (Number three promoted in for the dismissed Striker, Non-striker
-  // unchanged), which is exactly what these pickers already default to.
-  // Forcing an arbitrary non-dismissed pair (e.g. nonStriker/incoming) is a
-  // VALID pool member each, but not the ledger's actual pair, and 422s.
-  const over = pad.locator('[data-role="cricket-this-over"]');
-  const selects = over.locator("select");
-  await expect(selects).toHaveCount(3);
-  await expect(selects.nth(0)).not.toHaveValue("", { timeout: 20_000 });
-  await expect(selects.nth(1)).not.toHaveValue("", { timeout: 20_000 });
-  await expect(selects.nth(2)).not.toHaveValue("", { timeout: 20_000 });
-  const dismissTarget = await selects.nth(0).inputValue();
+  // The striker/non-striker are NOT set explicitly here (measured, not
+  // assumed, same as the v2-era comment this replaces): the server enforces
+  // that a ball's striker/non-striker must match the ledger's own idea of
+  // who is at the crease (INVALID_EVENT "striker/non-striker do not match
+  // the ledger", packages/engine/src/sports/cricket/cricket.ts) — after the
+  // seeded dismissal above, that is the fold's OWN resolved pair (Number
+  // three promoted in for the dismissed Striker, Non-striker unchanged),
+  // which is exactly what the wicket sheet's own `resolvePeople` already
+  // defaults to (v3/skins/cricket.tsx) with no context-strip override in
+  // play. Read straight off `/state`'s own `fine.striker` — the SAME field
+  // `resolvePeople` reads — rather than a picker's `.value`, since v3 has no
+  // <select> left to read one from; forcing an arbitrary non-dismissed pair
+  // (e.g. nonStriker/incoming) is a VALID pool member each, but not the
+  // ledger's actual pair, and 422s.
+  const foldState = await apiJson<{
+    state: { innings: { closed: boolean; fine: { striker: string } | null }[] };
+  }>(request, `/api/v1/fixtures/${fx.id}/state`);
+  const openInnings = (foldState.data!.state.innings ?? []).find((i) => !i.closed);
+  const dismissTarget = openInnings?.fine?.striker;
+  expect(dismissTarget, "an open innings with a resolved striker must exist after the seeded dismissal").toBeTruthy();
 
-  await over.getByRole("button", { name: "Wicket", exact: true }).click();
+  await pad.getByRole("button", { name: "Wicket", exact: true }).click();
+  const sheet = pad.locator('[data-role="v3-sheet"]');
 
-  // The dismissal picker is the one place `wicketLabel` renders. Before
-  // e55e10b7 this button list offered nine of the engine's ten
-  // CricketWicket.kind members and `hitballtwice` was unreachable from any UI.
-  const hitTwice = over.getByRole("button", { name: "Hit the ball twice", exact: true });
+  // The dismissal picker is the one place `wicketLabel`/`requiredVocabKey`
+  // renders. Before e55e10b7 this button list offered nine of the engine's
+  // ten CricketWicket.kind members and `hitballtwice` was unreachable from
+  // any UI.
+  const hitTwice = sheet.getByRole("button", { name: "Hit the ball twice", exact: true });
   await expect(hitTwice).toBeVisible({ timeout: 10_000 });
   // The raw enum member never reaches the scorer.
-  await expect(over).not.toContainText("hitballtwice");
+  await expect(sheet).not.toContainText("hitballtwice");
 
   // Selectable, not just present — tapping it fires a real second
   // `cricket.ball` dismissal, and the LEDGER (never merely the screen) is
-  // what must carry the engine's actual "hitballtwice" wire value. The
-  // pre-seeded dismissal above is ALSO a "hitballtwice" ball, so polling on
-  // kind alone would trivially match it before this tap even lands — poll
-  // on COUNT (only true once the new one actually arrives) instead, then
-  // read the newly-added second entry specifically.
+  // what must carry the engine's actual "hitballtwice" wire value. Neither
+  // `bowled`-family conditional step applies to `hitballtwice` (it is in
+  // neither VARIABLE_OUT_KINDS nor FIELDER_ELIGIBLE_KINDS), so this single
+  // tap is the wizard's LAST step — it completes and dispatches immediately,
+  // same one-tap shape the v2-era UI already had here. The pre-seeded
+  // dismissal above is ALSO a "hitballtwice" ball, so polling on kind alone
+  // would trivially match it before this tap even lands — poll on COUNT
+  // (only true once the new one actually arrives) instead, then read the
+  // newly-added second entry specifically.
   await hitTwice.click();
   const cricketBalls = async () => {
     const res = await apiJson<{ type: string; payload: { wicket?: { kind?: string; out?: string } } }[]>(

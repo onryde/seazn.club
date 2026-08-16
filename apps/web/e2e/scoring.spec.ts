@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import {
   addEntrantsViaApi,
   apiJson,
@@ -12,6 +12,13 @@ import {
 
 // Scoring discoverability + sport-shaped pads (organiser feedback: the score
 // pad was hard to reach, and cricket should be over-by-over, not ball-by-ball).
+
+/** The pad's own scoring surface, scoped so a page-wide text match can never
+ *  satisfy an assertion the skin was supposed to. Mirrors scorepad-v2.spec.ts
+ *  / scorepad-skins.spec.ts's own `pad()` exactly. */
+function pad(page: Page) {
+  return page.locator('[data-testid="score-pad"]');
+}
 
 test("every fixture row has a Score entry point", async ({ page, request }) => {
   const { divisionId } = await seedScoredDivision(request);
@@ -180,6 +187,9 @@ test("cricket: undo mid-over keeps the scoring panel usable (v3/09 §2)", async 
   page,
   request,
 }) => {
+  // Two "Innings total" round trips through the v3 More sheet each pay
+  // queue.ts's HOLD_MS = 6000ms soft-commit before the ledger sees them.
+  test.setTimeout(120_000);
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
     name: `Cricket undo ${TAG}`,
     visibility: "private",
@@ -230,46 +240,48 @@ test("cricket: undo mid-over keeps the scoring panel usable (v3/09 §2)", async 
   });
 
   await page.goto(await fixturePath(page.request, fixtureId));
-  // S13/#422 W11 cutover — v1's joined "<side> — total <runs>/<wickets>"
-  // string is gone; the v2 cricket skin renders "Score"/"Wickets" as two
-  // separate header fields (same recipe as the DLS test below, and its own
-  // comment on why a bare page-wide text match would be ambiguous against
-  // pad-renderer.tsx's chassis headline strip). This fixture seeds no
+  // S13/#422 W11 cutover, then R2's v2→v3 cutover for cricket specifically
+  // (V3_SKINS): v1's joined "<side> — total <runs>/<wickets>" string and v2's
+  // separate "Score"/"Wickets" header fields are both gone — the v3 chassis
+  // scorebug (v3/scorebug.tsx) renders ONE `runs/wickets` string instead
+  // (§2.1, D-11 — a score is drawn exactly once). This fixture seeds no
   // roster at all (no persons, no lineups — the original test's own "undo"
-  // repro needs none), so the ball-by-ball run pad stays permanently
-  // disabled (`canScore` needs a striker/non-striker/bowler); the coarse
-  // "Innings total" admin action — `cricket.innings.summary`, the very
-  // event type this test's own setup already posts via the API — is the
-  // one scoring surface this fixture can drive at all, and is this test's
-  // real v2 analogue of v1's "add an over" entry.
-  const cricketSkin = page.locator('[data-role="cricket-skin"]');
-  await expect(cricketSkin).toBeVisible({ timeout: 20_000 });
-  const scoreField = cricketSkin.getByText("Score", { exact: true }).locator("..");
-  const wicketsField = cricketSkin.getByText("Wickets", { exact: true }).locator("..");
-  await expect(scoreField).toContainText("12");
-  await expect(wicketsField).toContainText("1");
+  // repro needs none), so the run/wide/wicket tiles would 422 on a real tap
+  // (they carry striker/nonStriker/bowler resolved from an empty batting
+  // order); the coarse "Innings total" admin action — `cricket.innings.
+  // summary`, the very event type this test's own setup already posts via
+  // the API — rides the v3 "More" sheet (cricket.tsx's OWNER HYBRID RULING)
+  // and is the one scoring surface this fixture can drive at all, same as
+  // it was the one v2 could drive too.
+  const scorebug = pad(page).locator('[data-role="v3-scorebug"]');
+  await expect(scorebug).toBeVisible({ timeout: 20_000 });
+  await expect(scorebug).toContainText("12/1");
 
   // The intake #29 repro action: Undo last (voids the over) — chassis-level
-  // fixture-console.tsx control, untouched by the v1→v2 pad swap.
+  // fixture-console.tsx control, untouched by the v2→v3 pad swap.
   await page.getByRole("button", { name: /Undo last/ }).click();
-  await expect(scoreField).toContainText("0", { timeout: 20_000 });
-  await expect(wicketsField).toContainText("0", { timeout: 20_000 });
+  await expect(scorebug).toContainText("0/0", { timeout: 20_000 });
 
   // The panel stays usable — no blank screen, no dead-end: score again,
-  // through the "Innings" drawer's "Innings total" action.
-  await cricketSkin.getByText("Innings", { exact: true }).click();
-  await cricketSkin.getByRole("button", { name: "Innings total", exact: true }).click();
-  const confirm = cricketSkin.locator('[data-role="confirm"]');
+  // through the v3 "More" tile's own "Innings total" action.
+  await pad(page).getByRole("button", { name: "More", exact: true }).click();
+  const sheet = pad(page).locator('[data-role="v3-sheet"]');
+  await sheet.getByRole("button", { name: "Innings total", exact: true }).click();
+  const confirm = sheet.getByRole("button", { name: "Confirm", exact: true });
   await expect(async () => {
-    await cricketSkin.getByLabel("Runs", { exact: true }).fill("8");
-    await cricketSkin.getByLabel("Wickets", { exact: true }).fill("0");
-    await cricketSkin.getByLabel("Legal balls", { exact: true }).fill("6");
+    await sheet.getByLabel("Runs", { exact: true }).fill("8");
+    await sheet.getByLabel("Wickets", { exact: true }).fill("0");
+    await sheet.getByLabel("Legal balls", { exact: true }).fill("6");
     await expect(confirm).toBeEnabled({ timeout: 1_000 });
   }).toPass({ timeout: 20_000 });
-  await cricketSkin.getByLabel("Partial", { exact: true }).check();
+  await sheet.getByLabel("Partial", { exact: true }).check();
   await confirm.click();
-  await expect(scoreField).toContainText("8", { timeout: 20_000 });
-  await expect(wicketsField).toContainText("0", { timeout: 20_000 });
+  // The scorebug reads the OPTIMISTIC fold (use-pad-pipeline.ts's
+  // `commitPendingEnvelopes` runs synchronously inside `submitHeld`, before
+  // the awaited durable enqueue) — it updates immediately, never gated on
+  // queue.ts's HOLD_MS soft-commit window. Only the real ledger (polled via
+  // the API further down) waits out that ~6s hold.
+  await expect(scorebug).toContainText("8/0", { timeout: 20_000 });
 
   // fixture-console.tsx's "Undo last" targets its OWN `lastVoidable`, derived
   // from an `events` array that is seeded once from server props and only
@@ -295,14 +307,13 @@ test("cricket: undo mid-over keeps the scoring panel usable (v3/09 §2)", async 
     )
     .toBe(true);
   await page.reload();
-  await expect(cricketSkin).toBeVisible({ timeout: 20_000 });
-  await expect(scoreField).toContainText("8");
-  await expect(wicketsField).toContainText("0");
+  await expect(scorebug).toBeVisible({ timeout: 20_000 });
+  await expect(scorebug).toContainText("8/0");
 
   // Undo storms past the start: the console never dead-ends. Two more undos
   // (the corrected over, then core.start) must land back on "Start match".
   await page.getByRole("button", { name: /Undo last/ }).click();
-  await expect(scoreField).toContainText("0", { timeout: 20_000 });
+  await expect(scorebug).toContainText("0/0", { timeout: 20_000 });
   await page.getByRole("button", { name: /Undo last/ }).click();
   await expect(page.getByRole("button", { name: "Start match" })).toBeVisible({
     timeout: 20_000,
@@ -313,6 +324,9 @@ test("cricket scores over-by-over: add an over grows the total, then close innin
   page,
   request,
 }) => {
+  // "Innings total" then "Close innings", each a held dispatch (queue.ts's
+  // HOLD_MS = 6000ms soft-commit) the ledger polls below wait out.
+  test.setTimeout(120_000);
   // a minimal cricket fixture
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
     name: `Cricket ${TAG}`,
@@ -361,60 +375,56 @@ test("cricket scores over-by-over: add an over grows the total, then close innin
 
   await page.goto(await fixturePath(page.request, fixtureId));
 
-  // S13/#422 W11 cutover — v1's "Over-by-over"/"Ball-by-ball" mode switch
-  // and its own "runs this over"/"wickets this over"/"add over" form are
-  // gone. This fixture seeds no roster (no persons, no lineups), so the v2
-  // cricket skin's ball-by-ball run pad stays permanently disabled
-  // (`canScore` needs a striker/non-striker/bowler) — the coarse "Innings
-  // total" admin action (`cricket.innings.summary`, in the "Innings"
-  // drawer) is this fixture's one scoring surface, and is a closer v2
+  // S13/#422 W11 cutover, then R2's v2→v3 cutover for cricket: v1's
+  // "Over-by-over"/"Ball-by-ball" mode switch and v2's own "runs this
+  // over"/"wickets this over"/"add over" form are both gone. This fixture
+  // seeds no roster (no persons, no lineups), so the run/wide/wicket tiles
+  // would 422 (they resolve striker/nonStriker/bowler from an empty batting
+  // order) — the coarse "Innings total" admin action (`cricket.innings.
+  // summary`) rides the v3 "More" sheet (cricket.tsx's OWNER HYBRID RULING)
+  // and is this fixture's one scoring surface, and is a closer v2/v3
   // analogue of "over-by-over" than ball-by-ball would be anyway: a single
   // aggregate entry per over, exactly this test's own name.
-  const cricketSkin = page.locator('[data-role="cricket-skin"]');
-  await expect(cricketSkin).toBeVisible({ timeout: 20_000 });
-  const scoreField = cricketSkin.getByText("Score", { exact: true }).locator("..");
-  const wicketsField = cricketSkin.getByText("Wickets", { exact: true }).locator("..");
-  const oversField = cricketSkin.getByText("Overs", { exact: true }).locator("..");
-  await expect(scoreField).toContainText("0");
-  await expect(wicketsField).toContainText("0");
+  const scorebug = pad(page).locator('[data-role="v3-scorebug"]');
+  await expect(scorebug).toBeVisible({ timeout: 20_000 });
+  await expect(scorebug).toContainText("0/0");
 
   // record one over: 12 runs, 1 wicket, 6 legal balls. Under load the fill
   // can land before React hydrates (DOM value set, state empty → button
   // stays disabled), so re-fill until the pad actually accepts the input.
-  await cricketSkin.getByText("Innings", { exact: true }).click();
-  await cricketSkin.getByRole("button", { name: "Innings total", exact: true }).click();
-  const confirm = cricketSkin.locator('[data-role="confirm"]');
+  await pad(page).getByRole("button", { name: "More", exact: true }).click();
+  const sheet = pad(page).locator('[data-role="v3-sheet"]');
+  await sheet.getByRole("button", { name: "Innings total", exact: true }).click();
+  const confirm = sheet.getByRole("button", { name: "Confirm", exact: true });
   await expect(async () => {
-    await cricketSkin.getByLabel("Runs", { exact: true }).fill("12");
-    await cricketSkin.getByLabel("Wickets", { exact: true }).fill("1");
-    await cricketSkin.getByLabel("Legal balls", { exact: true }).fill("6");
+    await sheet.getByLabel("Runs", { exact: true }).fill("12");
+    await sheet.getByLabel("Wickets", { exact: true }).fill("1");
+    await sheet.getByLabel("Legal balls", { exact: true }).fill("6");
     await expect(confirm).toBeEnabled({ timeout: 1_000 });
   }).toPass({ timeout: 20_000 });
-  await cricketSkin.getByLabel("Partial", { exact: true }).check();
+  await sheet.getByLabel("Partial", { exact: true }).check();
   await confirm.click();
 
-  // the innings total grows (progressive summary folded)
-  await expect(scoreField).toContainText("12", { timeout: 20_000 });
-  await expect(wicketsField).toContainText("1", { timeout: 20_000 });
-  await expect(oversField).toContainText("1.0");
+  // the innings total grows (progressive summary folded) — the scorebug
+  // reads the optimistic fold, so this resolves well before the ~6s
+  // soft-commit hold (see the "undo mid-over" test's own comment on why).
+  await expect(scorebug).toContainText("12/1", { timeout: 20_000 });
+  await expect(scorebug).toContainText("1.0");
 
-  // close the innings. `cricket.innings.close` needs a `reason` (unlike v1's
-  // one-tap control), so this expands into a form rather than firing
-  // immediately. NOT `{ exact: true }` — a <select>'s computed accessible
-  // name concatenates its caption with every option's text (same trap
-  // scorepad-skins.spec.ts's period-skin test already documents for the
-  // "Kind" select).
-  await cricketSkin.getByRole("button", { name: "Close innings", exact: true }).click();
-  await cricketSkin.getByLabel("Reason").selectOption("other");
-  await expect(confirm).toBeEnabled({ timeout: 5_000 });
-  await confirm.click();
+  // close the innings. `cricket.innings.close` needs a `reason` — the v3
+  // "Close innings" TILE (one of cricket.tsx's five phase-aware hybrid
+  // tiles, not the generic More sheet) opens a guided sheet with exactly
+  // one choice step; picking "Other" completes the wizard and dispatches —
+  // no separate select/Confirm pair the way v2's generic ActionForm needed.
+  await pad(page).getByRole("button", { name: "Close innings", exact: true }).click();
+  await sheet.getByRole("button", { name: "Other", exact: true }).click();
 
   // Closing does not auto-open a fresh innings on this kernel: cricket.ts's
   // own `decideAfterClose`, single-innings branch, `count < 2` returns the
   // state UNCHANGED ("// innings break") — a second innings needs whatever
-  // starts it explicitly. So the header keeps showing innings #1's own
+  // starts it explicitly. So the scorebug keeps showing innings #1's own
   // final tally rather than resetting to 0/0 (`currentInnings()`'s own
-  // fallback, cricket-skin.tsx, once nothing is open: the last, closed,
+  // fallback, v3/skins/cricket.tsx, once nothing is open: the last, closed,
   // innings). The close itself is proven off the real ledger and the fold's
   // own state instead — the event landed with the chosen reason, and the
   // innings record it closed is actually marked closed.
@@ -448,12 +458,14 @@ test("cricket scores over-by-over: add an over grows the total, then close innin
 // also accepts a manual `target`, which stamps targetSource "manual" and
 // skips the maths entirely — this sends `oversPerSide` alone and pins
 // targetSource "dls", so a revise that quietly fell through to the manual
-// branch cannot pass either check below. (#467 was fixed by adding
-// `ck-revised-target` to the v2 cricket skin — see the DOM assertion
-// further down this test — so this comment no longer claims the value is
-// unrendered; it explains why the API checks stay even though a DOM one now
-// exists too: they are the only ones that can fire BEFORE the fixture has
-// a chase to paint, which is every moment before the second innings below.)
+// branch cannot pass either check below. #467 was fixed by adding
+// `ck-revised-target` to the v2 cricket skin, giving this arithmetic an
+// ON-SCREEN proof too — but R2's v2→v3 cutover for cricket (V3_SKINS) ships
+// no v3 equivalent of that surface (see this test's own comment at the DOM
+// assertion this used to make, further down) — so as of this conversion the
+// API checks below are AGAIN the only proof of #451/#467, exactly as before
+// #467 existed. Not this task's gap to close (do-not-touch `src/`); flagged
+// loudly rather than silently dropped.
 test("cricket DLS scales a five-ball-over format onto the published table", async ({
   page,
   request,
@@ -544,37 +556,34 @@ test("cricket DLS scales a five-ball-over format onto the published table", asyn
   // second innings, so the checks below that read "0" were only ever
   // matching the closed first innings' "150" as a substring).
   await page.goto(await fixturePath(page.request, fixtureId));
-  // S13/#422 W11 cutover — "— total" was v1 CricketPad's own OverByOverForm
-  // sentence ("<side> — total <runs>/<wickets>"), which the v2 cricket skin
-  // never composes (cricket-skin.tsx's ScoreHeader/buildHeader): score and
-  // wickets are two SEPARATE header fields, each its own caption+value pair,
-  // never joined into one "runs/wickets" string. Scoped inside the skin's own
-  // `data-role="cricket-skin"` container because pad-renderer.tsx's chassis
-  // headline strip carries the SAME "Score" caption as a SIBLING of the skin
-  // (never an ancestor — see scorepad-skins.spec.ts's file header), so a bare
-  // page-wide text match would be ambiguous between the two.
-  const cricketSkin = page.locator('[data-role="cricket-skin"]');
-  await expect(cricketSkin).toBeVisible({ timeout: 20_000 });
-  const scoreField = cricketSkin.getByText("Score", { exact: true }).locator("..");
-  const wicketsField = cricketSkin.getByText("Wickets", { exact: true }).locator("..");
-  await expect(scoreField).toContainText("0");
-  await expect(wicketsField).toContainText("0");
+  // S13/#422 W11 cutover, then R2's v2→v3 cutover for cricket: "— total" was
+  // v1 CricketPad's own OverByOverForm sentence, and v2's own separate
+  // "Score"/"Wickets" header fields are both gone — the v3 chassis scorebug
+  // renders ONE `runs/wickets` string instead (§2.1, D-11).
+  const scorebug = pad(page).locator('[data-role="v3-scorebug"]');
+  await expect(scorebug).toBeVisible({ timeout: 20_000 });
+  await expect(scorebug).toContainText("0/0");
 
-  // #467 — the 84 asserted off the state API above must also be ON SCREEN,
-  // inside the chase this test just opened above (chaseValue, cricket-skin.tsx,
-  // renders null before a second innings exists — this DOM assertion could not
-  // fire a moment earlier). Before #467, the revised target was verifiable only
-  // through /state, which is how #451 (a DLS bug that awarded the match to the
-  // wrong side) survived: an unrendered derivation is an unverified one. The
-  // pad must also say the figure is DLS-derived rather than one the organiser
-  // typed.
-  const target = page.getByTestId("ck-revised-target");
-  await expect(target).toBeVisible({ timeout: 20_000 });
-  await expect(target).toContainText("84");
-  await expect(target).toContainText(/DLS/i);
+  // #467 — GAP, not a conversion (flagged, not silently dropped): the 84
+  // asserted off the state API above (`fold.revisedTarget`) had an ON-SCREEN
+  // proof under v2 (`cricket-skin.tsx`'s `chaseValue`/`ck-revised-target`,
+  // worded "…DLS…") — #451 (a DLS bug that awarded the match to the wrong
+  // side) survived specifically BECAUSE the revised target was once
+  // API-only, unverified by any render. `v3/skins/cricket.tsx`'s own
+  // `CricketStateShape`/`buildScorebug` never reads `revisedTarget` or
+  // `targetSource` at all (grepped 2026-08-16, case-insensitive, across
+  // every v3/*.tsx file — zero hits outside the `dls?: {enabled}` CFG
+  // shape) — there is currently NO v3 surface this DOM assertion could
+  // target, so #467's own regression guard is unrepresented on the v3 lane
+  // today. This is a real product gap the R2 cricket skin (task C) did not
+  // close, not something an e2e conversion can paper over without inventing
+  // UI in `v3/skins/cricket.tsx` — out of this task's scope (do-not-touch
+  // `src/`). Left here as a loud marker for the controller/a follow-up task;
+  // the two `/state` assertions above (`targetSource`, `revisedTarget`)
+  // stay as the only proof of #451's fix until a v3 surface exists.
 
   // Every surface works at 375px with no horizontal page scroll (v3/02 §4).
   await page.setViewportSize({ width: 375, height: 800 });
-  await expect(target).toBeVisible();
+  await expect(scorebug).toBeVisible();
   await expectNoHorizontalScroll(page);
 });
