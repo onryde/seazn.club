@@ -7,7 +7,13 @@
 // .superpowers/sdd/2026-08-15-scorepad-v3-r1-chassis/pins.md §7 — scout-
 // verified 2026-08-16 against globals.css:436-439, no disagreement found).
 import { describe, it, expect } from "vitest";
-import { NIGHT_TILE_PAIRS, NIGHT_TILE_CLASSES, SCORE_TEXT_PX, SCORE_TEXT_SIZE_CLASS } from "../tokens";
+import {
+  NIGHT_TILE_PAIRS,
+  NIGHT_TILE_CLASSES,
+  NIGHT_TILE_ALPHA_TEXT,
+  SCORE_TEXT_PX,
+  SCORE_TEXT_SIZE_CLASS,
+} from "../tokens";
 
 /** WCAG 2.x relative luminance of one sRGB channel (0-255) -> linear.
  *  https://www.w3.org/TR/WCAG21/#dfn-relative-luminance */
@@ -136,10 +142,18 @@ describe("scorebug.tsx renders exactly what this file measures (the wiring, not 
   });
 
   it("the muted/subtle cream variants (hint + context/strip text) are still the SAME cream name, not an independent colour", () => {
-    // Not independently AA-tested against the /70,/80 opacity blend — a
-    // pre-existing R1 scope choice (contrast.test.ts, above, checks
-    // full-opacity cream only). This only guards that the hue can't drift
-    // out from under those variants unnoticed.
+    // The /70,/80 opacity blend IS now independently AA-tested — see
+    // "alpha (translucent) text meets WCAG AA..." below (Task A4, R2
+    // wave), which composites these exact classes over the ground they
+    // actually render on and re-derives AA from the result. This test
+    // stays anyway: it guards something that block doesn't — that the HUE
+    // can't drift to a different colour unnoticed. A class edit from
+    // "text-cream/70" to some other family's "/70" would either throw in
+    // resolveAlphaClass (no TAILWIND_UTILITY_HEX entry) or, if that other
+    // family happened to be registered too, get judged on ITS OWN
+    // contrast rather than being caught as "wrong colour" per se; this
+    // string check anchors specifically to creamText, already proven
+    // equal to NIGHT_TILE_PAIRS.creamOnNight.fg above.
     expect(NIGHT_TILE_CLASSES.creamTextMuted).toBe(`${NIGHT_TILE_CLASSES.creamText}/70`);
     expect(NIGHT_TILE_CLASSES.creamTextSubtle).toBe(`${NIGHT_TILE_CLASSES.creamText}/80`);
   });
@@ -158,5 +172,102 @@ describe("scorebug.tsx renders exactly what this file measures (the wiring, not 
 
   it("SCORE_TEXT_SIZE_CLASS renders the same pixel size SCORE_TEXT_PX licenses the large-text floor for", () => {
     expect(TAILWIND_TEXT_SIZE_PX[SCORE_TEXT_SIZE_CLASS]).toBe(SCORE_TEXT_PX);
+  });
+});
+
+// Task A4 (R2 wave): the block above (Task A3) proved AA only for
+// NIGHT_TILE_PAIRS' FULL-opacity colours. scorebug.tsx also renders text
+// through NIGHT_TILE_CLASSES.creamTextMuted (text-cream/70) and
+// .creamTextSubtle (text-cream/80) — HalfContent's tappable-half hint span,
+// the strip's non-accented items, and the context line — and nothing
+// checked the colour a sighted user actually sees there: translucent cream
+// composited over the tile's night ground, not the opaque #f5f0e8 the pairs
+// above test against. Cricket (R2's first converted sport) renders its
+// context line ("T20 · Over 0.5 · RR 14.4") and over-dots strip through
+// exactly these two classes, so this was about to ship the first converted
+// sport's most-read text with its contrast never checked.
+//
+// hexToRgb/rgbToHex/compositeOver are hand-rolled here — same stance as
+// contrastRatio above (implemented from the spec, not imported).
+// compositeOver does standard "source-over" alpha blending directly on the
+// sRGB (gamma-encoded, 0-255) channel values: how a browser actually paints
+// a translucent Tailwind text colour over an opaque background. This is
+// NOT a linear-light blend — `color-interpolation` only governs SVG
+// gradients/filters, not ordinary text/fill compositing, and mixing any
+// colour with `transparent` (which is what Tailwind's opacity modifier
+// compiles to) collapses to the same result regardless of the mix
+// colourspace, since the transparent endpoint contributes zero premultiplied
+// colour — so this matches real rendering independent of that detail.
+//
+// resolveAlphaClass parses the base colour AND the alpha fraction out of
+// the CLASS STRING itself (NIGHT_TILE_ALPHA_TEXT.*.textClass), not a
+// hand-copied number — the same reason NIGHT_TILE_CLASSES exists: a class
+// edit (e.g. creamTextMuted going from /70 to /50) can't silently desync
+// from what gets measured here. Same bug class Task A3 closed for colour,
+// closed here for alpha.
+function hexToRgb(hex: string): readonly [number, number, number] {
+  const n = hex.replace("#", "");
+  return [parseInt(n.slice(0, 2), 16), parseInt(n.slice(2, 4), 16), parseInt(n.slice(4, 6), 16)];
+}
+
+function rgbToHex([r, g, b]: readonly [number, number, number]): string {
+  return "#" + [r, g, b].map((c) => Math.round(c).toString(16).padStart(2, "0")).join("");
+}
+
+function compositeOver(fgHex: string, alpha: number, bgHex: string): string {
+  const fg = hexToRgb(fgHex);
+  const bg = hexToRgb(bgHex);
+  return rgbToHex([
+    alpha * fg[0] + (1 - alpha) * bg[0],
+    alpha * fg[1] + (1 - alpha) * bg[1],
+    alpha * fg[2] + (1 - alpha) * bg[2],
+  ]);
+}
+
+function resolveAlphaClass(cls: string): { hex: string; alpha: number } {
+  const m = /^(.+)\/(\d+(?:\.\d+)?)$/.exec(cls);
+  const base = m ? m[1] : cls;
+  const alpha = m ? Number(m[2]) / 100 : 1;
+  const hex = TAILWIND_UTILITY_HEX[base];
+  if (!hex) {
+    throw new Error(`resolveAlphaClass: no TAILWIND_UTILITY_HEX entry for base class "${base}" (from "${cls}")`);
+  }
+  return { hex, alpha };
+}
+
+describe("alpha (translucent) text meets WCAG AA at its EFFECTIVE composited colour, not the base token", () => {
+  it("every alpha-text render site is small text, not large — the 4.5 floor below is the right one, never the lime score's 3.0", () => {
+    // 11px (text-[11px]: hint, context line) / 12px (text-xs: strip muted)
+    // — nowhere near WCAG's large-text carve-out (>=24px regular or
+    // >=18.66px bold), unlike the lime score, which needs
+    // SCORE_TEXT_PX/SCORE_TEXT_SIZE_CLASS above specifically because IT
+    // claims the lower, more permissive floor and has to prove it.
+    for (const site of Object.values(NIGHT_TILE_ALPHA_TEXT)) {
+      expect(site.sizePx).toBeLessThan(18.66);
+    }
+  });
+
+  it("hint text (text-cream/70 on the tile's base ground) clears the normal-text floor (4.5:1) at its composited colour", () => {
+    const site = NIGHT_TILE_ALPHA_TEXT.hint;
+    const { hex, alpha } = resolveAlphaClass(site.textClass);
+    const bgHex = TAILWIND_UTILITY_HEX[site.bgClass];
+    const composited = compositeOver(hex, alpha, bgHex);
+    expect(contrastRatio(bgHex, composited)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("strip non-accent text (text-cream/70 on the band) clears the normal-text floor (4.5:1) at its composited colour", () => {
+    const site = NIGHT_TILE_ALPHA_TEXT.stripMuted;
+    const { hex, alpha } = resolveAlphaClass(site.textClass);
+    const bgHex = TAILWIND_UTILITY_HEX[site.bgClass];
+    const composited = compositeOver(hex, alpha, bgHex);
+    expect(contrastRatio(bgHex, composited)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("context line (text-cream/80 on the band) clears the normal-text floor (4.5:1) at its composited colour", () => {
+    const site = NIGHT_TILE_ALPHA_TEXT.contextLine;
+    const { hex, alpha } = resolveAlphaClass(site.textClass);
+    const bgHex = TAILWIND_UTILITY_HEX[site.bgClass];
+    const composited = compositeOver(hex, alpha, bgHex);
+    expect(contrastRatio(bgHex, composited)).toBeGreaterThanOrEqual(4.5);
   });
 });

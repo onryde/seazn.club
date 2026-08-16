@@ -81,13 +81,15 @@ export const NIGHT_TILE_CLASSES = {
    *  NIGHT_TILE_PAIRS.creamOnNight/.creamOnNight2's `fg`. */
   creamText: "text-cream",
   /** Tappable hint text + strip's non-accented text: same cream, 70%
-   *  opacity. The /70 blend isn't independently AA-tested below (a
-   *  pre-existing R1 scope choice — the ratio tests cover full-opacity
-   *  cream only); this constant still keeps the HUE sourced from
-   *  creamText so it can't drift to a different colour unnoticed. */
+   *  opacity. The /70 blend IS independently AA-tested against the ground
+   *  it actually renders on — see NIGHT_TILE_ALPHA_TEXT below and
+   *  contrast.test.ts's "alpha (translucent) text meets WCAG AA" block
+   *  (Task A4, R2 wave; R1 left this unchecked, full-opacity cream only).
+   *  This constant still keeps the HUE sourced from creamText so it can't
+   *  drift to a different colour unnoticed even if the alpha changes. */
   creamTextMuted: "text-cream/70",
-  /** Context line label: same cream, 80% opacity. Same caveat as
-   *  creamTextMuted. */
+  /** Context line label: same cream, 80% opacity. Same AA coverage as
+   *  creamTextMuted, via NIGHT_TILE_ALPHA_TEXT.contextLine below. */
   creamTextSubtle: "text-cream/80",
   /** Score digits — backs NIGHT_TILE_PAIRS.limeOnNight's `fg`. */
   limeText: "text-lime-400",
@@ -113,3 +115,65 @@ export const SCORE_TEXT_PX = 36;
  * than trusting this comment).
  */
 export const SCORE_TEXT_SIZE_CLASS = "text-4xl";
+
+export interface AlphaTextSite {
+  /** The NIGHT_TILE_CLASSES alpha-variant class actually rendered
+   *  ("text-cream/70" or "text-cream/80"). contrast.test.ts's
+   *  resolveAlphaClass parses the base colour AND the alpha fraction out
+   *  of this STRING directly, not from a hand-copied number, so a class
+   *  edit here (e.g. creamTextMuted going from /70 to /50) can't silently
+   *  desync from what gets measured — the same guarantee NIGHT_TILE_CLASSES
+   *  itself gives for colour, extended here to alpha. */
+  readonly textClass: string;
+  /** The NIGHT_TILE_CLASSES background class this text renders on, per
+   *  scorebug.tsx's actual DOM nesting (not a prop — read from the
+   *  component's structure directly). Keep in sync if that structure
+   *  changes. */
+  readonly bgClass: string;
+  /** Rendered pixel size (see the literal Tailwind class noted per entry
+   *  below). Every site here is far under WCAG's large-text carve-out
+   *  (>=24px regular, >=18.66px bold), so contrast.test.ts judges all
+   *  three at the stricter 4.5:1 floor — never the 3.0 SCORE_TEXT_PX
+   *  licenses for the lime score above. */
+  readonly sizePx: number;
+}
+
+// Task A4 (R2 wave): R1/A3 (NIGHT_TILE_CLASSES above) proved AA only for
+// NIGHT_TILE_PAIRS' FULL-opacity cream/lime. scorebug.tsx ALSO renders text
+// through NIGHT_TILE_CLASSES.creamTextMuted (text-cream/70) and
+// .creamTextSubtle (text-cream/80) — HalfContent's tappable-half hint span,
+// the stat strip's non-accented items, and the context line — and nothing
+// checked the colour a sighted user actually sees there: translucent cream
+// composited over the tile's night ground, not the opaque #f5f0e8
+// NIGHT_TILE_PAIRS tests against. Cricket (R2's first converted sport)
+// renders its context line ("T20 · Over 0.5 · RR 14.4") and over-dots strip
+// through exactly these two classes, making this the first converted
+// sport's most-read text — see contrast.test.ts's "alpha (translucent)
+// text meets WCAG AA" block for the composited-colour AA check itself.
+//
+// Two other alpha classes exist in scorebug.tsx (divide-cream/10, a
+// divider border; hover:bg-cream/[0.04], a hover-state background wash) —
+// deliberately NOT listed here. Neither is text; WCAG 1.4.3 (the AA floor
+// this whole file enforces) governs text contrast, not decorative borders
+// or hover-only background feedback.
+export const NIGHT_TILE_ALPHA_TEXT = {
+  /** HalfContent's tappable-half hint span ("text-[11px] font-medium"). */
+  hint: {
+    textClass: NIGHT_TILE_CLASSES.creamTextMuted, // text-cream/70
+    bgClass: NIGHT_TILE_CLASSES.tileBg, // bg-night
+    sizePx: 11, // scorebug.tsx: text-[11px]
+  } as AlphaTextSite,
+  /** The stat strip's non-accented items (StripItem.accent !== true;
+   *  "text-xs font-medium"). */
+  stripMuted: {
+    textClass: NIGHT_TILE_CLASSES.creamTextMuted, // text-cream/70
+    bgClass: NIGHT_TILE_CLASSES.bandBg, // bg-night-2
+    sizePx: 12, // scorebug.tsx: text-xs (Tailwind default scale = 12px)
+  } as AlphaTextSite,
+  /** The context line ("text-[11px] tracking-wide"). */
+  contextLine: {
+    textClass: NIGHT_TILE_CLASSES.creamTextSubtle, // text-cream/80
+    bgClass: NIGHT_TILE_CLASSES.bandBg, // bg-night-2
+    sizePx: 11, // scorebug.tsx: text-[11px]
+  } as AlphaTextSite,
+} as const;
