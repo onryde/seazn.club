@@ -57,9 +57,12 @@ describe("Event Pass checkout — presentation parity with Pro (D11)", () => {
 
   it("lets the Modal own the height, exactly as the Pro checkout does", () => {
     // Stripe's iframe measures and resizes ITSELF. The container must impose no
-    // height of its own; Modal's max-h-[85vh] + overflow-y-auto body is the cap.
+    // height of its own; Modal's max-h-[85dvh] + overflow-y-auto body is the cap.
     const html = sheet();
-    expect(html).toContain("max-h-[85vh]");
+    expect(html).toContain("max-h-[85dvh]");
+    // `vh` is the LARGE viewport and ignores retractable mobile chrome — it put
+    // the footer under it at 320×568. Pinned so a revert cannot slip back in.
+    expect(html).not.toContain("max-h-[85vh]");
     expect(html).toContain("overflow-y-auto");
   });
 

@@ -143,6 +143,16 @@ async function main() {
   });
   check("owner creates competition", comp.status === 201);
   const compId = v1data<{ id: string }>(comp).id;
+  // The uncontended case must stay UNSUFFIXED. `withUniqueSlug` retries a
+  // generated slug against the unique index, and a retry loop that started at
+  // the wrong candidate — or a `taken` predicate that reported a free slug as
+  // taken — would ship "-2" on a first-ever create and nothing else would
+  // notice: every other check here reads the id, not the URL.
+  const compSlug = v1data<{ slug: string }>(comp).slug;
+  check(
+    `first create keeps the clean slug (got '${compSlug}')`,
+    compSlug === `perm-probe-${tag}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+  );
 
   const del = await v1(admin, `/api/v1/competitions/${compId}`, "DELETE");
   check("unscored competition deletable", del.status === 200 || del.status === 204);

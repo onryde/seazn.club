@@ -140,7 +140,10 @@ function ConfirmSurface({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-purple-950/30 backdrop-blur-sm sm:items-center sm:p-4"
+      // `top-0 h-dvh`, not `inset-0` — see .modal-overlay in globals.css: on a
+      // fixed element `inset-0` is the LARGE viewport, so `items-end` aligned
+      // this sheet to a bottom edge hidden behind mobile browser chrome.
+      className="fixed inset-x-0 top-0 z-50 flex h-dvh items-end justify-center bg-purple-950/30 backdrop-blur-sm sm:items-center sm:p-4"
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) settle(false);
       }}
@@ -150,7 +153,9 @@ function ConfirmSurface({
         role="alertdialog"
         aria-modal="true"
         aria-label={title}
-        className="flex max-h-[85vh] w-full flex-col overflow-y-auto rounded-t-2xl border border-purple-100 bg-white p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl sm:max-w-md sm:rounded-2xl sm:pb-6"
+        // 85dvh, matching components/modal.tsx — `vh` ignores retractable
+        // mobile chrome, which put the confirm button under it at 320×568.
+        className="flex max-h-[85dvh] w-full flex-col overflow-y-auto rounded-t-2xl border border-purple-100 bg-white p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl sm:max-w-md sm:rounded-2xl sm:pb-6"
       >
         {/* Sheet drag handle — visual affordance only, phones only. */}
         <div aria-hidden className="mx-auto mb-4 h-1 w-10 rounded-full bg-slate-200 sm:hidden" />

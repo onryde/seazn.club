@@ -1,6 +1,13 @@
+import type postgres from "postgres";
 import { sql } from "@/lib/db";
-import { requireOrgRole, invalidateUserOrgs, generateOrgSlug } from "@/lib/auth";
-import { recordSlugHistory } from "@/server/usecases/slugs";
+import { requireOrgRole, invalidateUserOrgs } from "@/lib/auth";
+import { isReservedSlug } from "@/lib/public-site";
+import {
+  recordSlugHistory,
+  slugify,
+  withUniqueSlug,
+  SLUG_CONSTRAINT,
+} from "@/server/usecases/slugs";
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import { fireOrgRevalidate } from "@/server/public-site/revalidate";
 import { handler } from "@/lib/http";
@@ -65,6 +72,7 @@ export async function PATCH(
 
     const updates: Record<string, unknown> = {};
     let previousSlug: string | null = null;
+    let renameFrom: { slug: string; to: string } | null = null;
     if ("name" in body) {
       updates.name = body.name;
       // Rename regenerates the slug (v3/01 §2, PROMPT-30); the old slug keeps
@@ -72,13 +80,10 @@ export async function PATCH(
       const [current] = await sql<{ name: string; slug: string }[]>`
         select name, slug from organizations where id = ${id}`;
       if (!current) throw new HttpError(404, "Organization not found");
-      if (body.name !== current.name) {
-        const next = await generateOrgSlug(body.name, id);
-        if (next !== current.slug) {
-          updates.slug = next;
-          previousSlug = current.slug;
-        }
-      }
+      // The slug itself is settled inside the transaction below, against the
+      // unique index — a rename picked here and written later can lose the
+      // slug to a concurrent rename in the gap.
+      if (body.name !== current.name) renameFrom = { slug: current.slug, to: body.name };
     }
     if ("logo_storage_path" in body) updates.logo_storage_path = body.logo_storage_path;
     if ("payment_instructions" in body) updates.payment_instructions = body.payment_instructions;
@@ -101,13 +106,45 @@ export async function PATCH(
     if (Object.keys(updates).length === 0) throw new HttpError(400, "Nothing to update");
 
     const org = await sql.begin(async (tx) => {
-      const [row] = await tx<Organization[]>`
-        update organizations set ${tx(updates)}
-        where id = ${id}
-        returning id, name, slug, created_by, created_at, logo_url, logo_storage_path, payment_instructions, default_payment_method, branding, timezone`;
-      if (!row) throw new HttpError(404, "Organization not found");
-      if (previousSlug) await recordSlugHistory(tx, "org", null, previousSlug, id);
-      return row;
+      const update = async (
+        next: Record<string, unknown>,
+        q: postgres.TransactionSql,
+      ): Promise<Organization> => {
+        const [row] = await q<Organization[]>`
+          update organizations set ${q(next)}
+          where id = ${id}
+          returning id, name, slug, created_by, created_at, logo_url, logo_storage_path, payment_instructions, default_payment_method, branding, timezone`;
+        if (!row) throw new HttpError(404, "Organization not found");
+        if (previousSlug) await recordSlugHistory(q, "org", null, previousSlug, id);
+        return row;
+      };
+      if (!renameFrom) return update(updates, tx as postgres.TransactionSql);
+      const from = renameFrom;
+      return withUniqueSlug(
+        tx as postgres.TransactionSql,
+        {
+          base: slugify(from.to),
+          constraint: SLUG_CONSTRAINT.organizations,
+          // Read on `tx`, not the pooled `sql` proxy: we are already holding a
+          // connection here, and a second checkout inside it is the pool
+          // self-deadlock lib/db.ts's nesting guard exists for.
+          taken: async (s) => {
+            if (isReservedSlug(s)) return true;
+            const rows = await tx`
+              select 1 from organizations where slug = ${s} and id <> ${id}`;
+            return rows.length > 0;
+          },
+        },
+        (slug, q) => {
+          // Reset per attempt. A retry can land BACK on the org's current slug
+          // — current "acme-2", renamed to "Acme", "acme" lost to a rival, next
+          // candidate "acme-2" — and a `previousSlug` left set by the failed
+          // attempt would then write a slug_history row redirecting the org to
+          // itself, for a rename that did not happen.
+          previousSlug = slug === from.slug ? null : from.slug;
+          return update(slug === from.slug ? updates : { ...updates, slug }, q);
+        },
+      );
     });
 
     // name/logo/payment appear in every member's cached org list — bust each.

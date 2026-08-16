@@ -26,7 +26,7 @@ import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPair } from "@/server/engine-db/lineups";
 import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db/entrant-members";
 import { log } from "@/server/logger";
-import { slugify, uniqueSlug } from "./slugs";
+import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
 import { recomputePlayerStats } from "./player-stats";
 import {
   resultDraft,
@@ -199,15 +199,25 @@ export async function createPost(
   void orgId;
   return withTenant(auth.orgId, async (tx) => {
     await assertScope(tx, input.competitionId, input.divisionId);
-    const slug = await uniqueSlug(slugify(input.title), (s) => slugTaken(tx, auth.orgId, s));
-    const [row] = await tx<OrgPostRow[]>`
-      insert into org_posts
-        (org_id, competition_id, division_id, author_user_id, kind, status, slug,
-         title, body_md, hero_image_path)
-      values (${auth.orgId}, ${input.competitionId ?? null}, ${input.divisionId ?? null},
-              ${auth.userId}, ${input.kind ?? "news"}, 'draft', ${slug}, ${input.title},
-              ${input.bodyMd ?? ""}, ${input.heroImagePath ?? null})
-      returning ${COLS(tx)}`;
+    const row = await withUniqueSlug(
+      tx,
+      {
+        base: slugify(input.title),
+        constraint: SLUG_CONSTRAINT.org_posts,
+        taken: (s) => slugTaken(tx, auth.orgId, s),
+      },
+      async (slug, q) => {
+        const [created] = await q<OrgPostRow[]>`
+          insert into org_posts
+            (org_id, competition_id, division_id, author_user_id, kind, status, slug,
+             title, body_md, hero_image_path)
+          values (${auth.orgId}, ${input.competitionId ?? null}, ${input.divisionId ?? null},
+                  ${auth.userId}, ${input.kind ?? "news"}, 'draft', ${slug}, ${input.title},
+                  ${input.bodyMd ?? ""}, ${input.heroImagePath ?? null})
+          returning ${COLS(q)}`;
+        return created!;
+      },
+    );
     const post = mapPost(row!);
     await captureServer({
       event: EVENTS.POST_CREATED,
@@ -262,9 +272,8 @@ export async function updatePost(
     // while the post has never been published; once published_at is stamped the
     // slug is frozen for good (edits keep the URL), archive included.
     const neverPublished = existing.published_at === null;
-    if (input.title !== undefined && input.title !== existing.title && neverPublished) {
-      patch.slug = await uniqueSlug(slugify(input.title), (s) => slugTaken(tx, auth.orgId, s, id));
-    }
+    const regenerating =
+      input.title !== undefined && input.title !== existing.title && neverPublished;
 
     if (input.action === "publish") {
       patch.status = "published";
@@ -273,11 +282,28 @@ export async function updatePost(
       patch.status = "archived";
     }
 
-    const cols = Object.keys(patch);
-    const [row] = await tx<OrgPostRow[]>`
-      update org_posts set ${tx(patch as never, ...(cols as never[]))}
-      where id = ${id}
-      returning ${COLS(tx)}`;
+    const update = async (
+      next: Record<string, unknown>,
+      q: postgres.TransactionSql,
+    ): Promise<OrgPostRow> => {
+      const cols = Object.keys(next);
+      const [row] = await q<OrgPostRow[]>`
+        update org_posts set ${q(next as never, ...(cols as never[]))}
+        where id = ${id}
+        returning ${COLS(q)}`;
+      return row!;
+    };
+    const row = regenerating
+      ? await withUniqueSlug(
+          tx,
+          {
+            base: slugify(input.title!),
+            constraint: SLUG_CONSTRAINT.org_posts,
+            taken: (s) => slugTaken(tx, auth.orgId, s, id),
+          },
+          (slug, q) => update({ ...patch, slug }, q),
+        )
+      : await update(patch, tx);
     const post = mapPost(row!);
     if (input.action) {
       // Status flipped — purge the ISR'd public page so archive/republish
@@ -618,16 +644,37 @@ async function insertGeneratedPost(
     autoSource: Record<string, unknown>;
   },
 ): Promise<{ id: string } | null> {
-  const slug = await uniqueSlug(slugify(params.title), (s) => slugTaken(tx, params.orgId, s));
-  const rows = await tx<{ id: string }[]>`
-    insert into org_posts
-      (org_id, competition_id, division_id, author_user_id, kind, status, slug,
-       title, body_md, auto_source)
-    values (${params.orgId}, ${params.competitionId}, ${params.divisionId}, null, ${params.kind}, 'draft',
-            ${slug}, ${params.title}, ${params.bodyMd}, ${tx.json(params.autoSource as never)})
-    on conflict do nothing
-    returning id`;
-  return rows[0] ?? null;
+  return withUniqueSlug(
+    tx,
+    {
+      base: slugify(params.title),
+      constraint: SLUG_CONSTRAINT.org_posts,
+      taken: (s) => slugTaken(tx, params.orgId, s),
+    },
+    async (slug, q) => {
+      // The conflict target is SPELLED OUT (V358's `org_posts_auto_once`)
+      // rather than left as a bare `on conflict do nothing`. A bare one also
+      // absorbs the SLUG index, and absorbing it here is indistinguishable
+      // from "already drafted" — a draft raced out of its slug was silently
+      // dropped instead of retried. Naming the arbiter lets 23505 reach
+      // `withUniqueSlug`, which suffixes and tries again.
+      const rows = await q<{ id: string }[]>`
+        insert into org_posts
+          (org_id, competition_id, division_id, author_user_id, kind, status, slug,
+           title, body_md, auto_source)
+        values (${params.orgId}, ${params.competitionId}, ${params.divisionId}, null, ${params.kind}, 'draft',
+                ${slug}, ${params.title}, ${params.bodyMd}, ${q.json(params.autoSource as never)})
+        on conflict (org_id, (auto_source ->> 'trigger'),
+                     coalesce(auto_source ->> 'fixture_id', ''),
+                     coalesce(auto_source ->> 'division_id', ''),
+                     coalesce(auto_source ->> 'stage_id', ''),
+                     coalesce(auto_source ->> 'round_no', ''))
+          where auto_source is not null and (auto_source ->> 'trigger') <> 'weekly_digest'
+        do nothing
+        returning id`;
+      return rows[0] ?? null;
+    },
+  );
 }
 
 /** Scorers list for the result draft: the fixture's ledger folded through the

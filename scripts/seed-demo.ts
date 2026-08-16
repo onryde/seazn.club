@@ -14,6 +14,7 @@
 // (gitignored). --phase=seed is resume-safe: rerunning skips competitions/
 // divisions that already exist, so tweak the PLANs below and rerun.
 import { writeFileSync, readFileSync } from "node:fs";
+import { findOrCreateCompetition } from "./seed-resume.ts";
 
 const BASE = process.env.SEED_BASE ?? "http://localhost:3000";
 const STATE = new URL("./.seed-demo-state.json", import.meta.url).pathname;
@@ -915,23 +916,12 @@ async function main() {
   await call("/api/auth/login", "POST", { email, password: PASSWORD });
 
   for (const comp of PLAN) {
-    // Resume-safe: on a slug conflict reuse the existing competition and skip
-    // any division that already exists.
-    let c: { id: string };
-    try {
-      c = await call("/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: comp.name });
-    } catch (e) {
-      // Accounts seeded before a PLAN change may sit at their plan caps —
-      // skip the competition rather than aborting the resume run.
-      if (/cap|limit|payment/i.test(String(e))) {
-        console.log(`${comp.name}: skipped (plan cap on this account)`);
-        continue;
-      }
-      if (!String(e).includes("already in use")) throw e;
-      const list = await call("/api/v1/competitions?limit=100");
-      c = (list.items ?? list).find((x: { name: string }) => x.name === comp.name);
-      console.log(`${comp.name}: exists, resuming`);
-    }
+    // Resume-safe by NAME, checked before creating — NOT by catching a 409.
+    // A create without an explicit slug can never 409 (the server suffixes the
+    // collision away), so the old catch was dead code and every rerun made a
+    // second "<name>-2" competition. See scripts/seed-resume.ts.
+    const c = await findOrCreateCompetition(call, comp.name, { ends_on: "2030-12-31" });
+    if (!c) continue;
     const existingRes = await call(`/api/v1/competitions/${c.id}/divisions`);
     const existingArr: { name: string }[] = Array.isArray(existingRes)
       ? existingRes
@@ -1014,29 +1004,16 @@ async function main() {
  * anyway because an end date is about to be mandatory, and a seed without one
  * would break then rather than now.
  *
- * Resume-safe like the PLAN loop above: a slug conflict reuses the row, and the
+ * Resume-safe like the PLAN loop above: found by NAME before creating, and the
  * status PATCH is idempotent.
  */
 async function seedClosedCompetition(): Promise<void> {
   const name = "Winter 2024 (finished)";
-  let comp: { id: string };
-  try {
-    comp = await call("/api/v1/competitions", "POST", {
-      name,
-      starts_on: "2024-11-01",
-      ends_on: "2024-12-15",
-    });
-  } catch (e) {
-    // Same two escapes the PLAN loop takes: a plan cap is a skip, not an abort.
-    if (/cap|limit|payment/i.test(String(e))) {
-      console.log(`${name}: skipped (plan cap on this account)`);
-      return;
-    }
-    if (!String(e).includes("already in use")) throw e;
-    const list = await call("/api/v1/competitions?limit=100");
-    comp = ((list.items ?? list) as { id: string; name: string }[]).find((x) => x.name === name)!;
-    console.log(`${name}: exists, resuming`);
-  }
+  const comp = await findOrCreateCompetition(call, name, {
+    starts_on: "2024-11-01",
+    ends_on: "2024-12-15",
+  });
+  if (!comp) return;
   await call(`/api/v1/competitions/${comp.id}`, "PATCH", { status: "completed" });
   console.log(`${name}: completed, no pass — #376 closed state`);
 }
