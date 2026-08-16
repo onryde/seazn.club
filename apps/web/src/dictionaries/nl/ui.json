@@ -3745,5 +3745,13 @@
   "routeError.title": "Er is iets misgegaan",
   "routeError.body": "Deze pagina liep tegen een onverwachte fout aan. De rest van deze competitie werkt gewoon — probeer het opnieuw of kies een ander tabblad.",
   "routeError.reference": "Referentie: {digest}",
-  "routeError.retry": "Opnieuw proberen"
+  "routeError.retry": "Opnieuw proberen",
+  "templates.detail.progressionTitle": "Doorstroming",
+  "templates.detail.progression.line": "{source} → {target}",
+  "templates.detail.take.topNPerGroup": "De beste {n} per groep",
+  "templates.detail.take.bestNth": "{count} beste nummers {nth}",
+  "templates.detail.take.rankRange": "Posities {from}–{to}",
+  "templates.detail.take.and": "{a} en {b}",
+  "templates.stageKind.league": "Competitie",
+  "templates.stageKind.pagePlayoff": "Page-playoff"
 }

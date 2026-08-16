@@ -3745,5 +3745,13 @@
   "routeError.title": "Algo ha salido mal",
   "routeError.body": "Esta página ha sufrido un error inesperado. El resto de la competición sigue funcionando: inténtalo de nuevo o elige otra pestaña.",
   "routeError.reference": "Referencia: {digest}",
-  "routeError.retry": "Reintentar"
+  "routeError.retry": "Reintentar",
+  "templates.detail.progressionTitle": "Progresión",
+  "templates.detail.progression.line": "{source} → {target}",
+  "templates.detail.take.topNPerGroup": "Los {n} primeros de cada grupo",
+  "templates.detail.take.bestNth": "{count} mejores del puesto {nth}",
+  "templates.detail.take.rankRange": "Posiciones {from}–{to}",
+  "templates.detail.take.and": "{a} y {b}",
+  "templates.stageKind.league": "Liga",
+  "templates.stageKind.pagePlayoff": "Playoff Page"
 }

@@ -28,7 +28,7 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { routes } from "@/lib/routes";
 import { useT } from "@/components/i18n/dict-provider";
-import type { CompetitionTemplate } from "@/server/templates/schema";
+import type { CompetitionTemplate, TemplateStage } from "@/server/templates/schema";
 import { templateEntrantTotal, templateStageKinds } from "@/server/templates/summary";
 
 // useT() (not useMsg()) throughout this file, deliberately: every key here
@@ -38,22 +38,99 @@ import { templateEntrantTotal, templateStageKinds } from "@/server/templates/sum
 // (string & {})`) is the SAME "keys may be dynamic" escape hatch
 // format-gallery.tsx's familyCopy()/`tf: (key: string) => string` already
 // documents for this exact situation.
-type Msg = ReturnType<typeof useT>;
+export type Msg = ReturnType<typeof useT>;
 
-/** Human labels for the stage kinds the P4 launch catalog actually uses.
- *  Falls back to the raw kind string for anything not in this map — belt and
- *  suspenders, never hit by the current 5 templates (catalog.test.ts already
- *  pins the launch set), but a missing label reads better than a blank one
- *  if a future template adds a kind here first. */
+/** Human labels for the stage kinds the catalog uses — P4's original 5
+ *  templates plus P7's euro24/t20-super8/league-playoff (D1b). `league` and
+ *  `page_playoff` were added here in T4, alongside the progression map
+ *  below: league-playoff is the first catalog entry to actually reach
+ *  either branch, so before this fix both rendered as their raw kind string
+ *  here and in TemplateCard's structure line (both read this map via
+ *  stageKindLabel). Falls back to the raw kind string for anything still
+ *  missing — belt and suspenders, not currently reachable
+ *  (double_elim/stepladder/ladder have no catalog entry), but a missing
+ *  label reads better than a blank one if a future template adds one of
+ *  those kinds first. */
 const STAGE_KIND_KEY: Record<string, string> = {
   knockout: "templates.stageKind.knockout",
   group: "templates.stageKind.group",
   swiss: "templates.stageKind.swiss",
   americano: "templates.stageKind.americano",
+  league: "templates.stageKind.league",
+  page_playoff: "templates.stageKind.pagePlayoff",
 };
 
 function stageKindLabel(msg: Msg, kind: string): string {
   return msg(STAGE_KIND_KEY[kind] ?? kind);
+}
+
+// --- Progression map (P7 D1b T4) -------------------------------------------
+//
+// A stage carrying `.seeding` qualifies from an earlier stage in the same
+// division (schema.ts's TemplateStage.seeding doc comment). This renders
+// that as one line per seeded stage: what feeds it (its `seeding.take`
+// rules, ALL of them — euro24's knockout stage carries two, top-2-per-group
+// AND the 4 best third-placed teams, and rendering only the first would
+// silently under-describe exactly the template this feature exists for) and
+// where it lands (the stage's own name). Pure functions, exported for direct
+// unit testing — component-ui-i18n memory: no jsdom in this workspace, so
+// derivation logic is tested as plain functions rather than through a
+// rendered tree wherever it can be pulled out that far.
+
+type TakeRule = NonNullable<TemplateStage["seeding"]>["take"][number];
+
+/** One `seeding.take` rule -> its own translated phrase. Each rule kind is
+ *  ONE dictionary key with parameters, never fragments concatenated at the
+ *  call site — see StageSeedingSchema/TakeRuleSchema (api-v1/schemas.ts) for
+ *  the field shapes this switches on. */
+export function takeRuleText(msg: Msg, rule: TakeRule): string {
+  switch (rule.kind) {
+    case "topNPerGroup":
+      return msg("templates.detail.take.topNPerGroup", { n: rule.n });
+    case "bestNth":
+      return msg("templates.detail.take.bestNth", { count: rule.count, nth: rule.nth });
+    case "rankRange":
+      return msg("templates.detail.take.rankRange", { from: rule.from, to: rule.to });
+    default:
+      // Belt and suspenders, same spirit as stageKindLabel's fallback above
+      // — no TakeRule variant reaches this today (TakeRuleSchema is exactly
+      // the 3 cases above), `rule` narrows to `never` here.
+      return rule.kind;
+  }
+}
+
+/** Joins 2+ already-translated take-rule phrases into one source
+ *  description — its own parameterised key (`{a} and {b}`), not a hardcoded
+ *  join word, and folded pairwise so a stage with 3+ take rules (the schema
+ *  allows up to 8) still renders all of them, not just the first two. */
+function joinTakeTexts(msg: Msg, texts: string[]): string {
+  const [first, ...rest] = texts;
+  return rest.reduce((acc, text) => msg("templates.detail.take.and", { a: acc, b: text }), first);
+}
+
+export type ProgressionLine = { key: string; text: string };
+
+/** Every seeded stage across every division, as a fully-formatted
+ *  "{source} -> {target}" line. The empty array (no stage carries
+ *  `.seeding`) is the pre-P7 catalog shape, and the caller renders nothing
+ *  for it — the sheet's markup for those templates is unchanged by this. */
+export function templateProgressionLines(msg: Msg, template: CompetitionTemplate): ProgressionLine[] {
+  const lines: ProgressionLine[] = [];
+  for (const division of template.divisions) {
+    for (const stage of division.stages) {
+      if (!stage.seeding) continue;
+      const source = joinTakeTexts(
+        msg,
+        stage.seeding.take.map((rule) => takeRuleText(msg, rule)),
+      );
+      const target = msg(stage.i18nNameKey);
+      lines.push({
+        key: `${division.i18nNameKey}:${stage.i18nNameKey}`,
+        text: msg("templates.detail.progression.line", { source, target }),
+      });
+    }
+  }
+  return lines;
 }
 
 function TemplateCard({
@@ -85,7 +162,7 @@ function TemplateCard({
   );
 }
 
-function TemplateDetailSheet({
+export function TemplateDetailSheet({
   orgSlug,
   template,
   onClose,
@@ -102,6 +179,7 @@ function TemplateDetailSheet({
   const [error, setError] = useState<string | null>(null);
   const [paywall, setPaywall] = useState<{ feature: string; reason?: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const progressionLines = templateProgressionLines(msg, template);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -191,6 +269,27 @@ function TemplateDetailSheet({
             ))}
           </ul>
         </div>
+
+        {progressionLines.length > 0 && (
+          <div>
+            <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+              {msg("templates.detail.progressionTitle")}
+            </h4>
+            {/* `overflow-x-auto` is the sheet's own scroll boundary if a
+                long/untranslatable line ever can't wrap — never the page
+                (standing UI rule). Lines wrap normally by default (same as
+                the Structure list above it), so this is a safety net rather
+                than the common case. */}
+            <ul
+              className="space-y-1 overflow-x-auto text-sm text-slate-600"
+              data-testid="template-detail-progression"
+            >
+              {progressionLines.map((line) => (
+                <li key={line.key}>{line.text}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <label className="block">
           <span className="label">{msg("comp.wizard.name.label")}</span>

@@ -3745,5 +3745,13 @@
   "routeError.title": "Une erreur est survenue",
   "routeError.body": "Cette page a rencontré une erreur inattendue. Le reste de la compétition fonctionne toujours : réessayez ou choisissez un autre onglet.",
   "routeError.reference": "Référence : {digest}",
-  "routeError.retry": "Réessayer"
+  "routeError.retry": "Réessayer",
+  "templates.detail.progressionTitle": "Progression",
+  "templates.detail.progression.line": "{source} → {target}",
+  "templates.detail.take.topNPerGroup": "Les {n} premiers par groupe",
+  "templates.detail.take.bestNth": "{count} meilleurs {nth}èmes",
+  "templates.detail.take.rankRange": "Classés {from}–{to}",
+  "templates.detail.take.and": "{a} et {b}",
+  "templates.stageKind.league": "Championnat",
+  "templates.stageKind.pagePlayoff": "Playoff Page"
 }

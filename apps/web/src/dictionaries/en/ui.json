@@ -3745,5 +3745,13 @@
   "routeError.title": "Something went wrong",
   "routeError.body": "This page hit an unexpected error. The rest of this competition still works — try again, or pick another tab.",
   "routeError.reference": "Reference: {digest}",
-  "routeError.retry": "Try again"
+  "routeError.retry": "Try again",
+  "templates.detail.progressionTitle": "Progression",
+  "templates.detail.progression.line": "{source} → {target}",
+  "templates.detail.take.topNPerGroup": "Top {n} per group",
+  "templates.detail.take.bestNth": "{count} best {nth}-placed",
+  "templates.detail.take.rankRange": "Ranked {from}–{to}",
+  "templates.detail.take.and": "{a} and {b}",
+  "templates.stageKind.league": "League",
+  "templates.stageKind.pagePlayoff": "Page playoff"
 }
