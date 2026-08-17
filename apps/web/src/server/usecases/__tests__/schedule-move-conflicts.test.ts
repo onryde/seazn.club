@@ -27,6 +27,7 @@ import { createEntrants } from "../entrants";
 import { createStages } from "../stages";
 import { applySchedule, moveFixture } from "../schedule";
 import { patchFixture } from "../fixtures";
+import { createVenue, createCourt } from "../venues";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -54,6 +55,11 @@ const DAY_CAP: HardConstraint[] = [
 
 const SIBLING_COURT = "Far Court";
 
+// P9 pass 3a: `courts`/`slot.court` below are real courts.id values now —
+// ScheduleConfig.courts is CourtId[] since pass 1, fixtures.court_id
+// carries a composite FK since V367/368. `makeDivision`/`addFixture` keep
+// their generic `string`/`string[]` signatures; `seedBoard` resolves the
+// readable "Court 1"/"Court 2"/SIBLING_COURT labels to real ids once.
 function settingsConfig(courts: string[], hard: HardConstraint[]) {
   return {
     startAt: at(DAY, "08:00"),
@@ -138,7 +144,7 @@ async function addFixture(
 ): Promise<string> {
   const [f] = await sql<{ id: string }[]>`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
-                          home_entrant_id, away_entrant_id, scheduled_at, court_label)
+                          home_entrant_id, away_entrant_id, scheduled_at, court_id)
     values (${d.stageId}, ${d.id}, ${auth.orgId}, 1, ${seq}, ${extKey}, ${status},
             ${d.entrantByName.get(home)!}, ${d.entrantByName.get(away)!},
             ${slot?.at ?? null}, ${slot?.court ?? null})
@@ -149,7 +155,7 @@ async function addFixture(
 /** Planned division: one card already on `DAY`, one card with no slot yet.
  *  Sibling division: one fixed card on `DAY`, on a court this division does not
  *  even have — so nothing physical stands in for the rule firing. */
-async function seedBoard(): Promise<{ auth: AuthCtx; planned: Div; mover: string }> {
+async function seedBoard(): Promise<{ auth: AuthCtx; planned: Div; mover: string; court2: string }> {
   const { auth } = await seedOrg("pro");
   const tag = randomUUID().slice(0, 6);
   const comp = await createCompetition(auth, {
@@ -158,20 +164,24 @@ async function seedBoard(): Promise<{ auth: AuthCtx; planned: Div; mover: string
     visibility: "public",
     branding: {},
   });
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const court1 = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+  const court2 = await createCourt(auth, venue.id, { name: "Court 2", sort: 1, tags: [] });
+  const sibCourt = await createCourt(auth, venue.id, { name: SIBLING_COURT, sort: 2, tags: [] });
   const planned = await makeDivision(
-    auth, comp.id, `planned-${tag}`, ["Court 1", "Court 2"],
+    auth, comp.id, `planned-${tag}`, [court1.id, court2.id],
     ["A-1", "A-2", "A-3", "A-4"], DAY_CAP,
   );
   const sibling = await makeDivision(
-    auth, comp.id, `sibling-${tag}`, [SIBLING_COURT], ["B-1", "B-2"], [],
+    auth, comp.id, `sibling-${tag}`, [sibCourt.id], ["B-1", "B-2"], [],
   );
-  await addFixture(auth, planned, 0, "a-f1", "A-1", "A-2", { at: at(DAY, "09:00"), court: "Court 1" });
+  await addFixture(auth, planned, 0, "a-f1", "A-1", "A-2", { at: at(DAY, "09:00"), court: court1.id });
   const mover = await addFixture(auth, planned, 1, "a-f2", "A-3", "A-4", null);
   await addFixture(
     auth, sibling, 0, "b-f1", "B-1", "B-2",
-    { at: at(DAY, "14:00"), court: SIBLING_COURT }, "finalized",
+    { at: at(DAY, "14:00"), court: sibCourt.id }, "finalized",
   );
-  return { auth, planned, mover };
+  return { auth, planned, mover, court2: court2.id };
 }
 
 afterAll(async () => {
@@ -184,10 +194,10 @@ afterAll(async () => {
 
 describe.skipIf(!HAS_DB)("a move returns the conflicts it computes (#461)", () => {
   it("hands back the WARN-level conflicts a drag creates, and still writes", async () => {
-    const { auth, mover } = await seedBoard();
+    const { auth, mover, court2 } = await seedBoard();
     const conflicts = await moveFixture(auth, mover, {
       scheduled_at: at(DAY, "11:00"),
-      court_label: "Court 2",
+      court_id: court2,
     });
 
     // Non-empty and non-blocking — the two halves that make this reportable
@@ -205,19 +215,19 @@ describe.skipIf(!HAS_DB)("a move returns the conflicts it computes (#461)", () =
     expect(conflicts[0]!.details?.day).toBe(DAY);
 
     // The write happened anyway — a warn never refuses.
-    const [row] = await sql<{ court_label: string }[]>`
-      select court_label from fixtures where id = ${mover}`;
-    expect(row!.court_label).toBe("Court 2");
+    const [row] = await sql<{ court_id: string }[]>`
+      select court_id from fixtures where id = ${mover}`;
+    expect(row!.court_id).toBe(court2);
   }, 120_000);
 
   it("returns an empty list for a move that breaks nothing", async () => {
     // The falsifier for the test above: if `moveFixture` returned a non-empty
     // list unconditionally, or the whole board's conflicts rather than this
     // move's, the assertion above would pass while meaning nothing.
-    const { auth, mover } = await seedBoard();
+    const { auth, mover, court2 } = await seedBoard();
     const conflicts = await moveFixture(auth, mover, {
       scheduled_at: at(OTHER_DAY, "09:00"),
-      court_label: "Court 2",
+      court_id: court2,
     });
     expect(conflicts).toEqual([]);
   }, 120_000);
@@ -229,10 +239,10 @@ describe.skipIf(!HAS_DB)("a move returns the conflicts it computes (#461)", () =
     // real payload, which is what this does. `JSON.parse(JSON.stringify(...))` is
     // deliberate: postgres hands back `timestamptz` as a Date, and the WIRE is
     // what the schema describes.
-    const { auth, mover } = await seedBoard();
+    const { auth, mover, court2 } = await seedBoard();
     const out = await patchFixture(auth, mover, {
       scheduled_at: at(DAY, "11:00"),
-      court_label: "Court 2",
+      court_id: court2,
     });
     const wire = JSON.parse(JSON.stringify(out));
 
@@ -255,9 +265,9 @@ describe.skipIf(!HAS_DB)("a move returns the conflicts it computes (#461)", () =
   // file: THREE on the tally (mover + a-f1 + the sibling division's card),
   // but ONE row back, named `mover` — not `a-f1`, and not two rows.
   it("applySchedule's partial-apply path keeps the same scoping: a widened sibling's own conflict is not returned", async () => {
-    const { auth, planned, mover } = await seedBoard();
+    const { auth, planned, mover, court2 } = await seedBoard();
     const out = await applySchedule(auth, planned.stageId, {
-      assignments: [{ fixture_id: mover, scheduled_at: at(DAY, "11:00"), court_label: "Court 2" }],
+      assignments: [{ fixture_id: mover, scheduled_at: at(DAY, "11:00"), court_id: court2 }],
       source: "manual",
     });
     expect(out.conflicts).toHaveLength(1);
