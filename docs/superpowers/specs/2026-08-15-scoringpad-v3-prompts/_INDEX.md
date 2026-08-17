@@ -18,7 +18,7 @@ one PR per wave, visual sign-off gate on each).
 | Wave | Prompt file | Depends on | Status |
 |---|---|---|---|
 | R1 | `R1-chassis.md` + plan `docs/superpowers/plans/2026-08-15-scorepad-v3-r1-chassis.md` | — | **MERGED #577 `86ce08b3`** (2026-08-16) — chassis behind an EMPTY `V3_SKINS`. Gate: unit 7709/7774 (4 pre-existing, in a file this branch never touched), tsc 0, lint 0 errors, legacy pad e2e 32/32 unedited vs a prod build, gallery 12/12 with 0px overflow at 320. Visual sign-off was the ABSENCE of change — owner acked by merging |
-| R2 | `R2-cricket.md` + plan `docs/superpowers/plans/2026-08-16-scorepad-v3-r2-cricket.md` | R1 | **IN FLIGHT** (2026-08-16) — worktree `.claude/worktrees/r2-cricket`, branch `feat/scorepad-v3-r2-cricket` off main `c8f0c916` |
+| R2 | `R2-cricket.md` + plan `docs/superpowers/plans/2026-08-16-scorepad-v3-r2-cricket.md` | R1 | **CODE COMPLETE, AWAITING VISUAL SIGN-OFF** (2026-08-17) — worktree `.claude/worktrees/r2-cricket`, branch `feat/scorepad-v3-r2-cricket`, HEAD `b45f77a0`, rebased onto main `252a073d`. Gate: unit 8155/8227 (the 4 failures are `schedule-build-honours-locks`, REPRODUCED IDENTICALLY on `origin/main 252a073d` in a throwaway worktree with its own `pnpm install` — pre-existing, not this wave), `turbo run typecheck --force` 2/2 tasks 0 errors, `turbo run lint --force` 0 errors / 77 warnings (was 78; no v3 path warns), v3 suites 300/300 across 15 files, cricket e2e + converted specs green, seven-width matrix 9/9, gallery 12/12 sports with 0px overflow at 320. Sign-off sheet published (15 cricket captures, 5 states × 3 widths). **NOT MERGEABLE until the owner rules the three decisions below and the verdicts are recorded here.** |
 | R3 | `R3-football.md` | R1 | TODO |
 | R4 | `R4-tennis.md` | R1 | TODO |
 | R5 | `R5-racquet-split.md` | R1 | TODO |
@@ -205,6 +205,19 @@ reads `_RULES.md` → `_INDEX.md` → its own prompt meets each of these twice.
 - **Violet primary tiles are built exactly as §2.5 specs**, with the
   `violet-*`-means-AI collision flagged in R2's gallery for the owner's
   ruling with screenshots present. A recolour after that is a token change.
+
+### R2 — decisions AWAITING the owner's verdict (merge-blocking, 2026-08-17)
+
+Published sign-off sheet: 15 cricket captures, 5 states × 3 widths, gate
+results. **No verdict has been given on any of the three.** An empty verdict
+below means UNRULED, never "approved by silence" — do not merge R2, and do
+not let R3–R6 copy cricket's answer, until each line carries a real verdict.
+
+| # | Decision | My recommendation | Owner verdict |
+|---|---|---|---|
+| D1 | Do the primary action tiles stay `violet-600`? Built to §2.5 as ruled at scoping, with the `violet-*`-means-AI collision flagged here as promised. | **Keep violet this wave.** It is the product's existing primary and a recolour is a token change either way — changing it now forks cricket from the ten skins still to come. | _(unruled)_ |
+| D2 | Are dot ball and single the right two primary-weight tiles? | **Keep them.** Frequency is the right basis for a thumb-reach hierarchy in T20, and boundaries stay one tap away in the same grid rather than behind a sheet. | _(unruled)_ |
+| D3 | Should the pad capture cricket BELOW fidelity tier 3? | **Leave it to R8.** Ball-by-ball is gated at tier 3; defining a low-band pad is a question across all eleven skins, not a cricket one. | _(unruled)_ |
 
 ### R2 — false premises found (verified 2026-08-16, before any code)
 
