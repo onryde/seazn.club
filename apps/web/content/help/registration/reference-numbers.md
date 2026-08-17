@@ -14,8 +14,8 @@ Withdrawing from there uses the email link sent at registration, so only the per
 
 ## What you do with it
 
-On the day, ask "what's your reference?" and find them instantly in the registrations tab. References are unique across the whole platform and contain no personal information.
+On the day, ask "what's your reference?" References are unique across the whole platform and contain no personal information.
 
 ## Common questions
 
-**Lost the reference?** Look them up by name in your registrations tab — the reference is on their row; the ticket link resends from there.
+**Lost the reference?** Look them up by name — the reference and ticket-resend link are both on their entry.

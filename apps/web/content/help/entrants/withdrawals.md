@@ -19,4 +19,4 @@ The division's history records the withdrawal and every fixture it touched.
 
 **Is it reversible?** The withdrawal itself is recorded and final — re-add the entrant as a new entry if they return next season.
 
-**Registration refunds?** If they registered online, withdrawing a registration before entries lock refunds automatically; after that it's your call from the registrations panel.
+**Registration refunds?** If they registered online, withdrawing a registration before entries lock refunds automatically; after that it's your call.
