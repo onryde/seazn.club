@@ -509,13 +509,7 @@ export default async function DivisionPage({
               // survives remounts (tab switches) — same fix as the card.
               logo_url: resolveLogoUrl(division.logo_storage_path, division.logo_url),
               logo_storage_path: division.logo_storage_path,
-              // D5/P8: divisions.required_court_tags exists (V367) but
-              // divisions.ts's COLS/PatchDivision/Division schemas don't
-              // carry it yet (see division-settings.tsx's
-              // saveRequiredCourtTags comment) — so there is nothing to read
-              // here yet. Seeded empty rather than omitted so the picker has
-              // a defined starting value; it becomes live once that lands.
-              required_court_tags: [],
+              required_court_tags: division.required_court_tags,
             }}
             orgId={auth.orgId}
             variants={await listVariantOptions(auth, division.sport_key)}

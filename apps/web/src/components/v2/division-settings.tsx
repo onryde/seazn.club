@@ -35,15 +35,14 @@ export interface DivisionSettingsInfo {
   logo_url: string | null;
   logo_storage_path: string | null;
   /** D5/P9 candidate-court filter (tags ⊇ required_court_tags; empty = any
-   *  court) — stored by this picker, not yet read by scheduling. See the
-   *  PATCH caveat on `saveRequiredCourtTags` below: the server's
-   *  PatchDivision schema does not carry this column yet, so a save here
-   *  currently no-ops until that one-line addition lands. Optional (not
-   *  required) so existing callers/fixtures that predate this field — the
-   *  page always passes it, but division-settings-entrants.test.tsx and any
-   *  other DivisionSettingsInfo fixture do not — keep compiling and
-   *  rendering; the component defaults a missing value to "no requirement"
-   *  rather than throwing. */
+   *  court) — stored and read back by this picker (server: PatchDivision +
+   *  COLS, usecases/divisions.ts); not yet READ by scheduling or
+   *  candidate-court filtering, which is P9's. Optional (not required) so
+   *  existing callers/fixtures that predate this field — the page always
+   *  passes it, but division-settings-entrants.test.tsx and any other
+   *  DivisionSettingsInfo fixture do not — keep compiling and rendering; the
+   *  component defaults a missing value to "no requirement" rather than
+   *  throwing. */
   required_court_tags?: string[];
 }
 
@@ -391,17 +390,10 @@ export function DivisionSettings({
     }, msg("divset.news.saved"));
   };
 
-  // KNOWN GAP, tracked rather than silently shipped: the server's
-  // PatchDivision zod object (server/api-v1/schemas.ts:153-181) does not
-  // list `required_court_tags`, so zod strips it from the request body
-  // before patchDivision() ever sees it — this call currently 200s and
-  // no-ops. divisions.ts's UPDATE is otherwise fully generic
-  // (`cols = Object.keys(eff)`, usecases/divisions.ts:653), so the fix is a
-  // small, contained addition (PatchDivision + the COLS/Division response
-  // schemas) once the server tier is back open — not a UI change. Building
-  // this now regardless: it is what the brief asks for, it is inert rather
-  // than harmful in the meantime, and it needs no further client work once
-  // that lands.
+  // D5/P8 gap closed: PatchDivision (server/api-v1/schemas.ts) and COLS
+  // (usecases/divisions.ts) now carry `required_court_tags`, normalised on
+  // write with the same normalizeTags() the courts path uses. Not read by
+  // scheduling/candidate-court filtering — that stays P9's.
   const saveRequiredCourtTags = () =>
     run(async () => {
       await apiV1(`/api/v1/divisions/${division.id}`, {
