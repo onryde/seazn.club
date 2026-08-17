@@ -16698,119 +16698,189 @@
                         },
                         "additionalProperties": {}
                       },
-                      "qualification": {
-                        "anyOf": [
-                          {
-                            "$ref": "#/$defs/__schema0"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "seeding": {
+                      "progression": {
                         "anyOf": [
                           {
                             "type": "object",
                             "properties": {
-                              "source": {
-                                "anyOf": [
-                                  {
-                                    "type": "string",
-                                    "const": "previous"
-                                  },
-                                  {
-                                    "type": "object",
-                                    "properties": {
-                                      "stageId": {
-                                        "type": "string",
-                                        "format": "uuid",
-                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                      }
-                                    },
-                                    "required": [
-                                      "stageId"
-                                    ],
-                                    "additionalProperties": false
-                                  }
-                                ]
-                              },
-                              "take": {
+                              "sources": {
                                 "minItems": 1,
                                 "maxItems": 8,
                                 "type": "array",
                                 "items": {
-                                  "anyOf": [
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "kind": {
+                                  "type": "object",
+                                  "properties": {
+                                    "stage": {
+                                      "anyOf": [
+                                        {
                                           "type": "string",
-                                          "const": "rankRange"
+                                          "const": "previous"
                                         },
-                                        "from": {
-                                          "type": "integer",
-                                          "minimum": 1,
-                                          "maximum": 9007199254740991
-                                        },
-                                        "to": {
-                                          "type": "integer",
-                                          "minimum": 1,
-                                          "maximum": 9007199254740991
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "stageId": {
+                                              "type": "string",
+                                              "format": "uuid",
+                                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                            }
+                                          },
+                                          "required": [
+                                            "stageId"
+                                          ],
+                                          "additionalProperties": false
                                         }
-                                      },
-                                      "required": [
-                                        "kind",
-                                        "from",
-                                        "to"
-                                      ],
-                                      "additionalProperties": false
+                                      ]
                                     },
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "kind": {
-                                          "type": "string",
-                                          "const": "topNPerGroup"
-                                        },
-                                        "n": {
-                                          "type": "integer",
-                                          "minimum": 1,
-                                          "maximum": 16
-                                        }
-                                      },
-                                      "required": [
-                                        "kind",
-                                        "n"
-                                      ],
-                                      "additionalProperties": false
-                                    },
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "kind": {
-                                          "type": "string",
-                                          "const": "bestNth"
-                                        },
-                                        "nth": {
-                                          "type": "integer",
-                                          "minimum": 1,
-                                          "maximum": 9007199254740991
-                                        },
-                                        "count": {
-                                          "type": "integer",
-                                          "minimum": 1,
-                                          "maximum": 9007199254740991
-                                        }
-                                      },
-                                      "required": [
-                                        "kind",
-                                        "nth",
-                                        "count"
-                                      ],
-                                      "additionalProperties": false
+                                    "take": {
+                                      "minItems": 1,
+                                      "maxItems": 8,
+                                      "type": "array",
+                                      "items": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "const": "rankRange"
+                                              },
+                                              "from": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "to": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 9007199254740991
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "from",
+                                              "to"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "const": "topNPerGroup"
+                                              },
+                                              "n": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 16
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "n"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "const": "bestNth"
+                                              },
+                                              "nth": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "count": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "normaliseUnequalPools": {
+                                                "type": "boolean"
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "nth",
+                                              "count"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "const": "picks"
+                                              },
+                                              "picks": {
+                                                "minItems": 1,
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "pool": {
+                                                      "type": "string",
+                                                      "minLength": 1
+                                                    },
+                                                    "rank": {
+                                                      "type": "integer",
+                                                      "minimum": 1,
+                                                      "maximum": 9007199254740991
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "pool",
+                                                    "rank"
+                                                  ],
+                                                  "additionalProperties": false
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "picks"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "const": "roundLosers"
+                                              },
+                                              "round": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "count": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 9007199254740991
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "round",
+                                              "count"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        ]
+                                      }
                                     }
-                                  ]
+                                  },
+                                  "required": [
+                                    "stage",
+                                    "take"
+                                  ],
+                                  "additionalProperties": false
                                 }
                               },
                               "placement": {
@@ -16844,12 +16914,19 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "timing": {
+                                "type": "string",
+                                "enum": [
+                                  "setup",
+                                  "on_complete"
+                                ]
                               }
                             },
                             "required": [
-                              "source",
-                              "take",
-                              "placement"
+                              "sources",
+                              "placement",
+                              "timing"
                             ],
                             "additionalProperties": false
                           },
@@ -16906,119 +16983,189 @@
                           },
                           "additionalProperties": {}
                         },
-                        "qualification": {
-                          "anyOf": [
-                            {
-                              "$ref": "#/$defs/__schema0"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "seeding": {
+                        "progression": {
                           "anyOf": [
                             {
                               "type": "object",
                               "properties": {
-                                "source": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "const": "previous"
-                                    },
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "stageId": {
-                                          "type": "string",
-                                          "format": "uuid",
-                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                        }
-                                      },
-                                      "required": [
-                                        "stageId"
-                                      ],
-                                      "additionalProperties": false
-                                    }
-                                  ]
-                                },
-                                "take": {
+                                "sources": {
                                   "minItems": 1,
                                   "maxItems": 8,
                                   "type": "array",
                                   "items": {
-                                    "anyOf": [
-                                      {
-                                        "type": "object",
-                                        "properties": {
-                                          "kind": {
+                                    "type": "object",
+                                    "properties": {
+                                      "stage": {
+                                        "anyOf": [
+                                          {
                                             "type": "string",
-                                            "const": "rankRange"
+                                            "const": "previous"
                                           },
-                                          "from": {
-                                            "type": "integer",
-                                            "minimum": 1,
-                                            "maximum": 9007199254740991
-                                          },
-                                          "to": {
-                                            "type": "integer",
-                                            "minimum": 1,
-                                            "maximum": 9007199254740991
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "stageId": {
+                                                "type": "string",
+                                                "format": "uuid",
+                                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                              }
+                                            },
+                                            "required": [
+                                              "stageId"
+                                            ],
+                                            "additionalProperties": false
                                           }
-                                        },
-                                        "required": [
-                                          "kind",
-                                          "from",
-                                          "to"
-                                        ],
-                                        "additionalProperties": false
+                                        ]
                                       },
-                                      {
-                                        "type": "object",
-                                        "properties": {
-                                          "kind": {
-                                            "type": "string",
-                                            "const": "topNPerGroup"
-                                          },
-                                          "n": {
-                                            "type": "integer",
-                                            "minimum": 1,
-                                            "maximum": 16
-                                          }
-                                        },
-                                        "required": [
-                                          "kind",
-                                          "n"
-                                        ],
-                                        "additionalProperties": false
-                                      },
-                                      {
-                                        "type": "object",
-                                        "properties": {
-                                          "kind": {
-                                            "type": "string",
-                                            "const": "bestNth"
-                                          },
-                                          "nth": {
-                                            "type": "integer",
-                                            "minimum": 1,
-                                            "maximum": 9007199254740991
-                                          },
-                                          "count": {
-                                            "type": "integer",
-                                            "minimum": 1,
-                                            "maximum": 9007199254740991
-                                          }
-                                        },
-                                        "required": [
-                                          "kind",
-                                          "nth",
-                                          "count"
-                                        ],
-                                        "additionalProperties": false
+                                      "take": {
+                                        "minItems": 1,
+                                        "maxItems": 8,
+                                        "type": "array",
+                                        "items": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "rankRange"
+                                                },
+                                                "from": {
+                                                  "type": "integer",
+                                                  "minimum": 1,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "to": {
+                                                  "type": "integer",
+                                                  "minimum": 1,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "from",
+                                                "to"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "topNPerGroup"
+                                                },
+                                                "n": {
+                                                  "type": "integer",
+                                                  "minimum": 1,
+                                                  "maximum": 16
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "n"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "bestNth"
+                                                },
+                                                "nth": {
+                                                  "type": "integer",
+                                                  "minimum": 1,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "count": {
+                                                  "type": "integer",
+                                                  "minimum": 1,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "normaliseUnequalPools": {
+                                                  "type": "boolean"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "nth",
+                                                "count"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "picks"
+                                                },
+                                                "picks": {
+                                                  "minItems": 1,
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "pool": {
+                                                        "type": "string",
+                                                        "minLength": 1
+                                                      },
+                                                      "rank": {
+                                                        "type": "integer",
+                                                        "minimum": 1,
+                                                        "maximum": 9007199254740991
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "pool",
+                                                      "rank"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  }
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "picks"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "roundLosers"
+                                                },
+                                                "round": {
+                                                  "type": "integer",
+                                                  "minimum": 1,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "count": {
+                                                  "type": "integer",
+                                                  "minimum": 1,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "round",
+                                                "count"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          ]
+                                        }
                                       }
-                                    ]
+                                    },
+                                    "required": [
+                                      "stage",
+                                      "take"
+                                    ],
+                                    "additionalProperties": false
                                   }
                                 },
                                 "placement": {
@@ -17052,12 +17199,19 @@
                                     ],
                                     "additionalProperties": false
                                   }
+                                },
+                                "timing": {
+                                  "type": "string",
+                                  "enum": [
+                                    "setup",
+                                    "on_complete"
+                                  ]
                                 }
                               },
                               "required": [
-                                "source",
-                                "take",
-                                "placement"
+                                "sources",
+                                "placement",
+                                "timing"
                               ],
                               "additionalProperties": false
                             },
@@ -17076,152 +17230,7 @@
                       "additionalProperties": false
                     }
                   }
-                ],
-                "$defs": {
-                  "__schema0": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "from": {
-                            "type": "string"
-                          },
-                          "take": {
-                            "minItems": 1,
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "pool": {
-                                  "type": "string",
-                                  "minLength": 1
-                                },
-                                "rank": {
-                                  "type": "integer",
-                                  "minimum": 1,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "required": [
-                                "pool",
-                                "rank"
-                              ],
-                              "additionalProperties": false
-                            }
-                          }
-                        },
-                        "required": [
-                          "take"
-                        ],
-                        "additionalProperties": false
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "from": {
-                            "type": "string"
-                          },
-                          "topN": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 9007199254740991
-                          }
-                        },
-                        "required": [
-                          "topN"
-                        ],
-                        "additionalProperties": false
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "from": {
-                            "type": "string"
-                          },
-                          "bestOfRank": {
-                            "type": "object",
-                            "properties": {
-                              "rank": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 9007199254740991
-                              },
-                              "count": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 9007199254740991
-                              },
-                              "normaliseUnequalPools": {
-                                "type": "boolean"
-                              }
-                            },
-                            "required": [
-                              "rank",
-                              "count"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "required": [
-                          "bestOfRank"
-                        ],
-                        "additionalProperties": false
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "from": {
-                            "type": "string"
-                          },
-                          "losersOfRound": {
-                            "type": "object",
-                            "properties": {
-                              "round": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 9007199254740991
-                              },
-                              "count": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 9007199254740991
-                              }
-                            },
-                            "required": [
-                              "round",
-                              "count"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "required": [
-                          "losersOfRound"
-                        ],
-                        "additionalProperties": false
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "from": {
-                            "type": "string"
-                          },
-                          "combine": {
-                            "minItems": 2,
-                            "maxItems": 8,
-                            "type": "array",
-                            "items": {
-                              "$ref": "#/$defs/__schema0"
-                            }
-                          }
-                        },
-                        "required": [
-                          "combine"
-                        ],
-                        "additionalProperties": false
-                      }
-                    ]
-                  }
-                }
+                ]
               },
               "example": {
                 "seq": 1,
@@ -17707,119 +17716,189 @@
                         },
                         "additionalProperties": {}
                       },
-                      "qualification": {
-                        "anyOf": [
-                          {
-                            "$ref": "#/$defs/__schema0"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "seeding": {
+                      "progression": {
                         "anyOf": [
                           {
                             "type": "object",
                             "properties": {
-                              "source": {
-                                "anyOf": [
-                                  {
-                                    "type": "string",
-                                    "const": "previous"
-                                  },
-                                  {
-                                    "type": "object",
-                                    "properties": {
-                                      "stageId": {
-                                        "type": "string",
-                                        "format": "uuid",
-                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                      }
-                                    },
-                                    "required": [
-                                      "stageId"
-                                    ],
-                                    "additionalProperties": false
-                                  }
-                                ]
-                              },
-                              "take": {
+                              "sources": {
                                 "minItems": 1,
                                 "maxItems": 8,
                                 "type": "array",
                                 "items": {
-                                  "anyOf": [
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "kind": {
+                                  "type": "object",
+                                  "properties": {
+                                    "stage": {
+                                      "anyOf": [
+                                        {
                                           "type": "string",
-                                          "const": "rankRange"
+                                          "const": "previous"
                                         },
-                                        "from": {
-                                          "type": "integer",
-                                          "minimum": 1,
-                                          "maximum": 9007199254740991
-                                        },
-                                        "to": {
-                                          "type": "integer",
-                                          "minimum": 1,
-                                          "maximum": 9007199254740991
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "stageId": {
+                                              "type": "string",
+                                              "format": "uuid",
+                                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                            }
+                                          },
+                                          "required": [
+                                            "stageId"
+                                          ],
+                                          "additionalProperties": false
                                         }
-                                      },
-                                      "required": [
-                                        "kind",
-                                        "from",
-                                        "to"
-                                      ],
-                                      "additionalProperties": false
+                                      ]
                                     },
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "kind": {
-                                          "type": "string",
-                                          "const": "topNPerGroup"
-                                        },
-                                        "n": {
-                                          "type": "integer",
-                                          "minimum": 1,
-                                          "maximum": 16
-                                        }
-                                      },
-                                      "required": [
-                                        "kind",
-                                        "n"
-                                      ],
-                                      "additionalProperties": false
-                                    },
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "kind": {
-                                          "type": "string",
-                                          "const": "bestNth"
-                                        },
-                                        "nth": {
-                                          "type": "integer",
-                                          "minimum": 1,
-                                          "maximum": 9007199254740991
-                                        },
-                                        "count": {
-                                          "type": "integer",
-                                          "minimum": 1,
-                                          "maximum": 9007199254740991
-                                        }
-                                      },
-                                      "required": [
-                                        "kind",
-                                        "nth",
-                                        "count"
-                                      ],
-                                      "additionalProperties": false
+                                    "take": {
+                                      "minItems": 1,
+                                      "maxItems": 8,
+                                      "type": "array",
+                                      "items": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "const": "rankRange"
+                                              },
+                                              "from": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "to": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 9007199254740991
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "from",
+                                              "to"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "const": "topNPerGroup"
+                                              },
+                                              "n": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 16
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "n"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "const": "bestNth"
+                                              },
+                                              "nth": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "count": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "normaliseUnequalPools": {
+                                                "type": "boolean"
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "nth",
+                                              "count"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "const": "picks"
+                                              },
+                                              "picks": {
+                                                "minItems": 1,
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "pool": {
+                                                      "type": "string",
+                                                      "minLength": 1
+                                                    },
+                                                    "rank": {
+                                                      "type": "integer",
+                                                      "minimum": 1,
+                                                      "maximum": 9007199254740991
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "pool",
+                                                    "rank"
+                                                  ],
+                                                  "additionalProperties": false
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "picks"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "const": "roundLosers"
+                                              },
+                                              "round": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "count": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 9007199254740991
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "round",
+                                              "count"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        ]
+                                      }
                                     }
-                                  ]
+                                  },
+                                  "required": [
+                                    "stage",
+                                    "take"
+                                  ],
+                                  "additionalProperties": false
                                 }
                               },
                               "placement": {
@@ -17853,12 +17932,19 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "timing": {
+                                "type": "string",
+                                "enum": [
+                                  "setup",
+                                  "on_complete"
+                                ]
                               }
                             },
                             "required": [
-                              "source",
-                              "take",
-                              "placement"
+                              "sources",
+                              "placement",
+                              "timing"
                             ],
                             "additionalProperties": false
                           },
@@ -17915,119 +18001,189 @@
                           },
                           "additionalProperties": {}
                         },
-                        "qualification": {
-                          "anyOf": [
-                            {
-                              "$ref": "#/$defs/__schema0"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "seeding": {
+                        "progression": {
                           "anyOf": [
                             {
                               "type": "object",
                               "properties": {
-                                "source": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "const": "previous"
-                                    },
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "stageId": {
-                                          "type": "string",
-                                          "format": "uuid",
-                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                        }
-                                      },
-                                      "required": [
-                                        "stageId"
-                                      ],
-                                      "additionalProperties": false
-                                    }
-                                  ]
-                                },
-                                "take": {
+                                "sources": {
                                   "minItems": 1,
                                   "maxItems": 8,
                                   "type": "array",
                                   "items": {
-                                    "anyOf": [
-                                      {
-                                        "type": "object",
-                                        "properties": {
-                                          "kind": {
+                                    "type": "object",
+                                    "properties": {
+                                      "stage": {
+                                        "anyOf": [
+                                          {
                                             "type": "string",
-                                            "const": "rankRange"
+                                            "const": "previous"
                                           },
-                                          "from": {
-                                            "type": "integer",
-                                            "minimum": 1,
-                                            "maximum": 9007199254740991
-                                          },
-                                          "to": {
-                                            "type": "integer",
-                                            "minimum": 1,
-                                            "maximum": 9007199254740991
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "stageId": {
+                                                "type": "string",
+                                                "format": "uuid",
+                                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                              }
+                                            },
+                                            "required": [
+                                              "stageId"
+                                            ],
+                                            "additionalProperties": false
                                           }
-                                        },
-                                        "required": [
-                                          "kind",
-                                          "from",
-                                          "to"
-                                        ],
-                                        "additionalProperties": false
+                                        ]
                                       },
-                                      {
-                                        "type": "object",
-                                        "properties": {
-                                          "kind": {
-                                            "type": "string",
-                                            "const": "topNPerGroup"
-                                          },
-                                          "n": {
-                                            "type": "integer",
-                                            "minimum": 1,
-                                            "maximum": 16
-                                          }
-                                        },
-                                        "required": [
-                                          "kind",
-                                          "n"
-                                        ],
-                                        "additionalProperties": false
-                                      },
-                                      {
-                                        "type": "object",
-                                        "properties": {
-                                          "kind": {
-                                            "type": "string",
-                                            "const": "bestNth"
-                                          },
-                                          "nth": {
-                                            "type": "integer",
-                                            "minimum": 1,
-                                            "maximum": 9007199254740991
-                                          },
-                                          "count": {
-                                            "type": "integer",
-                                            "minimum": 1,
-                                            "maximum": 9007199254740991
-                                          }
-                                        },
-                                        "required": [
-                                          "kind",
-                                          "nth",
-                                          "count"
-                                        ],
-                                        "additionalProperties": false
+                                      "take": {
+                                        "minItems": 1,
+                                        "maxItems": 8,
+                                        "type": "array",
+                                        "items": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "rankRange"
+                                                },
+                                                "from": {
+                                                  "type": "integer",
+                                                  "minimum": 1,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "to": {
+                                                  "type": "integer",
+                                                  "minimum": 1,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "from",
+                                                "to"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "topNPerGroup"
+                                                },
+                                                "n": {
+                                                  "type": "integer",
+                                                  "minimum": 1,
+                                                  "maximum": 16
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "n"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "bestNth"
+                                                },
+                                                "nth": {
+                                                  "type": "integer",
+                                                  "minimum": 1,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "count": {
+                                                  "type": "integer",
+                                                  "minimum": 1,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "normaliseUnequalPools": {
+                                                  "type": "boolean"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "nth",
+                                                "count"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "picks"
+                                                },
+                                                "picks": {
+                                                  "minItems": 1,
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "pool": {
+                                                        "type": "string",
+                                                        "minLength": 1
+                                                      },
+                                                      "rank": {
+                                                        "type": "integer",
+                                                        "minimum": 1,
+                                                        "maximum": 9007199254740991
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "pool",
+                                                      "rank"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  }
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "picks"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "roundLosers"
+                                                },
+                                                "round": {
+                                                  "type": "integer",
+                                                  "minimum": 1,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "count": {
+                                                  "type": "integer",
+                                                  "minimum": 1,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "round",
+                                                "count"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          ]
+                                        }
                                       }
-                                    ]
+                                    },
+                                    "required": [
+                                      "stage",
+                                      "take"
+                                    ],
+                                    "additionalProperties": false
                                   }
                                 },
                                 "placement": {
@@ -18061,12 +18217,19 @@
                                     ],
                                     "additionalProperties": false
                                   }
+                                },
+                                "timing": {
+                                  "type": "string",
+                                  "enum": [
+                                    "setup",
+                                    "on_complete"
+                                  ]
                                 }
                               },
                               "required": [
-                                "source",
-                                "take",
-                                "placement"
+                                "sources",
+                                "placement",
+                                "timing"
                               ],
                               "additionalProperties": false
                             },
@@ -18085,152 +18248,7 @@
                       "additionalProperties": false
                     }
                   }
-                ],
-                "$defs": {
-                  "__schema0": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "from": {
-                            "type": "string"
-                          },
-                          "take": {
-                            "minItems": 1,
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "pool": {
-                                  "type": "string",
-                                  "minLength": 1
-                                },
-                                "rank": {
-                                  "type": "integer",
-                                  "minimum": 1,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "required": [
-                                "pool",
-                                "rank"
-                              ],
-                              "additionalProperties": false
-                            }
-                          }
-                        },
-                        "required": [
-                          "take"
-                        ],
-                        "additionalProperties": false
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "from": {
-                            "type": "string"
-                          },
-                          "topN": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 9007199254740991
-                          }
-                        },
-                        "required": [
-                          "topN"
-                        ],
-                        "additionalProperties": false
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "from": {
-                            "type": "string"
-                          },
-                          "bestOfRank": {
-                            "type": "object",
-                            "properties": {
-                              "rank": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 9007199254740991
-                              },
-                              "count": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 9007199254740991
-                              },
-                              "normaliseUnequalPools": {
-                                "type": "boolean"
-                              }
-                            },
-                            "required": [
-                              "rank",
-                              "count"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "required": [
-                          "bestOfRank"
-                        ],
-                        "additionalProperties": false
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "from": {
-                            "type": "string"
-                          },
-                          "losersOfRound": {
-                            "type": "object",
-                            "properties": {
-                              "round": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 9007199254740991
-                              },
-                              "count": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 9007199254740991
-                              }
-                            },
-                            "required": [
-                              "round",
-                              "count"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "required": [
-                          "losersOfRound"
-                        ],
-                        "additionalProperties": false
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "from": {
-                            "type": "string"
-                          },
-                          "combine": {
-                            "minItems": 2,
-                            "maxItems": 8,
-                            "type": "array",
-                            "items": {
-                              "$ref": "#/$defs/__schema0"
-                            }
-                          }
-                        },
-                        "required": [
-                          "combine"
-                        ],
-                        "additionalProperties": false
-                      }
-                    ]
-                  }
-                }
+                ]
               },
               "example": {
                 "seq": 1,
