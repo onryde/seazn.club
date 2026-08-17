@@ -233,16 +233,23 @@ export interface ExportBracketFixture {
   decided: boolean;
 }
 
-function bracketRoundLabel(fromEnd: number): string {
-  if (fromEnd === 0) return "Final";
-  if (fromEnd === 1) return "Semi-finals";
-  if (fromEnd === 2) return "Quarter-finals";
-  return `Round of ${2 ** (fromEnd + 1)}`;
-}
-
+// F1 Task 4: the engine must not carry user-facing English (scripts/
+// engine-boundary.ts's own gate, and the reason round-role.ts exists at
+// all — see its header). `roundLabel` is caller-supplied, the same pattern
+// `buildBracketDe`/`buildPagePoster`/`buildLadderPoster` already use for
+// `laneLabels` below: the caller resolves each round's RoundRole
+// (packages/engine/src/competition/round-role.ts, same package, no
+// apps/web dependency) through apps/web's roundRoleLabel() BEFORE calling
+// this, and passes only the resolved strings in. `fromEnd` (0 = the final)
+// is everything a knockout poster's round needs — the caller can produce
+// it via roundRole({stageKind:"knockout", lane:null, roundInLane:0,
+// lastRoundInLane:fromEnd, isFinal:false, thirdPlace:false,
+// conditional:false, extKey:null}), since only the DIFFERENCE between
+// roundInLane and lastRoundInLane matters for this branch.
 export function buildBracket(
   title: string,
   fixtures: readonly ExportBracketFixture[],
+  roundLabel: (fromEnd: number) => string,
   opts: BuildOpts,
 ): DocModel {
   const result = twoSidedBracket(fixtures);
@@ -275,9 +282,7 @@ export function buildBracket(
       rounds: layout.rounds,
       colsPerSide: layout.colsPerSide,
       rowsPerSide,
-      roundLabels: Array.from({ length: layout.rounds }, (_, i) =>
-        bracketRoundLabel(layout.rounds - 1 - i),
-      ),
+      roundLabels: Array.from({ length: layout.rounds }, (_, i) => roundLabel(layout.rounds - 1 - i)),
       ...(layout.thirdPlaceId !== undefined ? { thirdPlaceId: layout.thirdPlaceId } : {}),
     },
   };

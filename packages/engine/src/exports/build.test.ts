@@ -180,6 +180,19 @@ describe("buildBracket (PROMPT-62 §4)", () => {
     home: string | null, away: string | null, headline: string | null, decided: boolean,
   ) => ({ id, round_no: round, seq_in_round: seq, home, away, headline, decided });
 
+  // F1 Task 4: buildBracket no longer computes round names itself (the
+  // engine must not carry English) -- the caller injects a `roundLabel`
+  // callback, the same pattern buildBracketDe already uses for laneLabels.
+  // This mirrors what apps/web's roundRoleLabel(msg, roundRole({...}))
+  // would produce for a knockout, without pulling apps/web into the engine
+  // test.
+  const roundLabel = (fromEnd: number): string => {
+    if (fromEnd === 0) return "Final";
+    if (fromEnd === 1) return "Semi-finals";
+    if (fromEnd === 2) return "Quarter-finals";
+    return `Round of ${2 ** (fromEnd + 1)}`;
+  };
+
   const eight = [
     fx("q1", 0, 1, "Mexico", "Chile", "2–0", true),
     fx("q2", 0, 2, "Japan", "Ghana", "1–0", true),
@@ -191,7 +204,7 @@ describe("buildBracket (PROMPT-62 §4)", () => {
   ];
 
   it("produces a landscape-natured model with the laid-out payload + labels", () => {
-    const model = buildBracket("Cup — Open", eight, { printedAt: "2026-07-18T00:00:00Z" });
+    const model = buildBracket("Cup — Open", eight, roundLabel, { printedAt: "2026-07-18T00:00:00Z" });
     expect(model.kind).toBe("bracket");
     expect(model.sections).toEqual([]);
     expect(model.bracket!.roundLabels).toEqual(["Quarter-finals", "Semi-finals", "Final"]);
@@ -210,13 +223,23 @@ describe("buildBracket (PROMPT-62 §4)", () => {
       .concat(Array.from({ length: 4 }, (_, i) => fx(`r1-${i}`, 1, i + 1, null, null, null, false)))
       .concat(Array.from({ length: 2 }, (_, i) => fx(`r2-${i}`, 2, i + 1, null, null, null, false)))
       .concat([fx("fin", 3, 1, null, null, null, false)]);
-    const model = buildBracket("Cup", refs, { printedAt: "2026-07-18T00:00:00Z" });
+    const model = buildBracket("Cup", refs, roundLabel, { printedAt: "2026-07-18T00:00:00Z" });
     expect(model.bracket!.roundLabels).toEqual(["Round of 16", "Quarter-finals", "Semi-finals", "Final"]);
+  });
+
+  // Proves buildBracket actually CALLS the injected function (never falls
+  // back to hardcoded English) -- a distinctive marker string that isn't
+  // "Final"/"Semi-finals"/etc could only appear via roundLabel().
+  it("is driven by the injected roundLabel, not internal English", () => {
+    const model = buildBracket("Cup", eight, (fromEnd) => `MARKER-${fromEnd}`, {
+      printedAt: "2026-07-18T00:00:00Z",
+    });
+    expect(model.bracket!.roundLabels).toEqual(["MARKER-2", "MARKER-1", "MARKER-0"]);
   });
 
   it("throws CONFIG_INVALID for shapes the two-sided layout can't take", () => {
     const ladder = [fx("a", 0, 1, "A", "B", null, false), fx("b", 1, 1, null, null, null, false), fx("c", 2, 1, null, null, null, false)];
-    expect(() => buildBracket("Cup", ladder, { printedAt: "x" })).toThrow(/bracket poster/);
+    expect(() => buildBracket("Cup", ladder, roundLabel, { printedAt: "x" })).toThrow(/bracket poster/);
   });
 });
 
