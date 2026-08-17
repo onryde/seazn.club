@@ -214,7 +214,7 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
     await dropOrg(orgId);
   });
 
-  it("a join code resolves to exactly one entry; NULL codes never collide", async () => {
+  it("a join code resolves to exactly one entry ACROSS divisions; NULL codes never collide", async () => {
     const { orgId, compId, divId, tag } = await seedOrgCompDiv();
     const group = await seedGroup(compId, tag);
     const a = await seedEntry(group.id, divId, "Team A");
@@ -223,6 +223,19 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
     await sql`update registrations set join_code = ${`JOIN-${tag}`} where id = ${a.id}`;
     await expect(
       sql`update registrations set join_code = ${`JOIN-${tag}`} where id = ${b.id}`,
+    ).rejects.toThrow();
+
+    // The index is GLOBAL, not per-division, because a `?join=<CODE>` link
+    // carries nothing but the code — so it must not resolve to two entries in
+    // different divisions either. Same-division collisions alone cannot tell
+    // the two designs apart, so this case is the one that pins it.
+    const [otherDiv] = await sql<{ id: string }[]>`
+      insert into divisions (org_id, competition_id, name, slug, sport_key, variant_key, config, module_version)
+      values (${orgId}, ${compId}, 'Div 2', ${`div2-${tag}`}, 'generic', 'score', '{}', '1.0.0')
+      returning id`;
+    const crossDiv = await seedEntry(group.id, otherDiv.id, "Team X");
+    await expect(
+      sql`update registrations set join_code = ${`JOIN-${tag}`} where id = ${crossDiv.id}`,
     ).rejects.toThrow();
 
     // Both left NULL is the normal case (individual entries hand out no link).

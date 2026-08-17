@@ -130,6 +130,39 @@ serves its closed/unavailable state during that window.
   (2 callers → 0). Consumer is live and tested in RS001; the producer is
   RS002/RS003 (submit) and RS008 (claim).
 
+## RS002 entry conditions (RS001 hands these over — do not start without reading)
+
+1. **Cart-level money is flattened onto entry-level rows.** `RegistrationWithGroupRow`
+   merges the cart's payment envelope onto one entry. That is exact while carts
+   are 1:1 with entries — all that exists today — and wrong the moment RS002
+   ships multi-entry carts. Three shapes in `usecases/registrations.ts`, none
+   caught by a typecheck, all flagged inline pointing at the block comment above
+   `RegistrationWithGroupRow`:
+   - `stripeRefund(intent, undefined)` refunds the cart's FULL remaining balance
+     (withdraw path and the late-payment webhook path) — refunding one entry
+     would claw back its siblings' money. Pass the entry's own `amount_cents`,
+     as `refundRegistration` already does.
+   - `set refunded_cents = <entry fee>` OVERWRITES the cart total instead of
+     accumulating. The correct pattern already exists in that file
+     (`greatest(refunded_cents, …)` on the dispute path).
+   - `remaining = reg.amount_cents - reg.refunded_cents` subtracts a cart total
+     from an entry fee — a sibling's refund drives it negative and the organiser
+     gets "Already fully refunded" for an untouched entry.
+   **The decision RS001 deliberately did not take**: whether per-entry refunds
+   get their own `registrations.refunded_cents` or are derived. It belongs with
+   the group-submit design, and the schema for it is a one-column delta.
+2. **The privacy-consent rule went out with `submitRegistration`.** The deleted
+   test "rejects submissions without privacy consent (GDPR, spec 2026-07-14)"
+   guarded a submit-time check that no longer exists anywhere. RS002/RS003 must
+   reimplement it on the group submit path — this is a compliance rule, not a
+   nicety, and nothing in the tree will fail without it.
+3. **`waitlist-queue.tsx` is kept but unwired** (for RS005's Registrants tab)
+   and its coverage died with `reg-console.spec.ts` — queue order, #-in-line and
+   the public waitlist count now have no test at any level. Its view-model also
+   declares `contact_email`/`payment_intent_id`, which RS005 must source from
+   the CART; selecting them off `registrations` fails at runtime, not compile
+   time.
+
 ## False premises found
 
 - **"Only `registrations.ts` reads the payment columns" — WRONG, and it is the

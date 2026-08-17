@@ -371,7 +371,35 @@ export interface RegistrationPlayerRow {
 
 /** r.* plus the group's payment/contact columns — every read below that
  *  needs both the entry and its cart's envelope selects this shape off a
- *  `registrations r join registration_groups g on g.id = r.group_id`. */
+ *  `registrations r join registration_groups g on g.id = r.group_id`.
+ *
+ *  ── CART-LEVEL MONEY ON AN ENTRY-LEVEL ROW — READ BEFORE RS002 ─────────────
+ *  This type FLATTENS a cart's money onto one entry, which reads naturally and
+ *  is exactly right while carts are 1:1 with entries — which is all that can
+ *  exist today, since `submitRegistration` is gone and nothing creates a
+ *  multi-entry cart until RS002/RS003 ship group submit.
+ *
+ *  The moment a cart holds two entries, three shapes in this file are wrong,
+ *  and none of them fails a typecheck:
+ *
+ *   1. `stripeRefund(intent, undefined)` refunds the FULL remaining balance of
+ *      the cart's payment intent. Refunding or withdrawing ONE entry would
+ *      hand back its siblings' money too. Pass the entry's own `amount_cents`,
+ *      as `refundRegistration` already does.
+ *   2. `set refunded_cents = <this entry's fee>` OVERWRITES the cart's total
+ *      instead of accumulating into it. The correct pattern is already in this
+ *      file — `greatest(refunded_cents, …)` on the dispute path — and every
+ *      such write needs to become additive/monotonic the same way.
+ *   3. `remaining = reg.amount_cents - reg.refunded_cents` subtracts a CART
+ *      total from an ENTRY fee. A sibling's earlier refund drives it negative
+ *      and the organiser sees "Already fully refunded" for an untouched entry.
+ *
+ *  Fixing these properly needs a decision RS001 deliberately did not take:
+ *  whether per-entry refunds are tracked by a `registrations.refunded_cents`
+ *  of their own or derived. That belongs with RS002's group-submit design, and
+ *  is recorded in the prompts `_INDEX.md` as an RS002 entry condition. Until
+ *  then every site above carries a pointer back to this block.
+ *  ───────────────────────────────────────────────────────────────────────── */
 export type RegistrationWithGroupRow = RegistrationRow &
   Pick<
     RegistrationGroupRow,
@@ -1240,6 +1268,9 @@ async function confirmPaidRegistration(
   // Refunds happen OUTSIDE the tx (network). A failure surfaces on the
   // organiser console via the audit trail, never blocks the webhook ACK.
   try {
+    // Hazards 1 and 2 of RegistrationWithGroupRow's cart-level-money block:
+    // full-balance refund of the CART's intent, then an overwriting write.
+    // Exact at one entry per cart; RS002 owns the multi-entry fix.
     const refund = await stripeRefund(outcome.intent, undefined);
     if (outcome.kind === "late") {
       // refunded_cents/refunded_at live on the cart now (V364).
@@ -1772,6 +1803,10 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     !settings?.refund_lock_at || new Date() < new Date(settings.refund_lock_at);
   if (refundable && beforeLock) {
     try {
+      // Hazards 1 and 2 of RegistrationWithGroupRow's cart-level-money block:
+      // `undefined` refunds the cart's whole remaining balance, and the write
+      // below overwrites the cart total rather than accumulating. Both are
+      // exact while a cart holds one entry; RS002 owns the multi-entry fix.
       const refund = await stripeRefund(locked.payment_intent_id as string, undefined);
       // refunded_cents/refunded_at live on the cart now (V364); `amount_cents`
       // here is THIS entry's own fee, not the cart's subtotal column, so it
@@ -2126,6 +2161,9 @@ export async function refundRegistration(
 ): Promise<RegistrationWithGroupRow> {
   const reg = await withTenant(auth.orgId, async (tx) => orgReg(tx, regId));
   if (!reg.payment_intent_id) throw new HttpError(422, "No payment to refund");
+  // Hazard 3 of RegistrationWithGroupRow's cart-level-money block: entry fee
+  // minus CART refunds. Correct at one entry per cart, wrong the moment RS002
+  // ships multi-entry carts.
   const remaining = reg.amount_cents - reg.refunded_cents;
   if (remaining <= 0) throw new HttpError(422, "Already fully refunded");
   const amount = amountCents ?? remaining;

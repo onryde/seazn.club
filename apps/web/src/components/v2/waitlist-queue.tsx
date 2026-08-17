@@ -9,12 +9,21 @@ import { useMsg } from "@/components/i18n/dict-provider";
 // Local shape (RS001 demolition): previously imported from the deleted
 // registrations-panel.tsx. This component has no other caller left in the
 // tree after that deletion — kept, unwired, for RS005's Registrants tab.
+//
+// This is a VIEW MODEL, not a `registrations` row, and after V363/V364 it can
+// no longer be one: `contact_email` and `payment_intent_id` moved to the cart
+// (`registration_groups`). Whoever wires this in RS005 must join the group for
+// those two — selecting them off `registrations` fails at runtime, not at
+// compile time, because they are named in a SQL string.
 export interface Registration {
   id: string;
   status: string;
   display_name: string;
+  /** From `registration_groups.contact_email` — the cart's contact. */
   contact_email: string;
+  /** Per-entry fee; the cart's own total is `registration_groups.amount_cents`. */
   amount_cents: number;
+  /** From `registration_groups.payment_intent_id` — one payment per cart. */
   payment_intent_id: string | null;
   created_at: string;
 }
