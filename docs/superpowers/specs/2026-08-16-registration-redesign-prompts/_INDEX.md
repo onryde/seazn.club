@@ -17,7 +17,7 @@ interleaved: **org lane** RS004 → RS005 → RS009, **public lane** RS006 → R
 
 | Session | Prompt file | Depends on | Status |
 |---|---|---|---|
-| RS001 | `RS001-schema-and-demolition.md` | — | IN PROGRESS — `feat/rs001-registration-schema` |
+| RS001 | `RS001-schema-and-demolition.md` | — | **PR #592 OPEN** — `feat/rs001-registration-schema` |
 | RS001b | `RS001b-org-currency-allowlist.md` | RS001 | TODO |
 | RS002 | `RS002-core-usecases.md` | RS001b | TODO |
 | RS003 | `RS003-public-endpoints.md` | RS002 | TODO |
