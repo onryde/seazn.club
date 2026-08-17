@@ -683,13 +683,6 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
 
   "pad.cricket.action.ball",
   "pad.cricket.action.declare",
-  // R2b (`_INDEX.md`): the v3 pad's dedicated over-by-over entry tile
-  // (`skins/cricket.tsx`'s `buildTiles`) — a real, new v3-only capability,
-  // not a `padSpec(cfg)`-emitted legacy key like most of this cluster's
-  // other entries; added here anyway per this file's own "every new pad.
-  // cricket.* key a skin dispatches directly gets registered" convention
-  // (the ribbon cluster below already establishes this precedent).
-  "pad.cricket.action.endOfOver",
   "pad.cricket.action.extra",
   "pad.cricket.action.followOn",
   "pad.cricket.action.inningsClose",
