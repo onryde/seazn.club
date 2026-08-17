@@ -88,6 +88,7 @@ import {
   reconcileRegistrationBySession,
   sweepRegistrations,
   withdrawRegistrationPublic,
+  withdrawRegistrationOrganiser,
   confirmRegistration,
   confirmRegistrationWaived,
   markRegistrationPaidOffline,
@@ -272,21 +273,42 @@ async function rig(
 
 /** r.* ∪ g.* — same join `regGroupCols` builds internally (not exported).
  *  Kept in exact column-list sync with it by the schema tests in
- *  registration-schema.test.ts, which pin every column on both tables. */
+ *  registration-schema.test.ts, which pin every column on both tables.
+ *  `g.refunded_cents` is aliased to `group_refunded_cents` (V367) so it never
+ *  collides with `r.refunded_cents` — see the block comment above
+ *  `RegistrationWithGroupRow` in registrations.ts. */
 async function loadWithGroup(regId: string): Promise<RegistrationWithGroupRow> {
   const [row] = await sql<RegistrationWithGroupRow[]>`
     select r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
-           r.amount_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
+           r.amount_cents, r.refunded_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
            r.group_id, r.join_code, r.free_agent, r.created_at, r.updated_at,
            g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code,
            g.access_token_hash, g.currency, g.payment_method, g.checkout_session_id,
-           g.payment_intent_id, g.expires_at, g.reminded_at, g.refunded_cents,
+           g.payment_intent_id, g.expires_at, g.reminded_at,
+           g.refunded_cents as group_refunded_cents,
            g.refunded_at, g.disputed_at, g.dispute_id, g.offline_marked_paid_at,
            g.offline_marked_paid_by, g.fee_percent, g.privacy_consent_at,
            g.privacy_consent_version
     from registrations r join registration_groups g on g.id = r.group_id
     where r.id = ${regId}`;
   return row;
+}
+
+/** Attaches a SECOND entry to an existing cart (group) — reproduces what a
+ *  multi-entry cart will look like once RS002/RS003 ship group submit
+ *  (design §3). No such flow exists yet, so this seeds directly, the same
+ *  way seedRegistration reproduces submitRegistration's single-entry write. */
+async function seedSecondEntry(
+  groupId: string,
+  divisionId: string,
+  amountCents: number,
+  displayName: string,
+): Promise<RegistrationWithGroupRow> {
+  const [reg] = await sql<{ id: string }[]>`
+    insert into registrations (group_id, division_id, display_name, status, amount_cents)
+    values (${groupId}, ${divisionId}, ${displayName}, 'pending', ${amountCents})
+    returning id`;
+  return loadWithGroup(reg.id);
 }
 
 /**
@@ -1771,7 +1793,9 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
       "closed",
     );
     row = await loadWithGroup(res.registration.id);
-    expect(row.refunded_cents).toBe(500);
+    // Cart-scoped write-off (block comment above RegistrationWithGroupRow in
+    // registrations.ts) — group_refunded_cents, not the entry's own column.
+    expect(row.group_refunded_cents).toBe(500);
   });
 
   it("charge.refunded from the Stripe dashboard syncs refunded_cents", async () => {
@@ -1785,7 +1809,9 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
       amount_refunded: 300,
     } as unknown as Stripe.Charge);
     let row = await loadWithGroup(res.registration.id);
-    expect(row.refunded_cents).toBe(300);
+    // Cart-scoped mirror (block comment above RegistrationWithGroupRow in
+    // registrations.ts) — group_refunded_cents, not the entry's own column.
+    expect(row.group_refunded_cents).toBe(300);
 
     // Never regresses below what we already recorded.
     await syncRegistrationRefund({
@@ -1793,7 +1819,7 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
       amount_refunded: 100,
     } as unknown as Stripe.Charge);
     row = await loadWithGroup(res.registration.id);
-    expect(row.refunded_cents).toBe(300);
+    expect(row.group_refunded_cents).toBe(300);
   });
 
   // "waitlisted card submits take no window and no payment" DELETED (RS001
@@ -1873,7 +1899,7 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
     );
 
     const row = await loadWithGroup(regId);
-    expect(row.refunded_cents).toBe(2000);
+    expect(row.group_refunded_cents).toBe(2000);
 
     expect(stripeMock.chargeRetrieve).toHaveBeenCalledWith(chargeId, {
       expand: ["transfer"],
@@ -1925,7 +1951,7 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
     );
 
     const row = await loadWithGroup(regId);
-    expect(row.refunded_cents).toBe(2000); // the write-off never depends on Stripe
+    expect(row.group_refunded_cents).toBe(2000); // the write-off never depends on Stripe
 
     expect(await auditRows("registration.dispute_recovered", regId)).toHaveLength(0);
     const failed = await auditRows("registration.dispute_recovery_failed", regId);
@@ -2023,7 +2049,7 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
     expect(skipped).toHaveLength(1);
     expect(skipped[0].payload.reason).toBe("no_transfer");
     const row = await loadWithGroup(regId);
-    expect(row.refunded_cents).toBe(2000);
+    expect(row.group_refunded_cents).toBe(2000);
   });
 
   it("won dispute never touches transfers", async () => {
@@ -2053,7 +2079,7 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
     expect(stripeMock.reversalCreate).not.toHaveBeenCalled();
     expect(emailMock.disputeLost).not.toHaveBeenCalled();
     const row = await loadWithGroup(regId);
-    expect(row.refunded_cents).toBe(0);
+    expect(row.group_refunded_cents).toBe(0);
     expect(row.disputed_at).toBeNull();
   });
 
@@ -2082,6 +2108,123 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
       expect.objectContaining({ to: newOwnerEmail }),
     );
     expect(await auditRows("registration.dispute_recovered", regId)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS002 (V367): entry-level refunds — the three cart-level-money hazards
+// flagged in the block comment above RegistrationWithGroupRow
+// (registrations.ts), now fixed. No multi-entry submit flow exists yet
+// (RS002/RS003 own building group-submit), so `seedSecondEntry` attaches a
+// second entry directly to an existing cart, the same way `seedRegistration`
+// reproduces submitRegistration's single-entry write.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)", () => {
+  /** A confirmed two-entry cart sharing ONE payment intent — A and B each
+   *  carry their own fee. Reproduces what group-submit will write once it
+   *  ships (design §3: one payment per cart). */
+  async function twoEntryCart(feeA: number, feeB: number) {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations
+              set stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}, stripe_charges_enabled = true
+              where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      payment_method: "stripe",
+      fee_cents: feeA,
+    });
+    const a = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Entry A",
+      amountCents: feeA,
+    });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, feeB, "Entry B");
+    const intent = "pi_cart_" + a.registration.id.slice(0, 8);
+    await sql`
+      update registration_groups
+      set payment_intent_id = ${intent}, amount_cents = ${feeA + feeB}, updated_at = now()
+      where id = ${a.registration.group_id}`;
+    await sql`update registrations set status = 'confirmed', updated_at = now()
+              where id in (${a.registration.id}, ${b.id})`;
+    return {
+      owner, division, competition, intent,
+      accessToken: a.access_token,
+      a: await loadWithGroup(a.registration.id),
+      b: await loadWithGroup(b.id),
+    };
+  }
+
+  it("hazard 1 (late-payment webhook): refunds only the late entry's own amount, sibling untouched", async () => {
+    const { a, b, intent } = await twoEntryCart(1000, 700);
+    // A goes stale/withdrawn, then its OWN abandoned checkout completes late.
+    await sql`update registrations set status = 'withdrawn', withdrawn_at = now() where id = ${a.id}`;
+    stripeMock.refundCreate.mockClear();
+
+    await handleRegistrationCheckoutCompleted(fakeSession(a.id, a.amount_cents));
+
+    expect(stripeMock.refundCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ payment_intent: intent, amount: a.amount_cents }),
+    );
+    const bAfter = await loadWithGroup(b.id);
+    expect(bAfter.refunded_cents).toBe(0); // B's own money never moved
+    expect(bAfter.status).toBe("confirmed"); // B never touched
+  });
+
+  it("hazard 1 (withdraw auto-refund): refunds only the withdrawn entry's own amount, sibling untouched", async () => {
+    const { a, b, intent, accessToken } = await twoEntryCart(1000, 700);
+    stripeMock.refundCreate.mockClear();
+
+    await withdrawRegistrationPublic(a.id, accessToken);
+
+    expect(stripeMock.refundCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ payment_intent: intent, amount: a.amount_cents }),
+    );
+    const aAfter = await loadWithGroup(a.id);
+    const bAfter = await loadWithGroup(b.id);
+    expect(aAfter.status).toBe("withdrawn");
+    expect(aAfter.refunded_cents).toBe(a.amount_cents);
+    expect(bAfter.refunded_cents).toBe(0); // B's own money never moved
+    expect(bAfter.status).toBe("confirmed"); // B never touched
+    expect(bAfter.amount_cents).toBe(700);
+  });
+
+  it("hazard 2: successive withdrawals accumulate the cart total instead of overwriting it", async () => {
+    const { a, b, owner, accessToken } = await twoEntryCart(1000, 700);
+
+    await withdrawRegistrationPublic(a.id, accessToken);
+    const afterA = await loadWithGroup(a.id);
+    expect(afterA.group_refunded_cents).toBe(1000);
+
+    // B was seeded directly (no public token of its own) — withdraw via the
+    // organiser path instead of minting a second one.
+    await withdrawRegistrationOrganiser(owner, b.id);
+    const afterB = await loadWithGroup(b.id);
+    // Accumulated (1000 + 700), NOT overwritten to just B's own 700 — that
+    // overwrite would silently erase A's earlier refund from the cart total.
+    expect(afterB.group_refunded_cents).toBe(1700);
+  });
+
+  it("hazard 3 (+ entry-level write): refunding A fully does not block B's own manual refund", async () => {
+    const { owner, a, b, intent } = await twoEntryCart(1000, 700);
+    stripeMock.refundCreate.mockClear();
+
+    const aRefunded = await refundRegistration(owner, a.id, undefined);
+    expect(stripeMock.refundCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ payment_intent: intent, amount: a.amount_cents }),
+    );
+    // refundRegistration writes the ENTRY's own refunded_cents (V367), not
+    // just the group's accumulated total.
+    expect(aRefunded.refunded_cents).toBe(a.amount_cents);
+
+    // B's own remaining is computed from B's own numbers — must NOT throw
+    // "Already fully refunded" for an entry nobody has touched yet.
+    const bRefunded = await refundRegistration(owner, b.id, undefined);
+    expect(stripeMock.refundCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ payment_intent: intent, amount: b.amount_cents }),
+    );
+    expect(bRefunded.refunded_cents).toBe(b.amount_cents);
   });
 });
 

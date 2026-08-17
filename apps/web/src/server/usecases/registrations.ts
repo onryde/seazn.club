@@ -286,6 +286,12 @@ export interface RegistrationRow {
   /** This entry's own fee — stays per-entry because a cart can be partially
    *  waitlisted (design §3); the cart's charged subtotal lives on the group. */
   amount_cents: number;
+  /** This entry's OWN accumulated refund total (V367) — additive, never
+   *  overwritten, never decreases. Distinct from the group's
+   *  `refunded_cents` (the cart's total); see the block comment above
+   *  `RegistrationWithGroupRow`, which exposes the group's as
+   *  `group_refunded_cents` to keep the two from colliding in one SELECT. */
+  refunded_cents: number;
   entrant_id: string | null;
   promoted_at: Date | null;
   withdrawn_at: Date | null;
@@ -380,57 +386,72 @@ export interface RegistrationPlayerRow {
  *  needs both the entry and its cart's envelope selects this shape off a
  *  `registrations r join registration_groups g on g.id = r.group_id`.
  *
- *  ── CART-LEVEL MONEY ON AN ENTRY-LEVEL ROW — READ BEFORE RS002 ─────────────
- *  This type FLATTENS a cart's money onto one entry, which reads naturally and
- *  is exactly right while carts are 1:1 with entries — which is all that can
- *  exist today, since `submitRegistration` is gone and nothing creates a
- *  multi-entry cart until RS002/RS003 ship group submit.
+ *  ── CART-LEVEL MONEY ON AN ENTRY-LEVEL ROW — RS002 FIXED THIS ─────────────
+ *  This type used to FLATTEN a cart's money onto one entry — exactly right
+ *  while carts were 1:1 with entries (nothing created a multi-entry cart
+ *  until RS002/RS003 ship group submit), but wrong the moment a cart holds
+ *  two entries. Three shapes in this file used to be wrong, and none of them
+ *  failed a typecheck:
  *
- *  The moment a cart holds two entries, three shapes in this file are wrong,
- *  and none of them fails a typecheck:
+ *   1. `stripeRefund(intent, undefined)` refunded the FULL remaining balance
+ *      of the cart's payment intent. Refunding or withdrawing ONE entry would
+ *      hand back its siblings' money too. FIXED: every call site now passes
+ *      the entry's own remaining amount explicitly.
+ *   2. `set refunded_cents = <this entry's fee>` OVERWROTE the cart's total
+ *      instead of accumulating into it. FIXED: the webhook and auto-refund
+ *      writes are additive now, matching the pattern `refundRegistration`
+ *      already used.
+ *   3. `remaining = reg.amount_cents - reg.refunded_cents` subtracted a CART
+ *      total from an ENTRY fee. FIXED (V367): `registrations.refunded_cents`
+ *      is now this entry's own column, so `refunded_cents` below resolves to
+ *      it, never to the group's.
  *
- *   1. `stripeRefund(intent, undefined)` refunds the FULL remaining balance of
- *      the cart's payment intent. Refunding or withdrawing ONE entry would
- *      hand back its siblings' money too. Pass the entry's own `amount_cents`,
- *      as `refundRegistration` already does.
- *   2. `set refunded_cents = <this entry's fee>` OVERWRITES the cart's total
- *      instead of accumulating into it. The correct pattern is already in this
- *      file — `greatest(refunded_cents, …)` on the dispute path — and every
- *      such write needs to become additive/monotonic the same way.
- *   3. `remaining = reg.amount_cents - reg.refunded_cents` subtracts a CART
- *      total from an ENTRY fee. A sibling's earlier refund drives it negative
- *      and the organiser sees "Already fully refunded" for an untouched entry.
- *
- *  Fixing these properly needs a decision RS001 deliberately did not take:
- *  whether per-entry refunds are tracked by a `registrations.refunded_cents`
- *  of their own or derived. That belongs with RS002's group-submit design, and
- *  is recorded in the prompts `_INDEX.md` as an RS002 entry condition. Until
- *  then every site above carries a pointer back to this block.
+ *  The decision RS001 deliberately deferred is now taken: per-entry refunds
+ *  get their OWN column (V367) rather than being derived from the cart's.
+ *  `registration_groups.refunded_cents` is UNCHANGED — it stays the cart's
+ *  accumulated total — and this type deliberately does NOT pick it under the
+ *  name `refunded_cents`: that would collide with `RegistrationRow`'s own
+ *  column of the same name and leave whichever the SELECT lists last to win
+ *  silently (tsc cannot see a raw-SQL column collision — `select r.*, g.*`
+ *  would silently yield one of them). Code that needs the cart's total reads
+ *  `group_refunded_cents` instead — today that is only the dispute-lost
+ *  write-off and the Stripe-dashboard refund mirror, both genuinely
+ *  cart-scoped (a dispute/charge is against the intent, not one entry) and
+ *  deliberately left out of RS002's scope. No per-entry `refunded_at` either
+ *  — deliberately out of scope; the cart's last-refund timestamp is enough.
  *  ───────────────────────────────────────────────────────────────────────── */
 export type RegistrationWithGroupRow = RegistrationRow &
   Pick<
     RegistrationGroupRow,
     | "contact_name" | "contact_email" | "user_id" | "locale" | "ref_code"
     | "access_token_hash" | "currency" | "payment_method" | "checkout_session_id"
-    | "payment_intent_id" | "expires_at" | "reminded_at" | "refunded_cents"
+    | "payment_intent_id" | "expires_at" | "reminded_at"
     | "refunded_at" | "disputed_at" | "dispute_id" | "offline_marked_paid_at"
     | "offline_marked_paid_by" | "fee_percent" | "privacy_consent_at"
     | "privacy_consent_version"
-  >;
+  > & {
+    /** The CART's accumulated refund total (`registration_groups.refunded_cents`,
+     *  V363) — aliased so it can never collide with `RegistrationRow`'s own
+     *  entry-scoped `refunded_cents` (V367) in the same SELECT. */
+    group_refunded_cents: number;
+  };
 
 /** r.* ∪ g.* for `RegistrationWithGroupRow` — every SELECT that needs the
  *  joined shape interpolates `${regGroupCols(db)}` (same convention as
  *  org-posts.ts's `COLS`/discipline.ts's `SELECT_SUSPENSION`), built from the
  *  SAME `sql`/`tx` instance as the surrounding query so the two tables'
- *  column list can only drift in one place. */
+ *  column list can only drift in one place. `g.refunded_cents` is aliased to
+ *  `group_refunded_cents` so it never collides with `r.refunded_cents`
+ *  (V367) — see the block comment above `RegistrationWithGroupRow`. */
 function regGroupCols(db: AnySql) {
   return db`
     r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
-    r.amount_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
+    r.amount_cents, r.refunded_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
     r.group_id, r.join_code, r.free_agent, r.created_at, r.updated_at,
     g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code,
     g.access_token_hash, g.currency, g.payment_method, g.checkout_session_id,
-    g.payment_intent_id, g.expires_at, g.reminded_at, g.refunded_cents,
+    g.payment_intent_id, g.expires_at, g.reminded_at,
+    g.refunded_cents as group_refunded_cents,
     g.refunded_at, g.disputed_at, g.dispute_id, g.offline_marked_paid_at,
     g.offline_marked_paid_by, g.fee_percent, g.privacy_consent_at,
     g.privacy_consent_version`;
@@ -1293,15 +1314,24 @@ async function confirmPaidRegistration(
   // Refunds happen OUTSIDE the tx (network). A failure surfaces on the
   // organiser console via the audit trail, never blocks the webhook ACK.
   try {
-    // Hazards 1 and 2 of RegistrationWithGroupRow's cart-level-money block:
-    // full-balance refund of the CART's intent, then an overwriting write.
-    // Exact at one entry per cart; RS002 owns the multi-entry fix.
-    const refund = await stripeRefund(outcome.intent, undefined);
+    // RS002 (V367): refund exactly THIS entry's own charged amount, never the
+    // cart's whole remaining balance — a sibling entry's money must never
+    // move on a late/duplicate refund for this one (block comment above
+    // RegistrationWithGroupRow, hazard 1).
+    const entryRefundCents = amountTotal ?? outcome.reg.amount_cents;
+    const refund = await stripeRefund(outcome.intent, entryRefundCents);
     if (outcome.kind === "late") {
-      // refunded_cents/refunded_at live on the cart now (V364).
+      // Additive on BOTH tables (hazard 2 fixed) — never overwrite either
+      // total, since a sibling entry may already have contributed to the
+      // cart's refunded_cents. refunded_at stays group-only (V364); no
+      // per-entry clock (RS002 scope).
+      await sql`
+        update registrations
+        set refunded_cents = refunded_cents + ${entryRefundCents}, updated_at = now()
+        where id = ${outcome.reg.id}`;
       await sql`
         update registration_groups
-        set refunded_cents = ${amountTotal ?? outcome.reg.amount_cents},
+        set refunded_cents = refunded_cents + ${entryRefundCents},
             refunded_at = now(), updated_at = now()
         where id = ${outcome.reg.group_id}`;
     }
@@ -1827,26 +1857,32 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
   const beforeLock =
     !settings?.refund_lock_at || new Date() < new Date(settings.refund_lock_at);
   if (refundable && beforeLock) {
+    // RS002 (V367): THIS entry's own remaining balance — never the cart's
+    // whole intent (hazard 1) — so a sibling that already carries a partial
+    // refund (organiser discretion, then a late withdrawal) is never
+    // double-counted here either.
+    const remaining = locked.amount_cents - locked.refunded_cents;
     try {
-      // Hazards 1 and 2 of RegistrationWithGroupRow's cart-level-money block:
-      // `undefined` refunds the cart's whole remaining balance, and the write
-      // below overwrites the cart total rather than accumulating. Both are
-      // exact while a cart holds one entry; RS002 owns the multi-entry fix.
-      const refund = await stripeRefund(locked.payment_intent_id as string, undefined);
-      // refunded_cents/refunded_at live on the cart now (V364); `amount_cents`
-      // here is THIS entry's own fee, not the cart's subtotal column, so it
-      // rides as the already-fetched JS value.
+      const refund = await stripeRefund(locked.payment_intent_id as string, remaining);
+      // Additive on BOTH tables (hazard 2 fixed) — a sibling entry may
+      // already have contributed to the cart's refunded_cents, so this must
+      // never overwrite it. refunded_at stays group-only (V364); no
+      // per-entry clock (RS002 scope).
+      await sql`
+        update registrations
+        set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
+        where id = ${locked.id}`;
       await sql`
         update registration_groups
-        set refunded_cents = ${locked.amount_cents}, refunded_at = now(), updated_at = now()
+        set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
         where id = ${locked.group_id}`;
       await audit(sql, ctx.competition_id, ctx.org_id, "registration.refunded", {
         registration_id: reg.id,
-        amount_cents: locked.amount_cents,
+        amount_cents: remaining,
         mode: "auto",
         stripe_refund_id: refund.id,
       }, actorId);
-      notifyRefund(locked, ctx, locked.amount_cents);
+      notifyRefund(locked, ctx, remaining);
     } catch {
       // Refund failure must not undo the withdrawal — surfaces on the
       // organiser console (withdrawn + refunded_cents < amount_cents).
@@ -2186,9 +2222,9 @@ export async function refundRegistration(
 ): Promise<RegistrationWithGroupRow> {
   const reg = await withTenant(auth.orgId, async (tx) => orgReg(tx, regId));
   if (!reg.payment_intent_id) throw new HttpError(422, "No payment to refund");
-  // Hazard 3 of RegistrationWithGroupRow's cart-level-money block: entry fee
-  // minus CART refunds. Correct at one entry per cart, wrong the moment RS002
-  // ships multi-entry carts.
+  // RS002 (V367): reg.refunded_cents is THIS entry's own column now (hazard 3
+  // fixed) — a sibling's earlier refund can no longer drive this negative and
+  // falsely report an untouched entry as "already fully refunded".
   const remaining = reg.amount_cents - reg.refunded_cents;
   if (remaining <= 0) throw new HttpError(422, "Already fully refunded");
   const amount = amountCents ?? remaining;
@@ -2199,7 +2235,12 @@ export async function refundRegistration(
   const row = await withTenant(auth.orgId, async (tx) => {
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
-    // refunded_cents/refunded_at live on the cart now (V364).
+    // Additive on BOTH tables: this entry's own total (V367) and the cart's
+    // accumulated total (V364) — never overwrite either.
+    await tx`
+      update registrations
+      set refunded_cents = refunded_cents + ${amount}, updated_at = now()
+      where id = ${regId}`;
     await tx`
       update registration_groups
       set refunded_cents = refunded_cents + ${amount}, refunded_at = now(), updated_at = now()
