@@ -1092,11 +1092,14 @@ describe("buildSheets — over summary (R2b)", () => {
     expect(overSpec().event).toBe("cricket.innings.summary");
   });
 
-  it("prefills runs/wickets from the fold's current total, balls from current + one full over", () => {
+  it("prefills 0/0/bpo for THIS OVER, never the fold's current total (Q2 reversed 2026-08-17)", () => {
+    // fold is 24/1 off 30 balls — non-zero, so a 0 prefill here is actually
+    // distinguishable from the old "prefill from the fold" behaviour; testing
+    // this against an empty/zero fold would be vacuous.
     const spec = overSpec();
-    expect(numberStep(spec, "runs").initial).toBe(24);
-    expect(numberStep(spec, "wickets").initial).toBe(1);
-    expect(numberStep(spec, "balls").initial).toBe(36); // 30 + bpo(6)
+    expect(numberStep(spec, "runs").initial).toBe(0);
+    expect(numberStep(spec, "wickets").initial).toBe(0);
+    expect(numberStep(spec, "balls").initial).toBe(6); // bpo, not legalBalls + bpo
   });
 
   it("prefills 0/0/bpo when no innings is open yet", () => {
@@ -1106,42 +1109,57 @@ describe("buildSheets — over summary (R2b)", () => {
     expect(numberStep(spec, "balls").initial).toBe(6);
   });
 
-  it("uses ballsPerOverOf, never a hardcoded 6 — hundred variant", () => {
+  it("uses ballsPerOverOf for balls' initial/max, never a hardcoded 6 — hundred variant", () => {
     const spec = buildSheets(
       view({ cfg: cfg({ ballsPerOver: 5 }), state: state({ innings: [innings({ fine: null, legalBalls: 30 })] }) }),
     ).overSummary;
-    expect(numberStep(spec, "balls").initial).toBe(35); // 30 + bpo(5)
+    const balls = numberStep(spec, "balls");
+    expect(balls.initial).toBe(5); // bpo(5), not the fold's legalBalls + bpo
+    expect(balls.min).toBe(0);
+    expect(balls.max).toBe(5); // a hardcoded 6 would fail this on the Hundred
   });
 
-  it("each step's min is the fold's CURRENT value — the monotone guard is structurally unreachable through this sheet", () => {
+  it("runs/wickets carry no max; balls' max is bpo — a completed over is always exactly bpo legal deliveries", () => {
     const spec = overSpec();
-    expect(numberStep(spec, "runs").min).toBe(24);
-    expect(numberStep(spec, "wickets").min).toBe(1);
-    expect(numberStep(spec, "balls").min).toBe(30);
+    expect(numberStep(spec, "runs").max).toBeUndefined();
+    expect(numberStep(spec, "wickets").max).toBeUndefined();
+    expect(numberStep(spec, "balls").max).toBe(6); // bpo, default cfg
   });
 
-  it("hint carries the fold's current score, locale-invariant (no t() needed)", () => {
+  it("each step's min is 0 — the monotone guard is unreachable via buildPayload's additive sum onto the fold, not a min floor", () => {
+    const spec = overSpec();
+    expect(numberStep(spec, "runs").min).toBe(0);
+    expect(numberStep(spec, "wickets").min).toBe(0);
+    expect(numberStep(spec, "balls").min).toBe(0);
+  });
+
+  it("hint carries the fold's current score, locale-invariant (no t() needed) — the only place the scorer sees what the delta is added to", () => {
     const spec = overSpec();
     expect(numberStep(spec, "runs").hint).toBe("24/1");
     expect(numberStep(spec, "wickets").hint).toBe("24/1");
   });
 
-  it("buildPayload emits a TOTAL with partial:true, never an increment on the fold", () => {
-    const payload = overSpec().buildPayload({ runs: "31", wickets: "2", balls: "36" });
+  it("buildPayload sums the fold's current totals with this over's entered runs/wickets/balls — absolute, not the delta", () => {
+    const payload = overSpec().buildPayload({ runs: "7", wickets: "1", balls: "6" });
     expect(payload).toEqual({ runs: 31, wickets: 2, legalBalls: 36, partial: true });
+  });
+
+  it("a 0-run, 0-wicket maiden over still appends the unchanged totals plus 6 balls — the append is not conditional on non-zero input", () => {
+    const payload = overSpec().buildPayload({ runs: "0", wickets: "0", balls: "6" });
+    expect(payload).toEqual({ runs: 24, wickets: 1, legalBalls: 36, partial: true });
   });
 
   it("driven end to end through the real wizard: runs -> wickets -> balls -> a cricket.innings.summary event", () => {
     const spec = overSpec();
     const s0 = initialSheetState();
     expect(currentStep(spec, s0)!.id).toBe("runs");
-    const afterRuns = answerStep(spec, s0, "31");
+    const afterRuns = answerStep(spec, s0, "7");
     if (afterRuns.done) throw new Error("expected not done");
     expect(currentStep(spec, afterRuns.state)!.id).toBe("wickets");
-    const afterWickets = answerStep(spec, afterRuns.state, "2");
+    const afterWickets = answerStep(spec, afterRuns.state, "1");
     if (afterWickets.done) throw new Error("expected not done");
     expect(currentStep(spec, afterWickets.state)!.id).toBe("balls");
-    const done = answerStep(spec, afterWickets.state, "36");
+    const done = answerStep(spec, afterWickets.state, "6");
     if (!done.done) throw new Error("expected done");
     expect(done.event).toEqual({
       type: "cricket.innings.summary",
@@ -1149,8 +1167,9 @@ describe("buildSheets — over summary (R2b)", () => {
     });
   });
 
-  it("a sequence of partial summaries folds to the totals a scorer expects, never tripping the monotone guard", () => {
-    // Over 1: innings unopened, scorer enters 6 runs, 0 wickets, a full over.
+  it("a sequence of partial summaries, each entered as THIS OVER's runs/wickets/balls, folds to the totals a scorer expects, never tripping the monotone guard", () => {
+    // Over 1: innings unopened, scorer enters this over's 6 runs, 0 wickets, a
+    // full over. Base is 0 here, so the absolute payload equals the delta.
     const spec1 = buildSheets(view({ state: state({ innings: [] }) })).overSummary;
     const payload1 = spec1.buildPayload({ runs: "6", wickets: "0", balls: "6" });
     expect(payload1).toEqual({ runs: 6, wickets: 0, legalBalls: 6, partial: true });
@@ -1161,16 +1180,18 @@ describe("buildSheets — over summary (R2b)", () => {
     // packages/engine is out of this wave's file grant).
     const foldedAfterOver1 = innings({ fine: null, runs: 6, wickets: 0, legalBalls: 6 });
     const spec2 = buildSheets(view({ state: state({ innings: [foldedAfterOver1] }) })).overSummary;
-    expect(numberStep(spec2, "runs")).toMatchObject({ initial: 6, min: 6 });
+    expect(numberStep(spec2, "runs")).toMatchObject({ initial: 0, min: 0 });
     expect(numberStep(spec2, "wickets")).toMatchObject({ initial: 0, min: 0 });
-    expect(numberStep(spec2, "balls")).toMatchObject({ initial: 12, min: 6 }); // 6 + bpo(6)
+    expect(numberStep(spec2, "balls")).toMatchObject({ initial: 6, min: 0, max: 6 }); // bpo, not legalBalls + bpo
 
-    const payload2 = spec2.buildPayload({ runs: "14", wickets: "1", balls: "12" });
+    // Over 2: scorer enters this over's 8 runs, 1 wicket, a full over (6 balls).
+    const payload2 = spec2.buildPayload({ runs: "8", wickets: "1", balls: "6" });
     expect(payload2).toEqual({ runs: 14, wickets: 1, legalBalls: 12, partial: true });
     // payload2's totals (14/1/12) are each >= payload1's (6/0/6) — a rising
-    // sequence a scorer would actually produce over-by-over; `spec2`'s own
-    // `min` (asserted above) is what makes a DECREASING entry structurally
-    // unreachable through this sheet in the first place.
+    // sequence a scorer would actually produce over-by-over; every answer is
+    // floored at min:0 and buildPayload only ever ADDS it onto the fold's own
+    // reads, which is what makes a DECREASING total structurally unreachable
+    // through this sheet.
   });
 });
 

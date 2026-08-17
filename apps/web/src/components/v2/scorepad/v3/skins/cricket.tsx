@@ -1072,47 +1072,55 @@ function inningsCloseSheet(): GuidedSheetSpec {
 
 /**
  * R2b — the over-by-over entry point (Q1/Q2 owner rulings, `_INDEX.md`).
- * Three `SheetNumberStep`s, each PREFILLED from the fold's own current
- * innings total (Q2: "the scorer edits them up," never an increment form —
- * an increment would have to add in pad code against a fold that could be
- * stale by the time it lands, types.ts's own doc on `SheetNumberStep`).
+ * Q2 was REVERSED by the owner on 2026-08-17 (`_INDEX.md`, "R2b — Q2
+ * REVERSED"): the three `SheetNumberStep`s below capture THIS OVER's
+ * runs/wickets/balls, not the innings-so-far total, and `buildPayload`
+ * appends them onto the fold's current totals before emitting — re-keying
+ * the running total every over was the worse trade, and a scorer thinks in
+ * per-over terms, not running totals.
  *
- * `min` on each step is the CURRENT fold value for that field, not 0: this
- * is what keeps the engine's own "summary totals may not decrease" guard
- * (cricket.ts:1416-1426) structurally UNREACHABLE through this sheet's
- * stepper/field, rather than merely caught after a rejected submission —
- * Q2's own "the monotone guard can never fire on a correct entry," enforced
- * here. No `max` on any of the three: `allOut`/`ballsLimit` are strict,
- * cfg/squad-derived checks the ENGINE makes (`applySummary`, same file) and
- * are not exported for this pad to duplicate — same "the fold's own
- * validation is still the correctness backstop" posture the wicket sheet's
- * `fielder` step already takes (`wicketSheet`'s own doc, above).
+ * All three PREFILL to 0 (`balls` to `ballsPerOverOf(cfg)` — never a
+ * hardcoded 6, `hundred` sets 5, cricket.ts:2811) with `min: 0`: this is an
+ * increment form, the one documented exception to `SheetNumberStep`'s own
+ * "the scorer edits the total up" doc (types.ts). `balls` alone also
+ * carries `max: bpo`: a completed over is always exactly `bpo` LEGAL
+ * deliveries — extras (wides/no-balls) are not legal deliveries, so they
+ * can never push it past `bpo` — while below `bpo` stays legitimate, since
+ * an innings can end mid-over (all out, target reached, time). No `max` on
+ * `runs`/`wickets`: `allOut`/`ballsLimit` are strict, cfg/squad-derived
+ * checks the ENGINE makes (`applySummary`, same file) and are not exported
+ * for this pad to duplicate — same "the fold's own validation is still the
+ * correctness backstop" posture the wicket sheet's `fielder` step already
+ * takes (`wicketSheet`'s own doc, above).
  *
- * `balls` prefills to CURRENT + one full `ballsPerOverOf(cfg)` (never a
- * hardcoded 6 — `hundred` sets 5, cricket.ts:2811) — "assume a full over
- * unless told otherwise" — and stays EDITABLE, not derived: an innings can
- * end mid-over (all out, target reached, time), so the balls this entry
- * closes out are not always a whole extra over.
+ * The engine's own "summary totals may not decrease" guard
+ * (cricket.ts:1416-1426) stays structurally UNREACHABLE through this sheet,
+ * now via a different mechanism than the original ruling: every answer is
+ * floored at `min: 0` and `buildPayload` only ever ADDS it onto the fold's
+ * own current `runs`/`wickets`/`legalBalls` reads below, so the emitted
+ * total can never fall below what the fold already holds. (The addition
+ * itself is the one new failure mode this reversal accepts — a bug there
+ * could still emit a total that is higher than before, which passes the
+ * guard while drifting wrong permanently with nothing to catch it; the
+ * `hint` anchor below is the owner's chosen mitigation, not a fix.)
  *
  * `hint` on all three: the fold's CURRENT total as `${runs}/${wickets}` —
  * the exact notation `buildScorebug`'s own `halves[0].big` already uses, so
  * it needs no translation (numerals + "/" read identically on every locale)
  * and this function can stay `t`-free like every OTHER member here except
- * `scorebug`/`dock` (this file's header). This is the closest HONEST
- * approximation of the plan's own design note ("a before → after ledger
- * line... live as the numbers change"): `hint` is baked once when this
- * record is built (G4, types.ts) and rendered VERBATIM by guided-sheet.tsx
- * (never through `t()`, that file's own doc on `SheetNumberStep.hint`) — it
- * cannot react to a scorer's still-in-progress stepper taps on ANY step
- * (guided-sheet.tsx is out of this wave's file grant, and
- * `SheetNumberStep.hint` is a plain `string`, not a function of the live
- * edit value or of answers already given earlier in the SAME wizard run).
- * What ships instead: a correct, always-fresh "before" anchor — rebuilt
- * every `sheets(view)` call, per `PadHostView`'s own "never stale"
- * obligation — sitting directly above the ALREADY-live editable field
- * (task 2's own `renderNumberStep`), which together is the closest real
- * approximation of the ledger the design note describes. Flagged here as a
- * deliberate deviation, not a silent reinterpretation.
+ * `scorebug`/`dock` (this file's header). Now load-bearing rather than
+ * decorative: it is the only place the scorer sees what the delta above is
+ * being added to. `hint` is baked once when this record is built (G4,
+ * types.ts) and rendered VERBATIM by guided-sheet.tsx (never through `t()`,
+ * that file's own doc on `SheetNumberStep.hint`) — it cannot react to a
+ * scorer's still-in-progress stepper taps on ANY step (guided-sheet.tsx is
+ * out of this wave's file grant, and `SheetNumberStep.hint` is a plain
+ * `string`, not a function of the live edit value or of answers already
+ * given earlier in the SAME wizard run). What ships instead: a correct,
+ * always-fresh "before" anchor — rebuilt every `sheets(view)` call, per
+ * `PadHostView`'s own "never stale" obligation — sitting directly above the
+ * ALREADY-live editable field (task 2's own `renderNumberStep`). Flagged
+ * here as a deliberate deviation, not a silent reinterpretation.
  */
 function overSummarySheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
@@ -1124,18 +1132,18 @@ function overSummarySheet(view: PadHostView): GuidedSheetSpec {
   const before = `${runs}/${wickets}`;
 
   const steps: GuidedSheetStep[] = [
-    { id: "runs", kind: "number", title: "pad.cricket.sheet.overSummary.runs.title", initial: runs, min: runs, hint: before },
-    { id: "wickets", kind: "number", title: "pad.cricket.sheet.overSummary.wickets.title", initial: wickets, min: wickets, hint: before },
-    { id: "balls", kind: "number", title: "pad.cricket.sheet.overSummary.balls.title", initial: legalBalls + bpo, min: legalBalls, hint: before },
+    { id: "runs", kind: "number", title: "pad.cricket.sheet.overSummary.runs.title", initial: 0, min: 0, hint: before },
+    { id: "wickets", kind: "number", title: "pad.cricket.sheet.overSummary.wickets.title", initial: 0, min: 0, hint: before },
+    { id: "balls", kind: "number", title: "pad.cricket.sheet.overSummary.balls.title", initial: bpo, min: 0, max: bpo, hint: before },
   ];
 
   return {
     event: "cricket.innings.summary",
     steps,
     buildPayload: (answers) => ({
-      runs: Number(answers.runs),
-      wickets: Number(answers.wickets),
-      legalBalls: Number(answers.balls),
+      runs: runs + Number(answers.runs),
+      wickets: wickets + Number(answers.wickets),
+      legalBalls: legalBalls + Number(answers.balls),
       partial: true,
     }),
   };
