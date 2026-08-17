@@ -57,6 +57,7 @@ export const HELP_ARTICLE_SLUGS = [
   "divisions/archive",
   "divisions/settings",
   "divisions/groups-to-knockout",
+  "divisions/qualify-from-any-stage",
   "divisions/bracket-view",
   "divisions/add-a-match",
   "divisions/discipline",
