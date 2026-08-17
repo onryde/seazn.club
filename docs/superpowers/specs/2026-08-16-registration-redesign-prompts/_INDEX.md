@@ -178,6 +178,17 @@ serves its closed/unavailable state during that window.
   columns do belong to the cart); what was wrong was believing the search.
   Lesson for RS002+: after any column move, grep for `from <table>` /
   `join <table>` and read each hit, not for the column names.
+- **Sweeping e2e by FILENAME missed the spec that mattered.** The RS001 sweep
+  worked from a scout list of `registration*.spec.ts` / `reg-console.spec.ts`
+  and cleared them all — then CI failed 4 tests in
+  **`payments-hardening.spec.ts`**, which creates registrations with raw SQL,
+  POSTs the deleted public register endpoint, and navigates the register page
+  expecting a form. Nothing in its name says "registration". Local unit runs
+  could not see it either: it is Playwright-only, and the e2e job is the first
+  thing that executes it. For RS002+: sweep by BEHAVIOUR
+  (`git grep -a -n -E "insert into registrations|/register|registration_settings" -- apps/web/e2e`),
+  never by filename — and remember `payments-hardening.spec.ts` is one of the
+  four specs `e2e.yml` names explicitly, so it runs on every PR.
 - **"`seed:demo` may seed registrations" (RS001 prompt gotcha) — it does not.**
   `scripts/seed-demo.ts` touches registration exactly once, a
   `registration-settings` PUT (~1085), and writes no registration rows at all.
