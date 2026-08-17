@@ -49,6 +49,15 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   // something that isn't valid right now and can retype it once the breaker
   // ends.
   GAME_AWARD_DURING_TIEBREAK: 422,
+  // F2 (unified progression field) — placeDescriptors/
+  // validateProgressionAgainstShapes moved from this usecase layer's
+  // stage-seeding.ts into the engine; same four codes, same 422, same
+  // wire-visible strings (see apps/web/src/lib/seeding-error.ts and the
+  // errors.json dictionaries, unchanged by this move).
+  SEEDING_RULES_MISSING: 422,
+  SEEDING_MAP_SLOT_INVALID: 422,
+  SEEDING_MAP_SOURCE_INVALID: 422,
+  SEEDING_BESTNTH_UNEQUAL_POOLS: 422,
 };
 
 // HTTP status → stable machine code for non-engine errors.

@@ -52,6 +52,14 @@ export const EngineErrorCode = z.enum([
   // game left to concede — conceding a SET would be a genuinely different,
   // undesigned cascade, deliberately out of scope this session.
   "GAME_AWARD_DURING_TIEBREAK",
+  // F2 (unified progression field) — placeDescriptors/
+  // validateProgressionAgainstShapes moved from apps/web's stage-seeding.ts
+  // into the engine; these four codes moved with them, string-for-string, so
+  // the wire-visible error.code an existing client sees is unchanged.
+  "SEEDING_RULES_MISSING",
+  "SEEDING_MAP_SLOT_INVALID",
+  "SEEDING_MAP_SOURCE_INVALID",
+  "SEEDING_BESTNTH_UNEQUAL_POOLS",
 ]);
 export type EngineErrorCode = z.infer<typeof EngineErrorCode>;
 
