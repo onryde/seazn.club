@@ -428,20 +428,54 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
   test("no horizontal scroll at 375 or 320, and the tile grid + context strip meet the touch bar", async ({
     page,
   }) => {
+    // OWN fixture, deliberately NOT the describe's shared `fx`.
+    //
+    // This test asserts on LIVE-phase controls (the run/wicket tiles declare
+    // `phases: ["live"]`), but the siblings sharing `fx` score balls, void
+    // events and close the innings. Under CI's 2 workers they run CONCURRENTLY
+    // with this one, so the match can be past `live` by the time this asserts
+    // — the tile grid is then correctly empty and `tileCount` is 0, not 3.
+    //
+    // That is exactly how this failed on CI (`run/wicket tiles must be present
+    // at 375`) while passing every local run: reproduced 2/2 with
+    // `--workers=2` and 0/2 with `--workers=1`. The old conditional
+    // "click Start if a button happens to be there" could not fix it, because
+    // the race is about what the match has ALREADY become, not about who
+    // clicks Start.
+    const own = await seedRosteredFixture(page.request, {
+      label: `S12 Cricket Layout ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: `Layout Striker ${TAG}` }, { fullName: `Layout NonStriker ${TAG}` }],
+      away: [{ fullName: `Layout Bowler ${TAG}` }],
+    });
+
     for (const width of [375, 320]) {
       await page.setViewportSize({ width, height: 800 });
-      await page.goto(await fixturePath(page.request, fx.fixtureId));
+      await page.goto(await fixturePath(page.request, own.fixtureId));
       await expect(pad(page)).toBeVisible({ timeout: 20_000 });
       await expectNoHorizontalScroll(page);
 
-      // `fx` is shared with the sibling tests in this describe, which run in
-      // PARALLEL — so the match may or may not already be live by the time
-      // this one loads. Conditional rather than unconditional: calling
-      // `openLiveConsole` here would wait forever on a "Start match" button a
-      // sibling has already consumed, and skipping the click entirely would
-      // find no tile grid on the run where this test happens to be first.
-      const startBtn = page.getByRole("button", { name: "Start match", exact: true });
-      if ((await startBtn.count()) > 0) await startBtn.click();
+      // Nobody else touches `own`, so the match is live exactly when this
+      // test makes it live. Retry the click until the LEDGER moves rather
+      // than clicking once: `waitUntil:"load"` fires before React hydrates,
+      // so a single click can land on a not-yet-live button, leave the
+      // fixture in `pre`, and the run tiles then correctly do not exist —
+      // which reads as "tiles missing" (tileCount 0) rather than as the
+      // hydration race it is. Same pattern mobile.spec.ts already uses for
+      // this exact reason.
+      await expect
+        .poll(
+          async () => {
+            const types = (await ledger(page.request, own.fixtureId)).map((e) => e.type);
+            if (types.includes("core.start")) return true;
+            const btn = page.getByRole("button", { name: "Start match", exact: true });
+            if (await btn.isVisible().catch(() => false)) await btn.click({ timeout: 5_000 }).catch(() => {});
+            return false;
+          },
+          { timeout: 30_000 },
+        )
+        .toBe(true);
 
       // The run/wicket TILES are the REQUIRED entry every ball, replacing the
       // v2 "This over" selects as the pad's most-tapped control (D-14) — the
@@ -455,8 +489,22 @@ test.describe("v2 console — cricket, the headline flow S11 could not drive", (
       const requiredTiles = pad(page).locator(
         '[data-tile-id="run0"], [data-tile-id="run1"], [data-tile-id="wicket"]',
       );
+      // Poll for the tiles rather than counting once. `core.start` landing on
+      // the LEDGER is a server fact; the pad re-rendering into its `live`
+      // phase is a client one, and the second lags the first. Counting
+      // immediately after the ledger moves reads 0 tiles and blames the tile
+      // grid for what is really "the page has not caught up yet".
+      //
+      // This still FAILS if the tiles genuinely never render — the poll times
+      // out and reports the same message — so it waits for the right thing
+      // without being able to paper over a missing grid.
+      await expect
+        .poll(async () => requiredTiles.count(), {
+          timeout: 20_000,
+          message: `run/wicket tiles must be present at ${width}`,
+        })
+        .toBe(3);
       const tileCount = await requiredTiles.count();
-      expect(tileCount, `run/wicket tiles must be present at ${width}`).toBe(3);
       for (let i = 0; i < tileCount; i++) {
         const box = await requiredTiles.nth(i).boundingBox();
         expect(box, `tile ${i} must be laid out at ${width}`).not.toBeNull();
