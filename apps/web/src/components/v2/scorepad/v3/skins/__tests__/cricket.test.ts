@@ -20,7 +20,6 @@ import {
   buildDock,
   buildScorebug,
   buildSheets,
-  buildSwap,
   buildTiles,
   chaseTarget,
   cricketBallDetail,
@@ -1068,9 +1067,9 @@ describe("buildTiles", () => {
     }
   });
 
-  it("non-ball tiles (review/retire/inningsClose) stay visible regardless of fidelity", () => {
+  it("non-ball tiles (review/inningsClose) stay visible regardless of fidelity", () => {
     const tiles = buildTiles(view({ state: state({ innings: [innings({ fine: null })] }) }));
-    for (const id of ["review", "retire", "inningsClose"]) {
+    for (const id of ["review", "inningsClose"]) {
       expect(tiles.some((tl) => tl.id === id)).toBe(true);
     }
   });
@@ -1603,10 +1602,10 @@ describe("buildTiles — bowler-block disables every ball-emitting tile (R2b liv
     }
   });
 
-  it("non-ball tiles (review/retire/inningsClose/more) stay tappable even while bowler-blocked", () => {
+  it("non-ball tiles (review/inningsClose/more) stay tappable even while bowler-blocked", () => {
     const v = view({ state: boundaryWithPrevOverA1(), contextOverrides: { bowler: "a1" } });
     const tiles = buildTiles(v);
-    for (const id of ["review", "retire", "inningsClose", "more"]) {
+    for (const id of ["review", "inningsClose", "more"]) {
       expect(tiles.find((tl) => tl.id === id)!.disabled).toBeUndefined();
     }
   });
@@ -1986,27 +1985,35 @@ describe("buildSheets — over summary (R2b)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// buildSwap — retire flow
+// retire — dedicated tile + SwapSheet flow DROPPED (owner ruling, live-tile
+// audit defect 4, 2026-08-17): the tile's own SwapSheet scoped "off" to the
+// WHOLE batting side (never just the crease, engine backstops it at
+// cricket.ts:1676) and hardcoded reason:"other", while the generic
+// More-sheet's `cricket.retire` action was ALSO reachable, with a real
+// reason enum. Two divergent entry points for the same event was the
+// defect; the ruling keeps the generic path and drops the dedicated one.
+// `buildSwap` is gone — its only caller was the removed tile — and
+// `cricketSkinV3` now declares no `swap` member at all, so cricket has no
+// SwapSheet surface (SwapSheet stays chassis code, ready for R3-R7 — see
+// this describe block's own two tests below).
 // ---------------------------------------------------------------------------
 
-describe("buildSwap", () => {
-  it("is null before the match is live", () => {
-    expect(buildSwap(view({ state: state({ phase: "pre", innings: [] }) }))).toBeNull();
+describe("retire — dedicated tile dropped, generic More sheet is the only path (owner ruling)", () => {
+  it("no tile in any lineup/fidelity state declares id 'retire' or a swap action", () => {
+    const states = [
+      state({ innings: [] }), // pre-lineup
+      state({ innings: [innings({ fine: null })] }), // coarse
+      state(), // fine, default fixture — someone is genuinely at the crease
+    ];
+    for (const st of states) {
+      const tiles = buildTiles(view({ state: st }));
+      expect(tiles.some((tl) => tl.id === "retire")).toBe(false);
+      expect(tiles.some((tl) => "swap" in tl.action)).toBe(false);
+    }
   });
-  it("is null with no one at the crease yet", () => {
-    expect(buildSwap(view({ state: state({ innings: [innings({ fine: null })], orders: {} }) }))).toBeNull();
-  });
-  it("scopes to the batting side and builds a cricket.retire event from the picked pair", () => {
-    const slot = buildSwap(view())!;
-    expect(slot.side).toBe("home");
-    expect(slot.policyOk).toBe(true);
-    expect(slot.buildEvent("h1", "h3")).toEqual({ type: "cricket.retire", payload: { person: "h1", incoming: "h3", reason: "other" } });
-  });
-  it("scopes to away when away is batting", () => {
-    const slot = buildSwap(
-      view({ state: state({ innings: [innings({ battingSide: "away", fine: { striker: "a1", nonStriker: "a2", currentBowler: "h1" } })] }) }),
-    )!;
-    expect(slot.side).toBe("away");
+
+  it("cricketSkinV3 declares no swap method — same 'absent means never applicable' shape as contextSelect", () => {
+    expect(cricketSkinV3(t).swap).toBeUndefined();
   });
 });
 
@@ -2025,7 +2032,10 @@ describe("cricketSkinV3", () => {
     expect(skin.phase!(view())).toBe("live");
     expect(skin.context!(view())).not.toBeNull();
     expect(skin.sheets!(view()).wicket).toBeDefined();
-    expect(skin.swap!(view())).not.toBeNull();
+    // No swap — the dedicated Retire tile (and its SwapSheet flow) was
+    // dropped, owner ruling (live-tile audit defect 4): see the "retire"
+    // describe block above.
+    expect(skin.swap).toBeUndefined();
     // No contextSelect — cricket has no event to persist a selection with
     // (this file's own header).
     expect(skin.contextSelect).toBeUndefined();

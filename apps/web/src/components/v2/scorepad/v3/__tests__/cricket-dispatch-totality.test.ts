@@ -5,15 +5,15 @@
 // SEPARATE file from registry-totality.test.ts (which proves the LANE
 // decision) and from skins/__tests__/cricket.test.ts (task C's own skin
 // unit tests) — this file is the cross-cutting one, spanning the skin
-// (`skins/cricket.tsx`'s buildTiles/buildSheets/buildSwap), the host
+// (`skins/cricket.tsx`'s buildTiles/buildSheets), the host
 // (`pad-host.tsx`'s dedicatedEventTypes/moreActions) and the engine's own
 // `padSpec(cfg)`/`eventSchemas`, and it is the only place that measures all
 // three together against the engine's OWN declared vocabulary.
 //
 // Reachability comes from exactly three surfaces (cricket.tsx's own header,
 // "OWNER HYBRID RULING"): the skin's dedicated TILES (run keypad, wide,
-// declare), its GUIDED/SWAP SHEETS (toss, wicket, review, innings-close,
-// retire), and the chassis's generic "More" sheet, which lists every
+// declare), its GUIDED SHEETS (toss, wicket, review, innings-close), and the
+// chassis's generic "More" sheet, which lists every
 // `padSpec(cfg)` action the skin does not already dedicate — cfg-gated
 // exactly like the engine gates it (declare/follow-on/match-close need
 // `inningsPerSide===2`, follow-on additionally `cfg.followOn?.enabled`,
@@ -38,7 +38,7 @@ import { describe, expect, it } from "vitest";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import type { SquadState } from "@seazn/engine/core";
-import { buildSheets, buildSwap, buildTiles } from "../skins/cricket";
+import { buildSheets, buildTiles } from "../skins/cricket";
 import { dedicatedEventTypes, moreActions } from "../pad-host";
 import type { GuidedSheetSpec, PadHostView, TileSpec } from "../types";
 import { grantAllEntitlements } from "../../__tests__/_cfg-space";
@@ -78,7 +78,7 @@ function cfgFor(variant: VariantName, overrides: Record<string, unknown> = {}): 
 
 // ---------------------------------------------------------------------------
 // Minimal synthetic view — a real fold is not needed: every builder swept
-// here (buildTiles/buildSheets/buildSwap/dedicatedEventTypes/moreActions)
+// here (buildTiles/buildSheets/dedicatedEventTypes/moreActions)
 // is a pure function of its input, and reachability depends only on
 // state.phase / cfg, never on realistic scorecard numbers.
 // ---------------------------------------------------------------------------
@@ -107,8 +107,9 @@ function liveState(): Record<string, unknown> {
       battingSide: "home", runs: 10, wickets: 1, legalBalls: 7, closed: false,
       fine: { striker: "p1", nonStriker: "p2", currentBowler: "p4", freeHitPending: false },
     }],
-    // Non-empty so resolvePeople() resolves a real striker (buildSwap needs
-    // one to return non-null) — the exact ids are never asserted on.
+    // Non-empty so resolvePeople() resolves a real striker/bowler — the
+    // wicket sheet's own person steps need real candidates too — the exact
+    // ids are never asserted on.
     orders: { home: ["p1", "p2", "p3"], away: ["p4", "p5", "p6"] },
   };
 }
@@ -172,13 +173,13 @@ function sweepCases(): SweepCase[] {
 
 interface SweepResult {
   viaTiles: Set<string>;
-  viaSheetsAndSwap: Set<string>;
+  viaSheets: Set<string>;
   viaMore: Set<string>;
 }
 
 function sweep(): SweepResult {
   const viaTiles = new Set<string>();
-  const viaSheetsAndSwap = new Set<string>();
+  const viaSheets = new Set<string>();
   const viaMore = new Set<string>();
 
   for (const { cfg, probeSuperOver } of sweepCases()) {
@@ -186,10 +187,7 @@ function sweep(): SweepResult {
     const tiles = buildTiles(live);
     const sheets = buildSheets(live);
     for (const t of tileEventTypes(tiles)) viaTiles.add(t);
-    for (const t of sheetEventTypes(sheets)) viaSheetsAndSwap.add(t);
-
-    const swap = buildSwap(live);
-    if (swap) viaSheetsAndSwap.add(swap.buildEvent("p1", "p9").type);
+    for (const t of sheetEventTypes(sheets)) viaSheets.add(t);
 
     let dedicated = dedicatedEventTypes(tiles, sheets);
 
@@ -212,7 +210,7 @@ function sweep(): SweepResult {
     }
   }
 
-  return { viaTiles, viaSheetsAndSwap, viaMore };
+  return { viaTiles, viaSheets, viaMore };
 }
 
 describe("cricket dispatch-guard totality (R2/task E headline)", () => {
@@ -220,17 +218,17 @@ describe("cricket dispatch-guard totality (R2/task E headline)", () => {
     expect(ALL_EVENT_TYPES.size).toBe(15);
   });
 
-  it("every cricket.* event type is reachable via tiles, guided/swap sheets, or the More sheet — swept across every cfg variant that gates it", () => {
-    const { viaTiles, viaSheetsAndSwap, viaMore } = sweep();
+  it("every cricket.* event type is reachable via tiles, guided sheets, or the More sheet — swept across every cfg variant that gates it", () => {
+    const { viaTiles, viaSheets, viaMore } = sweep();
 
     // Each of the three surfaces the brief names pulls real weight — none
     // is vacuously empty (a vacuous bucket would let the union assertion
     // below pass for the wrong reason).
     expect([...viaTiles].sort(), "tiles reached nothing").not.toEqual([]);
-    expect([...viaSheetsAndSwap].sort(), "guided/swap sheets reached nothing").not.toEqual([]);
+    expect([...viaSheets].sort(), "guided sheets reached nothing").not.toEqual([]);
     expect([...viaMore].sort(), "the More sheet reached nothing").not.toEqual([]);
 
-    const union = new Set([...viaTiles, ...viaSheetsAndSwap, ...viaMore]);
+    const union = new Set([...viaTiles, ...viaSheets, ...viaMore]);
     const missing = [...ALL_EVENT_TYPES].filter((t) => !union.has(t)).sort();
     expect(missing, `unreachable cricket.* event types: ${missing.join(", ")}`).toEqual([]);
 
@@ -241,5 +239,15 @@ describe("cricket dispatch-guard totality (R2/task E headline)", () => {
     // themselves, for every cfg this sweep explores.
     const invented = [...union].filter((t) => !ALL_EVENT_TYPES.has(t)).sort();
     expect(invented, `reachable type not in the engine's own eventSchemas: ${invented.join(", ")}`).toEqual([]);
+  });
+
+  // R2b (owner ruling, live-tile audit defect 4): the dedicated Retire tile
+  // and its SwapSheet flow are gone — `cricket.retire` must now be reached
+  // ONLY through the generic More sheet, never through the guided sheets
+  // surface this same sweep already accounts for above.
+  it("cricket.retire is reachable ONLY through the generic More sheet — the dedicated tile and its SwapSheet flow were dropped", () => {
+    const { viaSheets, viaMore } = sweep();
+    expect(viaSheets.has("cricket.retire")).toBe(false);
+    expect(viaMore.has("cricket.retire")).toBe(true);
   });
 });

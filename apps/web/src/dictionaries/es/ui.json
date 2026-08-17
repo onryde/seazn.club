@@ -3898,8 +3898,6 @@
   "pad.cricket.sheet.retire.reason.hurt": "Lesionado",
   "pad.cricket.sheet.retire.reason.out": "Eliminado",
   "pad.cricket.sheet.retire.reason.other": "Otro",
-  "pad.cricket.sheet.retire.who.title": "¿Quién se retira?",
-  "pad.cricket.sheet.retire.incoming.title": "¿Quién entra?",
   "pad.cricket.sheet.inningsClose.reason.title": "¿Por qué cerrar la entrada?",
   "pad.cricket.sheet.inningsClose.reason.allOut": "Todos eliminados",
   "pad.cricket.sheet.inningsClose.reason.oversComplete": "Overs completados",

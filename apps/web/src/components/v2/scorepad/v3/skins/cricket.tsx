@@ -30,8 +30,10 @@
 // joined this list in R2b, `ContextSlot.message`'s own doc in ../types.ts,
 // once the bowler-eligibility block needed an interpolated name/quota baked
 // into a string before it reaches the chassis) — every other member
-// (`tiles`/`sheets`/`swap`/`phase`) is a plain, `t`-free function of `view`
-// alone, independently exported and testable with no `t` involved.
+// (`tiles`/`sheets`/`phase`) is a plain, `t`-free function of `view`
+// alone, independently exported and testable with no `t` involved. (cricket
+// declares no `swap` at all as of R2b — see the "swap() — DROPPED" section
+// further down.)
 // (`tiles` is the one exception worth flagging: it also RECEIVES an
 // optional `t` for `TileSpec.labelText`'s own sake, but keeps a working
 // default — `buildTiles`'s own header explains why that one is defaulted
@@ -91,7 +93,6 @@ import {
   type ScorebugSpec,
   type SkinDefV3,
   type StripItem,
-  type SwapSlot,
   type TileSpec,
 } from "../types";
 
@@ -1050,7 +1051,20 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   }
 
   tiles.push({ id: "review", label: "pad.cricket.action.review", kind: "standard", phases: ["live"], action: { sheet: "review" } });
-  tiles.push({ id: "retire", label: "pad.cricket.action.retire", kind: "standard", phases: ["live"], action: { swap: true } });
+  // R2b (owner ruling, live-tile audit defect 4, 2026-08-17): the dedicated
+  // Retire tile is GONE — its own SwapSheet scoped "off" to the whole
+  // batting side (never just the crease, engine backstops it at
+  // cricket.ts:1676) and hardcoded reason:"other", while the generic
+  // More-sheet's `cricket.retire` action (padSpec's own `retireAction`,
+  // engine cricket.ts) was ALSO reachable with a real reason enum — two
+  // divergent entry points for the one event. `pad-host.tsx`'s own
+  // `dedicatedEventTypes` never counted this tile's `{swap:true}` action
+  // toward the dedicated set anyway (its own header: a swap tile "builds its
+  // event dynamically... contributes nothing"), so `cricket.retire` was
+  // ALREADY reachable via the generic More sheet before this change and
+  // stays reachable the same way now — nothing to add here, only to remove.
+  // See `buildSwap`'s own former header (this section, now deleted) and
+  // `cricketSkinV3`'s factory below for the rest of the removal.
   tiles.push({
     id: "inningsClose",
     label: "pad.cricket.action.inningsClose",
@@ -1676,37 +1690,20 @@ export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> 
 }
 
 // ---------------------------------------------------------------------------
-// swap() — §2.7. `cricket.retire`: `person`/`incoming` are exactly an
-// off/on pair (cricket.ts:274-278, `incoming` optional there — supplied
-// here since the whole point of offering the on-picker is to name someone).
-// `reason` is REQUIRED with no default (hurt/out/other) and the SwapSheet
-// primitive collects only the off/on pair, no third field — "other" is the
-// honest generic bucket (never presumes "hurt" for what might be a tactical
-// swap of the auto-assigned next batter, design doc §2.7's OTHER named use
-// of this same flow: "new batter after a wicket"). `policyOk: true`
-// unconditionally: unlike football/hockey's substitutions, cricket.retire
-// does not run through `reduceLineupEvent`/`lineupPolicy(cfg)` (it is the
-// sport's own event, validated by the cricket fold itself, not the generic
-// lineup reducer) — there is no pre-computable policy verdict to gate on
-// here; a genuinely illegal retire still surfaces as a normal rejected
-// submission, same backstop as the wicket sheet's own fielder step (still
-// whole-side, G6's own doc explains why that one can't be narrowed).
+// swap() — DROPPED (R2b, owner ruling, live-tile audit defect 4,
+// 2026-08-17). This section used to build a `SwapSlot` for `cricket.retire`
+// (off/on pair, hardcoded `reason: "other"`) backing the tile removed above
+// in `buildTiles`. That flow scoped its "off" picker to the WHOLE batting
+// side rather than the crease (engine backstops it at cricket.ts:1676),
+// while the generic More-sheet's own `cricket.retire` action was already
+// separately reachable with a real reason enum — two divergent entry points
+// for one event, the defect this removal closes. `cricketSkinV3` below now
+// omits `swap` entirely (same "absent means never applicable" convention
+// `context`/`contextSelect` already establish in this file) — cricket has
+// no SwapSheet surface at all. `SwapSheet`/`SwapSlot` remain CHASSIS code
+// (swap-sheet.tsx, types.ts, pad-host.tsx) untouched by this removal — they
+// stay available for R3-R7, simply unused by cricket now.
 // ---------------------------------------------------------------------------
-
-export function buildSwap(view: PadHostView): SwapSlot | null {
-  const state = asState(view.state);
-  if (state.phase !== "live" && state.phase !== "super_over") return null;
-  if (currentInnings(state) === null) return null;
-  const people = resolvePeople(state, view.contextOverrides);
-  if (!people.striker) return null; // nobody at the crease yet to retire
-  return {
-    offLabel: "pad.cricket.sheet.retire.who.title",
-    onLabel: "pad.cricket.sheet.retire.incoming.title",
-    side: people.battingSide,
-    policyOk: true,
-    buildEvent: (off, on) => ({ type: "cricket.retire", payload: { person: off, incoming: on, reason: "other" } }),
-  };
-}
 
 // ---------------------------------------------------------------------------
 // The factory (this file's header explains why a factory, not a bare
@@ -1729,6 +1726,8 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     // skin-owned. Without this line the function exists, its unit tests pass,
     // and every row still reads "Ball recorded" in the product.
     activityDetail: cricketBallDetail,
-    swap: buildSwap,
+    // No swap — see this file's own "swap() — DROPPED" section above
+    // (owner ruling, live-tile audit defect 4). cricket.retire is reached
+    // through the generic More sheet only.
   };
 }
