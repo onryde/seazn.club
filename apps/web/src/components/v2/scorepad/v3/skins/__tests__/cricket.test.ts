@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { EventEnvelope, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
 import { answerStep, backStep, currentStep, initialSheetState } from "../../guided-sheet";
-import type { GuidedSheetSpec, PadHostView } from "../../types";
+import type { GuidedSheetSpec, PadHostView, SkinDefV3 } from "../../types";
 import {
   EXTRA_KINDS,
   FIELDER_ELIGIBLE_KINDS,
@@ -1225,6 +1225,21 @@ describe("cricketSkinV3", () => {
     const skinB = cricketSkinV3((k) => `B:${k}`);
     expect(skinA.scorebug(view()).halves[0]!.who[0]!.name).toBe("A:scorepad.skin.cricket.scorebug.batting");
     expect(skinB.scorebug(view()).halves[0]!.who[0]!.name).toBe("B:scorepad.skin.cricket.scorebug.batting");
+  });
+
+  // Review finding (bbcb12554): `buildTiles(view, t = (key) => key)` carries a
+  // DEFAULT t for ~17 call sites in this file, so dropping the 2nd arg at the
+  // `tiles:` wiring below type-checks, lints, and ships the raw i18n key as the
+  // tile's visible label. Every labelText test above calls buildTiles directly
+  // with an explicit t, so none of them can see that. This one goes through the
+  // FACTORY, which is the line that would actually regress.
+  it("tiles() closes over the given t — the factory wiring, not buildTiles' default, is what localises labelText", () => {
+    const coarse = view({ state: state({ innings: [innings({ fine: null, legalBalls: 30 })] }) });
+    const skinA = cricketSkinV3((k, vars) => `A:${k}:${vars?.over}`);
+    const skinB = cricketSkinV3((k, vars) => `B:${k}:${vars?.over}`);
+    const overOf = (s: SkinDefV3) => s.tiles(coarse).find((tl) => tl.id === "overSummary")!;
+    expect(overOf(skinA).labelText).toBe("A:pad.cricket.action.endOfOver:6");
+    expect(overOf(skinB).labelText).toBe("B:pad.cricket.action.endOfOver:6");
   });
 });
 
