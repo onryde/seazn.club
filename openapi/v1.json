@@ -25168,8 +25168,6 @@
                               "type": "string",
                               "enum": [
                                 "greedy",
-                                "z3",
-                                "z3+lns",
                                 "optimized"
                               ]
                             },
@@ -25188,7 +25186,6 @@
                                 "already_optimal",
                                 "infeasible",
                                 "verifier_rejected",
-                                "z3_unavailable",
                                 "solver_busy",
                                 "not_searched",
                                 "solver_unavailable"
@@ -62515,9 +62512,8 @@
                               "type": "string",
                               "enum": [
                                 "none",
-                                "z3",
-                                "llm",
-                                "optimized"
+                                "optimized",
+                                "llm"
                               ]
                             },
                             "solver_ran": {
@@ -67018,9 +67014,8 @@
                               "type": "string",
                               "enum": [
                                 "none",
-                                "z3",
-                                "llm",
-                                "optimized"
+                                "optimized",
+                                "llm"
                               ]
                             },
                             "solver_ran": {

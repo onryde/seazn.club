@@ -1578,7 +1578,7 @@ describe("AutoScheduleResult metrics + solver contract", () => {
     total: 14,
   };
   const solver = {
-    engine: "z3" as const,
+    engine: "optimized" as const,
     status: "ok" as const,
     tiers_completed: 2,
     tiers_total: 4,
@@ -1606,18 +1606,17 @@ describe("AutoScheduleResult metrics + solver contract", () => {
     expect(() => AutoScheduleResult.parse({ assignments: [], conflicts: [] })).toThrow();
   });
 
-  /** These eight must stay one-for-one with the engine's BuildStatus union.
+  /** These seven must stay one-for-one with the engine's BuildStatus union.
    *  Pinned as literals rather than imported: packages/engine is under
    *  concurrent edit in sibling lanes, and this is the API-side contract.
-   *  `solver_unavailable` (Task 06b) is the eighth — the placement era's
-   *  `z3_unavailable`, additive rather than a rename of it. */
-  it("accepts exactly the eight BuildStatus values", () => {
+   *  Seven since C7 retired the z3-era `z3_unavailable`, whose copy and
+   *  meaning `solver_unavailable` already carried. */
+  it("accepts exactly the seven BuildStatus values", () => {
     for (const status of [
       "ok",
       "already_optimal",
       "infeasible",
       "verifier_rejected",
-      "z3_unavailable",
       "solver_busy",
       "not_searched",
       "solver_unavailable",
@@ -1654,13 +1653,12 @@ describe("AutoScheduleResult metrics + solver contract", () => {
     expect(AutoScheduleResult.parse(result)).toEqual(result);
   });
 
-  // "optimized" (Task 06b, renamed from "cp-sat" by Task 13) is the fourth.
-  // The rejection below is "cp-sat" — the retired pre-rename value, still a
-  // distinct, invalid string — kept so this case keeps proving the enum
-  // rejects an unknown value rather than merely re-proving "optimized" is
-  // accepted twice.
-  it("accepts exactly the four solver engines", () => {
-    for (const engine of ["greedy", "z3", "z3+lns", "optimized"]) {
+  // Two engines since C7 retired "z3" and "z3+lns". The rejection below is
+  // "cp-sat" — the pre-rename value "optimized" replaced, still a distinct,
+  // invalid string — kept so this case keeps proving the enum rejects an
+  // unknown value rather than merely re-proving "optimized" is accepted twice.
+  it("accepts exactly the two solver engines", () => {
+    for (const engine of ["greedy", "optimized"]) {
       expect(ScheduleSolverInfo.parse({ ...solver, engine }).engine).toBe(engine);
     }
     expect(() => ScheduleSolverInfo.parse({ ...solver, engine: "cp-sat" })).toThrow();

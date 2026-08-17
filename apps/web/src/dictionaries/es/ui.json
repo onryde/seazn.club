@@ -3346,8 +3346,6 @@
   "board.result.metric.scheduled": "Programados",
   "board.result.legend": "Espera más larga = la mayor espera de un equipo entre partidos. Diferencia entre pistas = la pista más cargada frente a la menos cargada.",
   "board.result.engine.greedy": "Pasada rápida",
-  "board.result.engine.z3": "Solucionador",
-  "board.result.engine.z3lns": "Solucionador y refinado",
   "board.result.engine.optimized": "Solucionador",
   "board.result.moved.one": "1 partido movido",
   "board.result.moved.other": "{count} partidos movidos",

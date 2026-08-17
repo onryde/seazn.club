@@ -36,7 +36,7 @@ C6 (prose) is safe whenever.
 | C4 | `C4-z3-reflow-cpsat.md` | z3 stage A | C1 (reflow inherits round rule) | **PR open** (this session) — see status log. Found two real, out-of-scope `buildSchedule` gaps shared with BUILD/POLISH (a frozen-feeder dependency gap, a bracket/TBD-fixture wall) — neither fixed here. |
 | C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | **PARKED, PR #576 draft** — owner ruling 2026-08-16: land C9 first. CI found a real bracket/frozen-feeder repair-capability regression the session's own (vacuous — see status log) local smoke run could not see. See status log. |
 | C6 | `C6-z3-prose-identifiers.md` | z3 stage C | ~~anytime~~ → **after C4+C5** | ~~NO-OP today~~ → **PR #588 open**, real work once A+B landed — 15 false claims, one of them an actionable instruction naming a deleted script. Ships the ledger C8's acceptance asks for as a test. See status log. |
-| C7 | `C7-z3-public-contract.md` | z3 stage D | C4+C5 **deployed** (nothing writes z3) | TODO |
+| C7 | `C7-z3-public-contract.md` | z3 stage D | C4+**C9** (not C5) deployed to **stg** — prod does not exist | **PR open** — see status log. NO migration was owed: the values are response-only telemetry. Also retired `z3_unavailable`, which the brief never assigned to a stage and without which its own "zero z3 in openapi" acceptance is unreachable. |
 | C8 | `C8-z3-delete-solver.md` | z3 stage E | C7 | TODO |
 | C9 | `C9-decomposed-repair-cpsat.md` | z3 retirement gap closure | branches off `origin/main` directly, includes C5's commits (C5 targets a different base — see status log) | **PR #583 open**, targets `main` — see status log. Density regression CLOSED, general frozen-feeder dependency gap CLOSED. Bracket/TBD-sibling gap (what parked C5) NOT closed — new finding, contradicts this brief's own "REFUTED" note. #576 (C5) should close as superseded once #583 merges. |
 
@@ -1780,3 +1780,98 @@ wholesale, taking this task's own driver down with it.
 PR: https://github.com/ashokhein/seazn.club/pull/583 (targets `main`;
 carries C5's 11 commits too — #576 should close as superseded once this
 merges).
+
+### C7 — z3 public contract retirement (2026-08-17)
+
+Branch `feat/c7-z3-public-contract`, worktree `.claude/worktrees/c7-z3-contract`,
+off `252a073d`.
+
+**The gate as written could not be evaluated, and the reason matters.** The
+brief gates on "C4 + C5 **deployed**". C5 was superseded by C9 (`8b85ab39`), so
+the first half names a PR that closed. The second half assumes a production
+environment: `prod.yml` fires on a version tag, has **zero runs**, and its own
+header records that the `seazn-club-prod` Fly app does not exist yet. There is
+no production deploy for a narrowed enum to break. What the gate reduces to is
+staging, which is at `252a073d` with a green deploy — so it is satisfied, but
+by a different argument than the one written down.
+
+**NO MIGRATION WAS OWED, and this is the finding.** The brief's step 1 ("rewrite
+rows `engine z3|z3+lns → optimized`") and the design's premise (`"z3"` is
+"**stored** in board rows") are both false. Four independent checks:
+
+- `git grep -a -i -l z3 -- db/` returns nothing. No CHECK constraint, no
+  Postgres enum type, no column named engine/solver/repair.
+- On a live schema, `information_schema.columns` has zero columns matching
+  `engine|solver|repair`; every candidate is a `jsonb` blob, and no write path
+  puts a solver engine value into one.
+- `ScheduleSolverInfo.parse` / `AiRepairReport.parse` appear **only** in
+  `__tests__`, always over a freshly computed response. No production read path.
+- `ScheduleConfig` (`schemas.ts:843-894`) — the schema `_RULES.md` warns is the
+  READ path — has no engine, solver or repair field at all.
+
+So the "rewrite-then-narrow order is mandatory" instruction, the load-bearing
+part of the brief, protects against a hazard this repo does not have. The
+ordering was still honoured in spirit: the demo fixture (the one committed
+artefact that DID carry a retired value) was rewritten in the same PR.
+
+Recorded here rather than acted on: had the migration been written anyway it
+would have needed **V365**, not the "next free" V363 — the in-flight RS001
+registration branch holds unmerged V363 and V364.
+
+**`z3_unavailable` belonged to this stage and no brief said so.** The
+acceptance criterion is "openapi snapshot has zero `"z3"` occurrences (was 3)".
+The real count was **5**, in `v1.public.json` AND in `v1.json` (the brief names
+only the public one; the same generator writes both). Two of the five are the
+`status` member `z3_unavailable`. Nothing has produced it since C4/C9, and
+`solver_unavailable` — added by Task 06b explicitly because "the NAME is
+misleading once z3 is gone" — already renders through the identical i18n key.
+Owner ruled on 2026-08-17 to retire it here. Without that, the stated
+acceptance is unreachable by construction.
+
+**Two live smoke assertions had gone vacuous, found by sweeping for comparisons
+rather than for prose.** `scripts/smoke.ts` compared `solver.status` against
+`"z3_unavailable"` in two places (`!==`, in the BUILD and POLISH suites). Once
+the API cannot emit that value those comparisons are constantly true — checks
+that can no longer fail. Both now name `solver_unavailable`. This is the same
+defect shape C6 recorded against `schedule-capacity-guard.test.ts`'s
+`z3LoadCount`, in a file C6 had classified `ACCURATE_TODAY`.
+
+**The brief's `file:line` citations had all drifted.** `schemas.ts:1016` and
+`:2190` are really **`:1229`** (`ScheduleSolverInfo.engine`) and **`:2592`**
+(`AiRepairReport.engine`). The brief's five-file set also missed three
+load-bearing sites: `apps/web/src/lib/i18n-keys.ts`, `scripts/smoke.ts`, and
+the drift test itself.
+
+**Five unions, not two.** Narrowing the two Zod enums alone does not compile:
+`schedule.ts` assigns the engine's `BuildResult["engine"]` and `BuildStatus`
+into them one-for-one. So `build.ts:574` and its `BuildStatus` moved too, and
+`schedule-ai-solver.ts:136`'s `RepairEngine` with them. `tsc` found the 13
+consumer sites; **it could not find the runtime ones** — three enum loops in
+`schedule.test.ts` iterate plain `string[]`, so they typecheck clean and would
+have failed at runtime. Swept with a literal grep afterwards, which is what
+caught them.
+
+**Left for C8, deliberately:** `build.test.ts`'s two `it.skip` blocks
+(`:818` asserting `z3_unavailable`, `:1262` asserting `engine === "z3"`) now
+assert values their unions forbid. They are skipped, so they cannot fail, and
+the file's own comment says stage E deletes them with `z3-load.ts`. C8 must
+actually delete them rather than inherit them — a skipped test that asserts an
+impossible value is exactly the "skip is load-bearing" shape.
+
+**Ledger:** `OWNED_BY_C7` is now empty. Seven of its ten files lost their last
+z3 mention; three (`schemas.ts`, `result-strip.tsx`, `result-strip.test.tsx`)
+kept accurate past-tense prose explaining why a member is absent and moved to
+`ACCURATE_TODAY`. Two files that were in `ACCURATE_TODAY`
+(`schedule-board-polish.test.tsx`, `ai-diff-repair-strip.test.tsx`) left the
+ledger entirely — their only z3 was a fixture value this task rewrote. The
+new `z3-contract-retired.test.ts` joined it. The two-directional assertion
+caught every one of those four moves; none was predicted.
+
+**Numbers** (JSON reporter, brand-new database, `PLACEMENT_SERVICE_HOST` unset
+in BOTH arms):
+
+- base arm, `origin/main` content: **4938 passed / 4 failed / 5004 total**,
+  499 files. All four reds are `schedule-build-honours-locks.test.ts`,
+  `expected undefined to be '2026-08-01T19:00:00.000Z'` — the placement service
+  being unreachable, not the branch.
+- engine base arm: **3999 passed / 0 failed / 4031**.

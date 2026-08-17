@@ -260,7 +260,7 @@ describe("the board's three schedule actions post three different bodies", () =>
         total: 22,
       },
       solver: {
-        engine: "z3",
+        engine: "optimized",
         status: "ok",
         mode: "polish",
         tiers_completed: 4,

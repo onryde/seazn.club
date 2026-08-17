@@ -28,7 +28,7 @@ const metrics = (over: Partial<ScheduleMetrics> = {}): ScheduleMetrics => ({
 });
 
 const solver = (over: Partial<ScheduleSolverInfo> = {}): ScheduleSolverInfo => ({
-  engine: "z3",
+  engine: "optimized",
   status: "ok",
   tiers_completed: 4,
   tiers_total: 4,
@@ -54,9 +54,9 @@ const render = (m: ScheduleMetrics, s: ScheduleSolverInfo, onOverrideLocks?: () 
 
 /** The rendered text of the provenance line, comment markers stripped (React
  *  separates adjacent text expressions with `<!-- -->` in SSR output). Reading
- *  the WHOLE line is what lets an engine-label assertion be exact: "Solver" is a
- *  prefix of "Solver, then refined", so a substring check can be satisfied by
- *  the wrong label. */
+ *  the WHOLE line is what lets an engine-label assertion be exact: a substring
+ *  check can be satisfied by a longer label that merely starts the same way,
+ *  which is how the retired "Solver, then refined" used to shadow "Solver". */
 const provenance = (html: string): string => {
   const m = /data-testid="schedule-result-provenance"[^>]*>(.*?)<\/p>/s.exec(html);
   if (!m) throw new Error("no provenance line rendered");
@@ -77,56 +77,54 @@ describe("ScheduleResultStrip — the numbers", () => {
   /**
    * Task 11 (placement cutover) — `data-engine` is the ONLY DOM-observable
    * proof of which engine produced a board: the rendered provenance text
-   * gives "optimized" the SAME copy as `z3` in every locale (`it.each` below),
+   * gives "optimized" neutral copy in every locale (`it.each` below),
    * so an e2e spec asserting the cutover has nothing else to read. Anchored on
    * `="` for every value, never bare presence — React serialises an omitted
    * prop as the string `"$undefined"`, so a probe that only checked the
    * attribute existed would pass whether or not `solver.engine` ever reached
    * the DOM at all.
    */
-  it.each(["greedy", "z3", "z3+lns", "optimized"] as const)(
+  it.each(["greedy", "optimized"] as const)(
     "carries engine '%s' on data-engine, not a different value",
     (engine) => {
       const html = render(metrics(), solver({ engine }));
       expect(html).toContain(`data-engine="${engine}"`);
-      for (const other of ["greedy", "z3", "z3+lns", "optimized"] as const) {
+      for (const other of ["greedy", "optimized"] as const) {
         if (other !== engine) expect(html).not.toContain(`data-engine="${other}"`);
       }
     },
   );
 
   it("reports the run's provenance in the organiser's words, never the engine key", () => {
-    const html = render(metrics(), solver({ engine: "z3+lns", elapsed_ms: 3200, moved: 6 }));
-    expect(html).toContain("Solver, then refined");
+    const html = render(metrics(), solver({ engine: "optimized", elapsed_ms: 3200, moved: 6 }));
+    expect(html).toContain("Solver");
     // Scoped to the READABLE copy line, not the whole markup: Task 11 added
-    // `data-engine="z3+lns"`, a machine-readable attribute for e2e that is
+    // `data-engine="optimized"`, a machine-readable attribute for e2e that is
     // deliberately NOT organiser-facing copy — `provenance()` strips it out,
     // so this still pins "the engine key never leaks into the sentence a
     // person reads" without also forbidding the DOM hook that carries it.
-    expect(provenance(html)).not.toContain("z3+lns");
+    expect(provenance(html)).not.toContain("optimized");
     expect(html).toContain("3.2s");
     expect(html).toContain("6 matches moved");
   });
 
   /**
-   * ALL THREE engine values, one case each, asserted on the provenance line
+   * BOTH engine values, one case each, asserted on the provenance line
    * ITSELF.
    *
    * This label is the only thing anywhere on screen that names which solver
    * produced the board — a greedy fallback and an optimised run are otherwise
    * indistinguishable to an organiser, because a greedy board is also a valid
-   * board. This file used to pin `z3+lns` and nothing else, and the e2e regex
-   * accepts all three, so the `greedy` and `z3` entries of `ENGINE_KEY` were
+   * board. This file used to pin one engine and nothing else, and the e2e
+   * regex accepts every value, so the remaining `ENGINE_KEY` entries were
    * unpinned: SWAPPING THEM survived every test in the branch. A quick-pass
    * board would have told the organiser it was optimised, and an optimised one
    * that it was not.
    */
   it.each([
     ["greedy", "Quick pass"],
-    ["z3", "Solver"],
-    ["z3+lns", "Solver, then refined"],
-    // Task 06b: same neutral copy as `z3` — the organiser is never told
-    // which solver ran, only whether one did.
+    // Neutral copy: the organiser is never told which solver ran, only
+    // whether one did.
     ["optimized", "Solver"],
   ] as const)("names the '%s' engine exactly '%s'", (engine, label) => {
     const html = render(metrics(), solver({ engine, elapsed_ms: 3200, moved: 6 }));
@@ -259,20 +257,11 @@ describe("ScheduleResultStrip — the anytime contract", () => {
     expect(html).toContain('data-tone="plain"');
   });
 
-  it("z3_unavailable says the board is valid, and does NOT promise a retry will help", () => {
-    const html = render(metrics(), solver({ status: "z3_unavailable", engine: "greedy" }));
-    expect(html).toContain("the optimiser was not available");
-    expect(html).toContain("The board is valid, just not optimised.");
-    expect(html).not.toContain("Try again");
-    expect(html).toContain('data-tone="plain"');
-  });
-
-  // Task 06b: the placement era's `z3_unavailable`. Same copy, same tone, by
-  // design (the brief's semantic argument: "does not promise a retry will
-  // help" is equally true for a placement outage) — this is what proves the
-  // two statuses actually share a rendering path rather than one silently
-  // falling through a switch with no case (which throws, per the
-  // `not_searched` test below).
+  // Sole owner of this copy since C7 retired the z3-era `z3_unavailable` that
+  // shared it. The pairing that used to prove the two statuses share a
+  // rendering path is gone with the other member; what still proves this case
+  // is reached rather than falling through the switch is that a status with no
+  // case throws (see the `not_searched` test below).
   it("solver_unavailable says the board is valid, and does NOT promise a retry will help", () => {
     const html = render(metrics(), solver({ status: "solver_unavailable", engine: "greedy" }));
     expect(html).toContain("the optimiser was not available");
@@ -329,7 +318,7 @@ describe("ScheduleResultStrip — the anytime contract", () => {
   });
 
   /**
-   * AMBER, and the departure from `solver_busy` / `z3_unavailable` is the point.
+   * AMBER, and the departure from `solver_busy` / `solver_unavailable` is the point.
    *
    * Those two are plain because they are transient and the organiser cannot act
    * on them — the same click a minute later can produce a better board.
@@ -393,7 +382,7 @@ describe("ScheduleResultStrip — the anytime contract", () => {
     expect(html).not.toContain('data-tone="plain"');
     // The falsifier: a component that flagged every non-`ok` status would pass
     // the line above. These two must stay plain on the SAME complete board.
-    for (const status of ["solver_busy", "z3_unavailable"] as const) {
+    for (const status of ["solver_busy", "solver_unavailable"] as const) {
       expect(render(metrics(), solver({ status, engine: "greedy" }))).toContain(
         'data-tone="plain"',
       );

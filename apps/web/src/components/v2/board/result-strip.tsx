@@ -1,6 +1,6 @@
 "use client";
 
-// Result strip (z3 auto-schedule, Task 11) — what the solver actually achieved,
+// Result strip (auto-schedule, Task 11) — what the solver actually achieved,
 // stated plainly, directly under the green "Placed N matches" notice.
 //
 // WHY IT EXISTS. The solver is *anytime*: it returns the best board it found
@@ -30,12 +30,11 @@
 import { useMsg, usePlural } from "@/components/i18n/dict-provider";
 import type { ScheduleMetrics, ScheduleSolverInfo } from "@/server/api-v1/schemas";
 
+// Two members since C7 retired the z3-era engines. `optimized` already carried
+// the same neutral copy as the `z3` key it outlived ("Solver"/"Solveur"/
+// "Solucionador"/NL), which is why removing them changed no user-facing text.
 const ENGINE_KEY = {
   greedy: "board.result.engine.greedy",
-  z3: "board.result.engine.z3",
-  "z3+lns": "board.result.engine.z3lns",
-  // Same neutral copy as `z3` in every locale ("Solver"/"Solveur"/
-  // "Solucionador"/NL) — a new engine label, not new user-facing text.
   optimized: "board.result.engine.optimized",
 } as const;
 
@@ -65,11 +64,9 @@ function statusKey(solver: ScheduleSolverInfo) {
       return "board.result.alreadyOptimal";
     case "solver_busy":
       return "board.result.busy";
-    case "z3_unavailable":
-    // The placement era's `z3_unavailable`: same copy, because "does not promise
-    // a retry will help" is equally true for a genuine placement outage. No new
-    // string — see `build.ts`'s `BuildStatus.solver_unavailable` doc for why
-    // it is a distinct status identifier even though it renders identically.
+    // Shared this key with a z3-era `z3_unavailable` until C7 retired that
+    // name: "does not promise a retry will help" is equally true for a genuine
+    // placement outage, so the two always rendered identically.
     case "solver_unavailable":
       return "board.result.unavailable";
     case "verifier_rejected":
@@ -219,14 +216,14 @@ export function ScheduleResultStrip({
   // board". `verifier_rejected` deliberately does NOT qualify: it is an internal
   // fault the organiser cannot act on, their board is valid either way, and the
   // loud part of that failure belongs in our logs, not on their screen.
-  // `solver_busy` and `z3_unavailable` are likewise ordinary, not alarming.
+  // `solver_busy` and `solver_unavailable` are likewise ordinary, not alarming.
   //
   // `infeasible` DOES qualify even when nothing was dropped: the numbers are
   // fine, but a card the organiser pinned has been moved off the time they
   // pinned it to, and they may already have told somebody about it.
   //
   // `not_searched` ALSO qualifies, and the split from the two statuses named
-  // above is the whole judgement. `solver_busy` and `z3_unavailable` are
+  // above is the whole judgement. `solver_busy` and `solver_unavailable` are
   // transient and outside the organiser's hands — the same click a minute later
   // can return an optimised board, so a plain band plus "try again" is the
   // complete and honest answer. `not_searched` is neither transient nor ours:
@@ -274,9 +271,9 @@ export function ScheduleResultStrip({
       data-tone={flagged ? "flag" : "plain"}
       data-status={solver.status}
       // Task 11: the only DOM-observable proof of which engine produced this
-      // board. `ENGINE_KEY` above deliberately renders "optimized" with the
-      // SAME copy as z3 in every locale, so the rendered text cannot tell them
-      // apart — this attribute is additive, carries no new copy, and owes no
+      // board. `ENGINE_KEY` above renders "optimized" with neutral copy in
+      // every locale, so the rendered text cannot name the engine — this
+      // attribute is additive, carries no new copy, and owes no
       // i18n. Assert it as `data-engine="optimized"`, never bare presence:
       // React serialises an omitted prop as the string "$undefined".
       data-engine={solver.engine}

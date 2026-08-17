@@ -805,7 +805,7 @@ describe.skipIf(!HAS_DB)("autoSchedule dispatch (Task 9)", () => {
   // completed remote proof — `already_optimal` is exactly that, since
   // `build.ts` only reaches it when `tiersCompleted` climbs the WHOLE ladder
   // (the file's own first test pins the same fact against `TIERS_TOTAL`).
-  // `solver_unavailable`/`not_searched`/`z3_unavailable`/`solver_busy` are all
+  // `solver_unavailable`/`not_searched`/`solver_busy` are all
   // DIFFERENT status values that leave the ladder short, so this discriminates
   // a real, complete solve from every fallback shape there is.
   //
