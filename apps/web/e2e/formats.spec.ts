@@ -1,5 +1,12 @@
 import { test, expect } from "@playwright/test";
-import { apiJson, TAG, competitionPath, divisionPath } from "./helpers";
+import {
+  apiJson,
+  TAG,
+  competitionPath,
+  divisionPath,
+  addEntrantsViaApi,
+  expectNoHorizontalScroll,
+} from "./helpers";
 
 // PROMPT-28 formats: the new stage presets are reachable from the division
 // builder, and a ladder division renders its challenge panel.
@@ -20,6 +27,133 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
   await expect(page.getByText("Americano (padel)")).toBeVisible();
   await expect(page.getByText("Mexicano (padel)")).toBeVisible();
   await expect(page.getByText("Ladder", { exact: true })).toBeVisible();
+  // L3/#414 pass 3 — the two new qualification-from-any-stage presets.
+  await expect(page.getByText("Knockout + Plate", { exact: true })).toBeVisible();
+  await expect(page.getByText("Qualifying + Main draw", { exact: true })).toBeVisible();
+
+  await expectNoHorizontalScroll(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expectNoHorizontalScroll(page);
+});
+
+// L3/#414 pass 3: create a ko_plate competition from the template picker,
+// complete the main draw, see the plate seeded from round-1 losers.
+test("ko_plate template: completing the main draw seeds the plate", async ({ page, request }) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `KoPlate ${TAG}`,
+    visibility: "private",
+  });
+  const competitionId = comp.data!.id;
+  await page.goto(await competitionPath(page.request, competitionId, "/d/new"));
+  await page.getByRole("textbox").first().fill(`KoPlate ${TAG}`);
+  // The wizard defaults Sport to the catalog's first entry alphabetically
+  // (division-builder.tsx: `sports[0]?.key`) — never "generic". Scoring the
+  // fixtures below with `generic.result` needs the generic/score sport
+  // explicitly selected, or the event 422s as unrecognised for whatever
+  // sport happened to sort first. Scoped by label CONTAINMENT, not
+  // getByLabel: the <label> wraps every <option> text too (all sports/
+  // variants render as DOM text regardless of selection), so the computed
+  // accessible name is "SportBadmintonBoardgame…Volleyball" — never the bare
+  // "Sport" getByLabel(exact) would need.
+  await page.locator("label", { hasText: "Sport" }).locator("select").selectOption({ label: "Generic" });
+  await page.locator("label", { hasText: "Variant" }).locator("select").selectOption({ label: "Score" });
+  await page.getByRole("button", { name: "Format", exact: true }).click();
+  await page.getByText("Knockout + Plate", { exact: true }).click();
+  await page.getByRole("button", { name: "Scheduling", exact: true }).click();
+  await page.getByRole("button", { name: /create division/i }).click();
+  await page.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/(?!new(?:$|[/?]))[^/?]+/, { timeout: 20_000 });
+  const slug = page.url().match(/\/d\/([^/?]+)/)![1]!;
+  const divisions = await apiJson<{ id: string; slug: string }[]>(
+    page.request,
+    `/api/v1/competitions/${competitionId}/divisions`,
+  );
+  const divisionId = divisions.data!.find((d) => d.slug === slug)!.id;
+
+  const stages = await apiJson<{ id: string; seq: number; kind: string; qualification: unknown }[]>(
+    page.request,
+    `/api/v1/divisions/${divisionId}/stages`,
+  );
+  expect(stages.data).toHaveLength(2);
+  const main = stages.data!.find((s) => s.seq === 1)!;
+  const plate = stages.data!.find((s) => s.seq === 2)!;
+  expect(main.kind).toBe("knockout");
+  expect(plate.kind).toBe("knockout");
+  expect(plate.qualification).toMatchObject({ losersOfRound: { round: 1, count: 4 } });
+
+  const { ids } = await addEntrantsViaApi(request, divisionId, [
+    "Ann",
+    "Bo",
+    "Cy",
+    "Di",
+    "Ed",
+    "Fi",
+    "Gu",
+    "Hy",
+  ]);
+  const seedOf = new Map(ids.map((id, i) => [id, i + 1]));
+  type Fx = {
+    id: string;
+    status: string;
+    round_no: number;
+    home_entrant_id: string | null;
+    away_entrant_id: string | null;
+  };
+  const gen = await apiJson<{ fixtures: Fx[] }>(
+    request,
+    `/api/v1/stages/${main.id}/generate`,
+    "POST",
+  );
+  await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+  const round1No = Math.min(...gen.data!.fixtures.map((f) => f.round_no));
+  const round1 = gen.data!.fixtures.filter((f) => f.round_no === round1No);
+  const namesById = new Map(ids.map((id, i) => [id, ["Ann", "Bo", "Cy", "Di", "Ed", "Fi", "Gu", "Hy"][i]!]));
+  const expectedLoserNames = round1.map((f) =>
+    (seedOf.get(f.home_entrant_id!) ?? 99) < (seedOf.get(f.away_entrant_id!) ?? 99)
+      ? namesById.get(f.away_entrant_id!)!
+      : namesById.get(f.home_entrant_id!)!,
+  );
+
+  const decide = async (fid: string, a: number, b: number) => {
+    const st = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fid}/state`);
+    await apiJson(request, `/api/v1/fixtures/${fid}/events`, "POST", {
+      expected_seq: st.data!.last_seq,
+      type: "generic.result",
+      payload: { p1Score: a, p2Score: b },
+    });
+  };
+  for (let guard = 0; guard < 10; guard++) {
+    const rows = (
+      await apiJson<{ fixtures: Fx[] }>(request, `/api/v1/stages/${main.id}/generate`, "POST")
+    ).data!.fixtures;
+    const decidable = rows.filter(
+      (f) => f.home_entrant_id && f.away_entrant_id && !["decided", "finalized"].includes(f.status),
+    );
+    if (decidable.length === 0) break;
+    for (const f of decidable) {
+      const homeWins = (seedOf.get(f.home_entrant_id!) ?? 99) < (seedOf.get(f.away_entrant_id!) ?? 99);
+      await decide(f.id, homeWins ? 2 : 0, homeWins ? 0 : 2);
+    }
+  }
+
+  const done = await apiJson<{ completed: boolean; qualified?: { entrants: string[] } }>(
+    request,
+    `/api/v1/stages/${main.id}/complete`,
+    "POST",
+  );
+  expect(done.data!.completed).toBe(true);
+  expect(done.data!.qualified?.entrants).toHaveLength(4);
+  await apiJson(request, `/api/v1/stages/${plate.id}/generate`, "POST");
+
+  // See the plate seeded: at least one round-1 loser's name renders on the
+  // division page (desktop first, then 375px — no horizontal scroll at
+  // either).
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
+  await expect(page.getByText(expectedLoserNames[0]!).first()).toBeVisible({ timeout: 20_000 });
+  await expectNoHorizontalScroll(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(page.getByText(expectedLoserNames[0]!).first()).toBeVisible({ timeout: 20_000 });
+  await expectNoHorizontalScroll(page);
 });
 
 test("ladder division renders the challenge panel", async ({ page, request }) => {
