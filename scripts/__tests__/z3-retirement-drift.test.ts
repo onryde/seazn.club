@@ -210,6 +210,12 @@ const ACCURATE_TODAY = [
   "apps/web/src/server/usecases/__tests__/schedule-auto-cooldown.test.ts",
   "apps/web/src/server/usecases/__tests__/schedule-auto-feed-order.test.ts",
   "apps/web/src/server/usecases/__tests__/schedule-auto-tx-boundary.test.ts",
+  // RESTORED after C8 deleted it (the C8 follow-up, 2026-08-17). Its z3
+  // mentions are the history of how the contention used to be staged — the
+  // process-wide lock — beside what stages it now: holding the placement
+  // client open. Past tense throughout, and load-bearing: without it the file
+  // reads as if a lock it never takes were still involved.
+  "apps/web/src/server/usecases/__tests__/schedule-auto-solver-busy-latency.test.ts",
   "apps/web/src/server/usecases/__tests__/schedule-capacity-guard.test.ts",
   "apps/web/src/server/usecases/__tests__/schedule-default-day-spread.test.ts",
   "apps/web/src/server/usecases/__tests__/schedule-reflow-cpsat-engine-tag.test.ts",
@@ -235,6 +241,11 @@ const ACCURATE_TODAY = [
   // `"z3"` is a fixture id and `"Z3"` a court name here — not the solver.
   "packages/engine/src/scheduling/health.test.ts",
   "packages/engine/src/scheduling/index.ts",
+  // The C8 follow-up (2026-08-17) added a header note saying why this module
+  // is exported as its own subpath: it is the seam the web lane's tests use to
+  // prove a solve did or did not happen, which is what z3's deleted
+  // process-wide lock used to stage. Names the lock only to say it is gone.
+  "packages/engine/src/scheduling/placement-client.ts",
   "packages/engine/src/scheduling/repair-decompose-cpsat.ts",
   "packages/engine/src/scheduling/repair-decompose.test.ts",
   "packages/engine/src/scheduling/repair-decompose.ts",
