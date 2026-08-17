@@ -1336,26 +1336,31 @@ export async function autoSchedule(
    * The solvers are called DIRECTLY. Nothing wraps them here, and the absence is
    * deliberate (R17).
    *
-   * There used to be a `withZ3Teardown` helper around this call whose
-   * `finally { await resetZ3() }` handed the WASM heap back. It was redundant by
-   * the time it was reviewed — `buildSchedule` and `repairSchedule` each run
-   * under the engine's own `withZ3LockAndReset`, so the heap is already freed
-   * INSIDE the lock, which is where it has to happen for the bound to be per
-   * solve rather than per burst — and it was actively harmful:
+   * HOW THIS WAS LEARNT (history — z3 and its lock were deleted in C8, so
+   * none of the machinery named here still exists). A `withZ3Teardown` helper
+   * once wrapped this call with a `finally { await resetZ3() }` to hand the
+   * WASM heap back. It was redundant — the engine already freed the heap
+   * inside its own lock, which is where it had to happen for the bound to be
+   * per solve rather than per burst — and it was actively harmful:
    *
-   *   * `withZ3Lock` is a strict FIFO promise chain and `resetZ3` takes it, so
+   *   * that lock was a strict FIFO promise chain and `resetZ3` took it, so
    *     the no-op reset queued BEHIND every solve already waiting. Three
    *     concurrent clicks: the first solve finished at ~8s and its HTTP response
    *     landed at ~24s.
    *   * it defeated the queue cap outright. `buildSchedule` answers
-   *     `solver_busy` with a greedy board WITHOUT taking the lock, precisely so
-   *     the third caller need not wait — and this `finally` made that immediate
-   *     answer wait out two full budgets anyway.
+   *     `solver_busy` with a greedy board WITHOUT reaching the solver, precisely
+   *     so the third caller need not wait — and this `finally` made that
+   *     immediate answer wait out two full budgets anyway.
    *
-   * `z3-load.ts` names this exact spelling as the anti-pattern, in the comment
-   * over `withZ3LockAndReset`. Teardown belongs to the engine because the next
-   * entry point to call a solver re-introduces the OOM simply by not knowing
-   * about it. Pinned by `schedule-auto-solver-busy-latency.test.ts`.
+   * WHAT STILL APPLIES. There is no heap to tear down any more, but the second
+   * bullet survives the solver that produced it: a solve is now an
+   * out-of-process RPC carrying `autoSolverWallMs()`, so anything added at this
+   * seam that awaits it — a wrapper, a limiter, an admission check moved below
+   * the call — puts a refusal that costs nothing behind an answer that costs
+   * tens of seconds. Pinned by `schedule-auto-solver-busy-latency.test.ts`,
+   * which stages the contention by holding the placement client open (it used
+   * to hold the z3 lock; C8 deleted that and the test with it, and this
+   * restores the fact at the seam that replaced it).
    */
   const out: BuildResult | ReflowResult = await (body.mode === "reflow"
     ? // Pinned cards are handed separately from the rest: the solver may not

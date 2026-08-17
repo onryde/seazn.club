@@ -1984,3 +1984,79 @@ in both arms):
 - dependency proof: **7 / 0**.
 - `npm run typecheck` exit **0**; `rtk proxy npm run lint` exit 0,
   `✖ 77 problems (0 errors, 77 warnings)` — same warning count as C7.
+
+### C8 follow-up — the three coverage losses, CLOSED (2026-08-17)
+
+Branch `test/c8-coverage-gaps`. **No production behaviour changes**: three
+tests, one engine `exports` subpath, and the comments that said the coverage
+was owed.
+
+**ONE SEAM CLOSES ALL THREE, and it is the one the losses named.** Each fact
+above was staged by a process-wide z3 lock, and each is restaged by holding —
+or watching — `placement-client.solveBuild`. `build.ts` reaches it through a
+DYNAMIC `await import("./placement-client.ts")` (its own comment at the import
+says why), so a spy on that module namespace IS the call the engine makes.
+
+**`@seazn/engine/scheduling/placement-client` is now an exports subpath.** The
+web lane could not otherwise reach the module the engine imports internally,
+and the seven sibling `./scheduling/*` subpaths make it the idiomatic move
+rather than a vitest alias private to one config. Nothing in `apps/web` calls
+it in production and nothing should — the header comment says so.
+
+1. **Two solves in flight, refused third, boards not crossed** —
+   `build.test.ts`, appended to the existing `describe("buildSchedule — the
+   solver queue cap")`. The sibling case there judges the cap from the outside
+   on statuses alone, and with no `PLACEMENT_SERVICE_HOST` every admitted call
+   rejects inside `solveBuild` and returns greedy: a build refused BEFORE the
+   client and one that called it and fell back are indistinguishable, and
+   nothing is ever concurrent except the counter arithmetic. The new case parks
+   two solves inside the client and proves `solveBuild` was called exactly
+   **twice** while the third came back `solver_busy` — the refusal never
+   reached the service — then releases and proves each caller got ITS OWN
+   board. The stub keys its board off the REQUEST, never off arrival order: an
+   order-keyed stub answers correctly even when the caller/board pairing is
+   crossed, which is the corruption the case exists to catch.
+2. **`schedule-auto-solver-busy-latency.test.ts` — restored**, same claim,
+   new stage. The client is held open instead of the lock; the third
+   `autoSchedule` must settle inside 10 s (structural, not timed — a call that
+   reaches the client cannot settle at all until the test releases it), report
+   `solver_busy` + `greedy` + a non-empty board, and leave the spy on **2**
+   calls while `solver.entered` is 3. The live-cooldown assertion is kept
+   verbatim: the original point was that a limiter on this path destroys the
+   fast refusal.
+3. **`schedule-capacity-guard.test.ts`** — `expect(solveBuild).not
+   .toHaveBeenCalled()` replaces the deleted `z3LoadCount()` assertion, and its
+   PAIR is the file's existing loosened-window case, which asserts the same spy
+   on the same seam IS called. A zero-call assertion alone is satisfied by a
+   spy wired to a module nothing imports; the pair is what makes it a fact.
+
+**Every one proved by mutation, on production code, restored after:**
+
+| mutant | result |
+| --- | --- |
+| `queued >= MAX_SOLVER_QUEUE + 5` (cap unreachable) | engine case RED in 10.2 s (`'pending'` where `'settled'` expected); latency test RED in 10.3 s |
+| `solveBuild(input)` without the `.finally` decrement | engine case RED in 274 ms (fourth build refused) |
+| `guardCapacity(...)` moved BELOW the solve call | capacity case RED — and the mutant still throws 422, so the 422 assertion passed and ONLY the new line caught it |
+
+The first mutant originally red-ed by burning the whole 120 s test timeout;
+the third call is raced against a 10 s window specifically so the failure says
+what went wrong instead of what took too long.
+
+**Numbers** (JSON reporter, fresh DB on :54341, `db:apply` + `sync:sports`):
+
+- `packages/engine` full: **3877 passed / 0 failed / 3890**, 962 describes.
+  Baseline on the same tree with the diff removed: 3876 / 0 / 3889.
+- `apps/web src/server/usecases/__tests__`: **2298 passed / 4 failed / 2339**.
+  The four are `schedule-build-honours-locks.test.ts` — reproduced with the
+  diff reverted (7/4/11 either way, and with `PLACEMENT_SERVICE_HOST` unset
+  too), i.e. C8's own base arm: that suite needs a reachable placement service.
+- `npm run typecheck` exit **0**. `rtk proxy npm run lint` exit 0,
+  `✖ 76 problems (0 errors, 76 warnings)`; `packages/engine` lint exit 0.
+
+**A flake found on the way, not caused here and not fixed here.**
+`swiss.test.ts`'s "chess colour bounds hold (n up to 64)" is an `fc.assert`
+property with no seed and no timeout override: it times out at vitest's 5 s
+default roughly **1 run in 6** on a loaded machine (measured 1/6 alone, plus
+once in a full-suite run; the baseline arm happened to be green). It is a
+clock, not a counterexample — the failure message is "Test timed out in
+5000ms", never a shrunk case.

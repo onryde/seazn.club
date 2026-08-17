@@ -64,6 +64,23 @@ import { log } from "./logger.ts";
 const provedTiers = (): { name: string; value: number }[] =>
   TIER_NAMES.map((name, i) => ({ name, value: i }));
 
+/** Did `p` settle inside `ms`? Used to assert a promise is STILL PENDING, which
+ *  no matcher expresses. The window is not a threshold and not a claim about
+ *  this machine: the only case that uses it holds the placement client open, so
+ *  a pending promise cannot settle at any size of window, and a settled one has
+ *  already settled before the timer is even armed. The timer is `unref`'d so a
+ *  pending case cannot hold the worker open past the test. */
+const settledWithin = (p: Promise<unknown>, ms: number): Promise<boolean> =>
+  Promise.race([
+    p.then(
+      () => true,
+      () => true,
+    ),
+    new Promise<boolean>((resolve) => {
+      setTimeout(() => resolve(false), ms).unref?.();
+    }),
+  ]);
+
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 7, 8, 9, 0);
@@ -1241,6 +1258,137 @@ describe("buildSchedule — the solver queue cap", () => {
     const after = await buildSchedule({ fixtures, config });
     expect(after.status).not.toBe("solver_busy");
   }, 240_000);
+
+  // C8 coverage loss 1, restored at the seam that replaced the lock.
+  //
+  // WHAT THE CASE ABOVE CANNOT SEE. It judges the cap from the outside, on
+  // statuses alone, and with no `PLACEMENT_SERVICE_HOST` every admitted call
+  // rejects inside `solveBuild` and comes back as a greedy board. So a build
+  // that was refused BEFORE the client and a build that called the client and
+  // fell back are indistinguishable there, and neither of the two admitted
+  // calls ever has a solve in flight: nothing in that case is concurrent
+  // except the counter arithmetic.
+  //
+  // `build-teardown.test.ts` used to carry the other half — two concurrent
+  // builds really in flight, neither wedged nor crossed — by holding the
+  // process-wide z3 lock. C8 deleted the lock and the file with it and
+  // recorded the loss. Holding the placement client's promise open restages
+  // it: while two solves are pending, the third must be answered without a
+  // third call being made, and when they settle each must carry ITS OWN board.
+  it("holds two solves in flight, refuses the third before the client, and crosses neither board", async () => {
+    // The same corner as `cornerConfig` above (greedy places one card of two,
+    // a solver places both), plus a disjoint mirror of it. Two DIFFERENT
+    // inputs on purpose: two calls given the same board would satisfy a
+    // crossed pair, which is exactly the corruption a shared-nothing claim
+    // has to rule out.
+    const mirrorConfig = cfg({
+      sessionWindows: [{ from: T0, to: T0 + 60 * MIN }],
+      constraints: cons({ startWindows: [{ target: { kind: "entrant", id: "F3" }, notAfter: T0 }] }),
+    });
+    const mirrorFixtures = [fx("c", "F1", "F2"), fx("d", "F3", "F4")];
+
+    /** Ids sorted: the START-WINDOWED fixture (`b`, `d`) sorts SECOND in both
+     *  boards, so one rule serves both — it takes T0, the other takes the
+     *  30-minute slot. That is the shape `build.test.ts` measured for this
+     *  corner; the alphabetical coincidence is why one helper covers both,
+     *  and a third board added here must check it still holds. */
+    const boardFor = (ids: string[]): SolveBuildOutcome => ({
+      assignments: [
+        { fixtureId: ids[1]!, court: "C1", startAtMs: T0 },
+        { fixtureId: ids[0]!, court: "C1", startAtMs: T0 + 30 * MIN },
+      ],
+      status: "OPTIMAL",
+      tiersCompleted: TIER_COUNT,
+      objectiveValues: provedTiers(),
+      elapsedMs: 5,
+      wallExhausted: false,
+    });
+
+    /** Calls parked inside the client, newest last. Released by hand. */
+    const parked: (() => void)[] = [];
+    /** Every request the client actually received, by fixture id. */
+    const seen: string[] = [];
+    let openGate = false;
+    const release = (): void => {
+      openGate = true;
+      for (const resume of parked.splice(0)) resume();
+    };
+
+    const spy = vi
+      .spyOn(await import("./placement-client.ts"), "solveBuild")
+      .mockImplementation((input: SolveBuildInput) => {
+        const ids = input.fixtures.map((f) => f.fixtureId).sort();
+        seen.push(ids.join(""));
+        // Keyed off the REQUEST, never off arrival order — an order-keyed stub
+        // hands back the right boards even when the caller/board pairing is
+        // wrong, which is the failure this case exists to catch.
+        if (openGate) return Promise.resolve(boardFor(ids));
+        return new Promise<SolveBuildOutcome>((resolve) => {
+          parked.push(() => resolve(boardFor(ids)));
+        });
+      });
+
+    const first = buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+    const second = buildSchedule({ fixtures: mirrorFixtures, config: mirrorConfig });
+    void first.catch(() => undefined);
+    void second.catch(() => undefined);
+    try {
+      // Both are inside the client — polled, not slept: how long the seed and
+      // the grid take before the call is not this case's claim.
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(2), { timeout: 30_000 });
+
+      // RACED rather than plainly awaited, and the race is the failure mode's
+      // shape, not a speed threshold: a third call that joined the queue
+      // instead of being refused cannot settle at all while the client is held
+      // open, so without this the mutant that removes the cap fails by burning
+      // the whole test timeout instead of by saying what went wrong.
+      const thirdCall = buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+      void thirdCall.catch(() => undefined);
+      const third = await Promise.race([
+        thirdCall.then((result) => ({ kind: "settled" as const, result })),
+        new Promise<{ kind: "pending" }>((resolve) => {
+          setTimeout(() => resolve({ kind: "pending" }), 10_000).unref?.();
+        }),
+      ]);
+      expect(third.kind).toBe("settled");
+      if (third.kind !== "settled") throw new Error("unreachable");
+      expect(third.result.status).toBe("solver_busy");
+      expect(third.result.engine).toBe("greedy");
+      // THE FACT THIS CASE ADDS: the refusal was answered without a third
+      // request. A cap that queued instead of refusing would show 3 here even
+      // though the status above still read `solver_busy` eventually.
+      expect(spy).toHaveBeenCalledTimes(2);
+      // …and it was answered while the other two were genuinely stuck, which
+      // is what stops this passing on a run where they had already finished.
+      // Structural, not timed: the client's promise cannot settle until
+      // `release()` below, so any wait at all would be a wait forever.
+      expect(await settledWithin(first, 50)).toBe(false);
+      expect(await settledWithin(second, 50)).toBe(false);
+
+      release();
+      const [a, b] = await Promise.all([first, second]);
+      // Each got the solver's board, not a greedy fallback — 2 placed where
+      // greedy reaches 1 — and got its OWN.
+      expect(a.engine).toBe("optimized");
+      expect(b.engine).toBe("optimized");
+      expect(a.assignments.map((x) => x.fixtureId).sort()).toEqual(["a", "b"]);
+      expect(b.assignments.map((x) => x.fixtureId).sort()).toEqual(["c", "d"]);
+      expect(seen.sort()).toEqual(["ab", "cd"]);
+
+      // The slots were freed, and freed by the SOLVES settling rather than by
+      // the refusal: a fourth call is admitted and reaches the client.
+      const fourth = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+      expect(fourth.status).not.toBe("solver_busy");
+      expect(spy).toHaveBeenCalledTimes(3);
+    } finally {
+      // Whatever failed above, nothing may be left parked: `queued` is module
+      // state and `isolate: false` shares it across every file in this worker,
+      // so a build left in flight refuses the rest of the run's builds.
+      release();
+      await Promise.allSettled([first, second]);
+      spy.mockRestore();
+    }
+  }, 120_000);
 });
 
 // Task 06 — solveBuild now calls the placement service instead of z3. Every case

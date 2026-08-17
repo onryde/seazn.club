@@ -21,6 +21,7 @@
     "./scheduling/capacity": "./src/scheduling/capacity.ts",
     "./scheduling/grid-step": "./src/scheduling/grid-step.ts",
     "./scheduling/health": "./src/scheduling/health.ts",
+    "./scheduling/placement-client": "./src/scheduling/placement-client.ts",
     "./scheduling/rest-floor": "./src/scheduling/rest-floor.ts",
     "./scheduling/tz": "./src/scheduling/tz.ts",
     "./testkit": "./src/testkit/index.ts"

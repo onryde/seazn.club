@@ -5,7 +5,8 @@
 // seedOrg/seedStage pattern. Real Postgres required; skipped without
 // DATABASE_URL, matching every other DB-backed suite in this directory.
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { PlacementError } from "@seazn/engine/scheduling/placement-client";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -95,9 +96,33 @@ async function seedRoundRobin(
   return { stageId: stage.id };
 }
 
+/** A spy on the ONE seam every solve leaves the process through.
+ *
+ *  `buildSchedule` reaches the placement service by `await
+ *  import("./placement-client.ts")` — dynamic on purpose, so a spy on this
+ *  module namespace is the call it makes (`build.ts` says as much where the
+ *  import is written). The engine consumed here is the workspace source, so
+ *  this namespace and the engine's own are the same module instance; the
+ *  second test below is what PROVES that, by seeing a call through it.
+ *
+ *  Mocked rather than merely observed: unmocked, a call would dial
+ *  `PLACEMENT_SERVICE_HOST` (unset locally, set in CI) and this file's second
+ *  case would either wait out a gRPC deadline or hit a real service. */
+async function spyOnPlacement() {
+  const placement = await import("@seazn/engine/scheduling/placement-client");
+  return vi
+    .spyOn(placement, "solveBuild")
+    .mockRejectedValue(new PlacementError("unavailable", "stubbed by schedule-capacity-guard.test.ts"));
+}
+
 describe.skipIf(!HAS_DB)("autoSchedule — D2 capacity guard wiring", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("refuses a known-INFEASIBLE board (6 fixtures, 1-hour window fits 1) with 422 CAPACITY_IMPOSSIBLE, touching NEITHER solver", async () => {
     const auth = await seedOrg();
+    const solveBuild = await spyOnPlacement();
     // 1-hour session window -> supply = floor(60/60) = 1 slot on the ONE
     // court. 4-entrant round robin = 6 fixtures. 1 << 6: arithmetically
     // impossible before any placement attempt.
@@ -108,23 +133,41 @@ describe.skipIf(!HAS_DB)("autoSchedule — D2 capacity guard wiring", () => {
       status: 422,
       code: "CAPACITY_IMPOSSIBLE",
     });
-    // A z3 WASM-load-counter assertion sat here and was DELETED, not ported,
-    // in C8. It once proved the run never reached REFLOW's local solver; C4
-    // moved REFLOW onto `buildSchedule`, after which the counter could not
-    // move on this path whatever happened, and C6 recorded it as vacuous and
-    // due to die with the counter. The 422 above is what proves the guard
-    // fired.
+    // THE "NEVER REACHED THE SOLVER" HALF, restored (C8 coverage loss 3).
     //
-    // OWED: the "never reached the solver" fact itself is now untested. A spy
-    // on `placement-client` restores it, and is the shape to use.
+    // A `z3LoadCount()` assertion carried this until C8. It had stopped
+    // carrying anything long before: C4 moved REFLOW onto `buildSchedule`,
+    // after which that counter could not move on this path whatever the guard
+    // did, and C6 recorded it as vacuous and due to die with the counter. The
+    // 422 above proves the guard REFUSED; only this proves it refused BEFORE
+    // spending a solve, which is the whole point of a pre-check. A guard that
+    // ran after the solve, or one wired after the placement call, would
+    // satisfy the rejection above and fail here.
+    //
+    // Zero-call assertions read vacuously on their own — a spy on a module
+    // nothing imports is also never called — so the case below is this one's
+    // control: same spy, same seam, and it must be called there.
+    expect(solveBuild).not.toHaveBeenCalled();
   });
 
   it("loosening the single binding constraint (the session window, to the whole day) exits impossible", async () => {
     const auth = await seedOrg();
+    const solveBuild = await spyOnPlacement();
     const { stageId } = await seedRoundRobin(auth, [
       { from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T21:00:00.000Z" }, // 12h -> supply=12 >= 6
     ]);
     const out = await autoSchedule(auth, stageId, { only_unlocked: true, mode: "reflow" });
     expect(out).toBeDefined();
+    // THE CONTROL for the zero-call assertion above: the same spy on the same
+    // seam DOES see a call once the guard stops refusing. Without this pair,
+    // a spy that had been wired to the wrong module — or to a module the
+    // engine no longer calls — would report "never reached the solver" for
+    // every board, impossible or not, and read as coverage.
+    //
+    // The stub REJECTS, so this run also takes the documented
+    // `solver_unavailable` fallback to a greedy board rather than reaching a
+    // real service; the assertion is that the call happened, never what came
+    // back.
+    expect(solveBuild).toHaveBeenCalled();
   });
 });

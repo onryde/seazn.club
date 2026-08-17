@@ -1175,9 +1175,11 @@ export function buildSchedule(input: BuildInput): Promise<BuildResult> {
   // `queued` and `MAX_SOLVER_QUEUE` stay: they are what bounds how many
   // concurrent requests reach the service. `build-teardown.test.ts`, which
   // pinned the serialise-and-tear-down behaviour, went with the solver — every
-  // case in it mocked `z3-solver` or the encoder. Nothing now asserts that two
-  // concurrent runs queue rather than pile up; the cap itself is still applied
-  // here, but its test is owed.
+  // case in it mocked `z3-solver` or the encoder. What it covered that the
+  // lock used to stage — two solves genuinely in flight, a third refused
+  // before it reaches the client, neither board crossed — is back in
+  // `build.test.ts` ("holds two solves in flight…"), staged by holding the
+  // placement client's promise open instead.
   //
   // `finally` on the promise, not a `try`/`finally` around the call: the
   // decrement has to happen when the SOLVE settles, and it must run on the
