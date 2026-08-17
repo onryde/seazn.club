@@ -52,14 +52,18 @@
 -- `venue_id is null`, so a second run finds nothing to do.
 --
 -- Non-array `courts` (present-but-wrong-shaped: json null, a string, an
--- object): normalized to `[]` by the courts block's step 0, BEFORE
--- collection. This is the READ-PATH TRAP the whole migration exists to
--- close, not tidiness — `ScheduleConfig.courts`'s `.default([])` only
--- substitutes for an ABSENT key (`undefined`); it never fires for a
--- present value of the wrong shape, so an un-normalized `courts: null` (or
--- a string/object) is a live 500 at ScheduleConfig.parse. Step 0 is
--- idempotent on its own terms: once normalized, the value is jsonb type
--- "array", so a second run's `<> 'array'` guard finds nothing left to do.
+-- object): normalized to `[]` INSIDE step 5's rewrite (folded into the
+-- same UPDATE that resolves string court names to real ids — see step 5's
+-- comment), not by a separate up-front write. This is the READ-PATH TRAP
+-- the whole migration exists to close, not tidiness — `ScheduleConfig.
+-- courts`'s `.default([])` only substitutes for an ABSENT key
+-- (`undefined`); it never fires for a present value of the wrong shape, so
+-- an un-normalized `courts: null` (or a string/object) is a live 500 at
+-- ScheduleConfig.parse. How many rows this will touch is precomputed
+-- read-only in step 2b and surfaced in step 3's dry-run report (as
+-- `courts_field_to_normalize`) BEFORE step 5 — or any other write — runs;
+-- see "Dry-run/write agreement" below. Idempotent: once normalized, the
+-- value is jsonb type "array", so a second run's rewrite reproduces `[]`.
 --
 -- Dry-run/write agreement (both blocks): the "does an active court/venue
 -- already exist with this name" lookup is computed exactly ONCE per block
@@ -91,22 +95,8 @@ declare
   v_total_orgs int := 0;
   v_total_strings int := 0;
   v_total_to_create int := 0;
+  v_total_to_normalize int := 0;
 begin
-  -- 0) Normalize a present-but-non-array `courts` value (json null, a bare
-  -- string, a number, a bool, or an object) to `[]` — the same end state
-  -- `.default([])` gives an ABSENT key. This is the READ-PATH TRAP this
-  -- migration exists to close, not tidiness: `ScheduleConfig.courts`'s
-  -- `.default([])` only substitutes when the key is `undefined`; it never
-  -- fires for a present value of the wrong shape, so an un-normalized
-  -- `courts: null` (or a string/object) is a live 500 at
-  -- ScheduleConfig.parse. Idempotent on its own: once normalized the value
-  -- is jsonb type "array", so a second run's `<> 'array'` guard matches
-  -- nothing.
-  update schedule_settings ss
-     set config = jsonb_set(ss.config, '{courts}', '[]'::jsonb)
-   where ss.config ? 'courts'
-     and jsonb_typeof(ss.config -> 'courts') <> 'array';
-
   -- 1) Collect distinct (org_id, string) pairs from both sources, blank-
   -- filtered, excluding any string that already equals a real court id for
   -- that org (idempotency — see header).
@@ -149,24 +139,62 @@ begin
          limit 1
       ) as m on true;
 
+  -- 2b) Precompute, read-only, the count of schedule_settings rows whose
+  -- `courts` value is PRESENT but the wrong shape (json null, a bare
+  -- string, a number, a bool, or an object) — these get reset to `[]` by
+  -- step 5 below, folded into that same rewrite rather than a separate
+  -- pre-write pass (see step 5 and the header's "Non-array courts" note).
+  -- That reset is itself a write the operator should see coming — a report
+  -- that only covers string-to-id counts and stays silent about a row
+  -- whose non-array value is about to be discarded undercounts what the
+  -- migration actually does, so it is precomputed here (before step 3, the
+  -- report) and folded into that report below. NOTE this table is a
+  -- reporting-only count, unlike court_strings_status above: step 5 does
+  -- NOT read it back, it re-evaluates the identical `? 'courts' and
+  -- jsonb_typeof(...) <> 'array'` predicate inline via its own CASE. The
+  -- two are duplicated text, not a shared computation — safe only because
+  -- the predicate is a trivial, deterministic shape check with no "pick
+  -- one among ties" ambiguity (unlike the by-name reuse lookup, which IS
+  -- shared for exactly that reason — see "Dry-run/write agreement" below).
+  drop table if exists pg_temp.court_normalize_status;
+  create temp table court_normalize_status as
+    select ss.org_id, count(*) as n
+      from schedule_settings ss
+     where ss.config ? 'courts'
+       and jsonb_typeof(ss.config -> 'courts') <> 'array'
+     group by ss.org_id;
+
   -- 3) DRY-RUN REPORT — emitted BEFORE the first write (the safety property
-  -- of this whole session, per the P9 dispatch).
+  -- of this whole session, per the P9 dispatch). Driven off a FULL OUTER
+  -- JOIN of court_strings_status and court_normalize_status, not off
+  -- court_strings_status alone — an org whose ONLY pending write is the
+  -- non-array normalization (zero court strings anywhere) would otherwise
+  -- never appear in this loop at all, which is the same "report undercounts
+  -- a write" defect as omitting the column.
   for v_org in
-    select org_id,
-           count(*) as n_strings,
-           count(*) filter (where not already_exists) as n_to_create
-      from court_strings_status
-     group by org_id
-     order by org_id
+    select coalesce(css.org_id, cns.org_id) as org_id,
+           coalesce(css.n_strings, 0) as n_strings,
+           coalesce(css.n_to_create, 0) as n_to_create,
+           coalesce(cns.n, 0) as n_to_normalize
+      from (
+        select org_id,
+               count(*) as n_strings,
+               count(*) filter (where not already_exists) as n_to_create
+          from court_strings_status
+         group by org_id
+      ) css
+      full outer join court_normalize_status cns on cns.org_id = css.org_id
+     order by 1
   loop
-    raise notice 'V368 court migration (dry run): org=% distinct_court_strings=% courts_to_create=%',
-      v_org.org_id, v_org.n_strings, v_org.n_to_create;
+    raise notice 'V368 court migration (dry run): org=% distinct_court_strings=% courts_to_create=% courts_field_to_normalize=%',
+      v_org.org_id, v_org.n_strings, v_org.n_to_create, v_org.n_to_normalize;
     v_total_orgs := v_total_orgs + 1;
     v_total_strings := v_total_strings + v_org.n_strings;
     v_total_to_create := v_total_to_create + v_org.n_to_create;
+    v_total_to_normalize := v_total_to_normalize + v_org.n_to_normalize;
   end loop;
-  raise notice 'V368 court migration (dry run) TOTAL: orgs=% distinct_court_strings=% courts_to_create=%',
-    v_total_orgs, v_total_strings, v_total_to_create;
+  raise notice 'V368 court migration (dry run) TOTAL: orgs=% distinct_court_strings=% courts_to_create=% courts_field_to_normalize=%',
+    v_total_orgs, v_total_strings, v_total_to_create, v_total_to_normalize;
 
   -- 4) Build the mapping, reusing any existing ACTIVE court that already
   -- matches by name anywhere in the org (P8 may have shipped real venues —
@@ -216,8 +244,24 @@ begin
   -- name) OR, if it already equals a real court id for this org (idempotent
   -- re-run), passes through unchanged; an element that resolves neither way
   -- (blank/garbage) is dropped. A `courts` key that was absent to begin with
-  -- is never added (WHERE guards on jsonb_typeof = 'array') — it keeps
-  -- parsing through ScheduleConfig's default().
+  -- is never added (WHERE guards on `? 'courts'`) — it keeps parsing
+  -- through ScheduleConfig's default().
+  --
+  -- Also folds in the present-but-non-array normalization (json null, a
+  -- bare string, a number, a bool, or an object -> `[]`) — the READ-PATH
+  -- TRAP this migration exists to close, not tidiness: `ScheduleConfig.
+  -- courts`'s `.default([])` only substitutes for an ABSENT key
+  -- (`undefined`); it never fires for a present value of the wrong shape,
+  -- so an un-normalized `courts: null` (or a string/object) is a live 500
+  -- at ScheduleConfig.parse. This used to be a separate up-front UPDATE
+  -- (former "step 0"), which is exactly what put a write BEFORE the step-3
+  -- dry-run report — folding it into THIS statement (the CASE below
+  -- substitutes `[]` for `jsonb_array_elements_text` when the stored value
+  -- isn't already an array, so it iterates zero elements and the same
+  -- `coalesce(..., '[]'::jsonb)` below lands the value on `[]`) makes the
+  -- two behaviors one write instead of two, so they cannot independently
+  -- drift out of order again. Idempotent: once a row is `[]` (or already a
+  -- real-id array), a second run's CASE/rewrite reproduces the same value.
   update schedule_settings ss
      set config = jsonb_set(
        ss.config, '{courts}',
@@ -225,7 +269,12 @@ begin
          select jsonb_agg(resolved.court_id order by resolved.ord)
            from (
              select elem.ord, coalesce(cm.court_id, existing.id) as court_id
-               from jsonb_array_elements_text(ss.config -> 'courts') with ordinality as elem(val, ord)
+               from jsonb_array_elements_text(
+                      case when jsonb_typeof(ss.config -> 'courts') = 'array'
+                           then ss.config -> 'courts'
+                           else '[]'::jsonb
+                      end
+                    ) with ordinality as elem(val, ord)
                left join court_mapping cm
                  on cm.org_id = ss.org_id and cm.court_string = elem.val
                left join courts existing
@@ -234,7 +283,7 @@ begin
           where resolved.court_id is not null
        ), '[]'::jsonb)
      )
-   where jsonb_typeof(ss.config -> 'courts') = 'array';
+   where ss.config ? 'courts';
 
   -- 6) fixtures.court_id from court_label. Only rows with court_id still
   -- null are touched — already idempotent without any extra guard.

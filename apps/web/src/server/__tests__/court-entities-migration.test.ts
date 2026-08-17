@@ -192,9 +192,10 @@ describe.skipIf(!HAS_DB)("V368 court entities cutover", () => {
   // Review finding #2: `courts` PRESENT but the wrong shape (json null, a
   // bare string, an object) is a different case from "absent" (d2 above) —
   // `.default([])` only substitutes for `undefined`, never for a
-  // present-but-wrong-shaped value, so without the migration's step 0
-  // normalization this is a live 500 at ScheduleConfig.parse, not a
-  // rescued default.
+  // present-but-wrong-shaped value, so without the migration's step 5
+  // normalization (folded into the string->id rewrite, P9 pass-1 re-review
+  // — see V368...sql's step 5 comment) this is a live 500 at
+  // ScheduleConfig.parse, not a rescued default.
   it("a present-but-non-array `courts` value (null, string, object) normalizes to [] instead of 500ing at read", async () => {
     const { orgId, divisionId: d1 } = await seedOrgWithDivision();
     orgIds.push(orgId);
@@ -322,7 +323,18 @@ describe.skipIf(!HAS_DB)("V368 court entities cutover", () => {
   // "naturally idempotent" (it only ever collects rows where `venue_id is
   // null`) but nothing exercised that claim — mirrors the courts-migration
   // idempotency test immediately above.
-  it("fixture-venue-migration block is a no-op on a second apply (idempotent)", async () => {
+  //
+  // Review finding #2 (P9 pass-1 re-review): the `venue_id is null` guards
+  // (SQL:317 collection, :386 write) alone make a second apply a no-op
+  // for a fixture whose venue_id was ALREADY set by the first apply — but
+  // that means the second apply never gives the existing_venue_id
+  // reuse-by-name LATERAL (SQL:332-339) anything fresh to resolve; dropping
+  // that lookup entirely would not fail a test built only that way. f2 below
+  // is seeded AFTER the first apply, with the SAME free-text venue string
+  // as f1 — its venue_id is still null, so the second apply's collection
+  // (SQL:317) picks it up fresh, and it must resolve via reuse-by-name
+  // to the venue f1's apply already created, not a new one.
+  it("fixture-venue-migration block is a no-op on a second apply (idempotent), and reuses an existing venue by name for a freshly-seeded fixture", async () => {
     const { orgId, divisionId } = await seedOrgWithDivision();
     orgIds.push(orgId);
     const stageId = await seedStage(orgId, divisionId);
@@ -339,17 +351,34 @@ describe.skipIf(!HAS_DB)("V368 court entities cutover", () => {
       select venue, venue_id from fixtures where id = ${fixtureId}`;
     const [{ n: venuesAfter1 }] = await sql<{ n: string }[]>`
       select count(*)::text as n from venues where org_id = ${orgId}`;
+    expect(after1!.venue_id).toMatch(UUID_RE);
+    expect(venuesAfter1).toBe("1");
 
-    await sql.unsafe(block); // second apply — must change nothing
+    // Seeded AFTER the first apply, so venue_id is null on this row — the
+    // second apply's collection WILL pick it up (unlike f1, already done).
+    const [{ id: fixture2Id }] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, venue)
+      values (${stageId}, ${divisionId}, ${orgId}, 1, 2, 'Community Center')
+      returning id`;
+
+    await sql.unsafe(block); // second apply — f1 untouched; f2 resolved fresh
 
     const [after2] = await sql<{ venue: string | null; venue_id: string | null }[]>`
       select venue, venue_id from fixtures where id = ${fixtureId}`;
+    const [f2after] = await sql<{ venue: string | null; venue_id: string | null }[]>`
+      select venue, venue_id from fixtures where id = ${fixture2Id}`;
     const [{ n: venuesAfter2 }] = await sql<{ n: string }[]>`
       select count(*)::text as n from venues where org_id = ${orgId}`;
 
+    // f1: untouched by the second apply.
     expect(after2!.venue_id).toBe(after1!.venue_id);
     expect(after2!.venue).toBe("Community Center");
-    expect(venuesAfter2).toBe(venuesAfter1);
-    expect(venuesAfter1).toBe("1");
+    // f2: resolved via the reuse-by-name LATERAL to the SAME venue as f1 —
+    // this is the assertion that fails if reuse-by-name is dropped.
+    expect(f2after!.venue_id).toBe(after1!.venue_id);
+    expect(f2after!.venue).toBe("Community Center");
+    // Exactly one venue for this org after both applies: reuse, not a
+    // duplicate create.
+    expect(venuesAfter2).toBe("1");
   });
 });
