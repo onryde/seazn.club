@@ -9,8 +9,8 @@
 //
 // Deliberately does NOT import `@seazn/engine/scheduling` (the barrel) or
 // any non-leaf module: that barrel is server-only (scheduling/index.ts's
-// header) and a `"use client"` file that reaches it ships z3-solver/@grpc
-// into the browser bundle. Only two engine imports are used here, both
+// header) and a `"use client"` file that reaches it ships the whole @grpc
+// stack into the browser bundle. Only two engine imports are used here, both
 // declared LEAVES in package.json: `./scheduling/health` (this feature's
 // own pure lib — imports NOTHING itself) and `./scheduling/tz` (zero
 // dependencies), for the exact same reason capacity-input.ts uses them.

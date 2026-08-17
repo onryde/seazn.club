@@ -37,7 +37,7 @@ C6 (prose) is safe whenever.
 | C5 | `C5-z3-ai-repair-cpsat.md` | z3 stage B | C4 | **PARKED, PR #576 draft** — owner ruling 2026-08-16: land C9 first. CI found a real bracket/frozen-feeder repair-capability regression the session's own (vacuous — see status log) local smoke run could not see. See status log. |
 | C6 | `C6-z3-prose-identifiers.md` | z3 stage C | ~~anytime~~ → **after C4+C5** | ~~NO-OP today~~ → **PR #588 open**, real work once A+B landed — 15 false claims, one of them an actionable instruction naming a deleted script. Ships the ledger C8's acceptance asks for as a test. See status log. |
 | C7 | `C7-z3-public-contract.md` | z3 stage D | C4+**C9** (not C5) deployed to **stg** — prod does not exist | **PR open** — see status log. NO migration was owed: the values are response-only telemetry. Also retired `z3_unavailable`, which the brief never assigned to a stage and without which its own "zero z3 in openapi" acceptance is unreachable. |
-| C8 | `C8-z3-delete-solver.md` | z3 stage E | C7 | TODO |
+| C8 | `C8-z3-delete-solver.md` | z3 stage E | C7 (merged `298da0af`, stg green) | **PR open** — see status log. The brief's file set was an UNDERCOUNT: it listed what mentions z3, not what stops compiling once that is gone. Three coverage losses recorded rather than papered over. |
 | C9 | `C9-decomposed-repair-cpsat.md` | z3 retirement gap closure | branches off `origin/main` directly, includes C5's commits (C5 targets a different base — see status log) | **PR #583 open**, targets `main` — see status log. Density regression CLOSED, general frozen-feeder dependency gap CLOSED. Bracket/TBD-sibling gap (what parked C5) NOT closed — new finding, contradicts this brief's own "REFUTED" note. #576 (C5) should close as superseded once #583 merges. |
 
 ### C1 — round ordering (2026-08-12/13, DONE)
@@ -1875,3 +1875,112 @@ in BOTH arms):
   `expected undefined to be '2026-08-01T19:00:00.000Z'` — the placement service
   being unreachable, not the branch.
 - engine base arm: **3999 passed / 0 failed / 4031**.
+
+
+### C8 — z3 stage E, delete the solver (2026-08-17)
+
+Branch `feat/c8-z3-delete-solver`, worktree `.claude/worktrees/c8-z3-delete`,
+rebased onto `298da0af` (C7).
+
+**THE FILE SET IN THE BRIEF IS AN UNDERCOUNT, and the reason generalises.**
+The brief — and `OWNED_BY_C8` — listed the files that *mention* z3. What a
+deletion actually costs is the files that stop *compiling* once those are gone,
+and that is a different, larger set. The brief named 9 files; the diff is 57,
+−10 274 lines. Everything extra was found by running `tsc` after each cut, not
+by reading the ledger:
+
+- `build-encode.ts` (the boolean model) and `build-lns.ts` (its LNS fallback)
+  had **zero production callers** — only their own tests, plus a one-line
+  `BuildConfig` type `build.ts` imported. Same shape as `repair.ts`: dead code
+  kept compiling for its own tests. `BuildConfig` moved into `build.ts` (it
+  never had anything to do with z3) and both modules went.
+- Four more engine test files went with them: `build-encode-parity`,
+  `build-encode-rules`, `build-lns`, `build-lns-wiring`.
+- Five benches, not two. `bench-repair`/`bench-decompose` were named; `bench-reflow`,
+  `bench-ai-repair-cpsat`, `probe-lns-gate` and `repair-cpsat-harness` all exist
+  to compare a CP-SAT arm against a z3 arm, and cannot run their own baseline
+  once z3 is gone. Their gates were passed and merged in C4/C9.
+- The pnpm **public-hoist pattern** (`pnpm-workspace.yaml`) and the
+  **Dockerfile** note both name the three `serverExternalPackages`. Neither is
+  in any ledger; both would have gone stale silently.
+- **Eleven `apps/web` tests** spied on z3 to prove it was NOT called. Every one
+  of those negative assertions becomes structural when the function stops
+  existing — there is nothing left to fail.
+
+**`z3-load.ts` could not be deleted as the brief scoped it.** `build.ts:116`
+imported `withZ3LockAndReset` and used it at `:1210`; eleven `build-*.test.ts`
+files imported `resetZ3` as a hygiene guard. All were `ACCURATE_TODAY`, i.e.
+outside C8's brief. Owner ruled 2026-08-17: delete outright rather than keep a
+stub. `build.ts:2404` already called the wrapper vestigial, and after the
+deletion there is no z3 to reset, so the guards were inert by construction.
+
+**THREE COVERAGE LOSSES, recorded because they are real and none is repaired
+by this PR.** Each existed only because a process-wide z3 lock existed:
+
+1. `build-teardown.test.ts` — DELETED. Every case mocked `z3-solver` or the
+   encoder. Nothing now asserts that two concurrent runs queue rather than
+   pile up. `MAX_SOLVER_QUEUE` is still applied in `build.ts`; its test is owed.
+2. `schedule-auto-solver-busy-latency.test.ts` — DELETED. It staged
+   `solver_busy` by *holding the z3 lock* so two solves could not settle. With
+   the lock gone there is no way to hold `queued` at its cap from the barrel:
+   the real solve completes and decrements. Restoring it means hanging
+   `placement-client`, which is a rewrite this task did not attempt rather than
+   one it botched.
+3. `schedule-capacity-guard.test.ts` — the `z3LoadCount()` assertion is gone
+   (C6 had already recorded it as vacuous since C4 and due to die here). The
+   422 still proves the guard fired; the "never reached the solver" fact is
+   untested. A `placement-client` spy restores it.
+
+`build-wall.test.ts` was TRIMMED, not deleted — its R23 half spied on
+`encodeBuild`, its R22 half tests `canSolveWithin`, which is pure and still
+live. The last R22 case went too, because its only observable was the encode spy.
+
+**A deletion nearly took a guard's only coverage silently.** `dayCapGuard()`
+survives (C9 reuses it), but every test that exercised it did so *through*
+`repairDecomposed` — so deleting the driver would have left the function
+compiling, exported, called in production, and untested, with the remaining
+assertions in its own `describe` all about `repairComponents`. Three direct
+unit tests were added, including a no-cap case, because the two positive ones
+pass against a guard that refuses unconditionally.
+
+**Two of my own gates were vacuous when first written**, both caught by writing
+the failing test first:
+
+- `z3-dependency-retired.test.ts` used a bare `git grep`, which scopes to the
+  cwd — vitest runs it from `packages/engine`, so every `apps/web` pathspec
+  matched nothing and two of six cases passed against a tree that still
+  declared the dependency in both manifests. Fixed with `git -C <root>`.
+- Scoping it to the live trees (so historical design docs may keep quoting the
+  deleted source) then made every case a "grep found nothing" assertion, which
+  is also what a misaimed pathspec returns. A non-vacuity control was added.
+
+**The engine's own control caught the change, as designed.**
+`packages/engine/test/runtime-deps.test.ts` lists every expected runtime import
+BY NAME, `z3-solver` included. It went red on the removal. Edited deliberately
+with the reason in the comment — not loosened to a length check.
+
+**Prod-build proof** (the brief's point: this change ships a silent prod no-op
+if either half of the WASM pair is left):
+
+- `npm run build` exit **0**.
+- No `z3-built.wasm` anywhere under `.next` (only Next's own `@vercel/og` wasm).
+- No `z3-solver` directory in the standalone output.
+- `.next/standalone/node_modules/` contains exactly `exceljs` and `pdfkit` —
+  the two remaining `serverExternalPackages`.
+- The standalone server boots, serves HTML **200** and a real hashed static
+  asset **200**, and both scheduling routes reach their handlers (structured
+  `NOT_FOUND` / Zod `VALIDATION`), proving the engine module graph loads and
+  executes without the deleted package. No `MODULE_NOT_FOUND` in the log.
+
+**Numbers** (JSON reporter, brand-new database, `PLACEMENT_SERVICE_HOST` unset
+in both arms):
+
+- `packages/engine`: **3876 passed / 0 failed / 3889**, 138 files.
+- `apps/web` (`src/server src/lib src/components src/__tests__`):
+  **7311 passed / 4 failed / 7380**, 741 files. The four are
+  `schedule-build-honours-locks.test.ts`, identical to C7's base arm —
+  the placement service being unreachable locally.
+- drift gate: **19 / 0**. Both `OWNED_BY_C7` and `OWNED_BY_C8` are now empty.
+- dependency proof: **7 / 0**.
+- `npm run typecheck` exit **0**; `rtk proxy npm run lint` exit 0,
+  `✖ 77 problems (0 errors, 77 warnings)` — same warning count as C7.

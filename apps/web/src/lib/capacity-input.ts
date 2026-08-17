@@ -8,7 +8,7 @@
 //
 // Deliberately does NOT import `@seazn/engine/scheduling` (the barrel):
 // that barrel is server-only (see scheduling/index.ts's header) and a `"use
-// client"` file that reaches it ships z3-solver/@grpc into the browser
+// client"` file that reaches it ships the whole @grpc stack into the browser
 // bundle — `bracket-panel.tsx`/`slideshow.tsx` did exactly this and broke
 // the production build until Task 11 found it. Every engine import here is
 // a LEAF declared in package.json: `./scheduling/capacity` (this feature's

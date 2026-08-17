@@ -17,7 +17,6 @@
 // exactly why it needs a test: nothing else covers it.
 import { describe, expect, it } from "vitest";
 import { buildSchedule } from "./build.ts";
-import { resetZ3 } from "./z3-load.ts";
 import type { Assignment, SchedulableFixture, SlotConfig } from "./calendar.ts";
 
 const MIN = 60_000;
@@ -74,7 +73,6 @@ describe("a frozen id that names no fixture in this run", () => {
     // ANSWER while leaving it in the lattice cannot pass this quietly: T3 would
     // still be optimising an imbalance against a court that does not exist.
     expect(out.metrics.makespanMinutes).toBe(60);
-    await resetZ3();
   }, 120_000);
 
   it("agrees with the same run that was never handed the ghost", async () => {
@@ -89,6 +87,5 @@ describe("a frozen id that names no fixture in this run", () => {
     const without = await buildSchedule({ fixtures, config });
     expect(withGhost.assignments).toEqual(without.assignments);
     expect(withGhost.metrics).toEqual(without.metrics);
-    await resetZ3();
   }, 120_000);
 });

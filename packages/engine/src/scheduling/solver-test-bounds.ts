@@ -71,7 +71,8 @@ export const REFERENCE_UNIT_MS = 23;
 export const MAX_LOAD_FACTOR = 6;
 
 /** Integer arithmetic, no allocation, no I/O: the same resource the encode and
- *  z3 compete for, and nothing else. The result is returned so the loop cannot
+ *  the solver compete for, and nothing else. The result is returned so the loop
+ *  cannot
  *  be optimised away. */
 function workUnit(): number {
   const t0 = performance.now();

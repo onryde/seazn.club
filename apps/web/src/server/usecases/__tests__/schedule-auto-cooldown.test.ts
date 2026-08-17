@@ -2,12 +2,16 @@
 //
 // WHAT IT PROTECTS. `autoSchedule` had no rate limit at all, and its per-call
 // cost went from a sub-millisecond greedy pass to up to `AUTO_SOLVER_WALL_MS`
-// (20s) of z3 that is SERIALISED across the whole process — `withZ3Lock` is a
-// correctness device (`resetZ3` kills pthreads process-wide), not a throughput
-// knob. So one authenticated organiser clicking repeatedly stalls every other
-// org's solver on that instance. The key is the ORG, not the instance: the
-// failure mode is one tenant monopolising a shared serialised queue, and a
-// global limiter would refuse the victims along with the offender.
+// (20s) of solving. When this limit was written that solve was SERIALISED
+// across the whole process by a z3 lock, so one organiser clicking repeatedly
+// stalled every other org on that instance. The solver is out-of-process now
+// and the lock went with it, but the limit still bounds how much work a
+// single tenant can queue against it. So one authenticated organiser clicking
+// repeatedly still degrades the shared queue for everyone else on it.
+//
+// The key is the ORG, not the instance: the failure mode is one tenant
+// monopolising a shared serialised queue, and a global limiter would refuse
+// the victims along with the offender.
 //
 // WHY THE CACHE IS MOCKED. `rateLimit` is backed solely by Upstash, and
 // `incrWindow` returns null when no REDIS_URL is configured — which is every
@@ -22,7 +26,7 @@
 // one of them saved the solver. So every case here also asserts whether the
 // engine was ENTERED — `solver.entered` must not advance on the refused call,
 // and must advance on the allowed one, or the "allowed" case is proving nothing
-// about a path that reaches z3 at all.
+// about a path that reaches the solver at all.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
@@ -60,7 +64,6 @@ vi.mock("@/lib/cache", async (importOriginal) => {
 });
 
 const { sql } = await import("@/lib/db");
-const { resetZ3 } = await import("@seazn/engine/scheduling");
 const { createCompetition } = await import("../competitions");
 const { createDivision } = await import("../divisions");
 const { createEntrants } = await import("../entrants");
@@ -145,7 +148,6 @@ async function seedStage(): Promise<{ auth: AuthCtx; stageId: string }> {
 
 afterAll(async () => {
   if (!HAS_DB) return;
-  await resetZ3();
   await sql.end({ timeout: 5 });
 });
 

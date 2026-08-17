@@ -5,9 +5,10 @@ WORKDIR /app
 # Workspace manifests first so the install layer caches across source changes.
 # pnpm-workspace.yaml is not optional here, and its absence is SILENT: besides
 # the workspace globs it carries the public-hoist patterns for the three
-# serverExternalPackages (pdfkit, exceljs, z3-solver). Leave it out and the
+# serverExternalPackages (pdfkit, exceljs). Leave it out and the
 # install succeeds, `next build` succeeds, and the standalone server cannot
-# resolve any of them at runtime — z3 then falls back to LLM repair, which is a
+# resolve any of them at runtime — the scheduler then falls back to LLM repair,
+# which is a
 # designed path, so nothing surfaces an error..
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/

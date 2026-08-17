@@ -19,7 +19,7 @@
 //   * the floor is not greedy's board, it is greedy's LEGAL board. Counting a
 //     card that carries a blocking conflict as "placed" is what let an illegal
 //     greedy board outrank every legal one D3 could reach.
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_SOLVER_QUEUE,
   TIER_COUNT, TIER_NAMES,
@@ -34,16 +34,13 @@ import {
   scopeCoversFixture,
   slotFixtures,
   validateAssignments,
-  validateInstructionRules,
   type Assignment,
   type Conflict,
-  type RuleFixture,
   type SchedulableFixture,
   type ScopeRow,
   type SlotConfig,
 } from "./calendar.ts";
 import type { HardConstraint, SchedulingConstraints } from "./constraints.ts";
-import { resetZ3 } from "./z3-load.ts";
 import { dayKeyInTz } from "./tz.ts";
 import type { SolveBuildInput, SolveBuildOutcome } from "./placement-client.ts";
 // Bound at file-load time, same as `buildSchedule` above — so it is the SAME
@@ -158,9 +155,6 @@ const legalSeedOf = (input: BuildInput): Assignment[] => {
 };
 
 describe("buildSchedule", () => {
-  afterAll(async () => {
-    await resetZ3();
-  });
 
   // `isolate: false` (vitest.config.ts) shares module state across the whole
   // file, and this repo has no global `restoreMocks`/`clearMocks` — a
@@ -404,44 +398,10 @@ describe("buildSchedule", () => {
   // `rlimit: 1` here has no effect and cannot reproduce a z3 `unknown`. The
   // placement analog (an outcome whose `status` is `"UNKNOWN"`) needs a real or
   // mocked service response, not a local budget knob.
-  it.skip("does not mistake the WALK's `unknown` for a proof of infeasibility", async () => {
-    // `rlimit: 1` exhausts z3's deterministic resource counter before it can
-    // decide anything, so `check()` returns `unknown` — measured, not assumed.
-    // `unknown` is the ABSENCE of a proof and the incumbent must simply stand;
-    // mapping it onto `infeasible` would report an impossibility nobody
-    // established, which is the one thing this tier must never do.
-    const built = await buildSchedule({
-      fixtures: cornerFixtures,
-      config: cornerConfig,
-      rlimit: 1,
-    });
-    expect(built.status).toBe("ok");
-    expect(built.budgetExpired).toBe(true);
-    expect(built.tiersCompleted).toBe(0);
-    expect(built.engine).toBe("greedy");
-    expect(built.metrics.placed).toBe(1);
-  }, 180_000);
-
   // SKIPPED (Task 06, placement cutover): same `rlimit` obsolescence as the WALK
   // case above — `solveBuild` no longer runs a z3 feasibility probe at all
   // (contradictory pins are now caught by a local `validateAssignments` check
   // before ever calling placement; see `solveBuild`'s comment on `pinConflicts`).
-  it.skip("does not mistake the PROBE's `unknown` for a proof of infeasibility", async () => {
-    // The second site that can see an `unknown`, and it had no test of its own.
-    // A pin is what makes the bare feasibility probe run at all, so this needs
-    // both a locked card and an rlimit too small to decide anything.
-    const config = cfg({ courts: ["C1"], sessionWindows: [{ from: T0, to: T0 + 60 * MIN }] });
-    const fixtures = [
-      fx("a", "E1", "E2", { locked: { court: "C1", startAt: T0 } }),
-      fx("b", "E3", "E4"),
-    ];
-    const built = await buildSchedule({ fixtures, config, rlimit: 1 });
-    expect(built.status).not.toBe("infeasible");
-    expect(built.status).toBe("ok");
-    expect(built.budgetExpired).toBe(true);
-    expect(built.metrics.placed).toBe(2);
-  }, 180_000);
-
   it("does not report infeasible from a probe it never got to run", async () => {
     // The same contradictory pins as below, but no budget. `unsat` would be a
     // proof; not asking is not one. Without the wall-clock guard the probe runs
@@ -800,8 +760,6 @@ describe("buildSchedule", () => {
       expect(spy.mock.calls[0]?.[1]).toContain("verifier rejected");
       expect(spy.mock.calls[0]?.[0]).toMatchObject({ rejected: ["b:person_overlap"] });
     } finally {
-      const z3 = await import("./z3-load.ts");
-      await z3.resetZ3();
       vi.doUnmock("./calendar.ts");
       vi.doUnmock("./placement-client.ts");
       vi.resetModules();
@@ -815,25 +773,6 @@ describe("buildSchedule", () => {
   // falls back to greedy with `status: "not_searched"`) is covered by
   // `describe("buildSchedule — Placement path", ...)` below. Prompt 10 removes
   // `z3-load.ts` and this test with it.
-  it.skip("reports z3_unavailable rather than throwing when the solver will not boot", async () => {
-    // Auto-schedule must always hand back a board. A WASM that will not boot is
-    // a fallback, never an exception.
-    vi.resetModules();
-    vi.doMock("./z3-load.ts", async () => {
-      const actual = await vi.importActual<typeof import("./z3-load.ts")>("./z3-load.ts");
-      return { ...actual, loadZ3: () => Promise.reject(new Error("no wasm here")) };
-    });
-    try {
-      const mod = await import("./build.ts");
-      const built = await mod.buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
-      expect(built.status).toBe("z3_unavailable");
-      expect(built.engine).toBe("greedy");
-      expect(built.assignments).toHaveLength(1);
-    } finally {
-      vi.doUnmock("./z3-load.ts");
-      vi.resetModules();
-    }
-  }, 180_000);
 });
 
 describe("rejectedBlockingConflicts", () => {
@@ -949,9 +888,6 @@ describe("rejectedBlockingConflicts", () => {
 // stays skipped — see its own comment, not a live-service gap like the
 // others.
 describe("buildSchedule — lexicographic tiers", () => {
-  afterAll(async () => {
-    await resetZ3();
-  });
 
   // See the identical comment in `describe("buildSchedule", ...)` above —
   // `isolate: false` + no global mock-restore config means a `vi.spyOn` left
@@ -1203,71 +1139,9 @@ describe("buildSchedule — lexicographic tiers", () => {
   // real service, and a real service would fail this exactly as documented
   // above. This needs a `PinnedRow.division_index` wire change in
   // `services/placement`, own task, own owner decision.
-  it.skip("keeps the encoder and the verifier on ONE immovable board", async () => {
-    // The caller contract `encodeBuild` documents and `build.ts` honours, tested
-    // end to end for the first time now that both halves exist. The encoder
-    // seeds its per-day tally from the `existing` array IT is handed; the
-    // verifier tallies from the array IT is handed; hand either side a filtered
-    // copy and the model believes a day has room the referee says it does not.
-    //
-    // Two days, one court, a 3/day cap and one immovable card already on day 1.
-    // Day 1 therefore has room for two more and offers three slots, while day 2
-    // offers only two — so no board can avoid splitting, and packing all three
-    // onto day 1 would collapse the makespan from a day and a half to 90
-    // minutes. That is exactly what T1 does the moment the cap stops binding,
-    // and the cap only binds if the encoder counted the immovable card.
-    const D1 = Date.UTC(2026, 7, 8, 8, 0); // 09:00 Europe/London
-    const D2 = D1 + 24 * 60 * MIN;
-    const ruleFixtures: RuleFixture[] = ["x", "a", "b", "c"].map((id) => ({
-      id,
-      extKey: null,
-      winnerTo: null,
-    }));
-    const existing: Assignment[] = [
-      { fixtureId: "x", court: "C1", startAt: D1, endAt: D1 + 30 * MIN, entrants: ["E9"], people: [] },
-    ];
-    const config = cfg({
-      startAt: D1,
-      window: { from: D1, to: D2 + 120 * MIN },
-      sessionWindows: [
-        { from: D1, to: D1 + 120 * MIN },
-        { from: D2, to: D2 + 60 * MIN },
-      ],
-      constraints: cons({
-        hard: [{ type: "max_fixtures_per_day", count: 3, scope: { kind: "competition" } }],
-      }),
-      ruleFixtures,
-    });
-    const fixtures = [fx("a", "E1", "E2"), fx("b", "E3", "E4"), fx("c", "E5", "E6")];
-
-    // The premise, measured: day 1 offers three free slots, so the cap — not
-    // the lattice — is the only thing stopping all three cards landing there.
-    const grid = buildGrid({ config, existing });
-    expect(grid.slots.filter((s) => s.startAt < D2)).toHaveLength(3);
-    expect(grid.slots.filter((s) => s.startAt >= D2)).toHaveLength(2);
-    const seed = rawSeedOf({ fixtures, config, existing });
-    expect(seed.assignments).toHaveLength(3);
-    expect(validateInstructionRules(seed.assignments, config, existing)).toEqual([]);
-
-    const built = await buildSchedule({ fixtures, config, existing });
-    expect(built.metrics.placed).toBe(3);
-    // The load-bearing assertion. An encoder counting a day it thinks is empty
-    // puts all three on day 1 and the referee reports the cap breach here.
-    expect(validateInstructionRules(built.assignments, config, existing)).toEqual([]);
-    expect(built.assignments.filter((a) => a.startAt < D2).length).toBeLessThanOrEqual(2);
-    // Non-vacuous: the solver really did move the board, so this is not a test
-    // of greedy wearing the solver's name — and 1410 is the shortest board the
-    // cap allows, where 90 is the shortest board it would allow if the encoder
-    // had not counted `x`.
-    expect(built.engine).toBe("z3");
-    expect(built.metrics.makespanMinutes).toBe(1410);
-  }, 180_000);
 });
 
 describe("buildSchedule — the lattice is the configured courts", () => {
-  afterAll(async () => {
-    await resetZ3();
-  });
 
   /** An immovable row parked on a court the organiser never configured. It is
    *  what drags "C2" into `repairCourts`, and therefore into the lattice. */
@@ -1312,9 +1186,6 @@ describe("buildSchedule — the lattice is the configured courts", () => {
 });
 
 describe("buildSchedule — the solver queue cap", () => {
-  afterAll(async () => {
-    await resetZ3();
-  });
 
   // DELIBERATELY THE SMALLEST BOARD IN THE FILE. This is the one case that runs
   // `MAX_SOLVER_QUEUE` solves concurrently, and the suite is memory-bound rather

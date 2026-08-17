@@ -72,15 +72,18 @@ describe("engine runtime dependencies", () => {
 
   it("finds the imports it is meant to be guarding", () => {
     // A regex that silently matched nothing would make the gate above vacuous.
-    // `@grpc/grpc-js` and `@bufbuild/protobuf` arrive with the placement client and
-    // its generated stubs; `pino` arrives with `scheduling/logger.ts`; all three
-    // are runtime imports, so all three must stay in `dependencies` for the
-    // `--prod` staging install.
+    // `@grpc/grpc-js` and `@bufbuild/protobuf` arrive with the placement client
+    // and its generated stubs; `pino` arrives with `scheduling/logger.ts`; all
+    // three are runtime imports, so all three must stay in `dependencies` for
+    // the `--prod` staging install.
+    //
+    // `z3-solver` was a fifth entry until C8 deleted the solver. It is listed
+    // by name here rather than left to a length check precisely so that its
+    // removal had to be an edit someone made on purpose.
     expect([...runtimeImports().keys()].sort()).toEqual([
       "@bufbuild/protobuf",
       "@grpc/grpc-js",
       "pino",
-      "z3-solver",
       "zod",
     ]);
   });

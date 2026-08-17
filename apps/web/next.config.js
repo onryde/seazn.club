@@ -1,27 +1,6 @@
 import path from "node:path";
-import { createRequire } from "node:module";
 import { withSentryConfig } from "@sentry/nextjs";
 import { posthogIngestHosts } from "./src/lib/posthog-proxy.mjs";
-
-// z3-solver is a WASM build whose emscripten glue reads `build/z3-built.wasm`
-// off disk at runtime; nothing in the import graph names the `.wasm`, so tracing
-// cannot infer it and it has to be listed explicitly below. That listing used to
-// be a literal glob pointing two levels up into a hoisted `node_modules/
-// z3-solver/build` — which npm produced and pnpm does not: pnpm's store puts
-// the real file under
-// `node_modules/.pnpm/z3-solver@<version>/node_modules/z3-solver/build`, so the
-// glob would match NOTHING.
-//
-// It would also break in silence. With the file missing from the standalone
-// output the server ENOENTs on every solve, `loadZ3` turns that into the
-// designed fallback to LLM repair, and minimal-movement repair becomes a
-// production no-op that still spends a model round. Ask the resolver where the
-// package actually is instead of asserting a linker's layout.
-const require = createRequire(import.meta.url);
-const z3BuildDir = path.join(
-  path.dirname(require.resolve("z3-solver/package.json")),
-  "build",
-);
 
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -62,35 +41,16 @@ const nextConfig = {
   // pdfkit reads its AFM font-metrics files from disk at runtime (Jul3/06
   // exports); bundling it breaks that path resolution, so load it — and
   // exceljs, likewise native-ish — from node_modules on the server.
-  // z3-solver joins them, for pdfkit's exact reason. Its emscripten glue locates
-  // `build/z3-built.wasm` relative to its own `__dirname`; bundling rewrites that
-  // to the tracing placeholder, so the server asks for
-  // `/ROOT/node_modules/z3-solver/build/z3-built.wasm` and gets ENOENT no matter
-  // where the file actually is. Tracing the .wasm in (below) is necessary but NOT
-  // sufficient — that was measured: with the file present in
-  // .next/standalone/node_modules and this line missing, every solve still
-  // aborted. Both halves are load-bearing.
-  serverExternalPackages: ["pdfkit", "exceljs", "z3-solver"],
-  // Email HTML templates and /help Markdown are read from disk at runtime
-  // (lib/email-templates/compose.ts, server/help-content.ts) — make sure
-  // they land in the standalone trace for every route.
-  // z3-solver is a WASM build: the JS glue fetches `build/z3-built.wasm` from
-  // disk at runtime, and nothing in the import graph mentions the `.wasm`, so
-  // tracing cannot infer it. Without this the standalone server aborts on every
-  // solve with
-  //   ENOENT ... '/ROOT/node_modules/z3-solver/build/z3-built.wasm'
-  // and the scheduler falls back to LLM repair — silently, because that
-  // fallback is a designed path. The whole minimal-movement repair becomes a
-  // no-op in production while still spending a model round, and no unit test
-  // can see it: they import from the source node_modules, which always has the
-  // file. Caught only by e2e against a real standalone build (#401).
+  //
+  // The retired WASM solver was a third entry here, paired with an
+  // `outputFileTracingIncludes` glob for its `.wasm`. Both halves were
+  // load-bearing and both were removed together in the C8 solver retirement:
+  // either one left behind is config that does nothing. See that task's entry
+  // in `docs/superpowers/specs/2026-08-12-release2-prompts/_INDEX.md` if a
+  // future runtime needs the same treatment.
+  serverExternalPackages: ["pdfkit", "exceljs"],
   outputFileTracingIncludes: {
-    "/*": [
-      "src/lib/email-templates/html/**/*",
-      "content/help/**/*",
-      // Resolved, not hardcoded — see the createRequire block at the top.
-      path.relative(import.meta.dirname, path.join(z3BuildDir, "**/*")),
-    ],
+    "/*": ["src/lib/email-templates/html/**/*", "content/help/**/*"],
   },
   // PostHog reverse proxy: front analytics through our own origin so
   // ad-blockers don't drop events. Client posts to /ingest (see
