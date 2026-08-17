@@ -18,11 +18,15 @@ The brief's premise held, and three facts it did not have change the design:
    No cfg field, no org band, no picker — whichever event type arrives first
    for that innings locks it.
 2. **The refusal is BIDIRECTIONAL.** Ball on a coarse innings is refused at
-   `cricket.ts:1128-1131` and `:2936-2938`; summary on a fine innings is
+   `cricket.ts:1128-1131`; summary on a fine innings is
    refused at `cricket.ts:1402-1404` ("this innings is recorded ball-by-ball —
    summaries are not allowed for it"). So over-level and ball-level are
    mutually exclusive **within one innings**. The brief's own open question 1
    ("show it at every band") is answered by the engine, not by preference.
+   Correction, found by review while proving R2b's tests non-vacuous: the
+   SECOND ball-on-coarse guard at `cricket.ts:2936-2938` is **masked** by
+   `applyDelivery`'s own guard at `:1128-1131`, which fires first. `:1128` is
+   the load-bearing line; an earlier draft of this plan implied `:2936` was.
 3. **The payload REPLACES.** `runs`/`wickets`/`legalBalls` overwrite the
    innings totals (`cricket.ts:1445-1451`) behind a monotone "summary totals
    may not decrease" guard (`:1416-1426`). `partial: true` routes to

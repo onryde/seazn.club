@@ -269,7 +269,9 @@ scout's re-pin is what surfaced that.
 - **The brief's recommendation for Q1 was wrong, and the caveat it flagged is
   real.** It suggested showing the tile at every band so a band-3 org could
   fall back to over-level mid-match. The fold refuses that: the ball-on-summary
-  refusal (`cricket.ts:1128-1131`, `:2936-2938`) has a **mirror** at
+  refusal (`cricket.ts:1128-1131` — the duplicate at `:2936-2938` is MASKED by
+  it and never fires first, proven by inversion during R2b's review) has a
+  **mirror** at
   `cricket.ts:1402-1404` — "this innings is recorded ball-by-ball — summaries
   are not allowed for it". Over-level and ball-level are mutually exclusive
   WITHIN one innings. The brief told this session to confirm the caveat before
