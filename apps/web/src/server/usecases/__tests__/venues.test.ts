@@ -198,6 +198,29 @@ async function seedFixtureOnCourt(
   return { fixtureId };
 }
 
+/** Owner review finding 3, mutation-proving the race fix: `Promise.all` of
+ *  two calls PROVES NOTHING here — verified on this repo's own `uniqueSlug`
+ *  check-then-insert race fix, where the "lucky" non-colliding interleaving
+ *  (one call's transaction fully commits before the other even starts) is
+ *  the COMMON one, so a bare Promise.all test passed against the BROKEN code
+ *  too. Poll instead until a session is actually parked waiting on a lock,
+ *  then the caller releases the held lock and observes a deterministic, real
+ *  interleaving. Row-level `FOR UPDATE` contention shows up in
+ *  `pg_stat_activity.wait_event_type = 'Lock'` (a `transactionid` wait
+ *  internally) — not as a `pg_locks` row scoped to the `venues`/`courts`
+ *  relation, which is why this checks activity rather than trying to join
+ *  `pg_locks` to a specific table. */
+async function waitForLockContention(timeoutMs = 4000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const [row] = await sql<{ n: string }[]>`
+      select count(*)::text as n from pg_stat_activity where wait_event_type = 'Lock'`;
+    if (row!.n !== "0") return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`waitForLockContention: no session waiting on a lock within ${timeoutMs}ms`);
+}
+
 describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
   const orgIds: string[] = [];
 
@@ -212,6 +235,12 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
       // explicit multi-statement transaction that fixes ordering before
       // COMMIT, not a single statement's own internal cascade resolution.
       await sql`delete from competitions where org_id = ${id}`;
+      // Courts NEXT (owner review finding 3, 2026-08-17): courts.venue_id is
+      // now ON DELETE RESTRICT too (this migration shipped ON DELETE CASCADE
+      // initially) — a court left under a venue would block organizations'
+      // cascade into venues the same way a fixture used to block courts.
+      // courts.org_id is denormalized, so this doesn't need to join venues.
+      await sql`delete from courts where org_id = ${id}`;
       await sql`delete from organizations where id = ${id}`;
     }
   });
@@ -499,5 +528,247 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
     // READ rejected — org B's list never contains org A's venue.
     const listedByB = await listVenues(authB);
     expect(listedByB.map((v) => v.id)).not.toContain(venueA.id);
+  });
+
+  // ---------------------------------------------------------------------
+  // Owner review findings, 2026-08-17
+  // ---------------------------------------------------------------------
+
+  it("finding 1: includeArchived also reveals archived courts — unreachable before, since there is no single-court GET", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Include Archived Park", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court A", sort: 0, tags: [] });
+    await archiveCourt(auth, court.id);
+
+    const defaultListed = await listVenues(auth);
+    const vDefault = defaultListed.find((x) => x.id === venue.id)!;
+    expect(vDefault.courts.map((c) => c.id)).not.toContain(court.id);
+
+    const withArchived = await listVenues(auth, { includeArchived: true });
+    const vWithArchived = withArchived.find((x) => x.id === venue.id)!;
+    expect(vWithArchived.courts.map((c) => c.id)).toContain(court.id);
+  });
+
+  it("finding 2: createCourt 409s COURT_NAME_TAKEN instead of a raw 500 on a duplicate active name", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Dup Park", address: null, sort: 0 });
+    await createCourt(auth, venue.id, { name: "Court X", sort: 0, tags: [] });
+
+    await expect(
+      createCourt(auth, venue.id, { name: "Court X", sort: 0, tags: [] }),
+    ).rejects.toMatchObject({ status: 409, code: "COURT_NAME_TAKEN" });
+  });
+
+  it("finding 2: patchCourt 409s COURT_NAME_TAKEN instead of a raw 500 when renamed onto a taken active name", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Dup Park 2", address: null, sort: 0 });
+    const courtA = await createCourt(auth, venue.id, { name: "Court Y", sort: 0, tags: [] });
+    await createCourt(auth, venue.id, { name: "Court Z", sort: 0, tags: [] });
+
+    await expect(patchCourt(auth, courtA.id, { name: "Court Z" })).rejects.toMatchObject({
+      status: 409,
+      code: "COURT_NAME_TAKEN",
+    });
+  });
+
+  it("finding 3: deleteVenue refuses loudly instead of cascading a venue's courts away, even if the application guard is bypassed (DB-level backstop)", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Backstop Park", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+
+    // Raw SQL, deliberately bypassing deleteVenue's own "has no courts"
+    // guard entirely — proves the DDL guarantee (courts.venue_id is now ON
+    // DELETE RESTRICT, not CASCADE), not the application-level check.
+    await expect(sql`delete from venues where id = ${venue.id}`).rejects.toThrow();
+
+    const [survivor] = await sql<{ id: string }[]>`select id from courts where id = ${court.id}`;
+    expect(survivor?.id).toBe(court.id);
+  });
+
+  it("finding 3: deleteVenue's row lock closes the race — a court that lands mid-check is seen, not missed (409, never a silent cascade)", async () => {
+    const { auth, orgId } = await org();
+    const venue = await createVenue(auth, { name: "Race Park A", address: null, sort: 0 });
+
+    let releaseT1 = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseT1 = resolve;
+    });
+    let insertedCourtId = "";
+    const t1 = sql.begin(async (tx1) => {
+      // Mirrors createCourt's own locking SELECT — holds the venue row FOR
+      // UPDATE, inserts a court, then PAUSES before committing.
+      await tx1`select id from venues where id = ${venue.id} for update`;
+      const [c] = await tx1<{ id: string }[]>`
+        insert into courts (venue_id, org_id, name, sort, tags)
+        values (${venue.id}, ${orgId}, 'Racer Court', 0, '{}')
+        returning id`;
+      insertedCourtId = c!.id;
+      await gate;
+    });
+
+    const deleteCall = deleteVenue(auth, venue.id);
+
+    // Proves genuine contention, not a lucky non-overlapping interleave.
+    await waitForLockContention();
+    releaseT1();
+    await t1;
+
+    await expect(deleteCall).rejects.toMatchObject({ status: 409, code: "VENUE_NOT_EMPTY" });
+    const [survivor] = await sql<{ id: string }[]>`
+      select id from courts where id = ${insertedCourtId}`;
+    expect(survivor?.id).toBe(insertedCourtId);
+  });
+
+  it("finding 3: createCourt's row lock closes the race — once a concurrent delete commits, the loser 404s instead of inserting under a gone venue", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Race Park B", address: null, sort: 0 });
+
+    let releaseT1 = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseT1 = resolve;
+    });
+    const t1 = sql.begin(async (tx1) => {
+      // Mirrors deleteVenue's own locking SELECT — holds the venue row FOR
+      // UPDATE (the venue has no courts yet, so the real guard would pass),
+      // then PAUSES before actually deleting it.
+      await tx1`select id from venues where id = ${venue.id} for update`;
+      await gate;
+      await tx1`delete from venues where id = ${venue.id}`;
+    });
+
+    const createCall = createCourt(auth, venue.id, { name: "Late Court", sort: 0, tags: [] });
+
+    await waitForLockContention();
+    releaseT1();
+    await t1;
+
+    await expect(createCall).rejects.toMatchObject({ status: 404, code: "VENUE_NOT_FOUND" });
+  });
+
+  it("finding 3: archiveCourt's row lock is taken BEFORE the fixture-check — a fixture-writer that lands while it waits is seen, not raced past", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Race Park C", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+
+    // Stand up a fixture chain (competition -> division -> stage) WITHOUT
+    // yet inserting the fixture itself — T1 below inserts the fixture,
+    // after taking the SAME lock archiveCourt takes, so the two genuinely
+    // contend for the resource finding 3 is about. A test that only proved
+    // "archiveCourt eventually succeeds after some unrelated lock is
+    // released" would pass even with the fix reverted (the final UPDATE
+    // takes an equivalent lock implicitly) — this exercises the ordering
+    // that actually matters: whether the fixture-CHECK runs before or
+    // after the lock is acquired.
+    const comp = await createCompetition(auth, {
+      name: `Comp ${randomUUID().slice(0, 6)}`,
+      visibility: "private",
+      branding: {},
+      ends_on: "2030-12-31",
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Div",
+      slug: `div-${randomUUID().slice(0, 6)}`,
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+      eligibility: [],
+    });
+    const [{ id: stageId }] = await sql<{ id: string }[]>`
+      insert into stages (division_id, seq, kind, name)
+      values (${division.id}, 1, 'league', 'Stage 1') returning id`;
+
+    let releaseT1 = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseT1 = resolve;
+    });
+    const t1 = sql.begin(async (tx1) => {
+      // Simulates a future fixture-writer (P9, not built yet this session):
+      // locks the court row FOR UPDATE — the same lock archiveCourt takes —
+      // then inserts an UNPLAYED fixture referencing it, then pauses before
+      // committing.
+      await tx1`select id from courts where id = ${court.id} for update`;
+      await tx1`
+        insert into fixtures (stage_id, division_id, round_no, seq_in_round, court_id, status)
+        values (${stageId}, ${division.id}, 1, 1, ${court.id}, 'scheduled')`;
+      await gate;
+    });
+
+    const archiveCall = archiveCourt(auth, court.id);
+
+    await waitForLockContention();
+    releaseT1();
+    await t1;
+
+    // archiveCourt must see the fixture that landed while it waited — not
+    // archive on a stale "no unplayed fixture" read taken before the lock.
+    await expect(archiveCall).rejects.toMatchObject({ status: 409, code: "COURT_IN_USE" });
+  });
+
+  it("finding 4: fixtures.court_id FK is composite — a court from a different org cannot be referenced (DB-level cross-org guard)", async () => {
+    const { auth: authA } = await org();
+    const { auth: authB } = await org();
+    const venueA = await createVenue(authA, { name: "Org A Venue", address: null, sort: 0 });
+    const courtA = await createCourt(authA, venueA.id, { name: "Court A1", sort: 0, tags: [] });
+
+    // Nothing writes fixtures.court_id yet this session (P9's job) — reach
+    // straight for the DB-level guarantee via the same raw insert
+    // seedFixtureOnCourt uses, just pointed at a FOREIGN org's court. Before
+    // finding 4, the single-column `references courts(id)` FK accepted this
+    // (courtA.id is a real, valid court id) even though it belongs to a
+    // different org than the fixture chain built here under org B.
+    await expect(seedFixtureOnCourt(authB, courtA.id, "scheduled")).rejects.toThrow();
+  });
+
+  it("finding 5: courts_active_idx was dropped as redundant against courts_venue_name_active_idx", async () => {
+    const schema = process.env.DB_SCHEMA ?? "seazn_club";
+    const indexes = await sql<{ indexname: string }[]>`
+      select indexname from pg_indexes
+      where schemaname = ${schema} and tablename = 'courts'`;
+    const names = indexes.map((i) => i.indexname);
+    expect(names).not.toContain("courts_active_idx");
+    expect(names).toContain("courts_venue_name_active_idx");
+  });
+
+  it("finding 6: cross-org — another org cannot patch, delete, archive, unarchive, or set a calendar for a court it doesn't own", async () => {
+    const { auth: authA } = await org();
+    const { auth: authB } = await org();
+    const venueA = await createVenue(authA, { name: "Org A Arena", address: null, sort: 0 });
+    const courtA = await createCourt(authA, venueA.id, { name: "Court A1", sort: 0, tags: [] });
+
+    await expect(patchCourt(authB, courtA.id, { name: "hijacked" })).rejects.toMatchObject({
+      status: 404,
+      code: "COURT_NOT_FOUND",
+    });
+    await expect(deleteCourt(authB, courtA.id)).rejects.toMatchObject({
+      status: 404,
+      code: "COURT_NOT_FOUND",
+    });
+    await expect(archiveCourt(authB, courtA.id)).rejects.toMatchObject({
+      status: 404,
+      code: "COURT_NOT_FOUND",
+    });
+    await expect(unarchiveCourt(authB, courtA.id)).rejects.toMatchObject({
+      status: 404,
+      code: "COURT_NOT_FOUND",
+    });
+    await expect(
+      putCourtCalendar(authB, courtA.id, { hours: [], exceptions: [] }),
+    ).rejects.toMatchObject({ status: 404, code: "COURT_NOT_FOUND" });
+  });
+
+  it("finding 7: PUT calendar rejects two exceptions sharing the same date (422 COURT_EXCEPTION_DUPLICATE_DATE)", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Dup Exception Park", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+
+    await expect(
+      putCourtCalendar(auth, court.id, {
+        hours: [],
+        exceptions: [
+          { date: "2026-09-01", closed: true, open_min: null, close_min: null },
+          { date: "2026-09-01", closed: false, open_min: 600, close_min: 720 },
+        ],
+      }),
+    ).rejects.toMatchObject({ status: 422, code: "COURT_EXCEPTION_DUPLICATE_DATE" });
   });
 });
