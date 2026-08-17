@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { createVenue, createCourt } from "../venues";
 import { getScheduleHealth, getCompetitionScheduleHealth } from "../schedule-health";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -29,6 +30,9 @@ interface Seeded {
   stageId: string;
   competitionId: string;
   names: string[];
+  /** P9 pass 3a — the two real courts fixtures are seeded onto (id + the
+   *  display name a resolved offender label must show). */
+  courts: { id: string; name: string }[];
 }
 
 /** A lopsided but legal one-day league: every one of E1's matches on Court 1,
@@ -75,6 +79,19 @@ async function seedLopsidedLeague(): Promise<Seeded> {
     values (${orgId}, ${divisionId}, 1, 'league', 'League')
     returning id`;
 
+  // P9 pass 3a: two REAL courts — `schedule_settings.config.courts` is
+  // `CourtId[]` (real uuids) since pass 1, and `fixtures.court_id` carries a
+  // composite FK to `courts(id, org_id)` — a free-text "Court 1"/"Court 2"
+  // is no longer a legal value for either. This seed pre-dates that cutover
+  // and, unfixed, would throw a ZodError the moment `getScheduleHealth`
+  // calls `loadSettings`'s `ScheduleConfig.parse` on a non-uuid `courts`
+  // entry — this whole suite would be red before P9 pass 3a touched
+  // anything in this file.
+  const auth: AuthCtx = { orgId, via: "session", userId, role: "owner", keyId: null };
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const court1 = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+  const court2 = await createCourt(auth, venue.id, { name: "Court 2", sort: 1, tags: [] });
+
   await sql`
     insert into schedule_settings (org_id, division_id, tz, config)
     values (${orgId}, ${divisionId}, 'UTC', ${sql.json({
@@ -82,34 +99,38 @@ async function seedLopsidedLeague(): Promise<Seeded> {
       endAt: `${DAY}T23:59:00.000Z`,
       matchMinutes: 60,
       gapMinutes: 0,
-      courts: ["Court 1", "Court 2"],
+      courts: [court1.id, court2.id],
       perEntrantMinRest: 0,
       sessionWindows: [{ from: `${DAY}T09:00:00.000Z`, to: `${DAY}T21:00:00.000Z` }],
     })})
     on conflict (division_id) do update set tz = excluded.tz, config = excluded.config`;
 
   const board: Array<[string, string, string, string, number]> = [
-    [e1, e2, "09:00", "Court 1", 1],
-    [e3, e4, "09:00", "Court 2", 2],
-    [e1, e3, "10:15", "Court 1", 3],
-    [e2, e4, "10:15", "Court 2", 4],
-    [e1, e4, "15:00", "Court 1", 5],
-    [e2, e3, "15:00", "Court 2", 6],
+    [e1, e2, "09:00", court1.id, 1],
+    [e3, e4, "09:00", court2.id, 2],
+    [e1, e3, "10:15", court1.id, 3],
+    [e2, e4, "10:15", court2.id, 4],
+    [e1, e4, "15:00", court1.id, 5],
+    [e2, e3, "15:00", court2.id, 6],
   ];
-  for (const [home, away, time, court, no] of board) {
+  for (const [home, away, time, courtId, no] of board) {
     await sql`
       insert into fixtures (org_id, division_id, stage_id, round_no, seq_in_round,
-                            home_entrant_id, away_entrant_id, scheduled_at, court_label,
+                            home_entrant_id, away_entrant_id, scheduled_at, court_id,
                             status, ext_key, fixture_no)
       values (${orgId}, ${divisionId}, ${stageId}, 1, ${no}, ${home}, ${away},
-              ${at(time)}, ${court}, 'scheduled', ${`hl-${no}`}, ${no})`;
+              ${at(time)}, ${courtId}, 'scheduled', ${`hl-${no}`}, ${no})`;
   }
 
   return {
-    auth: { orgId, via: "session", userId, role: "owner", keyId: null },
+    auth,
     stageId,
     competitionId,
     names,
+    courts: [
+      { id: court1.id, name: court1.name },
+      { id: court2.id, name: court2.name },
+    ],
   };
 }
 
@@ -158,6 +179,64 @@ describe.skipIf(!HAS_DB)("schedule health — offender labels", () => {
     // test had on its first draft.
     for (const o of entrantOffenders) expect(o.label.length).toBeGreaterThan(0);
     expect(entrantOffenders.some((o) => names.includes(o.label))).toBe(true);
+  });
+
+  it("labels courtDay offenders with the court's NAME, never the raw court_id (P9 pass 3a)", async () => {
+    const { auth, stageId, courts } = await seedLopsidedLeague();
+    const report = await getScheduleHealth(auth, stageId);
+
+    const courtDayOffenders = report.metrics.flatMap((m) =>
+      m.offenders.filter((o) => o.kind === "courtDay"),
+    );
+    // Guard the premise: gapDispersion's own gate needs >= 2 fixtures on one
+    // (court, day) to emit a courtDay row at all — this board seeds 3 per
+    // court, so it always qualifies; a board with no offenders would make
+    // every assertion below trivially true.
+    expect(courtDayOffenders.length).toBeGreaterThan(0);
+
+    const courtNames = courts.map((c) => c.name);
+    for (const o of courtDayOffenders) {
+      expect(o.label, `courtDay offender label is a raw uuid: ${o.label}`).not.toMatch(UUID_RE);
+      // label is `${courtName} ${dayKey}` (health.ts's gapDispersionMetric)
+      // — assert it STARTS WITH a real court name, not merely contains one:
+      // a raw court_id could never start with "Court 1", so this alone
+      // already fails pre-fix (before withResolvedOffenderLabels resolved
+      // the courtDay case).
+      expect(courtNames.some((name) => o.label.startsWith(name))).toBe(true);
+      // `id` keeps its raw `${court_id}::${dayKey}` shape — the panel keys
+      // off it, and it must still resolve back to a real seeded court.
+      const [courtId] = o.id.split("::");
+      expect(courts.some((c) => c.id === courtId)).toBe(true);
+    }
+  });
+});
+
+// P9 pass 3a: the cutover this suite's own seeding needed (see
+// seedLopsidedLeague's comment) is also the direct proof of the dispatch's
+// regression — schedule-health keys on court_id, not the legacy
+// court_label, which no production writer has populated since this pass.
+describe.skipIf(!HAS_DB)("schedule health — court_id is authoritative, court_label is dead weight (P9 pass 3a)", () => {
+  it("scores a fixture whose court_label is NULL — the post-drop-PR world — as long as court_id is set", async () => {
+    const { auth, stageId } = await seedLopsidedLeague();
+    // court_label was never written by this seed (nor by any production
+    // writer any more) — it already starts NULL. The report existing at all
+    // is the proof: stageFixtures' WHERE clause used to require
+    // `court_label is not null`, which would have excluded every one of
+    // these rows and collapsed this call to the 409 SCHEDULE_NOT_APPLIED
+    // "empty board" case instead of a real report.
+    const report = await getScheduleHealth(auth, stageId);
+    expect(report.metrics.length).toBeGreaterThan(0);
+  });
+
+  it("ignores a stale, misleading court_label — only court_id is read", async () => {
+    const { auth, stageId } = await seedLopsidedLeague();
+    const baseline = await getScheduleHealth(auth, stageId);
+    // Poison court_label with a value that names neither seeded court —
+    // stageFixtures no longer selects this column at all, so the report
+    // must be byte-identical.
+    await sql`update fixtures set court_label = 'a court that does not exist' where stage_id = ${stageId}`;
+    const poisoned = await getScheduleHealth(auth, stageId);
+    expect(poisoned.metrics).toEqual(baseline.metrics);
   });
 });
 
