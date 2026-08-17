@@ -100,6 +100,29 @@ export const FIXTURE_COLS = [
   "ext_key", "lane", "is_final", "third_place", "conditional",
 ] as const;
 
+/** F1 follow-up (2026-08-17, payload-budget regression — board-v3.spec.ts
+ *  "gap 15" reds on PR #606, expect flightBytes-dictBytes < 250000, got
+ *  279043): the schedule board (competition-wide AND single-division)
+ *  never renders ext_key/lane/is_final/third_place/conditional — only the
+ *  division page's bracket/stages panel does (StagesPanel/BracketPanel,
+ *  fed by the full FIXTURE_COLS read via listDivisionFixtures above).
+ *  Shipping those five columns to a board that reads none of them cost
+ *  ~88 escaped bytes/fixture on the RSC flight — invisible on one
+ *  division, ~29KB over budget at a 5-division x 66-fixture board.
+ *  listDivisionFixturesForBoard (fixtures.ts) selects this instead.
+ *  ext_key's exclusion isn't new scope creep, either — board/settings-
+ *  panel.tsx already documented (pre-dating this branch) that "the page's
+ *  fetched fixture list never carries ext_key" as a design invariant for
+ *  its capacity precheck; this restores that invariant rather than
+ *  breaking new ground. Same as FIXTURE_COLS minus those five columns —
+ *  keep the two in sync by hand if FIXTURE_COLS's other columns change. */
+export const BOARD_FIXTURE_COLS = [
+  "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "fixture_no",
+  "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",
+  "scheduled_at", "venue", "court_label",
+  "officials", "status", "outcome", "schedule_source", "schedule_locked", "created_at",
+] as const;
+
 export interface FixtureRow {
   id: string;
   stage_id: string;
