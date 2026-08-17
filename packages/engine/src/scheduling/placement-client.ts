@@ -4,6 +4,16 @@
 // dumb: it translates `SolveBuildInput` onto the wire, translates the response
 // back into `SolveBuildOutcome`, and settles. No tier reasoning, no objective
 // interpretation, no board validation — `build.ts` owns all of that.
+//
+// EXPORTED AS `@seazn/engine/scheduling/placement-client`, and the subpath is
+// there for the WEB LANE'S TESTS rather than for production callers — nothing
+// in `apps/web` calls this directly, and nothing should: `buildSchedule` is
+// the entry point. Being the one seam every solve leaves the process through
+// makes it the one place a caller-side test can prove a solve did or did not
+// happen (`schedule-capacity-guard.test.ts`'s "never reached the solver",
+// `schedule-auto-solver-busy-latency.test.ts`'s held-open client). Those facts
+// used to be staged with z3's process-wide lock, which C8 deleted along with
+// the solver; the subpath is what replaced it.
 import * as grpc from "@grpc/grpc-js";
 
 import type { ServiceError } from "@grpc/grpc-js";
