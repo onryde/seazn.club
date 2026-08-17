@@ -28,7 +28,7 @@ import {
   sendDisputeLostEmail,
 } from "@/lib/email";
 import { routes } from "@/lib/routes";
-import { toLocale, type Locale } from "@/lib/i18n-constants";
+import { toLocale } from "@/lib/i18n-constants";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { maskDisplayName, resolveNameDisplay } from "@/lib/name-display";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -421,13 +421,6 @@ async function loadSettings(db: AnySql, divisionId: string): Promise<Registratio
   return row ?? null;
 }
 
-async function activeCount(db: AnySql, divisionId: string): Promise<number> {
-  const [{ n }] = await db<{ n: number }[]>`
-    select count(*)::int as n from registrations
-    where division_id = ${divisionId} and status in ${sql([...SPOT_HOLDERS])}`;
-  return n;
-}
-
 /** Append to the competition_events audit ledger (016 pattern). */
 async function audit(
   db: AnySql,
@@ -477,11 +470,6 @@ async function divisionCtx(db: AnySql, divisionId: string): Promise<DivisionCtx>
   return row;
 }
 
-function seasonStartYear(ctx: DivisionCtx): number {
-  return ctx.starts_on
-    ? new Date(`${ctx.starts_on}T00:00:00Z`).getUTCFullYear()
-    : new Date().getUTCFullYear();
-}
 
 /** Origin for emails fired from request-less paths (withdraw promotions):
  *  same override order as lib/base-url, localhost as the dev fallback. */
