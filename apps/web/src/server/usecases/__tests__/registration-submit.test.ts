@@ -43,6 +43,7 @@ import {
   submitRegistrationGroup,
   joinTeamEntry,
   type SubmitGroupContact,
+  type SubmitGroupEntryInput,
   type SubmitGroupInput,
 } from "../registration-submit";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -237,6 +238,88 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
     const [{ n }] = await sql<{ n: number }[]>`
       select count(*)::int as n from registration_groups where competition_id = ${competition.id}`;
     expect(n).toBe(0);
+  });
+
+  it("guardian consent is required when the contact is a minor registering themselves", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0 });
+
+    const minorEntry: SubmitGroupEntryInput = {
+      division_id: division.id,
+      entrant_kind: "individual",
+      registering_self: true,
+      self_player_index: 0,
+      players: [{ full_name: "Young Player" }],
+      answers: {},
+    };
+    // No guardian fields -> refused.
+    await expect(
+      submitRegistrationGroup(
+        { orgSlug, compSlug: competition.slug },
+        { contact: baseContact({ dob: "2015-01-01" }), privacy_consent: true, entries: [minorEntry] },
+      ),
+    ).rejects.toMatchObject({ status: 422 });
+
+    // With guardian name + consent -> accepted, and the self row records
+    // 'granted' (submit-time consent), not 'guardian' — the design's
+    // guardian gate is about WHO may submit for a minor, not the player
+    // row's own consent_status, which materialise/claim semantics elsewhere
+    // in `registrations.ts` already treat uniformly for captain-entered rows.
+    const res = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact({ dob: "2015-01-01", guardian_name: "A Guardian", guardian_consent: true }),
+        privacy_consent: true,
+        entries: [minorEntry],
+      },
+    );
+    expect(res.entries).toHaveLength(1);
+    const [row] = await sql<{ guardian_name: string | null; consent_status: string }[]>`
+      select guardian_name, consent_status from registration_players
+      where registration_id = ${res.entries[0]!.registration_id}`;
+    expect(row!.guardian_name).toBe("A Guardian");
+    expect(row!.consent_status).toBe("granted");
+  });
+
+  it("free_agent is only accepted when the division's allow_free_agents is on", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, { entrant_kind: "team", fee_cents: 0, allow_free_agents: false });
+
+    await expect(
+      submitRegistrationGroup(
+        { orgSlug, compSlug: competition.slug },
+        {
+          contact: baseContact(),
+          privacy_consent: true,
+          entries: [
+            { division_id: division.id, entrant_kind: "team", free_agent: true, players: [{ full_name: "Floater" }], answers: {} },
+          ],
+        },
+      ),
+    ).rejects.toMatchObject({ status: 422 });
+
+    await seedSettings(division.id, { entrant_kind: "team", fee_cents: 0, allow_free_agents: true });
+    const res = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [
+          { division_id: division.id, entrant_kind: "team", free_agent: true, players: [{ full_name: "Floater" }], answers: {} },
+        ],
+      },
+    );
+    expect(res.entries[0]!.free_agent).toBe(true);
+    // Never auto-materialised, even free + auto-approval — no team to attach
+    // an entrant to yet (design §5; RS009 owns assignment).
+    expect(res.entries[0]!.status).toBe("pending");
+    const [row] = await sql<{ entrant_id: string | null }[]>`
+      select entrant_id from registrations where id = ${res.entries[0]!.registration_id}`;
+    expect(row!.entrant_id).toBeNull();
   });
 
   it("manual-approval division holds pending even when free and under capacity; auto division still confirms", async () => {
@@ -717,6 +800,30 @@ describe.skipIf(!HAS_DB)("joinTeamEntry", () => {
     expect(row!.source).toBe("self_joined");
     expect(row!.consent_status).toBe("granted");
     expect(row!.user_id).toBe(sessionUserId);
+  });
+
+  it("a minor joiner needs guardian consent; consent_status records 'guardian'", async () => {
+    const { entry } = await teamRig();
+    await expect(
+      joinTeamEntry({}, { join_code: entry.join_code!, player: { full_name: "Young Joiner", dob: "2015-01-01" } }),
+    ).rejects.toMatchObject({ status: 422 });
+
+    const res = await joinTeamEntry(
+      {},
+      {
+        join_code: entry.join_code!,
+        player: { full_name: "Young Joiner", dob: "2015-01-01" },
+        guardian_name: "A Guardian",
+        guardian_consent: true,
+      },
+    );
+    expect(res.consent_status).toBe("guardian");
+    const [row] = await sql<{ guardian_name: string | null; user_id: string | null }[]>`
+      select guardian_name, user_id from registration_players where id = ${res.player_id}`;
+    expect(row!.guardian_name).toBe("A Guardian");
+    // Never linked to an account, even if the joiner happened to be signed
+    // in — the same adult-only rule deriveLinkUserId enforces for submit.
+    expect(row!.user_id).toBeNull();
   });
 
   it("full-roster rejection: joining is refused once the sport's squad cap is reached", async () => {

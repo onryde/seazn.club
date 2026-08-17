@@ -228,7 +228,10 @@ function entryDisplayName(
   players: SubmitGroupPlayerInput[],
   contact: SubmitGroupContact,
 ): string {
-  if (entry.entrant_kind === "team") {
+  // A free agent is `entrant_kind: "team"` at the division level (design §5:
+  // "an entry with no team of its own yet") but represents ONE unassigned
+  // person, not a named team — same fallback as `individual` below.
+  if (entry.entrant_kind === "team" && !entry.free_agent) {
     const name = entry.team_name?.trim();
     if (!name) throw new HttpError(422, "A team name is required");
     return name;
