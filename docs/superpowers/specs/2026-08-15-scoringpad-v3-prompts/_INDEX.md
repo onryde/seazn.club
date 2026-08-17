@@ -367,6 +367,190 @@ innings total every over.
   fidelity. `max: bpo` on the balls step; below `bpo` stays legal because an
   innings can end mid-over.
 
+### R2b — live tile audit, 2026-08-17: 4 defects in R2-era cricket tiles
+
+Owner asked "have you tried all these options?" of the No-ball / Bye / Leg bye /
+Penalty / Review / Retire / Close innings / More row. Answer was no — and the
+audit that followed found that **none of those eight tiles had ANY e2e
+coverage**, and their unit tests are spec-builder assertions in
+`environment: "node"`, so nothing had ever rendered or tapped one. Penalty had
+no test of any kind. A live browser pass against the prod build found four
+defects; all eight tiles DO open, all have a Cancel that provably does not
+dispatch (checked against the ledger, not the UI closing), and no raw i18n key
+leaks.
+
+1. **HIGH — the bowler default blocks the first tap of EVERY over.** Covered in
+   its own section below; broader than the bowler chip, since any instant-fire
+   tile 422s at a boundary.
+2. **HIGH — Close innings leaves a dead but fully tappable grid.**
+   `currentInnings()` (`cricket.tsx:207-210`) falls back to the JUST-CLOSED
+   innings when none is open, and `buildTiles`/`buildContext`/`buildSwap` never
+   check `.closed`. Every tile stays visible; every tap 422s with "over/
+   ballInOver do not match the ledger", which never mentions the closure. No
+   tile opens the next innings, so the scorer is stuck. Reversible by
+   `core.void` on the close event (verified live).
+3. **MEDIUM — Penalty always fires exactly 1 run.** `extraPayload` hardcodes
+   `runs = 1` (`cricket.tsx:316-318`) for every member of `MINOR_EXTRA_KINDS`
+   (`:688-696`), with nothing to adjust it. **A penalty is 5 runs under Law 41**,
+   so that tile cannot record a correct penalty at all. The same hardcoding
+   makes 2/3/4-run byes and leg byes unrecordable from their tiles.
+4. **MEDIUM — Retire has two divergent entry points.** The dedicated tile's
+   SwapSheet scopes "off" to the whole batting side rather than the crease
+   (engine backstops it at `cricket.ts:1676`) and hardcodes `reason: "other"`.
+   The generic More-sheet `cricket.retire` is ALSO reachable — `{swap:true}`
+   tiles contribute no type to `dedicatedEventTypes` (`pad-host.tsx:141-151`) —
+   and offers all 22 players from BOTH sides with a real reason enum. Two
+   flows, and the accidental one has the worse candidate safety.
+
+**Owner rulings, 2026-08-17:**
+- **Defect 3 → Penalty defaults to 5; Bye/Leg bye/No-ball gain a runs path for
+  the 2/3/4 cases** while the common 1-run tap stays fast.
+- **Defect 4 → DROP the dedicated Retire tile, keep the generic More-sheet
+  flow** (it already carries the real reason enum). Note the consequence:
+  cricket then has no SwapSheet surface at all, so today's swap-sheet Cancel fix
+  (`966c7ad4c`) stops being reachable from cricket — it stays because SwapSheet
+  is CHASSIS and R3-R7 inherit it, not because cricket still uses it.
+- Defect 2 needs no ruling; it is a plain bug.
+
+### R2b — owner ruling 2026-08-17: an ineligible bowler must block the TAP, not the event
+
+Owner: "we shouldn't allow to choose run if bowler already played 4 overs in
+t20?" — correct, and it widens defect 1's fix. Today the pad offers the
+delivery tiles regardless of bowler eligibility and the ENGINE refuses the
+result (`cricket.ts:1161` consecutive overs, `:1170` quota), surfacing as a
+generic 422 after the tap. The refusal moves in FRONT of the tap.
+
+- **Visible, blocked, and REASONED — not removed.** The over tile's Q1
+  precedent is "gone, not disabled", but that gate is a permanent property of
+  the innings; this one is transient and clears the moment a legal bowler is
+  picked. Removing every run tile at each over boundary would read as the pad
+  breaking. A tile that swallows taps without naming the cause is worse than
+  the 422 it replaces.
+- **Never hardcode 4.** `maxOversPerBowler` is cfg (`cricket.ts:2804-2811`):
+  t20 4, hundred 4, and the field is optional — ABSENT means no quota at all,
+  which must not be read as zero. Same for `ballsPerOver` in the
+  overs-bowled arithmetic (hundred is 5).
+- **Mirror the STRICT path only.** Both engine checks are gated on
+  `ctx.strictFold`; replay/import deliberately skip them, because re-cutting a
+  recorded innings at a different `ballsPerOver` turns a legal spell into a
+  false "consecutive overs" violation. The pad is a live-scoring surface and
+  mirrors the strict behaviour; it must not start enforcing quotas on replay.
+- Eligibility here means all three engine conditions, not just the quota:
+  not `prevOverBowler`, in `bowlingOrder`, and under quota.
+
+### R2b — owner ruling 2026-08-17: never show a generic error where the exact reason is known
+
+Owner: "are you making sure that error msg isn't generic when we have option to
+tell exactly why it is wrong". Binding, and it merges with the tap-blocking
+ruling above — they are one piece of work, not two.
+
+**Why it is generic today.** All three bowler violations return the SAME engine
+code, `INVALID_EVENT` (`cricket.ts:1161`/`:1164`/`:1170`). `ENGINE_ERROR_KEY`
+(`lib/scoring-vocab.ts:565`) maps by CODE, not by reason, so consecutive-overs,
+quota-exhausted and not-in-lineup all collapse to `engineError.INVALID_EVENT`
+— "That entry isn't valid for this match".
+
+**Why the engine's own message must NOT simply be surfaced.** Two blockers, both
+deliberate policy rather than oversight:
+- It is **English only** — there is no server-side i18n, so a raw engine string
+  reaches every locale untranslated. That is the documented reason for the
+  `scorepad.rejection.fallback` posture at `use-pad-pipeline.ts:1121-1123`.
+- It names a **personId**, not a person: `bowler "091e215a-a9e8-…" cannot bowl
+  consecutive overs` is WORSE for a scorer than the generic copy, not better.
+
+**The ruling.** The pad already knows all three conditions, holds `personNames`,
+and has 4 locales — so it states the reason BEFORE the tap, naming the bowler:
+"James Whitfield has bowled his 4 overs" / "James Whitfield bowled the last
+over". A blocked tile that does not say why is no better than the 422 it
+replaces. The generic fallback survives ONLY where the client genuinely cannot
+know the cause (true server-side races) — that is honest, not lazy.
+
+**Related, and worse than generic — defect 2's message is actively MISLEADING.**
+A tap on a closed innings surfaces "over/ballInOver do not match the ledger",
+which points at ball sequencing when the real cause is that the innings is
+closed. Fixing defect 2 must fix its copy too, not just the tile gating.
+
+**Not chosen (recorded so it is not re-litigated):** adding a structured
+reason enum to the engine so the code carries the cause. It is the "proper"
+fix and stays available, but it is a cross-cutting engine change touching
+every sport's error surface, for a case the pad can already answer locally and
+in 4 locales. Revisit only if a second surface needs the same reasons.
+
+### R2b — owner ruling 2026-08-17: extras carry runs via the DOCK, not a sheet
+
+Owner asked how "no-ball and 3 runs" should be entered. Answer: the No-ball
+TILE fires instantly as it does today (no-ball, 1 run), and the DOCK that
+follows offers bat-run chips (+1/+2/+3/+4/+6). Ignoring the dock leaves the
+plain no-ball, so the common case costs exactly what it costs now. Same shape
+gives Bye/Leg bye their 2/3/4 runs; Penalty simply defaults to 5.
+
+- **This supersedes the "others get a guided sheet" half of the earlier
+  defect-3 ruling.** A sheet would have cost an extra tap on every plain
+  no-ball, which is the frequent case. The dock already exists for exactly
+  this (`detail-dock.tsx`: a tap commits immediately, then ~6s of OPTIONAL
+  chips mutate the still-unsent payload; dismissing early and letting it
+  expire produce the identical send). `freeHit` is already a dock chip today.
+- **Chips go on the EXTRA's dock, never "tap 3 runs then convert to no-ball".**
+  The dock's own contract is enrichment — "never anything the payload
+  REQUIRES". Adding bat runs to an already-recorded no-ball is enrichment.
+  Converting a LEGAL delivery into an illegal one is not: it changes the over
+  count, and that is a semantic change the dock is not meant to carry.
+- **Scope correction found by the owner's question.** Defect 3 was recorded as
+  "Penalty fires 1 run". It is wider: `extraPayload` (`cricket.tsx:391-393`)
+  hardcodes BOTH `bat: 0` and `runs: 1`, so a no-ball with runs off the bat —
+  an ordinary delivery worth 4 to the batting side — has NO representation on
+  the pad at all. Not refused; unenterable. The engine has always allowed it
+  (only WIDES forbid bat runs, `cricket.ts:1229`). The fix needs both numbers,
+  not just the extra's own runs.
+
+### R2b — free-hit chip: REMOVE, do not gate (2026-08-17)
+
+Owner hit "3 runs + free hit -> generic error". Cause: the dock's `freeHit`
+chip is UNCONDITIONAL (`cricket.tsx:905-921`, a documented R2 scope cut) and
+the engine refuses the flag when nothing is pending (`cricket.ts:1224`),
+surfacing as the same generic `INVALID_EVENT` copy.
+
+`payload.freeHit` is **not load-bearing** — verified, not assumed. The engine
+derives `freeHitPending` purely from the preceding no-ball (`:1363-1368`), and
+the free-hit dismissal restriction reads `fine.freeHitPending`, NOT the payload
+flag (`:1234`). So the flag is validated but never consumed: the chip's only
+possible effect is an error. Replace it with a READ-ONLY "Free hit" indicator
+driven by `freeHitPending` — deleting the error class instead of explaining it,
+and matching the chassis rule against re-asking what the fold already knows.
+
+Engine facts worth not re-deriving:
+- "White ball" is **`cfg.ballsPerInnings !== null`** (`cricket.ts:2950`), not a
+  format flag — any innings with a ball limit arms free hits. The hardcoded
+  `whiteBall: true` at `:1515` is the SUPER-OVER path, which is correct.
+- A free hit is consumed only by a LEGAL delivery. Consecutive no-balls re-arm
+  it; a wide in between does not spend it.
+
+### R2b — free hit in the activity log: DERIVE, never send the flag (2026-08-17)
+
+Owner asked for free hits to appear in the activity panel. Approved as a
+DERIVED label, not a recorded one.
+
+- **Rejected: auto-sending `freeHit: true` when pending.** It would make the
+  activity row trivial and the record durable, but the flag is the ONE part of
+  the payload that can disagree with the server, and the client fold is
+  non-strict — so any drift reintroduces exactly the rejection class the chip's
+  removal deletes. Omitting the flag is always safe; the engine has never
+  needed it (`freeHitPending` is derived server-side, and the dismissal rule
+  reads `fine.freeHitPending`, `cricket.ts:1234`).
+- **`prev` ALONE IS WRONG for this.** A free hit is consumed only by a LEGAL
+  delivery, so `no-ball -> wide -> legal ball` leaves that third ball a genuine
+  free hit while its immediate predecessor is a wide. Any rule shaped as "was
+  the previous row a no-ball?" gets that case silently wrong. It must walk back
+  to the last LEGAL delivery. The panel holds every row, so the walk-back is
+  available; the skin hook's single `prev` (added for bowler-change notes) is
+  not sufficient and must not be stretched to cover this.
+- **One implementation, shared with the indicator.** The read-only "Free hit"
+  indicator and the activity label answer the SAME question ("was/is this
+  delivery a free hit?") and must not be computed twice — a second derivation
+  is the placer/verifier fork this repo keeps paying for.
+- Payoff worth keeping: because nothing new is recorded, the label appears
+  RETROACTIVELY on matches already scored, including the walkthrough fixtures.
+
 ### R2b — unplanned fixes (in scope per the fix-inline rule, recorded for the PR)
 
 - **SwapSheet had no way out** (`966c7ad4c`). Found while preparing the live
