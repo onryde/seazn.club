@@ -2498,6 +2498,12 @@
                           },
                           "created_at": {
                             "type": "string"
+                          },
+                          "required_court_tags": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
                           }
                         },
                         "required": [
@@ -2518,7 +2524,8 @@
                           "auto_progress",
                           "auto_posts",
                           "archived_at",
-                          "created_at"
+                          "created_at",
+                          "required_court_tags"
                         ],
                         "additionalProperties": false
                       }
@@ -2554,7 +2561,10 @@
                       "auto_progress": true,
                       "auto_posts": true,
                       "archived_at": "example",
-                      "created_at": "example"
+                      "created_at": "example",
+                      "required_court_tags": [
+                        "example"
+                      ]
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -2953,6 +2963,12 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "required_court_tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       },
                       "required": [
@@ -2973,7 +2989,8 @@
                         "auto_progress",
                         "auto_posts",
                         "archived_at",
-                        "created_at"
+                        "created_at",
+                        "required_court_tags"
                       ],
                       "additionalProperties": false
                     },
@@ -3007,7 +3024,10 @@
                     "auto_progress": true,
                     "auto_posts": true,
                     "archived_at": "example",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "required_court_tags": [
+                      "example"
+                    ]
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -3393,6 +3413,12 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "required_court_tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       },
                       "required": [
@@ -3413,7 +3439,8 @@
                         "auto_progress",
                         "auto_posts",
                         "archived_at",
-                        "created_at"
+                        "created_at",
+                        "required_court_tags"
                       ],
                       "additionalProperties": false
                     },
@@ -3447,7 +3474,10 @@
                     "auto_progress": true,
                     "auto_posts": true,
                     "archived_at": "example",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "required_court_tags": [
+                      "example"
+                    ]
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -3737,6 +3767,15 @@
                       "type": "string"
                     },
                     "additionalProperties": {}
+                  },
+                  "required_court_tags": {
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 40
+                    }
                   }
                 },
                 "additionalProperties": false
@@ -3884,6 +3923,12 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "required_court_tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       },
                       "required": [
@@ -3904,7 +3949,8 @@
                         "auto_progress",
                         "auto_posts",
                         "archived_at",
-                        "created_at"
+                        "created_at",
+                        "required_court_tags"
                       ],
                       "additionalProperties": false
                     },
@@ -3938,7 +3984,10 @@
                     "auto_progress": true,
                     "auto_posts": true,
                     "archived_at": "example",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "required_court_tags": [
+                      "example"
+                    ]
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -4602,6 +4651,12 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "required_court_tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       },
                       "required": [
@@ -4622,7 +4677,8 @@
                         "auto_progress",
                         "auto_posts",
                         "archived_at",
-                        "created_at"
+                        "created_at",
+                        "required_court_tags"
                       ],
                       "additionalProperties": false
                     },
@@ -4656,7 +4712,10 @@
                     "auto_progress": true,
                     "auto_posts": true,
                     "archived_at": "example",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "required_court_tags": [
+                      "example"
+                    ]
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -4996,6 +5055,12 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "required_court_tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       },
                       "required": [
@@ -5016,7 +5081,8 @@
                         "auto_progress",
                         "auto_posts",
                         "archived_at",
-                        "created_at"
+                        "created_at",
+                        "required_court_tags"
                       ],
                       "additionalProperties": false
                     },
@@ -5050,7 +5116,10 @@
                     "auto_progress": true,
                     "auto_posts": true,
                     "archived_at": "example",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "required_court_tags": [
+                      "example"
+                    ]
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
