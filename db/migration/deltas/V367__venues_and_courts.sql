@@ -154,18 +154,23 @@ grant select, insert, update, delete on court_exceptions to app_user;
 -- deleteCourt is the friendly message; this is the guarantee that holds
 -- even if a future call site forgets that check.
 --
--- `deferrable initially deferred`: unlike V299's single-hop case, a court
--- sits at the join of TWO cascade paths hanging off `organizations`
--- (org -> venues -> courts, and org -> competitions -> divisions -> stages
--- -> fixtures). A NOT DEFERRED restrict is checked per-row as Postgres
--- walks the cascade, so a single `delete from organizations` can visit the
--- court before it visits the fixture that references it and abort on a
--- violation that would have resolved itself by end of statement (both rows
--- are, in fact, being deleted together). Deferring the check to COMMIT
--- lets the whole cascade finish before it is evaluated — a normal
--- `deleteCourt` call (one court, no cascade) still fails exactly as before
--- if a fixture is left referencing it, just at COMMIT instead of mid­-
--- statement, and `withTenant` already wraps every call in one transaction.
+-- `deferrable initially deferred`: lets an explicit multi-statement
+-- transaction fix up ordering before COMMIT (e.g. delete the fixture, then
+-- the court, then commit) instead of failing on the first statement. A
+-- normal `deleteCourt` call (one court, no cascade, one transaction from
+-- `withTenant`) still fails exactly as before if a fixture references it —
+-- deferred only changes WHEN the check runs within a transaction that is
+-- already going to fail either way.
+--
+-- NOT a fix for a court sitting at the join of TWO cascade paths hanging
+-- off `organizations` (org -> venues -> courts, and org -> competitions ->
+-- divisions -> stages -> fixtures): a single `delete from organizations`
+-- fans out through both in one statement, and this was verified empirically
+-- to still violate the restrict even deferred — cross-path cascade order
+-- within one statement is not something deferral controls. A caller that
+-- bulk-deletes an organization (scripts, test cleanup) must delete
+-- dependent history (here: competitions, which cascades fixtures) before
+-- the organization itself; see venues.test.ts's `afterAll` for the pattern.
 alter table fixtures add column court_id uuid
   references courts(id) on delete restrict deferrable initially deferred;
 create index fixtures_court_idx on fixtures(court_id);

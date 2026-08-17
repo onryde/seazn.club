@@ -185,10 +185,12 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
     for (const id of orgIds) {
       // Competitions FIRST (cascades divisions -> stages -> fixtures) so no
       // fixture is left referencing a court by the time organizations'
-      // cascade reaches venues -> courts. Deleting the org directly races
-      // two independent cascade paths against `fixtures.court_id`'s
-      // ON DELETE RESTRICT (deferred to commit, but this is one top-level
-      // statement per call, not one transaction spanning both deletes).
+      // cascade reaches venues -> courts. `delete from organizations` alone
+      // fans out through BOTH paths in one statement, and empirically
+      // (verified) still trips `fixtures.court_id`'s ON DELETE RESTRICT even
+      // though it is DEFERRABLE INITIALLY DEFERRED — deferring only helps an
+      // explicit multi-statement transaction that fixes ordering before
+      // COMMIT, not a single statement's own internal cascade resolution.
       await sql`delete from competitions where org_id = ${id}`;
       await sql`delete from organizations where id = ${id}`;
     }

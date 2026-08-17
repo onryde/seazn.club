@@ -3417,6 +3417,7 @@ export const Court = z.object({
   name: z.string(),
   sort: z.number().int(),
   tags: z.array(z.string()),
+  archived_at: z.string().nullable(),
   created_at: z.string(),
 });
 
@@ -3433,6 +3434,7 @@ export const Venue = z.object({
   name: z.string(),
   address: z.string().nullable(),
   sort: z.number().int(),
+  archived_at: z.string().nullable(),
   created_at: z.string(),
 });
 
@@ -3465,5 +3467,9 @@ export const CourtCalendar = z.object({
   court_id: Uuid,
   hours: z.array(CourtHoursRangeS),
   exceptions: z.array(CourtExceptionS),
+  /** Advisory only (owner ruling): unplayed fixtures on this court that the
+   *  new calendar no longer covers. Non-blocking — the write already
+   *  happened; the real conflict code is P10's. */
+  strandedFixtureCount: z.number().int(),
 });
 export type MergeLog = z.infer<typeof MergeLog>;
