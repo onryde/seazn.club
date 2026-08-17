@@ -830,6 +830,66 @@ suites**; root `turbo typecheck` **2/2 successful**; `openapi:gen` +
   no-players and individual-implied-0 cases hold under both rules and are
   labelled in the file as characterisation. Written down because three tests
   beside one fix reads as three proofs.
+**Wave 2 CLOSED** (`cf76cd423` routes + tests, `29504f212` orchestrator fixes).
+`POST .../register` and `POST .../register/join` under
+`app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/`. Gate rerun by
+the main thread: routes + api-v1 **416 total / 416 passed / 0 failed / 0 failed
+suites**; `turbo typecheck` **2/2**; `openapi:gen` + `i18n:gen-keys` →
+`git status --porcelain` clean.
+
+- **The narrow bucket is keyed `regsubmit:${ip}:${orgSlug}:${slug}`, NOT on the
+  competition slug alone.** `competitions_org_id_slug_key` is unique on
+  `(org_id, slug)`, so two orgs may each run a "cup" and a slug-only key made
+  one tenant's registrants spend the other's budget. The old route keyed on
+  `division_id` (globally unique uuid) and could not express this bug — the
+  re-key to competition scope is what introduced the ambiguity, so it is this
+  session's to own. Buckets as shipped: `regsubmit:${ip}` 10/60s, then the
+  honeypot, then `regsubmit:${ip}:${orgSlug}:${slug}` 5/300s; join gets
+  `regjoin:${ip}` 5/300s.
+- **Rate-limit tests here are vacuous unless the module is mocked.** `rateLimit`
+  fails OPEN with no Redis, and vitest has none — firing 11 requests "proves"
+  the limiter whether or not the route ever calls it. Both suites `vi.mock`
+  `@/lib/rate-limit` and assert the exact key/config per bucket in order, plus
+  a case where the limiter throws and the route must surface it rather than
+  swallow it.
+- **`openapi.ts`'s `ROUTES` table is not optional for a new route.**
+  `openapi-coverage.test.ts` walks `route.ts` files against that table 1:1, so
+  an unregistered route is a deterministic red. But registering it is only half
+  — **`openapi-coverage` and `openapi-published` both pass against a STALE
+  `openapi/v1.json`**, because they read the table, not the committed artifact.
+  The drift gate is CI-only. W2's first commit shipped exactly that state: 17/17
+  green locally, two stale spec files, a red CI job waiting. Always finish with
+  `openapi:gen` + `git status --porcelain`.
+- **`turbo typecheck` is the only thing that sees a test file's types.** W2's
+  `join-route.test.ts` interpolated an `unknown` (`Envelope.data.player_id`)
+  into the `sql` tag — `TS1320` + `TS2345` — while its own suite ran 17/17
+  green, because **vitest never typechecks test files**. Consequence of the
+  anti-stall rule that implementers no longer run `tsc`: the boundary gate is
+  load-bearing, not ceremonial.
+- **Join route ignores its own `orgSlug`/`slug` path segments, deliberately.**
+  `join_code` is globally unique (RS001's partial unique index), so
+  `joinTeamEntry` needs no scoping — a join link posted at the wrong org's URL
+  still resolves. No security consequence (the code IS the secret), but RS007
+  should not assume the path is validated.
+- **W3 MUST FIX: the registration webhook branch has no `payment_status` gate,
+  and every branch beside it does.** `billing-events.ts:115-117` dispatches
+  `kind === "registration"` straight into `handleRegistrationCheckoutCompleted`
+  (`registrations.ts:1315-1335`), which reads the metadata and calls
+  `confirmPaidRegistration` unconditionally. Its neighbours in the SAME
+  dispatcher all guard: `size_pack` at `:126`, the next branch at `:139`, the
+  competition branch at `:213`, and even registrations' own reconcile paths at
+  `registrations.ts:1731`/`:1753` (`if (session.payment_status !== "paid")
+  return false`). Only the webhook entry point does not.
+  Why it bites: this repo correctly omits `payment_method_types`, so dynamic
+  payment methods are live, and a delayed-notification method fires
+  `checkout.session.completed` while the session is still **unpaid**. The entry
+  is then confirmed and MATERIALISED into an entrant before any money arrives;
+  if the payment later fails there is no `checkout.session.async_payment_failed`
+  handler to reverse it, and no `async_payment_succeeded` handler either. Same
+  family as RS002's worst finding (a rejected registration confirmed by a
+  replayed webhook) — money and materialisation moving on an event that does not
+  mean "paid". W3 owns this handler for the group re-key, so the gate is fixed
+  inline there, not deferred (no-new-issues rule).
 - **RS001's entry condition 2 is CLOSED, not outstanding.** The privacy-consent
   rule that died with the old `submitRegistration` was reimplemented by RS002:
   `registration-submit.ts:426` throws the identical
