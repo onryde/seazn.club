@@ -141,6 +141,60 @@ export function orderedActivity(events: readonly ActivityEvent[]): ActivityEvent
   return [...events].reverse();
 }
 
+/**
+ * R2b (owner ruling, freeHit chip removal): every strictly-older, non-voided
+ * event before `rows[index]`, OLDEST FIRST — the order a REPLAY-style
+ * derivation needs to walk forward through. `rows` is `orderedActivity`'s
+ * own NEWEST-FIRST output, so "older" walks FORWARD through the array —
+ * `rows[index + 1]`, `rows[index + 2]`, … — never `index - 1` (that
+ * direction is NEWER, the opposite of what "older" means here; this exact
+ * reversal is easy to get backwards and still look plausible on screen,
+ * which is why it is pinned by a discriminating test rather than just
+ * asserted).
+ *
+ * Skips voided rows for the same reason `activityRowState` derives
+ * `voided` in the first place (`some((v) => v.voids === event.id)`,
+ * duplicated here rather than calling that function — it also computes
+ * ownership/void-permission this caller has no use for): a voided
+ * delivery never actually happened as far as match state is concerned, so
+ * it must never stand in as "the previous" event for a skin comparing
+ * consecutive events.
+ *
+ * Deliberately does NOT filter by event type — this file is sport-
+ * agnostic (this file's own header) and has no vocabulary to filter with.
+ * A row in this list may be a structural event (`core.start`, `core.void`,
+ * a sport's own non-ball type); a skin that only wants to compare same-KIND
+ * events (e.g. cricket's ball-to-ball bowler check) checks `.type` against
+ * its own closed set itself once it receives this — same division of
+ * labour `SkinDefV3.activityDetail`'s own doc (types.ts) describes.
+ *
+ * `rows.length - 1` (the oldest surviving row) down to `index + 1` (the
+ * nearest older row) is exactly that oldest-first order — so the LAST
+ * element of the returned array (when non-empty) is the single nearest-
+ * older event a skin comparing consecutive events wants (R2b-cricket-over
+ * review fix, item 2: this function used to have a sibling,
+ * `previousActivityEvent`, returning exactly that one value directly —
+ * review proved the two were always computed from the identical range with
+ * the identical voided-skip rule, so `previousActivityEvent` was deleted as
+ * redundant; a caller derives its single "previous" fact as
+ * `history[history.length - 1]` instead).
+ *
+ * Empty array at the oldest row, or when every remaining older row is
+ * voided — this function is always total, never returns `undefined`.
+ */
+export function priorActivityEvents(
+  rows: readonly ActivityEvent[],
+  index: number,
+): { type: string; payload: Record<string, unknown> }[] {
+  const out: { type: string; payload: Record<string, unknown> }[] = [];
+  for (let i = rows.length - 1; i > index; i--) {
+    const candidate = rows[i]!;
+    const voided = rows.some((v) => v.voids === candidate.id);
+    if (!voided) out.push({ type: candidate.type, payload: (candidate.payload ?? {}) as Record<string, unknown> });
+  }
+  return out;
+}
+
 /** The panel scrolls internally past this many rows instead of growing the
  *  page. Matches the legacy `max-h-96` cap (timeline.tsx:257) — about six
  *  rows at the daylight shell's row height, which is roughly one over of
@@ -169,14 +223,32 @@ export interface ActivityPanelProps {
    * Optional and additive: omitted, every row keeps exactly today's
    * per-type-only caption.
    *
-   * NOT YET WIRED from `pad-host.tsx`'s own `<ActivityPanel>` call site —
-   * pad-host.tsx is reserved (out of this fix's file grant). Whoever wires
-   * it should pass e.g. `(type, payload) => cricketBallDetail(t, type,
-   * payload)` — or, better, promote this onto `SkinDefV3` itself so the
-   * chassis stays skin-driven rather than importing a sport-specific
-   * function directly. Flagged here for whoever picks that up.
+   * WIRED from `pad-host.tsx`'s own `<ActivityPanel>` call site as
+   * `props.skin.activityDetail` (promoted onto `SkinDefV3`, per this
+   * comment's own original suggestion) — `legacy-parity.test.ts`'s "3b"
+   * case asserts the whole chain, not just this function in isolation.
+   *
+   * Third parameter `history` (R2b, owner ruling, freeHit chip removal):
+   * every strictly older, non-voided row before this one, OLDEST FIRST —
+   * `priorActivityEvents` (above). Optional and additive: a `resolveDetail`
+   * implementation that only takes two parameters keeps compiling and
+   * working unchanged.
+   *
+   * R2b-cricket-over review fix (item 2): this used to also take a fourth,
+   * separate `prev` parameter (the single nearest-older event, computed by
+   * this file's own since-deleted `previousActivityEvent`). Review proved
+   * `prev` was always exactly `history`'s own last element — both walked
+   * `rows[index + 1..]` with the identical voided-skip rule, so the two
+   * could never disagree or be independently absent. A caller that needs
+   * that single fact reads `history[history.length - 1]` itself; see
+   * `priorActivityEvents`'s own doc (above) and `SkinDefV3.
+   * activityDetail`/`ActivityDetailContext`'s own doc (types.ts).
    */
-  resolveDetail?: (eventType: string, payload: Record<string, unknown>) => string | undefined;
+  resolveDetail?: (
+    eventType: string,
+    payload: Record<string, unknown>,
+    history?: readonly { type: string; payload: Record<string, unknown> }[],
+  ) => string | undefined;
 }
 
 export function ActivityPanel({
@@ -210,10 +282,11 @@ export function ActivityPanel({
         // scrolling the page behind it, which on a phone reads as the pad
         // jumping while a scorer is reviewing.
         <ul className="max-h-96 divide-y divide-slate-100 overflow-y-auto overscroll-contain" data-role="v3-activity-list">
-          {rows.map((event) => {
+          {rows.map((event, index) => {
             const { voided, canVoid } = activityRowState(event, events, ownEventIds, deviceLinkId, !!onVoid);
             const payload = (event.payload ?? {}) as Record<string, unknown>;
-            const detail = resolveDetail?.(event.type, payload);
+            const history = priorActivityEvents(rows, index);
+            const detail = resolveDetail?.(event.type, payload, history);
             const caption = buildRibbon(event.type, payload, nameOf, t, detail);
             return (
               <li

@@ -86,6 +86,43 @@ npx playwright test e2e/gallery.capture.ts --project=gallery \
   > /tmp/gallery-run.json
 ```
 
+### Narrowing the run (added by R2b, 2026-08-17)
+
+`GALLERY_WIDTHS` overrides which widths get SCREENSHOTS. Unset, it stays the
+three-width default (320/768/1280) — R2b's owner asked for the sign-off sheet
+at 768/1280 only:
+
+```bash
+GALLERY_WIDTHS=768,1280 \
+GALLERY_DIR=… npx playwright test e2e/gallery.capture.ts --project=gallery -g cricket
+```
+
+Two things this deliberately does NOT change, so a narrowed run stays honest:
+
+- **The 320px horizontal-overflow measurement always runs**, whatever
+  `GALLERY_WIDTHS` says, and lands in `manifest.json`. Excluding the 320 PNGs
+  must never leave a zero in that field — a missing measurement recorded as `0`
+  reads later as "no overflow at 320" when nothing was measured.
+- **The seven-width e2e matrix is the real enforcement**, not this gallery.
+  `mobile.spec.ts` covers 320/360/375/390/430/768/834; trimming the sign-off
+  sheet trims evidence for the owner's eye, never coverage.
+
+### Per-sport extra states
+
+`GallerySport.captureExtra` is an optional hook for states the shared five
+(`01-pre`…`05-devicelink`) cannot reach; it is a no-op for every sport that
+does not declare it. Cricket declares it for R2b's two over-by-over states:
+
+| ID | What it shows |
+|---|---|
+| `06-overtile` | The pad on a COARSE innings — "End of over" tile present, every ball tile gone |
+| `07-oversheet` | That sheet open, numeric steps prefilled from the fold |
+
+Reaching a coarse innings needs `cricket.innings.summary` posted as the
+innings' FIRST event. Score a ball first and the innings locks to ball-by-ball
+fidelity, the over tile correctly does not exist, and the capture silently
+records the wrong state.
+
 Judge the result the same way as every other suite in this repo — never a
 wrapper summary:
 

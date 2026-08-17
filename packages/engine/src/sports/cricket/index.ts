@@ -15,6 +15,9 @@ export {
   CricketNewBall,
   CricketPowerplay,
   CricketReview,
+  // R2b-next — apps/web's next-innings targeting fix (a public mirror of the
+  // private battingSideAt/maxInningsCount innings-sequencing rule).
+  nextBattingSide,
   type CricketBallEv,
   type CricketState,
   type InningsState,

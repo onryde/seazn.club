@@ -62,3 +62,44 @@ deferred debt without a named owner, owner's closing sign-off recorded.
 - **Verify the event-copy gate reds on a missing `pad.<sport>.ribbon` key** —
   R2 added cricket's ribbon keys to `PAD_LABEL_KEYS`, which is what makes that
   gate meaningful.
+
+## Inherited from R2b — owner-assigned, 2026-08-17
+
+Full context and evidence: `R2b-remaining.md` §D beside this file; rulings in
+`_INDEX.md`.
+
+- **D2 — nothing on screen says which SCORING MODE an innings is in.**
+  Cricket has TWO modes, not three: `createInnings(state, fidelity)`
+  (`packages/engine/src/sports/cricket/cricket.ts:661`) takes `"fine"`
+  (ball-by-ball) or `"coarse"` (summary), and "innings totals" is the same
+  coarse path with `partial` omitted. The mode is **locked by the first event
+  of the innings** and is reversible only by undoing that event — the fold
+  re-derives it on replay. Today a scorer infers the mode ONLY from which
+  tiles are present (over tile vs ball tiles), so someone who does not already
+  know the rule cannot learn it from the pad.
+  **Not fixed in R2b deliberately**: no owner ruling exists for what an
+  indicator should SAY, and the chassis is shared by eleven skins — inventing
+  copy would push it onto all of them. R8 owns it because R8 is the wave that
+  sees every skin at once.
+  Needs from the owner BEFORE code: the wording, and whether the indicator is
+  cricket-only or a chassis affordance every sport gets.
+  Do NOT conflate this with the **fidelity band** (0–3, closed): that gates
+  plan entitlements and is a different concept wearing a similar word.
+
+- **D3 — cricket smoke, restated with what R2b added.** Already owed above
+  ("R2 deferred SMOKE to you by name"), but the surface grew: smoke must now
+  also cover the over-by-over lane (`cricket.innings.summary` with
+  `partial: true`), not just ball-by-ball. Both lanes are mutually exclusive
+  per innings, so a single fixture cannot exercise both — plan two.
+
+- **Standing warning for the sweep, from R2b's review.** The recurring defect
+  class this programme keeps hitting is **the pad offering what the engine
+  will refuse**. R2b found and fixed four instances in cricket alone (bowler
+  ineligible at an over boundary, an unconditional free-hit chip, a tappable
+  grid on a closed innings, all ten wicket kinds during a free hit). Three
+  more are open and need chassis work (`R2b-remaining.md` §C, owner-assigned
+  to R2c). When sweeping the other ten skins, hunt this class specifically:
+  for every guided-sheet option list and every context-strip candidate pool,
+  ask whether the engine can refuse a member of it in the CURRENT fold state.
+  `assertDisabledTilesExplained` (`v3/tile-grid.tsx`, added in R2b) is
+  test-only and catches the *unexplained* half, not the *offered* half.

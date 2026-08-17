@@ -61,7 +61,7 @@ import { GuidedSheet } from "./guided-sheet";
 import { RecordingChip } from "./recording-chip";
 import { buildRibbon } from "./ribbon";
 import { ActivityPanel, type ActivityEvent } from "./activity";
-import { MORE_SHEET_KEY, type GuidedSheetSpec, type PadHostView, type PadPhase, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
+import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
 
 // ---------------------------------------------------------------------------
 // Pure builders — every decision this file makes, tested directly
@@ -330,6 +330,38 @@ export function resolvePadPhase(
  * actually swapped). `PadHostV3`'s own render-phase reset (below) is the
  * one call site — see that block's own comment for why a ref cannot back
  * this comparison in this repo (`react-hooks/refs`).
+ *
+ * INVESTIGATED, NOT CHANGED (R2b live bug follow-up, 2026-08-17): the owner
+ * also reported that manually picking a bowler and tapping again was
+ * "still refused." Suspected cause, unverified going in: this reset firing
+ * between the pick and the next tap. NOT confirmed for cricket specifically
+ * — cricket declares no `contextSelect` (cricket.tsx's own header), so
+ * `onSelect` below only calls `setContextOverrides`; it never dispatches,
+ * so picking a candidate alone never touches `pipeline.state` and cannot by
+ * itself trigger this reset. What IS real and worth a future investigator's
+ * time: this doc's own claim that "`prevState !== nextState` is exactly
+ * 'at least one new event landed'" is slightly stronger than the code
+ * actually guarantees — `foldedState`'s own `useMemo` (use-pad-pipeline.ts)
+ * depends on `lastRejection`/`serverOverride` in addition to the real event
+ * stream, and a rejected submission always constructs a NEW `{code,
+ * message}` object (no dedup against a same-content prior value), so
+ * `pipeline.state` CAN get a fresh reference from an UNRELATED async
+ * settlement (e.g. a different, earlier submission's rejection arriving
+ * late) landing in the gap between a pick and the next tap, not only from
+ * a change that actually affects the picked slot. Separately: the client's
+ * own optimistic fold (`foldClient`, called with no `opts` from
+ * use-pad-pipeline.ts) runs entirely non-strict (`strictFromSeq` undefined
+ * -> `strict: false` for every event, packages/engine/src/core/events.ts:
+ * 466/522), so an illegal bowler is NOT caught immediately client-side —
+ * it looks accepted until the server round-trip rejects it after
+ * `HOLD_MS`, which is a more likely source of "did my fix even take"
+ * confusion than this reset. Left AS IS: no reproduction found for the
+ * literal suspicion, and Part 1's fix (the bowler default is now always
+ * eligible-or-empty) closes the most common path to an illegal FIRST tap
+ * that this whole chain starts from. If this resurfaces, capture exact
+ * pick-to-tap timing and whether a second device/tab was scoring the same
+ * fixture concurrently — this file's own pure-builder test suite cannot
+ * observe either.
  */
 export function contextOverridesStale(overridesFor: unknown, currentState: unknown): boolean {
   return overridesFor !== currentState;
@@ -351,6 +383,29 @@ export function adaptSwapSlot(
       ? { ok: true }
       : { ok: false, message: slot.policyMessage !== undefined ? refusalMessage(slot.policyMessage) : undefined },
   };
+}
+
+/**
+ * R2b/task 4 (`_INDEX.md`, owner ruling): the ONE line that used to call
+ * `props.skin.dock(held.eventType, view)` directly inside `PadHostV3`'s own
+ * render body, extracted as a pure builder — same "data in, data out" split
+ * as every other decision in this section. `null` while nothing is held —
+ * the skin's own `dock()` is never called with nothing to build a dock for,
+ * proved by the mutation suite (a skin that throws when called with no hold
+ * must never actually be called here).
+ *
+ * `held.payload` is forwarded to `dock()` as its (optional) 3rd argument
+ * VERBATIM — cricket's own no-ball/plain-single distinction (both dispatch
+ * the identical `cricket.ball` event TYPE) is exactly why this widening
+ * exists; see `SkinDefV3.dock`'s own doc, types.ts.
+ */
+export function resolveDockSpec(
+  skin: SkinDefV3,
+  held: { eventType: string; payload: unknown } | null,
+  view: PadHostView,
+): DockSpec | null {
+  if (!held) return null;
+  return skin.dock(held.eventType, view, held.payload as Record<string, unknown> | undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -389,6 +444,10 @@ interface HeldTap {
   id: string;
   until: number;
   eventType: string;
+  /** R2b/task 4: the tap's own payload, captured at hold time — what
+   *  `resolveDockSpec` forwards to `skin.dock()`'s optional 3rd argument
+   *  (see that function's own doc, above). */
+  payload: unknown;
 }
 
 const NO_ENTITLEMENTS: Readonly<Record<string, boolean>> = {};
@@ -527,7 +586,7 @@ export function PadHostV3(props: PadHostV3Props) {
         setHeld(null);
         void pipeline.retryDrain();
       });
-      if (result) setHeld({ id: result.heldId, until: result.heldUntil, eventType: type });
+      if (result) setHeld({ id: result.heldId, until: result.heldUntil, eventType: type, payload });
     },
     [pipeline],
   );
@@ -552,7 +611,7 @@ export function PadHostV3(props: PadHostV3Props) {
   );
 
   const dockStore = useMemo(() => makeDockStore(pipeline.queueStore), [pipeline.queueStore]);
-  const dockSpec = held ? props.skin.dock(held.eventType, view) : null;
+  const dockSpec = resolveDockSpec(props.skin, held, view);
 
   // Blocker 1 — see rejectionText's own doc above.
   const rejectionMsg = rejectionText(pipeline.lastRejection, msg);
@@ -680,6 +739,14 @@ export function PadHostV3(props: PadHostV3Props) {
         </div>
       )}
 
+      {/* Defect fix (walkthrough 2026-08-17): this mount used to omit
+       *  onCancel entirely, while the sibling GuidedSheet mount just below
+       *  always got one — a scorer opening cricket's Retire flow could
+       *  only finish the whole off->on swap or navigate away. `onCancel`
+       *  here closes the sheet the same way `onSwap` does (`setSwapOpen
+       *  (false)`, unmounting `<SwapSheet>` and discarding its own local
+       *  state), and `SwapSheet` itself also resets its pending off pick
+       *  before calling back — see swap-sheet.tsx's own handleCancel. */}
       {swapOpen && swapSlot && adaptedSwap && (
         <div data-role="v3-swap">
           <SwapSheet
@@ -693,6 +760,7 @@ export function PadHostV3(props: PadHostV3Props) {
               const event = swapSlot.buildEvent(off, on);
               void dispatch(event.type, event.payload);
             }}
+            onCancel={() => setSwapOpen(false)}
           />
         </div>
       )}
@@ -762,7 +830,29 @@ export function PadHostV3(props: PadHostV3Props) {
           // this wave already fixed three times.
           resolveDetail={
             props.skin.activityDetail
-              ? (eventType, payload) => props.skin.activityDetail!(t, eventType, payload)
+              ? // R2b-cricket-over review fix (item 1): builds the single
+                // `ActivityDetailContext` object (types.ts) the skin's
+                // `activityDetail` now takes, instead of seven positional
+                // arguments. `history` is forwarded verbatim from
+                // ActivityPanel's own call (it already resolves per-row
+                // history — `priorActivityEvents`, activity.tsx; item 2
+                // removed the separate `prev` argument this used to also
+                // forward — a skin derives that single fact itself from
+                // `history`'s own last element, see ActivityDetailContext's
+                // doc). `view.cfg` and `personNames` are CAPTURED from this
+                // closure's own enclosing scope, not passed through
+                // ActivityPanel's own prop contract at all — both are static
+                // per render (not a per-row fact), and this keeps
+                // ActivityPanel itself from ever having to learn either
+                // exists. `personNames` (R2b, owner ruling, live-tile audit
+                // wave — "name the bowler"): the SAME map this component
+                // already resolves above (`const personNames =
+                // props.personNames ?? NO_NAMES`) for the ribbon and for
+                // `<ActivityPanel personNames={personNames}>` itself — no
+                // new plumbing, just one more forward at a boundary `cfg`
+                // already crosses.
+                (eventType, payload, history) =>
+                  props.skin.activityDetail!({ t, eventType, payload, history, cfg: view.cfg, personNames })
               : undefined
           }
         />

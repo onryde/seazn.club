@@ -12,8 +12,9 @@
 // `big` — "pre-formatted"; `WhoLine.name`; `StripItem.label`/`value` — none
 // of these carry an "i18n key" comment in types.ts, unlike TileSpec.label,
 // DockChip.label, and ContextSlot.label, which do) or is an i18n KEY this
-// file resolves itself (`ScorebugHalf.hint` — "i18n key; REQUIRED iff
-// tappable"). Hint resolution reuses padLabel() (apps/web/src/lib/
+// file resolves itself (`ScorebugHalf.hintKey` — "i18n key; REQUIRED iff
+// tappable", renamed from `hint` — R2b-cricket-over follow-up, hint-field
+// naming pass, 2026-08-17). Hint resolution reuses padLabel() (apps/web/src/lib/
 // scoring-vocab.ts:907), the SAME vocab path every legacy skin and this
 // wave's own ribbon.ts already call (S7/#427; pins.md §4) — R1 registers no
 // per-sport hint keys yet (V3_SKINS is empty, registry.ts), so every hint
@@ -133,7 +134,7 @@ export function Scorebug({ spec, t, onTap }: ScorebugProps) {
 
       <div className="grid grid-cols-2 divide-x divide-cream/10">
         {spec.halves.map((half, i) => {
-          const hintText = half.hint ? padLabel(half.hint, t, half.hint) : "";
+          const hintText = half.hintKey ? padLabel(half.hintKey, t, half.hintKey) : "";
           const content = <HalfContent half={half} hintText={hintText} />;
           if (half.tappable) {
             return (
@@ -162,6 +163,12 @@ export function Scorebug({ spec, t, onTap }: ScorebugProps) {
           {spec.strip.map((item, i) => (
             <span
               key={i}
+              // R2b (owner ruling, freeHit chip removal): a stable, i18n-
+              // independent hook for a Playwright spec to target ONE strip
+              // item — StripItem.id is optional/additive (types.ts); only
+              // rendered when a skin actually sets it, so every other strip
+              // item (over dots, names, target) is unchanged.
+              {...(item.id ? { "data-strip-item-id": item.id } : {})}
               className={
                 item.accent
                   ? `text-xs font-semibold ${NIGHT_TILE_CLASSES.creamText}`

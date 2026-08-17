@@ -597,7 +597,21 @@ function maxInningsCount(cfg: CricketCfg): number {
   return cfg.inningsPerSide * 2;
 }
 
-function battingSideAt(state: CricketState, index: number): Side {
+// Only the fields battingSideAt/nextBattingSide actually read — narrower on
+// purpose than CricketState so nextBattingSide (below, exported) can be
+// called by a caller that does not hold a full CricketState (e.g. apps/web's
+// v3 cricket skin, whose PadHostView.state/.cfg are `unknown` by the
+// chassis's own contract and re-derive a narrow, all-optional local shape
+// rather than importing this module's real types). Every existing internal
+// call site passes a real CricketState, which trivially satisfies this
+// narrower shape (structural typing) — no behaviour change.
+interface BattingAlternationCfg {
+  battingFirst: Side;
+  cfg: { inningsPerSide: 1 | 2 };
+  followOnEnforced: boolean;
+}
+
+function battingSideAt(state: BattingAlternationCfg, index: number): Side {
   const first = state.battingFirst;
   if (state.cfg.inningsPerSide === 1) return index === 0 ? first : opponent(first);
   if (state.followOnEnforced) {
@@ -605,6 +619,33 @@ function battingSideAt(state: CricketState, index: number): Side {
     return index === 0 || index === 3 ? first : opponent(first);
   }
   return index % 2 === 0 ? first : opponent(first);
+}
+
+/**
+ * Public mirror of `battingSideAt`/`maxInningsCount` (both private, above) —
+ * purpose-built for a caller outside this module that does not hold a full
+ * `CricketState` (apps/web's v3 cricket skin: `skins/cricket.tsx`'s own
+ * "Defensive shape probes" header explains why `PadHostView.state`/`.cfg`
+ * are read as `unknown` and re-derived into a narrow, all-optional local
+ * shape rather than importing engine types directly). Exported so that
+ * caller can ask "who bats the next innings, if one is still due" without
+ * hand-copying the alternation/follow-on rule — a forked copy is the
+ * recurring defect class this repo has hit before (drifts silently the next
+ * time this rule changes here and not there).
+ *
+ * `inningsCount` is `state.innings.length` — the SAME addressing
+ * `createInnings` uses for `index` (above) — and the `null` return is the
+ * same "no further innings is due" case `createInnings` enforces by
+ * throwing (`index >= maxInningsCount(cfg)` -> `invalid("all innings
+ * already recorded")`); a caller asking "who's next" before an illegal
+ * event is ever submitted is not making an illegal request itself, so this
+ * reports the dead end as data instead of throwing.
+ */
+export function nextBattingSide(
+  state: BattingAlternationCfg & { inningsCount: number },
+): Side | null {
+  if (state.inningsCount >= state.cfg.inningsPerSide * 2) return null;
+  return battingSideAt(state, state.inningsCount);
 }
 
 function aggregate(state: CricketState, side: Side): number {
