@@ -23,6 +23,7 @@ import {
   patchCourt,
   deleteCourt,
   putCourtCalendar,
+  PutCourtCalendarInput,
 } from "../venues";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -122,6 +123,23 @@ describe("venues usecase — pure validation", () => {
       expect(resolveCourtDay(hours, exceptions, 2, "2026-08-18")).toEqual([
         { open_min: 540, close_min: 1200 },
       ]);
+    });
+
+    // Every case above hands the helper an EXPLICIT `open_min: null`. The wire
+    // form of a closed exception omits the field entirely, and that path had no
+    // coverage: `.nullish()` alone parsed it to `undefined`, which is not a
+    // `CourtException`. Only tsc could see it — vitest never typechecks — so
+    // this asserts the normalisation as behaviour rather than as a type.
+    it("omitted open/close minutes parse to null, not undefined", () => {
+      const parsed = PutCourtCalendarInput.parse({
+        hours: [],
+        exceptions: [{ date: "2026-08-18", closed: true }],
+      });
+      const exception = parsed.exceptions[0]!;
+      expect(exception.open_min).toBeNull();
+      expect(exception.close_min).toBeNull();
+      expect(Object.hasOwn(exception, "open_min")).toBe(true);
+      expect(resolveCourtDay(hours, parsed.exceptions, 2, "2026-08-18")).toEqual([]);
     });
   });
 });

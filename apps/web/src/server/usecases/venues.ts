@@ -131,8 +131,13 @@ const CourtExceptionInput = z
   .object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"),
     closed: z.boolean(),
-    open_min: z.number().int().min(0).max(1440).nullish(),
-    close_min: z.number().int().min(0).max(1440).nullish(),
+    // `.default(null)` is load-bearing, not decoration: `.nullish()` alone
+    // infers `open_min?: number | null | undefined`, which is not assignable
+    // to `CourtException.open_min: number | null`. Normalising an omitted
+    // value to null at the parse boundary keeps the internal type strict
+    // instead of widening it to carry `undefined` down to the DB layer.
+    open_min: z.number().int().min(0).max(1440).nullish().default(null),
+    close_min: z.number().int().min(0).max(1440).nullish().default(null),
   })
   .refine(
     (e) =>
