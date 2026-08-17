@@ -156,19 +156,18 @@ const RETIRED_CLAIMS: readonly { path: string; pattern: string; nowTrue: string 
 ];
 
 /** Owned by stage D: a persisted or public enum VALUE, or something that
- *  renders one. Never a rename — these cross the wire and sit in the DB. */
-const OWNED_BY_C7 = [
-  "apps/web/src/components/v2/board/__tests__/result-strip-wiring.test.tsx",
-  "apps/web/src/components/v2/board/__tests__/result-strip.test.tsx",
-  "apps/web/src/components/v2/board/result-strip.tsx",
-  "apps/web/src/demo/ai-templates/northside-open.json",
-  "apps/web/src/dictionaries/en/ui.json",
-  "apps/web/src/dictionaries/es/ui.json",
-  "apps/web/src/dictionaries/fr/ui.json",
-  "apps/web/src/dictionaries/nl/ui.json",
-  "apps/web/src/lib/i18n-keys.ts",
-  "apps/web/src/server/api-v1/schemas.ts",
-];
+ *  renders one.
+ *
+ *  EMPTY since C7 (2026-08-17) shipped stage D. Seven of its ten files lost
+ *  their last z3 mention outright; the three that kept one — `schemas.ts`,
+ *  `result-strip.tsx` and `result-strip.test.tsx` — now say only why the
+ *  contract has the members it has, which is accurate past tense, so they
+ *  moved to ACCURATE_TODAY below rather than out of the ledger.
+ *
+ *  Stage D turned out to owe no migration: the values were response-only
+ *  telemetry, verified across the DDL, every jsonb column of a live schema,
+ *  and every read path. The brief's "rewrite rows" step had no target. */
+const OWNED_BY_C7: string[] = [];
 
 /** Owned by stage E: the solver, its WASM plumbing, its benches, and the tests
  *  that boot it. These files carry accurate z3 prose — they still run z3 — and
@@ -220,10 +219,14 @@ const ACCURATE_TODAY = [
   "apps/web/e2e/mobile.spec.ts",
   "apps/web/e2e/placement-cutover.spec.ts",
   "apps/web/e2e/schedule-datetime-ux.spec.ts",
-  "apps/web/src/components/v2/__tests__/schedule-board-polish.test.tsx",
-  "apps/web/src/components/v2/board/__tests__/ai-diff-repair-strip.test.tsx",
+  // Inherited from OWNED_BY_C7 when stage D shipped. Each explains why a
+  // retired member is absent — the kind of past tense this list exists for.
+  "apps/web/src/components/v2/board/__tests__/result-strip.test.tsx",
+  "apps/web/src/components/v2/board/result-strip.tsx",
   "apps/web/src/server/usecases/__tests__/competition-schedule-ai-http.test.ts",
   "apps/web/src/server/usecases/__tests__/competition-schedule-ai-repair.test.ts",
+  "apps/web/src/server/api-v1/__tests__/z3-contract-retired.test.ts",
+  "apps/web/src/server/api-v1/schemas.ts",
   "apps/web/src/server/usecases/__tests__/schedule-ai-repair-cpsat-wiring.test.ts",
   "apps/web/src/server/usecases/__tests__/schedule-ai-repair.test.ts",
   "apps/web/src/server/usecases/__tests__/schedule-ai-solver.test.ts",

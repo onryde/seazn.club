@@ -680,11 +680,11 @@ async function main() {
   // org, so it runs on every smoke invocation.
   await schedulingConstraintsSuite();
 
-  // --- T14 z3 auto-schedule: all three solver modes (build / re-flow / polish)
+  // --- T14 auto-schedule: all three solver modes (build / re-flow / polish)
   // against a real division, asserting the returned telemetry. The load-bearing
-  // one is `solver.engine`: it is the only field that distinguishes a z3 run
-  // from the greedy fallback the server takes when the WASM will not boot out of
-  // a traced standalone bundle, and no unit test can see that difference.
+  // one is `solver.engine`: it is the only field that distinguishes a solved
+  // run from the greedy fallback the server takes when the placement service
+  // is unreachable, and no unit test can see that difference.
   // Keyless, own Pro org, so it runs on every smoke invocation.
   await z3AutoScheduleSuite();
 
@@ -8743,7 +8743,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
 }
 
 /**
- * T14 — the z3 auto-schedule solver, in a production-shaped run.
+ * T14 — the auto-schedule solver, in a production-shaped run.
  *
  * WHAT ONLY THIS CAN PROVE. `buildSchedule` boots a WASM module. Every unit test
  * in the repo loads it from `node_modules` in a vitest process; production loads
@@ -8756,14 +8756,14 @@ async function schedulingConstraintsSuite(): Promise<void> {
  * as a graceful degradation is the reason this suite exists.
  *
  * THE FIELD THAT CARRIES IT IS `solver.status`, NOT `solver.engine`. This
- * docblock used to say the opposite — "asserting engine is z3/z3+lns and not
- * greedy" — and the check below deliberately does NOT do that, for the reason
- * spelled out over it: `engine` is board PROVENANCE, so a run where z3 loaded,
- * solved, and found nothing better than the greedy seed reports `greedy`
+ * docblock used to say the opposite — "asserting engine is the solver's and
+ * not greedy" — and the check below deliberately does NOT do that, for the
+ * reason spelled out over it: `engine` is board PROVENANCE, so a run that
+ * solved and found nothing better than the greedy seed reports `greedy`
  * correctly, which is the honest answer every time on this six-fixture board.
  * A reader trusting the old sentence would "restore" the engine assertion the
- * inline comment records as already broken once. A WASM that does not load
- * returns `z3_unavailable`; that is the assertion.
+ * inline comment records as already broken once. A solver the service could
+ * not give us returns `solver_unavailable`; that is the assertion.
  *
  * All three modes run, because they are three different solvers behind one
  * endpoint (`AutoScheduleRequest`'s preprocess derives `mode` from
@@ -8905,45 +8905,41 @@ async function z3AutoScheduleSuite(): Promise<void> {
     // two-court board greedy is already optimal, so `"greedy"` is the honest
     // answer every time and the old assertion failed against a healthy solver.
     //
-    // `status` is the field that carries the real failure: a WASM that does
-    // not load returns `z3_unavailable`. That is the whole of the claim.
+    // `status` is the field that carries the real failure: a solver the
+    // service could not give us returns `solver_unavailable`. That is the
+    // whole of the claim.
     //
     // `tiers_completed > 0` is kept as a shape check and NOT as corroboration,
     // which is what its old name ("the tier ladder ran") asserted and could not
     // support. T0 sets `tiersCompleted = 1` when `checks > 0` OR when greedy
     // already placed every card — "the maximum is achieved and proving it costs
     // zero checks" (build.ts). This six-fixture, two-court board is exactly that
-    // case, so a `1` here is routinely reached with ZERO z3 checks and says
-    // nothing about whether a solver was behind it.
-    "z3 build: the WASM loaded in prod (not the z3_unavailable fallback)",
-    build?.solver?.status !== "z3_unavailable" &&
+    // case, so a `1` here is routinely reached with ZERO solver checks and
+    // says nothing about whether a solver was behind it.
+    "build: the solver was reachable in prod (not the solver_unavailable fallback)",
+    build?.solver?.status !== "solver_unavailable" &&
       (build?.solver?.tiers_completed ?? 0) > 0,
   );
   check(
     // Provenance is still worth pinning — as a legal value, not as a liveness
     // proof. A serialisation that drops the field renders no engine sentence.
-    // "optimized" (Task 13's rename target) belongs in this allow-list too —
-    // its absence here was never caught by the vitest suite that WOULD catch
-    // it, because that suite skips locally behind `PLACEMENT_SERVICE_HOST`
-    // (placement-integration.test.ts). Without the service reachable, every
-    // board on THIS six-fixture instance falls back to "greedy" anyway, so the
-    // gap was invisible until the first smoke run against a live service. A
-    // four-value allow-list is still not an assertion that the optimiser is
-    // ever REACHED — `placementOptimizedSuite` below owes that, on a board
-    // sized to force a real win.
-    "z3 build: the run names where the board came from",
-    build?.solver?.engine === "greedy" ||
-      build?.solver?.engine === "z3" ||
-      build?.solver?.engine === "z3+lns" ||
-      build?.solver?.engine === "optimized",
+    // Down to the two legal values in C7, which retired "z3"/"z3+lns": a
+    // wider allow-list would now accept a value the API cannot emit, which is
+    // an assertion that has stopped testing anything. Still NOT an assertion
+    // that the optimiser is ever REACHED — `placementOptimizedSuite` below
+    // owes that, on a board sized to force a real win. Without
+    // `PLACEMENT_SERVICE_HOST` reachable, every board on THIS six-fixture
+    // instance falls back to "greedy" anyway.
+    "build: the run names where the board came from",
+    build?.solver?.engine === "greedy" || build?.solver?.engine === "optimized",
   );
   check(
-    "z3 build: the request derived mode=build and the solver reported a solved status",
+    "build: the request derived mode=build and the solver reported a solved status",
     build?.solver?.mode === "build" &&
       (build.solver.status === "ok" || build.solver.status === "already_optimal"),
   );
   check(
-    "z3 build: every fixture was placed, across both courts",
+    "build: every fixture was placed, across both courts",
     (build?.assignments ?? []).length === 6 &&
       build?.metrics?.placed === 6 &&
       build.metrics.total === 6 &&
@@ -8953,7 +8949,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
     // Telemetry POPULATED, not merely present: a strip full of structural zeros
     // is what a serialisation that lost the payload renders, and it is
     // indistinguishable from a real run by any presence check.
-    "z3 build: the telemetry came back populated (elapsed, tier ladder, real makespan)",
+    "build: the telemetry came back populated (elapsed, tier ladder, real makespan)",
     (build?.solver?.elapsed_ms ?? 0) > 0 &&
       (build?.solver?.tiers_total ?? 0) > 0 &&
       // `>= 0` here was VACUOUS — `tiers_completed` is a non-negative int, so
@@ -9050,7 +9046,7 @@ async function z3AutoScheduleSuite(): Promise<void> {
     // this run went to the tier solver.
     "z3 polish: the explicit mode reached the tier solver, not the repair solver",
     polish?.solver?.mode === "polish" &&
-      polish.solver.status !== "z3_unavailable" &&
+      polish.solver.status !== "solver_unavailable" &&
       (polish.solver.tiers_completed ?? 0) > 0,
   );
   const lockedProposed = (polish?.assignments ?? []).find((a) => a.fixture_id === lockedId);
