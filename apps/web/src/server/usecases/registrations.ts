@@ -44,7 +44,7 @@ import {
   tryEarnGrant,
   walletIdFor,
 } from "@/lib/credits";
-import { ageAt, isMinor, requiresDob, eligibilityIssues } from "./registration-eligibility";
+import { ageAt, isMinor, requiresDob } from "./registration-eligibility";
 
 type Tx = postgres.TransactionSql;
 
@@ -141,12 +141,15 @@ export function deriveLinkUserId(
   return sessionUserId;
 }
 
-// `ageAt`, `isMinor`, `requiresDob`, `eligibilityIssues` moved to
-// `./registration-eligibility` (RS002 wave 2) — imported above for local use
-// (`isMinor` by `deriveLinkUserId`, `requiresDob` by `publicRegistrationInfo`
-// below) and re-exported here verbatim so every existing importer of this
-// file keeps compiling unchanged.
-export { ageAt, isMinor, requiresDob, eligibilityIssues };
+// `ageAt`, `isMinor`, `requiresDob` moved to `./registration-eligibility`
+// (RS002 wave 2) — imported above for local use (`isMinor` by
+// `deriveLinkUserId`, `requiresDob` by `publicRegistrationInfo` below) and
+// re-exported here verbatim so every existing importer of this file keeps
+// compiling unchanged. The legacy `eligibilityIssues` string[] wrapper that
+// used to be part of this trio was deleted at its source (RS002 W5
+// whole-branch review — zero production callers repo-wide); nothing here
+// re-exports it any more.
+export { ageAt, isMinor, requiresDob };
 
 /** Validate answers against the bounded form definition; returns the kept
  *  subset (unknown keys dropped — the form is the contract). */
@@ -645,6 +648,38 @@ async function loadPlayers(tx: Tx, registrationId: string): Promise<
     order by is_captain desc, created_at`;
 }
 
+/**
+ * Clears the cart's shared `expires_at` ONLY when no OTHER entry in it is
+ * still `pending` — i.e. nothing else still depends on the deadline. The
+ * counterpart to `promoteWaitlistedRow`'s monotonic-extend ruling (RS002 W5
+ * whole-branch review): a deadline can only be EXTENDED while money is still
+ * owed, but must still be CLEARED once nothing does, or it lingers stale
+ * forever and `groupByRef`/`publicRegistrationStatus` keep surfacing a dead
+ * deadline. Call whenever an entry LEAVES `pending` for a reason that is not
+ * a fresh promotion: confirm (`materialise`, below — the original site this
+ * was factored out of), withdraw (`withdrawCore`), and expiry
+ * (`sweepRegistrations`'s overdue branch). Exported for
+ * `registration-approval.ts`'s `rejectRegistration`, which has the identical
+ * gap on its own reject-a-pending-entry path.
+ */
+export async function clearExpiresIfNoLongerNeeded(
+  tx: Tx,
+  groupId: string,
+  exceptRegId: string,
+): Promise<void> {
+  await tx`
+    update registration_groups
+    set expires_at = case
+          when not exists (
+            select 1 from registrations
+            where group_id = ${groupId} and id <> ${exceptRegId} and status = 'pending'
+          ) then null
+          else expires_at
+        end,
+        updated_at = now()
+    where id = ${groupId}`;
+}
+
 /** Exported for `registration-submit.ts` (RS002 W4) — the submit path
  *  auto-confirms a free, auto-approval, non-waitlisted entry INLINE in the
  *  same transaction by calling this directly, rather than re-deriving
@@ -714,29 +749,17 @@ export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: str
     set entrant_id = ${entrant.id}, status = 'confirmed', updated_at = now()
     where id = ${reg.id}`;
   // expires_at (the pay-by deadline) lives on the cart, shared by every
-  // entry in it (RS002 W5 review MAJOR — this cleared it UNCONDITIONALLY on
-  // every confirm, from all five confirm call sites: confirmRegistration,
-  // markRegistrationPaidOffline, confirmRegistrationWaived,
-  // confirmPaidRegistration, and approveRegistration. A pending SIBLING's
-  // still-live Stripe deadline was wiped whenever ANY other entry in its
-  // cart confirmed; that sibling then never expired via sweepRegistrations
-  // (its `expires_at is not null` filter no longer matched it), and
-  // groupByRef stopped showing a deadline for money still owed on it).
-  // Same not-exists pending-sibling guard as promoteWaitlistedRow's atomic
-  // UPDATE, keyed on reg.group_id: clear only when nothing else in the cart
-  // still needs it. No signature change — this stays a drop-in call for
-  // every existing caller.
-  await tx`
-    update registration_groups
-    set expires_at = case
-          when not exists (
-            select 1 from registrations
-            where group_id = ${reg.group_id} and id <> ${reg.id} and status = 'pending'
-          ) then null
-          else expires_at
-        end,
-        updated_at = now()
-    where id = ${reg.group_id}`;
+  // entry in it (RS002 W5 review MAJOR — this used to clear it
+  // UNCONDITIONALLY on every confirm, from all five confirm call sites:
+  // confirmRegistration, markRegistrationPaidOffline,
+  // confirmRegistrationWaived, confirmPaidRegistration, and
+  // approveRegistration. A pending SIBLING's still-live Stripe deadline was
+  // wiped whenever ANY other entry in its cart confirmed; that sibling then
+  // never expired via sweepRegistrations, and groupByRef stopped showing a
+  // deadline for money still owed on it). clearExpiresIfNoLongerNeeded, above,
+  // clears only when nothing else in the cart still needs it — the SAME
+  // helper withdrawCore and sweepRegistrations' expiry branch now call too.
+  await clearExpiresIfNoLongerNeeded(tx, reg.group_id, reg.id);
   return entrant.id;
 }
 
@@ -1204,9 +1227,12 @@ export async function publicRegistrationInfo(
 // public pages show the closed state (see the three rewritten pages).
 //
 // Pure helpers this function used stay exported for RS002 to reuse verbatim:
-// `eligibilityIssues`, `validateAnswers`, `deriveLinkUserId`, `isMinor`,
-// `ageAt`, `hashRegistrationToken`. `mintRegistrationToken` (private, token-
-// minting only) and `generateRefCode`'s only call site here went with it.
+// `validateAnswers`, `deriveLinkUserId`, `isMinor`, `ageAt`,
+// `hashRegistrationToken`. `mintRegistrationToken` (private, token-minting
+// only) and `generateRefCode`'s only call site here went with it.
+// `eligibilityIssues` was ALSO in this list originally, but the legacy
+// string[] wrapper it named was deleted at its source (RS002 W5
+// whole-branch review — zero production callers repo-wide, dead since W2).
 
 /** Destination charge on the org's Connect account; the platform keeps
  *  application_fee_amount (doc 16 §1.1). Always charges the SNAPSHOTTED
@@ -2087,8 +2113,11 @@ export async function resumeRegistrationCheckout(
 // ---------------------------------------------------------------------------
 
 /** Refund a payment taken as a destination charge: money comes back off the
- *  connected account, the platform returns its application fee. */
-async function stripeRefund(
+ *  connected account, the platform returns its application fee. Exported for
+ *  `registration-approval.ts` (RS002 W5 whole-branch review) —
+ *  `rejectRegistration` reuses this verbatim to refund a paid-awaiting-
+ *  approval entry it declines, same as withdrawCore/refundRegistration. */
+export async function stripeRefund(
   paymentIntentId: string,
   amountCents: number | undefined,
 ): Promise<Stripe.Refund> {
@@ -2100,8 +2129,9 @@ async function stripeRefund(
   });
 }
 
-/** Fire-and-forget refund receipt to the registrant (spec T9). */
-function notifyRefund(reg: RegistrationWithGroupRow, ctx: DivisionCtx, amountCents: number): void {
+/** Fire-and-forget refund receipt to the registrant (spec T9). Exported for
+ *  `registration-approval.ts` (RS002 W5 whole-branch review). */
+export function notifyRefund(reg: RegistrationWithGroupRow, ctx: DivisionCtx, amountCents: number): void {
   void sendRefundIssuedEmail({
     to: reg.contact_email,
     locale: toLocale(reg.locale),
@@ -2151,6 +2181,13 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     if (locked.entrant_id) {
       await tx`update entrants set status = 'withdrawn' where id = ${locked.entrant_id}`;
     }
+    // RS002 W5 whole-branch review MAJOR: withdrawing the cart's LAST
+    // `pending` entry used to leave `registration_groups.expires_at` stale
+    // forever — only `materialise`'s confirm path ever cleared it. Safe to
+    // run unconditionally: this row is excluded from its own `not exists`
+    // check regardless of what status it just left, and a cart with another
+    // still-pending entry is correctly left untouched.
+    await clearExpiresIfNoLongerNeeded(tx, locked.group_id, locked.id);
     const promoted = freedSpot
       ? await promoteOldestWaitlisted(tx, reg.division_id, settings)
       : null;
@@ -2280,11 +2317,23 @@ export async function sweepRegistrations(
     reminded++;
   }
 
-  // expires_at lives on the cart now (V364).
+  // expires_at lives on the cart now (V364). RS002 W5 whole-branch review
+  // BLOCKER: this used to filter only status + the CART-shared expires_at,
+  // with no per-entry fee or payment-method check — while the reminder pass
+  // immediately above DOES filter payment_method = 'stripe'. A cart can hold
+  // a free, manual-approval entry alongside a paid stripe one (design allows
+  // it; W4's assertUniformPaymentMethod only constrains PAID divisions); the
+  // free sibling was never subject to any payment deadline of its own, but
+  // shared the cart's expires_at and got silently swept to 'expired' the
+  // moment the stripe entry's deadline passed. Same relevance filter the
+  // reminder pass uses, PLUS the entry's own fee (a `pending` row can be
+  // `amount_cents = 0` even when its cart's method is 'stripe', if a sibling
+  // established that method).
   const overdue = await sql<{ id: string; division_id: string; group_id: string }[]>`
     select r.id, r.division_id, r.group_id
     from registrations r join registration_groups g on g.id = r.group_id
-    where r.status = 'pending' and g.expires_at is not null and g.expires_at < now()
+    where r.status = 'pending' and r.amount_cents > 0 and g.payment_method = 'stripe'
+      and g.expires_at is not null and g.expires_at < now()
     order by g.expires_at
     limit 200`;
   for (const { id, division_id } of overdue) {
@@ -2303,6 +2352,10 @@ export async function sweepRegistrations(
       }
       await tx`update registrations set status = 'expired', updated_at = now()
                where id = ${id}`;
+      // RS002 W5 whole-branch review MAJOR: expiring the cart's LAST
+      // `pending` entry used to leave `expires_at` stale forever — same gap
+      // as withdrawCore, same fix.
+      await clearExpiresIfNoLongerNeeded(tx, locked.group_id, locked.id);
       const settings = await loadSettings(tx, division_id);
       const [div] = await tx<{ competition_id: string; org_id: string }[]>`
         select competition_id, org_id from divisions where id = ${division_id}`;

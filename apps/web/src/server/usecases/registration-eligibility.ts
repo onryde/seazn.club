@@ -27,8 +27,16 @@ import "server-only";
 // "Two eligibility evaluators is the exact failure the RS011 re-homing
 // exists to prevent," so this module derives display strings at the edge
 // (`formatEligibilityIssues`) instead of forking a second evaluator later.
-// The legacy `eligibilityIssues` keeps its original `string[]` signature as
-// a thin wrapper, so no existing importer's call site changes.
+// A legacy `eligibilityIssues(rules, input, seasonStartYear): string[]`
+// wrapper shipped here at W2, kept "so no existing importer's call site
+// changes" — but the whole-branch review (RS002 W5) found ZERO importers,
+// repo-wide, of that exact shape: it was already dead when W2 shipped it.
+// Removed (W5 review) rather than left as a seam nothing uses — RS003/RS011
+// are the next consumers of this module and should find ONE evaluator with
+// ONE return shape, not a string-returning shortcut that reads as a
+// supported API. `formatEligibilityIssues`, below, is the only display-string
+// path now; its five hardcoded-English assertions moved from the deleted
+// wrapper's own test to call it directly (registration-eligibility.test.ts).
 
 /** Whole years between dob and `at` (doc 06 §2.1: never approximate). */
 export function ageAt(dobIso: string, at: Date): number {
@@ -102,7 +110,7 @@ export type EligibilityCode =
  * gates treat `MISSING_DOB`/`MISSING_GENDER` as WARNINGS (a person record
  * with gaps is still useful to an organiser); the registration submit path
  * (RS002/RS003) must keep treating the exact same codes as BLOCKING, exactly
- * as `eligibilityIssues` always has. Baking one policy into the issue shape
+ * as the pre-rework evaluator always did. Baking one policy into the issue shape
  * would force the other caller to fight it. Each caller classifies by
  * `code` — that is the whole point of shipping a code instead of a sentence.
  */
@@ -332,24 +340,6 @@ export function formatEligibilityIssues(issues: EligibilityIssue[]): string[] {
   });
 }
 
-/**
- * Validate a registrant against the division's JSONB eligibility rules ONLY
- * (doc 06 §2), returning ENGLISH SENTENCES — the pre-V364, pre-RS011 shape.
- * Kept at this exact signature so no existing importer's call site changes
- * (RS002 entry-condition item 5). A thin wrapper: formats the same
- * structured path `divisionEligibilityIssues` uses, with `category`/
- * `age_min`/`age_max` all null so only the jsonb rules can fire.
- */
-export function eligibilityIssues(
-  rules: unknown[],
-  input: EligibilityPerson,
-  seasonStartYear: number,
-): string[] {
-  return formatEligibilityIssues(
-    divisionEligibilityIssues(
-      { eligibility: rules, category: null, age_min: null, age_max: null },
-      input,
-      seasonStartYear,
-    ),
-  );
-}
+// The legacy `eligibilityIssues(rules, input, seasonStartYear): string[]`
+// wrapper that used to live here was deleted (RS002 W5 whole-branch review —
+// zero production callers repo-wide; see the module header comment above).

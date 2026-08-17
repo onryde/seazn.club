@@ -73,7 +73,6 @@ import { createDivision } from "../divisions";
 import {
   ageAt,
   applicationFeeCents,
-  eligibilityIssues,
   isMinor,
   validateAnswers,
   putRegistrationSettings,
@@ -103,6 +102,13 @@ import {
   type RegistrationRow,
   type RegistrationWithGroupRow,
 } from "../registrations";
+// The legacy `eligibilityIssues` string[] wrapper these pure tests used to
+// call was deleted at its source (RS002 W5 whole-branch review — zero
+// production callers repo-wide). Re-plumbed through the surviving evaluator
+// below rather than deleted: same rules, same inputs, same pass/fail intent,
+// just via `divisionEligibilityIssues` (EligibilityIssue[]) instead of a
+// string[] shortcut — exactly what the deleted wrapper did internally.
+import { divisionEligibilityIssues } from "../registration-eligibility";
 import { isValidRefCode, generateRefCode } from "@/lib/ref-code";
 import { LEGAL_VERSION } from "@/lib/legal";
 import { resolveNameDisplay } from "@/lib/name-display";
@@ -149,21 +155,26 @@ describe("age & eligibility (pure, doc 06 §2)", () => {
     },
   ];
 
+  const noCategoryOrAgeBand = { category: null, age_min: null, age_max: null };
+
   it("U16 cutoff rule: 15-or-younger on Sep 1 of the season-start year", () => {
     // Season starts 2026 → cutoff 2026-09-01.
-    expect(eligibilityIssues(U16, { dob: "2011-08-31" }, 2026)).toEqual([]); // 15 on cutoff
-    expect(eligibilityIssues(U16, { dob: "2010-09-01" }, 2026)).not.toEqual([]); // 16 on cutoff
+    const division = { eligibility: U16, ...noCategoryOrAgeBand };
+    expect(divisionEligibilityIssues(division, { dob: "2011-08-31" }, 2026)).toEqual([]); // 15 on cutoff
+    expect(divisionEligibilityIssues(division, { dob: "2010-09-01" }, 2026)).not.toEqual([]); // 16 on cutoff
   });
 
   it("age rule without a DOB is an issue (form must collect it)", () => {
-    expect(eligibilityIssues(U16, { dob: null }, 2026)).not.toEqual([]);
+    const division = { eligibility: U16, ...noCategoryOrAgeBand };
+    expect(divisionEligibilityIssues(division, { dob: null }, 2026)).not.toEqual([]);
   });
 
   it("gender rule checks the allowed list", () => {
     const rules = [{ kind: "gender", allowed: ["f", "x"] }];
-    expect(eligibilityIssues(rules, { dob: null, gender: "f" }, 2026)).toEqual([]);
-    expect(eligibilityIssues(rules, { dob: null, gender: "m" }, 2026)).not.toEqual([]);
-    expect(eligibilityIssues(rules, { dob: null, gender: null }, 2026)).not.toEqual([]);
+    const division = { eligibility: rules, ...noCategoryOrAgeBand };
+    expect(divisionEligibilityIssues(division, { dob: null, gender: "f" }, 2026)).toEqual([]);
+    expect(divisionEligibilityIssues(division, { dob: null, gender: "m" }, 2026)).not.toEqual([]);
+    expect(divisionEligibilityIssues(division, { dob: null, gender: null }, 2026)).not.toEqual([]);
   });
 });
 
@@ -852,10 +863,12 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
   // "eligibility gate: U16 rejects an adult; a minor needs guardian consent"
   // DELETED (RS001 demolition): the whole test drove
   // `submitRegistration`'s own eligibility-gate enforcement at submit time —
-  // no surviving usecase performs that check. `eligibilityIssues` (the pure
-  // rule function it called) keeps its own coverage above, unchanged
-  // ("age & eligibility (pure, doc 06 §2)"). RS002/RS003 own re-testing the
-  // gate against the new submit flow.
+  // no surviving usecase performs that check. The pure rule function it
+  // called keeps its own coverage above, unchanged ("age & eligibility
+  // (pure, doc 06 §2)") — now via `divisionEligibilityIssues` directly
+  // (RS002 W5: the legacy `eligibilityIssues` string[] wrapper it used to go
+  // through was deleted, zero production callers). RS002/RS003 own
+  // re-testing the gate against the new submit flow.
 
   // "rejects submissions without privacy consent (GDPR, spec 2026-07-14)"
   // DELETED (RS001 demolition): submitRegistration's own consent gate;
@@ -2697,5 +2710,103 @@ describe.skipIf(!HAS_DB)("RS002 W5 review: materialise no longer clobbers a pend
     const [after] = await sql<{ expires_at: Date | null }[]>`
       select expires_at from registration_groups where id = ${registration.group_id}`;
     expect(after!.expires_at).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS002 W5 whole-branch review (all five modules together): 1 blocker + 2
+// majors that no per-wave reviewer could see. The migration collision
+// (V367->V368) was fixed by the orchestrator directly — not this file's
+// concern.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("RS002 W5 whole-branch review: sweepRegistrations expiry payment relevance", () => {
+  it("does not sweep a free, manual-approval sibling sharing an overdue stripe cart's deadline (BLOCKER)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = { fee_cents: 1000, currency: "usd", payment_method: "stripe" as const };
+    const { registration: stripeEntry } = await seedRegistration(competition.id, division.id, settings, {
+      status: "pending",
+    });
+    // Fast-forward: the cart's shared deadline is overdue.
+    await sql`update registration_groups set expires_at = now() - interval '1 hour' where id = ${stripeEntry.group_id}`;
+    // A free sibling in the SAME cart, SAME shared deadline — never itself
+    // subject to a payment deadline: manual approval holds it 'pending' for
+    // review, not payment.
+    const freeSibling = await seedSecondEntry(stripeEntry.group_id, division.id, 0, "Free Reviewee");
+
+    await sweepRegistrations("https://test.local");
+
+    const [stripeRow] = await sql<{ status: string }[]>`select status from registrations where id = ${stripeEntry.id}`;
+    const [freeRow] = await sql<{ status: string }[]>`select status from registrations where id = ${freeSibling.id}`;
+    expect(stripeRow!.status).toBe("expired");
+    // Reverting the sweep's payment-relevance filter makes this fail: the
+    // free sibling would ALSO flip to 'expired', despite never having been
+    // subject to any deadline of its own — the reminder pass immediately
+    // above already filters payment_method = 'stripe'; the expiry pass did
+    // not, and also missed the per-entry fee check.
+    expect(freeRow!.status).toBe("pending");
+  });
+});
+
+describe.skipIf(!HAS_DB)("RS002 W5 whole-branch review: clearing a stale expires_at when the cart empties", () => {
+  it("withdrawing the cart's LAST pending entry clears the stale expires_at (MAJOR)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = { fee_cents: 1000, currency: "usd", payment_method: "stripe" as const };
+    const { registration } = await seedRegistration(competition.id, division.id, settings, { status: "pending" });
+    const [before] = await sql<{ expires_at: Date | null }[]>`
+      select expires_at from registration_groups where id = ${registration.group_id}`;
+    expect(before!.expires_at).not.toBeNull();
+
+    await withdrawRegistrationOrganiser(owner, registration.id);
+
+    const [after] = await sql<{ expires_at: Date | null }[]>`
+      select expires_at from registration_groups where id = ${registration.group_id}`;
+    // Reverting withdrawCore's clearExpiresIfNoLongerNeeded call makes this
+    // fail: the deadline lingers forever, and groupByRef/publicRegistrationStatus
+    // keep surfacing a dead deadline for an entry that is no longer even in
+    // the race.
+    expect(after!.expires_at).toBeNull();
+  });
+
+  it("withdrawing ONE of two pending entries leaves the still-pending sibling's expires_at untouched", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = { fee_cents: 1000, currency: "usd", payment_method: "stripe" as const };
+    const { registration: first } = await seedRegistration(competition.id, division.id, settings, {
+      status: "pending",
+    });
+    const second = await seedSecondEntry(first.group_id, division.id, 1000, "Still Pending Sibling");
+
+    await withdrawRegistrationOrganiser(owner, first.id);
+
+    const [group] = await sql<{ expires_at: Date | null }[]>`
+      select expires_at from registration_groups where id = ${first.group_id}`;
+    expect(group!.expires_at).not.toBeNull(); // second is still pending — untouched
+    const [secondRow] = await sql<{ status: string }[]>`select status from registrations where id = ${second.id}`;
+    expect(secondRow!.status).toBe("pending");
+  });
+
+  it("sweepRegistrations expiry clears the stale expires_at when expiring the cart's LAST pending entry (MAJOR)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = { fee_cents: 1000, currency: "usd", payment_method: "stripe" as const };
+    const { registration } = await seedRegistration(competition.id, division.id, settings, { status: "pending" });
+    await sql`update registration_groups set expires_at = now() - interval '1 hour' where id = ${registration.group_id}`;
+
+    await sweepRegistrations("https://test.local");
+
+    const [row] = await sql<{ status: string }[]>`select status from registrations where id = ${registration.id}`;
+    expect(row!.status).toBe("expired");
+    const [group] = await sql<{ expires_at: Date | null }[]>`
+      select expires_at from registration_groups where id = ${registration.group_id}`;
+    // Reverting the sweep's clearExpiresIfNoLongerNeeded call makes this
+    // fail: same stale-deadline gap as withdrawCore, same fix.
+    expect(group!.expires_at).toBeNull();
   });
 });

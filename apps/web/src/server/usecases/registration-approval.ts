@@ -29,6 +29,9 @@ import {
   promoteOldestWaitlisted,
   promoteWaitlistedRow,
   withdrawRegistrationOrganiser,
+  clearExpiresIfNoLongerNeeded,
+  stripeRefund,
+  notifyRefund,
   type RegistrationWithGroupRow,
   type RegistrationSettingsRow,
 } from "./registrations";
@@ -84,7 +87,11 @@ async function divisionCompetitionId(tx: Tx, divisionId: string): Promise<string
  * to do there. `rejected` is TERMINAL — approving after a reject always
  * fails, checked before anything else so it holds regardless of the
  * division's current approval mode. Idempotent: already-`confirmed` is a
- * silent no-op, not a second materialise.
+ * silent no-op, not a second materialise. Also refused: an already-refunded
+ * row (whole-branch review MAJOR) — `refundRegistration` does not itself
+ * change `status`, so a `paid` row an organiser refunded through the normal
+ * refund flow was otherwise still approvable, materialising a free entrant
+ * for money that had already gone back.
  */
 export async function approveRegistration(
   auth: AuthCtx,
@@ -103,6 +110,12 @@ export async function approveRegistration(
     }
     if (reg.status !== "pending" && reg.status !== "paid") {
       throw new HttpError(422, `Cannot approve a ${reg.status} registration`);
+    }
+    // Whole-branch review MAJOR: refundRegistration does NOT change status,
+    // so a 'paid' row an organiser already refunded stayed approvable —
+    // checked here, off `reg` directly, before anything settings-dependent.
+    if (reg.refunded_cents > 0) {
+      throw new HttpError(422, "This registration was already refunded and cannot be approved");
     }
     const settings = await loadApprovalSettings(tx, reg.division_id);
     if (settings?.approval !== "manual") {
@@ -132,13 +145,27 @@ export async function approveRegistration(
 }
 
 /**
- * Manual-approval review: `pending` → `rejected` (terminal — see
+ * Manual-approval review: `pending`|`paid` → `rejected` (terminal — see
  * `approveRegistration`). Frees the spot exactly like a withdraw does
  * (`withdrawCore`'s own doc comment): a rejected entry no longer holds
  * capacity, so the oldest waitlisted entry auto-promotes in the SAME
- * transaction. Idempotent: rejecting an already-`rejected` row is a silent
- * no-op — "not a second transition" (wave-5 acceptance) — so it audits and
- * promotes only on the FIRST call.
+ * transaction; the cart's shared `expires_at` also clears if this was the
+ * cart's last `pending` entry (same `clearExpiresIfNoLongerNeeded` guard as
+ * `withdrawCore`/`sweepRegistrations` — whole-branch review MAJOR: this had
+ * the identical stale-deadline gap and is fixed here rather than left next
+ * to two sibling fixes in the same session). Idempotent: rejecting an
+ * already-`rejected` row is a silent no-op — "not a second transition"
+ * (wave-5 acceptance) — so it audits and promotes only on the FIRST call.
+ *
+ * `paid` is accepted (whole-branch review MAJOR) because ruling B
+ * (`confirmPaidRegistration`, registrations.ts) can leave a Stripe-paid
+ * manual-approval entry sitting at exactly `paid` awaiting review — before
+ * this, that state could be APPROVED but never DECLINED, the precise gap
+ * ruling B was invented to avoid. Rejecting a paid entry refunds it in the
+ * same call (not the same SQL transaction — the Stripe network call happens
+ * between two locked tx's, same two-phase pattern as
+ * `withdrawCore`/`refundRegistration`: this entry's own remaining balance
+ * only, never the cart's whole intent).
  */
 export async function rejectRegistration(
   auth: AuthCtx,
@@ -147,9 +174,14 @@ export async function rejectRegistration(
   const result = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     if (reg.status === "rejected") {
-      return { row: reg, promoted: null as RegistrationWithGroupRow | null, competitionId: null as string | null };
+      return {
+        row: reg,
+        promoted: null as RegistrationWithGroupRow | null,
+        competitionId: null as string | null,
+        refundable: null as RegistrationWithGroupRow | null,
+      };
     }
-    if (reg.status !== "pending") {
+    if (reg.status !== "pending" && reg.status !== "paid") {
       throw new HttpError(422, `Cannot reject a ${reg.status} registration`);
     }
     const settings = await loadApprovalSettings(tx, reg.division_id);
@@ -160,9 +192,11 @@ export async function rejectRegistration(
     await tx`
       update registrations set status = 'rejected', updated_at = now()
       where id = ${regId}`;
+    await clearExpiresIfNoLongerNeeded(tx, reg.group_id, reg.id);
     const promoted = await promoteOldestWaitlisted(tx, reg.division_id, settings);
     await audit(tx, competitionId, auth.orgId, "registration.rejected", {
       registration_id: regId,
+      paid: reg.status === "paid",
       promoted_registration_id: promoted?.id ?? null,
     }, auth.userId);
     if (promoted) {
@@ -171,7 +205,12 @@ export async function rejectRegistration(
         from: "waitlist",
       }, auth.userId);
     }
-    return { row: await orgRegAfter(tx, regId), promoted, competitionId };
+    return {
+      row: await orgRegAfter(tx, regId),
+      promoted,
+      competitionId,
+      refundable: reg.status === "paid" ? reg : null,
+    };
   });
   fireDivisionRevalidate(result.row.division_id, result.competitionId ?? undefined);
   if (result.promoted) {
@@ -179,8 +218,43 @@ export async function rejectRegistration(
     const settings = await loadSettings(sql, result.row.division_id);
     void notifyPromoted(result.promoted, ctx, settings, fallbackOrigin());
   }
+
+  if (result.refundable?.payment_intent_id) {
+    const remaining = result.refundable.amount_cents - result.refundable.refunded_cents;
+    if (remaining > 0) {
+      try {
+        const refund = await stripeRefund(result.refundable.payment_intent_id, remaining);
+        await sql.begin(async (tx) => {
+          await tx`
+            update registrations set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
+            where id = ${regId}`;
+          await tx`
+            update registration_groups
+            set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
+            where id = ${result.refundable!.group_id}`;
+        });
+        await audit(sql, result.competitionId!, auth.orgId, "registration.refunded", {
+          registration_id: regId,
+          amount_cents: remaining,
+          mode: "reject",
+          stripe_refund_id: refund.id,
+        }, auth.userId);
+        const refundCtx = await divisionCtx(sql, result.row.division_id);
+        notifyRefund(result.refundable, refundCtx, remaining);
+      } catch {
+        // Same fail-open contract as withdrawCore: a refund failure must not
+        // undo the reject decision — surfaces on the organiser console
+        // (rejected + refunded_cents < amount_cents).
+        await audit(sql, result.competitionId!, auth.orgId, "registration.refund_failed", {
+          registration_id: regId,
+          mode: "reject",
+        }, auth.userId);
+      }
+    }
+  }
+
   log.info(
-    { event: "registration.rejected", registration_id: regId, org_id: auth.orgId },
+    { event: "registration.rejected", registration_id: regId, org_id: auth.orgId, refunded: !!result.refundable },
     "registration rejected",
   );
   return result.row;

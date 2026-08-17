@@ -14,7 +14,6 @@ import { describe, expect, it } from "vitest";
 import {
   ageAt,
   divisionEligibilityIssues,
-  eligibilityIssues,
   formatEligibilityIssues,
   isMinor,
   requiresDob,
@@ -24,10 +23,13 @@ import {
   type EligibilityRosterPlayer,
 } from "../registration-eligibility";
 // The move must not shrink the set of importers: registrations.ts re-exports
-// every moved symbol verbatim.
+// every moved symbol verbatim. `eligibilityIssues` was ALSO re-exported here
+// originally, but the legacy string[] wrapper it named was deleted at its
+// source (RS002 W5 whole-branch review — zero production callers repo-wide,
+// dead since this file's own W2) — nothing re-exports it any more, so this
+// file no longer imports it either.
 import {
   ageAt as reexportedAgeAt,
-  eligibilityIssues as reexportedEligibilityIssues,
   isMinor as reexportedIsMinor,
   requiresDob as reexportedRequiresDob,
 } from "../registrations";
@@ -51,14 +53,13 @@ function codesOf(issues: EligibilityIssue[]) {
 }
 
 describe("registrations.ts re-exports the moved eligibility helpers", () => {
-  it("re-exported ageAt/isMinor/eligibilityIssues/requiresDob behave identically to the originals", () => {
+  it("re-exported ageAt/isMinor/requiresDob behave identically to the originals", () => {
     expect(reexportedAgeAt("2010-06-05", new Date("2026-06-05T00:00:00Z"))).toBe(
       ageAt("2010-06-05", new Date("2026-06-05T00:00:00Z")),
     );
     expect(reexportedIsMinor("2010-01-01", new Date("2026-01-01T00:00:00Z"))).toBe(
       isMinor("2010-01-01", new Date("2026-01-01T00:00:00Z")),
     );
-    expect(reexportedEligibilityIssues([], { dob: null }, 2026)).toEqual([]);
     expect(reexportedRequiresDob([])).toBe(false);
     expect(reexportedRequiresDob([{ kind: "age", maxAgeAt: 10 }])).toBe(true);
   });
@@ -87,14 +88,19 @@ describe("requiresDob (division-aware overload, V364) — unaffected by the code
   });
 });
 
-describe("eligibilityIssues (legacy string[] wrapper) — literal English is pinned per code", () => {
-  // Review finding (MAJOR, post-W2b): comparing eligibilityIssues(...) against
-  // formatEligibilityIssues(divisionEligibilityIssues(...)) is tautological —
-  // that IS eligibilityIssues' own implementation (registration-eligibility.ts,
-  // the `eligibilityIssues` function body), so the comparison cannot fail.
-  // These assertions hardcode the literal sentence instead: the legacy wrapper
-  // exists so existing callers keep seeing BYTE-IDENTICAL text, so something
-  // has to pin the actual bytes, not just "whatever the code currently does".
+describe("formatEligibilityIssues(divisionEligibilityIssues(...)) — literal English is pinned per code", () => {
+  // Review finding (MAJOR, post-W2b) this describe block exists to satisfy:
+  // comparing the display path against ITSELF is tautological. These five
+  // assertions hardcode the literal sentence instead, so something pins the
+  // actual bytes, not just "whatever the code currently does" — the display
+  // strings are the thing that must not drift silently.
+  //
+  // Previously routed through the legacy `eligibilityIssues` string[]
+  // wrapper (deleted, RS002 W5 whole-branch review — zero production callers
+  // repo-wide, dead since this file's own W2). Moved onto
+  // `formatEligibilityIssues(divisionEligibilityIssues(...))` directly —
+  // the REAL display path, not a wrapper around it — with the exact same
+  // hardcoded expected strings, unchanged.
   const ageRule = [
     {
       kind: "age",
@@ -104,45 +110,50 @@ describe("eligibilityIssues (legacy string[] wrapper) — literal English is pin
     },
   ];
   const genderRule = [{ kind: "gender", allowed: ["f"] }];
+  const noCategoryOrAgeBand = { category: null, age_min: null, age_max: null };
 
   it("MISSING_DOB", () => {
-    // Reverting registration-eligibility.ts:182-185 (the jsonb age branch's
-    // MISSING_DOB push) changes this string and reds the test.
-    expect(eligibilityIssues(ageRule, { dob: null }, 2026)).toEqual([
+    // Reverting registration-eligibility.ts's jsonb age branch's MISSING_DOB
+    // push changes this string and reds the test.
+    const division: EligibilityDivision = { eligibility: ageRule, ...noCategoryOrAgeBand };
+    expect(formatEligibilityIssues(divisionEligibilityIssues(division, { dob: null }, 2026))).toEqual([
       "Date of birth is required for this age-restricted division.",
     ]);
   });
 
   it("AGE_TOO_OLD", () => {
-    // Pins registration-eligibility.ts:193-198 (age 16 > maxAgeAt 15).
-    expect(eligibilityIssues(ageRule, { dob: "2010-01-01" }, 2026)).toEqual([
-      "Too old for this division (must be 15 or younger on the cutoff date).",
-    ]);
+    // Pins the age-16-over-maxAgeAt-15 branch.
+    const division: EligibilityDivision = { eligibility: ageRule, ...noCategoryOrAgeBand };
+    expect(
+      formatEligibilityIssues(divisionEligibilityIssues(division, { dob: "2010-01-01" }, 2026)),
+    ).toEqual(["Too old for this division (must be 15 or younger on the cutoff date)."]);
   });
 
   it("AGE_TOO_YOUNG", () => {
-    // Pins registration-eligibility.ts:200-205 (age 9 < minAgeAt 10).
-    expect(eligibilityIssues(ageRule, { dob: "2017-01-01" }, 2026)).toEqual([
-      "Too young for this division (must be 10 or older on the cutoff date).",
-    ]);
+    // Pins the age-9-under-minAgeAt-10 branch.
+    const division: EligibilityDivision = { eligibility: ageRule, ...noCategoryOrAgeBand };
+    expect(
+      formatEligibilityIssues(divisionEligibilityIssues(division, { dob: "2017-01-01" }, 2026)),
+    ).toEqual(["Too young for this division (must be 10 or older on the cutoff date)."]);
   });
 
   it("GENDER_NOT_ALLOWED", () => {
-    // Pins registration-eligibility.ts:211-216.
-    expect(eligibilityIssues(genderRule, { gender: "m" }, 2026)).toEqual([
+    const division: EligibilityDivision = { eligibility: genderRule, ...noCategoryOrAgeBand };
+    expect(formatEligibilityIssues(divisionEligibilityIssues(division, { gender: "m" }, 2026))).toEqual([
       "This division is not open to your gender category.",
     ]);
   });
 
   it("MISSING_GENDER", () => {
-    // Pins registration-eligibility.ts:209-210 (the jsonb gender branch).
-    expect(eligibilityIssues(genderRule, { gender: null }, 2026)).toEqual([
+    // Pins the jsonb gender branch.
+    const division: EligibilityDivision = { eligibility: genderRule, ...noCategoryOrAgeBand };
+    expect(formatEligibilityIssues(divisionEligibilityIssues(division, { gender: null }, 2026))).toEqual([
       "Gender is required for this division.",
     ]);
   });
 
-  it("still returns [] for an eligible input (string[] contract unchanged)", () => {
-    expect(eligibilityIssues([], { dob: null }, 2026)).toEqual([]);
+  it("still returns [] for an eligible input", () => {
+    expect(formatEligibilityIssues(divisionEligibilityIssues(NO_RULES, { dob: null }, 2026))).toEqual([]);
   });
 });
 

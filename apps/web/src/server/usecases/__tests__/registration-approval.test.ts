@@ -2,8 +2,27 @@
 // read models (groupByRef, listRegistrations cross-division filters) built on
 // top of them. Design: docs/superpowers/specs/2026-08-16-registration-redesign-design.md
 // §3/§4, owner ruling 6. Real Postgres required; skipped without DATABASE_URL.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+
+// Stripe mock — same shape as registrations.test.ts's own (not shared
+// cross-file; each test file mocks its own module graph). Only `refunds.create`
+// is exercised here (rejectRegistration's refund-on-reject path, whole-branch
+// review MAJOR), but the full shape is mirrored for consistency/future reuse.
+const stripeMock = vi.hoisted(() => {
+  const checkoutCreate = vi.fn();
+  const refundCreate = vi.fn();
+  return {
+    checkoutCreate,
+    refundCreate,
+    stripe: {
+      checkout: { sessions: { create: checkoutCreate } },
+      refunds: { create: refundCreate },
+    },
+  };
+});
+vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
+
 import { sql, statementCount } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -22,8 +41,17 @@ import {
   groupByRef,
   promoteWaitlistedRow,
   getRegistrationSettings,
+  refundRegistration,
 } from "../registrations";
 const HAS_DB = !!process.env.DATABASE_URL;
+
+beforeEach(() => {
+  stripeMock.checkoutCreate.mockReset().mockResolvedValue({
+    id: "cs_test_" + randomUUID().slice(0, 8),
+    url: "https://checkout.stripe.test/session",
+  });
+  stripeMock.refundCreate.mockReset().mockResolvedValue({ id: "re_test_1" });
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures — same shape as registration-submit.test.ts's own (not shared
@@ -265,6 +293,99 @@ describe.skipIf(!HAS_DB)("approveRegistration", () => {
     const [promoted] = await sql<{ status: string }[]>`
       select status from registrations where id = ${second.entries[0]!.registration_id}`;
     expect(promoted!.status).toBe("pending");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RS002 W5 whole-branch review MAJOR: ruling B (registrations.ts,
+// confirmPaidRegistration) can leave a Stripe-paid manual-approval entry at
+// exactly 'paid' awaiting review. Before this, that state could be approved
+// but never declined.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("reject/approve on a paid-awaiting-approval entry", () => {
+  it("rejectRegistration accepts a paid manual-approval entry and refunds it in the process", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, {
+      entrant_kind: "individual", fee_cents: 1000, payment_method: "stripe", approval: "manual",
+    });
+    // Connect must be live or submitRegistrationGroup 503s on a stripe-fee
+    // division (W4 guard) — this fixture is about the paid-awaiting-approval
+    // state, not about Connect readiness.
+    await sql`update organizations set stripe_charges_enabled = true where id = ${orgId}`;
+    const submitted = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [{ division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Paid Reviewee" }], answers: {} }],
+      },
+    );
+    const regId = submitted.entries[0]!.registration_id;
+    // Simulate the payment having landed (ruling B: manual mode leaves this
+    // at 'paid' via confirmPaidRegistration's own manual-mode gate) without
+    // re-deriving the whole webhook path here.
+    await sql`update registrations set status = 'paid' where id = ${regId}`;
+    await sql`update registration_groups set payment_intent_id = 'pi_test_fake' where id = ${submitted.group_id}`;
+
+    const rejected = await rejectRegistration(owner, regId);
+    expect(rejected.status).toBe("rejected");
+    // Reverting rejectRegistration's status check back to 'pending'-only
+    // makes this fail: 422, no refund attempted.
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
+    const [row] = await sql<{ refunded_cents: number }[]>`
+      select refunded_cents from registrations where id = ${regId}`;
+    expect(row!.refunded_cents).toBe(1000);
+  });
+
+  it("approveRegistration refuses an already-refunded registration", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await seedSettings(division.id, {
+      entrant_kind: "individual", fee_cents: 1000, payment_method: "stripe", approval: "manual",
+    });
+    // Connect must be live or submitRegistrationGroup 503s on a stripe-fee
+    // division (W4 guard) — this fixture is about the paid-awaiting-approval
+    // state, not about Connect readiness.
+    await sql`update organizations set stripe_charges_enabled = true where id = ${orgId}`;
+    const submitted = await submitRegistrationGroup(
+      { orgSlug, compSlug: competition.slug },
+      {
+        contact: baseContact(),
+        privacy_consent: true,
+        entries: [{ division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Refunded Then Approved?" }], answers: {} }],
+      },
+    );
+    const regId = submitted.entries[0]!.registration_id;
+    await sql`update registrations set status = 'paid' where id = ${regId}`;
+    await sql`update registration_groups set payment_intent_id = 'pi_test_fake2' where id = ${submitted.group_id}`;
+
+    // An organiser refunds it via the normal refund flow — which does NOT
+    // itself change `status` (registrations.ts's refundRegistration).
+    await refundRegistration(owner, regId, undefined);
+    const [refunded] = await sql<{ status: string; refunded_cents: number }[]>`
+      select status, refunded_cents from registrations where id = ${regId}`;
+    expect(refunded!.status).toBe("paid"); // unchanged by refundRegistration itself
+    expect(refunded!.refunded_cents).toBe(1000);
+
+    let err: HttpError | undefined;
+    try {
+      await approveRegistration(owner, regId);
+    } catch (e) {
+      err = e as HttpError;
+    }
+    // Reverting approveRegistration's refunded_cents guard makes this fail:
+    // the already-refunded row would approve and materialise a free
+    // entrant for money that had already gone back.
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err?.status).toBe(422);
+    const [row] = await sql<{ status: string; entrant_id: string | null }[]>`
+      select status, entrant_id from registrations where id = ${regId}`;
+    expect(row!.status).toBe("paid");
+    expect(row!.entrant_id).toBeNull();
   });
 });
 
