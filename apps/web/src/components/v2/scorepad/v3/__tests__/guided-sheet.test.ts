@@ -29,6 +29,8 @@
 import { describe, it, expect } from "vitest";
 import type { SideSquad, SquadMember } from "@seazn/engine/core";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
+import type { Dict } from "@/lib/i18n-constants";
+import { t as realT } from "@/lib/i18n-runtime";
 import { resolvePool } from "../context-strip";
 import {
   GuidedSheet,
@@ -887,6 +889,36 @@ describe("GuidedSheet rendering — SheetNumberStep", () => {
     expect(propsOf(findByText(buttonsOf(island.tree()), "+"))["aria-label"]).toBe(
       t("pad.sheet.increase", { title }),
     );
+  });
+
+  // Coordinator fix (minor, post-approval of 1f7403c0): this file's own `t`
+  // stub (above, `(k) => k`) ignores its `vars` argument entirely, so the
+  // test above proves the KEY is right but never proves `{title}` is
+  // actually threaded through — a future edit that dropped the second
+  // argument (`t("pad.sheet.decrease")` instead of
+  // `t("pad.sheet.decrease", { title })`) would keep that test green while
+  // production read the literal string "Decrease {title}" aloud to
+  // screen-reader users. Uses the REAL `t` from lib/i18n-runtime.ts against
+  // a dict seeded with the actual en content for both keys plus the step's
+  // own title key — same pattern tiles.test.ts's "review finding 1" describe
+  // block already established for the identical problem (a stub that can't
+  // distinguish "resolved" from "echoed verbatim"), not a second one.
+  it("review fix, interpolation: the − and + buttons' aria-label genuinely threads {title} through the REAL t(), not just the bare key", () => {
+    const dict: Dict = {
+      "pad.sheet.overSummary.runs.title": "Total runs",
+      "pad.sheet.decrease": "Decrease {title}",
+      "pad.sheet.increase": "Increase {title}",
+    };
+    const realTStub: GuidedSheetProps["t"] = (k, vars) => realT(dict, k, vars);
+    const island = renderIsland(GuidedSheet, {
+      spec: numberSpec,
+      views: numberViews,
+      personNames: {},
+      t: realTStub,
+      onComplete: () => {},
+    });
+    expect(propsOf(findByText(buttonsOf(island.tree()), "−"))["aria-label"]).toBe("Decrease Total runs");
+    expect(propsOf(findByText(buttonsOf(island.tree()), "+"))["aria-label"]).toBe("Increase Total runs");
   });
 
   // Review fix, item 2 (MINOR): clampNumberStep had no Number.isFinite
