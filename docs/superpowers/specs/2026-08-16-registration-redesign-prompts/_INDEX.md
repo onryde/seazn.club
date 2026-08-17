@@ -17,8 +17,8 @@ interleaved: **org lane** RS004 → RS005 → RS009, **public lane** RS006 → R
 
 | Session | Prompt file | Depends on | Status |
 |---|---|---|---|
-| RS001 | `RS001-schema-and-demolition.md` | — | **PR #592 OPEN, CI 10/10 GREEN** — awaiting owner merge |
-| RS001b | `RS001b-org-currency-allowlist.md` | RS001 | TODO |
+| RS001 | `RS001-schema-and-demolition.md` | — | **DONE** — PR #592 merged `850cc630` (2026-08-17) |
+| RS001b | `RS001b-org-currency-allowlist.md` | RS001 | **NEXT** — RS001 is merged, unblocked |
 | RS002 | `RS002-core-usecases.md` | RS001b | TODO |
 | RS003 | `RS003-public-endpoints.md` | RS002 | TODO |
 | RS004 | `RS004-hub-settings-tab.md` | RS003 | TODO |
@@ -116,6 +116,13 @@ serves its closed/unavailable state during that window.
 - **Currency**: untouched by RS001 (`registration_settings.currency` still
   exists; `registration_groups.currency` ships unconstrained). Ruling 9 above
   says sessions opened before the addendum owe none of it — RS001b owns it.
+- **For RS001b, concretely**: the Flyway high-water mark is now **V364**, so
+  start at **V365**. The column RS001b must constrain already exists and is
+  `registration_groups.currency` (`text`, nullable, no CHECK) — the snapshot
+  the design calls for, deliberately left unconstrained. `registration_settings.currency`
+  is still present and still read by `usecases/registrations.ts`, so dropping it
+  is a code change as well as a migration. And note RS001 dropped
+  `registrations.currency` outright — it is already gone from the entry row.
 - **`registration_players.user_id`** (design gap #2, found mid-session): the old
   `materialise` linked a signed-in registrant's person to their account via
   `resolvePlayerPerson` (the `(org_id, user_id, lane='player')` upsert that
