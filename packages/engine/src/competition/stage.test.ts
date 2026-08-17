@@ -146,6 +146,60 @@ describe("bracketRanks (spec 05 §1)", () => {
   });
 });
 
+// L3/#414 — page_playoff is a NEW BracketStage.kind, but bracketRanks reads
+// only round/isFinal/loser (never stage.kind — grep confirms no branch on it
+// anywhere in this file), so the fixed 4-team IPL-style page playoff
+// (scheduling/generatePagePlayoff: pp-q1 + pp-elim at round 0, pp-q2 feeding
+// from both at round 1, pp-final isFinal at round 2 — no thirdPlace fixture)
+// needs zero changes to bracketRanks itself, only the type widen below. This
+// is the regression proving that: without `"page_playoff"` in BracketStage's
+// kind union this file fails to typecheck (TS2322).
+describe("bracketRanks — page_playoff (L3/#414, spec 2026-07-19)", () => {
+  const stage: BracketStage = {
+    id: "pp",
+    kind: "page_playoff",
+    seeds: new Map([["S1", 1], ["S2", 2], ["S3", 3], ["S4", 4]]),
+  };
+  // Q1 (major semi) S1 beats S2; Eliminator (minor semi) S3 beats S4; Q2
+  // (preliminary final) is an UPSET — S2 (the Q1 loser) beats S3 (the
+  // Eliminator winner) for a second life; the Final is S1 over S2.
+  const bracket: BracketFixture[] = [
+    { id: "pp-q1", round: 0, status: "decided", home: "S1", away: "S2", winner: "S1", loser: "S2" },
+    { id: "pp-elim", round: 0, status: "decided", home: "S3", away: "S4", winner: "S3", loser: "S4" },
+    { id: "pp-q2", round: 1, status: "decided", home: "S2", away: "S3", winner: "S2", loser: "S3" },
+    {
+      id: "pp-final",
+      round: 2,
+      isFinal: true,
+      status: "decided",
+      home: "S1",
+      away: "S2",
+      winner: "S1",
+      loser: "S2",
+    },
+  ];
+
+  it("ranks champion, runner-up, the Q2 (2nd-life) loser, then the Eliminator loser", () => {
+    // S3 lost the Eliminator (round 0) but got a 2nd life via S2's upset, then
+    // lost Q2 (round 1) — later elimination ⇒ ranked above S4, who never got
+    // a 2nd life and is out after round 0. No thirdPlace fixture is involved:
+    // this is the lastLossRound fallback alone.
+    expect(bracketRanks(stage, bracket)).toEqual(["S1", "S2", "S3", "S4"]);
+  });
+
+  it("completes once the Final alone is decided, regardless of the other three", () => {
+    const beforeFinal = bracket.map((f) => (f.id === "pp-final" ? { ...f, status: "scheduled" as const, winner: undefined, loser: undefined } : f));
+    expect(isBracketStageComplete(stage, beforeFinal)).toBe(false);
+    expect(isBracketStageComplete(stage, bracket)).toBe(true);
+  });
+
+  it("completeBracketStage emits stage_completed with the page_playoff ranks", () => {
+    const { events, finalRanks } = completeBracketStage(stage, bracket);
+    expect(finalRanks).toEqual(["S1", "S2", "S3", "S4"]);
+    expect(events).toEqual([{ type: "stage_completed", stageId: "pp", finalRanks }]);
+  });
+});
+
 describe("withdrawal policies (spec 05 §5)", () => {
   const stage: TableStage = { id: "s", kind: "league", entrants: ["W", "A", "B", "C"], cascade: ["points", "lots"] };
 

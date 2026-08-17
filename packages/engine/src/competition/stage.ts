@@ -68,7 +68,13 @@ export interface TableStage {
 
 export interface BracketStage {
   id: string;
-  kind: Extract<StageKind, "knockout" | "double_elim" | "stepladder">;
+  // L3/#414 — page_playoff added. bracketRanks/isBracketStageComplete below
+  // read only round/isFinal/loser/status off the fixtures, never stage.kind,
+  // so the fixed 4-team page playoff (scheduling/generatePagePlayoff) needs
+  // no algorithm change — see the page_playoff describe block in
+  // stage.test.ts for why the existing lastLossRound fallback already ranks
+  // it correctly with no thirdPlace fixture involved.
+  kind: Extract<StageKind, "knockout" | "double_elim" | "stepladder" | "page_playoff">;
   seeds?: ReadonlyMap<EntrantId, number>;
 }
 
