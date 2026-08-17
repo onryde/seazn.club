@@ -701,6 +701,17 @@ export const Fixture = z.object({
   schedule_source: z.enum(["none", "auto", "manual", "ai"]),
   schedule_locked: z.boolean(),
   created_at: z.string(),
+  /** F1 (2026-08-17): the engine's bracket-position role, persisted instead
+   *  of re-derived per consumer (V368/V369). Declared here for the same
+   *  reason as `fixture_no` above — `FIXTURE_COLS` now selects it and every
+   *  fixture route returns its row unmapped, so leaving it undocumented
+   *  would be a silent gap between the published spec and the real
+   *  payload, not a missing field. */
+  ext_key: z.string().nullable(),
+  lane: z.enum(["WB", "LB", "GF"]).nullable(),
+  is_final: z.boolean(),
+  third_place: z.boolean(),
+  conditional: z.boolean(),
 });
 
 export const LineupSlotInput = z.object({

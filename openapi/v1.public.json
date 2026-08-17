@@ -13143,6 +13143,40 @@
                               },
                               "created_at": {
                                 "type": "string"
+                              },
+                              "ext_key": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "lane": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "WB",
+                                      "LB",
+                                      "GF"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "is_final": {
+                                "type": "boolean"
+                              },
+                              "third_place": {
+                                "type": "boolean"
+                              },
+                              "conditional": {
+                                "type": "boolean"
                               }
                             },
                             "required": [
@@ -13165,7 +13199,12 @@
                               "outcome",
                               "schedule_source",
                               "schedule_locked",
-                              "created_at"
+                              "created_at",
+                              "ext_key",
+                              "lane",
+                              "is_final",
+                              "third_place",
+                              "conditional"
                             ],
                             "additionalProperties": false
                           }
@@ -13218,7 +13257,12 @@
                         "outcome": null,
                         "schedule_source": "none",
                         "schedule_locked": true,
-                        "created_at": "example"
+                        "created_at": "example",
+                        "ext_key": "example",
+                        "lane": "WB",
+                        "is_final": true,
+                        "third_place": true,
+                        "conditional": true
                       }
                     ]
                   },
@@ -14923,6 +14967,40 @@
                               },
                               "created_at": {
                                 "type": "string"
+                              },
+                              "ext_key": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "lane": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "WB",
+                                      "LB",
+                                      "GF"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "is_final": {
+                                "type": "boolean"
+                              },
+                              "third_place": {
+                                "type": "boolean"
+                              },
+                              "conditional": {
+                                "type": "boolean"
                               }
                             },
                             "required": [
@@ -14945,7 +15023,12 @@
                               "outcome",
                               "schedule_source",
                               "schedule_locked",
-                              "created_at"
+                              "created_at",
+                              "ext_key",
+                              "lane",
+                              "is_final",
+                              "third_place",
+                              "conditional"
                             ],
                             "additionalProperties": false
                           }
@@ -14998,7 +15081,12 @@
                         "outcome": null,
                         "schedule_source": "none",
                         "schedule_locked": true,
-                        "created_at": "example"
+                        "created_at": "example",
+                        "ext_key": "example",
+                        "lane": "WB",
+                        "is_final": true,
+                        "third_place": true,
+                        "conditional": true
                       }
                     ]
                   },
@@ -22766,6 +22854,40 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "ext_key": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "lane": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "WB",
+                                "LB",
+                                "GF"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "is_final": {
+                          "type": "boolean"
+                        },
+                        "third_place": {
+                          "type": "boolean"
+                        },
+                        "conditional": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -22788,7 +22910,12 @@
                         "outcome",
                         "schedule_source",
                         "schedule_locked",
-                        "created_at"
+                        "created_at",
+                        "ext_key",
+                        "lane",
+                        "is_final",
+                        "third_place",
+                        "conditional"
                       ],
                       "additionalProperties": false
                     },
@@ -22828,7 +22955,12 @@
                     "outcome": null,
                     "schedule_source": "none",
                     "schedule_locked": true,
-                    "created_at": "example"
+                    "created_at": "example",
+                    "ext_key": "example",
+                    "lane": "WB",
+                    "is_final": true,
+                    "third_place": true,
+                    "conditional": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -23275,6 +23407,40 @@
                         "created_at": {
                           "type": "string"
                         },
+                        "ext_key": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "lane": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "WB",
+                                "LB",
+                                "GF"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "is_final": {
+                          "type": "boolean"
+                        },
+                        "third_place": {
+                          "type": "boolean"
+                        },
+                        "conditional": {
+                          "type": "boolean"
+                        },
                         "conflicts": {
                           "type": "array",
                           "items": {
@@ -23472,6 +23638,11 @@
                         "schedule_source",
                         "schedule_locked",
                         "created_at",
+                        "ext_key",
+                        "lane",
+                        "is_final",
+                        "third_place",
+                        "conditional",
                         "conflicts"
                       ],
                       "additionalProperties": false
@@ -23513,6 +23684,11 @@
                     "schedule_source": "none",
                     "schedule_locked": true,
                     "created_at": "example",
+                    "ext_key": "example",
+                    "lane": "WB",
+                    "is_final": true,
+                    "third_place": true,
+                    "conditional": true,
                     "conflicts": [
                       {
                         "fixture_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",

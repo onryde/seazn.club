@@ -58,6 +58,7 @@ import { CreateStage } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { msg } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";
+import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { validateSchedule } from "./schedule";
 import {
   descriptorKey,
@@ -96,6 +97,7 @@ export const FIXTURE_COLS = [
   "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",
   "scheduled_at", "venue", "court_label",
   "officials", "status", "outcome", "schedule_source", "schedule_locked", "created_at",
+  "ext_key", "lane", "is_final", "third_place", "conditional",
 ] as const;
 
 export interface FixtureRow {
@@ -122,6 +124,17 @@ export interface FixtureRow {
   schedule_source: "none" | "auto" | "manual" | "ai";
   schedule_locked: boolean;
   created_at: string;
+  /** Generator-stable id (idempotent regeneration key). Also the ONE place
+   *  a page-playoff fixture's Qualifier-1-vs-Eliminator identity survives —
+   *  both share a round and a match count (F1 Task 4). */
+  ext_key: string | null;
+  /** F1 (2026-08-17): the engine's bracket-position role, persisted instead
+   *  of re-derived per consumer (db/migration/deltas/V368__fixture_round_role.sql).
+   *  `lane` is null for single-lane brackets and non-bracket stages. */
+  lane: "WB" | "LB" | "GF" | null;
+  is_final: boolean;
+  third_place: boolean;
+  conditional: boolean;
 }
 
 export async function listStages(auth: AuthCtx, divisionId: string): Promise<StageRow[]> {
@@ -773,16 +786,6 @@ function qualifierCount(qualification: unknown): number {
   return isSpec ? qualificationSize(qualification as QualificationSpec) : 0;
 }
 
-// Bracket-round title from the number of matches in that round.
-function roundTitle(kind: string, roundNo: number, matchCount: number): string {
-  const bracketish = kind === "knockout" || kind === "double_elim" || kind === "stepladder" || kind === "page_playoff";
-  if (!bracketish) return `Round ${roundNo}`;
-  if (matchCount === 1) return "Final";
-  if (matchCount === 2) return "Semi-finals";
-  if (matchCount <= 4) return "Quarter-finals";
-  return `Round of ${matchCount * 2}`;
-}
-
 /** Preview a whole stage graph. Stage 1 uses A,B,C… entrants; later (qualifier)
  *  stages use "Seed 1…q". Score-dependent formats (swiss/americano/ladder)
  *  can't be drawn before results, so they return an explanatory note. */
@@ -853,15 +856,49 @@ export function previewDivisionFixtures(
       (grouped.get(key) ?? grouped.set(key, []).get(key)!).push(f);
     }
 
+    // F1 Task 4: name each round by its POSITION (roundRole), never by match
+    // count — a double-elim's losers bracket has repeated round sizes, so a
+    // count-based namer produces several "Semi-finals" and several "Final"s
+    // in one bracket (design §2.3). Ranked per LANE (laneRoundRank), not
+    // across the whole stage. Non-bracket kinds (league/group round robins)
+    // keep the plain "Round N" — roundRole()'s fromEnd arithmetic assumes a
+    // bracket shape and is meaningless outside BRACKET_KINDS.
+    const laneFixtures = gen.map((f) => ({ round_no: f.roundNo, lane: f.lane ?? null }));
+
     const sections: PreviewSection[] = [...grouped.entries()]
       .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
       .map(([key, fixtures]) => {
         const matches = fixtures
           .sort((a, b) => a.roundNo - b.roundNo || a.seqInRound - b.seqInRound)
-          .map((f) => ({ home: slot(f.home, f.homeFrom), away: slot(f.away, f.awayFrom) }));
+          .map((f) => ({
+            home: slot(f.home, f.homeFrom),
+            // Task 5: a bye is known at setup and never resolves to anyone —
+            // "TBD" tells an organiser to wait for something that isn't
+            // coming. BracketFixtureGen.award marks the whole fixture; the
+            // engine always lands the award on `home` (buildSingleElim), so
+            // `away` is unconditionally the phantom slot here.
+            away: f.award !== undefined ? msg("bracket.slot.bye") : slot(f.away, f.awayFrom),
+          }));
+        const first = fixtures[0]!;
         const title = byPool
           ? `Group ${key.slice(5)}`
-          : roundTitle(stage.kind, fixtures[0]!.roundNo, fixtures.length);
+          : BRACKET_KINDS.has(stage.kind)
+            ? roundRoleLabel(
+                msg,
+                roundRoleFor(
+                  laneFixtures,
+                  {
+                    round_no: first.roundNo,
+                    lane: first.lane ?? null,
+                    is_final: first.isFinal === true,
+                    third_place: first.thirdPlace === true,
+                    conditional: first.conditional === true,
+                  },
+                  stage.kind,
+                  first.extKey,
+                ),
+              )
+            : msg("bracket.round.plain", { n: first.roundNo });
         return { title, matches };
       });
 
@@ -1738,10 +1775,16 @@ function toBracketFixtureStatus(dbStatus: string): FixtureStatus {
 // Rebuild the completed bracket's own BracketFixture[] for `losersOfRound`
 // (qualification.ts) — never re-derived from `standings_snapshots`, which
 // only ever carries FINAL ranks, not which round a fixture belongs to.
-// `ext_key` is the only place lane/thirdPlace survive persistence (spec 05
-// §2.3/§2.5): PARSE it via engine-db/competition.ts's own parseExtKey
-// (pass 2), never re-derive from round/position — a bracket's rounds number
-// sparsely (1,2,3 winners' side, 7-10 losers' side, 14 grand final).
+// Before F1 (2026-08-17), `ext_key` was the only place a bracket fixture's
+// lane/thirdPlace survived persistence, so this parsed it via engine-db/
+// competition.ts's own parseExtKey (pass 2) rather than reading a column.
+// `fixtures.lane`/`fixtures.third_place` now carry the same information
+// directly (db/migration/deltas/V368__fixture_round_role.sql) — this
+// function still derives from ext_key below because it hasn't been migrated
+// to the new columns, not because ext_key is still the only source. Either
+// way, never re-derive bracket position from round/seq_in_round: a
+// bracket's rounds number sparsely (1,2,3 winners' side, 7-10 losers' side,
+// 14 grand final).
 // resolveQualification's isRoundLosers trusts ITS CALLER for bracket-position
 // order (there is nothing left for it to sort by) — `order by round_no,
 // seq_in_round` below is what makes THIS the ordering authority.
