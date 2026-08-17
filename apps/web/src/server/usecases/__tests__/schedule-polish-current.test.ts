@@ -27,6 +27,7 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { applySchedule, autoSchedule, putScheduleSettings } from "../schedule";
 import { patchFixture } from "../fixtures";
+import { createVenue, createCourt } from "../venues";
 import { ScheduleSolverInfo } from "@/server/api-v1/schemas";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -104,12 +105,17 @@ async function seedStage(
     name: "L",
     config: {},
   });
+  // P9 pass 3a: ScheduleConfig.courts is CourtId[] (real courts.id) since
+  // pass 1 — a free-text "C1"/"C2" string no longer parses.
+  const venue = await createVenue(auth, { name: "Main", sort: 0 });
+  const c1 = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
+  const c2 = await createCourt(auth, venue.id, { name: "C2", sort: 1, tags: [] });
   await putScheduleSettings(auth, division.id, {
     config: {
       startAt: T0,
       matchMinutes: 30,
       gapMinutes: 0,
-      courts: ["C1", "C2"],
+      courts: [c1.id, c2.id],
       perEntrantMinRest: 30,
       blackouts: [],
       sessionWindows: [],
@@ -120,11 +126,11 @@ async function seedStage(
   return { stageId: stage.id, created: generated.created };
 }
 
-type Row = { id: string; scheduled_at: Date; court_label: string };
+type Row = { id: string; scheduled_at: Date; court_id: string };
 const boardOf = (stageId: string) =>
-  sql<Row[]>`select id, scheduled_at, court_label from fixtures
+  sql<Row[]>`select id, scheduled_at, court_id from fixtures
              where stage_id = ${stageId} and scheduled_at is not null
-             order by scheduled_at, court_label, id`;
+             order by scheduled_at, court_id, id`;
 
 const slot = (isoOrDate: string | Date, court: string | null) =>
   `${typeof isoOrDate === "string" ? isoOrDate : isoOrDate.toISOString()}|${court}`;
@@ -167,7 +173,7 @@ async function publishedBoardShifted(
     assignments: built.assignments.map((a) => ({
       fixture_id: a.fixture_id,
       scheduled_at: a.scheduled_at,
-      court_label: a.court_label,
+      court_id: a.court_id,
     })),
     source: "auto",
   });
@@ -209,10 +215,10 @@ describe.skipIf(!HAS_DB)(
       // What the run actually did to the organiser's board, computed here rather
       // than taken from the payload — this is the number `moved` is a claim about.
       const was = new Map(
-        before.map((r) => [r.id, slot(r.scheduled_at, r.court_label)]),
+        before.map((r) => [r.id, slot(r.scheduled_at, r.court_id)]),
       );
       const relocated = out.assignments.filter(
-        (a) => was.get(a.fixture_id) !== slot(a.scheduled_at, a.court_label),
+        (a) => was.get(a.fixture_id) !== slot(a.scheduled_at, a.court_id),
       ).length;
       // The premise of the fixture: the answer is nowhere near the +3h board.
       expect(relocated).toBe(created);
@@ -283,10 +289,10 @@ describe.skipIf(!HAS_DB)(
       });
 
       const was = new Map(
-        before.map((r) => [r.id, slot(r.scheduled_at, r.court_label)]),
+        before.map((r) => [r.id, slot(r.scheduled_at, r.court_id)]),
       );
       const relocated = out.assignments.filter(
-        (a) => was.get(a.fixture_id) !== slot(a.scheduled_at, a.court_label),
+        (a) => was.get(a.fixture_id) !== slot(a.scheduled_at, a.court_id),
       ).length;
       // The fixture's premise, restated here so this spec cannot pass on a board
       // where the two baselines happen to agree.
