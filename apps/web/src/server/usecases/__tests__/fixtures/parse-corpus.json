@@ -294,15 +294,21 @@
       "id": "t01",
       "tier": 4,
       "text": "no player plays more than 2 matches a day",
-      "trap": "PROMPT RULE 8 - a per-player cap is NOT max_fixtures_per_day",
-      "expect": { "hard": [], "unparsed": true }
+      "trap": "RE-BASELINED 2026-08-17 (3rd re-baseline of this corpus): was defer-all, because rule 8 forbade compiling a per-player cap at all. every_person now exists and carries NO id, so the id-invention objection that keeps entrant/person/pool out of the parser's Scope does not apply. Emitting competition scope here is STILL the bug - it caps a 60-player event at two matches a day.",
+      "expect": {
+        "hard": [{ "type": "max_fixtures_per_day", "count": 2, "scope": { "kind": "every_person" } }],
+        "unparsed": false
+      }
     },
     {
       "id": "t02",
       "tier": 4,
       "text": "each team plays twice a day at most",
-      "trap": "per-team cap, same rule-8 class",
-      "expect": { "hard": [], "unparsed": true }
+      "trap": "RE-BASELINED 2026-08-17, same wave as t01. per-TEAM, so every_entrant and NOT every_person: a team is an entry, not a human. Choosing every_person here would be wrong in the direction that matters - it would bind each player rather than each side.",
+      "expect": {
+        "hard": [{ "type": "max_fixtures_per_day", "count": 2, "scope": { "kind": "every_entrant" } }],
+        "unparsed": false
+      }
     },
     {
       "id": "t03",
@@ -511,6 +517,36 @@
       "expect": {
         "hard": [{ "type": "not_before", "time": "14:00", "scope": { "kind": "competition" } }],
         "unparsed": true
+      }
+    },
+    {
+      "id": "t10",
+      "tier": 4,
+      "text": "no player plays twice in a row",
+      "trap": "REPLACES t01/t02 in the deferral cohort after their 2026-08-17 re-baseline. Still a per-entity concept and still out of vocabulary: consecutiveness is a POSITION IN THE ORDER, and min_rest_minutes is a clock. Added so the deferral cohort does not shrink to the point where the invented-rule metric stops biting.",
+      "expect": { "hard": [], "unparsed": true }
+    },
+    {
+      "id": "t11",
+      "tier": 2,
+      "text": "we can only run 8 matches a day across the whole event",
+      "trap": "THE RULE-8 GUARD, kept as a corpus row now that the prompt sentence protecting it is gone. This really is a whole-run cap, so competition scope is correct and every_person would be wrong. Pairs with t01/t02, which move the other way: inverting rule 8 must not drag every day cap onto a universal scope.",
+      "expect": {
+        "hard": [{ "type": "max_fixtures_per_day", "count": 8, "scope": { "kind": "competition" } }],
+        "unparsed": false
+      }
+    },
+    {
+      "id": "t12",
+      "tier": 3,
+      "text": "run at most 10 matches a day and no player plays more than 2",
+      "trap": "BOTH caps in one sentence, and they do NOT conflict - a whole-run cap and a per-player cap are different rules at different scopes. Guards the scopeKey fix: while every non-division scope collapsed to the literal 'competition', conflictKeyOf gave these two the same identity and refuseContradictions dropped one.",
+      "expect": {
+        "hard": [
+          { "type": "max_fixtures_per_day", "count": 10, "scope": { "kind": "competition" } },
+          { "type": "max_fixtures_per_day", "count": 2, "scope": { "kind": "every_person" } }
+        ],
+        "unparsed": false
       }
     }
   ]

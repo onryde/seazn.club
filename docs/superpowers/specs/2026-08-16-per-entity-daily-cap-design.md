@@ -196,10 +196,238 @@ z3-ai-repair → CP-SAT) touches ZERO files under
 constraint enum, so the "engine enum" gate noted in the bench programme
 does not apply to `ConstraintScope`.
 
+**Correction, re-checked at implementation start 2026-08-16:** that
+sequencing paragraph checked #576 only, and there are TWO open PRs. #583
+(C9, decomposed repair on CP-SAT) *does* touch
+`packages/engine/src/scheduling/` — five files:
+`index.ts`, `repair-decompose.ts`, `repair-decompose-cpsat.ts` and their
+two suites. The conclusion survives but for a narrower reason than
+stated: the three files this spec rewrites — `constraints.ts`,
+`calendar.ts`, `build-encode.ts` — are still uncontested by BOTH PRs. The
+one shared file is the barrel `index.ts`, which C9 edits and which this
+work touches only if the new scope needs a new export. Prefer widening
+the existing `ConstraintScope` export over adding a barrel line, and if a
+new export is unavoidable, expect a one-line rebase conflict against
+whichever of the two lands first.
+
 **Estimate:** this is a session of its own — engine union, two tally
 implementations, two parity suites, golden corpus, then parser, prompt
 and corpus re-baseline. Starting it inside a session that has already
 shipped four other things is how a placer/verifier fork gets written.
+
+## Pinned at implementation start 2026-08-16 — five findings, three of which correct this spec
+
+Citations re-pinned against `main` at `a0cfb708`. The tally analysis above
+holds exactly. Five things it did not know:
+
+**1. The READ does not use the shared resolver, and the code comment says
+it does.** `calendar.ts:516-518` introduces `dayCapRulesFor` as "One
+resolution for the tally READ at placement time and the tally WRITE at
+commit time — two scope walks is how a placer and a verifier fork in the
+first place." The WRITE (`countDay`, :566) does call it. The READ
+(`nextAcceptableStart`, :593-597) does **not** — it walks `placementHard`
+with its own inline `scopeCoversFixture` call, because that loop also
+serves `not_before` / `not_after` / the selector families. The two agree
+today only because both happen to call the same predicate with the same
+arguments. That is precisely the fork the comment claims was designed
+away, sitting dormant behind a boolean that is currently symmetric.
+
+It stops being dormant here. Under a universal scope the read and write
+diverge in SHAPE, not just in predicate: the write increments N buckets
+(one per person on the card), the read must test N buckets. An inline
+walk that keeps returning one index will fork the moment the write
+returns many. **So the first engine change is not the union — it is
+routing the read through `dayCapRulesFor`, with a test pinning current
+behaviour, so the widening has one resolver to widen instead of two.**
+
+**2. `every_person` is inert unless callers populate `people`.**
+`SchedulableFixture.people` is **optional** (`calendar.ts:82`), and
+`scopeRowOf` (:486-488) fills `people: [...(f.people ?? [])]`. A fixture
+whose caller omits `people` yields an empty list, `scopeCoversFixture`'s
+`person` branch returns false, and a person-scoped cap silently binds
+nothing. A universal `every_person` cap inherits that exactly: on a board
+built without `people` it is a rule that reads back to the organiser as
+enforced and enforces nothing. This is the repo's known "seam left for
+later ships inert" class. The cap must not be shipped without either a
+populated-`people` precondition asserted at build time or an explicit,
+tested decision about what an empty `people` list means.
+
+**3. `build-encode-parity.test.ts` is structurally blind to this
+change.** Its guard is `ENCODED_RULE_TYPES` (:40-46), a whitelist keyed on
+`HardConstraint["type"]`, and its own comment states its purpose: to make
+"the NEXT unencoded **type** fail here rather than pass unnoticed". This
+work adds no rule type — it widens `scope` on an existing one. The suite
+will therefore stay green whether or not CP-SAT encodes `every_person`.
+Extending it means adding a **scope axis**, not another row; a row is the
+change that looks like coverage and is not.
+
+The sibling suite has its own version of the same trap.
+`calendar-placer-verifier-parity.test.ts` is table-driven (`FAMILIES`,
+:60-75; `it.each` at :78) and takes a new row easily — but its `cards(n)`
+helper (:33-39) gives **every** card `home: "e1"`, one shared entrant, and
+its existing `max_fixtures_per_day` row is already scoped
+`{kind:"entrant", entrantId:"e1"}`. On that fixture set a universal cap
+and a named-`e1` cap are the same assertion, so an `every_entrant` row
+added naively passes without ever distinguishing the new scope from the
+old one. A universal-scope row needs a card set with **disjoint**
+entrants, where a named-entrant cap does not bite and only a universal one
+does. `cards()` also sets no `people` at all, which is finding 2 arriving
+in the test fixtures: an `every_person` row against it is vacuous.
+
+**4. There is no scheduling golden corpus, so test-plan item 2 has no
+target.** All golden machinery under `packages/engine/src/testkit/` drives
+the **sport-module scoring** corpus — eleven `*.golden.json` under
+`src/sports/**`. Nothing under `scheduling/` participates, and no JSON
+under `scheduling/` exists at all. Running `EXTEND_GOLDEN=1` here would
+append to the scoring corpus and go green while saying nothing about a
+constraint scope. Item 2 should be struck and its intent — a durable,
+reviewable record of the new scope's behaviour — met by the parity suites
+plus a checked-in scheduling fixture, or a scheduling golden corpus
+should be created deliberately as its own piece of work.
+
+**5. Blast radius is smaller than Risks states: `conflict-detail.ts` does
+not read `scope`.** Its only `scope` occurrence is a comment on line 9.
+The "reaches ... conflict details (25 kinds as of C3)" risk does not hold
+as written; conflict detail is reached only if this work chooses to name
+the offending person in a message, which is a separate, optional
+improvement rather than forced fallout.
+
+**6. The CP-SAT encoder does not merely need widening — a universal scope
+compiles it into the exact bug rule 8 exists to prevent.**
+`build-encode.ts:484-513` encodes the cap as a FIXTURE-SET problem, not an
+entity problem: `scopedFixtures(h)` resolves the scope to a set of fixture
+indices, the slots are grouped by `dayKeyInTz`, and each day gets one
+clause capping how many of THAT DAY's slots the scoped fixtures may
+occupy (`room = count - immovable`).
+
+Point a universal scope at that and `scopedFixtures` returns **every**
+fixture, so the clause becomes "at most `count` fixtures run on this day",
+competition-wide. That is precisely the misreading `PARSER_PROMPT` rule 8
+was written to stop — "a 60-player event capped at two matches daily" —
+except reached through the encoder instead of the parser, on a board the
+solver will then call OPTIMAL. The greedy placer would spread the cards
+correctly and CP-SAT would refuse them, which is a placer/verifier fork
+with the sign flipped.
+
+The fix is not a wider `scopedFixtures`. The encoder needs one clause per
+**(entity, day)** — for each person (or entrant) appearing on the board,
+cap the slots of the fixtures that contain that entity on that day — which
+is a different clause count and a different loop nest from what is there.
+The comment at :477-483 anticipates a new rule TYPE being silently
+mis-encoded and says the parity whitelist catches it; a new SCOPE is the
+same hazard with no guard at all. Finding 3 is why this ships green.
+
+**7. Finding 2 was too pessimistic: `people` IS populated in production, from
+a real roster.** Re-checked directly. `entrant_members`
+(`db/migration/v2-engine/tables/V213__entrant_members.sql`, PK
+`(entrant_id, person_id)`) is the entrant↔person link, and
+`peopleByEntrant(tx, entrantIds)`
+(`apps/web/src/server/usecases/schedule.ts:556-560`) reads it and stamps
+`people` on every DB-driven assignment — called at five production entry
+points (`:725, :1139, :2079, :2395, :2639`). Rosters are captured at entrant
+creation through a "Find player…" picker over the existing persons directory
+(`apps/web/src/components/v2/entrants-panel.tsx:1444-1475`), so a team or a
+doubles pair already carries its members.
+
+So `every_person` is NOT inert on the DB-backed path, and this work needs no
+new roster mechanism. The optionality on `SchedulableFixture.people` is there
+for engine-internal and synthetic builders, not a production gap.
+
+What survives of finding 2 is narrower and still real: an entrant whose roster
+is EMPTY — a name typed in without members ever being added. A person cap
+binds nothing for that entrant while appearing to be in force. That is a
+data-completeness problem with a specific fix ("add players to X"), so the
+right behaviour is a warning that NAMES the entrants with empty rosters, not a
+blanket refusal of the build. Task 5 should be re-scoped to that.
+
+**8. The wire cannot carry a universal scope at all — and does not need to.**
+`proto/scheduler.proto:154-170` states the ruling explicitly: putting a scope
+on the wire "is the wrong shape, and rejecting it is the whole design",
+because the placement service has no person concept and must not learn one.
+Instead "the ACL resolves the scope and sends the RESULT" — `build.ts` uses
+`scopeCoversFixture` to turn any scope into a set of fixtures, and sends
+`RuleGroup { fixture_indices, min_rest_minutes, max_fixtures_per_day }`
+(`:176-192`).
+
+That is the same fixture-set shape finding 6 identifies as wrong for a
+universal scope — except here it is baked into the protocol, not one encoder.
+A universal scope resolved to ONE `RuleGroup` becomes a competition-wide cap
+on the service exactly as it does in `build-encode.ts`.
+
+**But `rule_groups` is already `repeated`.** So a universal scope expands, at
+the wire boundary only, into **N `RuleGroup`s — one per entity**, each
+carrying that entity's own `fixture_indices` and the same
+`max_fixtures_per_day`. No proto change, no Python change, no new concept
+taught to the service; it keeps "applying a rule to a set of fixture
+positions, which is the only thing it was ever doing".
+
+This resolves the spec's A-vs-B argument, which conflated two layers. B's
+costs — "200 near-identical rules is unreadable", "the AI pack's token budget
+is a live constraint", "it loses the organiser's sentence" — are all costs at
+the ORGANISER-FACING layer. None of them apply to a machine-facing wire
+message. So: **A above the ACL** (one constraint, one sentence, one thing the
+organiser reads back), **B below it** (N rule groups, which is the only shape
+the protocol accepts). Approach A remains right, and B is how it is
+transported.
+
+Consequence for scope: the tally exists in THREE consumers, not two — the
+greedy placer/verifier (`calendar.ts`), the in-process z3 encoder
+(`build-encode.ts`), and the placement service via the ACL. The third needs
+expansion at the boundary rather than a tally, and the Python side needs
+nothing.
+
+## Re-pinned 2026-08-17, after C6/C7/C8 merged — findings 6 and 4a are now moot
+
+C8 (#591) **deleted `build-encode.ts` and `build-encode-parity.test.ts`**, along
+with `z3-load.ts` and the WASM plumbing. C7 (#590) removed z3 from the public
+contract; C6 (#588) retired the prose. Consequences:
+
+**9. There are TWO consumers again, not three, and the surviving one is the
+wire.** Finding 6 (the in-process z3 encoder mis-compiling a universal scope
+into a competition-wide cap) describes a file that no longer exists. The
+tally/encoding work now splits as:
+- `calendar.ts` — greedy placer + verifier. Unchanged by C6-C8; every citation
+  in this spec still resolves.
+- `build.ts` `buildRuleGroups` (`:1318-1362`, sent at `:1931`) — resolves each
+  scope to a `RuleGroup { fixtureIds, minRestMinutes, maxFixturesPerDay }` for
+  the placement service.
+
+So finding 8's ruling is no longer one path among several — **it is the whole
+encoder story**. A universal scope expands into N `RuleGroup`s, one per entity,
+at `buildRuleGroups`. Still no proto change and no Python change.
+
+**10. The last surviving scope guard is blind to this change on TWO
+independent counts.** With `build-encode-parity.test.ts` deleted, the only
+test that walks scope kinds is `build.test.ts:1711`, "derives a rule group's
+fixture set from `scopeCoversFixture` itself, for every scope kind". It is a
+good test for what it was built for — its `rowOf` (`:1742-1747`) is
+constructed independently of `build.ts`'s private `scopeRowOf`, so a swapped
+`poolId`/`divisionId` or a dropped `people` really would fail it. But for a
+universal scope:
+
+1. Its `scopes` array (`:1723-1729`) is **hand-listed, five literals**, and the
+   count assertion is `toHaveLength(scopes.length)` — that same array. Adding a
+   member to `ConstraintScope` does not add it here, so the new scope is simply
+   untested despite the test's name. The
+   "union assertion is not a closed set" pattern.
+2. Even once added, the expectation is
+   `fixtures.filter(f => scopeCoversFixture(scope, …, rowOf(f)))`. A universal
+   scope makes that `true` for every fixture, and the produced group would also
+   hold every fixture — so it **passes while encoding a competition-wide cap**.
+   The expectation is derived from the same function the code under test uses:
+   a tautology precisely where the semantics are new.
+
+A universal scope is therefore the one case this suite cannot speak for, and it
+is now the only suite there is. Any implementation must re-establish a guard
+driven off `ConstraintScope.options` — not off `scopeCoversFixture` — before
+widening the union. The `ENCODED_SCOPE_KINDS` axis added for the deleted
+`build-encode-parity.test.ts` has to be rebuilt against `buildRuleGroups`.
+
+**Unchanged and confirmed:** `ConstraintScope` is a
+`z.discriminatedUnion("kind", …)` at `constraints.ts:30-37` with the five
+members the spec lists, re-exported by `scheduling/index.ts:46` via
+`export * from "./constraints.ts"` — so a new union member needs **no new
+barrel line**, which removes the only file this work shared with PR #583.
 
 ## Risks
 

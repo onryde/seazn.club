@@ -40,6 +40,7 @@ import {
   type ScopeRow,
   type SlotConfig,
 } from "./calendar.ts";
+import { ConstraintScope } from "./constraints.ts";
 import type { HardConstraint, SchedulingConstraints } from "./constraints.ts";
 import { dayKeyInTz } from "./tz.ts";
 import type { SolveBuildInput, SolveBuildOutcome } from "./placement-client.ts";
@@ -1847,6 +1848,112 @@ describe("buildSchedule — Placement path", () => {
   // "no model, no behaviour change"), so every case below is about what
   // `build.ts` SENDS — never about what a mocked `solveBuild` reply does with
   // it, which would be unable to tell the difference either way.
+
+  /** The scope kinds `buildRuleGroups` has a STATED wire representation for.
+   *
+   *  Exists because the anti-fork assertion below cannot speak for a scope
+   *  whose semantics are "each X separately". Two independent reasons, and
+   *  both survive adding a row to that test's `scopes` array:
+   *
+   *  1. That array is hand-listed, and its own length is the count assertion —
+   *     so a new `ConstraintScope` member is untested there rather than red.
+   *  2. Its expectation is `fixtures.filter(f => scopeCoversFixture(...))`,
+   *     the same function the code under test calls. A universal scope answers
+   *     `true` for every fixture, so expected and produced would BOTH be the
+   *     whole board and the comparison passes — while the emitted `RuleGroup`
+   *     caps the day competition-wide instead of per entity, which is the
+   *     misreading `PARSER_PROMPT` rule 8 exists to prevent.
+   *
+   *  So this is driven off `ConstraintScope.options` — the union itself —
+   *  rather than off `scopeCoversFixture`. A member added without a decision
+   *  about its wire shape fails HERE, immediately, instead of shipping a
+   *  competition-wide cap that every existing test calls correct. */
+  const WIRE_STATED_SCOPE_KINDS: ReadonlySet<ConstraintScope["kind"]> = new Set([
+    "competition",
+    "division",
+    "entrant",
+    "person",
+    "pool",
+    // Stated as an EXPANSION, not as a scope: `buildRuleGroups` emits one
+    // `RuleGroup` per entity rather than one holding every fixture. The wire
+    // has no scope field by design (`proto/scheduler.proto`), and one group
+    // over the whole board would be a competition-wide cap.
+    "every_entrant",
+    "every_person",
+  ]);
+
+  it("states a wire representation for every ConstraintScope member", () => {
+    // No cast: zod types `.value` as the literal, so the union drives this list
+    // rather than a copy of it that can drift.
+    const declared = ConstraintScope.options.map((o) => o.shape.kind.value);
+    expect([...declared].sort()).toEqual([...WIRE_STATED_SCOPE_KINDS].sort());
+  });
+
+  it("expands a universal scope into one RuleGroup per entity, not one over the board", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+
+    // Three cards, six distinct entrants, nobody shared.
+    const fixtures = [
+      fx("f1", "E1", "E2", { divisionId: "D1", people: ["alice", "bob"] }),
+      fx("f2", "E3", "E4", { divisionId: "D1", people: ["carol", "dave"] }),
+      fx("f3", "E5", "E6", { divisionId: "D1", people: ["erin", "frank"] }),
+    ];
+    const hard: HardConstraint[] = [
+      { type: "max_fixtures_per_day", count: 2, scope: { kind: "every_entrant" } },
+    ];
+
+    await buildSchedule({ fixtures, config: { ...cfg(), hard } });
+    expect(captured).toBeDefined();
+
+    // ONE group per entrant, not one group holding all three fixtures. The
+    // latter is what a fixture-set resolution of a universal scope produces,
+    // and it caps the whole competition at two a day instead of each entrant.
+    expect(captured!.ruleGroups).toHaveLength(6);
+    for (const g of captured!.ruleGroups!) {
+      expect(g.maxFixturesPerDay).toBe(2);
+      // Each entrant is on exactly one card here, so any group holding more
+      // than one fixture means the expansion collapsed back to a board-wide set.
+      expect(g.fixtureIds).toHaveLength(1);
+    }
+    // Every fixture is covered, each by two groups (its two entrants).
+    expect(captured!.ruleGroups!.flatMap((g) => g.fixtureIds).sort()).toEqual([
+      "f1", "f1", "f2", "f2", "f3", "f3",
+    ]);
+  });
+
+  it("expands every_person across entrants, catching the player in two divisions", async () => {
+    let captured: SolveBuildInput | undefined;
+    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockImplementation(async (input) => {
+      captured = input;
+      return okOutcome();
+    });
+
+    // `alice` plays for E1 in D1 and for E3 in D2 — two entrants, one human.
+    // Her group must hold BOTH cards; an entrant-shaped expansion would split
+    // them across two groups and never see that she plays twice.
+    const fixtures = [
+      fx("f1", "E1", "E2", { divisionId: "D1", people: ["alice", "bob"] }),
+      fx("f2", "E3", "E4", { divisionId: "D2", people: ["alice", "carol"] }),
+    ];
+    const hard: HardConstraint[] = [
+      { type: "max_fixtures_per_day", count: 1, scope: { kind: "every_person" } },
+    ];
+
+    await buildSchedule({ fixtures, config: { ...cfg(), hard } });
+    expect(captured).toBeDefined();
+
+    const groups = captured!.ruleGroups!;
+    // alice, bob, carol — one group each.
+    expect(groups).toHaveLength(3);
+    const sizes = groups.map((g) => g.fixtureIds.slice().sort()).sort((a, b) => b.length - a.length);
+    expect(sizes[0]).toEqual(["f1", "f2"]); // alice, spanning both divisions
+    expect(sizes[1]).toHaveLength(1);
+    expect(sizes[2]).toHaveLength(1);
+  });
 
   // THE ANTI-FORK ASSERTION. Written as a comparison against
   // `scopeCoversFixture` itself, not a hand-listed set: the row shape below is

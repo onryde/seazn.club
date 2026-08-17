@@ -61,6 +61,8 @@
   "board.ai.preview.scope.in": "en {name}",
   "board.ai.preview.scope.for": "para {name}",
   "board.ai.preview.scope.partial": "solo en una parte de la competición",
+  "board.ai.preview.scope.everyEntrant": "para cada equipo o pareja",
+  "board.ai.preview.scope.everyPerson": "para cada jugador",
   "board.ai.preview.selector.terminal": "la final",
   "board.ai.preview.selector.extKey": "el partido {key}",
   "board.ai.preview.selector.match": "ese partido",

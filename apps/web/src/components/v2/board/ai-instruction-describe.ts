@@ -160,6 +160,14 @@ function constraintScopeClause(
   names: NameLookup,
 ): string | null {
   if (scope.kind === "competition") return null;
+  // The UNIVERSAL scopes are handled BEFORE the name lookup, because they have
+  // no id to look up. Falling through would hand them
+  // `board.ai.preview.scope.partial` — "part of the competition only" — which
+  // is the opposite of what they mean: they bind every entrant or every person
+  // on the board. Reading a universal rule back as a partial one is exactly the
+  // misunderstanding this whole feature exists to end.
+  if (scope.kind === "every_entrant") return msg("board.ai.preview.scope.everyEntrant");
+  if (scope.kind === "every_person") return msg("board.ai.preview.scope.everyPerson");
   const name = names(scope);
   if (!name) return msg("board.ai.preview.scope.partial");
   // A division or a pool is a place on the board; an entrant or a person is

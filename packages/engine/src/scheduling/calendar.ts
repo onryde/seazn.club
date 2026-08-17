@@ -508,7 +508,13 @@ export function slotFixtures(input: SlotInput): SlotResult {
   const ruleFixtureById = ruleFixtureIndex(config);
   /** Per-RULE day tallies for `max_fixtures_per_day`, index-aligned with
    *  `placementHard`. Per rule and not per day because two rules can cap the
-   *  same day at different numbers for different scopes. */
+   *  same day at different numbers for different scopes.
+   *
+   *  KEYED `${entityKey}|${ymd}`, not `${ymd}`: a universal scope needs one
+   *  counter per ENTITY per day, and a single fixture increments several of
+   *  them. Scopes that name their subject use the sentinel entity key `*`
+   *  (`entityKeysFor`), which is exactly the old one-counter-per-day behaviour
+   *  — so the key change costs the named scopes nothing. */
   const dayCounts = placementHard.map(() => new Map<string, number>());
   /** The instant a calendar day begins in the org zone. Never `+ 86_400_000`:
    *  a DST day is 23 or 25 hours long. */
@@ -563,7 +569,15 @@ export function slotFixtures(input: SlotInput): SlotResult {
   const countDay = (row: ScopeRow, rf: RuleFixture | undefined, startAt: number): void => {
     if (tz === undefined) return;
     const day = dayKeyInTz(startAt, tz);
-    for (const i of dayCapRulesFor(row, rf)) dayCounts[i]!.set(day, (dayCounts[i]!.get(day) ?? 0) + 1);
+    for (const i of dayCapRulesFor(row, rf)) {
+      // EVERY covered entity is incremented, not one bucket: under a universal
+      // scope this card counts against both entrants, or against every person
+      // on both sides.
+      for (const key of entityKeysFor(placementHard[i]!.scope, row)) {
+        const k = `${key}|${day}`;
+        dayCounts[i]!.set(k, (dayCounts[i]!.get(k) ?? 0) + 1);
+      }
+    }
   };
   // Seed from the rest of the board. A cap is a statement about how busy a day
   // is, and a day is exactly as busy as everything already on it — the same
@@ -590,12 +604,27 @@ export function slotFixtures(input: SlotInput): SlotResult {
     const day = dayKeyInTz(start, zone);
     const time = hhmmInTz(start, zone);
     let bound = start;
+    // ONE resolution, shared with the commit-time write in `countDay` — the
+    // invariant `dayCapRulesFor` was introduced for and, until now, only half
+    // held: the write called it, this read walked `placementHard` itself. The
+    // two agreed only because both called `scopeCoversFixture` with the same
+    // arguments, which is a coincidence, not an invariant. The wall-clock and
+    // selector families keep the walk below because they are not tallied; only
+    // the cap has a counter, and only a counter can be indexed wrongly.
+    for (const i of dayCapRulesFor(row, rf)) {
+      const h = placementHard[i]!;
+      if (h.type !== "max_fixtures_per_day") continue;
+      // ANY covered entity already at its limit pushes the card, because the
+      // cap is a statement about each of them separately — one player being
+      // full is enough, even if their opponent has room.
+      const full = entityKeysFor(h.scope, row).some(
+        (key) => (dayCounts[i]!.get(`${key}|${day}`) ?? 0) >= h.count,
+      );
+      if (full) bound = Math.max(bound, dayStart(ymdAddDays(day, 1)));
+    }
     for (let i = 0; i < placementHard.length; i++) {
       const h = placementHard[i]!;
       if (!scopeCoversFixture(h.scope, rf, row)) continue;
-      if (h.type === "max_fixtures_per_day") {
-        if ((dayCounts[i]!.get(day) ?? 0) >= h.count) bound = Math.max(bound, dayStart(ymdAddDays(day, 1)));
-      }
       // WALL-CLOCK bounds in the org zone, never instants (constraints.ts:56).
       // Compared with the same `<` / `>` the verifier uses, so a start landing
       // exactly ON the bound is legal to both — an off-by-one here would place
@@ -954,6 +983,40 @@ export function scopeCoversFixture(
       return a.entrants.includes(scope.entrantId);
     case "person":
       return a.people.includes(scope.personKey);
+    case "every_entrant":
+    case "every_person":
+      // Universal scopes bind EVERY row — but this `true` is the least
+      // interesting thing about them and is not, on its own, an
+      // implementation. "Each entrant at most twice a day" and "the
+      // competition at most twice a day" both answer `true` here and are
+      // completely different rules; what separates them is the TALLY KEY, and
+      // that lives in `entityKeysFor`. A caller that tallies on this predicate
+      // alone has written a competition-wide cap.
+      return true;
+  }
+}
+
+/** The entities a `max_fixtures_per_day` rule counts a row against.
+ *
+ *  One element — the sentinel `*` — for every scope that NAMES its subject,
+ *  which reproduces the old one-counter-per-rule-per-day behaviour exactly. N
+ *  elements for a universal scope, because there the cap is a statement about
+ *  each entity SEPARATELY and a single fixture increments several counters at
+ *  once (both entrants, or every person on both sides).
+ *
+ *  Exported and deliberately the ONLY implementation: the greedy placer, the
+ *  verifier and the wire's `buildRuleGroups` must key their tallies
+ *  identically. Two copies of this function is precisely how a placer and a
+ *  verifier fork, and the fork would be invisible — both copies correct on the
+ *  day they were written, drifting on the day one of them was edited. */
+export function entityKeysFor(scope: ConstraintScope, row: ScopeRow): readonly string[] {
+  switch (scope.kind) {
+    case "every_entrant":
+      return row.entrants;
+    case "every_person":
+      return row.people;
+    default:
+      return ["*"];
   }
 }
 
@@ -1138,21 +1201,34 @@ if (tz !== undefined) {
     if (h.type === "max_fixtures_per_day") {
       // Counted over the WHOLE board. A cap is a statement about how busy a day
       // is, and a day is exactly as busy as everything already on it.
-      const perDay = new Map<string, { movable: Assignment[]; total: number }>();
+      // Bucketed `${entityKey}|${ymd}`, the SAME key the placer's `dayCounts`
+      // uses — one `entityKeysFor`, so the two sides cannot disagree about what
+      // a cap counts. Named scopes collapse to the sentinel `*` and behave
+      // exactly as before.
+      const perDay = new Map<string, { movable: Assignment[]; total: number; day: string }>();
       for (const a of [...existing.filter((e) => fixtureById.has(e.fixtureId)), ...assignments]) {
         if (!scopeCoversFixture(h.scope, fixtureById.get(a.fixtureId), a)) continue;
-        const key = dayKeyInTz(a.startAt, tz);
-        const bucket = perDay.get(key) ?? { movable: [], total: 0 };
-        bucket.total++;
-        if (placedById.has(a.fixtureId)) bucket.movable.push(a);
-        perDay.set(key, bucket);
+        const day = dayKeyInTz(a.startAt, tz);
+        for (const entity of entityKeysFor(h.scope, a)) {
+          const key = `${entity}|${day}`;
+          const bucket = perDay.get(key) ?? { movable: [], total: 0, day };
+          bucket.total++;
+          if (placedById.has(a.fixtureId)) bucket.movable.push(a);
+          perDay.set(key, bucket);
+        }
       }
-      for (const [day, { movable, total }] of perDay) {
+      // One card can be over its cap on TWO entities at once — both players in
+      // a match having a full day. That is one problem, not two, so a card is
+      // reported once per day rather than once per entity it breached.
+      const reported = new Set<string>();
+      for (const { movable, total, day } of perDay.values()) {
         if (total <= h.count) continue;
         // Reported on the cards this run can actually move. A day pushed over
         // by immovable fixtures alone yields no row — there is nothing here to
         // repair, and a conflict on a card nobody can drag is noise.
         for (const a of movable) {
+          if (reported.has(`${a.fixtureId}|${day}`)) continue;
+          reported.add(`${a.fixtureId}|${day}`);
           conflicts.push({
             fixtureId: a.fixtureId,
             reason: "instruction",

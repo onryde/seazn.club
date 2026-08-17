@@ -68,6 +68,15 @@ const SpanEnd = z.object({
 const Scope = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("competition") }),
   z.object({ kind: z.literal("division"), divisionId: z.string().min(1) }),
+  // The UNIVERSAL scopes are admitted here while `entrant`/`person`/`pool` stay
+  // out, and the reason is the objection above rather than an exception to it:
+  // those three need an ID the model was never shown, so it can only invent
+  // one, and an invented id matches no fixture. These two carry NO id. "Every
+  // player" is fully expressible from a competition-level context — nothing is
+  // added to `ParserContext`, nothing can be invented, and what the organiser
+  // is told was compiled is exactly what the engine enforces.
+  z.object({ kind: z.literal("every_entrant") }),
+  z.object({ kind: z.literal("every_person") }),
 ]);
 
 /** No `round`, no `id`, and — since 2026-08-16 — no `ext_key` either. Round
@@ -229,12 +238,21 @@ The run length and the lunch break both have a form. The morning/afternoon split
 does not: max_fixtures_per_day counts a WHOLE day, so compiling it as 5 would
 state a rule the organiser never gave.
 7. Tolerate typos and broken grammar; compile the evident intent.
-8. A scope is ONLY the whole competition or a division id you were given. There
-   is no scope for one team, one player or one pool. In particular a PER-PLAYER
-   cap ("no player plays more than 2 matches a day", "each team twice a day")
-   is NOT max_fixtures_per_day, which counts the whole scope's fixtures on a
-   day. Put per-player and per-team caps in unparsed VERBATIM. Only a cap on
-   how many fixtures RUN in a day is max_fixtures_per_day.
+8. A scope is the whole competition, a division id you were given, or one of the
+   two UNIVERSAL scopes. There is still no scope naming ONE team, ONE player or
+   ONE pool — you were given no ids for those, so a rule about a single named
+   entrant goes to unparsed VERBATIM.
+   A per-player or per-team daily cap HAS a scope and is max_fixtures_per_day:
+     "no player plays more than 2 matches a day"  -> scope {"kind":"every_person"}
+     "each pair plays twice a day at most"        -> scope {"kind":"every_entrant"}
+   Choose every_person when the organiser names a HUMAN ("player", "person",
+   "nobody", "she"); choose every_entrant when they name an ENTRY ("team",
+   "pair", "doubles", "side"). A player entered in two events is two entrants
+   and one person, so "player" means every_person.
+   These count EACH entity separately. {"kind":"competition"} is a different
+   rule — how many fixtures RUN in a day in total. Never use competition scope
+   for per-player wording: on a 60-player event that caps the whole day at two
+   matches. Both can be given at once and do not conflict.
 
 Example A
 instruction: "schedule two matches per day and hav a gap 45 mins at at least and
@@ -502,8 +520,18 @@ const resolveDateRef = (ref: DateRef, clock: Clock): string =>
 
 const MS_PER_DAY = 86_400_000;
 
+/** The scope's identity for rivalry purposes. `scope.kind` for everything that
+ *  is not division-qualified — NOT a literal `"competition"` fallback.
+ *
+ *  Identical for the two kinds that existed when this was written, and the
+ *  distinction matters the moment a third appears: a universal per-player cap
+ *  and a whole-run cap are DIFFERENT rules that can both hold ("no player plays
+ *  more than 2 a day" AND "run at most 8 matches a day"), and collapsing both
+ *  to "competition" would make `conflictKeyOf` call them rivals and refuse one
+ *  of the two. `every_entrant` and `every_person` would likewise have collided
+ *  with each other. */
 const scopeKey = (scope: { kind: string; divisionId?: string }): string =>
-  scope.kind === "division" ? `division:${scope.divisionId}` : "competition";
+  scope.kind === "division" ? `division:${scope.divisionId}` : scope.kind;
 
 /** The identity a rule competes for. Two rules sharing one cannot both hold.
  *  `null` means the type permits many at once and is never in conflict:
@@ -749,6 +777,23 @@ export function resolveParsed(
     }
   }
 
+  // A universal cap is a real TIGHTENING and its failure mode is silent: a
+  // 60-player one-day event capped at 2 a day may simply have no legal board,
+  // and what the organiser meets is unschedulable fixtures rather than a
+  // reason. Say it was applied, BEFORE they meet that.
+  for (const h of kept) {
+    if (h.type !== "max_fixtures_per_day") continue;
+    if (h.scope.kind === "every_person") {
+      assumptions.push(
+        `applied a limit of ${h.count} match${h.count === 1 ? "" : "es"} a day for each PLAYER — counted per person, so someone entered in two events is still held to ${h.count}`,
+      );
+    } else if (h.scope.kind === "every_entrant") {
+      assumptions.push(
+        `applied a limit of ${h.count} match${h.count === 1 ? "" : "es"} a day for each TEAM or PAIR — counted per entry, so one player entered twice may still play more`,
+      );
+    }
+  }
+
   // Feasibility-aware reading. "from tomorrow till Friday" when tomorrow IS
   // Friday literally means one day; if a per-day cap cannot hold the fixture
   // count in that many days, take the next weekly reading — and SAY SO, so the
@@ -758,6 +803,11 @@ export function resolveParsed(
     // COMPETITION-scoped caps only. A division-scoped 1/day bounds that
     // division, not the run, and using it here would extend everybody's window
     // by a week on the strength of a rule most fixtures are not subject to.
+    // The UNIVERSAL scopes are excluded for a different reason worth stating,
+    // because it looks like an omission: "each player at most 2 a day" binds
+    // every fixture, but it does NOT bound how many run in a day — different
+    // people play at the same time on different courts. It is not a throughput
+    // cap and must not extend the window.
     const cap = kept.reduce<number | null>(
       (m, h) =>
         h.type === "max_fixtures_per_day" && h.scope.kind === "competition"
