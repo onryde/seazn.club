@@ -830,23 +830,29 @@ export function PadHostV3(props: PadHostV3Props) {
           // this wave already fixed three times.
           resolveDetail={
             props.skin.activityDetail
-              ? // R2b (owner ruling, freeHit chip removal): `history` is
-                // forwarded verbatim from ActivityPanel's own call (it
-                // already resolves per-row history — `priorActivityEvents`,
-                // activity.tsx). `view.cfg` and `personNames` are CAPTURED
-                // from this closure's own enclosing scope, not passed
-                // through ActivityPanel's own prop contract at all — both
-                // are static per render (not a per-row fact), and this keeps
+              ? // R2b-cricket-over review fix (item 1): builds the single
+                // `ActivityDetailContext` object (types.ts) the skin's
+                // `activityDetail` now takes, instead of seven positional
+                // arguments. `history` is forwarded verbatim from
+                // ActivityPanel's own call (it already resolves per-row
+                // history — `priorActivityEvents`, activity.tsx; item 2
+                // removed the separate `prev` argument this used to also
+                // forward — a skin derives that single fact itself from
+                // `history`'s own last element, see ActivityDetailContext's
+                // doc). `view.cfg` and `personNames` are CAPTURED from this
+                // closure's own enclosing scope, not passed through
+                // ActivityPanel's own prop contract at all — both are static
+                // per render (not a per-row fact), and this keeps
                 // ActivityPanel itself from ever having to learn either
-                // exists (SkinDefV3.activityDetail's own doc explains why).
-                // `personNames` (R2b, owner ruling, live-tile audit wave —
-                // "name the bowler"): the SAME map this component already
-                // resolves above (`const personNames = props.personNames ??
-                // NO_NAMES`) for the ribbon and for `<ActivityPanel
-                // personNames={personNames}>` itself — no new plumbing, just
-                // one more forward at a boundary `cfg` already crosses.
-                (eventType, payload, prev, history) =>
-                  props.skin.activityDetail!(t, eventType, payload, prev, history, view.cfg, personNames)
+                // exists. `personNames` (R2b, owner ruling, live-tile audit
+                // wave — "name the bowler"): the SAME map this component
+                // already resolves above (`const personNames =
+                // props.personNames ?? NO_NAMES`) for the ribbon and for
+                // `<ActivityPanel personNames={personNames}>` itself — no
+                // new plumbing, just one more forward at a boundary `cfg`
+                // already crosses.
+                (eventType, payload, history) =>
+                  props.skin.activityDetail!({ t, eventType, payload, history, cfg: view.cfg, personNames })
               : undefined
           }
         />

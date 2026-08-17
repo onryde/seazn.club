@@ -12,7 +12,7 @@ import {
   activityRowState,
   isVoidableEventType,
   orderedActivity,
-  previousActivityEvent,
+  priorActivityEvents,
   ACTIVITY_SCROLL_AFTER_ROWS,
   ActivityPanel,
   type ActivityEvent,
@@ -164,20 +164,32 @@ describe("orderedActivity", () => {
 // renders NEWEST FIRST, so "previous" (older) is `rows[index + 1]`, never
 // `rows[index - 1]`; and a voided row must never stand in as "the
 // previous" event.
-describe("previousActivityEvent", () => {
-  it("walks to rows[index + 1] — the OLDER neighbour — never rows[index - 1]", () => {
+//
+// R2b-cricket-over review fix (item 2): `previousActivityEvent` (the
+// single-item lookup these tests used to call directly) is DELETED —
+// review proved it was always exactly `priorActivityEvents`'s own last
+// element (both walk `rows[index + 1..]`, skipping voided; the only
+// difference was direction/stopping point). These tests port the same
+// reversed-order and voided-skip traps onto the SURVIVING function,
+// reading its own last element where `previousActivityEvent` used to
+// return a single value directly — `priorActivityEvents`'s own return
+// shape carries `{type, payload}`, not `id`, so fixtures below distinguish
+// rows by a payload marker instead of by id.
+describe("priorActivityEvents", () => {
+  it("its LAST element is rows[index + 1] — the OLDER neighbour — never rows[index - 1]", () => {
     // Oldest → newest: a, b, c. orderedActivity reverses this to [c, b, a].
     const a = ev({ id: "a", seq: 1, payload: { bowler: "OLDEST" } });
     const b = ev({ id: "b", seq: 2, payload: { bowler: "MIDDLE" } });
     const c = ev({ id: "c", seq: 3, payload: { bowler: "NEWEST" } });
     const rows = orderedActivity([a, b, c]); // [c, b, a]
     // b sits at rows[1]. Its correct OLDER neighbour is a (rows[2]).
-    // Picking rows[index - 1] instead would wrongly return c (rows[0]) — a
+    // Picking rows[index - 1] instead would wrongly surface c (rows[0]) — a
     // different, detectably wrong event, which is why this fixture uses
     // three DISTINCT payloads rather than two.
-    const prev = previousActivityEvent(rows, 1);
-    expect(prev?.id).toBe("a");
-    expect(prev?.id).not.toBe("c");
+    const history = priorActivityEvents(rows, 1);
+    const prev = history[history.length - 1];
+    expect(prev?.payload.bowler).toBe("OLDEST");
+    expect(prev?.payload.bowler).not.toBe("NEWEST");
   });
 
   it("skips a voided row to reach the real previous ball beneath it", () => {
@@ -191,59 +203,67 @@ describe("previousActivityEvent", () => {
     const voidEvt = ev({ id: "v1", seq: 4, type: "core.void", voids: "b2" });
     const rows = orderedActivity([b1, b2, b3, voidEvt]); // [v1, b3, b2, b1]
     const b3Index = rows.findIndex((r) => r.id === "b3");
-    // Without the voided-skip this would wrongly return b2.
-    expect(previousActivityEvent(rows, b3Index)?.id).toBe("b1");
+    // Without the voided-skip this would wrongly end in b2.
+    const history = priorActivityEvents(rows, b3Index);
+    expect(history[history.length - 1]?.payload.bowler).toBe("REAL_PREV");
   });
 
   it("skips MULTIPLE consecutive voided rows, not just one", () => {
-    const real = ev({ id: "real", seq: 1 });
-    const v2 = ev({ id: "v2", seq: 2 });
-    const v3 = ev({ id: "v3", seq: 3 });
-    const current = ev({ id: "current", seq: 4 });
+    const real = ev({ id: "real", seq: 1, payload: { bowler: "REAL" } });
+    const v2 = ev({ id: "v2", seq: 2, payload: { bowler: "V2" } });
+    const v3 = ev({ id: "v3", seq: 3, payload: { bowler: "V3" } });
+    const current = ev({ id: "current", seq: 4, payload: { bowler: "CURRENT" } });
     const void2 = ev({ id: "void2", seq: 5, type: "core.void", voids: "v2" });
     const void3 = ev({ id: "void3", seq: 6, type: "core.void", voids: "v3" });
     const rows = orderedActivity([real, v2, v3, current, void2, void3]);
     const currentIndex = rows.findIndex((r) => r.id === "current");
-    expect(previousActivityEvent(rows, currentIndex)?.id).toBe("real");
+    const history = priorActivityEvents(rows, currentIndex);
+    expect(history[history.length - 1]?.payload.bowler).toBe("REAL");
   });
 
-  it("is undefined at the oldest row — nothing before it", () => {
+  it("is empty at the oldest row — nothing before it", () => {
     const a = ev({ id: "a", seq: 1 });
     const b = ev({ id: "b", seq: 2 });
     const rows = orderedActivity([a, b]); // [b, a]
-    expect(previousActivityEvent(rows, 1)).toBeUndefined();
+    expect(priorActivityEvents(rows, 1)).toEqual([]);
   });
 
-  it("is undefined when every older row is voided", () => {
+  it("is empty when every older row is voided", () => {
     const onlyPrev = ev({ id: "p", seq: 1 });
     const current = ev({ id: "c", seq: 2 });
-    const voidEvt = ev({ id: "v", seq: 3, type: "core.void", voids: "p" });
+    const voidEvt = ev({ id: "v", seq: 3, voids: "p" });
     const rows = orderedActivity([onlyPrev, current, voidEvt]); // [v, c, p]
     const currentIndex = rows.findIndex((r) => r.id === "c");
-    expect(previousActivityEvent(rows, currentIndex)).toBeUndefined();
+    expect(priorActivityEvents(rows, currentIndex)).toEqual([]);
   });
 });
 
 // R2b — proves the WIRING, not just the pure helper above: ActivityPanel
-// itself must compute and pass `prev` to `resolveDetail` correctly. A
+// itself must compute and pass `history` to `resolveDetail` correctly. A
 // helper that works in isolation but is never actually threaded through
 // the render is the exact "unit-tested, product-inert" shape this whole
 // panel's D1-D3 sign-off review already found three times.
-describe("ActivityPanel — prev wiring (R2b)", () => {
-  it("calls resolveDetail with the OLDER neighbour as the third argument, not the array-adjacent-by-index-minus-one row", () => {
+//
+// R2b-cricket-over review fix (item 2): renamed from "prev wiring" —
+// `resolveDetail`'s own 3rd parameter is now `history`, not a separate
+// `prev`; these tests check `history`'s own LAST element instead of a
+// dedicated 3rd-argument value, preserving the exact same reversed-order
+// and voided-skip trap coverage the original "prev wiring" tests pinned.
+describe("ActivityPanel — history wiring (R2b)", () => {
+  it("calls resolveDetail with a history array whose LAST element is the OLDER neighbour, not the array-adjacent-by-index-minus-one row", () => {
     const oldest = ev({ id: "oldest", seq: 1, payload: { bowler: "OLDEST" } });
     const middle = ev({ id: "middle", seq: 2, payload: { bowler: "MIDDLE" } });
     const newest = ev({ id: "newest", seq: 3, payload: { bowler: "NEWEST" } });
     const calls: Array<{
       payload: Record<string, unknown>;
-      prev?: { type: string; payload: Record<string, unknown> };
+      history?: readonly { type: string; payload: Record<string, unknown> }[];
     }> = [];
     const resolveDetail = (
       _type: string,
       payload: Record<string, unknown>,
-      prev?: { type: string; payload: Record<string, unknown> },
+      history?: readonly { type: string; payload: Record<string, unknown> }[],
     ): string | undefined => {
-      calls.push({ payload, prev });
+      calls.push({ payload, history });
       return undefined;
     };
     ActivityPanel({
@@ -255,25 +275,26 @@ describe("ActivityPanel — prev wiring (R2b)", () => {
       resolveDetail,
     });
     const middleCall = calls.find((c) => c.payload.bowler === "MIDDLE");
-    expect(middleCall?.prev?.payload.bowler).toBe("OLDEST");
-    expect(middleCall?.prev?.payload.bowler).not.toBe("NEWEST");
+    const prev = middleCall?.history?.[middleCall.history.length - 1];
+    expect(prev?.payload.bowler).toBe("OLDEST");
+    expect(prev?.payload.bowler).not.toBe("NEWEST");
   });
 
-  it("skips a voided row when resolving prev for the row above it", () => {
+  it("skips a voided row when resolving the nearest-older event for the row above it", () => {
     const real = ev({ id: "real", seq: 1, payload: { bowler: "REAL" } });
     const voided = ev({ id: "voided", seq: 2, payload: { bowler: "VOIDED" } });
     const current = ev({ id: "current", seq: 3, payload: { bowler: "CURRENT" } });
     const voidEvt = ev({ id: "v", seq: 4, type: "core.void", voids: "voided" });
     const calls: Array<{
       payload: Record<string, unknown>;
-      prev?: { type: string; payload: Record<string, unknown> };
+      history?: readonly { type: string; payload: Record<string, unknown> }[];
     }> = [];
     const resolveDetail = (
       _type: string,
       payload: Record<string, unknown>,
-      prev?: { type: string; payload: Record<string, unknown> },
+      history?: readonly { type: string; payload: Record<string, unknown> }[],
     ): string | undefined => {
-      calls.push({ payload, prev });
+      calls.push({ payload, history });
       return undefined;
     };
     ActivityPanel({
@@ -285,18 +306,19 @@ describe("ActivityPanel — prev wiring (R2b)", () => {
       resolveDetail,
     });
     const currentCall = calls.find((c) => c.payload.bowler === "CURRENT");
-    expect(currentCall?.prev?.payload.bowler).toBe("REAL");
+    const prev = currentCall?.history?.[currentCall.history.length - 1];
+    expect(prev?.payload.bowler).toBe("REAL");
   });
 
-  it("passes prev as undefined for the oldest row", () => {
+  it("passes an empty history for the oldest row", () => {
     const only = ev({ id: "only", seq: 1, payload: { bowler: "ONLY" } });
-    const calls: Array<{ prev?: { type: string; payload: Record<string, unknown> } }> = [];
+    const calls: Array<{ history?: readonly { type: string; payload: Record<string, unknown> }[] }> = [];
     const resolveDetail = (
       _type: string,
       _payload: Record<string, unknown>,
-      prev?: { type: string; payload: Record<string, unknown> },
+      history?: readonly { type: string; payload: Record<string, unknown> }[],
     ): string | undefined => {
-      calls.push({ prev });
+      calls.push({ history });
       return undefined;
     };
     ActivityPanel({
@@ -307,7 +329,7 @@ describe("ActivityPanel — prev wiring (R2b)", () => {
       t: T,
       resolveDetail,
     });
-    expect(calls[0]?.prev).toBeUndefined();
+    expect(calls[0]?.history).toEqual([]);
   });
 });
 

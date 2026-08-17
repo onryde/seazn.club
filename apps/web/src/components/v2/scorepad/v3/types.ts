@@ -421,6 +421,74 @@ export interface SwapSlot {
   buildEvent(off: string, on: string): TapEvent;
 }
 
+/**
+ * R2b-cricket-over review fix (item 1): the single object `SkinDefV3.
+ * activityDetail` takes, replacing what had grown to seven positional
+ * parameters. Field-for-field the same information the removed positional
+ * signature carried, MINUS `prev` (item 2 — review proved it redundant: a
+ * "previous event" lookup and a "every older event" lookup were computed
+ * from the IDENTICAL range with the identical voided-skip rule — see
+ * `history` below and `activity.tsx`'s `priorActivityEvents`; `prev` was
+ * always exactly `history`'s own last element, so a skin that needs it
+ * derives `history[history.length - 1]` itself instead of receiving a
+ * separate, independently-computed argument that can never actually
+ * disagree with `history`).
+ */
+export interface ActivityDetailContext {
+  /** Interpolating message lookup — same shape every other v3 chassis
+   *  renderer's own `t` prop takes. */
+  t: (key: string, vars?: Record<string, string | number>) => string;
+  /** The event's own type, e.g. `"cricket.ball"`. */
+  eventType: string;
+  /** The event's own payload. */
+  payload: Record<string, unknown>;
+  /**
+   * Every strictly OLDER, non-voided event before this row, OLDEST FIRST —
+   * the order a REPLAY-style derivation needs to walk forward through
+   * (`ActivityPanel`'s own `priorActivityEvents`, activity.tsx). The
+   * caller does not filter by event TYPE: it has no sport vocabulary to
+   * filter with, so this may contain structural rows (`core.start`, a
+   * sport's own non-ball event) — a skin that only cares about SOME event
+   * types (e.g. cricket comparing ball to ball) checks `.type` against its
+   * own closed set itself once it receives this, the same "chassis
+   * provides the mechanism, skin decides the policy" split every other
+   * optional member of `SkinDefV3` already takes. The caller also SKIPS
+   * voided rows — a voided delivery must never establish a fact like "the
+   * previous bowler", or undoing a ball would invent a change that never
+   * happened. Empty array at the oldest row, or when every older row is
+   * voided — never `undefined` for "nothing older" (only the whole
+   * `history` field itself is optional, for a pre-R2b call site that
+   * never computes it at all). A skin deriving a single "previous event"
+   * fact reads `history[history.length - 1]` itself (item 2 — see this
+   * interface's own header).
+   */
+  history?: readonly { type: string; payload: Record<string, unknown> }[];
+  /**
+   * `PadHostView.cfg` verbatim — `unknown`, same as every other view field
+   * a skin re-derives its own shape from. Exists because a per-row
+   * derivation can depend on a cfg-level fact no event payload carries on
+   * its own (cricket's free hit only arms at all when
+   * `cfg.ballsPerInnings !== null`, a format property, not a per-ball
+   * one). `ActivityPanel` itself never learns what `cfg` means or that
+   * this field exists — `pad-host.tsx`'s own `resolveDetail` closure
+   * captures `view.cfg` directly and forwards it here.
+   */
+  cfg?: unknown;
+  /**
+   * `PadHostView.personNames` verbatim — a static, closure-captured data
+   * bag `pad-host.tsx`'s own `resolveDetail` closure forwards alongside
+   * `view.cfg`, never a resolver FUNCTION threaded through the contract.
+   * Exists so a skin can turn a raw person id on the payload (e.g.
+   * cricket's `bowler`) into a display name instead of a name-free note.
+   * A skin that resolves a name from this MUST fall back to something
+   * sane (e.g. `t("eventCopy.unknownPerson")`) and must NEVER render the
+   * raw id — unlike `ActivityPanel`'s own `nameOf` (`personNames[id] ??
+   * id`), which is safe only because its output never reaches a skin's
+   * own composed prose.
+   */
+  personNames?: Readonly<Record<string, string>>;
+}
+
 export interface SkinDefV3<View = unknown> {
   key: string;
   tapModel: TapModel;
@@ -518,95 +586,16 @@ export interface SkinDefV3<View = unknown> {
    * `WhoLine.servingLabel` skin-supplied). Returns `undefined` when the skin
    * has nothing to add, which leaves the static caption untouched.
    *
-   * `prev` (R2b, owner request — "show when the bowler changed"): the
-   * PREVIOUS event in real chronological time — OLDER, never the previous
-   * ARRAY INDEX. `ActivityPanel` (activity.tsx) renders rows NEWEST FIRST
-   * (`orderedActivity`'s own doc), so for `rows[i]` this is `rows[i+1]`,
-   * never `rows[i-1]` — getting that backwards silently annotates the WRONG
-   * event while still looking plausible on screen. The caller also SKIPS
-   * voided rows when picking this candidate (`previousActivityEvent`,
-   * activity.tsx) — a voided delivery must never establish a fact like "the
-   * previous bowler", or undoing a ball would invent a change that never
-   * happened. What the caller does NOT do is filter by event TYPE: it has
-   * no sport vocabulary to filter with, so `prev` may be a structural row
-   * (`core.start`, a sport's own non-ball event, even a `core.void` marker)
-   * sitting immediately before this one. A skin that only cares about SOME
-   * event types (e.g. cricket comparing ball to ball) checks `prev.type`
-   * against its own closed set itself once it receives this — the same
-   * "chassis provides the mechanism, skin decides the policy" split every
-   * other optional member here already takes. `undefined` at the oldest
-   * row, or when every older row is voided — a skin must treat that as
-   * "nothing to compare", never crash and never claim a change. Optional
-   * and additive-only: every pre-R2b call site omits this 4th argument
-   * entirely and keeps compiling and behaving identically, and the other
-   * ten skins that decline to implement `activityDetail` at all are
-   * unaffected either way.
-   *
-   * `history` (R2b, owner ruling, freeHit chip removal): every strictly
-   * OLDER, non-voided event before this row, OLDEST FIRST -- the order a
-   * REPLAY-style derivation needs to walk forward through. `prev` above
-   * carries only the immediate neighbour, insufficient for a rule that must
-   * walk back past more than one row (cricket's free hit: a wide never
-   * consumes it, so "was this delivery a free hit" can require looking past
-   * several rows to find the last LEGAL one) -- rather than stretching
-   * `prev`'s own single-item shape, this is a second, separate, additive
-   * parameter. Same division of labour `prev` already establishes: the
-   * caller does not filter by event type, and skips voided rows the same
-   * way -- see `ActivityPanel`'s `priorActivityEvents` (activity.tsx), which
-   * generalizes `previousActivityEvent`'s own voided-skip logic from "the
-   * nearest one" to "every one".
-   *
-   * `cfg` (R2b, same ruling): `PadHostView.cfg` verbatim -- `unknown`, same
-   * as every other view field a skin re-derives its own shape from. Exists
-   * because a per-row derivation can depend on a cfg-level fact no event
-   * payload carries on its own (cricket's free hit only arms at all when
-   * `cfg.ballsPerInnings !== null`, a format property, not a per-ball one).
-   * `ActivityPanel` itself never learns what `cfg` means or that this
-   * parameter exists -- `pad-host.tsx`'s own `resolveDetail` closure
-   * captures `view.cfg` directly and forwards it here, so this stays purely
-   * a skin<->host concern, same "chassis provides the mechanism, skin
-   * decides the policy" split every other optional member here takes.
-   *
-   * Both optional/additive: every pre-R2b caller, and every skin besides
-   * cricket, omits them and keeps compiling and behaving identically.
-   * `undefined` on either means "cannot determine" -- never a guess; the
-   * same "omitting is always safe" posture the owner's ruling on
-   * `payload.freeHit` itself established for the dispatched-event side of
-   * this exact feature.
-   *
-   * `personNames` (R2b, owner ruling, live-tile audit wave -- "name the
-   * bowler"): `PadHostView.personNames` verbatim -- same shape as `cfg`
-   * immediately above, not a new kind of parameter: a static,
-   * closure-captured data bag `pad-host.tsx`'s own `resolveDetail` closure
-   * forwards alongside `view.cfg`, never a resolver FUNCTION threaded
-   * through the contract (that would be a genuinely new direction for this
-   * method, unlike handing over one more read-only field it already has in
-   * scope). Exists because `cricketBallDetail`'s bowler-changed note used to
-   * be NAME-FREE by design -- it received `t` but no way to turn the raw
-   * `bowler` id on the payload into a display name, so the note read "New
-   * bowler" with nobody named. `ActivityPanel` (activity.tsx) already
-   * carries this exact map (its own `nameOf`), which is what "the resolver
-   * is on the CHASSIS side of the seam" means in practice: no new plumbing
-   * from the DOM down, only one more argument at the same host<->skin
-   * boundary `cfg` already crosses. A skin that resolves a name from this
-   * MUST fall back to something sane (e.g. `t("eventCopy.unknownPerson")`,
-   * the same fallback `bowlerBlockMessage`, cricket.tsx, already uses for
-   * this exact bowler-naming problem elsewhere in the same file) and must
-   * NEVER render the raw id -- unlike `ActivityPanel`'s own `nameOf`
-   * (`personNames[id] ?? id`), which is safe only because its output never
-   * reaches a skin's own composed prose. Optional/additive: every
-   * pre-existing call site, and every skin besides cricket, omits it and
-   * keeps compiling and behaving identically.
+   * R2b-cricket-over review fix (item 1): takes a SINGLE `ActivityDetailContext`
+   * object (below) rather than positional parameters. This grew to seven
+   * positional params one fix round at a time — `cfg?: unknown` sat sixth
+   * among four trailing optionals, and since TypeScript types callbacks
+   * POSITIONALLY, a skin author who reordered params would get a silently
+   * type-safe wrong call (`unknown` accepts anything). Collapsing to one
+   * object makes every field self-naming at the call site instead. See
+   * `ActivityDetailContext`'s own doc for what each field means.
    */
-  activityDetail?(
-    t: (key: string, vars?: Record<string, string | number>) => string,
-    eventType: string,
-    payload: Record<string, unknown>,
-    prev?: { type: string; payload: Record<string, unknown> },
-    history?: readonly { type: string; payload: Record<string, unknown> }[],
-    cfg?: unknown,
-    personNames?: Readonly<Record<string, string>>,
-  ): string | undefined;
+  activityDetail?(ctx: ActivityDetailContext): string | undefined;
   /** Declares this skin's swap-sheet integration (design §2.7) — `null`
    *  when a swap is not applicable right now (e.g. no sub currently legal
    *  to OFFER, as opposed to legal-but-refused, which is `policyOk: false`

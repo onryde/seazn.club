@@ -142,14 +142,15 @@ export function orderedActivity(events: readonly ActivityEvent[]): ActivityEvent
 }
 
 /**
- * R2b (owner request — "show when the bowler changed"): the nearest OLDER
- * event before `rows[index]`, skipping voided rows. `rows` is
- * `orderedActivity`'s own NEWEST-FIRST output, so "older" walks FORWARD
- * through the array — `rows[index + 1]`, `rows[index + 2]`, … — never
- * `index - 1` (that direction is NEWER, the opposite of what "previous"
- * means here; this exact reversal is easy to get backwards and still look
- * plausible on screen, which is why it is pinned by a discriminating test
- * rather than just asserted).
+ * R2b (owner ruling, freeHit chip removal): every strictly-older, non-voided
+ * event before `rows[index]`, OLDEST FIRST — the order a REPLAY-style
+ * derivation needs to walk forward through. `rows` is `orderedActivity`'s
+ * own NEWEST-FIRST output, so "older" walks FORWARD through the array —
+ * `rows[index + 1]`, `rows[index + 2]`, … — never `index - 1` (that
+ * direction is NEWER, the opposite of what "older" means here; this exact
+ * reversal is easy to get backwards and still look plausible on screen,
+ * which is why it is pinned by a discriminating test rather than just
+ * asserted).
  *
  * Skips voided rows for the same reason `activityRowState` derives
  * `voided` in the first place (`some((v) => v.voids === event.id)`,
@@ -161,46 +162,25 @@ export function orderedActivity(events: readonly ActivityEvent[]): ActivityEvent
  *
  * Deliberately does NOT filter by event type — this file is sport-
  * agnostic (this file's own header) and has no vocabulary to filter with.
- * The nearest non-voided row may be a structural event (`core.start`,
- * `core.void`, a sport's own non-ball type); a skin that only wants to
- * compare same-KIND events (e.g. cricket's ball-to-ball bowler check)
- * checks `.type` against its own closed set itself once it receives this
- * — same division of labour `SkinDefV3.activityDetail`'s own doc (types.ts)
- * describes.
+ * A row in this list may be a structural event (`core.start`, `core.void`,
+ * a sport's own non-ball type); a skin that only wants to compare same-KIND
+ * events (e.g. cricket's ball-to-ball bowler check) checks `.type` against
+ * its own closed set itself once it receives this — same division of
+ * labour `SkinDefV3.activityDetail`'s own doc (types.ts) describes.
  *
- * `undefined` at the oldest row, or when every remaining older row is
- * voided.
- */
-export function previousActivityEvent(
-  rows: readonly ActivityEvent[],
-  index: number,
-): ActivityEvent | undefined {
-  for (let i = index + 1; i < rows.length; i++) {
-    const candidate = rows[i]!;
-    const voided = rows.some((v) => v.voids === candidate.id);
-    if (!voided) return candidate;
-  }
-  return undefined;
-}
-
-/**
- * R2b (owner ruling, freeHit chip removal): generalizes `previousActivityEvent`
- * (above) from "the nearest older row" to "every older row" — same voided-
- * skip rule, same "not itself a filter by event type" posture (this file's
- * own header on `prev`/here). Needed because a skin's derivation can require
- * walking back past more than one row: cricket's free hit is consumed ONLY
- * by a LEGAL delivery, so "was this delivery a free hit" can mean walking
- * past a wide (which never consumes it) to find the last legal one — the
- * single-item `prev` this function's sibling returns is insufficient for
- * that, by design (see `SkinDefV3.activityDetail`'s own doc, types.ts, on
- * why `prev` is not stretched to cover this instead).
+ * `rows.length - 1` (the oldest surviving row) down to `index + 1` (the
+ * nearest older row) is exactly that oldest-first order — so the LAST
+ * element of the returned array (when non-empty) is the single nearest-
+ * older event a skin comparing consecutive events wants (R2b-cricket-over
+ * review fix, item 2: this function used to have a sibling,
+ * `previousActivityEvent`, returning exactly that one value directly —
+ * review proved the two were always computed from the identical range with
+ * the identical voided-skip rule, so `previousActivityEvent` was deleted as
+ * redundant; a caller derives its single "previous" fact as
+ * `history[history.length - 1]` instead).
  *
- * OLDEST FIRST — the opposite of `rows` itself (newest-first) and of
- * `previousActivityEvent`'s own single-item convention — because a skin
- * folding this into a "what's true as of this row" answer needs to REPLAY
- * forward through history, not backward. `rows.length - 1` (the oldest
- * surviving row) down to `index + 1` (the nearest older row) is exactly that
- * order.
+ * Empty array at the oldest row, or when every remaining older row is
+ * voided — this function is always total, never returns `undefined`.
  */
 export function priorActivityEvents(
   rows: readonly ActivityEvent[],
@@ -248,25 +228,25 @@ export interface ActivityPanelProps {
    * comment's own original suggestion) — `legacy-parity.test.ts`'s "3b"
    * case asserts the whole chain, not just this function in isolation.
    *
-   * Third parameter `prev` (R2b, owner request — "show when the bowler
-   * changed"): the PREVIOUS event, resolved by this file's own
-   * `previousActivityEvent` (above) — see that function's doc for the
-   * reversed-order/voided-skip mechanics, and `SkinDefV3.activityDetail`'s
-   * own doc (types.ts) for the full caller contract. Optional and additive
-   * here too: a `resolveDetail` implementation that only takes two
-   * parameters (every one written before R2b) keeps compiling and working
-   * unchanged — nothing requires a callee to declare every parameter a
-   * caller might pass.
+   * Third parameter `history` (R2b, owner ruling, freeHit chip removal):
+   * every strictly older, non-voided row before this one, OLDEST FIRST —
+   * `priorActivityEvents` (above). Optional and additive: a `resolveDetail`
+   * implementation that only takes two parameters keeps compiling and
+   * working unchanged.
    *
-   * `history` (R2b, owner ruling, freeHit chip removal): every strictly
-   * older, non-voided row before this one, OLDEST FIRST — `priorActivityEvents`
-   * (above). Optional and additive here too: a `resolveDetail` implementation
-   * written before R2b (only 3 params) keeps compiling and working unchanged.
+   * R2b-cricket-over review fix (item 2): this used to also take a fourth,
+   * separate `prev` parameter (the single nearest-older event, computed by
+   * this file's own since-deleted `previousActivityEvent`). Review proved
+   * `prev` was always exactly `history`'s own last element — both walked
+   * `rows[index + 1..]` with the identical voided-skip rule, so the two
+   * could never disagree or be independently absent. A caller that needs
+   * that single fact reads `history[history.length - 1]` itself; see
+   * `priorActivityEvents`'s own doc (above) and `SkinDefV3.
+   * activityDetail`/`ActivityDetailContext`'s own doc (types.ts).
    */
   resolveDetail?: (
     eventType: string,
     payload: Record<string, unknown>,
-    prev?: { type: string; payload: Record<string, unknown> },
     history?: readonly { type: string; payload: Record<string, unknown> }[],
   ) => string | undefined;
 }
@@ -305,12 +285,8 @@ export function ActivityPanel({
           {rows.map((event, index) => {
             const { voided, canVoid } = activityRowState(event, events, ownEventIds, deviceLinkId, !!onVoid);
             const payload = (event.payload ?? {}) as Record<string, unknown>;
-            const prevEvent = previousActivityEvent(rows, index);
-            const prev = prevEvent
-              ? { type: prevEvent.type, payload: (prevEvent.payload ?? {}) as Record<string, unknown> }
-              : undefined;
             const history = priorActivityEvents(rows, index);
-            const detail = resolveDetail?.(event.type, payload, prev, history);
+            const detail = resolveDetail?.(event.type, payload, history);
             const caption = buildRibbon(event.type, payload, nameOf, t, detail);
             return (
               <li

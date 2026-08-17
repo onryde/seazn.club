@@ -125,22 +125,26 @@ describe("legacy parity — capabilities the v3 chassis must not lose", () => {
 
   it("6. the bowler-changed activity note resolves a NAME, not a raw id — personNames is forwarded from host to skin", () => {
     // Same shape as 3b's own gap: `cricketBallDetail` shipping a
-    // `personNames` parameter with passing unit tests proves nothing about
+    // `personNames` field with passing unit tests proves nothing about
     // the product if `pad-host.tsx`'s own call site never forwards the real
     // map — exactly the "unit-tested function nothing calls" defect 3b
-    // exists to catch, one parameter over.
+    // exists to catch, one field over.
     const cricket = readFileSync(join(V3, "skins", "cricket.tsx"), "utf8");
     const types = readFileSync(join(V3, "types.ts"), "utf8");
-    // Non-greedy [\s\S]*? (not [^)]*): activityDetail's own first parameter
-    // (`t`) is itself an arrow-function TYPE with a `)` inside it
-    // (`(key: string, vars?: ...) => string`), so a paren-excluding class
-    // stops short of ever reaching personNames — found live, not assumed.
-    expect(types).toMatch(/activityDetail\?\([\s\S]*?personNames\?:/); // the contract accepts it
-    expect(cricket).toMatch(/function cricketBallDetail\([\s\S]*?personNames\?:/); // the skin reads it
-    // The host's own resolveDetail closure must pass personNames alongside
-    // cfg — not merely have it in scope (props.personNames is read for the
-    // ribbon and the ActivityPanel prop too; only the activityDetail call
-    // site proves THIS feature is wired).
-    expect(padHost).toMatch(/activityDetail!\(t, eventType, payload, prev, history, view\.cfg, personNames\)/);
+    // R2b-cricket-over review fix (item 1): `activityDetail` now takes a
+    // single `ActivityDetailContext` object (types.ts) instead of seven
+    // positional parameters — updated below to match. `personNames` is
+    // part of THAT object's own contract, not a positional parameter of
+    // `activityDetail` itself any more.
+    expect(types).toContain("interface ActivityDetailContext"); // the dedicated context type exists
+    expect(types).toMatch(/activityDetail\?\(ctx: ActivityDetailContext\)/); // the method takes it
+    expect(types).toMatch(/interface ActivityDetailContext \{[\s\S]*?personNames\?:/); // …and personNames is part of that contract
+    expect(cricket).toMatch(/function cricketBallDetail\(ctx: ActivityDetailContext\)/); // the skin reads the same object shape
+    expect(cricket).toContain("personNames"); // …and destructures personNames from it
+    // The host's own resolveDetail closure must build the context object
+    // with personNames alongside cfg — not merely have it in scope
+    // (props.personNames is read for the ribbon and the ActivityPanel prop
+    // too; only the activityDetail call site proves THIS feature is wired).
+    expect(padHost).toMatch(/activityDetail!\(\{[\s\S]*?\bt,[\s\S]*?\beventType,[\s\S]*?\bpayload,[\s\S]*?\bhistory,[\s\S]*?cfg:\s*view\.cfg,[\s\S]*?\bpersonNames[\s\S]*?\}\)/);
   });
 });

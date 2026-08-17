@@ -93,6 +93,7 @@ import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
   MORE_SHEET_KEY,
+  type ActivityDetailContext,
   type ContextStripSpec,
   type DockChip,
   type DockSpec,
@@ -749,56 +750,53 @@ export function freeHitPending(
  * generic `resolveDetail` leaves every other cricket row (toss/review/
  * retire/…) on its existing static caption untouched.
  *
- * `prev` (R2b, owner request — "show when the bowler changed"): the data
+ * R2b-cricket-over review fix (item 1): takes a single `ActivityDetailContext`
+ * object (../types.ts) — wired by DIRECT REFERENCE as `SkinDefV3.
+ * activityDetail: cricketBallDetail` (below, no wrapper), so this
+ * function's signature must match that contract exactly.
+ *
+ * `ctx.history` (R2b, owner ruling — freeHit chip removal): the data
  * already exists on every `cricket.ball`/`cricket.superover.ball` payload
- * (`bowler`, a person id) — this is a RENDERING change, not a new event.
- * When present AND its own `bowler` genuinely differs from THIS ball's
- * `bowler`, the base detail above gets a bowler-changed note APPENDED
- * (never replaces it — a wicket off the first ball of a new spell must
- * still read as a wicket) via `bowlerChanged`/the
- * `pad.cricket.ribbon.ball.bowlerChanged` key. See `SkinDefV3.
- * activityDetail`'s own doc (types.ts) for the full caller contract
- * (reversed-order/voided-skip mechanics, why `prev` may be a structural
- * row this file must reject itself). `bowlerChanged` below is what does
- * that rejection, via this file's own `BALL_EVENT_TYPES`.
+ * (`bowler`, a person id) — the bowler-changed note is a RENDERING change,
+ * not a new event. This function derives the single "previous ball" fact
+ * as `history`'s own LAST element (item 2 — review proved that is always
+ * exactly what the removed, separately-passed `prev` parameter carried;
+ * see `ActivityDetailContext`'s own doc, types.ts). When that derived
+ * event is a real ball AND its own `bowler` genuinely differs from THIS
+ * ball's `bowler`, the base detail above gets a bowler-changed note
+ * APPENDED (never replaces it — a wicket off the first ball of a new spell
+ * must still read as a wicket) via `bowlerChanged`/the
+ * `pad.cricket.ribbon.ball.bowlerChanged` key. `bowlerChanged` below
+ * rejects a structural row (e.g. `core.start`) via this file's own
+ * `BALL_EVENT_TYPES`.
+ *
+ * `ctx.history` is ALSO used, separately, for the free-hit note (R2b, owner
+ * ruling): when BOTH `history` and `cfg` are given, this ALSO appends a
+ * free-hit note — via the SAME `freeHitPending` fold (above) the read-only
+ * scorebug indicator uses, so the two can never disagree — wrapping
+ * whatever detail already exists (composes with the bowler-changed note
+ * above it, never replaces either). `history` must be every
+ * strictly-older, non-voided ball in the SAME innings, oldest first
+ * (`ActivityDetailContext`'s own doc, types.ts); `cfg` is `PadHostView.cfg`
+ * verbatim, re-derived here via `asCfg` like every other builder in this
+ * file. Either missing means "cannot determine" — no note, never a guess
+ * (`freeHitPending` is simply not called at all in that case).
  *
  * NAMED as of R2b follow-up (owner ruling, live-tile audit wave — "name the
- * bowler, not just 'New bowler'"): `personNames` (7th param, below) resolves
- * `bowler` (a raw id) to a display name — same shape as `history`/`cfg`
- * immediately below (an optional, additive, closure-captured data bag
- * `pad-host.tsx` forwards verbatim from `PadHostView.personNames`, not a new
- * kind of parameter — `ActivityPanel` already holds this exact map for its
- * own `nameOf`, so no new plumbing exists between the DOM and this call,
- * only one more forward at the boundary `cfg` already crosses). Falls back
- * to `t("eventCopy.unknownPerson")` on a missing/unresolved id — the SAME
- * fallback `bowlerBlockMessage` (this file, below) already uses for this
- * exact bowler-naming problem elsewhere — and NEVER the raw id: an
- * unresolved id in the activity log is worse than the name-free note it
- * replaces, so this function does not fall back to the id the way
- * `ActivityPanel`'s own `nameOf` (`personNames[id] ?? id`) safely can (that
- * fallback never reaches composed prose; this one would).
- *
- * `history`/`cfg` (R2b, owner ruling — freeHit chip removal): when BOTH are
- * given, this ALSO appends a free-hit note — via the SAME `freeHitPending`
- * fold (above) the read-only scorebug indicator uses, so the two can never
- * disagree — wrapping whatever detail already exists (composes with the
- * bowler-changed note above it, never replaces either). `history` must be
- * every strictly-older, non-voided ball in the SAME innings, oldest first
- * (`SkinDefV3.activityDetail`'s own doc, types.ts); `cfg` is
- * `PadHostView.cfg` verbatim, re-derived here via `asCfg` like every other
- * builder in this file. Either missing means "cannot determine" — no note,
- * never a guess (`freeHitPending` is simply not called at all in that case),
- * same as every pre-R2b 4-arg call site above.
+ * bowler, not just 'New bowler'"): `ctx.personNames` resolves `bowler` (a
+ * raw id) to a display name — same shape as `history`/`cfg` (an optional,
+ * additive, closure-captured data bag `pad-host.tsx` forwards verbatim from
+ * `PadHostView.personNames`). Falls back to `t("eventCopy.unknownPerson")`
+ * on a missing/unresolved id — the SAME fallback `bowlerBlockMessage` (this
+ * file, below) already uses for this exact bowler-naming problem
+ * elsewhere — and NEVER the raw id: an unresolved id in the activity log is
+ * worse than the name-free note it replaces, so this function does not
+ * fall back to the id the way `ActivityPanel`'s own `nameOf`
+ * (`personNames[id] ?? id`) safely can (that fallback never reaches
+ * composed prose; this one would).
  */
-export function cricketBallDetail(
-  t: TFn,
-  eventType: string,
-  payload: Record<string, unknown>,
-  prev?: { type: string; payload: Record<string, unknown> },
-  history?: readonly { type: string; payload: Record<string, unknown> }[],
-  cfg?: unknown,
-  personNames?: Readonly<Record<string, string>>,
-): string | undefined {
+export function cricketBallDetail(ctx: ActivityDetailContext): string | undefined {
+  const { t, eventType, payload, history, cfg, personNames } = ctx;
   if (!BALL_EVENT_TYPES.has(eventType)) return undefined;
   const p = payload as {
     wicket?: { kind?: string };
@@ -806,6 +804,10 @@ export function cricketBallDetail(
     bowler?: unknown;
   };
   let detail = baseBallDetail(t, p);
+  // Item 2: the single "previous ball" fact is `history`'s own last
+  // element — the nearest OLDER, non-voided event (`history` is
+  // oldest-first) — rather than a separately-passed `prev` argument.
+  const prev = history && history.length > 0 ? history[history.length - 1] : undefined;
   if (bowlerChanged(p.bowler, prev)) {
     // `bowlerChanged` above already proved `p.bowler` is a non-empty
     // string (its own doc) — re-narrowed here rather than cast, so this
@@ -842,7 +844,7 @@ function baseBallDetail(
  * True when `prev` is a real ball — `BALL_EVENT_TYPES`, never a
  * structural row (`core.start`, `cricket.innings.summary`) or a
  * `core.void` marker sitting between two real balls; `activity.tsx`'s own
- * `previousActivityEvent` does not filter by type, so this file must —
+ * `priorActivityEvents` does not filter by type, so this file must —
  * whose `bowler` genuinely differs from THIS ball's own `bowler`. Both
  * compared as raw ids (`CricketBall.bowler`, packages/engine), never
  * resolved to a name first, so two different people who happen to share a
@@ -850,6 +852,12 @@ function baseBallDetail(
  * id on either side (the bowling order not populated yet) never counts as
  * a change — that would misfire on the very first ball a bowler is ever
  * recorded for.
+ *
+ * Takes `prev` as a plain, already-derived value rather than `history`
+ * itself (R2b-cricket-over review fix, item 2) — `cricketBallDetail`
+ * above derives it as `history`'s own last element before calling this,
+ * so this function's own shape stays a trivial, self-contained "compare
+ * two ball payloads" check.
  */
 function bowlerChanged(bowler: unknown, prev?: { type: string; payload: Record<string, unknown> }): boolean {
   if (!prev || !BALL_EVENT_TYPES.has(prev.type)) return false;

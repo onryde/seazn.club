@@ -401,64 +401,78 @@ describe("freeHitPending", () => {
 // `ActivityPanel`'s `resolveDetail` prop calls to fill that gap; mirrors
 // `ballOutcomeSymbol`'s own decision order (wicket, then extras-by-kind,
 // then plain runs) but returns WORDS via `t`, not compact symbols.
+//
+// R2b-cricket-over review fix (item 1): `cricketBallDetail` now takes a
+// single `ActivityDetailContext` object (../../types.ts) instead of seven
+// positional parameters — every call site below passes `{ t, eventType,
+// payload, ... }` rather than positional args. Assertions are byte-
+// identical to before this rewrite; only the call shape changed.
 describe("cricketBallDetail", () => {
   it("returns undefined for a non-ball event type — the generic resolveDetail hook must not touch toss/review/retire/etc.", () => {
-    expect(cricketBallDetail(t, "cricket.toss", {})).toBeUndefined();
-    expect(cricketBallDetail(t, "cricket.review", {})).toBeUndefined();
+    expect(cricketBallDetail({ t, eventType: "cricket.toss", payload: {} })).toBeUndefined();
+    expect(cricketBallDetail({ t, eventType: "cricket.review", payload: {} })).toBeUndefined();
   });
 
   it("a dot ball", () => {
-    expect(cricketBallDetail(t, "cricket.ball", { runs: { bat: 0 } })).toBe(
+    expect(cricketBallDetail({ t, eventType: "cricket.ball", payload: { runs: { bat: 0 } } })).toBe(
       "pad.cricket.ribbon.ball.dot",
     );
   });
 
   it("a single run uses the singular copy, not '1 runs'", () => {
-    expect(cricketBallDetail(t, "cricket.ball", { runs: { bat: 1 } })).toBe(
+    expect(cricketBallDetail({ t, eventType: "cricket.ball", payload: { runs: { bat: 1 } } })).toBe(
       "pad.cricket.ribbon.ball.run",
     );
   });
 
   it("plural runs interpolate the count", () => {
-    expect(cricketBallDetail(t, "cricket.ball", { runs: { bat: 4 } })).toBe(
+    expect(cricketBallDetail({ t, eventType: "cricket.ball", payload: { runs: { bat: 4 } } })).toBe(
       'pad.cricket.ribbon.ball.runs({"runs":4})',
     );
   });
 
   it("a wicket reuses the ALREADY-TRANSLATED wicket-kind vocab (ENUM_VOCAB.kind) — no new dictionary key needed", () => {
     expect(
-      cricketBallDetail(t, "cricket.ball", { wicket: { kind: "bowled" }, runs: { bat: 0 } }),
+      cricketBallDetail({ t, eventType: "cricket.ball", payload: { wicket: { kind: "bowled" }, runs: { bat: 0 } } }),
     ).toBe("wicket.bowled");
   });
 
   it("an extra reuses the ALREADY-TRANSLATED extra-kind vocab", () => {
     expect(
-      cricketBallDetail(t, "cricket.ball", {
-        runs: { bat: 0, extras: { kind: "wide", runs: 1 } },
+      cricketBallDetail({
+        t,
+        eventType: "cricket.ball",
+        payload: { runs: { bat: 0, extras: { kind: "wide", runs: 1 } } },
       }),
     ).toBe("extra.wide");
   });
 
   it("wicket takes priority over extras when a dismissal happens to carry one (e.g. a run-out off a no-ball)", () => {
     expect(
-      cricketBallDetail(t, "cricket.ball", {
-        wicket: { kind: "runout" },
-        runs: { bat: 0, extras: { kind: "noball", runs: 1 } },
+      cricketBallDetail({
+        t,
+        eventType: "cricket.ball",
+        payload: {
+          wicket: { kind: "runout" },
+          runs: { bat: 0, extras: { kind: "noball", runs: 1 } },
+        },
       }),
     ).toBe("wicket.runout");
   });
 
   it("works identically for a super-over ball", () => {
-    expect(cricketBallDetail(t, "cricket.superover.ball", { runs: { bat: 6 } })).toBe(
+    expect(cricketBallDetail({ t, eventType: "cricket.superover.ball", payload: { runs: { bat: 6 } } })).toBe(
       'pad.cricket.ribbon.ball.runs({"runs":6})',
     );
   });
 
   it("three different outcomes produce THREE different detail strings — the actual D2 differentiation this exists for", () => {
-    const dot = cricketBallDetail(t, "cricket.ball", { runs: { bat: 0 } });
-    const four = cricketBallDetail(t, "cricket.ball", { runs: { bat: 4 } });
-    const wide = cricketBallDetail(t, "cricket.ball", {
-      runs: { bat: 0, extras: { kind: "wide", runs: 1 } },
+    const dot = cricketBallDetail({ t, eventType: "cricket.ball", payload: { runs: { bat: 0 } } });
+    const four = cricketBallDetail({ t, eventType: "cricket.ball", payload: { runs: { bat: 4 } } });
+    const wide = cricketBallDetail({
+      t,
+      eventType: "cricket.ball",
+      payload: { runs: { bat: 0, extras: { kind: "wide", runs: 1 } } },
     });
     expect(new Set([dot, four, wide]).size).toBe(3);
   });
@@ -467,62 +481,78 @@ describe("cricketBallDetail", () => {
 // R2b (owner request — "show when the bowler changed"): the data already
 // exists on every `cricket.ball` payload (`bowler`), so this is a
 // rendering change — `cricketBallDetail` compares the CURRENT ball's
-// bowler against the PREVIOUS one's (passed in via the optional 4th `prev`
-// parameter, `SkinDefV3.activityDetail`'s own widened contract, types.ts)
-// and APPENDS a note when they differ, rather than replacing the existing
-// dot/run/wicket/extra detail.
+// bowler against the PREVIOUS one's and APPENDS a note when they differ,
+// rather than replacing the existing dot/run/wicket/extra detail.
+//
+// R2b-cricket-over review fix (item 2): there is no separate `prev`
+// parameter any more — review PROVED `prev` was always exactly
+// `history`'s own last element (`activity.tsx`'s `priorActivityEvents`;
+// see `ActivityDetailContext`'s own doc, ../../types.ts). Every "previous
+// ball" fixture below is threaded in as a one-element (or last-element)
+// `history` array instead of a bare `prev` argument — `cricketBallDetail`
+// derives the comparison event itself from `history`'s last element
+// before calling `bowlerChanged`. Assertions are unchanged from before
+// this rewrite.
 //
 // R2b follow-up (owner ruling, live-tile audit wave — "name the bowler, not
 // just 'New bowler'"): the note now carries the RESOLVED display name via
-// the 7th, optional/additive `personNames` param — mirrors `cfg` (6th
-// param)'s own shape exactly (a static, closure-captured data bag
-// `pad-host.tsx` forwards verbatim), not a new kind of parameter. Falls back
-// to `t("eventCopy.unknownPerson")` on a missing/absent name — the SAME
-// fallback `bowlerBlockMessage` (cricket.tsx) already uses for the bowler
-// context slot — NEVER the raw personId, proved below by asserting the
-// output does not contain the id string at all, not merely that it takes
-// some other branch.
+// the optional/additive `personNames` field — mirrors `cfg`'s own shape
+// exactly (a static, closure-captured data bag `pad-host.tsx` forwards
+// verbatim). Falls back to `t("eventCopy.unknownPerson")` on a
+// missing/absent name — the SAME fallback `bowlerBlockMessage`
+// (cricket.tsx) already uses for the bowler context slot — NEVER the raw
+// personId, proved below by asserting the output does not contain the id
+// string at all, not merely that it takes some other branch.
 describe("cricketBallDetail — bowler-changed note (R2b)", () => {
   const ball = (bowler: string, extra: Record<string, unknown> = {}) => ({
     type: "cricket.ball",
     payload: { bowler, runs: { bat: 0 }, ...extra },
   });
   // R2b (owner ruling, live-tile audit defect 4 wave — "name the bowler"):
-  // the 7th, optional/additive `personNames` param — see this describe
-  // block's own new tests below for the id-genuinely-unknown fallback.
+  // the optional/additive `personNames` field — see this describe block's
+  // own new tests below for the id-genuinely-unknown fallback.
   const names = { b1: "Ravi Bowler", b2: "Sam Spinner" };
 
   it("the same bowler across consecutive balls — no note appended", () => {
     const prev = ball("b1");
-    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b1", runs: { bat: 1 } }, prev)).toBe(
-      "pad.cricket.ribbon.ball.run",
-    );
+    expect(
+      cricketBallDetail({ t, eventType: "cricket.ball", payload: { bowler: "b1", runs: { bat: 1 } }, history: [prev] }),
+    ).toBe("pad.cricket.ribbon.ball.run");
   });
 
   it("a different bowler — the note is appended onto the existing base detail, carrying the RESOLVED name", () => {
     const prev = ball("b1");
-    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b2", runs: { bat: 1 } }, prev, undefined, undefined, names)).toBe(
-      'pad.cricket.ribbon.ball.bowlerChanged({"detail":"pad.cricket.ribbon.ball.run","name":"Sam Spinner"})',
-    );
+    expect(
+      cricketBallDetail({
+        t,
+        eventType: "cricket.ball",
+        payload: { bowler: "b2", runs: { bat: 1 } },
+        history: [prev],
+        personNames: names,
+      }),
+    ).toBe('pad.cricket.ribbon.ball.bowlerChanged({"detail":"pad.cricket.ribbon.ball.run","name":"Sam Spinner"})');
   });
 
   it("a wicket off the first ball of a new spell still reads as a wicket — the note APPENDS, never replaces", () => {
     const prev = ball("b1");
-    const result = cricketBallDetail(
+    const result = cricketBallDetail({
       t,
-      "cricket.ball",
-      { bowler: "b2", wicket: { kind: "bowled" }, runs: { bat: 0 } },
-      prev,
-      undefined,
-      undefined,
-      names,
-    );
+      eventType: "cricket.ball",
+      payload: { bowler: "b2", wicket: { kind: "bowled" }, runs: { bat: 0 } },
+      history: [prev],
+      personNames: names,
+    });
     expect(result).toBe('pad.cricket.ribbon.ball.bowlerChanged({"detail":"wicket.bowled","name":"Sam Spinner"})');
   });
 
   it("no personNames given at all — falls back to the unknown-person copy, never the raw id", () => {
     const prev = ball("b1");
-    const result = cricketBallDetail(t, "cricket.ball", { bowler: "b2", runs: { bat: 1 } }, prev);
+    const result = cricketBallDetail({
+      t,
+      eventType: "cricket.ball",
+      payload: { bowler: "b2", runs: { bat: 1 } },
+      history: [prev],
+    });
     expect(result).toBe(
       'pad.cricket.ribbon.ball.bowlerChanged({"detail":"pad.cricket.ribbon.ball.run","name":"eventCopy.unknownPerson"})',
     );
@@ -531,15 +561,13 @@ describe("cricketBallDetail — bowler-changed note (R2b)", () => {
 
   it("a personNames map that does not cover the new bowler — same fallback, never the raw id", () => {
     const prev = ball("b1");
-    const result = cricketBallDetail(
+    const result = cricketBallDetail({
       t,
-      "cricket.ball",
-      { bowler: "b2", runs: { bat: 1 } },
-      prev,
-      undefined,
-      undefined,
-      { b1: "Ravi Bowler" }, // has b1, not the new bowler b2
-    );
+      eventType: "cricket.ball",
+      payload: { bowler: "b2", runs: { bat: 1 } },
+      history: [prev],
+      personNames: { b1: "Ravi Bowler" }, // has b1, not the new bowler b2
+    });
     expect(result).toBe(
       'pad.cricket.ribbon.ball.bowlerChanged({"detail":"pad.cricket.ribbon.ball.run","name":"eventCopy.unknownPerson"})',
     );
@@ -547,66 +575,93 @@ describe("cricketBallDetail — bowler-changed note (R2b)", () => {
   });
 
   it("no prev at all (first ball of an innings) does not crash and does not claim a change", () => {
-    expect(() => cricketBallDetail(t, "cricket.ball", { bowler: "b1", runs: { bat: 0 } })).not.toThrow();
-    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b1", runs: { bat: 0 } })).toBe(
+    expect(() =>
+      cricketBallDetail({ t, eventType: "cricket.ball", payload: { bowler: "b1", runs: { bat: 0 } } }),
+    ).not.toThrow();
+    expect(cricketBallDetail({ t, eventType: "cricket.ball", payload: { bowler: "b1", runs: { bat: 0 } } })).toBe(
       "pad.cricket.ribbon.ball.dot",
     );
-    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b1", runs: { bat: 0 } }, undefined)).toBe(
-      "pad.cricket.ribbon.ball.dot",
-    );
+    expect(
+      cricketBallDetail({
+        t,
+        eventType: "cricket.ball",
+        payload: { bowler: "b1", runs: { bat: 0 } },
+        history: undefined,
+      }),
+    ).toBe("pad.cricket.ribbon.ball.dot");
   });
 
   it("a structural prev (core.start) is never treated as 'the previous ball' — no note, even though its own payload happens to carry a same-named field", () => {
     const prev = { type: "core.start", payload: { bowler: "b1" } };
-    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b2", runs: { bat: 0 } }, prev)).toBe(
-      "pad.cricket.ribbon.ball.dot",
-    );
+    expect(
+      cricketBallDetail({ t, eventType: "cricket.ball", payload: { bowler: "b2", runs: { bat: 0 } }, history: [prev] }),
+    ).toBe("pad.cricket.ribbon.ball.dot");
   });
 
   it("a cricket.innings.summary prev (structural, not a ball) is likewise never treated as the previous ball", () => {
     const prev = { type: "cricket.innings.summary", payload: { bowler: "b1" } };
-    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b2", runs: { bat: 0 } }, prev)).toBe(
-      "pad.cricket.ribbon.ball.dot",
-    );
+    expect(
+      cricketBallDetail({ t, eventType: "cricket.ball", payload: { bowler: "b2", runs: { bat: 0 } }, history: [prev] }),
+    ).toBe("pad.cricket.ribbon.ball.dot");
   });
 
   it("cricket.ball and cricket.superover.ball both count as BALL_EVENT_TYPES for this comparison", () => {
     const prev = ball("b1");
     expect(
-      cricketBallDetail(t, "cricket.superover.ball", { bowler: "b2", runs: { bat: 0 } }, prev, undefined, undefined, names),
+      cricketBallDetail({
+        t,
+        eventType: "cricket.superover.ball",
+        payload: { bowler: "b2", runs: { bat: 0 } },
+        history: [prev],
+        personNames: names,
+      }),
     ).toBe('pad.cricket.ribbon.ball.bowlerChanged({"detail":"pad.cricket.ribbon.ball.dot","name":"Sam Spinner"})');
   });
 
   it("an empty-string bowler on either side never counts as a change — the bowling order not populated yet", () => {
     const prevEmpty = { type: "cricket.ball", payload: { bowler: "", runs: { bat: 0 } } };
-    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b1", runs: { bat: 0 } }, prevEmpty)).toBe(
-      "pad.cricket.ribbon.ball.dot",
-    );
+    expect(
+      cricketBallDetail({
+        t,
+        eventType: "cricket.ball",
+        payload: { bowler: "b1", runs: { bat: 0 } },
+        history: [prevEmpty],
+      }),
+    ).toBe("pad.cricket.ribbon.ball.dot");
 
     const prevReal = ball("b1");
-    expect(cricketBallDetail(t, "cricket.ball", { bowler: "", runs: { bat: 0 } }, prevReal)).toBe(
-      "pad.cricket.ribbon.ball.dot",
-    );
+    expect(
+      cricketBallDetail({
+        t,
+        eventType: "cricket.ball",
+        payload: { bowler: "", runs: { bat: 0 } },
+        history: [prevReal],
+      }),
+    ).toBe("pad.cricket.ribbon.ball.dot");
   });
 });
 
 // R2b (owner ruling, live-tile audit — freeHit chip removal): the activity
 // log's own free-hit label, via the SAME `freeHitPending` fold the indicator
 // uses (see that describe block's own header for the correctness trap and
-// the innings-boundary reset). `history` (5th param, optional/additive —
-// every pre-existing 4-arg call site above keeps compiling and behaving
-// identically) is every STRICTLY OLDER, non-voided event, OLDEST FIRST —
-// `ActivityPanel`'s own `priorActivityEvents` (activity.tsx), generalizing
-// `previousActivityEvent` from "the nearest one" to "every one", since
-// walking back to the last LEGAL delivery can require looking past more than
-// just the immediate neighbour (`prev`'s own — insufficient — one-item
-// shape). `cfg` (6th param, also optional/additive) is `PadHostView.cfg`
-// verbatim, re-derived the same `asCfg()` way every other builder in this
-// file already does — needed only for `ballsPerInnings !== null`
-// (whiteBall), a fact no ball payload carries on its own. Both undefined
-// (the pre-existing call shape) means "cannot determine" — never claims a
-// free hit on a guess, same "omitting is always safe" posture the owner's
-// ruling on `payload.freeHit` itself already established.
+// the innings-boundary reset). `history` (optional/additive) is every
+// STRICTLY OLDER, non-voided event, OLDEST FIRST — `ActivityPanel`'s own
+// `priorActivityEvents` (activity.tsx), which can require walking back past
+// more than just the immediate neighbour to find the last LEGAL delivery.
+// `cfg` (also optional/additive) is `PadHostView.cfg` verbatim, re-derived
+// the same `asCfg()` way every other builder in this file already does —
+// needed only for `ballsPerInnings !== null` (whiteBall), a fact no ball
+// payload carries on its own. Both undefined (the pre-existing call shape)
+// means "cannot determine" — never claims a free hit on a guess, same
+// "omitting is always safe" posture the owner's ruling on `payload.freeHit`
+// itself already established.
+//
+// R2b-cricket-over review fix (item 1): call sites below pass a single
+// `ActivityDetailContext` object rather than positional arguments; item 2
+// folds the standalone `prev` argument the last test used to also pass
+// into `history` (its own last element) — see this file's "bowler-changed
+// note" describe block above for the full item-2 rationale. Assertions are
+// unchanged from before this rewrite.
 describe("cricketBallDetail — free hit note (R2b)", () => {
   const whiteBallCfg = cfg(); // ballsPerInnings: 120
   const testCfg = cfg({ inningsPerSide: 2, ballsPerInnings: null }); // the engine's own shipped "test" variant shape
@@ -616,14 +671,13 @@ describe("cricketBallDetail — free hit note (R2b)", () => {
       { type: "cricket.ball", payload: { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } } },
       { type: "cricket.ball", payload: { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "wide", runs: 1 } } } },
     ];
-    const result = cricketBallDetail(
+    const result = cricketBallDetail({
       t,
-      "cricket.ball",
-      { over: 0, ballInOver: 5, runs: { bat: 1 } },
-      undefined,
+      eventType: "cricket.ball",
+      payload: { over: 0, ballInOver: 5, runs: { bat: 1 } },
       history,
-      whiteBallCfg,
-    );
+      cfg: whiteBallCfg,
+    });
     expect(result).toBe('pad.cricket.ribbon.ball.freeHit({"detail":"pad.cricket.ribbon.ball.run"})');
   });
 
@@ -631,26 +685,24 @@ describe("cricketBallDetail — free hit note (R2b)", () => {
     const history = [
       { type: "cricket.ball", payload: { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } } },
     ];
-    const result = cricketBallDetail(
+    const result = cricketBallDetail({
       t,
-      "cricket.ball",
-      { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } },
-      undefined,
+      eventType: "cricket.ball",
+      payload: { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } },
       history,
-      whiteBallCfg,
-    );
+      cfg: whiteBallCfg,
+    });
     expect(result).toBe('pad.cricket.ribbon.ball.freeHit({"detail":"extra.noball"})');
   });
 
   it("a legal delivery's own row is not labelled when no free hit was pending before it", () => {
-    const result = cricketBallDetail(
+    const result = cricketBallDetail({
       t,
-      "cricket.ball",
-      { over: 0, ballInOver: 1, runs: { bat: 1 } },
-      undefined,
-      [],
-      whiteBallCfg,
-    );
+      eventType: "cricket.ball",
+      payload: { over: 0, ballInOver: 1, runs: { bat: 1 } },
+      history: [],
+      cfg: whiteBallCfg,
+    });
     expect(result).toBe("pad.cricket.ribbon.ball.run");
   });
 
@@ -659,14 +711,13 @@ describe("cricketBallDetail — free hit note (R2b)", () => {
       { type: "cricket.ball", payload: { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } } },
       { type: "cricket.ball", payload: { over: 0, ballInOver: 5, runs: { bat: 1 } } }, // the free hit itself
     ];
-    const result = cricketBallDetail(
+    const result = cricketBallDetail({
       t,
-      "cricket.ball",
-      { over: 0, ballInOver: 6, runs: { bat: 0 } },
-      undefined,
+      eventType: "cricket.ball",
+      payload: { over: 0, ballInOver: 6, runs: { bat: 0 } },
       history,
-      whiteBallCfg,
-    );
+      cfg: whiteBallCfg,
+    });
     expect(result).toBe("pad.cricket.ribbon.ball.dot");
   });
 
@@ -674,21 +725,20 @@ describe("cricketBallDetail — free hit note (R2b)", () => {
     const history = [
       { type: "cricket.ball", payload: { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } } },
     ];
-    const result = cricketBallDetail(
+    const result = cricketBallDetail({
       t,
-      "cricket.ball",
-      { over: 0, ballInOver: 1, runs: { bat: 1 } },
-      undefined,
+      eventType: "cricket.ball",
+      payload: { over: 0, ballInOver: 1, runs: { bat: 1 } },
       history,
-      testCfg,
-    );
+      cfg: testCfg,
+    });
     expect(result).toBe("pad.cricket.ribbon.ball.run");
   });
 
   it("omitting history and cfg (every pre-existing call site) never claims a free hit — undefined means 'cannot determine', not 'guess'", () => {
-    expect(cricketBallDetail(t, "cricket.ball", { over: 0, ballInOver: 5, runs: { bat: 1 } })).toBe(
-      "pad.cricket.ribbon.ball.run",
-    );
+    expect(
+      cricketBallDetail({ t, eventType: "cricket.ball", payload: { over: 0, ballInOver: 5, runs: { bat: 1 } } }),
+    ).toBe("pad.cricket.ribbon.ball.run");
   });
 
   it("composes with the bowler-changed note — free hit wraps whatever detail already includes", () => {
@@ -697,14 +747,13 @@ describe("cricketBallDetail — free hit note (R2b)", () => {
       payload: { bowler: "b1", over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } },
     };
     const history = [prev];
-    const result = cricketBallDetail(
+    const result = cricketBallDetail({
       t,
-      "cricket.ball",
-      { bowler: "b2", over: 0, ballInOver: 5, runs: { bat: 1 } },
-      prev,
+      eventType: "cricket.ball",
+      payload: { bowler: "b2", over: 0, ballInOver: 5, runs: { bat: 1 } },
       history,
-      whiteBallCfg,
-    )!;
+      cfg: whiteBallCfg,
+    })!;
     expect(result.startsWith("pad.cricket.ribbon.ball.freeHit(")).toBe(true);
     expect(result).toContain("pad.cricket.ribbon.ball.bowlerChanged");
   });
