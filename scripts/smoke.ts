@@ -7783,12 +7783,12 @@ async function seedStripeFeeDivision(divisionId: string): Promise<void> {
     await sql`
       insert into registration_settings
         (division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
-         fee_cents, currency, refund_lock_at, form_fields, payment_method,
+         fee_cents, refund_lock_at, form_fields, payment_method,
          payment_instructions, updated_at)
       values (${divisionId}, true, 'individual', null, null, null,
-              2000, 'gbp', null, '[]', 'stripe', null, now())
+              2000, null, '[]', 'stripe', null, now())
       on conflict (division_id) do update set
-        enabled = true, fee_cents = 2000, currency = 'gbp',
+        enabled = true, fee_cents = 2000,
         payment_method = 'stripe', opens_at = null, closes_at = null,
         capacity = null, updated_at = now()`;
   } finally {

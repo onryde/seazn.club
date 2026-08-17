@@ -220,10 +220,10 @@ async function seedStripeDivision(
     await sql`
       insert into registration_settings
         (division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
-         fee_cents, currency, refund_lock_at, form_fields, payment_method,
+         fee_cents, refund_lock_at, form_fields, payment_method,
          payment_instructions, updated_at)
       values (${divisionId}, true, 'individual', null, null, ${capacity},
-              500, 'gbp', null, ${sql.json([])}, 'stripe', null, now())`;
+              500, null, ${sql.json([])}, 'stripe', null, now())`;
     return { divisionId, divisionSlug: divSlug };
   });
 }
