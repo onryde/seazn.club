@@ -150,7 +150,61 @@ export interface SheetChoiceStep { id: string; kind: "choice"; title: string; op
  * with no narrower notion than "the whole fielding side").
  */
 export interface SheetPersonStep { id: string; kind: "person"; title: string; pool: "onfield" | "bench" | "all"; side: "home" | "away"; candidates?: readonly string[]; when?: StepPredicate }
-export type GuidedSheetStep = SheetChoiceStep | SheetPersonStep;
+
+/**
+ * R2b/task 1 (`docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-cricket-
+ * over.md`): a numeric step for guided sheets — an answer that is a
+ * QUANTITY, not a choice from a fixed list (`SheetChoiceStep`) or a person
+ * from a roster pool (`SheetPersonStep`). First real use is cricket's
+ * over-summary sheet (task 3): a scorer editing a running total (runs,
+ * wickets, legal balls) UP from wherever the fold's own current total
+ * already sits, never counting from zero.
+ *
+ * `initial` is the value the stepper/field opens showing. Task 3's own
+ * design ruling (plan doc, Q2) is that the sheet PREFILLS from the fold's
+ * CURRENT total rather than starting at 0, so an unedited confirm can never
+ * trip the engine's "summary totals may not decrease" guard (`cricket.ts`)
+ * — but this type does not itself enforce that policy; it only carries
+ * whatever number the skin hands it, same as `SheetChoiceStep.options`/
+ * `SheetPersonStep.pool` carry whatever the skin decides without this file
+ * validating the choice.
+ *
+ * `min`/`max` are enforced by the CHASSIS renderer (guided-sheet.tsx), not
+ * left for the skin's own `buildPayload` to catch after the fact: the
+ * stepper's `−`/`+` buttons and the editable field are two paths to the
+ * SAME control, and a clamp only the skin enforces in `buildPayload` is a
+ * clamp the renderer itself could still be made to bypass (type an
+ * out-of-range number directly into the field). Both optional — an absent
+ * bound simply never clamps on that side, same "absent means unrestricted"
+ * reading `SheetPersonStep.candidates`'s own absence already gets.
+ *
+ * `hint` follows `WhoLine.servingLabel`'s already-established rule (this
+ * file, above): pre-localised, skin-supplied prose — the chassis never
+ * resolves a sport-namespaced key itself.
+ *
+ * Deliberately NOT widening `GuidedSheetSpec.buildPayload`'s `answers:
+ * Record<string, string>` to admit a number: a number step's answer is
+ * still a plain STRING — the decimal rendering of whatever the stepper/
+ * field last held (`String(value)`) — read and parsed back by the SKIN's
+ * own `buildPayload`, exactly like a `SheetChoiceStep` answer is an option
+ * id and a `SheetPersonStep` answer is a person id, neither its own type
+ * either. Widening the map itself would be a contract change every R3-R7
+ * skin inherits for one sport's convenience, when the cost of NOT widening
+ * it is a one-line `Number(answers.x)` parse at cricket's own call site.
+ */
+export interface SheetNumberStep {
+  id: string;
+  kind: "number";
+  title: string;
+  initial: number;
+  min?: number;
+  max?: number;
+  /** Pre-localised, skin-supplied (same rule as WhoLine.servingLabel):
+   *  the chassis never resolves a sport-namespaced key. */
+  hint?: string;
+  when?: StepPredicate;
+}
+export type GuidedSheetStep = SheetChoiceStep | SheetPersonStep | SheetNumberStep;
 export interface GuidedSheetSpec { event: string; steps: GuidedSheetStep[]; buildPayload: (answers: Record<string, string>) => Record<string, unknown> }
 
 /**

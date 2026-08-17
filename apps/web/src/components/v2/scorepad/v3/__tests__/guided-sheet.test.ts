@@ -590,3 +590,270 @@ describe("GuidedSheet rendering — G6 candidates supersede pool", () => {
     expect(shown.sort()).toEqual(["Arjun", "Kannan"]); // onfield pair — bench1 still excluded, same as pool-only always did
   });
 });
+
+// --- R2b/task 2: SheetNumberStep — a `−`/value/`+` stepper + editable field
+// ----------------------------------------------------------------------------
+
+// Two number steps in sequence — enough to prove per-step reseeding and
+// chained confirm-to-advance without needing cricket's real three-field
+// shape (runs/wickets/legalBalls is task 3's own job, not this chassis
+// test's — this spec is deliberately sport-agnostic, same posture as
+// wicketSpec/conditionalSpec above).
+const numberSpec: GuidedSheetSpec = {
+  event: "cricket.summary",
+  steps: [
+    {
+      id: "runs",
+      kind: "number",
+      title: "pad.sheet.overSummary.runs.title",
+      initial: 24,
+      min: 0,
+      hint: "24/1 pre-localised hint",
+    },
+    { id: "wickets", kind: "number", title: "pad.sheet.overSummary.wickets.title", initial: 1, min: 0, max: 10 },
+  ],
+  buildPayload: (answers) => ({ runs: answers.runs, wickets: answers.wickets }),
+};
+const numberViews = { home: { squad: squad([]) }, away: { squad: squad([]) } };
+
+function inputsOf(tree: ReturnType<typeof walk>) {
+  return tree.filter((el) => el.type === "input");
+}
+
+describe("GuidedSheet rendering — SheetNumberStep", () => {
+  it("renders the hint above the control, a −/value/+ stepper at 44px, an editable field seeded from `initial`, and a confirm control", () => {
+    const island = renderIsland(GuidedSheet, {
+      spec: numberSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    expect(island.text()).toContain("24/1 pre-localised hint");
+    expect(island.text()).toContain("pad.sheet.overSummary.runs.title");
+
+    const buttons = buttonsOf(island.tree());
+    expect(buttons).toHaveLength(4); // minus, plus, confirm, cancel — no Back on step 1
+    const minus = findByText(buttons, "−");
+    const plus = findByText(buttons, "+");
+    const confirm = findByText(buttons, "scorepad.action.confirm");
+    for (const b of [minus, plus, confirm]) expect(propsOf(b).style).toMatchObject({ minHeight: 44 });
+
+    const fields = inputsOf(island.tree());
+    expect(fields).toHaveLength(1);
+    expect(propsOf(fields[0]!).value).toBe(24); // seeded from step.initial, never 0
+    expect(propsOf(fields[0]!).style).toMatchObject({ minHeight: 44 });
+  });
+
+  it("tapping + increments the displayed value by 1, tapping − decrements it", () => {
+    const island = renderIsland(GuidedSheet, {
+      spec: numberSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    const value = () => propsOf(inputsOf(island.tree())[0]!).value;
+
+    click(findByText(buttonsOf(island.tree()), "+"));
+    expect(value()).toBe(25);
+    click(findByText(buttonsOf(island.tree()), "+"));
+    expect(value()).toBe(26);
+    click(findByText(buttonsOf(island.tree()), "−"));
+    expect(value()).toBe(25);
+  });
+
+  it("clamps IN THE CHASSIS: − below min (0) holds at 0, + above max (10) holds at 10 — never a value the skin has to reject", () => {
+    const island = renderIsland(GuidedSheet, {
+      spec: numberSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    // Confirm "runs" unedited to reach "wickets" (initial 1, min 0, max 10).
+    click(findByText(buttonsOf(island.tree()), "scorepad.action.confirm"));
+    expect(island.text()).toContain("pad.sheet.overSummary.wickets.title");
+    const value = () => propsOf(inputsOf(island.tree())[0]!).value;
+
+    click(findByText(buttonsOf(island.tree()), "−")); // 1 -> 0
+    expect(value()).toBe(0);
+    click(findByText(buttonsOf(island.tree()), "−")); // holds at min, never negative
+    expect(value()).toBe(0);
+
+    for (let i = 0; i < 12; i++) click(findByText(buttonsOf(island.tree()), "+"));
+    expect(value()).toBe(10); // holds at max, never 12
+  });
+
+  it("mutation proof: clamping is genuinely enforced, not merely a max value the fixture never reaches", () => {
+    // clampNumberStep unclamped would let repeated + taps sail past `max`;
+    // this pins the boundary is load-bearing rather than incidentally never
+    // hit (the previous test already stops exactly AT 10 — this one proves
+    // one MORE tap still cannot cross it).
+    const island = renderIsland(GuidedSheet, {
+      spec: numberSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    click(findByText(buttonsOf(island.tree()), "scorepad.action.confirm")); // -> wickets, initial 1
+    for (let i = 0; i < 30; i++) click(findByText(buttonsOf(island.tree()), "+"));
+    expect(propsOf(inputsOf(island.tree())[0]!).value).toBe(10);
+  });
+
+  it("typing directly into the field sets the value, clamped the same as the stepper buttons", () => {
+    const island = renderIsland(GuidedSheet, {
+      spec: numberSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    const field = () => inputsOf(island.tree())[0]!;
+    const onChange = () => propsOf(field()).onChange as (e: { target: { value: string } }) => void;
+
+    onChange()({ target: { value: "40" } });
+    expect(propsOf(field()).value).toBe(40);
+
+    // "runs" has min:0 and no max — a negative typed value clamps to 0.
+    onChange()({ target: { value: "-5" } });
+    expect(propsOf(field()).value).toBe(0);
+  });
+
+  it("an empty or non-numeric typed value is ignored (keeps the last valid value) rather than crashing or going to NaN", () => {
+    const island = renderIsland(GuidedSheet, {
+      spec: numberSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    const field = () => inputsOf(island.tree())[0]!;
+    const onChange = () => propsOf(field()).onChange as (e: { target: { value: string } }) => void;
+
+    onChange()({ target: { value: "" } });
+    expect(propsOf(field()).value).toBe(24);
+    onChange()({ target: { value: "abc" } });
+    expect(propsOf(field()).value).toBe(24);
+  });
+
+  it("completing a spec of two number steps calls onComplete with BOTH answers as decimal STRINGS, not numbers", () => {
+    let completed: unknown = null;
+    const island = renderIsland(GuidedSheet, {
+      spec: numberSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: (event) => {
+        completed = event;
+      },
+    });
+    click(findByText(buttonsOf(island.tree()), "+")); // runs: 24 -> 25
+    click(findByText(buttonsOf(island.tree()), "scorepad.action.confirm")); // -> wickets
+    click(findByText(buttonsOf(island.tree()), "scorepad.action.confirm")); // wickets stays 1, confirm
+
+    expect(completed).toEqual({
+      type: "cricket.summary",
+      payload: { runs: "25", wickets: "1" },
+    });
+    const payload = (completed as { payload: { runs: unknown } }).payload;
+    expect(typeof payload.runs).toBe("string"); // never widened to a number — types.ts's own ruling
+  });
+
+  it("Back to an already-confirmed number step re-shows the CONFIRMED value, not the step's original `initial`", () => {
+    const island = renderIsland(GuidedSheet, {
+      spec: numberSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    click(findByText(buttonsOf(island.tree()), "+")); // runs: 24 -> 25
+    click(findByText(buttonsOf(island.tree()), "scorepad.action.confirm")); // -> wickets, runs answer = "25"
+    click(findByText(buttonsOf(island.tree()), "pad.sheet.back")); // back to runs
+
+    expect(island.text()).toContain("pad.sheet.overSummary.runs.title");
+    expect(propsOf(inputsOf(island.tree())[0]!).value).toBe(25); // NOT reset to 24
+  });
+
+  it("Cancel emits nothing from a number step, even after edits, and never calls onComplete", () => {
+    let completed = false;
+    let cancelled = false;
+    const island = renderIsland(GuidedSheet, {
+      spec: numberSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {
+        completed = true;
+      },
+      onCancel: () => {
+        cancelled = true;
+      },
+    });
+    click(findByText(buttonsOf(island.tree()), "+"));
+    click(findByText(buttonsOf(island.tree()), "pad.sheet.cancel"));
+    expect(cancelled).toBe(true);
+    expect(completed).toBe(false);
+  });
+
+  it("a number step declaring no hint renders no hint paragraph at all", () => {
+    const noHintSpec: GuidedSheetSpec = {
+      event: "cricket.summary",
+      steps: [{ id: "runs", kind: "number", title: "pad.sheet.overSummary.runs.title", initial: 0 }],
+      buildPayload: (answers) => ({ runs: answers.runs }),
+    };
+    const island = renderIsland(GuidedSheet, {
+      spec: noHintSpec,
+      views: numberViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    expect(island.text()).not.toContain("pre-localised hint");
+  });
+});
+
+// --- a number step obeys `when`/stepVisible identically to choice/person ---
+// Pure step-machine only — stepVisible/answerStep/backStep never branch on
+// `.kind`, so this is a parity check that the new kind rides the EXISTING
+// mechanism rather than needing its own.
+
+const numberConditionalSpec: GuidedSheetSpec = {
+  event: "cricket.summary",
+  steps: [
+    {
+      id: "kind",
+      kind: "choice",
+      title: "t",
+      options: [
+        { id: "partial", label: "partial" },
+        { id: "final", label: "final" },
+      ],
+    },
+    {
+      id: "runs",
+      kind: "number",
+      title: "runs",
+      initial: 0,
+      when: (answers) => answers.kind === "partial",
+    },
+    { id: "note", kind: "choice", title: "note", options: [{ id: "ok", label: "ok" }] },
+  ],
+  buildPayload: (answers) => ({ ...answers }),
+};
+
+describe("currentStep / answerStep / backStep — a number step obeys `when` identically to choice/person", () => {
+  it("a false `when` skips the number step without a tap", () => {
+    const outcome = answerStep(numberConditionalSpec, initialSheetState(), "final");
+    if (outcome.done) throw new Error("expected step 2 (note), not done");
+    expect(currentStep(numberConditionalSpec, outcome.state)?.id).toBe("note");
+  });
+
+  it("a true `when` shows the number step", () => {
+    const outcome = answerStep(numberConditionalSpec, initialSheetState(), "partial");
+    if (outcome.done) throw new Error("expected step 1 (runs), not done");
+    expect(currentStep(numberConditionalSpec, outcome.state)?.id).toBe("runs");
+  });
+});

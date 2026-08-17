@@ -69,7 +69,7 @@
 // `destructive` in the TileGrid sense, so violet/red have no place here.
 import { useState } from "react";
 import { renderCandidateRow, resolvePool, type PoolView, type TFn } from "./context-strip";
-import type { GuidedSheetSpec, GuidedSheetStep, SheetPersonStep, TapEvent } from "./types";
+import type { GuidedSheetSpec, GuidedSheetStep, SheetNumberStep, SheetPersonStep, TapEvent } from "./types";
 
 export interface GuidedSheetState {
   readonly stepIndex: number;
@@ -100,6 +100,18 @@ function stepVisible(step: GuidedSheetStep, answers: Readonly<Record<string, str
  *  `candidates`) reads identically. */
 function candidatesForStep(step: SheetPersonStep, view: PoolView): readonly string[] {
   return step.candidates ?? resolvePool({ pool: step.pool }, view);
+}
+
+/** Enforces `SheetNumberStep.min`/`.max` on any candidate new value — the
+ *  ONE place both the stepper buttons and the typed field funnel through
+ *  (types.ts's own doc on `SheetNumberStep`: a clamp only the skin enforces
+ *  in its `buildPayload` is one this renderer could still be made to
+ *  bypass, e.g. typing an out-of-range number directly into the field). */
+function clampNumberStep(value: number, step: SheetNumberStep): number {
+  let v = value;
+  if (step.min !== undefined && v < step.min) v = step.min;
+  if (step.max !== undefined && v > step.max) v = step.max;
+  return v;
 }
 
 /** R2 review finding (defect 2): drops any answer whose OWN step is no
@@ -285,6 +297,85 @@ function renderChoiceRow(options: readonly { id: string; label: string }[], t: T
   );
 }
 
+const stepperButtonClass =
+  "flex shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-lg font-semibold leading-none text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
+
+const numberFieldClass =
+  "min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-center text-base font-semibold tabular-nums text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
+
+/**
+ * A `−`/value/`+` stepper plus an editable numeric field for a
+ * `SheetNumberStep` — the numeric counterpart to `renderChoiceRow`/
+ * `renderCandidateRow` above: a PLAIN FUNCTION, not its own JSX component,
+ * for the identical reason those two are (this repo's node-only
+ * `_hook-harness` walks a rendered tree through `.props.children` only,
+ * never invoking a nested custom component's own function). `min`/`max` are
+ * enforced HERE via `clampNumberStep`, on every path that can change
+ * `value` — both stepper buttons and the typed field — never left for the
+ * skin's own `buildPayload` to catch after the fact (types.ts's own doc on
+ * `SheetNumberStep`). `hint`, when present, is rendered VERBATIM above the
+ * control (never through `t()` — it is pre-localised, skin-supplied prose,
+ * same rule as `WhoLine.servingLabel`).
+ *
+ * Unlike the other two row renderers, a tap here does NOT itself advance
+ * the wizard: `onConfirm` is a separate, explicit action (reusing the
+ * existing `scorepad.action.confirm` key action-form.tsx already uses for
+ * the same "I am done editing this value" gesture, rather than minting a
+ * new chassis-level key), because a scorer edits a count across several
+ * interactions — a few taps, or a typed correction — before it is ready to
+ * submit, unlike picking a single option or person.
+ */
+function renderNumberStep(
+  step: SheetNumberStep,
+  value: number,
+  t: TFn,
+  onChange: (value: number) => void,
+  onConfirm: () => void,
+) {
+  return (
+    <div className="flex flex-col gap-3">
+      {step.hint && <p className="text-sm text-slate-600">{step.hint}</p>}
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => onChange(clampNumberStep(value - 1, step))}
+          style={{ minHeight: 44, minWidth: 44 }}
+          className={stepperButtonClass}
+        >
+          −
+        </button>
+        <input
+          type="number"
+          inputMode="numeric"
+          min={step.min}
+          max={step.max}
+          value={value}
+          style={{ minHeight: 44 }}
+          className={numberFieldClass}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (raw === "") return;
+            const n = Number(raw);
+            if (Number.isNaN(n)) return;
+            onChange(clampNumberStep(n, step));
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => onChange(clampNumberStep(value + 1, step))}
+          style={{ minHeight: 44, minWidth: 44 }}
+          className={stepperButtonClass}
+        >
+          +
+        </button>
+      </div>
+      <button type="button" onClick={onConfirm} style={{ minHeight: 44 }} className={choiceButtonClass}>
+        {t("scorepad.action.confirm")}
+      </button>
+    </div>
+  );
+}
+
 export interface GuidedSheetProps {
   spec: GuidedSheetSpec;
   /** Both squads a `kind:"person"` step might resolve against — see the
@@ -324,10 +415,37 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
   const [state, setState] = useState<GuidedSheetState>(() => initialSheetState());
   const step = currentStep(spec, state);
 
+  // Task 2 (R2b): a "number" step's in-progress edit value. Unlike a choice
+  // option or a person candidate — where a single tap both PICKS and
+  // ADVANCES — a scorer adjusts a count across several stepper taps or a
+  // typed correction before it is ready to submit, so that value has to
+  // live somewhere BETWEEN renders. Render-phase reset (the same "two
+  // useStates" pattern detail-dock.tsx uses for "reset when the thing being
+  // edited changes" — `react-hooks/refs` bans reading/writing a ref during
+  // render, so a single ref-based "last id" guard is not an option here):
+  // whenever the CURRENT step's id no longer matches the id this value was
+  // last seeded for, reseed it — from whatever answer this step already
+  // carries (Back must not blank out a value the scorer already entered),
+  // falling back to the step's own `initial`. `numberEditStepId` is
+  // explicitly cleared back to `null` at both `setState(initialSheetState())`
+  // call sites below (completion, cancel) — without that, this check alone
+  // cannot tell "freshly mounted" apart from "the wizard just completed and
+  // reopened on a first step whose id happens to repeat" (both look like
+  // stepIndex 0 with an empty answers map to this check alone).
+  const [numberEditStepId, setNumberEditStepId] = useState<string | null>(null);
+  const [numberEditValue, setNumberEditValue] = useState(0);
+  if (step && step.kind === "number" && step.id !== numberEditStepId) {
+    const prior = state.answers[step.id];
+    const seeded = prior !== undefined ? Number(prior) : step.initial;
+    setNumberEditStepId(step.id);
+    setNumberEditValue(clampNumberStep(seeded, step));
+  }
+
   const handleAnswer = (value: string) => {
     const outcome = answerStep(spec, state, value);
     if (outcome.done) {
       setState(initialSheetState());
+      setNumberEditStepId(null);
       onComplete(outcome.event);
     } else {
       setState(outcome.state);
@@ -336,6 +454,7 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
   const handleBack = () => setState((s) => backStep(spec, s));
   const handleCancel = () => {
     setState(initialSheetState());
+    setNumberEditStepId(null);
     onCancel?.();
   };
 
@@ -355,7 +474,9 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
       <div className="px-4 py-3">
         {step.kind === "choice"
           ? renderChoiceRow(step.options, t, handleAnswer)
-          : renderCandidateRow(candidatesForStep(step, views[step.side]), personNames, t, handleAnswer, emptyText)}
+          : step.kind === "number"
+            ? renderNumberStep(step, numberEditValue, t, setNumberEditValue, () => handleAnswer(String(numberEditValue)))
+            : renderCandidateRow(candidatesForStep(step, views[step.side]), personNames, t, handleAnswer, emptyText)}
       </div>
       <div className="flex justify-end px-4 pb-3">
         <button type="button" onClick={handleCancel} style={{ minHeight: 44 }} className={cancelButtonClass}>
