@@ -3799,5 +3799,10 @@
   "pad.cricket.sheet.toss.elected.title": "Batten of bowlen?",
   "pad.cricket.sheet.review.kind.title": "Type review",
   "pad.cricket.sheet.review.outcome.title": "Uitslag",
-  "pad.cricket.sheet.review.by.title": "Aangevraagd door"
+  "pad.cricket.sheet.review.by.title": "Aangevraagd door",
+  "pad.activity.heading": "Activiteit",
+  "pad.activity.empty": "Nog niets vastgelegd.",
+  "pad.activity.void": "Ongeldig maken",
+  "pad.activity.voiding": "Bezig…",
+  "pad.activity.voided": "Ongeldig"
 }

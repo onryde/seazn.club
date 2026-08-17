@@ -3799,5 +3799,10 @@
   "pad.cricket.sheet.toss.elected.title": "Frapper ou lancer ?",
   "pad.cricket.sheet.review.kind.title": "Type de révision",
   "pad.cricket.sheet.review.outcome.title": "Résultat",
-  "pad.cricket.sheet.review.by.title": "Demandé par"
+  "pad.cricket.sheet.review.by.title": "Demandé par",
+  "pad.activity.heading": "Activité",
+  "pad.activity.empty": "Rien d'enregistré pour le moment.",
+  "pad.activity.void": "Annuler",
+  "pad.activity.voiding": "Annulation…",
+  "pad.activity.voided": "Annulé"
 }

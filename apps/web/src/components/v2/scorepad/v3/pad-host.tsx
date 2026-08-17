@@ -49,7 +49,7 @@ import type { OwnIdentity } from "../types";
 import { usePadPipeline } from "../use-pad-pipeline";
 import type { RejectionInfo } from "../use-pad-pipeline";
 import { HOLD_MS } from "../queue";
-import { buildPadView, type PadActionView, type PadViewCtx } from "../view-model";
+import { buildPadView, summaryHeadline, type PadActionView, type PadViewCtx } from "../view-model";
 import { createSkinDispatch } from "../skins/types";
 import { ActionFormList } from "./action-form";
 import { Scorebug } from "./scorebug";
@@ -60,6 +60,7 @@ import { SwapSheet, refusalMessage, type PolicyVerdict, type SwapSheetSpec } fro
 import { GuidedSheet } from "./guided-sheet";
 import { RecordingChip } from "./recording-chip";
 import { buildRibbon } from "./ribbon";
+import { ActivityPanel, type ActivityEvent } from "./activity";
 import { MORE_SHEET_KEY, type GuidedSheetSpec, type PadHostView, type PadPhase, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -216,6 +217,58 @@ export type UndoDecision = { kind: "drop"; heldId: string } | { kind: "void"; ev
  *  coincidence needing a second lookup. */
 export function decideUndo(eventId: string, heldId: string | null): UndoDecision {
   return heldId !== null && heldId === eventId ? { kind: "drop", heldId } : { kind: "void", eventId };
+}
+
+/**
+ * The event type a tile will dispatch, or `null` when it cannot be known
+ * statically.
+ *
+ * `{swap:true}` builds its event from the picked people at tap time, and the
+ * MORE sheet hosts the whole `padSpec(cfg)` action list rather than one event,
+ * so neither can be classified here — both return `null` and are therefore
+ * never filtered. That is deliberate: the MORE sheet is exactly where a
+ * LOW-band org reaches `cricket.innings.summary`, so hiding it by band would
+ * remove the only recording action such an org has.
+ */
+export function tileEventType(tile: TileSpec, sheets: Record<string, GuidedSheetSpec>): string | null {
+  if ("event" in tile.action) return tile.action.event.type;
+  if ("sheet" in tile.action) {
+    if (tile.action.sheet === MORE_SHEET_KEY) return null;
+    return sheets[tile.action.sheet]?.event ?? null;
+  }
+  return null;
+}
+
+/**
+ * Sign-off review 2026-08-17: tiles were rendered regardless of the org's
+ * fidelity band, so an org without `scoring.ball_by_ball` saw every ball tile
+ * and each tap earned a server refusal — `assertEntitledToScore` gates at the
+ * scoring door (`server/usecases/scoring.ts`). The events were never written,
+ * so this was a wrong affordance rather than data loss, but a control that
+ * always fails is not a control.
+ *
+ * Filtered on the CHASSIS, not in a skin: `PadSpec.fidelity` already maps
+ * every event type to its band for all 11 sports, so one filter here fixes
+ * the sports still to be converted too.
+ *
+ * FAIL-OPEN by design. A tile whose event type cannot be resolved, or whose
+ * type carries no `fidelity` entry, is KEPT. Hiding a control we failed to
+ * classify is a worse failure than showing one that refuses: the scorer can
+ * see and report a refusal, but cannot report a button that was never drawn.
+ */
+export function filterTilesByBand(
+  tiles: readonly TileSpec[],
+  sheets: Record<string, GuidedSheetSpec>,
+  fidelity: PadSpec["fidelity"],
+  entitledBands: ReadonlySet<FidelityBand>,
+): TileSpec[] {
+  return tiles.filter((tile) => {
+    const type = tileEventType(tile, sheets);
+    if (type === null) return true;
+    const band = fidelity[type];
+    if (band === undefined) return true;
+    return entitledBands.has(band);
+  });
 }
 
 const PHASE_ORDER: readonly PadPhase[] = ["pre", "live", "post"];
@@ -423,7 +476,23 @@ export function PadHostV3(props: PadHostV3Props) {
     [props.cfg, pipeline.state, pipeline.summary, phase, props.band, entitlements, personNames, squads, pipeline.events, contextOverrides],
   );
 
-  const tiles = useMemo(() => props.skin.tiles(view), [props.skin, view]);
+  // `sheets` is resolved BEFORE the tiles so the band filter below can read a
+  // sheet-opening tile's underlying event type. Deliberately not memoized —
+  // see the note that used to sit at this call's old position, further down:
+  // a skin's sheet closes over live view state and a memo would let it go
+  // stale the moment the match moves.
+  const sheets = props.skin.sheets?.(view);
+  const entitledBands = useMemo(() => entitledBandsFrom(spec.fidelityEntitlements, entitlements), [spec, entitlements]);
+
+  // Band filter applied BEFORE `phasesWithTiles`, not at render: the phase
+  // machinery must reason about the tiles a scorer can actually see, or the
+  // pad can snap to a phase whose only tiles were filtered away and show an
+  // empty grid.
+  const allTiles = useMemo(() => props.skin.tiles(view), [props.skin, view]);
+  const tiles = useMemo(
+    () => filterTilesByBand(allTiles, sheets ?? {}, spec.fidelity, entitledBands),
+    [allTiles, sheets, spec.fidelity, entitledBands],
+  );
   const availablePhases = useMemo(() => phasesWithTiles(tiles), [tiles]);
   // G3: a skin's own phase(view), when declared, overrides the self-correcting
   // default below rather than being cross-checked against it — see
@@ -440,14 +509,9 @@ export function PadHostV3(props: PadHostV3Props) {
     [pipeline.state, pipeline.summary, phase, props.band, entitlements],
   );
   const padView = useMemo(() => buildPadView(spec, padViewCtx), [spec, padViewCtx]);
-  // G4 (types.ts's own doc on `SkinDefV3.sheets`): rebuilt every render,
-  // deliberately NOT wrapped in useMemo — `sheets(view)` closes over the
-  // live view, and memoizing this would let that closure go stale the
-  // moment match state moves without this particular memo's deps noticing
-  // (e.g. a skin's `view.events`-derived sheet content). Cheap by
-  // construction (a handful of object literals), so there is no real cost
-  // to paying it every render.
-  const sheets = props.skin.sheets?.(view);
+  // `sheets` is declared once, further up — it had to move above the tile
+  // build so the band filter can resolve a sheet-opening tile's event type.
+  // G4's reasoning for not memoizing it lives with that declaration.
   const dedicated = useMemo(() => dedicatedEventTypes(tiles, sheets), [tiles, sheets]);
   const moreActionsList = useMemo(() => moreActions(spec, padViewCtx, dedicated), [spec, padViewCtx, dedicated]);
 
@@ -492,6 +556,9 @@ export function PadHostV3(props: PadHostV3Props) {
 
   // Blocker 1 — see rejectionText's own doc above.
   const rejectionMsg = rejectionText(pipeline.lastRejection, msg);
+  // No memo, matching the legacy reader's own reasoning: a cheap read, and
+  // `pipeline.summary` already changes identity on every fold advance.
+  const headline = summaryHeadline(pipeline.summary);
 
   const events = pipeline.events;
   const latestEvent = events.length > 0 ? events[events.length - 1]! : null;
@@ -499,20 +566,52 @@ export function PadHostV3(props: PadHostV3Props) {
     ? buildRibbon(latestEvent.type, latestEvent.payload as Record<string, unknown>, (id) => personNames[id] ?? id, t)
     : null;
 
+  // The activity panel reads four fields; `voids` is what makes a row show
+  // as cancelled (activity.tsx derives it by looking for some OTHER event
+  // pointing back at this id, never a flag on the target itself).
+  const activityEvents = useMemo<ActivityEvent[]>(
+    () => events.map((e) => ({ id: e.id, seq: e.seq, type: e.type, payload: e.payload, voids: e.voids ?? null })),
+    [events],
+  );
+
+  const [voidingId, setVoidingId] = useState<string | null>(null);
+
   async function handleUndo(eventId: string) {
     const decision = decideUndo(eventId, held?.id ?? null);
-    if (decision.kind === "drop") {
-      if (await pipeline.dropHeldSubmission(decision.heldId)) setHeld(null);
-    } else {
-      await pipeline.submit("core.void", { event_id: decision.eventId });
+    setVoidingId(eventId);
+    try {
+      if (decision.kind === "drop") {
+        if (await pipeline.dropHeldSubmission(decision.heldId)) setHeld(null);
+      } else {
+        await pipeline.submit("core.void", { event_id: decision.eventId });
+      }
+    } finally {
+      setVoidingId(null);
     }
   }
 
   const adaptedSwap = swapSlot ? adaptSwapSlot(swapSlot, squads) : null;
-  const entitledBands = useMemo(() => entitledBandsFrom(spec.fidelityEntitlements, entitlements), [spec, entitlements]);
 
   return (
     <div data-role="pad-v3" className="space-y-3">
+      {/* Sign-off review 2026-08-17: the legacy renderer showed the fold's own
+       *  headline (pad-renderer.tsx:192,296, added by S10/#419 as a fix) and
+       *  v3 dropped it — `ScorebugSpec` carries no result field, so a finished
+       *  match showed two scores and nothing that said who won. On a TIE that
+       *  is the whole outcome, and on a super-over or boundary-count decision
+       *  the pad said nothing about how it was decided. Rendered by the HOST,
+       *  not a skin: the string comes from the engine's own summary, so it
+       *  stays sport-agnostic and every converted skin gets it for free.
+       *  `summaryHeadline` is the SAME reader the legacy pad uses — reused,
+       *  not reimplemented, so the two cannot drift. It degrades to null for
+       *  anything that is not a genuine `{headline: string}`, and null means
+       *  render nothing rather than invent placeholder copy. */}
+      {headline && (
+        <p data-role="v3-headline" className="rounded-xl bg-slate-900 px-4 py-2 text-center text-sm font-semibold text-white">
+          {headline}
+        </p>
+      )}
+
       <div data-role="v3-scorebug">
         <Scorebug spec={scorebugSpec} t={t} onTap={(event: TapEvent) => void dispatch(event.type, event.payload)} />
       </div>
@@ -640,6 +739,25 @@ export function PadHostV3(props: PadHostV3Props) {
           )}
         </div>
       )}
+
+      {/* Sign-off review 2026-08-17: the legacy renderer mounts <Timeline>
+       *  INSIDE the pad, so event history and per-event void reached the
+       *  device-link surface, which has no console chrome to fall back on.
+       *  v3 shipped with neither (ribbon reads `latestEvent` only, and undo
+       *  had a single call site passing `latestEvent.id`), so on cricket a
+       *  scorer could not correct anything but the last ball once the hold
+       *  window elapsed. Restored on the CHASSIS so R3-R6 inherit it. */}
+      <div data-role="v3-activity-slot">
+        <ActivityPanel
+          events={activityEvents}
+          ownEventIds={pipeline.ownEventIds}
+          deviceLinkId={props.identity.deviceLinkId}
+          personNames={personNames}
+          t={t}
+          onVoid={(eventId) => void handleUndo(eventId)}
+          voidingId={voidingId}
+        />
+      </div>
     </div>
   );
 }

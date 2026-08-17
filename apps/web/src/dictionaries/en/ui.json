@@ -3799,5 +3799,10 @@
   "pad.cricket.sheet.toss.elected.title": "Bat or bowl?",
   "pad.cricket.sheet.review.kind.title": "Review type",
   "pad.cricket.sheet.review.outcome.title": "Outcome",
-  "pad.cricket.sheet.review.by.title": "Called by"
+  "pad.cricket.sheet.review.by.title": "Called by",
+  "pad.activity.heading": "Activity",
+  "pad.activity.empty": "Nothing recorded yet.",
+  "pad.activity.void": "Void",
+  "pad.activity.voiding": "Voiding…",
+  "pad.activity.voided": "Voided"
 }
