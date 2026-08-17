@@ -33,6 +33,26 @@ export const ConstraintScope = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("entrant"), entrantId: z.string().min(1) }),
   z.object({ kind: z.literal("person"), personKey: z.string().min(1) }),
   z.object({ kind: z.literal("pool"), divisionId: z.string().min(1), pool: z.string().min(1) }),
+  // UNIVERSAL scopes, and the reason they carry no id: they say "every one of
+  // these, EACH COUNTED SEPARATELY", not "all of them together". Every member
+  // above names its subject, so one rule needs one tally; these name a family,
+  // so one rule needs one tally PER MEMBER of it and a single fixture
+  // increments several at once.
+  //
+  // A rule wearing one is therefore NOT a competition-scoped rule with a wider
+  // net, and reading it as one is the defect `PARSER_PROMPT` rule 8 was written
+  // to prevent: "no player plays more than 2 matches a day" compiled as a
+  // whole-run cap caps a 60-player event at two matches daily. The distinction
+  // lives in the TALLY KEY (`entityKeysFor` in calendar.ts), not in
+  // `scopeCoversFixture`, which answers `true` for both and cannot tell them
+  // apart — treating that `true` as sufficient is exactly how the bug gets
+  // written.
+  //
+  // `every_entrant` vs `every_person` is not cosmetic: a doubles PAIR is one
+  // entrant, and a player entered in singles and mixed is TWO entrants and ONE
+  // person. Only the person scope stops that human playing four times in a day.
+  z.object({ kind: z.literal("every_entrant") }),
+  z.object({ kind: z.literal("every_person") }),
 ]);
 export type ConstraintScope = z.infer<typeof ConstraintScope>;
 

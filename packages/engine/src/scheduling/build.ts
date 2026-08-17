@@ -93,6 +93,7 @@ import { buildGrid, type BuildGrid, type BuildSlot } from "./build-grid.ts";
 import {
   deltaConflicts,
   effectiveHard,
+  entityKeysFor,
   isBlockingConflict,
   scopeCoversFixture,
   slotFixtures,
@@ -1328,15 +1329,50 @@ function buildRuleGroups(
   const divisionRestEntries = Object.entries(restByDivision ?? {}).filter(([, minutes]) => minutes > 0);
   const freeRows = freeFixtures.map((f) => ({ id: f.id, row: scopeRowOf(f) }));
 
+  /** The entities a universal-scoped rule expands over: every entrant (or
+   *  person) appearing on a FREE fixture.
+   *
+   *  Free fixtures only, deliberately. An entity with no movable fixture needs
+   *  no group — there is nothing for the service to place for it — while an
+   *  entity that has one still counts its pinned rows, because `indicesFor`
+   *  resolves an existing row against these same sources.
+   *
+   *  SORTED: `groups` goes on the wire in this order and `build-determinism`
+   *  requires the same board twice, so the order cannot come from `Set`
+   *  insertion, which follows fixture order and would shuffle with the input. */
+  const universalEntities = (rule: HardConstraint): string[] => {
+    const seen = new Set<string>();
+    for (const { row } of freeRows) for (const key of entityKeysFor(rule.scope, row)) seen.add(key);
+    return [...seen].sort();
+  };
+
   // ONE list, ONE construction — `groups` and `indicesFor` below both walk
   // `sources` via the SAME `coversRow` predicate, so array position cannot
   // mean different things on the two sides (the placer/verifier fork this
   // subsystem has hit repeatedly; see this function's own docstring, #447).
-  const sources: (
+  //
+  // A UNIVERSAL scope becomes N sources, one per entity, rather than one source
+  // holding every fixture. `proto/scheduler.proto` refuses to carry a scope at
+  // all — "the ACL resolves the scope and sends the RESULT" — and the result of
+  // "each entrant at most twice a day" is not one set of fixtures capped at two,
+  // which would cap the whole COMPETITION at two and is the misreading
+  // `PARSER_PROMPT` rule 8 exists to prevent. It is N sets, each capped at two.
+  // `rule_groups` is already `repeated`, so this needs no proto change and the
+  // service still never learns what a person is.
+  type RuleGroupSource =
     | { kind: "typed"; rule: HardConstraint }
-    | { kind: "division-rest"; divisionId: string; minRestMinutes: number }
-  )[] = [
-    ...typedRules.map((rule) => ({ kind: "typed" as const, rule })),
+    | { kind: "typed-entity"; rule: HardConstraint; entity: string }
+    | { kind: "division-rest"; divisionId: string; minRestMinutes: number };
+
+  const sources: RuleGroupSource[] = [
+    // Annotated on `flatMap` rather than inferred: the ternary returns two
+    // different array types, which infers as a union of arrays and does not
+    // widen to the source union on its own.
+    ...typedRules.flatMap<RuleGroupSource>((rule) =>
+      rule.scope.kind === "every_entrant" || rule.scope.kind === "every_person"
+        ? universalEntities(rule).map((entity) => ({ kind: "typed-entity" as const, rule, entity }))
+        : [{ kind: "typed" as const, rule }],
+    ),
     ...divisionRestEntries.map(([divisionId, minRestMinutes]) => ({
       kind: "division-rest" as const,
       divisionId,
@@ -1344,10 +1380,20 @@ function buildRuleGroups(
     })),
   ];
 
-  const coversRow = (source: (typeof sources)[number], row: ScopeRow): boolean =>
-    source.kind === "typed"
-      ? scopeCoversFixture(source.rule.scope, undefined, row)
-      : (row.divisionId ?? "") === source.divisionId;
+  const coversRow = (source: (typeof sources)[number], row: ScopeRow): boolean => {
+    switch (source.kind) {
+      case "typed":
+        return scopeCoversFixture(source.rule.scope, undefined, row);
+      case "typed-entity":
+        // NOT `scopeCoversFixture`, which answers `true` for every row under a
+        // universal scope and would put the whole board in every group. The
+        // group is this ONE entity's fixtures, resolved through the same
+        // `entityKeysFor` the placer and verifier tally with.
+        return entityKeysFor(source.rule.scope, row).includes(source.entity);
+      case "division-rest":
+        return (row.divisionId ?? "") === source.divisionId;
+    }
+  };
 
   return {
     groups: sources.map((source) => ({
@@ -1359,7 +1405,7 @@ function buildRuleGroups(
             ? source.rule.minutes
             : undefined,
       maxFixturesPerDay:
-        source.kind === "typed" && source.rule.type === "max_fixtures_per_day" && tz !== undefined
+        source.kind !== "division-rest" && source.rule.type === "max_fixtures_per_day" && tz !== undefined
           ? source.rule.count
           : undefined,
     })),

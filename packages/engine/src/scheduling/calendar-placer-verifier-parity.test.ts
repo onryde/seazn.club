@@ -223,6 +223,97 @@ describe("the parity harness can tell scopes apart", () => {
   });
 });
 
+describe("universal daily caps count each entity separately", () => {
+  it("every_entrant caps each entrant's own day, not the day's total", () => {
+    // Six cards, no shared entrant, cap 2 per entrant. Every entrant is on
+    // exactly ONE card, so a correct per-entity cap costs nothing and all six
+    // fit on day one. A tally still counting per RULE per DAY reads this as
+    // "at most 2 fixtures a day" and spreads them over three days — the
+    // 60-player-event bug PARSER_PROMPT rule 8 exists to prevent.
+    const n = 6;
+    const fixtures = disjointCards(n);
+    const config = configOver(
+      { type: "max_fixtures_per_day", count: 2, scope: { kind: "every_entrant" } },
+      fixtures,
+      SAT_1000_LOCAL,
+    );
+
+    const { assignments, conflicts } = slotFixtures({ fixtures, config });
+    expect(assignments).toHaveLength(n);
+    expect(conflicts.filter((c) => c.reason === "no_slot")).toEqual([]);
+    expect(new Set(assignments.map((a) => dayKeyInTz(a.startAt, TZ))).size).toBe(1);
+    expect(
+      validateAssignments(assignments, config)
+        .filter((c) => c.reason === "instruction")
+        .map((c) => c.details),
+    ).toEqual([]);
+  });
+
+  it("every_entrant still bites the entrant who is over", () => {
+    // The direction the old per-rule tally already got right, which must not
+    // regress while making the case above pass. `cards()` puts every card on
+    // `e1`: six capped at 2 is three days.
+    const n = 6;
+    const config = configFor(
+      { type: "max_fixtures_per_day", count: 2, scope: { kind: "every_entrant" } },
+      n,
+      SAT_1000_LOCAL,
+    );
+    const { assignments } = slotFixtures({ fixtures: cards(n), config });
+    expect(assignments).toHaveLength(n);
+    expect(new Set(assignments.map((a) => dayKeyInTz(a.startAt, TZ))).size).toBe(3);
+    expect(
+      validateAssignments(assignments, config).filter((c) => c.reason === "instruction"),
+    ).toEqual([]);
+  });
+
+  it("every_person catches the player entered in two divisions", () => {
+    // THE case an entrant-scoped cap misses, and the reason a person scope
+    // exists at all. `pX` plays for entrant `s1` in d1 and `m1` in d2 — two
+    // entrants, one human. A cap of 2 per PERSON must spread four cards over
+    // two days; a cap of 2 per ENTRANT would leave all four on one.
+    const fixtures: SchedulableFixture[] = [
+      { id: "x1", home: "s1", away: "s9", divisionId: "d1", people: ["pX", "p9"] },
+      { id: "x2", home: "s1", away: "s8", divisionId: "d1", people: ["pX", "p8"] },
+      { id: "x3", home: "m1", away: "m9", divisionId: "d2", people: ["pX", "q9"] },
+      { id: "x4", home: "m1", away: "m8", divisionId: "d2", people: ["pX", "q8"] },
+    ];
+    const config = configOver(
+      { type: "max_fixtures_per_day", count: 2, scope: { kind: "every_person" } },
+      fixtures,
+      SAT_1000_LOCAL,
+    );
+
+    const { assignments, conflicts } = slotFixtures({ fixtures, config });
+    expect(assignments).toHaveLength(4);
+    expect(conflicts.filter((c) => c.reason === "no_slot")).toEqual([]);
+    expect(new Set(assignments.map((a) => dayKeyInTz(a.startAt, TZ))).size).toBe(2);
+    expect(
+      validateAssignments(assignments, config).filter((c) => c.reason === "instruction"),
+    ).toEqual([]);
+  });
+
+  it("an entrant-scoped cap does NOT catch that player — the control", () => {
+    // Proves the case above measures the PERSON scope and not merely the cap.
+    // Same board, cap 2 per named entrant `s1`: `s1` is on two cards, so the
+    // cap costs nothing and all four fit on one day.
+    const fixtures: SchedulableFixture[] = [
+      { id: "x1", home: "s1", away: "s9", divisionId: "d1", people: ["pX", "p9"] },
+      { id: "x2", home: "s1", away: "s8", divisionId: "d1", people: ["pX", "p8"] },
+      { id: "x3", home: "m1", away: "m9", divisionId: "d2", people: ["pX", "q9"] },
+      { id: "x4", home: "m1", away: "m8", divisionId: "d2", people: ["pX", "q8"] },
+    ];
+    const config = configOver(
+      { type: "max_fixtures_per_day", count: 2, scope: { kind: "entrant", entrantId: "s1" } },
+      fixtures,
+      SAT_1000_LOCAL,
+    );
+    const { assignments } = slotFixtures({ fixtures, config });
+    expect(assignments).toHaveLength(4);
+    expect(new Set(assignments.map((a) => dayKeyInTz(a.startAt, TZ))).size).toBe(1);
+  });
+});
+
 describe("the placer's own output satisfies the verifier (#463)", () => {
   it.each(FAMILIES)("emits no %s violation it could have avoided", (_family, rule, n, startAt) => {
     const config = configFor(rule, n, startAt);
