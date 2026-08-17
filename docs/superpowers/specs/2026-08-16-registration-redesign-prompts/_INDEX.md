@@ -132,6 +132,28 @@ serves its closed/unavailable state during that window.
 
 ## False premises found
 
+- **"Only `registrations.ts` reads the payment columns" — WRONG, and it is the
+  premise the whole payment-columns verdict rested on.** The scout sweep that
+  produced it searched by column name and missed three production readers that
+  build the column names inside larger SQL templates:
+  `usecases/competitions.ts` (~546) and `usecases/divisions.ts` (~346) guard
+  deletes on `r.payment_intent_id` / `r.refunded_cents`, and
+  `usecases/exports.ts` (~627) builds admit-ticket QR URLs from `r.ref_code`.
+  `tsc` cannot see any of it — raw SQL strings — and every scoped test run the
+  implementers did was green. Only the **full-suite rerun at the wave boundary**
+  caught it: 20 failures across 7 suites. The verdict itself still stands (the
+  columns do belong to the cart); what was wrong was believing the search.
+  Lesson for RS002+: after any column move, grep for `from <table>` /
+  `join <table>` and read each hit, not for the column names.
+- **"`seed:demo` may seed registrations" (RS001 prompt gotcha) — it does not.**
+  `scripts/seed-demo.ts` touches registration exactly once, a
+  `registration-settings` PUT (~1085), and writes no registration rows at all.
+  No seeder work was owed.
+- **`schedule-build-honours-locks.test.ts` is RED ON MAIN** — 7/11 with the same
+  4 failures (`expected undefined to be '2026-08-01T19:00:00.000Z'`), reproduced
+  on a clean detached worktree at `252a073d` with its own fresh DB. Not caused
+  by RS001, and worth someone's attention independently.
+
 - **`seazn-local-env` skill vs `AGENTS.md`**: the skill still says "never
   enable `.github/workflows/e2e.yml`". It has been **LIVE on PRs since
   2026-08-14** (AGENTS.md is right; the skill is stale). Bearing on RS001: the
