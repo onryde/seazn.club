@@ -207,18 +207,28 @@ reads `_RULES.md` → `_INDEX.md` → its own prompt meets each of these twice.
   `violet-*`-means-AI collision flagged in R2's gallery for the owner's
   ruling with screenshots present. A recolour after that is a token change.
 
-### R2 — decisions AWAITING the owner's verdict (merge-blocking, 2026-08-17)
+### R2 — owner's visual sign-off GIVEN 2026-08-17 (with a scope caveat)
 
-Published sign-off sheet: 15 cricket captures, 5 states × 3 widths, gate
-results. **No verdict has been given on any of the three.** An empty verdict
-below means UNRULED, never "approved by silence" — do not merge R2, and do
-not let R3–R6 copy cricket's answer, until each line carries a real verdict.
+The owner signed off visually ("Visually is signed off as well"). Recorded as
+given. Two things a later session must not misread:
 
-| # | Decision | My recommendation | Owner verdict |
-|---|---|---|---|
-| D1 | Do the primary action tiles stay `violet-600`? Built to §2.5 as ruled at scoping, with the `violet-*`-means-AI collision flagged here as promised. | **Keep violet this wave.** It is the product's existing primary and a recolour is a token change either way — changing it now forks cricket from the ten skins still to come. | _(unruled)_ |
-| D2 | Are dot ball and single the right two primary-weight tiles? | **Keep them.** Frequency is the right basis for a thumb-reach hierarchy in T20, and boundaries stay one tap away in the same grid rather than behind a sheet. | _(unruled)_ |
-| D3 | Should the pad capture cricket BELOW fidelity tier 3? | **Leave it to R8.** Ball-by-ball is gated at tier 3; defining a low-band pad is a question across all eleven skins, not a cricket one. | _(unruled)_ |
+**1. The captures the owner reviewed PREDATE the three restored capabilities**
+(`072656b4`). The pad now renders two visible elements absent from every one of
+those 15 screenshots: the fold's result headline (`data-role="v3-headline"`,
+a dark bar above the scorebug) and the activity panel
+(`data-role="v3-activity-slot"`, a bordered scrollable list below the sheets).
+The sign-off was given against the pre-fix pad and the artifact was re-captured
+afterwards so the record matches what ships. The owner was told this
+explicitly at the time rather than after the fact.
+
+**2. The sign-off is a VISUAL verdict.** It settles D1 and D2, which are
+questions about how the pad looks. It does not settle anything non-visual.
+
+| # | Decision | Verdict |
+|---|---|---|
+| D1 | Do the primary action tiles stay `violet-600`? | **APPROVED as built** — violet stays. The `violet-*`-means-AI collision was flagged with screenshots present, as the scoping ruling required. A later recolour remains a token change. |
+| D2 | Are dot ball and single the right two primary-weight tiles? | **APPROVED as built.** Note this decision was smaller than first framed: `PRIMARY_RUNS = {0,1}` (`v3/skins/cricket.tsx:530`) controls EMPHASIS only — every run value keeps its own one-tap tile (`:549` gives the rest `kind:"standard"`), and only the extras are `minor`. Nothing was hidden behind a sheet. |
+| D3 | Should the pad capture cricket BELOW fidelity tier 3? | **SUPERSEDED — no longer a decision.** The premise was wrong: low-band cricket is not missing. It is `cricket.innings.summary` with `partial: true` (`cricket.ts:225`), which v1 exposed and the engine still folds. The real gap is that the v3 skin gives it no tile, so a scorer must open "More" once per over. Moved to **R2b**, which is a pad wave, not an engine one. |
 
 ### R2 — false premises found (verified 2026-08-16, before any code)
 
