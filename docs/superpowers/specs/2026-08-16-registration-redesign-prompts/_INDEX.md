@@ -24,8 +24,8 @@ prompts dir) also writes — those two are **sequential, never parallel**.
 | Session | Prompt file | Depends on | Status |
 |---|---|---|---|
 | RS001 | `RS001-schema-and-demolition.md` | — | **DONE** — PR #592 merged `850cc630` (2026-08-17) |
-| RS001b | `RS001b-org-currency-allowlist.md` | RS001 | **IN FLIGHT** — branch `feat/rs001b-org-currency` |
-| RS002 | `RS002-core-usecases.md` | RS001b | TODO |
+| RS001b | `RS001b-org-currency-allowlist.md` | RS001 | **DONE** — PR #598 merged `a7cca608` (2026-08-17) |
+| RS002 | `RS002-core-usecases.md` | RS001b | **IN FLIGHT** — branch `feat/rs002-registration-usecases` |
 | RS003 | `RS003-public-endpoints.md` | RS002 | TODO |
 | RS004 | `RS004-hub-settings-tab.md` | RS003 | TODO |
 | RS005 | `RS005-hub-registrants-tab.md` | RS004 | TODO |
@@ -147,8 +147,10 @@ serves its closed/unavailable state during that window.
 ### RS001b (2026-08-17) — branch `feat/rs001b-org-currency`
 
 - **V-number**: high-water mark was **V364**. RS001b ships
-  `V365__org_currency.sql`. Applies from zero on a clean schema (204
-  migrations, verified on a second fresh DB, not just incrementally).
+  `V365__org_currency.sql` **and `V366__rls_billing_org_tables.sql`** (the unplanned RLS
+  fix below), so the mark is now **V366** and RS002 starts at **V367**. Applies
+  from zero on a clean schema (204 migrations, verified on a second fresh DB,
+  not just incrementally).
 - **Card-unsupported representation — the thing RS004 reads**:
   `organizations.stripe_unsupported_currency text null`. It holds the
   CONNECTED ACCOUNT's settlement currency when that code is outside
@@ -231,6 +233,65 @@ serves its closed/unavailable state during that window.
   red on main documented below. `tsc` root EXIT=0, `lint` 0 errors (75 warnings,
   none in touched files), `i18n:check` parity OK, `openapi:gen` +
   `i18n:gen-keys` clean.
+
+### RS002 (2026-08-17) — branch `feat/rs002-registration-usecases`
+
+Worktree `.claude/worktrees/rs002`, DB label `rs002`. Baseline before any edit:
+the four registration suites are **89/89 green** on `main` @ `51ab77a8`
+(`registrations.test.ts`, `registrations-intake-gate.test.ts`,
+`registration-user-link.test.ts`, `registration-schema.test.ts`).
+
+Rulings taken (recorded as made):
+
+- **Per-entry refunds get their own column** — the decision RS001 deferred.
+  **V367** adds `registrations.refunded_cents int NOT NULL default 0`
+  (`>= 0` check). Rationale: RS002 is the session that makes multi-entry carts
+  real, and all three cart-money hazards are unfixable without an entry-level
+  number — `remaining = amount_cents - refunded_cents` only type-checks as
+  arithmetic, not as accounting, while one side is a cart total. The group's
+  `refunded_cents` stays as the cart's accumulated total (`greatest`/additive,
+  never overwritten); the entry column is what the withdraw/refund/dispute paths
+  read and write. It has a DEFAULT, so unlike RS001b's `registration_groups.currency`
+  this one owes no `insert into` sweep. No per-entry `refunded_at` — the cart's
+  timestamp is enough and YAGNI applies.
+- **Prompt premise "registrations.ts was near ~600 lines" is FALSE** — it is
+  **2431** lines at `51ab77a8`. So the "split if it passes ~600" clause fires
+  immediately. Split adopted is additive, not a rewrite of the existing file
+  (which would bury the diff): new siblings
+  `usecases/registration-eligibility.ts` (pure, imports nothing from
+  `registrations.ts`), `usecases/registration-submit.ts` and
+  `usecases/registration-approval.ts` (both import `registrations.ts`).
+  Direction of dependency is one-way by construction, so there is no cycle;
+  `registrations.ts` re-exports the moved eligibility symbols so no existing
+  call site changes.
+- **`x` gender never blocks** (as the prompt asked, recorded here as the
+  ruling): `mens`→`m`, `womens`→`f`, `mixed`→ roster needs ≥1 `m` and ≥1 `f`;
+  an `x` row satisfies neither side of the mixed rule but is never itself an
+  eligibility failure, in any category. A null gender is likewise not a failure
+  unless the division's rules require the field.
+- **Person get-or-create does NOT dedupe on name alone** — and the prompt's
+  "honouring the existing persons identity index semantics" rests on a false
+  premise: the only persons identity index is
+  `persons_org_user_lane_uq (org_id, user_id, lane) where user_id is not null
+  and lane='player' and merged_into is null`. There is no (org, name, dob)
+  unique index and RS002 does not add one. Ruling: a `registration_players` row
+  with a `user_id` resolves through `resolvePlayerPerson` (unchanged); a row
+  without one reuses an existing person only when **dob is present** and
+  exactly ONE non-merged player-lane person in the org matches
+  (`lower(trim(full_name))`, `dob`); no dob, no match, or an ambiguous match →
+  mint a new person. Rationale: a duplicate person is a one-click #404 merge,
+  whereas fusing two same-named people (juniors especially) silently merges
+  two humans' records and is not cleanly reversible.
+- **New persons are created with `consent = {"public_name": true}`** (owner
+  ruling 5). RS001's `materialise` inserts persons with the column default and
+  therefore ships the ruling unimplemented — this is the producer.
+- **`materialise` gains the `pair` branch.** It handled `individual` and `team`
+  only, so a pair entry materialised an entrant with zero members. With
+  `registration_players` a pair has real player rows; pair now takes the same
+  per-player path as team.
+- **`materialise` writes `registration_players.person_id`** — the column exists
+  (V363) and nothing sets it, so the roster→person link that RS005/RS008/#404
+  all read was inert.
 
 ## RS002 entry conditions (RS001 hands these over — do not start without reading)
 
@@ -338,10 +399,16 @@ sequencing only** and is deleted; `L2` now sequences against RS
   `scripts/seed-demo.ts` touches registration exactly once, a
   `registration-settings` PUT (~1085), and writes no registration rows at all.
   No seeder work was owed.
-- **`schedule-build-honours-locks.test.ts` is RED ON MAIN** — 7/11 with the same
-  4 failures (`expected undefined to be '2026-08-01T19:00:00.000Z'`), reproduced
-  on a clean detached worktree at `252a073d` with its own fresh DB. Not caused
-  by RS001, and worth someone's attention independently.
+- ~~**`schedule-build-honours-locks.test.ts` is RED ON MAIN**~~ — **WRONG, and
+  corrected 2026-08-17 (RS002).** The 4 failures
+  (`expected undefined to be '2026-08-01T19:00:00.000Z'`) are a **missing local
+  placement service**, not a code red: the suite is **11/11** with the CP-SAT
+  service running (`seazn-env up --label X --placement`, see the
+  `seazn-local-env` skill §3b/§5). Both RS001 and RS001b gates reported these 4
+  as "red on main too" and waved them through; the reproduction on a clean
+  detached worktree proved only that the *other* worktree also lacked the
+  service. Any RS session seeing exactly these 4 should start the placement
+  service before calling them pre-existing.
 
 - **`seazn-local-env` skill vs `AGENTS.md`**: the skill still says "never
   enable `.github/workflows/e2e.yml`". It has been **LIVE on PRs since
