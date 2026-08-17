@@ -680,6 +680,14 @@ export function PadHostV3(props: PadHostV3Props) {
         </div>
       )}
 
+      {/* Defect fix (walkthrough 2026-08-17): this mount used to omit
+       *  onCancel entirely, while the sibling GuidedSheet mount just below
+       *  always got one — a scorer opening cricket's Retire flow could
+       *  only finish the whole off->on swap or navigate away. `onCancel`
+       *  here closes the sheet the same way `onSwap` does (`setSwapOpen
+       *  (false)`, unmounting `<SwapSheet>` and discarding its own local
+       *  state), and `SwapSheet` itself also resets its pending off pick
+       *  before calling back — see swap-sheet.tsx's own handleCancel. */}
       {swapOpen && swapSlot && adaptedSwap && (
         <div data-role="v3-swap">
           <SwapSheet
@@ -693,6 +701,7 @@ export function PadHostV3(props: PadHostV3Props) {
               const event = swapSlot.buildEvent(off, on);
               void dispatch(event.type, event.payload);
             }}
+            onCancel={() => setSwapOpen(false)}
           />
         </div>
       )}

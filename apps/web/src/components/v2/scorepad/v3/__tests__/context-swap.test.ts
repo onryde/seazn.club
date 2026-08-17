@@ -416,7 +416,7 @@ describe("SwapSheet rendering", () => {
       onSwap: () => {},
     });
     const buttons = buttonsOf(island.tree());
-    expect(buttons).toHaveLength(1); // only "a" is onfield
+    expect(buttons).toHaveLength(2); // "a" is onfield, + the Cancel control
     expect(propsOf(buttons[0]!).style).toMatchObject({ minHeight: 44 });
     expect(propsOf(buttons[0]!).disabled).toBeFalsy();
   });
@@ -437,8 +437,8 @@ describe("SwapSheet rendering", () => {
     click(buttonsOf(island.tree())[0]!);
 
     const onStepButtons = buttonsOf(island.tree());
-    // 1 "off chosen" header chip (violet, shows "Player A") + 1 bench candidate ("b").
-    expect(onStepButtons).toHaveLength(2);
+    // 1 "off chosen" header chip (violet, shows "Player A") + 1 bench candidate ("b") + Cancel.
+    expect(onStepButtons).toHaveLength(3);
     expect(island.text()).toContain("Player A");
     const benchButton = onStepButtons.find((b) => textOf(b) === "Player B")!;
     click(benchButton);
@@ -459,7 +459,7 @@ describe("SwapSheet rendering", () => {
     click(buttonsOf(island.tree())[0]!); // off -> "a"
 
     const onStepButtons = buttonsOf(island.tree());
-    expect(onStepButtons).toHaveLength(1); // ONLY the "off chosen" header chip — no candidate buttons
+    expect(onStepButtons).toHaveLength(2); // the "off chosen" header chip + Cancel — no candidate buttons
     for (const b of onStepButtons) expect(propsOf(b).disabled).toBeFalsy();
     expect(island.text()).toContain(message);
   });
@@ -483,7 +483,7 @@ describe("SwapSheet rendering", () => {
     click(buttonsOf(island.tree())[0]!); // off -> "a"
 
     const onStepButtons = buttonsOf(island.tree());
-    expect(onStepButtons).toHaveLength(1); // only the "off chosen" header chip — no candidate buttons
+    expect(onStepButtons).toHaveLength(2); // the "off chosen" header chip + Cancel — no candidate buttons
     expect(island.text()).toContain("scorepad.attribution.noRoster"); // emptyText, via the identity t stub
   });
 
@@ -501,6 +501,106 @@ describe("SwapSheet rendering", () => {
     const headerChip = buttonsOf(island.tree())[0]!;
     click(headerChip); // -> back to off step
 
-    expect(buttonsOf(island.tree())).toHaveLength(1); // back to the single off candidate
+    expect(buttonsOf(island.tree())).toHaveLength(2); // back to the off step: 1 candidate + Cancel
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Defect fix (found while prepping a live v3 walkthrough, 2026-08-17):
+// SwapSheet shipped with no dismiss control on EITHER step — pad-host.tsx
+// mounted it with spec/view/policyVerdict/personNames/t/onSwap and nothing
+// else, while the sibling GuidedSheet (same file, guided-sheet.tsx) was
+// always given `onCancel`. A scorer who opened cricket's Retire flow could
+// only finish the whole off->on swap or abandon the page — mid-match, that
+// strands them. Fixed by mirroring GuidedSheet's own cancel contract exactly
+// (optional `onCancel`, an always-rendered Cancel control using the same
+// reused `pad.sheet.cancel` key and the same quiet dashed styling) rather
+// than inventing a second pattern.
+// ---------------------------------------------------------------------------
+
+describe("SwapSheet — cancel (defect fix)", () => {
+  const s = squad([member({ personId: "a", onField: true }), member({ personId: "b", onField: false })]);
+  const names = { a: "Player A", b: "Player B" };
+
+  it("the off step renders a real >=44px Cancel control that fires onCancel, never onSwap", () => {
+    let cancelled = false;
+    let swapped: [string, string] | null = null;
+    const island = renderIsland(SwapSheet, {
+      spec: swapSpec,
+      view: { squad: s },
+      policyVerdict: { ok: true },
+      personNames: names,
+      t,
+      onSwap: (off, on) => {
+        swapped = [off, on];
+      },
+      onCancel: () => {
+        cancelled = true;
+      },
+    });
+    const cancelButton = buttonsOf(island.tree()).find((b) => textOf(b) === "pad.sheet.cancel")!;
+    expect(cancelButton).toBeDefined();
+    expect(propsOf(cancelButton).style).toMatchObject({ minHeight: 44 });
+
+    click(cancelButton);
+    expect(cancelled).toBe(true);
+    expect(swapped).toBeNull();
+  });
+
+  it("the on step ALSO renders a Cancel control, reachable after an off pick has already been made", () => {
+    let cancelled = false;
+    const island = renderIsland(SwapSheet, {
+      spec: swapSpec,
+      view: { squad: s },
+      policyVerdict: { ok: true },
+      personNames: names,
+      t,
+      onSwap: () => {},
+      onCancel: () => {
+        cancelled = true;
+      },
+    });
+    const offCandidate = buttonsOf(island.tree()).find((b) => textOf(b) === "Player A")!;
+    click(offCandidate); // -> on step
+
+    const cancelButton = buttonsOf(island.tree()).find((b) => textOf(b) === "pad.sheet.cancel")!;
+    expect(cancelButton).toBeDefined();
+    expect(propsOf(cancelButton).style).toMatchObject({ minHeight: 44 });
+
+    click(cancelButton);
+    expect(cancelled).toBe(true);
+  });
+
+  it("cancelling from the on step clears the pending off pick — back to a fresh off step, no half-made swap left in state", () => {
+    let swapped: [string, string] | null = null;
+    const island = renderIsland(SwapSheet, {
+      spec: swapSpec,
+      view: { squad: s },
+      policyVerdict: { ok: true },
+      personNames: names,
+      t,
+      onSwap: (off, on) => {
+        swapped = [off, on];
+      },
+      onCancel: () => {},
+    });
+    const offCandidate = buttonsOf(island.tree()).find((b) => textOf(b) === "Player A")!;
+    click(offCandidate); // -> on step, "a" pending as the off pick
+    expect(island.text()).toContain("Player A"); // the violet "off chosen" header chip
+
+    const cancelButton = buttonsOf(island.tree()).find((b) => textOf(b) === "pad.sheet.cancel")!;
+    click(cancelButton);
+
+    const afterCancel = buttonsOf(island.tree());
+    // "Player A" itself still legitimately appears (it is the off-step's
+    // own onfield candidate button) — the real tell for "still stuck on
+    // the on step" is the bench candidate "Player B", which only renders
+    // once a step past the off pick. 2 (not 3, the on-step's own count
+    // with a real bench candidate — the earlier test above) plus no
+    // "Player B" together prove offId truly went back to null, not just
+    // that onCancel fired while the on-step stayed rendered underneath.
+    expect(afterCancel).toHaveLength(2); // back to the off step: 1 candidate ("a") + Cancel
+    expect(afterCancel.some((b) => textOf(b) === "Player B")).toBe(false); // never a stale on-step
+    expect(swapped).toBeNull(); // never finalized by a cancel
   });
 });
