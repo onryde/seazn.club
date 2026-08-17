@@ -147,8 +147,28 @@ describe("POST .../register — routing", () => {
     expect((await read(res)).status).toBe(201);
     expect(rl.mock.calls).toEqual([
       ["regsubmit:9.9.9.2", { max: 10, windowSeconds: 60 }],
-      ["regsubmit:9.9.9.2:cup", { max: 5, windowSeconds: 300 }],
+      ["regsubmit:9.9.9.2:acme:cup", { max: 5, windowSeconds: 300 }],
     ]);
+  });
+
+  // Competition slugs are unique per (org_id, slug) — `competitions_org_id_slug_key`
+  // — never globally, so a bucket keyed on the slug alone silently joins two
+  // tenants: the same IP registering at two orgs that both run a "cup" would
+  // spend one budget across both. The deleted single-entry route keyed on
+  // `division_id` (a globally unique uuid) and could not express this bug.
+  it("scopes the narrow bucket per ORG, so two orgs sharing a slug do not share a budget", async () => {
+    submitSpy.mockResolvedValueOnce(fakeResult()).mockResolvedValueOnce(fakeResult());
+    await registerRoute(
+      req(URL_("acme", "cup"), groupBody(), { "x-forwarded-for": "9.9.9.7" }),
+      ctx("acme", "cup"),
+    );
+    await registerRoute(
+      req(URL_("rivals", "cup"), groupBody(), { "x-forwarded-for": "9.9.9.7" }),
+      ctx("rivals", "cup"),
+    );
+    const narrow = rl.mock.calls.map(([k]) => k).filter((k: string) => k.split(":").length > 2);
+    expect(narrow).toEqual(["regsubmit:9.9.9.7:acme:cup", "regsubmit:9.9.9.7:rivals:cup"]);
+    expect(new Set(narrow).size).toBe(2);
   });
 
   it("surfaces a rate-limit rejection instead of swallowing it", async () => {

@@ -288,8 +288,13 @@ describe.skipIf(!HAS_DB)("POST .../register/join — DB-backed", () => {
     expect(status).toBe(201);
     expect(body.data?.consent_status).toBe("granted");
 
+    // `Envelope.data` is Record<string, unknown>, so the id has to be narrowed
+    // before it can be interpolated: the sql tag rejects an `unknown`, and the
+    // resulting error is a typecheck-only failure — vitest never typechecks
+    // test files, so this passed its own suite while reddening `turbo typecheck`.
+    const playerId = String(body.data!.player_id);
     const [row] = await sql<{ user_id: string | null; source: string }[]>`
-      select user_id, source from registration_players where id = ${body.data!.player_id}`;
+      select user_id, source from registration_players where id = ${playerId}`;
     expect(row!.source).toBe("self_joined");
     expect(row!.user_id).toBe(sessionUserId);
   });

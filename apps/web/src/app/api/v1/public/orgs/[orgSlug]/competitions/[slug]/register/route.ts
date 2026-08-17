@@ -45,7 +45,13 @@ export async function POST(req: Request, { params }: Ctx) {
     if (input.website) {
       throw new HttpError(400, "Registration failed");
     }
-    await rateLimit(`regsubmit:${ip}:${slug}`, { max: 5, windowSeconds: 300 });
+    // Keyed on org AND competition, not the competition slug alone:
+    // `competitions_org_id_slug_key` is unique on (org_id, slug), so two orgs
+    // may both call a competition "summer-league" and a slug-only key would
+    // make one tenant's registrants spend the other's budget. The deleted
+    // route keyed on `division_id`, a globally unique uuid, and had no such
+    // ambiguity to lose.
+    await rateLimit(`regsubmit:${ip}:${orgSlug}:${slug}`, { max: 5, windowSeconds: 300 });
     // #402 — resolve the session HERE, never inside the usecase: keeping the
     // lookup at the public boundary is what makes organiser-facing entry
     // paths structurally unable to supply one (an organiser entering a team
