@@ -238,7 +238,18 @@ export async function syncConnectAccount(account: Stripe.Account): Promise<void>
         stripe_disabled_reason  = ${account.requirements?.disabled_reason ?? null},
         stripe_requirements_due = ${account.requirements?.currently_due?.length ?? 0},
         currency = ${supported ? settlement : sql`currency`},
-        stripe_unsupported_currency = ${supported || settlement === null ? null : settlement}
+        -- An account that reports no settlement currency yet leaves BOTH
+        -- columns alone. Clearing the card-unsupported state on "we don't
+        -- know" would flip the settings UI to "card is fine" on absence of
+        -- evidence, for a payment capability — the state only clears when a
+        -- sync actually observes an allowlisted settlement currency.
+        stripe_unsupported_currency = ${
+          settlement === null
+            ? sql`stripe_unsupported_currency`
+            : supported
+              ? null
+              : settlement
+        }
     where stripe_account_id = ${account.id}
     returning id, currency`;
   // No row: the account belongs to no org here (or the org disconnected). An

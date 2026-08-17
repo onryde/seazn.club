@@ -18,7 +18,7 @@ interleaved: **org lane** RS004 → RS005 → RS009, **public lane** RS006 → R
 | Session | Prompt file | Depends on | Status |
 |---|---|---|---|
 | RS001 | `RS001-schema-and-demolition.md` | — | **DONE** — PR #592 merged `850cc630` (2026-08-17) |
-| RS001b | `RS001b-org-currency-allowlist.md` | RS001 | **NEXT** — RS001 is merged, unblocked |
+| RS001b | `RS001b-org-currency-allowlist.md` | RS001 | **IN FLIGHT** — branch `feat/rs001b-org-currency` |
 | RS002 | `RS002-core-usecases.md` | RS001b | TODO |
 | RS003 | `RS003-public-endpoints.md` | RS002 | TODO |
 | RS004 | `RS004-hub-settings-tab.md` | RS003 | TODO |
@@ -137,6 +137,70 @@ serves its closed/unavailable state during that window.
   (2 callers → 0). Consumer is live and tested in RS001; the producer is
   RS002/RS003 (submit) and RS008 (claim).
 
+### RS001b (2026-08-17) — branch `feat/rs001b-org-currency`
+
+- **V-number**: high-water mark was **V364**. RS001b ships
+  `V365__org_currency.sql`. Applies from zero on a clean schema (204
+  migrations, verified on a second fresh DB, not just incrementally).
+- **Card-unsupported representation — the thing RS004 reads**:
+  `organizations.stripe_unsupported_currency text null`. It holds the
+  CONNECTED ACCOUNT's settlement currency when that code is outside
+  `REGISTRATION_CURRENCIES`, and null when card registration is
+  currency-viable. Non-null therefore means *both* the flag and its reason.
+  Storage/read shape deliberately mirrors `stripe_disabled_reason`: written by
+  `syncConnectAccount`, read back out through `connectStatus` as
+  `unsupported_currency` (added to the `ConnectStatus` zod schema, so it is in
+  the OpenAPI contract).
+  Why not write the offending code into `organizations.currency` and flag it
+  elsewhere: it would violate the allowlist CHECK and abort the whole sync
+  transaction, taking the charges/payouts/requirements mirror down with it.
+- **Final list as shipped**: `REGISTRATION_CURRENCY_EXCLUSIONS` is **empty**, so
+  `REGISTRATION_CURRENCIES` == `SUPPORTED_CURRENCIES` == `usd, eur, gbp, inr,
+  aud`. All five are 2-decimal (guard test). INR stays selectable — it is
+  offline/display-only in practice per ruling 10, and nothing in the schema
+  needs to know that.
+- **`registration_groups.currency` carries NO allowlist CHECK, on purpose** —
+  only `NOT NULL` with no default. A snapshot is a historical fact: delisting a
+  currency later must not retroactively invalidate carts legitimately quoted in
+  it, and a future migration re-adding a tightened CHECK would fail on exactly
+  those rows. `organizations.currency` is the moving allowlist; the group column
+  is the frozen quote.
+- **Promotion no longer re-snapshots currency.** `promoteOldestWaitlisted` used
+  to write `settings.currency` onto the group alongside payment_method and the
+  48h window. With currency org-level, writing the org's CURRENT currency there
+  would silently re-denominate a cart the registrant was already shown a price
+  for (design §3: a later org-currency change never touches an existing group).
+  `payment_method`/`expires_at` still get written — that is RS001's flagged
+  multi-entry-cart issue, unchanged.
+- **The lock overwrites on EVERY sync**, and `default_currency` is absent on an
+  Express account until Stripe knows its country/bank — so "no settlement
+  currency yet" is a distinct branch that must leave `currency` alone rather
+  than default it. Covered.
+- **NOT NULL on `registration_groups.currency` is the session's real blast
+  radius**: 15 group-insert sites across unit tests, `payments-hardening.spec.ts`
+  (LIVE on PRs) and `scripts/smoke.ts` had to name the column. `tsc` sees none
+  of them — they are raw SQL — and the unit ones only surfaced by running the
+  suites. RS002+ adding another NOT NULL group column owes the same sweep:
+  `git grep -a -n "insert into registration_groups" -- apps scripts`.
+- **`PutRegistrationSettings` lost `currency`; `RegistrationSettings` kept it**,
+  now sourced from the org via `OrgPaymentDefaults`. So the division settings
+  panel can render RS004's read-only chip without a second fetch, and the field
+  is read-only by construction (no request-schema counterpart). OpenAPI
+  regenerated (`v1.json`, `v1.public.json`).
+- **E2E deferred, explicitly**: there is no user-facing currency surface until
+  RS004 (org-settings select + hub chip) and RS006/RS007 (public pay step), so
+  the E2E owed here is deferred to **RS004** for the select/chip and **RS006**
+  for the paid public flow. What DID ship in e2e is the fixture correction above
+  — `payments-hardening.spec.ts` would 500 on the new NOT NULL otherwise.
+- **Smoke shipped**: `regQueueSuite` now PUTs `currency: "usd"` at a gbp org and
+  asserts the response comes back `gbp` — i.e. a per-division currency is
+  ignored and the org's is quoted. That is the reachable RS001b behaviour today.
+- **Gate**: full `apps/web` vitest 7995 total / 7923 passed / 4 failed / 68
+  pending; the 4 are `schedule-build-honours-locks.test.ts`, the pre-existing
+  red on main documented below. `tsc` root EXIT=0, `lint` 0 errors (75 warnings,
+  none in touched files), `i18n:check` parity OK, `openapi:gen` +
+  `i18n:gen-keys` clean.
+
 ## RS002 entry conditions (RS001 hands these over — do not start without reading)
 
 1. **Cart-level money is flattened onto entry-level rows.** `RegistrationWithGroupRow`
@@ -169,6 +233,16 @@ serves its closed/unavailable state during that window.
    declares `contact_email`/`payment_intent_id`, which RS005 must source from
    the CART; selecting them off `registrations` fails at runtime, not compile
    time.
+4. **RS001b: the group insert must name `currency`.**
+   `registration_groups.currency` is NOT NULL with NO default — an insert that
+   omits it fails at RUNTIME (23502), never at compile time, because the insert
+   is raw SQL. The value is `organizations.currency` read at submit, and it is
+   never rewritten afterwards: not by a promotion, not by the Connect
+   same-currency lock converging, not by an org changing its preference. RS003's
+   checkout endpoint validates the snapshot against BOTH
+   `REGISTRATION_CURRENCIES` and the org's CURRENT currency before calling
+   Stripe (422, no Stripe call) — a snapshot gone stale is exactly the case that
+   must not reach a registrant's pay page.
 
 ## False premises found
 

@@ -488,10 +488,12 @@ interface DivisionCtx {
   default_locale: string | null;
   payment_instructions: string | null;
   charges_enabled: boolean;
-  /** The org's preferred currency (RS001b) — every fee under this division is
-   *  priced, displayed and charged in it. The fallback for anything without a
-   *  cart snapshot of its own. */
-  currency: string;
+  // No `currency` (RS001b): every currency read left in this file resolves from
+  // the CART's snapshot (`RegistrationGroupRow.currency`), which is what the
+  // registrant was actually quoted. RS002/RS003 need the org's CURRENT currency
+  // — to stamp a new group at submit, and to 422 a stale snapshot before
+  // calling Stripe — and this is the right place to add it, with its reader.
+  // Carrying it here unread now would be a seam that ships untested.
 }
 
 async function divisionCtx(db: AnySql, divisionId: string): Promise<DivisionCtx> {
@@ -500,7 +502,7 @@ async function divisionCtx(db: AnySql, divisionId: string): Promise<DivisionCtx>
            c.name as comp_name, c.slug as comp_slug, c.visibility as comp_visibility,
            c.starts_on, c.ends_on,
            o.slug as org_slug, o.name as org_name, o.default_locale, o.payment_instructions,
-           o.stripe_charges_enabled as charges_enabled, o.currency
+           o.stripe_charges_enabled as charges_enabled
     from divisions d
     join competitions c on c.id = d.competition_id
     join organizations o on o.id = c.org_id

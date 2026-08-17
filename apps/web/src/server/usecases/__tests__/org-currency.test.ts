@@ -170,6 +170,20 @@ describe.skipIf(!HAS_DB)("same-currency lock on Connect sync (owner ruling 2026-
     });
   });
 
+  it("keeps a recorded card-unsupported state when a later sync reports no settlement currency", async () => {
+    // Absence of evidence is not evidence of support. Clearing here would flip
+    // the settings UI to "card is fine" for an account we know nothing new
+    // about — the wrong direction to fail for a payment capability.
+    const acct = "acct_unknown_" + randomUUID().slice(0, 8);
+    const orgId = await seedOrg("gbp", acct);
+    await syncConnectAccount(account(acct, "sgd"));
+    await syncConnectAccount(account(acct, null));
+    expect(await orgCurrency(orgId)).toMatchObject({
+      currency: "gbp",
+      stripe_unsupported_currency: "sgd",
+    });
+  });
+
   it("still mirrors the Connect health flags while locking the currency", async () => {
     // The lock is an addition to syncConnectAccount, not a replacement — the
     // charges/payouts/requirements mirror must survive it.
