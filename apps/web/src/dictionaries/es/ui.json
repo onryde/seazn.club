@@ -3875,6 +3875,7 @@
   "pad.cricket.ribbon.ball.dot": "Bola sin carrera",
   "pad.cricket.ribbon.ball.run": "1 carrera",
   "pad.cricket.ribbon.ball.runs": "{runs} carreras",
+  "pad.cricket.ribbon.ball.bowlerChanged": "{detail} — Nuevo lanzador",
   "pad.cricket.tile.runs.0": "0",
   "pad.cricket.tile.runs.1": "1",
   "pad.cricket.tile.runs.2": "2",

@@ -371,6 +371,88 @@ describe("cricketBallDetail", () => {
   });
 });
 
+// R2b (owner request — "show when the bowler changed"): the data already
+// exists on every `cricket.ball` payload (`bowler`), so this is a
+// rendering change — `cricketBallDetail` compares the CURRENT ball's
+// bowler against the PREVIOUS one's (passed in via the optional 4th `prev`
+// parameter, `SkinDefV3.activityDetail`'s own widened contract, types.ts)
+// and APPENDS a note when they differ, rather than replacing the existing
+// dot/run/wicket/extra detail.
+describe("cricketBallDetail — bowler-changed note (R2b)", () => {
+  const ball = (bowler: string, extra: Record<string, unknown> = {}) => ({
+    type: "cricket.ball",
+    payload: { bowler, runs: { bat: 0 }, ...extra },
+  });
+
+  it("the same bowler across consecutive balls — no note appended", () => {
+    const prev = ball("b1");
+    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b1", runs: { bat: 1 } }, prev)).toBe(
+      "pad.cricket.ribbon.ball.run",
+    );
+  });
+
+  it("a different bowler — the note is appended onto the existing base detail", () => {
+    const prev = ball("b1");
+    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b2", runs: { bat: 1 } }, prev)).toBe(
+      'pad.cricket.ribbon.ball.bowlerChanged({"detail":"pad.cricket.ribbon.ball.run"})',
+    );
+  });
+
+  it("a wicket off the first ball of a new spell still reads as a wicket — the note APPENDS, never replaces", () => {
+    const prev = ball("b1");
+    const result = cricketBallDetail(
+      t,
+      "cricket.ball",
+      { bowler: "b2", wicket: { kind: "bowled" }, runs: { bat: 0 } },
+      prev,
+    );
+    expect(result).toBe('pad.cricket.ribbon.ball.bowlerChanged({"detail":"wicket.bowled"})');
+  });
+
+  it("no prev at all (first ball of an innings) does not crash and does not claim a change", () => {
+    expect(() => cricketBallDetail(t, "cricket.ball", { bowler: "b1", runs: { bat: 0 } })).not.toThrow();
+    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b1", runs: { bat: 0 } })).toBe(
+      "pad.cricket.ribbon.ball.dot",
+    );
+    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b1", runs: { bat: 0 } }, undefined)).toBe(
+      "pad.cricket.ribbon.ball.dot",
+    );
+  });
+
+  it("a structural prev (core.start) is never treated as 'the previous ball' — no note, even though its own payload happens to carry a same-named field", () => {
+    const prev = { type: "core.start", payload: { bowler: "b1" } };
+    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b2", runs: { bat: 0 } }, prev)).toBe(
+      "pad.cricket.ribbon.ball.dot",
+    );
+  });
+
+  it("a cricket.innings.summary prev (structural, not a ball) is likewise never treated as the previous ball", () => {
+    const prev = { type: "cricket.innings.summary", payload: { bowler: "b1" } };
+    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b2", runs: { bat: 0 } }, prev)).toBe(
+      "pad.cricket.ribbon.ball.dot",
+    );
+  });
+
+  it("cricket.ball and cricket.superover.ball both count as BALL_EVENT_TYPES for this comparison", () => {
+    const prev = ball("b1");
+    expect(
+      cricketBallDetail(t, "cricket.superover.ball", { bowler: "b2", runs: { bat: 0 } }, prev),
+    ).toBe('pad.cricket.ribbon.ball.bowlerChanged({"detail":"pad.cricket.ribbon.ball.dot"})');
+  });
+
+  it("an empty-string bowler on either side never counts as a change — the bowling order not populated yet", () => {
+    const prevEmpty = { type: "cricket.ball", payload: { bowler: "", runs: { bat: 0 } } };
+    expect(cricketBallDetail(t, "cricket.ball", { bowler: "b1", runs: { bat: 0 } }, prevEmpty)).toBe(
+      "pad.cricket.ribbon.ball.dot",
+    );
+
+    const prevReal = ball("b1");
+    expect(cricketBallDetail(t, "cricket.ball", { bowler: "", runs: { bat: 0 } }, prevReal)).toBe(
+      "pad.cricket.ribbon.ball.dot",
+    );
+  });
+});
+
 describe("runRate", () => {
   it("is null before any legal ball", () => {
     expect(runRate(0, 0, 6)).toBeNull();
@@ -917,6 +999,113 @@ describe("buildContext — bowler read-only tracks the fold's own over boundary 
     const spec = buildContext(v)!;
     expect(spec.slots.find((s) => s.id === "striker")!.readOnly).toBe(true);
     expect(spec.slots.find((s) => s.id === "nonStriker")!.readOnly).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Live bug fix (owner-reported, reproduced against real data, 2026-08-17):
+// on a T20 fixture with 10 overs bowled, the owner could not start over 11 —
+// the pad showed "That entry isn't valid for this match." Root cause:
+// `resolvePeople`'s bowler default read `bowlingOrder[0]` at an over
+// boundary with NO eligibility check, so when bowlingOrder[0] had just
+// bowled the previous over and/or exhausted his quota, the engine refused
+// the submission on up to two independent grounds (cricket.ts:1160-1171,
+// `applyDelivery`'s "consecutive overs"/"exhausted quota" checks — the third
+// ground, "not in the fielding lineup" (cricket.ts:1163), can never fire
+// here since every candidate below is drawn FROM bowlingOrder itself).
+//
+// Fixed by mirroring the engine's own eligibility filter (its private
+// `eligibleBowlers`, cricket.ts:1784-1795, used internally by the random
+// generator — not exported, so mirrored rather than imported, matching
+// packages/engine being read-only from this file) directly inside
+// `resolvePeople`. One default computed in one place means scorebug's shown
+// name, the context chip's personId, AND the submitted payload can never
+// disagree — the same reasoning G5's own header already gives for why
+// `resolvePeople` is the single source every consumer reads.
+// ---------------------------------------------------------------------------
+
+describe("resolvePeople / buildTiles / buildContext — bowler default is ELIGIBLE at an over boundary (R2b live bug fix)", () => {
+  it("skips bowlingOrder[0] when he bowled the PREVIOUS over — proposes the first eligible name instead", () => {
+    const s = state({
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })],
+    });
+    expect(resolvePeople(s).bowler).toBe("a2");
+  });
+
+  it("skips bowlingOrder[0] when he has already bowled cfg.maxOversPerBowler overs — proposes the first eligible name instead", () => {
+    // t20: maxOversPerBowler 4, ballsPerOver 6 (cfg()'s own default) -> 24
+    // balls is exactly 4 overs bowled, at quota (cricket.ts:1167-1169's own
+    // floor(bowlerBalls/bpo) >= max arithmetic, mirrored here).
+    const s = state({
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: { a1: 24 } } })],
+    });
+    const p = resolvePeople(s, {}, cfg({ maxOversPerBowler: 4 }));
+    expect(p.bowler).toBe("a2");
+  });
+
+  it("computes overs bowled against the REAL cfg.ballsPerOver, not a hardcoded 6 — the Hundred's 5-ball over changes who is at quota", () => {
+    // 20 balls / 5-ball over = exactly 4 overs bowled -> exhausted at a
+    // 4-over quota. A hardcoded 6 would compute floor(20/6)=3 < 4 and
+    // wrongly call bowlingOrder[0] still eligible.
+    const s = state({
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: { a1: 20 } } })],
+    });
+    const p = resolvePeople(s, {}, cfg({ ballsPerOver: 5, maxOversPerBowler: 4 }));
+    expect(p.bowler).toBe("a2");
+  });
+
+  it("mid-over (currentBowler already set) is UNCHANGED by this fix — the fold refuses a mid-over swap regardless of eligibility data", () => {
+    // a1 is simultaneously this-over's bowler, the PREVIOUS over's bowler,
+    // AND wildly over quota — proves the currentBowler branch short-circuits
+    // before eligibility is ever consulted, exactly like the brief requires.
+    const s = state({
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: "a1", prevOverBowler: "a1", bowlerBalls: { a1: 999 } } })],
+    });
+    const p = resolvePeople(s, {}, cfg({ maxOversPerBowler: 4 }));
+    expect(p.bowler).toBe("a1");
+  });
+
+  it("empty string, never an illegal name, when literally nobody in the bowling order is eligible", () => {
+    const s = state({
+      orders: { home: ["h1", "h2", "h3"], away: ["a1", "a2"] },
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: null, bowlerBalls: { a1: 24, a2: 24 } } })],
+    });
+    const p = resolvePeople(s, {}, cfg({ maxOversPerBowler: 4 }));
+    expect(p.bowler).toBe("");
+  });
+
+  it("a manual context-strip override still wins outright — this fix does not second-guess the scorer's own explicit pick", () => {
+    const s = state({
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })],
+    });
+    const p = resolvePeople(s, { bowler: "a1" }, cfg());
+    expect(p.bowler).toBe("a1");
+  });
+
+  it("the SUBMITTED ball payload (buildTiles) carries the eligible default too — the strip and the tap can never disagree", () => {
+    const v = view({
+      state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })] }),
+    });
+    const run1 = buildTiles(v).find((tl) => tl.id === "run1")!;
+    expect(run1.action).toMatchObject({ event: { payload: { bowler: "a2" } } });
+  });
+
+  it("the context chip's shown personId is the eligible default too, never the illegal bowlingOrder[0]", () => {
+    const v = view({
+      state: state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })] }),
+    });
+    const spec = buildContext(v)!;
+    expect(spec.slots.find((s) => s.id === "bowler")!.personId).toBe("a2");
+  });
+
+  it("mutation proof: a version blind to prevOverBowler (quota-only) would disagree with the real one here", () => {
+    const ignoresPrevOverBowler = () => "a1"; // pretends bowlingOrder[0] is always fine
+    const s = state({
+      innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: null, prevOverBowler: "a1", bowlerBalls: {} } })],
+    });
+    const real = resolvePeople(s).bowler;
+    const viaMutant = ignoresPrevOverBowler();
+    expect(real).not.toBe(viaMutant); // real: "a2" (skips a1); mutant: "a1" (blind to prevOverBowler)
   });
 });
 

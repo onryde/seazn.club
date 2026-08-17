@@ -400,8 +400,37 @@ export interface SkinDefV3<View = unknown> {
    * vocabulary, and the chassis must not learn it (the same rule that keeps
    * `WhoLine.servingLabel` skin-supplied). Returns `undefined` when the skin
    * has nothing to add, which leaves the static caption untouched.
+   *
+   * `prev` (R2b, owner request — "show when the bowler changed"): the
+   * PREVIOUS event in real chronological time — OLDER, never the previous
+   * ARRAY INDEX. `ActivityPanel` (activity.tsx) renders rows NEWEST FIRST
+   * (`orderedActivity`'s own doc), so for `rows[i]` this is `rows[i+1]`,
+   * never `rows[i-1]` — getting that backwards silently annotates the WRONG
+   * event while still looking plausible on screen. The caller also SKIPS
+   * voided rows when picking this candidate (`previousActivityEvent`,
+   * activity.tsx) — a voided delivery must never establish a fact like "the
+   * previous bowler", or undoing a ball would invent a change that never
+   * happened. What the caller does NOT do is filter by event TYPE: it has
+   * no sport vocabulary to filter with, so `prev` may be a structural row
+   * (`core.start`, a sport's own non-ball event, even a `core.void` marker)
+   * sitting immediately before this one. A skin that only cares about SOME
+   * event types (e.g. cricket comparing ball to ball) checks `prev.type`
+   * against its own closed set itself once it receives this — the same
+   * "chassis provides the mechanism, skin decides the policy" split every
+   * other optional member here already takes. `undefined` at the oldest
+   * row, or when every older row is voided — a skin must treat that as
+   * "nothing to compare", never crash and never claim a change. Optional
+   * and additive-only: every pre-R2b call site omits this 4th argument
+   * entirely and keeps compiling and behaving identically, and the other
+   * ten skins that decline to implement `activityDetail` at all are
+   * unaffected either way.
    */
-  activityDetail?(t: (key: string, vars?: Record<string, string | number>) => string, eventType: string, payload: Record<string, unknown>): string | undefined;
+  activityDetail?(
+    t: (key: string, vars?: Record<string, string | number>) => string,
+    eventType: string,
+    payload: Record<string, unknown>,
+    prev?: { type: string; payload: Record<string, unknown> },
+  ): string | undefined;
   /** Declares this skin's swap-sheet integration (design §2.7) — `null`
    *  when a swap is not applicable right now (e.g. no sub currently legal
    *  to OFFER, as opposed to legal-but-refused, which is `policyOk: false`

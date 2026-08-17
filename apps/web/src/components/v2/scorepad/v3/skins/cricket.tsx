@@ -127,12 +127,25 @@ interface CricketCfgShape {
   dls?: { enabled?: boolean };
   followOn?: { enabled?: boolean };
   superOver?: boolean;
+  /** t20: 4, odi: 10, hundred: 4 (cricket.ts's own `variants`); absent for
+   *  test cricket (no cap). Bug fix (R2b live bug, 2026-08-17) — needed so
+   *  `resolvePeople`'s bowler default can mirror the engine's own quota
+   *  check (cricket.ts:1166-1171) rather than proposing an exhausted
+   *  bowler. */
+  maxOversPerBowler?: number;
 }
 interface CricketFineShape {
   striker?: string | null;
   nonStriker?: string | null;
   currentBowler?: string | null;
   freeHitPending?: boolean;
+  /** Bug fix (R2b live bug, 2026-08-17): mirrors the engine's own
+   *  `FineInnings.prevOverBowler`/`.bowlerBalls` (cricket.ts:415/419) —
+   *  needed by `resolvePeople`'s bowler default to mirror the engine's own
+   *  consecutive-over/quota checks (cricket.ts:1160-1171). Both absent from
+   *  this shape until this fix; see `resolvePeople`'s own doc for why. */
+  prevOverBowler?: string | null;
+  bowlerBalls?: Record<string, number>;
 }
 interface CricketInningsShape {
   battingSide?: "home" | "away";
@@ -264,12 +277,42 @@ export interface ResolvedPeople {
   bowler: string;
 }
 
+/**
+ * Bug fix (owner-reported, reproduced against real data, 2026-08-17): whether
+ * `personId` may legally OPEN a new over — mirrors the engine's own two
+ * checks at an over boundary (`fine.currentBowler === null`) verbatim:
+ * `applyDelivery`, cricket.ts:1160-1171, and the identical filter its own
+ * random-stream generator uses internally, `eligibleBowlers`, cricket.ts:
+ * 1784-1795 (private to that module; mirrored here, not imported —
+ * packages/engine is read-only from this file). No consecutive overs
+ * (`personId === fine.prevOverBowler`), and — only when the cfg actually
+ * caps it — the per-bowler quota (`floor(bowlerBalls[id] / bpo) >=
+ * maxOversPerBowler`). The engine's THIRD refusal ground ("not in the
+ * fielding lineup", cricket.ts:1163) needs no check here: every caller below
+ * draws `personId` FROM `bowlingOrder` itself, so it always already holds.
+ *
+ * `bpo` must be the cfg's real `ballsPerOver` (`ballsPerOverOf`), never a
+ * hardcoded 6 — the Hundred sets 5 (cricket.ts:2811), and the quota
+ * arithmetic silently mis-divides against the wrong divisor otherwise.
+ */
+export function isEligibleOverBowler(
+  personId: string,
+  fine: CricketFineShape | null | undefined,
+  maxOversPerBowler: number | undefined,
+  bpo: number,
+): boolean {
+  if (personId === (fine?.prevOverBowler ?? null)) return false;
+  if (maxOversPerBowler === undefined) return true;
+  const bowled = Math.floor((fine?.bowlerBalls?.[personId] ?? 0) / bpo);
+  return bowled < maxOversPerBowler;
+}
+
 /** Striker/non-striker/bowler, fold-authoritative (`fine.*`) with the SAME
  *  default v2's `ThisOverGroup` used before any manual pick existed:
- *  `battingOrder[0]`/`[1]`, `bowlingOrder[0]` — stateless here (no local
- *  component state available to a pure skin builder), so this default is
- *  recomputed fresh each call rather than remembered across renders. Empty
- *  string when even the order itself isn't populated yet (pre-lineup).
+ *  `battingOrder[0]`/`[1]` for striker/non-striker — stateless here (no
+ *  local component state available to a pure skin builder), so this default
+ *  is recomputed fresh each call rather than remembered across renders.
+ *  Empty string when even the order itself isn't populated yet (pre-lineup).
  *
  *  `overrides` (G5 — controller ruling 2026-08-16): `view.contextOverrides`,
  *  a slot id -> person id map of PENDING context-strip picks the HOST holds
@@ -278,27 +321,59 @@ export interface ResolvedPeople {
  *  a scorer's own just-tapped choice, which must win over both the last
  *  KNOWN fold value and the fallback default. Defaults to `{}` so every
  *  pre-G5 call site (none passed a second argument) keeps behaving
- *  identically. */
-export function resolvePeople(state: CricketStateShape, overrides: Readonly<Record<string, string>> = {}): ResolvedPeople {
+ *  identically.
+ *
+ *  Bug fix (owner-reported, live data, 2026-08-17): the bowler default used
+ *  to read `bowlingOrder[0]` unconditionally — at an over boundary
+ *  (`fine.currentBowler === null`) with bowlingOrder[0] having just bowled
+ *  the previous over or exhausted his quota, this proposed a bowler the
+ *  engine would refuse outright, and the scorer could not start the next
+ *  over at all (see this file's own test suite for the exact live
+ *  reproduction). Now the first ELIGIBLE name in `bowlingOrder`
+ *  (`isEligibleOverBowler`, above) — `""` (never an illegal name) when
+ *  nobody qualifies, forcing the scorer to choose via the context strip
+ *  rather than silently shipping a payload the engine will reject. `cfg`
+ *  (new 3rd param, defaulted to `{}`) is what this needs: every pre-fix call
+ *  site either already had a `CricketCfgShape` in scope (updated below) or
+ *  — for direct 2-arg test calls — gets `maxOversPerBowler: undefined` (no
+ *  quota check) and `ballsPerOverOf({}) === 6`, which reproduces the OLD
+ *  bowlingOrder[0]-always behaviour exactly whenever `fine.prevOverBowler`/
+ *  `.bowlerBalls` are absent too (every pre-fix fixture), so no existing
+ *  caller's behaviour silently changes underneath it. This does NOT touch
+ *  the mid-over branch (`fine?.currentBowler`, checked first) or the
+ *  `overrides.bowler` branch (checked first of all) — a manual pick is never
+ *  second-guessed, and the fold's own strict mid-over refusal
+ *  (cricket.ts:1173-1178) is untouched. */
+export function resolvePeople(
+  state: CricketStateShape,
+  overrides: Readonly<Record<string, string>> = {},
+  cfg: CricketCfgShape = {},
+): ResolvedPeople {
   const innings = currentInnings(state);
   const battingSide = innings?.battingSide ?? "home";
   const bowlingSide = opponentSide(battingSide);
   const battingOrder = state.orders?.[battingSide] ?? [];
   const bowlingOrder = state.orders?.[bowlingSide] ?? [];
   const fine = innings?.fine ?? null;
+  const bpo = ballsPerOverOf(cfg);
   return {
     battingSide,
     bowlingSide,
     striker: overrides.striker ?? fine?.striker ?? battingOrder[0] ?? "",
     nonStriker: overrides.nonStriker ?? fine?.nonStriker ?? battingOrder[1] ?? "",
-    bowler: overrides.bowler ?? fine?.currentBowler ?? bowlingOrder[0] ?? "",
+    bowler:
+      overrides.bowler ??
+      fine?.currentBowler ??
+      bowlingOrder.find((id) => isEligibleOverBowler(id, fine, cfg.maxOversPerBowler, bpo)) ??
+      "",
   };
 }
 
-function basePayload(state: CricketStateShape, bpo: number, overrides: Readonly<Record<string, string>>): Record<string, unknown> {
+function basePayload(state: CricketStateShape, cfg: CricketCfgShape, overrides: Readonly<Record<string, string>>): Record<string, unknown> {
   const innings = currentInnings(state);
+  const bpo = ballsPerOverOf(cfg);
   const legalBalls = innings?.legalBalls ?? 0;
-  const people = resolvePeople(state, overrides);
+  const people = resolvePeople(state, overrides, cfg);
   return {
     over: Math.floor(legalBalls / bpo),
     ballInOver: (legalBalls % bpo) + 1,
@@ -417,17 +492,55 @@ export function overDots(events: readonly EventEnvelope[], bpo: number): string[
  * Returns `undefined` for any non-ball event type, so wiring this as a
  * generic `resolveDetail` leaves every other cricket row (toss/review/
  * retire/…) on its existing static caption untouched.
+ *
+ * `prev` (R2b, owner request — "show when the bowler changed"): the data
+ * already exists on every `cricket.ball`/`cricket.superover.ball` payload
+ * (`bowler`, a person id) — this is a RENDERING change, not a new event.
+ * When present AND its own `bowler` genuinely differs from THIS ball's
+ * `bowler`, the base detail above gets a bowler-changed note APPENDED
+ * (never replaces it — a wicket off the first ball of a new spell must
+ * still read as a wicket) via `bowlerChanged`/the
+ * `pad.cricket.ribbon.ball.bowlerChanged` key. See `SkinDefV3.
+ * activityDetail`'s own doc (types.ts) for the full caller contract
+ * (reversed-order/voided-skip mechanics, why `prev` may be a structural
+ * row this file must reject itself). `bowlerChanged` below is what does
+ * that rejection, via this file's own `BALL_EVENT_TYPES`.
+ *
+ * NAME-FREE by design, not by oversight: this function receives `t` but no
+ * person-name map, so it cannot turn `bowler` (a raw id) into a display
+ * name — `SkinDefV3.activityDetail`'s contract stops at `prev: {type,
+ * payload}` (types.ts), and reaching for a name would mean widening it
+ * further still (e.g. a resolver function bundled alongside `prev`, or a
+ * 5th parameter) beyond what this wave's brief authorised. The dictionary
+ * copy below reads "New bowler" with no name — a real but smaller
+ * usefulness cost than a widened contract every other skin's
+ * `activityDetail` would also have to reckon with.
  */
 export function cricketBallDetail(
   t: TFn,
   eventType: string,
   payload: Record<string, unknown>,
+  prev?: { type: string; payload: Record<string, unknown> },
 ): string | undefined {
   if (!BALL_EVENT_TYPES.has(eventType)) return undefined;
   const p = payload as {
     wicket?: { kind?: string };
     runs?: { bat?: number; extras?: { kind?: string; runs?: number } };
+    bowler?: unknown;
   };
+  const detail = baseBallDetail(t, p);
+  if (!bowlerChanged(p.bowler, prev)) return detail;
+  return t("pad.cricket.ribbon.ball.bowlerChanged", { detail });
+}
+
+/** The outcome-only detail — wicket, then extras-by-kind, then plain runs
+ *  (same decision order as `ballOutcomeSymbol`). Factored out of
+ *  `cricketBallDetail` so the bowler-changed note (above) can wrap the
+ *  result without duplicating this chain. */
+function baseBallDetail(
+  t: TFn,
+  p: { wicket?: { kind?: string }; runs?: { bat?: number; extras?: { kind?: string; runs?: number } } },
+): string {
   if (p.wicket?.kind) return t(requiredVocabKey("kind", p.wicket.kind));
   const extraKind = p.runs?.extras?.kind;
   if (extraKind) return t(requiredVocabKey("kind", extraKind));
@@ -435,6 +548,29 @@ export function cricketBallDetail(
   if (bat === 0) return t("pad.cricket.ribbon.ball.dot");
   if (bat === 1) return t("pad.cricket.ribbon.ball.run");
   return t("pad.cricket.ribbon.ball.runs", { runs: bat });
+}
+
+/**
+ * True when `prev` is a real ball — `BALL_EVENT_TYPES`, never a
+ * structural row (`core.start`, `cricket.innings.summary`) or a
+ * `core.void` marker sitting between two real balls; `activity.tsx`'s own
+ * `previousActivityEvent` does not filter by type, so this file must —
+ * whose `bowler` genuinely differs from THIS ball's own `bowler`. Both
+ * compared as raw ids (`CricketBall.bowler`, packages/engine), never
+ * resolved to a name first, so two different people who happen to share a
+ * display name can never misread as "unchanged" and vice versa. An empty
+ * id on either side (the bowling order not populated yet) never counts as
+ * a change — that would misfire on the very first ball a bowler is ever
+ * recorded for.
+ */
+function bowlerChanged(bowler: unknown, prev?: { type: string; payload: Record<string, unknown> }): boolean {
+  if (!prev || !BALL_EVENT_TYPES.has(prev.type)) return false;
+  const prevBowler = (prev.payload as { bowler?: unknown }).bowler;
+  return (
+    typeof bowler === "string" && bowler !== "" &&
+    typeof prevBowler === "string" && prevBowler !== "" &&
+    bowler !== prevBowler
+  );
 }
 
 /** Runs per `bpo`-ball over, or `null` before any legal ball this innings —
@@ -536,7 +672,7 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   const runs = innings?.runs ?? 0;
   const wickets = innings?.wickets ?? 0;
   const legalBalls = innings?.legalBalls ?? 0;
-  const people = resolvePeople(state, view.contextOverrides);
+  const people = resolvePeople(state, view.contextOverrides, cfg);
 
   const contextParts: string[] = [];
   const vc = variantCode(cfg);
@@ -642,8 +778,8 @@ const MINOR_EXTRA_KINDS: readonly ExtraKind[] = ["noball", "bye", "legbye", "pen
 export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[] {
   const cfg = asCfg(view.cfg);
   const state = asState(view.state);
-  const bpo = ballsPerOverOf(view.cfg);
-  const base = basePayload(state, bpo, view.contextOverrides);
+  const bpo = ballsPerOverOf(cfg);
+  const base = basePayload(state, cfg, view.contextOverrides);
   const type = ballEventType(state);
   const twoInnings = cfg.inningsPerSide === 2;
   const innings = currentInnings(state);
@@ -788,8 +924,8 @@ export function buildDock(eventType: string, t: TFn): DockSpec | null {
 
 // ---------------------------------------------------------------------------
 // context() — §2.4, closes D-14. Fold-and-override-authoritative (same
-// `resolvePeople(state, view.contextOverrides)` the tiles/sheets use, so the
-// strip and the next tap NEVER disagree). No `contextSelect`: cricket has no
+// `resolvePeople(state, view.contextOverrides, cfg)` the tiles/sheets use, so
+// the strip and the next tap NEVER disagree). No `contextSelect`: cricket has no
 // event that records "who is currently bowling/batting" as its own
 // standalone fact (all 15 event types checked — see this file's header) —
 // declaring one would either invent an event (`createSkinDispatch`'s guard
@@ -846,7 +982,7 @@ export function buildContext(view: PadHostView): ContextStripSpec | null {
   if (state.phase !== "live" && state.phase !== "super_over") return null;
   const innings = currentInnings(state);
   if (innings === null) return null;
-  const people = resolvePeople(state, view.contextOverrides);
+  const people = resolvePeople(state, view.contextOverrides, asCfg(view.cfg));
   const bowlerReadOnly = bowlerIsReadOnly(innings);
   return {
     slots: [
@@ -867,6 +1003,29 @@ export function buildContext(view: PadHostView): ContextStripSpec | null {
         readOnly: true, // blocker 2 — see this file's header above
       },
       {
+        // CANDIDATE-LIST GAP (checked as part of the R2b live bug fix,
+        // 2026-08-17 — reported, not fixed here): when this slot is
+        // editable (over boundary, not readOnly), tapping it opens a picker
+        // whose candidates come from `pad-host.tsx`'s `combinedPool(squads)`
+        // — resolved through `ContextSlot.pool` alone, via
+        // `context-strip.tsx`'s `resolvePool`. `ContextSlot` (types.ts) has
+        // no `candidates`/`side` field — only `SheetPersonStep` (the wicket
+        // sheet's own `out`/`fielder` steps, G6 above) supports narrowing a
+        // person picker's list; a context-strip slot cannot. Two consequences,
+        // neither fixable from this file alone: (1) the picker offers BOTH
+        // sides' on-field roster, not just the bowling side (`combinedPool`'s
+        // own header already flags this as a "slightly wider-than-ideal"
+        // pre-existing gap); (2) within the bowling side, it offers every
+        // on-field player regardless of the SAME eligibility this fix just
+        // taught the default to respect (consecutive-over/quota) — the chip
+        // does not stop a scorer from tapping an ineligible name, the same
+        // shape of defect this fix closes for the untouched default, just
+        // reachable through the picker instead. Fixing this needs a
+        // `candidates`-like field on `ContextSlot` (types.ts) plus a
+        // `context-strip.tsx` change to honour it — both out of this file's
+        // grant (types.ts is a concurrent task's file this wave; see this
+        // task's own report). Flagged here rather than silently left
+        // unmentioned, per the brief's own ask to report even a null result.
         id: "bowler",
         label: "pad.cricket.context.bowler",
         personId: people.bowler || undefined,
@@ -919,8 +1078,9 @@ const CLOSE_REASONS: readonly (readonly [string, string])[] = [
  */
 function wicketSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
-  const people = resolvePeople(state, view.contextOverrides);
-  const base = basePayload(state, ballsPerOverOf(view.cfg), view.contextOverrides);
+  const cfg = asCfg(view.cfg);
+  const people = resolvePeople(state, view.contextOverrides, cfg);
+  const base = basePayload(state, cfg, view.contextOverrides);
   // G6: exactly the two batters who can be run out — never an empty-string
   // placeholder (resolvePeople's own "order not populated yet" fallback) —
   // so a not-yet-populated crease offers zero candidates rather than a

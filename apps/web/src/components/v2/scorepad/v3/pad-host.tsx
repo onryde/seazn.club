@@ -771,7 +771,7 @@ export function PadHostV3(props: PadHostV3Props) {
           // this wave already fixed three times.
           resolveDetail={
             props.skin.activityDetail
-              ? (eventType, payload) => props.skin.activityDetail!(t, eventType, payload)
+              ? (eventType, payload, prev) => props.skin.activityDetail!(t, eventType, payload, prev)
               : undefined
           }
         />

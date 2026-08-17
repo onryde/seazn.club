@@ -141,6 +141,48 @@ export function orderedActivity(events: readonly ActivityEvent[]): ActivityEvent
   return [...events].reverse();
 }
 
+/**
+ * R2b (owner request — "show when the bowler changed"): the nearest OLDER
+ * event before `rows[index]`, skipping voided rows. `rows` is
+ * `orderedActivity`'s own NEWEST-FIRST output, so "older" walks FORWARD
+ * through the array — `rows[index + 1]`, `rows[index + 2]`, … — never
+ * `index - 1` (that direction is NEWER, the opposite of what "previous"
+ * means here; this exact reversal is easy to get backwards and still look
+ * plausible on screen, which is why it is pinned by a discriminating test
+ * rather than just asserted).
+ *
+ * Skips voided rows for the same reason `activityRowState` derives
+ * `voided` in the first place (`some((v) => v.voids === event.id)`,
+ * duplicated here rather than calling that function — it also computes
+ * ownership/void-permission this caller has no use for): a voided
+ * delivery never actually happened as far as match state is concerned, so
+ * it must never stand in as "the previous" event for a skin comparing
+ * consecutive events.
+ *
+ * Deliberately does NOT filter by event type — this file is sport-
+ * agnostic (this file's own header) and has no vocabulary to filter with.
+ * The nearest non-voided row may be a structural event (`core.start`,
+ * `core.void`, a sport's own non-ball type); a skin that only wants to
+ * compare same-KIND events (e.g. cricket's ball-to-ball bowler check)
+ * checks `.type` against its own closed set itself once it receives this
+ * — same division of labour `SkinDefV3.activityDetail`'s own doc (types.ts)
+ * describes.
+ *
+ * `undefined` at the oldest row, or when every remaining older row is
+ * voided.
+ */
+export function previousActivityEvent(
+  rows: readonly ActivityEvent[],
+  index: number,
+): ActivityEvent | undefined {
+  for (let i = index + 1; i < rows.length; i++) {
+    const candidate = rows[i]!;
+    const voided = rows.some((v) => v.voids === candidate.id);
+    if (!voided) return candidate;
+  }
+  return undefined;
+}
+
 /** The panel scrolls internally past this many rows instead of growing the
  *  page. Matches the legacy `max-h-96` cap (timeline.tsx:257) — about six
  *  rows at the daylight shell's row height, which is roughly one over of
@@ -169,14 +211,26 @@ export interface ActivityPanelProps {
    * Optional and additive: omitted, every row keeps exactly today's
    * per-type-only caption.
    *
-   * NOT YET WIRED from `pad-host.tsx`'s own `<ActivityPanel>` call site —
-   * pad-host.tsx is reserved (out of this fix's file grant). Whoever wires
-   * it should pass e.g. `(type, payload) => cricketBallDetail(t, type,
-   * payload)` — or, better, promote this onto `SkinDefV3` itself so the
-   * chassis stays skin-driven rather than importing a sport-specific
-   * function directly. Flagged here for whoever picks that up.
+   * WIRED from `pad-host.tsx`'s own `<ActivityPanel>` call site as
+   * `props.skin.activityDetail` (promoted onto `SkinDefV3`, per this
+   * comment's own original suggestion) — `legacy-parity.test.ts`'s "3b"
+   * case asserts the whole chain, not just this function in isolation.
+   *
+   * Third parameter `prev` (R2b, owner request — "show when the bowler
+   * changed"): the PREVIOUS event, resolved by this file's own
+   * `previousActivityEvent` (above) — see that function's doc for the
+   * reversed-order/voided-skip mechanics, and `SkinDefV3.activityDetail`'s
+   * own doc (types.ts) for the full caller contract. Optional and additive
+   * here too: a `resolveDetail` implementation that only takes two
+   * parameters (every one written before R2b) keeps compiling and working
+   * unchanged — nothing requires a callee to declare every parameter a
+   * caller might pass.
    */
-  resolveDetail?: (eventType: string, payload: Record<string, unknown>) => string | undefined;
+  resolveDetail?: (
+    eventType: string,
+    payload: Record<string, unknown>,
+    prev?: { type: string; payload: Record<string, unknown> },
+  ) => string | undefined;
 }
 
 export function ActivityPanel({
@@ -210,10 +264,14 @@ export function ActivityPanel({
         // scrolling the page behind it, which on a phone reads as the pad
         // jumping while a scorer is reviewing.
         <ul className="max-h-96 divide-y divide-slate-100 overflow-y-auto overscroll-contain" data-role="v3-activity-list">
-          {rows.map((event) => {
+          {rows.map((event, index) => {
             const { voided, canVoid } = activityRowState(event, events, ownEventIds, deviceLinkId, !!onVoid);
             const payload = (event.payload ?? {}) as Record<string, unknown>;
-            const detail = resolveDetail?.(event.type, payload);
+            const prevEvent = previousActivityEvent(rows, index);
+            const prev = prevEvent
+              ? { type: prevEvent.type, payload: (prevEvent.payload ?? {}) as Record<string, unknown> }
+              : undefined;
+            const detail = resolveDetail?.(event.type, payload, prev);
             const caption = buildRibbon(event.type, payload, nameOf, t, detail);
             return (
               <li

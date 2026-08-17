@@ -3875,6 +3875,7 @@
   "pad.cricket.ribbon.ball.dot": "Bal zonder run",
   "pad.cricket.ribbon.ball.run": "1 run",
   "pad.cricket.ribbon.ball.runs": "{runs} runs",
+  "pad.cricket.ribbon.ball.bowlerChanged": "{detail} — Nieuwe bowler",
   "pad.cricket.tile.runs.0": "0",
   "pad.cricket.tile.runs.1": "1",
   "pad.cricket.tile.runs.2": "2",

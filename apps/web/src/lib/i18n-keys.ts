@@ -2600,6 +2600,7 @@ export type DictionaryKey =
   | "pad.cricket.panel.superOver"
   | "pad.cricket.panel.wicket"
   | "pad.cricket.ribbon.ball"
+  | "pad.cricket.ribbon.ball.bowlerChanged"
   | "pad.cricket.ribbon.ball.dot"
   | "pad.cricket.ribbon.ball.run"
   | "pad.cricket.ribbon.ball.runs"
