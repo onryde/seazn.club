@@ -701,7 +701,23 @@ entity per day, so a single fixture increments every entity it contains."
 
 ---
 
-### Task 4: Encode the per-entity cap in CP-SAT
+### Task 4: ~~Encode the per-entity cap in CP-SAT~~ — STRUCK 2026-08-17
+
+**Do not do this task.** C8 (#591) deleted `build-encode.ts`,
+`build-encode-parity.test.ts` and `z3-load.ts`. There is no in-process z3
+encoder to widen; the whole task addressed a file that no longer exists, and
+the `ENCODED_SCOPE_KINDS` axis it depended on went with the file. The scope
+guard has been rebuilt against the surviving path in `build.test.ts`
+(commit `04a22329`).
+
+**Task 4b below is now the entire encoder story**, not one path among several.
+Everything under this heading is kept only as the record of why the wire
+expansion is the right shape — the reasoning transfers, the file does not.
+
+<details>
+<summary>Struck task, retained for its reasoning</summary>
+
+### Task 4 (struck): Encode the per-entity cap in CP-SAT
 
 `build-encode.ts:484-513` encodes the cap as a FIXTURE-SET problem:
 `scopedFixtures(h)` resolves the scope to fixture indices, slots group by
@@ -892,7 +908,20 @@ per (entity, day) over that entity's own fixtures."
 
 ---
 
+</details>
+
+---
+
 ### Task 4b: Expand a universal scope into N `RuleGroup`s at the ACL
+
+**Promoted 2026-08-17 — this is now THE encoder task**, Task 4 having been
+struck with the deletion of z3. Concrete target, re-pinned post-C8:
+`buildRuleGroups` in `packages/engine/src/scheduling/build.ts` — the group
+type at `:1318-1319`, the typed-rule filter at `:1327`, `maxFixturesPerDay`
+set at `:1361-1362`, and the result sent as `ruleGroups` at `:1931`. The
+guard that forces this decision is `build.test.ts`'s
+`WIRE_STATED_SCOPE_KINDS` (commit `04a22329`), which reds the moment Task 3
+widens the union.
 
 **Re-scoped 2026-08-16 after rebasing onto C10 (#586).** The cap has THREE
 consumers, not two. `proto/scheduler.proto:154-170` rejects scopes on the wire
