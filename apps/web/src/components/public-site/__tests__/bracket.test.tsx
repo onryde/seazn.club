@@ -357,4 +357,60 @@ describe("public Bracket", () => {
   // the falsifiability proof for this file's other conversion (the
   // roundName() fallback above gets its own dedicated test since nothing
   // pre-existing exercised it for double_elim).
+
+  // Knockout-captions gap (F1 left this the one bracket shape with NO round
+  // names at all): TwoSided is the TREE branch a well-formed, regular
+  // knockout actually renders through — every prior naming fix (DoubleElim,
+  // PagePlayoff, the column fallback) missed it because it renders no text
+  // to be wrong. A depth's L and R columns are the SAME round, so each name
+  // is computed ONCE (columnRoundLabel) and rendered at both mirrored
+  // x-positions — the two captions can never disagree, only ever repeat.
+  it("names a REGULAR, well-formed knockout of 8 through the tree, including 3rd place", () => {
+    const fixtures = [
+      // Round 0: quarter-finals (4 games).
+      F("q1", 0, 1, null, null, null),
+      F("q2", 0, 2, null, null, null),
+      F("q3", 0, 3, null, null, null),
+      F("q4", 0, 4, null, null, null),
+      // Round 1: semi-finals (2 games).
+      F("s1", 1, 1, null, null, null),
+      F("s2", 1, 2, null, null, null),
+      // Round 2: the final (lowest seq) + the 3rd-place playoff (2nd seq) —
+      // twoSidedBracket() places both at the centre column (bracket-layout.ts).
+      F("fin", 2, 1, null, null, null, "scheduled", null, null, null, true, false, false),
+      F("tp", 2, 2, null, null, null, "scheduled", null, null, null, false, true, false),
+    ];
+    const html = renderToStaticMarkup(
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+    );
+    expect(html).toContain('data-bracket="two-sided"'); // confirms the TREE branch, not the fallback
+    // Each round name appears exactly TWICE — once above the L column, once
+    // above the mirrored R column — never once (missing a side) and never
+    // more (which would mean a depth bled into the wrong column).
+    expect(html.match(/>Quarter-finals</g) ?? []).toHaveLength(2);
+    expect(html.match(/>Semi-finals</g) ?? []).toHaveLength(2);
+    // The centre column (the tournament final) renders exactly once.
+    expect(html.match(/>Final</g) ?? []).toHaveLength(1);
+    // The 3rd-place playoff — previously unlabelled entirely, the gap this
+    // task exists to close — gets its own caption via roundRole()'s
+    // thirdPlace early return, distinct from "Final".
+    expect(html.match(/>Third place</g) ?? []).toHaveLength(1);
+    expect(html.match(/data-side="center"/g) ?? []).toHaveLength(2);
+  });
+
+  it("does not render a 3rd-place caption when the knockout has no 3rd-place playoff", () => {
+    const fixtures = [
+      F("s1", 0, 1, "a", "b", null),
+      F("s2", 0, 2, "c", "d", null),
+      F("fin", 1, 1, null, null, null),
+    ];
+    const html = renderToStaticMarkup(
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+    );
+    expect(html).toContain('data-bracket="two-sided"');
+    expect(html.match(/>Semi-finals</g) ?? []).toHaveLength(2);
+    expect(html.match(/>Final</g) ?? []).toHaveLength(1);
+    expect(html).not.toContain("Third place");
+    expect(html.match(/data-side="center"/g) ?? []).toHaveLength(1);
+  });
 });

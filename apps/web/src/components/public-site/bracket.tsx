@@ -159,10 +159,50 @@ function TwoSided({
     1,
     layout.nodes.filter((n) => n.col === 0 && n.side === "L").length,
   );
+  // The one bracket shape F1 left with NO round names — this is the TREE
+  // branch a well-formed, regular knockout actually renders through (the
+  // shape irregular data falls back to columns for, which already got names).
+  // ROUND_LABEL_H reserves a header row above the columns, mirroring
+  // DoubleElim's ROUND_LABEL_H in this same file. A depth's L and R columns
+  // are the SAME round — the name is computed ONCE (columnRoundLabel/
+  // labelForNode) and painted at both mirrored x-positions, so the two
+  // captions can never disagree, only ever repeat.
+  const ROUND_LABEL_H = 22;
+  const laneFixtures = fixtures.map((f) => ({ round_no: f.round_no, lane: f.lane ?? null }));
+  const roleLabel = (f: PublicFixture): string =>
+    roundRoleLabel(
+      lookup,
+      roundRoleFor(
+        laneFixtures,
+        {
+          round_no: f.round_no,
+          lane: f.lane ?? null,
+          is_final: f.is_final === true,
+          third_place: f.third_place === true,
+          conditional: f.conditional === true,
+        },
+        "knockout",
+        null,
+      ),
+    );
+  const labelForNode = (node: BracketNode | undefined): string => {
+    const f = node ? byId.get(node.fixtureId) : undefined;
+    return f ? roleLabel(f) : "";
+  };
+  const columnNode = (col: number, side: "L" | "R"): BracketNode | undefined =>
+    layout.nodes.find((n) => n.col === col && n.side === side);
+  const finalNode = layout.nodes.find((n) => n.side === "center" && n.row === 0);
+  // The 3rd-place playoff already got extra vertical space below the final
+  // (NODE_H + 20); widen it by ROUND_LABEL_H too so it has its own caption
+  // rather than sharing (or colliding with) the final's.
+  const thirdPlaceGap = NODE_H + 20 + ROUND_LABEL_H;
+  const thirdPlaceNode =
+    layout.thirdPlaceId !== undefined ? layout.nodes.find((n) => n.side === "center" && n.row === 1) : undefined;
   const totalW = (2 * layout.colsPerSide + 1) * COL_W;
   const totalH =
+    ROUND_LABEL_H +
     Math.max(rowsPerSide * SLOT_H, SLOT_H * 2) +
-    (layout.thirdPlaceId !== undefined ? NODE_H + 20 : 0);
+    (layout.thirdPlaceId !== undefined ? thirdPlaceGap : 0);
   const colX = (node: Pick<BracketNode, "side" | "col">): number => {
     if (node.side === "L") return node.col * COL_W;
     if (node.side === "R") return (2 * layout.colsPerSide - node.col) * COL_W + (COL_W - NODE_W);
@@ -170,15 +210,48 @@ function TwoSided({
   };
   const nodeTop = (node: BracketNode): number => {
     if (node.side === "center") {
-      const centre = (rowsPerSide * SLOT_H) / 2 - NODE_H / 2;
-      return node.row === 0 ? centre : centre + NODE_H + 20;
+      const centre = ROUND_LABEL_H + (rowsPerSide * SLOT_H) / 2 - NODE_H / 2;
+      return node.row === 0 ? centre : centre + thirdPlaceGap;
     }
-    return rowCenter(node.col, node.row) * SLOT_H - NODE_H / 2;
+    return ROUND_LABEL_H + rowCenter(node.col, node.row) * SLOT_H - NODE_H / 2;
   };
+  const roundLabelClass = "absolute font-display text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted";
 
   return (
     <div className="overflow-x-auto" data-bracket="two-sided">
       <div className="relative" style={{ width: totalW, height: totalH }}>
+        {Array.from({ length: layout.colsPerSide }, (_, col) => (
+          <span
+            key={`round-l-${col}`}
+            className={roundLabelClass}
+            style={{ left: colX({ side: "L", col }), top: 0, width: NODE_W }}
+          >
+            {labelForNode(columnNode(col, "L"))}
+          </span>
+        ))}
+        {Array.from({ length: layout.colsPerSide }, (_, col) => (
+          <span
+            key={`round-r-${col}`}
+            className={roundLabelClass}
+            style={{ left: colX({ side: "R", col }), top: 0, width: NODE_W }}
+          >
+            {labelForNode(columnNode(col, "R"))}
+          </span>
+        ))}
+        <span
+          className={roundLabelClass}
+          style={{ left: colX({ side: "center", col: layout.colsPerSide }), top: 0, width: NODE_W }}
+        >
+          {labelForNode(finalNode)}
+        </span>
+        {thirdPlaceNode && (
+          <span
+            className={roundLabelClass}
+            style={{ left: colX(thirdPlaceNode), top: nodeTop(thirdPlaceNode) - ROUND_LABEL_H, width: NODE_W }}
+          >
+            {labelForNode(thirdPlaceNode)}
+          </span>
+        )}
         <svg
           aria-hidden
           className="absolute inset-0"
@@ -193,13 +266,13 @@ function TwoSided({
               c.side === "L"
                 ? fromCol * COL_W + NODE_W
                 : (2 * layout.colsPerSide - fromCol) * COL_W + (COL_W - NODE_W);
-            const fy = rowCenter(fromCol, c.fromRow) * SLOT_H;
+            const fy = ROUND_LABEL_H + rowCenter(fromCol, c.fromRow) * SLOT_H;
             const tx = isFinal
               ? layout.colsPerSide * COL_W + (c.side === "L" ? (COL_W - NODE_W) / 2 : COL_W - (COL_W - NODE_W) / 2)
               : c.side === "L"
                 ? c.col * COL_W
                 : (2 * layout.colsPerSide - c.col) * COL_W + COL_W;
-            const ty = isFinal ? (rowsPerSide * SLOT_H) / 2 : rowCenter(c.col, c.toRow) * SLOT_H;
+            const ty = ROUND_LABEL_H + (isFinal ? (rowsPerSide * SLOT_H) / 2 : rowCenter(c.col, c.toRow) * SLOT_H);
             const midX = (fx + tx) / 2;
             return (
               <path
