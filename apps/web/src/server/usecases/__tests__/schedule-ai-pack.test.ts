@@ -1107,9 +1107,10 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
   // `schedulable` builder (the DRAFT greedy placer's input) used to stamp
   // `roundNo: f.round_no` unconditionally — `fixtures.round_no` is one
   // shared column populated for EVERY stage kind (bracket rounds, swiss
-  // rounds, stepladder legs all reuse it for display; see `stages.ts`'s
-  // `roundTitle`), so a knockout stage's own bracket-round numbering rode
-  // along as if it meant round-robin order, the design doc's own
+  // rounds, stepladder legs all reuse it for display — F1's roundRole()/
+  // roundRoleLabel() names every one of them by position, never derived
+  // from this column alone), so a knockout stage's own bracket-round
+  // numbering rode along as if it meant round-robin order, the design doc's own
   // motivating symptom, reachable from the AI-plan path even after
   // `toAssignment`'s own callers were gated in task 1 (schedule.ts). Spies
   // on the engine's own `slotFixtures` — the one function `schedulable`
