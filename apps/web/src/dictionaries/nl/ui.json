@@ -61,6 +61,8 @@
   "board.ai.preview.scope.in": "in {name}",
   "board.ai.preview.scope.for": "voor {name}",
   "board.ai.preview.scope.partial": "alleen voor een deel van de competitie",
+  "board.ai.preview.scope.everyEntrant": "voor elk team of koppel",
+  "board.ai.preview.scope.everyPerson": "voor elke speler",
   "board.ai.preview.selector.terminal": "de finale",
   "board.ai.preview.selector.extKey": "wedstrijd {key}",
   "board.ai.preview.selector.match": "die wedstrijd",

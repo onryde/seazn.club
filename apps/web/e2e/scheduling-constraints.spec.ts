@@ -270,6 +270,74 @@ test("a durable min_rest_minutes rule the API stored binds on the board — and 
   expect(overflow).toBeLessThanOrEqual(0);
 });
 
+/** Two fixtures sharing NO entrant — the board on which a per-entrant cap and a
+ *  whole-run cap give opposite answers. */
+function disjointEntrantPair(fixtures: FixtureRow[]): [FixtureRow, FixtureRow] {
+  for (const a of fixtures) {
+    const ents = [a.home_entrant_id, a.away_entrant_id].filter((e): e is string => e !== null);
+    for (const b of fixtures) {
+      if (b.id === a.id) continue;
+      if (!ents.some((e) => e === b.home_entrant_id || e === b.away_entrant_id)) return [a, b];
+    }
+  }
+  throw new Error("seed produced no two fixtures with disjoint entrants");
+}
+
+test("a universal daily cap counts each entrant, not the whole day", async ({ page, request }) => {
+  // THE distinction the feature exists for, on a real board. `every_entrant`
+  // and `competition` both answer `true` to "does this rule bind this fixture",
+  // so nothing about scope COVERAGE separates them — only the tally does. The
+  // two directions below are the same board and the same count, and they must
+  // disagree.
+  //
+  // Before `every_entrant` existed, "no player plays more than one match a day"
+  // had exactly one landing spot: the competition-scoped cap of direction 2,
+  // which on a 60-player event caps the whole day at one match. That is the
+  // misreading PARSER_PROMPT rule 8 was written to prevent, and this test is
+  // what makes the fix visible to an organiser rather than only to a unit test.
+  const { divisionId, stageId, fixtures } = await seedDivision(request, {
+    entrants: ["Ada", "Bay", "Cy", "Dot"],
+    stage: { kind: "league", name: "League" },
+  });
+  expect(fixtures).toHaveLength(6);
+  // Disjoint on purpose: every entrant on this board plays exactly ONCE.
+  const pair = disjointEntrantPair(fixtures);
+
+  // ---- Direction 1: cap each entrant at one a day. ------------------------
+  // Nobody plays twice, so nobody is over. A clean board.
+  await putSettings(request, divisionId, {
+    hard: [{ type: "max_fixtures_per_day", count: 1, scope: { kind: "every_entrant" } }],
+  });
+  await placeBackToBack(request, stageId, pair);
+  await openBoard(page, divisionId, "Ada");
+  await expect(badge(page)).toHaveCount(0);
+
+  // ---- Direction 2: cap the COMPETITION at one a day. ---------------------
+  // Same board, same number, nothing else changed — and now two fixtures share
+  // one day against a cap of one, so it breaches. If this half were also clean
+  // the cap would simply not be binding and direction 1 would prove nothing.
+  await putSettings(request, divisionId, {
+    hard: [{ type: "max_fixtures_per_day", count: 1, scope: { kind: "competition" } }],
+  });
+  await openBoard(page, divisionId, "Ada");
+  await expect(badge(page)).toBeVisible({ timeout: 20_000 });
+
+  await badge(page).click();
+  const list = panel(page);
+  await expect(list).toBeVisible();
+  // One row per movable card on the over-full day.
+  await expect(list.getByRole("listitem")).toHaveCount(2);
+
+  // 375px, same reasoning as the rest-rule spec above: no mobile PROJECT runs
+  // this file, so the width is exercised here or nowhere.
+  await page.setViewportSize({ width: 375, height: 800 });
+  await expect(list).toBeVisible();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+});
+
 test("a pool-targeted restByGroup binds the pool it names, and no other (#446)", async ({
   page,
   request,

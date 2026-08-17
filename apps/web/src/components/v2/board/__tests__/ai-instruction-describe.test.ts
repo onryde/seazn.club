@@ -187,6 +187,32 @@ describe("constraintToken / describeHardConstraint", () => {
     expect(text).toContain(enDict["board.ai.preview.scope.partial"] as string);
   });
 
+  it("reads a universal cap as EVERY player, never as 'part of the competition'", () => {
+    // The universal scopes carry no id, so the name lookup returns null for
+    // them exactly as it does for an unresolvable entrant id — and the fallback
+    // that is right there ("part of the competition only") is the precise
+    // opposite of what they mean. An organiser reading their headline
+    // constraint back as a partial one is the misunderstanding this feature
+    // exists to end, so it gets its own clause rather than the fallback.
+    const person = describeHardConstraint(
+      { type: "max_fixtures_per_day", count: 2, scope: { kind: "every_person" } } as HardConstraint,
+      ctxFor(enDict, "en", () => null),
+    );
+    expect(person).toContain(enDict["board.ai.preview.scope.everyPerson"] as string);
+    expect(person).not.toContain(enDict["board.ai.preview.scope.partial"] as string);
+
+    const entrant = describeHardConstraint(
+      { type: "max_fixtures_per_day", count: 2, scope: { kind: "every_entrant" } } as HardConstraint,
+      ctxFor(enDict, "en", () => null),
+    );
+    expect(entrant).toContain(enDict["board.ai.preview.scope.everyEntrant"] as string);
+    expect(entrant).not.toContain(enDict["board.ai.preview.scope.partial"] as string);
+
+    // And the two must not read alike — a pair cap and a player cap are
+    // different rules, which is the whole reason both scopes exist.
+    expect(person).not.toBe(entrant);
+  });
+
   it("localizes the whole reading, including the scope clause", () => {
     const c = {
       type: "max_fixtures_per_day",

@@ -609,6 +609,8 @@ export type DictionaryKey =
   | "board.ai.preview.rule.rest.feeder_to_dependent"
   | "board.ai.preview.rule.rest.per_person"
   | "board.ai.preview.rule.weekday"
+  | "board.ai.preview.scope.everyEntrant"
+  | "board.ai.preview.scope.everyPerson"
   | "board.ai.preview.scope.for"
   | "board.ai.preview.scope.in"
   | "board.ai.preview.scope.partial"
