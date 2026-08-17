@@ -93,7 +93,20 @@ function squads(): SquadState {
 function liveState(): Record<string, unknown> {
   return {
     phase: "live",
-    innings: [{ battingSide: "home", runs: 10, wickets: 1, legalBalls: 7, closed: false, fine: null }],
+    // R2b: `fine` non-null (ball-level), not the pre-R2b `null` this fixture
+    // used to carry. The fold's per-innings fidelity (cricket.tsx's own
+    // `inningsFidelity`) now gates the run/wide/wicket/extras tiles this
+    // sweep depends on to reach `cricket.ball`/`cricket.superover.ball` —
+    // `fine: null` (coarse) would hide every one of them, exactly the
+    // regression this fixture change fixes (found running the full v3 suite
+    // after R2b's over-summary tile landed). This sweep's whole point is
+    // ball-derived reachability, so ball-level is the correct fixture, not
+    // an arbitrary pick — the ORIGINAL `fine: null` predates fidelity
+    // meaning anything at all (R2/task E, before R2b existed).
+    innings: [{
+      battingSide: "home", runs: 10, wickets: 1, legalBalls: 7, closed: false,
+      fine: { striker: "p1", nonStriker: "p2", currentBowler: "p4", freeHitPending: false },
+    }],
     // Non-empty so resolvePeople() resolves a real striker (buildSwap needs
     // one to return non-null) — the exact ids are never asserted on.
     orders: { home: ["p1", "p2", "p3"], away: ["p4", "p5", "p6"] },
