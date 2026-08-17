@@ -12,7 +12,7 @@ import "server-only";
 // connection like the public read models — registrants have no org session;
 // the access token (sha256 stored, shown once) is their credential.
 // Organiser paths ride withTenant/RLS as usual.
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type postgres from "postgres";
 import type Stripe from "stripe";
 import { sql, withTenant } from "@/lib/db";
@@ -415,15 +415,20 @@ export const SPOT_HOLDERS = ["pending", "paid", "confirmed"] as const;
 // (TransactionSql omits connection controls, so it isn't a plain Sql).
 type AnySql = Tx | postgres.Sql;
 
-async function loadSettings(db: AnySql, divisionId: string): Promise<RegistrationSettingsRow | null> {
+/** Exported for `registration-approval.ts` (RS002 W5) — approve/reject/
+ *  promote all need the same live division-settings read `confirmRegistration`
+ *  et al. already use. */
+export async function loadSettings(db: AnySql, divisionId: string): Promise<RegistrationSettingsRow | null> {
   const [row] = await db<RegistrationSettingsRow[]>`
     select ${sql(SETTINGS_COLS as unknown as string[])} from registration_settings
     where division_id = ${divisionId}`;
   return row ?? null;
 }
 
-/** Append to the competition_events audit ledger (016 pattern). */
-async function audit(
+/** Append to the competition_events audit ledger (016 pattern). Exported for
+ *  `registration-approval.ts` (RS002 W5) — every approval transition writes
+ *  the same ledger the existing organiser transitions do. */
+export async function audit(
   db: AnySql,
   competitionId: string,
   orgId: string,
@@ -436,7 +441,9 @@ async function audit(
     values (${competitionId}, ${orgId}, ${type}, ${sql.json(payload as never)}, ${actorId})`;
 }
 
-interface DivisionCtx {
+/** Exported for `registration-approval.ts` (RS002 W5) — `promoteFromWaitlist`
+ *  needs the same org/comp/name context `notifyPromoted` does. */
+export interface DivisionCtx {
   id: string;
   competition_id: string;
   org_id: string;
@@ -462,7 +469,7 @@ interface DivisionCtx {
   // Carrying it here unread now would be a seam that ships untested.
 }
 
-async function divisionCtx(db: AnySql, divisionId: string): Promise<DivisionCtx> {
+export async function divisionCtx(db: AnySql, divisionId: string): Promise<DivisionCtx> {
   const [row] = await db<DivisionCtx[]>`
     select d.id, d.competition_id, d.org_id, d.eligibility, d.slug as div_slug,
            c.name as comp_name, c.slug as comp_slug, c.visibility as comp_visibility,
@@ -479,8 +486,10 @@ async function divisionCtx(db: AnySql, divisionId: string): Promise<DivisionCtx>
 
 
 /** Origin for emails fired from request-less paths (withdraw promotions):
- *  same override order as lib/base-url, localhost as the dev fallback. */
-function fallbackOrigin(): string {
+ *  same override order as lib/base-url, localhost as the dev fallback.
+ *  Exported for `registration-approval.ts` (RS002 W5) — `promoteFromWaitlist`
+ *  is request-less too. */
+export function fallbackOrigin(): string {
   return (
     process.env.OAUTH_BASE_URL ||
     process.env.NEXT_PUBLIC_BASE_URL ||
@@ -719,54 +728,115 @@ export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: str
  * hold amount 0, so promotion SNAPSHOTS the current fee + method (spec §2);
  * card divisions get a fresh 48h pay window. Returns the promoted row.
  *
- * payment_method/expires_at now live on the entry's CART
- * (`registration_groups`), not the entry — writing them here overwrites the
- * whole group's snapshot, which is exactly right while every group holds one
- * entry (true until RS002/RS003 ship multi-entry carts) and wrong the moment
- * a promoted entry shares a cart with something else already paid for at a
- * different rate. RS002 territory; flagged, not fixed here.
- *
  * `currency` is NOT re-snapshotted (RS001b). It is org-level now and the group
  * captured it at submit; design §3 is explicit that a later org-currency change
  * never touches an existing group, and a promotion is not a new quote. Writing
  * the org's CURRENT currency here would silently re-denominate a cart the
  * registrant was already shown a price for.
+ *
+ * Exported for `registration-approval.ts` (RS002 W5) — `promoteFromWaitlist`'s
+ * default (no explicit id) mode calls this directly rather than re-deriving
+ * the oldest-first pick.
  */
-async function promoteOldestWaitlisted(
+export async function promoteOldestWaitlisted(
   tx: Tx,
   divisionId: string,
   settings: RegistrationSettingsRow | null,
 ): Promise<RegistrationWithGroupRow | null> {
-  const feeCents = settings?.fee_cents ?? 0;
-  const method = settings?.payment_method ?? "offline";
-  const stripeWindow = method === "stripe" && feeCents > 0;
   const [picked] = await tx<{ id: string; group_id: string }[]>`
     select id, group_id from registrations
     where division_id = ${divisionId} and status = 'waitlisted'
     order by created_at, id limit 1
     for update skip locked`;
   if (!picked) return null;
+  return promoteWaitlistedRow(tx, picked.id, picked.group_id, settings);
+}
+
+/**
+ * Mechanical promotion of ONE already-locked waitlisted row — factored out of
+ * `promoteOldestWaitlisted` so `registration-approval.ts`'s explicit-id
+ * override (`promoteFromWaitlist`) shares the identical write rather than
+ * re-deriving it. Callers own locking the row and confirming it is actually
+ * `waitlisted` first.
+ *
+ * ── ROUTED MAJOR FIX (RS002 W5, wave-4 finding) ─────────────────────────────
+ * `payment_method`/`expires_at` live on the entry's CART (`registration_groups`),
+ * shared by every entry in it — see the block comment above
+ * `RegistrationWithGroupRow`. The old code unconditionally overwrote both on
+ * every promotion, which is exactly right while a group holds only the entry
+ * being promoted, and WRONG the instant a SIBLING entry in the same cart is
+ * still `pending` (mid-payment, relying on the group's CURRENT payment_method
+ * + expires_at to know how and by when to pay): a promotion could null out or
+ * redirect that sibling's live Stripe deadline, or silently change which
+ * method it believes it's paying by.
+ *
+ * Shape chosen (of the two the brief allows — the other, a per-entry
+ * `expires_at` column, needs a migration and this wave's file set excludes
+ * `db/migration/**`): SCOPE THE WRITE, not the column. The group's shared
+ * envelope is only written when no OTHER entry in the cart still depends on
+ * it — i.e. no sibling is `pending`. `pending` is the right and only
+ * dependent status: it is the exact predicate `sweepRegistrations`' own
+ * due/overdue queries use for "still watching this envelope" (registrations.ts,
+ * the `due`/`overdue` selects a few hundred lines below). A `paid` or
+ * `confirmed` sibling no longer reads the group's payment_method/expires_at
+ * (paid is already past its deadline; confirmed had it cleared by
+ * `materialise`), so neither blocks the write; a `waitlisted` sibling has no
+ * envelope commitment yet either. `payment_method` is scoped the SAME way as
+ * `expires_at`, in the same conditional, even though wave 4's
+ * `assertUniformPaymentMethod` already makes every PAID division in one cart
+ * agree on method at submit time — that invariant is submit-time only and a
+ * division's own `registration_settings.payment_method` can still change
+ * afterwards, so it narrows this hazard but does not close it (flagged in the
+ * wave-5 brief, recorded in `_INDEX.md`).
+ *
+ * When the write IS skipped, the newly-promoted entry simply inherits
+ * whatever payment_method/expires_at the cart already carries (set by
+ * whichever entry most recently had sole claim on it) rather than getting a
+ * fresh one of its own — conservative, and strictly safer than clobbering a
+ * live deadline. `registration_groups.amount_cents` (the cart's payable
+ * subtotal) is deliberately left untouched here, matching the pre-existing
+ * behaviour this function already had — folding a promoted entry's fee back
+ * into a shared multi-entry checkout total is a checkout-architecture
+ * question (design §4 step 5, "one Stripe checkout pays the whole cart") that
+ * belongs with RS003's endpoint work, not this fix.
+ * ───────────────────────────────────────────────────────────────────────── */
+export async function promoteWaitlistedRow(
+  tx: Tx,
+  regId: string,
+  groupId: string,
+  settings: RegistrationSettingsRow | null,
+): Promise<RegistrationWithGroupRow | null> {
+  const feeCents = settings?.fee_cents ?? 0;
+  const method = settings?.payment_method ?? "offline";
+  const stripeWindow = method === "stripe" && feeCents > 0;
   await tx`
     update registrations
     set status = 'pending', promoted_at = now(), updated_at = now(),
         amount_cents = ${feeCents}
-    where id = ${picked.id}`;
-  await tx`
-    update registration_groups
-    set payment_method = ${method},
-        expires_at = ${stripeWindow ? tx`now() + interval '48 hours'` : null},
-        updated_at = now()
-    where id = ${picked.group_id}`;
+    where id = ${regId}`;
+  const [{ n: pendingSiblings }] = await tx<{ n: number }[]>`
+    select count(*)::int as n from registrations
+    where group_id = ${groupId} and id != ${regId} and status = 'pending'`;
+  if (pendingSiblings === 0) {
+    await tx`
+      update registration_groups
+      set payment_method = ${method},
+          expires_at = ${stripeWindow ? tx`now() + interval '48 hours'` : null},
+          updated_at = now()
+      where id = ${groupId}`;
+  }
   const [row] = await tx<RegistrationWithGroupRow[]>`
     select ${regGroupCols(tx)}
     from registrations r join registration_groups g on g.id = r.group_id
-    where r.id = ${picked.id}`;
+    where r.id = ${regId}`;
   return row ?? null;
 }
 
 /** Post-tx promoted email (fire-and-forget): card entries get a fresh
- *  token-free checkout link, offline entries the resolved instructions. */
-async function notifyPromoted(
+ *  token-free checkout link, offline entries the resolved instructions.
+ *  Exported for `registration-approval.ts` (RS002 W5) — `promoteFromWaitlist`
+ *  reuses this verbatim rather than re-deriving the promoted-email shape. */
+export async function notifyPromoted(
   promoted: RegistrationWithGroupRow,
   ctx: DivisionCtx,
   settings: RegistrationSettingsRow | null,
@@ -1794,6 +1864,134 @@ export async function withdrawRegistrationByRef(
   return publicRegistrationStatusByRef(ref, token);
 }
 
+// ---------------------------------------------------------------------------
+// Group read model — /r/[ref] status page, multi-entry (RS002 W5, RS007)
+// ---------------------------------------------------------------------------
+
+export interface GroupEntryPlayerView {
+  id: string;
+  full_name: string;
+  consent_status: "pending" | "granted" | "guardian";
+}
+
+export interface GroupEntryView {
+  id: string;
+  division_id: string;
+  division_name: string;
+  display_name: string;
+  status: RegistrationRow["status"];
+  amount_cents: number;
+  free_agent: boolean;
+  join_code: string | null;
+  players: GroupEntryPlayerView[];
+}
+
+/** The whole cart, for the status page (design §4 step 6; RS007 builds the
+ *  endpoint). Group-level sibling of `PublicStatusView` (one entry). Every
+ *  field here is token-gated (see `groupByRef`), so — unlike the token-less
+ *  `PublicRefView` — names are NOT masked: whoever holds the access token is
+ *  the registrant (or someone they chose to share the link with), not the
+ *  general public `/r/[ref]` serves. */
+export interface GroupStatusView {
+  ref_code: string;
+  contact_name: string;
+  currency: string;
+  amount_cents: number;
+  payment_method: "offline" | "stripe" | null;
+  expires_at: string | null;
+  refunded_cents: number;
+  competition_name: string;
+  competition_slug: string;
+  org_slug: string;
+  org_name: string;
+  created_at: string;
+  entries: GroupEntryView[];
+}
+
+/** A fixed, deterministic hash to compare against when no group matches —
+ *  keeps `groupByRef`'s work (one hash + one `timingSafeEqual` call) the same
+ *  whether or not `ref` exists, so a nonexistent ref and a real ref with the
+ *  wrong token take the same path at the same cost. */
+const DUMMY_ACCESS_HASH = hashRegistrationToken("");
+
+/** Constant-time token check — mirrors the repo's sole existing precedent
+ *  (`api/internal/revalidate`'s `secretOk`): length-gate before
+ *  `timingSafeEqual`, which THROWS on a length mismatch rather than
+ *  returning false. Both inputs are always sha256 hex (64 chars), so the
+ *  length gate never actually trips in practice — it exists so this can
+ *  never throw regardless. */
+function tokenMatchesHash(token: string, hash: string): boolean {
+  const a = Buffer.from(hashRegistrationToken(token));
+  const b = Buffer.from(hash);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * The whole cart by its human-quotable ref (design §4 step 6) — the
+ * multi-entry status page RS007 builds on. Unlike `publicRegistrationStatusByRef`
+ * (token OPTIONAL, gates only `can_withdraw`), the access token is REQUIRED
+ * here: a cart can list every entry and every player in it, more than the
+ * general public should ever see off a bare ref. A wrong token and a
+ * nonexistent ref throw the identical generic 404 (never "ref not found" vs
+ * "wrong token") and cost the same (`tokenMatchesHash` always runs, even with
+ * no real hash to compare), so neither the error shape nor the response
+ * timing discloses whether the ref exists.
+ */
+export async function groupByRef(ref: string, accessToken: string): Promise<GroupStatusView> {
+  const notFound = () => new HttpError(404, "registration not found");
+  const canonical = normalizeRefCode(ref);
+  if (!isValidRefCode(canonical)) throw notFound();
+  const [group] = await sql<RegistrationGroupRow[]>`
+    select * from registration_groups where ref_code = ${canonical}`;
+  const tokenOk = tokenMatchesHash(accessToken, group?.access_token_hash ?? DUMMY_ACCESS_HASH);
+  if (!group || !tokenOk) throw notFound();
+
+  const [comp] = await sql<
+    { comp_name: string; comp_slug: string; org_slug: string; org_name: string }[]
+  >`
+    select c.name as comp_name, c.slug as comp_slug, o.slug as org_slug, o.name as org_name
+    from competitions c join organizations o on o.id = c.org_id
+    where c.id = ${group.competition_id}`;
+
+  const entries = await sql<Omit<GroupEntryView, "players">[]>`
+    select r.id, r.division_id, d.name as division_name, r.display_name, r.status,
+           r.amount_cents, r.free_agent, r.join_code
+    from registrations r join divisions d on d.id = r.division_id
+    where r.group_id = ${group.id}
+    order by r.created_at, r.id`;
+
+  const players =
+    entries.length > 0
+      ? await sql<(GroupEntryPlayerView & { registration_id: string })[]>`
+          select id, registration_id, full_name, consent_status
+          from registration_players
+          where registration_id in ${sql(entries.map((e) => e.id))}
+          order by created_at`
+      : [];
+  const playersByEntry = new Map<string, GroupEntryPlayerView[]>();
+  for (const p of players) {
+    const list = playersByEntry.get(p.registration_id) ?? [];
+    list.push({ id: p.id, full_name: p.full_name, consent_status: p.consent_status });
+    playersByEntry.set(p.registration_id, list);
+  }
+
+  return {
+    ref_code: group.ref_code!,
+    contact_name: group.contact_name,
+    currency: group.currency,
+    amount_cents: group.amount_cents,
+    payment_method: group.payment_method,
+    expires_at: group.expires_at ? new Date(group.expires_at).toISOString() : null,
+    refunded_cents: group.refunded_cents,
+    competition_name: comp?.comp_name ?? "",
+    competition_slug: comp?.comp_slug ?? "",
+    org_slug: comp?.org_slug ?? "",
+    org_name: comp?.org_name ?? "",
+    created_at: new Date(group.created_at).toISOString(),
+    entries: entries.map((e) => ({ ...e, players: playersByEntry.get(e.id) ?? [] })),
+  };
+}
+
 /** Resume/complete payment from the status page (pending paid regs — fresh
  *  submissions whose checkout was abandoned, and waitlist promotions). */
 export async function resumeRegistrationCheckout(
@@ -2063,24 +2261,92 @@ export async function sweepRegistrations(
 // Organiser: list / confirm / waitlist / withdraw / refund / export
 // ---------------------------------------------------------------------------
 
+export interface ListRegistrationsFilters {
+  /** Required when `divisionId` is null (cross-division hub mode); ignored
+   *  otherwise — a single division already pins its own competition. */
+  competition_id?: string;
+  kind?: RegistrationSettingsRow["entrant_kind"];
+  free_agent?: boolean;
+  /** At least one player on the entry still has `consent_status = 'pending'`. */
+  consent_pending?: boolean;
+  /** Matches the entry's display name or the cart's contact name/email. */
+  text?: string;
+}
+
+/**
+ * Organiser registration list. `divisionId` scopes to ONE division exactly as
+ * before — the LIVE `/api/v1/divisions/[id]/registrations` route calls this
+ * with 3 positional args and must keep compiling and behaving identically
+ * (RS002 W5 owns no route-handler changes). Pass `null` for the
+ * competition-wide hub view (design: "competition-level Registration hub",
+ * owner ruling 2) and set `filters.competition_id` instead.
+ *
+ * `filters.kind` needs the join to `registration_settings`: `entrant_kind` is
+ * a DIVISION-level setting, not stored per-entry, so it is only a meaningful
+ * filter once a call can span more than one division — scoped to a single
+ * division every row already shares one kind. LEFT JOIN, not INNER: some
+ * rows in this table predate any `registration_settings` row for their
+ * division existing at all (direct-SQL test fixtures — see
+ * `seedRegistration` in the test file), and an INNER JOIN would silently
+ * drop those rows for the EXISTING single-division callers — a regression
+ * this extension must not cause.
+ */
 export async function listRegistrations(
   auth: AuthCtx,
-  divisionId: string,
+  divisionId: string | null,
   status: string | null,
+  filters: ListRegistrationsFilters = {},
 ): Promise<RegistrationWithGroupRow[]> {
   return withTenant(auth.orgId, async (tx) => {
-    const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
-    if (!division) throw new HttpError(404, "division not found");
+    let competitionId: string;
+    if (divisionId) {
+      const [division] = await tx<{ competition_id: string }[]>`
+        select competition_id from divisions where id = ${divisionId}`;
+      if (!division) throw new HttpError(404, "division not found");
+      competitionId = division.competition_id;
+    } else {
+      if (!filters.competition_id) {
+        throw new HttpError(400, "competition_id is required when no division is given");
+      }
+      const [competition] = await tx`select 1 from competitions where id = ${filters.competition_id}`;
+      if (!competition) throw new HttpError(404, "competition not found");
+      competitionId = filters.competition_id;
+    }
+    const text = filters.text?.trim();
     return tx<RegistrationWithGroupRow[]>`
       select ${regGroupCols(tx)}
-      from registrations r join registration_groups g on g.id = r.group_id
-      where r.division_id = ${divisionId}
+      from registrations r
+      join registration_groups g on g.id = r.group_id
+      join divisions d on d.id = r.division_id
+      left join registration_settings rs on rs.division_id = r.division_id
+      where d.competition_id = ${competitionId}
+        ${divisionId ? tx`and r.division_id = ${divisionId}` : tx``}
         ${status ? tx`and r.status = ${status}` : tx``}
+        ${filters.kind ? tx`and rs.entrant_kind = ${filters.kind}` : tx``}
+        ${filters.free_agent !== undefined ? tx`and r.free_agent = ${filters.free_agent}` : tx``}
+        ${
+          filters.consent_pending
+            ? tx`and exists (
+                select 1 from registration_players rp
+                where rp.registration_id = r.id and rp.consent_status = 'pending'
+              )`
+            : tx``
+        }
+        ${
+          text
+            ? tx`and (r.display_name ilike ${"%" + text + "%"}
+                  or g.contact_name ilike ${"%" + text + "%"}
+                  or g.contact_email ilike ${"%" + text + "%"})`
+            : tx``
+        }
       order by r.created_at, r.id`;
   });
 }
 
-async function orgReg(tx: Tx, regId: string): Promise<RegistrationWithGroupRow> {
+/** Exported for `registration-approval.ts` (RS002 W5) — approve/reject/
+ *  promote all load-and-lock a registration under `withTenant` the same way
+ *  `confirmRegistration` et al. already do. */
+export async function orgReg(tx: Tx, regId: string): Promise<RegistrationWithGroupRow> {
   const [reg] = await tx<RegistrationWithGroupRow[]>`
     select ${regGroupCols(tx)}
     from registrations r join registration_groups g on g.id = r.group_id
@@ -2231,7 +2497,10 @@ export async function sendPaymentReminder(
   return { sent };
 }
 
-async function orgRegAfter(tx: Tx, regId: string): Promise<RegistrationWithGroupRow> {
+/** Exported for `registration-approval.ts` (RS002 W5) — same
+ *  reload-without-lock read `confirmRegistration` et al. return after their
+ *  own mutation. */
+export async function orgRegAfter(tx: Tx, regId: string): Promise<RegistrationWithGroupRow> {
   const [reg] = await tx<RegistrationWithGroupRow[]>`
     select ${regGroupCols(tx)}
     from registrations r join registration_groups g on g.id = r.group_id
