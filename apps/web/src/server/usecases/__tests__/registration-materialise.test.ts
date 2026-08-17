@@ -138,15 +138,30 @@ async function personCount(orgId: string): Promise<number> {
   return Number(n);
 }
 
+/** A globally-unique full_name per call. The name+dob match query this file
+ *  exercises is org-scoped in production (so re-running this suite against a
+ *  persistent DB is safe on its own), but several tests below deliberately
+ *  MUTATE the query to check the org/lane/merged_into guards are load-bearing
+ *  (see the implementer's own verification pass) — under a mutation that
+ *  drops org-scoping, a fixed literal name would accumulate matches across
+ *  every past run of this file and turn "exactly one match" into "many",
+ *  which masks the very regression the test exists to catch. A unique name
+ *  per call keeps every test's match set exactly what IT seeds, regardless
+ *  of how many times the suite has run before against this DB. */
+function tag(base: string): string {
+  return `${base} ${randomUUID().slice(0, 8)}`;
+}
+
 describe.skipIf(!HAS_DB)("player person get-or-create by (org, name, dob) — no user_id (RS002 ruling)", () => {
   it("same name + same dob, no user_id, materialised across two registrations → ONE person, reused", async () => {
     const { auth } = await seedOrg("pro");
     const divA = await seedOpenDivision(auth);
     const divB = await seedOpenDivision(auth);
     const before = await personCount(auth.orgId);
+    const name = tag("Riley Fox");
 
-    const a = await seedPlayerEntry(divA.divisionId, [{ name: "Riley Fox", dob: "1998-06-15" }]);
-    const b = await seedPlayerEntry(divB.divisionId, [{ name: "Riley Fox", dob: "1998-06-15" }]);
+    const a = await seedPlayerEntry(divA.divisionId, [{ name, dob: "1998-06-15" }]);
+    const b = await seedPlayerEntry(divB.divisionId, [{ name, dob: "1998-06-15" }]);
     const ca = await confirmRegistration(auth, a.id);
     const cb = await confirmRegistration(auth, b.id);
 
@@ -163,9 +178,10 @@ describe.skipIf(!HAS_DB)("player person get-or-create by (org, name, dob) — no
     const divA = await seedOpenDivision(auth);
     const divB = await seedOpenDivision(auth);
     const before = await personCount(auth.orgId);
+    const name = tag("No Dob Person");
 
-    const a = await seedPlayerEntry(divA.divisionId, [{ name: "No Dob Person" }]);
-    const b = await seedPlayerEntry(divB.divisionId, [{ name: "No Dob Person" }]);
+    const a = await seedPlayerEntry(divA.divisionId, [{ name }]);
+    const b = await seedPlayerEntry(divB.divisionId, [{ name }]);
     const ca = await confirmRegistration(auth, a.id);
     const cb = await confirmRegistration(auth, b.id);
 
@@ -181,9 +197,10 @@ describe.skipIf(!HAS_DB)("player person get-or-create by (org, name, dob) — no
     const divA = await seedOpenDivision(auth);
     const divB = await seedOpenDivision(auth);
     const before = await personCount(auth.orgId);
+    const name = tag("Diff Dob");
 
-    const a = await seedPlayerEntry(divA.divisionId, [{ name: "Diff Dob", dob: "2000-01-01" }]);
-    const b = await seedPlayerEntry(divB.divisionId, [{ name: "Diff Dob", dob: "2001-02-02" }]);
+    const a = await seedPlayerEntry(divA.divisionId, [{ name, dob: "2000-01-01" }]);
+    const b = await seedPlayerEntry(divB.divisionId, [{ name, dob: "2001-02-02" }]);
     await confirmRegistration(auth, a.id);
     await confirmRegistration(auth, b.id);
 
@@ -193,11 +210,12 @@ describe.skipIf(!HAS_DB)("player person get-or-create by (org, name, dob) — no
   it("same name + dob but TWO existing matching persons already present → a NEW person, never an arbitrary pick", async () => {
     const { auth } = await seedOrg("pro");
     const div = await seedOpenDivision(auth);
-    const dup1 = await seedPerson(auth.orgId, { fullName: "Ambiguous Twin", dob: "1995-05-05" });
-    const dup2 = await seedPerson(auth.orgId, { fullName: "Ambiguous Twin", dob: "1995-05-05" });
+    const name = tag("Ambiguous Twin");
+    const dup1 = await seedPerson(auth.orgId, { fullName: name, dob: "1995-05-05" });
+    const dup2 = await seedPerson(auth.orgId, { fullName: name, dob: "1995-05-05" });
     const before = await personCount(auth.orgId);
 
-    const a = await seedPlayerEntry(div.divisionId, [{ name: "Ambiguous Twin", dob: "1995-05-05" }]);
+    const a = await seedPlayerEntry(div.divisionId, [{ name, dob: "1995-05-05" }]);
     const confirmed = await confirmRegistration(auth, a.id);
 
     expect(await personCount(auth.orgId)).toBe(before + 1);
@@ -212,11 +230,12 @@ describe.skipIf(!HAS_DB)("player person reuse never crosses org / merge / lane b
   it("a person in ANOTHER org with the same name+dob is never reused", async () => {
     const { auth: authA } = await seedOrg("pro");
     const { auth: authB } = await seedOrg("pro");
-    const other = await seedPerson(authB.orgId, { fullName: "Cross Org", dob: "1990-03-03" });
+    const name = tag("Cross Org");
+    const other = await seedPerson(authB.orgId, { fullName: name, dob: "1990-03-03" });
     const div = await seedOpenDivision(authA);
     const before = await personCount(authA.orgId);
 
-    const a = await seedPlayerEntry(div.divisionId, [{ name: "Cross Org", dob: "1990-03-03" }]);
+    const a = await seedPlayerEntry(div.divisionId, [{ name, dob: "1990-03-03" }]);
     const confirmed = await confirmRegistration(authA, a.id);
 
     expect(await personCount(authA.orgId)).toBe(before + 1);
@@ -230,15 +249,16 @@ describe.skipIf(!HAS_DB)("player person reuse never crosses org / merge / lane b
   it("a merged_into (tombstoned) person is never reused", async () => {
     const { auth } = await seedOrg("pro");
     const div = await seedOpenDivision(auth);
-    const survivor = await seedPerson(auth.orgId, { fullName: "Survivor", dob: "1988-08-08" });
+    const name = tag("Merged Twin");
+    const survivor = await seedPerson(auth.orgId, { fullName: tag("Survivor"), dob: "1988-08-08" });
     const tombstone = await seedPerson(auth.orgId, {
-      fullName: "Merged Twin",
+      fullName: name,
       dob: "1988-08-08",
       mergedInto: survivor.id,
     });
     const before = await personCount(auth.orgId);
 
-    const a = await seedPlayerEntry(div.divisionId, [{ name: "Merged Twin", dob: "1988-08-08" }]);
+    const a = await seedPlayerEntry(div.divisionId, [{ name, dob: "1988-08-08" }]);
     const confirmed = await confirmRegistration(auth, a.id);
 
     expect(await personCount(auth.orgId)).toBe(before + 1);
@@ -250,14 +270,15 @@ describe.skipIf(!HAS_DB)("player person reuse never crosses org / merge / lane b
   it("a lane != 'player' person is never reused", async () => {
     const { auth } = await seedOrg("pro");
     const div = await seedOpenDivision(auth);
+    const name = tag("Match Official");
     const official = await seedPerson(auth.orgId, {
-      fullName: "Match Official",
+      fullName: name,
       dob: "1975-01-01",
       lane: "official",
     });
     const before = await personCount(auth.orgId);
 
-    const a = await seedPlayerEntry(div.divisionId, [{ name: "Match Official", dob: "1975-01-01" }]);
+    const a = await seedPlayerEntry(div.divisionId, [{ name, dob: "1975-01-01" }]);
     const confirmed = await confirmRegistration(auth, a.id);
 
     expect(await personCount(auth.orgId)).toBe(before + 1);
@@ -271,7 +292,7 @@ describe.skipIf(!HAS_DB)("new persons default to public_name consent (owner ruli
   it("a newly created person has consent.public_name = true", async () => {
     const { auth } = await seedOrg("pro");
     const div = await seedOpenDivision(auth);
-    const a = await seedPlayerEntry(div.divisionId, [{ name: "Fresh Person", dob: "1999-09-09" }]);
+    const a = await seedPlayerEntry(div.divisionId, [{ name: tag("Fresh Person"), dob: "1999-09-09" }]);
     const confirmed = await confirmRegistration(auth, a.id);
 
     const [{ public_name }] = await sql<{ public_name: string }[]>`
@@ -284,13 +305,14 @@ describe.skipIf(!HAS_DB)("new persons default to public_name consent (owner ruli
   it("a REUSED person that had opted out keeps its own consent untouched", async () => {
     const { auth } = await seedOrg("pro");
     const div = await seedOpenDivision(auth);
+    const name = tag("Opted Out");
     const optedOut = await seedPerson(auth.orgId, {
-      fullName: "Opted Out",
+      fullName: name,
       dob: "1980-12-12",
       consent: { public_name: false },
     });
 
-    const a = await seedPlayerEntry(div.divisionId, [{ name: "Opted Out", dob: "1980-12-12" }]);
+    const a = await seedPlayerEntry(div.divisionId, [{ name, dob: "1980-12-12" }]);
     const confirmed = await confirmRegistration(auth, a.id);
 
     const [{ person_id, public_name }] = await sql<{ person_id: string; public_name: string }[]>`
@@ -307,8 +329,8 @@ describe.skipIf(!HAS_DB)("registration_players.person_id is written at materiali
     const { auth } = await seedOrg("pro");
     const div = await seedOpenDivision(auth, "team");
     const reg = await seedPlayerEntry(div.divisionId, [
-      { name: "Row One", dob: "1991-01-01" },
-      { name: "Row Two", dob: "1992-02-02" },
+      { name: tag("Row One"), dob: "1991-01-01" },
+      { name: tag("Row Two"), dob: "1992-02-02" },
     ]);
     const confirmed = await confirmRegistration(auth, reg.id);
 
@@ -330,9 +352,11 @@ describe.skipIf(!HAS_DB)("pair entrant_kind materialises both players (RS002 gap
   it("a pair entry materialises both players as entrant_members, with squad_number and is_captain carried", async () => {
     const { auth } = await seedOrg("pro");
     const div = await seedOpenDivision(auth, "pair");
+    const nameOne = tag("Pair One");
+    const nameTwo = tag("Pair Two");
     const reg = await seedPlayerEntry(div.divisionId, [
-      { name: "Pair One", dob: "1993-03-03", squadNumber: 1, isCaptain: true },
-      { name: "Pair Two", dob: "1994-04-04", squadNumber: 2, isCaptain: false },
+      { name: nameOne, dob: "1993-03-03", squadNumber: 1, isCaptain: true },
+      { name: nameTwo, dob: "1994-04-04", squadNumber: 2, isCaptain: false },
     ]);
     const confirmed = await confirmRegistration(auth, reg.id);
     expect(confirmed.entrant_id).not.toBeNull();
@@ -344,8 +368,8 @@ describe.skipIf(!HAS_DB)("pair entrant_kind materialises both players (RS002 gap
       join persons p on p.id = em.person_id
       where em.entrant_id = ${confirmed.entrant_id as string} order by p.full_name`;
     expect(members).toHaveLength(2);
-    expect(members[0]).toMatchObject({ full_name: "Pair One", squad_number: 1, is_captain: true });
-    expect(members[1]).toMatchObject({ full_name: "Pair Two", squad_number: 2, is_captain: false });
+    expect(members[0]).toMatchObject({ full_name: nameOne, squad_number: 1, is_captain: true });
+    expect(members[1]).toMatchObject({ full_name: nameTwo, squad_number: 2, is_captain: false });
   });
 });
 
@@ -354,8 +378,8 @@ describe.skipIf(!HAS_DB)("materialisation idempotency (pair roster + person reus
     const { auth } = await seedOrg("pro");
     const div = await seedOpenDivision(auth, "pair");
     const reg = await seedPlayerEntry(div.divisionId, [
-      { name: "Idem One", dob: "1993-03-03" },
-      { name: "Idem Two", dob: "1994-04-04" },
+      { name: tag("Idem One"), dob: "1993-03-03" },
+      { name: tag("Idem Two"), dob: "1994-04-04" },
     ]);
     const before = await personCount(auth.orgId);
     const first = await confirmRegistration(auth, reg.id);
@@ -374,10 +398,11 @@ describe.skipIf(!HAS_DB)("the user_id path is unchanged — never subject to the
     const { auth } = await seedOrg("pro");
     const div = await seedOpenDivision(auth);
     const userId = await makeUser();
-    const anon = await seedPerson(auth.orgId, { fullName: "Case Ten", dob: "1992-03-03" });
+    const name = tag("Case Ten");
+    const anon = await seedPerson(auth.orgId, { fullName: name, dob: "1992-03-03" });
     const before = await personCount(auth.orgId);
 
-    const a = await seedPlayerEntry(div.divisionId, [{ name: "Case Ten", dob: "1992-03-03", userId }]);
+    const a = await seedPlayerEntry(div.divisionId, [{ name, dob: "1992-03-03", userId }]);
     const confirmed = await confirmRegistration(auth, a.id);
 
     // A NEW linked person is minted; the pre-existing anonymous namesake is
@@ -398,7 +423,7 @@ describe.skipIf(!HAS_DB)("the user_id path is unchanged — never subject to the
     const div = await seedOpenDivision(auth);
     const userId = await makeUser();
 
-    const a = await seedPlayerEntry(div.divisionId, [{ name: "No Dob Linked", userId }]);
+    const a = await seedPlayerEntry(div.divisionId, [{ name: tag("No Dob Linked"), userId }]);
     const confirmed = await confirmRegistration(auth, a.id);
 
     const [{ user_id }] = await sql<{ user_id: string | null }[]>`
