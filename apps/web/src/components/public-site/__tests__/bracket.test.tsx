@@ -99,6 +99,69 @@ describe("public Bracket", () => {
     expect(html).toContain("<svg");
   });
 
+  // Post-merge code review, defect 2: this component (the TREE branch,
+  // taken by every WELL-FORMED double elimination) only ever labelled the
+  // two LANES as a whole ("Winners bracket"/"Losers bracket") — it never
+  // named individual ROUNDS via roundRoleLabel, so the flagship "name every
+  // round by its role" fix never reached the shape the design's own
+  // motivating bug describes (a double elimination of 8 — §2.3). Round
+  // numbers below are the REAL persisted values (verified against
+  // bracket-layout.test.ts's deRefs(8) + doubleElimBracket, not guessed):
+  // WB 1-3, LB 7-10 with game counts [2,2,1,1], GF 14 — NOT the "irregular"
+  // test below's hand-simplified LB, which is deliberately a different,
+  // non-regular shape.
+  it("names a REGULAR, well-formed double-elim of 8 through the tree (review finding: defect 2)", () => {
+    const fixtures = [
+      // WB round_no 1: quarter-finals (4 games).
+      F("w1", 1, 1, null, null, null, "scheduled", null, null, "WB"),
+      F("w2", 1, 2, null, null, null, "scheduled", null, null, "WB"),
+      F("w3", 1, 3, null, null, null, "scheduled", null, null, "WB"),
+      F("w4", 1, 4, null, null, null, "scheduled", null, null, "WB"),
+      // WB round_no 2: semi-finals (2 games).
+      F("w5", 2, 1, null, null, null, "scheduled", null, null, "WB"),
+      F("w6", 2, 2, null, null, null, "scheduled", null, null, "WB"),
+      // WB round_no 3: the winners' final (1 game) — NOT the tournament final.
+      F("wf", 3, 1, null, null, null, "scheduled", null, null, "WB"),
+      // LB round_no 7-8: 2 games each; round_no 9-10: 1 game each — the
+      // [2,2,1,1] shape doubleElimBracket's regularity check requires for k=3.
+      F("l1a", 7, 1, null, null, null, "scheduled", null, null, "LB"),
+      F("l1b", 7, 2, null, null, null, "scheduled", null, null, "LB"),
+      F("l2a", 8, 1, null, null, null, "scheduled", null, null, "LB"),
+      F("l2b", 8, 2, null, null, null, "scheduled", null, null, "LB"),
+      F("l3", 9, 1, null, null, null, "scheduled", null, null, "LB"),
+      F("lf", 10, 1, null, null, null, "scheduled", null, null, "LB"),
+      // GF round_no 14 (no reset game — bracketReset:false, same as deRefs(8)).
+      F("gf", 14, 1, null, null, null, "scheduled", null, null, "GF", true, false, false),
+    ];
+    const html = renderToStaticMarkup(
+      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+    );
+    // Confirms the TREE branch rendered, not the column fallback.
+    expect(html).toContain('data-bracket="double-elim"');
+    // Each WB round name appears exactly once — the original bug produced
+    // several "Semi-finals"/"Final"s in one bracket by naming from match
+    // count instead of position.
+    expect(html.match(/>Quarter-finals</g) ?? []).toHaveLength(1);
+    expect(html.match(/>Semi-finals</g) ?? []).toHaveLength(1);
+    expect(html).toContain("Winners&#x27; final"); // renderToStaticMarkup escapes '
+    // Each LB round name is distinct, despite two rounds sharing a game
+    // count (2 games) and two more sharing another (1 game) — a count-based
+    // namer would have collapsed these onto duplicate labels.
+    expect(html).toContain("Losers&#x27; round 1");
+    expect(html).toContain("Losers&#x27; round 2");
+    expect(html).toContain("Losers&#x27; round 3");
+    expect(html).toContain("Losers&#x27; final");
+    expect(html).toContain("Grand final");
+    // The lane headers are still present too, now sourced from lookup()
+    // instead of a hardcoded literal — this test doubles as the
+    // localization regression the hardcoded strings never had.
+    expect(html).toContain("Winners bracket");
+    expect(html).toContain("Losers bracket");
+    // A double-elim never produces a bare "final" role on its own — only
+    // winners_final/losers_final/grand_final (each qualified).
+    expect(html.match(/>Final</g) ?? []).toHaveLength(0);
+  });
+
   it("keeps the column fallback for irregular double-elim shapes", () => {
     const fixtures = [F("f1", 1, 1, "a", "b", null), F("f2", 2, 1, "c", "d", null), F("f3", 2, 2, "a", "c", null)];
     const html = renderToStaticMarkup(

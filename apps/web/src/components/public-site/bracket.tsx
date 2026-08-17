@@ -253,10 +253,18 @@ function DoubleElim({
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const LANE_GAP = 48;
   const LABEL_H = 24;
+  // Review finding (defect 2): this tree only ever labelled the two LANES as
+  // a whole ("Winners bracket"/"Losers bracket") — it never named individual
+  // ROUNDS, so the flagship "name every round by its role" fix (Task 4,
+  // roundRoleLabel) never reached the primary view a well-formed
+  // double-elim actually renders through (the column-fallback branch below
+  // only fires for irregular shapes). ROUND_LABEL_H reserves a second
+  // caption row, under the lane title, for a per-COLUMN round name.
+  const ROUND_LABEL_H = 18;
   const wbH = Math.max(layout.wbRows, 1) * SLOT_H;
   const lbH = Math.max(layout.lbRows, 0) * SLOT_H;
-  const wbTop = LABEL_H;
-  const lbTop = wbTop + wbH + LANE_GAP + (lbH > 0 ? LABEL_H : 0);
+  const wbTop = LABEL_H + ROUND_LABEL_H;
+  const lbTop = wbTop + wbH + LANE_GAP + (lbH > 0 ? LABEL_H + ROUND_LABEL_H : 0);
   const gfX = Math.max(layout.k, layout.lbCols) * COL_W;
   const totalW = gfX + COL_W * (layout.resetId !== undefined ? 2 : 1);
   const totalH = lbTop + lbH;
@@ -267,17 +275,60 @@ function DoubleElim({
   const lbFinalY = layout.lbCols > 0 ? lbY(layout.lbCols - 1, 0) : wbFinalY;
   const laneLabel = "font-display text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted";
 
+  // Per-column round name (Quarter-finals, Semi-finals, Winners' final, …),
+  // ranked within its OWN lane via roundRoleFor — never globally, or a DE's
+  // longer losers lane silently reintroduces the count-based naming bug this
+  // whole session exists to kill (design §2.3). Same helper the column
+  // fallback below already uses, so a round is named identically regardless
+  // of which branch renders it.
+  const laneFixtures = fixtures.map((f) => ({ round_no: f.round_no, lane: f.lane ?? null }));
+  const columnRoundLabel = (lane: "WB" | "LB", col: number): string => {
+    const node = layout.nodes.find((n) => n.lane === lane && n.col === col);
+    const f = node ? byId.get(node.fixtureId) : undefined;
+    if (!f) return "";
+    return roundRoleLabel(
+      lookup,
+      roundRoleFor(
+        laneFixtures,
+        {
+          round_no: f.round_no,
+          lane: f.lane ?? null,
+          is_final: f.is_final === true,
+          third_place: f.third_place === true,
+          conditional: f.conditional === true,
+        },
+        "double_elim",
+        null,
+      ),
+    );
+  };
+
   return (
     <div className="overflow-x-auto" data-bracket="double-elim">
       <div className="relative" style={{ width: totalW, height: totalH }}>
         <span className={`absolute ${laneLabel}`} style={{ left: 0, top: 0 }}>
-          Winners bracket
+          {lookup("bracket.winners")}
         </span>
+        {Array.from({ length: layout.k }, (_, col) => (
+          <span key={`wb-round-${col}`} className={`absolute ${laneLabel}`} style={{ left: col * COL_W, top: LABEL_H }}>
+            {columnRoundLabel("WB", col)}
+          </span>
+        ))}
         {lbH > 0 && (
           <span className={`absolute ${laneLabel}`} style={{ left: 0, top: wbTop + wbH + LANE_GAP }}>
-            Losers bracket
+            {lookup("bracket.losers")}
           </span>
         )}
+        {lbH > 0 &&
+          Array.from({ length: layout.lbCols }, (_, col) => (
+            <span
+              key={`lb-round-${col}`}
+              className={`absolute ${laneLabel}`}
+              style={{ left: col * COL_W, top: wbTop + wbH + LANE_GAP + LABEL_H }}
+            >
+              {columnRoundLabel("LB", col)}
+            </span>
+          ))}
         <svg aria-hidden className="absolute inset-0" width={totalW} height={totalH} viewBox={`0 0 ${totalW} ${totalH}`}>
           {layout.connectors.map((c, i) => {
             const y = c.lane === "WB" ? wbY : lbY;
@@ -315,7 +366,7 @@ function DoubleElim({
           return (
             <div key={node.fixtureId} data-lane={node.lane} className="absolute" style={{ left, top, width: NODE_W }}>
               {node.lane === "GF" && (
-                <p className={`mb-1 ${laneLabel}`}>{node.col === 0 ? "Grand final" : "Reset"}</p>
+                <p className={`mb-1 ${laneLabel}`}>{node.col === 0 ? lookup("bracket.grandFinal") : lookup("bracket.reset")}</p>
               )}
               <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} />
             </div>

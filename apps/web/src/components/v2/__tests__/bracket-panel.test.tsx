@@ -94,6 +94,34 @@ describe("BracketPanel", () => {
     expect(html).toContain('href="/o/org/c/cup/d/open/f/6"');
     expect(html).toContain("<svg");
   });
+
+  // Post-merge code review, defect 2: same structural gap as the public
+  // site's DoubleElim tree — this panel labelled the two LANES as a whole
+  // ("bracket.winners"/"bracket.losers") but never named individual ROUNDS
+  // via roundRoleLabel. Reuses the "G8" test's 4-entrant shape above (k=2):
+  // WB round_no 1 (2 games) is a semi-final, round_no 2 (1 game) the
+  // winners' final; LB round_no 5 is losers' round 1, round_no 6 the
+  // losers' final. useMsg() is mocked to the identity function in this
+  // file, so asserting the KEY (not translated text) is the faithful check
+  // here, same as the G8 test's own "bracket.winners" assertion.
+  it("names each round's column too, not just the two lanes (review finding: defect 2)", () => {
+    const de = [
+      FIX("w1", 1, 1, "e1", "e2", null, "scheduled", 1),
+      FIX("w2", 1, 2, "e3", "e4", null, "scheduled", 2),
+      FIX("wf", 2, 1, null, null, null, "scheduled", 3),
+      FIX("l1", 5, 1, null, null, null, "scheduled", 4),
+      FIX("lf", 6, 1, null, null, null, "scheduled", 5),
+      FIX("gf", 9, 1, null, null, null, "scheduled", 6),
+    ];
+    const html = markup({ fixtures: de as never });
+    expect(html).toContain("bracket.round.semi"); // WB round_no 1
+    expect(html).toContain("bracket.round.winnersFinal"); // WB round_no 2
+    expect(html).toContain("bracket.round.losersRound"); // LB round_no 5
+    expect(html).toContain("bracket.round.losersFinal"); // LB round_no 6
+    // The lane headers are still present too — this addition is additive.
+    expect(html).toContain("bracket.winners");
+    expect(html).toContain("bracket.losers");
+  });
 });
 
 describe("BracketPanel — stepladder", () => {
