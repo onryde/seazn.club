@@ -52,20 +52,45 @@ export type TileKind = "primary" | "standard" | "destructive" | "minor";
 export interface TileSpec {
   id: string;
   label: string;                  // i18n key
+  /**
+   * R2b (owner sign-off finding, single-line label fix): a PRE-LOCALISED
+   * raw string, rendered VERBATIM by the chassis (tile-grid.tsx) — never
+   * resolved through `t()`. Same convention `WhoLine.servingLabel` and
+   * `ScorebugSpec.context` already establish elsewhere in this file, and
+   * `sublabelText` below establishes for the sublabel slot: the chassis
+   * never resolves a sport-namespaced key itself, not even an interpolated
+   * one — a skin whose label needs a variable INSIDE the sentence itself
+   * (cricket's over-summary tile: "End of over 2", the over number belongs
+   * IN the label, not a separate sublabel line) calls `t(key, vars)` itself
+   * and hands the chassis the already-resolved string. `label` stays
+   * REQUIRED and keeps resolving through the chassis's own bare
+   * `t(tile.label)` (no vars — tile-grid.tsx never gained a vars argument)
+   * for every tile that does not set `labelText`; every existing skin is
+   * unchanged.
+   *
+   * A tile always sets `label` (the type still requires a valid key as the
+   * fallback/canonical value) and OPTIONALLY also sets `labelText` — but
+   * when `labelText` is present, it WINS and `label`'s key is never
+   * resolved at all (tile-grid.tsx), never concatenated or merged. Same
+   * "explicit pre-localised value overrides the key-resolved one" posture
+   * `sublabelText` takes below, and `PadHostView.contextOverrides`
+   * documents for a different field pair in this file.
+   */
+  labelText?: string;
   sublabel?: string;              // i18n key
   /**
    * Fix round (review finding 1, R2b): a PRE-LOCALISED raw string, rendered
    * VERBATIM by the chassis (tile-grid.tsx) — never resolved through `t()`.
    * Same convention `WhoLine.servingLabel` and `ScorebugSpec.context`
    * already establish elsewhere in this file: some tile sublabels are not
-   * translatable prose at all (cricket's over-summary tile carries a bare
-   * over NUMBER — the same "locale-invariant" category `variantCode()`
-   * documents for T20/ODI/HUNDRED/TEST, cricket.tsx), and routing one
-   * through `sublabel` (an i18n KEY) fires `[i18n] missing key: …` on
-   * every render, since no dictionary will ever carry a key literally
-   * named "6". A skin with a genuinely translatable sublabel keeps using
-   * `sublabel` exactly as before — this field is additive/optional, so
-   * every existing skin is unchanged.
+   * translatable prose at all (a bare NUMBER is the motivating category —
+   * the same "locale-invariant" one `variantCode()` documents for T20/ODI/
+   * HUNDRED/TEST, cricket.tsx), and routing one through `sublabel` (an
+   * i18n KEY) fires `[i18n] missing key: …` on every render, since no
+   * dictionary will ever carry a key literally named "6". A skin with a
+   * genuinely translatable sublabel keeps using `sublabel` exactly as
+   * before — this field is additive/optional, so every existing skin is
+   * unchanged.
    *
    * A tile sets ONE of `sublabel`/`sublabelText`, not both, in the normal
    * case — but if both are present, `sublabelText` WINS and `sublabel`'s
@@ -73,6 +98,17 @@ export interface TileSpec {
    * merged. Same "explicit pre-localised value overrides the key-resolved
    * one" posture `PadHostView.contextOverrides` already documents for a
    * different field pair in this file.
+   *
+   * R2b follow-up (owner sign-off, single-line label fix): cricket's
+   * over-summary tile — this doc's own original motivating example — no
+   * longer sets this field. The owner wanted the over NUMBER inside the
+   * tile's LABEL sentence ("End of over 2"), not a visually separate
+   * second line, so that tile now uses `labelText` above instead. This
+   * field has NO shipped production setter as of that change — kept,
+   * deliberately not deleted, as a chassis capability a later R3-R7 skin
+   * may still need for a genuinely non-translatable SUBLABEL (as opposed
+   * to a non-translatable LABEL); its own tests (`__tests__/tiles.test.ts`)
+   * stay in place unchanged.
    */
   sublabelText?: string;
   kind: TileKind;

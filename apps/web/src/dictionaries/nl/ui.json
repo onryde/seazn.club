@@ -3572,7 +3572,7 @@
   "pad.carrom.panel.pre": "Voor de wedstrijd",
   "pad.cricket.action.ball": "Bal",
   "pad.cricket.action.declare": "Declareren",
-  "pad.cricket.action.endOfOver": "Einde over",
+  "pad.cricket.action.endOfOver": "Einde over {over}",
   "pad.cricket.action.extra": "Extra",
   "pad.cricket.action.followOn": "Follow-on opleggen",
   "pad.cricket.action.inningsClose": "Innings sluiten",

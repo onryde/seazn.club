@@ -3572,7 +3572,7 @@
   "pad.carrom.panel.pre": "Avant-match",
   "pad.cricket.action.ball": "Balle",
   "pad.cricket.action.declare": "Déclarer",
-  "pad.cricket.action.endOfOver": "Fin de l'over",
+  "pad.cricket.action.endOfOver": "Fin de l'over {over}",
   "pad.cricket.action.extra": "Extra",
   "pad.cricket.action.followOn": "Imposer le follow-on",
   "pad.cricket.action.inningsClose": "Clore la manche",

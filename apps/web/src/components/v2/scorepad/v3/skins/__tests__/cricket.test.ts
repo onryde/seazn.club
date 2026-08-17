@@ -34,6 +34,9 @@ import {
   runRate,
   variantCode,
 } from "../cricket";
+import type { TFn } from "../cricket";
+import type { Dict } from "@/lib/i18n-constants";
+import { t as realT } from "@/lib/i18n-runtime";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -721,19 +724,45 @@ describe("buildTiles", () => {
     }
   });
 
-  // Fix round (review finding 1): the over number is a locale-invariant
-  // NUMERAL, not a translatable phrase — it must ride `sublabelText`
-  // (types.ts), rendered verbatim by tile-grid.tsx, never `sublabel` (an
-  // i18n KEY the chassis resolves through `t()`). Routing a bare numeral
-  // through `t()` fired `[i18n] missing key: N` on every render (no
-  // dictionary will ever carry a key literally named "6"). Asserting
-  // `sublabel` is undefined is the load-bearing half of this test: it is
-  // what proves the numeral no longer takes the t()-resolved path at all.
-  it("the over-summary tile's sublabelText is the 1-indexed over this entry would complete, pre-localised — never a sublabel i18n key", () => {
-    const tiles = buildTiles(view({ state: state({ innings: [innings({ fine: null, legalBalls: 30 })] }) }));
+  // R2b follow-up (owner sign-off, single-line label fix): the owner
+  // rejected the two-line render this test used to pin (`sublabelText`
+  // beneath a bare "End of over" label) — the over number now rides INSIDE
+  // the label sentence itself ("End of over 2"), via `TileSpec.labelText`
+  // (types.ts), which wins over `label`'s own key at render time
+  // (tile-grid.tsx). Building that string needs a REAL `t`, so `buildTiles`
+  // now takes one (defaulted, see its own header comment) — this test
+  // passes this file's own module-level `t` fixture explicitly. Asserting
+  // `sublabelText`/`sublabel` are both undefined is the load-bearing other
+  // half: it proves the number no longer takes the old two-line path at
+  // all, and `label` staying the real key is what tile-grid.tsx falls back
+  // to for every OTHER tile that doesn't set labelText.
+  it("the over-summary tile's labelText carries the 1-indexed over this entry would complete, INSIDE the label — never a separate sublabelText", () => {
+    const tiles = buildTiles(view({ state: state({ innings: [innings({ fine: null, legalBalls: 30 })] }) }), t);
     const over = tiles.find((tl) => tl.id === "overSummary")!;
-    expect(over.sublabelText).toBe("6");
+    expect(over.label).toBe("pad.cricket.action.endOfOver");
+    expect(over.labelText).toBe(t("pad.cricket.action.endOfOver", { over: 6 }));
+    expect(over.sublabelText).toBeUndefined();
     expect(over.sublabel).toBeUndefined();
+  });
+
+  // This file's own `t` fixture (above) ignores its `vars` argument (just
+  // serialises it), which proves the CALL was made with the right key+vars
+  // but not that a real dictionary would actually interpolate it into a
+  // single readable sentence — repeats the same call with the REAL t()
+  // from lib/i18n-runtime.ts against a seeded dict, same pattern
+  // guided-sheet.test.ts's stepper aria-label fix (c3779d9b) and
+  // tiles.test.ts's own sublabelText/labelText blocks already establish
+  // for the identical problem (a stub that can't distinguish "resolved"
+  // from "echoed verbatim").
+  it("review fix, interpolation: labelText genuinely threads {over} through the REAL t(), not just the bare key", () => {
+    const dict: Dict = { "pad.cricket.action.endOfOver": "End of over {over}" };
+    const realTStub: TFn = (k, vars) => realT(dict, k, vars);
+    const tiles = buildTiles(
+      view({ state: state({ innings: [innings({ fine: null, legalBalls: 30 })] }) }),
+      realTStub,
+    );
+    const over = tiles.find((tl) => tl.id === "overSummary")!;
+    expect(over.labelText).toBe("End of over 6");
   });
 
   it("the over-summary tile sits before More in tile order", () => {

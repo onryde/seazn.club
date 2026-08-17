@@ -250,6 +250,66 @@ describe("Tile rendering — sublabelText: pre-localised raw text, never routed 
   });
 });
 
+// R2b (owner sign-off finding, single-line label fix): `TileSpec.labelText`
+// — a PRE-LOCALISED raw string the chassis renders VERBATIM, never through
+// `t()` (types.ts's own doc, same convention as `sublabelText` above and
+// `WhoLine.servingLabel`/`ScorebugSpec.context` elsewhere in this file).
+// Exists because cricket's over-summary tile needs a variable INSIDE its
+// own label sentence ("End of over 2") — tile-grid.tsx's `t(tile.label)`
+// call takes no `vars` argument, so a skin that needs one calls `t(key,
+// vars)` itself and hands the chassis the already-resolved string.
+//
+// Same isolation trick the sublabelText block above uses: the dict below
+// resolves `pad.tile.label` cleanly but has NO entry for the key used as
+// the "label alone" fixture, so a stub `t` that merely echoed its key back
+// could not tell "resolved through t()" from "rendered verbatim" apart —
+// only the REAL t() (lib/i18n-runtime.ts), which warns on a missing key,
+// can.
+describe("Tile rendering — labelText: pre-localised raw text, never routed through t() (owner sign-off, single-line label fix)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const dict: Dict = { "pad.tile.label": "Label" };
+  const realTStub: TileGridProps["t"] = (k, vars) => realT(dict, k, vars);
+
+  function renderLabel(spec: TileSpec) {
+    const grid = TileGrid({ tiles: [spec], phase: "live", t: realTStub }) as unknown as RenderedEl<{
+      children: RenderedEl<unknown>[];
+    }>;
+    const [tileEl] = grid.props.children;
+    const button = tileEl.type(tileEl.props) as unknown as {
+      props: { children: [{ props: { children: string } }, unknown] };
+    };
+    return button.props.children[0];
+  }
+
+  it("labelText wins verbatim over label's key, and label's key is never resolved (no missing-key warning)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // "pad.tile.label.missing" has NO entry in `dict` — if the chassis ever
+    // fell back to resolving `label` through t(), this would warn.
+    const span = renderLabel(tile({ label: "pad.tile.label.missing", labelText: "End of over 2" }));
+    expect(span.props.children).toBe("End of over 2");
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("mutation proof the spy is real: label alone (no labelText) DOES fire the missing-key warning for an unresolved key", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    renderLabel(tile({ label: "pad.tile.label.missing" }));
+    expect(warn).toHaveBeenCalledWith("[i18n] missing key: pad.tile.label.missing");
+    warn.mockRestore();
+  });
+
+  it("label alone still resolves through t() exactly as before — no regression to the existing path", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const span = renderLabel(tile({ label: "pad.tile.label" })); // a KEY that DOES exist in `dict`
+    expect(span.props.children).toBe("Label");
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
 // Task A1 (R2 wave): the guided-sheet renderer's own consumer-side wiring.
 // R1 shipped TileSpec.action = {sheet: string} (types.ts) but this file
 // forwarded EVERY action shape to onAction untouched — nothing routed a

@@ -620,7 +620,26 @@ const RUN_VALUES = [0, 1, 2, 3, 4, 6] as const;
 const PRIMARY_RUNS = new Set<number>([0, 1]);
 const MINOR_EXTRA_KINDS: readonly ExtraKind[] = ["noball", "bye", "legbye", "penalty"];
 
-export function buildTiles(view: PadHostView): TileSpec[] {
+/**
+ * R2b (owner sign-off finding, single-line label fix): the over-summary
+ * tile's over number now rides INSIDE its `label` sentence ("End of over
+ * 2"), via `TileSpec.labelText` — a chassis-rendered, pre-localised raw
+ * string (types.ts), never re-resolved through `t()`. Building that one
+ * string needs a REAL `t`, unlike every other tile here (a bare i18n KEY,
+ * resolved later by the chassis's own `t(tile.label)` call, tile-grid.tsx)
+ * — so `t` is threaded in here, DEFAULTED rather than required like
+ * `buildScorebug`/`buildDock` below take it: the reachability sweep
+ * (`__tests__/cricket-dispatch-totality.test.ts`) and most of this file's
+ * own unit tests call `buildTiles(view)` with no second argument at all,
+ * and none of them inspect label TEXT (only tile ids/kinds/phases/
+ * actions) — a default no-op translator (echoes the bare key, ignoring
+ * vars) keeps every one of those call sites compiling and passing
+ * unchanged. Production always supplies the real one (`cricketSkinV3`'s
+ * own `tiles: (view) => buildTiles(view, t)` below) — relying on this
+ * default there would silently ship the raw i18n KEY as the tile's
+ * visible label.
+ */
+export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[] {
   const cfg = asCfg(view.cfg);
   const state = asState(view.state);
   const bpo = ballsPerOverOf(view.cfg);
@@ -707,15 +726,21 @@ export function buildTiles(view: PadHostView): TileSpec[] {
   // is advisory only and not wired to any skin's real output yet (R1 fix
   // round 1's own note), so this is a deliberate exception, not a defect.
   if (fidelity !== "fine") {
+    const overLabel = "pad.cricket.action.endOfOver";
     tiles.push({
       id: "overSummary",
-      label: "pad.cricket.action.endOfOver",
-      // Fix round (review finding 1): a pre-localised raw numeral —
-      // TileSpec.sublabelText (types.ts), rendered verbatim, never through
-      // t(). NOT `sublabel` (an i18n key): no dictionary will ever carry a
-      // key literally named "6", so that path fired `[i18n] missing key: …`
-      // on every render.
-      sublabelText: String(nextOverNumber(innings, bpo)),
+      label: overLabel,
+      // R2b follow-up (owner sign-off, single-line label fix): the over
+      // number now rides INSIDE the label sentence itself ("End of over
+      // 2") via TileSpec.labelText (types.ts), rendered verbatim by
+      // tile-grid.tsx, never re-resolved through t() — NOT a separate
+      // sublabelText line any more (this tile was that field's original
+      // motivating case; see types.ts's own follow-up note on
+      // sublabelText, right below its doc). `label` above still carries
+      // the real dictionary key ("End of over {over}", en/ui.json) as the
+      // fallback/canonical value tile-grid.tsx resolves for any tile that
+      // doesn't set labelText.
+      labelText: t(overLabel, { over: nextOverNumber(innings, bpo) }),
       kind: "primary",
       span: 2,
       phases: ["live"],
@@ -1170,7 +1195,7 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     tapModel: "T",
     phase: resolvePhase,
     scorebug: (view) => buildScorebug(view, t),
-    tiles: buildTiles,
+    tiles: (view) => buildTiles(view, t),
     dock: (eventType) => buildDock(eventType, t),
     context: buildContext,
     sheets: buildSheets,
