@@ -223,7 +223,7 @@ export interface RegistrationRow {
   /** This entry's own fee — stays per-entry because a cart can be partially
    *  waitlisted (design §3); the cart's charged subtotal lives on the group. */
   amount_cents: number;
-  /** This entry's OWN accumulated refund total (V367) — additive, never
+  /** This entry's OWN accumulated refund total (V368) — additive, never
    *  overwritten, never decreases. Distinct from the group's
    *  `refunded_cents` (the cart's total); see the block comment above
    *  `RegistrationWithGroupRow`, which exposes the group's as
@@ -339,12 +339,12 @@ export interface RegistrationPlayerRow {
  *      writes are additive now, matching the pattern `refundRegistration`
  *      already used.
  *   3. `remaining = reg.amount_cents - reg.refunded_cents` subtracted a CART
- *      total from an ENTRY fee. FIXED (V367): `registrations.refunded_cents`
+ *      total from an ENTRY fee. FIXED (V368): `registrations.refunded_cents`
  *      is now this entry's own column, so `refunded_cents` below resolves to
  *      it, never to the group's.
  *
  *  The decision RS001 deliberately deferred is now taken: per-entry refunds
- *  get their OWN column (V367) rather than being derived from the cart's.
+ *  get their OWN column (V368) rather than being derived from the cart's.
  *  `registration_groups.refunded_cents` is UNCHANGED — it stays the cart's
  *  accumulated total — and this type deliberately does NOT pick it under the
  *  name `refunded_cents`: that would collide with `RegistrationRow`'s own
@@ -375,7 +375,7 @@ export type RegistrationWithGroupRow = RegistrationRow &
   > & {
     /** The CART's accumulated refund total (`registration_groups.refunded_cents`,
      *  V363) — aliased so it can never collide with `RegistrationRow`'s own
-     *  entry-scoped `refunded_cents` (V367) in the same SELECT. */
+     *  entry-scoped `refunded_cents` (V368) in the same SELECT. */
     group_refunded_cents: number;
   };
 
@@ -385,7 +385,7 @@ export type RegistrationWithGroupRow = RegistrationRow &
  *  SAME `sql`/`tx` instance as the surrounding query so the two tables'
  *  column list can only drift in one place. `g.refunded_cents` is aliased to
  *  `group_refunded_cents` so it never collides with `r.refunded_cents`
- *  (V367) — see the block comment above `RegistrationWithGroupRow`. */
+ *  (V368) — see the block comment above `RegistrationWithGroupRow`. */
 function regGroupCols(db: AnySql) {
   return db`
     r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
@@ -1476,7 +1476,7 @@ async function confirmPaidRegistration(
   // Refunds happen OUTSIDE the tx (network). A failure surfaces on the
   // organiser console via the audit trail, never blocks the webhook ACK.
   try {
-    // RS002 (V367): refund exactly THIS entry's own charged amount, never the
+    // RS002 (V368): refund exactly THIS entry's own charged amount, never the
     // cart's whole remaining balance — a sibling entry's money must never
     // move on a late/duplicate refund for this one (block comment above
     // RegistrationWithGroupRow, hazard 1).
@@ -2184,7 +2184,7 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
   const beforeLock =
     !settings?.refund_lock_at || new Date() < new Date(settings.refund_lock_at);
   if (refundable && beforeLock) {
-    // RS002 (V367): THIS entry's own remaining balance — never the cart's
+    // RS002 (V368): THIS entry's own remaining balance — never the cart's
     // whole intent (hazard 1) — so a sibling that already carries a partial
     // refund (organiser discretion, then a late withdrawal) is never
     // double-counted here either.
@@ -2647,7 +2647,7 @@ export async function refundRegistration(
 ): Promise<RegistrationWithGroupRow> {
   const reg = await withTenant(auth.orgId, async (tx) => orgReg(tx, regId));
   if (!reg.payment_intent_id) throw new HttpError(422, "No payment to refund");
-  // RS002 (V367): reg.refunded_cents is THIS entry's own column now (hazard 3
+  // RS002 (V368): reg.refunded_cents is THIS entry's own column now (hazard 3
   // fixed) — a sibling's earlier refund can no longer drive this negative and
   // falsely report an untouched entry as "already fully refunded".
   const remaining = reg.amount_cents - reg.refunded_cents;
@@ -2660,7 +2660,7 @@ export async function refundRegistration(
   const row = await withTenant(auth.orgId, async (tx) => {
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
-    // Additive on BOTH tables: this entry's own total (V367) and the cart's
+    // Additive on BOTH tables: this entry's own total (V368) and the cart's
     // accumulated total (V364) — never overwrite either.
     await tx`
       update registrations

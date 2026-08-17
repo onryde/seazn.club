@@ -148,7 +148,7 @@ serves its closed/unavailable state during that window.
 
 - **V-number**: high-water mark was **V364**. RS001b ships
   `V365__org_currency.sql` **and `V366__rls_billing_org_tables.sql`** (the unplanned RLS
-  fix below), so the mark is now **V366** and RS002 starts at **V367**. Applies
+  fix below), so the mark is now **V366** and RS002 starts at **V368**. Applies
   from zero on a clean schema (204 migrations, verified on a second fresh DB,
   not just incrementally).
 - **Card-unsupported representation — the thing RS004 reads**:
@@ -285,7 +285,7 @@ the four registration suites are **89/89 green** on `main` @ `51ab77a8`
 Rulings taken (recorded as made):
 
 - **Per-entry refunds get their own column** — the decision RS001 deferred.
-  **V367** adds `registrations.refunded_cents int NOT NULL default 0`
+  **V368** adds `registrations.refunded_cents int NOT NULL default 0`
   (`>= 0` check). Rationale: RS002 is the session that makes multi-entry carts
   real, and all three cart-money hazards are unfixable without an entry-level
   number — `remaining = amount_cents - refunded_cents` only type-checks as
@@ -347,7 +347,7 @@ Rulings taken (recorded as made):
   this session: this file is now shared with RS011, whose override dialog
   would otherwise render two rows for one problem.
 
-**Wave 1 CLOSED** (`130d3f6a`, `d53554e0`, `f31abc21`). V367 applies on the
+**Wave 1 CLOSED** (`130d3f6a`, `d53554e0`, `f31abc21`). V368 applies on the
 session DB and from zero (206 migrations → v367). The review loop found a
 **fourth** hazard of the same family that RS001's list did not name, plus two
 atomicity blockers on paths that were ALREADY live before RS002:

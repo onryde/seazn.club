@@ -274,7 +274,7 @@ async function rig(
 /** r.* ∪ g.* — same join `regGroupCols` builds internally (not exported).
  *  Kept in exact column-list sync with it by the schema tests in
  *  registration-schema.test.ts, which pin every column on both tables.
- *  `g.refunded_cents` is aliased to `group_refunded_cents` (V367) so it never
+ *  `g.refunded_cents` is aliased to `group_refunded_cents` (V368) so it never
  *  collides with `r.refunded_cents` — see the block comment above
  *  `RegistrationWithGroupRow` in registrations.ts. */
 async function loadWithGroup(regId: string): Promise<RegistrationWithGroupRow> {
@@ -2112,7 +2112,7 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// RS002 (V367): entry-level refunds — the three cart-level-money hazards
+// RS002 (V368): entry-level refunds — the three cart-level-money hazards
 // flagged in the block comment above RegistrationWithGroupRow
 // (registrations.ts), now fixed. No multi-entry submit flow exists yet
 // (RS002/RS003 own building group-submit), so `seedSecondEntry` attaches a
@@ -2214,7 +2214,7 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     expect(stripeMock.refundCreate).toHaveBeenCalledWith(
       expect.objectContaining({ payment_intent: intent, amount: a.amount_cents }),
     );
-    // refundRegistration writes the ENTRY's own refunded_cents (V367), not
+    // refundRegistration writes the ENTRY's own refunded_cents (V368), not
     // just the group's accumulated total.
     expect(aRefunded.refunded_cents).toBe(a.amount_cents);
 

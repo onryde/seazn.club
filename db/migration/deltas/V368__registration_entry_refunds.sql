@@ -1,5 +1,5 @@
 -- =============================================================================
--- V367 — per-entry refunds: registrations.refunded_cents
+-- V368 — per-entry refunds: registrations.refunded_cents
 --
 -- RS001 moved the whole payment envelope — including refunded_cents — from
 -- registrations to registration_groups (V364). That is exactly right while a

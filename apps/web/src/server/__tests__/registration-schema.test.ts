@@ -134,7 +134,7 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
     }
     // Dropped: the roster jsonb, the payment/identity envelope (now the group's),
     // and the per-person fields (now the player row's). refunded_cents is NOT
-    // in this list: V367 adds it back, but scoped to the entry rather than the
+    // in this list: V368 adds it back, but scoped to the entry rather than the
     // cart — see the dedicated test below.
     for (const c of [
       "roster", "contact_email", "access_token_hash", "ref_code", "locale", "user_id",
@@ -148,10 +148,10 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
     }
   });
 
-  // V367 (RS002): per-entry refunds get their OWN column rather than being
+  // V368 (RS002): per-entry refunds get their OWN column rather than being
   // derived from the cart's — registration_groups.refunded_cents stays the
   // cart's accumulated total, untouched by this migration.
-  it("registrations.refunded_cents (V367): entry-scoped, defaults 0, never negative", async () => {
+  it("registrations.refunded_cents (V368): entry-scoped, defaults 0, never negative", async () => {
     const cols = await sql<{ column_name: string; is_nullable: string; column_default: string | null }[]>`
       select column_name, is_nullable, column_default from information_schema.columns
       where table_name = 'registrations' and column_name = 'refunded_cents'`;
