@@ -106,7 +106,6 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
       entrant_kind: "individual",
       capacity: 10,
       fee_cents: 0,
-      currency: "gbp",
       form_fields: [],
     },
   );

@@ -31,8 +31,9 @@ async function seedOrgCompDiv() {
 
 async function seedGroup(compId: string, tag: string) {
   const [group] = await sql<{ id: string; org_id: string }[]>`
-    insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash)
-    values (${compId}, 'Cap Tain', 'cap@example.com', ${`tok-${tag}`})
+    insert into registration_groups
+      (competition_id, contact_name, contact_email, access_token_hash, currency)
+    values (${compId}, 'Cap Tain', 'cap@example.com', ${`tok-${tag}`}, 'gbp')
     returning id, org_id`;
   return group;
 }

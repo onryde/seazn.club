@@ -255,7 +255,10 @@ export interface RegistrationSettingsRow {
   closes_at: Date | null;
   capacity: number | null;
   fee_cents: number;
-  currency: string;
+  /** No `currency` here on purpose (RS001b): currency is org-level
+   *  (`organizations.currency`), because one cart can span divisions and one
+   *  Stripe checkout session has one currency. Reads resolve it from
+   *  `OrgPaymentDefaults` / `DivisionCtx`. */
   refund_lock_at: Date | null;
   form_fields: RegistrationFormField[];
   payment_method: "offline" | "stripe";
@@ -313,7 +316,11 @@ export interface RegistrationGroupRow {
   ref_code: string | null;
   access_token_hash: string;
   amount_cents: number;
-  currency: string | null;
+  /** The org currency snapshotted when this cart was submitted (RS001b, design
+   *  §3). NOT NULL in the DB and never rewritten afterwards — a later
+   *  org-currency change (including the Connect same-currency lock converging)
+   *  must not re-denominate a cart the registrant was already quoted. */
+  currency: string;
   payment_method: "offline" | "stripe" | null;
   checkout_session_id: string | null;
   payment_intent_id: string | null;
@@ -431,7 +438,7 @@ function regGroupCols(db: AnySql) {
 
 const SETTINGS_COLS = [
   "division_id", "enabled", "entrant_kind", "opens_at", "closes_at",
-  "capacity", "fee_cents", "currency", "refund_lock_at", "form_fields",
+  "capacity", "fee_cents", "refund_lock_at", "form_fields",
   "payment_method", "payment_instructions", "updated_at",
 ] as const;
 
@@ -481,6 +488,12 @@ interface DivisionCtx {
   default_locale: string | null;
   payment_instructions: string | null;
   charges_enabled: boolean;
+  // No `currency` (RS001b): every currency read left in this file resolves from
+  // the CART's snapshot (`RegistrationGroupRow.currency`), which is what the
+  // registrant was actually quoted. RS002/RS003 need the org's CURRENT currency
+  // — to stamp a new group at submit, and to 422 a stale snapshot before
+  // calling Stripe — and this is the right place to add it, with its reader.
+  // Carrying it here unread now would be a seam that ships untested.
 }
 
 async function divisionCtx(db: AnySql, divisionId: string): Promise<DivisionCtx> {
@@ -669,12 +682,18 @@ async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: string): P
  * hold amount 0, so promotion SNAPSHOTS the current fee + method (spec §2);
  * card divisions get a fresh 48h pay window. Returns the promoted row.
  *
- * currency/payment_method/expires_at now live on the entry's CART
+ * payment_method/expires_at now live on the entry's CART
  * (`registration_groups`), not the entry — writing them here overwrites the
  * whole group's snapshot, which is exactly right while every group holds one
  * entry (true until RS002/RS003 ship multi-entry carts) and wrong the moment
  * a promoted entry shares a cart with something else already paid for at a
- * different rate/currency. RS002 territory; flagged, not fixed here.
+ * different rate. RS002 territory; flagged, not fixed here.
+ *
+ * `currency` is NOT re-snapshotted (RS001b). It is org-level now and the group
+ * captured it at submit; design §3 is explicit that a later org-currency change
+ * never touches an existing group, and a promotion is not a new quote. Writing
+ * the org's CURRENT currency here would silently re-denominate a cart the
+ * registrant was already shown a price for.
  */
 async function promoteOldestWaitlisted(
   tx: Tx,
@@ -697,8 +716,7 @@ async function promoteOldestWaitlisted(
     where id = ${picked.id}`;
   await tx`
     update registration_groups
-    set currency = ${settings?.currency ?? "gbp"},
-        payment_method = ${method},
+    set payment_method = ${method},
         expires_at = ${stripeWindow ? tx`now() + interval '48 hours'` : null},
         updated_at = now()
     where id = ${picked.group_id}`;
@@ -733,7 +751,7 @@ async function notifyPromoted(
       competitionName: ctx.comp_name,
       displayName: promoted.display_name,
       feeCents: promoted.amount_cents,
-      currency: promoted.currency ?? settings?.currency ?? "gbp",
+      currency: promoted.currency,
       payUrl,
       payDeadline: promoted.expires_at,
       paymentInstructions:
@@ -759,7 +777,6 @@ const DEFAULT_SETTINGS: Omit<RegistrationSettingsRow, "division_id"> = {
   closes_at: null,
   capacity: null,
   fee_cents: 0,
-  currency: "gbp",
   refund_lock_at: null,
   form_fields: [],
   payment_method: "offline",
@@ -771,13 +788,19 @@ export interface OrgPaymentDefaults {
   charges_enabled: boolean;
   org_payment_instructions: string | null;
   org_default_payment_method: string;
+  /** The org's one preferred currency (RS001b). Read-only on the division
+   *  settings surface — RS004 renders it as a chip linking to org settings,
+   *  and the same-currency lock pins it to the connected account's settlement
+   *  currency while connected. */
+  currency: string;
 }
 
 async function orgPaymentDefaults(orgId: string): Promise<OrgPaymentDefaults> {
   const [row] = await sql<OrgPaymentDefaults[]>`
     select stripe_charges_enabled as charges_enabled,
            payment_instructions as org_payment_instructions,
-           default_payment_method as org_default_payment_method
+           default_payment_method as org_default_payment_method,
+           currency
     from organizations where id = ${orgId}`;
   if (!row) throw new HttpError(404, "organization not found");
   return row;
@@ -814,7 +837,6 @@ export async function putRegistrationSettings(
   // defaulted fields, so normalise exactly like the schema does.
   const method = input.payment_method ?? "offline";
   const feeCents = input.fee_cents ?? 0;
-  const currency = input.currency ?? "gbp";
   const entrantKind = input.entrant_kind ?? "individual";
   const formFields = input.form_fields ?? [];
   if (method === "stripe") {
@@ -852,12 +874,12 @@ export async function putRegistrationSettings(
     const [row] = await tx<RegistrationSettingsRow[]>`
       insert into registration_settings
         (division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
-         fee_cents, currency, refund_lock_at, form_fields,
+         fee_cents, refund_lock_at, form_fields,
          payment_method, payment_instructions, updated_at)
       values
         (${divisionId}, ${input.enabled}, ${entrantKind},
          ${input.opens_at ?? null}, ${input.closes_at ?? null},
-         ${input.capacity ?? null}, ${feeCents}, ${currency},
+         ${input.capacity ?? null}, ${feeCents},
          ${input.refund_lock_at ?? null}, ${tx.json(formFields as never)},
          ${method}, ${input.payment_instructions?.trim() || null}, now())
       on conflict (division_id) do update set
@@ -867,7 +889,6 @@ export async function putRegistrationSettings(
         closes_at            = excluded.closes_at,
         capacity             = excluded.capacity,
         fee_cents            = excluded.fee_cents,
-        currency             = excluded.currency,
         refund_lock_at       = excluded.refund_lock_at,
         form_fields          = excluded.form_fields,
         payment_method       = excluded.payment_method,
@@ -931,11 +952,12 @@ export async function publicRegistrationInfo(
       id: string; name: string; slug: string; org_id: string; charges_enabled: boolean;
       starts_on: string | null; ends_on: string | null;
       org_name: string; logo_storage_path: string | null; logo_url: string | null;
+      currency: string;
     }[]
   >`
     select c.id, c.name, c.slug, c.org_id, o.stripe_charges_enabled as charges_enabled,
            c.starts_on, c.ends_on,
-           o.name as org_name, o.logo_storage_path, o.logo_url
+           o.name as org_name, o.logo_storage_path, o.logo_url, o.currency
     from competitions c join organizations o on o.id = c.org_id
     where o.slug = ${orgSlug} and c.slug = ${compSlug}
       and c.visibility in ('public','unlisted') and o.status = 'active'`;
@@ -991,7 +1013,10 @@ export async function publicRegistrationInfo(
       sport_key: r.sport_key,
       entrant_kind: r.entrant_kind,
       fee_cents: r.fee_cents,
-      currency: r.currency,
+      // Org-level (RS001b): every division on this panel quotes the same
+      // currency, which is what makes a multi-division cart payable in one
+      // Stripe session.
+      currency: comp.currency,
       payment_method: r.payment_method,
       opens_at: r.opens_at ? new Date(r.opens_at).toISOString() : null,
       closes_at: r.closes_at ? new Date(r.closes_at).toISOString() : null,
@@ -1088,7 +1113,7 @@ async function createRegistrationCheckout(
       {
         quantity: 1,
         price_data: {
-          currency: reg.currency ?? "gbp",
+          currency: reg.currency,
           unit_amount: reg.amount_cents,
           product_data: { name: `${ctx.comp_name} — entry fee (${reg.display_name})` },
         },
@@ -1338,7 +1363,7 @@ export async function handleRegistrationDispute(
         competitionName: ctx.comp_name,
         displayName: reg.display_name,
         amountCents: dispute.amount,
-        currency: reg.currency ?? "gbp",
+        currency: reg.currency,
         refCode: reg.ref_code,
       }).catch(() => {});
     }
@@ -1377,7 +1402,7 @@ export async function handleRegistrationDispute(
           competitionName: ctx.comp_name,
           displayName: reg.display_name,
           amountCents: dispute.amount,
-          currency: reg.currency ?? "gbp",
+          currency: reg.currency,
           refCode: reg.ref_code,
           recoveredCents: recovery.recoveredCents,
           // divisionRegistrations route deleted (RS001 demolition) —
@@ -1741,7 +1766,7 @@ function notifyRefund(reg: RegistrationWithGroupRow, ctx: DivisionCtx, amountCen
     competitionName: ctx.comp_name,
     displayName: reg.display_name,
     amountCents,
-    currency: reg.currency ?? "gbp",
+    currency: reg.currency,
     refCode: reg.ref_code,
   }).catch(() => {});
 }
@@ -1875,7 +1900,7 @@ export async function sweepRegistrations(
         competitionName: ctx.comp_name,
         displayName: reg.display_name,
         feeCents: reg.amount_cents,
-        currency: reg.currency ?? "gbp",
+        currency: reg.currency,
         paymentInstructions: null,
         checkoutUrl: url,
         payDeadline: reg.expires_at,
@@ -2104,7 +2129,7 @@ export async function sendPaymentReminder(
     competitionName: ctx.comp_name,
     displayName: reg.display_name,
     feeCents: fee,
-    currency: settings?.currency ?? reg.currency ?? "gbp",
+    currency: reg.currency,
     // Division override first, org-wide fallback — same resolution as the
     // confirmation email; refCode personalises {{reference}}.
     paymentInstructions: settings?.payment_instructions ?? ctx.payment_instructions,
@@ -2220,7 +2245,7 @@ export async function exportRegistrationsCsv(auth: AuthCtx, divisionId: string):
     const lines = rows.map((r) =>
       [
         r.id, r.status, r.display_name, r.contact_email,
-        r.amount_cents, r.currency ?? "", r.refunded_cents,
+        r.amount_cents, r.currency, r.refunded_cents,
         new Date(r.created_at).toISOString(),
         ...fieldKeys.map((k) => (r.answers as Record<string, unknown>)[k] ?? ""),
       ].map(esc).join(","),
@@ -2303,8 +2328,12 @@ export async function buildDisputeEvidence(
       order by round_no nulls last, scheduled_at nulls last`
     : [];
 
-  // The transactional receipt, reconstructed with the exact sender inputs.
-  const settings = await loadSettings(sql, reg.division_id);
+  // The transactional receipt, reconstructed with the exact sender inputs. The
+  // division's settings are no longer among them: currency was the last thing
+  // read off them here, and it is the CART's snapshot now (RS001b) — which is
+  // also the more honest source for dispute evidence, since it is what the
+  // registrant was actually charged in rather than what the division is
+  // configured for today.
   const { registrationTemplate } = await import("@/lib/email-templates");
   const { getDictionary } = await import("@/lib/i18n");
   // Reconstruct the receipt exactly as sent — in the registrant's captured
@@ -2317,7 +2346,7 @@ export async function buildDisputeEvidence(
       displayName: reg.display_name,
       status: reg.status,
       feeCents: reg.amount_cents,
-      currency: reg.currency ?? settings?.currency ?? "gbp",
+      currency: reg.currency,
       paymentInstructions: null,
       statusUrl: `${origin}/shared/${ctx.org_slug}/${ctx.comp_slug}/register/status`,
       refCode: reg.ref_code,
@@ -2350,7 +2379,7 @@ export async function buildDisputeEvidence(
     ${evidenceRow("Customer email", reg.contact_email)}
     ${evidenceRow("Competition", `${ctx.comp_name} — ${division?.name ?? ""}`)}
     ${evidenceRow("Service dates", `${ctx.starts_on ?? "—"} – ${ctx.ends_on ?? "—"}`)}
-    ${evidenceRow("Amount", `${((reg.amount_cents ?? 0) / 100).toFixed(2)} ${(reg.currency ?? "gbp").toUpperCase()}`)}
+    ${evidenceRow("Amount", `${((reg.amount_cents ?? 0) / 100).toFixed(2)} ${reg.currency.toUpperCase()}`)}
     ${evidenceRow("Payment intent", reg.payment_intent_id ?? "—")}
     ${evidenceRow("Registered at", when(reg.created_at))}
     ${evidenceRow("Status", reg.status)}

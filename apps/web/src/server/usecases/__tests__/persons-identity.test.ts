@@ -62,7 +62,6 @@ async function seedOpenDivision(auth: AuthCtx): Promise<{
     enabled: true,
     entrant_kind: "individual",
     fee_cents: 0,
-    currency: "usd",
     form_fields: [],
     opens_at: null,
     closes_at: null,
@@ -92,8 +91,10 @@ async function registerAndConfirm(
   const [{ id: competitionId }] = await sql<{ id: string }[]>`
     select id from competitions where slug = ${div.compSlug} and org_id = ${auth.orgId}`;
   const [group] = await sql<{ id: string }[]>`
-    insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash)
-    values (${competitionId}, ${input.display_name}, ${input.contact_email}, ${randomUUID()})
+    insert into registration_groups
+      (competition_id, contact_name, contact_email, access_token_hash, currency)
+    values (${competitionId}, ${input.display_name}, ${input.contact_email},
+            ${randomUUID()}, 'gbp')
     returning id`;
   const [reg] = await sql<{ id: string }[]>`
     insert into registrations (group_id, division_id, display_name)

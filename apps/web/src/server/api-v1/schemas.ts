@@ -1692,7 +1692,10 @@ export const PutRegistrationSettings = z
     closes_at: z.iso.datetime({ offset: true }).nullish(),
     capacity: z.number().int().min(1).max(10000).nullish(),
     fee_cents: z.number().int().min(0).max(100_000_00).default(0),
-    currency: z.string().length(3).toLowerCase().default("gbp"),
+    // No `currency` (RS001b): it is org-level now (`organizations.currency`,
+    // allowlisted by DB CHECK), because one cart can span divisions and a
+    // Stripe checkout session has exactly one currency. The org settings page
+    // owns the select; this panel shows a read-only chip.
     refund_lock_at: z.iso.datetime({ offset: true }).nullish(),
     form_fields: z.array(RegistrationFormField).max(12).default([]),
     payment_method: RegistrationPaymentMethod.default("offline"),
@@ -1717,6 +1720,9 @@ export const RegistrationSettings = z.object({
   closes_at: z.string().nullable(),
   capacity: z.number().int().nullable(),
   fee_cents: z.number().int(),
+  /** The ORG's currency (RS001b), echoed here so the division settings panel
+   *  can render its read-only chip without a second fetch. Not writable — the
+   *  request schema has no `currency`. */
   currency: z.string(),
   refund_lock_at: z.string().nullable(),
   form_fields: z.array(RegistrationFormField),
@@ -1846,6 +1852,12 @@ export const ConnectStatus = z.object({
   payouts_enabled: z.boolean(),
   disabled_reason: z.string().nullable(),
   requirements_due: z.number(),
+  /** Card-unsupported state (RS001b): the connected account's settlement
+   *  currency when it is outside `REGISTRATION_CURRENCIES`, else null. The
+   *  same-currency rule means we cannot charge in it and will not charge
+   *  across it, so card registration is unavailable until the account settles
+   *  in an allowlisted currency. Surfaced at connect time; RS004 renders it. */
+  unsupported_currency: z.string().nullable(),
 });
 
 export const CreateConnectOnboarding = z.object({

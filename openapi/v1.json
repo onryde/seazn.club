@@ -40147,12 +40147,6 @@
                     "minimum": 0,
                     "maximum": 10000000
                   },
-                  "currency": {
-                    "default": "gbp",
-                    "type": "string",
-                    "minLength": 3,
-                    "maxLength": 3
-                  },
                   "refund_lock_at": {
                     "anyOf": [
                       {
@@ -40239,7 +40233,6 @@
                   "enabled",
                   "entrant_kind",
                   "fee_cents",
-                  "currency",
                   "form_fields",
                   "payment_method"
                 ],
@@ -40251,7 +40244,6 @@
                 "opens_at": "2026-08-01T09:00:00Z",
                 "closes_at": "2026-08-01T09:00:00Z",
                 "fee_cents": 0,
-                "currency": "example",
                 "form_fields": [
                   {
                     "key": "example",
@@ -44834,6 +44826,16 @@
                         },
                         "requirements_due": {
                           "type": "number"
+                        },
+                        "unsupported_currency": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -44842,7 +44844,8 @@
                         "details_submitted",
                         "payouts_enabled",
                         "disabled_reason",
-                        "requirements_due"
+                        "requirements_due",
+                        "unsupported_currency"
                       ],
                       "additionalProperties": false
                     },
@@ -44860,7 +44863,8 @@
                     "details_submitted": true,
                     "payouts_enabled": true,
                     "disabled_reason": "example",
-                    "requirements_due": 1
+                    "requirements_due": 1,
+                    "unsupported_currency": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

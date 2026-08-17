@@ -92,8 +92,8 @@ describe.skipIf(!HAS_DB)("deleteCompetition money guards", () => {
     const [{ id: groupId }] = await sql<{ id: string }[]>`
       insert into registration_groups
         (competition_id, contact_name, contact_email, access_token_hash,
-         amount_cents, payment_intent_id, refunded_cents)
-      values (${compId}, 'P', 'p@x.test', ${randomUUID()}, 2000, 'pi_reg', 0)
+         amount_cents, currency, payment_intent_id, refunded_cents)
+      values (${compId}, 'P', 'p@x.test', ${randomUUID()}, 2000, 'gbp', 'pi_reg', 0)
       returning id`;
     await sql`insert into registrations (division_id, group_id, status, display_name, amount_cents)
       values (${divId}, ${groupId}, 'paid', 'P', 2000)`;
@@ -120,8 +120,8 @@ describe.skipIf(!HAS_DB)("deleteCompetition money guards", () => {
     const [{ id: groupId }] = await sql<{ id: string }[]>`
       insert into registration_groups
         (competition_id, contact_name, contact_email, access_token_hash,
-         amount_cents, payment_intent_id, refunded_cents)
-      values (${compId}, 'P', 'p@x.test', ${randomUUID()}, 2000, 'pi_reg2', 2000)
+         amount_cents, currency, payment_intent_id, refunded_cents)
+      values (${compId}, 'P', 'p@x.test', ${randomUUID()}, 2000, 'gbp', 'pi_reg2', 2000)
       returning id`;
     await sql`insert into registrations (division_id, group_id, status, display_name, amount_cents)
       values (${divId}, ${groupId}, 'withdrawn', 'P', 2000)`;

@@ -27269,12 +27269,6 @@
                     "minimum": 0,
                     "maximum": 10000000
                   },
-                  "currency": {
-                    "default": "gbp",
-                    "type": "string",
-                    "minLength": 3,
-                    "maxLength": 3
-                  },
                   "refund_lock_at": {
                     "anyOf": [
                       {
@@ -27361,7 +27355,6 @@
                   "enabled",
                   "entrant_kind",
                   "fee_cents",
-                  "currency",
                   "form_fields",
                   "payment_method"
                 ],
@@ -27373,7 +27366,6 @@
                 "opens_at": "2026-08-01T09:00:00Z",
                 "closes_at": "2026-08-01T09:00:00Z",
                 "fee_cents": 0,
-                "currency": "example",
                 "form_fields": [
                   {
                     "key": "example",
