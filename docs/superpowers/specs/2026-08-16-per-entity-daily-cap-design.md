@@ -376,6 +376,53 @@ greedy placer/verifier (`calendar.ts`), the in-process z3 encoder
 expansion at the boundary rather than a tally, and the Python side needs
 nothing.
 
+## Re-pinned 2026-08-17, after C6/C7/C8 merged — findings 6 and 4a are now moot
+
+C8 (#591) **deleted `build-encode.ts` and `build-encode-parity.test.ts`**, along
+with `z3-load.ts` and the WASM plumbing. C7 (#590) removed z3 from the public
+contract; C6 (#588) retired the prose. Consequences:
+
+**9. There are TWO consumers again, not three, and the surviving one is the
+wire.** Finding 6 (the in-process z3 encoder mis-compiling a universal scope
+into a competition-wide cap) describes a file that no longer exists. The
+tally/encoding work now splits as:
+- `calendar.ts` — greedy placer + verifier. Unchanged by C6-C8; every citation
+  in this spec still resolves.
+- `build.ts` `buildRuleGroups` (`:1318-1362`, sent at `:1931`) — resolves each
+  scope to a `RuleGroup { fixtureIds, minRestMinutes, maxFixturesPerDay }` for
+  the placement service.
+
+So finding 8's ruling is no longer one path among several — **it is the whole
+encoder story**. A universal scope expands into N `RuleGroup`s, one per entity,
+at `buildRuleGroups`. Still no proto change and no Python change.
+
+**10. The last surviving scope guard is blind to this change on TWO
+independent counts.** With `build-encode-parity.test.ts` deleted, the only
+test that walks scope kinds is `build.test.ts:1711`, "derives a rule group's
+fixture set from `scopeCoversFixture` itself, for every scope kind". It is a
+good test for what it was built for — its `rowOf` (`:1742-1747`) is
+constructed independently of `build.ts`'s private `scopeRowOf`, so a swapped
+`poolId`/`divisionId` or a dropped `people` really would fail it. But for a
+universal scope:
+
+1. Its `scopes` array (`:1723-1729`) is **hand-listed, five literals**, and the
+   count assertion is `toHaveLength(scopes.length)` — that same array. Adding a
+   member to `ConstraintScope` does not add it here, so the new scope is simply
+   untested despite the test's name. The
+   "union assertion is not a closed set" pattern.
+2. Even once added, the expectation is
+   `fixtures.filter(f => scopeCoversFixture(scope, …, rowOf(f)))`. A universal
+   scope makes that `true` for every fixture, and the produced group would also
+   hold every fixture — so it **passes while encoding a competition-wide cap**.
+   The expectation is derived from the same function the code under test uses:
+   a tautology precisely where the semantics are new.
+
+A universal scope is therefore the one case this suite cannot speak for, and it
+is now the only suite there is. Any implementation must re-establish a guard
+driven off `ConstraintScope.options` — not off `scopeCoversFixture` — before
+widening the union. The `ENCODED_SCOPE_KINDS` axis added for the deleted
+`build-encode-parity.test.ts` has to be rebuilt against `buildRuleGroups`.
+
 **Unchanged and confirmed:** `ConstraintScope` is a
 `z.discriminatedUnion("kind", …)` at `constraints.ts:30-37` with the five
 members the spec lists, re-exported by `scheduling/index.ts:46` via
