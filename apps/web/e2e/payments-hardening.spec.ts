@@ -41,7 +41,11 @@ const GENERIC_CONFIG = {
  *  comp (accepted, holds a real spot) from a community one (waitlisted). This is
  *  the grant the pass STILL uniquely provides after V310 made registration.paid
  *  true on every plan — card intake no longer closes on pass/plan loss, so the
- *  old "card payments temporarily unavailable" proof is dead. */
+ *  old "card payments temporarily unavailable" proof is dead.
+ *
+ *  RS001 deleted the only entry point that could observe this cap (the public
+ *  register POST — see `submitPublicRegistration`), so as of RS001 this is
+ *  read only by T10's PARKED body. Owed back by RS006/RS007. */
 const COMMUNITY_ENTRANT_CAP = 64;
 
 // ---------------------------------------------------------------------------
@@ -226,19 +230,27 @@ async function seedStripeDivision(
 
 /** Fill a division to `taken` spot-holding entries (status 'pending'), inserted
  *  directly — 64 round-trips through the public endpoint would trip its per-IP
- *  rate limit long before they finished. Mirrors event-pass.spec.ts::fillDivision. */
-async function fillDivision(divisionId: string, orgId: string, taken: number): Promise<void> {
+ *  rate limit long before they finished. One registration_groups cart per entry
+ *  (V363/V364 split the old single-row shape); org_id is trigger-filled on both
+ *  tables, never passed — `orgId` stays a parameter only so T10's frozen call
+ *  site needs no edit. event-pass.spec.ts's sibling fillDivision was deleted
+ *  outright (its only caller went with it); this one survives because T10's
+ *  PARKED body (test.skip, RS006/RS007) still calls it. */
+async function fillDivision(divisionId: string, _orgId: string, taken: number): Promise<void> {
   const tag = randomBytes(5).toString("hex");
   await withDb(async (sql) => {
     await sql`
-      insert into registrations
-        (division_id, org_id, status, display_name, contact_email, ref_code,
-         access_token_hash, payment_method)
-      select ${divisionId}, ${orgId}, 'pending',
-             'Seed ' || g, 'seed-' || g || '-' || ${tag} || '@test.local',
-             ${"SZ-" + tag.toUpperCase() + "-"} || lpad(g::text, 4, '0'),
-             ${tag + "-"} || g, 'offline'
-      from generate_series(1, ${taken}) g`;
+      with g as (
+        insert into registration_groups
+          (competition_id, contact_name, contact_email, access_token_hash)
+        select (select competition_id from divisions where id = ${divisionId}),
+               'Seed ' || s, 'seed-' || s || '-' || ${tag} || '@test.local',
+               ${tag + "-"} || s
+        from generate_series(1, ${taken}) s
+        returning id
+      )
+      insert into registrations (division_id, group_id, status, display_name)
+      select ${divisionId}, id, 'pending', 'Seed' from g`;
   });
 }
 
@@ -246,7 +258,13 @@ async function fillDivision(divisionId: string, orgId: string, taken: number): P
  *  registration status ('pending' = holds a spot, 'waitlisted' = over the cap).
  *  The card division's checkout mint fails on the seeded fake Connect account and
  *  is swallowed (createRegistrationCheckout try/catch), so a pending entry still
- *  ACKs 201 without any real Stripe call — this stays CI-runnable. */
+ *  ACKs 201 without any real Stripe call — this stays CI-runnable.
+ *
+ *  RS001 DELETED this route (`submitRegistration` — see registrations.ts's
+ *  "Public: submit — REMOVED" block); no surviving endpoint can create a
+ *  registration. This helper is dead code kept only for T10's PARKED body
+ *  (test.skip, RS006/RS007 own restoring it) — every other caller was removed
+ *  (T3/T7's cap-drop halves; event-pass.spec.ts's U7 outright). */
 async function submitPublicRegistration(
   request: APIRequestContext,
   orgSlug: string,
@@ -391,11 +409,20 @@ test.describe("T1 · competition delete is blocked while money is on file", () =
       { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG, eligibility: [] },
     );
     await withDb(async (sql) => {
-      await sql`insert into registrations
-        (division_id, org_id, status, display_name, contact_email, amount_cents,
-         payment_intent_id, refunded_cents, guardian_consent, answers, roster, access_token_hash)
-        values (${cardDiv.data!.id}, ${org.id}, 'paid', 'P', ${`p-${TAG}@x.test`}, 2000,
-                ${uid("pi")}, 0, false, '{}', '[]', ${uid("tok")})`;
+      // V363/V364: the payment envelope (payment_intent_id/refunded_cents/
+      // contact_email/access_token_hash) moved off the entry row onto the
+      // cart (registration_groups) — the guard now joins through it (see
+      // deleteCompetition's `liveMoney` query). org_id is trigger-filled on
+      // both inserts, never passed.
+      const [{ id: groupId }] = await sql<{ id: string }[]>`
+        insert into registration_groups
+          (competition_id, contact_name, contact_email, access_token_hash,
+           amount_cents, payment_intent_id, refunded_cents)
+        values (${cardComp.data!.id}, 'P', ${`p-${TAG}@x.test`}, ${uid("tok")},
+                2000, ${uid("pi")}, 0)
+        returning id`;
+      await sql`insert into registrations (division_id, group_id, status, display_name, amount_cents)
+        values (${cardDiv.data!.id}, ${groupId}, 'paid', 'P', 2000)`;
     });
     const cardDel = await apiJson(page.request, `/api/v1/competitions/${cardComp.data!.id}`, "DELETE");
     expect(cardDel.status).toBe(409);
@@ -459,25 +486,11 @@ test.describe("T2 · API keys cannot delete a competition", () => {
 // ===========================================================================
 
 test.describe("T3 · Event Pass refund revokes the pass", () => {
-  test("charge.refunded revokes the pass — the entrant cap drops 128 → 64", async ({
-    request,
-  }) => {
+  test("charge.refunded revokes the pass", async ({ request }) => {
     const intent = uid("pi");
-    const org = await seedOrg({ plan: "community", chargesEnabled: true, connected: true });
-    const { compId, compSlug } = await seedComp(org.orgId);
-    // Uncapped by the organiser, so the PLAN quota is the only ceiling; sit the
-    // division ON the community cap so entry 65 separates a passed comp from a
-    // community one. (V310 killed the card-intake-closes proof — see the
-    // COMMUNITY_ENTRANT_CAP note; the entrant cap is what the pass still grants.)
-    const { divisionId } = await seedStripeDivision(compId, null);
+    const org = await seedOrg({ plan: "community" });
+    const { compId } = await seedComp(org.orgId);
     await grantPass(compId, org.orgId, "event_pass", intent);
-    await fillDivision(divisionId, org.orgId, COMMUNITY_ENTRANT_CAP);
-
-    // While the pass is held the cap is 128: entry 65 takes a real spot. A
-    // passless community org would waitlist this, so the assertion is NOT vacuous.
-    const held = await submitPublicRegistration(request, org.orgSlug, compSlug, divisionId, "Held 65");
-    expect(held.status).toBe(201);
-    expect(held.data!.status).toBe("pending");
 
     // A fully-refunded pass charge revokes the pass.
     const res = await postSignedEvent(
@@ -497,14 +510,16 @@ test.describe("T3 · Event Pass refund revokes the pass", () => {
     );
     expect(passGone.length).toBe(0);
 
-    // … and the cap has dropped back to 64: the next entry (the 66th spot-holder)
-    // is over the community ceiling and waitlists. Reverting the revocation leaves
-    // the cap at 128 and this comes back 'pending' — so the assertion can still fail.
-    const afterRevoke = await submitPublicRegistration(
-      request, org.orgSlug, compSlug, divisionId, "After Refund 66",
-    );
-    expect(afterRevoke.status).toBe(201);
-    expect(afterRevoke.data!.status).toBe("waitlisted");
+    // This test used to ALSO prove the entrant cap drops 128 → 64 by
+    // submitting entry 65/66 through the public register endpoint. RS001
+    // deleted that endpoint (no surviving way to create a registration — see
+    // registrations.ts's "Public: submit — REMOVED" block) and there is no
+    // live code path left that reads this cap (publicRegistrationInfo, the
+    // one surviving public read, never queries entrants.per_division.max —
+    // verified by reading it). PARKED, not weakened: rather than assert
+    // something that no longer proves anything, that half is dropped here
+    // (same cause as event-pass.spec.ts's deleted U7); T10 keeps the fuller
+    // mechanism frozen under test.skip for RS006/RS007 to restore.
   });
 });
 
@@ -743,21 +758,11 @@ test.describe("T7 · platform disputes truth-up entitlements", () => {
     ).toBeVisible({ timeout: 20_000 });
   });
 
-  test("Event Pass: a lost dispute revokes the pass — the entrant cap drops 128 → 64", async ({
-    request,
-  }) => {
+  test("Event Pass: a lost dispute revokes the pass", async ({ request }) => {
     const intent = uid("pi");
-    const org = await seedOrg({ plan: "community", chargesEnabled: true, connected: true });
-    const { compId, compSlug } = await seedComp(org.orgId);
-    // Same entrant-cap proof as T3 (card intake no longer closes on pass loss).
-    const { divisionId } = await seedStripeDivision(compId, null);
+    const org = await seedOrg({ plan: "community" });
+    const { compId } = await seedComp(org.orgId);
     await grantPass(compId, org.orgId, "event_pass", intent);
-    await fillDivision(divisionId, org.orgId, COMMUNITY_ENTRANT_CAP);
-
-    // Pass held → cap 128 → entry 65 holds a spot (a passless community waitlists).
-    const held = await submitPublicRegistration(request, org.orgSlug, compSlug, divisionId, "Held 65");
-    expect(held.status).toBe(201);
-    expect(held.data!.status).toBe("pending");
 
     const lost = await postSignedEvent(
       request,
@@ -778,13 +783,9 @@ test.describe("T7 · platform disputes truth-up entitlements", () => {
     );
     expect(passGone.length).toBe(0);
 
-    // Cap back to 64 → the 66th spot-holder waitlists. Reverting the dispute
-    // revocation leaves it 128 and this reads 'pending', so it can still fail.
-    const afterRevoke = await submitPublicRegistration(
-      request, org.orgSlug, compSlug, divisionId, "After Dispute 66",
-    );
-    expect(afterRevoke.status).toBe(201);
-    expect(afterRevoke.data!.status).toBe("waitlisted");
+    // The entrant-cap-drops-128-to-64 half is PARKED here for the same reason
+    // as T3 (see its comment) — RS001 deleted the public register endpoint
+    // both relied on to observe the cap.
   });
 });
 
@@ -929,6 +930,20 @@ test.describe("T10 · a pass lifts the entrant cap on its own comp only", () => 
   test("Community org: entry 65 waitlists on the no-pass comp, holds a spot on the passed comp", async ({
     page,
   }) => {
+    // PARKED (RS001): this test's whole mechanism is 65 public submissions
+    // through /api/v1/public/orgs/{orgSlug}/competitions/{slug}/register,
+    // which RS001 deleted along with the rest of the old registration UI —
+    // no surviving endpoint can submit a registration (registrations.ts's
+    // "Public: submit — REMOVED" block; same cause as event-pass.spec.ts's
+    // deleted U7). There is no live path — public or organiser — that reads
+    // entrants.per_division.max the way this test needs, so seeding the
+    // waitlisted/pending rows directly would only assert the outcome we'd be
+    // hard-coding, not prove the cap actually moved with the pass. The body
+    // below (including the ~line-951 register-page nav, which now renders the
+    // CLOSED state and would need its own re-decision) is left intact,
+    // unexecuted, for RS006/RS007 to restore — delete this test.skip line
+    // once the endpoint exists again.
+    test.skip(true, "RS001 deleted the public register POST — owed back by RS006/RS007");
     // Connect stays LIVE; only the paid entitlement lapsed (community plan). V310
     // made registration.paid true on every plan, so card intake no longer closes
     // on plan loss — the entrant cap (community 64, pass 128) is the grant the pass
