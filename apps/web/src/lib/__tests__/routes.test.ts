@@ -28,9 +28,6 @@ describe("routes", () => {
     expect(routes.divisionSchedule("acme", "summer-smash", "u16-boys")).toBe(
       "/o/acme/c/summer-smash/d/u16-boys/schedule",
     );
-    expect(routes.divisionRegistrations("acme", "summer-smash", "u16-boys")).toBe(
-      "/o/acme/c/summer-smash/d/u16-boys/registrations",
-    );
     expect(routes.fixture("acme", "summer-smash", "u16-boys", 14)).toBe(
       "/o/acme/c/summer-smash/d/u16-boys/f/14",
     );

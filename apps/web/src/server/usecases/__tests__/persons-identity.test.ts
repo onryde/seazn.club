@@ -17,11 +17,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createOfficial, inviteOfficial } from "../officials";
-import {
-  confirmRegistration,
-  putRegistrationSettings,
-  submitRegistration,
-} from "../registrations";
+import { confirmRegistration, putRegistrationSettings } from "../registrations";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -76,31 +72,42 @@ async function seedOpenDivision(auth: AuthCtx): Promise<{
   return { divisionId: division.id, orgSlug, compSlug: competition.slug };
 }
 
-/** The real public submit → organiser confirm → `materialise` path. Never
- *  hand-inserts a persons row: a hand-rolled insert would prove nothing. */
+/**
+ * The real organiser confirm → `materialise` path. `submitRegistration` is
+ * deleted (RS001 registration demolition), so the INPUT (one cart, one
+ * entry, one player row) is seeded directly in the V363/V364 shape — but the
+ * OUTCOME under test is never hand-inserted: `confirmRegistration` runs for
+ * real and the resulting `persons` rows are what every assertion below
+ * reads. A hand-rolled `persons` insert would still prove nothing; a
+ * hand-rolled INPUT does not touch that guarantee — `materialise` (below)
+ * doesn't even receive contact_email any more (it moved to
+ * `registration_groups`, off the row materialise reads), so two carts
+ * sharing one contact_email is exactly the shape this guard needs.
+ */
 async function registerAndConfirm(
   auth: AuthCtx,
   div: { divisionId: string; orgSlug: string; compSlug: string },
   input: { display_name: string; contact_email: string; dob: string; guardian_name: string },
 ): Promise<{ entrant_id: string }> {
-  const res = await submitRegistration(
-    div.orgSlug,
-    div.compSlug,
-    {
-      division_id: div.divisionId,
-      display_name: input.display_name,
-      contact_email: input.contact_email,
-      dob: input.dob,
-      gender: null,
-      guardian_name: input.guardian_name,
-      guardian_consent: true,
-      privacy_consent: true,
-      answers: {},
-      players: [],
-    },
-    "http://test.local",
-  );
-  const confirmed = await confirmRegistration(auth, res.registration.id);
+  const [{ id: competitionId }] = await sql<{ id: string }[]>`
+    select id from competitions where slug = ${div.compSlug} and org_id = ${auth.orgId}`;
+  const [group] = await sql<{ id: string }[]>`
+    insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash)
+    values (${competitionId}, ${input.display_name}, ${input.contact_email}, ${randomUUID()})
+    returning id`;
+  const [reg] = await sql<{ id: string }[]>`
+    insert into registrations (group_id, division_id, display_name)
+    values (${group.id}, ${div.divisionId}, ${input.display_name})
+    returning id`;
+  await sql`
+    insert into registration_players
+      (registration_id, full_name, dob, source, consent_status, consent_at, guardian_name)
+    values (
+      ${reg.id}, ${input.display_name}, ${input.dob}, 'captain_entered', 'guardian', now(),
+      ${input.guardian_name}
+    )`;
+
+  const confirmed = await confirmRegistration(auth, reg.id);
   expect(confirmed.status).toBe("confirmed");
   expect(confirmed.entrant_id).not.toBeNull();
   return { entrant_id: confirmed.entrant_id as string };

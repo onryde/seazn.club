@@ -87,12 +87,16 @@ describe.skipIf(!HAS_DB)("deleteCompetition money guards", () => {
   });
 
   it("409s when a registration has unrefunded card money", async () => {
-    const { auth, compId, divId, orgId } = await seedCompWithDivision();
-    await sql`insert into registrations
-      (division_id, org_id, status, display_name, contact_email, amount_cents,
-       payment_intent_id, refunded_cents, guardian_consent, answers, roster, access_token_hash)
-      values (${divId}, ${orgId}, 'paid', 'P', 'p@x.test', 2000, 'pi_reg', 0,
-              false, '{}', '[]', ${randomUUID()})`;
+    const { auth, compId, divId } = await seedCompWithDivision();
+    // Payment envelope lives on the cart (registration_groups) now.
+    const [{ id: groupId }] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash,
+         amount_cents, payment_intent_id, refunded_cents)
+      values (${compId}, 'P', 'p@x.test', ${randomUUID()}, 2000, 'pi_reg', 0)
+      returning id`;
+    await sql`insert into registrations (division_id, group_id, status, display_name, amount_cents)
+      values (${divId}, ${groupId}, 'paid', 'P', 2000)`;
     await expect(deleteCompetition(auth, compId)).rejects.toMatchObject({
       status: 409,
     });
@@ -112,12 +116,15 @@ describe.skipIf(!HAS_DB)("deleteCompetition money guards", () => {
   });
 
   it("still deletes when money is fully refunded", async () => {
-    const { auth, compId, divId, orgId } = await seedCompWithDivision();
-    await sql`insert into registrations
-      (division_id, org_id, status, display_name, contact_email, amount_cents,
-       payment_intent_id, refunded_cents, guardian_consent, answers, roster, access_token_hash)
-      values (${divId}, ${orgId}, 'withdrawn', 'P', 'p@x.test', 2000, 'pi_reg2', 2000,
-              false, '{}', '[]', ${randomUUID()})`;
+    const { auth, compId, divId } = await seedCompWithDivision();
+    const [{ id: groupId }] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash,
+         amount_cents, payment_intent_id, refunded_cents)
+      values (${compId}, 'P', 'p@x.test', ${randomUUID()}, 2000, 'pi_reg2', 2000)
+      returning id`;
+    await sql`insert into registrations (division_id, group_id, status, display_name, amount_cents)
+      values (${divId}, ${groupId}, 'withdrawn', 'P', 2000)`;
     await deleteCompetition(auth, compId);
     const [gone] = await sql`select 1 from competitions where id = ${compId}`;
     expect(gone).toBeUndefined();

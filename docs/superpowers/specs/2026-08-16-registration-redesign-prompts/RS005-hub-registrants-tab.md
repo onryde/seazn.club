@@ -64,6 +64,14 @@ read model + transitions; the tab RS004 left as a designed placeholder.
 
 ## Gotchas
 
+- **`waitlist-queue.tsx` is yours to wire, and it currently has ZERO coverage
+  at any level** — RS001 kept the component but deleted `reg-console.spec.ts`,
+  which was the only thing asserting queue order, #-in-line and the public
+  waitlist count. Restore those assertions as you wire it.
+- **Its view model is not a `registrations` row.** `contact_email` and
+  `payment_intent_id` moved to `registration_groups` in V364, so they must be
+  joined from the cart. Selecting them off `registrations` fails at RUNTIME,
+  not at compile time — they are names inside a SQL string.
 - The list is the READ path for the same rows RS002 mutates — reuse the
   usecase read model; a second SQL path here WILL drift (repo's recurring
   placer-vs-verifier bug class).

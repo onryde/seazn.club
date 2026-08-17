@@ -4,7 +4,8 @@
 // An org can lose `registration.paid` WITHOUT touching Connect. Connect stays
 // live (charges_enabled=true), so the pre-existing charges_enabled gate does
 // NOT fire; money would keep landing on an entitlement the org no longer holds.
-// The intake read + submit therefore also gate on the entitlement itself.
+// The intake READ therefore also gates on the entitlement itself
+// (`publicRegistrationInfo` → payments_unavailable, pinned below).
 //
 // V310 (D19) narrowed WHEN that happens without changing the gate. Charging an
 // entry fee is now free on every plan, so a downgrade to community no longer
@@ -12,9 +13,13 @@
 // The surviving revocation path is a staff `org_entitlement_overrides` deny
 // (abuse, chargeback risk), and that is what the RED cases here use.
 //
+// RS001 registration demolition: the SUBMIT-side 402 gate this file
+// used to pin died with `submitRegistration` — see the comment inside the
+// describe block below. Only the read-side gate has coverage here now.
+//
 // Real Postgres required; skipped without DATABASE_URL. Seeds are run-unique
-// (randomUUID). The Stripe seam is stubbed so the RED submit case fails by
-// RESOLVING (no gate) rather than reaching the network.
+// (randomUUID). The Stripe seam is stubbed but currently unused by any
+// surviving test — left in place as harmless setup.
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
@@ -35,11 +40,7 @@ import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import {
-  putRegistrationSettings,
-  publicRegistrationInfo,
-  submitRegistration,
-} from "../registrations";
+import { putRegistrationSettings, publicRegistrationInfo } from "../registrations";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -122,18 +123,6 @@ const SETTINGS_BASE = {
   currency: "gbp",
   refund_lock_at: null,
   form_fields: [],
-};
-
-const SUBMIT_BASE = {
-  display_name: "Alex Test",
-  contact_email: "alex@test.local",
-  dob: null,
-  gender: null,
-  guardian_name: null,
-  guardian_consent: false,
-  privacy_consent: true,
-  answers: {},
-  players: [],
 };
 
 /** Pro org → save a Stripe-fee division → lose `registration.paid`. Connect
@@ -253,28 +242,18 @@ describe.skipIf(!HAS_DB)("revoked card intake gate (P2-10)", () => {
     expect(d.closed_reason).toBeNull();
   });
 
-  it("rejects submit with 402 when registration.paid is revoked", async () => {
-    const { orgSlug, competition, division } = await revokedStripeRig();
-    await expect(
-      submitRegistration(
-        orgSlug,
-        competition.slug,
-        { ...SUBMIT_BASE, division_id: division.id },
-        "http://test.local",
-      ),
-    ).rejects.toMatchObject({ status: 402 });
-  });
-
-  it("lets a downgraded org's card submit through — no plan gate left", async () => {
-    const { orgSlug, competition, division } = await downgradedStripeRig();
-    const res = await submitRegistration(
-      orgSlug,
-      competition.slug,
-      { ...SUBMIT_BASE, division_id: division.id },
-      "http://test.local",
-    );
-    expect(res.registration.status).toBe("pending");
-  });
+  // "rejects submit with 402 when registration.paid is revoked" and "lets a
+  // downgraded org's card submit through — no plan gate left" DELETED (RS001
+  // registration demolition): both pinned `submitRegistration`'s own
+  // 402 entitlement gate at submit time. That function is deleted — the
+  // public submit route stays closed until RS002/RS003 ship the new
+  // group-shaped flow — and no surviving usecase enforces `registration.paid`
+  // at a "submit" moment: `putRegistrationSettings` gates it only at
+  // SAVE time (organiser turning the method on), which this rig deliberately
+  // does BEFORE revoking the entitlement, so it never re-fires. The read-side
+  // gate (`publicRegistrationInfo` → payments_unavailable) keeps its own
+  // coverage above, unchanged. RS002/RS003 own re-testing the 402 against the
+  // new submit flow.
 
   it("leaves an offline paid division untouched by the revoked entitlement", async () => {
     const { orgId, orgSlug, ownerId } = await seedProOrg();
@@ -297,14 +276,8 @@ describe.skipIf(!HAS_DB)("revoked card intake gate (P2-10)", () => {
     expect(d.payment_method).toBe("offline");
     expect(d.open).toBe(true);
     expect(d.closed_reason).toBeNull();
-
-    // …and an offline submit still goes through — the gate rides the card method.
-    const res = await submitRegistration(
-      orgSlug,
-      competition.slug,
-      { ...SUBMIT_BASE, division_id: division.id },
-      "http://test.local",
-    );
-    expect(res.registration.status).toBe("pending");
+    // The trailing "an offline submit still goes through" assertion this test
+    // used to carry was submitRegistration's own pass-through — deleted with
+    // it; the gate riding the card method is otherwise unchanged.
   });
 });

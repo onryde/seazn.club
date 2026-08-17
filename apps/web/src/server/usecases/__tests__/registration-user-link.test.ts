@@ -1,17 +1,28 @@
-// #402 — the registrant's session, and the person it resolves to.
+// #402 — the account behind a registration, and the person it resolves to.
 //
 // Two halves, deliberately in one file because the second depends on what the
 // first writes:
 //
-//  1. CAPTURE. `registrations.user_id` is written ONLY when the submitter is
-//     signed in AND affirmed "I'm registering myself" AND left every guardian
-//     field empty. Being signed in is never enough on its own — a guardian, a
-//     spouse and a team captain are all signed in too, and inferring the link
-//     would merge them into one person exactly as `contact_email` would
-//     (persons-identity.test.ts pins that same harm in its email form).
-//  2. RESOLVE. Given that link, `materialise` upserts into the PLAYER lane on
-//     (org_id, user_id, 'player'), so one human entering two divisions gets one
-//     persons row. Everything without a link keeps today's plain insert.
+//  1. CAPTURE. Pre-RS001 this was `registrations.user_id`, written ONLY when
+//     the submitter was signed in AND affirmed "I'm registering myself" AND
+//     left every guardian field empty (`deriveLinkUserId`, still exported,
+//     still pinned pure below). Post-RS001/V363 the target column is
+//     `registration_players.user_id` — the account that owns ONE specific
+//     player row, set for the submitter's own row at submit (design §4 step
+//     1) or at claim/join (design §2 item 4). Deliberately NOT
+//     `registration_groups.user_id`: the group's contact is often a club rep
+//     entering OTHER people's entries, and resolving every player against
+//     the rep's account would mis-link entries that are not theirs. Nothing
+//     writes this column yet (RS002/RS003 own submit, RS008 owns claim) —
+//     untested here, on purpose; that capture decision has no call site to
+//     pin against until one of those ships.
+//  2. RESOLVE. Given a player row carrying a `user_id`, `materialise` calls
+//     `resolvePlayerPerson` to upsert into the PLAYER lane on (org_id,
+//     user_id, 'player'), so one human entering two divisions gets ONE
+//     persons row. A row with no `user_id` keeps the plain unlinked insert.
+//     Restored below, seeded directly against the V363/V364 shape (RS001
+//     follow-up) — this half needs no submit flow, only a player row that
+//     already carries the link.
 //
 // Real Postgres required; skipped without DATABASE_URL.
 import { describe, expect, it } from "vitest";
@@ -21,12 +32,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import {
-  confirmRegistration,
-  deriveLinkUserId,
-  putRegistrationSettings,
-  submitRegistration,
-} from "../registrations";
+import { confirmRegistration, deriveLinkUserId, putRegistrationSettings } from "../registrations";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -69,53 +75,6 @@ async function seedOpenDivision(
     refund_lock_at: null,
   });
   return { divisionId: division.id, orgSlug, compSlug: competition.slug };
-}
-
-async function makeUser(): Promise<string> {
-  const [u] = await sql<{ id: string }[]>`
-    insert into users (email, display_name, password_hash)
-    values (${`u-${randomUUID().slice(0, 8)}@test.local`}, 'Session User', 'x')
-    returning id`;
-  return u.id;
-}
-
-async function submitAs(
-  div: { divisionId: string; orgSlug: string; compSlug: string },
-  over: Partial<Parameters<typeof submitRegistration>[2]>,
-  sessionUserId: string | null,
-) {
-  return submitRegistration(
-    div.orgSlug,
-    div.compSlug,
-    {
-      division_id: div.divisionId,
-      display_name: "Sam Player",
-      contact_email: `sam-${randomUUID().slice(0, 8)}@test.local`,
-      dob: null,
-      gender: null,
-      guardian_name: null,
-      guardian_consent: false,
-      privacy_consent: true,
-      registering_self: false,
-      answers: {},
-      players: [],
-      ...over,
-    },
-    "http://test.local",
-    { sessionUserId },
-  );
-}
-
-async function linkedUser(registrationId: string): Promise<string | null> {
-  const [row] = await sql<{ user_id: string | null }[]>`
-    select user_id from registrations where id = ${registrationId}`;
-  return row.user_id;
-}
-
-async function personCount(orgId: string): Promise<number> {
-  const [{ n }] = await sql<{ n: string }[]>`
-    select count(*)::text as n from persons where org_id = ${orgId}`;
-  return Number(n);
 }
 
 // The derivation is exported so the branches the outer 422s make unreachable can
@@ -180,74 +139,15 @@ describe("deriveLinkUserId (#402 — the capture rule itself)", () => {
   });
 });
 
-describe.skipIf(!HAS_DB)("registration session capture (#402)", () => {
-  it("signed out ⇒ user_id null", async () => {
-    const { auth } = await seedOrg("pro");
-    const div = await seedOpenDivision(auth);
-    const res = await submitAs(div, {}, null);
-    expect(await linkedUser(res.registration.id)).toBeNull();
-  });
-
-  it("signed in but NOT affirmed ⇒ user_id null (opt-in, never inferred)", async () => {
-    const { auth } = await seedOrg("pro");
-    const div = await seedOpenDivision(auth);
-    const userId = await makeUser();
-    const res = await submitAs(div, {}, userId);
-    expect(await linkedUser(res.registration.id)).toBeNull();
-  });
-
-  it("signed in and affirmed with an ADULT dob ⇒ user_id captured", async () => {
-    const { auth } = await seedOrg("pro");
-    const div = await seedOpenDivision(auth);
-    const userId = await makeUser();
-    const res = await submitAs(div, { registering_self: true, dob: ADULT_DOB }, userId);
-    expect(await linkedUser(res.registration.id)).toBe(userId);
-  });
-
-  it("affirmed BUT no dob ⇒ user_id null (an unaged registrant may be a child)", async () => {
-    const { auth } = await seedOrg("pro");
-    const div = await seedOpenDivision(auth);
-    const userId = await makeUser();
-    const res = await submitAs(div, { registering_self: true, dob: null }, userId);
-    expect(await linkedUser(res.registration.id)).toBeNull();
-  });
-
-  it("affirmed with a MINOR's dob and no guardian fields ⇒ refused outright", async () => {
-    const { auth } = await seedOrg("pro");
-    const div = await seedOpenDivision(auth);
-    const userId = await makeUser();
-    // The outer guardian-consent guard rejects this submission before any row
-    // exists, so there is nothing left to link. deriveLinkUserId pins the same
-    // case independently, above, so the invariant does not rest on this 422.
-    await expect(
-      submitAs(div, { registering_self: true, dob: "2016-09-11" }, userId),
-    ).rejects.toMatchObject({ status: 422 });
-  });
-
-  it("affirmed BUT guardian_name present ⇒ user_id null (server-side veto)", async () => {
-    const { auth } = await seedOrg("pro");
-    const div = await seedOpenDivision(auth);
-    const userId = await makeUser();
-    const res = await submitAs(
-      div,
-      { registering_self: true, guardian_name: "Grace Guardian" },
-      userId,
-    );
-    expect(await linkedUser(res.registration.id)).toBeNull();
-  });
-
-  it("affirmed BUT guardian_consent true ⇒ user_id null (server-side veto)", async () => {
-    const { auth } = await seedOrg("pro");
-    const div = await seedOpenDivision(auth);
-    const userId = await makeUser();
-    const res = await submitAs(
-      div,
-      { registering_self: true, guardian_consent: true },
-      userId,
-    );
-    expect(await linkedUser(res.registration.id)).toBeNull();
-  });
-});
+// describe("registration session capture (#402)") DELETED (RS001 demolition):
+// all 7 tests drove `submitRegistration`'s own capture of the
+// session's user_id onto the row it inserted. The column moved too
+// (`registrations.user_id` → `registration_groups.user_id`, V364), but that
+// is secondary — the write only ever happened INSIDE submitRegistration,
+// which no longer exists. `deriveLinkUserId`, the pure decision function
+// this capture step called, keeps its own full coverage above, unchanged.
+// RS002/RS003 own re-wiring capture (and re-testing it) against the new
+// group-shaped submit flow.
 
 describe.skipIf(!HAS_DB)("organiser-side entry creation (#402)", () => {
   it("binds NO user_id to the person, even though the organiser is signed in", async () => {
@@ -287,26 +187,80 @@ describe.skipIf(!HAS_DB)("organiser-side entry creation (#402)", () => {
   });
 });
 
-describe.skipIf(!HAS_DB)("person resolution by (org_id, user_id, 'player') (#402)", () => {
-  it("THE headline: one signed-in registrant, two divisions ⇒ ONE persons row", async () => {
+async function makeUser(): Promise<string> {
+  const [u] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, password_hash)
+    values (${`u-${randomUUID().slice(0, 8)}@test.local`}, 'Session User', 'x')
+    returning id`;
+  return u.id;
+}
+
+async function personCount(orgId: string): Promise<number> {
+  const [{ n }] = await sql<{ n: string }[]>`
+    select count(*)::text as n from persons where org_id = ${orgId}`;
+  return Number(n);
+}
+
+/**
+ * Direct V363/V364 fixture: the group → entry → player-row chain
+ * `submitRegistration` used to write in one call (now deleted — see the file
+ * header). `userId` on a player entry mimics whatever RS002/RS003 (submit) or
+ * RS008 (claim) will eventually stamp onto that ONE row — never the group's
+ * own `user_id`, which is the CONTACT's account and is not what `materialise`
+ * resolves against.
+ */
+async function seedPlayerEntry(
+  divisionId: string,
+  players: { name: string; dob?: string | null; gender?: string | null; userId?: string | null }[],
+): Promise<{ id: string }> {
+  const [{ competition_id: competitionId }] = await sql<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${divisionId}`;
+  const [group] = await sql<{ id: string }[]>`
+    insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash)
+    values (
+      ${competitionId}, 'Contact', ${`c-${randomUUID().slice(0, 8)}@test.local`},
+      ${`tok-${randomUUID()}`}
+    )
+    returning id`;
+  const [reg] = await sql<{ id: string }[]>`
+    insert into registrations (group_id, division_id, display_name)
+    values (${group.id}, ${divisionId}, ${players[0]?.name ?? "Entry"})
+    returning id`;
+  for (const p of players) {
+    await sql`
+      insert into registration_players (registration_id, full_name, dob, gender, user_id, source)
+      values (
+        ${reg.id}, ${p.name}, ${p.dob ?? null}, ${p.gender ?? null}, ${p.userId ?? null},
+        'captain_entered'
+      )`;
+  }
+  return reg;
+}
+
+describe.skipIf(!HAS_DB)("person resolution by (org_id, user_id, 'player') (#402, restored)", () => {
+  it("THE headline: one signed-in registrant, two divisions ⇒ ONE persons row, linked", async () => {
     const { auth } = await seedOrg("pro");
     const divA = await seedOpenDivision(auth);
     const divB = await seedOpenDivision(auth);
     const userId = await makeUser();
     const before = await personCount(auth.orgId);
 
-    const a = await submitAs(divA, { registering_self: true, dob: ADULT_DOB }, userId);
-    const b = await submitAs(divB, { registering_self: true, dob: ADULT_DOB }, userId);
-    const ca = await confirmRegistration(auth, a.registration.id);
-    const cb = await confirmRegistration(auth, b.registration.id);
+    const a = await seedPlayerEntry(divA.divisionId, [{ name: "Sam Player", dob: ADULT_DOB, userId }]);
+    const b = await seedPlayerEntry(divB.divisionId, [{ name: "Sam Player", dob: ADULT_DOB, userId }]);
+    const ca = await confirmRegistration(auth, a.id);
+    const cb = await confirmRegistration(auth, b.id);
 
     expect(await personCount(auth.orgId)).toBe(before + 1);
+    const [person] = await sql<{ user_id: string | null; lane: string }[]>`
+      select user_id, lane from persons where org_id = ${auth.orgId} and user_id = ${userId}`;
+    expect(person.user_id).toBe(userId);
+    expect(person.lane).toBe("player");
 
     const members = await sql<{ person_id: string }[]>`
       select person_id from entrant_members
        where entrant_id in (${ca.entrant_id as string}, ${cb.entrant_id as string})`;
     expect(members).toHaveLength(2);
-    expect(members[0].person_id).toBe(members[1].person_id);
+    expect(members[0]!.person_id).toBe(members[1]!.person_id);
   });
 
   it("the resolved person keeps its OWN data — a later entry never overwrites it", async () => {
@@ -315,18 +269,12 @@ describe.skipIf(!HAS_DB)("person resolution by (org_id, user_id, 'player') (#402
     const divB = await seedOpenDivision(auth);
     const userId = await makeUser();
 
-    const a = await submitAs(
-      divA,
-      { registering_self: true, display_name: "Original Name", dob: "1990-01-01" },
-      userId,
-    );
-    await confirmRegistration(auth, a.registration.id);
-    const b = await submitAs(
-      divB,
-      { registering_self: true, display_name: "Typo Nmae", dob: "1991-02-02" },
-      userId,
-    );
-    await confirmRegistration(auth, b.registration.id);
+    const a = await seedPlayerEntry(divA.divisionId, [
+      { name: "Original Name", dob: "1990-01-01", userId },
+    ]);
+    await confirmRegistration(auth, a.id);
+    const b = await seedPlayerEntry(divB.divisionId, [{ name: "Typo Nmae", dob: "1991-02-02", userId }]);
+    await confirmRegistration(auth, b.id);
 
     const [person] = await sql<{ full_name: string; dob: string | null }[]>`
       select full_name, dob from persons
@@ -335,95 +283,37 @@ describe.skipIf(!HAS_DB)("person resolution by (org_id, user_id, 'player') (#402
     expect(person.dob).toBe("1990-01-01");
   });
 
-  it("anonymous registrations still mint a fresh person each time", async () => {
+  it("a player row with a NULL user_id still materialises an unlinked person, fresh each time", async () => {
     const { auth } = await seedOrg("pro");
     const div = await seedOpenDivision(auth);
     const before = await personCount(auth.orgId);
-    const one = await submitAs(div, { display_name: "Anon A" }, null);
-    const two = await submitAs(div, { display_name: "Anon B" }, null);
-    await confirmRegistration(auth, one.registration.id);
-    await confirmRegistration(auth, two.registration.id);
-    expect(await personCount(auth.orgId)).toBe(before + 2);
-  });
-
-  it("a signed-in guardian entering two children still gets TWO persons", async () => {
-    const { auth } = await seedOrg("pro");
-    const div = await seedOpenDivision(auth);
-    const userId = await makeUser();
-    const email = `guardian-${randomUUID().slice(0, 8)}@test.local`;
-    const before = await personCount(auth.orgId);
-
-    for (const [name, dob] of [
-      ["Ada Child", "2014-03-02"],
-      ["Bob Child", "2016-09-11"],
-    ] as const) {
-      const r = await submitAs(
-        div,
-        {
-          display_name: name,
-          contact_email: email,
-          dob,
-          registering_self: true, // even if the form said yes
-          guardian_name: "Grace Guardian",
-          guardian_consent: true,
-        },
-        userId, // ...and even signed in as one parent
-      );
-      await confirmRegistration(auth, r.registration.id);
-    }
-
-    // The permanent anti-merge guard, now in its user_id form.
-    expect(await personCount(auth.orgId)).toBe(before + 2);
-  });
-
-  it("a signed-in parent entering two children with NO dob and NO guardian fields still gets TWO persons", async () => {
-    const { auth } = await seedOrg("pro");
-    const div = await seedOpenDivision(auth);
-    const userId = await makeUser();
-    const email = `parent-${randomUUID().slice(0, 8)}@test.local`;
-    const before = await personCount(auth.orgId);
-
-    // The hole finding 5 closed: with `dob` absent the guardian branch never
-    // runs, so nothing forces the guardian fields, and an affirmation alone
-    // used to link BOTH children to the parent's account — one persons row for
-    // two siblings. Counted as a DELTA: existence would pass either way.
-    const regIds: string[] = [];
-    for (const name of ["Ada Child", "Bob Child"]) {
-      const r = await submitAs(
-        div,
-        {
-          display_name: name,
-          contact_email: email,
-          dob: null,
-          registering_self: true,
-          guardian_name: null,
-          guardian_consent: false,
-        },
-        userId,
-      );
-      regIds.push(r.registration.id);
-      await confirmRegistration(auth, r.registration.id);
-    }
+    const one = await seedPlayerEntry(div.divisionId, [{ name: "Anon A", userId: null }]);
+    const two = await seedPlayerEntry(div.divisionId, [{ name: "Anon B", userId: null }]);
+    const ca = await confirmRegistration(auth, one.id);
+    await confirmRegistration(auth, two.id);
 
     expect(await personCount(auth.orgId)).toBe(before + 2);
-    for (const id of regIds) expect(await linkedUser(id)).toBeNull();
+    const [{ user_id: linked }] = await sql<{ user_id: string | null }[]>`
+      select p.user_id from persons p join entrant_members em on em.person_id = p.id
+       where em.entrant_id = ${ca.entrant_id as string}`;
+    expect(linked).toBeNull();
   });
 
-  it("team roster: only the declared `self` entry resolves; the rest insert fresh", async () => {
+  it("team roster: the linked player's row resolves & dedupes; unlinked teammates insert fresh each time", async () => {
     const { auth } = await seedOrg("pro");
     const divA = await seedOpenDivision(auth, "team");
     const divB = await seedOpenDivision(auth, "team");
     const userId = await makeUser();
 
     const players = [
-      { name: "Cap Tain", self: true },
-      { name: "Team Mate One" },
-      { name: "Team Mate Two" },
+      { name: "Cap Tain", dob: ADULT_DOB, userId },
+      { name: "Team Mate One", userId: null },
+      { name: "Team Mate Two", userId: null },
     ];
-    const a = await submitAs(divA, { registering_self: true, dob: ADULT_DOB, players }, userId);
-    const b = await submitAs(divB, { registering_self: true, dob: ADULT_DOB, players }, userId);
-    const ca = await confirmRegistration(auth, a.registration.id);
-    const cb = await confirmRegistration(auth, b.registration.id);
+    const a = await seedPlayerEntry(divA.divisionId, players);
+    const b = await seedPlayerEntry(divB.divisionId, players);
+    const ca = await confirmRegistration(auth, a.id);
+    const cb = await confirmRegistration(auth, b.id);
 
     const [{ n }] = await sql<{ n: string }[]>`
       select count(*)::text as n from persons
@@ -435,7 +325,7 @@ describe.skipIf(!HAS_DB)("person resolution by (org_id, user_id, 'player') (#402
        where entrant_id in (${ca.entrant_id as string}, ${cb.entrant_id as string})`;
     expect(rows).toHaveLength(6);
     // The captain's person is the only one appearing on BOTH entrants; the two
-    // team-mates are typed names with no identity of their own and insert fresh.
+    // team-mates are unlinked and insert fresh on every confirm.
     const counts = new Map<string, number>();
     for (const r of rows) counts.set(r.person_id, (counts.get(r.person_id) ?? 0) + 1);
     expect([...counts.values()].filter((c) => c === 2)).toHaveLength(1);
@@ -443,65 +333,35 @@ describe.skipIf(!HAS_DB)("person resolution by (org_id, user_id, 'player') (#402
     const [captain] = await sql<{ id: string }[]>`
       select id from persons
        where org_id = ${auth.orgId} and user_id = ${userId} and lane = 'player'`;
-    expect(counts.get(captain.id)).toBe(2);
+    expect(counts.get(captain!.id)).toBe(2);
   });
 
-  it("TWO roster entries flagged `self` ⇒ only the first resolves, the second is a fresh person", async () => {
-    const { auth } = await seedOrg("pro");
-    const div = await seedOpenDivision(auth, "team");
-    const userId = await makeUser();
-    const before = await personCount(auth.orgId);
-
-    // The schema rejects a second `self`, but the roster is jsonb that reaches
-    // `materialise` from a stored row — so the loop must refuse structurally
-    // rather than trust the door it came through. Driven through
-    // submitRegistration, which is the highest level below the schema and the
-    // one that actually writes the roster the loop reads.
-    const c = await confirmRegistration(
-      auth,
-      (
-        await submitAs(
-          div,
-          {
-            registering_self: true,
-            dob: ADULT_DOB,
-            players: [
-              { name: "Cap Tain", self: true },
-              { name: "Imposter Two", self: true },
-            ],
-          },
-          userId,
-        )
-      ).registration.id,
-    );
-
-    const members = await sql<{ person_id: string }[]>`
-      select person_id from entrant_members where entrant_id = ${c.entrant_id as string}`;
-    expect(members).toHaveLength(2);
-    expect(new Set(members.map((m) => m.person_id)).size).toBe(2);
-    // Two humans, two rows. With the second `self` also resolving they shared
-    // one, and `on conflict do nothing` swallowed the duplicate membership.
-    expect(await personCount(auth.orgId)).toBe(before + 2);
-    const [{ n }] = await sql<{ n: string }[]>`
-      select count(*)::text as n from persons
-       where org_id = ${auth.orgId} and user_id = ${userId} and lane = 'player'`;
-    expect(Number(n)).toBe(1);
-  });
-
-  it("two concurrent affirmed registrations ⇒ still ONE persons row", async () => {
+  it("two concurrent confirmations of the same linked user ⇒ still ONE persons row", async () => {
     const { auth } = await seedOrg("pro");
     const divA = await seedOpenDivision(auth);
     const divB = await seedOpenDivision(auth);
     const userId = await makeUser();
     const before = await personCount(auth.orgId);
 
-    const a = await submitAs(divA, { registering_self: true, dob: ADULT_DOB }, userId);
-    const b = await submitAs(divB, { registering_self: true, dob: ADULT_DOB }, userId);
-    await Promise.all([
-      confirmRegistration(auth, a.registration.id),
-      confirmRegistration(auth, b.registration.id),
-    ]);
+    const a = await seedPlayerEntry(divA.divisionId, [{ name: "Race One", dob: ADULT_DOB, userId }]);
+    const b = await seedPlayerEntry(divB.divisionId, [{ name: "Race Two", dob: ADULT_DOB, userId }]);
+    await Promise.all([confirmRegistration(auth, a.id), confirmRegistration(auth, b.id)]);
 
     expect(await personCount(auth.orgId)).toBe(before + 1);
   });
 });
+
+// Two more cases from the pre-RS001 version of this describe are NOT
+// restored: a guardian's/parent's own veto against linking a CHILD's row, and
+// a defensive "only the first of two flagged rows resolves" guard. Both
+// tested `deriveLinkUserId`/the old roster's single boolean `self` flag —
+// decisions the OLD `submitRegistration` made about WHETHER to write a link
+// at all. That decision now lives entirely upstream of `materialise`
+// (RS002/RS003's submit flow, RS008's claim flow): whichever row a future
+// caller stamps `user_id` onto is not something `materialise` re-derives, so
+// there is no `materialise`-level surface left to pin either scenario
+// against — restoring them here would either duplicate the NULL-user_id
+// coverage above under a different name, or invent a same-registration
+// double-`user_id` guard nobody has asked `materialise` to enforce.
+// RS002/RS003/RS008 own re-pinning their own linking decisions once they
+// exist.

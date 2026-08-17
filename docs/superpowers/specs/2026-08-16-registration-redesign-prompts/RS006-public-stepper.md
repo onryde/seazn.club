@@ -76,6 +76,17 @@ but correct).
 
 ## Gotchas
 
+- **You are turning registration back ON — three RS001 artefacts must go with
+  it**, or the product contradicts itself: the closed-state bodies of
+  `register/page.tsx` and `register/status/page.tsx`; the "Registration is
+  temporarily switched off" note leading all five
+  `apps/web/content/help/registration/*.md` pages; and the `test.skip` on
+  `payments-hardening.spec.ts` T10, whose frozen body was kept verbatim for
+  exactly this moment (it needs a public submit path to exist).
+- **The submitter's own player row must carry `user_id`** when they are playing
+  ("I'm playing", design §4 step 1). `materialise` already resolves a linked
+  person from it; without the producer, every new registration mints an
+  UNLINKED person and the #402/#404 identity dedupe stays dormant.
 - **320px first.** The cart, the roster table and the stepper nav are the
   three overflow risks; grid `min-width:auto` trap applies.
 - RSC serializes an omitted prop as `"$undefined"` — anchor e2e assertions on

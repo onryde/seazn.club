@@ -4,6 +4,8 @@ description: Let players sign themselves up from your public page — fees, ques
 order: 1
 ---
 
+**Registration is temporarily switched off** while the sign-up flow is rebuilt. Your division settings are kept and nothing you have configured is lost — the public page tells visitors that registration is not open, and this page describes how it works once it is back on.
+
 Instead of typing entrants yourself, open a division for **self-registration**: a *Register now* button appears on the competition's public page.
 
 The console's **Public registration link** card gives you the URL to share — **Copy** it, **Open** it, or press **QR** for a printable code (with a PNG download) that opens the register form from a club noticeboard.

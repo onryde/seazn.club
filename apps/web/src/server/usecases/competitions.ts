@@ -545,9 +545,10 @@ export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void
     const [liveMoney] = await tx`
       select 1 from registrations r
       join divisions d on d.id = r.division_id
+      join registration_groups g on g.id = r.group_id
       where d.competition_id = ${id}
-        and r.payment_intent_id is not null
-        and r.refunded_cents < r.amount_cents
+        and g.payment_intent_id is not null
+        and g.refunded_cents < g.amount_cents
       limit 1`;
     if (liveMoney) {
       throw new HttpError(

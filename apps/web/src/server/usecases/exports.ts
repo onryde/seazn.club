@@ -633,11 +633,12 @@ interface TicketRegistrationRow {
 
 async function ticketRegistrationRows(tx: Tx, competitionId: string): Promise<TicketRegistrationRow[]> {
   return tx<TicketRegistrationRow[]>`
-    select r.ref_code, r.display_name, r.status, d.player_name_display, d.youth
+    select g.ref_code, r.display_name, r.status, d.player_name_display, d.youth
     from registrations r
     join divisions d on d.id = r.division_id
+    join registration_groups g on g.id = r.group_id
     where d.competition_id = ${competitionId}
-      and r.status = 'confirmed' and r.ref_code is not null
+      and r.status = 'confirmed' and g.ref_code is not null
     order by r.created_at`;
 }
 

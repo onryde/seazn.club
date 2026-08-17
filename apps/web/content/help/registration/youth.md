@@ -4,6 +4,8 @@ description: Under-18 divisions get guardian consent at registration and shorten
 order: 5
 ---
 
+**Registration is temporarily switched off** while the sign-up flow is rebuilt. Your division settings are kept and nothing you have configured is lost — the public page tells visitors that registration is not open, and this page describes how it works once it is back on.
+
 Set an under-age eligibility rule (U16, U12…) on a division and it is automatically flagged as a **youth division**. Two protections switch on:
 
 ## Guardian consent

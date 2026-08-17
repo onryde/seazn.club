@@ -176,7 +176,9 @@ export const ROUTES: RouteSpec[] = [
   { path: "/orgs/{id}/connect", method: "post", summary: "Create the Express account + onboarding link (Pro)", tag: "registration", request: S.CreateConnectOnboarding, response: S.ConnectOnboardingLink, errors: [402] },
   { path: "/orgs/{id}/connect/dashboard", method: "post", summary: "Mint a one-time Stripe Express Dashboard login link (owner)", tag: "registration", response: S.ConnectOnboardingLink, errors: [409] },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/registration", method: "get", summary: "Public register panel: open divisions, fees, remaining capacity", tag: "public", public: true, response: S.PublicRegistrationInfo },
-  { path: "/public/orgs/{orgSlug}/competitions/{slug}/register", method: "post", summary: "Submit a registration (fee → Stripe Checkout URL)", tag: "public", public: true, request: S.PublicRegisterRequest, response: S.PublicRegisterResponse, status: 201, errors: [422, 429, 503] },
+  // POST .../register (old single-entry submit) deleted in the RS001
+  // registration demolition — RS003 defines its group-shaped
+  // replacement.
   { path: "/public/registrations/{id}", method: "get", summary: "Registrant status view (?token=; ?reconcile=1 after checkout)", tag: "public", public: true, response: S.PublicRegistrationStatus, errors: [401] },
   { path: "/public/registrations/{id}/withdraw", method: "post", summary: "Registrant self-withdraw (token)", tag: "public", public: true, request: S.PublicRegistrationToken, response: S.PublicRegistrationStatus },
   { path: "/public/registrations/{id}/checkout", method: "post", summary: "(Re)open Stripe Checkout for a pending paid registration", tag: "public", public: true, request: S.PublicRegistrationToken, errors: [422, 503] },

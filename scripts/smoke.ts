@@ -858,7 +858,9 @@ async function main() {
   // gapSuite's destructive downgrade.
   await configSnapshotSuite(admin, `admin_${tag}@example.com`);
 
-  // --- design/v7 PROMPT-52: waitlist queue position + public count.
+  // --- design/v7 PROMPT-52: waitlist queue position + public count. RS001
+  // deleted the public submit endpoint this used to drive; what remains
+  // checks registration-settings PUT and the register page's closed state.
   // Before gapSuite — its destructive downgrade ends the org's pro quota.
   await regQueueSuite(admin);
 
@@ -1249,7 +1251,7 @@ async function p72Suite(): Promise<void> {
   // Guard 2 — a card registration with unrefunded money.
   const regComp = await makeComp("P72 Reg Cup");
   const regDiv = await makeDiv(regComp.id);
-  await seedPaidRegistration(orgId, regDiv.id);
+  await seedPaidRegistration(regComp.id, regDiv.id);
   const delReg = await v1(owner, `/api/v1/competitions/${regComp.id}`, "DELETE");
   check(
     "p72: delete blocked by unrefunded card money (409, 'card payments')",
@@ -5676,7 +5678,16 @@ async function configSnapshotSuite(admin: Session, adminEmail: string): Promise<
 
 /** design/v7 PROMPT-52: the waitlist is a visible queue — the token status
  *  view carries a 1-based position and the public register card shows the
- *  queue length behind a full division. */
+ *  queue length behind a full division.
+ *
+ *  RS001 (registration demolition) deleted the public submit endpoint
+ *  (`POST .../register`) this suite drove to build the queue, so every
+ *  assertion downstream of a submission — the waitlist position, the "full —
+ *  waitlist: N" copy — is gone with it; nothing can create a registration row
+ *  through a live public entry point until RS006 restores one. What is left:
+ *  registration-settings still PUTs successfully, and the public register
+ *  page still 200s and renders its closed state (design §7 phasing) rather
+ *  than 404ing or 500ing. */
 async function regQueueSuite(admin: Session): Promise<void> {
   // v1 writes land on the session's ACTIVE org (earlier suites switch it) —
   // resolve that org's slug, not the sign-in default's.
@@ -5713,45 +5724,11 @@ async function regQueueSuite(admin: Session): Promise<void> {
     form_fields: [],
   });
 
-  const submit = async (name: string) => {
-    const res = await v1(
-      newSession(),
-      `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`,
-      "POST",
-      {
-        division_id: div.id,
-        display_name: name,
-        contact_email: `${name.replace(/ /g, "").toLowerCase()}_${tag}@example.com`,
-        privacy_consent: true,
-      },
-    );
-    if (res.status !== 201) {
-      console.log(`queue submit "${name}" failed:`, res.status, JSON.stringify(res.json));
-    }
-    return res;
-  };
-  const holder = await submit("Queue Holder"); // takes the only spot
-  check("queue holder takes the spot", holder.status === 201);
-  const w1res = await submit("Queue First");
-  const w1 = v1data<{
-    registration_id: string;
-    access_token: string;
-    status: string;
-  }>(w1res);
-  check("queue overflow waitlists", w1res.status === 201 && w1?.status === "waitlisted");
-  await submit("Queue Second");
-
-  const status = await v1(
-    newSession(),
-    `/api/v1/public/registrations/${w1.registration_id}?token=${encodeURIComponent(w1.access_token)}`,
-  );
-  const view = v1data<{ status: string; position: number | null }>(status);
-  check("waitlist status carries #1 position", view.status === "waitlisted" && view.position === 1);
-
   const registerPage = await html(newSession(), `/shared/${orgSlug}/${comp.slug}/register`);
   check(
-    "public card shows waitlist count",
-    registerPage.status === 200 && registerPage.body.includes("full — waitlist: 2"),
+    "public register page renders its closed state (RS001 — no submit endpoint until RS006)",
+    registerPage.status === 200 &&
+      registerPage.body.includes("Registration is not open for this competition."),
   );
 }
 
@@ -7714,8 +7691,14 @@ async function postPaidPassWebhook(args: {
 /** payments-hardening P0-1: seed a PAID registration carrying unrefunded card
  *  money (payment_intent set, refunded < amount) — the delete guard keys off
  *  exactly this. Mirrors competitions-delete-money.test.ts's SQL seed; the
- *  Stripe checkout can't run headless. */
-async function seedPaidRegistration(orgId: string, divisionId: string): Promise<void> {
+ *  Stripe checkout can't run headless.
+ *
+ *  Post-V364: payment_intent_id/refunded_cents/contact_email/access_token_hash
+ *  moved off registrations onto registration_groups (one payment per cart), so
+ *  this now inserts both rows. registration_groups.org_id auto-derives from
+ *  competition_id (trg_set_org), which is why this takes a competitionId —
+ *  the plain division org_id the old single-table insert used is gone. */
+async function seedPaidRegistration(competitionId: string, divisionId: string): Promise<void> {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is required to seed a registration in smoke");
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
@@ -7726,12 +7709,17 @@ async function seedPaidRegistration(orgId: string, divisionId: string): Promise<
     max: 1,
   });
   try {
+    const [group] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash,
+         amount_cents, payment_method, payment_intent_id, refunded_cents)
+      values (${competitionId}, 'Smoke Payer', 'payer@x.test', ${crypto.randomUUID()},
+              2000, 'stripe', ${"pi_smoke_" + divisionId.slice(0, 8)}, 0)
+      returning id`;
     await sql`
       insert into registrations
-        (division_id, org_id, status, display_name, contact_email, amount_cents,
-         payment_intent_id, refunded_cents, guardian_consent, answers, roster, access_token_hash)
-      values (${divisionId}, ${orgId}, 'paid', 'Smoke Payer', 'payer@x.test', 2000,
-              ${"pi_smoke_" + divisionId.slice(0, 8)}, 0, false, '{}', '[]', ${crypto.randomUUID()})`;
+        (group_id, division_id, status, display_name, amount_cents, answers)
+      values (${group!.id}, ${divisionId}, 'paid', 'Smoke Payer', 2000, '{}')`;
   } finally {
     await sql.end();
   }
@@ -11391,7 +11379,15 @@ async function schedRegV3Suite(
     stale.status === 409 && stale.json.error?.code === "SEQ_CONFLICT",
   );
 
-  // Registration → SZ ref → public /r/[ref] page (pro org).
+  // Registration → SZ ref → public /r/[ref] page (pro org). RS001 deleted the
+  // public submit endpoint this drove (POST .../register) — everything
+  // downstream of a submission (the SZ ref, /r/[ref] resolving it, the
+  // ticket.png render, confirming it, the admit-tickets PDF export it fed)
+  // went with it, since nothing can create a registration through a live
+  // public entry point until RS006 restores one. confirmRegistration and the
+  // tickets export both still have unit coverage (registrations.test.ts);
+  // this was their only end-to-end/PDF-render exercise. What survives here:
+  // registration-settings still PUTs successfully.
   await v1(admin, `/api/v1/divisions/${div.id}/registration-settings`, "PUT", {
     enabled: true,
     entrant_kind: "individual",
@@ -11399,94 +11395,18 @@ async function schedRegV3Suite(
     currency: "gbp",
     form_fields: [],
   });
-  const reg = await v1(
-    newSession(),
-    `/api/v1/public/orgs/${proOrgSlug}/competitions/${comp.slug}/register`,
-    "POST",
-    {
-      division_id: div.id,
-      display_name: `Ref Probe ${tag}`,
-      contact_email: `refprobe_${tag}@example.com`,
-      privacy_consent: true,
-    },
-  );
-  const regData = v1data<{
-    registration_id: string;
-    status: string;
-    ref_code: string;
-  }>(reg);
-  check(
-    "reg issues an SZ ref (pro)",
-    reg.status === 201 && /^SZ-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(regData.ref_code ?? ""),
-  );
-  const refPage = await html(newSession(), `/r/${regData.ref_code}`);
-  check(
-    "reg /r/[ref] resolves (pro)",
-    refPage.status === 200 && refPage.body.includes(regData.ref_code),
-  );
-  // Save-ticket PNG (next/og) renders for the same ref.
-  const png = await fetch(`${BASE}/r/${regData.ref_code}/ticket.png`);
-  check(
-    "reg ticket.png renders (pro)",
-    png.status === 200 && (png.headers.get("content-type") ?? "").startsWith("image/png"),
-  );
 
-  // Matchday documents (v12, Task 17): admit tickets only render a section
-  // per CONFIRMED registration with a ref_code (buildAdmitTicketsDoc filters
-  // status = 'confirmed') — the fresh submission above is still 'pending',
-  // so confirm it first, then hit the export to exercise the real
-  // ticket/QR/masked-name render path, not just the empty masthead.
-  const confirmRegForTicket = await v1(
-    admin,
-    `/api/v1/registrations/${regData.registration_id}/confirm`,
-    "POST",
-    {},
-  );
-  check(
-    "reg confirmed ahead of the tickets export (pro)",
-    confirmRegForTicket.status === 200 || confirmRegForTicket.status === 201,
-  );
-  const ticketsPdf = await fetch(
-    `${BASE}/api/v1/competitions/${comp.id}/exports/tickets?format=pdf`,
-    { headers: { cookie: cookieHeader(admin) } },
-  );
-  const ticketsPdfBytes = Buffer.from(await ticketsPdf.arrayBuffer());
-  check(
-    "exports admit tickets PDF renders a valid PDF with a real ticket (pro)",
-    ticketsPdf.status === 200 &&
-      (ticketsPdf.headers.get("content-type") ?? "").includes("application/pdf") &&
-      ticketsPdfBytes.subarray(0, 5).toString() === "%PDF-" &&
-      ticketsPdfBytes.byteLength > 1024,
-  );
+  // Honeypot (400) and GDPR no-consent (422) were both submit-time gates on
+  // the same deleted endpoint — no surviving entry point to drive them
+  // through, so both are gone with it. Owed back by RS006/RS007.
 
-  // Honeypot: a filled `website` field is rejected before any work.
-  const honey = await v1(
-    newSession(),
-    `/api/v1/public/orgs/${proOrgSlug}/competitions/${comp.slug}/register`,
-    "POST",
-    {
-      division_id: div.id,
-      display_name: "Bot Entry",
-      contact_email: `bot_${tag}@example.com`,
-      website: "https://spam.example",
-    },
-  );
-  check("reg honeypot rejects bots (400)", honey.status === 400);
-
-  // GDPR (spec 2026-07-14): a submission without privacy consent is refused.
-  const noConsent = await v1(
-    newSession(),
-    `/api/v1/public/orgs/${proOrgSlug}/competitions/${comp.slug}/register`,
-    "POST",
-    {
-      division_id: div.id,
-      display_name: `No Consent ${tag}`,
-      contact_email: `noconsent_${tag}@example.com`,
-    },
-  );
-  check("reg without privacy consent refused (422)", noConsent.status === 422);
-
-  // --- Dual payments (spec 2026-07-12): offline mark-paid + card gates (pro) ---
+  // --- Dual payments (spec 2026-07-12): card gates (pro). The offline
+  // mark-paid half (pending submit → confirm blocked 422 → mark-paid
+  // confirms) needed a submitted registration to test any of; RS001 deleted
+  // the endpoint that submits one, so that half is gone with it (unit
+  // coverage for confirm/mark-paid survives in registrations.test.ts). Card
+  // method gates below need no submission — they only exercise
+  // registration-settings PUT — so they stay. ---
   const payDiv = v1data<{ id: string; slug: string }>(
     await v1(admin, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
       name: "Paid Offline",
@@ -11494,57 +11414,6 @@ async function schedRegV3Suite(
       variant_key: "score",
       config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
     }),
-  );
-  await v1(admin, `/api/v1/divisions/${payDiv.id}/registration-settings`, "PUT", {
-    enabled: true,
-    entrant_kind: "individual",
-    fee_cents: 1500,
-    currency: "gbp",
-    form_fields: [],
-    payment_method: "offline",
-    payment_instructions: `Cash desk ${tag}`,
-  });
-  const offReg = await v1(
-    newSession(),
-    `/api/v1/public/orgs/${proOrgSlug}/competitions/${comp.slug}/register`,
-    "POST",
-    {
-      division_id: payDiv.id,
-      display_name: `Cash Payer ${tag}`,
-      contact_email: `cash_${tag}@example.com`,
-      privacy_consent: true,
-    },
-  );
-  const offRegData = v1data<{
-    registration_id: string;
-    checkout_url: string | null;
-  }>(offReg);
-  check(
-    "pay offline submit: pending, no checkout",
-    offReg.status === 201 && offRegData.checkout_url === null,
-  );
-  const confirmEarly = await v1(
-    admin,
-    `/api/v1/registrations/${offRegData.registration_id}/confirm`,
-    "POST",
-    {},
-  );
-  check("pay unpaid confirm blocked (422)", confirmEarly.status === 422);
-  const markPaid = await v1(
-    admin,
-    `/api/v1/registrations/${offRegData.registration_id}/mark-paid`,
-    "POST",
-    {},
-  );
-  const markPaidData = v1data<{
-    status: string;
-    offline_marked_paid_at: string | null;
-  }>(markPaid);
-  check(
-    "pay mark-paid confirms entry",
-    markPaid.status === 200 &&
-      markPaidData.status === "confirmed" &&
-      !!markPaidData.offline_marked_paid_at,
   );
 
   // Card method gates: rejected without Connect, accepted once flipped.
@@ -11572,37 +11441,12 @@ async function schedRegV3Suite(
     payment_method: "stripe",
   });
   check("pay card method saves with Connect", cardPut.status === 200);
-  const cardReg = await v1(
-    newSession(),
-    `/api/v1/public/orgs/${proOrgSlug}/competitions/${comp.slug}/register`,
-    "POST",
-    {
-      division_id: payDiv.id,
-      display_name: `Card Payer ${tag}`,
-      contact_email: `card_${tag}@example.com`,
-      privacy_consent: true,
-    },
-  );
-  const cardRegData = v1data<{ registration_id: string; status: string }>(cardReg);
-  // No Stripe key in smoke: the session mint fails gracefully — the row still
-  // lands pending with a 48h window (pay-later from the status page).
-  check(
-    "pay card submit holds a pending spot",
-    cardReg.status === 201 && cardRegData.status === "pending",
-  );
-  const waived = await v1(
-    admin,
-    `/api/v1/registrations/${cardRegData.registration_id}/waive`,
-    "POST",
-    {},
-  );
-  check(
-    "pay waive confirms without payment",
-    waived.status === 200 && v1data<{ status: string }>(waived).status === "confirmed",
-  );
+  // "pay card submit holds a pending spot" and "pay waive confirms without
+  // payment" both needed a submitted registration (the deleted endpoint) —
+  // gone with it; waive's own unit coverage lives in registrations.test.ts.
   await setConnect(proOrgId, false);
 
-  // --- Free path: fresh community owner, registration + ref lookup ---
+  // --- Free path: fresh community owner ---
   const free = newSession();
   const freeVer = await signIn(free, `sched_free_${tag}@example.com`);
   const freeOrgs = (await call(free, "/api/orgs")) as {
@@ -11631,27 +11475,8 @@ async function schedRegV3Suite(
     currency: "gbp",
     form_fields: [],
   });
-  const fReg = await v1(
-    newSession(),
-    `/api/v1/public/orgs/${freeOrg.slug}/competitions/${fComp.slug}/register`,
-    "POST",
-    {
-      division_id: fDiv.id,
-      display_name: `Free Ref ${tag}`,
-      contact_email: `freeref_${tag}@example.com`,
-      privacy_consent: true,
-    },
-  );
-  const fRegData = v1data<{ ref_code: string }>(fReg);
-  check(
-    "reg issues an SZ ref (free)",
-    fReg.status === 201 && /^SZ-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(fRegData.ref_code ?? ""),
-  );
-  const fRefPage = await html(newSession(), `/r/${fRegData.ref_code}`);
-  check(
-    "reg /r/[ref] resolves (free)",
-    fRefPage.status === 200 && fRefPage.body.includes(fRegData.ref_code),
-  );
+  // "reg issues an SZ ref (free)" and "reg /r/[ref] resolves (free)" both
+  // submitted through the now-deleted public endpoint — gone with it.
   // Community sees the division fixtures page (schedule list) fine.
   const fFixtures = await html(
     free,
@@ -12490,6 +12315,11 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
  * registration, ownership transfer, account export, and the in-app
  * downgrade → competition-freeze path. `proOrgId` (org2) must be Pro on
  * entry; the downgrade at the end deliberately flips it to community.
+ *
+ * "Public registration" is thinner than it reads above since RS001: the
+ * submit-and-confirm and #402 self-link/guardian person-resolution flows are
+ * gone (deleted public endpoint — see the comments in place below), so what
+ * remains here is registration-settings PUT only.
  */
 // PROMPT-38 (v3/09 §4): division delete on free, archive/restore on pro.
 async function divisionLifecycleSuite(admin: Session, proOrgId: string): Promise<void> {
@@ -12841,7 +12671,11 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
   check("gap discoverable requires public (422)", badDisc.status === 422);
 
   // --- Public registration: open free signup → pending + access token →
-  // organiser confirm materialises an entrant ---
+  // organiser confirm materialises an entrant --- RS001 deleted the public
+  // submit endpoint this drove (POST .../register); "pending + tokened",
+  // "confirmed", and "confirmed registration is an entrant" all needed a
+  // submitted row, so all three are gone with it. registration-settings
+  // still PUTs successfully.
   const regSettings = await v1(admin, `/api/v1/divisions/${divId}/registration-settings`, "PUT", {
     enabled: true,
     entrant_kind: "individual",
@@ -12851,155 +12685,21 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
     form_fields: [],
   });
   check("gap registration opened", regSettings.status === 200);
-  const orgs = (await call(admin, "/api/orgs")) as {
-    id: string;
-    slug: string;
-  }[];
-  const proSlug = orgs.find((o) => o.id === proOrgId)!.slug;
-  const compSlug = v1data<{ slug: string }>(await v1(admin, `/api/v1/competitions/${compId}`)).slug;
-  const reg = await v1(
-    bare,
-    `/api/v1/public/orgs/${proSlug}/competitions/${compSlug}/register`,
-    "POST",
-    {
-      division_id: divId,
-      display_name: `Walk In ${tag}`,
-      contact_email: `walkin_${tag}@example.com`,
-      privacy_consent: true,
-    },
-  );
-  const regData = v1data<{
-    registration_id: string;
-    status: string;
-    access_token: string;
-  }>(reg);
-  check(
-    "gap public registration pending + tokened",
-    reg.status === 201 && regData.status === "pending" && regData.access_token.length > 0,
-  );
-  const confirmed = await v1(
-    admin,
-    `/api/v1/registrations/${regData.registration_id}/confirm`,
-    "POST",
-    {},
-  );
-  check("gap registration confirmed", confirmed.status === 200 || confirmed.status === 201);
-  const gapEntrants = await v1(admin, `/api/v1/divisions/${divId}/entrants`);
-  check(
-    "gap confirmed registration is an entrant",
-    v1data<{ display_name: string }[]>(gapEntrants).some(
-      (e) => e.display_name === `Walk In ${tag}`,
-    ),
-  );
 
   // --- #402: a SIGNED-IN registrant who affirms "I'm registering myself" is
   // ONE person across every division they enter; the same account registering
-  // a child under guardian consent stays a SEPARATE person (the server-side
-  // veto — a signed-in guardian entering two children shares one user_id, so
-  // an inferred link would fuse the siblings exactly as contact_email would).
-  //
-  // Person identity is observed through GET /api/v1/entrants/{id}, whose
-  // `members[]` carry `person_id`; the division entrants LIST does not (it
-  // returns entrant columns only). /api/v1/me/persons is the second, distinct
-  // vantage point: it selects on persons.user_id, so it proves the link was
-  // actually written rather than that two entrants merely share a row.
-  const selfDivIds: string[] = [];
-  for (const lane of ["Self A", "Self B", "Self Guardian"]) {
-    const selfDiv = await v1(admin, `/api/v1/competitions/${compId}/divisions`, "POST", {
-      name: `${lane} ${tag}`,
-      sport_key: "generic",
-      variant_key: "score",
-      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-    });
-    const selfDivId = v1data<{ id: string }>(selfDiv).id;
-    const selfSettings = await v1(
-      admin,
-      `/api/v1/divisions/${selfDivId}/registration-settings`,
-      "PUT",
-      {
-        enabled: true,
-        entrant_kind: "individual",
-        capacity: 10,
-        fee_cents: 0,
-        currency: "gbp",
-        form_fields: [],
-      },
-    );
-    check(`gap self-link division "${lane}" open for registration`, selfSettings.status === 200);
-    selfDivIds.push(selfDivId);
-  }
-  const selfEmail = `selflink_${tag}@example.com`;
-  const selfSession = newSession();
-  await signIn(selfSession, selfEmail);
-  // #402 — an affirmation without a date of birth is refused (400) and never
-  // links: an undated registrant may be a child, and a parent entering two of
-  // them would otherwise fuse both siblings into one persons row.
-  const adultDob = "1990-05-05";
-  const registerAsSelf = (divisionId: string, extra: Record<string, unknown>) =>
-    v1(selfSession, `/api/v1/public/orgs/${proSlug}/competitions/${compSlug}/register`, "POST", {
-      division_id: divisionId,
-      display_name: `Self Link ${tag}`,
-      contact_email: selfEmail,
-      privacy_consent: true,
-      registering_self: true,
-      dob: adultDob,
-      ...extra,
-    });
-  /** Confirm a submitted registration and return the person the entrant carries. */
-  const confirmToPerson = async (submitted: V1Res): Promise<string | null> => {
-    const regId = v1data<{ registration_id: string }>(submitted).registration_id;
-    const done = await v1(admin, `/api/v1/registrations/${regId}/confirm`, "POST", {});
-    const entrantId = v1data<{ entrant_id: string | null }>(done).entrant_id;
-    if (!entrantId) return null;
-    const entrant = await v1(admin, `/api/v1/entrants/${entrantId}`);
-    return v1data<{ members: { person_id: string }[] }>(entrant).members[0]?.person_id ?? null;
-  };
-
-  const selfA = await registerAsSelf(selfDivIds[0]!, {});
-  const selfB = await registerAsSelf(selfDivIds[1]!, {});
-  check(
-    "gap self-link registrations accepted in two divisions",
-    selfA.status === 201 && selfB.status === 201,
-  );
-  // The affirmation carries no weight without an age: refused at the schema so
-  // the registrant is told why, and unlinkable at the server either way.
-  const undatedSelf = await registerAsSelf(selfDivIds[2]!, { dob: null });
-  check("gap an affirmed registration with NO date of birth is refused", undatedSelf.status === 400);
-  const selfPersonA = await confirmToPerson(selfA);
-  const selfPersonB = await confirmToPerson(selfB);
-  check(
-    "gap signed-in self-registration resolves ONE person across two divisions",
-    selfPersonA !== null && selfPersonA === selfPersonB,
-  );
-
-  // Always ~10 years old, so the guardian branch is genuinely required rather
-  // than decorative (a bare dob-less pair would be accepted either way).
-  const kidDob = new Date(Date.now() - 10 * 365.25 * 864e5).toISOString().slice(0, 10);
-  const kid = await registerAsSelf(selfDivIds[2]!, {
-    display_name: `Self Kid ${tag}`,
-    dob: kidDob,
-    guardian_name: `Self Link ${tag}`,
-    guardian_consent: true,
-  });
-  check("gap guardian registration accepted from the same account", kid.status === 201);
-  const kidPerson = await confirmToPerson(kid);
-  check(
-    "gap guardian entry from the same account is a SEPARATE person",
-    kidPerson !== null && kidPerson !== selfPersonA,
-  );
-
-  const myPersons = await v1(selfSession, "/api/v1/me/persons");
-  const myPersonIds = v1data<{ id: string }[]>(myPersons) ?? [];
-  check(
-    "gap the registrant's account claims the linked person exactly once",
-    myPersons.status === 200 &&
-      selfPersonA !== null &&
-      myPersonIds.filter((p) => p.id === selfPersonA).length === 1,
-  );
-  check(
-    "gap the guardian's child never joins the registrant's account",
-    kidPerson !== null && !myPersonIds.some((p) => p.id === kidPerson),
-  );
+  // a child under guardian consent stays a SEPARATE person — REMOVED by
+  // RS001. Every check in this block (self-link across two divisions, the
+  // undated-affirmation 400, one-person resolution, the guardian's separate
+  // person, the me/persons dedup) submitted through the same deleted public
+  // endpoint, so none of it can run until RS006/RS007 restore an entry
+  // point. This is a bigger loss than the other registration coverage this
+  // sweep removed: registration-user-link.test.ts's DB-backed SESSION-CAPTURE
+  // tests went with `submitRegistration`, which owned the capture, and RS002/
+  // RS003 owe them back. The person-RESOLUTION half is still covered — those
+  // tests were restored against `registration_players.user_id`, so confirm
+  // still proves it links and dedupes a person. What has no equivalent here is
+  // the end-to-end path from a public submit to that link.
 
   // --- Free paths on a fresh community owner: device links 402, offline
   // entry fees allowed without Stripe ---

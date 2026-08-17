@@ -138,7 +138,9 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     { path: await divisionPath(request, divisionId) },
     { path: await divisionPath(request, divisionId, "?tab=fixtures") },
     { path: await divisionPath(request, divisionId, "?tab=standings") },
-    { path: await divisionPath(request, divisionId, "/registrations") },
+    // The /registrations console route (its "registrations panel" component)
+    // was removed by RS001 along with the rest of the old registration UI; no
+    // replacement route exists yet (owed by RS006/RS007/RS010).
     // The /schedule console was absent from this inventory entirely, so the
     // three tabs that carry the portfolio's new panels (P1 capacity card on
     // Settings, P2 health panel on Health, both on the Board's chrome) shipped
@@ -1573,10 +1575,13 @@ test("P6 task B fix round 3 (Critical 1): regenerating a stage that already has 
 // tablet is still a touch device. The density recipes themselves (text-xs,
 // etc.) are untouched — this is a sizing fix, not a restyle.
 //
-// Five of the twelve fixed files are covered below, each reusing a fixture
-// this file already has live by this point in the serial run (the shared
-// setup division/org and its registration settings, or the console's own
-// authenticated session) — no new seeding. The other seven (americano-panel,
+// Four of the twelve fixed files are covered below (a fifth — the org-
+// console "registrations panel" component — was deleted wholesale by RS001
+// along with the rest of the old registration UI — its fix is moot, so its
+// check is removed rather than left probing a route that 404s), each reusing a
+// fixture this file already has live by this point in the serial run (the
+// shared setup division/org and its registration settings, or the console's
+// own authenticated session) — no new seeding. The other seven (americano-panel,
 // board/move-panel, club-hub/team-squad-editor, division-builder's preview
 // step, me/officiating-lane, me/rsvp-control, stages-panel's AddMatchForm +
 // inline fixture edit) each need a format/officiating/club-hub scenario this
@@ -1588,7 +1593,7 @@ test("P6 task B fix round 3 (Critical 1): regenerating a stage that already has 
 // already proves is the same mechanical override; flagged here rather than
 // faked with a shallow test.
 // ---------------------------------------------------------------------------
-test("density-pair sweep: five more .select/.input controls hold the 44px floor (S13/#422 W11)", async ({
+test("density-pair sweep: four more .select/.input controls hold the 44px floor (S13/#422 W11)", async ({
   page,
   browser,
 }) => {
@@ -1626,11 +1631,9 @@ test("density-pair sweep: five more .select/.input controls hold the 44px floor 
   await assertFloor(page.locator('input[aria-label^="Seed for "]').first(), "entrant seed input");
   await expectNoHorizontalScroll(page);
 
-  // Registrations tab (registrations-panel.tsx) — registration-settings were
-  // already enabled by the file's top-of-file setup test.
-  await page.goto(await divisionPath(page.request, divisionId, "/registrations"), { waitUntil: "load" });
-  await assertFloor(page.getByTestId("reg-search"), "registrations search input");
-  await expectNoHorizontalScroll(page);
+  // Registrations tab (the org-console "registrations panel" component) was
+  // checked here until RS001 deleted it along with the rest of the old
+  // registration UI; the route now 404s, so the check is gone with it.
 
   // Schedule > History (history-panel.tsx) — the create-save-point form
   // renders whenever `canEdit` is true; it needs no stage or schedule state.

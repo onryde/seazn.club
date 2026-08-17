@@ -4,6 +4,8 @@ description: From connecting Stripe to money in your bank — holds, reminders, 
 order: 2
 ---
 
+**Registration is temporarily switched off** while the sign-up flow is rebuilt. Your division settings are kept and nothing you have configured is lost — the public page tells visitors that registration is not open, and this page describes how it works once it is back on.
+
 Card entry fees run on **Stripe Connect**: registrants pay at sign-up, the money settles into *your* Stripe account, and Seazn Club never holds your funds. Once your account is live, your public pages carry a **"Payments secured by Stripe"** line in the footer, so registrants see it too. Here's the whole journey.
 
 ## 1. Connect and verify (one-time)

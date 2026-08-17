@@ -179,17 +179,20 @@ describe.skipIf(!HAS_DB)("division delete (v3/09 §4)", () => {
 
   it("unrefunded card payments block delete until refunded (spec issue #10)", async () => {
     const { auth } = await seedOrg();
-    const { division } = await seedDivision(auth);
+    const { comp, division } = await seedDivision(auth);
     // Registration CLOSED (the open-registration guard must not be the one
-    // firing) but money was taken and not returned.
-    const [{ id: regId }] = await sql<{ id: string }[]>`
-      insert into registrations
-        (division_id, status, display_name, contact_email, amount_cents, currency,
-         payment_method, payment_intent_id, access_token_hash)
+    // firing) but money was taken and not returned. Payment envelope lives
+    // on the cart (registration_groups) now.
+    const [{ id: groupId }] = await sql<{ id: string }[]>`
+      insert into registration_groups
+        (competition_id, contact_name, contact_email, access_token_hash,
+         amount_cents, currency, payment_method, payment_intent_id)
       values
-        (${division.id}, 'confirmed', 'Payer', 'payer@test.local', 500, 'gbp',
-         'stripe', ${"pi_" + randomUUID().slice(0, 8)}, ${randomUUID()})
+        (${comp.id}, 'Payer', 'payer@test.local', ${randomUUID()},
+         500, 'gbp', 'stripe', ${"pi_" + randomUUID().slice(0, 8)})
       returning id`;
+    await sql`insert into registrations (division_id, group_id, status, display_name, amount_cents)
+      values (${division.id}, ${groupId}, 'confirmed', 'Payer', 500)`;
     try {
       await deleteDivision(auth, division.id);
       expect.unreachable("expected 409 REGISTRATION_PAYMENTS");
@@ -199,7 +202,7 @@ describe.skipIf(!HAS_DB)("division delete (v3/09 §4)", () => {
       expect((err as HttpError).code).toBe("REGISTRATION_PAYMENTS");
     }
     // Fully refunded → the money trail is settled → delete proceeds.
-    await sql`update registrations set refunded_cents = amount_cents where id = ${regId}`;
+    await sql`update registration_groups set refunded_cents = amount_cents where id = ${groupId}`;
     await deleteDivision(auth, division.id);
     const [gone] = await sql`select 1 from divisions where id = ${division.id}`;
     expect(gone).toBeUndefined();

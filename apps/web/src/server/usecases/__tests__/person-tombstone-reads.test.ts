@@ -13,17 +13,10 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createPerson, listPersons } from "../persons";
-import {
-  confirmRegistration,
-  putRegistrationSettings,
-  submitRegistration,
-} from "../registrations";
+import { confirmRegistration } from "../registrations";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
-
-/** Old enough that the registration flow links the session (#402 finding 5). */
-const ADULT_DOB = "1990-05-05";
 
 const DIVISION_CONFIG = { points: { w: 3, d: 1, l: 0 }, progressScore: false };
 
@@ -54,6 +47,37 @@ async function makeLoginUser(): Promise<string> {
     values (${`t404-${randomUUID().slice(0, 8)}@test.local`}, 'Session User', true)
     returning id`;
   return u.id;
+}
+
+/**
+ * Direct V363/V364 fixture: the group → entry → player-row chain
+ * `submitRegistration` used to write in one call (deleted, RS001 demolition
+ *). `userId` lands on the ONE player row, mimicking what RS002/RS003
+ * (submit) or RS008 (claim) will eventually stamp there — never the group's
+ * own `user_id`, which belongs to the contact, not the player.
+ */
+async function seedLinkedEntry(
+  divisionId: string,
+  playerName: string,
+  userId: string | null,
+): Promise<{ id: string }> {
+  const [{ competition_id: competitionId }] = await sql<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${divisionId}`;
+  const [group] = await sql<{ id: string }[]>`
+    insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash)
+    values (
+      ${competitionId}, 'Contact', ${`c-${randomUUID().slice(0, 8)}@test.local`},
+      ${`tok-${randomUUID()}`}
+    )
+    returning id`;
+  const [reg] = await sql<{ id: string }[]>`
+    insert into registrations (group_id, division_id, display_name)
+    values (${group.id}, ${divisionId}, ${playerName})
+    returning id`;
+  await sql`
+    insert into registration_players (registration_id, full_name, user_id, source)
+    values (${reg.id}, ${playerName}, ${userId}, 'captain_entered')`;
+  return reg;
 }
 
 describe.skipIf(!HAS_DB)("#404 a tombstoned person is invisible", () => {
@@ -119,48 +143,22 @@ describe.skipIf(!HAS_DB)("#404 a tombstoned person is invisible", () => {
     expect(playerIds).not.toContain(absorbed.id);
   });
 
+  // "a registration upsert lands on the survivor, not the tombstone" — RESTORED
+  // (RS001 follow-up): `resolvePlayerPerson` is back on `materialise`'s call
+  // path (`registration_players.user_id`, not `registrations.user_id` —
+  // that column moved with the group/entry split, V363/V364). Reached here by
+  // seeding a player row directly rather than through the deleted
+  // `submitRegistration` — see registration-user-link.test.ts's file header
+  // for why the direct-SQL fixture is equivalent for this purpose.
   it("a registration upsert lands on the survivor, not the tombstone", async () => {
     const { auth } = await seedOrg("pro");
     const userId = await makeLoginUser();
     const divA = await seedPublicDivision(auth);
     const divB = await seedPublicDivision(auth);
-    for (const div of [divA, divB]) {
-      await putRegistrationSettings(auth, div.divisionId, {
-        enabled: true,
-        entrant_kind: "individual",
-        fee_cents: 0,
-        currency: "usd",
-        form_fields: [],
-        opens_at: null,
-        closes_at: null,
-        capacity: null,
-        refund_lock_at: null,
-      });
-    }
-    const submit = (div: typeof divA) =>
-      submitRegistration(
-        div.orgSlug,
-        div.compSlug,
-        {
-          division_id: div.divisionId,
-          display_name: "Sam Player",
-          contact_email: `sam-${randomUUID().slice(0, 8)}@test.local`,
-          dob: ADULT_DOB,
-          gender: null,
-          guardian_name: null,
-          guardian_consent: false,
-          privacy_consent: true,
-          registering_self: true,
-          answers: {},
-          players: [],
-        },
-        "http://test.local",
-        { sessionUserId: userId },
-      );
 
     // The registration mints the account's player person...
-    const a = await submit(divA);
-    await confirmRegistration(auth, a.registration.id);
+    const a = await seedLinkedEntry(divA.divisionId, "Sam Player", userId);
+    await confirmRegistration(auth, a.id);
     const [minted] = await sql<{ id: string }[]>`
       select id from persons
        where org_id = ${auth.orgId} and user_id = ${userId} and lane = 'player'`;
@@ -177,8 +175,8 @@ describe.skipIf(!HAS_DB)("#404 a tombstoned person is invisible", () => {
     // The next registration by the same account must land on the survivor. With
     // a statement predicate that no longer implies the index predicate Postgres
     // cannot infer the arbiter at all and this throws 42P10, not 23505.
-    const b = await submit(divB);
-    const confirmed = await confirmRegistration(auth, b.registration.id);
+    const b = await seedLinkedEntry(divB.divisionId, "Sam Player", userId);
+    const confirmed = await confirmRegistration(auth, b.id);
     const [member] = await sql<{ person_id: string }[]>`
       select person_id from entrant_members where entrant_id = ${confirmed.entrant_id as string}`;
     expect(member.person_id).toBe(survivor.id);
