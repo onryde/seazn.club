@@ -411,7 +411,28 @@ export interface SkinDefV3<View = unknown> {
   phase?(view: View): PadPhase;
   scorebug(view: View): ScorebugSpec;
   tiles(view: View): TileSpec[];
-  dock(eventType: string, view: View): DockSpec | null;
+  /**
+   * R2b/task 4 (`_INDEX.md`, owner ruling): `payload`, the OPTIONAL 3rd
+   * argument, is the held tap's own event payload. Additive: every
+   * pre-existing 2-arg `dock(eventType, view)` call site, and every skin
+   * that declines to read this parameter at all, keeps compiling and
+   * behaving identically — zero change, same "chassis provides the
+   * mechanism, skin decides the policy" posture every other optional
+   * parameter in this file already takes.
+   *
+   * Exists because `eventType` alone cannot tell two taps apart: a no-ball
+   * and a plain single both dispatch the identical `cricket.ball` event
+   * TYPE, so a skin whose dock should offer different chips for the two
+   * (e.g. bat-run chips only for a no-ball, never for an ordinary run or a
+   * wide — the engine refuses bat runs off a wide, cricket.ts:1229) needs
+   * the actual PAYLOAD that was tapped, not just its type, to decide.
+   * `pad-host.tsx`'s own `resolveDockSpec` is the one call site that
+   * supplies this: the held tap's payload, captured at hold time
+   * (`HeldTap.payload`), forwarded verbatim, never re-derived from `view`
+   * (by dock-render time the optimistic fold has already advanced past the
+   * held tap, so `view.state` alone cannot answer "which tile was this").
+   */
+  dock(eventType: string, view: View, payload?: Record<string, unknown>): DockSpec | null;
   context?(view: View): ContextStripSpec | null;
   /** Turns a context-strip selection (a slot id + the tapped candidate's
    *  person id) into a concrete event — e.g. a sport that records "who is

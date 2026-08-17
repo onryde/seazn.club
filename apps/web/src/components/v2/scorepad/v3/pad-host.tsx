@@ -61,7 +61,7 @@ import { GuidedSheet } from "./guided-sheet";
 import { RecordingChip } from "./recording-chip";
 import { buildRibbon } from "./ribbon";
 import { ActivityPanel, type ActivityEvent } from "./activity";
-import { MORE_SHEET_KEY, type GuidedSheetSpec, type PadHostView, type PadPhase, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
+import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
 
 // ---------------------------------------------------------------------------
 // Pure builders — every decision this file makes, tested directly
@@ -385,6 +385,29 @@ export function adaptSwapSlot(
   };
 }
 
+/**
+ * R2b/task 4 (`_INDEX.md`, owner ruling): the ONE line that used to call
+ * `props.skin.dock(held.eventType, view)` directly inside `PadHostV3`'s own
+ * render body, extracted as a pure builder — same "data in, data out" split
+ * as every other decision in this section. `null` while nothing is held —
+ * the skin's own `dock()` is never called with nothing to build a dock for,
+ * proved by the mutation suite (a skin that throws when called with no hold
+ * must never actually be called here).
+ *
+ * `held.payload` is forwarded to `dock()` as its (optional) 3rd argument
+ * VERBATIM — cricket's own no-ball/plain-single distinction (both dispatch
+ * the identical `cricket.ball` event TYPE) is exactly why this widening
+ * exists; see `SkinDefV3.dock`'s own doc, types.ts.
+ */
+export function resolveDockSpec(
+  skin: SkinDefV3,
+  held: { eventType: string; payload: unknown } | null,
+  view: PadHostView,
+): DockSpec | null {
+  if (!held) return null;
+  return skin.dock(held.eventType, view, held.payload as Record<string, unknown> | undefined);
+}
+
 // ---------------------------------------------------------------------------
 // PadHostV3 — the React shell
 // ---------------------------------------------------------------------------
@@ -421,6 +444,10 @@ interface HeldTap {
   id: string;
   until: number;
   eventType: string;
+  /** R2b/task 4: the tap's own payload, captured at hold time — what
+   *  `resolveDockSpec` forwards to `skin.dock()`'s optional 3rd argument
+   *  (see that function's own doc, above). */
+  payload: unknown;
 }
 
 const NO_ENTITLEMENTS: Readonly<Record<string, boolean>> = {};
@@ -559,7 +586,7 @@ export function PadHostV3(props: PadHostV3Props) {
         setHeld(null);
         void pipeline.retryDrain();
       });
-      if (result) setHeld({ id: result.heldId, until: result.heldUntil, eventType: type });
+      if (result) setHeld({ id: result.heldId, until: result.heldUntil, eventType: type, payload });
     },
     [pipeline],
   );
@@ -584,7 +611,7 @@ export function PadHostV3(props: PadHostV3Props) {
   );
 
   const dockStore = useMemo(() => makeDockStore(pipeline.queueStore), [pipeline.queueStore]);
-  const dockSpec = held ? props.skin.dock(held.eventType, view) : null;
+  const dockSpec = resolveDockSpec(props.skin, held, view);
 
   // Blocker 1 — see rejectionText's own doc above.
   const rejectionMsg = rejectionText(pipeline.lastRejection, msg);

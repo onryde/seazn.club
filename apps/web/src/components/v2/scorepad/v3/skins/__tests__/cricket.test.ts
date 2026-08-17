@@ -858,6 +858,53 @@ describe("buildTiles", () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildTiles — minor extras defaults (R2b task 4, `_INDEX.md`, owner ruling).
+// The extras TILES keep firing instantly at a sensible default; the DOCK
+// (below) is where the variable runs get entered. This block only proves
+// the TILE-tap defaults; the dock's own chip behaviour is proved further
+// down.
+// ---------------------------------------------------------------------------
+
+describe("buildTiles — minor extras defaults (R2b task 4)", () => {
+  it("penalty defaults to 5 runs (Law 41), not the ordinary single every other minor extra gets", () => {
+    const tiles = buildTiles(view());
+    const penalty = tiles.find((tl) => tl.id === "extra-penalty")!;
+    expect(penalty.action).toEqual({
+      event: {
+        type: "cricket.ball",
+        payload: {
+          over: 0, ballInOver: 6, striker: "h1", nonStriker: "h2", bowler: "a1",
+          runs: { bat: 0, extras: { kind: "penalty", runs: 5 } },
+        },
+      },
+    });
+  });
+
+  it("ignoring the dock leaves the plain no-ball extra unchanged — 1 run, bat 0 — the common path is untouched", () => {
+    const tiles = buildTiles(view());
+    const noball = tiles.find((tl) => tl.id === "extra-noball")!;
+    expect(noball.action).toEqual({
+      event: {
+        type: "cricket.ball",
+        payload: {
+          over: 0, ballInOver: 6, striker: "h1", nonStriker: "h2", bowler: "a1",
+          runs: { bat: 0, extras: { kind: "noball", runs: 1 } },
+        },
+      },
+    });
+  });
+
+  it("bye and leg bye tiles still default to the ordinary single — the penalty fix does not touch them", () => {
+    const tiles = buildTiles(view());
+    for (const kind of ["bye", "legbye"] as const) {
+      const tile = tiles.find((tl) => tl.id === `extra-${kind}`)!;
+      const action = tile.action as unknown as { event: { payload: { runs: unknown } } };
+      expect(action.event.payload.runs).toEqual({ bat: 0, extras: { kind, runs: 1 } });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildDock
 // ---------------------------------------------------------------------------
 
@@ -875,6 +922,70 @@ describe("buildDock", () => {
   it("is null for every non-ball event type — never a stray dock on an admin action", () => {
     expect(buildDock("cricket.toss", t)).toBeNull();
     expect(buildDock("cricket.retire", t)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildDock — payload-aware chips (R2b task 4, `_INDEX.md`, owner ruling).
+// The chassis now threads the held tap's own payload through as an
+// OPTIONAL 3rd argument (pad-host.tsx's widened HeldTap/resolveDockSpec) —
+// this is what lets the dock tell a no-ball apart from a plain single, both
+// of which dispatch the identical `cricket.ball` event TYPE.
+// ---------------------------------------------------------------------------
+
+describe("buildDock — payload-aware chips (R2b task 4)", () => {
+  it("omitting payload entirely (every pre-existing 2-arg call site) behaves exactly as before", () => {
+    const dock = buildDock("cricket.ball", t)!;
+    expect(dock.chips.map((c) => c.id)).toEqual(["freeHit"]);
+  });
+
+  it("a plain run tap's dock is unaffected — no extras field at all", () => {
+    const dock = buildDock("cricket.ball", t, { runs: { bat: 4 }, boundary: 4 })!;
+    expect(dock.chips.map((c) => c.id)).toEqual(["freeHit"]);
+  });
+
+  it("a no-ball's dock offers bat-run chips +1/+2/+3/+4/+6, in addition to Free Hit", () => {
+    const payload = { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } };
+    const dock = buildDock("cricket.ball", t, payload)!;
+    expect(dock.chips.map((c) => c.id)).toEqual(["freeHit", "batRun1", "batRun2", "batRun3", "batRun4", "batRun6"]);
+  });
+
+  it("tapping a no-ball's +3 chip sets bat:3, preserving the noball extra verbatim — the WHOLE payload, not just bat", () => {
+    const payload = { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } };
+    const dock = buildDock("cricket.ball", t, payload)!;
+    const chip = dock.chips.find((c) => c.id === "batRun3")!;
+    expect(chip.mutate(payload)).toEqual({ runs: { bat: 3, extras: { kind: "noball", runs: 1 } } });
+  });
+
+  it("a no-ball's +4/+6 bat-run chip also stamps boundary, matching the plain run4/run6 tile's own convention", () => {
+    const payload = { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } };
+    const dock = buildDock("cricket.ball", t, payload)!;
+    const chip4 = dock.chips.find((c) => c.id === "batRun4")!;
+    expect(chip4.mutate(payload)).toEqual({ runs: { bat: 4, extras: { kind: "noball", runs: 1 } }, boundary: 4 });
+    const chip6 = dock.chips.find((c) => c.id === "batRun6")!;
+    expect(chip6.mutate(payload)).toEqual({ runs: { bat: 6, extras: { kind: "noball", runs: 1 } }, boundary: 6 });
+  });
+
+  it("bye and leg bye docks offer extra-run chips 2/3/4 that raise the EXTRA's own runs, bat stays 0", () => {
+    for (const kind of ["bye", "legbye"] as const) {
+      const payload = { runs: { bat: 0, extras: { kind, runs: 1 } } };
+      const dock = buildDock("cricket.ball", t, payload)!;
+      expect(dock.chips.map((c) => c.id)).toEqual(["freeHit", "extraRun2", "extraRun3", "extraRun4"]);
+      const chip = dock.chips.find((c) => c.id === "extraRun3")!;
+      expect(chip.mutate(payload)).toEqual({ runs: { bat: 0, extras: { kind, runs: 3 } } });
+    }
+  });
+
+  it("a wide's dock offers NO bat-run chips — the engine refuses bat runs off a wide (cricket.ts:1229)", () => {
+    const payload = { runs: { bat: 0, extras: { kind: "wide", runs: 1 } } };
+    const dock = buildDock("cricket.ball", t, payload)!;
+    expect(dock.chips.map((c) => c.id)).toEqual(["freeHit"]);
+  });
+
+  it("a penalty's dock stays Free-Hit-only — only the TILE default changed (5), the owner never asked for dock chips here", () => {
+    const payload = { runs: { bat: 0, extras: { kind: "penalty", runs: 5 } } };
+    const dock = buildDock("cricket.ball", t, payload)!;
+    expect(dock.chips.map((c) => c.id)).toEqual(["freeHit"]);
   });
 });
 

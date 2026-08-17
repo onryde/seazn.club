@@ -19,7 +19,7 @@ import type { MsgFn } from "@/lib/scoring-vocab";
 import { createSkinDispatch } from "../../skins/types";
 import { buildPadView, type PadViewCtx } from "../../view-model";
 import type { RejectionInfo } from "../../use-pad-pipeline";
-import type { GuidedSheetSpec, TileSpec } from "../types";
+import type { GuidedSheetSpec, PadHostView, SkinDefV3, TileSpec } from "../types";
 import { MORE_SHEET_KEY } from "../types";
 import {
   adaptSwapSlot,
@@ -31,6 +31,7 @@ import {
   moreActions,
   phasesWithTiles,
   rejectionText,
+  resolveDockSpec,
   resolveNextPhase,
   resolvePadPhase,
   resolveSheet,
@@ -456,5 +457,88 @@ describe("rejectionText — mutation proof (blocker 1: the v3 pad swallowed ever
     const viaMutant = stopsReadingRejection(rejection, identityMsg);
     expect(real).not.toBe(viaMutant); // real: "Server exploded"; mutant: null
     expect(real).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveDockSpec — R2b task 4 (`_INDEX.md`, owner ruling): cricket's dock
+// needed to tell a no-ball tap apart from a plain single, but `dock(eventType,
+// view)` only ever received the event TYPE — identical for every ball tap.
+// This is the ONE line that used to call `props.skin.dock(held.eventType,
+// view)` directly inside `PadHostV3`'s own render body, extracted as a pure
+// builder (same "data in, data out" split as every other decision in this
+// file's own pure-builders section — this file's own header) specifically so
+// the widened wiring — the held tap's PAYLOAD now reaches `dock()` too — is
+// provable without rendering the seven-primitive-deep component tree the
+// node-only hook-harness cannot walk (this file's own header, same reason
+// `PadHostV3`'s JSX itself has no test here at all).
+// ---------------------------------------------------------------------------
+
+function padHostView(): PadHostView {
+  return {
+    cfg: {},
+    state: {},
+    summary: {},
+    phase: "live",
+    band: 3,
+    entitlements: {},
+    personNames: {},
+    squads: initSquads(lineupPair()),
+    events: [],
+    contextOverrides: {},
+  };
+}
+
+function stubSkin(dock: SkinDefV3["dock"]): SkinDefV3 {
+  return {
+    key: "stub",
+    tapModel: "T",
+    scorebug: () => ({
+      context: "",
+      phase: "live",
+      halves: [{ who: [{ name: "" }], big: "" }, { who: [{ name: "" }], big: "" }],
+      strip: [],
+    }),
+    tiles: () => [],
+    dock,
+  };
+}
+
+describe("resolveDockSpec", () => {
+  it("is null when nothing is held — never calls the skin's own dock()", () => {
+    const skin = stubSkin(() => {
+      throw new Error("must not be called with nothing held");
+    });
+    expect(resolveDockSpec(skin, null, padHostView())).toBeNull();
+  });
+
+  it("forwards the held tap's own payload as dock()'s 3rd argument", () => {
+    const calls: Array<[string, unknown]> = [];
+    const skin = stubSkin((eventType, _view, payload) => {
+      calls.push([eventType, payload]);
+      return { title: "seen", chips: [] };
+    });
+    const heldPayload = { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } };
+    const spec = resolveDockSpec(skin, { eventType: "cricket.ball", payload: heldPayload }, padHostView());
+    expect(spec).toEqual({ title: "seen", chips: [] });
+    expect(calls).toEqual([["cricket.ball", heldPayload]]);
+  });
+});
+
+describe("resolveDockSpec — mutation proof (the widened payload wiring is load-bearing)", () => {
+  it("a version that drops the 3rd argument disagrees with the real one once a skin's dock() actually reads it", () => {
+    const skin = stubSkin((_eventType, _view, payload) =>
+      payload !== undefined ? { title: "has-payload", chips: [] } : { title: "no-payload", chips: [] },
+    );
+    const held = { eventType: "cricket.ball", payload: { kind: "noball" } };
+    // Typed AS `resolveDockSpec` so the mutant is callable identically while
+    // silently dropping the payload — the exact regression this wiring
+    // guards against (dock() would fall back to seeing no payload at all,
+    // same as before this task's own chassis widening).
+    const dropsPayload: typeof resolveDockSpec = (s, h, v) => (h ? s.dock(h.eventType, v) : null);
+    const real = resolveDockSpec(skin, held, padHostView());
+    const viaMutant = dropsPayload(skin, held, padHostView());
+    expect(real).not.toEqual(viaMutant);
+    expect(real).toEqual({ title: "has-payload", chips: [] });
   });
 });

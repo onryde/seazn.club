@@ -82,6 +82,7 @@ import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
   MORE_SHEET_KEY,
   type ContextStripSpec,
+  type DockChip,
   type DockSpec,
   type GuidedSheetSpec,
   type GuidedSheetStep,
@@ -916,12 +917,17 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
     }));
 
     for (const kind of MINOR_EXTRA_KINDS) {
+      // R2b task 4 (`_INDEX.md`, owner ruling): penalty runs default to 5
+      // (Law 41), not the ordinary single every OTHER minor extra opens
+      // with — a real, deliberate exception, not an oversight. The other
+      // three kinds (noball/bye/legbye) keep `extraPayload`'s own default.
+      const runs = kind === "penalty" ? 5 : undefined;
       tiles.push(ballTile({
         id: `extra-${kind}`,
         label: requiredVocabKey("kind", kind),
         kind: "minor",
         phases: ["live"],
-        action: { event: { type, payload: extraPayload(base, kind) } },
+        action: { event: { type, payload: extraPayload(base, kind, runs) } },
       }));
     }
   }
@@ -991,29 +997,89 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
 }
 
 // ---------------------------------------------------------------------------
-// dock() — needs `t` for DockSpec.title (this file's header). Free hit only:
-// "shot type" (design doc §3's cricket row) has no home in `CricketBall`'s
-// `z.strictObject` schema — no field anywhere carries how a shot was played,
-// and a strict-object dock mutation adding an unrecognised key would 422 at
-// send time. Flagged as a real, engine-schema-shaped gap (out of this wave's
-// "no packages/engine work" scope), not a silent scope cut: `freeHit` is the
-// one genuinely optional `CricketBall` field, so it is what this dock
-// offers. Unconditional (not gated on `fine.freeHitPending`): by dock-render
-// time the optimistic fold has ALREADY advanced past the just-tapped ball
-// (spec §2.3), so `view.state`'s OWN freeHitPending already reflects
-// AFTER this ball, not before it — this chassis gives a skin's `dock(type,
-// view)` no per-held-event payload to check instead. Tapping it on an
-// ineligible ball surfaces as a normal rejected-submission error (the fold's
-// own `"freeHit flagged but no free hit is pending"` check), same as any
-// other invalid pick elsewhere in this chassis — not a crash.
+// dock() — needs `t` for DockSpec.title (this file's header). Free hit,
+// unconditionally offered on every ball: "shot type" (design doc §3's
+// cricket row) has no home in `CricketBall`'s `z.strictObject` schema — no
+// field anywhere carries how a shot was played, and a strict-object dock
+// mutation adding an unrecognised key would 422 at send time. Flagged as a
+// real, engine-schema-shaped gap (out of this wave's "no packages/engine
+// work" scope), not a silent scope cut: `freeHit` is the one genuinely
+// optional `CricketBall` field, so it is what this dock always offers. Not
+// gated on `fine.freeHitPending`: by dock-render time the optimistic fold
+// has ALREADY advanced past the just-tapped ball (spec §2.3), so
+// `view.state`'s OWN freeHitPending already reflects AFTER this ball, not
+// before it. Tapping it on an ineligible ball surfaces as a normal
+// rejected-submission error (the fold's own `"freeHit flagged but no free
+// hit is pending"` check), same as any other invalid pick elsewhere in this
+// chassis — not a crash.
+//
+// R2b task 4 (`_INDEX.md`, owner ruling): `heldPayload`, the optional 3rd
+// argument (the widened chassis contract, `SkinDefV3.dock`, ../types.ts),
+// is what lets THIS dock tell a no-ball apart from a plain single — both
+// dispatch the identical `cricket.ball` event TYPE, so `eventType` alone
+// can never answer "which tile was actually tapped". A no-ball's dock
+// additionally offers bat-run chips (+1/+2/+3/+4/+6 — a no-ball is batted
+// normally, so this is legal; a WIDE is deliberately excluded even though
+// it is also an extra, because the engine refuses any bat run off one,
+// cricket.ts:1229 — "bat runs are impossible off a wide"). A bye/leg-bye's
+// dock instead offers extra-run chips (2/3/4) that raise the EXTRA's own
+// `runs`, never `bat`. Every other case — a plain run tap, a wide, a
+// penalty, or the pre-existing 2-arg call with no payload at all — keeps
+// offering Free Hit only, unchanged from pre-R2b behaviour.
 // ---------------------------------------------------------------------------
 
-export function buildDock(eventType: string, t: TFn): DockSpec | null {
-  if (!BALL_EVENT_TYPES.has(eventType)) return null;
+const BAT_RUN_VALUES = [1, 2, 3, 4, 6] as const;
+const EXTRA_RUN_VALUES = [2, 3, 4] as const;
+
+/** A no-ball's dock chip that sets `runs.bat` to `n`, preserving the
+ *  no-ball's own `runs.extras` verbatim (never dropped, never re-kinded) —
+ *  and, for `n` in {4, 6}, also stamps `boundary`, mirroring `runPayload`'s
+ *  own convention for the plain run4/run6 tiles exactly: the same two
+ *  literal values, the same "boundary present only for 4 or 6" shape. */
+function batRunChip(n: (typeof BAT_RUN_VALUES)[number]): DockChip {
+  const boundary = n === 4 ? 4 : n === 6 ? 6 : undefined;
   return {
-    title: t("pad.cricket.dock.title"),
-    chips: [{ id: "freeHit", label: "pad.cricket.dock.freeHit", mutate: (payload) => ({ ...payload, freeHit: true }) }],
+    id: `batRun${n}`,
+    label: `pad.cricket.dock.batRun${n}`,
+    mutate: (payload) => {
+      const extras = (payload.runs as { extras?: unknown } | undefined)?.extras;
+      return {
+        ...payload,
+        runs: { bat: n, ...(extras !== undefined ? { extras } : {}) },
+        ...(boundary !== undefined ? { boundary } : {}),
+      };
+    },
   };
+}
+
+/** A bye/leg-bye's dock chip that raises the EXTRA's own `runs` to `n`.
+ *  `bat` is read from (never assumed on top of) the current payload — it is
+ *  always 0 for a real bye/leg-bye, but a chip should never silently touch
+ *  a field it was not asked to change — and `extras.kind` is preserved
+ *  verbatim so a leg-bye can never mutate into a bye or vice versa. */
+function extraRunChip(n: (typeof EXTRA_RUN_VALUES)[number]): DockChip {
+  return {
+    id: `extraRun${n}`,
+    label: `pad.cricket.dock.extraRun${n}`,
+    mutate: (payload) => {
+      const runs = payload.runs as { bat?: number; extras?: { kind?: string } } | undefined;
+      return { ...payload, runs: { bat: runs?.bat ?? 0, extras: { kind: runs?.extras?.kind, runs: n } } };
+    },
+  };
+}
+
+export function buildDock(eventType: string, t: TFn, heldPayload?: Record<string, unknown>): DockSpec | null {
+  if (!BALL_EVENT_TYPES.has(eventType)) return null;
+  const chips: DockChip[] = [
+    { id: "freeHit", label: "pad.cricket.dock.freeHit", mutate: (payload) => ({ ...payload, freeHit: true }) },
+  ];
+  const extraKind = (heldPayload?.runs as { extras?: { kind?: string } } | undefined)?.extras?.kind;
+  if (extraKind === "noball") {
+    for (const n of BAT_RUN_VALUES) chips.push(batRunChip(n));
+  } else if (extraKind === "bye" || extraKind === "legbye") {
+    for (const n of EXTRA_RUN_VALUES) chips.push(extraRunChip(n));
+  }
+  return { title: t("pad.cricket.dock.title"), chips };
 }
 
 const BOWLER_BLOCK_MESSAGE_KEY: Record<Exclude<BowlerBlockReason, "noEligible">, MessageKey> = {
@@ -1524,7 +1590,7 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     phase: resolvePhase,
     scorebug: (view) => buildScorebug(view, t),
     tiles: (view) => buildTiles(view, t),
-    dock: (eventType) => buildDock(eventType, t),
+    dock: (eventType, _view, payload) => buildDock(eventType, t, payload),
     context: (view) => buildContext(view, t),
     sheets: buildSheets,
     // D2 (R2 sign-off): the skin supplies per-ball detail so the activity
