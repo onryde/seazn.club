@@ -406,8 +406,10 @@ const SETTINGS_COLS = [
   "payment_method", "payment_instructions", "updated_at",
 ] as const;
 
-/** Statuses that hold a capacity spot. */
-const SPOT_HOLDERS = ["pending", "paid", "confirmed"] as const;
+/** Statuses that hold a capacity spot. Exported for `registration-submit.ts`'s
+ *  capacity count (RS002 W4) — kept in ONE place so the two files' notion of
+ *  "holds a spot" cannot drift apart. */
+export const SPOT_HOLDERS = ["pending", "paid", "confirmed"] as const;
 
 // Both the superuser client and a withTenant tx serve the shared helpers
 // (TransactionSql omits connection controls, so it isn't a plain Sql).
@@ -486,7 +488,9 @@ function fallbackOrigin(): string {
   ).replace(/\/$/, "");
 }
 
-function windowOpen(s: RegistrationSettingsRow, now: Date): boolean {
+/** Exported for `registration-submit.ts` (RS002 W4) — the submit path's
+ *  per-division window gate reuses this VERBATIM rather than re-deriving it. */
+export function windowOpen(s: RegistrationSettingsRow, now: Date): boolean {
   if (!s.enabled) return false;
   if (s.opens_at && now < new Date(s.opens_at)) return false;
   if (s.closes_at && now > new Date(s.closes_at)) return false;
@@ -632,7 +636,11 @@ async function loadPlayers(tx: Tx, registrationId: string): Promise<
     order by is_captain desc, created_at`;
 }
 
-async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: string): Promise<string> {
+/** Exported for `registration-submit.ts` (RS002 W4) — the submit path
+ *  auto-confirms a free, auto-approval, non-waitlisted entry INLINE in the
+ *  same transaction by calling this directly, rather than re-deriving
+ *  materialization. */
+export async function materialise(tx: Tx, reg: RegistrationRow, entrantKind: string): Promise<string> {
   if (reg.entrant_id) return reg.entrant_id;
   const [entrant] = await tx<{ id: string }[]>`
     insert into entrants (division_id, kind, display_name, status)
