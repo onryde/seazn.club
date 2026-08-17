@@ -138,8 +138,8 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     { path: await divisionPath(request, divisionId) },
     { path: await divisionPath(request, divisionId, "?tab=fixtures") },
     { path: await divisionPath(request, divisionId, "?tab=standings") },
-    // The /registrations console route (registrations-panel.tsx) was removed
-    // by RS001 along with the rest of the old registration UI; no
+    // The /registrations console route (its "registrations panel" component)
+    // was removed by RS001 along with the rest of the old registration UI; no
     // replacement route exists yet (owed by RS006/RS007/RS010).
     // The /schedule console was absent from this inventory entirely, so the
     // three tabs that carry the portfolio's new panels (P1 capacity card on
@@ -1575,10 +1575,10 @@ test("P6 task B fix round 3 (Critical 1): regenerating a stage that already has 
 // tablet is still a touch device. The density recipes themselves (text-xs,
 // etc.) are untouched — this is a sizing fix, not a restyle.
 //
-// Four of the twelve fixed files are covered below (a fifth,
-// registrations-panel.tsx, was deleted wholesale by RS001 along with the
-// rest of the old registration UI — its fix is moot, so its check is
-// removed rather than left probing a route that 404s), each reusing a
+// Four of the twelve fixed files are covered below (a fifth — the org-
+// console "registrations panel" component — was deleted wholesale by RS001
+// along with the rest of the old registration UI — its fix is moot, so its
+// check is removed rather than left probing a route that 404s), each reusing a
 // fixture this file already has live by this point in the serial run (the
 // shared setup division/org and its registration settings, or the console's
 // own authenticated session) — no new seeding. The other seven (americano-panel,
@@ -1631,8 +1631,8 @@ test("density-pair sweep: four more .select/.input controls hold the 44px floor 
   await assertFloor(page.locator('input[aria-label^="Seed for "]').first(), "entrant seed input");
   await expectNoHorizontalScroll(page);
 
-  // Registrations tab (registrations-panel.tsx) was checked here until
-  // RS001 deleted the component along with the rest of the old
+  // Registrations tab (the org-console "registrations panel" component) was
+  // checked here until RS001 deleted it along with the rest of the old
   // registration UI; the route now 404s, so the check is gone with it.
 
   // Schedule > History (history-panel.tsx) — the create-save-point form
