@@ -1,7 +1,7 @@
 ---
 title: The bracket
 description: The classic two-sided tree — on the console, the public page, the big screen and a printable poster.
-order: 5
+order: 6
 ---
 
 Knockout stages render as the classic **two-sided bracket**: quarter-finals on the outside, converging on a centre Final, the third-place match tucked underneath. One shared layout drives every surface, so they never disagree:
