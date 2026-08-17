@@ -9,17 +9,14 @@
 // doc's UI section (A2/A4/A5 amendments,
 // docs/superpowers/specs/bench-product-value/designs/2026-08-13-venues-courts-design.md).
 //
-// ARCHIVE ASYMMETRY (server/usecases/venues.ts, listVenues doc comment):
-// `GET /venues?archived=1` (here: `listVenues(auth, {includeArchived:true})`,
-// called once in directory/page.tsx's VenuesTab) returns archived VENUES, but
-// every venue's nested `courts[]` is unconditionally filtered to active-only
-// regardless of that flag — "toggling archived-court visibility here is out
-// of this session's scope." So a court can be archived (the action exists,
-// 409s the same way a venue's does) but never re-discovered through this API
-// once it is, and this UI cannot show a court's archived_at truthfully
-// changing to non-null. The "Show archived" toggle below therefore only ever
-// applies to venues; CourtRow has no archived branch at all, deliberately —
-// one would be dead, untestable code for a state this API never returns.
+// ARCHIVED COURTS (A5, gap closed): `listVenues(auth, {includeArchived:true})`
+// (server/usecases/venues.ts) threads the SAME flag into both the venues AND
+// the nested courts query, and directory/page.tsx's VenuesTab always fetches
+// with it on — so the full court list (active + archived) is already in the
+// `venues` prop. The one "Show archived" toggle below is a client-side
+// filter applied at BOTH levels (`filterVenuesByArchived` /
+// `filterCourtsByArchived`): off hides archived rows entirely; on shows them
+// greyed with an Unarchive action, same idiom at both levels.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
@@ -92,11 +89,17 @@ const WEEKDAY_KEYS = [
 // genuinely testable surface; see __tests__/venues-panel.test.ts.
 // ---------------------------------------------------------------------------
 
-/** The "Show archived" toggle's filter. Archived VENUES only — see the file
- *  header on why courts have no equivalent. */
+/** The "Show archived" toggle's filter, applied to top-level venues. */
 export function filterVenuesByArchived(venues: readonly Venue[], showArchived: boolean): Venue[] {
   if (showArchived) return [...venues];
   return venues.filter((v) => v.archived_at === null);
+}
+
+/** The SAME "Show archived" toggle, applied one level down to a venue's
+ *  nested courts (A5) — one flag, same off/on behaviour at both levels. */
+export function filterCourtsByArchived(courts: readonly Court[], showArchived: boolean): Court[] {
+  if (showArchived) return [...courts];
+  return courts.filter((c) => c.archived_at === null);
 }
 
 /** "Copy this day to all days" — replaces the WHOLE week with seven copies of

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   copyHoursToAllDays,
+  filterCourtsByArchived,
   filterVenuesByArchived,
   hasHoursOverlap,
   hasInvalidRange,
@@ -57,6 +58,31 @@ describe("filterVenuesByArchived — the 'Show archived' toggle's filter", () =>
 
   it("empty input yields empty output", () => {
     expect(filterVenuesByArchived([], false)).toEqual([]);
+  });
+});
+
+describe("filterCourtsByArchived — the same 'Show archived' toggle, one level down (A5)", () => {
+  const active = court({ id: "c-active", archived_at: null });
+  const archived = court({ id: "c-archived", archived_at: "2026-08-01T00:00:00.000Z" });
+
+  it("off (default): hides archived courts", () => {
+    expect(filterCourtsByArchived([active, archived], false).map((c) => c.id)).toEqual(["c-active"]);
+  });
+
+  it("on: shows every court, archived included", () => {
+    expect(filterCourtsByArchived([active, archived], true).map((c) => c.id)).toEqual([
+      "c-active",
+      "c-archived",
+    ]);
+  });
+
+  it("an all-active list is unaffected by the toggle either way", () => {
+    expect(filterCourtsByArchived([active], false)).toEqual([active]);
+    expect(filterCourtsByArchived([active], true)).toEqual([active]);
+  });
+
+  it("empty input yields empty output", () => {
+    expect(filterCourtsByArchived([], false)).toEqual([]);
   });
 });
 
