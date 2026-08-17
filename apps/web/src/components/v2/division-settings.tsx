@@ -38,8 +38,13 @@ export interface DivisionSettingsInfo {
    *  court) — stored by this picker, not yet read by scheduling. See the
    *  PATCH caveat on `saveRequiredCourtTags` below: the server's
    *  PatchDivision schema does not carry this column yet, so a save here
-   *  currently no-ops until that one-line addition lands. */
-  required_court_tags: string[];
+   *  currently no-ops until that one-line addition lands. Optional (not
+   *  required) so existing callers/fixtures that predate this field — the
+   *  page always passes it, but division-settings-entrants.test.tsx and any
+   *  other DivisionSettingsInfo fixture do not — keep compiling and
+   *  rendering; the component defaults a missing value to "no requirement"
+   *  rather than throwing. */
+  required_court_tags?: string[];
 }
 
 function Group({
@@ -192,7 +197,7 @@ export function DivisionSettings({
   // the Entrants block above, not autosave-per-chip like venues-panel's
   // court tags, because this file's OWN convention (every other multi-field
   // section here) is stage-then-Save.
-  const [requiredCourtTags, setRequiredCourtTags] = useState<string[]>(division.required_court_tags);
+  const [requiredCourtTags, setRequiredCourtTags] = useState<string[]>(division.required_court_tags ?? []);
   const [courtTagSuggestions, setCourtTagSuggestions] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
