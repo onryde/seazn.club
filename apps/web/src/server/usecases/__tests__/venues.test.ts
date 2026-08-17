@@ -17,6 +17,8 @@ import {
   patchVenue,
   deleteVenue,
   listVenues,
+  archiveCourt,
+  unarchiveCourt,
   createCourt,
   patchCourt,
   deleteCourt,
@@ -142,11 +144,52 @@ async function seedOrg(): Promise<{ auth: AuthCtx; orgId: string }> {
   return { auth: { orgId, via: "session", userId: null, role: "owner", keyId: null }, orgId };
 }
 
+/** A fixture referencing `courtId`, standing up the full competition ->
+ *  division -> stage chain a fixture needs. `status` drives the archive
+ *  gate (unplayed = scheduled/in_play, everything else = history). */
+async function seedFixtureOnCourt(
+  auth: AuthCtx,
+  courtId: string,
+  status: string,
+  scheduledAt?: string,
+): Promise<{ fixtureId: string }> {
+  const comp = await createCompetition(auth, {
+    name: `Comp ${randomUUID().slice(0, 6)}`,
+    visibility: "private",
+    branding: {},
+    ends_on: "2030-12-31",
+  });
+  const division = await createDivision(auth, comp.id, {
+    name: "Div",
+    slug: `div-${randomUUID().slice(0, 6)}`,
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC_CONFIG,
+    eligibility: [],
+  });
+  const [{ id: stageId }] = await sql<{ id: string }[]>`
+    insert into stages (division_id, seq, kind, name)
+    values (${division.id}, 1, 'league', 'Stage 1')
+    returning id`;
+  const [{ id: fixtureId }] = await sql<{ id: string }[]>`
+    insert into fixtures (stage_id, division_id, round_no, seq_in_round, court_id, status, scheduled_at)
+    values (${stageId}, ${division.id}, 1, 1, ${courtId}, ${status}, ${scheduledAt ?? null})
+    returning id`;
+  return { fixtureId };
+}
+
 describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
   const orgIds: string[] = [];
 
   afterAll(async () => {
     for (const id of orgIds) {
+      // Competitions FIRST (cascades divisions -> stages -> fixtures) so no
+      // fixture is left referencing a court by the time organizations'
+      // cascade reaches venues -> courts. Deleting the org directly races
+      // two independent cascade paths against `fixtures.court_id`'s
+      // ON DELETE RESTRICT (deferred to commit, but this is one top-level
+      // statement per call, not one transaction spanning both deletes).
+      await sql`delete from competitions where org_id = ${id}`;
       await sql`delete from organizations where id = ${id}`;
     }
   });
@@ -207,32 +250,95 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
     const venue = await createVenue(auth, { name: "Arena", address: null, sort: 0 });
     const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
 
-    const comp = await createCompetition(auth, {
-      name: `Comp ${randomUUID().slice(0, 6)}`,
-      visibility: "private",
-      branding: {},
-      ends_on: "2030-12-31",
-    });
-    const division = await createDivision(auth, comp.id, {
-      name: "Div",
-      slug: `div-${randomUUID().slice(0, 6)}`,
-      sport_key: "generic",
-      variant_key: "score",
-      config: GENERIC_CONFIG,
-      eligibility: [],
-    });
-    const [{ id: stageId }] = await sql<{ id: string }[]>`
-      insert into stages (division_id, seq, kind, name)
-      values (${division.id}, 1, 'league', 'Stage 1')
-      returning id`;
-    await sql`
-      insert into fixtures (stage_id, division_id, round_no, seq_in_round, court_id)
-      values (${stageId}, ${division.id}, 1, 1, ${court.id})`;
+    await seedFixtureOnCourt(auth, court.id, "scheduled");
 
     await expect(deleteCourt(auth, court.id)).rejects.toMatchObject({
       status: 409,
       code: "COURT_IN_USE",
     });
+  });
+
+  it("archiveCourt allows archiving a court referenced only by COMPLETED fixtures", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "History Park", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    await seedFixtureOnCourt(auth, court.id, "finalized");
+
+    const archived = await archiveCourt(auth, court.id);
+    expect(archived.archived_at).not.toBeNull();
+    // Idempotent: archiving an already-archived court is a no-op, not an error.
+    const archivedAgain = await archiveCourt(auth, court.id);
+    expect(archivedAgain.archived_at).toEqual(archived.archived_at);
+  });
+
+  it("archiveCourt blocks a court referenced by an UNPLAYED fixture (409 COURT_IN_USE)", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Live Park", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    await seedFixtureOnCourt(auth, court.id, "scheduled");
+
+    await expect(archiveCourt(auth, court.id)).rejects.toMatchObject({
+      status: 409,
+      code: "COURT_IN_USE",
+    });
+  });
+
+  it("archived courts are excluded from listVenues by default, and archiving frees the name for reuse", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Reuse Park", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court A", sort: 0, tags: [] });
+    await archiveCourt(auth, court.id);
+
+    const listed = await listVenues(auth);
+    const v = listed.find((x) => x.id === venue.id)!;
+    expect(v.courts.map((c) => c.id)).not.toContain(court.id);
+
+    // Name frees up: a NEW active court with the same name in the same
+    // venue must be allowed now that the old one is archived (partial
+    // unique index on (venue_id, name) where archived_at is null).
+    const reused = await createCourt(auth, venue.id, { name: "Court A", sort: 0, tags: [] });
+    expect(reused.id).not.toBe(court.id);
+  });
+
+  it("unarchiveCourt restores a court, and 409s COURT_NAME_TAKEN if another active court now holds the name", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Restore Park", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court B", sort: 0, tags: [] });
+    await archiveCourt(auth, court.id);
+
+    const restored = await unarchiveCourt(auth, court.id);
+    expect(restored.archived_at).toBeNull();
+    // Idempotent.
+    const restoredAgain = await unarchiveCourt(auth, court.id);
+    expect(restoredAgain.archived_at).toBeNull();
+
+    await archiveCourt(auth, court.id);
+    await createCourt(auth, venue.id, { name: "Court B", sort: 0, tags: [] });
+    await expect(unarchiveCourt(auth, court.id)).rejects.toMatchObject({
+      status: 409,
+      code: "COURT_NAME_TAKEN",
+    });
+  });
+
+  it("PUT calendar reports an advisory strandedFixtureCount for unplayed fixtures now outside the new hours", async () => {
+    const { auth } = await org();
+    const venue = await createVenue(auth, { name: "Advisory Park", address: null, sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    // Tuesday 21:00 UTC (org has no timezone set -> UTC fallback); weekday 2
+    // with 0 = Sunday, matching the engine tz module's getUTCDay() convention.
+    await seedFixtureOnCourt(auth, court.id, "scheduled", "2026-08-18T21:00:00.000Z");
+
+    const narrow = await putCourtCalendar(auth, court.id, {
+      hours: [{ weekday: 2, open_min: 540, close_min: 1020 }], // 09:00-17:00
+      exceptions: [],
+    });
+    expect(narrow.strandedFixtureCount).toBe(1);
+
+    const wide = await putCourtCalendar(auth, court.id, {
+      hours: [{ weekday: 2, open_min: 540, close_min: 1320 }], // 09:00-22:00
+      exceptions: [],
+    });
+    expect(wide.strandedFixtureCount).toBe(0);
   });
 
   it("PUT calendar replaces hours + exceptions atomically and round-trips", async () => {

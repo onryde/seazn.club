@@ -22,18 +22,39 @@
 -- Hours-overlap (multiple ranges/weekday must not overlap) is validated
 -- application-side (usecases/venues.ts) and unit-tested there — not a DB
 -- EXCLUDE constraint, to keep this migration's scope to what P8 owes.
+--
+-- Amendment (owner ruling, same session — see the session-status doc's
+-- "Rulings made this session" #4): court removal is delete-OR-archive, not
+-- one permanent 409. A club that permanently loses a hall could otherwise
+-- never remove the court — history references it forever, so pickers would
+-- accumulate dead courts. `archived_at` lands on both `venues` and `courts`
+-- (precedent `V261__division_archive.sql`); the courts name-uniqueness
+-- becomes a PARTIAL unique index so a name frees up once archived; and
+-- `fixtures.court_id` is `on delete restrict` (precedent
+-- `V299__sponsor_order_delete_restrict.sql`) so the in-use 409 is a DDL
+-- guarantee, not only a check `usecases/venues.ts` could forget. The
+-- archive gate itself keys on fixture STATUS (scheduled/in_play = still
+-- needed vs decided/finalized/abandoned/forfeited/cancelled = history),
+-- never on date — see usecases/venues.ts.
+--
+-- `weekday` is 0-6 with 0 = Sunday, matching `@seazn/engine/scheduling/tz`'s
+-- own `getUTCDay()`-based convention (WEEKDAYS[0] = "SUN") — pinned here
+-- because the original design DDL left it unstated and P8's advisory
+-- stranded-fixture count (below) computes weekday via that same module.
 -- =============================================================================
 
 create table venues (
-  id         uuid primary key default gen_random_uuid(),
-  org_id     uuid not null references organizations(id) on delete cascade,
-  name       text not null,
-  address    text,
-  sort       int  not null default 0,
-  created_at timestamptz not null default now(),
+  id          uuid primary key default gen_random_uuid(),
+  org_id      uuid not null references organizations(id) on delete cascade,
+  name        text not null,
+  address     text,
+  sort        int  not null default 0,
+  archived_at timestamptz,
+  created_at  timestamptz not null default now(),
   unique (id, org_id)
 );
 create index venues_org_idx on venues(org_id);
+create index venues_active_idx on venues(org_id) where archived_at is null;
 
 alter table venues enable row level security;
 alter table venues force  row level security;
@@ -45,19 +66,24 @@ grant select, insert, update, delete on venues to app_user;
 -- by the composite FK below — an org_id that disagrees with the parent venue
 -- cannot be inserted.
 create table courts (
-  id         uuid primary key default gen_random_uuid(),
-  venue_id   uuid not null,
-  org_id     uuid not null,
-  name       text not null,
-  sort       int  not null default 0,
-  tags       text[] not null default '{}',
-  created_at timestamptz not null default now(),
+  id          uuid primary key default gen_random_uuid(),
+  venue_id    uuid not null,
+  org_id      uuid not null,
+  name        text not null,
+  sort        int  not null default 0,
+  tags        text[] not null default '{}',
+  archived_at timestamptz,
+  created_at  timestamptz not null default now(),
   unique (id, org_id),
-  unique (venue_id, name),
   foreign key (venue_id, org_id) references venues (id, org_id) on delete cascade
 );
 create index courts_venue_idx on courts(venue_id);
 create index courts_org_idx   on courts(org_id);
+create index courts_active_idx on courts(venue_id) where archived_at is null;
+-- Name uniqueness only among ACTIVE courts — archiving frees the name for
+-- reuse (owner ruling; V261:9 is the precedent for this partial-index form).
+create unique index courts_venue_name_active_idx on courts(venue_id, name)
+  where archived_at is null;
 -- Tag containment filter (P9: candidate courts for a stage = tags ⊇
 -- required_court_tags).
 create index courts_tags_gin_idx on courts using gin(tags);
@@ -121,7 +147,27 @@ grant select, insert, update, delete on court_exceptions to app_user;
 
 -- Fixtures: the future write model (P9 cuts stored configs + fixtures.venue/
 -- court_label text over to this). Nullable, zero readers this session.
-alter table fixtures add column court_id uuid references courts(id) on delete set null;
+-- `on delete restrict` (not the repo's more common cascade/set-null): a
+-- court referenced by fixture history must not silently vanish out from
+-- under it — the same "referenced history must not vanish" reasoning as
+-- V299__sponsor_order_delete_restrict.sql. The application-level 409 in
+-- deleteCourt is the friendly message; this is the guarantee that holds
+-- even if a future call site forgets that check.
+--
+-- `deferrable initially deferred`: unlike V299's single-hop case, a court
+-- sits at the join of TWO cascade paths hanging off `organizations`
+-- (org -> venues -> courts, and org -> competitions -> divisions -> stages
+-- -> fixtures). A NOT DEFERRED restrict is checked per-row as Postgres
+-- walks the cascade, so a single `delete from organizations` can visit the
+-- court before it visits the fixture that references it and abort on a
+-- violation that would have resolved itself by end of statement (both rows
+-- are, in fact, being deleted together). Deferring the check to COMMIT
+-- lets the whole cascade finish before it is evaluated — a normal
+-- `deleteCourt` call (one court, no cascade) still fails exactly as before
+-- if a fixture is left referencing it, just at COMMIT instead of mid­-
+-- statement, and `withTenant` already wraps every call in one transaction.
+alter table fixtures add column court_id uuid
+  references courts(id) on delete restrict deferrable initially deferred;
 create index fixtures_court_idx on fixtures(court_id);
 
 -- Tag-scoped court requirement per division/stage (P9 consumes: candidate

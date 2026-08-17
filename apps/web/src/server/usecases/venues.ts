@@ -14,10 +14,21 @@ import "server-only";
 // `set_org_from_parent` trigger; a value that disagreed with the parent
 // would fail the FK, not silently pass).
 import { z } from "zod";
+import { dayKeyInTz, hhmmInTz, weekdayOfYmd, type Weekday } from "@seazn/engine/scheduling/tz";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
+
+// 0 = Sunday, matching `weekdayOfYmd`'s own `getUTCDay()`-based convention
+// (see V367's header comment) — court_hours.weekday and the advisory
+// stranded-fixture check below both key off this same order.
+const WEEKDAY_LABELS: readonly Weekday[] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+/** Fixture statuses that still need a court (per the owner ruling: the
+ *  archive gate keys on STATUS, never date). Everything else — decided,
+ *  finalized, abandoned, forfeited, cancelled — is history. */
+const UNPLAYED_FIXTURE_STATUSES = ["scheduled", "in_play"] as const;
 
 // ---------------------------------------------------------------------------
 // Typed error codes (repo convention: ALL_CAPS_SNAKE — see capacity-guard.ts's
@@ -32,6 +43,7 @@ export const COURT_NOT_FOUND_CODE = "COURT_NOT_FOUND";
 export const COURT_IN_USE_CODE = "COURT_IN_USE";
 export const COURT_HOURS_OVERLAP_CODE = "COURT_HOURS_OVERLAP";
 export const COURT_EXCEPTION_DUPLICATE_DATE_CODE = "COURT_EXCEPTION_DUPLICATE_DATE";
+export const COURT_NAME_TAKEN_CODE = "COURT_NAME_TAKEN";
 
 // ---------------------------------------------------------------------------
 // Rows
@@ -43,6 +55,7 @@ export interface VenueRow {
   name: string;
   address: string | null;
   sort: number;
+  archived_at: string | null;
   created_at: string;
 }
 
@@ -53,6 +66,7 @@ export interface CourtRow {
   name: string;
   sort: number;
   tags: string[];
+  archived_at: string | null;
   created_at: string;
 }
 
@@ -235,8 +249,10 @@ export function resolveCourtDay(
 // CRUD
 // ---------------------------------------------------------------------------
 
-const VENUE_COLS = ["id", "org_id", "name", "address", "sort", "created_at"] as const;
-const COURT_COLS = ["id", "venue_id", "org_id", "name", "sort", "tags", "created_at"] as const;
+const VENUE_COLS = ["id", "org_id", "name", "address", "sort", "archived_at", "created_at"] as const;
+const COURT_COLS = [
+  "id", "venue_id", "org_id", "name", "sort", "tags", "archived_at", "created_at",
+] as const;
 
 /** A SQL `date` column comes back from postgres.js as a `Date` at UTC
  *  midnight; extract the wall date with UTC getters so the host's local
@@ -257,9 +273,11 @@ function toDateStr(d: string | Date): string {
 export async function listVenues(auth: AuthCtx): Promise<VenueWithCourts[]> {
   return withTenant(auth.orgId, async (tx) => {
     const venues = await tx<VenueRow[]>`
-      select ${tx(VENUE_COLS)} from venues order by sort, name, id`;
+      select ${tx(VENUE_COLS)} from venues
+      where archived_at is null order by sort, name, id`;
     const courts = await tx<CourtRow[]>`
-      select ${tx(COURT_COLS)} from courts order by sort, name, id`;
+      select ${tx(COURT_COLS)} from courts
+      where archived_at is null order by sort, name, id`;
     const hours = await tx<(CourtHoursRange & { court_id: string })[]>`
       select court_id, weekday, open_min, close_min from court_hours
       order by court_id, weekday, open_min`;
@@ -391,9 +409,13 @@ export async function patchCourt(
   return row;
 }
 
-/** A court referenced by any fixture is 409 COURT_IN_USE (soft-block —
- *  reassign the fixture's court first). Deleting a clean court cascades its
- *  own court_hours/court_exceptions rows (FK on delete cascade). */
+/** A court referenced by ANY fixture (played or not) is 409 COURT_IN_USE —
+ *  `fixtures.court_id` is `on delete restrict`, so this check is a friendly
+ *  message ahead of a DDL guarantee, not the only thing stopping the delete.
+ *  A court with only COMPLETED-fixture history can still be archived
+ *  instead (`archiveCourt`) — hard delete stays reserved for a court with
+ *  no fixture reference at all. Deleting a clean court cascades its own
+ *  court_hours/court_exceptions rows (FK on delete cascade). */
 export async function deleteCourt(auth: AuthCtx, id: string): Promise<void> {
   await withTenant(auth.orgId, async (tx) => {
     const [existing] = await tx<{ id: string }[]>`select id from courts where id = ${id}`;
@@ -401,21 +423,136 @@ export async function deleteCourt(auth: AuthCtx, id: string): Promise<void> {
     const [fixture] = await tx<{ id: string }[]>`
       select id from fixtures where court_id = ${id} limit 1`;
     if (fixture) {
-      throw new HttpError(409, "Reassign this court's fixtures first", COURT_IN_USE_CODE);
+      throw new HttpError(
+        409,
+        "This court has fixture history — archive it instead, or reassign every fixture first",
+        COURT_IN_USE_CODE,
+      );
     }
     await tx`delete from courts where id = ${id}`;
   });
   log.info({ orgId: auth.orgId, courtId: id }, "court_deleted");
 }
 
+/**
+ * Archive-or-block (owner ruling, D5/P8 amendment): a court referenced by
+ * any UNPLAYED fixture (`scheduled`/`in_play` — still needs somewhere to
+ * happen) is 409 COURT_IN_USE, same as delete; a court referenced only by
+ * COMPLETED fixtures (or none at all) can always be archived — that is the
+ * end state a permanently-lost hall needs, since `deleteCourt` stays
+ * blocked by its fixture history forever. Idempotent: archiving an
+ * already-archived court is a no-op, not an error.
+ */
+export async function archiveCourt(auth: AuthCtx, id: string): Promise<CourtRow> {
+  const row = await withTenant(auth.orgId, async (tx) => {
+    const [existing] = await tx<CourtRow[]>`select ${tx(COURT_COLS)} from courts where id = ${id}`;
+    if (!existing) throw new HttpError(404, "court not found", COURT_NOT_FOUND_CODE);
+    if (existing.archived_at !== null) return existing;
+    const [unplayed] = await tx<{ id: string }[]>`
+      select id from fixtures
+      where court_id = ${id} and status in ${tx(UNPLAYED_FIXTURE_STATUSES)}
+      limit 1`;
+    if (unplayed) {
+      throw new HttpError(
+        409,
+        "This court has an unplayed fixture — reassign it before archiving",
+        COURT_IN_USE_CODE,
+      );
+    }
+    const [updated] = await tx<CourtRow[]>`
+      update courts set archived_at = now() where id = ${id} returning ${tx(COURT_COLS)}`;
+    return updated!;
+  });
+  log.info({ orgId: auth.orgId, courtId: id }, "court_archived");
+  return row;
+}
+
+/** Restore an archived court. Idempotent. The freed name (see V367's
+ *  partial unique index) may have been taken by a new active court in the
+ *  meantime — that DB-level collision is caught here and reported as a
+ *  typed 409 rather than a raw constraint-violation 500. */
+export async function unarchiveCourt(auth: AuthCtx, id: string): Promise<CourtRow> {
+  const row = await withTenant(auth.orgId, async (tx) => {
+    const [existing] = await tx<CourtRow[]>`select ${tx(COURT_COLS)} from courts where id = ${id}`;
+    if (!existing) throw new HttpError(404, "court not found", COURT_NOT_FOUND_CODE);
+    if (existing.archived_at === null) return existing;
+    try {
+      const [updated] = await tx<CourtRow[]>`
+        update courts set archived_at = null where id = ${id} returning ${tx(COURT_COLS)}`;
+      return updated!;
+    } catch (err) {
+      if (err instanceof Error && "code" in err && err.code === "23505") {
+        throw new HttpError(
+          409,
+          `An active court is already named "${existing.name}" in this venue`,
+          COURT_NAME_TAKEN_CODE,
+        );
+      }
+      throw err;
+    }
+  });
+  log.info({ orgId: auth.orgId, courtId: id }, "court_unarchived");
+  return row;
+}
+
+/** Local minutes-since-midnight for one fixture's `scheduled_at`, resolved
+ *  in `tz` (DST-correct — reuses the engine's `Intl`-backed helpers, never
+ *  hand-rolled). Returns the Ymd alongside so the caller can resolve the
+ *  right weekday/exception for that specific date. */
+function localFixtureSlot(scheduledAt: Date, tz: string): { ymd: string; weekday: number; minute: number } {
+  const ms = scheduledAt.getTime();
+  const ymd = dayKeyInTz(ms, tz);
+  const weekday = WEEKDAY_LABELS.indexOf(weekdayOfYmd(ymd));
+  const [h, m] = hhmmInTz(ms, tz).split(":").map(Number) as [number, number];
+  return { ymd, weekday, minute: h * 60 + m };
+}
+
+/** Advisory-only (owner ruling): how many of this court's still-UNPLAYED
+ *  fixtures now fall outside the just-written calendar. Non-blocking — the
+ *  write already happened by the time this runs — because a real conflict
+ *  code needs `usableWindows` (session windows, blackouts), which is P10's
+ *  (out of scope this session; `ScheduleConfig` stays untouched). Uses the
+ *  ORG's timezone uniformly rather than resolving each fixture's own
+ *  division's `schedule_settings.tz` — a deliberate simplification for a
+ *  best-effort count, not the scheduler's own authority. */
+async function countStrandedFixtures(
+  orgId: string,
+  courtId: string,
+  hours: readonly CourtHoursRange[],
+  exceptions: readonly CourtException[],
+): Promise<number> {
+  const [org] = await sql<{ timezone: string | null }[]>`
+    select timezone from organizations where id = ${orgId}`;
+  const tz = org?.timezone ?? "UTC";
+  const fixtures = await sql<{ scheduled_at: Date }[]>`
+    select scheduled_at from fixtures
+    where court_id = ${courtId} and scheduled_at is not null
+      and status in ${sql(UNPLAYED_FIXTURE_STATUSES)}`;
+  let stranded = 0;
+  for (const f of fixtures) {
+    const { ymd, weekday, minute } = localFixtureSlot(f.scheduled_at, tz);
+    const windows = resolveCourtDay(hours, exceptions, weekday, ymd);
+    const fits = windows.some((w) => minute >= w.open_min && minute < w.close_min);
+    if (!fits) stranded++;
+  }
+  return stranded;
+}
+
 /** Full replace of a court's weekly hours + exceptions in ONE transaction —
  *  no per-row PATCH surface (design doc). Validated BEFORE the transaction
- *  opens, so a rejected write leaves the stored calendar untouched. */
+ *  opens, so a rejected write leaves the stored calendar untouched. Returns
+ *  an ADVISORY count of unplayed fixtures the new calendar now strands
+ *  (owner ruling — non-blocking; the real conflict code is P10's). */
 export async function putCourtCalendar(
   auth: AuthCtx,
   courtId: string,
   input: PutCourtCalendarInput,
-): Promise<{ court_id: string; hours: CourtHoursRange[]; exceptions: CourtException[] }> {
+): Promise<{
+  court_id: string;
+  hours: CourtHoursRange[];
+  exceptions: CourtException[];
+  strandedFixtureCount: number;
+}> {
   assertNoHoursOverlap(input.hours);
   assertNoDuplicateExceptionDates(input.exceptions);
   await withTenant(auth.orgId, async (tx) => {
@@ -435,14 +572,21 @@ export async function putCourtCalendar(
                 ${e.open_min ?? null}, ${e.close_min ?? null})`;
     }
   });
+  const strandedFixtureCount = await countStrandedFixtures(
+    auth.orgId,
+    courtId,
+    input.hours,
+    input.exceptions,
+  );
   log.info(
     {
       orgId: auth.orgId,
       courtId,
       hoursCount: input.hours.length,
       exceptionsCount: input.exceptions.length,
+      strandedFixtureCount,
     },
     "court_calendar_replaced",
   );
-  return { court_id: courtId, hours: input.hours, exceptions: input.exceptions };
+  return { court_id: courtId, hours: input.hours, exceptions: input.exceptions, strandedFixtureCount };
 }
