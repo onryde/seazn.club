@@ -133,6 +133,29 @@ export const STAGE_TEMPLATES: {
       { kind: "ladder", name: "Ladder", config: { challengeRange: 3 }, qualification: null },
     ],
   },
+  {
+    key: "ko_plate",
+    label: "Knockout + Plate",
+    help: "Main knockout draw; round-1 losers play a plate bracket for a second chance.",
+    build: (q) => [
+      { kind: "knockout", name: "Main draw", config: {}, qualification: null },
+      {
+        kind: "knockout",
+        name: "Plate",
+        config: {},
+        qualification: { losersOfRound: { round: 1, count: q } },
+      },
+    ],
+  },
+  {
+    key: "qualifying_main",
+    label: "Qualifying + Main draw",
+    help: "A smaller knockout decides who advances into the main knockout draw.",
+    build: (q) => [
+      { kind: "knockout", name: "Qualifying", config: {}, qualification: null },
+      { kind: "knockout", name: "Main draw", config: {}, qualification: { topN: q } },
+    ],
+  },
 ];
 
 /** Template + knob values → the stage specs the API accepts. */
@@ -149,7 +172,11 @@ export function buildTemplateStages(templateKey: string, knobs: TemplateKnobs): 
 
 /** Best-effort reverse map: existing stages → template key (null = custom). */
 export function detectTemplate(
-  stages: { kind: string; config?: Record<string, unknown> | null }[],
+  stages: {
+    kind: string;
+    config?: Record<string, unknown> | null;
+    qualification?: Record<string, unknown> | null;
+  }[],
 ): string | null {
   const kinds = stages.map((s) => s.kind).join("+");
   if (kinds === "league") {
@@ -163,6 +190,14 @@ export function detectTemplate(
   if (kinds === "swiss") return "swiss";
   if (kinds === "knockout") return "knockout";
   if (kinds === "double_elim") return "double_elim";
+  if (kinds === "knockout+knockout") {
+    // Same kind sequence, disambiguated by the second stage's qualification
+    // shape — losersOfRound (KO+Plate) vs topN (Qualifying+Main draw).
+    const q2 = stages[1]?.qualification;
+    if (q2 && "losersOfRound" in q2) return "ko_plate";
+    if (q2 && "topN" in q2) return "qualifying_main";
+    return null;
+  }
   if (kinds === "americano") {
     const mode = (stages[0]?.config as { mode?: string } | undefined)?.mode;
     return mode === "mexicano" ? "mexicano" : "americano";
