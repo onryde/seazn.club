@@ -308,6 +308,98 @@ describe("ContextStrip rendering", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Blocker 2 (R2 review finding, `docs/superpowers/plans/2026-08-16-scorepad-
+// v3-r2-cricket.md`) — a `readOnly` slot must never look tappable: the
+// engine's strict-fold sports (cricket's striker/non-striker) reject every
+// scorer override for such a slot on the live submit path, so a picker that
+// LOOKS like it works but always gets refused server-side is the "picker
+// opens and silently fails" defect G5 was fixed to close, reopened.
+// ---------------------------------------------------------------------------
+
+describe("ContextStrip rendering — readOnly slots (blocker 2)", () => {
+  const baseSquad = squad([
+    member({ personId: "kannan", onField: true }),
+    member({ personId: "arjun", onField: true }),
+  ]);
+  const names = { kannan: "Kannan", arjun: "Arjun" };
+
+  function mixedSpec(): ContextStripSpec {
+    return {
+      slots: [
+        { id: "striker", label: "pad.context.striker", personId: "kannan", pool: "onfield", required: true, readOnly: true },
+        { id: "bowler", label: "pad.context.bowler", personId: "arjun", pool: "onfield", required: true },
+      ],
+    };
+  }
+
+  it("a readOnly slot renders no <button> — only the editable slot is a real tap target", () => {
+    const island = renderIsland(ContextStrip, {
+      spec: mixedSpec(),
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+    expect(buttonsOf(island.tree())).toHaveLength(1); // bowler only
+    expect(island.text()).toContain("pad.context.striker: Kannan"); // still shown, just not tappable
+  });
+
+  it("no button anywhere in the tree carries the readOnly striker's own label — nothing there for a scorer to tap", () => {
+    const island = renderIsland(ContextStrip, {
+      spec: mixedSpec(),
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+    const strikerButton = buttonsOf(island.tree()).find((b) => textOf(b).includes("pad.context.striker"));
+    expect(strikerButton).toBeUndefined();
+  });
+
+  it("the editable chip still opens its own picker and reports onSelect normally — the fix does not disturb the editable slot", () => {
+    let selected: [string, string] | null = null;
+    const island = renderIsland(ContextStrip, {
+      spec: mixedSpec(),
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: (slotId, personId) => {
+        selected = [slotId, personId];
+      },
+    });
+    const bowlerChip = buttonsOf(island.tree()).find((b) => textOf(b).includes("pad.context.bowler"))!;
+    click(bowlerChip);
+    const arjunCandidate = buttonsOf(island.tree()).find((b) => textOf(b) === "Arjun")!;
+    click(arjunCandidate);
+    expect(selected).toEqual(["bowler", "arjun"]);
+  });
+
+  it("a readOnly slot never shows the unset attention dot, even when required and unset — nothing to tap to fix", () => {
+    const island = renderIsland(ContextStrip, {
+      spec: { slots: [{ id: "striker", label: "pad.context.striker", pool: "onfield", required: true, readOnly: true }] },
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+    const dots = island.tree().filter((el) => (propsOf(el).className as string | undefined)?.includes("bg-lime-400"));
+    expect(dots).toHaveLength(0);
+  });
+
+  it("an EDITABLE unset slot still shows the dot — the suppression is specific to readOnly, not a general regression", () => {
+    const island = renderIsland(ContextStrip, {
+      spec: { slots: [{ id: "bowler", label: "pad.context.bowler", pool: "onfield", required: true }] },
+      view: { squad: baseSquad },
+      personNames: names,
+      t,
+      onSelect: () => {},
+    });
+    const dots = island.tree().filter((el) => (propsOf(el).className as string | undefined)?.includes("bg-lime-400"));
+    expect(dots).toHaveLength(1);
+  });
+});
+
 const swapSpec: SwapSheetProps["spec"] = { offLabel: "pad.swap.off", onLabel: "pad.swap.on" };
 
 describe("SwapSheet rendering", () => {

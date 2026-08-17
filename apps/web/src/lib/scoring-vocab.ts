@@ -709,6 +709,22 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.cricket.panel.reviews",
   "pad.cricket.panel.superOver",
   "pad.cricket.panel.wicket",
+  // R2/task C (v3 ribbon — brief item 10): registered here, not only in the
+  // dictionaries. ribbon.ts's buildRibbon() gates its per-sport lookup on
+  // PAD_LABEL_KEYS membership BEFORE calling padLabel() — dictionary copy
+  // with no entry here silently stays on the generic `pad.ribbon.fallback`
+  // forever, with nothing failing (R1's own owed item, restated in the R2
+  // plan so this session doesn't repeat it). One key per event type this
+  // skin's tiles/sheets dispatch directly — the remaining 8 cricket.* types
+  // (reachable only via the "More" sheet) stay on the fallback, same
+  // graceful-degradation posture ribbon.ts's header already documents.
+  "pad.cricket.ribbon.ball",
+  "pad.cricket.ribbon.innings.close",
+  "pad.cricket.ribbon.innings.declare",
+  "pad.cricket.ribbon.retire",
+  "pad.cricket.ribbon.review",
+  "pad.cricket.ribbon.superover.ball",
+  "pad.cricket.ribbon.toss",
 
   "pad.football.action.card",
   "pad.football.action.goal",

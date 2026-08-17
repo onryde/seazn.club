@@ -35,3 +35,25 @@ anchored `="`); carrom device-link e2e kept green; console chrome e2e (undo,
 forfeit distinct, handover placement); unit; smoke deferred to R8;
 screenshots ×3 incl. 320px console audit density (spec §11); axe; **gallery +
 walkthrough sign-off recorded before merge**.
+
+## Inherited from R2 — do not re-derive
+
+All of R3–R6's inherited block applies to your three skins as well (read it in
+`R3-football.md`: `phase?(view)`, `when`/`candidates`, `sheets` as a method,
+the `(t) => SkinDefV3` factory, `contextOverrides`, `fidelityEntitlements`,
+ribbon keys in `PAD_LABEL_KEYS`, and the e2e/gallery grep). Additionally:
+
+- **D-4 is still fully open — R2 did NOT close it.** The R2 brief listed it as
+  owed, but the duplicate Activity ledger is console-level and R2 was barred
+  from console chrome; spec §8 already assigns the row R1/R7. R2 closed D-5
+  only (the pad's ribbon renders words, not payload dumps), so what remains is
+  exactly the page-level duplication: consolidate to ONE audit ledger, with the
+  pad's ribbon as the in-pad history.
+- **Enforce the tile-hierarchy convention.** "Forfeit/Abandon are not
+  representable in the tile grid" is STILL only a comment, with no type or
+  runtime block (R1's item; R2 changed nothing here — cricket simply declares
+  no such tile). Console chrome is where the enforcement belongs, and it is the
+  other half of D-12.
+- **The 44px floor on 40px minor tiles rides on a 2px `::before` bleed**, which
+  any ancestor with `overflow: hidden` silently clips back to 40. Console chrome
+  wraps the pad — do not introduce one.

@@ -350,7 +350,20 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
   });
 
   it("declares no key the engine cannot emit (the list does not rot the other way)", () => {
+    // R2/task C — `pad.<sport>.ribbon.<suffix>` (ribbon.ts's own
+    // ribbonKeyFor()) is a SECOND, legitimate PAD_LABEL_KEYS membership
+    // category alongside engine-declared PadSpec labels: app-authored
+    // ribbon prose for an event, gated on THIS SET (buildRibbon checks
+    // membership before calling padLabel — R1's own design, ribbon.ts's
+    // header), never a PadSpec labelKey the engine emits. `declaredPadLabels`
+    // above walks ONLY panel/action/field/attribution labelKeys, so a ribbon
+    // key can never appear there by construction — exempted here rather than
+    // widening `declared` to synthesize entries the engine never actually
+    // declares, which would make the OTHER two exhaustiveness tests in this
+    // block lie about what "declared" means.
+    const isRibbonKey = /^pad\.[a-z]+\.ribbon\./;
     for (const key of PAD_LABEL_KEYS) {
+      if (isRibbonKey.test(key)) continue;
       expect([...declared.keys()], `PAD_LABEL_KEYS has "${key}", which no module emits`).toContain(key);
     }
   });

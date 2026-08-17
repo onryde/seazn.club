@@ -1,17 +1,27 @@
 // R1 chassis (Task 2) — the totality gate: every engine sport key must
 // resolve to EXACTLY ONE pad lane (v3 or legacy), never both, never
-// neither. R1 converts no sports: LEGACY_SPORTS names every builtinModules
-// key and V3_SKINS stays empty, so today every key resolves "legacy" — the
-// gate's job is to turn "a 12th engine sport ships with no lane" (or a
-// double-owned key) into a CI failure instead of a silent fallthrough.
-// Mutation-proved in task-2-report.md: deleting one key from LEGACY_SPORTS
-// reds this suite with the "unowned" message.
+// neither. R1 converted no sports: LEGACY_SPORTS named every builtinModules
+// key and V3_SKINS stayed empty, so every key resolved "legacy". R2/task E
+// moves cricket — the gate's job stays the same: turn "a 12th engine sport
+// ships with no lane" (or a double-owned key, or a half-finished flip) into
+// a CI failure instead of a silent fallthrough.
+// Mutation-proved in task-2-report.md (R1, the empty-registry shape) and
+// again for R2/task E's flip — see the task report for the three pasted
+// reds (double-owned / unowned / cricket-still-legacy), each produced by a
+// temporary hand edit to ../registry.ts, reverted immediately after.
 import { describe, it, expect } from "vitest";
 // Scout re-pin (2026-08-16): the engine's canonical sport-key source is
 // `builtinModules`, imported exactly as registry.test.tsx:11 already does —
 // NOT a hand-copied list of the 11 sport names.
 import { builtinModules } from "@seazn/engine/sports";
-import { V3_SKINS, LEGACY_SPORTS, resolvePad } from "../registry";
+import { V3_SKINS, LEGACY_SPORTS, resolvePad, type PadLaneResolution } from "../registry";
+import { cricketSkinV3 } from "../skins/cricket";
+
+// A dummy, no-op translator. Every test in this file cares only about LANE
+// resolution (v3 vs legacy vs throw) or the TYPE shape of what V3_SKINS/
+// resolvePad accept — never about a resolved skin's own copy — so nothing
+// here needs a real dictionary.
+const T = (key: string): string => key;
 
 describe("registry totality", () => {
   it("every engine sport resolves to exactly one lane", () => {
@@ -28,12 +38,12 @@ describe("registry totality", () => {
       const inLegacy = LEGACY_SPORTS.has(key);
       expect(inV3 || inLegacy, `${key} unowned`).toBe(true);
       expect(inV3 && inLegacy, `${key} double-owned`).toBe(false);
-      expect(resolvePad(key).lane).toBe(inV3 ? "v3" : "legacy");
+      expect(resolvePad(key, T).lane).toBe(inV3 ? "v3" : "legacy");
     }
   });
 
   it("unknown key throws — no silent universal fallback", () => {
-    expect(() => resolvePad("quidditch")).toThrow(/no pad lane/);
+    expect(() => resolvePad("quidditch", T)).toThrow(/no pad lane/);
   });
 
   it("a key equal to an Object.prototype property name is not falsely owned (Task 11 fix batch)", () => {
@@ -43,6 +53,68 @@ describe("registry totality", () => {
     // was never inserted — resolvePad("constructor") returned a bogus
     // { lane: "v3", skin: Object } instead of throwing.
     expect("constructor" in V3_SKINS).toBe(false);
-    expect(() => resolvePad("constructor")).toThrow(/no pad lane/);
+    expect(() => resolvePad("constructor", T)).toThrow(/no pad lane/);
+  });
+
+  // R2/task E — the wave's actual deliverable, not merely structural
+  // self-consistency. The generic sweep above only proves resolvePad AGREES
+  // with V3_SKINS/LEGACY_SPORTS' own membership, whatever that membership
+  // happens to say — it would stay green even if this task shipped without
+  // actually flipping cricket (cricket would simply read `inV3: false,
+  // inLegacy: true`, and the loop's own `inV3 ? "v3" : "legacy"` check would
+  // agree with itself and never notice). This pin is independent of that
+  // membership check: it hardcodes the wave's own intended answer, so a
+  // regression that leaves cricket in the legacy lane (while V3_SKINS/
+  // LEGACY_SPORTS still structurally agree with each other) still reds.
+  it("cricket specifically resolves to the v3 lane, not legacy — the wave's own flip", () => {
+    expect(resolvePad("cricket", T).lane).toBe("v3");
+  });
+
+  it("every other builtinModules sport still resolves to legacy — the flip touches cricket alone", () => {
+    const others = builtinModules.map((m) => m.key).filter((key) => key !== "cricket");
+    // Pins today's known-good shape, same convention registry.test.tsx's own
+    // "the table names exactly the 11 shipped sports" assertion uses.
+    expect(others.length).toBe(10);
+    for (const key of others) {
+      expect(resolvePad(key, T).lane, key).toBe("legacy");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Type-level (R2/task E acceptance criterion 2): an UN-CALLED factory must
+// never satisfy a slot that expects a resolved skin — neither V3_SKINS
+// itself nor resolvePad's own return. vitest (esbuild) strips types and
+// checks nothing; the real gate for everything below is `npm run
+// typecheck`, not this file's own green tick — widening either type back
+// makes tsc report `TS2578: Unused '@ts-expect-error' directive'` and the
+// project typecheck fails, which IS the red step
+// (reference_ts_expect_error_is_a_real_test.md).
+// ---------------------------------------------------------------------------
+describe("type-level: an un-called v3 skin factory cannot stand in for a resolved skin (R2/task E)", () => {
+  it("V3_SKINS holds FACTORIES — the correct shape compiles clean", () => {
+    const ok: typeof V3_SKINS = { cricket: cricketSkinV3 };
+    expect(typeof ok.cricket).toBe("function");
+  });
+
+  it("an ALREADY-CALLED skin is not a valid V3_SKINS entry", () => {
+    // @ts-expect-error — V3_SKINS's value type is `(t: TFn) => SkinDefV3`,
+    // a function; `cricketSkinV3(T)` is the CALLED result, a plain object
+    // with no call signature. If V3_SKINS's type is ever loosened to also
+    // accept an already-built skin, this line stops erroring and
+    // `npm run typecheck` reports TS2578 here.
+    const bad: typeof V3_SKINS = { cricket: cricketSkinV3(T) };
+    expect(bad).toBeTruthy();
+  });
+
+  it("an un-called factory is not a valid PadLaneResolution.skin either — the boundary that actually reaches PadHostV3", () => {
+    // @ts-expect-error — even if V3_SKINS's own type were loosened,
+    // resolvePad's RETURN must still refuse to hand PadHostV3 a bare
+    // function where it expects an object with a `.scorebug` method: this
+    // is the line "do NOT assign the bare factory object into V3_SKINS" is
+    // actually protecting downstream of the map itself. If this ever stops
+    // erroring, `npm run typecheck` reports TS2578 here.
+    const bad: PadLaneResolution = { lane: "v3", skin: cricketSkinV3 };
+    expect(bad).toBeTruthy();
   });
 });

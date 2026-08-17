@@ -6,15 +6,19 @@
 // fallthrough — a new engine sport shipping with no row must fail CI, not
 // silently render on the universal path with nobody having decided that was
 // right. See registry.tsx's own header for the full reasoning.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import type { SideInfo } from "@/components/v2/fixture-console";
+import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { skinFor } from "../skins/registry";
-import { RESOLUTION_KIND, lineupPairFrom, personNamesFrom, resolveScorePad } from "../registry";
+import { RESOLUTION_KIND, ScorePad, lineupPairFrom, personNamesFrom, resolveScorePad } from "../registry";
 import { eventOutToEnvelope } from "../wire";
 import { foldClient } from "../module-client";
+import { PadRenderer } from "../pad-renderer";
+import { PadHostV3 } from "../v3/pad-host";
+import type { SkinDefV3 } from "../v3/types";
 
 describe("resolveScorePad — drift guard over every builtinModules key", () => {
   it("assertion 1: every builtinModules key has a table row", () => {
@@ -325,5 +329,75 @@ describe("lineupPairFrom: pairOrder reaches the client LineupSlot (S12/#421 pass
     const pair = lineupPairFrom(home, { id: "ent-a", name: "Away", members: [], lineup: [] });
     expect(pair.home.slots[0]).not.toHaveProperty("pairOrder");
     expect(pair.home.slots[1]).not.toHaveProperty("pairOrder");
+  });
+});
+
+// R2/task B — registry.tsx:280 used to throw a deliberate, loud failure for
+// any sport resolved to the v3 lane ("no v3 renderer is wired yet"); this
+// wave replaces it with the real branch. `V3_SKINS` (v3/registry.ts) stays
+// EMPTY through the end of THIS wave (do-not-touch — cricket's own
+// conversion is a later task), so there is no REAL sport this file can
+// exercise the branch through without mutating that registry. Mocking
+// `resolvePad` for a single sportKey proves the ROUTING decision itself
+// (mutation-relevant: a mutant swapping `padLane.lane === "v3"` for
+// `=== "legacy"`, or forgetting to thread `skin`, changes this test's
+// outcome) — `PadHostV3`'s own body never runs here (renderIsland invokes
+// `ScorePad` ONE level deep, per _hook-harness.tsx's own doc; `<PadHostV3
+// .../>` below is only ever a REACT ELEMENT this test inspects, never
+// called), which is exactly the intended split: the shell is e2e's job, the
+// routing decision is this file's.
+const FAKE_V3_SKIN: SkinDefV3 = {
+  key: "generic",
+  tapModel: "S",
+  scorebug: () => ({
+    context: "",
+    phase: "live",
+    halves: [
+      { who: [{ name: "H" }], big: "0" },
+      { who: [{ name: "A" }], big: "0" },
+    ],
+    strip: [],
+  }),
+  tiles: () => [],
+  dock: () => null,
+};
+
+vi.mock("../v3/registry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../v3/registry")>();
+  return {
+    ...actual,
+    // R2/task E: resolvePad now takes a live translator too (v3/registry.ts's
+    // own header explains why) — this fake sportKey never reaches a real
+    // skin's own string-building, so a no-op stand-in is fine either way.
+    resolvePad: (key: string, t: (k: string) => string) =>
+      key === "generic" ? { lane: "v3" as const, skin: FAKE_V3_SKIN } : actual.resolvePad(key, t),
+  };
+});
+
+describe("ScorePad — the v3 lane renders PadHostV3, never PadRenderer (R2/task B)", () => {
+  const home: SideInfo = { id: "ent-h", name: "Home", lineup: [], members: [] };
+  const away: SideInfo = { id: "ent-a", name: "Away", lineup: [], members: [] };
+  const genericConfig = { resultMode: "win_loss", allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false };
+
+  it("a sportKey resolvePad reports as v3 renders PadHostV3 with the resolved skin — the legacy PadRenderer path is never reached", () => {
+    const island = renderIsland(ScorePad, {
+      fixtureId: "fx-1",
+      sportKey: "generic",
+      moduleVersion: "1.0.0",
+      resolvedConfig: genericConfig,
+      home,
+      away,
+      initialEvents: [],
+      auth: { kind: "session" as const },
+      identity: { recordedBy: "user-1", deviceLinkId: null },
+      entitlements: {},
+      band: 3 as const,
+    });
+    const [output] = island.tree();
+    expect(output?.type).toBe(PadHostV3);
+    expect(output?.type).not.toBe(PadRenderer);
+    expect((output?.props as { skin?: unknown }).skin).toBe(FAKE_V3_SKIN);
+    expect((output?.props as { fixtureId?: unknown }).fixtureId).toBe("fx-1");
+    expect((output?.props as { queueDbName?: unknown }).queueDbName).toBe("scorepad-fx-1");
   });
 });

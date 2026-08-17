@@ -588,6 +588,137 @@ test("lineup editor role/pair-order selects hold at phone width", async ({ page,
 });
 
 /**
+ * T16 — the ScoringPad v3 cricket pad (R2/task F1) at all SEVEN width
+ * projects (320/360/375/390/430/768/834), same "add it above the z3 test"
+ * placement T15's own comment asks for.
+ *
+ * Cricket is the first sport this repo flips onto `V3_SKINS`
+ * (v3/registry.ts) — a brand-new render tree (tile-grid.tsx/context-
+ * strip.tsx/scorebug.tsx) with ZERO width coverage until it lands inside
+ * THIS file (reference_new_ui_surface_uncovered_until_in_mobile_spec — this
+ * file's own SEVEN projects are the only place a new surface gets narrower
+ * than 375/768 coverage at all). Self-contained fixture, no shared org.
+ *
+ * The context strip (D-14) only renders once an innings exists
+ * (`buildContext`, v3/skins/cricket.tsx requires `currentInnings() !==
+ * null`), and `cricket.ts` creates that innings lazily inside the FIRST
+ * ball's own fold — so one run tile is tapped first, both to prove the
+ * tile itself clears the touch floor and to bring the context strip on
+ * screen for its own floor check right after.
+ */
+test("cricket v3 pad: tiles + context strip hold the 44px floor, no horizontal scroll", async ({
+  page,
+  request,
+}) => {
+  // core.start poll + a held ball dispatch (queue.ts's HOLD_MS = 6000ms)
+  // each budget up to 20s below; generous headroom over their sum.
+  test.setTimeout(90_000);
+  const fx = await seedRosteredFixture(request, {
+    label: `Mobile Cricket V3 ${TAG}-${projectTag()}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `Mobile V3 Striker ${TAG}` }, { fullName: `Mobile V3 NonStriker ${TAG}` }],
+    away: [{ fullName: `Mobile V3 Bowler ${TAG}` }],
+  });
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+  const pad = page.getByTestId("score-pad");
+  await expect(pad).toBeVisible({ timeout: 20_000 });
+  // Click until the ledger actually moves. `waitUntil: "load"` resolves
+  // before React has hydrated, so on a loaded machine the first click lands
+  // on server-rendered markup with no handler attached and is silently a
+  // no-op: the fixture stays "Scheduled", core.start never lands, and the
+  // failure surfaces 20s later at the poll below as an empty event list
+  // rather than anywhere near the click. Observed at all seven widths while
+  // the same flow passed under the `parallel` project on a quieter machine.
+  const startBtn = page.getByRole("button", { name: "Start match", exact: true });
+  await expect(startBtn).toBeEnabled({ timeout: 20_000 });
+  await expect
+    .poll(
+      async () => {
+        if (await startBtn.isVisible().catch(() => false)) {
+          await startBtn.click({ timeout: 5_000 }).catch(() => {});
+        }
+        const res = await apiJson<{ type: string }[]>(
+          page.request,
+          `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`,
+        );
+        return (res.data ?? []).some((e) => e.type === "core.start");
+      },
+      { timeout: 30_000, message: "Start match must reach the ledger once the pad has hydrated" },
+    )
+    .toBe(true);
+  // Wait on the real LEDGER, not the click alone — the pad's own
+  // `useFixtureStream` polls at a 15s interval (scorepad-v2.spec.ts's own
+  // `openLiveConsole` comment), so a tile-visibility check racing the click
+  // itself could stall past this test's budget waiting on that poll cycle.
+  await expect
+    .poll(
+      async () => {
+        const res = await apiJson<{ type: string }[]>(
+          page.request,
+          `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`,
+        );
+        return (res.data ?? []).map((e) => e.type);
+      },
+      { timeout: 20_000 },
+    )
+    .toContain("core.start");
+
+  const assertFloor = async (locator: Locator, label: string) => {
+    await expect(locator, `${label} not visible`).toBeVisible({ timeout: 20_000 });
+    const box = await locator.boundingBox();
+    expect(box, `${label} has no box`).not.toBeNull();
+    expect(box!.height, `${label} touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
+  };
+
+  // The run tiles are the pad's most-tapped control (D-14's replacement for
+  // the old "This over" selects) — assert the floor BEFORE tapping one,
+  // since the tap itself is what this same assertion is proving is safe.
+  await assertFloor(pad.locator('[data-tile-id="run1"]'), "run tile \"1\"");
+  await assertFloor(pad.locator('[data-tile-id="wicket"]'), "wicket tile");
+
+  await pad.getByRole("button", { name: "1", exact: true }).click();
+  await expect
+    .poll(
+      async () => {
+        const res = await apiJson<{ type: string }[]>(
+          page.request,
+          `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`,
+        );
+        return (res.data ?? []).filter((e) => e.type === "cricket.ball").length;
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(1);
+
+  // Every chip, interactive or not. After the first ball the strip is
+  // ENTIRELY non-interactive by design: striker and non-striker are
+  // read-only because the engine refuses those overrides under a strict
+  // fold, and bowler is read-only until an over boundary (`currentBowler
+  // === null`) because mid-over the same fold refuses it. Selecting on
+  // `button` therefore matched nothing here and the test failed at all
+  // seven widths — the 44px floor applies to the chip footprint, which is
+  // what a thumb meets, not to whether it happens to be a control.
+  const chips = pad.locator('[data-role="context-chip"]');
+  await expect(chips.first(), "context strip must render once an innings exists").toBeVisible({ timeout: 20_000 });
+  const chipCount = await chips.count();
+  expect(chipCount, "cricket declares striker, non-striker and bowler").toBe(3);
+  for (let i = 0; i < chipCount; i++) {
+    await assertFloor(chips.nth(i), `context chip ${i}`);
+  }
+  // Mid-over none of them may be a control: a chip that opens a picker the
+  // engine will refuse is the defect this wave fixed twice (G5, then the
+  // bowler's own mid-over case).
+  await expect(
+    pad.locator('[data-role="context-chip"][data-readonly="false"]'),
+    "mid-over every context chip is read-only",
+  ).toHaveCount(0);
+
+  await expectNoHorizontalScroll(page);
+});
+
+/**
  * T15 — the z3 solver action bar and its result strip at phone width.
  *
  * THIS TEST CANNOT LIVE IN `auto-schedule.spec.ts`. The `mobile-se`

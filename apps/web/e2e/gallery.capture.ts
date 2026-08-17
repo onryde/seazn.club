@@ -197,32 +197,111 @@ const SPORTS: GallerySport[] = [
     label: "Cricket (T20)",
     sportKey: "cricket",
     variantKey: "t20",
+    // THREE home batters, not two: a caught dismissal one wicket short of
+    // the batting order's OWN length auto-closes the innings
+    // (scoring-vocab-labels.spec.ts's own "a two-man order would close the
+    // innings" reasoning) — this harness needs it to STAY open through
+    // `openDock` below. TWO away players: the context-strip proof (see
+    // `scoreOne`) needs a real second bowler to change TO.
     roster: (tag) => ({
       home: [
         { fullName: `Gallery Cricket Striker ${tag}` },
         { fullName: `Gallery Cricket NonStriker ${tag}` },
+        { fullName: `Gallery Cricket Incoming ${tag}` },
       ],
-      away: [{ fullName: `Gallery Cricket Bowler ${tag}` }],
+      away: [{ fullName: `Gallery Cricket Bowler ${tag}` }, { fullName: `Gallery Cricket Fielder ${tag}` }],
     }),
-    // Verified live: scorepad-skins.spec.ts "cricket skin: real roster, a
-    // couple of balls scored". Deliberately stops at a plain run tap — a
-    // wicket-completion attempt wedged the page during the session that
-    // captured the baseline gallery (dispatch's own capture traps), so this
-    // harness never drives that flow.
+    // R2/task F1 — moved onto the v3 surface (V3_SKINS.cricket) and
+    // re-verified live: scorepad-skins.spec.ts "cricket skin: real roster, a
+    // couple of balls scored" (defaults resolve without any context-strip
+    // tap) and scorepad-v3-cricket.spec.ts (the context-change + full-over +
+    // wicket flow this harness now mirrors). §2.4's context strip and
+    // §2.5's wicket sheet are this wave's two product claims for cricket —
+    // a gallery showing neither is not a sign-off, so this drives both
+    // rather than stopping at a plain run tap the way the R1 baseline did.
+    //
+    // The context strip only renders once an innings exists (`buildContext`,
+    // v3/skins/cricket.tsx, requires `currentInnings() !== null`, which
+    // `cricket.ts` creates lazily inside ball 1's own fold) AND the bowler
+    // can only legally CHANGE at an over boundary (`applyDelivery`'s
+    // "over in progress belongs to X" check, mid-over) — so this taps out a
+    // full over on defaults first (six dot balls, T20's own `ballsPerOver`),
+    // THEN changes the bowler (valid AND necessary there: the naive default
+    // would repeat over 1's own bowler, which the engine rejects outright as
+    // "cannot bowl consecutive overs" — full reasoning in
+    // scorepad-v3-cricket.spec.ts's own comment on the identical shape).
+    //
+    // R1's own wicket wedge: this harness previously stopped at a plain run
+    // tap because "a wicket-completion attempt wedged the page during the
+    // session that captured the baseline gallery" — that was against the
+    // LEGACY pad's hand-rolled `ThisOverGroup` (skins/cricket-skin.tsx), a
+    // structurally different code path from the v3 guided sheet driven here
+    // (v3/guided-sheet.tsx, a generic chassis primitive shared with every
+    // other sheet-shaped flow in this wave, already exercised live by
+    // scorepad-v2.spec.ts's own wicket test). NOT independently re-verified
+    // live in this session (no server available — static implementation
+    // only); if the wedge recurs here, it is a NEW finding against the v3
+    // renderer, not a repeat of the R1-era one, and should be diagnosed as
+    // such rather than assumed to be the same bug.
     scoreOne: async (page, fx, tag) => {
-      const striker = fx.personIds[`Gallery Cricket Striker ${tag}`]!;
-      const nonStriker = fx.personIds[`Gallery Cricket NonStriker ${tag}`]!;
-      const bowler = fx.personIds[`Gallery Cricket Bowler ${tag}`]!;
-      const selects = pad(page).locator('[data-role="cricket-this-over"] select');
-      await expect(selects).toHaveCount(3);
-      await selects.nth(0).selectOption(striker);
-      await selects.nth(1).selectOption(nonStriker);
-      await selects.nth(2).selectOption(bowler);
-      await pad(page).getByRole("button", { name: "4", exact: true }).click();
+      let before = await ledgerCount(page.request, fx.fixtureId);
+      for (let i = 0; i < 6; i++) {
+        await pad(page).getByRole("button", { name: "0", exact: true }).click();
+        await waitForLedgerGrowth(page.request, fx.fixtureId, before);
+        before += 1;
+      }
+      const strip = pad(page).locator('[data-role="context-strip"]');
+      // Chip accessible name is compound (`"Bowler: <name>"`, chipLabel in
+      // context-strip.tsx) the instant a bowler is resolved — which it always
+      // is here (resolvePeople's own bowlingOrder[0] default). A bare
+      // `exact: true` match on the label alone matches nothing and hangs for
+      // this test's whole `test.setTimeout(180_000)` budget (R2 review
+      // finding — the identical bug scorepad-v3-cricket.spec.ts's own
+      // `setContextPerson` had) — matched as a name PREFIX instead, anchored
+      // so it can never also satisfy a differently-labelled chip.
+      //
+      // Left unguarded by a `.catch(() => false)`, unlike every `openDock`
+      // step below: `openDock` is genuinely optional per sport (a sport with
+      // no distinct detail panel just returns false), but changing the
+      // bowler here is the one context-strip pick this flow cannot skip —
+      // the naive default for over 2 is over 1's own bowler, which the
+      // engine rejects outright as "cannot bowl consecutive overs" (this
+      // sport's own `scoreOne` header comment). A failure here means the
+      // capture genuinely did not reach a valid "03-scored" state and should
+      // fail loudly, the same posture every OTHER sport's unguarded
+      // `scoreOne` already takes.
+      await strip.getByRole("button", { name: /^Bowler(:|$)/ }).click();
+      await strip.getByRole("button", { name: `Gallery Cricket Fielder ${tag}`, exact: true }).click();
+
+      await pad(page).getByRole("button", { name: "Wicket", exact: true }).click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      await sheet.getByRole("button", { name: "Caught", exact: true }).click();
+      await sheet.getByRole("button", { name: `Gallery Cricket Bowler ${tag}`, exact: true }).click();
+      // Waited out explicitly (not left to the driver's own post-`scoreOne`
+      // poll): that poll only checks ledger count > beforeScore, which the
+      // six over-1 balls above already satisfy — leaving it unwaited would
+      // make "03-scored" a race between this dismissal's own ~6s soft-commit
+      // hold (queue.ts's HOLD_MS) and whenever the driver happens to
+      // screenshot, instead of the settled post-wicket state every other
+      // sport's single-dispatch `scoreOne` gets for free.
+      await waitForLedgerGrowth(page.request, fx.fixtureId, before);
     },
-    // No panel precedent for cricket in the e2e suite, and no wicket flow is
-    // driven here (see scoreOne) — "04-dock" intentionally reuses "03-scored".
-    openDock: async () => false,
+    // The wicket sheet again, on a DIFFERENT step than `scoreOne` completed
+    // (kind -> "Run out", which asks "who's out" before it would ask
+    // "fielder" — VARIABLE_OUT_KINDS, v3/skins/cricket.tsx) — stopped before
+    // picking a batter, so nothing submits. Two of the three home batters
+    // remain not-out after `scoreOne`'s own dismissal (see the roster
+    // comment above), so this sheet has real candidates to show.
+    openDock: async (page) => {
+      const wicket = pad(page).getByRole("button", { name: "Wicket", exact: true });
+      if (!(await wicket.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
+      await wicket.click();
+      const sheet = pad(page).locator('[data-role="v3-sheet"]');
+      const runOut = sheet.getByRole("button", { name: "Run out", exact: true });
+      if (!(await runOut.isVisible({ timeout: 3_000 }).catch(() => false))) return false;
+      await runOut.click();
+      return true;
+    },
   },
   {
     slug: "football",

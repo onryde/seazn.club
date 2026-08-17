@@ -99,8 +99,16 @@ before diagnosing a real bug:
 - **`.github/workflows/e2e.yml` is LIVE on pull requests** (owner-confirmed
   2026-08-14). It was disabled for a long time and this file said "never
   enable it", which is why several sessions still assume e2e is local-only —
-  it is not. Six Playwright jobs run per PR, including the seven-width
-  mobile/tablet matrix and a flag-forced scorepad-v2 job. Two consequences:
+  it is not. Three jobs — `e2e-parallel` (sharded), `e2e-serial`,
+  `e2e-mobile` (matrixed) — and **all seven width projects are covered**
+  between them. Do NOT trust a job/leg count written here: this paragraph
+  claimed "five legs" and was correct for about four hours until #597 split
+  the floor jobs (2026-08-17), making it seven. Read `e2e.yml` for the
+  current shape; the durable facts are "it runs on PRs" and "the seven
+  widths are covered", not the arithmetic. There is **no flag-forced
+  scorepad-v2 job**; the file contains no `scorepad` or `flag` reference at
+  all, so a scorepad change behind a flag gets NO dedicated CI coverage —
+  cover it from a project that actually runs. Two consequences:
   an edit to that file's CONTENTS now affects live CI rather than being dead
   weight, and e2e coverage no longer has to be argued for locally. Verifying
   locally as well is still useful (prod build + `E2E_PROD_TARGET`) — CI is

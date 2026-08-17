@@ -268,8 +268,8 @@ Waves state their deferred test types explicitly in the PR body, v2-style.
 | D-1 | Lineup editor renders for every sport — `fixture-console.tsx:546` gates only on `{home && away}`; chess gets a 1-slot team UI | CHE-01 | R7 |
 | D-2 | Tennis pad has zero doubles affordances; `pairOrder` unread by the nested kernel (S3 seam left inert) | TED-03 | R4 |
 | D-3 | Doubles lineup badge reads "2/1 starting" | TED-01 | R4 |
-| D-4 | Activity ledger rendered twice per console page | CRI-03 | R1/R7 |
-| D-5 | Ledger rows print raw payload copy ("over: 0, ballInOver: 5") | CRI-03 | R1 |
+| D-4 | Activity ledger rendered twice per console page | CRI-03 | R7 — R2 recorded why not (console chrome is barred to it; `_INDEX.md`) |
+| D-5 | Ledger rows print raw payload copy ("over: 0, ballInOver: 5") | CRI-03 | R2 — CLOSED for cricket (ribbon renders words); R8 audits the rest |
 | D-6 | Individual/pair sports show entrant labels, never person names | CHE-01 | R1 + skins |
 | D-7 | Raw fidelity picker + unexplained 🔒; free badminton = lone "Set score" | BAD-03 | R1 |
 | D-8 | Icehockey goal form permanently open with resting validation error | ICE-03 | R6 |
@@ -278,8 +278,8 @@ Waves state their deferred test types explicitly in the PR body, v2-style.
 | D-11 | Score rendered 3× above the fold | BAD-03 | R1 |
 | D-12 | No action hierarchy — Abandon reads like a rally tap | all | R1/R7 |
 | D-13 | boardgame + tabletennis never browser-driven (no e2e ever) | scout #2 | R1 harness + R4/R5/R7 e2e |
-| D-14 | Cricket batter/bowler are dropdowns (3 taps each) | CRI-03 | R2 |
-| D-15 | Wicket fielder picker = cramped chip wall; capture runs wedged twice here | CRI-03 | R2 |
+| D-14 | Cricket batter/bowler are dropdowns (3 taps each) | CRI-03 | R2 — CLOSED (context strip; the host holds pending picks, see `_INDEX.md` G5) |
+| D-15 | Wicket fielder picker = cramped chip wall; capture runs wedged twice here | CRI-03 | R2 — CLOSED (one guided sheet, conditional steps, explicit candidates) |
 | D-16 | Set-score entry offered mid-game (tennis at 30–30) | TED-03 | R4 |
 | D-17 | Badminton SERVING shows "—" | BAD-03 | R5 |
 | D-18 | One lineup table for all sports (position dropdowns for cricket, Captain for chess) | CRI-01 | R7 |
@@ -310,9 +310,26 @@ why not in the programme index — no silent drops.
    to touch no recorded fold output (serve attribution is presentation until
    a point payload carries it). If any corpus state moves, follow
    GOLDEN-POLICY: red code commit + isolated re-baseline commit.
-2. Nothing else. No new event types, no fidelity changes, no schema work.
-   The T-lane (tier-3 extensions), plus/minus and boardgame PGN stay parked
-   on #430 exactly as ruled.
+2. **`PadAttributionItem` needs a required/optional flag** (found in R2,
+   owed by R8). `PadAttributionItem` (`sport/module.ts:264`) carries only
+   `kind`, `path`, `role?` and `labelKey?`, so the pad cannot tell a required
+   attribution item from an optional one — and the same action legitimately
+   has both (`cricket.review`: `by` required, `person`/`against` optional).
+   `checkActionValidity` therefore skips attribution entirely and an action
+   can be confirmed with a required person unfilled; the engine's
+   `strictObject` rejects it and the scorer's tap dead-ends on a refusal.
+   Additive flag, then a sweep of all 11 sports' `padSpec` declarations, then
+   conformance + golden replay because `padSpec` output is recorded surface.
+   Modules stay `1.0.0`; no fold output should move.
+3. **A shot-type field on `CricketBall`** (found in R2, owed by R8 or a
+   cricket follow-up). §3's cricket row promises shot-type dock enrichment,
+   but `CricketBall` is a `z.strictObject` with nowhere to put it, so R2
+   shipped a Free-hit-only dock. This one IS a payload change: additive and
+   optional, but it touches the golden corpus, so it follows GOLDEN-POLICY —
+   red code commit plus an isolated re-baseline commit, never a silent one.
+4. Nothing else. No new event types, no fidelity changes, no other schema
+   work. The T-lane (tier-3 extensions), plus/minus and boardgame PGN stay
+   parked on #430 exactly as ruled.
 
 ## 10. Out of scope
 

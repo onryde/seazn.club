@@ -1,0 +1,343 @@
+# R2 — cricket conversion, execution plan
+
+Wave brief: `docs/superpowers/specs/2026-08-15-scoringpad-v3-prompts/R2-cricket.md`.
+Standing rules: `_RULES.md` beside it. Design of record:
+`docs/superpowers/specs/2026-08-15-scoringpad-v3-redesign-design.md`.
+
+Worktree `.claude/worktrees/r2-cricket`, branch `feat/scorepad-v3-r2-cricket`,
+based on main `c8f0c916`. Test DB `postgresql://postgres@127.0.0.1:54345/seazn_test`
+(own server, `data_directory` verified; `db:apply` + `sync:sports` = 11 sports,
+31 system variants).
+
+## 0. Re-pinned facts (scouted 2026-08-16, all pins in the brief predate R1)
+
+| fact | evidence |
+|---|---|
+| **No v3 render host exists.** All six chassis components have ZERO production imports | `git grep -a` over `apps/web/src` + `apps/web/e2e` excluding `v3/__tests__/` |
+| `registry.tsx:280` **throws** for a v3-lane sport — deliberate R1 tripwire | read inline |
+| `SkinDefV3` methods take `(view)` only, not `(view, ctx)` as the spec sketch says | `v3/types.ts` |
+| `enqueueHeld` (`queue.ts:184`) is dead code, no production caller; `retryDrain` is exposed at `use-pad-pipeline.ts:1352` | scout |
+| cricket has **15** event types (`cricket.ts:362`); only `cricket.ball` / `cricket.superover.ball` dispatch directly (`cricket-skin.tsx:619`); the other 13 ride the generic `padSpec(cfg)` `ActionForm` (`cricket-skin.tsx:831,863`) | scout |
+| `ballsPerOverOf()` (`cricket-skin.tsx:98`) already reads cfg with a 6 fallback; `hundred` sets 5 at `cricket.ts:2811` | scout — the brief's "assumes 6" fear is already half-closed |
+| `PAD_LABEL_KEYS` = 172 entries (`scoring-vocab.ts:646`); 20 `pad.cricket.*`; **no ribbon keys** | scout |
+| dictionaries: `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`, 76 cricket keys each, at parity | scout |
+| 4 e2e specs drive the cricket pad: `scorepad-skins.spec.ts`, `scorepad-v2.spec.ts`, `scoring.spec.ts`, `scoring-vocab-labels.spec.ts` | scout |
+| gallery capture: `apps/web/e2e/gallery.capture.ts:38`, `GALLERY_DIR`-gated, walks 12 sports | scout |
+
+## 1. Owner rulings taken this session (2026-08-16)
+
+1. **Admin events — HYBRID.** Toss, Review, Retire, Innings close, Declare get
+   real phase-aware tiles; the remaining 8 sit behind one `minor` "More" tile
+   that opens a sheet hosting the `padSpec(cfg)`-driven generic form. All in
+   the PAD. Console authority chrome (Finalize/Forfeit/Abandon) stays R7;
+   `/admin` is untouched.
+2. **Recording chip — wire it, parameterised.** Derive the plan name from the
+   org's real entitlement; kill the `planLabel("pro")` literal before the chip
+   renders. Closes D-7 for cricket.
+3. **Violet primary tiles — build as §2.5 specs, rule at sign-off.** Flag the
+   `violet-*`-means-AI collision in the gallery; a recolour afterwards is a
+   token change.
+
+## 2. Tasks
+
+Wave A runs in parallel (provably disjoint files). Everything after is serial.
+
+### A1 — guided-sheet renderer (chassis debt R1 left)
+- New `v3/guided-sheet.tsx`: renders `GuidedSheetSpec` step wizard
+  (`SheetChoiceStep` | `SheetPersonStep`), back/cancel, `buildPayload(answers)`
+  on the last step. Person steps resolve through `resolvePool` (context-strip's
+  existing helper), NOT `attribution-picker`'s bench-inclusive candidates.
+- `tile-grid.tsx`: `action = {sheet: string}` must reach a sheet-opener callback,
+  not be forwarded raw.
+- Tests: `v3/__tests__/guided-sheet.test.ts` — builder/step-machine assertions
+  (node env, no DOM).
+
+### A2 — recording chip plan name
+- `recording-chip.tsx`: `buildRecording` takes the plan/entitlement instead of
+  `planLabel("pro")`. `pro_plus` must render as itself.
+- Tests: extend `v3/__tests__/recording.test.ts` — a `pro_plus` org is never
+  told the band is "available on Pro".
+
+### A3 — scorebug token linkage
+- `scorebug.tsx` currently hand-matches `NIGHT_TILE_PAIRS` / `SCORE_TEXT_PX` in
+  literal Tailwind. Link them so a class edit cannot desync what
+  `contrast.test.ts` measures from what renders.
+
+### A5 — guided sheets span TWO sides (found by A1, blocks C)
+
+`GuidedSheetProps` takes ONE `view: PoolView` (one squad), following
+`ContextStrip`/`SwapSheet` precedent — and R1's `SheetPersonStep` has
+`pool: "onfield" | "bench" | "all"` with no notion of side. Cricket's wicket
+flow needs the **batting** side for "who out" and the **fielding** side for
+"fielder", in one sheet. So `SheetPersonStep` needs an explicit side and the
+host must resolve pools for both. This is a change to an R1 type; R2 owns it
+as its first consumer. Do it in B (host) so C (skin) can just declare the flow.
+
+### A4 — alpha-text AA (found by A3, folded in rather than raised)
+
+`NIGHT_TILE_PAIRS` AA-tests full-opacity cream only, but the scorebug renders
+hint / context / strip text at `cream/70` and `cream/80`. Cricket's scorebug is
+largely made of exactly those (`T20 · Over 0.5 · RR 14.4`, the over dots), so
+the gap ships with this wave unless closed. Composite the alpha over the night
+ground, assert AA on the RESULT, and mutation-prove it. If a real ratio fails,
+that is a finding for the gallery sign-off (a token change is a restyle and
+needs the owner's sign-off), not a silent re-baseline.
+
+### B — v3 pad host (serial, biggest single item)
+- New `v3/pad-host.tsx`: assembles scorebug + ribbon + context strip + tile grid
+  + detail dock + swap sheet + guided sheet + recording chip over
+  `usePadPipeline`. Held path via `enqueueHeld`; dock `onDue` uses `retryDrain`.
+- Dispatch guard preserved: a skin cannot invent an event type.
+- The "More" sheet hosts the `padSpec(cfg)` generic form (ruling 1).
+- Replaces the `registry.tsx:280` throw with the real v3 branch.
+
+### C — cricket `SkinDefV3` (`v3/skins/cricket.tsx`)
+- scorebug: `12/0` + overs halves (both passive, tapModel T); strip =
+  ▸striker* · non-striker · over dots (`ballsPerOver` from cfg) · ⚾ bowler.
+- tiles: run keypad 0–6, Wide, red Wicket, extras minor row; 5 designed admin
+  tiles per phase; "More"; `test` variant adds declare/follow-on/match.close.
+- context strip: striker / non-striker / bowler — replaces the 3 dropdowns (D-14).
+- sheets: wicket = kind → who out → fielder (D-15).
+- dock: shot type.
+- swap sheet: new batter after wicket, `cricket.retire` flow.
+
+### C-gaps — three contract facts the spec's cricket row assumes but the code does not provide
+
+Scouted 2026-08-16 from `CRICKET_EVENT_SCHEMAS`, `padSpec(cfg)`, `InningsState`
+and `skins/types.ts`. Each one silently degrades the wave if discovered during
+implementation instead of before it.
+
+**G1 — over dots are not buildable from the view.** Spec §3 wants
+`▸striker* · non-striker · over dots · ⚾bowler`, but the fold exposes NO
+per-ball history: `CricketState` has `runs/wickets/legalBalls` and nothing
+else, and v2's `OverProgress` (`cricket-skin.tsx:405`) therefore renders bare
+filled/unfilled segments from a COUNT — it cannot tell a dot from a four from
+a wicket. `SkinProps` carries no events array either. Since the v3 `view` is
+whatever the v3 host defines (R1 typed it `View = unknown`), the host must
+pass the event stream it already holds so the skin can derive real outcome
+dots. Run rate is the same shape of problem and is cheaply derivable
+(`runs / (legalBalls / 6)`); it is presentation, not state.
+
+**G2 — the wicket sheet's steps are CONDITIONAL, and `GuidedSheetSpec.steps`
+is a flat array.** Only `{caught, runout, stumped}` take a fielder
+(`FIELDER_ELIGIBLE_KINDS`), and only `runout` has a batter who varies
+(`VARIABLE_OUT_KINDS`) — for every other kind the batter out is the striker
+and asking is a wasted tap, which is the D-15 defect restated. The renderer
+needs conditional steps (a `when(answers)` predicate or equivalent), which is
+a change to the R1 type and to A1's renderer. `bowlerCredited` is derived from
+the kind (`BOWLER_CREDITED_KINDS`), never asked.
+
+**G3 — `PadPhase` is a USER-CLICKED TAB, not the match phase.** The engine has
+`state.phase: "pre"|"live"|"super_over"|"done"|"final"` (`cricket.ts:459`),
+while `PadPhase` in `view-model.ts:36` is a tab `pad-renderer.tsx` holds in
+`useState`, defaulted to `view.phases[0]`. v3's `TileSpec.phases` must gate on
+the ENGINE phase — spec §3's "phase-awareness kills D-16" means an action is
+unavailable because the MATCH is not there, not because a tab is unselected.
+Note `super_over` has no `PadPhase` equivalent and v2 switches
+`cricket.ball` → `cricket.superover.ball` on it (`cricket-skin.tsx:502`).
+
+**Task B disposition on G1-G3 (seen mid-implementation, recorded so C doesn't
+wonder whether these were missed):**
+
+- **G1 — FIXED.** `PadHostView` (v3/types.ts) now carries `events: readonly
+  EventEnvelope[]` — the same list `pipeline.events` already exposes, no
+  second copy. Small, additive, zero behaviour change for anything not yet
+  reading it. `pad-host.tsx` populates it from `usePadPipeline`'s own result.
+- **G2 — NOT fixed this task; a workaround exists.** Conditional
+  (`when(answers)`-gated) guided-sheet steps are a real chassis gap, but
+  cricket's wicket flow does NOT strictly require them: C can use several
+  destructive TILES (Bowled/Caught/LBW/Run out/…) instead of one "Wicket"
+  tile with a kind-picker as step 1 — each tile opens its own fixed,
+  non-conditional 1-2-step sheet (kind is then implicit in which tile was
+  tapped, not asked). That reshapes C's tile layout but needs no chassis
+  change. If C decides the single-tile-with-kind-picker shape is worth it
+  anyway, `GuidedSheetStep`/`answerStep`/`backStep` (types.ts,
+  guided-sheet.tsx — both task B's own files) are exactly where a `when`
+  predicate would land; flagged here rather than built speculatively against
+  a requirement C hasn't confirmed.
+- **G3 — NOT fixed; needs a controller ruling, not a task-B judgment call.**
+  Whether `PadPhase` should derive from a sport's own engine phase (cricket:
+  `pre|live|super_over|done|final`) rather than a chassis-local
+  self-correcting tab affects `TileSpec.phases`/`view-model.ts`'s `PadPhase`
+  — types shared with R3-R7, not scoped to cricket — and `super_over` has no
+  `PadPhase` slot to land in regardless of who decides this. `pad-host.tsx`
+  ships the SAME local-state-plus-self-correction phase model
+  `pad-renderer.tsx` already uses (structural: snaps to the first phase with
+  a declared tile, same as the legacy renderer snaps to the first phase with
+  a declared panel) — a real, working default, not a placeholder — but it
+  does not attempt G3's redesign. Left for the owner/controller to rule on
+  before C is blocked by it for real.
+
+**Controller rulings on G2 and G3 (2026-08-16) — both go to C:**
+
+- **G2 — build the `when(answers)` predicate; do NOT fan the wicket out into
+  ten destructive tiles.** The workaround is legitimate engineering but the
+  wrong product: spec §2.4 names this flow explicitly ("a guided sheet for
+  events that cannot be side-only (cricket wicket: kind → who)"), §3's cricket
+  row lists exactly one red `Wicket` tile, and §2.5 caps the destructive class
+  at Wicket/Card. Ten red tiles is GF-1's monster-button monotony re-created in
+  the surface built to kill it. So `GuidedSheetStep` gains an optional
+  `when(answers): boolean`, evaluated as the wizard advances; a step whose
+  predicate is false is skipped without a tap. Cricket then declares one sheet:
+  kind → (who out, only when `runout`) → (fielder, only when caught/runout/
+  stumped). `bowlerCredited` is derived from the kind and never asked.
+- **G3 — the host derives the phase from match state, via a skin hook.**
+  `TileSpec.phases` gating on a user-clicked tab means an action is hidden
+  because of a UI selection rather than because the match cannot accept it,
+  which is not what §3's "phase-awareness kills D-16" asks for. `PadPhase`
+  stays the three-value UI concept — do NOT widen it to the engine's five, and
+  do NOT give `super_over` its own slot. Instead `SkinDefV3` gains an optional
+  `phase?(view): PadPhase`; the host uses it when present and keeps B's
+  self-correcting default when absent, so R3–R7 opt in rather than being
+  migrated by this wave. Cricket implements it: `pre → "pre"`,
+  `live|super_over → "live"`, `done|final → "post"`, and the skin keeps v2's
+  own `super_over` behaviour of dispatching `cricket.superover.ball` in place
+  of `cricket.ball`.
+
+**G4 (found by task C mid-flight) — a sheet's payload cannot see the match.**
+`GuidedSheetSpec.buildPayload(answers)` receives ONLY the wizard's own answers,
+but cricket's wicket is a `cricket.ball` event: the payload also needs `over`,
+`ballInOver`, `striker`, `nonStriker` and `bowler`, none of which the sheet
+asks for (the context strip already holds them, and asking again is the wasted
+tap D-14/D-15 exist to remove). Task C died at the 600 s watchdog before
+implementing anything for this; `buildPayload`'s signature is unchanged.
+
+**Controller ruling on G4 (2026-08-16):** make `sheets` a method of the view —
+`sheets?(view): Record<string, GuidedSheetSpec>` — rather than adding a second
+parameter to `buildPayload`. Every other member of `SkinDefV3` (`scorebug`,
+`tiles`, `dock`, `context`, `swap`, `phase`) is already a function of `view`;
+the static `sheets` record is the anomaly, and closing over the view at build
+time needs no new plumbing and no change to the renderer's own contract. The
+host must therefore rebuild the sheet spec per render rather than caching it,
+or the closed-over view goes stale — state that requirement in the type's
+docstring, since nothing else enforces it.
+
+**G5 (found by review of task C, 2026-08-16) — the context strip was INERT.**
+`buildContext` derived every slot from the engine fold, the cricket skin
+shipped no `contextSelect`, and `pad-host.tsx`'s `onSelect` therefore resolved
+to `undefined`: a scorer could open the picker, choose a person, and watch the
+chip revert to its pre-tap value on the next render, forever. D-14 would have
+regressed — v2's three dropdowns at least held what you chose.
+
+The cause is structural, not careless. No cricket event records a
+striker/bowler pick (all 15 schemas checked), and a pure `view → spec` builder
+has nowhere to hold a pending choice, which is exactly what v2 used local
+`useState` for (`cricket-skin.tsx:548-553`).
+
+**Controller ruling on G5:** the HOST holds the pending selection.
+`PadHostV3` keeps per-slot overrides in local state and feeds them back
+through `PadHostView`; a skin reads `override ?? fold value` when it builds
+both the context strip and the ball payload. Skins stay pure functions of the
+view, no engine change is needed (the people already travel in the ball
+payload), and §2.4's promise — set once, tap to change, every ball carries
+them — is restored. `contextSelect` REMAINS on the contract for a sport whose
+engine genuinely can persist the pick; cricket simply is not one.
+
+**G6 (same review) — the wicket sheet's "who's out" pool is wrong.**
+`SquadMember.onField` is never cleared by a dismissal, only by lineup and
+substitution events (`cricket.ts:2100-2113`), so the whole batting-side
+on-field roster is offered: by the ninth wicket the picker lists ~9 already-out
+players beside the 2 real ones. The engine rejects a wrong pick
+(`cricket.ts:1237`), so nothing corrupts — it is a wrong-but-tappable list,
+which is the D-15 defect wearing a new coat.
+
+**Controller ruling on G6:** give `SheetPersonStep` an optional explicit
+`candidates` list that supersedes the pool when present. A run-out has exactly
+two possible batters, and the skin knows both. Same shape as the G2/G4
+additions: small, additive, and it removes a wrong choice rather than
+documenting it.
+
+**Also settled by the same scout, so C does not re-derive it:**
+`fine.striker/nonStriker/currentBowler` exist at **fidelity tier 3 only**
+(`fine: null` below it), and `cricket.ball` is itself a band-3 action — so the
+keypad and the context strip are a tier-3 surface, and lower bands legitimately
+see the summary actions instead. Extras are NOT separate events: a wide is
+`cricket.ball` with `runs.extras{kind,runs}`. Both `cricket.ball` and
+`cricket.superover.ball` share one schema.
+
+### D — i18n
+- `pad.cricket.ribbon.*` ×4 locales **and** into `PAD_LABEL_KEYS` (R1's owed
+  item — dictionaries alone leave ribbon copy on the generic fallback forever
+  with nothing failing), plus every new tile/sheet string.
+- `npm run i18n:gen-keys`, `i18n:check`, `git status --porcelain` empty.
+
+### E — registry flip + gates
+- `V3_SKINS.cricket`; cricket out of `LEGACY_SPORTS`. Mutation-prove both
+  directions in `registry-totality.test.ts`.
+- Dispatch-guard test: every one of the 15 `cricket.*` event types is reachable
+  from the new surface.
+
+### F — e2e + widths
+
+Exact couplings the lane flip breaks (grepped 2026-08-16, before any edit):
+
+| spec:line | selector / text | dies because |
+|---|---|---|
+| `scorepad-v2.spec.ts:96` | `[data-role="cricket-this-over"] select` ×3, driven by `selectOption` | the three dropdowns ARE D-14; the context strip replaces them |
+| `scoring.spec.ts:245` | `[data-role="cricket-skin"]` | v3 skin is a different component |
+| `scoring.spec.ts:247-248` | `getByText("Score")` / `getByText("Wickets")` as two fields | §2.1 renders one `12/0` scorebug instead |
+| `scoring-vocab-labels.spec.ts:31` | the 10th dismissal offered as words | the wicket kind picker moves into the guided sheet |
+| `scorepad-skins.spec.ts:76,114` | axe contrast guard + "a couple of balls scored" | only place axe runs against the cricket pad |
+
+Consequence for tasks B/C: the v3 host and the cricket skin must emit STABLE
+`data-role` hooks, decided deliberately, not inherited by accident — and every
+assertion must anchor on `="` (React serialises an omitted prop as
+`"$undefined"`, so a bare `data-*` probe passes in both states).
+
+- Update the 4 existing cricket specs to the v3 surface (`git grep -a` old AND
+  new text first).
+- New spec: full over + wicket + undo + device link, real rosters.
+- Add the converted pad to `mobile.spec.ts`'s seven-width matrix.
+- axe per skin; screenshots 320/768/1280, no horizontal scroll, 44px floor.
+
+### H — help pages (English only, `content/help/**` owes no i18n)
+
+Surveyed 2026-08-16: `apps/web/content/help/scoring/` already keeps a
+per-sport page convention (`tennis.md`, `hockey.md`) and cricket has none.
+Two existing pages describe UI this wave changes:
+
+- `scoring/fidelity.md` documents the "**Detail level** switch above the
+  scoring actions" and says a locked level shows "with a lock icon and
+  'Requires a plan upgrade'" — that bare padlock is exactly what §2.6's
+  worded recording chip replaces (D-7). Cricket is the first sport where the
+  page becomes wrong. Word it so it is TRUE of both lanes while the other 10
+  sports still show the picker; R8's sweep finishes it.
+- `scoring/basics.md` says "overs and wickets for cricket" with no link —
+  point it at the new page.
+
+New `scoring/cricket.md`: the tap-then-enrich grammar, the context strip
+(who is striking/bowling, set once), the wicket sheet, undo inside vs after
+the ~6 s window, and what a device link can and cannot do.
+
+### G — gate, gallery, sign-off
+- Gallery capture for cricket, publish the artifact, owner per-screen verdicts
+  recorded in `_INDEX.md` BEFORE merge (merge-blocking).
+- Smoke deferred to R8 — say so in the PR body.
+- Register rows D-4, D-5, D-14, D-15: close or record why not.
+
+## 3. Verify commands (exact — the wrappers lie)
+
+Scoped unit run, from the worktree, JSON only:
+
+```bash
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/r2-cricket/apps/web && \
+DATABASE_URL="postgresql://postgres@127.0.0.1:54345/seazn_test" DATABASE_SSL=disable \
+npx vitest run src/components/v2/scorepad/v3 --reporter=json \
+  --outputFile=/tmp/r2-unit.json > /dev/null 2>&1; echo "EXIT=$?"
+jq '{success,numPassedTests,numFailedTests,numTotalTests,numFailedTestSuites}' /tmp/r2-unit.json
+```
+
+Typecheck (peaks ~2.8 GB):
+
+```bash
+cd <wt>/apps/web && NODE_OPTIONS=--max-old-space-size=6144 npm run typecheck > out.txt 2>&1; echo "EXIT=$?"
+```
+
+Lint via `rtk proxy`, judged on the `✖ N problems` line — `rtk` hides
+`npm run lint` output entirely.
+
+## 4. Do NOT touch
+
+`packages/engine` (no engine work in R2 — §9 item 1 is R4's), other skins,
+the lineup editor (R7), console chrome (R7), `/admin`, `.github/workflows/`.
+`skins/cricket-skin.tsx` stays on disk — R8 deletes the v2 path.

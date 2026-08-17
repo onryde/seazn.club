@@ -43,6 +43,7 @@ export const HELP_ARTICLE_SLUGS = [
   "scoring/conflicts",
   "scoring/device-links",
   "scoring/scorer-role",
+  "scoring/cricket",
   "scoring/tennis",
   "scoring/hockey",
   "scoring/knockout-deciders",

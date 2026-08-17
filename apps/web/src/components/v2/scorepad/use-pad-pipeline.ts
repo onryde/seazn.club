@@ -234,7 +234,8 @@ import { EngineError, type EventEnvelope, type LineupPair } from "@seazn/engine/
 import type { AnySportModule } from "@seazn/engine/sport";
 import { foldClient } from "./module-client";
 import { indexedDbQueueStore } from "./queue-store";
-import { depth, enqueue, markDropped, peekInOrder, recordAttempt, releaseHeld } from "./queue";
+import { depth, dropHeld, enqueue, enqueueHeld, markDropped, peekInOrder, recordAttempt, releaseHeld } from "./queue";
+import type { QueueStore } from "./queue-store";
 import { deepEqual, reconcile, sendOne } from "./pipeline";
 import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "./types";
 import type { PadAuthMode, PadTransport } from "./transport";
@@ -336,6 +337,55 @@ export interface UsePadPipelineResult {
    *  an empty queue (a no-op) or while a drain is already in flight
    *  (piggybacks on it — see runDrain's own doc). */
   retryDrain: () => Promise<void>;
+  /** R2 (spec §2.3 soft-commit, v3 pad host): the SAME `QueueStore` instance
+   *  this hook itself drains — exposed rather than re-opened, so a caller
+   *  wiring `./v3/detail-dock.tsx`'s `makeDockStore(store)` (its chip
+   *  mutations/dismiss) is provably touching the store this hook's own
+   *  `runDrain`/`submitHeld`/`dropHeldSubmission` all read and write, not a
+   *  second, independently-opened handle a caller would otherwise have to
+   *  reconstruct by re-deriving this hook's own `dbName` default
+   *  (`scorepad-queue-\${fixtureId}\`, or `queueDbName` when a caller passes
+   *  one) — exactly the "second data path" this wave's own brief forbids.
+   *  Stable across renders (the same `useMemo` `runDrain`/`submit` already
+   *  key off). */
+  queueStore: QueueStore;
+  /** R2 (spec §2.3): the soft-commit entry point. Builds and optimistically
+   *  folds a `PendingEvent` through the EXACT SAME machinery `submit` above
+   *  does — the SAME `submitInFlight`/`lastAccepted` double-submit guard,
+   *  the SAME `expectedSeq`/`voidTargetSeq` computation, the SAME
+   *  `pendingEnvelopes` commit (so the fold "advances immediately", spec
+   *  §2.3's own wording) and the SAME `markOwn` — but enqueues the built
+   *  event HELD (`queue.ts`'s `enqueueHeld`, `holdMs`/`onDue` threaded
+   *  straight through) instead of a plain `enqueue`, and deliberately never
+   *  calls `runDrain` itself: transmission stays deferred until `onDue`
+   *  fires (the hold's own release tick, or an explicit
+   *  `releaseHeld`/`dropHeld`/`flushHeldBefore` against `queueStore` above)
+   *  — "only the enqueue -> send moment moves" (spec §2.3's own framing;
+   *  ack/seq handling downstream is untouched by this function). Returns
+   *  `null` on the identical double-submit guard `submit` itself silently
+   *  no-ops on (an indistinguishable repeat within `DOUBLE_SUBMIT_WINDOW_MS`,
+   *  or the same tick) — nothing new was held, so a caller has no id to open
+   *  a dock against. */
+  submitHeld: (
+    type: string,
+    payload: unknown,
+    holdMs: number,
+    onDue: () => void,
+  ) => Promise<{ heldId: string; heldUntil: number } | null>;
+  /** R2 (spec §2.3): undo INSIDE a held tap's window. Drops the entry from
+   *  the queue with no network call and no `core.void` (`queue.ts`'s
+   *  `dropHeld` — the event never left this device) AND rolls back the
+   *  `pendingEnvelopes` entry `submitHeld` added, so the optimistic fold
+   *  reverts exactly as if the tap never happened — the ONE piece of this
+   *  undo `dropHeld` alone cannot do, since `pendingEnvelopes` is this
+   *  hook's own private state. Mirrors the same remove-from-
+   *  `pendingEnvelopes`-then-`refreshDepth` shape `runDrain`'s own
+   *  permanent-rejection branch already uses for an entry leaving the queue
+   *  without an ack. Returns `false`, a no-op, if `id` no longer names a
+   *  currently-held entry (already sent, or already dropped) — the caller's
+   *  job in that case is `submit("core.void", {event_id: id})`, exactly as
+   *  today (this function makes no attempt at that fallback itself). */
+  dropHeldSubmission: (id: string) => Promise<boolean>;
   /** S12/#421 — every known event (durable ledger + still-queued local
    *  ones), oldest first: the raw list `state` above was folded FROM, for a
    *  persistent activity feed (timeline.tsx). Same combination `foldedState`
@@ -1342,6 +1392,81 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     [store, fixtureId, identity, commitPendingEnvelopes, markOwn, refreshDepth, runDrain],
   );
 
+  // R2 (spec §2.3) — see UsePadPipelineResult.submitHeld's own doc. Mirrors
+  // `submit` above almost line for line (same guard refs, same
+  // expectedSeq/voidTargetSeq/pendingToEnvelope/markOwn calls) rather than
+  // refactoring `submit` itself to share a helper: `submit` is this hook's
+  // most heavily reviewed/tested path (26 describe blocks in this file's own
+  // test suite), and this function's whole job is to be provably
+  // BYTE-IDENTICAL up to the one seam that actually changes (enqueueHeld
+  // instead of enqueue, no trailing runDrain) — a shared-helper refactor
+  // would touch code the rest of this file depends on staying exactly as it
+  // is.
+  const submitHeld = useCallback(
+    async (
+      type: string,
+      payload: unknown,
+      holdMs: number,
+      onDue: () => void,
+    ): Promise<{ heldId: string; heldUntil: number } | null> => {
+      const isSameAction = (o: { type: string; payload: unknown } | null): boolean =>
+        o !== null && o.type === type && deepEqual(o.payload, payload);
+      if (isSameAction(submitInFlight.current)) {
+        return null; // identical action already mid-flight this same tick — no-op, same as submit()
+      }
+      const now = Date.now();
+      const last = lastAccepted.current;
+      if (last !== null && isSameAction(last) && now - last.at < DOUBLE_SUBMIT_WINDOW_MS) {
+        return null; // identical action accepted too recently — same guard submit() uses
+      }
+      submitInFlight.current = { type, payload };
+      lastAccepted.current = { type, payload, at: now };
+      try {
+        const nextExpectedSeq = ledgerEventsRef.current.length + pendingEnvelopesRef.current.size;
+        const voidTargetSeq = voidTargetSeqAtSubmit(type, payload, ownEventIdsRef.current, ledgerEventsRef.current);
+        const pending: PendingEvent = {
+          localId: newId(),
+          idempotencyKey: newId(),
+          type,
+          payload,
+          expectedSeq: nextExpectedSeq,
+          createdAt: new Date().toISOString(),
+          attempts: 0,
+          ...(voidTargetSeq === undefined ? {} : { voidTargetSeq }),
+        };
+        const withPending = new Map(pendingEnvelopesRef.current);
+        withPending.set(pending.idempotencyKey, pendingToEnvelope(fixtureId, identity, pending));
+        commitPendingEnvelopes(withPending); // optimistic fold shows immediately, same as submit()
+        markOwn(pending.idempotencyKey);
+        setLastRejection(null);
+        const heldUntil = Date.now() + holdMs;
+        // Everything below is async. Deliberately NO runDrain() call here —
+        // see this function's own doc: transmission stays deferred until
+        // `onDue` fires.
+        await enqueueHeld(store, pending, holdMs, onDue);
+        await refreshDepth();
+        return { heldId: pending.idempotencyKey, heldUntil };
+      } finally {
+        submitInFlight.current = null;
+      }
+    },
+    [store, fixtureId, identity, commitPendingEnvelopes, markOwn, refreshDepth],
+  );
+
+  // R2 (spec §2.3) — see UsePadPipelineResult.dropHeldSubmission's own doc.
+  const dropHeldSubmission = useCallback(
+    async (id: string): Promise<boolean> => {
+      const dropped = await dropHeld(store, id);
+      if (!dropped) return false;
+      const remaining = new Map(pendingEnvelopesRef.current);
+      remaining.delete(id);
+      commitPendingEnvelopes(remaining);
+      await refreshDepth();
+      return true;
+    },
+    [store, commitPendingEnvelopes, refreshDepth],
+  );
+
   // S12/#421 — the raw list `foldedState` above was folded from, exposed for
   // a persistent activity feed. Same combination as `foldedState`'s own
   // `events` local above, kept as a SEPARATE memo (not reused verbatim) so a
@@ -1349,5 +1474,19 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // needs to display, even while the FOLD is showing the server's override.
   const events = useMemo(() => [...ledgerEvents, ...pendingEnvelopes.values()], [ledgerEvents, pendingEnvelopes]);
 
-  return { state: foldedState, summary, queueDepth, offline, lastRejection, resyncing, submit, events, ownEventIds, retryDrain: runDrain };
+  return {
+    state: foldedState,
+    summary,
+    queueDepth,
+    offline,
+    lastRejection,
+    resyncing,
+    submit,
+    events,
+    ownEventIds,
+    retryDrain: runDrain,
+    queueStore: store,
+    submitHeld,
+    dropHeldSubmission,
+  };
 }

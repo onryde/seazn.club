@@ -126,12 +126,16 @@ test("cricket skin: real roster, a couple of balls scored", async ({ page, reque
   const nonStriker = fx.personIds[`Skins NonStriker ${TAG}`]!;
   const bowler = fx.personIds[`Skins Bowler ${TAG}`]!;
 
-  const selects = pad(page).locator('[data-role="cricket-this-over"] select');
-  await expect(selects).toHaveCount(3);
-  await selects.nth(0).selectOption(striker);
-  await selects.nth(1).selectOption(nonStriker);
-  await selects.nth(2).selectOption(bowler);
-
+  // R2's v2→v3 cutover for cricket (V3_SKINS) replaces the three "This over"
+  // selects with the context strip (D-14) — no picker tap is needed here at
+  // all: with exactly one home pair and one away player, the strip's own
+  // fold-derived defaults (`resolvePeople`, v3/skins/cricket.tsx —
+  // `battingOrder[0]/[1]`, `bowlingOrder[0]`) are already this fixture's only
+  // possible assignment, so a run tile can be tapped directly. The picker
+  // ITSELF (tap a chip, tap a candidate BY NAME, and the pick survives into
+  // the next dispatched payload) has its own dedicated proof in
+  // scorepad-v3-cricket.spec.ts — this file stays the "one quick real-roster
+  // tour per skin" it was before.
   await pad(page).getByRole("button", { name: "4", exact: true }).click();
   await expect
     .poll(

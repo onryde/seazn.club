@@ -76,7 +76,7 @@ export function resolvePool(slot: PoolSlot, view: PoolView): readonly string[] {
 export type TFn = (key: string, vars?: Record<string, string | number>) => string;
 
 const candidateButtonClass =
-  "min-w-0 shrink-0 break-words rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
+  "min-w-0 max-w-full break-words rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400";
 
 /**
  * A row of real 44px candidate buttons, or `emptyText` when the pool is
@@ -149,22 +149,50 @@ function chipLabel(slot: ContextSlot, personNames: Readonly<Record<string, strin
 export function ContextStrip({ spec, view, personNames, t, onSelect }: ContextStripProps) {
   const [activeSlotId, setActiveSlotId] = useState<string | null>(null);
   if (spec.slots.length === 0) return null;
-  const activeSlot = spec.slots.find((s) => s.id === activeSlotId) ?? null;
+  // Blocker 2 (R2 review): a readOnly slot's picker must never open — this
+  // guards even a stray activeSlotId somehow naming one (belt-and-braces;
+  // the row below already never attaches an onClick to a readOnly chip, so
+  // activeSlotId can never actually BE set to one in the first place).
+  const activeSlot = spec.slots.find((s) => s.id === activeSlotId && !s.readOnly) ?? null;
 
   return (
     <div data-role="context-strip" className="flex flex-col gap-2">
       <div className="flex flex-wrap gap-2">
         {spec.slots.map((slot) => {
+          // Blocker 2 (R2 review, `docs/superpowers/plans/2026-08-16-
+          // scorepad-v3-r2-cricket.md`): a readOnly slot (ContextSlot.
+          // readOnly's own doc, ./types.ts) renders as plain, non-
+          // interactive markup — same chip footprint, no <button>, no
+          // onClick, no aria-pressed, no "unset" affordance (there is
+          // nothing a tap could fix). It still shows real information —
+          // dropping it entirely would lose the on-strike marker/name for
+          // no gain — it just never pretends to be a control the engine
+          // will actually honour.
+          if (slot.readOnly) {
+            return (
+              <span
+                key={slot.id}
+                data-role="context-chip"
+                data-readonly="true"
+                style={{ minHeight: 44 }}
+                className="inline-flex min-w-0 max-w-full cursor-default items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700"
+              >
+                <span className="break-words">{chipLabel(slot, personNames, t)}</span>
+              </span>
+            );
+          }
           const active = slot.id === activeSlotId;
           const unset = slot.required && !slot.personId;
           return (
             <button
               key={slot.id}
               type="button"
+              data-role="context-chip"
+              data-readonly="false"
               aria-pressed={active}
               onClick={() => setActiveSlotId(active ? null : slot.id)}
               style={{ minHeight: 44 }}
-              className={`inline-flex min-w-0 shrink-0 items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 ${
+              className={`inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 ${
                 active
                   ? "border-transparent bg-violet-600 text-white hover:bg-violet-700"
                   : unset
